@@ -1,0 +1,1 @@
+Location for ARM based templates to deploy Azure Resources in a configured state.
