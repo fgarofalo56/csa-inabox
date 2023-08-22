@@ -76,6 +76,30 @@ param endpointConfigs array = [
     privateDNSZoneRG: 'demo-core-vnet'
     privateDNSZone: 'privatelink.purview.azure.com'
   }
+  {
+    vNetRG: 'demo-core-vnet'
+    vNetName: 'demo-privatelink-vnet'
+    subnet: 'default'
+    privateEPGroup: 'ingestion-blob'
+    privateDNSZoneRG: 'demo-core-vnet'
+    privateDNSZone: 'privatelink.blob.core.windows.net'
+  }
+  {
+    vNetRG: 'demo-core-vnet'
+    vNetName: 'demo-privatelink-vnet'
+    subnet: 'default'
+    privateEPGroup: 'ingestion-queue'
+    privateDNSZoneRG: 'demo-core-vnet'
+    privateDNSZone: 'privatelink.queue.core.windows.com'
+  }
+  {
+    vNetRG: 'demo-core-vnet'
+    vNetName: 'demo-privatelink-vnet'
+    subnet: 'default'
+    privateEPGroup: 'ingestion-namespace'
+    privateDNSZoneRG: 'demo-core-vnet'
+    privateDNSZone: 'privatelink.servicebus.windows.com'
+  }
 ]
 
 // Resources
@@ -111,6 +135,7 @@ resource purviewAcct 'Microsoft.Purview/accounts@2021-12-01' = {
   }
 }
 
+
 resource purviewPrivateEndPoint 'Microsoft.Network/privateEndpoints@2023-04-01' = [for (config, i) in endpointConfigs: if (publicNetworkAccess == 'Disabled') {
   name: '${toLower(purviewAcctName)}-${uniqueString(resourceGroup().id)}-${config.privateEPGroup}-pep-${env}'
   location: location
@@ -137,12 +162,12 @@ resource purviewPrivateEndPoint 'Microsoft.Network/privateEndpoints@2023-04-01' 
 resource pepConfig 'Microsoft.Purview/accounts/privateEndpointConnections@2021-12-01' =  [for (config, i) in endpointConfigs: if (publicNetworkAccess == 'Disabled') {
   name: '${toLower(purviewAcctName)}-${uniqueString(resourceGroup().id)}-${config.privateEPGroup}-pep-${env}'
   parent: purviewAcct
-  dependsOn:[
-    purviewPrivateEndPoint
+  dependsOn: [
+    purviewPrivateEndPoint[i]
   ]
   properties: {
     privateEndpoint: {
-      id: '/subscriptions/${subscription().subscriptionId}/resourceGroups/${config.privateEPGroup}/providers/Microsoft.Network/privateEndpoints/${purviewPrivateEndPoint[0]}'
+      id: '/subscriptions/${subscription().subscriptionId}/resourceGroups/${resourceGroup().name}/providers/Microsoft.Network/privateEndpoints/${purviewPrivateEndPoint[0]}'
     }
     privateLinkServiceConnectionState: {
       status: 'Approved'
@@ -152,10 +177,8 @@ resource pepConfig 'Microsoft.Purview/accounts/privateEndpointConnections@2021-1
 }]
 
 resource purviewPrivateEndpointPortalARecord 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2020-11-01' = [for (config, i) in endpointConfigs: if (publicNetworkAccess == 'Disabled')  {
-  name: '${toLower(purviewAcctName)}-${uniqueString(resourceGroup().id)}-${config.privateEPGroup}-pep-${env}/zone'
-  dependsOn:[
-    pepConfig
-  ]
+  name: 'default'
+  parent: purviewPrivateEndPoint[i]
   properties: {
     privateDnsZoneConfigs: [
       {
@@ -167,3 +190,17 @@ resource purviewPrivateEndpointPortalARecord 'Microsoft.Network/privateEndpoints
     ]
   }
 }]
+
+output purviewAcctName string = purviewAcct.name
+output purviewAcctId string = purviewAcct.id
+output purviewAcctIdentity string = purviewAcct.identity.principalId
+output purviewAcctPrivateEndpoint string = purviewPrivateEndPoint[0].id
+output purviewAcctPrivateEndpointPortalARecord string = purviewPrivateEndpointPortalARecord[0].id
+output purviewAcctPrivateEndpointPortalARecordName string = purviewPrivateEndpointPortalARecord[0].name
+output purviewAcctPrivateEndpointPortalARecordPrivateDNSZone string = purviewPrivateEndpointPortalARecord[0].properties.privateDnsZoneConfigs[0].properties.privateDnsZoneId
+output purviewAcctPrivateEndpointPortalARecordPrivateDNSZoneName string = purviewPrivateEndpointPortalARecord[0].properties.privateDnsZoneConfigs[0].name
+output purviewAcctPrivateEndpointPortalARecordPrivateDNSZoneConfigId string = purviewPrivateEndpointPortalARecord[0].properties.privateDnsZoneConfigs[0].id
+output purviewAcctPrivateEndpointPortalARecordPrivateDNSZoneConfigName string = purviewPrivateEndpointPortalARecord[0].properties.privateDnsZoneConfigs[0].name
+output purviewAcctPrivateEndpointPortalARecordPrivateDNSZoneConfigPrivateDNSZoneId string = purviewPrivateEndpointPortalARecord[0].properties.privateDnsZoneConfigs[0].properties.privateDnsZoneId
+output purviewAcctPrivateEndpointPortalARecordPrivateDNSZoneConfigPrivateDNSZoneName string = purviewPrivateEndpointPortalARecord[0].properties.privateDnsZoneConfigs[0].properties.privateDnsZoneName
+output purviewAcctPrivateEndpointPortalARecordPrivateDNSZoneConfigPrivateDNSZonePrivateEndpointName string = purviewPrivateEndpointPortalARecord[0].properties.privateDnsZoneConfigs[0].properties.privateEndpointName
