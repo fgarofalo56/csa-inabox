@@ -102,6 +102,8 @@ param endpointConfigs array = [
   }
 ]
 
+param existing bool
+
 // Resources
 
 resource purviewAcct 'Microsoft.Purview/accounts@2021-12-01' = {
@@ -136,7 +138,7 @@ resource purviewAcct 'Microsoft.Purview/accounts@2021-12-01' = {
 }
 
 
-resource purviewPrivateEndPoint 'Microsoft.Network/privateEndpoints@2023-04-01' = [for (config, i) in endpointConfigs: if (publicNetworkAccess == 'Disabled') {
+resource purviewPrivateEndPoint 'Microsoft.Network/privateEndpoints@2023-04-01' = [for (config, i) in endpointConfigs: if (!existing && publicNetworkAccess == 'Disabled')  {
   name: '${toLower(purviewAcctName)}-${uniqueString(resourceGroup().id)}-${config.privateEPGroup}-pep-${env}'
   location: location
   tags: tags
@@ -159,7 +161,7 @@ resource purviewPrivateEndPoint 'Microsoft.Network/privateEndpoints@2023-04-01' 
 }]
 
 
-resource pepConfig 'Microsoft.Purview/accounts/privateEndpointConnections@2021-12-01' =  [for (config, i) in endpointConfigs: if (publicNetworkAccess == 'Disabled') {
+resource pepConfig 'Microsoft.Purview/accounts/privateEndpointConnections@2021-12-01' =  [for (config, i) in endpointConfigs: if (!existing && publicNetworkAccess == 'Disabled') {
   name: '${toLower(purviewAcctName)}-${uniqueString(resourceGroup().id)}-${config.privateEPGroup}-pep-${env}'
   parent: purviewAcct
   dependsOn: [
@@ -176,7 +178,7 @@ resource pepConfig 'Microsoft.Purview/accounts/privateEndpointConnections@2021-1
   }
 }]
 
-resource purviewPrivateEndpointPortalARecord 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2020-11-01' = [for (config, i) in endpointConfigs: if (publicNetworkAccess == 'Disabled')  {
+resource purviewPrivateEndpointPortalARecord 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2020-11-01' = [for (config, i) in endpointConfigs: if (!existing && publicNetworkAccess == 'Disabled')  {
   name: 'default'
   parent: purviewPrivateEndPoint[i]
   properties: {
