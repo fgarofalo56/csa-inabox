@@ -80,7 +80,7 @@ param endpointConfigs array = [
     vNetRG: 'demo-core-vnet'
     vNetName: 'demo-privatelink-vnet'
     subnet: 'default'
-    privateEPGroup: 'ingestion-blob'
+    privateEPGroup: 'blob'
     privateDNSZoneRG: 'demo-core-vnet'
     privateDNSZone: 'privatelink.blob.core.windows.net'
   }
@@ -88,7 +88,7 @@ param endpointConfigs array = [
     vNetRG: 'demo-core-vnet'
     vNetName: 'demo-privatelink-vnet'
     subnet: 'default'
-    privateEPGroup: 'ingestion-queue'
+    privateEPGroup: 'queue'
     privateDNSZoneRG: 'demo-core-vnet'
     privateDNSZone: 'privatelink.queue.core.windows.com'
   }
@@ -96,7 +96,7 @@ param endpointConfigs array = [
     vNetRG: 'demo-core-vnet'
     vNetName: 'demo-privatelink-vnet'
     subnet: 'default'
-    privateEPGroup: 'ingestion-namespace'
+    privateEPGroup: 'namespace'
     privateDNSZoneRG: 'demo-core-vnet'
     privateDNSZone: 'privatelink.servicebus.windows.com'
   }
@@ -146,9 +146,9 @@ resource purviewPrivateEndPoint 'Microsoft.Network/privateEndpoints@2023-04-01' 
     }
     privateLinkServiceConnections: [
       {
-        name: 'purviewAcctPortal'
+        name: 'purviewPrivateEndpoint${config.privateEPGroup}'
         properties: {
-          privateLinkServiceId: purviewAcct.id
+          privateLinkServiceId: '${config.privateEPGroup == 'portal' || config.privateEPGroup =='account' ? purviewAcct.id : config.privateEPGroup == 'blob' || config.privateEPGroup == 'queue'? purviewAcct.properties.managedResources.storageAccount : purviewAcct.properties.managedResources.eventHubNamespace}'
           groupIds: [
             '${config.privateEPGroup}'
           ]
