@@ -102,9 +102,7 @@ param endpointConfigs array = [
   }
 ]
 
-param existing bool
-
-// Resources
+// A function that checks if a storage account exists
 
 resource purviewAcct 'Microsoft.Purview/accounts@2021-12-01' = {
   name: '${toLower(purviewAcctName)}-${uniqueString(resourceGroup().id)}-${env}'
@@ -138,7 +136,9 @@ resource purviewAcct 'Microsoft.Purview/accounts@2021-12-01' = {
 }
 
 
-resource purviewPrivateEndPoint 'Microsoft.Network/privateEndpoints@2023-04-01' = [for (config, i) in endpointConfigs: if (!existing && publicNetworkAccess == 'Disabled')  {
+
+resource purviewPrivateEndPoint 'Microsoft.Network/privateEndpoints@2023-04-01' = [for (config, i) in endpointConfigs: if (empty(resourceId('Microsoft.Network/privateEndpoints@2023-04-01', '${toLower(purviewAcctName)}-${uniqueString(resourceGroup().id)}-${config.privateEPGroup}-pep-${env}')) && publicNetworkAccess == 'Disabled') {
+ 
   name: '${toLower(purviewAcctName)}-${uniqueString(resourceGroup().id)}-${config.privateEPGroup}-pep-${env}'
   location: location
   tags: tags
@@ -146,6 +146,7 @@ resource purviewPrivateEndPoint 'Microsoft.Network/privateEndpoints@2023-04-01' 
     subnet: {
       id: '/subscriptions/${subscription().subscriptionId}/resourceGroups/${config.vNetRG}/providers/Microsoft.Network/virtualNetworks/${config.vNetName}/subnets/${config.subnet}'
     }
+    manualPrivateLinkServiceConnections: []
     privateLinkServiceConnections: [
       {
         name: 'purviewPrivateEndpoint${config.privateEPGroup}'
@@ -160,16 +161,31 @@ resource purviewPrivateEndPoint 'Microsoft.Network/privateEndpoints@2023-04-01' 
   }
 }]
 
+resource purviewPrivateEndpointPortalARecord 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2020-11-01' = [for (config, i) in endpointConfigs: if (publicNetworkAccess == 'Disabled')  {
+  name: 'default'
+  parent: purviewPrivateEndPoint[i]
+  properties: {
+    privateDnsZoneConfigs: [
+      {
+        name: '${purviewPrivateEndPoint[i].name}-arecord'
+        properties: {
+          privateDnsZoneId: '/subscriptions/${subscription().subscriptionId}/resourceGroups/${config.privateDNSZoneRG}/providers/Microsoft.Network/privateDnsZones/${config.privateDNSZone}'
+        }
+      }
+    ]
+  }
+}]
 
-resource pepConfig 'Microsoft.Purview/accounts/privateEndpointConnections@2021-12-01' =  [for (config, i) in endpointConfigs: if (!existing && publicNetworkAccess == 'Disabled') {
+resource pepConfig 'Microsoft.Purview/accounts/privateEndpointConnections@2021-12-01' =  [for (config, i) in endpointConfigs: if (publicNetworkAccess == 'Disabled') {
   name: '${toLower(purviewAcctName)}-${uniqueString(resourceGroup().id)}-${config.privateEPGroup}-pep-${env}'
   parent: purviewAcct
   dependsOn: [
     purviewPrivateEndPoint[i]
+    purviewPrivateEndpointPortalARecord[i]
   ]
   properties: {
     privateEndpoint: {
-      id: '/subscriptions/${subscription().subscriptionId}/resourceGroups/${resourceGroup().name}/providers/Microsoft.Network/privateEndpoints/${purviewPrivateEndPoint[0]}'
+      id: '/subscriptions/${subscription().subscriptionId}/resourceGroups/${config.privateDNSZoneRG}/providers/Microsoft.Network/privateEndpoints/${purviewPrivateEndPoint[i]}'
     }
     privateLinkServiceConnectionState: {
       status: 'Approved'
@@ -177,32 +193,3 @@ resource pepConfig 'Microsoft.Purview/accounts/privateEndpointConnections@2021-1
     }
   }
 }]
-
-resource purviewPrivateEndpointPortalARecord 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2020-11-01' = [for (config, i) in endpointConfigs: if (!existing && publicNetworkAccess == 'Disabled')  {
-  name: 'default'
-  parent: purviewPrivateEndPoint[i]
-  properties: {
-    privateDnsZoneConfigs: [
-      {
-        name: '${pepConfig[0].name}-arecord'
-        properties: {
-          privateDnsZoneId: '/subscriptions/${subscription().subscriptionId}/resourceGroups/${config.privateDNSZoneRG}/providers/Microsoft.Network/privateDnsZones${config.privateDNSZone}'
-        }
-      }
-    ]
-  }
-}]
-
-output purviewAcctName string = purviewAcct.name
-output purviewAcctId string = purviewAcct.id
-output purviewAcctIdentity string = purviewAcct.identity.principalId
-output purviewAcctPrivateEndpoint string = purviewPrivateEndPoint[0].id
-output purviewAcctPrivateEndpointPortalARecord string = purviewPrivateEndpointPortalARecord[0].id
-output purviewAcctPrivateEndpointPortalARecordName string = purviewPrivateEndpointPortalARecord[0].name
-output purviewAcctPrivateEndpointPortalARecordPrivateDNSZone string = purviewPrivateEndpointPortalARecord[0].properties.privateDnsZoneConfigs[0].properties.privateDnsZoneId
-output purviewAcctPrivateEndpointPortalARecordPrivateDNSZoneName string = purviewPrivateEndpointPortalARecord[0].properties.privateDnsZoneConfigs[0].name
-output purviewAcctPrivateEndpointPortalARecordPrivateDNSZoneConfigId string = purviewPrivateEndpointPortalARecord[0].properties.privateDnsZoneConfigs[0].id
-output purviewAcctPrivateEndpointPortalARecordPrivateDNSZoneConfigName string = purviewPrivateEndpointPortalARecord[0].properties.privateDnsZoneConfigs[0].name
-output purviewAcctPrivateEndpointPortalARecordPrivateDNSZoneConfigPrivateDNSZoneId string = purviewPrivateEndpointPortalARecord[0].properties.privateDnsZoneConfigs[0].properties.privateDnsZoneId
-output purviewAcctPrivateEndpointPortalARecordPrivateDNSZoneConfigPrivateDNSZoneName string = purviewPrivateEndpointPortalARecord[0].properties.privateDnsZoneConfigs[0].properties.privateDnsZoneName
-output purviewAcctPrivateEndpointPortalARecordPrivateDNSZoneConfigPrivateDNSZonePrivateEndpointName string = purviewPrivateEndpointPortalARecord[0].properties.privateDnsZoneConfigs[0].properties.privateEndpointName
