@@ -137,23 +137,23 @@ resource purviewAcct 'Microsoft.Purview/accounts@2021-12-01' = {
 
 
 
-resource purviewPrivateEndPoint 'Microsoft.Network/privateEndpoints@2023-04-01' = [for (config, i) in endpointConfigs: if (empty(resourceId('Microsoft.Network/privateEndpoints@2023-04-01', '${toLower(purviewAcctName)}-${uniqueString(resourceGroup().id)}-${config.privateEPGroup}-pep-${env}')) && publicNetworkAccess == 'Disabled') {
+resource purviewPrivateEndPoint 'Microsoft.Network/privateEndpoints@2023-04-01' = [for item in endpointConfigs: if (empty(resourceId('Microsoft.Network/privateEndpoints@2023-04-01', '${toLower(purviewAcctName)}-${uniqueString(resourceGroup().id)}-${item.privateEPGroup}-pep-${env}')) && publicNetworkAccess == 'Disabled') {
  
-  name: '${toLower(purviewAcctName)}-${uniqueString(resourceGroup().id)}-${config.privateEPGroup}-pep-${env}'
+  name: '${toLower(purviewAcctName)}-${uniqueString(resourceGroup().id)}-${item.privateEPGroup}-pep-${env}'
   location: location
   tags: tags
   properties: {
     subnet: {
-      id: '/subscriptions/${subscription().subscriptionId}/resourceGroups/${config.vNetRG}/providers/Microsoft.Network/virtualNetworks/${config.vNetName}/subnets/${config.subnet}'
+      id: '/subscriptions/${subscription().subscriptionId}/resourceGroups/${item.vNetRG}/providers/Microsoft.Network/virtualNetworks/${item.vNetName}/subnets/${item.subnet}'
     }
     manualPrivateLinkServiceConnections: []
     privateLinkServiceConnections: [
       {
-        name: 'purviewPrivateEndpoint${config.privateEPGroup}'
+        name: 'purviewPrivateEndpoint${item.privateEPGroup}'
         properties: {
-          privateLinkServiceId: '${config.privateEPGroup == 'portal' || config.privateEPGroup =='account' ? purviewAcct.id : config.privateEPGroup == 'blob' || config.privateEPGroup == 'queue'? purviewAcct.properties.managedResources.storageAccount : purviewAcct.properties.managedResources.eventHubNamespace}'
+          privateLinkServiceId: '${item.privateEPGroup == 'portal' || item.privateEPGroup =='account' ? purviewAcct.id : item.privateEPGroup == 'blob' || item.privateEPGroup == 'queue'? purviewAcct.properties.managedResources.storageAccount : purviewAcct.properties.managedResources.eventHubNamespace}'
           groupIds: [
-            '${config.privateEPGroup}'
+            '${item.privateEPGroup}'
           ]
         }
       }
@@ -161,31 +161,31 @@ resource purviewPrivateEndPoint 'Microsoft.Network/privateEndpoints@2023-04-01' 
   }
 }]
 
-resource purviewPrivateEndpointPortalARecord 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2020-11-01' = [for (config, i) in endpointConfigs: if (publicNetworkAccess == 'Disabled')  {
+resource purviewPrivateEndpointPortalARecord 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2020-11-01' = [for item in endpointConfigs: if (empty(resourceId('Microsoft.Network/privateEndpoints@2023-04-01', '${toLower(purviewAcctName)}-${uniqueString(resourceGroup().id)}-${item.privateEPGroup}-pep-${env}')) && publicNetworkAccess == 'Disabled')  {
   name: 'default'
-  parent: purviewPrivateEndPoint[i]
+  parent: purviewPrivateEndPoint[indexOf(endpointConfigs, item)]
   properties: {
     privateDnsZoneConfigs: [
       {
-        name: '${purviewPrivateEndPoint[i].name}-arecord'
+        name: '${purviewPrivateEndPoint[indexOf(endpointConfigs, item)].name}-arecord'
         properties: {
-          privateDnsZoneId: '/subscriptions/${subscription().subscriptionId}/resourceGroups/${config.privateDNSZoneRG}/providers/Microsoft.Network/privateDnsZones/${config.privateDNSZone}'
+          privateDnsZoneId: '/subscriptions/${subscription().subscriptionId}/resourceGroups/${item.privateDNSZoneRG}/providers/Microsoft.Network/privateDnsZones/${item.privateDNSZone}'
         }
       }
     ]
   }
 }]
 
-resource pepConfig 'Microsoft.Purview/accounts/privateEndpointConnections@2021-12-01' =  [for (config, i) in endpointConfigs: if (publicNetworkAccess == 'Disabled') {
-  name: '${toLower(purviewAcctName)}-${uniqueString(resourceGroup().id)}-${config.privateEPGroup}-pep-${env}'
+resource pepConfig 'Microsoft.Purview/accounts/privateEndpointConnections@2021-12-01' =  [for item in endpointConfigs: if (publicNetworkAccess == 'Disabled') {
+  name: '${toLower(purviewAcctName)}-${uniqueString(resourceGroup().id)}-${item.privateEPGroup}-pep-${env}'
   parent: purviewAcct
   dependsOn: [
-    purviewPrivateEndPoint[i]
-    purviewPrivateEndpointPortalARecord[i]
+    purviewPrivateEndPoint[indexOf(endpointConfigs, item)]
+    purviewPrivateEndpointPortalARecord[indexOf(endpointConfigs, item)]
   ]
   properties: {
     privateEndpoint: {
-      id: '/subscriptions/${subscription().subscriptionId}/resourceGroups/${config.privateDNSZoneRG}/providers/Microsoft.Network/privateEndpoints/${purviewPrivateEndPoint[i]}'
+      id: '/subscriptions/${subscription().subscriptionId}/resourceGroups/${item.privateDNSZoneRG}/providers/Microsoft.Network/privateEndpoints/${purviewPrivateEndPoint[indexOf(endpointConfigs, item)]}'
     }
     privateLinkServiceConnectionState: {
       status: 'Approved'

@@ -44,7 +44,11 @@ var privateDnsZoneNames = [
   'privatelink.file.${environment().suffixes.storage}'
  ]
 
- var allZones = [for zone in privateDnsZoneNames: concat('\'', zone, '\'')]
+ var allZones = [for zone in privateDnsZoneNames:'\'${zone}\'']
+ var zoneVnet = [for zone in privateDnsZoneNames: {
+  ZoneName: zone
+  vNetName: vNetName
+ }]
  var allZonesString = join(allZones, ', ')
 
 // Resources
@@ -65,43 +69,28 @@ resource GetExistingVNetLinks 'Microsoft.Resources/deploymentScripts@2020-10-01'
     arguments: '-zones ${allZonesString} -ResourceGroupName \'${resourceGroup().name}\''
     scriptContent: '''
     param([string[]] $zones, [string] $ResourceGroupName)
-    Write-Output "Starting GetExistingVNetLinks script"
     foreach ($zone in $zones) { `
-      Write-Output "Running Get-AzPrivateDnsVirtualNetworkLink for zone: $zone"
-      $existingLinks += Get-AzPrivateDnsVirtualNetworkLink -ZoneName $zone -ResourceGroupName $ResourceGroupName | Select Name, ZoneName, ResourceGroupName, VirtualNetworkId, VirtualNetworkLinkState
-      Write-Output "Finished Get-AzPrivateDnsVirtualNetworkLink for zone: $zone"
+      $existingLinks += Get-AzPrivateDnsVirtualNetworkLink -ZoneName $zone -ResourceGroupName $ResourceGroupName | Select ZoneName, @{label='vNetName'; expression={$_.VirtualNetworkId.Split('/')[-1]}} ` 
     }
     $output = $existingLinks
     $DeploymentScriptOutputs = @{}
     $DeploymentScriptOutputs['linkedvNets'] = $output
-    Write-Output "Finished GetExistingVNetLinks script"
    '''
     cleanupPreference: 'OnSuccess'
     retentionInterval: 'P1D'
   }
 }
 
-var testarray = [for zone in privateDnsZoneNames: '\'${zone}\', \'${vnetId}\'']
-var test = intersection(GetExistingVNetLinks.properties.outputs['linkedvNets'], testarray)
+module linkedvnet 'virtualNetworkLinks.bicep' = [for item in zoneVnet: {
+  name: '${item.ZoneName}-${item.vNetName}'
+  scope: resourceGroup()
+  params: {
+    exists: (contains(GetExistingVNetLinks.properties.outputs['linkedvNets'], item) ? true : false)
+    tags: tags
+    vNetName: item.vNetName
+    pzone: item.ZoneName
+    env: env    
+  }
+}]
 
-// module linkedvnet 'privatednszone.bicep' = [for zone in privateDnsZoneNames: {
-//   name: '${zone}-${vNetName}'
-//   scope: resourceGroup()
-//   params: {
-//     exists: (contains(test,vnetId) && contains(test,zone) && contains(GetExistingVNetLinks.properties.outputs['linkedvNets'], vNetName) ? true : false)
-//     tags: tags
-//     vNetName: vNetName
-//     pzone: zone
-//     env: env
-    
-//   }
-// }]
 
-// // Outputs
-// output linkedvnet array = [for zone in privateDnsZoneNames: {
-//   name: linkedvnet[0].name
-//   value: linkedvnet[0].outputs
-// }]
-
-output testarray array = testarray
-output test array = test

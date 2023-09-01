@@ -1,14 +1,6 @@
 targetScope = 'resourceGroup'
 
 // Parameters
-@allowed([
-  'dev'
-  'test'
-  'prod'
-])
-@minLength(2)
-@maxLength(10)
-@description('Deployment Environment')
 param env string
 param vNetName string
 param tags object
