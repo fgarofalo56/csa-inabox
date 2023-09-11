@@ -22,7 +22,7 @@ param location string = resourceGroup().location
 
 @description('Name of the Purview Account')
 @maxLength(24)
-param purviewAcctName string = 'purviewacct'
+param purviewAcctName string = 'demo-purview'
 
 @description('SKU of the Purview Account')
 param sku object = {
@@ -137,9 +137,9 @@ resource purviewAcct 'Microsoft.Purview/accounts@2021-12-01' = {
 
 
 
-resource purviewPrivateEndPoint 'Microsoft.Network/privateEndpoints@2023-04-01' = [for item in endpointConfigs: if (empty(resourceId('Microsoft.Network/privateEndpoints@2023-04-01', '${toLower(purviewAcctName)}-${uniqueString(resourceGroup().id)}-${item.privateEPGroup}-pep-${env}')) && publicNetworkAccess == 'Disabled') {
+resource purviewPrivateEndPoint 'Microsoft.Network/privateEndpoints@2023-04-01' = [for item in endpointConfigs: if (publicNetworkAccess == 'Disabled') {
  
-  name: '${toLower(purviewAcctName)}-${uniqueString(resourceGroup().id)}-${item.privateEPGroup}-pep-${env}'
+  name: '${toLower(purviewAcctName)}-private-endpoint-${env}-${item.privateEPGroup}'
   location: location
   tags: tags
   properties: {
@@ -161,7 +161,7 @@ resource purviewPrivateEndPoint 'Microsoft.Network/privateEndpoints@2023-04-01' 
   }
 }]
 
-resource purviewPrivateEndpointPortalARecord 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2020-11-01' = [for item in endpointConfigs: if (empty(resourceId('Microsoft.Network/privateEndpoints@2023-04-01', '${toLower(purviewAcctName)}-${uniqueString(resourceGroup().id)}-${item.privateEPGroup}-pep-${env}')) && publicNetworkAccess == 'Disabled')  {
+resource purviewPrivateEndpointPortalARecord 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2020-11-01' = [for item in endpointConfigs: if (empty(resourceId('Microsoft.Network/privateDnsZones', item.privateDNSZone)) && publicNetworkAccess == 'Disabled')  {
   name: 'default'
   parent: purviewPrivateEndPoint[indexOf(endpointConfigs, item)]
   properties: {
@@ -169,7 +169,7 @@ resource purviewPrivateEndpointPortalARecord 'Microsoft.Network/privateEndpoints
       {
         name: '${purviewPrivateEndPoint[indexOf(endpointConfigs, item)].name}-arecord'
         properties: {
-          privateDnsZoneId: '/subscriptions/${subscription().subscriptionId}/resourceGroups/${item.privateDNSZoneRG}/providers/Microsoft.Network/privateDnsZones/${item.privateDNSZone}'
+          privateDnsZoneId: resourceId('Microsoft.Network/privateDnsZones', item.privateDNSZone)
         }
       }
     ]
@@ -177,15 +177,11 @@ resource purviewPrivateEndpointPortalARecord 'Microsoft.Network/privateEndpoints
 }]
 
 resource pepConfig 'Microsoft.Purview/accounts/privateEndpointConnections@2021-12-01' =  [for item in endpointConfigs: if (publicNetworkAccess == 'Disabled') {
-  name: '${toLower(purviewAcctName)}-${uniqueString(resourceGroup().id)}-${item.privateEPGroup}-pep-${env}'
+  name: '${toLower(purviewAcctName)}-private-endpoint-${env}-${item.privateEPGroup}'
   parent: purviewAcct
-  dependsOn: [
-    purviewPrivateEndPoint[indexOf(endpointConfigs, item)]
-    purviewPrivateEndpointPortalARecord[indexOf(endpointConfigs, item)]
-  ]
   properties: {
     privateEndpoint: {
-      id: '/subscriptions/${subscription().subscriptionId}/resourceGroups/${item.privateDNSZoneRG}/providers/Microsoft.Network/privateEndpoints/${purviewPrivateEndPoint[indexOf(endpointConfigs, item)]}'
+      id: resourceId('Microsoft.Network/privateEndpoints', purviewPrivateEndPoint[indexOf(endpointConfigs, item)].name)
     }
     privateLinkServiceConnectionState: {
       status: 'Approved'
