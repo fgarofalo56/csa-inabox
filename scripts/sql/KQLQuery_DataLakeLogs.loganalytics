@@ -1,0 +1,19 @@
+//generate a simple list of all events from the data lake
+StorageBlobLogs
+| where TimeGenerated between (datetime(2023-10-04 18:00:00) .. datetime(2023-10-04 19:00:00))
+| where UserAgentHeader contains "SQLBLOBACCESS"
+| sort by TimeGenerated desc
+
+//run an aggregate query to calculate how many files were scanned and the total body size in MB
+StorageBlobLogs
+| where TimeGenerated between (datetime(2023-10-04 18:00:00) .. datetime(2023-10-04 19:00:00))
+| where UserAgentHeader contains "SQLBLOBACCESS"
+| where Uri contains "pppfoi"
+| summarize FilesScanned=dcount(Uri),ScannedSizeMB=sum(ResponseBodySize)/1024/1024
+
+//run an aggregate query and group by the CallerIpAddress
+StorageBlobLogs
+| where TimeGenerated between (datetime(2023-10-04 18:00:00) .. datetime(2023-10-04 19:00:00))
+| where UserAgentHeader contains "SQLBLOBACCESS"
+| where Uri contains "pppfoi"
+| summarize FilesScanned=dcount(Uri),ScannedSizeMB=sum(ResponseBodySize)/1024/1024 by CallerIpAddress
