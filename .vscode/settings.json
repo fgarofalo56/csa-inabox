@@ -1,9 +1,79 @@
 {
     "github.copilot.enable": {
-
         "*": true,
         "plaintext": true,
         "markdown": true,
         "scminput": true
+    },
+    "terminal.integrated.profiles.windows": {
+        "PowerShell": {
+            "source": "PowerShell",
+            "icon": "terminal-powershell"
+        },
+        "Command Prompt": {
+            "path": [
+                "${env:windir}\\Sysnative\\cmd.exe",
+                "${env:windir}\\System32\\cmd.exe"
+            ],
+            "args": [],
+            "icon": "terminal-cmd"
+        },
+        "Git Bash": {
+            "source": "Git Bash"
+        }
+    },
+    "azure-iot-edge.defaultPlatform": {
+        "platform": "windows-amd64",
+        "alias": null
+    },
+    "azureAutomation.directory.basePath": "S:\\temp\\vscodelocal",
+    "sarif-viewer.connectToGithubCodeScanning": "off",
+    "editor.definitionLinkOpensInPeek": false,
+    "dotnetAcquisitionExtension.enablePreviewFeatures": true,
+    "dotnetAcquisitionExtension.enableTelemetry": false,
+    "azureApiManagement.advancedCreation": true,
+    "azureApiManagement.advancedPolicyAuthoringExperience": true,
+    "appService.enablePythonRemoteDebugging": true,
+    "azure-dev.auth.useIntegratedAuth": true,
+    "csharp.preview.improvedLaunchExperience": true,
+    "jupyter.interactiveWindow.textEditor.magicCommandsAsComments": true,
+    "jupyter.interactiveWindow.textEditor.normalizeSelection": true,
+    "jupyter.logging.level": "error",
+    "jupyter.showVariableViewWhenDebugging": true,
+    "jupyter.themeMatplotlibPlots": true,
+    "extensions.autoRestart": true,
+    "extensions.closeExtensionDetailsOnViewChange": true,
+    "terminal.explorerKind": "both",
+    "diffEditor.codeLens": true,
+    "editor.quickSuggestions": {
+        "strings": "on",
+        "comments": "on"
+    },
+    "window.autoDetectColorScheme": true,
+    "azureDatabases.useCosmosOAuth": true,
+    "jupyter.allowUnauthorizedRemoteConnection": true,
+    "azure.cloud": "AzureCloud",
+    "azureResourceManagerTools.autoDetectJsonTemplates": true,
+    "azIntegrationAccounts.showExplorer": true,
+    "azure.showSignedInEmail": true,
+    "azureResourceManagerTools.checkForLatestSchema": true,
+    "workbench.editor.preferHistoryBasedLanguageDetection": true,
+    "azure.authenticationLibrary": "MSAL",
+    "editor.wordWrap": "on",
+    "prompty.currentModelConfiguration": "default",
+    "editor.formatOnPaste": true,
+    "editor.formatOnSave": true,
+    "editor.formatOnType": true,
+    "[bicep]": {
+        "editor.defaultFormatter": "ms-azuretools.vscode-bicep"
+    },
+    "bicep.completions.getAllAccessibleAzureContainerRegistries": true,
+    "bicep.trace.server": "Messages",
+    "editor.defaultFormatter": "vscode.json-language-features",
+    "azureResourceGroups.suppressActivityNotifications": false,
+    "azureResourceGroups.showHiddenTypes": true,
+    "azure.resourceFilter": null,
+    "[powershell]": {
+        "editor.defaultFormatter": "ms-vscode.powershell"
     }
 }

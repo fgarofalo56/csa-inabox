@@ -1,0 +1,46 @@
+ADFPipelineRun
+| where TimeGenerated > ago(1d)
+| where Status in('InProgress', 'Queued')
+| where RunId !in ((ADFPipelineRun | where Status in ("Succeeded", "Failed", "Cancelled") | project RunId))
+| where datetime_diff('hour', now(), Start) > 24
+| extend dataFactory = split(ResourceId, '/')[-1]
+| project TimeGenerated, dataFactory, OperationName, Status, PipelineName
+| summarize count() by PipelineName, tostring(dataFactory), Status, TimeGenerated
+| order by TimeGenerated desc
+
+ADFActivityRun
+
+
+AzureDiagnostics 
+| where TimeGenerated > ago(1d)
+| where ResourceProvider == "MICROSOFT.DATAFACTORY"
+| extend dataFactory = split(ResourceId, '/')[-2]
+| extend pipelineName = split(ResourceId, '/')[-1]
+| extend activityName = split(ResourceId, '/')[-3]
+| project TimeGenerated, dataFactory, pipelineName
+| summarize count() by pipelineName, dataFactory, TimeGenerated
+| order by TimeGenerated desc
+
+
+ADFSandboxActivityRun 
+
+ADFSandboxPipelineRun
+
+
+
+let allPipelineRuns = union ADFPipelineRun, ADFSandboxPipelineRun;
+allPipelineRuns
+| where TimeGenerated > ago(1d)
+| where PipelineName in ('mdwload')
+| where Status in ('InProgress', 'Queued')
+| where RunId !in ((allPipelineRuns | where Status in (
+    // 'Succeeded'
+    'Failed'
+    ,'Cancelled'
+    ) 
+    | project RunId)
+    )
+| where datetime_diff('minute', now(), Start) > 20
+| extend dataFactory = split(ResourceId, '/')[-1]
+| project TimeGenerated, dataFactory, OperationName, Status, PipelineName,  datetime_diff('minute', now(), Start)
+| summarize count() by PipelineName, tostring(dataFactory), Status, TimeGenerated

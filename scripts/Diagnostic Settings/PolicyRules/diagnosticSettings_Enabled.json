@@ -1,0 +1,57 @@
+{
+    "if": {
+        "field": "type",
+        "equals": "Microsoft.Resources/subscriptions/resourceGroups/providers/diagnosticSettings"
+    },
+    "then": {
+        "effect": "deployIfNotExists",
+        "details": {
+            "type": "Microsoft.Insights/diagnosticSettings",
+            "existenceCondition": {
+                "allOf": [
+                    {
+                        "field": "Microsoft.Insights/diagnosticSettings/logs.logAnalyticsDestination.enabled",
+                        "equals": "true"
+                    }
+                ]
+            },
+            "deploymentScope": "subscription",
+            "roleDefinitionIds": [
+                "/providers/Microsoft.Authorization/roleDefinitions/8e3af657-a8ff-443c-a75c-2fe8c4bcb635"
+            ],
+            "deployment": {
+                "properties": {
+                    "mode": "incremental",
+                    "template": {
+                        "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                        "contentVersion": "1.0.0.0",
+                        "resources": [
+                            {
+                                "type": "Microsoft.Insights/diagnosticSettings",
+                                "name": "[concat('diagnosticSettings-', parameters('diagnosticSettingsName'))]",
+                                "apiVersion": "2017-05-01-preview",
+                                "properties": {
+                                    "workspaceId": "[parameters('workspaceId')]",
+                                    "logs": [
+                                        {
+                                            "category": "AllLogs",
+                                            "enabled": true
+                                        }
+                                    ]
+                                }
+                            }
+                        ]
+                    },
+                    "parameters": {
+                        "workspaceId": {
+                            "value": "<your-log-analytics-workspace-id>"
+                        },
+                        "diagnosticSettingsName": {
+                            "value": "diagsettingsdefault"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

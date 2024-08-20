@@ -1,0 +1,28 @@
+#Login to Azure
+#Use -Environment Parm to if you need to use Azure Gov.  AzureUSGovernmnet
+
+Connect-AzAccount -Environment AzureCloud -UseDeviceAuthentication
+
+# For Azure Global regions
+# Set Platform management subscripion ID as the the current subscription
+# Azure CLI does not run in Polyglot Notebook, run the could in terminal
+
+# $ManagementSubscriptionId="a0d6cfbe-8dc6-49b2-80da-c2473a463a98"  a0d6cfbe-8dc6-49b2-80da-c2473a463a98
+# az account set --subscription $ManagementSubscriptionId
+
+# Set the top level MG Prefix in accordance to your environment. This example assumes default 'alz'.
+$TopLevelMGPrefix="alz"
+
+# $dateYMD=$(date +%Y%m%dT%H%M%S%NZ)
+$dateYMD = Get-Date -Format "yyyyMMddTHHmmssffZ"
+
+$GROUP="rg-${TopLevelMGPrefix}-logging-001"
+$NAME="alz-loggingDeployment-${dateYMD}"
+$TEMPLATEFILE="S:\Repos\GitHub\csa-inabox\deploy\bicep\LandingZone\01_Logging\logging\logging.bicep"
+$PARAMETERS="@S:\Repos\GitHub\csa-inabox\deploy\bicep\LandingZone\01_Logging\logging\parameters\logging.parameters.all.json"
+
+# Create Resource Group - optional when using an existing resource group
+az group create --name $GROUP --location eastus
+
+# Deploy Module
+az deployment group create --name $NAME --resource-group $GROUP --template-file $TEMPLATEFILE --parameters $PARAMETERS
