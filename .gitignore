@@ -161,3 +161,11 @@ cython_debug/
 
 #Paths to ignore
 domains/spark/ArcGIS_GeoAnalyticsEngine/
+.azuredatastudio/
+__blob*/
+#  Files to ignore
+__azurite_db_blob*
+Alerts.bicep
+lasaalzdev
+AzureBuiltIn*.csv
+
