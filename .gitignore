@@ -168,6 +168,6 @@ tools/dbt/
 #  Files to ignore
 __azurite_db_blob*
 Alerts.bicep
-lasaalzdev
+lasaalzdev*
 AzureBuiltIn*.csv
 
