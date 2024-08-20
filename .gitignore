@@ -163,6 +163,8 @@ cython_debug/
 domains/spark/ArcGIS_GeoAnalyticsEngine/
 .azuredatastudio/
 __blob*/
+tools/dbt/
+
 #  Files to ignore
 __azurite_db_blob*
 Alerts.bicep
