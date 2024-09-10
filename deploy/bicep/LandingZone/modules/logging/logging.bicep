@@ -1,5 +1,4 @@
 // This template is used as a module to from the main.bicep file to deploy a Log Analytics workspace
-
 // Metadata
 metadata name = 'ALZ Bicep - Subscription default Log Analytics workspace'
 
@@ -10,6 +9,7 @@ param prefix string
 param tags object
 param logRetentionDays int = 30
 param storageAccountId string
+param parLoggingRG string
 param environment string
 
 @allowed([
@@ -101,6 +101,7 @@ resource resDataCollectionRuleVMInsights 'Microsoft.Insights/dataCollectionRules
   }
 }
 
+// DCR Change Tracking
 resource resDataCollectionRuleChangeTracking 'Microsoft.Insights/dataCollectionRules@2021-04-01' = {
   name: '${prefix}-change-tracking-dcr'
   location: location
@@ -411,6 +412,53 @@ resource resDataCollectionRuleMDFCSQL'Microsoft.Insights/dataCollectionRules@202
   }
 }
 
+// Workspace transformation
+resource resDCRWorkspaceTransformation'Microsoft.Insights/dataCollectionRules@2021-04-01' = {
+  name: '${prefix}-workspacetransformation-dcr'
+  location: location
+  properties: {
+    description: 'Data collection rule for Workspace Transformation.'
+    dataSources: {
+      extensions: [
+        {
+          extensionName: 'MicrosoftDefenderForSQL'
+          name: 'MicrosoftDefenderForSQL'
+          streams: [
+            'Microsoft-DefenderForSqlAlerts'
+            'Microsoft-DefenderForSqlLogins'
+            'Microsoft-DefenderForSqlTelemetry'
+            'Microsoft-DefenderForSqlScanEvents'
+            'Microsoft-DefenderForSqlScanResults'
+          ]
+          extensionSettings: {
+            enableCollectionOfSqlQueriesForSecurityResearch: true
+          }
+        }
+      ]
+    }
+    destinations: {
+      logAnalytics: [
+        {
+          workspaceResourceId: logAnalyticsWorkspace.id
+          name: 'WorkspaceTransformation-Dest'
+        }
+      ]
+    }
+    dataFlows: [
+      {
+        streams: [
+          'Microsoft-Table-LAQueryLogs'
+        ]
+        destinations: [
+          'WorkspaceTransformation-Dest'
+        ]
+        transformKql: 'source |where QueryText !contains \'LAQueryLogs\' | extend Context = parse_json(RequestContext) | extend Resources_CF = tostring(Context[\'workspaces\']) |extend RequestContext = \'\''
+      }
+    ]
+  }
+}
+
+
 // Onboard the Log Analytics Workspace to Sentinel for SecurityInsights 
 resource resSentinelOnboarding 'Microsoft.SecurityInsights/onboardingStates@2024-03-01'= {
   name: 'default'
@@ -459,6 +507,16 @@ resource resLogAnalyticsLinkedStorageAccountAlerts 'Microsoft.OperationalInsight
     ]
   }
 }
+
+module resQueryPack 'QueryPacks/packs.bicep' = {
+  name: 'resQueryPack'
+  params: {
+    location: location
+    tags: tags
+    parLoggingRG: parLoggingRG
+  }
+}
+output resQueryPacks object = resQueryPack
 
 output logAnalyticsWorkspaceName string = logAnalyticsWorkspace.name
 output logAnalyticsWorkspaceId string = logAnalyticsWorkspace.id

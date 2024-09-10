@@ -1,21 +1,16 @@
-// Templete to deploy policy assignment for built in policies and policy sets
 targetScope = 'subscription'
 
 metadata name = 'ALZ Bicep - Policy Settings'
 metadata description = 'Module used to set up Policies at the subscription level'
 
-// @sys.description('Log Analytics Workspace Resource ID.')
-// param parLogAnalyticsWorkspaceResourceId string
+@sys.description('List of Built In Policy Initiative Names to Assign')
+param initiatives array
 
 @sys.description('Log Analytics Workspace Resource Name')
-param logAnalytics string 
-
-// @sys.description('Log Analytics Workspace Resource Group Name')
-// param logAnalyticsRG string
+param parmLogAnalytics string 
 
 @sys.description('Managed Identity')
-param userAssignedIdentityId string
-
+param userAssignedIdentity object
 
 @sys.description('Policy Resource Location.')
 param location string = 'eastus'
@@ -23,98 +18,105 @@ param location string = 'eastus'
 @sys.description('Policy Assignment Non-Compliance Message.')
 param nonComplianceMessage string
 
+param parmLoggingRG string
+
 param prefix string
 param environment string
 
 param tags object = {}
 
-// param resourceLocationList array = [
-//   'eastus'
-//   'eastus2'
-//   'westus'
-//   'westus2'
-//   'centralus'
-//   'northcentralus'
-//   'southcentralus'
-//   'westcentralus'
-// ]
-// param effect string = 'DeployIfNotExists'
+// Parameters for Policy Assignment Configuration when parameter values are required
+param parLogAnalyticsDiagonsticConfig string = '{"logAnalytics": {"value": "${parmLogAnalytics}"}, "diagnosticSettingName": {"value": "${prefix}-${environment}-[replaceString]"}}'
+param parLogAnalyticsOnlyConfig string = '{"logAnalytics": {"value": "${parmLogAnalytics}"}}'
 
-// param profileName string = 'alz-policy-profile'
-// param metricsEnabled string = 'True'
-// param logsEnabled string = 'True'
+param parDCRResourceId string = resourceId('Microsoft.Insights/dataCollectionRules', '${prefix}-change-tracking-dcr')
+// param parUMID string = resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', '${userAssignedIdentity.outputs.userAssignedIdentityId}')
+param parChangeTrackingInventoryConfing object = {
+  bringYourOwnUserAssignedManagedIdentity: {value: true}
+  userAssignedIdentityResourceId: {value: '${userAssignedIdentity.outputs.userAssignedIdentityId.value}'}
+  dcrResourceId: {value: parDCRResourceId}
+}
+param parSecurityBenchmarkCFG object = json('{"networkWatcherShouldBeEnabledResourceGroupName": {"value": "${parmLoggingRG}"}}')
+param parSQLSecurityCenter object = json('{"userWorkspaceResourceId": {"value": "${parmLogAnalytics}"}}') 
 
-// Variables
-var diagnosticSettingName = '${prefix}-dataObservability-${environment}-diagSettingsLA'
+// Variables for Policy Assignment Configuration when parameter values are required
+var varFedRampModerateConfig = json('{"resourceGroupName-b6e2945c-0b7b-40f5-9233-7a5323b5cdc6": {"value": "${parmLoggingRG}"}}')
 
-// Assign built in policy sets for logging and monitoring
-// Array of built in policy definitions
-param policyAssignments array = [
-  {
-    name: '${prefix}-EnableLogsPolicy-${environment}-policyAssignment'
-    policyDefinitionId: '/providers/Microsoft.Authorization/policySetDefinitions/0884adba-2312-4468-abeb-5422caed1038'
-    displayName: '${prefix}-${environment} Enable allLogs category group resource logging for supported resources to Log Analytics'
-    setName: '0884adba-2312-4468-abeb-5422caed1038'
-  }
-  {
-    name: '${prefix}-EnableAuditPolicy-${environment}-policyAssignment'
-    policyDefinitionId: '/providers/Microsoft.Authorization/policySetDefinitions/f5b29bc4-feca-4cc6-a58a-772dd5e290a5'
-    displayName: '${prefix}-${environment} Enable audit category group resource logging for supported resources to Log Analytics'
-    setName: 'f5b29bc4-feca-4cc6-a58a-772dd5e290a5'
-  }
-]
+// Function to replace [replaceString] in the diagnostic setting name for loops 
+@sys.description('Function to replace [replaceString] in the diagnostic setting name for loops')
+func replaceString(inputValue string, replaceValue string) string => '${replace(inputValue, '[replaceString]', '${replaceValue}')}'
 
-resource policySetAssignment 'Microsoft.Authorization/policyAssignments@2024-04-01' = [for assignment in policyAssignments: {
-  name: assignment.name
+//Resource policyAssignment Deployment
+resource policyAssignment 'Microsoft.Authorization/policyAssignments@2024-04-01' = [for initiative in initiatives: {
+  name: toLower(take('${prefix}-${initiative.displayName}-${initiative.id}',64))
   location: location
-  scope: subscription()
   identity: {
     type: 'UserAssigned'
     userAssignedIdentities: {
-        '${userAssignedIdentityId}': {}
-      }
+      '${userAssignedIdentity.outputs.userAssignedIdentityId.value}': {}
     }
-  
+  }  
   properties: {
-    displayName: assignment.displayName
-    policyDefinitionId: assignment.policyDefinitionId
+    displayName: '${prefix} ${initiative.displayName} for ${environment}'
+    policyDefinitionId: '/providers/Microsoft.Authorization/policySetDefinitions/${initiative.id}'
+    // policySetDefinitionId: '${resourceId('Microsoft.Authorization/policySetDefinitions/','${initiative.id}')}'
     metadata: tags
-
-    // Additional properties like parameters, etc.
     nonComplianceMessages:[ 
       {
       message: nonComplianceMessage
     }
-  ]
-    parameters: {
-      logAnalytics: {
-        value: logAnalytics
-      }
-      diagnosticSettingName: {
-        value: diagnosticSettingName
-    }
-  }
+  ] 
+
+  parameters: (empty(initiative.?parameters) ?? true ) ? {} 
+  : (initiative.parameters.?varWinMonitorAgent ?? false) ? json('{"dcrResourceId": {"value": "${parDCRResourceId}"},"bringYourOwnUserAssignedManagedIdentity": {"value": true},"userAssignedManagedIdentityName": {"value": "${userAssignedIdentity.outputs.userAssignedIdentityName}"}}')   
+  : (initiative.parameters.?varCISBenchmarkEnabled ?? false) ? json('{"maximumDaysToRotate-d8cf8476-a2ec-4916-896e-992351803c44": {"value": 365}, "resourceGroupName-b6e2945c-0b7b-40f5-9233-7a5323b5cdc6": {"value": "${parmLoggingRG}"}}')
+  : (initiative.parameters.?varInventoryArcVM ?? false) ? json('{"dcrResourceId": {"value": "${parDCRResourceId}"}}')      
+  : ((initiative.parameters.?varCosmosDBThroughput ?? 0) > 0) ? json('{"throughputMax": {"value": ${initiative.parameters.varCosmosDBThroughput}}}') 
+  : (initiative.parameters.?varSecurityBenchmarkEnabled  ?? false) ? parSecurityBenchmarkCFG
+  : (initiative.parameters.?varChangeTrackingEnabled ?? false) ? parChangeTrackingInventoryConfing
+  : (initiative.parameters.?varSQLSecurityCenterEnabled ?? false) ? parSQLSecurityCenter
+  : (initiative.parameters.varLogAnalyticsEnabled) && (!initiative.parameters.varDiagnosticSettingEnabled) && (!initiative.parameters.varFedRampModerateEnabled) ? json(parLogAnalyticsOnlyConfig) 
+  : (initiative.parameters.varLogAnalyticsEnabled) && (initiative.parameters.varDiagnosticSettingEnabled) && (contains(initiative.displayName, '*Logs*')) && (!initiative.parameters.varFedRampModerateEnabled) ?  json(replaceString(parLogAnalyticsDiagonsticConfig, 'Logs-${initiative.displayName}-${initiative.id}'))
+  : (initiative.parameters.varLogAnalyticsEnabled) && (initiative.parameters.varDiagnosticSettingEnabled) && (contains(initiative.displayName, '*Audit*')) && (!initiative.parameters.varFedRampModerateEnabled) ?  json(replaceString(parLogAnalyticsDiagonsticConfig, 'Audit-${initiative.displayName}-${initiative.id}'))  
+  : (initiative.parameters.varLogAnalyticsEnabled) && (initiative.parameters.varDiagnosticSettingEnabled) && (!initiative.parameters.varFedRampModerateEnabled) ?  json(replaceString(parLogAnalyticsDiagonsticConfig, '${initiative.displayName}-${initiative.id}'))
+  : (!initiative.parameters.varLogAnalyticsEnabled) && (!initiative.parameters.varDiagnosticSettingEnabled) && (initiative.parameters.varFedRampModerateEnabled) ? varFedRampModerateConfig 
+  : (initiative.parameters.varLogAnalyticsEnabled) && (!initiative.parameters.varDiagnosticSettingEnabled) && (initiative.parameters.varFedRampModerateEnabled) ? union(json(parLogAnalyticsOnlyConfig), varFedRampModerateConfig) 
+  : (initiative.parameters.varLogAnalyticsEnabled) && (initiative.parameters.varDiagnosticSettingEnabled) && (initiative.parameters.varFedRampModerateEnabled) ? union(json(replaceString(parLogAnalyticsDiagonsticConfig, '${initiative.displayName}-${initiative.id}')), varFedRampModerateConfig) : {} 
 }
 }
 ]
 
-
-// Count of the number of policy sets assigned
-var varPolicySetCount = length(policyAssignments)
-
-resource policySetDefinitions 'Microsoft.Authorization/policySetDefinitions@2023-04-01' existing = [for i in range(0, varPolicySetCount):{
-  name: policyAssignments[i].setName
-  scope: tenant()
-  }]
-
-// Outputs
-
-output policySetDefinitions array = [for i in range(0, varPolicySetCount):{
-policyDefinitionId: policySetDefinitions[i].id
-policySetDefinitionName: policySetDefinitions[i].name
-// policySetDefinitionproperties: policySetDefinitions[i].properties
-policySetDefinitionpropertiespolicyDefinitions: map(policySetDefinitions[i].properties.policyDefinitions, DefinitionId => DefinitionId.policyDefinitionId)
-// policySetDefinitionpropertiespolicyDefinitions: toObject(policySetDefinitions[i].properties.policyDefinitions, entry => 'policyDefinitionId', entry => entry.policyDefinitionId)
-// policySetDefinitionPolicyIds: flatten(policySetDefinitions[i].properties.policyDefinitions.policyDefinitionId)
-// policySetDefinitionReferenceId: flatten(policySetDefinitions[i].properties.policyDefinitions.policyDefinitionReferenceId)
+var policyAssignmentCount = length(initiatives)
+output policySetAssignments array = [for i in range(0, policyAssignmentCount):{
+  policyAssignmentId: policyAssignment[i].id
+  policyAssignmentName: policyAssignment[i].name
 }]
+
+
+// resource policySetDefinitions 'Microsoft.Authorization/policySetDefinitions@2023-04-01' existing = [for i in range(0, varPolicySetCount):{
+//   name: policyAssignments[i].setName
+//   scope: tenant()
+//   }]
+
+// output policySetDefinitions array = [for i in range(0, varPolicySetCount):{
+// policySetCount: varPolicySetCount    
+// policySetDefinitionId: policySetDefinitions[i].id
+// policySetDefinitionName: policySetDefinitions[i].name
+// policySetPolicyCount: length(policySetDefinitions[i].properties.policyDefinitions)
+// policySetPolicyDefinitionIds: map(policySetDefinitions[i].properties.policyDefinitions, DefinitionId => DefinitionId.policyDefinitionId)
+// policySetPolicyReferenceId: map(policySetDefinitions[i].properties.policyDefinitions, ReferenceId => ReferenceId.policyDefinitionReferenceId)  
+// }]
+
+// output id string = policySetAssignment[0].id
+
+
+// // policySetDefinitionName: policySetDefinitions[i].name
+// // policyDefinitionId: policySetDefinitions[i].id
+// // policySetDefinitionpropertiespolicyDefinitions: map(policySetDefinitions[i].properties.policyDefinitions, DefinitionId => DefinitionId.policyDefinitionId)
+// // policyDefinitionReferenceId: map(policySetDefinitions[i].properties.policyDefinitions, ReferenceId => ReferenceId.policyDefinitionReferenceId)
+
+// // policySetDefinitionpropertiespolicyDefinitions: toObject(policySetDefinitions[i].properties.policyDefinitions, entry => 'policyDefinitionId', entry => entry.policyDefinitionId)
+// // policySetDefinitionPolicyIds: flatten(policySetDefinitions[i].properties.policyDefinitions.policyDefinitionId)
+// // policySetDefinitionReferenceId: flatten(policySetDefinitions[i].properties.policyDefinitions.policyDefinitionReferenceId)
+// }]
+

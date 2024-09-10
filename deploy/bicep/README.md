@@ -1,1 +1,0 @@
-Location for BiCEP templates to deploy Azure Resources in a configured state.

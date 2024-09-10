@@ -20,16 +20,16 @@ param parLocation string
 @sys.description('Name of Resource Group to be created.')
 param parResourceGroupName string
 
-@sys.description('''Resource Lock Configuration for Resource Groups.
+// @sys.description('''Resource Lock Configuration for Resource Groups.
 
-- `kind` - The lock settings of the service which can be CanNotDelete, ReadOnly, or None.
-- `notes` - Notes about this lock.
+// - `kind` - The lock settings of the service which can be CanNotDelete, ReadOnly, or None.
+// - `notes` - Notes about this lock.
 
-''')
-param parResourceLockConfig lockType = {
-  kind: 'None'
-  notes: 'This lock was created by the ALZ Bicep Resource Group Module.'
-}
+// ''')
+// param parResourceLockConfig lockType = {
+//   kind: 'None'
+//   notes: 'This lock was created by the ALZ Bicep Resource Group Module.'
+// }
 
 @sys.description('Tags you would like to be applied to all resources in this module.')
 param parTags object = {}
@@ -47,14 +47,14 @@ resource resResourceGroup 'Microsoft.Resources/resourceGroups@2022-09-01' = {
 }
 
 // Create a resource lock at the resource group level
-module modResourceGroupLock 'resourceGroupLock.bicep' = if (!empty(parResourceLockConfig ?? {}) && parResourceLockConfig.?kind != 'None') {
-  scope: resourceGroup(resResourceGroup.name)
-  name: 'deploy-${resResourceGroup.name}-lock'
-  params: {
-    parResourceGroupName: resResourceGroup.name
-    parResourceLockConfig: parResourceLockConfig
-  }
-}
+// module modResourceGroupLock 'resourceGroupLock.bicep' = if (!empty(parResourceLockConfig ?? {}) && parResourceLockConfig.?kind != 'None') {
+//   scope: resourceGroup(resResourceGroup.name)
+//   name: 'deploy-${resResourceGroup.name}-lock'
+//   params: {
+//     parResourceGroupName: resResourceGroup.name
+//     parResourceLockConfig: parResourceLockConfig
+//   }
+// }
 
 module modCustomerUsageAttribution '../../CRML/customerUsageAttribution/cuaIdSubscription.bicep' = if (!parTelemetryOptOut) {
   name: 'pid-${varCuaid}-${uniqueString(subscription().subscriptionId, parResourceGroupName)}'

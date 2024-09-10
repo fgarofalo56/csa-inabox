@@ -5,34 +5,55 @@ targetScope = 'subscription'
 metadata name = 'ALZ Bicep - Policy Remediation'
 metadata description = 'Module used to set up Remediation Tasks for Policies at the subscription level'
 
-@sys.description('Policy Assignments')
-param parmPolicyAssignmentid string
+// @sys.description('Policy Assignments')
+// param parmPolicyAssignmentid string
 
-@sys.description('Policy Definition Reference ID')
-param parmPolicyDefinitionReferenceId string
-
-@sys.description('Prefix for the resources')
-param prefix string
+// @sys.description('Policy Definition Reference ID')
+// param parmPolicyDefinitionReferenceId string
 
 @sys.description('Environment for the resources')
 param environment string
 
-@sys.description('Policy Definition Name')
-param policyDefinitionName string
+// @sys.description('Policy Definition Name')
+// param policyDefinitionName string
+
+// param initiatives array
+param policyAssignmentid string
+param policyAssignmentName string
 
 
 // Resources
-resource remediationTask 'Microsoft.PolicyInsights/policyAssignments/remediationTasks@2021-10-01' = {
-  name: '${prefix}-remediationTask-${policyDefinitionName}-${environment}'
+// resource remediationTask 'Microsoft.PolicyInsights/remediations@2021-10-01' = {
+//   name: '${prefix}-remediationTask-${policyDefinitionName}-${environment}'
+//   properties: {
+//     failureThreshold: {
+//       percentage: 1
+//     }
+//   policyAssignmentId: parmPolicyAssignmentid
+//   policyDefinitionReferenceId: parmPolicyDefinitionReferenceId
+//   resourceDiscoveryMode: 'ExistingNonCompliant'
+//   parallelDeployments: 20
+// }
+// }
+
+// resource remediationTask 'Microsoft.PolicyInsights/remediations@2021-10-01' = [for id in policyAssignmentid: {
+//   name: '${prefix}-${id}-${environment}-remediation'
+//   properties: {
+//     // policyAssignmentId: resourceId('/providers/Microsoft.Authorization/policySetDefinitions', initiative.id)
+//     policyAssignmentId: id
+//     // policyDefinitionReferenceId: initiative.id
+//     parallelDeployments: 100
+//     resourceDiscoveryMode: 'ReEvaluateCompliance'
+//   }
+// }]
+
+resource remediationTask 'Microsoft.PolicyInsights/remediations@2021-10-01' = {
+  name: '${policyAssignmentName}-${environment}-remediation'
   properties: {
-    policyAssignmentId: parmPolicyAssignmentid
-    policyDefinitionReferenceId: parmPolicyDefinitionReferenceId
-    resourceDiscoveryMode: 'ExistingNonCompliant'
-    parallelDeployments: 10
-    failureThreshold
-        failureThreshold: {
-      percentage: 0.1
-    }
+    // policyAssignmentId: resourceId('/providers/Microsoft.Authorization/policySetDefinitions', initiative.id)
+    policyAssignmentId: policyAssignmentid
+    policyDefinitionReferenceId: policyAssignmentid
+    parallelDeployments: 30
+    resourceDiscoveryMode: 'ReEvaluateCompliance'
   }
 }
-
