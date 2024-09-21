@@ -3,6 +3,8 @@ targetScope = 'subscription'
 metadata name = 'ALZ Bicep - Virtual Network Peering to vWAN'
 metadata description = 'Module used to set up Virtual Network Peering from Virtual Network back to vWAN'
 
+
+
 @sys.description('Virtual WAN Hub resource ID.')
 param parVirtualWanHubResourceId string
 
@@ -17,12 +19,6 @@ param parVirtualHubConnectionSuffix string = '-vhc'
 
 @sys.description('Enable Internet Security for the Virtual Hub Connection.')
 param parEnableInternetSecurity bool = false
-
-@sys.description('Set Parameter to true to Opt-out of deployment telemetry. Default: false')
-param parTelemetryOptOut bool = false
-
-// Customer Usage Attribution Id
-var varCuaid = '7b5e6db2-1e8c-4b01-8eee-e1830073a63d'
 
 var varVwanSubscriptionId = split(parVirtualWanHubResourceId, '/')[2]
 
@@ -43,12 +39,6 @@ module modhubVirtualNetworkConnection 'hubVirtualNetworkConnection.bicep' = if (
     parVirtualHubConnectionSuffix: parVirtualHubConnectionSuffix
     parEnableInternetSecurity: parEnableInternetSecurity
   }
-}
-
-// Optional Deployment for Customer Usage Attribution
-module modCustomerUsageAttribution '../../../CRML/customerUsageAttribution/cuaIdSubscription.bicep' = if (!parTelemetryOptOut) {
-  name: 'pid-${varCuaid}-${uniqueString(subscription().id, varSpokeVnetName)}'
-  params: {}
 }
 
 output outHubVirtualNetworkConnectionName string = modhubVirtualNetworkConnection.outputs.outHubVirtualNetworkConnectionName

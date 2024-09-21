@@ -39,7 +39,6 @@ param parPrivateDnsZonesResourceGroup string
 param parHubNetworkName string
 // Variables used for the module
 
-
 @sys.description('Tags to apply to all resources.')
 param parTags object
 
@@ -90,11 +89,6 @@ var varGwConfig = [
   varErGwConfig
 ]
 
-// Customer Usage Attribution Id Telemetry
-var varCuaid = '2686e846-5fdc-4d4f-b533-16dcb09d6e6c'
-
-// ZTN Telemetry
-var varZtnP1CuaId = '3ab23b1e-c5c5-42d4-b163-1402384ba2db'
 var varZtnP1Trigger = (hubNetwork.parDdosEnabled.value && hubNetwork.parAzFirewallEnabled.value && (hubNetwork.parAzFirewallTier.value == 'Premium')) ? true : false
 
 var varAzFirewallUseCustomPublicIps = length(hubNetwork.parAzFirewallCustomPublicIps.value) > 0
@@ -166,7 +160,6 @@ module modBastionPublicIp '../publicIp/publicIp.bicep' = if (hubNetwork.parAzBas
     }
     parResourceLockConfig: (hubNetwork.parGlobalResourceLock.value.kind != 'None') ? hubNetwork.parGlobalResourceLock.value : hubNetwork.parBastionLock.value
     parTags: parTags
-    parTelemetryOptOut: hubNetwork.parTelemetryOptOut.value
   }
 }
 
@@ -393,7 +386,7 @@ module modGatewayPublicIp '../publicIp/publicIp.bicep' = [for (gateway, i) in va
     }
     parResourceLockConfig: (hubNetwork.parGlobalResourceLock.value.kind != 'None') ? hubNetwork.parGlobalResourceLock.value : hubNetwork.parVirtualNetworkGatewayLock.value
     parTags: parTags
-    parTelemetryOptOut: hubNetwork.parTelemetryOptOut.value
+    
   }
 }]
 
@@ -478,7 +471,7 @@ module modAzureFirewallPublicIp '../publicIp/publicIp.bicep' = if (hubNetwork.pa
     }
     parResourceLockConfig: (hubNetwork.parGlobalResourceLock.value.kind != 'None') ? hubNetwork.parGlobalResourceLock.value : hubNetwork.parAzureFirewallLock.value
     parTags: parTags
-    parTelemetryOptOut: hubNetwork.parTelemetryOptOut.value
+    
   }
 }
 
@@ -497,7 +490,7 @@ module modAzureFirewallMgmtPublicIp '../publicIp/publicIp.bicep' = if (hubNetwor
     }
     parResourceLockConfig: (hubNetwork.parGlobalResourceLock.value.kind != 'None') ? hubNetwork.parGlobalResourceLock.value : hubNetwork.parAzureFirewallLock.value
     parTags: parTags
-    parTelemetryOptOut: hubNetwork.parTelemetryOptOut.value
+    
   }
 }
 
@@ -687,21 +680,8 @@ module modPrivateDnsZones '../privateDnsZones/privateDnsZones.bicep' = if (hubNe
     parPrivateDnsZones: hubNetwork.parPrivateDnsZones.value
     parPrivateDnsZoneAutoMergeAzureBackupZone: hubNetwork.parPrivateDnsZoneAutoMergeAzureBackupZone.value
     parResourceLockConfig: (hubNetwork.parGlobalResourceLock.value.kind != 'None') ? hubNetwork.parGlobalResourceLock.value : hubNetwork.parPrivateDNSZonesLock.value
-    parTelemetryOptOut: hubNetwork.parTelemetryOptOut.value
+    
   }
-}
-
-// Optional Deployments for Customer Usage Attribution
-module modCustomerUsageAttribution '../../../CRML/customerUsageAttribution/cuaIdResourceGroup.bicep' = if (!hubNetwork.parTelemetryOptOut.value) {
-  #disable-next-line no-loc-expr-outside-params //Only to ensure telemetry data is stored in same location as deployment. See https://github.com/Azure/ALZ-Bicep/wiki/FAQ#why-are-some-linter-rules-disabled-via-the-disable-next-line-bicep-function for more information
-  name: 'pid-${varCuaid}-${uniqueString(resourceGroup().location)}'
-  params: {}
-}
-
-module modCustomerUsageAttributionZtnP1 '../../../CRML/customerUsageAttribution/cuaIdResourceGroup.bicep' = if (!hubNetwork.parTelemetryOptOut.value && varZtnP1Trigger) {
-  #disable-next-line no-loc-expr-outside-params //Only to ensure telemetry data is stored in same location as deployment. See https://github.com/Azure/ALZ-Bicep/wiki/FAQ#why-are-some-linter-rules-disabled-via-the-disable-next-line-bicep-function for more information
-  name: 'pid-${varZtnP1CuaId}-${uniqueString(resourceGroup().location)}'
-  params: {}
 }
 
 //If Azure Firewall is enabled we will deploy a RouteTable to redirect Traffic to the Firewall.
@@ -720,3 +700,5 @@ output outHubRouteTableId string = hubNetwork.parAzFirewallEnabled.value ? resHu
 output outHubRouteTableName string = hubNetwork.parAzFirewallEnabled.value ? resHubRouteTable.name : ''
 output outBastionNsgId string = hubNetwork.parAzBastionEnabled.value ? resBastionNsg.id : ''
 output outBastionNsgName string = hubNetwork.parAzBastionEnabled.value ? resBastionNsg.name : ''
+output outHubVirtualNetworkSubscriptionId string = subscription().subscriptionId
+output outHubVirtualNetworkResourceGroup string = resourceGroup().name

@@ -1,5 +1,3 @@
-// Template to deploy Azure Storage Accounts
-
 targetScope = 'resourceGroup'
 
 // Metadata
@@ -14,6 +12,10 @@ param tags object
 param resourceGroup string
 
 param ipRules array = []
+
+@sys.description('Storage Account Name')
+param parmStorageAccountName string
+
 
 @allowed([
   'Standard_LRS'
@@ -62,14 +64,13 @@ param defaultAction string = 'Allow'
 @description('Enable Hierarchical Namespace for the storage account. Azure Datalake Gen2')
 param isHnsEnabled bool = false
 
-
 // Variables
-var name = substring(toLower('lasa${prefix}${environment}${uniqueString(resourceGroup)}'), 0, 23)
+@sys.description('Takes the value from storageAccountName and formats name to make it unique')
+var varStorageAccountname = substring(replace(replace(replace(toLower(concat(parmStorageAccountName, uniqueString(subscription().subscriptionId, resourceGroup, parmStorageAccountName))),'-',''),' ', ''),'_', ''), 0, 24) 
 
-// Resource
-
+// Resource Definition for Storage Account
 resource resStorageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' = {
-  name: name
+  name: varStorageAccountname
   location: location
   tags: tags
   kind: kind
@@ -92,6 +93,7 @@ resource resStorageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' = {
 
   }
 }
+
 
 output storageAccountName string = resStorageAccount.name
 output storageAccountId string = resStorageAccount.id

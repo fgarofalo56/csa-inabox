@@ -1,6 +1,5 @@
 // Template used to assign roles to the user assigned identity
-
-targetScope = 'subscription'
+targetScope = 'resourceGroup'
 
 // Metadata
 metadata name = 'ALZ Bicep - Subscription Role Assignment'
@@ -8,7 +7,6 @@ metadata name = 'ALZ Bicep - Subscription Role Assignment'
 // Parameters
 param roleDefinitionId string
 param principalId string
-
 
 // Variables
 

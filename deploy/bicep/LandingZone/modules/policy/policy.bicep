@@ -39,12 +39,15 @@ param parChangeTrackingInventoryConfing object = {
 param parSecurityBenchmarkCFG object = json('{"networkWatcherShouldBeEnabledResourceGroupName": {"value": "${parmLoggingRG}"}}')
 param parSQLSecurityCenter object = json('{"userWorkspaceResourceId": {"value": "${parmLogAnalytics}"}}') 
 
+
 // Variables for Policy Assignment Configuration when parameter values are required
 var varFedRampModerateConfig = json('{"resourceGroupName-b6e2945c-0b7b-40f5-9233-7a5323b5cdc6": {"value": "${parmLoggingRG}"}}')
 
 // Function to replace [replaceString] in the diagnostic setting name for loops 
 @sys.description('Function to replace [replaceString] in the diagnostic setting name for loops')
 func replaceString(inputValue string, replaceValue string) string => '${replace(inputValue, '[replaceString]', '${replaceValue}')}'
+
+
 
 //Resource policyAssignment Deployment
 resource policyAssignment 'Microsoft.Authorization/policyAssignments@2024-04-01' = [for initiative in initiatives: {
@@ -66,7 +69,6 @@ resource policyAssignment 'Microsoft.Authorization/policyAssignments@2024-04-01'
       message: nonComplianceMessage
     }
   ] 
-
   parameters: (empty(initiative.?parameters) ?? true ) ? {} 
   : (initiative.parameters.?varWinMonitorAgent ?? false) ? json('{"dcrResourceId": {"value": "${parDCRResourceId}"},"bringYourOwnUserAssignedManagedIdentity": {"value": true},"userAssignedManagedIdentityName": {"value": "${userAssignedIdentity.outputs.userAssignedIdentityName}"}}')   
   : (initiative.parameters.?varCISBenchmarkEnabled ?? false) ? json('{"maximumDaysToRotate-d8cf8476-a2ec-4916-896e-992351803c44": {"value": 365}, "resourceGroupName-b6e2945c-0b7b-40f5-9233-7a5323b5cdc6": {"value": "${parmLoggingRG}"}}')
@@ -90,33 +92,5 @@ var policyAssignmentCount = length(initiatives)
 output policySetAssignments array = [for i in range(0, policyAssignmentCount):{
   policyAssignmentId: policyAssignment[i].id
   policyAssignmentName: policyAssignment[i].name
+
 }]
-
-
-// resource policySetDefinitions 'Microsoft.Authorization/policySetDefinitions@2023-04-01' existing = [for i in range(0, varPolicySetCount):{
-//   name: policyAssignments[i].setName
-//   scope: tenant()
-//   }]
-
-// output policySetDefinitions array = [for i in range(0, varPolicySetCount):{
-// policySetCount: varPolicySetCount    
-// policySetDefinitionId: policySetDefinitions[i].id
-// policySetDefinitionName: policySetDefinitions[i].name
-// policySetPolicyCount: length(policySetDefinitions[i].properties.policyDefinitions)
-// policySetPolicyDefinitionIds: map(policySetDefinitions[i].properties.policyDefinitions, DefinitionId => DefinitionId.policyDefinitionId)
-// policySetPolicyReferenceId: map(policySetDefinitions[i].properties.policyDefinitions, ReferenceId => ReferenceId.policyDefinitionReferenceId)  
-// }]
-
-// output id string = policySetAssignment[0].id
-
-
-// // policySetDefinitionName: policySetDefinitions[i].name
-// // policyDefinitionId: policySetDefinitions[i].id
-// // policySetDefinitionpropertiespolicyDefinitions: map(policySetDefinitions[i].properties.policyDefinitions, DefinitionId => DefinitionId.policyDefinitionId)
-// // policyDefinitionReferenceId: map(policySetDefinitions[i].properties.policyDefinitions, ReferenceId => ReferenceId.policyDefinitionReferenceId)
-
-// // policySetDefinitionpropertiespolicyDefinitions: toObject(policySetDefinitions[i].properties.policyDefinitions, entry => 'policyDefinitionId', entry => entry.policyDefinitionId)
-// // policySetDefinitionPolicyIds: flatten(policySetDefinitions[i].properties.policyDefinitions.policyDefinitionId)
-// // policySetDefinitionReferenceId: flatten(policySetDefinitions[i].properties.policyDefinitions.policyDefinitionReferenceId)
-// }]
-

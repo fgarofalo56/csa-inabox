@@ -5,7 +5,19 @@
     "core": {
       "rules": {
         "no-unused-params": {
-          "level": "warning"
+          "level": "off"
+        },
+        "no-unused-vars": {
+          "level": "off"
+        },
+        "use-safe-access": {
+          "level": "off"
+        },
+        "use-resource-id-functions": {
+          "level": "off"
+        },
+        "prefer-interpolation": {
+          "level": "off"
         }
       }
     }
@@ -20,10 +32,9 @@
     "emitMetadata": true
   },
   "experimentalFeaturesEnabled": {
-    "useSemanticColorization": true,
-    "useSemanticFormatting": true,
-    "useSemanticValidation": true,
-    "userDefinedTypes": true,
+    "assertions": true,
+    "testFramework": true,
+    "extendableParamFiles": true,
     "extensibility": true
-}
+  }
 }

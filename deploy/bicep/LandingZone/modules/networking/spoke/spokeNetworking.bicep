@@ -12,56 +12,99 @@ type lockType = {
   notes: string?
 }
 
-@sys.description('Array to hold all vaules for spoke networking module.')
-param spokeNetwork object
+// @sys.description('Array to hold all vaules for spoke networking module.')
+// param spokeNetwork object
 
 @sys.description('The Name of the Spoke Virtual Network.')
 param parSpokeNetworkName string
 
+@sys.description('The Azure Region to deploy the resources into.')
+param parSpokeLocation string
 
 @sys.description('Tags you would like to be applied to all resources in this module.')
 param parTags object
 
-// Customer Usage Attribution Id
-var varCuaid = '0c428583-f2a1-4448-975c-2d6262fd193a'
+@sys.description('Address prefix for the Spoke Virtual Network.')
+param parSpokeNetworkAddressPrefix string
+
+@sys.description('The DDoS Protection Plan ID to associate with the Spoke Virtual Network.')
+param parSpokeNetworkarDdosProtectionPlanId string
+
+@sys.description('The DNS Server IPs to associate with the Spoke Virtual Network.')
+param parDnsServerIps object
+
+@sys.description('Virtual Network Lock Configuration.')
+param parSpokeNetworkLock object
+
+@sys.description('Global Resource Lock Configuration.')
+param parGlobalResourceLock object
+
+@sys.description('The Route Table Name for the Spoke Virtual Network.')
+param parSpokeToHubRouteTableName string
+
+@sys.description('Next Hop IP Address for the Spoke Virtual Network Route Table.')
+param parNextHopIpAddress string
+
+@sys.description('Disable BGP Route Propagation for the Spoke Virtual Network Route Table.')
+param parDisableBgpRoutePropagation bool
+
+@sys.description('Route Table Lock Configuration.')
+param parSpokeRouteTableLock object
 
 
 //If Ddos parameter is true Ddos will be Enabled on the Virtual Network
 //If Azure Firewall is enabled and Network DNS Proxy is enabled DNS will be configured to point to AzureFirewall
 resource resSpokeVirtualNetwork 'Microsoft.Network/virtualNetworks@2023-02-01' = {
   name: parSpokeNetworkName
-  location: spokeNetwork.parLocation
+  // location: spokeNetwork.parLocation
+  location: parSpokeLocation
   tags: parTags
   properties: {
     addressSpace: {
       addressPrefixes: [
-        spokeNetwork.parSpokeNetworkAddressPrefix
+        // spokeNetwork.parSpokeNetworkAddressPrefix
+        parSpokeNetworkAddressPrefix
       ]
     }
-    enableDdosProtection: (!empty(spokeNetwork.pspokeNetworkarDdosProtectionPlanId) ? true : false)
-    ddosProtectionPlan: (!empty(spokeNetwork.parDdosProtectionPlanId) ? true : false) ? {
-      id: spokeNetwork.parDdosProtectionPlanId
+    // enableDdosProtection: (!empty(spokeNetwork.pspokeNetworkarDdosProtectionPlanId) ? true : false)
+    enableDdosProtection: (!empty(parSpokeNetworkarDdosProtectionPlanId) ? true : false)
+
+    // ddosProtectionPlan: (!empty(spokeNetwork.parDdosProtectionPlanId) ? true : false) ? {
+    ddosProtectionPlan: (!empty(parSpokeNetworkarDdosProtectionPlanId) ? true : false) ? {
+      // id: spokeNetwork.parDdosProtectionPlanId
+      id: parSpokeNetworkarDdosProtectionPlanId
     } : null
-    dhcpOptions: (!empty(spokeNetwork.parDnsServerIps.value) ? true : false) ? {
-      dnsServers: spokeNetwork.parDnsServerIps.value
+    // dhcpOptions: (!empty(spokeNetwork.parDnsServerIps.value) ? true : false) ? {
+    //   dnsServers: spokeNetwork.parDnsServerIps.value
+    dhcpOptions: (!empty(parDnsServerIps.value) ? true : false) ? {
+      dnsServers: parDnsServerIps.value
     } : null
   }
 }
 
 
-// Create a virtual network resource lock if parGlobalResourceLock.value.kind != 'None' or if parSpokeNetworkLock.value.kind != 'None'
-resource resSpokeVirtualNetworkLock 'Microsoft.Authorization/locks@2020-05-01' = if (spokeNetwork.parSpokeNetworkLock.value.kind != 'None' || spokeNetwork.parGlobalResourceLock.value.kind != 'None') {
+// // Create a virtual network resource lock if parGlobalResourceLock.value.kind != 'None' or if parSpokeNetworkLock.value.kind != 'None'
+// resource resSpokeVirtualNetworkLock 'Microsoft.Authorization/locks@2020-05-01' = if (spokeNetwork.parSpokeNetworkLock.value.kind != 'None' || spokeNetwork.parGlobalResourceLock.value.kind != 'None') {
+//   scope: resSpokeVirtualNetwork
+//   name: spokeNetwork.parSpokeNetworkLock.value.?name ?? '${resSpokeVirtualNetwork.name}-lock'
+//   properties: {
+//     level: (spokeNetwork.parGlobalResourceLock.value.kind != 'None') ? spokeNetwork.parGlobalResourceLock.value.kind : spokeNetwork.parSpokeNetworkLock.value.kind
+//     notes: (spokeNetwork.parGlobalResourceLock.value.kind != 'None') ? spokeNetwork.parGlobalResourceLock.value.?notes : spokeNetwork.parSpokeNetworkLock.value.?notes
+//   }
+// }
+
+resource resSpokeVirtualNetworkLock 'Microsoft.Authorization/locks@2020-05-01' = if (parSpokeNetworkLock.value.kind != 'None' || parGlobalResourceLock.value.kind != 'None') {
   scope: resSpokeVirtualNetwork
-  name: spokeNetwork.parSpokeNetworkLock.value.?name ?? '${resSpokeVirtualNetwork.name}-lock'
+  name: parSpokeNetworkLock.value.?name ?? '${resSpokeVirtualNetwork.name}-lock'
   properties: {
-    level: (spokeNetwork.parGlobalResourceLock.value.kind != 'None') ? spokeNetwork.parGlobalResourceLock.value.kind : spokeNetwork.parSpokeNetworkLock.value.kind
-    notes: (spokeNetwork.parGlobalResourceLock.value.kind != 'None') ? spokeNetwork.parGlobalResourceLock.value.?notes : spokeNetwork.parSpokeNetworkLock.value.?notes
+    level: (parGlobalResourceLock.value.kind != 'None') ? parGlobalResourceLock.value.kind : parSpokeNetworkLock.value.kind
+    notes: (parGlobalResourceLock.value.kind != 'None') ? parGlobalResourceLock.value.?notes : parSpokeNetworkLock.value.?notes
   }
 }
 
-resource resSpokeToHubRouteTable 'Microsoft.Network/routeTables@2023-02-01' = if (!empty(spokeNetwork.parNextHopIpAddress)) {
-  name: spokeNetwork.parSpokeToHubRouteTableName
-  location: spokeNetwork.parLocation
+resource resSpokeToHubRouteTable 'Microsoft.Network/routeTables@2023-02-01' = if (!empty(parNextHopIpAddress)) {
+  name: parSpokeToHubRouteTableName
+  location: parSpokeLocation
   tags: parTags
   properties: {
     routes: [
@@ -70,29 +113,25 @@ resource resSpokeToHubRouteTable 'Microsoft.Network/routeTables@2023-02-01' = if
         properties: {
           addressPrefix: '0.0.0.0/0'
           nextHopType: 'VirtualAppliance'
-          nextHopIpAddress: spokeNetwork.parNextHopIpAddress
+          nextHopIpAddress: parNextHopIpAddress
         }
       }
     ]
-    disableBgpRoutePropagation: spokeNetwork.parDisableBgpRoutePropagation
+    disableBgpRoutePropagation: parDisableBgpRoutePropagation
   }
 }
 
 // Create a Route Table if parAzFirewallEnabled is true and parGlobalResourceLock.value.kind != 'None' or if parHubRouteTableLock.value.kind != 'None'
-resource resSpokeToHubRouteTableLock 'Microsoft.Authorization/locks@2020-05-01' = if (!empty(spokeNetwork.parNextHopIpAddress) && (spokeNetwork.parSpokeRouteTableLock.value.kind != 'None' || spokeNetwork.parGlobalResourceLock.value.kind != 'None')) {
+resource resSpokeToHubRouteTableLock 'Microsoft.Authorization/locks@2020-05-01' = if (!empty(parNextHopIpAddress) && (parSpokeRouteTableLock.value.kind != 'None' || parGlobalResourceLock.value.kind != 'None')) {
   scope: resSpokeToHubRouteTable
-  name: spokeNetwork.parSpokeRouteTableLock.value.?name ?? '${resSpokeToHubRouteTable.name}-lock'
+  name: parSpokeRouteTableLock.value.?name ?? '${resSpokeToHubRouteTable.name}-lock'
   properties: {
-    level: (spokeNetwork.parGlobalResourceLock.value.kind != 'None') ? spokeNetwork.parGlobalResourceLock.value.kind : spokeNetwork.parSpokeRouteTableLock.value.kind
-    notes: (spokeNetwork.parGlobalResourceLock.value.kind != 'None') ? spokeNetwork.parGlobalResourceLock.value.?notes : spokeNetwork.parSpokeRouteTableLock.value.?notes
+    level: (parGlobalResourceLock.value.kind != 'None') ? parGlobalResourceLock.value.kind : parSpokeRouteTableLock.value.kind
+    notes: (parGlobalResourceLock.value.kind != 'None') ? parGlobalResourceLock.value.?notes : parSpokeRouteTableLock.value.?notes
   }
-}
-
-// Optional Deployment for Customer Usage Attribution
-module modCustomerUsageAttribution '../../../CRML/customerUsageAttribution/cuaIdResourceGroup.bicep' = if (!spokeNetwork.parTelemetryOptOut) {
-  name: 'pid-${varCuaid}-${uniqueString(resourceGroup().id)}'
-  params: {}
 }
 
 output outSpokeVirtualNetworkName string = resSpokeVirtualNetwork.name
 output outSpokeVirtualNetworkId string = resSpokeVirtualNetwork.id
+output outSpokeVirtualNetworkRouteTableName string = resSpokeToHubRouteTable.name
+output outSpokeVirtualNetworkRouteTableId string = resSpokeToHubRouteTable.id

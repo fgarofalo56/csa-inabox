@@ -46,11 +46,6 @@ param parResourceLockConfig lockType = {
 @sys.description('Tags to be applied to resource when deployed.')
 param parTags object = {}
 
-@sys.description('Set Parameter to true to Opt-out of deployment telemetry.')
-param parTelemetryOptOut bool = false
-
-// Customer Usage Attribution Id
-var varCuaid = '3f85b84c-6bad-4c42-86bf-11c233241c22'
 
 resource resPublicIp 'Microsoft.Network/publicIPAddresses@2023-02-01' = {
   name: parPublicIpName
@@ -68,13 +63,6 @@ resource resPublicIpLock 'Microsoft.Authorization/locks@2020-05-01' = if (!empty
     level: parResourceLockConfig.kind
     notes: parResourceLockConfig.?notes ?? ''
   }
-}
-
-// Optional Deployment for Customer Usage Attribution
-module modCustomerUsageAttribution '../../../CRML/customerUsageAttribution/cuaIdResourceGroup.bicep' = if (!parTelemetryOptOut) {
-  #disable-next-line no-loc-expr-outside-params //Only to ensure telemetry data is stored in same location as deployment. See https://github.com/Azure/ALZ-Bicep/wiki/FAQ#why-are-some-linter-rules-disabled-via-the-disable-next-line-bicep-function for more information
-  name: 'pid-${varCuaid}-${uniqueString(resourceGroup().location, parPublicIpName)}'
-  params: {}
 }
 
 output outPublicIpId string = resPublicIp.id

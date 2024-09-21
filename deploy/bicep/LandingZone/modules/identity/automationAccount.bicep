@@ -13,7 +13,6 @@ param prefix string
 param environment string
 param tags object
 
-
 resource resAutomationAccount 'Microsoft.Automation/automationAccounts@2022-08-08' = {
   name: '${prefix}-${environment}-automation-account'
   location: location

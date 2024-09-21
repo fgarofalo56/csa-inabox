@@ -41,6 +41,7 @@
     "jupyter.logging.level": "error",
     "jupyter.showVariableViewWhenDebugging": true,
     "jupyter.themeMatplotlibPlots": true,
+    "jupyter.logging.level": "debug",
     "extensions.autoRestart": true,
     "extensions.closeExtensionDetailsOnViewChange": true,
     "terminal.explorerKind": "both",
@@ -75,5 +76,26 @@
     "azure.resourceFilter": null,
     "[powershell]": {
         "editor.defaultFormatter": "ms-vscode.powershell"
-    }
+    },
+    "python.globalModuleInstallation": true,
+    "python.terminal.activateEnvInCurrentTerminal": true,
+    "python.createEnvironment.contentButton": "show",
+    "python.defaultInterpreterPath": "python",
+    "ipynb.experimental.serialization": true,
+    "notebook.formatOnCellExecution": true,
+    "notebook.formatOnSave.enabled": true,
+    "notebook.outline.showCodeCells": true,
+    "polyglot-notebook.suppressPromptToSaveDefaults": false,
+    "dbt.enableNotebooks": true,
+    "dataWrangler.experiments.useJupyterProposedAPI": true,
+    "chat.experimental.variables.notebook": true,
+    "search.experimental.closedNotebookRichContentResults": false,
+    "python.terminal.activateEnvironment": true,
+    "python.terminal.activateEnvInCurrentTerminal": true,
+    "bicep.suppressedWarnings": [
+        "BCP037",
+        "use-safe-access",
+        "no-unused-params",
+        "prefer-interpolation"
+    ]
 }

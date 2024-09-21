@@ -69,17 +69,11 @@ param parPolicyAssignmentIdentityRoleAssignmentsResourceGroups array = []
 @sys.description('An array containing a list of RBAC role definition IDs to be assigned to the Managed Identity that is created and associated with the policy assignment. Only required for Modify and DeployIfNotExists policy effects. e.g. [\'/providers/Microsoft.Authorization/roleDefinitions/b24988ac-6180-42a0-ab88-20f7382dd24c\'].')
 param parPolicyAssignmentIdentityRoleDefinitionIds array = []
 
-@sys.description('Set Parameter to true to Opt-out of deployment telemetry')
-param parTelemetryOptOut bool = false
-
 var varPolicyAssignmentParametersMerged = union(parPolicyAssignmentParameters, parPolicyAssignmentParameterOverrides)
 
 var varPolicyIdentity = parPolicyAssignmentIdentityType == 'SystemAssigned' ? 'SystemAssigned' : 'None'
 
 var varPolicyAssignmentIdentityRoleAssignmentsMgsConverged = parPolicyAssignmentIdentityType == 'SystemAssigned' ? union(parPolicyAssignmentIdentityRoleAssignmentsAdditionalMgs, (array(managementGroup().name))) : []
-
-// Customer Usage Attribution Id
-var varCuaid = '78001e36-9738-429c-a343-45cc84e8a527'
 
 resource resPolicyAssignment 'Microsoft.Authorization/policyAssignments@2024-04-01' = {
   name: parPolicyAssignmentName
@@ -136,12 +130,5 @@ module modPolicyIdentityRoleAssignmentResourceGroupMany '../../roleAssignments/r
     parTelemetryOptOut: parTelemetryOptOut
   }
 }]
-
-// Optional Deployment for Customer Usage Attribution
-module modCustomerUsageAttribution '../../../CRML/customerUsageAttribution/cuaIdManagementGroup.bicep' = if (!parTelemetryOptOut) {
-  #disable-next-line no-loc-expr-outside-params //Only to ensure telemetry data is stored in same location as deployment. See https://github.com/Azure/ALZ-Bicep/wiki/FAQ#why-are-some-linter-rules-disabled-via-the-disable-next-line-bicep-function for more information
-  name: 'pid-${varCuaid}-${uniqueString(deployment().location, parPolicyAssignmentName)}'
-  params: {}
-}
 
 output outPolicyAssignmentId string = resPolicyAssignment.id

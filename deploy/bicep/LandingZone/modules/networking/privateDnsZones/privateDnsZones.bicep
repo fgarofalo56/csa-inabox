@@ -109,9 +109,6 @@ param parResourceLockConfig lockType = {
   notes: 'This lock was created by the ALZ Bicep Private DNS Zones Module.'
 }
 
-@sys.description('Set Parameter to true to Opt-out of deployment telemetry.')
-param parTelemetryOptOut bool = false
-
 var varAzBackupGeoCodes = {
   australiacentral: 'acl'
   australiacentral2: 'acl2'
@@ -188,8 +185,6 @@ var varAzBackupGeoCodes = {
 // If region entered in parLocation and matches a lookup to varAzBackupGeoCodes then insert Azure Backup Private DNS Zone with appropriate geo code inserted alongside zones in parPrivateDnsZones. If not just return parPrivateDnsZones
 var varPrivateDnsZonesMerge = parPrivateDnsZoneAutoMergeAzureBackupZone && contains(varAzBackupGeoCodes, parLocation) ? union(parPrivateDnsZones, [ 'privatelink.${varAzBackupGeoCodes[toLower(parLocation)]}.backup.windowsazure.com' ]) : parPrivateDnsZones
 
-// Customer Usage Attribution Id
-var varCuaid = '981733dd-3195-4fda-a4ee-605ab959edb6'
 
 resource resPrivateDnsZones 'Microsoft.Network/privateDnsZones@2020-06-01' = [for privateDnsZone in varPrivateDnsZonesMerge: {
   name: privateDnsZone
@@ -249,12 +244,6 @@ resource resVirtualNetworkLinkFailoverLock 'Microsoft.Authorization/locks@2020-0
     notes: parResourceLockConfig.?notes ?? ''
   }
 }]
-
-module modCustomerUsageAttribution '../../../CRML/customerUsageAttribution/cuaIdResourceGroup.bicep' = if (!parTelemetryOptOut) {
-  #disable-next-line no-loc-expr-outside-params
-  name: 'pid-${varCuaid}-${uniqueString(resourceGroup().location)}'
-  params: {}
-}
 
 output outPrivateDnsZones array = [for i in range(0, length(varPrivateDnsZonesMerge)): {
   name: resPrivateDnsZones[i].name

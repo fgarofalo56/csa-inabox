@@ -5,17 +5,9 @@ targetScope = 'subscription'
 metadata name = 'ALZ Bicep - Policy Remediation'
 metadata description = 'Module used to set up Remediation Tasks for Policies at the subscription level'
 
-// @sys.description('Policy Assignments')
-// param parmPolicyAssignmentid string
-
-// @sys.description('Policy Definition Reference ID')
-// param parmPolicyDefinitionReferenceId string
 
 @sys.description('Environment for the resources')
 param environment string
-
-// @sys.description('Policy Definition Name')
-// param policyDefinitionName string
 
 // param initiatives array
 param policyAssignmentid string
@@ -50,7 +42,6 @@ param policyAssignmentName string
 resource remediationTask 'Microsoft.PolicyInsights/remediations@2021-10-01' = {
   name: '${policyAssignmentName}-${environment}-remediation'
   properties: {
-    // policyAssignmentId: resourceId('/providers/Microsoft.Authorization/policySetDefinitions', initiative.id)
     policyAssignmentId: policyAssignmentid
     policyDefinitionReferenceId: policyAssignmentid
     parallelDeployments: 30

@@ -37,5 +37,4 @@ resource resRoleDefinition 'Microsoft.Authorization/roleDefinitions@2022-05-01-p
     ]
   }
 }
-
 output roleDefinitionId string = resRoleDefinition.id

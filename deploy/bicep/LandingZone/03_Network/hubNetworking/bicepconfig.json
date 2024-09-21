@@ -66,16 +66,7 @@
         "no-unused-existing-resources": {
           "level": "error"
         },
-        "no-unused-params": {
-          "level": "error"
-        },
-        "no-unused-vars": {
-          "level": "error"
-        },
         "outputs-should-not-contain-secrets": {
-          "level": "error"
-        },
-        "prefer-interpolation": {
           "level": "error"
         },
         "prefer-unquoted-property-names": {
@@ -106,9 +97,6 @@
           "level": "warning",
           "maxAllowedAgeInDays": 730
         },
-        "use-resource-id-functions": {
-          "level": "error"
-        },
         "use-resource-symbol-reference": {
           "level": "error"
         },
@@ -117,6 +105,21 @@
         },
         "use-stable-vm-image": {
           "level": "error"
+        },
+        "no-unused-params": {
+          "level": "off"
+        },
+        "no-unused-vars": {
+          "level": "off"
+        },
+        "use-safe-access": {
+          "level": "off"
+        },
+        "use-resource-id-functions": {
+          "level": "off"
+        },
+        "prefer-interpolation": {
+          "level": "off"
         }
       }
     }

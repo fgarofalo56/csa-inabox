@@ -20,25 +20,19 @@ param parLocation string
 @sys.description('Name of Resource Group to be created.')
 param parResourceGroupName string
 
-// @sys.description('''Resource Lock Configuration for Resource Groups.
+@sys.description('''Resource Lock Configuration for Resource Groups.
 
-// - `kind` - The lock settings of the service which can be CanNotDelete, ReadOnly, or None.
-// - `notes` - Notes about this lock.
+- `kind` - The lock settings of the service which can be CanNotDelete, ReadOnly, or None.
+- `notes` - Notes about this lock.
 
-// ''')
-// param parResourceLockConfig lockType = {
-//   kind: 'None'
-//   notes: 'This lock was created by the ALZ Bicep Resource Group Module.'
-// }
+''')
+param parResourceLockConfig lockType = {
+  kind: 'None'
+  notes: 'This lock was created by the ALZ Bicep Resource Group Module.'
+}
 
 @sys.description('Tags you would like to be applied to all resources in this module.')
 param parTags object = {}
-
-@sys.description('Set Parameter to true to Opt-out of deployment telemetry.')
-param parTelemetryOptOut bool = false
-
-// Customer Usage Attribution Id
-var varCuaid = 'b6718c54-b49e-4748-a466-88e3d7c789c8'
 
 resource resResourceGroup 'Microsoft.Resources/resourceGroups@2022-09-01' = {
   location: parLocation
@@ -55,11 +49,6 @@ resource resResourceGroup 'Microsoft.Resources/resourceGroups@2022-09-01' = {
 //     parResourceLockConfig: parResourceLockConfig
 //   }
 // }
-
-module modCustomerUsageAttribution '../../CRML/customerUsageAttribution/cuaIdSubscription.bicep' = if (!parTelemetryOptOut) {
-  name: 'pid-${varCuaid}-${uniqueString(subscription().subscriptionId, parResourceGroupName)}'
-  params: {}
-}
 
 output outResourceGroupName string = resResourceGroup.name
 output outResourceGroupId string = resResourceGroup.id

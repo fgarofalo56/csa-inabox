@@ -13,8 +13,6 @@ param parDiagnosticSettingsName string = 'dataObservability'
 param prefix string
 param environment string
 
-
-
 resource DiagSet 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
   name: '${prefix}-${parDiagnosticSettingsName}-${environment}-diagSettingsLA'
   properties: {
@@ -69,5 +67,5 @@ resource DiagSet 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
 //   }
 // }
 
-
 output DiagSet string = DiagSet.name
+output DiagSetId string = DiagSet.id

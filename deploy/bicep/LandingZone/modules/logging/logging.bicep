@@ -3,6 +3,9 @@
 metadata name = 'ALZ Bicep - Subscription default Log Analytics workspace'
 
 // Parameters
+
+
+
 param automationAccountID string
 param location string
 param prefix string
@@ -11,6 +14,10 @@ param logRetentionDays int = 30
 param storageAccountId string
 param parLoggingRG string
 param environment string
+
+@sys.description('Log Analytics Workspace Name.')
+param parmLogAnalyticsWorkspaceName string = '${prefix}-${environment}-log-analytics'
+
 
 @allowed([
   'CapacityReservation'
@@ -28,7 +35,7 @@ param sku string = 'PerGB2018'
 // Resource
 // Create a Log Analytics Workspace
 resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
-  name: '${prefix}-${environment}-log-analytics'
+  name: parmLogAnalyticsWorkspaceName
   location: location
   tags: tags
    properties: {
@@ -516,8 +523,9 @@ module resQueryPack 'QueryPacks/packs.bicep' = {
     parLoggingRG: parLoggingRG
   }
 }
-output resQueryPacks object = resQueryPack
 
+
+// output resQueryPacks object = resQueryPack
 output logAnalyticsWorkspaceName string = logAnalyticsWorkspace.name
 output logAnalyticsWorkspaceId string = logAnalyticsWorkspace.id
 

@@ -22,12 +22,6 @@ param parAllowGatewayTransit bool = false
 @sys.description('Switch to enable/disable remote gateway for the Network Peer.')
 param parUseRemoteGateways bool = false
 
-@sys.description('Set Parameter to true to Opt-out of deployment telemetry.')
-param parTelemetryOptOut bool = false
-
-// Customer Usage Attribution Id
-var varCuaId = 'ab8e3b12-b0fa-40aa-8630-e3f7699e2142'
-
 resource resVirtualNetworkPeer 'Microsoft.Network/virtualNetworks/virtualNetworkPeerings@2023-02-01' = {
   name: '${parSourceVirtualNetworkName}/peer-to-${parDestinationVirtualNetworkName}'
   properties: {
@@ -39,11 +33,4 @@ resource resVirtualNetworkPeer 'Microsoft.Network/virtualNetworks/virtualNetwork
       id: parDestinationVirtualNetworkId
     }
   }
-}
-
-// Optional Deployment for Customer Usage Attribution
-module modCustomerUsageAttribution '../../../CRML/customerUsageAttribution/cuaIdResourceGroup.bicep' = if (!parTelemetryOptOut) {
-  #disable-next-line no-loc-expr-outside-params //Only to ensure telemetry data is stored in same location as deployment. See https://github.com/Azure/ALZ-Bicep/wiki/FAQ#why-are-some-linter-rules-disabled-via-the-disable-next-line-bicep-function for more information
-  name: 'pid-${varCuaId}-${uniqueString(resourceGroup().location)}'
-  params: {}
 }

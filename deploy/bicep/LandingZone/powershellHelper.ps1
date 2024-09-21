@@ -17,6 +17,15 @@ Get-AzDeploymentWhatIfResult -Location "East US" -TemplateFile ".\deploy\bicep\L
 New-AzSubscriptionDeployment -Location "East US" -TemplateFile ".\deploy\bicep\LandingZone\main.bicep" -TemplateParameterFile ".\deploy\bicep\LandingZone\params.dev.json" -Debug 
 
 
-
 # Deploy Spoke Networks
-New-AzSubscriptionDeployment -Location "East US" -TemplateFile ".\deploy\bicep\LandingZone\main.bicep" -TemplateParameterFile ".\deploy\bicep\LandingZone\params.spokenetwork.adev.json" -Debug 
+
+Test-AzDeployment -Location "East US" -TemplateFile ".\deploy\bicep\LandingZone\main.bicep" -TemplateParameterFile ".\deploy\bicep\LandingZone\params.spokenetwork.dev.json" -Debug 
+
+Get-AzDeploymentWhatIfResult -Location "East US" -TemplateFile ".\deploy\bicep\LandingZone\main.bicep" -TemplateParameterFile ".\deploy\bicep\LandingZone\params.spokenetwork.dev.json"  -ResultFormat "FullResourcePayloads"
+
+New-AzSubscriptionDeployment -Location "East US" -TemplateFile ".\deploy\bicep\LandingZone\main.bicep" -TemplateParameterFile ".\deploy\bicep\LandingZone\params.spokenetwork.dev.json" -Debug
+
+Get-AzSubscriptionDeployment | Remove-AzSubscriptionDeployment
+
+Get-AzSubscriptionDeployment -Id '076322ff-5d31-4133-8776-0e9ca79019ff' | Format-List
+

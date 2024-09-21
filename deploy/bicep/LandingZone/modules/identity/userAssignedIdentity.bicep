@@ -12,9 +12,6 @@ metadata description = 'Module used to deploy a User Assigned Identity'
 param location string
 param prefix string
 param tags object
-// param resourceGroupName string
-
-// Variables
 
 // Resource
 resource userAssignedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2018-11-30' = {

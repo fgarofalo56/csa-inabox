@@ -2,7 +2,6 @@ param parParent string
 param parQueryPackQueries array
 param tags object
 
-
 resource queryPackDeployed 'Microsoft.OperationalInsights/queryPacks@2019-09-01' existing = {
   name: parParent
 }
