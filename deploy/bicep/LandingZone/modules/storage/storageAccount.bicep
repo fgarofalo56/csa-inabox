@@ -16,6 +16,11 @@ param ipRules array = []
 @sys.description('Storage Account Name')
 param parmStorageAccountName string
 
+@sys.description('Enable Defender for Storage')
+param defenderForStorageEnabled bool = false
+
+@sys.description('The maximum amount of data that can be scanned by Defender for Storage in a month. The value should be between 1 and 1000 GB.')
+param parDefenderStorageCapGBPerMonth int = 100
 
 @allowed([
   'Standard_LRS'
@@ -93,6 +98,27 @@ resource resStorageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' = {
 
   }
 }
+
+resource defenderForStorageConfig 'Microsoft.Security/defenderForStorageSettings@2022-12-01-preview' = if(defenderForStorageEnabled) {
+  name: 'current'
+  scope: resStorageAccount
+  properties: {
+    isEnabled: true
+    malwareScanning: {
+      onUpload: {
+        capGBPerMonth: parDefenderStorageCapGBPerMonth
+        isEnabled: true
+      }
+    scanResultsEventGridTopicResourceId: null
+    }
+    overrideSubscriptionLevelSettings: false
+    sensitiveDataDiscovery: {
+      isEnabled: true
+    }
+  }
+}
+
+
 
 
 output storageAccountName string = resStorageAccount.name

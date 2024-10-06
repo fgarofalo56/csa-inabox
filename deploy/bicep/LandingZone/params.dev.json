@@ -13,11 +13,88 @@
         },
         "deployModules": {
             "value": {
-                "requirments": true,
+                "requirments": false,
                 "logging": true,
                 "policy": false,
                 "initiatives": false,
-                "hubNetwork": false
+                "hubNetwork": false,
+                "spokeNetwork": false,
+                "securityCenter": true
+            }
+        },
+        "parLogAnalytics": {
+            "value": {
+                "parWorkspaceSufix": "dataObservability-logAnalyticsWorkspace",
+                "parLogAnalyticsWorkspaceSkuName": "PerGB2018",
+                "parLogAnalyticsWorkspaceLogRetentionInDays": 120,
+                "parLocation": "eastus",
+                "parDataCollectionRuleVMInsightsName": "alz-ama-vmi-dcr",
+                "parDataCollectionRuleChangeTrackingName": "alz-ama-ct-dcr",
+                "parDataCollectionRuleMDFCSQLName": "alz-ama-mdfcsql-dcr",
+                "parDCRWorkspaceTransformationName": "alz-ama-dcr-ws-transformation-dcr",
+                "parLogAnalyticsWorkspaceSolutions": {
+                    "value": [
+                        "Security",
+                        "ADAssessment",
+                        "AgentHealthAssessment",
+                        "AntiMalware",
+                        "AzureCdnCoreAnalytics",
+                        "AzureSQLAnalytics",
+                        "LogicAppB2B",
+                        "LogicAppsManagement",
+                        "SQLAssessment",
+                        "SQLVulnerabilityAssessment",
+                        "SecurityInsights",
+                        "VMInsights",
+                        "Containers",
+                        "ContainerInsights",
+                        "ServiceFabric",
+                        "InfrastructureInsights",
+                        "SecurityCenterFree",
+                        "CapacityPerformance",
+                        "AzureWebAppsAnalytics",
+                        "BehaviorAnalyticsInsights",
+                        "Updates",
+                        "AzureResources",
+                        "ChangeTracking",
+                        "SCOMAssessment",
+                        "AlertManagement",
+                        "AzureAutomation",
+                        "WireData",
+                        "SiteRecovery",
+                        "Backup",
+                        "NetworkMonitoring",
+                        "AppDependencyMonitor",
+                        "ADReplication",
+                        "Office365",
+                        "DnsAnalytics",
+                        "ApplicationInsights",
+                        "WireData2",
+                        "WaaSUpdateInsights",
+                        "AzureActivity",
+                        "HDInsight",
+                        "HDInsightKafka",
+                        "HDInsightHadoop",
+                        "HDInsightStorm",
+                        "VMware",
+                        "KeyVaultAnalytics",
+                        "AzureNSGAnalytics",
+                        "WindowsDefenderATPStable",
+                        "ProcessInvestigator",
+                        "Microsoft365Analytics",
+                        "ASRAnalytics",
+                        "DHCPActivity",
+                        "WinLog",
+                        "NetFlow",
+                        "ServiceMap",
+                        "LogManagement",
+                        "SQLAssessmentPlus",
+                        "AzureDataFactoryAnalytics",
+                        "AzureSecurityOfThings",
+                        "SecurityCenter",
+                        "SQLAdvancedThreatProtection"
+                    ]
+                }
             }
         },
         "roleAssignmentIds": {
@@ -293,6 +370,7 @@
         "hubNetwork": {
             "value": {
                 "parLocation": "eastus",
+                "parHubNetworkName": "hubVnet",
                 "parHubNetworkAddressPrefix": {
                     "value": "10.20.0.0/16"
                 },
@@ -583,6 +661,197 @@
                     }
                 }
             }
+        },
+        "parRouteSpokesToHubFirewall": {
+            "value": true
+        },
+        "parSpokeNetworks": {
+            "value": [
+                {
+                    "parLocation": "eastus",
+                    "parSpokeNetworkName": "spokeVnet",
+                    "parDisableBgpRoutePropagation": false,
+                    "parDdosProtectionPlanId": "",
+                    "parSpokeNetworkAddressPrefix": "10.200.0.0/24",
+                    "pspokeNetworkarDdosProtectionPlanId": "",
+                    "parDnsServerIps": {
+                        "value": []
+                    },
+                    "parPrivateDnsZoneResourceIds": {
+                        "value": []
+                    },
+                    "parNextHopIpAddress": "10.20.255.4",
+                    "parPeeredVnetSubscriptionId": "",
+                    "parSpokeToHubRouteTableName": "rtb-eastus-spoke-to-hub",
+                    "parTags": {
+                        "value": {
+                            "Network Environment": "Spoke Live"
+                        }
+                    },
+                    "parSubnets": [
+                        {
+                            "parSubnetName": "web",
+                            "ipAddressRange": "10.200.0.0/26",
+                            "privateEndpointNetworkPolicy": "Disabled",
+                            "delegation": "",
+                            "parRouteTable": true,
+                            "parDisableBgpRoutePropagation": false
+                        },
+                        {
+                            "parSubnetName": "application",
+                            "ipAddressRange": "10.200.0.64/26",
+                            "privateEndpointNetworkPolicy": "Disabled",
+                            "delegation": "",
+                            "parRouteTable": true,
+                            "parDisableBgpRoutePropagation": false
+                        },
+                        {
+                            "parSubnetName": "database",
+                            "ipAddressRange": "10.200.0.128/26",
+                            "privateEndpointNetworkPolicy": "Disabled",
+                            "delegation": "",
+                            "parRouteTable": true,
+                            "parDisableBgpRoutePropagation": false
+                        },
+                        {
+                            "parSubnetName": "virtualMachine",
+                            "ipAddressRange": "10.200.0.192/26",
+                            "privateEndpointNetworkPolicy": "Disabled",
+                            "delegation": "",
+                            "parRouteTable": true,
+                            "parDisableBgpRoutePropagation": false
+                        }
+                    ],
+                    "parTelemetryOptOut": false,
+                    "parAllowSpokeForwardedTraffic": false,
+                    "parAllowHubVPNGatewayTransit": true,
+                    "parVirtualHubConnectionPrefix": "",
+                    "parVirtualHubConnectionSuffix": "-vhc",
+                    "parEnableInternetSecurity": false,
+                    "parGlobalResourceLock": {
+                        "value": {
+                            "kind": "None",
+                            "notes": "This lock was created by the ALZ Bicep Spoke Networking Module."
+                        }
+                    },
+                    "parSpokeNetworkLock": {
+                        "value": {
+                            "kind": "None",
+                            "notes": "This lock was created by the ALZ Bicep Spoke Networking Module."
+                        }
+                    },
+                    "parSpokeparRouteTableLock": {
+                        "value": {
+                            "kind": "None",
+                            "notes": "This lock was created by the ALZ Bicep Spoke Networking Module."
+                        }
+                    },
+                    "parResourceGroupLock": {
+                        "value": {
+                            "kind": "None",
+                            "notes": "This lock was created by the ALZ Bicep Hub Peered Spoke Orchestration Networking Module."
+                        }
+                    },
+                    "parPrivateDnsZoneVirtualNetworkLinkLock": {
+                        "value": {
+                            "kind": "None",
+                            "notes": "This lock was created by the ALZ Bicep Hub Peered Spoke Orchestration Networking Module."
+                        }
+                    }
+                },
+                {
+                    "parLocation": "westus",
+                    "parSpokeNetworkName": "spokeVnet",
+                    "parDisableBgpRoutePropagation": false,
+                    "parDdosProtectionPlanId": "",
+                    "parSpokeNetworkAddressPrefix": "10.200.1.0/24",
+                    "pspokeNetworkarDdosProtectionPlanId": "",
+                    "parDnsServerIps": {
+                        "value": []
+                    },
+                    "parPrivateDnsZoneResourceIds": {
+                        "value": []
+                    },
+                    "parNextHopIpAddress": "10.20.255.4",
+                    "parPeeredVnetSubscriptionId": "",
+                    "parSpokeToHubRouteTableName": "rtb-westus-spoke-to-hub",
+                    "parTags": {
+                        "value": {
+                            "Network Environment": "Spoke Live"
+                        }
+                    },
+                    "parSubnets": [
+                        {
+                            "parSubnetName": "web",
+                            "ipAddressRange": "10.200.1.0/26",
+                            "privateEndpointNetworkPolicy": "Disabled",
+                            "delegation": "",
+                            "parRouteTable": true,
+                            "parDisableBgpRoutePropagation": false
+                        },
+                        {
+                            "parSubnetName": "application",
+                            "ipAddressRange": "10.200.1.64/26",
+                            "privateEndpointNetworkPolicy": "Disabled",
+                            "delegation": "",
+                            "parRouteTable": true,
+                            "parDisableBgpRoutePropagation": false
+                        },
+                        {
+                            "parSubnetName": "database",
+                            "ipAddressRange": "10.200.1.128/26",
+                            "privateEndpointNetworkPolicy": "Disabled",
+                            "delegation": "",
+                            "parRouteTable": true,
+                            "parDisableBgpRoutePropagation": false
+                        },
+                        {
+                            "parSubnetName": "virtualMachine",
+                            "ipAddressRange": "10.200.1.192/26",
+                            "privateEndpointNetworkPolicy": "Disabled",
+                            "delegation": "",
+                            "parRouteTable": true,
+                            "parDisableBgpRoutePropagation": false
+                        }
+                    ],
+                    "parTelemetryOptOut": false,
+                    "parAllowSpokeForwardedTraffic": false,
+                    "parAllowHubVPNGatewayTransit": true,
+                    "parVirtualHubConnectionPrefix": "",
+                    "parVirtualHubConnectionSuffix": "-vhc",
+                    "parEnableInternetSecurity": false,
+                    "parGlobalResourceLock": {
+                        "value": {
+                            "kind": "None",
+                            "notes": "This lock was created by the ALZ Bicep Spoke Networking Module."
+                        }
+                    },
+                    "parSpokeNetworkLock": {
+                        "value": {
+                            "kind": "None",
+                            "notes": "This lock was created by the ALZ Bicep Spoke Networking Module."
+                        }
+                    },
+                    "parSpokeparRouteTableLock": {
+                        "value": {
+                            "kind": "None",
+                            "notes": "This lock was created by the ALZ Bicep Spoke Networking Module."
+                        }
+                    },
+                    "parResourceGroupLock": {
+                        "value": {
+                            "kind": "None",
+                            "notes": "This lock was created by the ALZ Bicep Hub Peered Spoke Orchestration Networking Module."
+                        }
+                    },
+                    "parPrivateDnsZoneVirtualNetworkLinkLock": {
+                        "value": {
+                            "kind": "None",
+                            "notes": "This lock was created by the ALZ Bicep Hub Peered Spoke Orchestration Networking Module."
+                        }
+                    }
+                }
+            ]
         }
     }
 }

@@ -71,18 +71,8 @@ param parDataCollectionRuleMDFCSQLLock lockType = {
   notes: 'This lock was created by the ALZ Bicep Logging Module.'
 }
 
-@allowed([
-  'CapacityReservation'
-  'Free'
-  'LACluster'
-  'PerGB2018'
-  'PerNode'
-  'Premium'
-  'Standalone'
-  'Standard'
-])
 @sys.description('Log Analytics Workspace sku name.')
-param parLogAnalyticsWorkspaceSkuName string = 'PerGB2018'
+param parLogAnalyticsWorkspaceSkuName string 
 
 @allowed([
   100
@@ -97,8 +87,7 @@ param parLogAnalyticsWorkspaceSkuName string = 'PerGB2018'
 @sys.description('Log Analytics Workspace Capacity Reservation Level. Only used if parLogAnalyticsWorkspaceSkuName is set to CapacityReservation.')
 param parLogAnalyticsWorkspaceCapacityReservationLevel int = 100
 
-@minValue(30)
-@maxValue(730)
+
 @sys.description('Number of days of log retention for Log Analytics Workspace.')
 param parLogAnalyticsWorkspaceLogRetentionInDays int = 365
 
@@ -657,6 +646,13 @@ resource resLogAnalyticsWorkspaceSolutions 'Microsoft.OperationsManagement/solut
   }
 }]
 
+
+
+
+
+
+
+
 // Create a resource lock for each log analytics workspace solutions in parLogAnalyticsWorkspaceSolutions if parGlobalResourceLock.kind != 'None' or if parLogAnalyticsWorkspaceSolutionsLock.kind != 'None'
 resource resLogAnalyticsWorkspaceSolutionsLock 'Microsoft.Authorization/locks@2020-05-01' = [for (solution, index) in parLogAnalyticsWorkspaceSolutions: if (parLogAnalyticsWorkspaceSolutionsLock.kind != 'None' || parGlobalResourceLock.kind != 'None') {
   scope: resLogAnalyticsWorkspaceSolutions[index]
@@ -675,12 +671,6 @@ resource resLogAnalyticsLinkedServiceForAutomationAccount 'Microsoft.Operational
   }
 }
 
-// Optional Deployment for Customer Usage Attribution
-// module modCustomerUsageAttribution '../../CRML/customerUsageAttribution/cuaIdResourceGroup.bicep' = if (!parTelemetryOptOut) {
-//   #disable-next-line no-loc-expr-outside-params //Only to ensure telemetry data is stored in same location as deployment. See https://github.com/Azure/ALZ-Bicep/wiki/FAQ#why-are-some-linter-rules-disabled-via-the-disable-next-line-bicep-function for more information
-//   name: 'pid-${varCuaid}-${uniqueString(resourceGroup().location)}'
-//   params: {}
-// }
 
 output outUserAssignedManagedIdentityId string = resUserAssignedManagedIdentity.id
 output outUserAssignedManagedIdentityPrincipalId string = resUserAssignedManagedIdentity.properties.principalId

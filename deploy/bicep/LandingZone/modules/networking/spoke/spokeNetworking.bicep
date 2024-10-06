@@ -51,6 +51,8 @@ param parDisableBgpRoutePropagation bool
 @sys.description('Route Table Lock Configuration.')
 param parSpokeRouteTableLock object
 
+@description('Array parameter for subnet configurations')
+param parmSubnetConfigurations array
 
 //If Ddos parameter is true Ddos will be Enabled on the Virtual Network
 //If Azure Firewall is enabled and Network DNS Proxy is enabled DNS will be configured to point to AzureFirewall
@@ -62,23 +64,17 @@ resource resSpokeVirtualNetwork 'Microsoft.Network/virtualNetworks@2023-02-01' =
   properties: {
     addressSpace: {
       addressPrefixes: [
-        // spokeNetwork.parSpokeNetworkAddressPrefix
         parSpokeNetworkAddressPrefix
       ]
     }
-    // enableDdosProtection: (!empty(spokeNetwork.pspokeNetworkarDdosProtectionPlanId) ? true : false)
     enableDdosProtection: (!empty(parSpokeNetworkarDdosProtectionPlanId) ? true : false)
-
-    // ddosProtectionPlan: (!empty(spokeNetwork.parDdosProtectionPlanId) ? true : false) ? {
     ddosProtectionPlan: (!empty(parSpokeNetworkarDdosProtectionPlanId) ? true : false) ? {
-      // id: spokeNetwork.parDdosProtectionPlanId
       id: parSpokeNetworkarDdosProtectionPlanId
     } : null
-    // dhcpOptions: (!empty(spokeNetwork.parDnsServerIps.value) ? true : false) ? {
-    //   dnsServers: spokeNetwork.parDnsServerIps.value
     dhcpOptions: (!empty(parDnsServerIps.value) ? true : false) ? {
       dnsServers: parDnsServerIps.value
     } : null
+    subnets: parmSubnetConfigurations
   }
 }
 
@@ -109,7 +105,7 @@ resource resSpokeToHubRouteTable 'Microsoft.Network/routeTables@2023-02-01' = if
   properties: {
     routes: [
       {
-        name: 'udr-default-to-hub-nva'
+        name: 'route-to-firewall'
         properties: {
           addressPrefix: '0.0.0.0/0'
           nextHopType: 'VirtualAppliance'

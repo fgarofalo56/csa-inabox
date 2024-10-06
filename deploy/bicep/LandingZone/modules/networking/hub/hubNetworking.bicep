@@ -44,11 +44,12 @@ param parTags object
 
 param parSubnets subnetOptionsType = array(hubNetwork.parSubnets.value)
 
+
 var varSubnetMap = map(range(0, length(parSubnets)), i => {
     name: parSubnets[i].name
     ipAddressRange: parSubnets[i].ipAddressRange
     networkSecurityGroupId: contains(parSubnets[i], 'networkSecurityGroupId') ? parSubnets[i].networkSecurityGroupId : ''
-    routeTableId: contains(parSubnets[i], 'routeTableId') ? parSubnets[i].routeTableId : ''
+    routeTableId: contains(parSubnets[i], 'routeTableId') ? parSubnets[i].routeTableId : resourceId(subscription().subscriptionId,'rg here', 'Microsoft.Network/routeTables', hubNetwork.parHubRouteTableName.value)
     delegation: contains(parSubnets[i], 'delegation') ? parSubnets[i].delegation : ''
   })
 
@@ -56,7 +57,6 @@ var varSubnetProperties = [for subnet in varSubnetMap: {
   name: subnet.name
   properties: {
     addressPrefix: subnet.ipAddressRange
-
     delegations: (empty(subnet.delegation)) ? null : [
       {
         name: subnet.delegation

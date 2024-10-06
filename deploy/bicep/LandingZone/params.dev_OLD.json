@@ -17,9 +17,7 @@
                 "logging": true,
                 "policy": false,
                 "initiatives": false,
-                "hubNetwork": false,
-                "spokeNetwork": true,
-                "spokeNetwork2": true
+                "hubNetwork": false
             }
         },
         "roleAssignmentIds": {
@@ -295,7 +293,6 @@
         "hubNetwork": {
             "value": {
                 "parLocation": "eastus",
-                "parHubNetworkName": "hubVnet",
                 "parHubNetworkAddressPrefix": {
                     "value": "10.20.0.0/16"
                 },
@@ -583,170 +580,6 @@
                     "value": {
                         "kind": "None",
                         "notes": "This lock was created by the ALZ Bicep Hub Networking Module."
-                    }
-                }
-            }
-        },
-        "spokeNetwork": {
-            "value": {
-                "parLocation": "eastus",
-                "parSpokeNetworkName": "spokeVnet",
-                "parDisableBgpRoutePropagation": false,
-                "parDdosProtectionPlanId": "",
-                "parSpokeNetworkAddressPrefix": "10.200.0.0/24",
-                "pspokeNetworkarDdosProtectionPlanId": "",
-                "parDnsServerIps": {
-                    "value": []
-                },
-                "parPrivateDnsZoneResourceIds": {
-                    "value": []
-                },
-                "parNextHopIpAddress": "10.20.255.4",
-                "parPeeredVnetSubscriptionId": "",
-                "parSpokeToHubRouteTableName": "rtb-spoke-to-hub",
-                "parTags": {
-                    "value": {
-                        "Network Environment": "Spoke Live"
-                    }
-                },
-                "parSubnets": [
-                    {
-                        "parSubnetName": "web",
-                        "ipAddressRange": "10.200.0.0/26",
-                        "privateEndpointNetworkPolicy": "Disabled"
-                    },
-                    {
-                        "parSubnetName": "application",
-                        "ipAddressRange": "10.200.0.64/26",
-                        "privateEndpointNetworkPolicy": "Disabled"
-                    },
-                    {
-                        "parSubnetName": "database",
-                        "ipAddressRange": "10.200.0.128/26",
-                        "privateEndpointNetworkPolicy": "Disabled"
-                    },
-                    {
-                        "parSubnetName": "virtualMachine",
-                        "ipAddressRange": "10.200.0.192/26",
-                        "privateEndpointNetworkPolicy": "Disabled"
-                    }
-                ],
-                "parTelemetryOptOut": false,
-                "parAllowSpokeForwardedTraffic": false,
-                "parAllowHubVPNGatewayTransit": true,
-                "parVirtualHubConnectionPrefix": "",
-                "parVirtualHubConnectionSuffix": "-vhc",
-                "parEnableInternetSecurity": false,
-                "parGlobalResourceLock": {
-                    "value": {
-                        "kind": "None",
-                        "notes": "This lock was created by the ALZ Bicep Spoke Networking Module."
-                    }
-                },
-                "parSpokeNetworkLock": {
-                    "value": {
-                        "kind": "None",
-                        "notes": "This lock was created by the ALZ Bicep Spoke Networking Module."
-                    }
-                },
-                "parSpokeRouteTableLock": {
-                    "value": {
-                        "kind": "None",
-                        "notes": "This lock was created by the ALZ Bicep Spoke Networking Module."
-                    }
-                },
-                "parResourceGroupLock": {
-                    "value": {
-                        "kind": "None",
-                        "notes": "This lock was created by the ALZ Bicep Hub Peered Spoke Orchestration Networking Module."
-                    }
-                },
-                "parPrivateDnsZoneVirtualNetworkLinkLock": {
-                    "value": {
-                        "kind": "None",
-                        "notes": "This lock was created by the ALZ Bicep Hub Peered Spoke Orchestration Networking Module."
-                    }
-                }
-            }
-        },
-        "spokeNetwork2": {
-            "value": {
-                "parLocation": "westus",
-                "parSpokeNetworkName": "spokeVnet",
-                "parDisableBgpRoutePropagation": false,
-                "parDdosProtectionPlanId": "",
-                "parSpokeNetworkAddressPrefix": "10.200.1.0/24",
-                "pspokeNetworkarDdosProtectionPlanId": "",
-                "parDnsServerIps": {
-                    "value": []
-                },
-                "parPrivateDnsZoneResourceIds": {
-                    "value": []
-                },
-                "parNextHopIpAddress": "10.20.255.4",
-                "parPeeredVnetSubscriptionId": "",
-                "parSpokeToHubRouteTableName": "rtb-spoke-to-hub",
-                "parTags": {
-                    "value": {
-                        "Network Environment": "Spoke 2 Live"
-                    }
-                },
-                "parSubnets": [
-                    {
-                        "parSubnetName": "web",
-                        "ipAddressRange": "10.200.1.0/26",
-                        "privateEndpointNetworkPolicy": "Disabled"
-                    },
-                    {
-                        "parSubnetName": "application",
-                        "ipAddressRange": "10.200.1.64/26",
-                        "privateEndpointNetworkPolicy": "Disabled"
-                    },
-                    {
-                        "parSubnetName": "database",
-                        "ipAddressRange": "10.200.1.128/26",
-                        "privateEndpointNetworkPolicy": "Disabled"
-                    },
-                    {
-                        "parSubnetName": "virtualMachine",
-                        "ipAddressRange": "10.200.1.192/26",
-                        "privateEndpointNetworkPolicy": "Disabled"
-                    }
-                ],
-                "parTelemetryOptOut": false,
-                "parAllowSpokeForwardedTraffic": false,
-                "parAllowHubVPNGatewayTransit": true,
-                "parVirtualHubConnectionPrefix": "",
-                "parVirtualHubConnectionSuffix": "-vhc",
-                "parEnableInternetSecurity": false,
-                "parGlobalResourceLock": {
-                    "value": {
-                        "kind": "None",
-                        "notes": "This lock was created by the ALZ Bicep Spoke Networking Module."
-                    }
-                },
-                "parSpokeNetworkLock": {
-                    "value": {
-                        "kind": "None",
-                        "notes": "This lock was created by the ALZ Bicep Spoke Networking Module."
-                    }
-                },
-                "parSpokeRouteTableLock": {
-                    "value": {
-                        "kind": "None",
-                        "notes": "This lock was created by the ALZ Bicep Spoke Networking Module."
-                    }
-                },
-                "parResourceGroupLock": {
-                    "value": {
-                        "kind": "None",
-                        "notes": "This lock was created by the ALZ Bicep Hub Peered Spoke Orchestration Networking Module."
-                    }
-                },
-                "parPrivateDnsZoneVirtualNetworkLinkLock": {
-                    "value": {
-                        "kind": "None",
-                        "notes": "This lock was created by the ALZ Bicep Hub Peered Spoke Orchestration Networking Module."
                     }
                 }
             }

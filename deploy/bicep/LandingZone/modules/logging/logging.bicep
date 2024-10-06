@@ -14,6 +14,17 @@ param logRetentionDays int = 30
 param storageAccountId string
 param parLoggingRG string
 param environment string
+param parLogAnalyticsWorkspaceLogRetentionInDays int
+param parDataCollectionRuleVMInsightsName string
+param parDataCollectionRuleChangeTrackingName string
+param parDataCollectionRuleMDFCSQLName string
+param parDCRWorkspaceTransformationName string
+
+@sys.description('Solutions that will be added to the Log Analytics Workspace.')
+param parLogAnalyticsWorkspaceSolutions array = [
+  'SecurityInsights'
+]
+
 
 @sys.description('Log Analytics Workspace Name.')
 param parmLogAnalyticsWorkspaceName string = '${prefix}-${environment}-log-analytics'
@@ -30,7 +41,7 @@ param parmLogAnalyticsWorkspaceName string = '${prefix}-${environment}-log-analy
   'Standard'
 ])
 @sys.description('Log Analytics Workspace sku name.')
-param sku string = 'PerGB2018'
+param parLogAnalyticsWorkspaceSkuName string = 'PerGB2018'
 
 // Resource
 // Create a Log Analytics Workspace
@@ -43,7 +54,7 @@ resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2023-09
     publicNetworkAccessForQuery: 'Enabled'
     retentionInDays: logRetentionDays
     sku: {
-      name: sku
+      name: parLogAnalyticsWorkspaceSkuName
     }
   } 
 }
@@ -51,7 +62,7 @@ resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2023-09
 // data collection rules
 // VM Insights
 resource resDataCollectionRuleVMInsights 'Microsoft.Insights/dataCollectionRules@2021-04-01' = {
-  name: '${prefix}-vm-insights-dcr'
+  name: parDataCollectionRuleVMInsightsName
   location: location
   properties: {
     description: 'Data collection rule for VM Insights'
@@ -110,7 +121,7 @@ resource resDataCollectionRuleVMInsights 'Microsoft.Insights/dataCollectionRules
 
 // DCR Change Tracking
 resource resDataCollectionRuleChangeTracking 'Microsoft.Insights/dataCollectionRules@2021-04-01' = {
-  name: '${prefix}-change-tracking-dcr'
+  name: parDataCollectionRuleChangeTrackingName
   location: location
   properties: {
     description: 'Data collection rule for CT.'
@@ -372,7 +383,7 @@ resource resDataCollectionRuleChangeTracking 'Microsoft.Insights/dataCollectionR
 
 // Data Collection Rule for Defender for SQL
 resource resDataCollectionRuleMDFCSQL'Microsoft.Insights/dataCollectionRules@2021-04-01' = {
-  name: '${prefix}-defender-for-sql-dcr'
+  name: parDataCollectionRuleMDFCSQLName
   location: location
   properties: {
     description: 'Data collection rule for Defender for SQL.'
@@ -421,7 +432,7 @@ resource resDataCollectionRuleMDFCSQL'Microsoft.Insights/dataCollectionRules@202
 
 // Workspace transformation
 resource resDCRWorkspaceTransformation'Microsoft.Insights/dataCollectionRules@2021-04-01' = {
-  name: '${prefix}-workspacetransformation-dcr'
+  name: parDCRWorkspaceTransformationName
   location: location
   properties: {
     description: 'Data collection rule for Workspace Transformation.'
@@ -473,6 +484,9 @@ resource resSentinelOnboarding 'Microsoft.SecurityInsights/onboardingStates@2024
   properties: {}
 }
 
+
+
+
 // Link the Log Analytics Workspace to the Automation Account
 resource resLogAnalyticsLinkedServiceForAutomationAccount 'Microsoft.OperationalInsights/workspaces/linkedServices@2020-08-01' ={
   parent: logAnalyticsWorkspace
@@ -523,6 +537,22 @@ module resQueryPack 'QueryPacks/packs.bicep' = {
     parLoggingRG: parLoggingRG
   }
 }
+
+// // Solution deployments:
+resource resLogAnalyticsWorkspaceSolutions 'Microsoft.OperationsManagement/solutions@2015-11-01-preview' = [for solution in parLogAnalyticsWorkspaceSolutions: {
+  name: '${solution}(${parmLogAnalyticsWorkspaceName})'
+  location: location
+  tags: tags
+  plan: {
+    name: '${solution}(${parmLogAnalyticsWorkspaceName})'
+    product: 'OMSGallery/${solution}' 
+    promotionCode: ''  
+    publisher: 'Microsoft'
+  }
+ properties: {
+    workspaceResourceId: logAnalyticsWorkspace.id
+  }  
+}]
 
 
 // output resQueryPacks object = resQueryPack
