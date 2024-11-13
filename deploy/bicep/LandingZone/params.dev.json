@@ -18,7 +18,7 @@
                 "policy": false,
                 "initiatives": false,
                 "hubNetwork": false,
-                "spokeNetwork": false,
+                "spokeNetwork": true,
                 "securityCenter": true
             }
         },
@@ -807,7 +807,31 @@
                         },
                         {
                             "parSubnetName": "virtualMachine",
-                            "ipAddressRange": "10.200.1.192/26",
+                            "ipAddressRange": "10.200.1.192/28",
+                            "privateEndpointNetworkPolicy": "Disabled",
+                            "delegation": "",
+                            "parRouteTable": true,
+                            "parDisableBgpRoutePropagation": false
+                        },
+                        {
+                            "parSubnetName": "PrivateEndpoint",
+                            "ipAddressRange": "10.200.1.208/28",
+                            "privateEndpointNetworkPolicy": "Enabled",
+                            "delegation": "",
+                            "parRouteTable": true,
+                            "parDisableBgpRoutePropagation": false
+                        },
+                        {
+                            "parSubnetName": "DevTestLab",
+                            "ipAddressRange": "10.200.1.224/28",
+                            "privateEndpointNetworkPolicy": "Disabled",
+                            "delegation": "",
+                            "parRouteTable": true,
+                            "parDisableBgpRoutePropagation": false
+                        },
+                        {
+                            "parSubnetName": "DevTestLab_VMs",
+                            "ipAddressRange": "10.200.1.240/28",
                             "privateEndpointNetworkPolicy": "Disabled",
                             "delegation": "",
                             "parRouteTable": true,

@@ -88,5 +88,3 @@ Get-AzMonitorLogAnalyticsSolution
 # Azure CLI 
 
 az monitor log-analytics solution list 
-
---query "[?publisher=='Microsoft']"

@@ -136,3 +136,8 @@ $response = Invoke-RestMethod -Uri $apiUrl -Headers $headers -Method Get
 $response.value | Select-Object Name, @{Name = "PricingTier"; Expression = { $_.properties.pricingTier } }, @{Name = "SubPlan"; Expression = { $_.properties.SubPlan } }, @{Name = "deprecated"; Expression = { $_.properties.deprecated } } | Format-Table -AutoSize
 
 $response.value | Where-Object name -EQ "CloudPosture" | Select-Object -ExpandProperty properties | Select-Object -ExpandProperty extensions
+
+az login
+az acr update --name alzcontainerregwest --sku Premium
+
+

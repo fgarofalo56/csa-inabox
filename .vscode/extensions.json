@@ -1,7 +1,8 @@
 {
-    "recommendations": [
-        "github.copilot",
-        "ms-vscode.azure-account",
-        "ms-azuretools.vscode-bicep"
-    ]
+  "recommendations": [
+    "ms-azuretools.vscode-azurefunctions",
+    "github.copilot",
+    "ms-vscode.azure-account",
+    "ms-azuretools.vscode-bicep"
+  ]
 }
