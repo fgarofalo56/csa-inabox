@@ -557,3 +557,127 @@ resource resLogAnalyticsWorkspaceSolutions 'Microsoft.OperationsManagement/solut
 // output resQueryPacks object = resQueryPack
 output logAnalyticsWorkspaceName string = logAnalyticsWorkspace.name
 output logAnalyticsWorkspaceId string = logAnalyticsWorkspace.id
+
+/***************************************************************************************************************************************************
+Data Platform Log Routing & Retention
+Configures table-level retention for data platform diagnostic tables and a data platform DCR.
+***************************************************************************************************************************************************/
+
+// ─── Table-level retention overrides ────────────────────────────────────────
+// Hot retention: 30 days (interactive queries). Total retention: up to 365 days (archive tier).
+// Tables that don't exist yet will be created when services start sending logs.
+
+@description('Retention in days for data platform hot logs (interactive queries). Default 30.')
+param parDataPlatformHotRetentionDays int = 30
+
+@description('Total retention in days for data platform logs (includes archive). Default 365.')
+param parDataPlatformTotalRetentionDays int = 365
+
+// ADF pipeline/activity logs — retain 90 days hot, 365 total
+resource tableADFPipelineRun 'Microsoft.OperationalInsights/workspaces/tables@2022-10-01' = {
+  parent: logAnalyticsWorkspace
+  name: 'ADFPipelineRun'
+  properties: {
+    retentionInDays: 90
+    totalRetentionInDays: parDataPlatformTotalRetentionDays
+  }
+}
+
+resource tableADFActivityRun 'Microsoft.OperationalInsights/workspaces/tables@2022-10-01' = {
+  parent: logAnalyticsWorkspace
+  name: 'ADFActivityRun'
+  properties: {
+    retentionInDays: 90
+    totalRetentionInDays: parDataPlatformTotalRetentionDays
+  }
+}
+
+// Databricks logs — retain 30 days hot, 365 total
+resource tableDatabricksJobs 'Microsoft.OperationalInsights/workspaces/tables@2022-10-01' = {
+  parent: logAnalyticsWorkspace
+  name: 'DatabricksJobs'
+  properties: {
+    retentionInDays: parDataPlatformHotRetentionDays
+    totalRetentionInDays: parDataPlatformTotalRetentionDays
+  }
+}
+
+resource tableDatabricksClusters 'Microsoft.OperationalInsights/workspaces/tables@2022-10-01' = {
+  parent: logAnalyticsWorkspace
+  name: 'DatabricksClusters'
+  properties: {
+    retentionInDays: parDataPlatformHotRetentionDays
+    totalRetentionInDays: parDataPlatformTotalRetentionDays
+  }
+}
+
+resource tableDatabricksNotebook 'Microsoft.OperationalInsights/workspaces/tables@2022-10-01' = {
+  parent: logAnalyticsWorkspace
+  name: 'DatabricksNotebook'
+  properties: {
+    retentionInDays: parDataPlatformHotRetentionDays
+    totalRetentionInDays: parDataPlatformTotalRetentionDays
+  }
+}
+
+// Synapse logs — retain 90 days hot (query audit trail), 365 total
+resource tableSynapseSqlPoolExecRequests 'Microsoft.OperationalInsights/workspaces/tables@2022-10-01' = {
+  parent: logAnalyticsWorkspace
+  name: 'SynapseSqlPoolExecRequests'
+  properties: {
+    retentionInDays: 90
+    totalRetentionInDays: parDataPlatformTotalRetentionDays
+  }
+}
+
+// Storage logs — retain 30 days hot, 90 total (high volume)
+resource tableStorageBlobLogs 'Microsoft.OperationalInsights/workspaces/tables@2022-10-01' = {
+  parent: logAnalyticsWorkspace
+  name: 'StorageBlobLogs'
+  properties: {
+    retentionInDays: parDataPlatformHotRetentionDays
+    totalRetentionInDays: 90
+  }
+}
+
+// Azure Firewall logs — retain 30 days hot, 365 total (security audit)
+resource tableAzureFirewallLogs 'Microsoft.OperationalInsights/workspaces/tables@2022-10-01' = {
+  parent: logAnalyticsWorkspace
+  name: 'AZFWNetworkRule'
+  properties: {
+    retentionInDays: parDataPlatformHotRetentionDays
+    totalRetentionInDays: parDataPlatformTotalRetentionDays
+  }
+}
+
+resource tableAzureFirewallAppLogs 'Microsoft.OperationalInsights/workspaces/tables@2022-10-01' = {
+  parent: logAnalyticsWorkspace
+  name: 'AZFWApplicationRule'
+  properties: {
+    retentionInDays: parDataPlatformHotRetentionDays
+    totalRetentionInDays: parDataPlatformTotalRetentionDays
+  }
+}
+
+// ─── Data Export Rule — Archive to Storage ──────────────────────────────────
+// Exports select high-volume tables to the linked storage account for long-term retention
+resource resDataExportRule 'Microsoft.OperationalInsights/workspaces/dataExports@2020-08-01' = {
+  parent: logAnalyticsWorkspace
+  name: 'data-platform-archive-export'
+  properties: {
+    destination: {
+      resourceId: storageAccountId
+    }
+    enable: true
+    tableNames: [
+      'ADFPipelineRun'
+      'ADFActivityRun'
+      'DatabricksJobs'
+      'DatabricksClusters'
+      'SynapseSqlPoolExecRequests'
+      'AZFWNetworkRule'
+      'AZFWApplicationRule'
+    ]
+  }
+}
+

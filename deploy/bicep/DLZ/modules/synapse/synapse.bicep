@@ -18,6 +18,10 @@ param synapseComputeSubnetId string = ''
 param privateDnsZoneIdSynapseSql string = ''
 param privateDnsZoneIdSynapseDev string = ''
 param privateEndpointSubnets array
+@description('Purview resource ID for lineage integration (optional)')
+param purviewId string = ''
+@description('Log Analytics workspace resource ID for diagnostic settings')
+param logAnalyticsWorkspaceId string = ''
 
 // Variables
 var synapseDefaultStorageAccountFileSystemName = length(split(synapseDefaultStorageAccountFileSystemId, '/')) >= 13
@@ -51,9 +55,9 @@ resource synapse 'Microsoft.Synapse/workspaces@2021-03-01' = {
       preventDataExfiltration: true
     }
     publicNetworkAccess: 'Disabled'
-    purviewConfiguration: {
+    purviewConfiguration: !empty(purviewId) ? {
       purviewResourceId: purviewId
-    }
+    } : null
     sqlAdministratorLogin: administratorUsername
     sqlAdministratorLoginPassword: administratorPassword
     virtualNetworkProfile: {
@@ -171,110 +175,137 @@ resource synapsePrivateEndpointSql 'Microsoft.Network/privateEndpoints@2020-11-0
   }
 ]
 
-resource synapsePrivateEndpointSqlARecord 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2020-11-01' = if (!empty(privateDnsZoneIdSynapseSql)) {
-  parent: synapsePrivateEndpointSql
-  name: 'default'
-  properties: {
-    privateDnsZoneConfigs: [
-      {
-        name: '${synapsePrivateEndpointSql.name}-arecord'
-        properties: {
-          privateDnsZoneId: privateDnsZoneIdSynapseSql
+resource synapsePrivateEndpointSqlARecord 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2020-11-01' = [
+  for (peSubnet, i) in privateEndpointSubnets: if (!empty(privateDnsZoneIdSynapseSql)) {
+    name: 'default'
+    parent: synapsePrivateEndpointSql[i]
+    properties: {
+      privateDnsZoneConfigs: [
+        {
+          name: '${synapsePrivateEndpointNameSql}-${peSubnet.vNetName}-arecord'
+          properties: {
+            privateDnsZoneId: privateDnsZoneIdSynapseSql
+          }
         }
-      }
-    ]
-  }
-}
-
-resource synapsePrivateEndpointSqlOnDemand 'Microsoft.Network/privateEndpoints@2020-11-01' = {
-  name: synapsePrivateEndpointNameSqlOnDemand
-  location: location
-  tags: tags
-  properties: {
-    manualPrivateLinkServiceConnections: []
-    privateLinkServiceConnections: [
-      {
-        name: synapsePrivateEndpointNameSqlOnDemand
-        properties: {
-          groupIds: [
-            'SqlOnDemand'
-          ]
-          privateLinkServiceId: synapse.id
-          requestMessage: ''
-        }
-      }
-    ]
-    subnet: {
-      id: resourceId(
-        subscription().subscriptionId,
-        peSubnet.vNetResourceGroup,
-        'Microsoft.Network/virtualNetworks/subnets',
-        peSubnet.vNetName,
-        peSubnet.subnetName
-      )
+      ]
     }
   }
-}
+]
 
-resource synapsePrivateEndpointSqlOnDemandARecord 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2020-11-01' = if (!empty(privateDnsZoneIdSynapseSql)) {
-  parent: synapsePrivateEndpointSqlOnDemand
-  name: 'default'
-  properties: {
-    privateDnsZoneConfigs: [
-      {
-        name: '${synapsePrivateEndpointSqlOnDemand.name}-arecord'
-        properties: {
-          privateDnsZoneId: privateDnsZoneIdSynapseSql
+resource synapsePrivateEndpointSqlOnDemand 'Microsoft.Network/privateEndpoints@2020-11-01' = [
+  for peSubnet in privateEndpointSubnets: {
+    name: '${synapsePrivateEndpointNameSqlOnDemand}-${peSubnet.vNetName}'
+    location: peSubnet.vNetLocation
+    tags: tags
+    properties: {
+      manualPrivateLinkServiceConnections: []
+      privateLinkServiceConnections: [
+        {
+          name: synapsePrivateEndpointNameSqlOnDemand
+          properties: {
+            groupIds: [
+              'SqlOnDemand'
+            ]
+            privateLinkServiceId: synapse.id
+            requestMessage: ''
+          }
         }
+      ]
+      subnet: {
+        id: resourceId(
+          subscription().subscriptionId,
+          peSubnet.vNetResourceGroup,
+          'Microsoft.Network/virtualNetworks/subnets',
+          peSubnet.vNetName,
+          peSubnet.subnetName
+        )
       }
-    ]
-  }
-}
-
-resource synapsePrivateEndpointDev 'Microsoft.Network/privateEndpoints@2020-11-01' = {
-  name: synapsePrivateEndpointNameDev
-  location: location
-  tags: tags
-  properties: {
-    manualPrivateLinkServiceConnections: []
-    privateLinkServiceConnections: [
-      {
-        name: synapsePrivateEndpointNameDev
-        properties: {
-          groupIds: [
-            'Dev'
-          ]
-          privateLinkServiceId: synapse.id
-          requestMessage: ''
-        }
-      }
-    ]
-    subnet: {
-      id: resourceId(
-        subscription().subscriptionId,
-        peSubnet.vNetResourceGroup,
-        'Microsoft.Network/virtualNetworks/subnets',
-        peSubnet.vNetName,
-        peSubnet.subnetName
-      )
     }
   }
-}
+]
 
-resource synapsePrivateEndpointDevARecord 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2020-11-01' = if (!empty(privateDnsZoneIdSynapseDev)) {
-  parent: synapsePrivateEndpointDev
-  name: 'default'
-  properties: {
-    privateDnsZoneConfigs: [
-      {
-        name: '${synapsePrivateEndpointDev.name}-arecord'
-        properties: {
-          privateDnsZoneId: privateDnsZoneIdSynapseDev
+resource synapsePrivateEndpointSqlOnDemandARecord 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2020-11-01' = [
+  for (peSubnet, i) in privateEndpointSubnets: if (!empty(privateDnsZoneIdSynapseSql)) {
+    name: 'default'
+    parent: synapsePrivateEndpointSqlOnDemand[i]
+    properties: {
+      privateDnsZoneConfigs: [
+        {
+          name: '${synapsePrivateEndpointNameSqlOnDemand}-${peSubnet.vNetName}-arecord'
+          properties: {
+            privateDnsZoneId: privateDnsZoneIdSynapseSql
+          }
         }
+      ]
+    }
+  }
+]
+
+resource synapsePrivateEndpointDev 'Microsoft.Network/privateEndpoints@2020-11-01' = [
+  for peSubnet in privateEndpointSubnets: {
+    name: '${synapsePrivateEndpointNameDev}-${peSubnet.vNetName}'
+    location: peSubnet.vNetLocation
+    tags: tags
+    properties: {
+      manualPrivateLinkServiceConnections: []
+      privateLinkServiceConnections: [
+        {
+          name: synapsePrivateEndpointNameDev
+          properties: {
+            groupIds: [
+              'Dev'
+            ]
+            privateLinkServiceId: synapse.id
+            requestMessage: ''
+          }
+        }
+      ]
+      subnet: {
+        id: resourceId(
+          subscription().subscriptionId,
+          peSubnet.vNetResourceGroup,
+          'Microsoft.Network/virtualNetworks/subnets',
+          peSubnet.vNetName,
+          peSubnet.subnetName
+        )
       }
+    }
+  }
+]
+
+resource synapsePrivateEndpointDevARecord 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2020-11-01' = [
+  for (peSubnet, i) in privateEndpointSubnets: if (!empty(privateDnsZoneIdSynapseDev)) {
+    name: 'default'
+    parent: synapsePrivateEndpointDev[i]
+    properties: {
+      privateDnsZoneConfigs: [
+        {
+          name: '${synapsePrivateEndpointNameDev}-${peSubnet.vNetName}-arecord'
+          properties: {
+            privateDnsZoneId: privateDnsZoneIdSynapseDev
+          }
+        }
+      ]
+    }
+  }
+]
+
+// Diagnostic Settings
+resource synapseDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(logAnalyticsWorkspaceId)) {
+  name: '${synapse.name}-diagnostics'
+  scope: synapse
+  properties: {
+    workspaceId: logAnalyticsWorkspaceId
+    logs: [
+      { categoryGroup: 'allLogs', enabled: true }
+    ]
+    metrics: [
+      { category: 'AllMetrics', enabled: true }
     ]
   }
 }
 
 // Outputs
 output synapseId string = synapse.id
+output synapseName string = synapse.name
+output managedIdentityPrincipalId string = synapse.identity.principalId

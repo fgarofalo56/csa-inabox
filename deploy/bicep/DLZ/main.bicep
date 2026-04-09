@@ -425,11 +425,127 @@ module machineLearning 'modules/machinelearning/machinelearning.bicep' = if (con
   ]
 }
 
-// Outputs
+/***************************************************************************************************************************************************
+RBAC Role Assignments — Service-to-Service Identity Wiring
+Assigns managed identities the required roles on dependent services.
+Built-in Role Definition IDs reference: https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles
+***************************************************************************************************************************************************/
+
+// ADF → Storage: Storage Blob Data Contributor (ba92f5b4-2d11-453d-a403-e96b0029c9fe)
+module roleAdfToStorage '../shared/modules/roleAssignment.bicep' = if (contains(deployModules, 'dataFactory') && bool(deployModules.dataFactory) && contains(deployModules, 'storageZones') && bool(deployModules.storageZones)) {
+  name: 'rbac-adf-storage-blob-contributor'
+  scope: resourceGroup('rg-${basename}-storage-${parLocationShort}')
+  params: {
+    principalId: dataFactory.outputs.managedIdentityPrincipalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
+    description: 'ADF managed identity → Storage Blob Data Contributor on lake storage'
+  }
+  dependsOn: [
+    dataFactory
+    storageServices
+  ]
+}
+
+// ADF → External Storage: Storage Blob Data Contributor
+module roleAdfToExternalStorage '../shared/modules/roleAssignment.bicep' = if (contains(deployModules, 'dataFactory') && bool(deployModules.dataFactory) && contains(deployModules, 'externalStorage') && bool(deployModules.externalStorage)) {
+  name: 'rbac-adf-ext-storage-blob-contributor'
+  scope: resourceGroup('rg-${basename}-externalstorage-${parLocationShort}')
+  params: {
+    principalId: dataFactory.outputs.managedIdentityPrincipalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
+    description: 'ADF managed identity → Storage Blob Data Contributor on external storage'
+  }
+  dependsOn: [
+    dataFactory
+    externalStorageServices
+  ]
+}
+
+// Synapse → Storage: Storage Blob Data Contributor
+module roleSynapseToStorage '../shared/modules/roleAssignment.bicep' = if (contains(deployModules, 'synapse') && bool(deployModules.synapse) && contains(deployModules, 'storageZones') && bool(deployModules.storageZones)) {
+  name: 'rbac-synapse-storage-blob-contributor'
+  scope: resourceGroup('rg-${basename}-storage-${parLocationShort}')
+  params: {
+    principalId: synapseWorkspace.outputs.managedIdentityPrincipalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
+    description: 'Synapse managed identity → Storage Blob Data Contributor on lake storage'
+  }
+  dependsOn: [
+    synapseWorkspace
+    storageServices
+  ]
+}
+
+// Databricks → Storage: Storage Blob Data Contributor
+module roleDatabricksToStorage '../shared/modules/roleAssignment.bicep' = if (contains(deployModules, 'databricks') && bool(deployModules.databricks) && contains(deployModules, 'storageZones') && bool(deployModules.storageZones)) {
+  name: 'rbac-databricks-storage-blob-contributor'
+  scope: resourceGroup('rg-${basename}-storage-${parLocationShort}')
+  params: {
+    principalId: databricksWorkspace.outputs.managedIdentityPrincipalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
+    description: 'Databricks managed identity → Storage Blob Data Contributor on lake storage'
+  }
+  dependsOn: [
+    databricksWorkspace
+    storageServices
+  ]
+}
+
+// Data Explorer → Storage: Storage Blob Data Reader (2a2b9908-6ea1-4ae2-8e65-a410df84e7d1)
+module roleAdxToStorage '../shared/modules/roleAssignment.bicep' = if (contains(deployModules, 'dataExplorer') && bool(deployModules.dataExplorer) && contains(deployModules, 'storageZones') && bool(deployModules.storageZones)) {
+  name: 'rbac-adx-storage-blob-reader'
+  scope: resourceGroup('rg-${basename}-storage-${parLocationShort}')
+  params: {
+    principalId: dataExplorer.outputs.managedIdentityPrincipalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1')
+    description: 'Data Explorer managed identity → Storage Blob Data Reader on lake storage'
+  }
+  dependsOn: [
+    dataExplorer
+    storageServices
+  ]
+}
+
+// ADF → Event Hubs: Azure Event Hubs Data Sender (2b629674-e913-4c01-ae53-ef4638d8f975)
+module roleAdfToEventHubs '../shared/modules/roleAssignment.bicep' = if (contains(deployModules, 'dataFactory') && bool(deployModules.dataFactory) && contains(deployModules, 'eventHubs') && bool(deployModules.eventHubs)) {
+  name: 'rbac-adf-eventhubs-data-sender'
+  scope: resourceGroup('rg-${basename}-eventhubs-${parLocationShort}')
+  params: {
+    principalId: dataFactory.outputs.managedIdentityPrincipalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '2b629674-e913-4c01-ae53-ef4638d8f975')
+    description: 'ADF managed identity → Event Hubs Data Sender'
+  }
+  dependsOn: [
+    dataFactory
+    eventHubs
+  ]
+}
+
+// Data Explorer → Event Hubs: Azure Event Hubs Data Receiver (a638d3c7-ab3a-418d-83e6-5f17a39d4fde)
+module roleAdxToEventHubs '../shared/modules/roleAssignment.bicep' = if (contains(deployModules, 'dataExplorer') && bool(deployModules.dataExplorer) && contains(deployModules, 'eventHubs') && bool(deployModules.eventHubs)) {
+  name: 'rbac-adx-eventhubs-data-receiver'
+  scope: resourceGroup('rg-${basename}-eventhubs-${parLocationShort}')
+  params: {
+    principalId: dataExplorer.outputs.managedIdentityPrincipalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'a638d3c7-ab3a-418d-83e6-5f17a39d4fde')
+    description: 'Data Explorer managed identity → Event Hubs Data Receiver'
+  }
+  dependsOn: [
+    dataExplorer
+    eventHubs
+  ]
+}
+
+// Outputs — Service Resource IDs
 output cosmosDbAccountId string = contains(deployModules, 'cosmosDB') && bool(deployModules.cosmosDB) ? cosmosdb.outputs.cosmosDbAccountId : ''
+output storageAccountId string = contains(deployModules, 'storageZones') && bool(deployModules.storageZones) ? storageServices.outputs.storageAccountId : ''
+output synapseWorkspaceId string = contains(deployModules, 'synapse') && bool(deployModules.synapse) ? synapseWorkspace.outputs.synapseId : ''
+output synapseManagedIdentityPrincipalId string = contains(deployModules, 'synapse') && bool(deployModules.synapse) ? synapseWorkspace.outputs.managedIdentityPrincipalId : ''
 output databricksWorkspaceId string = contains(deployModules, 'databricks') && bool(deployModules.databricks) ? databricksWorkspace.outputs.workspaceId : ''
 output databricksWorkspaceUrl string = contains(deployModules, 'databricks') && bool(deployModules.databricks) ? databricksWorkspace.outputs.workspaceUrl : ''
+output databricksManagedIdentityPrincipalId string = contains(deployModules, 'databricks') && bool(deployModules.databricks) ? databricksWorkspace.outputs.managedIdentityPrincipalId : ''
 output dataFactoryId string = contains(deployModules, 'dataFactory') && bool(deployModules.dataFactory) ? dataFactory.outputs.factoryId : ''
+output dataFactoryManagedIdentityPrincipalId string = contains(deployModules, 'dataFactory') && bool(deployModules.dataFactory) ? dataFactory.outputs.managedIdentityPrincipalId : ''
 output eventHubsNamespaceId string = contains(deployModules, 'eventHubs') && bool(deployModules.eventHubs) ? eventHubs.outputs.namespaceId : ''
 output dataExplorerId string = contains(deployModules, 'dataExplorer') && bool(deployModules.dataExplorer) ? dataExplorer.outputs.clusterId : ''
 output machineLearningId string = contains(deployModules, 'machineLearning') && bool(deployModules.machineLearning) ? machineLearning.outputs.workspaceId : ''

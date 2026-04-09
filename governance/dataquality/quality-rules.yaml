@@ -1,0 +1,175 @@
+# Data Quality Framework — dbt + Great Expectations Integration
+# This configuration defines data quality rules, alerting, and observability.
+
+version: "1.0"
+description: "CSA-in-a-Box Data Quality Framework"
+
+# ─── Quality Rule Definitions ───────────────────────────────────────────────
+rules:
+  # Freshness — are we receiving data on schedule?
+  freshness:
+    - source: raw.customers
+      max_loaded_at_age:
+        warn_after: { count: 12, period: hour }
+        error_after: { count: 24, period: hour }
+    - source: raw.sales_orders
+      max_loaded_at_age:
+        warn_after: { count: 1, period: hour }
+        error_after: { count: 4, period: hour }
+    - source: raw.transactions
+      max_loaded_at_age:
+        warn_after: { count: 30, period: minute }
+        error_after: { count: 2, period: hour }
+
+  # Volume — row counts within expected bounds
+  volume:
+    - table: bronze.brz_customers
+      min_rows: 1000
+      max_growth_pct: 50  # alert if row count grows >50% between runs
+    - table: bronze.brz_sales_orders
+      min_rows: 100
+      max_growth_pct: 200
+
+  # Schema — expected columns and types
+  schema:
+    - table: silver.slv_customers
+      required_columns:
+        - { name: customer_sk, type: string }
+        - { name: customer_id, type: string }
+        - { name: email, type: string }
+        - { name: full_name, type: string }
+        - { name: is_valid_email, type: boolean }
+        - { name: loaded_at, type: timestamp }
+
+  # Uniqueness — no duplicates on these columns
+  uniqueness:
+    - table: silver.slv_customers
+      columns: [customer_sk]
+    - table: silver.slv_sales_orders
+      columns: [order_sk]
+    - table: gold.gld_customer_lifetime_value
+      columns: [customer_id]
+
+  # Referential integrity — foreign key relationships
+  referential_integrity:
+    - child: silver.slv_sales_orders
+      child_column: customer_id
+      parent: silver.slv_customers
+      parent_column: customer_id
+
+  # Custom — business-specific rules
+  custom:
+    - name: no_negative_revenue
+      table: gold.gld_sales_metrics
+      expression: "total_revenue >= 0"
+      severity: error
+    - name: valid_customer_segments
+      table: gold.gld_customer_lifetime_value
+      expression: "customer_segment IN ('active', 'at_risk', 'churned', 'never_purchased')"
+      severity: error
+    - name: clv_positive_for_active
+      table: gold.gld_customer_lifetime_value
+      expression: "customer_segment = 'active' AND total_revenue > 0"
+      severity: warn
+
+# ─── dbt Test Mapping ────────────────────────────────────────────────────────
+# These rules map to dbt tests that are auto-generated or already defined
+dbt_tests:
+  generic:
+    - test: unique
+      applies_to: all_surrogate_keys
+    - test: not_null
+      applies_to: all_surrogate_keys
+    - test: accepted_values
+      applies_to: enum_columns
+    - test: relationships
+      applies_to: foreign_keys
+  custom:
+    - test: test_no_nulls_in_columns
+      path: tests/generic/test_no_nulls_in_columns.sql
+    - test: test_recency
+      path: tests/generic/test_recency.sql
+
+# ─── Great Expectations Suites ────────────────────────────────────────────────
+great_expectations:
+  datasources:
+    - name: adls_bronze
+      type: spark
+      connection_string: "abfss://raw@{storage_account}.dfs.core.windows.net/"
+    - name: adls_silver
+      type: spark
+      connection_string: "abfss://silver@{storage_account}.dfs.core.windows.net/"
+    - name: adls_gold
+      type: spark
+      connection_string: "abfss://gold@{storage_account}.dfs.core.windows.net/"
+
+  suites:
+    - name: bronze_customers_suite
+      datasource: adls_bronze
+      expectations:
+        - expect_table_row_count_to_be_between:
+            min_value: 1000
+        - expect_column_values_to_not_be_null:
+            column: customer_id
+        - expect_column_values_to_be_unique:
+            column: customer_id
+        - expect_column_values_to_match_regex:
+            column: email
+            regex: "^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\\.[a-zA-Z0-9-.]+$"
+            mostly: 0.95
+
+    - name: silver_sales_orders_suite
+      datasource: adls_silver
+      expectations:
+        - expect_column_values_to_not_be_null:
+            column: order_sk
+        - expect_column_values_to_be_between:
+            column: total_amount
+            min_value: 0
+        - expect_column_values_to_be_in_set:
+            column: order_status
+            value_set: ["pending", "confirmed", "shipped", "delivered", "cancelled", "returned"]
+
+    - name: gold_clv_suite
+      datasource: adls_gold
+      expectations:
+        - expect_column_values_to_not_be_null:
+            column: customer_id
+        - expect_column_values_to_be_in_set:
+            column: customer_segment
+            value_set: ["active", "at_risk", "churned", "never_purchased"]
+        - expect_column_values_to_be_in_set:
+            column: value_tier
+            value_set: ["platinum", "gold", "silver", "bronze"]
+
+# ─── Alerting ────────────────────────────────────────────────────────────────
+alerting:
+  channels:
+    - name: azure_monitor
+      type: azure_monitor_custom_metric
+      workspace_id: "${LOG_ANALYTICS_WORKSPACE_ID}"
+      custom_metric_namespace: "DataQuality"
+    - name: teams_webhook
+      type: webhook
+      url: "${TEAMS_WEBHOOK_URL}"
+
+  rules:
+    - trigger: freshness_error
+      channels: [azure_monitor, teams_webhook]
+      message: "Data freshness SLA violated: {source} has not received data in {elapsed}"
+    - trigger: volume_anomaly
+      channels: [azure_monitor, teams_webhook]
+      message: "Row count anomaly detected: {table} — expected {expected}, got {actual}"
+    - trigger: schema_drift
+      channels: [azure_monitor, teams_webhook]
+      message: "Schema drift detected: {table} — missing columns: {missing}"
+    - trigger: test_failure
+      channels: [azure_monitor]
+      message: "Data quality test failed: {test_name} on {table}"
+
+# ─── Schedule ────────────────────────────────────────────────────────────────
+schedule:
+  freshness_checks: "*/15 * * * *"   # Every 15 minutes
+  volume_checks: "0 */2 * * *"       # Every 2 hours
+  full_suite: "0 6 * * *"            # Daily at 6 AM
+  schema_validation: "0 0 * * 1"     # Weekly on Monday

@@ -1,0 +1,81 @@
+{
+    "secretRotation": {
+        "description": "Configuration for automatic and manual secret rotation",
+        "rotationPolicies": {
+            "sql-admin-password": {
+                "rotationInterval": "P90D",
+                "notifyBeforeExpiry": "P30D",
+                "secretLength": 32,
+                "includeSpecialChars": true,
+                "services": ["synapse", "sql-server"]
+            },
+            "synapse-sql-password": {
+                "rotationInterval": "P90D",
+                "notifyBeforeExpiry": "P30D",
+                "secretLength": 32,
+                "includeSpecialChars": true,
+                "services": ["synapse"]
+            },
+            "storage-access-key": {
+                "rotationInterval": "P180D",
+                "notifyBeforeExpiry": "P30D",
+                "rotationMethod": "azure-api",
+                "services": ["storage-account"]
+            }
+        }
+    },
+    "managedIdentityMappings": {
+        "description": "Maps service managed identities to Key Vault RBAC roles",
+        "roles": {
+            "keyVaultSecretsUser": {
+                "roleDefinitionId": "4633458b-17de-408a-b874-0445c86b69e6",
+                "services": [
+                    "Microsoft.DataFactory/factories",
+                    "Microsoft.Databricks/workspaces",
+                    "Microsoft.Synapse/workspaces",
+                    "Microsoft.MachineLearningServices/workspaces",
+                    "Microsoft.Web/sites"
+                ]
+            },
+            "keyVaultCryptoUser": {
+                "roleDefinitionId": "12338af0-0e69-4776-bea7-57ae8d297424",
+                "services": [
+                    "Microsoft.Databricks/workspaces"
+                ]
+            },
+            "keyVaultSecretsOfficer": {
+                "roleDefinitionId": "b86a8fe4-44ce-4948-aee5-eccb2c155cd7",
+                "services": []
+            }
+        }
+    },
+    "secretNamingConvention": {
+        "description": "Naming standards for Key Vault secrets",
+        "pattern": "{service}-{purpose}-{environment}",
+        "examples": [
+            "sql-admin-password-prod",
+            "storage-connection-string-dev",
+            "databricks-pat-token-prod",
+            "eventhub-connection-string-prod",
+            "cosmosdb-primary-key-prod"
+        ]
+    },
+    "complianceChecks": {
+        "softDeleteEnabled": true,
+        "purgeProtectionEnabled": true,
+        "rbacAuthorizationEnabled": true,
+        "publicNetworkAccessDisabled": true,
+        "diagnosticSettingsConfigured": true,
+        "secretExpiryMaxDays": 365,
+        "noExpiredSecrets": true
+    },
+    "eventGridIntegration": {
+        "description": "Event Grid subscription for secret near-expiry notifications",
+        "eventType": "Microsoft.KeyVault.SecretNearExpiry",
+        "endpoint": {
+            "type": "AzureFunction",
+            "functionApp": "{prefix}-{env}-func",
+            "functionName": "secret-rotation-handler"
+        }
+    }
+}

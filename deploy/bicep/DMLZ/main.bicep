@@ -254,19 +254,7 @@ module databricksGovernance 'modules/Databricks/databricks.bicep' = if (contains
 //   properties: {}
 // }
 
-// // Outputs
-// output vnetId string = networkServices.outputs.vnetId
-// output firewallPrivateIp string = networkServices.outputs.firewallPrivateIp
-// output purviewId string = governanceResources.outputs.purviewId
-// output purviewManagedStorageId string = governanceResources.outputs.purviewManagedStorageId
-// output purviewManagedEventHubId string = governanceResources.outputs.purviewManagedEventHubId
-// output privateDnsZoneIdKeyVault string = enableDnsAndFirewallDeployment ? globalDnsZones.outputs.privateDnsZoneIdKeyVault : ''
-// output privateDnsZoneIdDataFactory string = enableDnsAndFirewallDeployment ? globalDnsZones.outputs.privateDnsZoneIdDataFactory : ''
-// output privateDnsZoneIdDataFactoryPortal string = enableDnsAndFirewallDeployment ? globalDnsZones.outputs.privateDnsZoneIdDataFactoryPortal : ''
-// output privateDnsZoneIdBlob string = enableDnsAndFirewallDeployment ? globalDnsZones.outputs.privateDnsZoneIdBlob : ''
-// output privateDnsZoneIdDfs string = enableDnsAndFirewallDeployment ? globalDnsZones.outputs.privateDnsZoneIdDfs : ''
-// output privateDnsZoneIdSqlServer string = enableDnsAndFirewallDeployment ? globalDnsZones.outputs.privateDnsZoneIdSqlServer : ''
-// output privateDnsZoneIdMySqlServer string = enableDnsAndFirewallDeployment ? globalDnsZones.outputs.privateDnsZoneIdMySqlServer : ''
-// output privateDnsZoneIdNamespace string = enableDnsAndFirewallDeployment ? globalDnsZones.outputs.privateDnsZoneIdNamespace : ''
-// output privateDnsZoneIdSynapseDev string = enableDnsAndFirewallDeployment ? globalDnsZones.outputs.privateDnsZoneIdSynapseDev : ''
-// output privateDnsZoneIdSynapseSql string = enableDnsAndFirewallDeployment ? globalDnsZones.outputs.privateDnsZoneIdSynapseSql : ''
+// Outputs — Governance & Databricks Resource IDs
+output governanceResourceGroupName string = bool(deployModules.governance) ? governanceResourceGroup.name : ''
+output databricksGovernanceWorkspaceId string = contains(deployModules, 'databricks') && bool(deployModules.databricks) ? databricksGovernance.outputs.workspaceId : ''
+output databricksGovernanceWorkspaceUrl string = contains(deployModules, 'databricks') && bool(deployModules.databricks) ? databricksGovernance.outputs.workspaceUrl : ''

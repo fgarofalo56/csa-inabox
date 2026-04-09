@@ -56,6 +56,9 @@ param configKafka bool
 ])
 param parPurviewPublicNetworkAccess string = 'Disabled'
 
+@description('VNet and Subnet info for Private Endpoints')
+param endpointConfigs array = []
+
 @description('Tenant Endpoint State')
 @allowed([
   'Enabled'
@@ -200,63 +203,49 @@ resource kafkaConfig 'Microsoft.Purview/accounts/kafkaConfigurations@2024-04-01-
   ]
 }
 
-// resource purviewPrivateEndPoint 'Microsoft.Network/privateEndpoints@2023-04-01' = [
-//   for item in endpointConfigs: if (publicNetworkAccess == 'Disabled') {
-//     name: '${toLower(purviewAcctName)}-private-endpoint-${env}-${item.privateEPGroup}'
-//     location: location
-//     tags: tags
-//     properties: {
-//       subnet: {
-//         id: '/subscriptions/${subscription().subscriptionId}/resourceGroups/${item.vNetRG}/providers/Microsoft.Network/virtualNetworks/${item.vNetName}/subnets/${item.subnet}'
-//       }
-//       manualPrivateLinkServiceConnections: []
-//       privateLinkServiceConnections: [
-//         {
-//           name: 'purviewPrivateEndpoint${item.privateEPGroup}'
-//           properties: {
-//             privateLinkServiceId: '${item.privateEPGroup == 'portal' || item.privateEPGroup =='account' ? purviewAcct.id : item.privateEPGroup == 'blob' || item.privateEPGroup == 'queue'? purviewAcct.properties.managedResources.storageAccount : purviewAcct.properties.managedResources.eventHubNamespace}'
-//             groupIds: [
-//               '${item.privateEPGroup}'
-//             ]
-//           }
-//         }
-//       ]
-//     }
-//   }
-// ]
+resource purviewPrivateEndPoint 'Microsoft.Network/privateEndpoints@2023-04-01' = [
+  for item in endpointConfigs: if (parPurviewPublicNetworkAccess == 'Disabled') {
+    name: '${toLower(purviewAcctName)}-private-endpoint-${env}-${item.privateEPGroup}'
+    location: location
+    tags: tags
+    properties: {
+      subnet: {
+        id: '/subscriptions/${subscription().subscriptionId}/resourceGroups/${item.vNetRG}/providers/Microsoft.Network/virtualNetworks/${item.vNetName}/subnets/${item.subnet}'
+      }
+      manualPrivateLinkServiceConnections: []
+      privateLinkServiceConnections: [
+        {
+          name: 'purviewPrivateEndpoint${item.privateEPGroup}'
+          properties: {
+            privateLinkServiceId: '${item.privateEPGroup == 'portal' || item.privateEPGroup == 'account' ? purviewAcct.id : item.privateEPGroup == 'blob' || item.privateEPGroup == 'queue' ? purviewAcct.properties.managedResources.storageAccount : purviewAcct.properties.managedResources.eventHubNamespace}'
+            groupIds: [
+              '${item.privateEPGroup}'
+            ]
+          }
+        }
+      ]
+    }
+  }
+]
 
-// resource purviewPrivateEndpointPortalARecord 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2020-11-01' = [
-//   for item in endpointConfigs: if (empty(resourceId('Microsoft.Network/privateDnsZones', item.privateDNSZone)) && publicNetworkAccess == 'Disabled') {
-//     name: 'default'
-//     parent: purviewPrivateEndPoint[indexOf(endpointConfigs, item)]
-//     properties: {
-//       privateDnsZoneConfigs: [
-//         {
-//           name: '${purviewPrivateEndPoint[indexOf(endpointConfigs, item)].name}-arecord'
-//           properties: {
-//             privateDnsZoneId: resourceId('Microsoft.Network/privateDnsZones', item.privateDNSZone)
-//           }
-//         }
-//       ]
-//     }
-//   }
-// ]
+resource purviewPrivateEndpointDnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2020-11-01' = [
+  for (item, i) in endpointConfigs: if (parPurviewPublicNetworkAccess == 'Disabled' && !empty(item.privateDNSZone)) {
+    name: 'default'
+    parent: purviewPrivateEndPoint[i]
+    properties: {
+      privateDnsZoneConfigs: [
+        {
+          name: '${purviewPrivateEndPoint[i].name}-arecord'
+          properties: {
+            privateDnsZoneId: resourceId(item.privateDNSZoneRG, 'Microsoft.Network/privateDnsZones', item.privateDNSZone)
+          }
+        }
+      ]
+    }
+  }
+]
 
-// resource pepConfig 'Microsoft.Purview/accounts/privateEndpointConnections@2021-12-01' = [
-//   for item in endpointConfigs: if (publicNetworkAccess == 'Disabled') {
-//     name: '${toLower(purviewAcctName)}-private-endpoint-${env}-${item.privateEPGroup}'
-//     parent: purviewAcct
-//     properties: {
-//       privateEndpoint: {
-//         id: resourceId(
-//           'Microsoft.Network/privateEndpoints',
-//           purviewPrivateEndPoint[indexOf(endpointConfigs, item)].name
-//         )
-//       }
-//       privateLinkServiceConnectionState: {
-//         status: 'Approved'
-//         description: 'DMLZ PEP Approved'
-//       }
-//     }
-//   }
-// ]
+// Outputs
+output purviewAccountId string = purviewAcct.id
+output purviewAccountName string = purviewAcct.name
+output managedIdentityPrincipalId string = purviewAcct.identity.principalId

@@ -1,0 +1,196 @@
+# Bicep What-If Analysis — PR Comment Workflow
+# Runs `az deployment sub what-if` on PRs that modify Bicep files and posts results as PR comments.
+
+name: 'Bicep What-If'
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'deploy/bicep/**/*.bicep'
+      - 'deploy/bicep/**/*.json'
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: bicep-whatif-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  AZURE_LOCATION: 'eastus'
+
+jobs:
+  detect-changes:
+    name: Detect Changed Landing Zones
+    runs-on: ubuntu-latest
+    outputs:
+      alz_changed: ${{ steps.changes.outputs.alz }}
+      dmlz_changed: ${{ steps.changes.outputs.dmlz }}
+      dlz_changed: ${{ steps.changes.outputs.dlz }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect file changes
+        id: changes
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            alz:
+              - 'deploy/bicep/LandingZone - ALZ/**'
+              - 'deploy/bicep/shared/**'
+            dmlz:
+              - 'deploy/bicep/DMLZ/**'
+              - 'deploy/bicep/shared/**'
+            dlz:
+              - 'deploy/bicep/DLZ/**'
+              - 'deploy/bicep/shared/**'
+
+  bicep-build:
+    name: Validate Bicep (${{ matrix.zone }})
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - zone: ALZ
+            path: 'deploy/bicep/LandingZone - ALZ'
+            main: main.bicep
+            changed: ${{ needs.detect-changes.outputs.alz_changed }}
+          - zone: DMLZ
+            path: deploy/bicep/DMLZ
+            main: main.bicep
+            changed: ${{ needs.detect-changes.outputs.dmlz_changed }}
+          - zone: DLZ
+            path: deploy/bicep/DLZ
+            main: main.bicep
+            changed: ${{ needs.detect-changes.outputs.dlz_changed }}
+    steps:
+      - name: Checkout
+        if: matrix.changed == 'true'
+        uses: actions/checkout@v4
+
+      - name: Bicep Build
+        if: matrix.changed == 'true'
+        uses: azure/CLI@v2
+        with:
+          inlineScript: |
+            az bicep build --file "${{ matrix.path }}/${{ matrix.main }}" --stdout > /dev/null 2>&1
+            echo "✅ ${{ matrix.zone }}: Bicep build succeeded" >> $GITHUB_STEP_SUMMARY
+
+  whatif:
+    name: What-If (${{ matrix.zone }})
+    runs-on: ubuntu-latest
+    needs: [detect-changes, bicep-build]
+    environment: dev
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - zone: DMLZ
+            path: deploy/bicep/DMLZ
+            main: main.bicep
+            params: params.dev.json
+            subscription_secret: DMLZ_SUBSCRIPTION_ID
+            changed: ${{ needs.detect-changes.outputs.dmlz_changed }}
+          - zone: DLZ
+            path: deploy/bicep/DLZ
+            main: main.bicep
+            params: params.dev.json
+            subscription_secret: DLZ_SUBSCRIPTION_ID
+            changed: ${{ needs.detect-changes.outputs.dlz_changed }}
+    steps:
+      - name: Checkout
+        if: matrix.changed == 'true'
+        uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        if: matrix.changed == 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets[matrix.subscription_secret] }}
+
+      - name: Run What-If
+        if: matrix.changed == 'true'
+        id: whatif
+        uses: azure/CLI@v2
+        with:
+          inlineScript: |
+            set +e
+            RESULT=$(az deployment sub what-if \
+              --location "${{ env.AZURE_LOCATION }}" \
+              --template-file "${{ matrix.path }}/${{ matrix.main }}" \
+              --parameters "${{ matrix.path }}/${{ matrix.params }}" \
+              --no-pretty-print 2>&1)
+            EXIT_CODE=$?
+            set -e
+
+            # Truncate if too large for PR comment (GitHub limit ~65535 chars)
+            if [ ${#RESULT} -gt 60000 ]; then
+              RESULT="${RESULT:0:60000}
+            ... (output truncated, see workflow logs for full details)"
+            fi
+
+            # Escape for multiline output
+            EOF=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
+            echo "whatif_result<<$EOF" >> $GITHUB_OUTPUT
+            echo "$RESULT" >> $GITHUB_OUTPUT
+            echo "$EOF" >> $GITHUB_OUTPUT
+            echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+
+      - name: Post PR Comment
+        if: matrix.changed == 'true' && always()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const zone = '${{ matrix.zone }}';
+            const exitCode = '${{ steps.whatif.outputs.exit_code }}';
+            const result = `${{ steps.whatif.outputs.whatif_result }}`;
+            const status = exitCode === '0' ? '✅' : '⚠️';
+
+            const body = `## ${status} Bicep What-If: **${zone}**
+
+            <details>
+            <summary>Click to expand what-if results</summary>
+
+            \`\`\`
+            ${result}
+            \`\`\`
+
+            </details>
+
+            ---
+            *Generated by [Bicep What-If Workflow](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})*`;
+
+            // Find existing comment from this workflow for this zone
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find(c =>
+              c.user.type === 'Bot' && c.body.includes(`Bicep What-If: **${zone}**`)
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body: body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body,
+              });
+            }
