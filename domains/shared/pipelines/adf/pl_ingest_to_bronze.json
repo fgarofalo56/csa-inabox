@@ -1,0 +1,162 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "metadata": {
+        "description": "ADF Pipeline: Batch ingestion from external sources to ADLS Bronze layer",
+        "domain": "shared",
+        "pattern": "copy-to-bronze"
+    },
+    "resources": [
+        {
+            "type": "Microsoft.DataFactory/factories/pipelines",
+            "apiVersion": "2018-06-01",
+            "name": "[concat(parameters('factoryName'), '/pl_ingest_to_bronze')]",
+            "properties": {
+                "description": "Generic batch ingestion pipeline. Copies data from source to ADLS raw/bronze container with metadata logging.",
+                "activities": [
+                    {
+                        "name": "SetIngestionTimestamp",
+                        "type": "SetVariable",
+                        "typeProperties": {
+                            "variableName": "ingestionTimestamp",
+                            "value": {
+                                "value": "@utcnow('yyyy-MM-ddTHH:mm:ssZ')",
+                                "type": "Expression"
+                            }
+                        }
+                    },
+                    {
+                        "name": "CopyToRaw",
+                        "type": "Copy",
+                        "dependsOn": [
+                            {
+                                "activity": "SetIngestionTimestamp",
+                                "dependencyConditions": ["Succeeded"]
+                            }
+                        ],
+                        "typeProperties": {
+                            "source": {
+                                "type": "DelimitedTextSource",
+                                "storeSettings": {
+                                    "type": "AzureBlobStorageReadSettings",
+                                    "recursive": true,
+                                    "wildcardFileName": "*.csv"
+                                },
+                                "formatSettings": {
+                                    "type": "DelimitedTextReadSettings"
+                                }
+                            },
+                            "sink": {
+                                "type": "ParquetSink",
+                                "storeSettings": {
+                                    "type": "AzureBlobFSWriteSettings"
+                                },
+                                "formatSettings": {
+                                    "type": "ParquetWriteSettings"
+                                }
+                            },
+                            "enableStaging": false
+                        },
+                        "inputs": [
+                            {
+                                "referenceName": "ds_source_delimited",
+                                "type": "DatasetReference",
+                                "parameters": {
+                                    "containerName": {
+                                        "value": "@pipeline().parameters.sourceContainer",
+                                        "type": "Expression"
+                                    },
+                                    "folderPath": {
+                                        "value": "@pipeline().parameters.sourceFolderPath",
+                                        "type": "Expression"
+                                    }
+                                }
+                            }
+                        ],
+                        "outputs": [
+                            {
+                                "referenceName": "ds_adls_parquet",
+                                "type": "DatasetReference",
+                                "parameters": {
+                                    "containerName": "raw",
+                                    "folderPath": {
+                                        "value": "@concat(pipeline().parameters.domainName, '/', pipeline().parameters.entityName, '/year=', formatDateTime(variables('ingestionTimestamp'), 'yyyy'), '/month=', formatDateTime(variables('ingestionTimestamp'), 'MM'), '/day=', formatDateTime(variables('ingestionTimestamp'), 'dd'))",
+                                        "type": "Expression"
+                                    }
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "name": "LogIngestionSuccess",
+                        "type": "SetVariable",
+                        "dependsOn": [
+                            {
+                                "activity": "CopyToRaw",
+                                "dependencyConditions": ["Succeeded"]
+                            }
+                        ],
+                        "typeProperties": {
+                            "variableName": "ingestionStatus",
+                            "value": "success"
+                        }
+                    },
+                    {
+                        "name": "LogIngestionFailure",
+                        "type": "SetVariable",
+                        "dependsOn": [
+                            {
+                                "activity": "CopyToRaw",
+                                "dependencyConditions": ["Failed"]
+                            }
+                        ],
+                        "typeProperties": {
+                            "variableName": "ingestionStatus",
+                            "value": {
+                                "value": "@concat('FAILED: ', activity('CopyToRaw').error.message)",
+                                "type": "Expression"
+                            }
+                        }
+                    }
+                ],
+                "parameters": {
+                    "sourceContainer": {
+                        "type": "String",
+                        "defaultValue": "source-data"
+                    },
+                    "sourceFolderPath": {
+                        "type": "String"
+                    },
+                    "domainName": {
+                        "type": "String",
+                        "defaultValue": "shared"
+                    },
+                    "entityName": {
+                        "type": "String"
+                    }
+                },
+                "variables": {
+                    "ingestionTimestamp": {
+                        "type": "String"
+                    },
+                    "ingestionStatus": {
+                        "type": "String"
+                    }
+                },
+                "annotations": [
+                    "batch-ingestion",
+                    "bronze-layer",
+                    "csa-inabox"
+                ]
+            }
+        }
+    ],
+    "parameters": {
+        "factoryName": {
+            "type": "string",
+            "metadata": {
+                "description": "Name of the Azure Data Factory instance"
+            }
+        }
+    }
+}

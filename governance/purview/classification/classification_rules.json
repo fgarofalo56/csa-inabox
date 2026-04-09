@@ -1,0 +1,107 @@
+{
+    "customClassificationRules": [
+        {
+            "name": "CSA_CUSTOMER_ID",
+            "description": "CSA-in-a-Box internal customer identifier pattern",
+            "ruleType": "Custom",
+            "classificationAction": "Keep",
+            "dataPatterns": [
+                {
+                    "pattern": "C\\d{4,10}",
+                    "description": "Customer ID format: C followed by 4-10 digits"
+                }
+            ],
+            "columnPatterns": [
+                {
+                    "pattern": "(?i)(customer_id|cust_id|customerid|custid)",
+                    "description": "Column names matching customer ID patterns"
+                }
+            ],
+            "minimumPercentageMatch": 60.0
+        },
+        {
+            "name": "CSA_ORDER_ID",
+            "description": "CSA-in-a-Box internal order identifier pattern",
+            "ruleType": "Custom",
+            "classificationAction": "Keep",
+            "dataPatterns": [
+                {
+                    "pattern": "ORD-\\d{6,12}",
+                    "description": "Order ID format: ORD- followed by 6-12 digits"
+                }
+            ],
+            "columnPatterns": [
+                {
+                    "pattern": "(?i)(order_id|orderid|order_number|ordernumber)",
+                    "description": "Column names matching order ID patterns"
+                }
+            ],
+            "minimumPercentageMatch": 60.0
+        },
+        {
+            "name": "CSA_FINANCIAL_AMOUNT",
+            "description": "Financial amount columns requiring audit tracking",
+            "ruleType": "Custom",
+            "classificationAction": "Keep",
+            "columnPatterns": [
+                {
+                    "pattern": "(?i)(revenue|amount|price|cost|total|fee|charge|balance|payment|salary|wage|income)",
+                    "description": "Column names indicating financial values"
+                }
+            ],
+            "minimumPercentageMatch": 80.0
+        }
+    ],
+    "sensitivityLabels": {
+        "Public": {
+            "description": "Non-sensitive data safe for broad access",
+            "order": 1,
+            "examples": ["product catalog", "public metrics"]
+        },
+        "Internal": {
+            "description": "Standard business data for internal use",
+            "order": 2,
+            "examples": ["sales metrics", "operational KPIs"]
+        },
+        "Confidential": {
+            "description": "Sensitive business data with restricted access",
+            "order": 3,
+            "examples": ["customer data", "financial reports", "pricing strategies"]
+        },
+        "Restricted": {
+            "description": "Highly sensitive data requiring strict controls",
+            "order": 4,
+            "examples": ["PII", "PHI", "payment card data", "credentials"]
+        }
+    },
+    "autoLabelingPolicies": [
+        {
+            "name": "PII_Auto_Label",
+            "description": "Automatically label columns containing PII as Restricted",
+            "classificationNames": [
+                "MICROSOFT.PERSONAL.US.SOCIAL_SECURITY_NUMBER",
+                "MICROSOFT.PERSONAL.DATE_OF_BIRTH",
+                "MICROSOFT.PERSONAL.US.DRIVER_LICENSE_NUMBER"
+            ],
+            "targetLabel": "Restricted"
+        },
+        {
+            "name": "Financial_Auto_Label",
+            "description": "Automatically label financial data as Confidential",
+            "classificationNames": [
+                "MICROSOFT.FINANCIAL.CREDIT_CARD_NUMBER",
+                "MICROSOFT.FINANCIAL.ABA_ROUTING_NUMBER",
+                "CSA_FINANCIAL_AMOUNT"
+            ],
+            "targetLabel": "Confidential"
+        },
+        {
+            "name": "Email_Auto_Label",
+            "description": "Automatically label email columns as Confidential",
+            "classificationNames": [
+                "MICROSOFT.PERSONAL.EMAIL"
+            ],
+            "targetLabel": "Confidential"
+        }
+    ]
+}

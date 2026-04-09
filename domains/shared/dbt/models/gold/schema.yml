@@ -1,0 +1,48 @@
+version: 2
+
+models:
+  - name: gld_daily_order_metrics
+    description: >
+      Gold layer: Daily order aggregations for operational dashboards.
+      Filters out records with quality issues (negative amounts, future dates).
+    columns:
+      - name: order_date
+        description: Calendar date
+        tests:
+          - unique
+          - not_null
+      - name: total_orders
+        description: Count of orders for the day
+      - name: total_revenue
+        description: Sum of order totals for the day
+      - name: avg_order_value
+        description: Average order value for the day
+      - name: cancellation_rate
+        description: Percentage of cancelled orders (0-100)
+
+  - name: gld_customer_lifetime_value
+    description: >
+      Gold layer: Customer lifetime value metrics with segmentation.
+      Combines customer and order data for analytics.
+    columns:
+      - name: customer_id
+        description: Unique customer identifier
+        tests:
+          - unique
+          - not_null
+      - name: customer_segment
+        description: "Activity-based segment: active, at_risk, churned, never_purchased"
+        tests:
+          - accepted_values:
+              values: ['active', 'at_risk', 'churned', 'never_purchased']
+      - name: value_tier
+        description: "Revenue-based tier: platinum, gold, silver, bronze"
+        tests:
+          - accepted_values:
+              values: ['platinum', 'gold', 'silver', 'bronze']
+      - name: lifetime_revenue
+        description: Total revenue from all completed orders
+      - name: total_orders
+        description: Total number of orders placed
+      - name: monthly_revenue_rate
+        description: Average monthly revenue since customer creation

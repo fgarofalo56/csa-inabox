@@ -1,0 +1,60 @@
+[project]
+name = "csa-inabox"
+version = "0.1.0"
+description = "Cloud-Scale Analytics in-a-Box — Azure Data Mesh Platform"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+src = ["domains", "scripts", "governance", "agent-harness"]
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "F",      # pyflakes
+    "W",      # pycodestyle warnings
+    "I",      # isort
+    "N",      # pep8-naming
+    "UP",     # pyupgrade
+    "B",      # flake8-bugbear
+    "A",      # flake8-builtins
+    "COM",    # flake8-commas
+    "C4",     # flake8-comprehensions
+    "DTZ",    # flake8-datetimez
+    "ISC",    # flake8-implicit-str-concat
+    "PIE",    # flake8-pie
+    "PT",     # flake8-pytest-style
+    "RSE",    # flake8-raise
+    "RET",    # flake8-return
+    "SIM",    # flake8-simplify
+    "TCH",    # flake8-type-checking
+    "ARG",    # flake8-unused-arguments
+    "ERA",    # eradicate
+    "RUF",    # ruff-specific rules
+]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+    "COM812", # missing trailing comma (conflicts with formatter)
+    "ISC001", # single-line implicit string concat (conflicts with formatter)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["domains", "governance"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_functions = ["test_*"]
+addopts = "--tb=short -q"
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+warn_return_any = true
+warn_unused_configs = true

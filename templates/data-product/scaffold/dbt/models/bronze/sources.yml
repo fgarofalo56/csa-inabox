@@ -1,0 +1,20 @@
+version: 2
+
+sources:
+  - name: raw_DOMAIN_NAME
+    description: "Raw DOMAIN_NAME data from source systems"
+    database: "{{ var('domain_database') }}"
+    schema: raw
+    loader: adf_copy_activity
+    loaded_at_field: _metadata.file_modification_time
+    freshness:
+      warn_after: {count: 24, period: hour}
+      error_after: {count: 48, period: hour}
+    tables:
+      - name: raw_TABLE_NAME
+        description: "TODO: Describe this source table"
+        columns:
+          - name: id
+            tests:
+              - not_null
+              - unique

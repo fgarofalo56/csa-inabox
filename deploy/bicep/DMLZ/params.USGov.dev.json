@@ -1,0 +1,47 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "location": {
+            "value": "US Gov Virginia"
+        },
+        "environment": {
+            "value": "dev"
+        },
+        "prefix": {
+            "value": "dmlz"
+        },
+        "deployModules": {
+            "value": {
+                "governance": true
+            }
+        },
+        "privateDNSZones": {
+            "value": {
+                "subscriptionId": "c36bc643-b071-42f8-8197-4c787fcf5549",
+                "resourceGroupName": "rg-alz-dev-dns-usgovvirginia"
+            }
+        },
+        "parGovernance": {
+            "value": {
+                "rgTags": {
+                    "DMLZ Type": "Governance",
+                    "Purpose": "Resource Group for Governance"
+                },
+                "purviewTags": {
+                    "DMLZ Type": "Governance",
+                    "Purpose": "Purview Account for Governance"
+                },
+                "purviewAcountName": "purview001",
+                "purviewLocation": "US Gov Virginia",
+                "purviewSku": {
+                    "name": "Standard",
+                    "capacity": 1
+                },
+                "purviewTenantEndpointState": "Disabled",
+                "purviewPublicNetworkAccess": "Enabled",
+                "purviewKafkaConfig": true
+            }
+        }
+    }
+}

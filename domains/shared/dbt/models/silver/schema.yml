@@ -1,0 +1,54 @@
+version: 2
+
+models:
+  - name: slv_orders
+    description: >
+      Silver layer: Cleansed and enriched orders. Deduped by order_id,
+      type-cast, with data quality flags for downstream filtering.
+    columns:
+      - name: order_id
+        description: Unique order identifier (string)
+        tests:
+          - unique
+          - not_null
+      - name: customer_id
+        description: FK to slv_customers
+        tests:
+          - not_null
+          - relationships:
+              to: ref('slv_customers')
+              field: customer_id
+              severity: warn
+      - name: order_date
+        description: Date the order was placed
+        tests:
+          - not_null
+      - name: order_total
+        description: Total order value in USD
+      - name: order_status
+        description: "Current order status: pending, completed, cancelled, returned"
+        tests:
+          - accepted_values:
+              values: ['pending', 'completed', 'cancelled', 'returned', 'shipped', 'processing']
+              severity: warn
+      - name: _is_negative_amount
+        description: Quality flag - true if order_total < 0
+      - name: _is_future_date
+        description: Quality flag - true if order_date > current_date
+
+  - name: slv_customers
+    description: >
+      Silver layer: Cleansed customer records. Deduped, standardized casing,
+      validated email format.
+    columns:
+      - name: customer_id
+        description: Unique customer identifier
+        tests:
+          - unique
+          - not_null
+      - name: email
+        description: Customer email (lowercased)
+      - name: _is_invalid_email
+        description: Quality flag - true if email fails regex validation
+      - name: _is_missing_id
+        description: Quality flag - true if customer_id was null in source

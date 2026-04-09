@@ -1,0 +1,67 @@
+{
+  // See https://aka.ms/bicep/config for more information on Bicep configuration options
+  //https://github.com/Azure/bicep/blob/main/docs/experimental-features.md
+  // Press CTRL+SPACE/CMD+SPACE at any location to see Intellisense suggestions
+  "analyzers": {
+    "core": {
+      "rules": {
+        "no-unused-params": {
+          "level": "Off"
+        },
+        "no-unused-vars": {
+          "level": "Off"
+        },
+        "no-unnecessary-dependson": {
+          "level": "warning"
+        },
+        "use-safe-access": {
+          "level": "Off"
+        },
+        "use-resource-id-functions": {
+          "level": "Off"
+        },
+        "prefer-interpolation": {
+          "level": "Off"
+        },
+        "no-unused-existing-resource": {
+          "level": "Off"
+        },
+        "use-secure-value-for-secure-inputs": {
+          "level": "warning"
+        },
+        "BCP318": {
+          "level": "Off"
+        }
+      }
+    }
+  },
+  "telemetry": {
+    "enableTelemetry": true
+  },
+  "experimentalFeaturesEnabled": {
+    "resourceDerivedTypes": true,
+    "resourceTypedParamsAndOutputs": true,
+    "sourceMapping": true,
+    "extendableParamFiles": true,
+    "symbolicNameCodegen": true,
+    "optionalModuleNames": true,
+    "publish-extension": true,
+    "assertions": true,
+    "testFramework": true,
+    "extensibility": true,
+    "legacyFormatter": false,
+    "desiredStateConfiguration": true,
+    "externalInputFunctions": true,
+    "moduleExtensionConfigs": true,
+    "onlyIfNotExists": true,
+    "resourceDerivedTypes": true,
+    "resourceInfoCodegen": true,
+    "resourceTypedParamsAndOutputs": true,
+    "sourceMapping": true,
+    "symbolicNameCodegen": true,
+    "testFramework": true,
+    "typedVariables": true,
+    "waitAndRetry": true,
+    "publish-extension": true
+  }
+}

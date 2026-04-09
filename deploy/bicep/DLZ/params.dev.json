@@ -1,0 +1,132 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "location": {
+            "value": "East US 2"
+        },
+        "environment": {
+            "value": "dev"
+        },
+        "prefix": {
+            "value": "dlz"
+        },
+        "deployModules": {
+            "value": {
+                "cosmosDB": true,
+                "storageZones": true,
+                "externalStorage": true,
+                "synapse": false
+            }
+        },
+        "privateDNSZones": {
+            "value": {
+                "subscriptionId": "a60a2fdd-c133-4845-9beb-31f470bf3ef5",
+                "resourceGroupName": "rg-alz-dev-dns-eastus"
+            }
+        },
+        "parCosmosDB": {
+            "value": {
+                "cosmosDbAccountName": "DataHiveCosmosSQL",
+                "enableAutomaticFailover": false,
+                "defaultDatabaseName": "default",
+                "enableMultipleWriteLocations": false,
+                "enableAnalyticalStorage": false,
+                "enableFreeTier": false,
+                "enableBurstCapacity": false,
+                "enableMaterializedViews": false,
+                "enableCassandraConnector": false,
+                "enablePartitionMerge": false,
+                "enablePerRegionPerPartitionAutoscale": false,
+                "enablePriorityBasedExecution": false,
+                "disableKeyBasedMetadataWriteAccess": false,
+                "disableLocalAuth": false,
+                "consistencyLevel": "Session",
+                "backupPolicyType": "Continuous",
+                "backupIntervalInMinutes": 240,
+                "backupRetentionInHours": 720,
+                "continuousBackupTier": "Continuous7Days",
+                "publicNetworkAccess": "Enabled",
+                "networkAclBypass": "None",
+                "ipRules": [],
+                "virtualNetworkRules": [],
+                "tags": {
+                    "DLZ Type": "No SQL",
+                    "API": "SQL"
+                }
+            }
+        },
+        "parStorage": {
+            "value": {
+                "storageAccountName": "dlzstorage",
+                "sku": "Standard_LRS",
+                "kind": "StorageV2",
+                "domainFileSystemNames": [
+                    "data",
+                    "di001",
+                    "di002"
+                ],
+                "dataProductFileSystemNames": [
+                    "data",
+                    "di001",
+                    "di002"
+                ],
+                "privateEndpointSubnets": [
+                    {
+                        "subscriptionId": "a60a2fdd-c133-4845-9beb-31f470bf3ef5",
+                        "vNetResourceGroup": "rg-alz-dev-spokeVnet-eastus2",
+                        "vNetName": "alz-dev-spokeVnet-eastus2",
+                        "subnetName": "privatelinke",
+                        "vNetLocation": "East US 2"
+                    }
+                ],
+                "virtualNetworkRules": [],
+                "tags": {
+                    "DLZ Type": "Storage",
+                    "Purpose": "Shared Storage zones"
+                }
+            }
+        },
+        "parExternalStorage": {
+            "value": {
+                "storageAccountName": "dlzstorage",
+                "sku": "Standard_LRS",
+                "kind": "StorageV2",
+                "fileSytemNames": [
+                    "data"
+                ],
+                "privateEndpointSubnets": [
+                    {
+                        "subscriptionId": "a60a2fdd-c133-4845-9beb-31f470bf3ef5",
+                        "vNetResourceGroup": "rg-alz-dev-spokeVnet-eastus2",
+                        "vNetName": "alz-dev-spokeVnet-eastus2",
+                        "subnetName": "privatelinke",
+                        "vNetLocation": "East US 2"
+                    }
+                ],
+                "virtualNetworkRules": [],
+                "tags": {
+                    "DLZ Type": "External Storage",
+                    "Purpose": "External Shared Storage"
+                }
+            }
+        },
+        "parSynapse": {
+            "value": {
+                "synapseWorkspaceName": "dlzsynapse",
+                "sqlPoolName": "dlzsqlpool",
+                "managedVirtualNetworkName": "dlzManagedVnet",
+                "managedPrivateEndpointName": "dlzManagedPrivateEndpoint",
+                "managedPrivateEndpointDescription": "DLZ Synapse Managed Private Endpoint",
+                "managedPrivateEndpointGroupName": "dlzManagedPrivateEndpointGroup",
+                "managedPrivateEndpointGroupDescription": "DLZ Synapse Managed Private Endpoint Group",
+                "privateLinkHubName": "dlzPrivateLinkHub",
+                "privateLinkHubDescription": "DLZ Synapse Private Link Hub",
+                "privateLinkHubLocation": "[parameters('location')]",
+                "tags": {
+                    "DLZ Type": "Synapse"
+                }
+            }
+        }
+    }
+}

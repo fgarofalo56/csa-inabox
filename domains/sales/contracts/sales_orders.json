@@ -1,0 +1,68 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://csa-inabox.local/contracts/sales-orders-v1",
+    "title": "Sales Orders Data Product",
+    "description": "Curated daily sales metrics by region and channel. Published from the Sales domain gold layer.",
+    "type": "object",
+    "properties": {
+        "metadata": {
+            "type": "object",
+            "properties": {
+                "domain": { "const": "sales" },
+                "product_name": { "const": "gld_sales_metrics" },
+                "version": { "const": "1.0.0" },
+                "owner": { "type": "string", "description": "Domain team or individual" },
+                "sla": {
+                    "type": "object",
+                    "properties": {
+                        "freshness": { "type": "string", "description": "Max data age", "default": "24h" },
+                        "availability": { "type": "string", "description": "Uptime SLA", "default": "99.5%" },
+                        "completeness": { "type": "number", "description": "Min % non-null required fields", "default": 99.0 }
+                    }
+                },
+                "classification": {
+                    "type": "string",
+                    "enum": ["public", "internal", "confidential", "restricted"],
+                    "default": "internal"
+                },
+                "update_frequency": { "type": "string", "default": "daily" },
+                "retention_days": { "type": "integer", "default": 730 }
+            },
+            "required": ["domain", "product_name", "version", "owner"]
+        },
+        "schema": {
+            "type": "object",
+            "properties": {
+                "order_date": { "type": "string", "format": "date", "description": "Calendar date" },
+                "sales_region": { "type": "string", "description": "Geographic sales region" },
+                "sales_channel": { "type": "string", "description": "Sales channel (ONLINE, STORE, PARTNER)" },
+                "total_orders": { "type": "integer", "minimum": 0 },
+                "unique_customers": { "type": "integer", "minimum": 0 },
+                "total_revenue": { "type": "number", "minimum": 0 },
+                "avg_line_value": { "type": "number" },
+                "total_units_sold": { "type": "integer", "minimum": 0 },
+                "unique_products_sold": { "type": "integer", "minimum": 0 },
+                "revenue_per_order": { "type": "number" },
+                "units_per_order": { "type": "number" }
+            },
+            "required": ["order_date", "sales_region", "sales_channel", "total_orders", "total_revenue"]
+        },
+        "quality_rules": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "rule": { "type": "string" },
+                    "severity": { "type": "string", "enum": ["error", "warn", "info"] },
+                    "description": { "type": "string" }
+                }
+            },
+            "default": [
+                { "rule": "total_revenue >= 0", "severity": "error", "description": "Revenue must be non-negative" },
+                { "rule": "order_date <= current_date()", "severity": "error", "description": "No future dates" },
+                { "rule": "total_orders > 0", "severity": "warn", "description": "Expected at least one order per row" }
+            ]
+        }
+    },
+    "required": ["metadata", "schema"]
+}

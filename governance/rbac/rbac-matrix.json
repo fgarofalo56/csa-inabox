@@ -1,0 +1,98 @@
+{
+    "description": "RBAC matrix for CSA-in-a-Box data platform. Maps personas to Azure role assignments across services.",
+    "version": "1.0.0",
+    "personas": {
+        "PlatformAdmin": {
+            "description": "Full platform administration - infrastructure, networking, security",
+            "assignments": [
+                { "scope": "subscription/dlz", "role": "Contributor" },
+                { "scope": "subscription/dmlz", "role": "Contributor" },
+                { "scope": "rg/databricks", "role": "Contributor" },
+                { "scope": "rg/storage", "role": "Storage Blob Data Owner" },
+                { "scope": "rg/keyvault", "role": "Key Vault Administrator" },
+                { "scope": "rg/synapse", "role": "Synapse Administrator" },
+                { "scope": "rg/purview", "role": "Purview Data Source Administrator" },
+                { "scope": "rg/adf", "role": "Data Factory Contributor" }
+            ]
+        },
+        "DataEngineer": {
+            "description": "Build and maintain data pipelines, dbt models, ADF pipelines",
+            "assignments": [
+                { "scope": "rg/databricks", "role": "Contributor" },
+                { "scope": "rg/storage", "role": "Storage Blob Data Contributor" },
+                { "scope": "rg/adf", "role": "Data Factory Contributor" },
+                { "scope": "rg/synapse", "role": "Synapse SQL Administrator" },
+                { "scope": "rg/keyvault", "role": "Key Vault Secrets User" },
+                { "scope": "rg/eventhubs", "role": "Azure Event Hubs Data Receiver" },
+                { "scope": "rg/cosmos", "role": "Cosmos DB Operator" }
+            ]
+        },
+        "DataScientist": {
+            "description": "Build ML models, access curated data, run experiments",
+            "assignments": [
+                { "scope": "rg/databricks", "role": "Contributor" },
+                { "scope": "rg/storage", "role": "Storage Blob Data Reader" },
+                { "scope": "rg/ml", "role": "AzureML Compute Operator" },
+                { "scope": "rg/ml", "role": "AzureML Data Scientist" },
+                { "scope": "rg/keyvault", "role": "Key Vault Secrets User" }
+            ]
+        },
+        "DomainOwner": {
+            "description": "Business domain ownership - manages domain data products and quality",
+            "assignments": [
+                { "scope": "rg/storage", "role": "Storage Blob Data Reader" },
+                { "scope": "rg/purview", "role": "Purview Data Reader" },
+                { "scope": "rg/databricks", "role": "Reader" },
+                { "scope": "rg/synapse", "role": "Synapse User" }
+            ]
+        },
+        "Analyst": {
+            "description": "Consume gold-layer data products for reporting and analysis",
+            "assignments": [
+                { "scope": "rg/storage", "role": "Storage Blob Data Reader" },
+                { "scope": "rg/synapse", "role": "Synapse User" },
+                { "scope": "rg/databricks", "role": "Reader" },
+                { "scope": "rg/purview", "role": "Purview Data Reader" }
+            ]
+        },
+        "GovernanceOfficer": {
+            "description": "Data governance, classification, compliance oversight",
+            "assignments": [
+                { "scope": "rg/purview", "role": "Purview Data Curator" },
+                { "scope": "rg/purview", "role": "Purview Data Source Administrator" },
+                { "scope": "rg/storage", "role": "Storage Blob Data Reader" },
+                { "scope": "rg/keyvault", "role": "Key Vault Reader" }
+            ]
+        },
+        "CICDServicePrincipal": {
+            "description": "GitHub Actions OIDC identity for automated deployments",
+            "assignments": [
+                { "scope": "subscription/dlz", "role": "Contributor" },
+                { "scope": "subscription/dmlz", "role": "Contributor" },
+                { "scope": "subscription/connectivity", "role": "Reader" },
+                { "scope": "subscription/management", "role": "Reader" }
+            ]
+        }
+    },
+    "azure_role_definitions": {
+        "Storage Blob Data Owner": "b7e6dc6d-f1e8-4753-8033-0f276bb0955b",
+        "Storage Blob Data Contributor": "ba92f5b4-2d11-453d-a403-e96b0029c9fe",
+        "Storage Blob Data Reader": "2a2b9908-6ea1-4ae2-8e65-a410df84e7d1",
+        "Key Vault Administrator": "00482a5a-887f-4fb3-b363-3b7fe8e74483",
+        "Key Vault Secrets User": "4633458b-17de-408a-b874-0445c86b69e6",
+        "Key Vault Reader": "21090545-7ca7-4776-b22c-e363652d74d2",
+        "Synapse Administrator": "6e4bf58a-b8e1-4cc3-bbf9-d73143322b78",
+        "Synapse SQL Administrator": "d7c8d0e4-4b20-4a1b-aca6-4bce4c9e4b6c",
+        "Synapse User": "6e4bf58a-b8e1-4cc3-bbf9-d73143322b78",
+        "Data Factory Contributor": "673868aa-7521-48a0-acc6-0f60742d39f5",
+        "Contributor": "b24988ac-6180-42a0-ab88-20f7382dd24c",
+        "Reader": "acdd72a7-3385-48ef-bd42-f606fba81ae7",
+        "Purview Data Curator": "8a3c2885-9b38-4fd2-9d99-91af537c1347",
+        "Purview Data Reader": "ff100721-1b9d-43d8-af52-42b69c1272db",
+        "Purview Data Source Administrator": "200bba9e-f0c8-430f-892b-6f0794863803",
+        "Azure Event Hubs Data Receiver": "a638d3c7-ab3a-418d-83e6-5f17a39d4fde",
+        "Cosmos DB Operator": "230815da-be43-4aae-9cb4-875f7bd000aa",
+        "AzureML Data Scientist": "f6c7c914-8db3-469d-8ca1-694a8f32e121",
+        "AzureML Compute Operator": "e503ece1-11d0-4e8e-8e2c-7a6c3bf38815"
+    }
+}

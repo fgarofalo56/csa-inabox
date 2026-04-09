@@ -1,0 +1,37 @@
+version: 2
+
+models:
+  - name: brz_orders
+    description: >
+      Bronze layer: Raw orders ingested from ADLS raw container.
+      Minimal transformation — adds metadata columns for lineage tracking.
+    columns:
+      - name: _surrogate_key
+        description: Surrogate key generated from order_id
+        tests:
+          - unique
+          - not_null
+      - name: order_id
+        description: Source system order identifier
+        tests:
+          - not_null
+      - name: _dbt_loaded_at
+        description: Timestamp when record was loaded by dbt
+      - name: _source_file
+        description: ADLS file path of source data
+      - name: _dbt_run_id
+        description: dbt invocation ID for lineage
+
+  - name: brz_customers
+    description: >
+      Bronze layer: Raw customer records from ADLS raw container.
+    columns:
+      - name: _surrogate_key
+        description: Surrogate key generated from customer_id
+        tests:
+          - unique
+          - not_null
+      - name: customer_id
+        description: Source system customer identifier
+        tests:
+          - not_null

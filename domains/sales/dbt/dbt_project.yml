@@ -1,0 +1,30 @@
+name: sales
+version: '1.0.0'
+config-version: 2
+
+profile: csa_databricks
+
+model-paths: ["models"]
+test-paths: ["tests"]
+macro-paths: ["../shared/dbt/macros"]  # Inherit shared macros
+
+vars:
+  sales_database: "{{ env_var('DBT_SALES_DATABASE', 'sales') }}"
+  raw_schema: "bronze"
+  enriched_schema: "silver"
+  curated_schema: "gold"
+
+models:
+  sales:
+    bronze:
+      +materialized: incremental
+      +schema: bronze_sales
+      +tags: ['bronze', 'sales']
+    silver:
+      +materialized: incremental
+      +schema: silver_sales
+      +tags: ['silver', 'sales']
+    gold:
+      +materialized: table
+      +schema: gold_sales
+      +tags: ['gold', 'sales']

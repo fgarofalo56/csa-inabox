@@ -1,0 +1,157 @@
+[
+  {
+    "policyDefinitionId": "/subscriptions/ca2b3e6b-f892-4c57-b9d8-b64e5799f9ea/providers/Microsoft.Authorization/policyDefinitions/alz DiagSetting LA Compute disks",
+    "definitionVersion": "1.*.*",
+    "parameters": {
+      "logAnalytics": {
+        "value": "/subscriptions/a60a2fdd-c133-4845-9beb-31f470bf3ef5/resourceGroups/rg-alz-dev-logging/providers/Microsoft.OperationalInsights/workspaces/alz-dev-dataObservability-logAnalyticsWorkspace"
+      },
+      "azureRegions": {
+        "value": [
+          "eastus",
+          "eastus2",
+          "westus",
+          "centralus",
+          "northcentralus",
+          "southcentralus",
+          "eastus2euap",
+          "westcentralus",
+          "westus2"
+        ]
+      },
+      "profileName": {
+        "value": "diagsettings"
+      },
+      "logsEnabled": {
+        "value": "True"
+      },
+      "metricsEnabled": {
+        "value": "True"
+      }
+    }
+  },
+  {
+    "policyDefinitionId": "/subscriptions/ca2b3e6b-f892-4c57-b9d8-b64e5799f9ea/providers/Microsoft.Authorization/policyDefinitions/alz DiagSetting LA Compute virtualMachines",
+    "definitionVersion": "1.*.*",
+    "parameters": {
+      "logAnalytics": {
+        "value": "/subscriptions/a60a2fdd-c133-4845-9beb-31f470bf3ef5/resourceGroups/rg-alz-dev-logging/providers/Microsoft.OperationalInsights/workspaces/alz-dev-dataObservability-logAnalyticsWorkspace"
+      },
+      "azureRegions": {
+        "value": [
+          "eastus",
+          "eastus2",
+          "westus",
+          "centralus",
+          "northcentralus",
+          "southcentralus",
+          "eastus2euap",
+          "westcentralus",
+          "westus2"
+        ]
+      },
+      "profileName": {
+        "value": "diagsettings"
+      },
+      "logsEnabled": {
+        "value": "True"
+      },
+      "metricsEnabled": {
+        "value": "True"
+      }
+    }
+  },
+  {
+    "policyDefinitionId": "/subscriptions/ca2b3e6b-f892-4c57-b9d8-b64e5799f9ea/providers/Microsoft.Authorization/policyDefinitions/alz DiagSetting LA Network networkInterfaces",
+    "definitionVersion": "1.*.*",
+    "parameters": {
+      "logAnalytics": {
+        "value": "/subscriptions/a60a2fdd-c133-4845-9beb-31f470bf3ef5/resourceGroups/rg-alz-dev-logging/providers/Microsoft.OperationalInsights/workspaces/alz-dev-dataObservability-logAnalyticsWorkspace"
+      },
+      "azureRegions": {
+        "value": [
+          "eastus",
+          "eastus2",
+          "westus",
+          "centralus",
+          "northcentralus",
+          "southcentralus",
+          "eastus2euap",
+          "westcentralus",
+          "westus2"
+        ]
+      },
+      "profileName": {
+        "value": "diagsettings"
+      },
+      "logsEnabled": {
+        "value": "True"
+      },
+      "metricsEnabled": {
+        "value": "True"
+      }
+    }
+  },
+  {
+    "policyDefinitionId": "/subscriptions/ca2b3e6b-f892-4c57-b9d8-b64e5799f9ea/providers/Microsoft.Authorization/policyDefinitions/alz DiagSetting LA Network networkSecurityGroups",
+    "definitionVersion": "1.*.*",
+    "parameters": {
+      "logAnalytics": {
+        "value": "/subscriptions/a60a2fdd-c133-4845-9beb-31f470bf3ef5/resourceGroups/rg-alz-dev-logging/providers/Microsoft.OperationalInsights/workspaces/alz-dev-dataObservability-logAnalyticsWorkspace"
+      },
+      "azureRegions": {
+        "value": [
+          "eastus",
+          "eastus2",
+          "westus",
+          "centralus",
+          "northcentralus",
+          "southcentralus",
+          "eastus2euap",
+          "westcentralus",
+          "westus2"
+        ]
+      },
+      "profileName": {
+        "value": "diagsettings"
+      },
+      "logsEnabled": {
+        "value": "True"
+      },
+      "metricsEnabled": {
+        "value": "True"
+      }
+    }
+  },
+  {
+    "policyDefinitionId": "/subscriptions/ca2b3e6b-f892-4c57-b9d8-b64e5799f9ea/providers/Microsoft.Authorization/policyDefinitions/alz DiagSetting LA Network virtualNetworks",
+    "definitionVersion": "1.*.*",
+    "parameters": {
+      "logAnalytics": {
+        "value": "/subscriptions/a60a2fdd-c133-4845-9beb-31f470bf3ef5/resourceGroups/rg-alz-dev-logging/providers/Microsoft.OperationalInsights/workspaces/alz-dev-dataObservability-logAnalyticsWorkspace"
+      },
+      "azureRegions": {
+        "value": [
+          "eastus",
+          "eastus2",
+          "westus",
+          "centralus",
+          "northcentralus",
+          "southcentralus",
+          "eastus2euap",
+          "westcentralus",
+          "westus2"
+        ]
+      },
+      "profileName": {
+        "value": "diagsettings"
+      },
+      "logsEnabled": {
+        "value": "True"
+      },
+      "metricsEnabled": {
+        "value": "True"
+      }
+    }
+  }
+]

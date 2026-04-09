@@ -1,0 +1,51 @@
+# CSA-in-a-Box Code Owners
+# These owners are automatically requested for review on pull requests.
+
+# Platform Infrastructure
+/deploy/bicep/                      @platform-team
+/deploy/scripts/                    @platform-team
+
+# Shared Modules
+/deploy/bicep/shared/               @platform-team @security-team
+
+# Landing Zones
+/deploy/bicep/DLZ/                  @platform-team
+/deploy/bicep/DMLZ/                 @platform-team @governance-team
+/deploy/bicep/LandingZone\ -\ ALZ/  @platform-team @network-team
+
+# Governance
+/governance/                         @governance-team
+/governance/purview/                 @governance-team @data-stewards
+/governance/rbac/                    @security-team
+/governance/network/                 @network-team @security-team
+/governance/compliance/              @security-team @governance-team
+
+# Data Pipelines (Shared)
+/domains/shared/                     @data-engineering
+/domains/shared/dbt/                 @data-engineering
+/domains/shared/pipelines/           @data-engineering
+/domains/shared/notebooks/           @data-engineering @data-science
+
+# Domain: Sales
+/domains/sales/                      @sales-domain-team
+
+# Shared Services
+/domains/sharedServices/             @platform-team
+/domains/sharedServices/aiEnrichment/ @ai-team @platform-team
+/domains/sharedServices/eventProcessing/ @data-engineering @platform-team
+
+# CI/CD
+/.github/                            @platform-team
+/.github/workflows/                  @platform-team @devops-team
+
+# Agent Harness
+/agent-harness/                      @platform-team
+
+# Documentation
+/docs/                               @platform-team
+/templates/                          @platform-team @data-engineering
+
+# Security-sensitive files
+*.env                                @security-team
+**/secrets/                          @security-team
+**/credentials*                      @security-team

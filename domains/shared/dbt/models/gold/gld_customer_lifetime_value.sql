@@ -1,0 +1,83 @@
+{{
+    config(
+        materialized='table',
+        file_format='delta',
+        tags=['gold', 'customers', 'metrics']
+    )
+}}
+
+{#
+    Customer Lifetime Value (CLV) metrics.
+    Combines customer and order data to compute per-customer aggregates
+    for analytics and reporting.
+#}
+
+with customers as (
+    select * from {{ ref('slv_customers') }}
+    where not _is_missing_id
+),
+
+orders as (
+    select * from {{ ref('slv_orders') }}
+    where not _is_negative_amount
+      and not _is_future_date
+),
+
+customer_orders as (
+    select
+        c.customer_id,
+        c.first_name,
+        c.last_name,
+        c.email,
+        c.city,
+        c.state_code,
+        c.country_code,
+        c.created_at as customer_since,
+
+        -- Order metrics
+        count(distinct o.order_id) as total_orders,
+        coalesce(sum(o.order_total), 0) as lifetime_revenue,
+        coalesce(avg(o.order_total), 0) as avg_order_value,
+        min(o.order_date) as first_order_date,
+        max(o.order_date) as last_order_date,
+        count(distinct date_trunc('month', o.order_date)) as active_months,
+
+        -- Status breakdown
+        count(case when o.order_status = 'completed' then 1 end) as completed_orders,
+        count(case when o.order_status = 'cancelled' then 1 end) as cancelled_orders,
+        count(case when o.order_status = 'returned' then 1 end) as returned_orders
+
+    from customers c
+    left join orders o on c.customer_id = o.customer_id
+    group by 1, 2, 3, 4, 5, 6, 7, 8
+),
+
+final as (
+    select
+        *,
+        -- Derived metrics
+        case
+            when total_orders = 0 then 'never_purchased'
+            when datediff(current_date(), last_order_date) <= 90 then 'active'
+            when datediff(current_date(), last_order_date) <= 365 then 'at_risk'
+            else 'churned'
+        end as customer_segment,
+
+        case
+            when lifetime_revenue >= 10000 then 'platinum'
+            when lifetime_revenue >= 5000 then 'gold'
+            when lifetime_revenue >= 1000 then 'silver'
+            else 'bronze'
+        end as value_tier,
+
+        coalesce(
+            lifetime_revenue / nullif(
+                months_between(current_date(), customer_since), 0
+            ), 0
+        ) as monthly_revenue_rate,
+
+        current_timestamp() as _dbt_refreshed_at
+    from customer_orders
+)
+
+select * from final

@@ -1,0 +1,53 @@
+name: 'csa_analytics'
+version: '1.0.0'
+config-version: 2
+
+profile: 'csa_analytics'
+
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+vars:
+  # Medallion layer settings
+  bronze_database: "bronze"
+  silver_database: "silver"
+  gold_database: "gold"
+
+  # Delta Lake settings
+  file_format: "delta"
+  incremental_strategy: "merge"
+
+  # Data quality thresholds
+  freshness_warn_hours: 24
+  freshness_error_hours: 48
+
+models:
+  csa_analytics:
+    bronze:
+      +materialized: incremental
+      +file_format: delta
+      +schema: bronze
+      +tags: ['bronze', 'raw']
+    silver:
+      +materialized: incremental
+      +file_format: delta
+      +schema: silver
+      +tags: ['silver', 'conformed']
+      +incremental_strategy: merge
+    gold:
+      +materialized: table
+      +file_format: delta
+      +schema: gold
+      +tags: ['gold', 'business']
+
+seeds:
+  csa_analytics:
+    +schema: seeds

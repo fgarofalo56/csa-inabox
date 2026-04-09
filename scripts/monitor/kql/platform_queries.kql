@@ -1,0 +1,108 @@
+// ----- Databricks Cluster Health -----
+// Failed cluster starts and unexpected terminations
+AzureDiagnostics
+| where ResourceProvider == "MICROSOFT.DATABRICKS"
+| where Category == "clusters"
+| where actionName_s in ("terminateCluster", "startClusterResult")
+| where statusCode_s != "200"
+| project TimeGenerated, clusterName_s, actionName_s, statusCode_s, response_s
+| order by TimeGenerated desc
+
+// ----- Databricks Job Failures -----
+AzureDiagnostics
+| where ResourceProvider == "MICROSOFT.DATABRICKS"
+| where Category == "jobs"
+| where actionName_s == "runFailed"
+| project TimeGenerated, jobId_s, runId_s, response_s
+| order by TimeGenerated desc
+
+// ----- ADF Pipeline Run Summary (24h) -----
+AzureDiagnostics
+| where ResourceProvider == "MICROSOFT.DATAFACTORY"
+| where Category == "PipelineRuns"
+| where TimeGenerated > ago(24h)
+| summarize
+    Total = count(),
+    Succeeded = countif(status_s == "Succeeded"),
+    Failed = countif(status_s == "Failed"),
+    InProgress = countif(status_s == "InProgress"),
+    Cancelled = countif(status_s == "Cancelled")
+    by pipelineName_s
+| extend SuccessRate = round(100.0 * Succeeded / Total, 1)
+| order by Failed desc
+
+// ----- ADF Activity Failures Detail -----
+AzureDiagnostics
+| where ResourceProvider == "MICROSOFT.DATAFACTORY"
+| where Category == "ActivityRuns"
+| where status_s == "Failed"
+| where TimeGenerated > ago(24h)
+| project TimeGenerated, pipelineName_s, activityName_s, activityType_s, errorMessage_s = error_s
+| order by TimeGenerated desc
+
+// ----- Synapse SQL Pool DTU Usage -----
+AzureMetrics
+| where ResourceProvider == "MICROSOFT.SYNAPSE"
+| where MetricName == "DWUUsedPercent"
+| summarize AvgDTU = avg(Average), MaxDTU = max(Maximum) by bin(TimeGenerated, 15m), Resource
+| render timechart
+
+// ----- Storage Account Data Transfer -----
+AzureMetrics
+| where ResourceProvider == "MICROSOFT.STORAGE"
+| where MetricName in ("Ingress", "Egress")
+| summarize TotalGB = sum(Total) / 1073741824 by MetricName, bin(TimeGenerated, 1h), Resource
+| render timechart
+
+// ----- Data Freshness Check -----
+// Monitors when the last data was written to bronze containers
+StorageBlobLogs
+| where OperationName == "PutBlob" or OperationName == "PutBlock"
+| where ObjectKey has "/bronze/" or ObjectKey has "/raw/"
+| summarize LastWrite = max(TimeGenerated) by AccountName, ObjectKey = tostring(split(ObjectKey, "/")[1])
+| extend HoursSinceLastWrite = datetime_diff('hour', now(), LastWrite)
+| where HoursSinceLastWrite > 24
+| order by HoursSinceLastWrite desc
+
+// ----- Purview Scan Results -----
+AzureDiagnostics
+| where ResourceProvider == "MICROSOFT.PURVIEW"
+| where Category == "ScanStatusLogEvent"
+| summarize
+    TotalScans = count(),
+    Completed = countif(status_s == "Completed"),
+    Failed = countif(status_s == "Failed")
+    by dataSourceName_s
+| order by Failed desc
+
+// ----- Cost Attribution by Resource Type -----
+AzureActivity
+| where TimeGenerated > ago(30d)
+| where OperationNameValue has "write" or OperationNameValue has "create"
+| summarize Operations = count() by ResourceProviderValue, _ResourceId
+| order by Operations desc
+| take 20
+
+// ----- Network: Firewall Denied Connections -----
+AzureDiagnostics
+| where ResourceProvider == "MICROSOFT.NETWORK"
+| where Category == "AzureFirewallNetworkRule"
+| where msg_s has "Deny"
+| parse msg_s with * "from " SourceIP ":" SourcePort " to " DestIP ":" DestPort ". " Action "." *
+| summarize DeniedCount = count() by SourceIP, DestIP, DestPort
+| order by DeniedCount desc
+| take 20
+
+// ----- Pipeline Latency Tracking -----
+AzureDiagnostics
+| where ResourceProvider == "MICROSOFT.DATAFACTORY"
+| where Category == "PipelineRuns"
+| where status_s == "Succeeded"
+| where TimeGenerated > ago(7d)
+| extend DurationMinutes = datetime_diff('minute', end_t, start_t)
+| summarize
+    AvgDurationMin = avg(DurationMinutes),
+    P95DurationMin = percentile(DurationMinutes, 95),
+    MaxDurationMin = max(DurationMinutes)
+    by pipelineName_s
+| order by AvgDurationMin desc

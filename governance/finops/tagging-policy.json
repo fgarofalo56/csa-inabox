@@ -1,0 +1,93 @@
+{
+    "tagEnforcement": {
+        "description": "Required tags for all CSA-in-a-Box resources for cost attribution and governance",
+        "requiredTags": [
+            {
+                "name": "Environment",
+                "description": "Deployment environment",
+                "allowedValues": ["dev", "staging", "prod", "dr"],
+                "enforcedBy": "Azure Policy (csa-require-tags)"
+            },
+            {
+                "name": "Platform",
+                "description": "Platform identifier for cost grouping",
+                "allowedValues": ["csa-inabox"],
+                "enforcedBy": "Azure Policy"
+            },
+            {
+                "name": "Domain",
+                "description": "Business domain owning the resource",
+                "allowedValues": ["platform", "shared", "sales", "finance", "marketing", "operations"],
+                "enforcedBy": "CODEOWNERS review"
+            },
+            {
+                "name": "CostCenter",
+                "description": "Finance cost center code",
+                "format": "CC-XXXX",
+                "enforcedBy": "Azure Policy"
+            },
+            {
+                "name": "Owner",
+                "description": "Team or individual responsible",
+                "enforcedBy": "CODEOWNERS review"
+            }
+        ],
+        "optionalTags": [
+            {
+                "name": "DataClassification",
+                "description": "Data sensitivity level",
+                "allowedValues": ["public", "internal", "confidential", "restricted"]
+            },
+            {
+                "name": "AutoShutdown",
+                "description": "Whether resource should be auto-paused in dev",
+                "allowedValues": ["true", "false"]
+            }
+        ]
+    },
+    "costOptimization": {
+        "devEnvironment": {
+            "databricks": {
+                "autoTerminationMinutes": 30,
+                "maxWorkers": 4,
+                "spotInstances": true
+            },
+            "synapse": {
+                "autoPauseDelayMinutes": 15,
+                "minDWU": 100
+            },
+            "storage": {
+                "accessTier": "Hot",
+                "lifecycle": {
+                    "moveToArchiveAfterDays": 90,
+                    "deleteAfterDays": 365
+                }
+            },
+            "functions": {
+                "plan": "Consumption"
+            }
+        },
+        "prodEnvironment": {
+            "databricks": {
+                "autoTerminationMinutes": 120,
+                "maxWorkers": 32,
+                "spotInstances": false
+            },
+            "synapse": {
+                "autoPauseDelayMinutes": 60,
+                "minDWU": 500
+            },
+            "storage": {
+                "accessTier": "Hot",
+                "lifecycle": {
+                    "moveToCoolAfterDays": 90,
+                    "moveToArchiveAfterDays": 365,
+                    "deleteAfterDays": 730
+                }
+            },
+            "functions": {
+                "plan": "ElasticPremium"
+            }
+        }
+    }
+}

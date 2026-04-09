@@ -1,0 +1,132 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://csa-inabox.local/templates/data-product-contract",
+    "title": "Data Product Contract Template",
+    "description": "Standard template for defining data product contracts in the CSA-in-a-Box Data Mesh. Copy and customize for each published data product.",
+    "type": "object",
+    "properties": {
+        "metadata": {
+            "type": "object",
+            "properties": {
+                "domain": {
+                    "type": "string",
+                    "description": "Owning domain name (e.g., sales, finance, marketing)"
+                },
+                "product_name": {
+                    "type": "string",
+                    "description": "Data product name matching the gold layer table/view"
+                },
+                "version": {
+                    "type": "string",
+                    "pattern": "^\\d+\\.\\d+\\.\\d+$",
+                    "description": "Semantic version of the data product contract"
+                },
+                "owner": {
+                    "type": "string",
+                    "description": "Team or individual responsible for this data product"
+                },
+                "contact": {
+                    "type": "string",
+                    "format": "email",
+                    "description": "Contact email for issues"
+                },
+                "classification": {
+                    "type": "string",
+                    "enum": ["public", "internal", "confidential", "restricted"]
+                },
+                "sla": {
+                    "type": "object",
+                    "properties": {
+                        "freshness": {
+                            "type": "string",
+                            "description": "Max acceptable data age (e.g., 24h, 1h, 15m)"
+                        },
+                        "availability": {
+                            "type": "string",
+                            "description": "Uptime percentage (e.g., 99.5%)"
+                        },
+                        "completeness": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 100,
+                            "description": "Min percentage of non-null required fields"
+                        },
+                        "latency_p99_seconds": {
+                            "type": "number",
+                            "description": "p99 query latency SLA"
+                        }
+                    }
+                },
+                "update_frequency": {
+                    "type": "string",
+                    "enum": ["real-time", "hourly", "daily", "weekly", "monthly", "on-demand"]
+                },
+                "retention_days": {
+                    "type": "integer",
+                    "minimum": 1
+                },
+                "tags": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                }
+            },
+            "required": ["domain", "product_name", "version", "owner", "classification"]
+        },
+        "schema": {
+            "type": "object",
+            "description": "JSON Schema definition of the data product's output columns",
+            "additionalProperties": {
+                "type": "object",
+                "properties": {
+                    "type": { "type": "string" },
+                    "description": { "type": "string" },
+                    "nullable": { "type": "boolean" },
+                    "pii": { "type": "boolean", "default": false },
+                    "business_key": { "type": "boolean", "default": false }
+                }
+            }
+        },
+        "input_sources": {
+            "type": "array",
+            "description": "Upstream dependencies this product consumes",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "source": { "type": "string", "description": "Fully qualified table/view name" },
+                    "type": { "type": "string", "enum": ["table", "view", "stream", "api", "file"] },
+                    "refresh_type": { "type": "string", "enum": ["full", "incremental", "cdc"] }
+                }
+            }
+        },
+        "quality_rules": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "rule": { "type": "string" },
+                    "severity": { "type": "string", "enum": ["error", "warn", "info"] },
+                    "description": { "type": "string" },
+                    "threshold": { "type": "number" }
+                }
+            }
+        },
+        "access": {
+            "type": "object",
+            "properties": {
+                "allowed_roles": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                },
+                "denied_roles": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                },
+                "request_process": {
+                    "type": "string",
+                    "description": "How to request access"
+                }
+            }
+        }
+    },
+    "required": ["metadata", "schema"]
+}

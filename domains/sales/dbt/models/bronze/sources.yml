@@ -1,0 +1,39 @@
+version: 2
+
+sources:
+  - name: raw_sales
+    description: Raw sales data from source systems
+    database: "{{ var('sales_database') }}"
+    schema: raw
+    loader: adf_copy_activity
+    loaded_at_field: _metadata.file_modification_time
+    freshness:
+      warn_after: {count: 24, period: hour}
+      error_after: {count: 48, period: hour}
+    tables:
+      - name: raw_sales_orders
+        description: Raw sales order records
+        columns:
+          - name: order_id
+            tests:
+              - not_null
+          - name: customer_id
+            tests:
+              - not_null
+          - name: product_id
+          - name: quantity
+          - name: unit_price
+          - name: order_date
+          - name: sales_region
+          - name: sales_channel
+
+      - name: raw_sales_products
+        description: Product catalog
+        columns:
+          - name: product_id
+            tests:
+              - not_null
+              - unique
+          - name: product_name
+          - name: category
+          - name: subcategory

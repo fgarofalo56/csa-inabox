@@ -1,0 +1,144 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "metadata": {
+        "description": "ADF Pipeline: Orchestrate dbt run on Databricks via notebook activity",
+        "domain": "shared",
+        "pattern": "dbt-orchestration"
+    },
+    "resources": [
+        {
+            "type": "Microsoft.DataFactory/factories/pipelines",
+            "apiVersion": "2018-06-01",
+            "name": "[concat(parameters('factoryName'), '/pl_run_dbt_models')]",
+            "properties": {
+                "description": "Triggers dbt run on Databricks cluster. Supports full refresh and incremental modes.",
+                "activities": [
+                    {
+                        "name": "RunDbtModels",
+                        "type": "DatabricksNotebook",
+                        "typeProperties": {
+                            "notebookPath": "/Shared/csa-inabox/orchestration/run_dbt",
+                            "baseParameters": {
+                                "dbt_command": {
+                                    "value": "@pipeline().parameters.dbtCommand",
+                                    "type": "Expression"
+                                },
+                                "target": {
+                                    "value": "@pipeline().parameters.dbtTarget",
+                                    "type": "Expression"
+                                },
+                                "models": {
+                                    "value": "@pipeline().parameters.dbtModels",
+                                    "type": "Expression"
+                                },
+                                "full_refresh": {
+                                    "value": "@string(pipeline().parameters.fullRefresh)",
+                                    "type": "Expression"
+                                }
+                            }
+                        },
+                        "linkedServiceName": {
+                            "referenceName": "ls_databricks",
+                            "type": "LinkedServiceReference"
+                        },
+                        "policy": {
+                            "timeout": "01:00:00",
+                            "retry": 1,
+                            "retryIntervalInSeconds": 60
+                        }
+                    },
+                    {
+                        "name": "RunDbtTests",
+                        "type": "DatabricksNotebook",
+                        "dependsOn": [
+                            {
+                                "activity": "RunDbtModels",
+                                "dependencyConditions": ["Succeeded"]
+                            }
+                        ],
+                        "typeProperties": {
+                            "notebookPath": "/Shared/csa-inabox/orchestration/run_dbt",
+                            "baseParameters": {
+                                "dbt_command": "test",
+                                "target": {
+                                    "value": "@pipeline().parameters.dbtTarget",
+                                    "type": "Expression"
+                                },
+                                "models": {
+                                    "value": "@pipeline().parameters.dbtModels",
+                                    "type": "Expression"
+                                }
+                            }
+                        },
+                        "linkedServiceName": {
+                            "referenceName": "ls_databricks",
+                            "type": "LinkedServiceReference"
+                        },
+                        "policy": {
+                            "timeout": "00:30:00",
+                            "retry": 0
+                        }
+                    },
+                    {
+                        "name": "OnTestFailure",
+                        "type": "WebActivity",
+                        "dependsOn": [
+                            {
+                                "activity": "RunDbtTests",
+                                "dependencyConditions": ["Failed"]
+                            }
+                        ],
+                        "typeProperties": {
+                            "url": {
+                                "value": "@pipeline().parameters.alertWebhookUrl",
+                                "type": "Expression"
+                            },
+                            "method": "POST",
+                            "body": {
+                                "value": "@json(concat('{\"title\": \"dbt Test Failure\", \"pipeline\": \"', pipeline().Pipeline, '\", \"run_id\": \"', pipeline().RunId, '\", \"models\": \"', pipeline().parameters.dbtModels, '\", \"error\": \"', activity('RunDbtTests').error.message, '\"}'))",
+                                "type": "Expression"
+                            }
+                        },
+                        "policy": {
+                            "timeout": "00:01:00",
+                            "retry": 2
+                        }
+                    }
+                ],
+                "parameters": {
+                    "dbtCommand": {
+                        "type": "String",
+                        "defaultValue": "run"
+                    },
+                    "dbtTarget": {
+                        "type": "String",
+                        "defaultValue": "prod"
+                    },
+                    "dbtModels": {
+                        "type": "String",
+                        "defaultValue": "+"
+                    },
+                    "fullRefresh": {
+                        "type": "Bool",
+                        "defaultValue": false
+                    },
+                    "alertWebhookUrl": {
+                        "type": "String",
+                        "defaultValue": ""
+                    }
+                },
+                "annotations": [
+                    "dbt-orchestration",
+                    "medallion-pipeline",
+                    "csa-inabox"
+                ]
+            }
+        }
+    ],
+    "parameters": {
+        "factoryName": {
+            "type": "string"
+        }
+    }
+}

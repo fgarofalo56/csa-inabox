@@ -1,0 +1,30 @@
+name: DOMAIN_NAME
+version: '1.0.0'
+config-version: 2
+
+profile: csa_databricks
+
+model-paths: ["models"]
+test-paths: ["tests"]
+macro-paths: ["../../shared/dbt/macros"]
+
+vars:
+  domain_database: "{{ env_var('DBT_DOMAIN_DATABASE', 'DOMAIN_NAME') }}"
+  raw_schema: "bronze"
+  enriched_schema: "silver"
+  curated_schema: "gold"
+
+models:
+  DOMAIN_NAME:
+    bronze:
+      +materialized: incremental
+      +schema: "bronze_DOMAIN_NAME"
+      +tags: ['bronze', 'DOMAIN_NAME']
+    silver:
+      +materialized: incremental
+      +schema: "silver_DOMAIN_NAME"
+      +tags: ['silver', 'DOMAIN_NAME']
+    gold:
+      +materialized: table
+      +schema: "gold_DOMAIN_NAME"
+      +tags: ['gold', 'DOMAIN_NAME']

@@ -1,0 +1,52 @@
+-- Bronze source definitions
+-- Raw data sources from ADLS Gen2 storage (raw container)
+
+version: 2
+
+sources:
+  - name: raw_data
+    description: "Raw data ingested from external sources into ADLS Gen2 raw container"
+    database: "{{ var('bronze_database') }}"
+    schema: raw
+    loader: "Azure Data Factory / Event Hubs"
+    loaded_at_field: _ingested_at
+    freshness:
+      warn_after: {count: "{{ var('freshness_warn_hours') }}", period: hour}
+      error_after: {count: "{{ var('freshness_error_hours') }}", period: hour}
+
+    tables:
+      - name: sample_orders
+        description: "Raw order data from source systems"
+        columns:
+          - name: order_id
+            description: "Unique order identifier"
+            tests:
+              - not_null
+              - unique
+          - name: customer_id
+            description: "Customer identifier"
+            tests:
+              - not_null
+          - name: order_date
+            description: "Date the order was placed"
+          - name: total_amount
+            description: "Total order amount in base currency"
+          - name: status
+            description: "Current order status"
+            tests:
+              - accepted_values:
+                  values: ['pending', 'confirmed', 'shipped', 'delivered', 'cancelled']
+          - name: _ingested_at
+            description: "Timestamp when record was ingested"
+
+      - name: sample_customers
+        description: "Raw customer master data"
+        columns:
+          - name: customer_id
+            tests:
+              - not_null
+              - unique
+          - name: customer_name
+          - name: email
+          - name: region
+          - name: _ingested_at
