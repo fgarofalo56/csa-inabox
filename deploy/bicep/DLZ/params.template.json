@@ -11,12 +11,20 @@
         "prefix": {
             "value": "dlz"
         },
+        "logAnalyticsWorkspaceId": {
+            "value": "<LOG_ANALYTICS_WORKSPACE_RESOURCE_ID>"
+        },
         "deployModules": {
             "value": {
                 "cosmosDB": false,
                 "storageZones": true,
                 "externalStorage": true,
-                "synapse": false
+                "synapse": false,
+                "databricks": true,
+                "dataFactory": true,
+                "eventHubs": false,
+                "dataExplorer": false,
+                "machineLearning": false
             }
         },
         "privateDNSZones": {
@@ -95,8 +103,106 @@
         "parSynapse": {
             "value": {
                 "synapseWorkspaceName": "<SYNAPSE_WORKSPACE_NAME>",
-                "sqlPoolName": "<SQL_POOL_NAME>",
+                "sqlAdminUsername": "sqladmin",
+                "sqlAdminPassword": "<SQL_ADMIN_PASSWORD>",
                 "tags": {}
+            }
+        },
+        "parDatabricks": {
+            "value": {
+                "workspaceName": "<DATABRICKS_WORKSPACE_NAME>",
+                "pricingTier": "premium",
+                "enableNoPublicIp": true,
+                "vnetId": "<SPOKE_VNET_RESOURCE_ID>",
+                "publicSubnetName": "databricks-public",
+                "privateSubnetName": "databricks-private",
+                "privateEndpointSubnets": [
+                    {
+                        "subscriptionId": "<DLZ_SUBSCRIPTION_ID>",
+                        "vNetResourceGroup": "<VNET_RESOURCE_GROUP>",
+                        "vNetName": "<SPOKE_VNET_NAME>",
+                        "subnetName": "<PRIVATE_ENDPOINT_SUBNET>",
+                        "vNetLocation": "<AZURE_REGION>"
+                    }
+                ],
+                "privateDnsZoneId": "<DATABRICKS_PRIVATE_DNS_ZONE_ID>"
+            }
+        },
+        "parDataFactory": {
+            "value": {
+                "factoryName": "<DATA_FACTORY_NAME>",
+                "managedVirtualNetworkEnabled": true,
+                "privateEndpointSubnets": [
+                    {
+                        "subscriptionId": "<DLZ_SUBSCRIPTION_ID>",
+                        "vNetResourceGroup": "<VNET_RESOURCE_GROUP>",
+                        "vNetName": "<SPOKE_VNET_NAME>",
+                        "subnetName": "<PRIVATE_ENDPOINT_SUBNET>",
+                        "vNetLocation": "<AZURE_REGION>"
+                    }
+                ],
+                "privateDnsZoneIdDataFactory": "<ADF_PRIVATE_DNS_ZONE_ID>",
+                "privateDnsZoneIdPortal": "<ADF_PORTAL_PRIVATE_DNS_ZONE_ID>"
+            }
+        },
+        "parEventHubs": {
+            "value": {
+                "namespaceName": "<EVENTHUB_NAMESPACE_NAME>",
+                "sku": "Standard",
+                "eventHubs": [
+                    {
+                        "name": "ingestion",
+                        "partitionCount": 4,
+                        "messageRetentionInDays": 7
+                    },
+                    {
+                        "name": "cdc-events",
+                        "partitionCount": 8,
+                        "messageRetentionInDays": 3
+                    }
+                ],
+                "privateEndpointSubnets": [],
+                "privateDnsZoneId": "<EVENTHUB_PRIVATE_DNS_ZONE_ID>"
+            }
+        },
+        "parMachineLearning": {
+            "value": {
+                "workspaceName": "<AML_WORKSPACE_NAME>",
+                "storageAccountId": "<AML_STORAGE_ACCOUNT_ID>",
+                "keyVaultId": "<KEY_VAULT_RESOURCE_ID>",
+                "applicationInsightsId": "<APP_INSIGHTS_RESOURCE_ID>",
+                "privateEndpointSubnets": [],
+                "privateDnsZoneIdApi": "<AML_API_PRIVATE_DNS_ZONE_ID>",
+                "privateDnsZoneIdNotebooks": "<AML_NOTEBOOKS_PRIVATE_DNS_ZONE_ID>"
+            }
+        },
+        "parDataExplorer": {
+            "value": {
+                "clusterName": "<ADX_CLUSTER_NAME>",
+                "skuName": "Dev(No SLA)_Standard_E2a_v4",
+                "skuCapacity": 1,
+                "databases": [
+                    {
+                        "name": "analytics",
+                        "softDeletePeriod": "P365D",
+                        "hotCachePeriod": "P31D"
+                    }
+                ],
+                "privateEndpointSubnets": [],
+                "privateDnsZoneId": "<ADX_PRIVATE_DNS_ZONE_ID>"
+            }
+        },
+        "parStreamAnalytics": {
+            "value": {
+                "jobName": "<STREAM_ANALYTICS_JOB_NAME>",
+                "streamingUnits": 3
+            }
+        },
+        "parFunctions": {
+            "value": {
+                "functionAppName": "<FUNCTION_APP_NAME>",
+                "runtime": "python",
+                "planSku": "EP1"
             }
         }
     }

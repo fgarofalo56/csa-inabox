@@ -11,9 +11,19 @@
         "prefix": {
             "value": "dmlz"
         },
+        "logAnalyticsWorkspaceId": {
+            "value": "<LOG_ANALYTICS_WORKSPACE_RESOURCE_ID>"
+        },
         "deployModules": {
             "value": {
-                "governance": true
+                "governance": true,
+                "databricks": true
+            }
+        },
+        "privateDNSZones": {
+            "value": {
+                "subscriptionId": "<CONNECTIVITY_SUBSCRIPTION_ID>",
+                "resourceGroupName": "<DNS_RESOURCE_GROUP_NAME>"
             }
         },
         "parGovernance": {
@@ -27,6 +37,7 @@
                 "parTenantEndpointState": "Disabled",
                 "parPurviewPublicNetworkAccess": "Disabled",
                 "parPurviewKafkaConfig": false,
+                "rgTags": {},
                 "tags": {
                     "Owner": "<TEAM_NAME>",
                     "CloudScale": "DMLZ",
@@ -36,6 +47,24 @@
                     "Environment": "<ENVIRONMENT_NAME>",
                     "Toolkit": "bicep"
                 }
+            }
+        },
+        "parDatabricks": {
+            "value": {
+                "workspaceName": "<DATABRICKS_GOV_WORKSPACE_NAME>",
+                "vnetId": "<DMLZ_VNET_RESOURCE_ID>",
+                "publicSubnetName": "databricks-gov-public",
+                "privateSubnetName": "databricks-gov-private",
+                "privateEndpointSubnets": [
+                    {
+                        "subscriptionId": "<DMLZ_SUBSCRIPTION_ID>",
+                        "vNetResourceGroup": "<VNET_RESOURCE_GROUP>",
+                        "vNetName": "<DMLZ_VNET_NAME>",
+                        "subnetName": "<PRIVATE_ENDPOINT_SUBNET>",
+                        "vNetLocation": "<AZURE_REGION>"
+                    }
+                ],
+                "privateDnsZoneId": "<DATABRICKS_PRIVATE_DNS_ZONE_ID>"
             }
         }
     }

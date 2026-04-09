@@ -67,6 +67,14 @@ param privateDNSZones object
 @sys.description('Array to hold all vaules for Governance module.')
 param parGovernance object
 
+// Databricks governance workspace parameters
+@description('Parameters for governance Databricks workspace (Unity Catalog)')
+param parDatabricks object = {}
+
+// Log Analytics Workspace ID for diagnostics
+@description('Resource ID of the Log Analytics workspace for diagnostics')
+param logAnalyticsWorkspaceId string = ''
+
 // Default tags
 var tagsDefault = {
   Owner: 'Azure Data Management Landing Zone & Cloud Scale Analytics Scenario'
@@ -145,6 +153,33 @@ module governanceResources 'modules/governance/governance.bicep' = if (bool(depl
   }
   dependsOn: [
     governanceResourceGroup
+  ]
+}
+
+// Deploy Governance Databricks Workspace (Unity Catalog)
+resource databricksResourceGroup 'Microsoft.Resources/resourceGroups@2021-01-01' = if (contains(deployModules, 'databricks') && bool(deployModules.databricks)) {
+  name: 'rg-${parBaseName}-databricks-gov-${parLocationShort}'
+  location: location
+  tags: tagsJoined
+  properties: {}
+}
+
+module databricksGovernance 'modules/Databricks/databricks.bicep' = if (contains(deployModules, 'databricks') && bool(deployModules.databricks)) {
+  name: 'databricksGovernance'
+  scope: resourceGroup('rg-${parBaseName}-databricks-gov-${parLocationShort}')
+  params: {
+    workspaceName: contains(parDatabricks, 'workspaceName') ? parDatabricks.workspaceName : '${parBaseName}-dbw-gov'
+    location: location
+    tags: tagsJoined
+    vnetId: contains(parDatabricks, 'vnetId') ? parDatabricks.vnetId : ''
+    publicSubnetName: contains(parDatabricks, 'publicSubnetName') ? parDatabricks.publicSubnetName : 'databricks-gov-public'
+    privateSubnetName: contains(parDatabricks, 'privateSubnetName') ? parDatabricks.privateSubnetName : 'databricks-gov-private'
+    privateEndpointSubnets: contains(parDatabricks, 'privateEndpointSubnets') ? parDatabricks.privateEndpointSubnets : []
+    privateDnsZoneId: contains(parDatabricks, 'privateDnsZoneId') ? parDatabricks.privateDnsZoneId : ''
+    logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
+  }
+  dependsOn: [
+    databricksResourceGroup
   ]
 }
 
