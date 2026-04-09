@@ -1,0 +1,177 @@
+# ==============================================================================
+# CSA-in-a-Box: Bicep Validation & Security Scanning
+# Runs on PRs and pushes to main
+# ==============================================================================
+
+name: Validate & Scan
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'deploy/**/*.bicep'
+      - 'deploy/**/*.json'
+      - '*.bicep'
+      - '.github/workflows/**'
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  # -------------------------------------------------------------------------
+  # Bicep Linting & Validation
+  # -------------------------------------------------------------------------
+  bicep-lint:
+    name: Bicep Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Bicep CLI
+        run: |
+          curl -Lo bicep https://github.com/Azure/bicep/releases/latest/download/bicep-linux-x64
+          chmod +x bicep
+          sudo mv bicep /usr/local/bin/
+
+      - name: Lint all Bicep files
+        run: |
+          echo "=== Linting Bicep files ==="
+          find . -name "*.bicep" -not -path "./codeqlDB/*" | while read -r file; do
+            echo "Linting: $file"
+            bicep lint "$file" || true
+          done
+
+      - name: Build all Bicep files (compile check)
+        run: |
+          echo "=== Building Bicep files ==="
+          find . -name "*.bicep" -not -path "./codeqlDB/*" | while read -r file; do
+            echo "Building: $file"
+            bicep build "$file" --no-restore 2>&1 || echo "WARNING: Build failed for $file"
+          done
+
+  # -------------------------------------------------------------------------
+  # Secret Scanning
+  # -------------------------------------------------------------------------
+  secret-scan:
+    name: Secret Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+
+  # -------------------------------------------------------------------------
+  # IaC Security Scanning
+  # -------------------------------------------------------------------------
+  security-scan:
+    name: IaC Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Checkov
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: deploy/
+          framework: bicep,arm
+          soft_fail: true
+          output_format: sarif
+          output_file_path: results.sarif
+
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
+
+  # -------------------------------------------------------------------------
+  # PowerShell Linting
+  # -------------------------------------------------------------------------
+  powershell-lint:
+    name: PowerShell Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser
+
+      - name: Lint PowerShell scripts
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -Path . -Filter "*.ps1" -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -notmatch 'node_modules|\.venv|dbt-env|codeqlDB' }
+          foreach ($file in $files) {
+            Write-Host "Analyzing: $($file.FullName)"
+            $results = Invoke-ScriptAnalyzer -Path $file.FullName -Severity Warning,Error
+            if ($results) {
+              $results | Format-Table -AutoSize
+            }
+          }
+
+  # -------------------------------------------------------------------------
+  # Python Linting
+  # -------------------------------------------------------------------------
+  python-lint:
+    name: Python Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install linters
+        run: pip install ruff
+
+      - name: Lint Python files
+        run: |
+          ruff check scripts/ domains/ tools/ --ignore E501 || true
+
+  # -------------------------------------------------------------------------
+  # Repository Hygiene Check
+  # -------------------------------------------------------------------------
+  hygiene:
+    name: Repo Hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for large files
+        run: |
+          echo "=== Files larger than 5MB ==="
+          find . -type f -size +5M -not -path "./.git/*" | while read -r file; do
+            SIZE=$(du -sh "$file" | cut -f1)
+            echo "WARNING: $file ($SIZE)"
+          done
+
+      - name: Check for committed secrets patterns
+        run: |
+          echo "=== Checking for common secret patterns ==="
+          PATTERNS="password|secret|api_key|apikey|access_key|private_key|client_secret"
+          grep -rni "$PATTERNS" --include="*.json" --include="*.yaml" --include="*.yml" \
+            --include="*.ps1" --include="*.py" --include="*.bicep" \
+            --exclude-dir=node_modules --exclude-dir=.venv --exclude-dir=codeqlDB \
+            --exclude-dir=.git . | grep -v "askForPassword" | grep -v "savePassword" \
+            | grep -v ".gitignore" | grep -v "secretStorage" | head -20 || echo "No patterns found"
+
+      - name: Check for committed venvs/node_modules
+        run: |
+          for dir in node_modules .venv venv dbt-env __pycache__; do
+            FOUND=$(find . -type d -name "$dir" -not -path "./.git/*" 2>/dev/null)
+            if [ -n "$FOUND" ]; then
+              echo "WARNING: Found committed $dir directory: $FOUND"
+            fi
+          done

@@ -1,83 +1,137 @@
-# Description: Create a new service principal with a self-signed certificate and assign the service principal the Contributor role on a resource group.
-# Cert: Name 
-$certName = "FedCivATU-Comercial-Cert"
-$path = "S:\DevResources\Certs"
-$certExportPath = "$path\$certName"
-# Generate a self-signed certificate, create a service principal with the certificate, and assign the service principal the Contributor role on a resource group.
-$cert = New-SelfSignedCertificate -Subject "CN=$certName" -CertStoreLocation "Cert:\CurrentUser\My" -KeyExportPolicy Exportable -KeySpec Signature
+<#
+.SYNOPSIS
+    Creates a service principal with a self-signed certificate and assigns RBAC roles.
 
-# Get the password for the certificate
-$certSecurePassword = Read-Host -Prompt "Enter Password" -AsSecureString
+.DESCRIPTION
+    Generates a self-signed certificate, creates an Azure AD service principal,
+    and assigns specified roles at resource group and/or subscription scope.
+    Certificates are exported to a specified directory.
 
+.PARAMETER ServicePrincipalName
+    Display name for the service principal.
 
-# Export the certificate to a .pfx file 
-Export-PfxCertificate -Cert $cert -FilePath "$certExportPath.pfx" -Password $certSecurePassword 
-$pfx = Get-PfxData -FilePath "$certExportPath.pfx" -Password $certSecurePassword
+.PARAMETER CertName
+    Name for the self-signed certificate.
 
-# Export the certificate to a .cer file
-Export-Certificate -Cert $cert -FilePath "$certExportPath.cer"
+.PARAMETER CertOutputPath
+    Directory to export certificate files. Created if it doesn't exist.
 
+.PARAMETER ResourceGroupName
+    Resource group to assign Contributor role.
 
-# Conver CER File to PEM format
-$certPassword = Read-Host -Prompt "Enter Password"
-openssl pkcs12 -in "$certExportPath.pfx" -out "$certExportPath.pem" -nodes -password pass:$certPassword 
-# Read Pem File
-$certPem = Get-Content "$certExportPath.pem"
-$certPem
+.PARAMETER Location
+    Azure region for the resource group (if creating).
 
+.PARAMETER RoleDefinitionName
+    Role to assign at resource group scope. Default: Contributor.
 
-#If you need to use plain txt for any Reason
-# $plainPassword = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePassword))
+.PARAMETER SubscriptionRole
+    Role to assign at subscription scope. Default: Reader.
 
-# Convert the certificate to base64
-$certBytes = [System.IO.File]::ReadAllBytes("$certExportPath.cer")
-$certBase64 = [System.Convert]::ToBase64String($certBytes)
-# Set SP Name
-$servicePrincipalName = "FedCivATU-demoSub-Deploy"
+.EXAMPLE
+    .\New-SP-with-Cert.ps1 -ServicePrincipalName "my-deploy-sp" `
+        -CertName "my-cert" -CertOutputPath "C:\certs" `
+        -ResourceGroupName "rg-dev"
+#>
 
-# Create a service principal with the certificate (New SP)
-$sp = New-AzADServicePrincipal -DisplayName $servicePrincipalName -CertValue $certBase64
+[CmdletBinding(SupportsShouldProcess)]
+param(
+    [Parameter(Mandatory)]
+    [ValidateNotNullOrEmpty()]
+    [string]$ServicePrincipalName,
 
-# Update-AzADServicePrincipal to add certificate to existing SP
+    [Parameter(Mandatory)]
+    [ValidateNotNullOrEmpty()]
+    [string]$CertName,
 
-$sp = Get-AzADServicePrincipal -DisplayName $servicePrincipalName
+    [Parameter(Mandatory)]
+    [ValidateNotNullOrEmpty()]
+    [string]$CertOutputPath,
 
-$sp
-$keyConfig = @{
-    # 'CustomKeyIdentifier' = $cert.Thumbprint
-    'Key'         = $certBytes
-    'usage'       = 'Verify'
-    'Type'        = 'AsymmetricX509Cert'
-    'DisplayName' = 'FedCivATU-Comercial-Cert'
+    [Parameter(Mandatory)]
+    [ValidateNotNullOrEmpty()]
+    [string]$ResourceGroupName,
+
+    [string]$Location = "East US 2",
+
+    [string]$RoleDefinitionName = "Contributor",
+
+    [string]$SubscriptionRole = "Reader"
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+try {
+    # Ensure output directory exists
+    if (-not (Test-Path $CertOutputPath)) {
+        New-Item -ItemType Directory -Path $CertOutputPath -Force | Out-Null
+    }
+
+    $certExportPath = Join-Path $CertOutputPath $CertName
+
+    # Generate self-signed certificate
+    Write-Host "Generating self-signed certificate: $CertName"
+    $cert = New-SelfSignedCertificate `
+        -Subject "CN=$CertName" `
+        -CertStoreLocation "Cert:\CurrentUser\My" `
+        -KeyExportPolicy Exportable `
+        -KeySpec Signature `
+        -NotAfter (Get-Date).AddYears(2)
+
+    # Export PFX (with private key)
+    $certSecurePassword = Read-Host -Prompt "Enter certificate export password" -AsSecureString
+    Export-PfxCertificate -Cert $cert -FilePath "$certExportPath.pfx" -Password $certSecurePassword | Out-Null
+    Write-Host "  Exported PFX: $certExportPath.pfx"
+
+    # Export CER (public key only)
+    Export-Certificate -Cert $cert -FilePath "$certExportPath.cer" | Out-Null
+    Write-Host "  Exported CER: $certExportPath.cer"
+
+    # Read certificate bytes for SP creation
+    $certBytes = [System.IO.File]::ReadAllBytes("$certExportPath.cer")
+    $certBase64 = [System.Convert]::ToBase64String($certBytes)
+
+    # Create service principal
+    Write-Host "`nCreating service principal: $ServicePrincipalName"
+    if ($PSCmdlet.ShouldProcess($ServicePrincipalName, "Create Service Principal")) {
+        $sp = New-AzADServicePrincipal -DisplayName $ServicePrincipalName -CertValue $certBase64
+        Write-Host "  App ID: $($sp.AppId)"
+        Write-Host "  Object ID: $($sp.Id)"
+    }
+
+    # Create resource group if needed
+    $existingRg = Get-AzResourceGroup -Name $ResourceGroupName -ErrorAction SilentlyContinue
+    if (-not $existingRg) {
+        Write-Host "`nCreating resource group: $ResourceGroupName in $Location"
+        if ($PSCmdlet.ShouldProcess($ResourceGroupName, "Create Resource Group")) {
+            New-AzResourceGroup -Name $ResourceGroupName -Location $Location | Out-Null
+        }
+    }
+
+    # Assign resource group role
+    $subId = (Get-AzContext).Subscription.Id
+    $rgScope = "/subscriptions/$subId/resourceGroups/$ResourceGroupName"
+
+    Write-Host "`nAssigning $RoleDefinitionName role at resource group scope"
+    if ($PSCmdlet.ShouldProcess("$RoleDefinitionName on $ResourceGroupName", "Assign Role")) {
+        New-AzRoleAssignment -ObjectId $sp.Id -RoleDefinitionName $RoleDefinitionName -Scope $rgScope | Out-Null
+    }
+
+    # Assign subscription role
+    Write-Host "Assigning $SubscriptionRole role at subscription scope"
+    if ($PSCmdlet.ShouldProcess("$SubscriptionRole on subscription", "Assign Role")) {
+        New-AzRoleAssignment -ObjectId $sp.Id -RoleDefinitionName $SubscriptionRole -Scope "/subscriptions/$subId" | Out-Null
+    }
+
+    # Verify
+    Write-Host "`nRole assignments for service principal:"
+    Get-AzRoleAssignment -ObjectId $sp.Id | Format-Table RoleDefinitionName, Scope -AutoSize
+
+    Write-Host "`nService principal created successfully." -ForegroundColor Green
+    Write-Host "IMPORTANT: Store the certificate files securely. Consider importing into Azure Key Vault." -ForegroundColor Yellow
 }
-
-$certConfig = New-Object -TypeName "Microsoft.Azure.PowerShell.Cmdlets.Resources.MSGraph.Models.ApiV10.MicrosoftGraphKeyCredential" -Property $keyConfig
-$certConfig
-
-Update-AzADServicePrincipal -ObjectId $sp.Id -KeyCredential $certConfig
-
-#Get Built in Roles 
-Get-AzRoleDefinition | Where-Object Name -Like '*read*' | Select-Object -Property Name
-
-# Get the subscription ID
-$subId = Get-AzSubscription | Select-Object -ExpandProperty Id
-
-# Assign the service principal the Contributor role on a resource group
-$resourceGroupName = "rg-alz-dev-logging"
-
-# Create Resource group
-New-AzResourceGroup -Name $resourceGroupName -Location "East US 2"
-
-
-$scope = "/subscriptions/$subId/resourceGroups/$resourceGroupName"
-$roleDefinitionName = "Contributor"
-New-AzRoleAssignment -ObjectId $sp.Id -RoleDefinitionName $roleDefinitionName -Scope $scope
-
-# Assign Service Pricipal Subscription Level Roles:  Reader
-$roleDefinitionName = "Reader"
-New-AzRoleAssignment -ObjectId $sp.Id -RoleDefinitionName $roleDefinitionName -Scope "/subscriptions/$subId"
-
-# Verify the service principal's role assignments
-Get-AzRoleAssignment -ObjectId $sp.Id
-
-                                    
+catch {
+    Write-Error "Failed to create service principal: $_"
+    exit 1
+}

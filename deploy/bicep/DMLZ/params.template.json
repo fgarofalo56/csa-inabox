@@ -1,0 +1,42 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "location": {
+            "value": "<AZURE_REGION>"
+        },
+        "environment": {
+            "value": "<ENVIRONMENT_NAME>"
+        },
+        "prefix": {
+            "value": "dmlz"
+        },
+        "deployModules": {
+            "value": {
+                "governance": true
+            }
+        },
+        "parGovernance": {
+            "value": {
+                "parLocation": "<AZURE_REGION>",
+                "parPurviewName": "<PURVIEW_ACCOUNT_NAME>",
+                "parPurviewSku": {
+                    "name": "Standard",
+                    "capacity": 1
+                },
+                "parTenantEndpointState": "Disabled",
+                "parPurviewPublicNetworkAccess": "Disabled",
+                "parPurviewKafkaConfig": false,
+                "tags": {
+                    "Owner": "<TEAM_NAME>",
+                    "CloudScale": "DMLZ",
+                    "Domain": "Data Management",
+                    "Contact": "<CONTACT_EMAIL>",
+                    "Project": "<PROJECT_NAME>",
+                    "Environment": "<ENVIRONMENT_NAME>",
+                    "Toolkit": "bicep"
+                }
+            }
+        }
+    }
+}

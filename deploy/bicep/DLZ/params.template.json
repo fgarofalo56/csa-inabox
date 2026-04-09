@@ -1,0 +1,103 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "location": {
+            "value": "<AZURE_REGION>"
+        },
+        "environment": {
+            "value": "<ENVIRONMENT_NAME>"
+        },
+        "prefix": {
+            "value": "dlz"
+        },
+        "deployModules": {
+            "value": {
+                "cosmosDB": false,
+                "storageZones": true,
+                "externalStorage": true,
+                "synapse": false
+            }
+        },
+        "privateDNSZones": {
+            "value": {
+                "subscriptionId": "<CONNECTIVITY_SUBSCRIPTION_ID>",
+                "resourceGroupName": "<DNS_RESOURCE_GROUP_NAME>"
+            }
+        },
+        "parCosmosDB": {
+            "value": {
+                "cosmosDbAccountName": "<COSMOS_ACCOUNT_NAME>",
+                "enableAutomaticFailover": false,
+                "defaultDatabaseName": "default",
+                "enableMultipleWriteLocations": false,
+                "enableAnalyticalStorage": false,
+                "enableFreeTier": false,
+                "consistencyLevel": "Session",
+                "backupPolicyType": "Continuous",
+                "continuousBackupTier": "Continuous7Days",
+                "publicNetworkAccess": "Disabled",
+                "networkAclBypass": "None",
+                "ipRules": [],
+                "virtualNetworkRules": [],
+                "tags": {}
+            }
+        },
+        "parStorage": {
+            "value": {
+                "storageAccountName": "<STORAGE_ACCOUNT_NAME>",
+                "sku": "Standard_LRS",
+                "kind": "StorageV2",
+                "domainFileSystemNames": [
+                    "raw",
+                    "curated",
+                    "enriched"
+                ],
+                "dataProductFileSystemNames": [
+                    "data",
+                    "workspace"
+                ],
+                "privateEndpointSubnets": [
+                    {
+                        "subscriptionId": "<DLZ_SUBSCRIPTION_ID>",
+                        "vNetResourceGroup": "<VNET_RESOURCE_GROUP>",
+                        "vNetName": "<SPOKE_VNET_NAME>",
+                        "subnetName": "<PRIVATE_ENDPOINT_SUBNET>",
+                        "vNetLocation": "<AZURE_REGION>"
+                    }
+                ],
+                "virtualNetworkRules": [],
+                "tags": {}
+            }
+        },
+        "parExternalStorage": {
+            "value": {
+                "storageAccountName": "<EXTERNAL_STORAGE_NAME>",
+                "sku": "Standard_LRS",
+                "kind": "StorageV2",
+                "fileSytemNames": [
+                    "inbox",
+                    "outbox"
+                ],
+                "privateEndpointSubnets": [
+                    {
+                        "subscriptionId": "<DLZ_SUBSCRIPTION_ID>",
+                        "vNetResourceGroup": "<VNET_RESOURCE_GROUP>",
+                        "vNetName": "<SPOKE_VNET_NAME>",
+                        "subnetName": "<PRIVATE_ENDPOINT_SUBNET>",
+                        "vNetLocation": "<AZURE_REGION>"
+                    }
+                ],
+                "virtualNetworkRules": [],
+                "tags": {}
+            }
+        },
+        "parSynapse": {
+            "value": {
+                "synapseWorkspaceName": "<SYNAPSE_WORKSPACE_NAME>",
+                "sqlPoolName": "<SQL_POOL_NAME>",
+                "tags": {}
+            }
+        }
+    }
+}

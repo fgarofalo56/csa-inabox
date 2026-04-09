@@ -1,28 +1,55 @@
-#Login to Azure
-#Use -Environment Parm to if you need to use Azure Gov.  AzureUSGovernmnet
+<#
+.SYNOPSIS
+    Helper script for deploying Bicep templates via Azure CLI.
 
+.DESCRIPTION
+    Deploys a Bicep template to a resource group using Azure CLI.
+    Adjust the variables below for your environment.
+
+.NOTES
+    Azure CLI does not run in Polyglot Notebook - run in terminal.
+    Use -Environment parameter for Azure Government: AzureUSGovernment
+#>
+
+# Login to Azure
+# Use -Environment AzureUSGovernment for Azure Gov
 Connect-AzAccount -Environment AzureCloud -UseDeviceAuthentication
 
-# For Azure Global regions
-# Set Platform management subscripion ID as the the current subscription
-# Azure CLI does not run in Polyglot Notebook, run the could in terminal
+# ============================================================================
+# CONFIGURATION - Update these for your environment
+# ============================================================================
 
-# $ManagementSubscriptionId="a0d6cfbe-8dc6-49b2-80da-c2473a463a98"  a0d6cfbe-8dc6-49b2-80da-c2473a463a98
-# az account set --subscription $ManagementSubscriptionId
+# Set the top level Management Group prefix
+$TopLevelMGPrefix = "alz"
 
-# Set the top level MG Prefix in accordance to your environment. This example assumes default 'alz'.
-$TopLevelMGPrefix="alz"
-
-# $dateYMD=$(date +%Y%m%dT%H%M%S%NZ)
+# Generate deployment name with timestamp
 $dateYMD = Get-Date -Format "yyyyMMddTHHmmssffZ"
 
-$GROUP="rg-${TopLevelMGPrefix}-logging-001"
-$NAME="alz-loggingDeployment-${dateYMD}"
-$TEMPLATEFILE="S:\Repos\GitHub\csa-inabox\deploy\bicep\LandingZone\01_Logging\logging\logging.bicep"
-$PARAMETERS="@S:\Repos\GitHub\csa-inabox\deploy\bicep\LandingZone\01_Logging\logging\parameters\logging.parameters.all.json"
+# Resource group and deployment names
+$GROUP = "rg-${TopLevelMGPrefix}-logging-001"
+$NAME = "alz-loggingDeployment-${dateYMD}"
 
-# Create Resource Group - optional when using an existing resource group
+# Template paths (relative to repo root)
+$RepoRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+$TEMPLATEFILE = Join-Path $RepoRoot "deploy\bicep\LandingZone - ALZ\01_Logging\logging\logging.bicep"
+$PARAMETERS = "@$(Join-Path $RepoRoot 'deploy\bicep\LandingZone - ALZ\01_Logging\logging\parameters\logging.parameters.all.json')"
+
+# ============================================================================
+# DEPLOYMENT
+# ============================================================================
+
+# Verify template exists
+if (-not (Test-Path $TEMPLATEFILE)) {
+    Write-Error "Template file not found: $TEMPLATEFILE"
+    exit 1
+}
+
+# Create Resource Group (optional - skip if using existing)
 az group create --name $GROUP --location eastus
 
 # Deploy Module
-az deployment group create --name $NAME --resource-group $GROUP --template-file $TEMPLATEFILE --parameters $PARAMETERS
+az deployment group create `
+    --name $NAME `
+    --resource-group $GROUP `
+    --template-file $TEMPLATEFILE `
+    --parameters $PARAMETERS

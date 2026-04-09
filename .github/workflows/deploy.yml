@@ -1,0 +1,185 @@
+# ==============================================================================
+# CSA-in-a-Box: Infrastructure Deployment
+# Deploys to Azure across 4 subscriptions (Management, Connectivity, DMLZ, DLZ)
+# ==============================================================================
+
+name: Deploy Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        options:
+          - dev
+          - test
+          - prod
+      deploy_alz:
+        description: 'Deploy Azure Landing Zone'
+        required: false
+        type: boolean
+        default: false
+      deploy_dmlz:
+        description: 'Deploy Data Management Landing Zone'
+        required: false
+        type: boolean
+        default: false
+      deploy_dlz:
+        description: 'Deploy Data Landing Zone'
+        required: false
+        type: boolean
+        default: false
+      dry_run:
+        description: 'What-if mode (no actual deployment)'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AZURE_REGION: eastus
+
+jobs:
+  # -------------------------------------------------------------------------
+  # Validate before any deployment
+  # -------------------------------------------------------------------------
+  validate:
+    name: Validate Templates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_MGMT_SUBSCRIPTION_ID }}
+
+      - name: Validate Bicep Templates
+        run: |
+          echo "Validating Bicep templates for ${{ inputs.environment }}..."
+          bicep build deploy/bicep/DLZ/main.bicep
+          bicep build deploy/bicep/DMLZ/main.bicep
+
+  # -------------------------------------------------------------------------
+  # Deploy Azure Landing Zone (Management + Connectivity)
+  # -------------------------------------------------------------------------
+  deploy-alz:
+    name: Deploy Landing Zone
+    needs: validate
+    if: ${{ inputs.deploy_alz }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_MGMT_SUBSCRIPTION_ID }}
+
+      - name: What-If / Deploy ALZ
+        run: |
+          MODE=${{ inputs.dry_run && '--what-if' || '' }}
+          az deployment sub create \
+            --location ${{ env.AZURE_REGION }} \
+            --template-file deploy/bicep/LandingZone-ALZ/main.bicep \
+            --parameters deploy/bicep/LandingZone-ALZ/params.${{ inputs.environment }}.json \
+            $MODE
+
+  # -------------------------------------------------------------------------
+  # Deploy Data Management Landing Zone
+  # -------------------------------------------------------------------------
+  deploy-dmlz:
+    name: Deploy DMLZ
+    needs: validate
+    if: ${{ inputs.deploy_dmlz }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_DMLZ_SUBSCRIPTION_ID }}
+
+      - name: What-If / Deploy DMLZ
+        run: |
+          MODE=${{ inputs.dry_run && '--what-if' || '' }}
+          az deployment sub create \
+            --location ${{ env.AZURE_REGION }} \
+            --template-file deploy/bicep/DMLZ/main.bicep \
+            --parameters deploy/bicep/DMLZ/params.${{ inputs.environment }}.json \
+            $MODE
+
+  # -------------------------------------------------------------------------
+  # Deploy Data Landing Zone
+  # -------------------------------------------------------------------------
+  deploy-dlz:
+    name: Deploy DLZ
+    needs: [validate, deploy-dmlz]
+    if: ${{ inputs.deploy_dlz && always() }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_DLZ_SUBSCRIPTION_ID }}
+
+      - name: What-If / Deploy DLZ
+        run: |
+          MODE=${{ inputs.dry_run && '--what-if' || '' }}
+          az deployment sub create \
+            --location ${{ env.AZURE_REGION }} \
+            --template-file deploy/bicep/DLZ/main.bicep \
+            --parameters deploy/bicep/DLZ/params.${{ inputs.environment }}.json \
+            $MODE
+
+  # -------------------------------------------------------------------------
+  # Post-Deployment Validation
+  # -------------------------------------------------------------------------
+  post-deploy:
+    name: Post-Deploy Validation
+    needs: [deploy-alz, deploy-dmlz, deploy-dlz]
+    if: ${{ always() && !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_MGMT_SUBSCRIPTION_ID }}
+
+      - name: Verify Resource Groups
+        run: |
+          echo "=== Verifying deployed resource groups ==="
+          az group list --query "[?tags.Project=='CSA-in-a-Box'].{Name:name, Location:location, State:properties.provisioningState}" -o table
+
+      - name: Verify Network Connectivity
+        run: |
+          echo "=== Checking VNet peerings ==="
+          az network vnet peering list --resource-group rg-connectivity --vnet-name vnet-hub -o table 2>/dev/null || echo "No peerings found"
+
+      - name: Verify Private DNS
+        run: |
+          echo "=== Checking Private DNS Zones ==="
+          az network private-dns zone list --query "[].{Name:name, Records:numberOfRecordSets}" -o table 2>/dev/null || echo "No DNS zones found"

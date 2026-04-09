@@ -1,134 +1,193 @@
 {
-    "github.copilot.enable": {
-        "*": true,
-        "plaintext": true,
-        "markdown": true,
-        "scminput": true
+  "github.copilot.enable": {
+    "*": true,
+    "plaintext": true,
+    "markdown": true,
+    "scminput": true
+  },
+  "terminal.integrated.profiles.windows": {
+    "PowerShell": {
+      "source": "PowerShell",
+      "icon": "terminal-powershell"
     },
-    "terminal.integrated.profiles.windows": {
-        "PowerShell": {
-            "source": "PowerShell",
-            "icon": "terminal-powershell"
-        },
-        "Command Prompt": {
-            "path": [
-                "${env:windir}\\Sysnative\\cmd.exe",
-                "${env:windir}\\System32\\cmd.exe"
-            ],
-            "args": [],
-            "icon": "terminal-cmd"
-        },
-        "Git Bash": {
-            "source": "Git Bash"
+    "Command Prompt": {
+      "path": [
+        "${env:windir}\\Sysnative\\cmd.exe",
+        "${env:windir}\\System32\\cmd.exe"
+      ],
+      "args": [],
+      "icon": "terminal-cmd"
+    },
+    "Git Bash": {
+      "source": "Git Bash"
+    }
+  },
+  "azureAutomation.directory.basePath": "${workspaceFolder}/temp",
+  "editor.definitionLinkOpensInPeek": false,
+  "dotnetAcquisitionExtension.enablePreviewFeatures": true,
+  "dotnetAcquisitionExtension.enableTelemetry": false,
+  "azureApiManagement.advancedCreation": true,
+  "azureApiManagement.advancedPolicyAuthoringExperience": true,
+  "appService.enablePythonRemoteDebugging": true,
+  "azure-dev.auth.useIntegratedAuth": true,
+  "csharp.preview.improvedLaunchExperience": true,
+  "extensions.autoRestart": true,
+  "extensions.closeExtensionDetailsOnViewChange": true,
+  "editor.wordWrap": "on",
+  "editor.formatOnPaste": true,
+  "editor.formatOnSave": true,
+  "editor.formatOnType": true,
+  "prompty.currentModelConfiguration": "default",
+  "terminal.explorerKind": "integrated",
+  "diffEditor.codeLens": true,
+  "editor.quickSuggestions": {
+    "strings": "on",
+    "comments": "on"
+  },
+  "window.autoDetectColorScheme": true,
+  "azure.cloud": "AzureCloud",
+  "azureResourceManagerTools.autoDetectJsonTemplates": true,
+  "azureResourceManagerTools.checkForLatestSchema": true,
+  "azureDatabases.useCosmosOAuth": true,
+  "azIntegrationAccounts.showExplorer": true,
+  "azure.showSignedInEmail": true,
+  "azure.authenticationLibrary": "MSAL",
+  "bicep.completions.getAllAccessibleAzureContainerRegistries": true,
+  "bicep.trace.server": "Messages",
+  "bicep.suppressedWarnings": [
+    "BCP037",
+    "use-safe-access",
+    "no-unused-params",
+    "prefer-interpolation"
+  ],
+  "bicep.align-bicep.enabled": false,
+  "bicep.linter.ruleLevel": {
+    "no-unused-parameters": "warning",
+    "no-hardcoded-env-urls": "warning",
+    "use-referenced-parameters": "info"
+  },
+  "[powershell]": {
+    "editor.defaultFormatter": "ms-vscode.powershell"
+  },
+  "[markdown]": {
+    "editor.defaultFormatter": "DavidAnson.vscode-markdownlint"
+  },
+  "python.globalModuleInstallation": true,
+  "python.createEnvironment.contentButton": "show",
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
+  "python.terminal.shellIntegration.enabled": true,
+  "python.analysis.inlayHints.functionReturnTypes": true,
+  "python.analysis.inlayHints.pytestParameters": true,
+  "python.analysis.inlayHints.variableTypes": true,
+  "python.analysis.typeEvaluation.enableExperimentalFeatures": true,
+  "python.analysis.autoFormatStrings": true,
+  "python.analysis.autoImportCompletions": true,
+  "python.testing.pytestEnabled": true,
+  "python.testing.unittestEnabled": true,
+  "python.analysis.logLevel": "Warning",
+  "python.languageServer": "Pylance",
+  "notebook.formatOnCellExecution": true,
+  "notebook.formatOnSave.enabled": true,
+  "notebook.outline.showCodeCells": true,
+  "polyglot-notebook.defaultNotebookExtension": ".ipynb",
+  "polyglot-notebook.defaultNotebookLanguage": "pwsh",
+  "debug.internalConsoleOptions": "neverOpen",
+  "debugpy.showPythonInlineValues": true,
+  "codeQL.cli.executablePath": "",
+  "semantic-kernel.endpointsProvider": "AzureOpenAI",
+  "hdinsight.azureEnvironment": "Azure",
+  "hive.persistQueryResultTabs": true,
+  "jupyter.themeMatplotlibPlots": true,
+  "jupyter.allowUnauthorizedRemoteConnection": true,
+  "jupyter.logging.level": "error",
+  "polyglot-notebook.suppressPromptToSaveDefaults": false,
+  "search.experimental.closedNotebookRichContentResults": false,
+  "terminal.integrated.defaultProfile.windows": "Git Bash",
+  "terminal.integrated.suggest.enabled": true,
+  "terminal.integrated.enableImages": true,
+  "terminal.integrated.enableVisualBell": true,
+  "terminal.integrated.allowMnemonics": true,
+  "azure.azure-account.showStatusBar": true,
+  "azureFunctions.deploySubpath": "domains\\sharedServices\\aiEnrichment\\functions",
+  "azureFunctions.scmDoBuildDuringDeployment": true,
+  "azureFunctions.pythonVenv": ".venv",
+  "azureFunctions.projectLanguage": "Python",
+  "azureFunctions.projectRuntime": "~4",
+  "azureFunctions.projectLanguageModel": 2,
+  "align-bicep.allowed-language-ids": false,
+  "align-spaces.enabled": false,
+  "sarif-viewer.connectToGithubCodeScanning": "off",
+  "python-envs.pythonProjects": [
+    {
+      "path": "",
+      "envManager": "ms-python.python:venv",
+      "packageManager": "ms-python.python:pip"
+    }
+  ],
+  "terminal.integrated.smoothScrolling": true,
+  "mcp": {
+    "inputs": [],
+    "servers": {
+      "mcp-server-time": {
+        "command": "python",
+        "args": [
+          "-m",
+          "mcp_server_time",
+          "--local-timezone=America/Los_Angeles"
+        ],
+        "env": {}
+      }
+    }
+  },
+  "sqltools.connections": [
+    {
+      "pgOptions": {
+        "ssl": {
+          "rejectUnauthorized": true
         }
+      },
+      "previewLimit": 50,
+      "server": "alz-postgresql-srv01-westus.postgres.database.azure.com",
+      "port": 5432,
+      "askForPassword": true,
+      "driver": "PostgreSQL",
+      "name": "alz-postgresql-srv01-westus",
+      "group": "Limitless Data",
+      "database": "vectordb",
+      "username": "jarvis"
     },
-    "azureAutomation.directory.basePath": "S:\\temp\\vscodelocal",
-    "sarif-viewer.connectToGithubCodeScanning": "off",
-    "editor.definitionLinkOpensInPeek": false,
-    "dotnetAcquisitionExtension.enablePreviewFeatures": true,
-    "dotnetAcquisitionExtension.enableTelemetry": false,
-    "azureApiManagement.advancedCreation": true,
-    "azureApiManagement.advancedPolicyAuthoringExperience": true,
-    "appService.enablePythonRemoteDebugging": true,
-    "azure-dev.auth.useIntegratedAuth": true,
-    "csharp.preview.improvedLaunchExperience": true,
-    "jupyter.interactiveWindow.textEditor.magicCommandsAsComments": true,
-    "jupyter.interactiveWindow.textEditor.normalizeSelection": true,
-    "jupyter.logging.level": "error",
-    "jupyter.showVariableViewWhenDebugging": true,
-    "jupyter.themeMatplotlibPlots": true,
-    "jupyter.logging.level": "debug",
-    "extensions.autoRestart": true,
-    "extensions.closeExtensionDetailsOnViewChange": true,
-    "terminal.explorerKind": "both",
-    "diffEditor.codeLens": true,
-    "editor.quickSuggestions": {
-        "strings": "on",
-        "comments": "on"
-    },
-    "window.autoDetectColorScheme": true,
-    "azureDatabases.useCosmosOAuth": true,
-    "jupyter.allowUnauthorizedRemoteConnection": true,
-    "azure.cloud": "AzureCloud",
-    "azureResourceManagerTools.autoDetectJsonTemplates": true,
-    "azIntegrationAccounts.showExplorer": true,
-    "azure.showSignedInEmail": true,
-    "azureResourceManagerTools.checkForLatestSchema": true,
-    "workbench.editor.preferHistoryBasedLanguageDetection": true,
-    "azure.authenticationLibrary": "MSAL",
-    "editor.wordWrap": "on",
-    "prompty.currentModelConfiguration": "default",
-    "editor.formatOnPaste": true,
-    "editor.formatOnSave": true,
-    "editor.formatOnType": true,
-    "[bicep]": {
-        "editor.defaultFormatter": "ms-azuretools.vscode-bicep"
-    },
-    "bicep.completions.getAllAccessibleAzureContainerRegistries": true,
-    "bicep.trace.server": "Messages",
-    "azureResourceGroups.suppressActivityNotifications": false,
-    "azureResourceGroups.showHiddenTypes": true,
-    "azure.resourceFilter": null,
-    "[powershell]": {
-        "editor.defaultFormatter": "ms-vscode.powershell"
-    },
-    "python.globalModuleInstallation": true,
-    "python.createEnvironment.contentButton": "show",
-    "ipynb.experimental.serialization": true,
-    "notebook.formatOnCellExecution": true,
-    "notebook.formatOnSave.enabled": true,
-    "notebook.outline.showCodeCells": true,
-    "polyglot-notebook.suppressPromptToSaveDefaults": false,
-    "dbt.enableNotebooks": true,
-    "dataWrangler.experiments.useJupyterProposedAPI": true,
-    "chat.experimental.variables.notebook": true,
-    "search.experimental.closedNotebookRichContentResults": false,
-    "bicep.suppressedWarnings": [
-        "BCP037",
-        "use-safe-access",
-        "no-unused-params",
-        "prefer-interpolation"
-    ],
-    "azureFunctions.deploySubpath": "domains\\sharedServices\\aiEnrichment\\functions",
-    "azureFunctions.scmDoBuildDuringDeployment": true,
-    "azureFunctions.pythonVenv": ".venv",
-    "azureFunctions.projectLanguage": "Python",
-    "azureFunctions.projectRuntime": "~4",
-    "debug.internalConsoleOptions": "neverOpen",
-    "azureFunctions.projectLanguageModel": 2,
-    "codeQL.githubDatabase.download": "ask",
-    "[markdown]": {
-        "editor.defaultFormatter": "DavidAnson.vscode-markdownlint"
-    },
-    "python.terminal.shellIntegration.enabled": true,
-    "python.analysis.inlayHints.functionReturnTypes": true,
-    "python.analysis.inlayHints.pytestParameters": true,
-    "python.analysis.inlayHints.variableTypes": true,
-    "python.analysis.typeEvaluation.enableExperimentalFeatures": true,
-    "python.analysis.autoFormatStrings": true,
-    "python.analysis.autoImportCompletions": true,
-    "python.analysis.completionOverrideExperiment": false,
-    "terminal.integrated.suggest.enabled": true,
-    "terminal.integrated.enableImages": true,
-    "terminal.integrated.enableVisualBell": true,
-    "hdinsight.azureEnvironment": "Azure",
-    "hive.persistQueryResultTabs": true,
-    "jupyter.interactiveWindow.notebookRepl": true,
-    "jupyter.interactiveWindow.textEditor.executeSelection": true,
-    "polyglot-notebook.defaultNotebookExtension": ".ipynb",
-    "polyglot-notebook.defaultNotebookLanguage": "pwsh",
-    "terminal.integrated.defaultProfile.windows": "Git Bash",
-    "python.defaultInterpreterPath": "D:\\Programs\\anaconda\\anaconda3\\python.exe",
-    "python.autoComplete.extraPaths": [],
-    "debugpy.showPythonInlineValues": true,
-    "vue.server.hybridMode": true,
-    "python.testing.pytestEnabled": true,
-    "python.missingPackage.severity": "Information",
-    "debug.javascript.unmapMissingSources": true,
-    "python.testing.unittestEnabled": true,
-    "python.analysis.logLevel": "Warning",
-    "python.languageServer": "Pylance",
-    "skPromptLanguage.trace.server": "messages",
-    "semantic-kernel.endpointsProvider": "AzureOpenAI",
-    "codeQL.cli.executablePath": "S:\\DevResources\\codeql\\codeql\\codeql.exe"
+    {
+      "previewLimit": 50,
+      "server": "192.168.10.201",
+      "port": 5433,
+      "driver": "PostgreSQL",
+      "database": "postgres",
+      "username": "postgres",
+      "name": "local_PostgresSQL",
+      "askForPassword": true
+    }
+  ],
+  "dbcode.connections": [
+    {
+      "connectionId": "SZhep_7GqqoDoCpInbd1b",
+      "name": "local_PostgreSQL",
+      "driver": "postgres",
+      "connectionType": "host",
+      "host": "192.168.10.201",
+      "port": 5433,
+      "ssl": false,
+      "username": "postgres",
+      "password": "",
+      "savePassword": "secretStorage",
+      "database": "postgres",
+      "readOnly": false,
+      "connectionTimeout": 30
+    }
+  ],
+  "chat.mcp.discovery.enabled": {
+    "claude-desktop": false,
+    "windsurf": false,
+    "cursor-global": false,
+    "cursor-workspace": false
+  }
 }
