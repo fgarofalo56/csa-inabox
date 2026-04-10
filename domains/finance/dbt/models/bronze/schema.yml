@@ -1,0 +1,28 @@
+version: 2
+
+models:
+  - name: brz_invoices
+    description: Bronze invoices — raw invoice records with ingestion metadata.
+    columns:
+      - name: invoice_id
+        description: Unique invoice identifier from the billing system.
+        tests:
+          - not_null
+      - name: order_id
+        description: FK to sales orders. Null for manual invoices.
+      - name: customer_id
+        description: Customer identifier.
+      - name: _dbt_loaded_at
+        description: dbt ingestion timestamp.
+
+  - name: brz_payments
+    description: Bronze payments — raw payment records with ingestion metadata.
+    columns:
+      - name: payment_id
+        description: Unique payment identifier.
+        tests:
+          - not_null
+      - name: invoice_id
+        description: FK to invoices.
+        tests:
+          - not_null

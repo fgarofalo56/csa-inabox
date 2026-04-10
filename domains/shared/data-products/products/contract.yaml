@@ -1,0 +1,65 @@
+# Data product contract — shared.products
+#
+# Authoritative interface for the shared domain's product data product.
+
+apiVersion: csa.microsoft.com/v1
+kind: DataProductContract
+
+metadata:
+  name: shared.products
+  domain: shared
+  owner: data-engineering@contoso.com
+  version: "1.0.0"
+  description: >
+    Product catalog from the commerce system. Contains product names,
+    categories, and pricing. Referenced by inventory domain for stock
+    management and enrichment.
+
+schema:
+  primary_key: [product_sk]
+  columns:
+    - name: product_sk
+      type: string
+      nullable: false
+      description: Surrogate key (md5 of product_id). Generated in Silver.
+    - name: product_id
+      type: long
+      nullable: false
+      description: Unique product identifier from the catalog.
+    - name: product_name
+      type: string
+      nullable: false
+      description: Product display name (trimmed).
+    - name: category
+      type: string
+      nullable: true
+      description: Product category (uppercase, trimmed).
+    - name: unit_price
+      type: decimal(18,2)
+      nullable: true
+      description: Standard unit price (USD).
+    - name: is_valid
+      type: boolean
+      nullable: false
+      description: True when every quality flag is clean. Gold filters on this.
+    - name: validation_errors
+      type: string
+      nullable: true
+      description: Human-readable '; '-joined list of validation failures.
+
+sla:
+  freshness_minutes: 120
+  valid_row_ratio: 0.99
+  supported_until: "2027-04-10"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: product_sk
+  - rule: expect_column_values_to_be_unique
+    column: product_sk
+  - rule: expect_column_values_to_not_be_null
+    column: product_id
+  - rule: expect_column_values_to_be_between
+    column: unit_price
+    min_value: 0
+    mostly: 0.99

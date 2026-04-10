@@ -1,0 +1,49 @@
+version: 2
+
+models:
+  - name: slv_inventory
+    description: >
+      Silver inventory with validation flags. Flag-don't-drop pattern
+      catches null product_id, negative quantities, and overreserved stock.
+    columns:
+      - name: inventory_sk
+        description: Surrogate key (md5 of inventory_id).
+        tests:
+          - not_null
+          - unique
+      - name: inventory_id
+        description: Original inventory record identifier.
+        tests:
+          - not_null
+      - name: product_id
+        description: FK to products. Null flagged by _is_missing_product_id.
+      - name: warehouse_id
+        description: FK to warehouses.
+      - name: qty_on_hand
+        description: Current stock quantity.
+      - name: qty_reserved
+        description: Quantity reserved for orders.
+      - name: is_valid
+        description: TRUE when all quality checks pass.
+        tests:
+          - not_null
+      - name: validation_errors
+        description: Semicolon-separated list of validation failures.
+
+  - name: slv_warehouses
+    description: >
+      Silver warehouses with validation flags.
+    columns:
+      - name: warehouse_sk
+        description: Surrogate key (md5 of warehouse_id).
+        tests:
+          - not_null
+          - unique
+      - name: warehouse_id
+        description: Original warehouse identifier.
+        tests:
+          - not_null
+      - name: is_valid
+        description: TRUE when all quality checks pass.
+        tests:
+          - not_null

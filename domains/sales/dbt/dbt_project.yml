@@ -1,30 +1,42 @@
-name: sales
+name: 'csa_sales'
 version: '1.0.0'
 config-version: 2
+require-dbt-version: [">=1.7.0", "<2.0.0"]
 
-profile: csa_databricks
+profile: 'csa_analytics'
 
 model-paths: ["models"]
-test-paths: ["tests"]
-macro-paths: ["../shared/dbt/macros"]  # Inherit shared macros
+seed-paths: ["seeds"]
+macro-paths: ["../../shared/dbt/macros"]
 
 vars:
-  sales_database: "{{ env_var('DBT_SALES_DATABASE', 'sales') }}"
-  raw_schema: "bronze"
-  enriched_schema: "silver"
-  curated_schema: "gold"
+  bronze_database: "bronze"
+  silver_database: "silver"
+  gold_database: "gold"
+  file_format: "delta"
+  incremental_strategy: "merge"
+  freshness_warn_hours: 24
+  freshness_error_hours: 48
 
 models:
-  sales:
+  csa_sales:
     bronze:
       +materialized: incremental
-      +schema: bronze_sales
+      +file_format: delta
+      +schema: bronze
       +tags: ['bronze', 'sales']
     silver:
       +materialized: incremental
-      +schema: silver_sales
+      +file_format: delta
+      +schema: silver
       +tags: ['silver', 'sales']
+      +incremental_strategy: merge
     gold:
       +materialized: table
-      +schema: gold_sales
+      +file_format: delta
+      +schema: gold
       +tags: ['gold', 'sales']
+
+seeds:
+  csa_sales:
+    +schema: seeds

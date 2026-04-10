@@ -1,0 +1,29 @@
+version: 2
+
+models:
+  - name: brz_sales_orders
+    description: Bronze sales orders — raw order line items with surrogate key and ingestion metadata.
+    columns:
+      - name: _surrogate_key
+        description: Surrogate key (md5 of order_id).
+        tests:
+          - not_null
+          - unique
+      - name: order_id
+        description: Unique order identifier.
+        tests:
+          - not_null
+      - name: customer_id
+        description: FK to shared customers.
+      - name: product_id
+        description: FK to products.
+      - name: quantity
+        description: Units ordered.
+      - name: unit_price
+        description: Price per unit (USD).
+      - name: order_date
+        description: Date the order was placed.
+      - name: sales_region
+        description: Geographic sales region.
+      - name: sales_channel
+        description: Sales channel.

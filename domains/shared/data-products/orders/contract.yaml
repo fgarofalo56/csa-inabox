@@ -1,0 +1,81 @@
+# Data product contract — shared.orders
+#
+# Authoritative interface for the shared domain's order data product.
+# Consumed by finance.gld_revenue_reconciliation and downstream analytics.
+
+apiVersion: csa.microsoft.com/v1
+kind: DataProductContract
+
+metadata:
+  name: shared.orders
+  domain: shared
+  owner: data-engineering@contoso.com
+  version: "1.0.0"
+  description: >
+    Order records from the shared commerce system. Tracks all customer
+    orders with amounts, status, and dates. Serves as the canonical
+    order source consumed by finance (reconciliation) and inventory
+    (demand analysis) domains.
+
+schema:
+  primary_key: [order_sk]
+  columns:
+    - name: order_sk
+      type: string
+      nullable: false
+      description: Surrogate key (md5 of order_id). Generated in Silver.
+    - name: order_id
+      type: long
+      nullable: false
+      description: Unique order identifier from the commerce system.
+    - name: customer_id
+      type: long
+      nullable: true
+      description: FK to shared.customers.customer_id. Null for ~5% of test rows.
+    - name: order_date
+      type: date
+      nullable: false
+      description: Date the order was placed.
+    - name: total_amount
+      type: decimal(18,2)
+      nullable: false
+      description: Order total (USD).
+    - name: status
+      type: string
+      nullable: false
+      description: Order lifecycle state.
+      allowed_values:
+        - PENDING
+        - CONFIRMED
+        - SHIPPED
+        - DELIVERED
+        - CANCELLED
+        - RETURNED
+    - name: is_valid
+      type: boolean
+      nullable: false
+      description: True when every quality flag is clean. Gold filters on this.
+    - name: validation_errors
+      type: string
+      nullable: true
+      description: Human-readable '; '-joined list of validation failures.
+
+sla:
+  freshness_minutes: 60
+  valid_row_ratio: 0.95
+  supported_until: "2027-04-10"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: order_sk
+  - rule: expect_column_values_to_be_unique
+    column: order_sk
+  - rule: expect_column_values_to_not_be_null
+    column: order_id
+  - rule: expect_column_values_to_be_in_set
+    column: status
+    value_set: [PENDING, CONFIRMED, SHIPPED, DELIVERED, CANCELLED, RETURNED]
+  - rule: expect_column_values_to_be_between
+    column: total_amount
+    min_value: 0
+    mostly: 0.95

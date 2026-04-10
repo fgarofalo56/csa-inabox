@@ -92,7 +92,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        domain: [shared, finance, inventory]
+        domain: [shared, finance, inventory, sales]
     defaults:
       run:
         working-directory: domains/${{ matrix.domain }}/dbt
@@ -125,7 +125,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        domain: [shared, finance, inventory]
+        domain: [shared, finance, inventory, sales]
     defaults:
       run:
         working-directory: domains/${{ matrix.domain }}/dbt

@@ -2,38 +2,37 @@ version: 2
 
 sources:
   - name: raw_sales
-    description: Raw sales data from source systems
-    database: "{{ var('sales_database') }}"
-    schema: raw
-    loader: adf_copy_activity
-    loaded_at_field: _metadata.file_modification_time
-    freshness:
-      warn_after: {count: 24, period: hour}
-      error_after: {count: 48, period: hour}
+    description: >
+      Raw sales data. When running with seeds (dev/CI), the data is loaded
+      via dbt seed. In production, ADF Copy Activity ingests from source
+      systems to ADLS Bronze.
+    schema: seeds
     tables:
       - name: raw_sales_orders
-        description: Raw sales order records
+        description: >
+          Raw sales order line items with quantity, pricing, region, and
+          channel. ~5% rows contain deliberate quality issues for
+          validation testing.
         columns:
           - name: order_id
+            description: Unique order identifier.
             tests:
               - not_null
           - name: customer_id
+            description: FK to shared customers.
             tests:
               - not_null
           - name: product_id
+            description: FK to products.
           - name: quantity
+            description: Units ordered.
           - name: unit_price
+            description: Price per unit (USD).
           - name: order_date
+            description: Date the order was placed.
           - name: sales_region
+            description: Geographic sales region.
           - name: sales_channel
-
-      - name: raw_sales_products
-        description: Product catalog
-        columns:
-          - name: product_id
-            tests:
-              - not_null
-              - unique
-          - name: product_name
-          - name: category
-          - name: subcategory
+            description: Sales channel (ONLINE, STORE, WHOLESALE, PARTNER).
+          - name: _ingested_at
+            description: Ingestion timestamp.

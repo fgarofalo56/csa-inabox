@@ -1,0 +1,57 @@
+version: 2
+
+models:
+  - name: dim_warehouses
+    description: >
+      Warehouse dimension. Valid warehouse records from Silver.
+    columns:
+      - name: warehouse_sk
+        description: Surrogate key.
+        tests:
+          - not_null
+          - unique
+      - name: warehouse_id
+        description: Original warehouse identifier.
+        tests:
+          - not_null
+          - unique
+
+  - name: fact_inventory_snapshot
+    description: >
+      Inventory snapshot fact table. One row per product-warehouse
+      combination with stock status classification and reorder flags.
+    columns:
+      - name: inventory_sk
+        description: Surrogate key from Silver.
+        tests:
+          - not_null
+          - unique
+      - name: stock_status
+        description: Stock level classification.
+        tests:
+          - accepted_values:
+              values: ['OUT_OF_STOCK', 'LOW_STOCK', 'ADEQUATE', 'WELL_STOCKED']
+      - name: needs_reorder
+        description: TRUE when available stock is at or below reorder point.
+
+  - name: gld_reorder_alerts
+    description: >
+      Products needing reorder, enriched with shared dim_products.
+      Cross-domain join to shared.dim_products.
+    columns:
+      - name: alert_severity
+        description: Alert urgency level.
+        tests:
+          - accepted_values:
+              values: ['CRITICAL', 'URGENT', 'WARNING']
+
+  - name: gld_inventory_turnover
+    description: >
+      Inventory turnover analysis. Cross-domain join with shared
+      fact_orders for demand-supply assessment.
+    columns:
+      - name: supply_demand_status
+        description: Supply-demand balance classification.
+        tests:
+          - accepted_values:
+              values: ['STOCKOUT', 'NO_DEMAND', 'UNDERSTOCKED', 'OVERSTOCKED', 'BALANCED']

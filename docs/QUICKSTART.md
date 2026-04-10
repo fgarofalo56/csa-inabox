@@ -51,6 +51,9 @@ CSA-in-a-Box ships with realistic seed data:
 | `sample_products.csv` | 50 | Clean |
 | `sample_invoices.csv` | 500 | ~3% (null order_id, negative amounts) |
 | `sample_payments.csv` | 400 | Clean |
+| `sample_inventory.csv` | 300 | ~3% (null product_id, negative qty, overreserved) |
+| `sample_warehouses.csv` | 8 | Clean |
+| `raw_sales_orders.csv` | 1,000 | ~5% (negative prices, future dates, invalid qty) |
 
 ```bash
 # Option A: Upload to ADLS Gen2 (requires deployed storage account)
@@ -65,19 +68,49 @@ dbt seed --profiles-dir .
 
 ## Step 3: Run the dbt Pipeline
 
+Each domain has its own dbt project. Run them in order:
+
 ```bash
+# Shared domain (foundation — customers, orders, products)
 cd domains/shared/dbt
+dbt deps
+dbt seed
+dbt run --select tag:bronze
+dbt run --select tag:silver
+dbt run --select tag:gold
+dbt test
 
-# Build all layers in sequence
-dbt run --select tag:bronze    # Bronze: raw ingestion
-dbt run --select tag:silver    # Silver: validation + dedup
-dbt run --select tag:gold      # Gold: dimensions + facts + metrics
+# Finance domain (invoices, payments, reconciliation)
+cd ../../finance/dbt
+dbt deps
+dbt seed
+dbt run --select tag:bronze
+dbt run --select tag:silver
+dbt run --select tag:gold
+dbt test
 
-# Run all tests
+# Inventory domain (stock levels, warehouses, reorder alerts)
+cd ../../inventory/dbt
+dbt deps
+dbt seed
+dbt run --select tag:bronze
+dbt run --select tag:silver
+dbt run --select tag:gold
+dbt test
+
+# Sales domain (sales orders, metrics)
+cd ../../sales/dbt
+dbt deps
+dbt seed
+dbt run --select tag:bronze
+dbt run --select tag:silver
+dbt run --select tag:gold
 dbt test
 ```
 
 ### Expected Row Counts
+
+**Shared Domain:**
 
 | Layer | Model | Expected Rows |
 |-------|-------|--------------|
@@ -93,6 +126,38 @@ dbt test
 | Gold | `gld_daily_order_metrics` | ~1,095 (unique dates) |
 | Gold | `gld_customer_lifetime_value` | ~190 |
 | Gold | `gld_monthly_revenue` | ~36 (months x countries) |
+
+**Finance Domain:**
+
+| Layer | Model | Expected Rows |
+|-------|-------|--------------|
+| Bronze | `brz_invoices` | 500 |
+| Bronze | `brz_payments` | 400 |
+| Silver | `slv_invoices` | 500 (all rows, ~15 flagged invalid) |
+| Silver | `slv_payments` | 400 |
+| Gold | `gld_aging_report` | ~485 (valid invoices) |
+| Gold | `gld_revenue_reconciliation` | ~2,000+ (full outer join orders↔invoices) |
+
+**Inventory Domain:**
+
+| Layer | Model | Expected Rows |
+|-------|-------|--------------|
+| Bronze | `brz_inventory` | 300 |
+| Bronze | `brz_warehouses` | 8 |
+| Silver | `slv_inventory` | 300 (all rows, ~11 flagged invalid) |
+| Silver | `slv_warehouses` | 8 |
+| Gold | `dim_warehouses` | 8 |
+| Gold | `fact_inventory_snapshot` | ~289 (valid inventory) |
+| Gold | `gld_reorder_alerts` | varies (products below reorder point) |
+| Gold | `gld_inventory_turnover` | ~50 (one per product) |
+
+**Sales Domain:**
+
+| Layer | Model | Expected Rows |
+|-------|-------|--------------|
+| Bronze | `brz_sales_orders` | 1,000 |
+| Silver | `slv_sales_orders` | 1,000 (all rows, ~45 flagged invalid) |
+| Gold | `gld_sales_metrics` | varies (date × region × channel) |
 
 ## Step 4: Run ADF Orchestration (Optional)
 
@@ -190,14 +255,20 @@ csa-inabox/
       dbt/                #   dbt models: Bronze -> Silver -> Gold
       notebooks/          #   Databricks notebooks
       pipelines/adf/      #   ADF pipeline definitions
+      data-products/      #   Data product contracts
     finance/              # Finance domain (invoices, payments)
       dbt/                #   Finance-specific dbt models
       data-products/      #   Data product contracts
-    sales/                # Sales domain
+    inventory/            # Inventory domain (stock, warehouses)
+      dbt/                #   Inventory-specific dbt models
+      data-products/      #   Data product contracts
+    sales/                # Sales domain (sales orders, metrics)
+      dbt/                #   Sales-specific dbt models
       data-products/      #   Orders data product contract
       pipelines/adf/      #   Sales-specific ADF pipelines
   governance/             # Cross-cutting governance
     common/               #   Logging, validation, contracts
+    contracts/            #   Contract validator + dbt test generator
     purview/              #   Catalog config, glossary, classification
     dataquality/          #   Great Expectations runner
   scripts/
@@ -214,4 +285,4 @@ csa-inabox/
 - **Add a data product**: Create `contract.yaml` under `data-products/`
 - **Add quality rules**: Extend `governance/dataquality/` with Great Expectations checkpoints
 - **Scale streaming**: Increase Event Hub partitions, add ADX scaling policies
-- **Production hardening**: See `docs/PRODUCTION_CHECKLIST.md`
+- **Production hardening**: See [`docs/PRODUCTION_CHECKLIST.md`](PRODUCTION_CHECKLIST.md)

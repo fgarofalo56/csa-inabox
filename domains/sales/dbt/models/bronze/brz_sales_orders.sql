@@ -8,18 +8,32 @@
     )
 }}
 
+/*
+  Bronze: Raw sales orders.
+  Preserves all source columns; adds surrogate key and ingestion metadata.
+*/
+
 with source as (
     select * from {{ source('raw_sales', 'raw_sales_orders') }}
     {% if is_incremental() %}
-    where _metadata.file_modification_time > (select max(_dbt_loaded_at) from {{ this }})
+    where _ingested_at > (select max(_dbt_loaded_at) from {{ this }})
     {% endif %}
 ),
 
 staged as (
     select
         {{ dbt_utils.generate_surrogate_key(['order_id']) }} as _surrogate_key,
-        *,
-        {{ bronze_audit_columns() }}
+        order_id,
+        customer_id,
+        product_id,
+        quantity,
+        unit_price,
+        order_date,
+        sales_region,
+        sales_channel,
+        _ingested_at,
+        current_timestamp() as _dbt_loaded_at,
+        '{{ invocation_id }}' as _dbt_run_id
     from source
 )
 

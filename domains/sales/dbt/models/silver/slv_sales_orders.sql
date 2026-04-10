@@ -8,6 +8,11 @@
     )
 }}
 
+/*
+  Silver: Conformed sales orders with validation flags.
+  Flag-don't-drop pattern — Gold filters on quality flags.
+*/
+
 with bronze as (
     select * from {{ ref('brz_sales_orders') }}
     {% if is_incremental() %}
@@ -20,7 +25,7 @@ deduped as (
         *,
         row_number() over (
             partition by order_id
-            order by _source_modified_at desc, _dbt_loaded_at desc
+            order by _ingested_at desc, _dbt_loaded_at desc
         ) as _row_num
     from bronze
 ),
@@ -37,16 +42,24 @@ cleaned as (
         trim(upper(coalesce(sales_region, 'UNKNOWN'))) as sales_region,
         trim(upper(coalesce(sales_channel, 'UNKNOWN'))) as sales_channel,
 
-        -- Data quality
+        -- Data quality flags
         {{ flag_negative_value('unit_price') }} as _is_negative_price,
         {{ flag_future_date('order_date') }} as _is_future_date,
         case when quantity <= 0 then true else false end as _is_invalid_quantity,
 
         current_timestamp() as _dbt_loaded_at,
-        _source_file,
         _dbt_run_id
     from deduped
     where _row_num = 1
 )
 
-select * from cleaned
+select
+    *,
+    not (_is_negative_price or _is_future_date or _is_invalid_quantity) as is_valid,
+    concat_ws(
+        '; ',
+        case when _is_negative_price then 'unit_price negative' end,
+        case when _is_future_date then 'order_date in the future' end,
+        case when _is_invalid_quantity then 'quantity invalid' end
+    ) as validation_errors
+from cleaned

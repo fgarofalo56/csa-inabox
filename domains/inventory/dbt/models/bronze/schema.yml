@@ -1,0 +1,29 @@
+version: 2
+
+models:
+  - name: brz_inventory
+    description: Bronze inventory — raw stock position records with ingestion metadata.
+    columns:
+      - name: inventory_id
+        description: Unique inventory record identifier.
+        tests:
+          - not_null
+      - name: product_id
+        description: FK to products. Nullable for quality testing.
+      - name: warehouse_id
+        description: FK to warehouses.
+        tests:
+          - not_null
+
+  - name: brz_warehouses
+    description: Bronze warehouses — raw warehouse reference data.
+    columns:
+      - name: warehouse_id
+        description: Unique warehouse identifier.
+        tests:
+          - not_null
+          - unique
+      - name: warehouse_name
+        description: Human-readable warehouse name.
+        tests:
+          - not_null

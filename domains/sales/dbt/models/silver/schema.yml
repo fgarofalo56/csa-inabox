@@ -1,0 +1,39 @@
+version: 2
+
+models:
+  - name: slv_sales_orders
+    description: >
+      Silver sales orders with validation flags and computed line_total.
+      Flag-don't-drop pattern — Gold filters on quality flags.
+    columns:
+      - name: order_id
+        description: Unique order identifier.
+        tests:
+          - not_null
+          - unique
+      - name: customer_id
+        description: FK to shared customers.
+      - name: product_id
+        description: FK to products.
+      - name: quantity
+        description: Units ordered.
+      - name: unit_price
+        description: Price per unit (USD).
+      - name: line_total
+        description: Computed quantity * unit_price.
+      - name: order_date
+        description: Date the order was placed.
+      - name: sales_region
+        description: Geographic sales region.
+        tests:
+          - not_null
+      - name: sales_channel
+        description: Sales channel.
+        tests:
+          - not_null
+      - name: is_valid
+        description: TRUE when all quality checks pass.
+        tests:
+          - not_null
+      - name: validation_errors
+        description: Semicolon-separated list of validation failures.

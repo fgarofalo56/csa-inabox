@@ -1,0 +1,27 @@
+version: 2
+
+models:
+  - name: gld_sales_metrics
+    description: >
+      Daily sales metrics by region and channel. Aggregates valid
+      sales orders into KPIs: revenue, order count, units sold,
+      average values, and product diversity.
+    columns:
+      - name: order_date
+        description: Aggregation date.
+        tests:
+          - not_null
+      - name: sales_region
+        description: Geographic sales region.
+        tests:
+          - not_null
+      - name: sales_channel
+        description: Sales channel.
+        tests:
+          - not_null
+      - name: total_orders
+        description: Count of distinct orders.
+      - name: total_revenue
+        description: Sum of line totals (USD).
+      - name: unique_customers
+        description: Count of distinct customers.

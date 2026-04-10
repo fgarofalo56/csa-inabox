@@ -1,0 +1,30 @@
+version: 2
+
+models:
+  - name: gld_aging_report
+    description: >
+      AR aging report — outstanding invoices grouped by aging bucket
+      (CURRENT, 1-30, 31-60, 61-90, 90+ days) with estimated loss rates.
+    columns:
+      - name: invoice_sk
+        description: FK to slv_invoices.
+        tests:
+          - not_null
+      - name: aging_bucket
+        description: Aging classification.
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['CURRENT', '1-30', '31-60', '61-90', '90+']
+
+  - name: gld_revenue_reconciliation
+    description: >
+      Cross-domain reconciliation between sales orders and finance invoices.
+      FULL OUTER JOIN matches orders with invoices to detect mismatches.
+    columns:
+      - name: reconciliation_status
+        description: Match outcome.
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['MATCHED', 'AMOUNT_MISMATCH', 'ORDER_ONLY', 'INVOICE_ONLY']

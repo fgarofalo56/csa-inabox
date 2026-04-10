@@ -1,0 +1,54 @@
+version: 2
+
+models:
+  - name: slv_invoices
+    description: >
+      Silver invoices with validation flags. Flag-don't-drop pattern —
+      every row flows through, invalid rows are flagged with is_valid = FALSE.
+    columns:
+      - name: invoice_sk
+        description: Surrogate key (md5 of invoice_id).
+        tests:
+          - not_null
+          - unique
+      - name: invoice_id
+        description: Original invoice identifier.
+        tests:
+          - not_null
+      - name: order_id
+        description: FK to sales orders. Null for manual invoices.
+      - name: customer_id
+        description: Customer identifier.
+      - name: total_amount
+        description: Invoice total before tax (USD).
+      - name: status
+        description: Invoice lifecycle state.
+        tests:
+          - accepted_values:
+              values: ['DRAFT', 'SENT', 'PAID', 'OVERDUE', 'CANCELLED', 'PARTIAL']
+      - name: is_valid
+        description: TRUE when all quality checks pass.
+        tests:
+          - not_null
+      - name: validation_errors
+        description: Semicolon-separated list of validation failures.
+
+  - name: slv_payments
+    description: >
+      Silver payments with validation flags.
+    columns:
+      - name: payment_sk
+        description: Surrogate key (md5 of payment_id).
+        tests:
+          - not_null
+          - unique
+      - name: payment_id
+        description: Original payment identifier.
+        tests:
+          - not_null
+      - name: invoice_id
+        description: FK to invoices.
+      - name: is_valid
+        description: TRUE when all quality checks pass.
+        tests:
+          - not_null

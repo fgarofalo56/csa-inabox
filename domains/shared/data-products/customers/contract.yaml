@@ -1,0 +1,65 @@
+# Data product contract — shared.customers
+#
+# Authoritative interface for the shared domain's customer data product.
+
+apiVersion: csa.microsoft.com/v1
+kind: DataProductContract
+
+metadata:
+  name: shared.customers
+  domain: shared
+  owner: data-engineering@contoso.com
+  version: "1.0.0"
+  description: >
+    Customer master records from the CRM system. Contains demographics,
+    contact information, and geographic data. Referenced by orders,
+    invoices, and all downstream analytics.
+
+schema:
+  primary_key: [customer_sk]
+  columns:
+    - name: customer_sk
+      type: string
+      nullable: false
+      description: Surrogate key (md5 of customer_id). Generated in Silver.
+    - name: customer_id
+      type: long
+      nullable: false
+      description: Unique customer identifier from the CRM.
+    - name: first_name
+      type: string
+      nullable: true
+      description: Customer first name (uppercase, trimmed).
+    - name: last_name
+      type: string
+      nullable: true
+      description: Customer last name (uppercase, trimmed).
+    - name: email
+      type: string
+      nullable: true
+      description: Customer email address (lowercase, trimmed).
+    - name: country_code
+      type: string
+      nullable: true
+      description: ISO country code (uppercase).
+    - name: is_valid
+      type: boolean
+      nullable: false
+      description: True when every quality flag is clean. Gold filters on this.
+    - name: validation_errors
+      type: string
+      nullable: true
+      description: Human-readable '; '-joined list of validation failures.
+
+sla:
+  freshness_minutes: 60
+  valid_row_ratio: 0.95
+  supported_until: "2027-04-10"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: customer_sk
+  - rule: expect_column_values_to_be_unique
+    column: customer_sk
+  - rule: expect_column_values_to_not_be_null
+    column: customer_id
