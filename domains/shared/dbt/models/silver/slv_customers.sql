@@ -1,12 +1,29 @@
 {{
     config(
         materialized='incremental',
-        unique_key='customer_id',
+        unique_key='customer_sk',
         incremental_strategy='merge',
+        partition_by=['country_code'],
+        clustered_by=['customer_sk'],
         file_format='delta',
         tags=['silver', 'customers']
     )
 }}
+
+/*
+  Silver: Conformed customers.
+
+  Two behaviour changes from prior versions (Archon tasks 310b5446 +
+  0ac384b5):
+
+  1. The customer_sk surrogate key is generated HERE (not in Bronze) so
+     Bronze stays a raw ingestion layer — see brz_customers.sql.
+  2. Silver FLAGS bad records with ``is_valid`` + ``validation_errors``
+     rather than filtering them out. Bad data now reaches Silver with a
+     clear lineage marker so the data-quality runner and dashboards can
+     count and categorise it. Gold models filter to
+     ``WHERE is_valid = true`` — see gld_customer_lifetime_value.sql.
+*/
 
 with bronze as (
     select * from {{ ref('brz_customers') }}
@@ -15,7 +32,9 @@ with bronze as (
     {% endif %}
 ),
 
--- Dedup: keep latest record per customer
+-- Dedup: keep latest record per customer_id.  This is the one place we
+-- still drop rows, and it's intentional — duplicate inbound rows for the
+-- same customer are noise, not data loss.
 deduped as (
     select
         *,
@@ -28,7 +47,10 @@ deduped as (
 
 cleaned as (
     select
-        -- Keys
+        -- Surrogate key (moved here from Bronze per 310b5446).
+        {{ dbt_utils.generate_surrogate_key(['customer_id']) }} as customer_sk,
+
+        -- Natural key
         cast(customer_id as string) as customer_id,
 
         -- Attributes
@@ -47,17 +69,34 @@ cleaned as (
         cast(created_at as timestamp) as created_at,
         cast(updated_at as timestamp) as updated_at,
 
-        -- Data quality flags (email regex lives in
-        -- macros/data_quality.sql, sourced from dbt_project.yml var)
-        {{ flag_invalid_email('email') }} as _is_invalid_email,
-        case when customer_id is null then true else false end as _is_missing_id,
-
         -- Metadata
         current_timestamp() as _dbt_loaded_at,
         _source_file,
         _dbt_run_id
     from deduped
     where _row_num = 1
+),
+
+-- Validation: build individual quality flags, then aggregate them into
+-- a single is_valid boolean + a human-readable validation_errors string.
+validated as (
+    select
+        *,
+        case when customer_id is null or customer_id = '' then true else false end as _is_missing_id,
+        {{ flag_invalid_email('email') }} as _is_invalid_email,
+        case when first_name = '' and last_name = '' then true else false end as _is_missing_name,
+        case when created_at is null then true else false end as _is_missing_created_at
+    from cleaned
 )
 
-select * from cleaned
+select
+    *,
+    not (_is_missing_id or _is_invalid_email or _is_missing_name or _is_missing_created_at) as is_valid,
+    concat_ws(
+        '; ',
+        case when _is_missing_id then 'customer_id missing' end,
+        case when _is_invalid_email then 'email failed regex validation' end,
+        case when _is_missing_name then 'first_name and last_name both empty' end,
+        case when _is_missing_created_at then 'created_at null' end
+    ) as validation_errors
+from validated

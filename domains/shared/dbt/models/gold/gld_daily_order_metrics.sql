@@ -14,10 +14,13 @@
   Business-ready aggregations for dashboards and reporting.
 */
 
+-- Gold filters to valid Silver rows only. The Silver layer keeps bad
+-- records with ``is_valid = false`` + ``validation_errors`` per Archon
+-- task 0ac384b5, so quality monitoring can count drops; here in Gold we
+-- just take the clean subset for business-facing metrics.
 WITH orders AS (
     SELECT * FROM {{ ref('slv_orders') }}
-    WHERE _is_negative_amount = FALSE
-      AND _is_future_date = FALSE
+    WHERE is_valid = TRUE
 ),
 
 daily_metrics AS (

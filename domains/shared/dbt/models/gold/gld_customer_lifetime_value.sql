@@ -16,15 +16,18 @@
     for analytics and reporting.
 #}
 
+-- Gold filters to valid Silver rows only.  The Silver layer keeps bad
+-- records with ``is_valid = false`` + ``validation_errors`` per Archon
+-- task 0ac384b5, so quality monitoring can count drops; here in Gold we
+-- just take the clean subset for business-facing metrics.
 with customers as (
     select * from {{ ref('slv_customers') }}
-    where not _is_missing_id
+    where is_valid = true
 ),
 
 orders as (
     select * from {{ ref('slv_orders') }}
-    where not _is_negative_amount
-      and not _is_future_date
+    where is_valid = true
 ),
 
 customer_orders as (
