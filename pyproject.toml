@@ -159,6 +159,17 @@ module = [
 ignore_errors = true
 
 [[tool.mypy.overrides]]
+# Load-test harnesses intentionally subclass dynamically-typed
+# third-party base classes (Locust's HttpUser).  They are also not
+# part of the deployable toolchain — they run manually via the
+# ``load-tests.yml`` workflow_dispatch.  Ignore them so strict mode
+# stays useful for the rest of the tree.
+module = [
+    "tests.load.*",
+]
+ignore_errors = true
+
+[[tool.mypy.overrides]]
 # The Azure Functions host imports function_app.py by path, not as a
 # regular Python module, so these files are stand-alone. Test cases do
 # not import them as modules either — we only need mypy to check them.

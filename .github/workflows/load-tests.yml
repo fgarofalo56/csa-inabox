@@ -1,0 +1,210 @@
+# ==============================================================================
+# CSA-in-a-Box: Load & Performance Tests
+# Manual-dispatch-only workflow — these runs hit a live environment and
+# incur cost, so they should not fire on every PR.  See tests/load/README.md.
+# ==============================================================================
+
+name: Load & Performance Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Which load test to run'
+        required: true
+        type: choice
+        options:
+          - locust_ai_enrichment
+          - k6_ai_enrichment
+          - dbt_benchmark_silver
+          - dbt_benchmark_gold
+      base_url:
+        description: 'Function app base URL (required for locust/k6)'
+        required: false
+        type: string
+      vus:
+        description: 'Number of virtual users'
+        required: false
+        type: string
+        default: '50'
+      duration:
+        description: 'Run duration (e.g. 2m, 5m)'
+        required: false
+        type: string
+        default: '2m'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: load-tests-${{ inputs.target }}
+  cancel-in-progress: true
+
+jobs:
+  locust:
+    name: Locust — aiEnrichment
+    if: ${{ inputs.target == 'locust_ai_enrichment' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Locust
+        run: pip install locust
+
+      - name: Validate inputs
+        run: |
+          if [ -z "${{ inputs.base_url }}" ]; then
+            echo "::error::base_url input is required for the locust target"
+            exit 1
+          fi
+
+      - name: Run Locust (headless)
+        env:
+          FUNCTION_KEY: ${{ secrets.AI_ENRICHMENT_FUNCTION_KEY }}
+        run: |
+          mkdir -p reports
+          locust -f tests/load/locustfile_ai_enrichment.py \
+            --host="${{ inputs.base_url }}" \
+            --users=${{ inputs.vus }} \
+            --spawn-rate=5 \
+            --run-time=${{ inputs.duration }} \
+            --headless \
+            --csv=reports/locust-ai-enrichment
+
+      - name: Upload Locust report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: locust-report
+          path: reports/locust-*.csv
+          retention-days: 14
+
+  k6:
+    name: k6 — aiEnrichment
+    if: ${{ inputs.target == 'k6_ai_enrichment' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install k6
+        run: |
+          sudo gpg -k
+          sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update
+          sudo apt-get install k6
+
+      - name: Validate inputs
+        run: |
+          if [ -z "${{ inputs.base_url }}" ]; then
+            echo "::error::base_url input is required for the k6 target"
+            exit 1
+          fi
+
+      - name: Run k6
+        env:
+          BASE_URL: ${{ inputs.base_url }}
+          FUNCTION_KEY: ${{ secrets.AI_ENRICHMENT_FUNCTION_KEY }}
+        run: |
+          k6 run tests/load/k6_ai_enrichment.js \
+            --env BASE_URL="$BASE_URL" \
+            --env FUNCTION_KEY="$FUNCTION_KEY" \
+            --vus ${{ inputs.vus }} \
+            --duration ${{ inputs.duration }} \
+            --summary-export=reports/k6-ai-enrichment.json
+
+      - name: Upload k6 report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: k6-report
+          path: reports/k6-*.json
+          retention-days: 14
+
+  dbt-bench-silver:
+    name: dbt benchmark — silver
+    if: ${{ inputs.target == 'dbt_benchmark_silver' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dbt
+        run: pip install dbt-databricks
+
+      - name: Run benchmark
+        env:
+          DBT_DATABRICKS_HOST: ${{ secrets.DBT_DATABRICKS_HOST }}
+          DBT_DATABRICKS_HTTP_PATH: ${{ secrets.DBT_DATABRICKS_HTTP_PATH }}
+          DBT_DATABRICKS_TOKEN: ${{ secrets.DBT_DATABRICKS_TOKEN }}
+        run: |
+          python tests/load/benchmark_dbt_models.py \
+            --target dev \
+            --models tag:silver \
+            --runs 3 \
+            --output reports/dbt-bench-silver.json \
+            --baseline tests/load/baselines/dbt-bench-silver.baseline.json \
+            --max-regression-pct 20 \
+            || echo "::warning::dbt benchmark regression detected (see report)"
+
+      - name: Upload dbt benchmark report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dbt-benchmark-report
+          path: reports/dbt-bench-*.json
+          retention-days: 90
+
+  dbt-bench-gold:
+    name: dbt benchmark — gold
+    if: ${{ inputs.target == 'dbt_benchmark_gold' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dbt
+        run: pip install dbt-databricks
+
+      - name: Run benchmark
+        env:
+          DBT_DATABRICKS_HOST: ${{ secrets.DBT_DATABRICKS_HOST }}
+          DBT_DATABRICKS_HTTP_PATH: ${{ secrets.DBT_DATABRICKS_HTTP_PATH }}
+          DBT_DATABRICKS_TOKEN: ${{ secrets.DBT_DATABRICKS_TOKEN }}
+        run: |
+          python tests/load/benchmark_dbt_models.py \
+            --target dev \
+            --models tag:gold \
+            --runs 3 \
+            --output reports/dbt-bench-gold.json \
+            --baseline tests/load/baselines/dbt-bench-gold.baseline.json \
+            --max-regression-pct 20 \
+            || echo "::warning::dbt benchmark regression detected (see report)"
+
+      - name: Upload dbt benchmark report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dbt-benchmark-report
+          path: reports/dbt-bench-*.json
+          retention-days: 90

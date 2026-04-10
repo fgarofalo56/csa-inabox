@@ -161,6 +161,9 @@ cache/
 retrieval/
 containers/
 stats/
+# Load-test reports (tests/load/README.md) — keep baselines checked in
+# under tests/load/baselines/ but do not commit raw runs.
+reports/
 
 # ---------------------------
 # CodeQL Database (large, generated)
