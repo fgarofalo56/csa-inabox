@@ -37,7 +37,7 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
     DisableLocalAuth: disableLocalAuth
     IngestionMode: 'LogAnalytics'
     publicNetworkAccessForIngestion: 'Disabled'
-    publicNetworkAccessForQuery: 'Enabled'
+    publicNetworkAccessForQuery: 'Disabled'
   }
 }
 

@@ -124,11 +124,11 @@ resource purviewAcct 'Microsoft.Purview/accounts@2024-04-01-preview' = {
   properties: {
     cloudConnectors: {}
     ingestionStorage: {
-      publicNetworkAccess: 'Enabled'
+      publicNetworkAccess: 'Disabled'
     }
     managedEventHubState: configKafka ? 'Disabled' : 'Enabled'
     managedResourceGroupName: 'managed-rg-${purviewAcctName}'
-    managedResourcesPublicNetworkAccess: 'Enabled'
+    managedResourcesPublicNetworkAccess: 'Disabled'
     publicNetworkAccess: parPurviewPublicNetworkAccess
     tenantEndpointState: parTenantEndpointState
   }

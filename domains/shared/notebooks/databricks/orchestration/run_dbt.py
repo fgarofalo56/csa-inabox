@@ -22,6 +22,19 @@ target = dbutils.widgets.get("target")
 models = dbutils.widgets.get("models")
 full_refresh = dbutils.widgets.get("full_refresh").lower() == "true"
 
+# Validate inputs to prevent command injection
+import re
+VALID_DBT_COMMANDS = {"run", "test", "build", "compile", "seed", "snapshot"}
+if dbt_command not in VALID_DBT_COMMANDS:
+    raise ValueError(f"Invalid dbt command: {dbt_command!r}. Must be one of {VALID_DBT_COMMANDS}")
+
+if models != "+" and not re.match(r'^[a-zA-Z0-9_.,+*/:@-]+$', models):
+    raise ValueError(f"Invalid model selection pattern: {models!r}")
+
+VALID_TARGETS = {"dev", "staging", "prod"}
+if target not in VALID_TARGETS:
+    raise ValueError(f"Invalid target: {target!r}. Must be one of {VALID_TARGETS}")
+
 print(f"Command: dbt {dbt_command}")
 print(f"Target: {target}")
 print(f"Models: {models}")

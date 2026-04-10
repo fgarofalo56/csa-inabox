@@ -41,7 +41,7 @@ param enablePriorityBasedExecution bool = false
 param disableKeyBasedMetadataWriteAccess bool = false
 
 @description('Disable local authentication (use managed identity or AAD instead)')
-param disableLocalAuth bool = false
+param disableLocalAuth bool = true
 
 @description('Consistency level for Cosmos DB')
 @allowed([
@@ -78,7 +78,7 @@ param continuousBackupTier string = 'Continuous7Days'
   'Enabled' // Allows public access
   'Disabled' // Restricts to private endpoints or virtual network
 ])
-param publicNetworkAccess string = 'Enabled'
+param publicNetworkAccess string = 'Disabled'
 
 @description('Network ACL bypass configuration')
 @allowed([
@@ -101,8 +101,7 @@ resource cosmosDbAccount 'Microsoft.DocumentDB/databaseAccounts@2024-12-01-previ
   location: parLocation
   kind: 'GlobalDocumentDB'
   identity: {
-    type: 'None' // Use 'SystemAssigned' or 'UserAssigned' for managed identities
-    userAssignedIdentities: {}
+    type: 'SystemAssigned'
   }
   tags: tags
   properties: {

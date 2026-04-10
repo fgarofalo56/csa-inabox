@@ -46,8 +46,8 @@ resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2023-09
   location: parLocation
   tags: tags
   properties: {
-    publicNetworkAccessForIngestion: 'Enabled'
-    publicNetworkAccessForQuery: 'Enabled'
+    publicNetworkAccessForIngestion: 'Disabled'
+    publicNetworkAccessForQuery: 'Disabled'
     retentionInDays: logRetentionDays
     sku: {
       name: parLogAnalyticsWorkspaceSkuName

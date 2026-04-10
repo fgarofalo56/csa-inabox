@@ -34,6 +34,13 @@
                                 "dependencyConditions": ["Succeeded"]
                             }
                         ],
+                        "policy": {
+                            "timeout": "01:00:00",
+                            "retry": 3,
+                            "retryIntervalInSeconds": 30,
+                            "secureOutput": false,
+                            "secureInput": false
+                        },
                         "typeProperties": {
                             "source": {
                                 "type": "DelimitedTextSource",

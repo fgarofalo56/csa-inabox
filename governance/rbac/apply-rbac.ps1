@@ -83,12 +83,24 @@ foreach ($persona in $targetPersonas) {
         } else {
             if ($PSCmdlet.ShouldProcess($scope, "Assign $roleName to $persona")) {
                 try {
-                    # Note: principalId must be resolved from AAD group matching persona name
-                    # This is a placeholder - actual implementation needs:
-                    # $group = Get-AzADGroup -DisplayName "CSA-$persona"
-                    # New-AzRoleAssignment -ObjectId $group.Id -RoleDefinitionId $roleId -Scope $scope
+                    # Resolve AAD group for this persona
+                    $groupName = "CSA-$persona"
+                    $group = Get-AzADGroup -DisplayName $groupName -ErrorAction SilentlyContinue
+                    if (-not $group) {
+                        Write-Host "  WARN: AAD group '$groupName' not found. Create it first." -ForegroundColor Yellow
+                        $results += @{ Persona = $persona; Role = $roleName; Scope = $assignment.scope; Status = "Skipped"; Reason = "Group not found" }
+                        continue
+                    }
 
-                    Write-Host "$assignmentDesc [OK]" -ForegroundColor Green
+                    # Check if assignment already exists
+                    $existing = Get-AzRoleAssignment -ObjectId $group.Id -RoleDefinitionId $roleId -Scope $scope -ErrorAction SilentlyContinue
+                    if ($existing) {
+                        Write-Host "$assignmentDesc [ALREADY EXISTS]" -ForegroundColor DarkGray
+                        $results += @{ Persona = $persona; Role = $roleName; Scope = $assignment.scope; Status = "Exists" }
+                    } else {
+                        New-AzRoleAssignment -ObjectId $group.Id -RoleDefinitionId $roleId -Scope $scope -ErrorAction Stop | Out-Null
+                        Write-Host "$assignmentDesc [OK]" -ForegroundColor Green
+                    }
                     $results += @{ Persona = $persona; Role = $roleName; Scope = $assignment.scope; Status = "Applied" }
                 } catch {
                     Write-Host "$assignmentDesc [FAILED: $($_.Exception.Message)]" -ForegroundColor Red

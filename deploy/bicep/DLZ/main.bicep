@@ -42,7 +42,7 @@ param location string
 @minLength(2)
 param environment string = 'dev'
 
-//Moddules and Resources to deploy
+// Modules and Resources to deploy
 @description('Specify the modules and resources to deploy')
 param deployModules object = {}
 
@@ -186,7 +186,7 @@ module cosmosdb 'modules/cosmos/cosmosdb.bicep' = if (bool(deployModules.cosmosD
 output cosmosDbAccountId string = cosmosdb.outputs.cosmosDbAccountId
 output defaultDatabaseId string = cosmosdb.outputs.defaultDatabaseId
 
-// Stoarge Resources:
+// Storage Resources:
 module storageResourceGroup 'modules/resourceGroup/resourceGroup.bicep' = if (bool(deployModules.storageZones)) {
   name: 'rg-${basename}-storage-${parLocationShort}'
   scope: subscription()
@@ -265,8 +265,8 @@ module synapseWorkspace 'modules/synapse/synapse.bicep' = if (contains(deployMod
     location: location
     tags: varSynapseTags
     synapseName: contains(parSynapse, 'synapseWorkspaceName') ? parSynapse.synapseWorkspaceName : '${basename}-synapse'
-    administratorUsername: contains(parSynapse, 'sqlAdminUsername') ? parSynapse.sqlAdminUsername : 'sqladmin'
-    administratorPassword: contains(parSynapse, 'sqlAdminPassword') ? parSynapse.sqlAdminPassword : ''
+    administratorUsername: contains(parSynapse, 'sqlAdminUsername') ? parSynapse.sqlAdminUsername : 'synadmin_${uniqueString(subscription().subscriptionId)}'
+    administratorPassword: parSynapse.sqlAdminPassword // REQUIRED: Must be provided via parameter file or Key Vault reference
     synapseDefaultStorageAccountFileSystemId: storageServices.outputs.storageAccountFileSystemId
     privateEndpointSubnets: contains(parSynapse, 'privateEndpointSubnets') ? parSynapse.privateEndpointSubnets : parStorage.privateEndpointSubnets
   }

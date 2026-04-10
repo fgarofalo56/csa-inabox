@@ -5,8 +5,8 @@
         "PlatformAdmin": {
             "description": "Full platform administration - infrastructure, networking, security",
             "assignments": [
-                { "scope": "subscription/dlz", "role": "Contributor" },
-                { "scope": "subscription/dmlz", "role": "Contributor" },
+                { "scope": "rg/platform-dlz", "role": "Contributor" },
+                { "scope": "rg/platform-dmlz", "role": "Contributor" },
                 { "scope": "rg/databricks", "role": "Contributor" },
                 { "scope": "rg/storage", "role": "Storage Blob Data Owner" },
                 { "scope": "rg/keyvault", "role": "Key Vault Administrator" },
@@ -67,8 +67,8 @@
         "CICDServicePrincipal": {
             "description": "GitHub Actions OIDC identity for automated deployments",
             "assignments": [
-                { "scope": "subscription/dlz", "role": "Contributor" },
-                { "scope": "subscription/dmlz", "role": "Contributor" },
+                { "scope": "rg/cicd-dlz", "role": "Contributor" },
+                { "scope": "rg/cicd-dmlz", "role": "Contributor" },
                 { "scope": "subscription/connectivity", "role": "Reader" },
                 { "scope": "subscription/management", "role": "Reader" }
             ]

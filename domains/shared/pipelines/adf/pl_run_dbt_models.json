@@ -77,7 +77,7 @@
                         },
                         "policy": {
                             "timeout": "00:30:00",
-                            "retry": 0
+                            "retry": 2
                         }
                     },
                     {

@@ -1,9 +1,11 @@
 {{
   config(
     materialized='incremental',
-    file_format='delta',
     unique_key='order_id',
     incremental_strategy='merge',
+    partition_by=['order_date'],
+    clustered_by=['customer_id'],
+    file_format='delta',
     tags=['silver', 'orders']
   )
 }}

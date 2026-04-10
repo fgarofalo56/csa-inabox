@@ -64,9 +64,19 @@ print(f"Run started: {datetime.utcnow().isoformat()}")
 
 # COMMAND ----------
 
+def _validate_identifier(name: str) -> str:
+    """Validate a SQL identifier to prevent injection."""
+    import re
+    if not re.match(r'^[a-zA-Z0-9_]{1,256}$', name):
+        raise ValueError(f"Invalid SQL identifier: {name!r}")
+    return name
+
+
 def get_delta_tables(catalog: str, schema: str) -> list:
     """List all Delta tables in a schema."""
-    tables = spark.sql(f"SHOW TABLES IN {catalog}.{schema}").collect()
+    cat = _validate_identifier(catalog)
+    sch = _validate_identifier(schema)
+    tables = spark.sql(f"SHOW TABLES IN `{cat}`.`{sch}`").collect()
     return [
         f"{catalog}.{schema}.{row.tableName}"
         for row in tables
@@ -77,11 +87,17 @@ def get_delta_tables(catalog: str, schema: str) -> list:
 def optimize_table(table_name: str, zorder_cols: list = None):
     """Run OPTIMIZE with optional Z-ORDER on a Delta table."""
     try:
+        # Validate table name parts to prevent SQL injection
+        for part in table_name.split("."):
+            _validate_identifier(part)
+        safe_name = ".".join(f"`{p}`" for p in table_name.split("."))
         if zorder_cols:
-            cols = ", ".join(zorder_cols)
-            result = spark.sql(f"OPTIMIZE {table_name} ZORDER BY ({cols})")
+            for col in zorder_cols:
+                _validate_identifier(col)
+            cols = ", ".join(f"`{c}`" for c in zorder_cols)
+            result = spark.sql(f"OPTIMIZE {safe_name} ZORDER BY ({cols})")
         else:
-            result = spark.sql(f"OPTIMIZE {table_name}")
+            result = spark.sql(f"OPTIMIZE {safe_name}")
 
         metrics = result.collect()[0]
         print(f"  OPTIMIZE {table_name}: "
@@ -97,7 +113,12 @@ def optimize_table(table_name: str, zorder_cols: list = None):
 def vacuum_table(table_name: str, retention_hours: int):
     """Run VACUUM on a Delta table."""
     try:
-        spark.sql(f"VACUUM {table_name} RETAIN {retention_hours} HOURS")
+        for part in table_name.split("."):
+            _validate_identifier(part)
+        safe_name = ".".join(f"`{p}`" for p in table_name.split("."))
+        if not isinstance(retention_hours, int) or retention_hours < 0:
+            raise ValueError(f"Invalid retention_hours: {retention_hours}")
+        spark.sql(f"VACUUM {safe_name} RETAIN {retention_hours} HOURS")
         print(f"  VACUUM {table_name}: SUCCESS (retention={retention_hours}h)")
         return {"status": "success"}
     except Exception as e:
@@ -108,7 +129,10 @@ def vacuum_table(table_name: str, retention_hours: int):
 def get_table_detail(table_name: str) -> dict:
     """Get Delta table stats."""
     try:
-        detail = spark.sql(f"DESCRIBE DETAIL {table_name}").collect()[0]
+        for part in table_name.split("."):
+            _validate_identifier(part)
+        safe_name = ".".join(f"`{p}`" for p in table_name.split("."))
+        detail = spark.sql(f"DESCRIBE DETAIL {safe_name}").collect()[0]
         return {
             "name": table_name,
             "format": detail.format,

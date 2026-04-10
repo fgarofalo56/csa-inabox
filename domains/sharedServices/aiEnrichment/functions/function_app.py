@@ -129,9 +129,9 @@ def _enrich_text(text: str) -> dict:
                 for e in pii_result[0].entities
             ]
 
-    except Exception as e:
+    except Exception:
         logging.exception("Text enrichment failed")
-        results["error"] = str(e)
+        results["error"] = "Text enrichment failed. Check service logs for details."
 
     return results
 
@@ -173,9 +173,9 @@ def _analyze_document(blob_data: bytes, content_type: str) -> dict:
                 for kvp in result.key_value_pairs[:50]
             ]
 
-    except Exception as e:
+    except Exception:
         logging.exception("Document analysis failed")
-        results["error"] = str(e)
+        results["error"] = "Document analysis failed. Check service logs for details."
 
     return results
 
@@ -307,10 +307,7 @@ def health_check(req: func.HttpRequest) -> func.HttpResponse:
             "document_intelligence": _get_form_recognizer_client() is not None,
         },
         "configuration": {
-            "ai_endpoint_configured": bool(AI_ENDPOINT),
-            "storage_configured": bool(STORAGE_CONNECTION),
-            "inbox_container": INBOX_CONTAINER,
-            "enriched_container": ENRICHED_CONTAINER,
+            "services_configured": bool(AI_ENDPOINT) and bool(STORAGE_CONNECTION),
         },
     }
     return func.HttpResponse(

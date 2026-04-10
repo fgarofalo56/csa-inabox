@@ -1,6 +1,10 @@
 {{
     config(
-        materialized='table',
+        materialized='incremental',
+        unique_key='customer_id',
+        incremental_strategy='merge',
+        partition_by=['customer_segment'],
+        clustered_by=['value_tier'],
         file_format='delta',
         tags=['gold', 'customers', 'metrics']
     )
@@ -81,3 +85,10 @@ final as (
 )
 
 select * from final
+{% if is_incremental() %}
+WHERE customer_id IN (
+    SELECT DISTINCT customer_id
+    FROM {{ ref('slv_orders') }}
+    WHERE _dbt_loaded_at > (SELECT MAX(_dbt_refreshed_at) FROM {{ this }})
+)
+{% endif %}

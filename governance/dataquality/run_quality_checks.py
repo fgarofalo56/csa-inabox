@@ -71,6 +71,9 @@ class DataQualityRunner:
         logger.info("Running dbt tests...")
         cmd = ["dbt", "test", "--profiles-dir", ".", "--project-dir", "."]
         if select:
+            import re
+            if not re.match(r'^[a-zA-Z0-9_.,+*/:@-]+$', select):
+                raise ValueError(f"Invalid dbt select pattern: {select!r}")
             cmd.extend(["--select", select])
 
         try:
@@ -148,20 +151,67 @@ class DataQualityRunner:
         return self.results
 
     def check_volume_rules(self) -> list[QualityCheckResult]:
-        """Validate row counts against configured thresholds."""
+        """Validate row counts against configured thresholds.
+
+        Uses dbt to query actual row counts and compares against configured
+        min/max thresholds. Falls back to config-only mode if dbt unavailable.
+        """
         volume_rules = self.config.get("rules", {}).get("volume", [])
         for rule in volume_rules:
             table = rule["table"]
             min_rows = rule.get("min_rows", 0)
+            max_growth_pct = rule.get("max_growth_pct", 200)
             logger.info(f"Checking volume for {table} (min_rows={min_rows})")
-            # In a real implementation, this would query the table via Spark/SQL
+
+            # Try to get actual row count via dbt
+            try:
+                import re
+                if not re.match(r'^[a-zA-Z0-9_.]+$', table):
+                    raise ValueError(f"Invalid table name: {table!r}")
+                result = subprocess.run(
+                    ["dbt", "run-operation", "get_row_count",
+                     "--args", json.dumps({"table_name": table}),
+                     "--profiles-dir", ".", "--project-dir", "."],
+                    capture_output=True, text=True, timeout=60,
+                )
+                # Parse row count from output if available
+                row_count = None
+                for line in result.stdout.split("\n"):
+                    line = line.strip()
+                    if line.isdigit():
+                        row_count = int(line)
+                        break
+
+                if row_count is not None:
+                    if row_count < min_rows:
+                        status = "fail"
+                        message = f"Row count {row_count} below minimum {min_rows}"
+                    else:
+                        status = "pass"
+                        message = f"Row count {row_count} meets minimum {min_rows}"
+                    self.results.append(
+                        QualityCheckResult(
+                            check_name=f"volume:{table}",
+                            table=table,
+                            status=status,
+                            message=message,
+                            details={"actual_rows": row_count, "min_rows": min_rows,
+                                     "max_growth_pct": max_growth_pct},
+                        )
+                    )
+                    continue
+            except (FileNotFoundError, subprocess.TimeoutExpired, ValueError):
+                pass  # Fall through to config-only mode
+
+            # Config-only mode: report as warning (cannot verify)
             self.results.append(
                 QualityCheckResult(
                     check_name=f"volume:{table}",
                     table=table,
-                    status="pass",
-                    message=f"Volume check configured (min_rows={min_rows})",
-                    details={"min_rows": min_rows, "max_growth_pct": rule.get("max_growth_pct")},
+                    status="warn",
+                    message=f"Volume check not verified (dbt unavailable). min_rows={min_rows}",
+                    details={"min_rows": min_rows, "max_growth_pct": max_growth_pct,
+                             "verified": False},
                 )
             )
         return self.results
@@ -201,7 +251,31 @@ class DataQualityRunner:
 
     @staticmethod
     def _parse_dbt_failures(output: str) -> list[dict[str, str]]:
-        """Parse dbt test output to extract individual failures."""
+        """Parse dbt test output to extract individual failures.
+
+        Attempts to read run_results.json for structured data,
+        falls back to line-by-line parsing of stdout.
+        """
+        # Try structured JSON results first
+        results_path = Path("target/run_results.json")
+        if results_path.exists():
+            try:
+                with open(results_path) as f:
+                    run_results = json.load(f)
+                return [
+                    {
+                        "test": r.get("unique_id", "unknown"),
+                        "model": r.get("unique_id", "").split(".")[-1],
+                        "message": r.get("message", "Test failed"),
+                        "status": r.get("status", "fail"),
+                    }
+                    for r in run_results.get("results", [])
+                    if r.get("status") in ("fail", "error")
+                ]
+            except (json.JSONDecodeError, KeyError):
+                logger.warning("Could not parse run_results.json, falling back to stdout parsing")
+
+        # Fallback: parse stdout
         failures = []
         for line in output.split("\n"):
             if "FAIL" in line and "test" in line.lower():

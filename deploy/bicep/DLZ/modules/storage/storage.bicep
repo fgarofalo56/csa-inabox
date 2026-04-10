@@ -30,11 +30,10 @@ var storageZrsRegions = [
   'southcentralus'
   'westus2'
   'westus3'
-  'newregion1' // Placeholder for future-proofing
 ]
 
 // Storage Account
-resource storage 'Microsoft.Storage/storageAccounts@2021-02-01' = {
+resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   name: storageNameCleaned
   location: location
   tags: tags
@@ -51,7 +50,7 @@ resource storage 'Microsoft.Storage/storageAccounts@2021-02-01' = {
     allowSharedKeyAccess: false
     encryption: {
       keySource: 'Microsoft.Storage'
-      requireInfrastructureEncryption: false
+      requireInfrastructureEncryption: true
       services: {
         blob: { enabled: true, keyType: 'Account' }
         file: { enabled: true, keyType: 'Account' }
@@ -74,7 +73,7 @@ resource storage 'Microsoft.Storage/storageAccounts@2021-02-01' = {
 }
 
 // Lifecycle Management Policy
-resource storageManagementPolicies 'Microsoft.Storage/storageAccounts/managementPolicies@2021-02-01' = {
+resource storageManagementPolicies 'Microsoft.Storage/storageAccounts/managementPolicies@2023-05-01' = {
   parent: storage
   name: 'default'
   properties: {
@@ -102,7 +101,7 @@ resource storageManagementPolicies 'Microsoft.Storage/storageAccounts/management
 }
 
 // Blob Service Properties
-resource storageBlobServices 'Microsoft.Storage/storageAccounts/blobServices@2021-02-01' = {
+resource storageBlobServices 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = {
   parent: storage
   name: 'default'
   properties: {

@@ -1,6 +1,9 @@
 {{
   config(
-    materialized='table',
+    materialized='incremental',
+    unique_key='order_date',
+    incremental_strategy='merge',
+    partition_by=['order_date'],
     file_format='delta',
     tags=['gold', 'orders', 'metrics']
   )
