@@ -1,0 +1,66 @@
+version: 2
+
+sources:
+  - name: raw_finance
+    description: "Raw finance data ingested from source systems"
+    database: "{{ var('bronze_database') }}"
+    schema: raw
+    loaded_at_field: _ingested_at
+    freshness:
+      warn_after: {count: "{{ var('freshness_warn_hours') }}", period: hour}
+      error_after: {count: "{{ var('freshness_error_hours') }}", period: hour}
+
+    tables:
+      - name: sample_invoices
+        description: "Raw invoice records from billing system"
+        columns:
+          - name: invoice_id
+            description: "Unique invoice identifier"
+            tests:
+              - not_null
+              - unique
+          - name: order_id
+            description: "FK to shared.sample_orders"
+          - name: customer_id
+            description: "FK to shared.sample_customers"
+          - name: invoice_date
+            description: "Date invoice was issued"
+          - name: due_date
+            description: "Payment due date"
+          - name: total_amount
+            description: "Invoice total before tax"
+          - name: tax_amount
+            description: "Tax amount"
+          - name: currency
+            description: "Currency code (ISO 4217)"
+          - name: status
+            description: "Invoice status"
+            tests:
+              - accepted_values:
+                  values: ['DRAFT', 'SENT', 'PAID', 'OVERDUE', 'CANCELLED', 'PARTIAL']
+          - name: _ingested_at
+            description: "Ingestion timestamp"
+
+      - name: sample_payments
+        description: "Raw payment records"
+        columns:
+          - name: payment_id
+            description: "Unique payment identifier"
+            tests:
+              - not_null
+              - unique
+          - name: invoice_id
+            description: "FK to sample_invoices"
+          - name: payment_date
+            description: "Date payment was received"
+          - name: amount
+            description: "Payment amount"
+          - name: payment_method
+            description: "Payment method"
+            tests:
+              - accepted_values:
+                  values: ['credit_card', 'bank_transfer', 'wire', 'check', 'ach']
+          - name: reference_number
+            description: "External payment reference"
+          - name: _ingested_at
+            description: "Ingestion timestamp"

@@ -1,0 +1,69 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "metadata": {
+        "description": "ADF Linked Service: Azure Databricks with Managed Identity",
+        "pattern": "linked-service"
+    },
+    "resources": [
+        {
+            "type": "Microsoft.DataFactory/factories/linkedServices",
+            "apiVersion": "2018-06-01",
+            "name": "[concat(parameters('factoryName'), '/ls_databricks')]",
+            "properties": {
+                "description": "Databricks workspace connection for dbt orchestration and Spark notebooks. Uses MSI authentication with an auto-scaling job cluster.",
+                "type": "AzureDatabricks",
+                "typeProperties": {
+                    "domain": {
+                        "type": "AzureKeyVaultSecret",
+                        "store": {
+                            "referenceName": "ls_KeyVault",
+                            "type": "LinkedServiceReference"
+                        },
+                        "secretName": "databricks-workspace-url"
+                    },
+                    "authentication": "MSI",
+                    "workspaceResourceId": {
+                        "value": "@linkedService().databricksWorkspaceResourceId",
+                        "type": "Expression"
+                    },
+                    "newClusterNodeType": "Standard_DS3_v2",
+                    "newClusterNumOfWorker": "2:8",
+                    "newClusterSparkEnvVars": {
+                        "PYSPARK_PYTHON": "/databricks/python3/bin/python3"
+                    },
+                    "newClusterSparkConf": {
+                        "spark.databricks.delta.preview.enabled": "true",
+                        "spark.databricks.delta.optimizeWrite.enabled": "true",
+                        "spark.databricks.delta.autoCompact.enabled": "true"
+                    },
+                    "newClusterVersion": "14.3.x-scala2.12",
+                    "newClusterInitScripts": [],
+                    "clusterOption": "Fixed"
+                },
+                "parameters": {
+                    "databricksWorkspaceResourceId": {
+                        "type": "String"
+                    }
+                },
+                "connectVia": {
+                    "referenceName": "AutoResolveIntegrationRuntime",
+                    "type": "IntegrationRuntimeReference"
+                },
+                "annotations": [
+                    "databricks",
+                    "managed-identity",
+                    "csa-inabox"
+                ]
+            }
+        }
+    ],
+    "parameters": {
+        "factoryName": {
+            "type": "string",
+            "metadata": {
+                "description": "Name of the Azure Data Factory instance"
+            }
+        }
+    }
+}

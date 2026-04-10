@@ -43,16 +43,16 @@ customer_orders as (
 
         -- Order metrics
         count(distinct o.order_id) as total_orders,
-        coalesce(sum(o.order_total), 0) as lifetime_revenue,
-        coalesce(avg(o.order_total), 0) as avg_order_value,
+        coalesce(sum(o.total_amount), 0) as lifetime_revenue,
+        coalesce(avg(o.total_amount), 0) as avg_order_value,
         min(o.order_date) as first_order_date,
         max(o.order_date) as last_order_date,
         count(distinct date_trunc('month', o.order_date)) as active_months,
 
         -- Status breakdown
-        count(case when o.order_status = 'completed' then 1 end) as completed_orders,
-        count(case when o.order_status = 'cancelled' then 1 end) as cancelled_orders,
-        count(case when o.order_status = 'returned' then 1 end) as returned_orders
+        count(case when o.status = 'DELIVERED' then 1 end) as completed_orders,
+        count(case when o.status = 'CANCELLED' then 1 end) as cancelled_orders,
+        count(case when o.status = 'RETURNED' then 1 end) as returned_orders
 
     from customers c
     left join orders o on c.customer_id = o.customer_id

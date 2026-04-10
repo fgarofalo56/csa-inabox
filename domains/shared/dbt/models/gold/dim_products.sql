@@ -1,0 +1,41 @@
+{{
+  config(
+    materialized='table',
+    file_format='delta',
+    tags=['gold', 'products', 'dimension']
+  )
+}}
+
+/*
+  Gold: Product dimension.
+
+  Flattened product attributes for star-schema joins.  Gold filters to
+  valid Silver rows only.
+*/
+
+WITH products AS (
+    SELECT * FROM {{ ref('slv_products') }}
+    WHERE is_valid = TRUE
+),
+
+final AS (
+    SELECT
+        product_sk,
+        product_id,
+        product_name,
+        category,
+        unit_price,
+
+        -- Price tier for reporting
+        CASE
+            WHEN unit_price >= 100 THEN 'premium'
+            WHEN unit_price >= 50 THEN 'standard'
+            WHEN unit_price >= 25 THEN 'value'
+            ELSE 'economy'
+        END AS price_tier,
+
+        current_timestamp() AS _dbt_refreshed_at
+    FROM products
+)
+
+SELECT * FROM final

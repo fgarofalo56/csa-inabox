@@ -1,0 +1,96 @@
+# Data product contract — finance.invoices
+#
+# This file is the authoritative interface between the finance domain
+# and its consumers.  It declares the schema, SLAs, and quality rules
+# for the ``finance.invoices`` data product.  The validator in
+# governance/contracts/contract_validator.py reads this file at both
+# CI time and runtime to reject data that violates the contract.
+
+apiVersion: csa.microsoft.com/v1
+kind: DataProductContract
+
+metadata:
+  name: finance.invoices
+  domain: finance
+  owner: finance-data-engineering@contoso.com
+  version: "1.0.0"
+  description: >
+    Invoice records from the billing system. Tracks all invoices issued
+    to customers, linked to sales orders via order_id. Includes payment
+    status and aging information for AR management and cross-domain
+    revenue reconciliation with the sales domain.
+
+schema:
+  primary_key: [invoice_sk]
+  columns:
+    - name: invoice_sk
+      type: string
+      nullable: false
+      description: Surrogate key (md5 of invoice_id). Generated in Silver.
+    - name: invoice_id
+      type: long
+      nullable: false
+      description: Unique invoice identifier from the billing system.
+    - name: order_id
+      type: long
+      nullable: true
+      description: FK to sales.orders.order_id. Null for manual invoices.
+    - name: customer_id
+      type: long
+      nullable: false
+      description: Customer identifier, consistent with shared.customers.
+    - name: invoice_date
+      type: date
+      nullable: false
+      description: Date the invoice was issued.
+    - name: due_date
+      type: date
+      nullable: false
+      description: Payment due date.
+    - name: total_amount
+      type: decimal(18,2)
+      nullable: false
+      description: Invoice total before tax (USD).
+    - name: tax_amount
+      type: decimal(18,2)
+      nullable: false
+      description: Tax amount (USD).
+    - name: status
+      type: string
+      nullable: false
+      description: Invoice lifecycle state.
+      allowed_values:
+        - DRAFT
+        - SENT
+        - PAID
+        - OVERDUE
+        - CANCELLED
+        - PARTIAL
+    - name: is_valid
+      type: boolean
+      nullable: false
+      description: True when every quality flag is clean. Gold filters on this.
+    - name: validation_errors
+      type: string
+      nullable: true
+      description: Human-readable '; '-joined list of validation failures.
+
+sla:
+  freshness_minutes: 60
+  valid_row_ratio: 0.97
+  supported_until: "2027-04-10"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: invoice_sk
+  - rule: expect_column_values_to_be_unique
+    column: invoice_sk
+  - rule: expect_column_values_to_not_be_null
+    column: invoice_id
+  - rule: expect_column_values_to_be_in_set
+    column: status
+    value_set: [DRAFT, SENT, PAID, OVERDUE, CANCELLED, PARTIAL]
+  - rule: expect_column_values_to_be_between
+    column: total_amount
+    min_value: 0
+    mostly: 0.97

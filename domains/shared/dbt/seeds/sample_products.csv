@@ -1,0 +1,51 @@
+product_id,product_name,category,unit_price,_ingested_at
+1,Wireless Bluetooth Headphones,Electronics,79.99,2023-01-01T00:00:00
+2,USB-C Hub 7-in-1,Electronics,49.99,2023-01-01T00:00:00
+3,Mechanical Keyboard RGB,Electronics,129.99,2023-01-01T00:00:00
+4,Portable SSD 1TB,Electronics,89.99,2023-01-01T00:00:00
+5,Webcam 1080p HD,Electronics,59.99,2023-01-01T00:00:00
+6,Smart Watch Fitness Tracker,Electronics,199.99,2023-01-01T00:00:00
+7,Noise Cancelling Earbuds,Electronics,149.99,2023-01-01T00:00:00
+8,Laptop Stand Adjustable,Electronics,39.99,2023-01-01T00:00:00
+9,Wireless Mouse Ergonomic,Electronics,34.99,2023-01-01T00:00:00
+10,Phone Charging Dock,Electronics,29.99,2023-01-01T00:00:00
+11,Cotton T-Shirt Classic,Clothing,24.99,2023-01-01T00:00:00
+12,Denim Jeans Slim Fit,Clothing,59.99,2023-01-01T00:00:00
+13,Wool Sweater Crew Neck,Clothing,79.99,2023-01-01T00:00:00
+14,Running Shoes Lightweight,Clothing,119.99,2023-01-01T00:00:00
+15,Rain Jacket Waterproof,Clothing,89.99,2023-01-01T00:00:00
+16,Casual Polo Shirt,Clothing,34.99,2023-01-01T00:00:00
+17,Athletic Shorts,Clothing,29.99,2023-01-01T00:00:00
+18,Winter Beanie Hat,Clothing,19.99,2023-01-01T00:00:00
+19,Leather Belt,Clothing,44.99,2023-01-01T00:00:00
+20,Hiking Boots,Clothing,149.99,2023-01-01T00:00:00
+21,Stainless Steel Water Bottle,Home,24.99,2023-01-01T00:00:00
+22,Memory Foam Pillow,Home,49.99,2023-01-01T00:00:00
+23,LED Desk Lamp,Home,39.99,2023-01-01T00:00:00
+24,Cast Iron Skillet 12in,Home,44.99,2023-01-01T00:00:00
+25,Ceramic Plant Pot Set,Home,34.99,2023-01-01T00:00:00
+26,Cotton Bath Towel Set,Home,39.99,2023-01-01T00:00:00
+27,Scented Candle Collection,Home,29.99,2023-01-01T00:00:00
+28,Bamboo Cutting Board,Home,24.99,2023-01-01T00:00:00
+29,Electric Kettle 1.7L,Home,39.99,2023-01-01T00:00:00
+30,Throw Blanket Fleece,Home,34.99,2023-01-01T00:00:00
+31,Data Engineering Fundamentals,Books,49.99,2023-01-01T00:00:00
+32,Cloud Architecture Patterns,Books,54.99,2023-01-01T00:00:00
+33,Python for Data Science,Books,44.99,2023-01-01T00:00:00
+34,Azure Solutions Architect Guide,Books,59.99,2023-01-01T00:00:00
+35,Machine Learning Handbook,Books,64.99,2023-01-01T00:00:00
+36,DevOps Best Practices,Books,39.99,2023-01-01T00:00:00
+37,SQL Performance Tuning,Books,44.99,2023-01-01T00:00:00
+38,Distributed Systems Design,Books,54.99,2023-01-01T00:00:00
+39,Kubernetes in Production,Books,49.99,2023-01-01T00:00:00
+40,Site Reliability Engineering,Books,44.99,2023-01-01T00:00:00
+41,Yoga Mat Premium,Sports,39.99,2023-01-01T00:00:00
+42,Resistance Bands Set,Sports,24.99,2023-01-01T00:00:00
+43,Jump Rope Speed,Sports,14.99,2023-01-01T00:00:00
+44,Foam Roller 18in,Sports,29.99,2023-01-01T00:00:00
+45,Dumbbell Set Adjustable,Sports,149.99,2023-01-01T00:00:00
+46,Tennis Racket Pro,Sports,89.99,2023-01-01T00:00:00
+47,Basketball Indoor/Outdoor,Sports,34.99,2023-01-01T00:00:00
+48,Cycling Gloves Padded,Sports,24.99,2023-01-01T00:00:00
+49,Swimming Goggles,Sports,19.99,2023-01-01T00:00:00
+50,Fitness Tracker Band,Sports,49.99,2023-01-01T00:00:00

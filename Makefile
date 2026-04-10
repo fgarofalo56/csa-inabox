@@ -1,4 +1,4 @@
-.PHONY: help setup lint test validate deploy-dev clean
+.PHONY: help setup lint test validate deploy-dev deploy-prod prerequisites seed seed-azure clean
 
 # Default target
 help: ## Show this help
@@ -71,8 +71,20 @@ validate-dbt: ## Validate dbt models only
 
 deploy-dev: ## Deploy to dev environment (what-if)
 	@echo "Running what-if for all landing zones..."
-	az deployment sub what-if --location eastus --template-file deploy/bicep/DLZ/main.bicep --parameters deploy/bicep/DLZ/params.dev.json
-	az deployment sub what-if --location eastus --template-file deploy/bicep/DMLZ/main.bicep --parameters deploy/bicep/DMLZ/params.dev.json
+	bash scripts/deploy/deploy-platform.sh --environment dev --dry-run
+
+deploy-prod: ## Deploy to production (requires confirmation)
+	@echo "Deploying to PRODUCTION..."
+	bash scripts/deploy/deploy-platform.sh --environment prod
+
+prerequisites: ## Validate deployment prerequisites
+	bash scripts/deploy/validate-prerequisites.sh
+
+seed: ## Load sample data via dbt seed
+	cd domains/shared/dbt && dbt seed --profiles-dir .
+
+seed-azure: ## Upload sample data to ADLS (requires --storage-account)
+	python scripts/seed/load_sample_data.py --mode adls --storage-account $(STORAGE_ACCOUNT)
 
 # --- Cleanup ---
 

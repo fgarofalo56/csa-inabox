@@ -95,3 +95,46 @@ models:
         description: Quality flag - true if both first_name and last_name are empty.
       - name: _is_missing_created_at
         description: Quality flag - true if created_at was null in Bronze.
+
+  - name: slv_products
+    description: >
+      Silver layer: Cleansed product records. Deduped, standardized
+      casing, validated prices. Every row is kept, with is_valid /
+      validation_errors flagging records that failed quality checks.
+      Gold models filter on is_valid = true.
+    columns:
+      - name: product_sk
+        description: Surrogate key (md5 of product_id).
+        tests:
+          - unique
+          - not_null
+      - name: product_id
+        description: Natural product identifier from Bronze.
+        tests:
+          - not_null
+      - name: product_name
+        description: Product display name (trimmed).
+      - name: category
+        description: Product category (uppercased).
+        tests:
+          - accepted_values:
+              values: ['ELECTRONICS', 'CLOTHING', 'HOME', 'BOOKS', 'SPORTS']
+              severity: warn
+      - name: unit_price
+        description: Unit price in USD.
+      - name: is_valid
+        description: >
+          True when the row passes every quality check.
+        tests:
+          - not_null
+      - name: validation_errors
+        description: >
+          Human-readable '; '-joined list of failed quality checks.
+      - name: _is_missing_product_id
+        description: Quality flag - true if product_id was null.
+      - name: _is_missing_name
+        description: Quality flag - true if product_name was empty.
+      - name: _is_invalid_price
+        description: Quality flag - true if unit_price <= 0 or null.
+      - name: _is_missing_category
+        description: Quality flag - true if category was empty.

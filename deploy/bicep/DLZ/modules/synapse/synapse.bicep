@@ -23,6 +23,15 @@ param purviewId string = ''
 @description('Log Analytics workspace resource ID for diagnostic settings')
 param logAnalyticsWorkspaceId string = ''
 
+@description('Enable Customer-Managed Key (CMK) encryption for the workspace.  Default false for dev.')
+param parEnableCmk bool = false
+
+@description('Key name in Key Vault for CMK encryption.  Required when parEnableCmk is true.')
+param parCmkKeyName string = ''
+
+@description('Key Vault resource URI for CMK (e.g. https://myvault.vault.azure.net).  Required when parEnableCmk is true.')
+param parCmkKeyVaultUrl string = ''
+
 @description('Attach a CanNotDelete resource lock to the Synapse workspace. Default true for production safety.')
 param enableResourceLock bool = true
 
@@ -63,6 +72,14 @@ resource synapse 'Microsoft.Synapse/workspaces@2021-06-01' = {
     } : null
     sqlAdministratorLogin: administratorUsername
     sqlAdministratorLoginPassword: administratorPassword
+    encryption: parEnableCmk ? {
+      cmk: {
+        key: {
+          name: parCmkKeyName
+          keyVaultUrl: parCmkKeyVaultUrl
+        }
+      }
+    } : null
     virtualNetworkProfile: {
       computeSubnetId: synapseComputeSubnetId
     }

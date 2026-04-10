@@ -36,6 +36,21 @@ param enableResourceLock bool = true
 @description('Log Analytics workspace resource ID for diagnostic settings. Leave empty to skip diagnostics.')
 param logAnalyticsWorkspaceId string = ''
 
+@description('Enable Customer-Managed Key (CMK) encryption.  Default false for dev; set true for prod/compliance.')
+param parEnableCmk bool = false
+
+@description('Key Vault URI (e.g. https://myvault.vault.azure.net) when CMK is enabled.')
+param parCmkKeyVaultUri string = ''
+
+@description('Key name in the Key Vault for CMK encryption.')
+param parCmkKeyName string = ''
+
+@description('Key version.  Leave empty for automatic key rotation (recommended).')
+param parCmkKeyVersion string = ''
+
+@description('Resource ID of the user-assigned managed identity for CMK.  Created by cmkIdentity.bicep.')
+param parCmkIdentityId string = ''
+
 // Variables
 var storageNameCleaned = length(storageName) > 24
   ? concat(substring(toLower(replace(storageName, '-', '')), 0, 20), uniqueString(resourceGroup().id))
@@ -63,7 +78,12 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   name: storageNameCleaned
   location: location
   tags: tags
-  identity: {
+  identity: parEnableCmk ? {
+    type: 'SystemAssigned,UserAssigned'
+    userAssignedIdentities: {
+      '${parCmkIdentityId}': {}
+    }
+  } : {
     type: 'SystemAssigned'
   }
   sku: {
@@ -74,7 +94,24 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
     accessTier: 'Hot'
     allowBlobPublicAccess: false
     allowSharedKeyAccess: false
-    encryption: {
+    encryption: parEnableCmk ? {
+      keySource: 'Microsoft.Keyvault'
+      requireInfrastructureEncryption: true
+      keyvaultproperties: {
+        keyvaulturi: parCmkKeyVaultUri
+        keyname: parCmkKeyName
+        keyversion: !empty(parCmkKeyVersion) ? parCmkKeyVersion : null
+      }
+      identity: {
+        userAssignedIdentity: parCmkIdentityId
+      }
+      services: {
+        blob: { enabled: true, keyType: 'Account' }
+        file: { enabled: true, keyType: 'Account' }
+        queue: { enabled: true, keyType: 'Account' }
+        table: { enabled: true, keyType: 'Account' }
+      }
+    } : {
       keySource: 'Microsoft.Storage'
       requireInfrastructureEncryption: true
       services: {

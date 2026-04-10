@@ -17,7 +17,7 @@ models:
         description: Sum of order totals for the day
       - name: avg_order_value
         description: Average order value for the day
-      - name: cancellation_rate
+      - name: cancellation_rate_pct
         description: Percentage of cancelled orders (0-100)
 
   - name: gld_customer_lifetime_value
@@ -46,3 +46,121 @@ models:
         description: Total number of orders placed
       - name: monthly_revenue_rate
         description: Average monthly revenue since customer creation
+
+  - name: dim_customers
+    description: >
+      Gold layer: Customer dimension (SCD Type 1). Flattened customer
+      attributes for star-schema joins.
+    columns:
+      - name: customer_sk
+        description: Surrogate key from Silver layer.
+        tests:
+          - unique
+          - not_null
+      - name: customer_id
+        description: Natural customer identifier.
+        tests:
+          - unique
+          - not_null
+      - name: full_name
+        description: Concatenated first + last name.
+      - name: email
+        description: Customer email (lowercased).
+      - name: region
+        description: "Derived business region: WEST, SOUTH, CENTRAL, EAST, INTERNATIONAL."
+        tests:
+          - accepted_values:
+              values: ['WEST', 'SOUTH', 'CENTRAL', 'EAST', 'INTERNATIONAL']
+
+  - name: dim_products
+    description: >
+      Gold layer: Product dimension. Flattened product attributes for
+      star-schema joins.
+    columns:
+      - name: product_sk
+        description: Surrogate key from Silver layer.
+        tests:
+          - unique
+          - not_null
+      - name: product_id
+        description: Natural product identifier.
+        tests:
+          - unique
+          - not_null
+      - name: product_name
+        description: Product display name.
+      - name: category
+        description: Product category (uppercased).
+      - name: unit_price
+        description: Unit price in USD.
+      - name: price_tier
+        description: "Derived price tier: premium, standard, value, economy."
+        tests:
+          - accepted_values:
+              values: ['premium', 'standard', 'value', 'economy']
+
+  - name: fact_orders
+    description: >
+      Gold layer: Fact table at order grain. Joins Silver orders with
+      customer dimension for star-schema analytics.
+    columns:
+      - name: order_sk
+        description: Surrogate key from Silver orders.
+        tests:
+          - unique
+          - not_null
+      - name: order_id
+        description: Natural order identifier.
+        tests:
+          - not_null
+      - name: customer_sk
+        description: FK to dim_customers.
+        tests:
+          - relationships:
+              to: ref('dim_customers')
+              field: customer_sk
+              severity: warn
+      - name: order_date
+        description: Date the order was placed.
+        tests:
+          - not_null
+      - name: total_amount
+        description: Order total in USD.
+      - name: order_status
+        description: Current order status (uppercased).
+      - name: order_year
+        description: Year extracted from order_date.
+      - name: order_month
+        description: Month extracted from order_date.
+      - name: order_quarter
+        description: Quarter extracted from order_date.
+
+  - name: gld_monthly_revenue
+    description: >
+      Gold layer: Monthly revenue metrics by country/state. Aggregates
+      fact_orders into monthly cohorts with status breakdowns for
+      executive dashboards and financial reporting.
+    columns:
+      - name: month_key
+        description: Composite key (YYYY-MM-country) for merge.
+        tests:
+          - unique
+          - not_null
+      - name: revenue_year
+        description: Calendar year.
+      - name: revenue_month
+        description: Calendar month (1-12).
+      - name: revenue_period
+        description: First day of the month.
+      - name: gross_revenue
+        description: Total revenue including cancellations and returns.
+      - name: net_revenue
+        description: Revenue excluding cancelled and returned orders.
+      - name: total_orders
+        description: Count of distinct orders.
+      - name: unique_customers
+        description: Count of distinct customers.
+      - name: cancellation_rate_pct
+        description: Percentage of cancelled orders.
+      - name: return_rate_pct
+        description: Percentage of returned orders.

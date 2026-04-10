@@ -1,0 +1,120 @@
+{
+    "$schema": "https://raw.githubusercontent.com/Azure/purview-api-schema/main/glossary-terms-schema.json",
+    "metadata": {
+        "description": "CSA-in-a-Box business glossary. Defines key business concepts shared across domains.",
+        "version": "1.0.0",
+        "last_updated": "2024-01-01"
+    },
+    "terms": [
+        {
+            "name": "Customer",
+            "short_description": "Individual or organization that purchases products or services",
+            "long_description": "A Customer is identified by a unique customer_id that is consistent across all domains (sales, finance, shared). The Silver layer applies validation and standardization; the Gold layer provides dim_customers for analytics. PII fields (email, phone, address) are classified and monitored by Purview classification rules.",
+            "status": "Approved",
+            "domain": "shared",
+            "steward": "platform-engineering@contoso.com",
+            "related_terms": ["Order", "Revenue", "Data Product"],
+            "related_assets": {
+                "bronze": ["raw_data.sample_customers"],
+                "silver": ["silver.slv_customers"],
+                "gold": ["gold.dim_customers", "gold.gld_customer_lifetime_value"]
+            },
+            "classification": "Internal"
+        },
+        {
+            "name": "Order",
+            "short_description": "Purchase transaction initiated by a customer",
+            "long_description": "An Order represents a commercial transaction. Orders flow through the medallion pipeline: raw ingestion (Bronze), validation and dedup (Silver), then dimensional modeling (Gold fact_orders). The is_valid flag in Silver marks quality issues without dropping rows.",
+            "status": "Approved",
+            "domain": "sales",
+            "steward": "sales-data-engineering@contoso.com",
+            "related_terms": ["Customer", "Invoice", "Revenue", "Product"],
+            "related_assets": {
+                "bronze": ["raw_data.sample_orders"],
+                "silver": ["silver.slv_orders"],
+                "gold": ["gold.fact_orders", "gold.gld_daily_order_metrics"]
+            },
+            "classification": "Internal"
+        },
+        {
+            "name": "Product",
+            "short_description": "Good available for purchase",
+            "long_description": "Products are categorized into Electronics, Clothing, Home, Books, and Sports. The Gold dim_products dimension adds a derived price_tier (economy, value, standard, premium) for analytics segmentation.",
+            "status": "Approved",
+            "domain": "shared",
+            "steward": "platform-engineering@contoso.com",
+            "related_terms": ["Order"],
+            "related_assets": {
+                "bronze": ["raw_data.sample_products"],
+                "silver": ["silver.slv_products"],
+                "gold": ["gold.dim_products"]
+            },
+            "classification": "Public"
+        },
+        {
+            "name": "Invoice",
+            "short_description": "Billing document issued to a customer",
+            "long_description": "Invoices link to sales Orders via order_id for revenue reconciliation. The finance domain owns invoice data from issuance through payment collection. The gld_aging_report classifies outstanding invoices into aging buckets for AR management.",
+            "status": "Approved",
+            "domain": "finance",
+            "steward": "finance-data-engineering@contoso.com",
+            "related_terms": ["Payment", "Order", "Revenue"],
+            "related_assets": {
+                "bronze": ["raw_finance.sample_invoices"],
+                "silver": ["silver.slv_invoices"],
+                "gold": ["gold.gld_aging_report", "gold.gld_revenue_reconciliation"]
+            },
+            "classification": "Confidential"
+        },
+        {
+            "name": "Payment",
+            "short_description": "Monetary transaction that settles an invoice",
+            "long_description": "Payments apply to invoices and can be partial. Multiple payments can settle a single invoice. The aging report computes outstanding_balance = invoice_total - sum(payments) to determine collection status.",
+            "status": "Approved",
+            "domain": "finance",
+            "steward": "finance-data-engineering@contoso.com",
+            "related_terms": ["Invoice"],
+            "related_assets": {
+                "bronze": ["raw_finance.sample_payments"],
+                "silver": ["silver.slv_payments"],
+                "gold": []
+            },
+            "classification": "Confidential"
+        },
+        {
+            "name": "Revenue",
+            "short_description": "Income generated from sales of products and services",
+            "long_description": "Revenue is measured at two levels: (1) order revenue in the sales domain (total_amount in fact_orders) and (2) invoiced revenue in the finance domain (invoice_amount in slv_invoices). The gld_revenue_reconciliation model performs cross-domain reconciliation to identify discrepancies between the two measurements.",
+            "status": "Approved",
+            "domain": "shared",
+            "steward": "platform-engineering@contoso.com",
+            "related_terms": ["Order", "Invoice", "Customer"],
+            "related_assets": {
+                "gold": ["gold.gld_monthly_revenue", "gold.gld_revenue_reconciliation", "gold.gld_customer_lifetime_value"]
+            },
+            "classification": "Confidential"
+        },
+        {
+            "name": "Data Product",
+            "short_description": "Self-contained data asset with defined schema, SLA, and quality rules",
+            "long_description": "Data Products are the unit of data sharing in the Data Mesh architecture. Each product is defined by a contract.yaml file specifying schema, SLA (freshness, availability), quality rules, ownership, and access policies. Contracts live under domains/{domain}/data-products/{product}/contract.yaml.",
+            "status": "Approved",
+            "domain": "shared",
+            "steward": "platform-engineering@contoso.com",
+            "related_terms": ["Medallion Architecture"],
+            "related_assets": {},
+            "classification": "Public"
+        },
+        {
+            "name": "Medallion Architecture",
+            "short_description": "Three-layer data lakehouse pattern: Bronze, Silver, Gold",
+            "long_description": "Bronze: raw ingestion with minimal transformation (add metadata, no filtering). Silver: conformed data with type casting, dedup, and validation flags (is_valid + validation_errors). Key principle: flag-don't-drop, keeping all rows for audit. Gold: business-ready aggregates and dimensional models that filter to is_valid = true. Each layer is materialized as Delta Lake tables on ADLS Gen2.",
+            "status": "Approved",
+            "domain": "shared",
+            "steward": "platform-engineering@contoso.com",
+            "related_terms": ["Data Product"],
+            "related_assets": {},
+            "classification": "Public"
+        }
+    ]
+}

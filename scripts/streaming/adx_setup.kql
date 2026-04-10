@@ -1,0 +1,108 @@
+// =============================================================================
+// CSA-in-a-Box: ADX (Azure Data Explorer) Setup
+// Creates tables, ingestion mappings, and materialized views for the
+// streaming analytics pipeline.
+// =============================================================================
+
+// --- Table: Raw events from Event Hub ---
+.create-merge table RawEvents (
+    id: string,
+    source: string,
+    type: string,
+    timestamp: datetime,
+    data: dynamic,
+    _ingested_at: datetime
+)
+
+// Ingestion mapping for JSON events from Event Hub
+.create-or-alter table RawEvents ingestion json mapping 'EventHubMapping'
+    '[{"column":"id","path":"$.id"},'
+    '{"column":"source","path":"$.source"},'
+    '{"column":"type","path":"$.type"},'
+    '{"column":"timestamp","path":"$.timestamp"},'
+    '{"column":"data","path":"$.data"},'
+    '{"column":"_ingested_at","path":"$.processing.processed_at"}]'
+
+// Retention: keep raw events for 90 days
+.alter-merge table RawEvents policy retention softdelete = 90d
+
+// Enable streaming ingestion for low-latency
+.alter table RawEvents policy streamingingestion enable
+
+// --- Materialized view: 5-minute event counts ---
+.create-or-alter materialized-view EventCounts5Min on table RawEvents
+{
+    RawEvents
+    | summarize
+        event_count = count(),
+        unique_sessions = dcount(tostring(data.session_id)),
+        unique_customers = dcount(tostring(data.customer_id)),
+        avg_load_time = avg(toreal(data.load_time_ms))
+      by type, bin(timestamp, 5m)
+}
+
+// --- Materialized view: Hourly event summary ---
+.create-or-alter materialized-view EventCountsHourly on table RawEvents
+{
+    RawEvents
+    | summarize
+        event_count = count(),
+        unique_sessions = dcount(tostring(data.session_id)),
+        unique_customers = dcount(tostring(data.customer_id)),
+        error_count = countif(type == "error"),
+        purchase_count = countif(type == "purchase_complete"),
+        total_revenue = sumif(toreal(data.amount), type == "purchase_complete")
+      by bin(timestamp, 1h), tostring(data.region)
+}
+
+// --- Function: Anomaly detection (spike in error rate) ---
+.create-or-alter function EventAnomalies(lookback: timespan = 1h, threshold: real = 3.0) {
+    let baseline = RawEvents
+        | where timestamp between (ago(7d) .. ago(lookback))
+        | summarize avg_rate = count() / (7.0 * 24) by type;
+    let current = RawEvents
+        | where timestamp > ago(lookback)
+        | summarize current_rate = count() by type;
+    current
+    | join kind=leftouter baseline on type
+    | extend deviation = iff(avg_rate > 0, (current_rate - avg_rate) / avg_rate, 0.0)
+    | where deviation > threshold
+    | project type, current_rate, avg_rate, deviation, alert = strcat("Spike: ", type, " rate ", round(deviation, 1), "x above normal")
+}
+
+// --- Dashboard queries ---
+
+// Query 1: Real-time event stream (last 15 minutes)
+// RawEvents
+// | where timestamp > ago(15m)
+// | project timestamp, type, data.session_id, data.customer_id, data.region
+// | order by timestamp desc
+// | take 100
+
+// Query 2: Event type distribution (last hour)
+// RawEvents
+// | where timestamp > ago(1h)
+// | summarize count() by type
+// | render piechart
+
+// Query 3: Error rate over time (last 24 hours)
+// RawEvents
+// | where timestamp > ago(24h)
+// | summarize total = count(), errors = countif(type == "error") by bin(timestamp, 5m)
+// | extend error_rate_pct = round(errors * 100.0 / total, 2)
+// | render timechart
+
+// Query 4: Revenue funnel (last 24 hours)
+// RawEvents
+// | where timestamp > ago(24h)
+// | where type in ("page_view", "add_to_cart", "checkout_start", "purchase_complete")
+// | summarize count() by type
+// | order by count_ desc
+// | render barchart
+
+// Query 5: Geographic distribution
+// RawEvents
+// | where timestamp > ago(1h)
+// | extend region = tostring(data.region)
+// | summarize event_count = count() by region
+// | render piechart

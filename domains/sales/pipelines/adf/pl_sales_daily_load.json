@@ -1,0 +1,114 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "metadata": {
+        "description": "ADF Pipeline: Sales domain daily load (calls medallion orchestration)",
+        "domain": "sales",
+        "pattern": "domain-pipeline"
+    },
+    "resources": [
+        {
+            "type": "Microsoft.DataFactory/factories/pipelines",
+            "apiVersion": "2018-06-01",
+            "name": "[concat(parameters('factoryName'), '/pl_sales_daily_load')]",
+            "properties": {
+                "description": "Daily load for the sales domain. Ingests orders and customers from source to Bronze, then runs dbt Silver and Gold transformations.",
+                "activities": [
+                    {
+                        "name": "RunMedallionOrchestration",
+                        "type": "ExecutePipeline",
+                        "typeProperties": {
+                            "pipeline": {
+                                "referenceName": "pl_medallion_orchestration",
+                                "type": "PipelineReference"
+                            },
+                            "waitOnCompletion": true,
+                            "parameters": {
+                                "domain": "shared",
+                                "entities": ["sample_orders", "sample_customers", "sample_products"],
+                                "environment": {
+                                    "value": "@pipeline().parameters.environment",
+                                    "type": "Expression"
+                                },
+                                "fullRefresh": {
+                                    "value": "@pipeline().parameters.fullRefresh",
+                                    "type": "Expression"
+                                },
+                                "alertWebhookUrl": {
+                                    "value": "@pipeline().parameters.alertWebhookUrl",
+                                    "type": "Expression"
+                                }
+                            }
+                        }
+                    }
+                ],
+                "parameters": {
+                    "environment": {
+                        "type": "String",
+                        "defaultValue": "prod"
+                    },
+                    "fullRefresh": {
+                        "type": "Bool",
+                        "defaultValue": false
+                    },
+                    "alertWebhookUrl": {
+                        "type": "String",
+                        "defaultValue": ""
+                    }
+                },
+                "annotations": [
+                    "sales-domain",
+                    "daily-load",
+                    "csa-inabox"
+                ]
+            }
+        },
+        {
+            "type": "Microsoft.DataFactory/factories/triggers",
+            "apiVersion": "2018-06-01",
+            "name": "[concat(parameters('factoryName'), '/tr_sales_daily_0200utc')]",
+            "dependsOn": [
+                "[concat(parameters('factoryName'), '/pl_sales_daily_load')]"
+            ],
+            "properties": {
+                "description": "Daily trigger at 02:00 UTC for sales domain data refresh.",
+                "type": "ScheduleTrigger",
+                "typeProperties": {
+                    "recurrence": {
+                        "frequency": "Day",
+                        "interval": 1,
+                        "startTime": "2024-01-01T02:00:00Z",
+                        "timeZone": "UTC"
+                    }
+                },
+                "pipelines": [
+                    {
+                        "pipelineReference": {
+                            "referenceName": "pl_sales_daily_load",
+                            "type": "PipelineReference"
+                        },
+                        "parameters": {
+                            "environment": "prod",
+                            "fullRefresh": false,
+                            "alertWebhookUrl": ""
+                        }
+                    }
+                ],
+                "runtimeState": "Stopped",
+                "annotations": [
+                    "sales-domain",
+                    "daily-schedule",
+                    "csa-inabox"
+                ]
+            }
+        }
+    ],
+    "parameters": {
+        "factoryName": {
+            "type": "string",
+            "metadata": {
+                "description": "Name of the Azure Data Factory instance"
+            }
+        }
+    }
+}

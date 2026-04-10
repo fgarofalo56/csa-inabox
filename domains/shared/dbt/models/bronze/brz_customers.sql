@@ -9,7 +9,7 @@
 }}
 
 with source as (
-    select * from {{ source('raw_data', 'raw_customers') }}
+    select * from {{ source('raw_data', 'sample_customers') }}
     {% if is_incremental() %}
     where _metadata.file_modification_time > (select max(_dbt_loaded_at) from {{ this }})
     {% endif %}

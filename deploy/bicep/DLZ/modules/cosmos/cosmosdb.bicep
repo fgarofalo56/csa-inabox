@@ -109,6 +109,12 @@ param enableResourceLock bool = true
 @description('Log Analytics workspace resource ID for diagnostic settings. Leave empty to skip diagnostics.')
 param logAnalyticsWorkspaceId string = ''
 
+@description('Enable Customer-Managed Key (CMK) encryption.  Default false for dev; set true for prod/compliance.')
+param parEnableCmk bool = false
+
+@description('Full Key Vault key URI for CMK (e.g. https://myvault.vault.azure.net/keys/mykey).  Required when parEnableCmk is true.')
+param parCmkKeyVaultKeyUri string = ''
+
 // Build the ``locations`` array from the primary location and the optional
 // secondary. When secondaryLocation is set we define two failover priorities
 // so Azure knows which is primary.
@@ -174,6 +180,7 @@ resource cosmosDbAccount 'Microsoft.DocumentDB/databaseAccounts@2024-12-01-previ
           tier: continuousBackupTier
         }
     publicNetworkAccess: publicNetworkAccess
+    keyVaultKeyUri: parEnableCmk && !empty(parCmkKeyVaultKeyUri) ? parCmkKeyVaultKeyUri : null
     networkAclBypass: networkAclBypass
     ipRules: [
       for ip in ipRules: {

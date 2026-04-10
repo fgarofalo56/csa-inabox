@@ -22,6 +22,27 @@ models:
       - name: _dbt_run_id
         description: dbt invocation ID for lineage
 
+  - name: brz_products
+    description: >
+      Bronze layer: Raw product records from ADLS raw container.
+    columns:
+      - name: product_id
+        description: Source system product identifier
+        tests:
+          - not_null
+      - name: product_name
+        description: Product display name
+      - name: category
+        description: Product category
+      - name: unit_price
+        description: Unit price in base currency
+      - name: _dbt_loaded_at
+        description: Timestamp when record was loaded by dbt
+      - name: _source_file
+        description: ADLS file path of source data
+      - name: _dbt_run_id
+        description: dbt invocation ID for lineage
+
   - name: brz_customers
     description: >
       Bronze layer: Raw customer records from ADLS raw container.

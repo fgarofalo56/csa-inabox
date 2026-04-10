@@ -1,0 +1,60 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "metadata": {
+        "description": "ADF Dataset: Parameterized delimited text (CSV) source",
+        "pattern": "dataset"
+    },
+    "resources": [
+        {
+            "type": "Microsoft.DataFactory/factories/datasets",
+            "apiVersion": "2018-06-01",
+            "name": "[concat(parameters('factoryName'), '/ds_source_delimited')]",
+            "properties": {
+                "description": "Parameterized CSV dataset for source data ingestion. Supports any container/folder path combination.",
+                "type": "DelimitedText",
+                "linkedServiceName": {
+                    "referenceName": "ls_adls_gen2",
+                    "type": "LinkedServiceReference"
+                },
+                "typeProperties": {
+                    "location": {
+                        "type": "AzureBlobFSLocation",
+                        "fileSystem": {
+                            "value": "@dataset().containerName",
+                            "type": "Expression"
+                        },
+                        "folderPath": {
+                            "value": "@dataset().folderPath",
+                            "type": "Expression"
+                        }
+                    },
+                    "columnDelimiter": ",",
+                    "escapeChar": "\\",
+                    "firstRowAsHeader": true,
+                    "quoteChar": "\""
+                },
+                "parameters": {
+                    "containerName": {
+                        "type": "String",
+                        "defaultValue": "source-data"
+                    },
+                    "folderPath": {
+                        "type": "String"
+                    }
+                },
+                "schema": [],
+                "annotations": [
+                    "csv-source",
+                    "parameterized",
+                    "csa-inabox"
+                ]
+            }
+        }
+    ],
+    "parameters": {
+        "factoryName": {
+            "type": "string"
+        }
+    }
+}

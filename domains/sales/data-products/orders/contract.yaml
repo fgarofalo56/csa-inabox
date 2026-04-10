@@ -1,0 +1,90 @@
+# Data product contract — sales.orders
+#
+# This file is the authoritative interface between the sales domain and
+# its consumers.  It declares the schema, SLAs, and quality rules for
+# the ``sales.orders`` data product.  The validator in
+# governance/contracts/contract_validator.py reads this file at both
+# CI time (``python -m governance.contracts.contract_validator --ci``)
+# and runtime (ingestion pipeline) to reject data that violates the
+# contract.
+#
+# Adding a new data product: copy this file, fill in the values, and
+# make sure the new contract passes the CI check.
+
+apiVersion: csa.microsoft.com/v1
+kind: DataProductContract
+
+metadata:
+  name: sales.orders
+  domain: sales
+  owner: sales-data-team@example.com
+  version: "1.0.0"
+  description: >
+    Deduplicated, validated order facts sourced from the Silver layer.
+    One row per order.  See domains/shared/dbt/models/silver/slv_orders.sql
+    for the upstream transformation.
+
+schema:
+  primary_key: [order_sk]
+  columns:
+    - name: order_sk
+      type: string
+      nullable: false
+      description: Surrogate key (md5 of order_id).  Generated in Silver per Archon task 310b5446.
+    - name: order_id
+      type: long
+      nullable: true  # flagged by is_valid rather than filtered per task 0ac384b5
+      description: Natural order identifier from the source system.
+    - name: customer_id
+      type: long
+      nullable: true
+      description: FK to sales.customers.customer_id.
+    - name: order_date
+      type: date
+      nullable: true
+      description: Date the order was placed.  Null rows are flagged, not filtered.
+    - name: total_amount
+      type: decimal(18,2)
+      nullable: false
+      description: Order total in USD.  Negatives are flagged (is_valid=false) but retained for audit.
+    - name: status
+      type: string
+      nullable: false
+      description: Order lifecycle state.
+      allowed_values:
+        - PENDING
+        - CONFIRMED
+        - SHIPPED
+        - PROCESSING
+        - DELIVERED
+        - CANCELLED
+        - RETURNED
+    - name: is_valid
+      type: boolean
+      nullable: false
+      description: True when every quality flag is clean.  Gold filters on this.
+    - name: validation_errors
+      type: string
+      nullable: true
+      description: Human-readable '; '-joined list of validation failures, empty for valid rows.
+
+sla:
+  # Freshness target (how old can the newest row be).
+  freshness_minutes: 60
+  # Availability target (percentage of valid rows).
+  valid_row_ratio: 0.95
+  # How long consumers can expect this contract to be supported.
+  supported_until: "2027-04-10"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: order_sk
+  - rule: expect_column_values_to_be_unique
+    column: order_sk
+  - rule: expect_column_values_to_be_in_set
+    column: status
+    value_set: [PENDING, CONFIRMED, SHIPPED, PROCESSING, DELIVERED, CANCELLED, RETURNED]
+  - rule: expect_column_values_to_be_between
+    column: total_amount
+    min_value: 0
+    mostly: 0.95  # tolerate 5% negative-amount rows because they are is_valid=false anyway

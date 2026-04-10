@@ -1,0 +1,15 @@
+# DO NOT include azure-functions-worker in this file
+# The Python Worker is managed by Azure Functions platform
+# Manually managing azure-functions-worker may cause unexpected issues
+
+azure-functions>=1.17.0,<2.0.0
+azure-identity>=1.15.0,<2.0.0
+azure-keyvault-secrets>=4.7.0,<5.0.0
+azure-mgmt-storage>=21.0.0,<22.0.0
+azure-mgmt-cosmosdb>=9.0.0,<10.0.0
+azure-core>=1.29.0,<2.0.0
+# Structured JSON logging with trace IDs — see governance/common/logging.py
+# and docs/LOG_SCHEMA.md.  The function_app imports
+# governance.common.logging directly so the package must be available on
+# the Python path at runtime (deployed alongside the function app code).
+structlog>=24.1.0

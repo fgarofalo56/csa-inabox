@@ -35,7 +35,7 @@ sources:
             description: "Current order status"
             tests:
               - accepted_values:
-                  values: ['pending', 'confirmed', 'shipped', 'delivered', 'cancelled']
+                  values: ['PENDING', 'CONFIRMED', 'SHIPPED', 'DELIVERED', 'CANCELLED', 'RETURNED']
           - name: _ingested_at
             description: "Timestamp when record was ingested"
 
@@ -43,10 +43,57 @@ sources:
         description: "Raw customer master data"
         columns:
           - name: customer_id
+            description: "Unique customer identifier"
             tests:
               - not_null
               - unique
-          - name: customer_name
+          - name: first_name
+            description: "Customer first name"
+          - name: last_name
+            description: "Customer last name"
           - name: email
+            description: "Customer email address"
+          - name: phone
+            description: "Customer phone number"
+          - name: address_line1
+            description: "Street address line 1"
+          - name: address_line2
+            description: "Street address line 2 (apt, suite, etc.)"
+          - name: city
+            description: "City"
+          - name: state
+            description: "State/province code"
+          - name: postal_code
+            description: "Postal/ZIP code"
+          - name: country
+            description: "Country code (ISO 3166-1 alpha-2)"
           - name: region
+            description: "Business region (EAST, WEST, CENTRAL, SOUTH)"
+          - name: signup_date
+            description: "Date the customer signed up"
+          - name: created_at
+            description: "Record creation timestamp"
+          - name: updated_at
+            description: "Record last update timestamp"
           - name: _ingested_at
+            description: "Timestamp when record was ingested"
+
+      - name: sample_products
+        description: "Product catalog master data"
+        columns:
+          - name: product_id
+            description: "Unique product identifier"
+            tests:
+              - not_null
+              - unique
+          - name: product_name
+            description: "Product display name"
+          - name: category
+            description: "Product category (Electronics, Clothing, Home, Books, Sports)"
+            tests:
+              - accepted_values:
+                  values: ['Electronics', 'Clothing', 'Home', 'Books', 'Sports']
+          - name: unit_price
+            description: "Unit price in USD"
+          - name: _ingested_at
+            description: "Timestamp when record was ingested"

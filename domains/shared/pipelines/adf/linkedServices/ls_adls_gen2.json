@@ -1,0 +1,46 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "metadata": {
+        "description": "ADF Linked Service: ADLS Gen2 with Managed Identity authentication",
+        "pattern": "linked-service"
+    },
+    "resources": [
+        {
+            "type": "Microsoft.DataFactory/factories/linkedServices",
+            "apiVersion": "2018-06-01",
+            "name": "[concat(parameters('factoryName'), '/ls_adls_gen2')]",
+            "properties": {
+                "description": "ADLS Gen2 data lake connection using system-assigned managed identity. URL retrieved from Key Vault.",
+                "type": "AzureBlobFS",
+                "typeProperties": {
+                    "url": {
+                        "type": "AzureKeyVaultSecret",
+                        "store": {
+                            "referenceName": "ls_KeyVault",
+                            "type": "LinkedServiceReference"
+                        },
+                        "secretName": "adls-endpoint-url"
+                    }
+                },
+                "connectVia": {
+                    "referenceName": "AutoResolveIntegrationRuntime",
+                    "type": "IntegrationRuntimeReference"
+                },
+                "annotations": [
+                    "managed-identity",
+                    "adls-gen2",
+                    "csa-inabox"
+                ]
+            }
+        }
+    ],
+    "parameters": {
+        "factoryName": {
+            "type": "string",
+            "metadata": {
+                "description": "Name of the Azure Data Factory instance"
+            }
+        }
+    }
+}

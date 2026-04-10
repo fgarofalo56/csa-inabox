@@ -50,6 +50,14 @@ jobs:
           mypy domains/sharedServices/aiEnrichment/functions/function_app.py
           mypy domains/sharedServices/eventProcessing/functions/function_app.py
 
+      - name: Validate data product contracts
+        run: |
+          python -m governance.contracts.contract_validator --ci --repo-root .
+
+      - name: Check dbt schema drift against contracts
+        run: |
+          python -m governance.contracts.dbt_test_generator --repo-root . --check
+
       - name: Run pytest with coverage
         run: |
           pytest tests/ \

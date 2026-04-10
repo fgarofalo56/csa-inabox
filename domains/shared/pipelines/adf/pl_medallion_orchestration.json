@@ -1,0 +1,246 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "metadata": {
+        "description": "ADF Pipeline: Master medallion orchestration (Bronze -> Silver -> Gold)",
+        "domain": "shared",
+        "pattern": "orchestration"
+    },
+    "resources": [
+        {
+            "type": "Microsoft.DataFactory/factories/pipelines",
+            "apiVersion": "2018-06-01",
+            "name": "[concat(parameters('factoryName'), '/pl_medallion_orchestration')]",
+            "properties": {
+                "description": "Master orchestration pipeline. Ingests entities to Bronze (ForEach), then runs dbt Bronze -> Silver -> Gold in sequence. On failure, sends alert via webhook.",
+                "activities": [
+                    {
+                        "name": "ForEachEntity_IngestToBronze",
+                        "type": "ForEach",
+                        "typeProperties": {
+                            "items": {
+                                "value": "@pipeline().parameters.entities",
+                                "type": "Expression"
+                            },
+                            "isSequential": false,
+                            "batchCount": 4,
+                            "activities": [
+                                {
+                                    "name": "IngestEntityToBronze",
+                                    "type": "ExecutePipeline",
+                                    "typeProperties": {
+                                        "pipeline": {
+                                            "referenceName": "pl_ingest_to_bronze",
+                                            "type": "PipelineReference"
+                                        },
+                                        "waitOnCompletion": true,
+                                        "parameters": {
+                                            "sourceContainer": "source-data",
+                                            "sourceFolderPath": {
+                                                "value": "@concat(pipeline().parameters.domain, '/', item())",
+                                                "type": "Expression"
+                                            },
+                                            "domainName": {
+                                                "value": "@pipeline().parameters.domain",
+                                                "type": "Expression"
+                                            },
+                                            "entityName": {
+                                                "value": "@item()",
+                                                "type": "Expression"
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    {
+                        "name": "RunDbt_Bronze",
+                        "type": "ExecutePipeline",
+                        "dependsOn": [
+                            {
+                                "activity": "ForEachEntity_IngestToBronze",
+                                "dependencyConditions": ["Completed"]
+                            }
+                        ],
+                        "typeProperties": {
+                            "pipeline": {
+                                "referenceName": "pl_run_dbt_models",
+                                "type": "PipelineReference"
+                            },
+                            "waitOnCompletion": true,
+                            "parameters": {
+                                "dbtCommand": "run",
+                                "dbtTarget": {
+                                    "value": "@pipeline().parameters.environment",
+                                    "type": "Expression"
+                                },
+                                "dbtModels": "tag:bronze",
+                                "fullRefresh": {
+                                    "value": "@pipeline().parameters.fullRefresh",
+                                    "type": "Expression"
+                                },
+                                "alertWebhookUrl": {
+                                    "value": "@pipeline().parameters.alertWebhookUrl",
+                                    "type": "Expression"
+                                }
+                            }
+                        }
+                    },
+                    {
+                        "name": "RunDbt_Silver",
+                        "type": "ExecutePipeline",
+                        "dependsOn": [
+                            {
+                                "activity": "RunDbt_Bronze",
+                                "dependencyConditions": ["Succeeded"]
+                            }
+                        ],
+                        "typeProperties": {
+                            "pipeline": {
+                                "referenceName": "pl_run_dbt_models",
+                                "type": "PipelineReference"
+                            },
+                            "waitOnCompletion": true,
+                            "parameters": {
+                                "dbtCommand": "run",
+                                "dbtTarget": {
+                                    "value": "@pipeline().parameters.environment",
+                                    "type": "Expression"
+                                },
+                                "dbtModels": "tag:silver",
+                                "fullRefresh": {
+                                    "value": "@pipeline().parameters.fullRefresh",
+                                    "type": "Expression"
+                                },
+                                "alertWebhookUrl": {
+                                    "value": "@pipeline().parameters.alertWebhookUrl",
+                                    "type": "Expression"
+                                }
+                            }
+                        }
+                    },
+                    {
+                        "name": "RunDbt_Gold",
+                        "type": "ExecutePipeline",
+                        "dependsOn": [
+                            {
+                                "activity": "RunDbt_Silver",
+                                "dependencyConditions": ["Succeeded"]
+                            }
+                        ],
+                        "typeProperties": {
+                            "pipeline": {
+                                "referenceName": "pl_run_dbt_models",
+                                "type": "PipelineReference"
+                            },
+                            "waitOnCompletion": true,
+                            "parameters": {
+                                "dbtCommand": "run",
+                                "dbtTarget": {
+                                    "value": "@pipeline().parameters.environment",
+                                    "type": "Expression"
+                                },
+                                "dbtModels": "tag:gold",
+                                "fullRefresh": {
+                                    "value": "@pipeline().parameters.fullRefresh",
+                                    "type": "Expression"
+                                },
+                                "alertWebhookUrl": {
+                                    "value": "@pipeline().parameters.alertWebhookUrl",
+                                    "type": "Expression"
+                                }
+                            }
+                        }
+                    },
+                    {
+                        "name": "OnPipelineFailure",
+                        "type": "WebActivity",
+                        "dependsOn": [
+                            {
+                                "activity": "RunDbt_Silver",
+                                "dependencyConditions": ["Failed"]
+                            }
+                        ],
+                        "typeProperties": {
+                            "url": {
+                                "value": "@pipeline().parameters.alertWebhookUrl",
+                                "type": "Expression"
+                            },
+                            "method": "POST",
+                            "body": {
+                                "value": "@json(concat('{\"title\": \"Medallion Pipeline Failure\", \"pipeline\": \"', pipeline().Pipeline, '\", \"run_id\": \"', pipeline().RunId, '\", \"domain\": \"', pipeline().parameters.domain, '\", \"stage\": \"silver\", \"timestamp\": \"', utcnow(), '\"}'))",
+                                "type": "Expression"
+                            }
+                        },
+                        "policy": {
+                            "timeout": "00:01:00",
+                            "retry": 2
+                        }
+                    },
+                    {
+                        "name": "OnGoldFailure",
+                        "type": "WebActivity",
+                        "dependsOn": [
+                            {
+                                "activity": "RunDbt_Gold",
+                                "dependencyConditions": ["Failed"]
+                            }
+                        ],
+                        "typeProperties": {
+                            "url": {
+                                "value": "@pipeline().parameters.alertWebhookUrl",
+                                "type": "Expression"
+                            },
+                            "method": "POST",
+                            "body": {
+                                "value": "@json(concat('{\"title\": \"Medallion Pipeline Failure\", \"pipeline\": \"', pipeline().Pipeline, '\", \"run_id\": \"', pipeline().RunId, '\", \"domain\": \"', pipeline().parameters.domain, '\", \"stage\": \"gold\", \"timestamp\": \"', utcnow(), '\"}'))",
+                                "type": "Expression"
+                            }
+                        },
+                        "policy": {
+                            "timeout": "00:01:00",
+                            "retry": 2
+                        }
+                    }
+                ],
+                "parameters": {
+                    "domain": {
+                        "type": "String",
+                        "defaultValue": "shared"
+                    },
+                    "entities": {
+                        "type": "Array",
+                        "defaultValue": ["sample_customers", "sample_orders", "sample_products"]
+                    },
+                    "environment": {
+                        "type": "String",
+                        "defaultValue": "prod"
+                    },
+                    "fullRefresh": {
+                        "type": "Bool",
+                        "defaultValue": false
+                    },
+                    "alertWebhookUrl": {
+                        "type": "String",
+                        "defaultValue": ""
+                    }
+                },
+                "annotations": [
+                    "orchestration",
+                    "medallion-pipeline",
+                    "bronze-silver-gold",
+                    "csa-inabox"
+                ]
+            }
+        }
+    ],
+    "parameters": {
+        "factoryName": {
+            "type": "string",
+            "metadata": {
+                "description": "Name of the Azure Data Factory instance"
+            }
+        }
+    }
+}
