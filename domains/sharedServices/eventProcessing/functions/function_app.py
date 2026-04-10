@@ -16,7 +16,7 @@ correlation works out of the box.
 import json
 import os
 from datetime import datetime, timezone
-from typing import List
+from typing import Any, List
 
 import azure.functions as func
 
@@ -41,7 +41,7 @@ COSMOS_CONTAINER = os.environ.get("COSMOS_CONTAINER", "processed_events")
 OUTPUT_CONTAINER = os.environ.get("OUTPUT_CONTAINER", "events-archive")
 
 
-def _process_event(event_data: dict) -> dict:
+def _process_event(event_data: dict[str, Any]) -> dict[str, Any]:
     """Process a single event: validate, enrich, and transform.
 
     Args:
@@ -50,7 +50,7 @@ def _process_event(event_data: dict) -> dict:
     Returns:
         Enriched event with processing metadata.
     """
-    processed = {
+    processed: dict[str, Any] = {
         "id": event_data.get("id", f"evt-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"),
         "source": event_data.get("source", "unknown"),
         "event_type": event_data.get("type", event_data.get("event_type", "unknown")),
@@ -91,7 +91,7 @@ def _process_event(event_data: dict) -> dict:
     create_if_not_exists=True,
     partition_key="/partition_key",
 )
-def process_events(events: List[func.EventHubEvent], cosmosOutput: func.Out[str]):
+def process_events(events: List[func.EventHubEvent], cosmosOutput: func.Out[str]) -> None:
     """Process batch of events from Event Hub.
 
     Enriches events and writes to:
@@ -156,7 +156,7 @@ def process_events(events: List[func.EventHubEvent], cosmosOutput: func.Out[str]
     arg_name="timer",
     run_on_startup=False,
 )
-def aggregate_event_stats(timer: func.TimerRequest):
+def aggregate_event_stats(timer: func.TimerRequest) -> None:
     """Periodically aggregate event processing statistics.
 
     Runs every 5 minutes. Logs metrics for Azure Monitor / Log Analytics.

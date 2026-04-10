@@ -1,6 +1,5 @@
 """Tests for the data quality runner."""
 
-import json
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -10,13 +9,13 @@ import pytest
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent / "governance" / "dataquality"))
 
-from run_quality_checks import DataQualityRunner, QualityCheckResult
+from run_quality_checks import DataQualityRunner, QualityCheckResult  # noqa: E402
 
 
 class TestQualityCheckResult:
     """Tests for QualityCheckResult data class."""
 
-    def test_create_pass_result(self):
+    def test_create_pass_result(self) -> None:
         result = QualityCheckResult(
             check_name="test_check",
             table="my_table",
@@ -27,7 +26,7 @@ class TestQualityCheckResult:
         assert result.table == "my_table"
         assert result.check_name == "test_check"
 
-    def test_create_fail_result_with_details(self):
+    def test_create_fail_result_with_details(self) -> None:
         result = QualityCheckResult(
             check_name="test_check",
             table="my_table",
@@ -38,7 +37,7 @@ class TestQualityCheckResult:
         assert result.status == "fail"
         assert result.details["row_count"] == 0
 
-    def test_to_dict(self):
+    def test_to_dict(self) -> None:
         result = QualityCheckResult(
             check_name="volume:orders",
             table="orders",
@@ -55,7 +54,7 @@ class TestDataQualityRunner:
     """Tests for the DataQualityRunner orchestrator."""
 
     @pytest.fixture
-    def config_path(self, tmp_path):
+    def config_path(self, tmp_path: Path) -> str:
         config = {
             "rules": {
                 "volume": [
@@ -72,20 +71,20 @@ class TestDataQualityRunner:
         config_file.write_text(yaml.dump(config))
         return str(config_file)
 
-    def test_init_loads_config(self, config_path):
+    def test_init_loads_config(self, config_path: str) -> None:
         runner = DataQualityRunner(config_path)
         assert "rules" in runner.config
         assert len(runner.results) == 0
 
     @patch("subprocess.run")
-    def test_run_dbt_tests_success(self, mock_run, config_path):
+    def test_run_dbt_tests_success(self, mock_run: MagicMock, config_path: str) -> None:
         mock_run.return_value = MagicMock(returncode=0, stdout="All tests passed")
         runner = DataQualityRunner(config_path)
         runner.run_dbt_tests()
         assert any(r.status == "pass" for r in runner.results)
 
     @patch("subprocess.run")
-    def test_run_dbt_tests_failure(self, mock_run, config_path):
+    def test_run_dbt_tests_failure(self, mock_run: MagicMock, config_path: str) -> None:
         mock_run.return_value = MagicMock(
             returncode=1,
             stdout="FAIL 1 test_unique_orders_id\n",
@@ -95,20 +94,20 @@ class TestDataQualityRunner:
         assert any(r.status == "fail" for r in runner.results)
 
     @patch("subprocess.run", side_effect=FileNotFoundError)
-    def test_run_dbt_tests_dbt_not_found(self, mock_run, config_path):
+    def test_run_dbt_tests_dbt_not_found(self, mock_run: MagicMock, config_path: str) -> None:
         runner = DataQualityRunner(config_path)
         runner.run_dbt_tests()
         # Should not raise, just skip
         assert len(runner.results) == 0
 
-    def test_check_volume_rules_no_dbt(self, config_path):
+    def test_check_volume_rules_no_dbt(self, config_path: str) -> None:
         runner = DataQualityRunner(config_path)
         runner.check_volume_rules()
         assert len(runner.results) == 2  # Two volume rules in config
         # Without dbt, should be "warn" (not verified)
         assert all(r.status == "warn" for r in runner.results)
 
-    def test_generate_report(self, config_path):
+    def test_generate_report(self, config_path: str) -> None:
         runner = DataQualityRunner(config_path)
         runner.results = [
             QualityCheckResult("t1", "table1", "pass", "ok"),
@@ -122,13 +121,13 @@ class TestDataQualityRunner:
         assert report["summary"]["warnings"] == 1
         assert report["summary"]["health_score"] == pytest.approx(33.3, abs=0.1)
 
-    def test_generate_report_empty(self, config_path):
+    def test_generate_report_empty(self, config_path: str) -> None:
         runner = DataQualityRunner(config_path)
         report = runner.generate_report()
         assert report["summary"]["total_checks"] == 0
         assert report["summary"]["health_score"] == 0
 
-    def test_parse_dbt_failures(self):
+    def test_parse_dbt_failures(self) -> None:
         output = """Running 3 tests...
 PASS unique_orders_id
 FAIL 1 test_not_null_orders_amount
@@ -137,12 +136,12 @@ PASS accepted_values_status"""
         assert len(failures) == 1
         assert "FAIL" in failures[0]["test"]
 
-    def test_select_validation_rejects_injection(self, config_path):
+    def test_select_validation_rejects_injection(self, config_path: str) -> None:
         runner = DataQualityRunner(config_path)
         with pytest.raises(ValueError, match="Invalid dbt select pattern"):
             runner.run_dbt_tests(select="models; rm -rf /")
 
-    def test_select_validation_allows_valid(self, config_path):
+    def test_select_validation_allows_valid(self, config_path: str) -> None:
         runner = DataQualityRunner(config_path)
         # Should not raise
         with patch("subprocess.run") as mock_run:
@@ -153,7 +152,7 @@ PASS accepted_values_status"""
 class TestInputValidation:
     """Tests for SQL injection prevention in delta_lake_optimization."""
 
-    def test_valid_identifiers(self):
+    def test_valid_identifiers(self) -> None:
         # Import the validator from delta_lake_optimization
         # Since it's a notebook, we test the pattern directly
         import re

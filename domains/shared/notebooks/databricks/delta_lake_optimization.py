@@ -72,7 +72,7 @@ def _validate_identifier(name: str) -> str:
     return name
 
 
-def get_delta_tables(catalog: str, schema: str) -> list:
+def get_delta_tables(catalog: str, schema: str) -> list[str]:
     """List all Delta tables in a schema."""
     cat = _validate_identifier(catalog)
     sch = _validate_identifier(schema)
@@ -84,7 +84,7 @@ def get_delta_tables(catalog: str, schema: str) -> list:
     ]
 
 
-def optimize_table(table_name: str, zorder_cols: list = None):
+def optimize_table(table_name: str, zorder_cols: list[str] | None = None) -> dict[str, object]:
     """Run OPTIMIZE with optional Z-ORDER on a Delta table."""
     try:
         # Validate table name parts to prevent SQL injection
@@ -110,7 +110,7 @@ def optimize_table(table_name: str, zorder_cols: list = None):
         return {"status": "error", "error": str(e)}
 
 
-def vacuum_table(table_name: str, retention_hours: int):
+def vacuum_table(table_name: str, retention_hours: int) -> dict[str, str]:
     """Run VACUUM on a Delta table."""
     try:
         for part in table_name.split("."):
@@ -126,7 +126,7 @@ def vacuum_table(table_name: str, retention_hours: int):
         return {"status": "error", "error": str(e)}
 
 
-def get_table_detail(table_name: str) -> dict:
+def get_table_detail(table_name: str) -> dict[str, object]:
     """Get Delta table stats."""
     try:
         for part in table_name.split("."):

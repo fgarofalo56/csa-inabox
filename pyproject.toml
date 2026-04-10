@@ -18,6 +18,10 @@ dev = [
     # structlog is a governance runtime dep but tests for the shared
     # logging helper need it available in the dev env too.
     "structlog>=24.1.0",
+    # Type stubs for third-party libraries that lack inline types — kept
+    # here (and not under governance extras) so mypy always sees them
+    # during a `pip install -e ".[dev]"` workflow.
+    "types-PyYAML>=6.0",
 ]
 governance = [
     "pyyaml>=6.0",
@@ -108,6 +112,46 @@ output = "coverage.xml"
 
 [tool.mypy]
 python_version = "3.10"
+# Strict mode is enabled globally. New code is expected to pass strict
+# checks; when adding a new module that cannot yet comply, prefer adding
+# it to the overrides list below with an explicit reason rather than
+# weakening this config.
+strict = true
+# Default target when ``mypy`` is run with no arguments: the governance
+# package plus its tests. The two Azure Functions apps both ship a flat
+# ``function_app.py`` at different paths, which otherwise collides at
+# module resolution time — they are type-checked by dedicated ``mypy
+# <path>`` invocations from the Makefile and the test.yml workflow so
+# each app resolves as its own module. See ``make typecheck``.
+files = [
+    "governance",
+    "tests",
+]
+# Third-party Azure SDK libraries still ship partial type info — stay
+# lenient there, but keep strict checks on our own code.
 ignore_missing_imports = true
 warn_return_any = true
 warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+no_implicit_reexport = true
+
+[[tool.mypy.overrides]]
+# Databricks notebooks rely on spark / dbutils / display globals that
+# mypy cannot resolve.  Type hints are still added for IDE support, but
+# static analysis is disabled so mypy does not fail the CI.
+module = [
+    "domains.shared.notebooks.*",
+]
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+# The Azure Functions host imports function_app.py by path, not as a
+# regular Python module, so these files are stand-alone. Test cases do
+# not import them as modules either — we only need mypy to check them.
+module = [
+    "azure.ai.*",
+    "azure.cosmos.*",
+    "azure.eventhub.*",
+]
+ignore_missing_imports = true

@@ -40,6 +40,16 @@ jobs:
         run: |
           ruff check domains/ scripts/ governance/ --select E,F,W --ignore E501 --output-format github
 
+      - name: Typecheck with mypy (strict)
+        run: |
+          # The default mypy config covers governance + tests. The two
+          # Function apps both ship a flat function_app.py file, so they
+          # are checked with explicit invocations (one per app) to avoid
+          # module-path collisions.
+          mypy
+          mypy domains/sharedServices/aiEnrichment/functions/function_app.py
+          mypy domains/sharedServices/eventProcessing/functions/function_app.py
+
       - name: Run pytest with coverage
         run: |
           pytest tests/ \

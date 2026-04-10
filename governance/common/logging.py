@@ -131,7 +131,10 @@ def get_logger(name: str | None = None) -> structlog.stdlib.BoundLogger:
         name: Optional logger name — typically ``__name__`` at the call
             site.  When set, it is added as ``logger`` to each log entry.
     """
-    return structlog.get_logger(name) if name else structlog.get_logger()
+    logger: structlog.stdlib.BoundLogger = (
+        structlog.get_logger(name) if name else structlog.get_logger()
+    )
+    return logger
 
 
 def new_trace_id() -> str:

@@ -16,6 +16,7 @@ cross-service correlation works out of the box.
 import json
 import os
 from datetime import datetime, timezone
+from typing import Any
 
 import azure.functions as func
 
@@ -41,8 +42,14 @@ ENRICHED_CONTAINER = os.environ.get("ENRICHED_CONTAINER", "enriched")
 INBOX_CONTAINER = os.environ.get("INBOX_CONTAINER", "inbox")
 
 
-def _get_ai_client():
-    """Lazy-initialize Azure AI Text Analytics client."""
+def _get_ai_client() -> Any:
+    """Lazy-initialize Azure AI Text Analytics client.
+
+    Returns a ``TextAnalyticsClient`` instance or ``None`` if the package
+    is not installed or the endpoint/key are not configured. Typed as
+    ``Any`` because the concrete client type lives behind an optional
+    import.
+    """
     try:
         from azure.ai.textanalytics import TextAnalyticsClient
         from azure.core.credentials import AzureKeyCredential
@@ -58,8 +65,12 @@ def _get_ai_client():
         return None
 
 
-def _get_form_recognizer_client():
-    """Lazy-initialize Azure AI Document Intelligence client."""
+def _get_form_recognizer_client() -> Any:
+    """Lazy-initialize Azure AI Document Intelligence client.
+
+    Returns a ``DocumentAnalysisClient`` instance or ``None`` if the
+    package is not installed or the endpoint/key are not configured.
+    """
     try:
         from azure.ai.formrecognizer import DocumentAnalysisClient
         from azure.core.credentials import AzureKeyCredential
@@ -75,9 +86,9 @@ def _get_form_recognizer_client():
         return None
 
 
-def _enrich_text(text: str) -> dict:
+def _enrich_text(text: str) -> dict[str, Any]:
     """Run text enrichment pipeline: language detection, sentiment, entities, PII."""
-    results = {
+    results: dict[str, Any] = {
         "enriched_at": datetime.now(timezone.utc).isoformat(),
         "language": None,
         "sentiment": None,
@@ -153,9 +164,9 @@ def _enrich_text(text: str) -> dict:
     return results
 
 
-def _analyze_document(blob_data: bytes, content_type: str) -> dict:
+def _analyze_document(blob_data: bytes, content_type: str) -> dict[str, Any]:
     """Analyze document using Azure AI Document Intelligence."""
-    results = {
+    results: dict[str, Any] = {
         "analyzed_at": datetime.now(timezone.utc).isoformat(),
         "pages": 0,
         "tables": 0,
@@ -271,7 +282,7 @@ def enrich_text(req: func.HttpRequest) -> func.HttpResponse:
     path=f"{ENRICHED_CONTAINER}/{{name}}.enrichment.json",
     connection="AzureWebJobsStorage",
 )
-def process_inbox_document(blob: func.InputStream, outputBlob: func.Out[str]):
+def process_inbox_document(blob: func.InputStream, outputBlob: func.Out[str]) -> None:
     """Automatically process documents dropped into the inbox container.
 
     Triggered by new blobs in the inbox container. Runs document analysis
@@ -287,7 +298,7 @@ def process_inbox_document(blob: func.InputStream, outputBlob: func.Out[str]):
         blob_data = blob.read()
         content_type = blob.name.rsplit(".", 1)[-1].lower() if blob.name else ""
 
-        enrichment = {
+        enrichment: dict[str, Any] = {
             "source_blob": blob.name,
             "source_size": blob.length,
             "processed_at": datetime.now(timezone.utc).isoformat(),
@@ -335,7 +346,7 @@ def health_check(req: func.HttpRequest) -> func.HttpResponse:
     GET /api/health
     Returns: JSON with service status and capability checks
     """
-    status = {
+    status: dict[str, Any] = {
         "status": "healthy",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "capabilities": {

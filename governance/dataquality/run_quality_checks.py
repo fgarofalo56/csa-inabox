@@ -303,7 +303,7 @@ class DataQualityRunner:
         return failures
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="CSA-in-a-Box Data Quality Runner")
     parser.add_argument(
         "--config",

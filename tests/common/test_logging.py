@@ -26,8 +26,12 @@ from governance.common.logging import (
 )
 
 
+from collections.abc import Iterator
+from typing import Any
+
+
 @pytest.fixture(autouse=True)
-def _reset_between_tests():
+def _reset_between_tests() -> Iterator[None]:
     """Each test starts with a fresh structlog config and no bound context."""
     reset_logging_state()
     yield
@@ -50,10 +54,11 @@ def _capture_logs() -> io.StringIO:
     return buffer
 
 
-def _parse_last_log(buffer: io.StringIO) -> dict:
+def _parse_last_log(buffer: io.StringIO) -> dict[str, Any]:
     lines = [line for line in buffer.getvalue().splitlines() if line.strip()]
     assert lines, "expected at least one log line to be emitted"
-    return json.loads(lines[-1])
+    parsed: dict[str, Any] = json.loads(lines[-1])
+    return parsed
 
 
 def test_new_trace_id_returns_32_hex_chars() -> None:

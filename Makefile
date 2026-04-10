@@ -32,6 +32,12 @@ lint-fix: ## Auto-fix lint issues
 	ruff check domains/ scripts/ governance/ --fix --select E,F,W --ignore E501
 	ruff format domains/ scripts/ governance/
 
+typecheck: ## Run strict mypy on governance, tests, and both Function apps
+	mypy
+	mypy domains/sharedServices/aiEnrichment/functions/function_app.py
+	mypy domains/sharedServices/eventProcessing/functions/function_app.py
+	@echo "mypy strict passed"
+
 lint-bicep: ## Lint all Bicep files
 	@find deploy/bicep -name "*.bicep" -not -path "*/node_modules/*" -exec sh -c 'echo "Building: {}"; bicep build {} && rm -f "$${1%.bicep}.json"' _ {} \;
 
