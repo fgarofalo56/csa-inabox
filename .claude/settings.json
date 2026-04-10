@@ -1,0 +1,16 @@
+{
+  "allowedTools": [],
+  "disallowedTools": [],
+  "permissions": {
+    "allow": [],
+    "deny": []
+  },
+  "contextFiles": ["CLAUDE.md", ".claude/SESSION_KNOWLEDGE.md"],
+  "description": "CSA-in-a-Box: Cloud-Scale Analytics platform on Azure. Bicep infrastructure for a 4-subscription data mesh (ALZ, Connectivity, DMLZ, DLZ) with medallion dbt models, Databricks notebooks, ADF pipelines, Azure Functions for AI enrichment and event processing, Purview governance, and an autonomous agent harness (Ralph loop).",
+  "languages": ["bicep", "python", "sql", "powershell", "bash", "yaml", "markdown"],
+  "projectType": "azure-data-platform",
+  "confirmCommands": true,
+  "showDiffs": true,
+  "defaultBranch": "main",
+  "mcpServers": {}
+}

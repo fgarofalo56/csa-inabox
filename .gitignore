@@ -192,3 +192,19 @@ instance/
 *.h5
 *.pt
 !**/models/README.md
+
+# ---------------------------
+# Claude Code — user-local state
+# Shared instructions (rules/, context/, hooks/, settings.json) are tracked.
+# Per-user memory and local overrides are not.
+# ---------------------------
+.claude/agent-memory-local/
+.claude/settings.local.json
+
+# ---------------------------
+# Stray VS Code Bicep extension installs under deploy/bicep/
+# (Created by the azext-azureauth auto-install; not project dependencies.)
+# ---------------------------
+deploy/bicep/**/package.json
+deploy/bicep/**/package-lock.json
+deploy/bicep/**/node_modules/
