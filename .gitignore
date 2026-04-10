@@ -196,10 +196,16 @@ instance/
 # ---------------------------
 # Claude Code — user-local state
 # Shared instructions (rules/, context/, hooks/, settings.json) are tracked.
-# Per-user memory and local overrides are not.
+# Per-user memory and local overrides are not, and neither are the
+# agents/commands/skills directories which Claude Code mirrors from the
+# user's global ~/.claude install rather than the repo.
 # ---------------------------
+.claude/agent-memory/
 .claude/agent-memory-local/
 .claude/settings.local.json
+.claude/agents/
+.claude/commands/
+.claude/skills/
 
 # ---------------------------
 # Stray VS Code Bicep extension installs under deploy/bicep/
