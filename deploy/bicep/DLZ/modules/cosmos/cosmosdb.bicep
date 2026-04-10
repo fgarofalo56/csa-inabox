@@ -103,6 +103,9 @@ param virtualNetworkRules array = []
 @description('Tags for the Cosmos DB account')
 param tags object = {}
 
+@description('Attach a CanNotDelete resource lock to the Cosmos account. Default true for production safety.')
+param enableResourceLock bool = true
+
 // Build the ``locations`` array from the primary location and the optional
 // secondary. When secondaryLocation is set we define two failover priorities
 // so Azure knows which is primary.
@@ -193,6 +196,16 @@ resource defaultDatabase 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@202
   dependsOn: [
     cosmosDbAccount
   ]
+}
+
+// Resource lock — protects the Cosmos account from accidental deletion.
+resource cosmosLock 'Microsoft.Authorization/locks@2020-05-01' = if (enableResourceLock) {
+  scope: cosmosDbAccount
+  name: '${cosmosDbAccountName}-no-delete'
+  properties: {
+    level: 'CanNotDelete'
+    notes: 'CSA-in-a-Box: data-lake Cosmos account. Delete via the rollback workflow in docs/ROLLBACK.md.'
+  }
 }
 
 output cosmosDbAccountId string = cosmosDbAccount.id

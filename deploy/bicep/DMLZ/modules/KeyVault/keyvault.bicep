@@ -11,6 +11,9 @@ param subnetId string
 param keyvaultName string
 param privateDnsZoneIdKeyVault string = ''
 
+@description('Attach a CanNotDelete resource lock to the Key Vault. Default true for production safety.')
+param enableResourceLock bool = true
+
 // Variables
 var keyVaultPrivateEndpointName = '${keyVault.name}-private-endpoint'
 
@@ -83,6 +86,18 @@ resource keyVaultPrivateEndpointARecord 'Microsoft.Network/privateEndpoints/priv
         }
       }
     ]
+  }
+}
+
+// Resource lock — Key Vault has its own soft-delete + purge protection,
+// but a resource lock prevents accidental `az group delete` from hitting
+// it in the first place.
+resource keyVaultLock 'Microsoft.Authorization/locks@2020-05-01' = if (enableResourceLock) {
+  scope: keyVault
+  name: '${keyvaultName}-no-delete'
+  properties: {
+    level: 'CanNotDelete'
+    notes: 'CSA-in-a-Box: DMLZ Key Vault. Delete via the rollback workflow in docs/ROLLBACK.md.'
   }
 }
 

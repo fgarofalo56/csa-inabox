@@ -8,7 +8,15 @@ param automationAccountID string
 param parLocation string
 param prefix string
 param tags object
-param logRetentionDays int = 30
+// Workspace-level hot retention.  Compliance frameworks (SOC2, HIPAA,
+// FedRAMP) require 1-7 years of audit log retention, so the default is
+// now 365 days.  Table-level overrides in the ``Data Platform Log
+// Routing & Retention`` section below further tune hot/archive per
+// table; raw data beyond ``parDataPlatformTotalRetentionDays`` is
+// archived to the linked logging storage account via the
+// ``resDataExportRule`` data-export rule, which supports up to 7 years
+// when the destination storage account has an immutability policy.
+param logRetentionDays int = 365
 param storageAccountId string
 param parLoggingRG string
 param environment string

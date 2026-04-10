@@ -30,6 +30,9 @@ tier the DR runbook (docs/DR.md) expects for RPO < 1h workloads.''')
 ])
 param storageSku string = ''
 
+@description('Attach a CanNotDelete resource lock to the storage account.  Default true for production safety.')
+param enableResourceLock bool = true
+
 // Variables
 var storageNameCleaned = length(storageName) > 24
   ? concat(substring(toLower(replace(storageName, '-', '')), 0, 20), uniqueString(resourceGroup().id))
@@ -128,16 +131,17 @@ resource storageBlobServices 'Microsoft.Storage/storageAccounts/blobServices@202
   parent: storage
   name: 'default'
   properties: {
-    // Keep deleted blobs for 7 days so accidental deletes are recoverable.
-    deleteRetentionPolicy: { enabled: true, days: 7 }
-    // Keep deleted containers for 7 days for the same reason.
-    containerDeleteRetentionPolicy: { enabled: true, days: 7 }
+    // Keep deleted blobs for 30 days — matches the audit recommendation
+    // for data-platform soft-delete retention.
+    deleteRetentionPolicy: { enabled: true, days: 30 }
+    // Keep deleted containers for 30 days for the same reason.
+    containerDeleteRetentionPolicy: { enabled: true, days: 30 }
     // Blob versioning + change feed are required to enable restorePolicy.
     isVersioningEnabled: true
-    changeFeed: { enabled: true, retentionInDays: 7 }
-    // 6-day point-in-time restore window (must be strictly less than
+    changeFeed: { enabled: true, retentionInDays: 30 }
+    // 29-day point-in-time restore window (must be strictly less than
     // deleteRetentionPolicy.days and changeFeed.retentionInDays).
-    restorePolicy: { enabled: true, days: 6 }
+    restorePolicy: { enabled: true, days: 29 }
     cors: { corsRules: [] }
   }
 }
@@ -236,6 +240,16 @@ module privateEndpointModuleDfs '../network/privatelink.bicep' = [
 //     dependsOn: [storagePrivateEndpointsBlob[i]]
 //   }
 // ]
+
+// Resource lock — protects the storage account from accidental `az group delete`.
+resource storageLock 'Microsoft.Authorization/locks@2020-05-01' = if (enableResourceLock) {
+  scope: storage
+  name: '${storageNameCleaned}-no-delete'
+  properties: {
+    level: 'CanNotDelete'
+    notes: 'CSA-in-a-Box: data-lake storage account. Delete via the rollback workflow in docs/ROLLBACK.md.'
+  }
+}
 
 // Outputs
 output storageId string = storage.id

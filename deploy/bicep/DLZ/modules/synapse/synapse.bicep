@@ -23,6 +23,9 @@ param purviewId string = ''
 @description('Log Analytics workspace resource ID for diagnostic settings')
 param logAnalyticsWorkspaceId string = ''
 
+@description('Attach a CanNotDelete resource lock to the Synapse workspace. Default true for production safety.')
+param enableResourceLock bool = true
+
 // Variables
 var synapseDefaultStorageAccountFileSystemName = length(split(synapseDefaultStorageAccountFileSystemId, '/')) >= 13
   ? last(split(synapseDefaultStorageAccountFileSystemId, '/'))
@@ -302,6 +305,16 @@ resource synapseDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-pr
     metrics: [
       { category: 'AllMetrics', enabled: true }
     ]
+  }
+}
+
+// Resource lock — protects the Synapse workspace from accidental deletion.
+resource synapseLock 'Microsoft.Authorization/locks@2020-05-01' = if (enableResourceLock) {
+  scope: synapse
+  name: '${synapseName}-no-delete'
+  properties: {
+    level: 'CanNotDelete'
+    notes: 'CSA-in-a-Box: data-lake Synapse workspace. Delete via the rollback workflow in docs/ROLLBACK.md.'
   }
 }
 

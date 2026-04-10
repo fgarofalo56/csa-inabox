@@ -56,6 +56,9 @@ param configKafka bool
 ])
 param parPurviewPublicNetworkAccess string = 'Disabled'
 
+@description('Attach a CanNotDelete resource lock to the Purview account. Default true for production safety.')
+param enableResourceLock bool = true
+
 @description('VNet and Subnet info for Private Endpoints')
 param endpointConfigs array = []
 
@@ -136,6 +139,19 @@ resource purviewAcct 'Microsoft.Purview/accounts@2024-04-01-preview' = {
     eventHubNamespace
     eventHub
   ]
+}
+
+// Resource lock — protects the Purview catalog from accidental deletion.
+// Rebuilding a Purview catalog is a multi-day operation (re-scanning all
+// sources and re-applying classifications), so the lock is especially
+// valuable here.
+resource purviewLock 'Microsoft.Authorization/locks@2020-05-01' = if (enableResourceLock) {
+  scope: purviewAcct
+  name: '${purviewAcctName}-no-delete'
+  properties: {
+    level: 'CanNotDelete'
+    notes: 'CSA-in-a-Box: DMLZ Purview account. Delete via the rollback workflow in docs/ROLLBACK.md.'
+  }
 }
 
 // Assign the Purview account the correct roles for the Event Hub (Event Hubs Data Owner )
