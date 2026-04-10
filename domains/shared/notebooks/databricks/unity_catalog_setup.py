@@ -23,17 +23,20 @@ dbutils.widgets.text("storage_account", "", "Storage Account Name")
 dbutils.widgets.text("catalog_name", "csa_analytics", "Catalog Name")
 dbutils.widgets.text("environment", "dev", "Environment (dev/prod)")
 dbutils.widgets.text("domains", "shared,sales", "Comma-separated domain names")
+dbutils.widgets.dropdown("dry_run", "true", ["true", "false"], "Dry-run (print GRANTs without executing)")
 
 metastore_name = dbutils.widgets.get("metastore_name")
 storage_account = dbutils.widgets.get("storage_account")
 catalog_name = dbutils.widgets.get("catalog_name")
 environment = dbutils.widgets.get("environment")
 domains = [d.strip() for d in dbutils.widgets.get("domains").split(",")]
+dry_run = dbutils.widgets.get("dry_run").lower() == "true"
 
 print(f"Metastore: {metastore_name}")
 print(f"Catalog: {catalog_name}")
 print(f"Environment: {environment}")
 print(f"Domains: {domains}")
+print(f"Dry run: {dry_run}")
 
 # COMMAND ----------
 
@@ -164,39 +167,130 @@ print("\nNote: Apply this policy via Databricks REST API or Terraform.")
 
 # COMMAND ----------
 
-# Role-based access
+# Role-based access.  The group names below must exist in Databricks
+# Account Console before running this notebook — see
+# governance/rbac/rbac-matrix.json for the sanctioned naming scheme.
+# Schema-level privileges are scoped to the layers each role needs; per
+# the medallion contract, analysts cannot touch Bronze, and data
+# engineers cannot touch the published Gold surface.
+#
+# Changes here are audited: every executed (or dry-run) GRANT is appended
+# to ``audit_log`` and printed at the end so the run can be pasted into
+# the change record.
 ROLES = {
-    "data_engineers": {
-        "catalog_privileges": ["USE_CATALOG", "USE_SCHEMA", "CREATE_TABLE", "CREATE_FUNCTION", "SELECT", "MODIFY"],
-        "schemas": ["bronze", "silver"],
+    "CSA-DataEngineers": {
+        "catalog_privileges": ["USE_CATALOG"],
+        "schema_privileges": {
+            "bronze": ["USE_SCHEMA", "CREATE_TABLE", "SELECT", "MODIFY"],
+            "silver": ["USE_SCHEMA", "CREATE_TABLE", "SELECT", "MODIFY"],
+        },
     },
-    "data_scientists": {
-        "catalog_privileges": ["USE_CATALOG", "USE_SCHEMA", "SELECT", "CREATE_TABLE"],
-        "schemas": ["silver", "gold"],
+    "CSA-DataScientists": {
+        "catalog_privileges": ["USE_CATALOG"],
+        "schema_privileges": {
+            "silver": ["USE_SCHEMA", "SELECT"],
+            "gold": ["USE_SCHEMA", "SELECT", "CREATE_TABLE"],  # for feature tables
+        },
     },
-    "analysts": {
-        "catalog_privileges": ["USE_CATALOG", "USE_SCHEMA", "SELECT"],
-        "schemas": ["gold", "platinum"],
+    "CSA-Analysts": {
+        "catalog_privileges": ["USE_CATALOG"],
+        "schema_privileges": {
+            "gold": ["USE_SCHEMA", "SELECT"],
+            "platinum": ["USE_SCHEMA", "SELECT"],
+        },
     },
-    "platform_admins": {
+    "CSA-PlatformAdmin": {
         "catalog_privileges": ["ALL_PRIVILEGES"],
-        "schemas": ["bronze", "silver", "gold", "platinum"],
+        "schema_privileges": {
+            "bronze": ["ALL_PRIVILEGES"],
+            "silver": ["ALL_PRIVILEGES"],
+            "gold": ["ALL_PRIVILEGES"],
+            "platinum": ["ALL_PRIVILEGES"],
+        },
     },
 }
 
+audit_log: list[str] = []
+
+
+def run_grant(statement: str) -> None:
+    """Execute a GRANT statement (or print it, in dry-run mode)."""
+    audit_log.append(statement)
+    if dry_run:
+        print(f"  [DRY-RUN] {statement}")
+        return
+    try:
+        spark.sql(statement)
+        print(f"  [OK]      {statement}")
+    except Exception as e:
+        print(f"  [FAIL]    {statement}  -- {e}")
+
+
 print("RBAC Configuration:")
 print("-" * 50)
-for role, config in ROLES.items():
-    print(f"\nRole: {role}")
-    print(f"  Privileges: {', '.join(config['catalog_privileges'])}")
-    print(f"  Schemas: {', '.join(config['schemas'])}")
-    # Note: Actual GRANT statements require group names
-    # Example:
-    # for schema in config['schemas']:
-    #     for priv in config['catalog_privileges']:
-    #         spark.sql(f"GRANT {priv} ON SCHEMA {catalog_name}.{schema} TO `{role}`")
 
-print("\nNote: Create groups in Databricks Account Console, then run GRANT statements.")
+for group_name, cfg in ROLES.items():
+    print(f"\nGroup: {group_name}")
+
+    # Catalog-level privileges
+    for priv in cfg["catalog_privileges"]:
+        run_grant(
+            f"GRANT {priv} ON CATALOG {catalog_name} TO `{group_name}`"
+        )
+
+    # Schema-level privileges (per-domain schemas too)
+    for schema, privs in cfg["schema_privileges"].items():
+        for target_schema in [schema] + [f"{schema}_{d}" for d in domains]:
+            for priv in privs:
+                run_grant(
+                    f"GRANT {priv} ON SCHEMA {catalog_name}.{target_schema} "
+                    f"TO `{group_name}`"
+                )
+
+# Table-level row security example: sales analysts can only see rows
+# where customer_segment matches their allowed segments.  Databricks
+# Unity Catalog supports row filters via CREATE FUNCTION + ALTER TABLE
+# SET ROW FILTER.  This is commented out with a real, working shape so
+# security engineers can adapt it when they add a new dimension.
+#
+# run_grant(f"""
+# CREATE FUNCTION IF NOT EXISTS {catalog_name}.gold.segment_filter(segment STRING)
+# RETURN IF(
+#     is_member('CSA-SalesAnalysts'),
+#     segment IN ('active', 'at_risk'),
+#     TRUE
+# )
+# """)
+# run_grant(f"""
+# ALTER TABLE {catalog_name}.gold.gld_customer_lifetime_value
+# SET ROW FILTER {catalog_name}.gold.segment_filter
+# ON (customer_segment)
+# """)
+
+# Column-level masking example: mask PII email for analysts.
+# run_grant(f"""
+# CREATE FUNCTION IF NOT EXISTS {catalog_name}.silver.mask_email(email STRING)
+# RETURN IF(
+#     is_member('CSA-Analysts') AND NOT is_member('CSA-PlatformAdmin'),
+#     '***@***',
+#     email
+# )
+# """)
+# run_grant(f"""
+# ALTER TABLE {catalog_name}.silver.slv_customers
+# ALTER COLUMN email SET MASK {catalog_name}.silver.mask_email
+# """)
+
+print("\n" + "=" * 60)
+print(f"Audit log — {len(audit_log)} statements {'planned' if dry_run else 'executed'}:")
+print("=" * 60)
+for i, statement in enumerate(audit_log, 1):
+    print(f"{i:3d}. {statement}")
+
+if dry_run:
+    print("\n[DRY-RUN] Re-run with dry_run=false to apply the GRANTs above.")
+else:
+    print("\nNext: verify with `SHOW GRANTS ON CATALOG " + catalog_name + "`")
 
 # COMMAND ----------
 
