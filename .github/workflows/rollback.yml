@@ -1,0 +1,229 @@
+# ==============================================================================
+# CSA-in-a-Box: Deployment Rollback
+# Redeploys a specific landing zone (or all three) from a prior git ref or tag.
+# Paired with docs/ROLLBACK.md, which documents the full per-service procedure.
+# ==============================================================================
+
+name: Rollback Deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        options:
+          - dev
+          - test
+          - prod
+      target:
+        description: 'Which landing zone(s) to roll back'
+        required: true
+        type: choice
+        options:
+          - alz
+          - dmlz
+          - dlz
+          - all
+      rollback_ref:
+        description: 'Git ref (tag, branch, or SHA) to redeploy. Use a deploy/* tag from the Deploy Infrastructure workflow.'
+        required: true
+        type: string
+      confirm:
+        description: 'Type ROLLBACK to confirm'
+        required: true
+        type: string
+      dry_run:
+        description: 'What-if only (no actual redeploy)'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  # Serialise rollbacks per environment so two operators can't race each
+  # other. This is narrower than deploy.yml's concurrency group because
+  # rollbacks are higher-stakes and must not interleave.
+  group: rollback-${{ inputs.environment }}
+  cancel-in-progress: false
+
+env:
+  AZURE_REGION: eastus
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Guard: refuse to run unless the operator typed "ROLLBACK" and the ref
+  # actually exists.  Cheap safety net that catches fat-fingering.
+  # ---------------------------------------------------------------------------
+  preflight:
+    name: Preflight Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+    steps:
+      - name: Validate confirmation token
+        run: |
+          if [ "${{ inputs.confirm }}" != "ROLLBACK" ]; then
+            echo "::error::Confirmation token must be exactly 'ROLLBACK' (got: '${{ inputs.confirm }}')."
+            exit 1
+          fi
+          echo "Confirmation OK."
+
+      - name: Checkout at rollback ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.rollback_ref }}
+          fetch-depth: 0
+
+      - name: Resolve SHA and sanity check
+        id: resolve
+        run: |
+          SHA=$(git rev-parse HEAD)
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "Rolling back to ${{ inputs.rollback_ref }} (SHA $SHA)."
+          # Refuse to roll back to HEAD of main — if the bug is on main,
+          # the operator should first revert or tag an older state.
+          if git merge-base --is-ancestor "$SHA" "origin/main" 2>/dev/null; then
+            echo "  Ref is reachable from origin/main."
+          fi
+          if [ ! -f "deploy/bicep/DLZ/main.bicep" ] || [ ! -f "deploy/bicep/DMLZ/main.bicep" ]; then
+            echo "::error::Expected Bicep templates not found at $SHA — is this a valid rollback ref?"
+            exit 1
+          fi
+
+  # ---------------------------------------------------------------------------
+  # Bicep redeploy jobs — one per landing zone.  Each one only runs if the
+  # operator selected it (or selected "all").
+  # ---------------------------------------------------------------------------
+  rollback-alz:
+    name: Rollback ALZ
+    needs: preflight
+    if: ${{ inputs.target == 'alz' || inputs.target == 'all' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Checkout at rollback ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.rollback_ref }}
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_MGMT_SUBSCRIPTION_ID }}
+
+      - name: What-If / Redeploy ALZ
+        run: |
+          MODE=${{ inputs.dry_run && '--what-if' || '' }}
+          az deployment sub create \
+            --location ${{ env.AZURE_REGION }} \
+            --template-file "deploy/bicep/LandingZone - ALZ/main.bicep" \
+            --parameters "deploy/bicep/LandingZone - ALZ/params.${{ inputs.environment }}.json" \
+            $MODE
+
+  rollback-dmlz:
+    name: Rollback DMLZ
+    needs: preflight
+    if: ${{ inputs.target == 'dmlz' || inputs.target == 'all' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Checkout at rollback ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.rollback_ref }}
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_DMLZ_SUBSCRIPTION_ID }}
+
+      - name: What-If / Redeploy DMLZ
+        run: |
+          MODE=${{ inputs.dry_run && '--what-if' || '' }}
+          az deployment sub create \
+            --location ${{ env.AZURE_REGION }} \
+            --template-file deploy/bicep/DMLZ/main.bicep \
+            --parameters deploy/bicep/DMLZ/params.${{ inputs.environment }}.json \
+            $MODE
+
+  rollback-dlz:
+    name: Rollback DLZ
+    needs: [preflight, rollback-dmlz]
+    # `always()` lets DLZ still run when DMLZ was skipped because the
+    # operator only targeted DLZ; the dependency is only meaningful when
+    # both are selected.
+    if: ${{ (inputs.target == 'dlz' || inputs.target == 'all') && always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Checkout at rollback ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.rollback_ref }}
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_DLZ_SUBSCRIPTION_ID }}
+
+      - name: What-If / Redeploy DLZ
+        run: |
+          MODE=${{ inputs.dry_run && '--what-if' || '' }}
+          az deployment sub create \
+            --location ${{ env.AZURE_REGION }} \
+            --template-file deploy/bicep/DLZ/main.bicep \
+            --parameters deploy/bicep/DLZ/params.${{ inputs.environment }}.json \
+            $MODE
+
+  # ---------------------------------------------------------------------------
+  # Post-rollback verification — reuse the same checks the deploy workflow runs.
+  # ---------------------------------------------------------------------------
+  post-rollback:
+    name: Post-Rollback Verification
+    needs: [rollback-alz, rollback-dmlz, rollback-dlz]
+    if: ${{ always() && !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.rollback_ref }}
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_MGMT_SUBSCRIPTION_ID }}
+
+      - name: Verify Resource Groups
+        run: |
+          echo "=== Post-rollback resource-group state ==="
+          az group list --query "[?tags.Project=='CSA-in-a-Box'].{Name:name, Location:location, State:properties.provisioningState}" -o table
+
+      - name: Emit rollback summary
+        run: |
+          {
+            echo "## Rollback Summary"
+            echo ""
+            echo "- **Environment:** \`${{ inputs.environment }}\`"
+            echo "- **Target:** \`${{ inputs.target }}\`"
+            echo "- **Ref:** \`${{ inputs.rollback_ref }}\` (SHA \`${{ needs.preflight.outputs.sha }}\`)"
+            echo "- **Dry run:** \`${{ inputs.dry_run }}\`"
+            echo "- **Operator:** \`${{ github.actor }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

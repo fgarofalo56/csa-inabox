@@ -39,7 +39,10 @@ on:
 
 permissions:
   id-token: write
-  contents: read
+  # `contents: write` is needed by the tag-deployment job below so
+  # successful non-dry-run deploys create a deploy/<env>-<sha> tag that
+  # the rollback workflow can target.
+  contents: write
 
 env:
   AZURE_REGION: eastus
@@ -189,3 +192,37 @@ jobs:
         run: |
           echo "=== Checking Private DNS Zones ==="
           az network private-dns zone list --query "[].{Name:name, Records:numberOfRecordSets}" -o table 2>/dev/null || echo "No DNS zones found"
+
+  # -------------------------------------------------------------------------
+  # Tag a successful, non-dry-run deployment so the Rollback workflow can
+  # target it.  Tag format: deploy/<environment>-<short-sha>-<run-number>
+  # See docs/ROLLBACK.md for how to consume these tags.
+  # -------------------------------------------------------------------------
+  tag-deployment:
+    name: Tag Deployment
+    needs: post-deploy
+    if: ${{ !inputs.dry_run && needs.post-deploy.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create deployment tag
+        run: |
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          TAG="deploy/${{ inputs.environment }}-${SHORT_SHA}-${{ github.run_number }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Deployed ${{ inputs.environment }} by ${{ github.actor }} (run ${{ github.run_id }})"
+          git push origin "$TAG"
+          echo "Created and pushed tag: $TAG"
+          {
+            echo "## Deployment Tag Created"
+            echo ""
+            echo "- **Tag:** \`$TAG\`"
+            echo "- **Use this tag with the Rollback workflow to return to this known-good state.**"
+          } >> "$GITHUB_STEP_SUMMARY"

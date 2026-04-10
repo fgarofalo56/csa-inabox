@@ -53,12 +53,12 @@ param disableLocalAuth bool = true
 ])
 param consistencyLevel string = 'Session'
 
-@description('Backup mode type')
+@description('Backup mode type.  Continuous is strongly recommended so the rollback procedure in docs/ROLLBACK.md can use point-in-time restore.')
 @allowed([
   'Periodic' // Backups with periodic intervals
   'Continuous' // Continuous backups with point-in-time restore
 ])
-param backupPolicyType string = 'Periodic'
+param backupPolicyType string = 'Continuous'
 
 @description('Backup interval in minutes (only applies for Periodic backup mode)')
 param backupIntervalInMinutes int = 240
@@ -66,12 +66,12 @@ param backupIntervalInMinutes int = 240
 @description('Backup retention period in hours (only applies for Periodic backup mode)')
 param backupRetentionInHours int = 720
 
-@description('Continuous backup tier (only applies for Continuous backup mode)')
+@description('Continuous backup tier (only applies for Continuous backup mode).  30Days enables a 30-day PITR window used by the rollback procedure.')
 @allowed([
   'Continuous7Days' // Point-in-time restore for up to 7 days
   'Continuous30Days' // Point-in-time restore for up to 30 days
 ])
-param continuousBackupTier string = 'Continuous7Days'
+param continuousBackupTier string = 'Continuous30Days'
 
 @description('Enable public network access')
 @allowed([

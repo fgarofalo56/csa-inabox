@@ -100,12 +100,24 @@ resource storageManagementPolicies 'Microsoft.Storage/storageAccounts/management
   }
 }
 
-// Blob Service Properties
+// Blob Service Properties — enables the point-in-time restore feature
+// set used by the rollback procedure in docs/ROLLBACK.md.  Versioning +
+// change feed are prerequisites for restorePolicy, and blob/container
+// soft-delete give a second line of recovery.
 resource storageBlobServices 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = {
   parent: storage
   name: 'default'
   properties: {
+    // Keep deleted blobs for 7 days so accidental deletes are recoverable.
+    deleteRetentionPolicy: { enabled: true, days: 7 }
+    // Keep deleted containers for 7 days for the same reason.
     containerDeleteRetentionPolicy: { enabled: true, days: 7 }
+    // Blob versioning + change feed are required to enable restorePolicy.
+    isVersioningEnabled: true
+    changeFeed: { enabled: true, retentionInDays: 7 }
+    // 6-day point-in-time restore window (must be strictly less than
+    // deleteRetentionPolicy.days and changeFeed.retentionInDays).
+    restorePolicy: { enabled: true, days: 6 }
     cors: { corsRules: [] }
   }
 }

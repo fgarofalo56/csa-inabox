@@ -69,3 +69,10 @@ Set these environment variables in the Function App configuration:
 
 ### "Event Hub connection failed"
 Verify `EVENT_HUB_CONNECTION` app setting points to a valid Event Hub namespace connection string.
+
+## Deployment Rollback
+
+If a deployment landed broken state in Azure, see
+[`ROLLBACK.md`](ROLLBACK.md) for the step-by-step rollback runbook. It
+covers Bicep redeploy, ADF pipeline restore, dbt full-refresh, Cosmos DB
+point-in-time restore, and storage account blob recovery.
