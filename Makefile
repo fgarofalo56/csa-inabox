@@ -7,16 +7,18 @@ help: ## Show this help
 # --- Setup ---
 
 setup: ## Set up development environment
-	python -m venv .venv
-	. .venv/bin/activate && pip install --upgrade pip
-	. .venv/bin/activate && pip install ruff pytest dbt-databricks
+	python -m venv .venv && \
+	. .venv/bin/activate && \
+	pip install --upgrade pip && \
+	pip install -e ".[dev]"
 	@echo ""
 	@echo "Activate with: source .venv/bin/activate"
 
 setup-win: ## Set up development environment (Windows)
-	python -m venv .venv
-	.venv\Scripts\activate && pip install --upgrade pip
-	.venv\Scripts\activate && pip install ruff pytest dbt-databricks
+	python -m venv .venv && \
+	.venv\Scripts\activate && \
+	pip install --upgrade pip && \
+	pip install -e ".[dev]"
 	@echo ""
 	@echo "Activate with: .venv\Scripts\activate"
 
@@ -69,10 +71,10 @@ deploy-dev: ## Deploy to dev environment (what-if)
 # --- Cleanup ---
 
 clean: ## Remove build artifacts and caches
-	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-	find . -type d -name ".ruff_cache" -exec rm -rf {} + 2>/dev/null || true
-	find . -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true
-	find . -name "*.pyc" -delete 2>/dev/null || true
+	-find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null
+	-find . -type d -name ".ruff_cache" -exec rm -rf {} + 2>/dev/null
+	-find . -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null
+	-find . -name "*.pyc" -delete 2>/dev/null
 	rm -rf .venv
 	rm -rf domains/shared/dbt/target
 	rm -rf domains/shared/dbt/dbt_packages

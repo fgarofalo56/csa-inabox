@@ -4,7 +4,7 @@
 loop:
   max_iterations: 3          # Max fix-validate cycles per task before escalation
   timeout_minutes: 120       # Max time per task before timeout
-  auto_commit: true          # Auto-commit on successful validation
+  auto_commit: false  # SAFETY: Require human review before committing
   auto_advance: true         # Auto-pick next task after completion
 
 validation_gates:

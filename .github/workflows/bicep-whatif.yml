@@ -147,12 +147,14 @@ jobs:
       - name: Post PR Comment
         if: matrix.changed == 'true' && always()
         uses: actions/github-script@v7
+        env:
+          WHATIF_RESULT: ${{ steps.whatif.outputs.whatif_result }}
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const zone = '${{ matrix.zone }}';
             const exitCode = '${{ steps.whatif.outputs.exit_code }}';
-            const result = `${{ steps.whatif.outputs.whatif_result }}`;
+            const result = process.env.WHATIF_RESULT || '';
             const status = exitCode === '0' ? '✅' : '⚠️';
 
             const body = `## ${status} Bicep What-If: **${zone}**
