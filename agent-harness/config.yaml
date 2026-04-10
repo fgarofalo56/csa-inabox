@@ -53,3 +53,6 @@ notifications:
   on_completion: true
   on_escalation: true
   on_error: true
+
+# Updated by session-end protocol — see .claude/rules/session-end.md
+updated_at: "2026-04-10T16:30:00Z"
