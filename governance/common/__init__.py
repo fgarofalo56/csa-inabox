@@ -1,5 +1,13 @@
-"""Shared validation utilities for governance / data-quality tooling."""
+"""Shared governance utilities — validation patterns and structured logging."""
 
+from governance.common.logging import (
+    bind_trace_context,
+    configure_structlog,
+    extract_trace_id_from_headers,
+    get_logger,
+    new_correlation_id,
+    new_trace_id,
+)
 from governance.common.validation import (
     EMAIL_REGEX,
     EMAIL_REGEX_PATTERN,
@@ -10,6 +18,12 @@ from governance.common.validation import (
 __all__ = [
     "EMAIL_REGEX",
     "EMAIL_REGEX_PATTERN",
+    "bind_trace_context",
+    "configure_structlog",
+    "extract_trace_id_from_headers",
+    "get_logger",
     "is_valid_email",
+    "new_correlation_id",
+    "new_trace_id",
     "substitute_common_patterns",
 ]

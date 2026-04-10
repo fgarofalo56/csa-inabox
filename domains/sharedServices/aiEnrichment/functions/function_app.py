@@ -3,14 +3,31 @@
 Provides HTTP and Blob-triggered functions for enriching documents
 using Azure AI Services (Form Recognizer, Text Analytics, OpenAI).
 Part of the CSA-in-a-Box shared services layer.
+
+Logging
+-------
+All log lines are emitted as JSON via :mod:`governance.common.logging`
+(structlog) so Log Analytics can parse them with a single KQL expression
+(see ``docs/LOG_SCHEMA.md``).  Every HTTP / Blob / Timer invocation binds
+a ``trace_id`` and ``correlation_id`` via :func:`bind_trace_context` so
+cross-service correlation works out of the box.
 """
 
 import json
-import logging
 import os
 from datetime import datetime, timezone
 
 import azure.functions as func
+
+from governance.common.logging import (
+    bind_trace_context,
+    configure_structlog,
+    extract_trace_id_from_headers,
+    get_logger,
+)
+
+configure_structlog(service="csa-ai-enrichment")
+logger = get_logger(__name__)
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
 
@@ -37,7 +54,7 @@ def _get_ai_client():
             credential=AzureKeyCredential(AI_KEY_SECRET),
         )
     except ImportError:
-        logging.warning("azure-ai-textanalytics not installed")
+        logger.warning("ai_client.import_failed", package="azure-ai-textanalytics")
         return None
 
 
@@ -54,7 +71,7 @@ def _get_form_recognizer_client():
             credential=AzureKeyCredential(AI_KEY_SECRET),
         )
     except ImportError:
-        logging.warning("azure-ai-formrecognizer not installed")
+        logger.warning("ai_client.import_failed", package="azure-ai-formrecognizer")
         return None
 
 
@@ -130,7 +147,7 @@ def _enrich_text(text: str) -> dict:
             ]
 
     except Exception:
-        logging.exception("Text enrichment failed")
+        logger.exception("enrichment.text_failed")
         results["error"] = "Text enrichment failed. Check service logs for details."
 
     return results
@@ -174,7 +191,7 @@ def _analyze_document(blob_data: bytes, content_type: str) -> dict:
             ]
 
     except Exception:
-        logging.exception("Document analysis failed")
+        logger.exception("enrichment.document_failed")
         results["error"] = "Document analysis failed. Check service logs for details."
 
     return results
@@ -191,40 +208,54 @@ def enrich_text(req: func.HttpRequest) -> func.HttpResponse:
     Body: { "text": "Your text to analyze" }
     Returns: JSON with enrichment results
     """
-    logging.info("AI enrichment request received")
+    trace_id = extract_trace_id_from_headers(dict(req.headers))
+    with bind_trace_context(
+        trace_id=trace_id,
+        request_method="POST",
+        request_route="/api/enrich",
+    ):
+        logger.info("request.received")
 
-    try:
-        body = req.get_json()
-    except ValueError:
+        try:
+            body = req.get_json()
+        except ValueError:
+            logger.warning("request.invalid_json")
+            return func.HttpResponse(
+                json.dumps({"error": "Invalid JSON body"}),
+                status_code=400,
+                mimetype="application/json",
+            )
+
+        text = body.get("text", "")
+        if not text:
+            logger.warning("request.missing_field", field="text")
+            return func.HttpResponse(
+                json.dumps({"error": "Missing 'text' field"}),
+                status_code=400,
+                mimetype="application/json",
+            )
+
+        if len(text) > 125000:
+            logger.warning("request.payload_too_large", input_length=len(text))
+            return func.HttpResponse(
+                json.dumps({"error": "Text exceeds 125,000 character limit"}),
+                status_code=413,
+                mimetype="application/json",
+            )
+
+        results = _enrich_text(text)
+        results["input_length"] = len(text)
+
+        logger.info(
+            "request.completed",
+            input_length=len(text),
+            has_error="error" in results,
+        )
         return func.HttpResponse(
-            json.dumps({"error": "Invalid JSON body"}),
-            status_code=400,
+            json.dumps(results, default=str),
+            status_code=200,
             mimetype="application/json",
         )
-
-    text = body.get("text", "")
-    if not text:
-        return func.HttpResponse(
-            json.dumps({"error": "Missing 'text' field"}),
-            status_code=400,
-            mimetype="application/json",
-        )
-
-    if len(text) > 125000:
-        return func.HttpResponse(
-            json.dumps({"error": "Text exceeds 125,000 character limit"}),
-            status_code=413,
-            mimetype="application/json",
-        )
-
-    results = _enrich_text(text)
-    results["input_length"] = len(text)
-
-    return func.HttpResponse(
-        json.dumps(results, default=str),
-        status_code=200,
-        mimetype="application/json",
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -246,47 +277,52 @@ def process_inbox_document(blob: func.InputStream, outputBlob: func.Out[str]):
     Triggered by new blobs in the inbox container. Runs document analysis
     and text enrichment, then writes results to the enriched container.
     """
-    logging.info(f"Processing blob: {blob.name}, Size: {blob.length} bytes")
+    with bind_trace_context(
+        trigger="blob",
+        blob_name=blob.name,
+        blob_size=blob.length,
+    ):
+        logger.info("blob.received")
 
-    blob_data = blob.read()
-    content_type = blob.name.rsplit(".", 1)[-1].lower() if blob.name else ""
+        blob_data = blob.read()
+        content_type = blob.name.rsplit(".", 1)[-1].lower() if blob.name else ""
 
-    enrichment = {
-        "source_blob": blob.name,
-        "source_size": blob.length,
-        "processed_at": datetime.now(timezone.utc).isoformat(),
-        "content_type": content_type,
-    }
-
-    # Route based on content type
-    if content_type in ("pdf", "png", "jpg", "jpeg", "tiff", "bmp"):
-        mime_map = {
-            "pdf": "application/pdf",
-            "png": "image/png",
-            "jpg": "image/jpeg",
-            "jpeg": "image/jpeg",
-            "tiff": "image/tiff",
-            "bmp": "image/bmp",
+        enrichment = {
+            "source_blob": blob.name,
+            "source_size": blob.length,
+            "processed_at": datetime.now(timezone.utc).isoformat(),
+            "content_type": content_type,
         }
-        doc_results = _analyze_document(blob_data, mime_map.get(content_type, "application/octet-stream"))
-        enrichment["document_analysis"] = doc_results
 
-        # Also run text enrichment on extracted content
-        if doc_results.get("content_preview"):
-            enrichment["text_enrichment"] = _enrich_text(doc_results["content_preview"])
+        # Route based on content type
+        if content_type in ("pdf", "png", "jpg", "jpeg", "tiff", "bmp"):
+            mime_map = {
+                "pdf": "application/pdf",
+                "png": "image/png",
+                "jpg": "image/jpeg",
+                "jpeg": "image/jpeg",
+                "tiff": "image/tiff",
+                "bmp": "image/bmp",
+            }
+            doc_results = _analyze_document(blob_data, mime_map.get(content_type, "application/octet-stream"))
+            enrichment["document_analysis"] = doc_results
 
-    elif content_type in ("txt", "csv", "json", "md"):
-        text_content = blob_data.decode("utf-8", errors="replace")
-        enrichment["text_enrichment"] = _enrich_text(text_content[:125000])
+            # Also run text enrichment on extracted content
+            if doc_results.get("content_preview"):
+                enrichment["text_enrichment"] = _enrich_text(doc_results["content_preview"])
 
-    else:
-        enrichment["skipped"] = True
-        enrichment["reason"] = f"Unsupported content type: {content_type}"
-        logging.warning(f"Skipping unsupported file type: {content_type}")
+        elif content_type in ("txt", "csv", "json", "md"):
+            text_content = blob_data.decode("utf-8", errors="replace")
+            enrichment["text_enrichment"] = _enrich_text(text_content[:125000])
 
-    output_json = json.dumps(enrichment, default=str, indent=2)
-    outputBlob.set(output_json)
-    logging.info(f"Enrichment complete for {blob.name}")
+        else:
+            enrichment["skipped"] = True
+            enrichment["reason"] = f"Unsupported content type: {content_type}"
+            logger.warning("blob.unsupported_type", content_type=content_type)
+
+        output_json = json.dumps(enrichment, default=str, indent=2)
+        outputBlob.set(output_json)
+        logger.info("blob.completed")
 
 
 # ---------------------------------------------------------------------------

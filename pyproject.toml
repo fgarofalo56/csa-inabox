@@ -15,10 +15,16 @@ dev = [
     "mypy>=1.0.0",
     "bandit>=1.7.5",
     "pre-commit>=3.5.0",
+    # structlog is a governance runtime dep but tests for the shared
+    # logging helper need it available in the dev env too.
+    "structlog>=24.1.0",
 ]
 governance = [
     "pyyaml>=6.0",
     "azure-monitor-ingestion>=1.0.0",
+    # Structured JSON logging with trace/correlation context — see
+    # governance/common/logging.py and docs/LOG_SCHEMA.md.
+    "structlog>=24.1.0",
 ]
 
 [tool.ruff]
