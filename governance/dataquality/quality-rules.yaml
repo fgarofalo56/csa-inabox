@@ -115,7 +115,11 @@ great_expectations:
             column: customer_id
         - expect_column_values_to_match_regex:
             column: email
-            regex: "^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\\.[a-zA-Z0-9-.]+$"
+            # {EMAIL_REGEX} is substituted at load time by
+            # governance.common.validation.substitute_common_patterns so this
+            # pattern always matches the canonical one in
+            # governance/common/validation.py.
+            regex: "{EMAIL_REGEX}"
             mostly: 0.95
 
     - name: silver_sales_orders_suite

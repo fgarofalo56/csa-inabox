@@ -47,9 +47,9 @@ cleaned as (
         cast(created_at as timestamp) as created_at,
         cast(updated_at as timestamp) as updated_at,
 
-        -- Data quality flags
-        case when email rlike '^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$'
-             then false else true end as _is_invalid_email,
+        -- Data quality flags (email regex lives in
+        -- macros/data_quality.sql, sourced from dbt_project.yml var)
+        {{ flag_invalid_email('email') }} as _is_invalid_email,
         case when customer_id is null then true else false end as _is_missing_id,
 
         -- Metadata

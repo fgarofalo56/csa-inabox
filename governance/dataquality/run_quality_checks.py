@@ -25,6 +25,14 @@ from typing import Any
 
 import yaml
 
+# Resolve the repo root so ``governance.common`` imports work whether the
+# script is invoked from the repo root or from ``governance/dataquality/``.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from governance.common.validation import substitute_common_patterns  # noqa: E402
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("data_quality")
 
@@ -63,7 +71,10 @@ class DataQualityRunner:
 
     def __init__(self, config_path: str):
         with open(config_path) as f:
-            self.config = yaml.safe_load(f)
+            raw_config = yaml.safe_load(f)
+        # Expand shared-pattern placeholders like {EMAIL_REGEX} so the rule
+        # file stays in sync with governance.common.validation.
+        self.config = substitute_common_patterns(raw_config)
         self.results: list[QualityCheckResult] = []
 
     def run_dbt_tests(self, select: str = "") -> list[QualityCheckResult]:

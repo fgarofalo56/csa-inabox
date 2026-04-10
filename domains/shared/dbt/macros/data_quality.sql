@@ -12,9 +12,15 @@
     case when {{ column_name }} < 0 then true else false end
 {% endmacro %}
 
-{# Validate email format with regex #}
+{#
+    Validate email format with the canonical regex defined in
+    dbt_project.yml var `email_regex` (kept in sync with
+    governance/common/validation.py EMAIL_REGEX_PATTERN).
+    Returns true when the email is invalid so it can be assigned to a
+    `_is_invalid_email` quality flag column.
+#}
 {% macro flag_invalid_email(column_name) %}
-    case when {{ column_name }} rlike '^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$'
+    case when {{ column_name }} rlike '{{ var("email_regex") }}'
          then false else true end
 {% endmacro %}
 
