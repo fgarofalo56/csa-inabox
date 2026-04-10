@@ -33,6 +33,9 @@ param storageSku string = ''
 @description('Attach a CanNotDelete resource lock to the storage account.  Default true for production safety.')
 param enableResourceLock bool = true
 
+@description('Log Analytics workspace resource ID for diagnostic settings. Leave empty to skip diagnostics.')
+param logAnalyticsWorkspaceId string = ''
+
 // Variables
 var storageNameCleaned = length(storageName) > 24
   ? concat(substring(toLower(replace(storageName, '-', '')), 0, 20), uniqueString(resourceGroup().id))
@@ -240,6 +243,35 @@ module privateEndpointModuleDfs '../network/privatelink.bicep' = [
 //     dependsOn: [storagePrivateEndpointsBlob[i]]
 //   }
 // ]
+
+// Diagnostic settings — storage account diagnostics flow at the
+// blobServices / fileServices sub-resource level, not the account
+// itself.  The account still gets a metric-only diagnostic setting so
+// transaction / availability metrics land in Log Analytics.
+resource storageAccountDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(logAnalyticsWorkspaceId)) {
+  name: '${storageNameCleaned}-diagnostics'
+  scope: storage
+  properties: {
+    workspaceId: logAnalyticsWorkspaceId
+    metrics: [
+      { category: 'Transaction', enabled: true }
+    ]
+  }
+}
+
+resource storageBlobDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(logAnalyticsWorkspaceId)) {
+  name: '${storageNameCleaned}-blob-diagnostics'
+  scope: storageBlobServices
+  properties: {
+    workspaceId: logAnalyticsWorkspaceId
+    logs: [
+      { categoryGroup: 'allLogs', enabled: true }
+    ]
+    metrics: [
+      { category: 'Transaction', enabled: true }
+    ]
+  }
+}
 
 // Resource lock — protects the storage account from accidental `az group delete`.
 resource storageLock 'Microsoft.Authorization/locks@2020-05-01' = if (enableResourceLock) {

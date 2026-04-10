@@ -14,6 +14,9 @@ param privateDnsZoneIdKeyVault string = ''
 @description('Attach a CanNotDelete resource lock to the Key Vault. Default true for production safety.')
 param enableResourceLock bool = true
 
+@description('Log Analytics workspace resource ID for diagnostic settings. Leave empty to skip diagnostics.')
+param logAnalyticsWorkspaceId string = ''
+
 // Variables
 var keyVaultPrivateEndpointName = '${keyVault.name}-private-endpoint'
 
@@ -98,6 +101,21 @@ resource keyVaultLock 'Microsoft.Authorization/locks@2020-05-01' = if (enableRes
   properties: {
     level: 'CanNotDelete'
     notes: 'CSA-in-a-Box: ALZ Key Vault. Delete via the rollback workflow in docs/ROLLBACK.md.'
+  }
+}
+
+// Diagnostic settings — audit every Key Vault operation to Log Analytics.
+resource keyVaultDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(logAnalyticsWorkspaceId)) {
+  name: '${keyvaultName}-diagnostics'
+  scope: keyVault
+  properties: {
+    workspaceId: logAnalyticsWorkspaceId
+    logs: [
+      { categoryGroup: 'allLogs', enabled: true }
+    ]
+    metrics: [
+      { category: 'AllMetrics', enabled: true }
+    ]
   }
 }
 

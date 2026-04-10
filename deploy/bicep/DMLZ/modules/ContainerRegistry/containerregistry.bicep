@@ -11,6 +11,12 @@ param subnetId string
 param containerRegistryName string
 param privateDnsZoneIdContainerRegistry string = ''
 
+@description('Attach a CanNotDelete resource lock to the ACR. Default true for production safety.')
+param enableResourceLock bool = true
+
+@description('Log Analytics workspace resource ID for diagnostic settings. Leave empty to skip diagnostics.')
+param logAnalyticsWorkspaceId string = ''
+
 // Variables
 var containerRegistryNameCleaned = replace(containerRegistryName, '-', '')
 var containerRegistryPrivateEndpointName = '${containerRegistry.name}-private-endpoint'
@@ -92,6 +98,32 @@ resource containerRegistryPrivateEndpointARecord 'Microsoft.Network/privateEndpo
           privateDnsZoneId: privateDnsZoneIdContainerRegistry
         }
       }
+    ]
+  }
+}
+
+// Resource lock — protects the ACR from accidental deletion.
+resource containerRegistryLock 'Microsoft.Authorization/locks@2020-05-01' = if (enableResourceLock) {
+  scope: containerRegistry
+  name: '${containerRegistryNameCleaned}-no-delete'
+  properties: {
+    level: 'CanNotDelete'
+    notes: 'CSA-in-a-Box: DMLZ container registry. Delete via the rollback workflow in docs/ROLLBACK.md.'
+  }
+}
+
+// Diagnostic settings — ship registry repository + login events to Log
+// Analytics for audit.
+resource containerRegistryDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(logAnalyticsWorkspaceId)) {
+  name: '${containerRegistryNameCleaned}-diagnostics'
+  scope: containerRegistry
+  properties: {
+    workspaceId: logAnalyticsWorkspaceId
+    logs: [
+      { categoryGroup: 'allLogs', enabled: true }
+    ]
+    metrics: [
+      { category: 'AllMetrics', enabled: true }
     ]
   }
 }

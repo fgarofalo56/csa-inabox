@@ -59,6 +59,9 @@ param parPurviewPublicNetworkAccess string = 'Disabled'
 @description('Attach a CanNotDelete resource lock to the Purview account. Default true for production safety.')
 param enableResourceLock bool = true
 
+@description('Log Analytics workspace resource ID for diagnostic settings. Leave empty to skip diagnostics.')
+param logAnalyticsWorkspaceId string = ''
+
 @description('VNet and Subnet info for Private Endpoints')
 param endpointConfigs array = []
 
@@ -151,6 +154,22 @@ resource purviewLock 'Microsoft.Authorization/locks@2020-05-01' = if (enableReso
   properties: {
     level: 'CanNotDelete'
     notes: 'CSA-in-a-Box: DMLZ Purview account. Delete via the rollback workflow in docs/ROLLBACK.md.'
+  }
+}
+
+// Diagnostic settings — capture scan status and data-sensitivity events
+// so governance audits can query them from Log Analytics.
+resource purviewDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(logAnalyticsWorkspaceId)) {
+  name: '${purviewAcctName}-diagnostics'
+  scope: purviewAcct
+  properties: {
+    workspaceId: logAnalyticsWorkspaceId
+    logs: [
+      { categoryGroup: 'allLogs', enabled: true }
+    ]
+    metrics: [
+      { category: 'AllMetrics', enabled: true }
+    ]
   }
 }
 

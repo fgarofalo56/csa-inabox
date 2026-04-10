@@ -106,6 +106,9 @@ param tags object = {}
 @description('Attach a CanNotDelete resource lock to the Cosmos account. Default true for production safety.')
 param enableResourceLock bool = true
 
+@description('Log Analytics workspace resource ID for diagnostic settings. Leave empty to skip diagnostics.')
+param logAnalyticsWorkspaceId string = ''
+
 // Build the ``locations`` array from the primary location and the optional
 // secondary. When secondaryLocation is set we define two failover priorities
 // so Azure knows which is primary.
@@ -205,6 +208,24 @@ resource cosmosLock 'Microsoft.Authorization/locks@2020-05-01' = if (enableResou
   properties: {
     level: 'CanNotDelete'
     notes: 'CSA-in-a-Box: data-lake Cosmos account. Delete via the rollback workflow in docs/ROLLBACK.md.'
+  }
+}
+
+// Diagnostic settings — ship all Cosmos logs + metrics to Log Analytics
+// so ``csa-event-processing`` and the data-quality runner can correlate
+// request IDs across services. See docs/LOG_SCHEMA.md for the shared
+// schema and KQL queries.
+resource cosmosDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(logAnalyticsWorkspaceId)) {
+  name: '${cosmosDbAccountName}-diagnostics'
+  scope: cosmosDbAccount
+  properties: {
+    workspaceId: logAnalyticsWorkspaceId
+    logs: [
+      { categoryGroup: 'allLogs', enabled: true }
+    ]
+    metrics: [
+      { category: 'AllMetrics', enabled: true }
+    ]
   }
 }
 
