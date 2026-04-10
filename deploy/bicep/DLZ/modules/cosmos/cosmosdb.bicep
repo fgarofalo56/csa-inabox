@@ -1,6 +1,13 @@
 @description('Azure region for deployment')
 param parLocation string
 
+@description('''Optional secondary Azure region for multi-region reads/writes.
+When set, the account is configured with two locations and — if
+enableMultipleWriteLocations is true — both regions accept writes.  The
+DR runbook (docs/DR.md) recommends enabling this for any Cosmos account
+holding workloads with RPO < 15 minutes.''')
+param secondaryLocation string = ''
+
 @description('Name of the Cosmos DB account')
 param cosmosDbAccountName string
 
@@ -96,6 +103,30 @@ param virtualNetworkRules array = []
 @description('Tags for the Cosmos DB account')
 param tags object = {}
 
+// Build the ``locations`` array from the primary location and the optional
+// secondary. When secondaryLocation is set we define two failover priorities
+// so Azure knows which is primary.
+var cosmosLocations = empty(secondaryLocation)
+  ? [
+      {
+        locationName: parLocation
+        failoverPriority: 0
+        isZoneRedundant: false
+      }
+    ]
+  : [
+      {
+        locationName: parLocation
+        failoverPriority: 0
+        isZoneRedundant: false
+      }
+      {
+        locationName: secondaryLocation
+        failoverPriority: 1
+        isZoneRedundant: false
+      }
+    ]
+
 resource cosmosDbAccount 'Microsoft.DocumentDB/databaseAccounts@2024-12-01-preview' = {
   name: cosmosDbAccountName
   location: parLocation
@@ -106,6 +137,7 @@ resource cosmosDbAccount 'Microsoft.DocumentDB/databaseAccounts@2024-12-01-previ
   tags: tags
   properties: {
     databaseAccountOfferType: 'Standard'
+    locations: cosmosLocations
     enableAutomaticFailover: enableAutomaticFailover
     enableMultipleWriteLocations: enableMultipleWriteLocations
     enableAnalyticalStorage: enableAnalyticalStorage

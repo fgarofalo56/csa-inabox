@@ -76,3 +76,10 @@ If a deployment landed broken state in Azure, see
 [`ROLLBACK.md`](ROLLBACK.md) for the step-by-step rollback runbook. It
 covers Bicep redeploy, ADF pipeline restore, dbt full-refresh, Cosmos DB
 point-in-time restore, and storage account blob recovery.
+
+## Regional Outage / Disaster Recovery
+
+If the whole primary Azure region is down (not just a deploy gone bad),
+see [`DR.md`](DR.md) for the failover runbook. It documents RPO/RTO
+targets per service, the primary/secondary region pairs, and the
+step-by-step failover and failback procedures.

@@ -14,6 +14,22 @@ param storageName string
 param privateDNSZones object
 param fileSystemNames array
 
+@description('''Override the storage SKU.  When empty, the module picks
+Standard_ZRS in regions that support it and Standard_LRS elsewhere.  Set
+this to ``Standard_RAGRS`` (or ``Standard_RAGZRS``) on critical data
+workloads to enable read-access geo-redundant storage — this is the
+tier the DR runbook (docs/DR.md) expects for RPO < 1h workloads.''')
+@allowed([
+  ''
+  'Standard_LRS'
+  'Standard_ZRS'
+  'Standard_GRS'
+  'Standard_RAGRS'
+  'Standard_GZRS'
+  'Standard_RAGZRS'
+])
+param storageSku string = ''
+
 // Variables
 var storageNameCleaned = length(storageName) > 24
   ? concat(substring(toLower(replace(storageName, '-', '')), 0, 20), uniqueString(resourceGroup().id))
@@ -32,6 +48,10 @@ var storageZrsRegions = [
   'westus3'
 ]
 
+var effectiveStorageSku = !empty(storageSku)
+  ? storageSku
+  : (contains(storageZrsRegions, toLower(location)) ? 'Standard_ZRS' : 'Standard_LRS')
+
 // Storage Account
 resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   name: storageNameCleaned
@@ -41,7 +61,7 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
     type: 'SystemAssigned'
   }
   sku: {
-    name: contains(storageZrsRegions, toLower(location)) ? 'Standard_ZRS' : 'Standard_LRS'
+    name: effectiveStorageSku
   }
   kind: 'StorageV2'
   properties: {
