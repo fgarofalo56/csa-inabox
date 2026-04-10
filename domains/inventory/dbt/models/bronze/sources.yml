@@ -1,0 +1,57 @@
+version: 2
+
+sources:
+  - name: raw_inventory
+    description: >
+      Raw inventory data ingested from the warehouse management system.
+      Loaded via dbt seed or ADLS Bronze ingestion.
+    schema: seeds
+    tables:
+      - name: sample_inventory
+        description: >
+          Product inventory levels across warehouses. Tracks on-hand
+          quantities, reservations, and reorder thresholds. ~3% of rows
+          contain deliberate quality issues for validation testing.
+        columns:
+          - name: inventory_id
+            description: Unique inventory record identifier.
+            tests:
+              - not_null
+              - unique
+          - name: product_id
+            description: FK to sample_products.product_id. Nullable (~1% null for quality testing).
+          - name: warehouse_id
+            description: FK to sample_warehouses.warehouse_id.
+            tests:
+              - not_null
+          - name: qty_on_hand
+            description: Current quantity physically in warehouse.
+          - name: qty_reserved
+            description: Quantity reserved for pending orders.
+          - name: reorder_point
+            description: Threshold below which a reorder alert is triggered.
+          - name: last_restocked_at
+            description: Timestamp of the most recent restocking event.
+          - name: _ingested_at
+            description: Ingestion timestamp added at load time.
+
+      - name: sample_warehouses
+        description: >
+          Reference table of warehouse locations. Clean data, no
+          deliberate quality issues.
+        columns:
+          - name: warehouse_id
+            description: Unique warehouse identifier.
+            tests:
+              - not_null
+              - unique
+          - name: warehouse_name
+            description: Human-readable warehouse name.
+            tests:
+              - not_null
+          - name: region
+            description: Azure region where the warehouse is located.
+          - name: capacity
+            description: Maximum storage capacity (units).
+          - name: _ingested_at
+            description: Ingestion timestamp.

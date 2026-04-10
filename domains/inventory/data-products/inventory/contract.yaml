@@ -1,0 +1,85 @@
+# Data product contract — inventory.inventory
+#
+# This file is the authoritative interface between the inventory domain
+# and its consumers.  It declares the schema, SLAs, and quality rules
+# for the ``inventory.inventory`` data product.
+
+apiVersion: csa.microsoft.com/v1
+kind: DataProductContract
+
+metadata:
+  name: inventory.inventory
+  domain: inventory
+  owner: supply-chain-data-team@contoso.com
+  version: "1.0.0"
+  description: >
+    Inventory position records from the warehouse management system.
+    Tracks product stock levels across warehouses, including on-hand
+    quantities, reservations, and reorder thresholds. Cross-domain
+    joins with shared.products for product enrichment and shared.orders
+    for demand-supply analysis.
+
+schema:
+  primary_key: [inventory_sk]
+  columns:
+    - name: inventory_sk
+      type: string
+      nullable: false
+      description: Surrogate key (md5 of inventory_id). Generated in Silver.
+    - name: inventory_id
+      type: long
+      nullable: false
+      description: Unique inventory record identifier from the WMS.
+    - name: product_id
+      type: long
+      nullable: true
+      description: FK to shared.products.product_id. Null for unlinked records.
+    - name: warehouse_id
+      type: long
+      nullable: false
+      description: FK to inventory.warehouses.warehouse_id.
+    - name: qty_on_hand
+      type: int
+      nullable: false
+      description: Current quantity physically in warehouse.
+    - name: qty_reserved
+      type: int
+      nullable: false
+      description: Quantity reserved for pending orders.
+    - name: reorder_point
+      type: int
+      nullable: false
+      description: Threshold below which a reorder alert is triggered.
+    - name: last_restocked_at
+      type: timestamp
+      nullable: true
+      description: Timestamp of the most recent restocking event.
+    - name: is_valid
+      type: boolean
+      nullable: false
+      description: True when every quality flag is clean. Gold filters on this.
+    - name: validation_errors
+      type: string
+      nullable: true
+      description: Human-readable '; '-joined list of validation failures.
+
+sla:
+  freshness_minutes: 120
+  valid_row_ratio: 0.97
+  supported_until: "2027-04-10"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: inventory_sk
+  - rule: expect_column_values_to_be_unique
+    column: inventory_sk
+  - rule: expect_column_values_to_not_be_null
+    column: inventory_id
+  - rule: expect_column_values_to_be_between
+    column: qty_on_hand
+    min_value: 0
+    mostly: 0.97
+  - rule: expect_column_values_to_be_between
+    column: qty_reserved
+    min_value: 0
+    mostly: 0.97

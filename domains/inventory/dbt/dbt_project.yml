@@ -1,0 +1,42 @@
+name: 'csa_inventory'
+version: '1.0.0'
+config-version: 2
+require-dbt-version: [">=1.7.0", "<2.0.0"]
+
+profile: 'csa_analytics'
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+macro-paths: ["../../shared/dbt/macros"]
+
+vars:
+  bronze_database: "bronze"
+  silver_database: "silver"
+  gold_database: "gold"
+  file_format: "delta"
+  incremental_strategy: "merge"
+  freshness_warn_hours: 24
+  freshness_error_hours: 48
+
+models:
+  csa_inventory:
+    bronze:
+      +materialized: incremental
+      +file_format: delta
+      +schema: bronze
+      +tags: ['bronze', 'inventory']
+    silver:
+      +materialized: incremental
+      +file_format: delta
+      +schema: silver
+      +tags: ['silver', 'inventory']
+      +incremental_strategy: merge
+    gold:
+      +materialized: table
+      +file_format: delta
+      +schema: gold
+      +tags: ['gold', 'inventory']
+
+seeds:
+  csa_inventory:
+    +schema: seeds

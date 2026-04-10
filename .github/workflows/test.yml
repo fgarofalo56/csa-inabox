@@ -86,12 +86,16 @@ jobs:
           MINIMUM_ORANGE: 60
 
   dbt-compile:
-    name: dbt Compile Check
+    name: dbt Compile (${{ matrix.domain }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        domain: [shared, finance, inventory]
     defaults:
       run:
-        working-directory: domains/shared/dbt
+        working-directory: domains/${{ matrix.domain }}/dbt
     steps:
       - uses: actions/checkout@v4
 
@@ -113,6 +117,115 @@ jobs:
           DBT_DATABRICKS_HOST: ${{ secrets.DBT_DATABRICKS_HOST }}
           DBT_DATABRICKS_HTTP_PATH: ${{ secrets.DBT_DATABRICKS_HTTP_PATH }}
           DBT_DATABRICKS_TOKEN: ${{ secrets.DBT_DATABRICKS_TOKEN }}
+
+  dbt-integration:
+    name: dbt Integration (${{ matrix.domain }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        domain: [shared, finance, inventory]
+    defaults:
+      run:
+        working-directory: domains/${{ matrix.domain }}/dbt
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dbt + DuckDB adapter
+        run: |
+          pip install dbt-core dbt-duckdb
+
+      - name: Create DuckDB profile
+        run: |
+          mkdir -p ~/.dbt
+          cat > ~/.dbt/profiles.yml << 'PROFILE'
+          csa_analytics:
+            target: ci
+            outputs:
+              ci:
+                type: duckdb
+                path: ":memory:"
+                schema: main
+          PROFILE
+
+      - name: dbt deps
+        run: dbt deps || echo "dbt deps skipped (no packages)"
+
+      - name: dbt seed
+        run: dbt seed --target ci
+
+      - name: dbt run
+        run: dbt run --target ci
+
+      - name: dbt test
+        run: dbt test --target ci
+
+  pr-summary:
+    name: PR Summary
+    if: github.event_name == 'pull_request' && always()
+    needs: [python-tests, dbt-compile, dbt-integration, bicep-lint, powershell-lint, security-scan]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const jobs = [
+              { name: 'Python Tests', id: 'python-tests' },
+              { name: 'dbt Compile', id: 'dbt-compile' },
+              { name: 'dbt Integration', id: 'dbt-integration' },
+              { name: 'Bicep Lint', id: 'bicep-lint' },
+              { name: 'PowerShell Lint', id: 'powershell-lint' },
+              { name: 'Security Scan', id: 'security-scan' },
+            ];
+            const needs = ${{ toJSON(needs) }};
+            const rows = jobs.map(j => {
+              const result = needs[j.id]?.result || 'skipped';
+              const emoji = { success: '✅', failure: '❌', skipped: '⏭️', cancelled: '🚫' }[result] || '❓';
+              return `| ${j.name} | ${emoji} ${result} |`;
+            }).join('\n');
+
+            const body = [
+              '## 🧪 CI Test Summary',
+              '',
+              '| Job | Status |',
+              '|-----|--------|',
+              rows,
+              '',
+              `> Run: [#${context.runNumber}](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
+            ].join('\n');
+
+            const marker = '## 🧪 CI Test Summary';
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find(c => c.body?.startsWith(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
 
   bicep-lint:
     name: Bicep Lint
