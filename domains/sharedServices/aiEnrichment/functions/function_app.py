@@ -4,6 +4,16 @@ Provides HTTP and Blob-triggered functions for enriching documents
 using Azure AI Services (Form Recognizer, Text Analytics, OpenAI).
 Part of the CSA-in-a-Box shared services layer.
 
+Async / concurrency model
+-------------------------
+Every trigger is ``async def`` and every outbound SDK call uses the
+``.aio`` variant (``azure.ai.textanalytics.aio``,
+``azure.ai.formrecognizer.aio``) so the Azure Functions host can
+interleave multiple in-flight invocations without blocking the event
+loop on I/O.  Clients are instantiated per-invocation inside
+``async with`` blocks so the SDK's aiohttp transport gets closed
+cleanly; there is no module-level client cache.
+
 Logging
 -------
 All log lines are emitted as JSON via :mod:`governance.common.logging`
@@ -42,52 +52,42 @@ ENRICHED_CONTAINER = os.environ.get("ENRICHED_CONTAINER", "enriched")
 INBOX_CONTAINER = os.environ.get("INBOX_CONTAINER", "inbox")
 
 
-def _get_ai_client() -> Any:
-    """Lazy-initialize Azure AI Text Analytics client.
-
-    Returns a ``TextAnalyticsClient`` instance or ``None`` if the package
-    is not installed or the endpoint/key are not configured. Typed as
-    ``Any`` because the concrete client type lives behind an optional
-    import.
-    """
+# ---------------------------------------------------------------------------
+# Capability probes (synchronous, for health check only)
+# ---------------------------------------------------------------------------
+def _text_analytics_available() -> bool:
+    """Return True if the Text Analytics SDK + config are both ready."""
+    if not AI_ENDPOINT or not AI_KEY_SECRET:
+        return False
     try:
-        from azure.ai.textanalytics import TextAnalyticsClient
-        from azure.core.credentials import AzureKeyCredential
-
-        if not AI_ENDPOINT or not AI_KEY_SECRET:
-            return None
-        return TextAnalyticsClient(
-            endpoint=AI_ENDPOINT,
-            credential=AzureKeyCredential(AI_KEY_SECRET),
-        )
+        import azure.ai.textanalytics.aio  # noqa: F401
+        return True
     except ImportError:
-        logger.warning("ai_client.import_failed", package="azure-ai-textanalytics")
-        return None
+        return False
 
 
-def _get_form_recognizer_client() -> Any:
-    """Lazy-initialize Azure AI Document Intelligence client.
-
-    Returns a ``DocumentAnalysisClient`` instance or ``None`` if the
-    package is not installed or the endpoint/key are not configured.
-    """
+def _form_recognizer_available() -> bool:
+    """Return True if the Document Intelligence SDK + config are both ready."""
+    if not AI_ENDPOINT or not AI_KEY_SECRET:
+        return False
     try:
-        from azure.ai.formrecognizer import DocumentAnalysisClient
-        from azure.core.credentials import AzureKeyCredential
-
-        if not AI_ENDPOINT or not AI_KEY_SECRET:
-            return None
-        return DocumentAnalysisClient(
-            endpoint=AI_ENDPOINT,
-            credential=AzureKeyCredential(AI_KEY_SECRET),
-        )
+        import azure.ai.formrecognizer.aio  # noqa: F401
+        return True
     except ImportError:
-        logger.warning("ai_client.import_failed", package="azure-ai-formrecognizer")
-        return None
+        return False
 
 
-def _enrich_text(text: str) -> dict[str, Any]:
-    """Run text enrichment pipeline: language detection, sentiment, entities, PII."""
+# ---------------------------------------------------------------------------
+# Async enrichment pipelines
+# ---------------------------------------------------------------------------
+async def _enrich_text(text: str) -> dict[str, Any]:
+    """Run text enrichment pipeline: language detection, sentiment, entities, PII.
+
+    Uses the azure.ai.textanalytics.aio client so every outbound call is
+    awaited and the event loop can service other invocations in parallel.
+    The client is opened inside an ``async with`` so its aiohttp transport
+    is always closed, even on exceptions.
+    """
     results: dict[str, Any] = {
         "enriched_at": datetime.now(timezone.utc).isoformat(),
         "language": None,
@@ -97,65 +97,78 @@ def _enrich_text(text: str) -> dict[str, Any]:
         "pii_entities": [],
     }
 
-    client = _get_ai_client()
-    if not client:
+    try:
+        from azure.ai.textanalytics.aio import TextAnalyticsClient
+        from azure.core.credentials import AzureKeyCredential
+    except ImportError:
+        logger.warning("ai_client.import_failed", package="azure-ai-textanalytics")
         results["error"] = "AI client not configured"
         return results
 
+    if not AI_ENDPOINT or not AI_KEY_SECRET:
+        results["error"] = "AI client not configured"
+        return results
+
+    docs = [{"id": "1", "text": text[:5120]}]
+
     try:
-        # Language detection
-        lang_result = client.detect_language(documents=[{"id": "1", "text": text[:5120]}])
-        if lang_result and not lang_result[0].is_error:
-            detected = lang_result[0].primary_language
-            results["language"] = {
-                "name": detected.name,
-                "iso_code": detected.iso6391_name,
-                "confidence": detected.confidence_score,
-            }
-
-        # Sentiment analysis
-        sentiment_result = client.analyze_sentiment(documents=[{"id": "1", "text": text[:5120]}])
-        if sentiment_result and not sentiment_result[0].is_error:
-            doc = sentiment_result[0]
-            results["sentiment"] = {
-                "overall": doc.sentiment,
-                "scores": {
-                    "positive": doc.confidence_scores.positive,
-                    "neutral": doc.confidence_scores.neutral,
-                    "negative": doc.confidence_scores.negative,
-                },
-            }
-
-        # Key phrases
-        phrases_result = client.extract_key_phrases(documents=[{"id": "1", "text": text[:5120]}])
-        if phrases_result and not phrases_result[0].is_error:
-            results["key_phrases"] = list(phrases_result[0].key_phrases)
-
-        # Named entity recognition
-        entity_result = client.recognize_entities(documents=[{"id": "1", "text": text[:5120]}])
-        if entity_result and not entity_result[0].is_error:
-            results["entities"] = [
-                {
-                    "text": e.text,
-                    "category": e.category,
-                    "subcategory": e.subcategory,
-                    "confidence": e.confidence_score,
+        async with TextAnalyticsClient(
+            endpoint=AI_ENDPOINT,
+            credential=AzureKeyCredential(AI_KEY_SECRET),
+        ) as client:
+            # Language detection
+            lang_result = await client.detect_language(documents=docs)
+            if lang_result and not lang_result[0].is_error:
+                detected = lang_result[0].primary_language
+                results["language"] = {
+                    "name": detected.name,
+                    "iso_code": detected.iso6391_name,
+                    "confidence": detected.confidence_score,
                 }
-                for e in entity_result[0].entities
-            ]
 
-        # PII detection
-        pii_result = client.recognize_pii_entities(documents=[{"id": "1", "text": text[:5120]}])
-        if pii_result and not pii_result[0].is_error:
-            results["pii_entities"] = [
-                {
-                    "text": f"{e.text[:3]}***",  # Redact in results
-                    "category": e.category,
-                    "subcategory": e.subcategory,
-                    "confidence": e.confidence_score,
+            # Sentiment analysis
+            sentiment_result = await client.analyze_sentiment(documents=docs)
+            if sentiment_result and not sentiment_result[0].is_error:
+                doc = sentiment_result[0]
+                results["sentiment"] = {
+                    "overall": doc.sentiment,
+                    "scores": {
+                        "positive": doc.confidence_scores.positive,
+                        "neutral": doc.confidence_scores.neutral,
+                        "negative": doc.confidence_scores.negative,
+                    },
                 }
-                for e in pii_result[0].entities
-            ]
+
+            # Key phrases
+            phrases_result = await client.extract_key_phrases(documents=docs)
+            if phrases_result and not phrases_result[0].is_error:
+                results["key_phrases"] = list(phrases_result[0].key_phrases)
+
+            # Named entity recognition
+            entity_result = await client.recognize_entities(documents=docs)
+            if entity_result and not entity_result[0].is_error:
+                results["entities"] = [
+                    {
+                        "text": e.text,
+                        "category": e.category,
+                        "subcategory": e.subcategory,
+                        "confidence": e.confidence_score,
+                    }
+                    for e in entity_result[0].entities
+                ]
+
+            # PII detection
+            pii_result = await client.recognize_pii_entities(documents=docs)
+            if pii_result and not pii_result[0].is_error:
+                results["pii_entities"] = [
+                    {
+                        "text": f"{e.text[:3]}***",  # Redact in results
+                        "category": e.category,
+                        "subcategory": e.subcategory,
+                        "confidence": e.confidence_score,
+                    }
+                    for e in pii_result[0].entities
+                ]
 
     except Exception:
         logger.exception("enrichment.text_failed")
@@ -164,8 +177,8 @@ def _enrich_text(text: str) -> dict[str, Any]:
     return results
 
 
-def _analyze_document(blob_data: bytes, content_type: str) -> dict[str, Any]:
-    """Analyze document using Azure AI Document Intelligence."""
+async def _analyze_document(blob_data: bytes, content_type: str) -> dict[str, Any]:
+    """Analyze document using the async Azure AI Document Intelligence client."""
     results: dict[str, Any] = {
         "analyzed_at": datetime.now(timezone.utc).isoformat(),
         "pages": 0,
@@ -174,32 +187,43 @@ def _analyze_document(blob_data: bytes, content_type: str) -> dict[str, Any]:
         "content_preview": "",
     }
 
-    client = _get_form_recognizer_client()
-    if not client:
+    try:
+        from azure.ai.formrecognizer.aio import DocumentAnalysisClient
+        from azure.core.credentials import AzureKeyCredential
+    except ImportError:
+        logger.warning("ai_client.import_failed", package="azure-ai-formrecognizer")
+        results["error"] = "Document Intelligence client not configured"
+        return results
+
+    if not AI_ENDPOINT or not AI_KEY_SECRET:
         results["error"] = "Document Intelligence client not configured"
         return results
 
     try:
-        poller = client.begin_analyze_document(
-            model_id="prebuilt-document",
-            document=blob_data,
-            content_type=content_type,
-        )
-        result = poller.result()
+        async with DocumentAnalysisClient(
+            endpoint=AI_ENDPOINT,
+            credential=AzureKeyCredential(AI_KEY_SECRET),
+        ) as client:
+            poller = await client.begin_analyze_document(
+                model_id="prebuilt-document",
+                document=blob_data,
+                content_type=content_type,
+            )
+            result = await poller.result()
 
-        results["pages"] = len(result.pages) if result.pages else 0
-        results["tables"] = len(result.tables) if result.tables else 0
-        results["content_preview"] = (result.content or "")[:500]
+            results["pages"] = len(result.pages) if result.pages else 0
+            results["tables"] = len(result.tables) if result.tables else 0
+            results["content_preview"] = (result.content or "")[:500]
 
-        if result.key_value_pairs:
-            results["key_value_pairs"] = [
-                {
-                    "key": kvp.key.content if kvp.key else None,
-                    "value": kvp.value.content if kvp.value else None,
-                    "confidence": kvp.confidence,
-                }
-                for kvp in result.key_value_pairs[:50]
-            ]
+            if result.key_value_pairs:
+                results["key_value_pairs"] = [
+                    {
+                        "key": kvp.key.content if kvp.key else None,
+                        "value": kvp.value.content if kvp.value else None,
+                        "confidence": kvp.confidence,
+                    }
+                    for kvp in result.key_value_pairs[:50]
+                ]
 
     except Exception:
         logger.exception("enrichment.document_failed")
@@ -212,7 +236,7 @@ def _analyze_document(blob_data: bytes, content_type: str) -> dict[str, Any]:
 # HTTP Trigger: On-demand text enrichment
 # ---------------------------------------------------------------------------
 @app.route(route="enrich", methods=["POST"])
-def enrich_text(req: func.HttpRequest) -> func.HttpResponse:
+async def enrich_text(req: func.HttpRequest) -> func.HttpResponse:
     """Enrich text with AI analysis (language, sentiment, entities, PII).
 
     POST /api/enrich
@@ -254,7 +278,7 @@ def enrich_text(req: func.HttpRequest) -> func.HttpResponse:
                 mimetype="application/json",
             )
 
-        results = _enrich_text(text)
+        results = await _enrich_text(text)
         results["input_length"] = len(text)
 
         logger.info(
@@ -282,11 +306,15 @@ def enrich_text(req: func.HttpRequest) -> func.HttpResponse:
     path=f"{ENRICHED_CONTAINER}/{{name}}.enrichment.json",
     connection="AzureWebJobsStorage",
 )
-def process_inbox_document(blob: func.InputStream, outputBlob: func.Out[str]) -> None:
+async def process_inbox_document(
+    blob: func.InputStream,
+    outputBlob: func.Out[str],
+) -> None:
     """Automatically process documents dropped into the inbox container.
 
     Triggered by new blobs in the inbox container. Runs document analysis
-    and text enrichment, then writes results to the enriched container.
+    and text enrichment asynchronously, then writes results to the
+    enriched container.
     """
     with bind_trace_context(
         trigger="blob",
@@ -315,16 +343,21 @@ def process_inbox_document(blob: func.InputStream, outputBlob: func.Out[str]) ->
                 "tiff": "image/tiff",
                 "bmp": "image/bmp",
             }
-            doc_results = _analyze_document(blob_data, mime_map.get(content_type, "application/octet-stream"))
+            doc_results = await _analyze_document(
+                blob_data,
+                mime_map.get(content_type, "application/octet-stream"),
+            )
             enrichment["document_analysis"] = doc_results
 
             # Also run text enrichment on extracted content
             if doc_results.get("content_preview"):
-                enrichment["text_enrichment"] = _enrich_text(doc_results["content_preview"])
+                enrichment["text_enrichment"] = await _enrich_text(
+                    doc_results["content_preview"],
+                )
 
         elif content_type in ("txt", "csv", "json", "md"):
             text_content = blob_data.decode("utf-8", errors="replace")
-            enrichment["text_enrichment"] = _enrich_text(text_content[:125000])
+            enrichment["text_enrichment"] = await _enrich_text(text_content[:125000])
 
         else:
             enrichment["skipped"] = True
@@ -340,7 +373,7 @@ def process_inbox_document(blob: func.InputStream, outputBlob: func.Out[str]) ->
 # HTTP Trigger: Health check
 # ---------------------------------------------------------------------------
 @app.route(route="health", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
-def health_check(req: func.HttpRequest) -> func.HttpResponse:
+async def health_check(req: func.HttpRequest) -> func.HttpResponse:
     """Health check endpoint for monitoring.
 
     GET /api/health
@@ -350,8 +383,8 @@ def health_check(req: func.HttpRequest) -> func.HttpResponse:
         "status": "healthy",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "capabilities": {
-            "text_analytics": _get_ai_client() is not None,
-            "document_intelligence": _get_form_recognizer_client() is not None,
+            "text_analytics": _text_analytics_available(),
+            "document_intelligence": _form_recognizer_available(),
         },
         "configuration": {
             "services_configured": bool(AI_ENDPOINT) and bool(STORAGE_CONNECTION),

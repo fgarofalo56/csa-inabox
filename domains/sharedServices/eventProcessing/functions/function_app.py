@@ -4,6 +4,17 @@ Processes events from Event Hub in real-time. Writes enriched events
 to Cosmos DB for low-latency queries and ADLS for batch analytics.
 Part of the CSA-in-a-Box shared services streaming layer.
 
+Async / concurrency model
+-------------------------
+All triggers are ``async def`` so the Azure Functions host does not
+block the event loop while processing a batch.  Outbound writes still
+flow through the host-managed ``cosmos_db_output`` and
+``event_hub_message_trigger`` bindings (which give us automatic
+retries, dead-letter routing, and throughput control) rather than a
+raw ``azure.cosmos.aio`` client — but the ``async def`` signatures
+leave the door open for direct ``.aio`` SDK calls when a scenario
+needs more control.
+
 Logging
 -------
 All log lines are emitted as JSON via :mod:`governance.common.logging`
@@ -91,7 +102,10 @@ def _process_event(event_data: dict[str, Any]) -> dict[str, Any]:
     create_if_not_exists=True,
     partition_key="/partition_key",
 )
-def process_events(events: List[func.EventHubEvent], cosmosOutput: func.Out[str]) -> None:
+async def process_events(
+    events: List[func.EventHubEvent],
+    cosmosOutput: func.Out[str],
+) -> None:
     """Process batch of events from Event Hub.
 
     Enriches events and writes to:
@@ -156,7 +170,7 @@ def process_events(events: List[func.EventHubEvent], cosmosOutput: func.Out[str]
     arg_name="timer",
     run_on_startup=False,
 )
-def aggregate_event_stats(timer: func.TimerRequest) -> None:
+async def aggregate_event_stats(timer: func.TimerRequest) -> None:
     """Periodically aggregate event processing statistics.
 
     Runs every 5 minutes. Logs metrics for Azure Monitor / Log Analytics.
@@ -183,7 +197,10 @@ def aggregate_event_stats(timer: func.TimerRequest) -> None:
     connection="COSMOS_CONNECTION",
     partition_key="/partition_key",
 )
-def replay_events(req: func.HttpRequest, cosmosOutput: func.Out[str]) -> func.HttpResponse:
+async def replay_events(
+    req: func.HttpRequest,
+    cosmosOutput: func.Out[str],
+) -> func.HttpResponse:
     """Replay dead-letter events for reprocessing.
 
     POST /api/replay
@@ -241,7 +258,7 @@ def replay_events(req: func.HttpRequest, cosmosOutput: func.Out[str]) -> func.Ht
 # HTTP Trigger: Health check
 # ---------------------------------------------------------------------------
 @app.route(route="health", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
-def health(req: func.HttpRequest) -> func.HttpResponse:
+async def health(req: func.HttpRequest) -> func.HttpResponse:
     """Health check for event processing service."""
     return func.HttpResponse(
         json.dumps({
