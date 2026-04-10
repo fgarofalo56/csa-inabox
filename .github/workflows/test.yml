@@ -8,6 +8,8 @@ on:
 
 permissions:
   contents: read
+  # Needed by py-cov-action to post/update the coverage comment on PRs.
+  pull-requests: write
 
 jobs:
   python-tests:
@@ -26,19 +28,44 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install ruff pytest pytest-cov
-          # Install project-specific deps if requirements.txt exists
+          # Install the project with dev extras so ruff / pytest /
+          # pytest-cov / mypy all come from pyproject.toml.
+          pip install -e ".[dev]"
+          # Install any additional per-domain requirements.
           for req in $(find . -name "requirements.txt" -not -path "*/dbt-env/*" -not -path "*/.venv/*"); do
             pip install -r "$req" || true
           done
 
       - name: Lint with ruff
         run: |
-          ruff check domains/ scripts/ --select E,F,W --ignore E501 --output-format github
+          ruff check domains/ scripts/ governance/ --select E,F,W --ignore E501 --output-format github
 
-      - name: Run pytest
+      - name: Run pytest with coverage
         run: |
-          pytest tests/ --tb=short --co -q 2>/dev/null || echo "No tests found yet"
+          pytest tests/ \
+            --cov \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            --cov-report=html \
+            --cov-fail-under=80
+
+      - name: Upload coverage report (xml + html)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            coverage.xml
+            htmlcov/
+          retention-days: 14
+
+      - name: Post coverage comment on PR
+        if: github.event_name == 'pull_request'
+        uses: py-cov-action/python-coverage-comment-action@v3
+        with:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MINIMUM_GREEN: 80
+          MINIMUM_ORANGE: 60
 
   dbt-compile:
     name: dbt Compile Check

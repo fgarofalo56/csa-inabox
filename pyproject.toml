@@ -67,7 +67,38 @@ indent-style = "space"
 testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
 python_functions = ["test_*"]
-addopts = "--tb=short -q"
+addopts = "--tb=short -q --strict-markers"
+
+[tool.coverage.run]
+# Only measure the code under test today.  As new areas grow a real test
+# suite (dbt Python runners, Azure Functions, agent harness gates),
+# add them to this list alongside their tests.
+source = ["governance/common"]
+branch = true
+omit = [
+    "tests/*",
+    "**/__init__.py",
+    "**/conftest.py",
+    "**/test_*.py",
+]
+
+[tool.coverage.report]
+# CI fails the job if total coverage for the source packages above drops
+# below this threshold (see .github/workflows/test.yml).  The threshold
+# ratchets upward as the test suite grows — do not lower it without an
+# explicit justification in the commit message.
+fail_under = 80
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
+
+[tool.coverage.xml]
+output = "coverage.xml"
 
 [tool.mypy]
 python_version = "3.10"
