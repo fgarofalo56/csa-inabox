@@ -29,6 +29,11 @@ governance = [
     # Structured JSON logging with trace/correlation context — see
     # governance/common/logging.py and docs/LOG_SCHEMA.md.
     "structlog>=24.1.0",
+    # Great Expectations for the checkpoint runner in
+    # governance/dataquality/ge_runner.py. The runner has an in-memory
+    # fallback evaluator so this package is not required for the unit
+    # tests, but it is required for live Spark-backed checkpoint runs.
+    "great-expectations>=1.0.0",
 ]
 
 [tool.ruff]
@@ -83,13 +88,21 @@ addopts = "--tb=short -q --strict-markers"
 # Only measure the code under test today.  As new areas grow a real test
 # suite (dbt Python runners, Azure Functions, agent harness gates),
 # add them to this list alongside their tests.
-source = ["governance/common"]
+source = [
+    "governance/common",
+    "governance/dataquality",
+]
 branch = true
 omit = [
     "tests/*",
     "**/__init__.py",
     "**/conftest.py",
     "**/test_*.py",
+    # The quality-check CLI runner wraps third-party tools (dbt,
+    # great_expectations) and is exercised in integration tests, not
+    # unit tests.  Keep it out of the coverage gate until an
+    # integration test suite exists.
+    "governance/dataquality/run_quality_checks.py",
 ]
 
 [tool.coverage.report]

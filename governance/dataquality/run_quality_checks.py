@@ -36,6 +36,10 @@ from governance.common.logging import (  # noqa: E402
     new_correlation_id,
 )
 from governance.common.validation import substitute_common_patterns  # noqa: E402
+from governance.dataquality.ge_runner import (  # noqa: E402
+    SuiteResult,
+    run_ge_checkpoints,
+)
 
 configure_structlog(service="csa-data-quality")
 logger = get_logger("data_quality")
@@ -231,6 +235,55 @@ class DataQualityRunner:
             )
         return self.results
 
+    def run_ge_checkpoints(
+        self,
+        sample_data: dict[str, list[dict[str, Any]]] | None = None,
+    ) -> list[QualityCheckResult]:
+        """Execute Great Expectations suites configured in quality-rules.yaml.
+
+        Bridges the declarative ``great_expectations`` section of the
+        config to the runner in :mod:`governance.dataquality.ge_runner`.
+        Each :class:`SuiteResult` is converted to a
+        :class:`QualityCheckResult` and appended to ``self.results`` so
+        the normal report pipeline picks it up.
+
+        Args:
+            sample_data: Optional per-suite sample rows for the
+                in-memory fallback evaluator.  See
+                :func:`ge_runner.run_ge_checkpoints` for details.
+        """
+        logger.info("ge.checkpoints_starting")
+        suite_results: list[SuiteResult] = run_ge_checkpoints(
+            self.config,
+            sample_data=sample_data,
+        )
+
+        for suite in suite_results:
+            self.results.append(
+                QualityCheckResult(
+                    check_name=f"ge:{suite.suite_name}",
+                    table=suite.table,
+                    status=suite.status,
+                    message=suite.message,
+                    details={
+                        "datasource": suite.datasource,
+                        "failed_expectations": suite.failed,
+                        "total_expectations": suite.total,
+                        "expectations": [
+                            {
+                                "type": e.expectation_type,
+                                "column": e.column,
+                                "success": e.success,
+                                "message": e.message,
+                            }
+                            for e in suite.expectations
+                        ],
+                    },
+                )
+            )
+
+        return self.results
+
     def generate_report(self) -> dict[str, Any]:
         """Generate a quality report summary."""
         total = len(self.results)
@@ -317,6 +370,11 @@ def main() -> None:
         help="Which test suite to run",
     )
     parser.add_argument("--freshness-only", action="store_true", help="Run only freshness checks")
+    parser.add_argument(
+        "--ge-only",
+        action="store_true",
+        help="Run only the Great Expectations checkpoint suites",
+    )
     parser.add_argument("--report", action="store_true", help="Generate and print report")
     parser.add_argument("--output", help="Output report to JSON file")
 
@@ -336,11 +394,14 @@ def main() -> None:
 
     if args.freshness_only:
         runner.check_freshness()
+    elif args.ge_only:
+        runner.run_ge_checkpoints()
     else:
         select_filter = f"tag:{args.suite}" if args.suite != "all" else ""
         runner.run_dbt_tests(select=select_filter)
         runner.check_freshness()
         runner.check_volume_rules()
+        runner.run_ge_checkpoints()
 
     report = runner.generate_report()
 
