@@ -16,7 +16,7 @@ var containerRegistryNameCleaned = replace(containerRegistryName, '-', '')
 var containerRegistryPrivateEndpointName = '${containerRegistry.name}-private-endpoint'
 
 // Resources
-resource containerRegistry 'Microsoft.ContainerRegistry/registries@2020-11-01-preview' = {
+resource containerRegistry 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
   name: containerRegistryNameCleaned
   location: location
   tags: tags
@@ -28,7 +28,10 @@ resource containerRegistry 'Microsoft.ContainerRegistry/registries@2020-11-01-pr
   }
   properties: {
     adminUserEnabled: false
-    anonymousPullEnabled: true
+    // anonymousPullEnabled cannot be true while publicNetworkAccess is
+    // Disabled — the ACR would reject anonymous pulls anyway, so keep the
+    // intent explicit.
+    anonymousPullEnabled: false
     dataEndpointEnabled: false
     networkRuleBypassOptions: 'None'
     networkRuleSet: {
@@ -54,7 +57,7 @@ resource containerRegistry 'Microsoft.ContainerRegistry/registries@2020-11-01-pr
   }
 }
 
-resource containerRegistryPrivateEndpoint 'Microsoft.Network/privateEndpoints@2020-11-01' = {
+resource containerRegistryPrivateEndpoint 'Microsoft.Network/privateEndpoints@2023-11-01' = {
   name: containerRegistryPrivateEndpointName
   location: location
   tags: tags
@@ -78,7 +81,7 @@ resource containerRegistryPrivateEndpoint 'Microsoft.Network/privateEndpoints@20
   }
 }
 
-resource containerRegistryPrivateEndpointARecord 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2020-11-01' = if(!empty(privateDnsZoneIdContainerRegistry)) {
+resource containerRegistryPrivateEndpointARecord 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2023-11-01' = if(!empty(privateDnsZoneIdContainerRegistry)) {
   parent: containerRegistryPrivateEndpoint
   name: 'default'
   properties: {

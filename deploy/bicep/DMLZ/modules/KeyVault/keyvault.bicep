@@ -15,7 +15,7 @@ param privateDnsZoneIdKeyVault string = ''
 var keyVaultPrivateEndpointName = '${keyVault.name}-private-endpoint'
 
 // Resources
-resource keyVault 'Microsoft.KeyVault/vaults@2021-04-01-preview' = {
+resource keyVault 'Microsoft.KeyVault/vaults@2024-11-01' = {
   name: keyvaultName
   location: location
   tags: tags
@@ -34,16 +34,20 @@ resource keyVault 'Microsoft.KeyVault/vaults@2021-04-01-preview' = {
       ipRules: []
       virtualNetworkRules: []
     }
+    // With the networkAcls above we already deny public traffic; setting
+    // publicNetworkAccess 'Disabled' makes the intent explicit and matches
+    // the rest of the DMLZ data-plane posture.
+    publicNetworkAccess: 'Disabled'
     sku: {
       family: 'A'
       name: 'standard'
     }
-    softDeleteRetentionInDays: 7
+    softDeleteRetentionInDays: 90
     tenantId: subscription().tenantId
   }
 }
 
-resource keyVaultPrivateEndpoint 'Microsoft.Network/privateEndpoints@2020-11-01' = {
+resource keyVaultPrivateEndpoint 'Microsoft.Network/privateEndpoints@2023-11-01' = {
   name: keyVaultPrivateEndpointName
   location: location
   tags: tags
@@ -67,7 +71,7 @@ resource keyVaultPrivateEndpoint 'Microsoft.Network/privateEndpoints@2020-11-01'
   }
 }
 
-resource keyVaultPrivateEndpointARecord 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2020-11-01' = if(!empty(privateDnsZoneIdKeyVault)) {
+resource keyVaultPrivateEndpointARecord 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2023-11-01' = if(!empty(privateDnsZoneIdKeyVault)) {
   parent: keyVaultPrivateEndpoint
   name: 'default'
   properties: {

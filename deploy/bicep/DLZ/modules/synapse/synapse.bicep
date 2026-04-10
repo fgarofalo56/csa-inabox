@@ -35,7 +35,7 @@ var synapsePrivateEndpointNameSqlOnDemand = '${synapse.name}-sqlondemand-private
 var synapsePrivateEndpointNameDev = '${synapse.name}-dev-private-endpoint'
 
 // Resources
-resource synapse 'Microsoft.Synapse/workspaces@2021-03-01' = {
+resource synapse 'Microsoft.Synapse/workspaces@2021-06-01' = {
   name: synapseName
   location: location
   tags: tags
@@ -66,7 +66,7 @@ resource synapse 'Microsoft.Synapse/workspaces@2021-03-01' = {
   }
 }
 
-resource synapseSqlPool001 'Microsoft.Synapse/workspaces/sqlPools@2021-03-01' = {
+resource synapseSqlPool001 'Microsoft.Synapse/workspaces/sqlPools@2021-06-01' = {
   // Uncomment if you want to deploy a Synapse Spark Pool as part of your Data Landing Zone inside the shared product resource group
   parent: synapse
   name: 'sqlPool001'
@@ -82,7 +82,7 @@ resource synapseSqlPool001 'Microsoft.Synapse/workspaces/sqlPools@2021-03-01' = 
   }
 }
 
-// resource synapseBigDataPool001 'Microsoft.Synapse/workspaces/bigDataPools@2021-03-01' = {  // Uncomment if you want to deploy a Synapse SQL Pool as part of your Data Landing Zone inside the shared product resource group
+// resource synapseBigDataPool001 'Microsoft.Synapse/workspaces/bigDataPools@2021-06-01' = {  // Uncomment if you want to deploy a Synapse SQL Pool as part of your Data Landing Zone inside the shared product resource group
 //   parent: synapse
 //   name: 'bigDataPool001'
 //   location: location
@@ -122,7 +122,7 @@ resource synapseSqlPool001 'Microsoft.Synapse/workspaces/sqlPools@2021-03-01' = 
 //   }
 // }
 
-resource synapseManagedIdentitySqlControlSettings 'Microsoft.Synapse/workspaces/managedIdentitySqlControlSettings@2021-03-01' = {
+resource synapseManagedIdentitySqlControlSettings 'Microsoft.Synapse/workspaces/managedIdentitySqlControlSettings@2021-06-01' = {
   parent: synapse
   name: 'default'
   properties: {
@@ -132,7 +132,7 @@ resource synapseManagedIdentitySqlControlSettings 'Microsoft.Synapse/workspaces/
   }
 }
 
-resource synapseAadAdministrators 'Microsoft.Synapse/workspaces/administrators@2021-03-01' = if (!empty(synapseSqlAdminGroupName) && !empty(synapseSqlAdminGroupObjectID)) {
+resource synapseAadAdministrators 'Microsoft.Synapse/workspaces/administrators@2021-06-01' = if (!empty(synapseSqlAdminGroupName) && !empty(synapseSqlAdminGroupObjectID)) {
   parent: synapse
   name: 'activeDirectory'
   properties: {
@@ -143,7 +143,7 @@ resource synapseAadAdministrators 'Microsoft.Synapse/workspaces/administrators@2
   }
 }
 
-resource synapsePrivateEndpointSql 'Microsoft.Network/privateEndpoints@2020-11-01' = [
+resource synapsePrivateEndpointSql 'Microsoft.Network/privateEndpoints@2023-11-01' = [
   for peSubnet in privateEndpointSubnets: {
     name: '${synapsePrivateEndpointNameSql}-${peSubnet.vNetName}'
     location: peSubnet.vNetLocation
@@ -175,7 +175,7 @@ resource synapsePrivateEndpointSql 'Microsoft.Network/privateEndpoints@2020-11-0
   }
 ]
 
-resource synapsePrivateEndpointSqlARecord 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2020-11-01' = [
+resource synapsePrivateEndpointSqlARecord 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2023-11-01' = [
   for (peSubnet, i) in privateEndpointSubnets: if (!empty(privateDnsZoneIdSynapseSql)) {
     name: 'default'
     parent: synapsePrivateEndpointSql[i]
@@ -192,7 +192,7 @@ resource synapsePrivateEndpointSqlARecord 'Microsoft.Network/privateEndpoints/pr
   }
 ]
 
-resource synapsePrivateEndpointSqlOnDemand 'Microsoft.Network/privateEndpoints@2020-11-01' = [
+resource synapsePrivateEndpointSqlOnDemand 'Microsoft.Network/privateEndpoints@2023-11-01' = [
   for peSubnet in privateEndpointSubnets: {
     name: '${synapsePrivateEndpointNameSqlOnDemand}-${peSubnet.vNetName}'
     location: peSubnet.vNetLocation
@@ -224,7 +224,7 @@ resource synapsePrivateEndpointSqlOnDemand 'Microsoft.Network/privateEndpoints@2
   }
 ]
 
-resource synapsePrivateEndpointSqlOnDemandARecord 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2020-11-01' = [
+resource synapsePrivateEndpointSqlOnDemandARecord 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2023-11-01' = [
   for (peSubnet, i) in privateEndpointSubnets: if (!empty(privateDnsZoneIdSynapseSql)) {
     name: 'default'
     parent: synapsePrivateEndpointSqlOnDemand[i]
@@ -241,7 +241,7 @@ resource synapsePrivateEndpointSqlOnDemandARecord 'Microsoft.Network/privateEndp
   }
 ]
 
-resource synapsePrivateEndpointDev 'Microsoft.Network/privateEndpoints@2020-11-01' = [
+resource synapsePrivateEndpointDev 'Microsoft.Network/privateEndpoints@2023-11-01' = [
   for peSubnet in privateEndpointSubnets: {
     name: '${synapsePrivateEndpointNameDev}-${peSubnet.vNetName}'
     location: peSubnet.vNetLocation
@@ -273,7 +273,7 @@ resource synapsePrivateEndpointDev 'Microsoft.Network/privateEndpoints@2020-11-0
   }
 ]
 
-resource synapsePrivateEndpointDevARecord 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2020-11-01' = [
+resource synapsePrivateEndpointDevARecord 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2023-11-01' = [
   for (peSubnet, i) in privateEndpointSubnets: if (!empty(privateDnsZoneIdSynapseDev)) {
     name: 'default'
     parent: synapsePrivateEndpointDev[i]
