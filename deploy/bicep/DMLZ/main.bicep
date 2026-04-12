@@ -75,14 +75,20 @@ param parDatabricks object = {}
 @description('Resource ID of the Log Analytics workspace for diagnostics')
 param logAnalyticsWorkspaceId string = ''
 
+@description('Primary technical contact for deployed resources.')
+param primaryContact string = 'platform-team@contoso.com'
+
+@description('Cost center or billing code for deployed resources.')
+param costCenter string = 'CSA-Platform'
+
 // Default tags
 var tagsDefault = {
   Owner: 'Azure Data Management Landing Zone & Cloud Scale Analytics Scenario'
   Project: 'Azure Demo DMLZ & CSA'
   environment: environment
   Toolkit: 'Bicep'
-  PrimaryContact: 'frgarofa'
-  CostCenter: 'FFL ATU - ExampleDataCostCenter-12345'
+  PrimaryContact: primaryContact
+  CostCenter: costCenter
 }
 
 // Union of default tags and user-defined tags
@@ -97,39 +103,6 @@ var parLocationShort = toLower(replace(location, ' ', ''))
 /***************************************************************************************************************************************************
 Resource Modules and Deployments
 ***************************************************************************************************************************************************/
-
-// Governance Modules
-// Deploy Resource Group
-// module purviewResourceGroup 'modules/resourceGroup/resourceGroup.bicep' = if (bool(deployModules.governance)) {
-//   name: 'DeployPurviewResourceGroup'
-//   scope: subscription()
-//   params: {
-//     parLocation: parGovernance.parLocation
-//     // parResourceGroupName: 'rg-${parBaseName}-governance-${parGovernance.parLocation}'
-//     parResourceGroupName: 'frgaofa-purview-dev'
-//     parTags: tagsJoined
-//   }
-// }
-
-// //Deploy Purview
-// module deployPurview 'modules/Purview/purview.bicep' = if (bool(deployModules.governance)) {
-//   name: 'Deploy-Purview-${parGovernance.parLocation}'
-//   // scope: resourceGroup('rg-${parBaseName}-governance-${parGovernance.parLocation}')
-//   scope: resourceGroup('frgaofa-purview-dev')
-//   params: {
-//     // purviewAcctName: '${parBaseName}-purview-${parGovernance.parLocation}'
-//     purviewAcctName: 'dmz-purview'
-//     sku: parGovernance.parPurviewSku
-//     publicNetworkAccess: parGovernance.parPurviewPublicNetworkAccess
-//     location: parGovernance.parLocation
-//     parTenantEndpointState: parGovernance.parTenantEndpointState
-//     configKafka: parGovernance.parPurviewKafkaConfig
-//     tags: parGovernance.tags
-//   }
-//   dependsOn: [
-//     purviewResourceGroup
-//   ]
-// }
 
 // Governance resources
 resource governanceResourceGroup 'Microsoft.Resources/resourceGroups@2021-01-01' = if (bool(deployModules.governance)) {
@@ -182,77 +155,6 @@ module databricksGovernance 'modules/Databricks/databricks.bicep' = if (contains
     databricksResourceGroup
   ]
 }
-
-// // Container resources
-// resource containerResourceGroup 'Microsoft.Resources/resourceGroups@2021-01-01' = {
-//   name: '${name}-container'
-//   location: location
-//   tags: tagsJoined
-//   properties: {}
-// }
-
-// module containerResources 'modules/container.bicep' = {
-//   name: 'containerResources'
-//   scope: containerResourceGroup
-//   params: {
-//     location: location
-//     prefix: name
-//     tags: tagsJoined
-//     subnetId: networkServices.outputs.serviceSubnet
-//     privateDnsZoneIdContainerRegistry: enableDnsAndFirewallDeployment ? globalDnsZones.outputs.privateDnsZoneIdContainerRegistry : privateDnsZoneIdContainerRegistry
-//   }
-// }
-
-// // Consumption resources
-// resource consumptionResourceGroup 'Microsoft.Resources/resourceGroups@2021-01-01' = {
-//   name: '${name}-consumption'
-//   location: location
-//   tags: tagsJoined
-//   properties: {}
-// }
-
-// module consumptionResources 'modules/consumption.bicep' = {
-//   name: 'consumptionResources'
-//   scope: consumptionResourceGroup
-//   params: {
-//     location: location
-//     prefix: name
-//     tags: tagsJoined
-//     subnetId: networkServices.outputs.serviceSubnet
-//     privateDnsZoneIdSynapseprivatelinkhub: enableDnsAndFirewallDeployment ? globalDnsZones.outputs.privateDnsZoneIdSynapse : privateDnsZoneIdSynapse
-//     privateDnsZoneIdAnalysis: enableDnsAndFirewallDeployment ? globalDnsZones.outputs.privateDnsZoneIdAnalysis : ''
-//     privateDnsZoneIdPbiDedicated: enableDnsAndFirewallDeployment ? globalDnsZones.outputs.privateDnsZoneIdPbiDedicated : ''
-//     privateDnsZoneIdPowerQuery: enableDnsAndFirewallDeployment ? globalDnsZones.outputs.privateDnsZoneIdPowerQuery : ''
-//   }
-// }
-
-// // Automation services
-// resource automationResourceGroup 'Microsoft.Resources/resourceGroups@2021-01-01' = {
-//   name: '${name}-automation'
-//   location: location
-//   tags: tagsJoined
-//   properties: {}
-// }
-
-// module automationResources 'modules/automation.bicep' = {
-//   name: 'automationResources'
-//   scope: automationResourceGroup
-//   params: {
-//     location: location
-//     tags: tagsJoined
-//     prefix: name
-//     purviewId: governanceResources.outputs.purviewId
-//     purviewRootCollectionAdminObjectIds: purviewRootCollectionAdminObjectIds
-//   }
-// }
-
-// // Management services
-// resource managementResourceGroup 'Microsoft.Resources/resourceGroups@2021-01-01' = {
-//   name: '${name}-mgmt'
-//   location: location
-//   tags: tagsJoined
-//   properties: {}
-// }
 
 // Outputs — Governance & Databricks Resource IDs
 output governanceResourceGroupName string = bool(deployModules.governance) ? governanceResourceGroup.name : ''

@@ -64,7 +64,7 @@ param bypassServies string = 'AzureServices'
   'Deny'
   ])
 @description('The default action of the storage account.')
-param defaultAction string = 'Allow'
+param defaultAction string = 'Deny'
 
 @description('Enable Hierarchical Namespace for the storage account. Azure Datalake Gen2')
 param isHnsEnabled bool = false
@@ -94,7 +94,8 @@ resource resStorageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' = {
       virtualNetworkRules: []
     }
     defaultToOAuthAuthentication: true
-    publicNetworkAccess: 'enabled'
+    allowSharedKeyAccess: false
+    publicNetworkAccess: 'Disabled'
 
   }
 }

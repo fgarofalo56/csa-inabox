@@ -10,4 +10,4 @@ azure-core>=1.29.0,<2.0.0
 # and docs/LOG_SCHEMA.md.  The function_app imports
 # governance.common.logging directly so the package must be available on
 # the Python path at runtime (deployed alongside the function app code).
-structlog>=24.1.0
+structlog>=24.1.0,<25.0.0

@@ -156,6 +156,8 @@ docs/_build/
 temp/
 tmp/
 *.tmp
+*.completed.json
+*.dev_OLD.json
 runs/
 cache/
 retrieval/

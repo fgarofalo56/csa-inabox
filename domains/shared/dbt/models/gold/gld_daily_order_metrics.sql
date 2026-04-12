@@ -51,4 +51,3 @@ daily_metrics AS (
 )
 
 SELECT * FROM daily_metrics
-ORDER BY order_date DESC

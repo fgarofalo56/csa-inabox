@@ -459,20 +459,12 @@ async def health(req: func.HttpRequest) -> func.HttpResponse:
     Returns: JSON with service status and configuration checks
     """
     kv_configured = bool(KEY_VAULT_URL)
-
-    status: dict[str, Any] = {
-        "status": "healthy" if kv_configured else "degraded",
-        "service": "secret-rotation",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "configuration": {
-            "key_vault_configured": kv_configured,
-            "supported_services": list(_ROTATION_HANDLERS.keys()),
-            "default_secret_length": DEFAULT_SECRET_LENGTH,
-            "default_validity_days": DEFAULT_VALIDITY_DAYS,
-        },
-    }
     return func.HttpResponse(
-        json.dumps(status),
+        json.dumps({
+            "status": "healthy" if kv_configured else "degraded",
+            "service": "secret-rotation",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }),
         status_code=200,
         mimetype="application/json",
     )

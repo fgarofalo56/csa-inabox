@@ -27,7 +27,7 @@ resource loadbalancer001 'Microsoft.Network/loadBalancers@2021-03-01' = {
   location: location
   tags: tags
   sku: {
-    name: 'Basic'
+    name: 'Standard'
   }
   properties: {
     backendAddressPools: [
@@ -42,21 +42,6 @@ resource loadbalancer001 'Microsoft.Network/loadBalancers@2021-03-01' = {
           subnet: {
             id: subnetId
           }
-        }
-      }
-    ]
-    inboundNatPools: [
-      {
-        name: '${vmssName}-natpool'
-        properties: {
-          frontendIPConfiguration: {
-            id: resourceId('Microsoft.Network/loadBalancers/frontendIPConfigurations', loadbalancerName, 'frontendipconfiguration')
-          }
-          protocol: 'Tcp'
-          frontendPortRangeStart: 50000
-          frontendPortRangeEnd: 50099
-          backendPort: 3389
-          idleTimeoutInMinutes: 4
         }
       }
     ]
@@ -151,11 +136,6 @@ resource vmss001 'Microsoft.Compute/virtualMachineScaleSets@2021-07-01' = {
                         id: resourceId('Microsoft.Network/loadBalancers/backendAddressPools', loadbalancerName, '${vmssName}-backendaddresspool')
                       }
                     ]
-                    loadBalancerInboundNatPools: [
-                      {
-                        id: resourceId('Microsoft.Network/loadBalancers/inboundNatPools', loadbalancerName, '${vmssName}-natpool')
-                      }
-                    ]
                     primary: true
                     privateIPAddressVersion: 'IPv4'
                     subnet: {
@@ -193,7 +173,7 @@ resource vmss001 'Microsoft.Compute/virtualMachineScaleSets@2021-07-01' = {
                 fileUris: []
               }
               protectedSettings: {
-                commandToExecute: 'powershell.exe -ExecutionPolicy Unrestricted -NoProfile -NonInteractive -command "cp c:/azuredata/customdata.bin c:/azuredata/installSHIRGateway.ps1; c:/azuredata/installSHIRGateway.ps1 -gatewayKey "${datafactoryIntegrationRuntimeAuthKey}"'
+                commandToExecute: 'powershell.exe -ExecutionPolicy RemoteSigned -NoProfile -NonInteractive -command "cp c:/azuredata/customdata.bin c:/azuredata/installSHIRGateway.ps1; c:/azuredata/installSHIRGateway.ps1 -gatewayKey "${datafactoryIntegrationRuntimeAuthKey}"'
               }
             }
           }

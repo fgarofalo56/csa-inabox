@@ -28,7 +28,7 @@ jobs:
     name: Bicep Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
       - name: Install Bicep CLI
         run: |
@@ -39,18 +39,32 @@ jobs:
       - name: Lint all Bicep files
         run: |
           echo "=== Linting Bicep files ==="
-          find . -name "*.bicep" -not -path "./codeqlDB/*" | while read -r file; do
+          ERRORS=0
+          find . -name "*.bicep" -not -path "./codeqlDB/*" -not -path "*/node_modules/*" | while read -r file; do
             echo "Linting: $file"
-            bicep lint "$file" || true
+            if ! bicep lint "$file" 2>&1; then
+              ERRORS=$((ERRORS + 1))
+            fi
           done
+          if [ "$ERRORS" -gt 0 ]; then
+            echo "::error::$ERRORS Bicep file(s) failed linting"
+            exit 1
+          fi
 
       - name: Build all Bicep files (compile check)
         run: |
           echo "=== Building Bicep files ==="
-          find . -name "*.bicep" -not -path "./codeqlDB/*" | while read -r file; do
+          ERRORS=0
+          find . -name "*.bicep" -not -path "./codeqlDB/*" -not -path "*/node_modules/*" | while read -r file; do
             echo "Building: $file"
-            bicep build "$file" --no-restore 2>&1 || echo "WARNING: Build failed for $file"
+            if ! bicep build "$file" --no-restore 2>&1; then
+              ERRORS=$((ERRORS + 1))
+            fi
           done
+          if [ "$ERRORS" -gt 0 ]; then
+            echo "::error::$ERRORS Bicep file(s) failed to build"
+            exit 1
+          fi
 
   # -------------------------------------------------------------------------
   # Secret Scanning
@@ -59,12 +73,12 @@ jobs:
     name: Secret Scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
           fetch-depth: 0
 
       - name: Run gitleaks
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@83373cf2f8c4db6e24b41c1a9b086bb9619e9cd3 # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
@@ -76,20 +90,20 @@ jobs:
     name: IaC Security Scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
       - name: Run Checkov
-        uses: bridgecrewio/checkov-action@v12
+        uses: bridgecrewio/checkov-action@002cd2e8cc0fe0535e6f364509e091c1a9870efa # v12
         with:
           directory: deploy/
           framework: bicep,arm
-          soft_fail: true
+          soft_fail: false
           output_format: sarif
           output_file_path: results.sarif
 
       - name: Upload SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@3b1a19a80ab047f35cbb237b5bd9bdc1e14f166c # v3
         with:
           sarif_file: results.sarif
 
@@ -100,7 +114,7 @@ jobs:
     name: PowerShell Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
       - name: Install PSScriptAnalyzer
         shell: pwsh
@@ -127,9 +141,9 @@ jobs:
     name: Python Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5
         with:
           python-version: '3.11'
 
@@ -138,7 +152,7 @@ jobs:
 
       - name: Lint Python files
         run: |
-          ruff check scripts/ domains/ tools/ --ignore E501 || true
+          ruff check scripts/ domains/ tools/ --ignore E501
 
   # -------------------------------------------------------------------------
   # Repository Hygiene Check
@@ -147,7 +161,7 @@ jobs:
     name: Repo Hygiene
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
       - name: Check for large files
         run: |

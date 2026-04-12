@@ -381,14 +381,8 @@ async def health_check(req: func.HttpRequest) -> func.HttpResponse:
     """
     status: dict[str, Any] = {
         "status": "healthy",
+        "service": "ai-enrichment",
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "capabilities": {
-            "text_analytics": _text_analytics_available(),
-            "document_intelligence": _form_recognizer_available(),
-        },
-        "configuration": {
-            "services_configured": bool(AI_ENDPOINT) and bool(STORAGE_CONNECTION),
-        },
     }
     return func.HttpResponse(
         json.dumps(status),

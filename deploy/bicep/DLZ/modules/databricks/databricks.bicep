@@ -61,6 +61,9 @@ resource databricksWorkspace 'Microsoft.Databricks/workspaces@2024-05-01' = {
   sku: {
     name: pricingTier
   }
+  identity: {
+    type: 'SystemAssigned'
+  }
   properties: {
     managedResourceGroupId: managedRgId
     publicNetworkAccess: publicNetworkAccess

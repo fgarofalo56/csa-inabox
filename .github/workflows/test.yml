@@ -17,10 +17,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -69,7 +69,7 @@ jobs:
 
       - name: Upload coverage report (xml + html)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b # v4
         with:
           name: coverage-report
           path: |
@@ -79,7 +79,7 @@ jobs:
 
       - name: Post coverage comment on PR
         if: github.event_name == 'pull_request'
-        uses: py-cov-action/python-coverage-comment-action@v3
+        uses: py-cov-action/python-coverage-comment-action@4c2eefcda8b94596768855a80ac94edc61aba669 # v3
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MINIMUM_GREEN: 80
@@ -97,10 +97,10 @@ jobs:
       run:
         working-directory: domains/${{ matrix.domain }}/dbt
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5
         with:
           python-version: '3.11'
 
@@ -130,10 +130,10 @@ jobs:
       run:
         working-directory: domains/${{ matrix.domain }}/dbt
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5
         with:
           python-version: '3.11'
 
@@ -169,22 +169,19 @@ jobs:
   pr-summary:
     name: PR Summary
     if: github.event_name == 'pull_request' && always()
-    needs: [python-tests, dbt-compile, dbt-integration, bicep-lint, powershell-lint, security-scan]
+    needs: [python-tests, dbt-compile, dbt-integration]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       pull-requests: write
     steps:
-      - uses: actions/github-script@v7
+      - uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
             const jobs = [
               { name: 'Python Tests', id: 'python-tests' },
               { name: 'dbt Compile', id: 'dbt-compile' },
               { name: 'dbt Integration', id: 'dbt-integration' },
-              { name: 'Bicep Lint', id: 'bicep-lint' },
-              { name: 'PowerShell Lint', id: 'powershell-lint' },
-              { name: 'Security Scan', id: 'security-scan' },
             ];
             const needs = ${{ toJSON(needs) }};
             const rows = jobs.map(j => {
@@ -227,64 +224,3 @@ jobs:
               });
             }
 
-  bicep-lint:
-    name: Bicep Lint
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Bicep CLI
-        run: |
-          curl -Lo bicep https://github.com/Azure/bicep/releases/latest/download/bicep-linux-x64
-          chmod +x ./bicep
-          sudo mv ./bicep /usr/local/bin/bicep
-
-      - name: Lint Bicep files
-        run: |
-          ERRORS=0
-          for f in $(find deploy/bicep -name "*.bicep" -not -path "*/node_modules/*"); do
-            echo "Building: $f"
-            if ! bicep build "$f" 2>&1; then
-              ERRORS=$((ERRORS + 1))
-            else
-              # Clean up generated ARM templates
-              arm_file="${f%.bicep}.json"
-              [ -f "$arm_file" ] && rm "$arm_file"
-            fi
-          done
-          if [ $ERRORS -gt 0 ]; then
-            echo "::error::$ERRORS Bicep file(s) failed to build"
-            exit 1
-          fi
-
-  powershell-lint:
-    name: PowerShell Lint
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Run PSScriptAnalyzer
-        shell: pwsh
-        run: |
-          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
-          $results = Get-ChildItem -Recurse -Filter *.ps1 |
-            Where-Object { $_.FullName -notmatch 'node_modules|\.venv' } |
-            ForEach-Object { Invoke-ScriptAnalyzer -Path $_.FullName -Severity Warning }
-          if ($results) {
-            $results | Format-Table -AutoSize
-            Write-Host "::warning::Found $($results.Count) PSScriptAnalyzer issues"
-          }
-
-  security-scan:
-    name: Security Scan
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Gitleaks
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

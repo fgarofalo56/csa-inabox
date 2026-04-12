@@ -108,6 +108,12 @@ param parStreamAnalytics object = {}
 @description('Resource ID of the Log Analytics workspace for diagnostics across all services')
 param logAnalyticsWorkspaceId string = ''
 
+@description('Primary technical contact for deployed resources.')
+param primaryContact string = 'platform-team@contoso.com'
+
+@description('Cost center or billing code for deployed resources.')
+param costCenter string = 'CSA-Platform'
+
 //  Variables
 // Default tags
 var tagsDefault = {
@@ -115,8 +121,8 @@ var tagsDefault = {
   Project: 'Azure Demo ALZ & CSA'
   environment: environment
   Toolkit: 'Bicep'
-  PrimaryContact: 'frgarofa'
-  CostCenter: 'FFL ATU - exp12345'
+  PrimaryContact: primaryContact
+  CostCenter: costCenter
 }
 var parLocationShort = toLower(replace(location, ' ', ''))
 
@@ -197,7 +203,7 @@ module storageResourceGroup 'modules/resourceGroup/resourceGroup.bicep' = if (bo
   }
 }
 
-module storageServices 'modules/storage/lakezones.bicep' = {
+module storageServices 'modules/storage/lakezones.bicep' = if (bool(deployModules.storageZones)) {
   name: 'storageServices'
   scope: resourceGroup('rg-${basename}-storage-${parLocationShort}')
   params: {
@@ -267,7 +273,7 @@ module synapseWorkspace 'modules/synapse/synapse.bicep' = if (contains(deployMod
     synapseName: contains(parSynapse, 'synapseWorkspaceName') ? parSynapse.synapseWorkspaceName : '${basename}-synapse'
     administratorUsername: contains(parSynapse, 'sqlAdminUsername') ? parSynapse.sqlAdminUsername : 'synadmin_${uniqueString(subscription().subscriptionId)}'
     administratorPassword: parSynapse.sqlAdminPassword // REQUIRED: Must be provided via parameter file or Key Vault reference
-    synapseDefaultStorageAccountFileSystemId: storageServices.outputs.storageAccountFileSystemId
+    synapseDefaultStorageAccountFileSystemId: storageServices.outputs.storageWorkspaceFileSystemId
     privateEndpointSubnets: contains(parSynapse, 'privateEndpointSubnets') ? parSynapse.privateEndpointSubnets : parStorage.privateEndpointSubnets
   }
   dependsOn: [
@@ -538,7 +544,7 @@ module roleAdxToEventHubs '../shared/modules/roleAssignment.bicep' = if (contain
 
 // Outputs — Service Resource IDs
 output cosmosDbAccountId string = contains(deployModules, 'cosmosDB') && bool(deployModules.cosmosDB) ? cosmosdb.outputs.cosmosDbAccountId : ''
-output storageAccountId string = contains(deployModules, 'storageZones') && bool(deployModules.storageZones) ? storageServices.outputs.storageAccountId : ''
+output storageAccountId string = contains(deployModules, 'storageZones') && bool(deployModules.storageZones) ? storageServices.outputs.storageRawId : ''
 output synapseWorkspaceId string = contains(deployModules, 'synapse') && bool(deployModules.synapse) ? synapseWorkspace.outputs.synapseId : ''
 output synapseManagedIdentityPrincipalId string = contains(deployModules, 'synapse') && bool(deployModules.synapse) ? synapseWorkspace.outputs.managedIdentityPrincipalId : ''
 output databricksWorkspaceId string = contains(deployModules, 'databricks') && bool(deployModules.databricks) ? databricksWorkspace.outputs.workspaceId : ''

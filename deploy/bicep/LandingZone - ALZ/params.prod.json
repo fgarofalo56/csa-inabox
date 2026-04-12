@@ -1,0 +1,903 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "location": {
+            "value": "East US"
+        },
+        "parEnvironment": {
+            "value": "prod"
+        },
+        "prefix": {
+            "value": "dmlz"
+        },
+        "parALZ_SubscriptionId": {
+            "value": "__PROD_SUBSCRIPTION_ID__"
+        },
+        "deployModules": {
+            "value": {
+                "requirments": true,
+                "logging": true,
+                "policy": true,
+                "initiatives": true,
+                "hubNetwork": true,
+                "spokeNetwork": true,
+                "securityCenter": true
+            }
+        },
+        "parLogAnalytics": {
+            "value": {
+                "parWorkspaceSufix": "dataObservability-logAnalyticsWorkspace",
+                "parLogAnalyticsWorkspaceSkuName": "PerGB2018",
+                "parLogAnalyticsWorkspaceLogRetentionInDays": 365,
+                "parLocation": "eastus",
+                "parDataCollectionRuleVMInsightsName": "alz-ama-vmi-dcr",
+                "parDataCollectionRuleChangeTrackingName": "alz-ama-ct-dcr",
+                "parDataCollectionRuleMDFCSQLName": "alz-ama-mdfcsql-dcr",
+                "parDCRWorkspaceTransformationName": "alz-ama-dcr-ws-transformation-dcr",
+                "parLogAnalyticsWorkspaceSolutions": {
+                    "value": [
+                        "Security",
+                        "ADAssessment",
+                        "AgentHealthAssessment",
+                        "AntiMalware",
+                        "AzureCdnCoreAnalytics",
+                        "AzureSQLAnalytics",
+                        "LogicAppB2B",
+                        "LogicAppsManagement",
+                        "SQLAssessment",
+                        "SQLVulnerabilityAssessment",
+                        "SecurityInsights",
+                        "VMInsights",
+                        "Containers",
+                        "ContainerInsights",
+                        "ServiceFabric",
+                        "InfrastructureInsights",
+                        "SecurityCenterFree",
+                        "CapacityPerformance",
+                        "AzureWebAppsAnalytics",
+                        "BehaviorAnalyticsInsights",
+                        "Updates",
+                        "AzureResources",
+                        "ChangeTracking",
+                        "SCOMAssessment",
+                        "AlertManagement",
+                        "AzureAutomation",
+                        "WireData",
+                        "SiteRecovery",
+                        "Backup",
+                        "NetworkMonitoring",
+                        "AppDependencyMonitor",
+                        "ADReplication",
+                        "Office365",
+                        "DnsAnalytics",
+                        "ApplicationInsights",
+                        "WireData2",
+                        "WaaSUpdateInsights",
+                        "AzureActivity",
+                        "HDInsight",
+                        "HDInsightKafka",
+                        "HDInsightHadoop",
+                        "HDInsightStorm",
+                        "VMware",
+                        "KeyVaultAnalytics",
+                        "AzureNSGAnalytics",
+                        "WindowsDefenderATPStable",
+                        "ProcessInvestigator",
+                        "Microsoft365Analytics",
+                        "ASRAnalytics",
+                        "DHCPActivity",
+                        "WinLog",
+                        "NetFlow",
+                        "ServiceMap",
+                        "LogManagement",
+                        "SQLAssessmentPlus",
+                        "AzureDataFactoryAnalytics",
+                        "AzureSecurityOfThings",
+                        "SecurityCenter",
+                        "SQLAdvancedThreatProtection"
+                    ]
+                }
+            }
+        },
+        "roleAssignmentIds": {
+            "value": [
+                "056cd41c-7e88-42e1-933e-88ba6a50c9c3",
+                "18d7d88d-d35e-4fb5-a5c3-7773c20a72d9",
+                "749f88d5-cbae-40b8-bcfc-e573ddc772fa",
+                "8e3af657-a8ff-443c-a75c-2fe8c4bcb635",
+                "92aaf0da-9dab-42b6-94a3-d43ce8d16293",
+                "9980e02c-c2be-4d73-94e8-173b1dc7cf3c",
+                "b24988ac-6180-42a0-ab88-20f7382dd24c",
+                "cd570a14-e51a-42ad-bac8-bafd67325302",
+                "fb1c8493-542b-48eb-b624-b4c8fea62acd"
+            ]
+        },
+        "initiatives": {
+            "value": [
+                {
+                    "displayName": "EnableLogsPolicy",
+                    "id": "0884adba-2312-4468-abeb-5422caed1038",
+                    "parameters": {
+                        "varLogAnalyticsEnabled": true,
+                        "varDiagnosticSettingEnabled": true,
+                        "varFedRampModerateEnabled": true
+                    }
+                },
+                {
+                    "displayName": "EnableAuditPolicy",
+                    "id": "f5b29bc4-feca-4cc6-a58a-772dd5e290a5",
+                    "parameters": {
+                        "varLogAnalyticsEnabled": true,
+                        "varDiagnosticSettingEnabled": true,
+                        "varFedRampModerateEnabled": true
+                    }
+                },
+                {
+                    "displayName": "SQL_VMs_Defender",
+                    "id": "39a366e6-fdde-4f41-bbf8-3757f46d1611",
+                    "parameters": {
+                        "varLogAnalyticsEnabled": true,
+                        "varDiagnosticSettingEnabled": true,
+                        "varFedRampModerateEnabled": true
+                    }
+                },
+                {
+                    "displayName": "OS_Advanced_Threat_Protection",
+                    "id": "e77fc0b3-f7e9-4c58-bc13-cb753ed8e46e",
+                    "parameters": {
+                        "varLogAnalyticsEnabled": true,
+                        "varDiagnosticSettingEnabled": true,
+                        "varFedRampModerateEnabled": true
+                    }
+                },
+                {
+                    "displayName": "SQL_MI-Defender",
+                    "id": "9cb3cc7a-b39b-4b82-bc89-e5a5d9ff7b97",
+                    "parameters": {
+                        "varLogAnalyticsEnabled": true,
+                        "varDiagnosticSettingEnabled": true,
+                        "varFedRampModerateEnabled": true
+                    }
+                },
+                {
+                    "displayName": "Defender-CloudPlans",
+                    "id": "f08c57cd-dbd6-49a4-a85e-9ae77ac959b0",
+                    "parameters": {
+                        "varLogAnalyticsEnabled": true,
+                        "varDiagnosticSettingEnabled": true,
+                        "varFedRampModerateEnabled": true
+                    }
+                },
+                {
+                    "displayName": "Defender-DBs",
+                    "id": "9d46421d-1a48-4636-8d1a-5525ed29172d",
+                    "parameters": {
+                        "varLogAnalyticsEnabled": true,
+                        "varDiagnosticSettingEnabled": true,
+                        "varFedRampModerateEnabled": true
+                    }
+                },
+                {
+                    "displayName": "Security-Benchmark",
+                    "id": "1f3afdf9-d0c9-4c3d-847f-89da613e70a8",
+                    "parameters": {
+                        "varLogAnalyticsEnabled": true,
+                        "varDiagnosticSettingEnabled": true,
+                        "varFedRampModerateEnabled": true,
+                        "varSecurityBenchmarkEnabled": true
+                    }
+                },
+                {
+                    "displayName": "AzureSQLDB-EntraOnly",
+                    "id": "a55e4a7e-1b9c-43ef-b4b3-642f303804d6",
+                    "parameters": {
+                        "varLogAnalyticsEnabled": true,
+                        "varDiagnosticSettingEnabled": true,
+                        "varFedRampModerateEnabled": true
+                    }
+                },
+                {
+                    "displayName": "SQL_MI-EntraOnly",
+                    "id": "9b8d8228-e8cc-4c95-8d98-47f32df40b5e",
+                    "parameters": {
+                        "varLogAnalyticsEnabled": true,
+                        "varDiagnosticSettingEnabled": true,
+                        "varFedRampModerateEnabled": true
+                    }
+                },
+                {
+                    "displayName": "Synapse-EntraOnly",
+                    "id": "1ee51566-9bb4-49da-b8d2-3c06991963eb",
+                    "parameters": {
+                        "varLogAnalyticsEnabled": true,
+                        "varDiagnosticSettingEnabled": true,
+                        "varFedRampModerateEnabled": true
+                    }
+                },
+                {
+                    "displayName": "FlowLogs-NSG",
+                    "id": "62329546-775b-4a3d-a4cb-eb4bb990d2c0",
+                    "parameters": {
+                        "varLogAnalyticsEnabled": true,
+                        "varDiagnosticSettingEnabled": true,
+                        "varFedRampModerateEnabled": true
+                    }
+                },
+                {
+                    "displayName": "Defender-EngpointAgent",
+                    "id": "e20d08c5-6d64-656d-6465-ce9e37fd0ebc",
+                    "parameters": {
+                        "varLogAnalyticsEnabled": true,
+                        "varDiagnosticSettingEnabled": true,
+                        "varFedRampModerateEnabled": true
+                    }
+                },
+                {
+                    "displayName": "Allow-Usage-Cost-Resources",
+                    "id": "0a2ebd47-3fb9-4735-a006-b7f31ddadd9f",
+                    "parameters": {
+                        "varLogAnalyticsEnabled": true,
+                        "varDiagnosticSettingEnabled": true,
+                        "varFedRampModerateEnabled": true
+                    }
+                },
+                {
+                    "displayName": "AuditPublicNetworkAccess",
+                    "id": "f1535064-3294-48fa-94e2-6e83095a5c08",
+                    "parameters": {
+                        "varLogAnalyticsEnabled": true,
+                        "varDiagnosticSettingEnabled": true,
+                        "varFedRampModerateEnabled": true
+                    }
+                },
+                {
+                    "displayName": "EvaluatePrivateLinkUsage",
+                    "id": "7379ef4c-89b0-48b6-a5cc-fd3a75eaef93",
+                    "parameters": {
+                        "varLogAnalyticsEnabled": true,
+                        "varDiagnosticSettingEnabled": true,
+                        "varFedRampModerateEnabled": true
+                    }
+                },
+                {
+                    "displayName": "AuditInsecurePasswordSettings",
+                    "id": "095e4ed9-c835-4ab6-9439-b5644362a06c",
+                    "parameters": {
+                        "varLogAnalyticsEnabled": true,
+                        "varDiagnosticSettingEnabled": true,
+                        "varFedRampModerateEnabled": true
+                    }
+                },
+                {
+                    "displayName": "ConfigureSecureCommunicationProtocols",
+                    "id": "ee6f9c39-ca6c-4937-b5b7-f6d9775a6f17",
+                    "parameters": {
+                        "varLogAnalyticsEnabled": true,
+                        "varDiagnosticSettingEnabled": true,
+                        "varFedRampModerateEnabled": true
+                    }
+                },
+                {
+                    "displayName": "Change Tracking-Inventory-VM",
+                    "id": "92a36f05-ebc9-4bba-9128-b47ad2ea3354",
+                    "parameters": {
+                        "varLogAnalyticsEnabled": true,
+                        "varDiagnosticSettingEnabled": true,
+                        "varFedRampModerateEnabled": true,
+                        "varChangeTrackingEnabled": true
+                    }
+                },
+                {
+                    "displayName": "EnableMonitorVMSS-AMA",
+                    "id": "f5bf694c-cca7-4033-b883-3a23327d5485",
+                    "parameters": {
+                        "varLogAnalyticsEnabled": true,
+                        "varDiagnosticSettingEnabled": true,
+                        "varFedRampModerateEnabled": true,
+                        "varChangeTrackingEnabled": true
+                    }
+                },
+                {
+                    "displayName": "ChangeTracking-Inventory-VMScaleSets",
+                    "id": "c4a70814-96be-461c-889f-2b27429120dc",
+                    "parameters": {
+                        "varLogAnalyticsEnabled": true,
+                        "varDiagnosticSettingEnabled": true,
+                        "varFedRampModerateEnabled": true,
+                        "varChangeTrackingEnabled": true
+                    }
+                },
+                {
+                    "displayName": "DeployWinMonitorAgent-UserAssignedIdentity",
+                    "id": "0d1b56c6-6d1f-4a5d-8695-b15efbea6b49",
+                    "parameters": {
+                        "varLogAnalyticsEnabled": true,
+                        "varDiagnosticSettingEnabled": true,
+                        "varFedRampModerateEnabled": true,
+                        "varChangeTrackingEnabled": true,
+                        "varWinMonitorAgent": true
+                    }
+                },
+                {
+                    "displayName": "ChangeTracking-Inventory-ArcVM",
+                    "id": "53448c70-089b-4f52-8f38-89196d7f2de1",
+                    "parameters": {
+                        "varLogAnalyticsEnabled": true,
+                        "varDiagnosticSettingEnabled": true,
+                        "varInventoryArcVM": true
+                    }
+                },
+                {
+                    "displayName": "SQL_VMs_Security_Center",
+                    "id": "de01d381-bae9-4670-8870-786f89f49e26",
+                    "parameters": {
+                        "varLogAnalyticsEnabled": true,
+                        "varDiagnosticSettingEnabled": true,
+                        "varFedRampModerateEnabled": true,
+                        "varChangeTrackingEnabled": true,
+                        "varSQLSecurityCenterEnabled": true
+                    }
+                },
+                {
+                    "displayName": "CosmosDB-throughput",
+                    "id": "cb5e1e90-7c33-491c-a15b-24885c915752",
+                    "parameters": {
+                        "varLogAnalyticsEnabled": true,
+                        "varDiagnosticSettingEnabled": true,
+                        "varFedRampModerateEnabled": true,
+                        "varCosmosDBThroughput": 400
+                    }
+                },
+                {
+                    "displayName": "CIS-Benchmark2.0.0",
+                    "id": "06f19060-9e68-4070-92ca-f15cc126059e",
+                    "parameters": {
+                        "varLogAnalyticsEnabled": true,
+                        "varDiagnosticSettingEnabled": true,
+                        "varFedRampModerateEnabled": true,
+                        "varCISBenchmarkEnabled": true
+                    }
+                },
+                {
+                    "displayName": "FedRamp Moderate",
+                    "id": "e95f5a9f-57ad-4d03-bb0b-b1d16db93693",
+                    "parameters": {
+                        "varLogAnalyticsEnabled": true,
+                        "varDiagnosticSettingEnabled": true,
+                        "varFedRampModerateEnabled": true
+                    }
+                }
+            ]
+        },
+        "hubNetwork": {
+            "value": {
+                "parHubSubscriptionId": "__PROD_SUBSCRIPTION_ID__",
+                "parLocation": "eastus",
+                "parHubNetworkName": "hubVnet",
+                "parHubNetworkAddressPrefix": {
+                    "value": "10.20.0.0/16"
+                },
+                "parSubnets": {
+                    "value": [
+                        {
+                            "name": "AzureBastionSubnet",
+                            "ipAddressRange": "10.20.0.0/24",
+                            "networkSecurityGroupId": "",
+                            "routeTableId": ""
+                        },
+                        {
+                            "name": "GatewaySubnet",
+                            "ipAddressRange": "10.20.254.0/24",
+                            "networkSecurityGroupId": "",
+                            "routeTableId": ""
+                        },
+                        {
+                            "name": "AzureFirewallSubnet",
+                            "ipAddressRange": "10.20.255.0/24",
+                            "networkSecurityGroupId": "",
+                            "routeTableId": ""
+                        },
+                        {
+                            "name": "AzureFirewallManagementSubnet",
+                            "ipAddressRange": "10.20.253.0/24",
+                            "networkSecurityGroupId": "",
+                            "routeTableId": ""
+                        }
+                    ]
+                },
+                "parDnsServerIps": {
+                    "value": []
+                },
+                "parPublicIpSku": {
+                    "value": "Standard"
+                },
+                "parPublicIpPrefix": {
+                    "value": ""
+                },
+                "parPublicIpSuffix": {
+                    "value": "-PublicIP"
+                },
+                "parAzBastionEnabled": {
+                    "value": true
+                },
+                "parAzBastionName": {
+                    "value": "alz-bastion"
+                },
+                "parAzBastionSku": {
+                    "value": "Premium"
+                },
+                "parAzBastionTunneling": {
+                    "value": true
+                },
+                "parAzBastionNsgName": {
+                    "value": "nsg-AzureBastionSubnet"
+                },
+                "parDdosEnabled": {
+                    "value": true
+                },
+                "parDdosPlanName": {
+                    "value": "alz-ddos-plan"
+                },
+                "parAzFirewallEnabled": {
+                    "value": true
+                },
+                "parAzFirewallName": {
+                    "value": "alz-azfw-eastus"
+                },
+                "parAzFirewallPoliciesEnabled": {
+                    "value": true
+                },
+                "parAzFirewallPoliciesName": {
+                    "value": "alz-azfwpolicy-eastus"
+                },
+                "parAzFirewallTier": {
+                    "value": "Premium"
+                },
+                "parAzFirewallIntelMode": {
+                    "value": "Deny"
+                },
+                "parAzFirewallAvailabilityZones": {
+                    "value": [
+                        "1",
+                        "2",
+                        "3"
+                    ]
+                },
+                "parAzFirewallCustomPublicIps": {
+                    "value": []
+                },
+                "parAzErGatewayAvailabilityZones": {
+                    "value": [
+                        "1",
+                        "2",
+                        "3"
+                    ]
+                },
+                "parAzVpnGatewayAvailabilityZones": {
+                    "value": [
+                        "1",
+                        "2",
+                        "3"
+                    ]
+                },
+                "parAzFirewallDnsProxyEnabled": {
+                    "value": true
+                },
+                "parAzFirewallDnsServers": {
+                    "value": []
+                },
+                "parHubRouteTableName": {
+                    "value": "alz-hub-routetable-eastus"
+                },
+                "parDisableBgpRoutePropagation": {
+                    "value": false
+                },
+                "parPrivateDnsZonesEnabled": {
+                    "value": true
+                },
+                "parPrivateDnsZoneAutoMergeAzureBackupZone": {
+                    "value": true
+                },
+                "parVirtualNetworkIdToLinkFailover": {
+                    "value": ""
+                },
+                "parVpnGatewayEnabled": {
+                    "value": true
+                },
+                "parVpnGatewayConfig": {
+                    "value": {
+                        "name": "alz-Vpn-Gateway",
+                        "gatewayType": "Vpn",
+                        "sku": "VpnGw2AZ",
+                        "vpnType": "RouteBased",
+                        "generation": "Generation2",
+                        "enableBgp": false,
+                        "activeActive": true,
+                        "enableBgpRouteTranslationForNat": false,
+                        "enableDnsForwarding": false,
+                        "bgpPeeringAddress": "",
+                        "bgpsettings": {
+                            "asn": "65515",
+                            "bgpPeeringAddress": "",
+                            "peerWeight": "5"
+                        },
+                        "vpnClientConfiguration": {}
+                    }
+                },
+                "parExpressRouteGatewayEnabled": {
+                    "value": true
+                },
+                "parExpressRouteGatewayConfig": {
+                    "value": {
+                        "name": "alz-ExpressRoute-Gateway",
+                        "gatewayType": "ExpressRoute",
+                        "sku": "ErGw1AZ",
+                        "vpnType": "RouteBased",
+                        "generation": "None",
+                        "enableBgp": false,
+                        "activeActive": false,
+                        "enableBgpRouteTranslationForNat": false,
+                        "enableDnsForwarding": false,
+                        "bgpPeeringAddress": "",
+                        "bgpsettings": {
+                            "asn": "65515",
+                            "bgpPeeringAddress": "",
+                            "peerWeight": "5"
+                        }
+                    }
+                },
+                "parTelemetryOptOut": {
+                    "value": true
+                },
+                "parBastionOutboundSshRdpPorts": {
+                    "value": [
+                        "22",
+                        "3389"
+                    ]
+                },
+                "parGlobalResourceLock": {
+                    "value": {
+                        "kind": "CanNotDelete",
+                        "notes": "Production resource lock — prevents accidental deletion of ALZ hub resources."
+                    }
+                },
+                "parVirtualNetworkLock": {
+                    "value": {
+                        "kind": "CanNotDelete",
+                        "notes": "Production lock — hub virtual network must not be deleted."
+                    }
+                },
+                "parBastionLock": {
+                    "value": {
+                        "kind": "CanNotDelete",
+                        "notes": "Production lock — Bastion host must not be deleted."
+                    }
+                },
+                "parDdosLock": {
+                    "value": {
+                        "kind": "CanNotDelete",
+                        "notes": "Production lock — DDoS protection plan must not be deleted."
+                    }
+                },
+                "parAzureFirewallLock": {
+                    "value": {
+                        "kind": "CanNotDelete",
+                        "notes": "Production lock — Azure Firewall must not be deleted."
+                    }
+                },
+                "parHubRouteTableLock": {
+                    "value": {
+                        "kind": "CanNotDelete",
+                        "notes": "Production lock — hub route table must not be deleted."
+                    }
+                },
+                "parPrivateDNSZonesLock": {
+                    "value": {
+                        "kind": "CanNotDelete",
+                        "notes": "Production lock — private DNS zones must not be deleted."
+                    }
+                },
+                "parVirtualNetworkGatewayLock": {
+                    "value": {
+                        "kind": "CanNotDelete",
+                        "notes": "Production lock — VPN/ExpressRoute gateways must not be deleted."
+                    }
+                }
+            }
+        },
+        "parRouteSpokesToHubFirewall": {
+            "value": true
+        },
+        "parSpokeNetworks": {
+            "value": [
+                {
+                    "parHubSubscriptionId": "__PROD_SUBSCRIPTION_ID__",
+                    "parHubAlreadyExists": true,
+                    "parLocation": "eastus",
+                    "parSpokeNetworkName": "spokeVnet-dmlz",
+                    "parDisableBgpRoutePropagation": false,
+                    "parDdosProtectionPlanId": "",
+                    "parSpokeNetworkAddressPrefix": "10.40.0.0/24",
+                    "pspokeNetworkarDdosProtectionPlanId": "",
+                    "parDnsServerIps": {
+                        "value": []
+                    },
+                    "parPrivateDnsZoneResourceIds": {
+                        "value": []
+                    },
+                    "parNextHopIpAddress": "10.20.255.4",
+                    "parPeeredVnetSubscriptionId": "",
+                    "parSpokeToHubRouteTableName": "rtb-eastus-dmlz-spoke-to-hub",
+                    "parTags": {
+                        "value": {
+                            "Network Environment": "Spoke Live"
+                        }
+                    },
+                    "parSubnets": [
+                        {
+                            "parSubnetName": "web",
+                            "ipAddressRange": "10.40.0.0/26",
+                            "privateEndpointNetworkPolicy": "Disabled",
+                            "delegation": "",
+                            "parRouteTable": true,
+                            "parDisableBgpRoutePropagation": false
+                        },
+                        {
+                            "parSubnetName": "application",
+                            "ipAddressRange": "10.40.0.64/26",
+                            "privateEndpointNetworkPolicy": "Disabled",
+                            "delegation": "",
+                            "parRouteTable": true,
+                            "parDisableBgpRoutePropagation": false
+                        },
+                        {
+                            "parSubnetName": "database",
+                            "ipAddressRange": "10.40.0.128/26",
+                            "privateEndpointNetworkPolicy": "Disabled",
+                            "delegation": "",
+                            "parRouteTable": true,
+                            "parDisableBgpRoutePropagation": false
+                        },
+                        {
+                            "parSubnetName": "virtualMachine",
+                            "ipAddressRange": "10.40.0.192/26",
+                            "privateEndpointNetworkPolicy": "Disabled",
+                            "delegation": "",
+                            "parRouteTable": true,
+                            "parDisableBgpRoutePropagation": false
+                        }
+                    ],
+                    "parTelemetryOptOut": false,
+                    "parAllowSpokeForwardedTraffic": false,
+                    "parAllowHubVPNGatewayTransit": true,
+                    "parVirtualHubConnectionPrefix": "",
+                    "parVirtualHubConnectionSuffix": "-vhc",
+                    "parEnableInternetSecurity": false,
+                    "parGlobalResourceLock": {
+                        "value": {
+                            "kind": "CanNotDelete",
+                            "notes": "Production lock — spoke resources must not be deleted."
+                        }
+                    },
+                    "parSpokeNetworkLock": {
+                        "value": {
+                            "kind": "CanNotDelete",
+                            "notes": "Production lock — spoke virtual network must not be deleted."
+                        }
+                    },
+                    "parSpokeparRouteTableLock": {
+                        "value": {
+                            "kind": "CanNotDelete",
+                            "notes": "Production lock — spoke route table must not be deleted."
+                        }
+                    },
+                    "parResourceGroupLock": {
+                        "value": {
+                            "kind": "CanNotDelete",
+                            "notes": "Production lock — spoke resource group must not be deleted."
+                        }
+                    },
+                    "parPrivateDnsZoneVirtualNetworkLinkLock": {
+                        "value": {
+                            "kind": "CanNotDelete",
+                            "notes": "Production lock — DNS zone VNet links must not be deleted."
+                        }
+                    }
+                },
+                {
+                    "parLocation": "eastus2",
+                    "parSpokeNetworkName": "spokeVnet-dmlz",
+                    "parDisableBgpRoutePropagation": false,
+                    "parDdosProtectionPlanId": "",
+                    "parSpokeNetworkAddressPrefix": "10.80.0.0/24",
+                    "pspokeNetworkarDdosProtectionPlanId": "",
+                    "parDnsServerIps": {
+                        "value": []
+                    },
+                    "parPrivateDnsZoneResourceIds": {
+                        "value": []
+                    },
+                    "parNextHopIpAddress": "10.20.255.4",
+                    "parPeeredVnetSubscriptionId": "",
+                    "parSpokeToHubRouteTableName": "rtb-eastus-dmlz-spoke-to-hub",
+                    "parTags": {
+                        "value": {
+                            "Network Environment": "Spoke Live"
+                        }
+                    },
+                    "parSubnets": [
+                        {
+                            "parSubnetName": "web",
+                            "ipAddressRange": "10.80.0.0/26",
+                            "privateEndpointNetworkPolicy": "Disabled",
+                            "delegation": "",
+                            "parRouteTable": true,
+                            "parDisableBgpRoutePropagation": false
+                        },
+                        {
+                            "parSubnetName": "application",
+                            "ipAddressRange": "10.80.0.64/26",
+                            "privateEndpointNetworkPolicy": "Disabled",
+                            "delegation": "",
+                            "parRouteTable": true,
+                            "parDisableBgpRoutePropagation": false
+                        },
+                        {
+                            "parSubnetName": "database",
+                            "ipAddressRange": "10.80.0.128/26",
+                            "privateEndpointNetworkPolicy": "Disabled",
+                            "delegation": "",
+                            "parRouteTable": true,
+                            "parDisableBgpRoutePropagation": false
+                        },
+                        {
+                            "parSubnetName": "virtualMachine",
+                            "ipAddressRange": "10.80.0.192/26",
+                            "privateEndpointNetworkPolicy": "Disabled",
+                            "delegation": "",
+                            "parRouteTable": true,
+                            "parDisableBgpRoutePropagation": false
+                        }
+                    ],
+                    "parTelemetryOptOut": false,
+                    "parAllowSpokeForwardedTraffic": false,
+                    "parAllowHubVPNGatewayTransit": true,
+                    "parVirtualHubConnectionPrefix": "",
+                    "parVirtualHubConnectionSuffix": "-vhc",
+                    "parEnableInternetSecurity": false,
+                    "parGlobalResourceLock": {
+                        "value": {
+                            "kind": "CanNotDelete",
+                            "notes": "Production lock — spoke resources must not be deleted."
+                        }
+                    },
+                    "parSpokeNetworkLock": {
+                        "value": {
+                            "kind": "CanNotDelete",
+                            "notes": "Production lock — spoke virtual network must not be deleted."
+                        }
+                    },
+                    "parSpokeparRouteTableLock": {
+                        "value": {
+                            "kind": "CanNotDelete",
+                            "notes": "Production lock — spoke route table must not be deleted."
+                        }
+                    },
+                    "parResourceGroupLock": {
+                        "value": {
+                            "kind": "CanNotDelete",
+                            "notes": "Production lock — spoke resource group must not be deleted."
+                        }
+                    },
+                    "parPrivateDnsZoneVirtualNetworkLinkLock": {
+                        "value": {
+                            "kind": "CanNotDelete",
+                            "notes": "Production lock — DNS zone VNet links must not be deleted."
+                        }
+                    }
+                },
+                {
+                    "parLocation": "westus",
+                    "parSpokeNetworkName": "spokeVnet-dmlz",
+                    "parDisableBgpRoutePropagation": false,
+                    "parDdosProtectionPlanId": "",
+                    "parSpokeNetworkAddressPrefix": "10.90.1.0/24",
+                    "pspokeNetworkarDdosProtectionPlanId": "",
+                    "parDnsServerIps": {
+                        "value": []
+                    },
+                    "parPrivateDnsZoneResourceIds": {
+                        "value": []
+                    },
+                    "parNextHopIpAddress": "10.20.255.4",
+                    "parPeeredVnetSubscriptionId": "",
+                    "parSpokeToHubRouteTableName": "rtb-westus-dmlz-spoke-to-hub",
+                    "parTags": {
+                        "value": {
+                            "Network Environment": "Spoke Live"
+                        }
+                    },
+                    "parSubnets": [
+                        {
+                            "parSubnetName": "web",
+                            "ipAddressRange": "10.90.1.0/26",
+                            "privateEndpointNetworkPolicy": "Disabled",
+                            "delegation": "",
+                            "parRouteTable": true,
+                            "parDisableBgpRoutePropagation": false
+                        },
+                        {
+                            "parSubnetName": "application",
+                            "ipAddressRange": "10.90.1.64/26",
+                            "privateEndpointNetworkPolicy": "Disabled",
+                            "delegation": "",
+                            "parRouteTable": true,
+                            "parDisableBgpRoutePropagation": false
+                        },
+                        {
+                            "parSubnetName": "database",
+                            "ipAddressRange": "10.90.1.128/26",
+                            "privateEndpointNetworkPolicy": "Disabled",
+                            "delegation": "",
+                            "parRouteTable": true,
+                            "parDisableBgpRoutePropagation": false
+                        },
+                        {
+                            "parSubnetName": "virtualMachine",
+                            "ipAddressRange": "10.90.1.192/28",
+                            "privateEndpointNetworkPolicy": "Disabled",
+                            "delegation": "",
+                            "parRouteTable": true,
+                            "parDisableBgpRoutePropagation": false
+                        },
+                        {
+                            "parSubnetName": "PrivateEndpoint",
+                            "ipAddressRange": "10.90.1.208/28",
+                            "privateEndpointNetworkPolicy": "Enabled",
+                            "delegation": "",
+                            "parRouteTable": true,
+                            "parDisableBgpRoutePropagation": false
+                        }
+                    ],
+                    "parTelemetryOptOut": false,
+                    "parAllowSpokeForwardedTraffic": false,
+                    "parAllowHubVPNGatewayTransit": true,
+                    "parVirtualHubConnectionPrefix": "",
+                    "parVirtualHubConnectionSuffix": "-vhc",
+                    "parEnableInternetSecurity": false,
+                    "parGlobalResourceLock": {
+                        "value": {
+                            "kind": "CanNotDelete",
+                            "notes": "Production lock — spoke resources must not be deleted."
+                        }
+                    },
+                    "parSpokeNetworkLock": {
+                        "value": {
+                            "kind": "CanNotDelete",
+                            "notes": "Production lock — spoke virtual network must not be deleted."
+                        }
+                    },
+                    "parSpokeparRouteTableLock": {
+                        "value": {
+                            "kind": "CanNotDelete",
+                            "notes": "Production lock — spoke route table must not be deleted."
+                        }
+                    },
+                    "parResourceGroupLock": {
+                        "value": {
+                            "kind": "CanNotDelete",
+                            "notes": "Production lock — spoke resource group must not be deleted."
+                        }
+                    },
+                    "parPrivateDnsZoneVirtualNetworkLinkLock": {
+                        "value": {
+                            "kind": "CanNotDelete",
+                            "notes": "Production lock — DNS zone VNet links must not be deleted."
+                        }
+                    }
+                }
+            ]
+        }
+    }
+}

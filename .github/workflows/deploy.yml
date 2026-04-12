@@ -37,12 +37,15 @@ on:
         type: boolean
         default: true
 
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
 permissions:
   id-token: write
-  # `contents: write` is needed by the tag-deployment job below so
-  # successful non-dry-run deploys create a deploy/<env>-<sha> tag that
-  # the rollback workflow can target.
-  contents: write
+  # `contents: read` at workflow level. Only the tag-deployment job below
+  # needs `contents: write`, which it declares at job level.
+  contents: read
 
 env:
   AZURE_REGION: eastus
@@ -56,10 +59,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
       - name: Azure Login (OIDC)
-        uses: azure/login@v2
+        uses: azure/login@d19a4f1b3c068b799dff7574ac265b0144f415fe # v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -83,10 +86,10 @@ jobs:
     timeout-minutes: 60
     environment: ${{ inputs.environment }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
       - name: Azure Login
-        uses: azure/login@v2
+        uses: azure/login@d19a4f1b3c068b799dff7574ac265b0144f415fe # v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -112,10 +115,10 @@ jobs:
     timeout-minutes: 60
     environment: ${{ inputs.environment }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
       - name: Azure Login
-        uses: azure/login@v2
+        uses: azure/login@d19a4f1b3c068b799dff7574ac265b0144f415fe # v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -136,15 +139,15 @@ jobs:
   deploy-dlz:
     name: Deploy DLZ
     needs: [validate, deploy-dmlz]
-    if: ${{ inputs.deploy_dlz && always() }}
+    if: ${{ inputs.deploy_dlz && !cancelled() && (needs.deploy-dmlz.result == 'success' || needs.deploy-dmlz.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: ${{ inputs.environment }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
       - name: Azure Login
-        uses: azure/login@v2
+        uses: azure/login@d19a4f1b3c068b799dff7574ac265b0144f415fe # v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -169,10 +172,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
       - name: Azure Login
-        uses: azure/login@v2
+        uses: azure/login@d19a4f1b3c068b799dff7574ac265b0144f415fe # v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -204,10 +207,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5
         with:
           python-version: '3.11'
 
@@ -257,7 +260,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
           fetch-depth: 0
 

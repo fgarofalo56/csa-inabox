@@ -52,7 +52,7 @@ var varSubnetMap = map(range(0, length(parSubnets)), i => {
     ? parSubnets[i].routeTableId
     : resourceId(
         subscription().subscriptionId,
-        'rg here',
+        resourceGroup().name,
         'Microsoft.Network/routeTables',
         hubNetwork.parHubRouteTableName.value
       )

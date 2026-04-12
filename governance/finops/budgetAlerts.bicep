@@ -66,8 +66,8 @@ resource platformBudget 'Microsoft.Consumption/budgets@2023-11-01' = {
     }
     filter: {
       tags: {
-        name: 'Platform'
-        values: ['csa-inabox']
+        name: 'Project'
+        values: ['Azure Demo ALZ & CSA']
         operator: 'In'
       }
     }

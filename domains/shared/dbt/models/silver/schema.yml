@@ -19,7 +19,7 @@ models:
         tests:
           - not_null:
               config:
-                severity: warn  # nulls are flagged, not filtered
+                severity: error  # PK must never be null
       - name: customer_id
         description: FK to slv_customers
         tests:
