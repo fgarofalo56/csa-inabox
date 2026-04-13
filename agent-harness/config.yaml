@@ -55,4 +55,4 @@ notifications:
   on_error: true
 
 # Updated by session-end protocol — see .claude/rules/session-end.md
-updated_at: "2026-04-13T19:00:00Z"
+updated_at: "2026-04-13T20:30:00Z"

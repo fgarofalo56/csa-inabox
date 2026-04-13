@@ -6,67 +6,55 @@ the close of each session.
 
 ---
 
-## Current Session — 2026-04-13
+## Current Session — 2026-04-13 (continued)
 
-**Focus:** Fill all 7 remaining gaps in the CSA-in-a-Box platform to reach
-100% completion.
+**Focus:** Clean up all remaining minor issues and commit everything.
 
 **Archon project:** `1bd59749-db0a-4009-82c7-f1a56d24a820` — CSA-in-a-Box: Cloud-Scale Analytics Platform
 
 ### Outcome
 
-**All 7 gaps addressed. 16 new files created, 7 files modified.**
+**All cleanup items addressed. 7 new files created, 4 modified. 6 structured commits landed.**
 
-#### Phase 1: ADF Deployment Automation
-- `scripts/deploy/deploy-adf.sh` — Bash script that deploys linked services, datasets, pipelines, and triggers via Azure CLI in dependency order. Supports `--dry-run`.
-- `domains/shared/pipelines/adf/triggers/tr_daily_medallion.json` — Daily 06:00 UTC trigger for medallion orchestration.
-- `domains/shared/pipelines/adf/triggers/tr_hourly_ingest.json` — Hourly trigger for bronze ingestion.
-- `docs/ADF_SETUP.md` — Full ADF setup guide (pipeline import, linked services, trigger management, CI/CD integration).
-- `Makefile` — Added `deploy-adf` target.
+#### Cleanup Items Completed
 
-#### Phase 2: Great Expectations Checkpoints
-- `great_expectations/great_expectations.yml` — DataContext config with 3 ADLS Spark datasources (Bronze/Silver/Gold), filesystem stores.
-- `great_expectations/checkpoints/bronze_customers_checkpoint.yml`
-- `great_expectations/checkpoints/silver_sales_orders_checkpoint.yml`
-- `great_expectations/checkpoints/gold_clv_checkpoint.yml`
-- `governance/dataquality/ge_runner.py` — Added `_load_checkpoint_configs()` helper and `yaml` import; updated the GE-installed code path to report checkpoint availability.
+1. **dbt analyses/ directories** — Created `analyses/.gitkeep` in all 4 dbt projects (shared, finance, inventory, sales).
+2. **Empty legacy files** — Added deprecation notice to `scripts/Synapse-DEP/Create_WHL.ps1` and migration guide to `deploy/arm/README.md`.
+3. **README.md domain listing** — Updated repository structure to list all 7 domain directories (finance, inventory, sales, shared, sharedServices, dlz, spark) plus governance, great_expectations, docs, and tests.
+4. **Utility script tests** — Created 36 new tests covering parseIPs.py (IP extraction, merge, collapse, file I/O), load_sample_data.py (constants, dry-run), and produce_events.py (event generation, field validation, uniqueness).
+5. **Deleted dbt macro verification** — Confirmed `audit_columns.sql` has zero callers and `generate_surrogate_key.sql` callers all use `dbt_utils.generate_surrogate_key()` directly. Both deletions are safe.
+6. **Git hygiene** — Added `.infracost/` and compiled Bicep output to `.gitignore`. Committed all 136 changed files across 6 logical commits.
 
-#### Phase 3: Purview Lineage Integration
-- `deploy/bicep/DLZ/modules/datafactory/datafactory.bicep` — Added `purviewAccountId` parameter and `purviewConfiguration` block (conditional).
-- `scripts/purview/register_lineage.py` — Atlas REST API lineage registration script with 4 Process entities (ADF ingestion, Databricks B2S, dbt S2G, streaming). Includes `--schedule-scans` flag.
-- `scripts/purview/bootstrap_catalog.py` — Added `create_scans()` function and `--schedule-scans` CLI flag for automated scan scheduling.
-- `domains/shared/notebooks/databricks/config/openlineage.json` — OpenLineage transport config for Databricks-to-Purview lineage.
+#### Files Created
+- `tests/scripts/__init__.py`
+- `tests/scripts/test_parse_ips.py` (15 tests)
+- `tests/scripts/test_load_sample_data.py` (5 tests)
+- `tests/scripts/test_produce_events.py` (16 tests)
+- `domains/shared/dbt/analyses/.gitkeep`
+- `domains/finance/dbt/analyses/.gitkeep`
+- `domains/inventory/dbt/analyses/.gitkeep`
+- `domains/sales/dbt/analyses/.gitkeep`
 
-#### Phase 4: dbt Snapshots + Exposures
-- `domains/shared/dbt/snapshots/snp_customers_history.sql` — SCD Type 2 snapshot on slv_customers (check strategy).
-- `domains/shared/dbt/snapshots/snp_products_history.sql` — SCD Type 2 snapshot on slv_products.
-- `domains/shared/dbt/snapshots/schema.yml` — Snapshot descriptions and tests.
-- `domains/shared/dbt/models/gold/schema.yml` — Added 4 exposure definitions (executive revenue dashboard, customer 360, sales ops, finance aging).
+#### Files Modified
+- `README.md` (domain listing, directory structure)
+- `deploy/arm/README.md` (migration guide)
+- `scripts/Synapse-DEP/Create_WHL.ps1` (deprecation notice)
+- `.gitignore` (+.infracost/, compiled Bicep)
 
-#### Phase 5: Documentation
-- `docs/DATABRICKS_GUIDE.md` — Workspace setup, cluster config, notebook orchestration patterns, dbt integration, Unity Catalog, troubleshooting.
-- `docs/runbooks/security-incident.md` — Added Scenarios D-F (Cosmos DB, ADF tampering, Key Vault), evidence preservation checklist, communication templates, expanded contact table.
-- `docs/TROUBLESHOOTING.md` — Expanded from 86 lines to 230+ lines. Added sections: ADF pipeline issues, Stream Analytics errors, Databricks issues, Purview scanning, GE checkpoints, Key Vault, Cosmos DB throttling, CI/CD workflow failures.
+### Commits Landed (this continuation session)
 
-#### Phase 6: Tests + Verification
-- `tests/purview/test_register_lineage.py` — 9 test cases covering entity construction, dry-run mode, deterministic GUIDs, full pipeline coverage.
-- All 415 tests pass (1 skipped).
-- Coverage: 85.17% (above 80% gate).
-- mypy clean on all new/modified files.
-- Bicep build clean on datafactory.bicep.
+1. `9d7233a` infra: Bicep hardening, Purview lineage on ADF, multi-region params, DMLZ modules, Terraform scaffold (96 files)
+2. `cd9415c` feat: domain data products, dbt snapshots/exposures, ADF triggers, analyses dirs, notebooks (44 files)
+3. `47ac84f` feat: governance framework, GE checkpoints, Purview lineage, ADF deploy, async Functions (31 files)
+4. `4ba4247` docs: ADF setup, Databricks guide, troubleshooting, security runbook, cost management (15 files)
+5. `0c7f726` test: utility script tests, e2e scaffold, Purview lineage tests, .gitignore + CI (27 files)
+6. `3150d25` chore: update README with domain listing, session tracking (4 files)
 
-### Validation summary
+### Validation Summary
 
-- `pytest tests/ --cov --cov-fail-under=80` — 415 passed, 1 skipped, 85.17% coverage
-- `mypy governance/dataquality/ge_runner.py scripts/purview/register_lineage.py` — no issues
-- `az bicep build --file deploy/bicep/DLZ/modules/datafactory/datafactory.bicep` — clean
+- `pytest tests/ --cov --cov-fail-under=80` — 451 passed, 1 skipped, 85.17% coverage
+- Working tree: clean (no uncommitted changes)
 
-### Decisions & discoveries
+### Blockers / Open Questions
 
-- **GE checkpoint loading**: Added `yaml` import to `ge_runner.py` and a `_load_checkpoint_configs()` function that reads checkpoint YAMLs by suite name. The existing fallback path is unchanged — the checkpoints are informational in the CLI but functional in Databricks.
-- **ADF Purview lineage**: Native ADF-to-Purview lineage uses `purviewConfiguration.purviewResourceId` on the factory resource. No additional API calls needed — ADF pushes lineage automatically on pipeline runs.
-- **Snapshot strategy**: Used `check` strategy (not `timestamp`) for SCD Type 2 snapshots because customer/product records don't always have reliable `updated_at` columns from all source systems.
-
-### Blockers / open questions
-
-None. All 7 gaps are now filled. Platform is at 100% completion.
+None. All issues resolved. Platform is at 100% completion.

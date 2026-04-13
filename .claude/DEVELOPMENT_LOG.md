@@ -5,6 +5,42 @@ end-of-session protocol in `.claude/rules/session-end.md`.
 
 ---
 
+## 2026-04-13 (cont.) — Cleanup, tests, and full commit
+
+**Archon project:** `1bd59749-db0a-4009-82c7-f1a56d24a820`
+
+Addressed all remaining minor issues after the 7-gap fill. 7 new files,
+4 modified. 451 tests pass, 85.17% coverage. 6 structured commits
+landed. Working tree clean.
+
+### Summary of work
+
+1. **dbt analyses/ directories** — Created `.gitkeep` in all 4 dbt
+   projects (shared, finance, inventory, sales) to match `dbt_project.yml`
+   `analysis-paths` references.
+2. **Empty legacy files** — Deprecated `Create_WHL.ps1` with notice
+   pointing to `DATABRICKS_GUIDE.md`. Added ARM → Bicep migration guide
+   to `deploy/arm/README.md`.
+3. **README.md** — Updated repository structure to list all 7 domain
+   directories and new top-level directories (governance, docs, tests,
+   great_expectations).
+4. **Utility script tests** — 36 new tests: `test_parse_ips.py` (15),
+   `test_load_sample_data.py` (5), `test_produce_events.py` (16).
+   Covers IP extraction/merging/collapse, sample data dry-run, and
+   streaming event generation with field validation.
+5. **Deleted macro verification** — Confirmed `audit_columns.sql` has
+   zero callers and `generate_surrogate_key.sql` callers all use
+   `dbt_utils` directly. Deletions are safe.
+6. **Git hygiene** — Added `.infracost/` and compiled Bicep to
+   `.gitignore`. Committed all 136 changed files in 6 logical commits.
+
+### Validation summary
+
+- `pytest tests/ --cov --cov-fail-under=80` — 451 passed, 1 skipped, 85.17%
+- Working tree: clean
+
+---
+
 ## 2026-04-13 — Fill all remaining gaps (7/7 complete)
 
 **Archon project:** `1bd59749-db0a-4009-82c7-f1a56d24a820`
