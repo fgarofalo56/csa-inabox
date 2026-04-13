@@ -30,9 +30,28 @@ EMAIL_REGEX: re.Pattern[str] = re.compile(EMAIL_REGEX_PATTERN)
 
 
 def is_valid_email(value: str | None) -> bool:
-    """Return ``True`` if *value* matches :data:`EMAIL_REGEX`, else ``False``.
+    """Return True if value matches the canonical email regex pattern, else False.
 
-    ``None`` and non-string inputs are treated as invalid.
+    This function validates email addresses using a simplified RFC-5322-ish regex
+    pattern that focuses on common cases and ensures compatibility with dbt's
+    Spark SQL 'rlike' function and Great Expectations regex validation.
+
+    Args:
+        value: The email address string to validate, or None
+
+    Returns:
+        bool: True if the value is a valid email format, False otherwise.
+              None and non-string inputs are treated as invalid.
+
+    Examples:
+        >>> is_valid_email("user@example.com")
+        True
+        >>> is_valid_email("invalid.email")
+        False
+        >>> is_valid_email(None)
+        False
+        >>> is_valid_email(123)
+        False
     """
     if not isinstance(value, str):
         return False
@@ -47,9 +66,34 @@ _COMMON_PATTERN_SUBSTITUTIONS: dict[str, str] = {
 
 
 def substitute_common_patterns(value: Any) -> Any:
-    """Recursively expand ``{EMAIL_REGEX}``-style placeholders in *value*.
+    """Recursively expand placeholder patterns in configuration values.
 
-    Walks dicts, lists, and strings. Non-string leaves are returned unchanged.
+    This function walks through dictionaries, lists, and strings to replace
+    standardized placeholders like '{EMAIL_REGEX}' with their canonical values.
+    This ensures that validation patterns defined in this module are consistently
+    applied across dbt macros, Great Expectations rules, and Python validation.
+
+    Args:
+        value: The configuration value to process. Can be a string containing
+               placeholders, a dict with nested values, a list of values, or
+               any other type (returned unchanged).
+
+    Returns:
+        Any: The processed value with placeholders expanded:
+             - Strings: placeholders replaced with canonical patterns
+             - Dicts: recursively processed with placeholders in values replaced
+             - Lists: recursively processed with placeholders in items replaced
+             - Other types: returned unchanged
+
+    Examples:
+        >>> substitute_common_patterns("Email must match {EMAIL_REGEX}")
+        'Email must match ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$'
+
+        >>> substitute_common_patterns({"pattern": "{EMAIL_REGEX}", "enabled": True})
+        {'pattern': '^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$', 'enabled': True}
+
+        >>> substitute_common_patterns(["{EMAIL_REGEX}", "other"])
+        ['^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$', 'other']
     """
     if isinstance(value, str):
         result = value

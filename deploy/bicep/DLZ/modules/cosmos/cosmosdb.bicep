@@ -45,7 +45,7 @@ param enablePerRegionPerPartitionAutoscale bool = false
 param enablePriorityBasedExecution bool = false
 
 @description('Disable key-based metadata write access (improves security)')
-param disableKeyBasedMetadataWriteAccess bool = false
+param disableKeyBasedMetadataWriteAccess bool = true
 
 @description('Disable local authentication (use managed identity or AAD instead)')
 param disableLocalAuth bool = true

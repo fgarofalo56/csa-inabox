@@ -74,4 +74,7 @@ reconciled AS (
     FULL OUTER JOIN invoices i ON o.order_id = i.order_id
 )
 
-SELECT * FROM reconciled
+SELECT
+    {{ dbt_utils.generate_surrogate_key(['order_id', 'reconciliation_status']) }} AS reconciliation_key,
+    *
+FROM reconciled

@@ -58,10 +58,10 @@ final AS (
         CASE
             WHEN outstanding_balance <= 0 THEN 0
             WHEN days_past_due <= 0 THEN 0
-            WHEN days_past_due <= 30 THEN 0.01
-            WHEN days_past_due <= 60 THEN 0.05
-            WHEN days_past_due <= 90 THEN 0.10
-            ELSE 0.25
+            WHEN days_past_due <= 30 THEN {{ var('loss_rate_0_30', 0.01) }}
+            WHEN days_past_due <= 60 THEN {{ var('loss_rate_31_60', 0.05) }}
+            WHEN days_past_due <= 90 THEN {{ var('loss_rate_61_90', 0.10) }}
+            ELSE {{ var('loss_rate_over_90', 0.25) }}
         END AS estimated_loss_rate,
 
         current_timestamp() AS _dbt_refreshed_at

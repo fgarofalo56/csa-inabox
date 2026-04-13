@@ -28,9 +28,9 @@ final AS (
 
         -- Price tier for reporting
         CASE
-            WHEN unit_price >= 100 THEN 'premium'
-            WHEN unit_price >= 50 THEN 'standard'
-            WHEN unit_price >= 25 THEN 'value'
+            WHEN unit_price >= {{ var('price_tier_premium', 100) }} THEN 'premium'
+            WHEN unit_price >= {{ var('price_tier_standard', 50) }} THEN 'standard'
+            WHEN unit_price >= {{ var('price_tier_value', 25) }} THEN 'value'
             ELSE 'economy'
         END AS price_tier,
 

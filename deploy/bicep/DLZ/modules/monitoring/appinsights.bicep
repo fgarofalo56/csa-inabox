@@ -45,3 +45,6 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
 @description('Resource ID of the Application Insights.')
 output appInsightsId string = appInsights.id
 
+@description('Connection string for Application Insights.')
+output connectionString string = appInsights.properties.ConnectionString
+

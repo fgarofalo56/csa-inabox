@@ -110,6 +110,9 @@ resource vmss001 'Microsoft.Compute/virtualMachineScaleSets@2021-07-01' = {
       mode: 'Automatic'
     }
     virtualMachineProfile: {
+      securityProfile: {
+        encryptionAtHost: true
+      }
       priority: 'Regular'
       osProfile: {
         adminUsername: administratorUsername

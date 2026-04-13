@@ -35,14 +35,14 @@ param parGovernance object
 param parBaseName string = '${prefix}-${environment}'
 
 var varPurview001Name = toLower(substring(
-  '${parBaseName}-${parGovernance.purviewAcountName}}',
+  '${parBaseName}-${parGovernance.parPurviewName}}',
   0,
-  min(length('${parBaseName}-${parGovernance.purviewAcountName}'), 24)
+  min(length('${parBaseName}-${parGovernance.parPurviewName}'), 24)
 ))
 
 // var keyvault001Name = '${prefix}-vault001'
 
-var varPurviewTags = union(defaultTags, parGovernance.purviewTags)
+var varPurviewTags = union(defaultTags, parGovernance.tags)
 
 // Resources
 //Deploy Purview
@@ -52,11 +52,11 @@ module deployPurview '../Purview/purview.bicep' = if (bool(deployModules.governa
   params: {
     // purviewAcctName: '${parBaseName}-purview-${parGovernance.parLocation}'
     purviewAcctName: varPurview001Name
-    sku: parGovernance.purviewSku
-    parPurviewPublicNetworkAccess: parGovernance.purviewPublicNetworkAccess
-    location: parGovernance.purviewLocation
-    parTenantEndpointState: parGovernance.purviewTenantEndpointState
-    configKafka: parGovernance.purviewKafkaConfig
+    sku: parGovernance.parPurviewSku
+    parPurviewPublicNetworkAccess: parGovernance.parPurviewPublicNetworkAccess
+    location: parGovernance.parLocation
+    parTenantEndpointState: parGovernance.parTenantEndpointState
+    configKafka: parGovernance.parPurviewKafkaConfig
     tags: varPurviewTags
   }
   dependsOn: [

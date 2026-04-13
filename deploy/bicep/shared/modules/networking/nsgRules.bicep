@@ -35,6 +35,56 @@ var denyAllInbound = {
   description: 'Default deny — all inbound traffic not explicitly allowed is dropped.'
 }
 
+// Common outbound rules — allow essential Azure services, deny everything else
+var outboundAllowAzureCloud = {
+  name: 'AllowAzureCloudOutbound'
+  priority: 100
+  direction: 'Outbound'
+  access: 'Allow'
+  protocol: 'Tcp'
+  sourceAddressPrefix: 'VirtualNetwork'
+  destinationAddressPrefix: 'AzureCloud'
+  destinationPortRange: '443'
+  description: 'Allow HTTPS outbound to Azure Cloud services.'
+}
+
+var outboundAllowAAD = {
+  name: 'AllowAADOutbound'
+  priority: 110
+  direction: 'Outbound'
+  access: 'Allow'
+  protocol: 'Tcp'
+  sourceAddressPrefix: 'VirtualNetwork'
+  destinationAddressPrefix: 'AzureActiveDirectory'
+  destinationPortRange: '443'
+  description: 'Allow HTTPS outbound to Azure Active Directory.'
+}
+
+var outboundAllowMonitor = {
+  name: 'AllowAzureMonitorOutbound'
+  priority: 120
+  direction: 'Outbound'
+  access: 'Allow'
+  protocol: 'Tcp'
+  sourceAddressPrefix: 'VirtualNetwork'
+  destinationAddressPrefix: 'AzureMonitor'
+  destinationPortRange: '443'
+  description: 'Allow HTTPS outbound to Azure Monitor.'
+}
+
+var denyAllOutbound = {
+  name: 'DenyAllOutbound'
+  priority: 4096
+  direction: 'Outbound'
+  access: 'Deny'
+  protocol: '*'
+  sourceAddressPrefix: '*'
+  sourcePortRange: '*'
+  destinationAddressPrefix: '*'
+  destinationPortRange: '*'
+  description: 'Default deny — all outbound traffic not explicitly allowed is dropped.'
+}
+
 var hubSource = !empty(parHubAddressPrefix) ? parHubAddressPrefix : 'VirtualNetwork'
 
 // Data subnet rules — allow private endpoint traffic from VNet, deny internet
@@ -70,6 +120,10 @@ var dataRules = [
     description: 'Block all internet inbound.'
   }
   denyAllInbound
+  outboundAllowAzureCloud
+  outboundAllowAAD
+  outboundAllowMonitor
+  denyAllOutbound
 ]
 
 // Compute subnet rules — allow SSH/RDP from hub, allow VNet, deny internet
@@ -115,6 +169,10 @@ var computeRules = [
     description: 'Block all internet inbound.'
   }
   denyAllInbound
+  outboundAllowAzureCloud
+  outboundAllowAAD
+  outboundAllowMonitor
+  denyAllOutbound
 ]
 
 // Management subnet rules — allow HTTPS + RDP from hub, Bastion
@@ -170,6 +228,10 @@ var managementRules = [
     description: 'Block all internet inbound.'
   }
   denyAllInbound
+  outboundAllowAzureCloud
+  outboundAllowAAD
+  outboundAllowMonitor
+  denyAllOutbound
 ]
 
 // Integration subnet rules — allow HTTPS + AMQP from VNet, deny internet
@@ -215,6 +277,10 @@ var integrationRules = [
     description: 'Block all internet inbound.'
   }
   denyAllInbound
+  outboundAllowAzureCloud
+  outboundAllowAAD
+  outboundAllowMonitor
+  denyAllOutbound
 ]
 
 // Select the rule set based on subnet type

@@ -28,7 +28,7 @@ WITH inventory AS (
         COUNT(*) AS warehouse_count,
         -- Calculate basic reorder metrics from inventory alone
         MAX(reorder_point) AS max_reorder_point,
-        MAX(safety_stock) AS max_safety_stock
+        MIN(reorder_point) AS min_reorder_point
     FROM {{ ref('fact_inventory_snapshot') }}
     GROUP BY product_id
 ),
@@ -59,7 +59,7 @@ final AS (
         CASE
             WHEN i.total_available <= 0 THEN 'STOCKOUT'
             WHEN i.total_available <= i.max_reorder_point THEN 'LOW_STOCK'
-            WHEN i.total_available <= i.max_safety_stock * 2 THEN 'ADEQUATE'
+            WHEN i.total_available <= i.min_reorder_point * 2 THEN 'ADEQUATE'
             ELSE 'WELL_STOCKED'
         END AS inventory_status,
 
@@ -73,9 +73,6 @@ final AS (
 
     FROM inventory i
     LEFT JOIN products p ON i.product_id = p.product_id
-)
-
-SELECT * FROM final
 )
 
 SELECT * FROM final

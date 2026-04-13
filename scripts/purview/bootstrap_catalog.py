@@ -15,21 +15,44 @@ import json
 import sys
 from typing import Any
 
-
-def get_catalog_client(account_name: str) -> Any:
-    """Create Purview catalog client with DefaultAzureCredential."""
+try:
     from azure.identity import DefaultAzureCredential
     from azure.purview.catalog import PurviewCatalogClient
+    from azure.purview.scanning import PurviewScanningClient
+except ImportError:
+    PurviewCatalogClient = None
+    PurviewScanningClient = None
+    DefaultAzureCredential = None
+
+
+def get_catalog_client(account_name: str) -> PurviewCatalogClient:
+    """Create Purview catalog client with DefaultAzureCredential.
+
+    Args:
+        account_name: The name of the Purview account
+
+    Returns:
+        PurviewCatalogClient: Configured catalog client instance
+    """
+    if not DefaultAzureCredential or not PurviewCatalogClient:
+        raise ImportError("azure-identity and azure-purview-catalog are required")
 
     endpoint = f"https://{account_name}.purview.azure.com"
     credential = DefaultAzureCredential()
     return PurviewCatalogClient(endpoint=endpoint, credential=credential)
 
 
-def get_scanning_client(account_name: str) -> Any:
-    """Create Purview scanning client with DefaultAzureCredential."""
-    from azure.identity import DefaultAzureCredential
-    from azure.purview.scanning import PurviewScanningClient
+def get_scanning_client(account_name: str) -> PurviewScanningClient:
+    """Create Purview scanning client with DefaultAzureCredential.
+
+    Args:
+        account_name: The name of the Purview account
+
+    Returns:
+        PurviewScanningClient: Configured scanning client instance
+    """
+    if not DefaultAzureCredential or not PurviewScanningClient:
+        raise ImportError("azure-identity and azure-purview-scanning are required")
 
     endpoint = f"https://{account_name}.purview.azure.com"
     credential = DefaultAzureCredential()
@@ -47,8 +70,16 @@ COLLECTIONS = [
 ]
 
 
-def create_collections(client: Any, dry_run: bool = False) -> None:
-    """Create collection hierarchy in Purview."""
+def create_collections(client: PurviewCatalogClient, dry_run: bool = False) -> None:
+    """Create collection hierarchy in Purview.
+
+    Args:
+        client: Purview catalog client instance
+        dry_run: If True, only show what would be created without making changes
+
+    Returns:
+        None
+    """
     print("\nCreating collections...")
     for coll in COLLECTIONS:
         body: dict[str, Any] = {
@@ -124,8 +155,16 @@ GLOSSARY_TERMS = [
 ]
 
 
-def create_glossary_terms(client: Any, dry_run: bool = False) -> None:
-    """Create business glossary terms."""
+def create_glossary_terms(client: PurviewCatalogClient, dry_run: bool = False) -> None:
+    """Create business glossary terms.
+
+    Args:
+        client: Purview catalog client instance
+        dry_run: If True, only show what would be created without making changes
+
+    Returns:
+        None
+    """
     print("\nCreating glossary terms...")
     for term in GLOSSARY_TERMS:
         body = {
@@ -176,8 +215,17 @@ SCAN_SOURCES = [
 ]
 
 
-def register_scan_sources(client: Any, storage_account: str, dry_run: bool = False) -> None:
-    """Register ADLS containers as Purview scan sources."""
+def register_scan_sources(client: PurviewScanningClient, storage_account: str, dry_run: bool = False) -> None:
+    """Register ADLS containers as Purview scan sources.
+
+    Args:
+        client: Purview scanning client instance
+        storage_account: Name of the Azure storage account
+        dry_run: If True, only show what would be registered without making changes
+
+    Returns:
+        None
+    """
     print("\nRegistering scan sources...")
     for source in SCAN_SOURCES:
         body = {
@@ -201,12 +249,21 @@ def register_scan_sources(client: Any, storage_account: str, dry_run: bool = Fal
 
 
 def create_scans(
-    client: Any,
+    client: PurviewScanningClient,
     storage_account: str,
     *,
     dry_run: bool = False,
 ) -> None:
-    """Create scan definitions and weekly schedules for ADLS sources."""
+    """Create scan definitions and weekly schedules for ADLS sources.
+
+    Args:
+        client: Purview scanning client instance
+        storage_account: Name of the Azure storage account
+        dry_run: If True, only show what would be created without making changes
+
+    Returns:
+        None
+    """
     print("\nCreating scan definitions ...")
     for source in SCAN_SOURCES:
         scan_name = f"weekly-{source['name']}"
@@ -244,6 +301,14 @@ def create_scans(
 # Main
 # ---------------------------------------------------------------------------
 def main() -> None:
+    """Main function to bootstrap Purview catalog with collections, glossary terms, and scan sources.
+
+    Parses command line arguments and orchestrates the setup process.
+    Supports dry-run mode for validation without making actual changes.
+
+    Returns:
+        None
+    """
     parser = argparse.ArgumentParser(description="Bootstrap Purview catalog for CSA-in-a-Box")
     parser.add_argument("--purview-account", required=True, help="Purview account name")
     parser.add_argument("--storage-account", default="csadatalake", help="ADLS storage account name")

@@ -20,7 +20,7 @@ SELECT
     CAST(capacity AS BIGINT) AS capacity,
     _ingested_at,
     current_timestamp() AS _dbt_loaded_at,
-    '{{ invocation_id }}' AS _dbt_invocation_id
+    '{{ invocation_id }}' AS _dbt_run_id
 FROM {{ source('raw_inventory', 'sample_warehouses') }}
 
 {% if is_incremental() %}

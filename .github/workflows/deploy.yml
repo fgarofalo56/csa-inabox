@@ -102,7 +102,7 @@ jobs:
             --location ${{ env.AZURE_REGION }} \
             --template-file "deploy/bicep/LandingZone - ALZ/main.bicep" \
             --parameters "deploy/bicep/LandingZone - ALZ/params.${{ inputs.environment }}.json" \
-            $MODE
+            "$MODE"
 
   # -------------------------------------------------------------------------
   # Deploy Data Management Landing Zone
@@ -131,7 +131,7 @@ jobs:
             --location ${{ env.AZURE_REGION }} \
             --template-file deploy/bicep/DMLZ/main.bicep \
             --parameters deploy/bicep/DMLZ/params.${{ inputs.environment }}.json \
-            $MODE
+            "$MODE"
 
   # -------------------------------------------------------------------------
   # Deploy Data Landing Zone
@@ -160,7 +160,7 @@ jobs:
             --location ${{ env.AZURE_REGION }} \
             --template-file deploy/bicep/DLZ/main.bicep \
             --parameters deploy/bicep/DLZ/params.${{ inputs.environment }}.json \
-            $MODE
+            "$MODE"
 
   # -------------------------------------------------------------------------
   # Post-Deployment Validation

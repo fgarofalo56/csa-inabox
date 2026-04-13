@@ -52,7 +52,7 @@ param parEnvironment string = 'dev'
 @description('Specify the ALZ Subscription ID.')
 param parALZ_SubscriptionId string
 
-//Moddules and Resources to deploy
+//Modules and Resources to deploy
 @description('Specify the modules and resources to deploy')
 param deployModules object = {}
 
@@ -65,6 +65,15 @@ param tags object = {}
 @minLength(2)
 @maxLength(10)
 param prefix string = 'alz'
+
+@description('Primary technical contact for deployed resources.')
+param primaryContact string = 'platform-team@contoso.com'
+
+@description('Cost center or billing code for deployed resources.')
+param costCenter string = 'CSA-Platform'
+
+@description('List of allowed IP addresses for storage firewall rules.')
+param parAllowedIpAddresses array = []
 
 @sys.description('Prefix used for the management group hierarchy.')
 @minLength(2)
@@ -95,7 +104,7 @@ param parHubBaseNetworkName string = hubNetwork.parHubNetworkName
 param parHubNetworkName string = '${name}-${parHubBaseNetworkName}-${parHubLocation}'
 
 @sys.description('Parameter to build Hub Resource Group Name')
-param parHubResourceGroupName string = concat('rg-${name}-hubnetwork-', hubNetwork.parLocation)
+param parHubResourceGroupName string = 'rg-${name}-hubnetwork-${hubNetwork.parLocation}'
 
 // Spoke Vnet Parameters
 @sys.description('Array to hold all vaules for spoke networking module.')
@@ -126,8 +135,8 @@ var tagsDefault = {
   Project: 'Azure Demo ALZ & CSA'
   environment: parEnvironment
   Toolkit: 'Bicep'
-  PrimaryContact: 'frgarofa'
-  CostCenter: 'FFL ATU - exp12345'
+  PrimaryContact: primaryContact
+  CostCenter: costCenter
 }
 
 // Union of default tags and user-defined tags
@@ -223,7 +232,7 @@ var varAzureCloudPrivateDNSZones = [
   'privatelink.${replace(toLower(location),' ','')}.kusto.windows.net'
   'privatelink.mysql.database.azure.com'
   'privatelink.mariadb.database.azure.com'
-  'privatelink.postgres.database.azure.co'
+  'privatelink.postgres.database.azure.com'
   'privatelink.dev.azuresynapse.net'
   'privatelink.webpubsub.azure.com'
   'privatelink.openai.azure.com'
@@ -409,7 +418,7 @@ module loggingResourceGroup 'modules/resourceGroup/resourceGroup.bicep' = if (bo
 }
 // Custom Role Definitions
 // Subscription Owner Role
-module alzSubscriptionOwnerRole 'modules/customRoleDefinitions/definitions/alzSubscriptionOwnerRole.bicep' = if (bool(deployModules.requirments)) {
+module alzSubscriptionOwnerRole 'modules/customRoleDefinitions/definitions/alzSubscriptionOwnerRole.bicep' = if (bool(deployModules.requirements)) {
   name: 'alzSubscriptionOwnerRole'
   scope: subscription(parALZ_SubscriptionId)
   params: {
@@ -417,7 +426,7 @@ module alzSubscriptionOwnerRole 'modules/customRoleDefinitions/definitions/alzSu
   }
 }
 // Application Owner Role
-module alzApplicationOwnerRole 'modules/customRoleDefinitions/definitions/alzApplicationOwnerRole.bicep' = if (bool(deployModules.requirments)) {
+module alzApplicationOwnerRole 'modules/customRoleDefinitions/definitions/alzApplicationOwnerRole.bicep' = if (bool(deployModules.requirements)) {
   name: 'alzApplicationOwnerRole'
   scope: subscription(parALZ_SubscriptionId)
   params: {
@@ -425,7 +434,7 @@ module alzApplicationOwnerRole 'modules/customRoleDefinitions/definitions/alzApp
   }
 }
 // Network Management Role
-module alzNetworkManagementRole 'modules/customRoleDefinitions/definitions/alzNetworkManagementRole.bicep' = if (bool(deployModules.requirments)) {
+module alzNetworkManagementRole 'modules/customRoleDefinitions/definitions/alzNetworkManagementRole.bicep' = if (bool(deployModules.requirements)) {
   name: 'alzNetworkManagementRole'
   scope: subscription(parALZ_SubscriptionId)
   params: {
@@ -433,7 +442,7 @@ module alzNetworkManagementRole 'modules/customRoleDefinitions/definitions/alzNe
   }
 }
 // Security Operations Role
-module alzSecurityOperationsRole 'modules/customRoleDefinitions/definitions/alzSecurityOperationsRole.bicep' = if (bool(deployModules.requirments)) {
+module alzSecurityOperationsRole 'modules/customRoleDefinitions/definitions/alzSecurityOperationsRole.bicep' = if (bool(deployModules.requirements)) {
   name: 'alzSecurityManagementRole'
   scope: subscription(parALZ_SubscriptionId)
   params: {
@@ -441,7 +450,7 @@ module alzSecurityOperationsRole 'modules/customRoleDefinitions/definitions/alzS
   }
 }
 // User Assigned Identity
-module userAssignedIdentity 'modules/identity/userAssignedIdentity.bicep' = if (bool(deployModules.requirments)) {
+module userAssignedIdentity 'modules/identity/userAssignedIdentity.bicep' = if (bool(deployModules.requirements)) {
   name: 'userAssignedIdentity'
   scope: resourceGroup(parALZ_SubscriptionId, parLoggingResourceGroupName)
   params: {
@@ -453,13 +462,13 @@ module userAssignedIdentity 'modules/identity/userAssignedIdentity.bicep' = if (
     loggingResourceGroup
   ]
 }
-// resource userAssignedIdentityExisting 'Microsoft.ManagedIdentity/userAssignedIdentities@2018-11-30' existing = if (!bool(deployModules.requirments)) {
+// resource userAssignedIdentityExisting 'Microsoft.ManagedIdentity/userAssignedIdentities@2018-11-30' existing = if (!bool(deployModules.requirements)) {
 //   name: '${prefix}-umi-identity'
 //   scope: resourceGroup(parLoggingResourceGroupName)
 // }
 
 // Automation Account
-module resAutomationAccount 'modules/identity/automationAccount.bicep' = if (bool(deployModules.requirments)) {
+module resAutomationAccount 'modules/identity/automationAccount.bicep' = if (bool(deployModules.requirements)) {
   name: 'resAutomationAccount'
   scope: resourceGroup(parALZ_SubscriptionId, parLoggingResourceGroupName)
   params: {
@@ -472,14 +481,14 @@ module resAutomationAccount 'modules/identity/automationAccount.bicep' = if (boo
     loggingResourceGroup
   ]
 }
-resource resAutomationAccountExisting 'Microsoft.Automation/automationAccounts@2022-08-08' existing = if (!bool(deployModules.requirments)) {
+resource resAutomationAccountExisting 'Microsoft.Automation/automationAccounts@2022-08-08' existing = if (!bool(deployModules.requirements)) {
   name: '${prefix}-${parEnvironment}-automation-account'
   scope: resourceGroup(parALZ_SubscriptionId, parLoggingResourceGroupName)
 }
 
 // Role Assignments
 // Custom Role Assignments for alz Subscription Owner Role and User Assigned Identity
-module roleAssignmentUAI 'modules/customRoleDefinitions/roleAssignment/roleAssignment.bicep' = if (bool(deployModules.requirments)) {
+module roleAssignmentUAI 'modules/customRoleDefinitions/roleAssignment/roleAssignment.bicep' = if (bool(deployModules.requirements)) {
   name: 'roleAssignment-UserAssignedIdentity'
   scope: resourceGroup(parALZ_SubscriptionId, parLoggingResourceGroupName)
   params: {
@@ -491,7 +500,7 @@ module roleAssignmentUAI 'modules/customRoleDefinitions/roleAssignment/roleAssig
   ]
 }
 // Custom Role Assignments for alz Subscription Owner Role and Automation Account
-module roleAssignmentAA 'modules/customRoleDefinitions/roleAssignment/roleAssignment.bicep' = if (bool(deployModules.requirments)) {
+module roleAssignmentAA 'modules/customRoleDefinitions/roleAssignment/roleAssignment.bicep' = if (bool(deployModules.requirements)) {
   name: 'roleAssignment-AutomationAccount'
   scope: resourceGroup(parALZ_SubscriptionId, parLoggingResourceGroupName)
   params: {
@@ -504,7 +513,7 @@ module roleAssignmentAA 'modules/customRoleDefinitions/roleAssignment/roleAssign
 }
 // Bulit In Role Assignments for Policies UAI from roleAssignmentIds
 module roleAssignmentBuiltInUAI 'modules/customRoleDefinitions/roleAssignment/roleAssignment.bicep' = [
-  for i in roleAssignmentIds: if (bool(deployModules.requirments)) {
+  for i in roleAssignmentIds: if (bool(deployModules.requirements)) {
     name: 'roleAssignment-UAI-${i}'
     scope: resourceGroup(parALZ_SubscriptionId, parLoggingResourceGroupName)
     params: {
@@ -518,7 +527,7 @@ module roleAssignmentBuiltInUAI 'modules/customRoleDefinitions/roleAssignment/ro
 ]
 // Bulit In Role Assignments for Policies AutomationAccount from roleAssignmentIds
 module roleAssignmentBuiltInAA 'modules/customRoleDefinitions/roleAssignment/roleAssignment.bicep' = [
-  for i in roleAssignmentIds: if (bool(deployModules.requirments)) {
+  for i in roleAssignmentIds: if (bool(deployModules.requirements)) {
     name: 'roleAssignment-AA-${i}'
     scope: resourceGroup(parALZ_SubscriptionId, parLoggingResourceGroupName)
     params: {
@@ -548,12 +557,10 @@ module resStorageAccount 'modules/storage/storageAccount.bicep' = if (bool(deplo
     bypassServies: 'AzureServices'
     defaultAction: 'Allow'
     isHnsEnabled: false
-    ipRules: [
-      {
-        value: '98.204.179.172'
-        action: 'Allow'
-      }
-    ]
+    ipRules: [for ip in parAllowedIpAddresses: {
+      value: ip
+      action: 'Allow'
+    }]
   }
   dependsOn: [
     loggingResourceGroup
@@ -570,7 +577,7 @@ module logAnalyticsWorkspace 'modules/logging/logging.bicep' = if (bool(deployMo
   params: {
     parmLogAnalyticsWorkspaceName: '${name}-${parLogAnalytics.parWorkspaceSufix}'
     parLocation: parLogAnalytics.parLocation
-    automationAccountID: (bool(deployModules.requirments))
+    automationAccountID: (bool(deployModules.requirements))
       ? resAutomationAccount.outputs.automationAccountId
       : resAutomationAccountExisting.id
     storageAccountId: resStorageAccount.outputs.storageAccountId

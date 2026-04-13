@@ -6,6 +6,10 @@ sources:
       Raw inventory data ingested from the warehouse management system.
       Loaded via dbt seed or ADLS Bronze ingestion.
     schema: seeds
+    loaded_at_field: _ingested_at
+    freshness:
+      warn_after: {count: 24, period: hour}
+      error_after: {count: 48, period: hour}
     tables:
       - name: sample_inventory
         description: >

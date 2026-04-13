@@ -19,6 +19,12 @@ vars:
   freshness_error_hours: 48
   email_regex: '^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
 
+  # Aging report loss rates
+  loss_rate_0_30: 0.01
+  loss_rate_31_60: 0.05
+  loss_rate_61_90: 0.10
+  loss_rate_over_90: 0.25
+
 models:
   csa_finance:
     bronze:

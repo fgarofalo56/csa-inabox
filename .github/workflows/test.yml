@@ -5,6 +5,8 @@ on:
     branches: [main]
   push:
     branches: [main]
+  schedule:
+    - cron: '37 3 * * 1'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -17,16 +19,19 @@ permissions:
 
 jobs:
   python-tests:
-    name: Python Tests
+    name: Python Tests (${{ matrix.python-version }})
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.11', '3.12']
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
       - name: Set up Python
         uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5
         with:
-          python-version: '3.11'
+          python-version: ${{ matrix.python-version }}
           cache: 'pip'
 
       - name: Install dependencies
@@ -79,7 +84,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b # v4
         with:
-          name: coverage-report
+          name: coverage-report-${{ matrix.python-version }}
           path: |
             coverage.xml
             htmlcov/
@@ -111,6 +116,7 @@ jobs:
         uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5
         with:
           python-version: '3.11'
+          cache: 'pip'
 
       - name: Install dbt
         run: |
@@ -119,8 +125,17 @@ jobs:
       - name: dbt deps
         run: dbt deps --profiles-dir . || echo "dbt deps skipped (no packages)"
 
-      - name: dbt compile
-        run: dbt compile --profiles-dir . --target dev || echo "dbt compile requires Databricks connection"
+      - name: Compile dbt models
+        run: |
+          dbt compile --project-dir ${{ matrix.domain_path }} --profiles-dir ${{ matrix.domain_path }} 2>&1 || {
+            exit_code=$?
+            if [ $exit_code -eq 2 ]; then
+              echo "::warning::dbt compile failed - may need database connection"
+            else
+              echo "::error::dbt compile failed with unexpected error"
+              exit $exit_code
+            fi
+          }
         env:
           DBT_DATABRICKS_HOST: ${{ secrets.DBT_DATABRICKS_HOST }}
           DBT_DATABRICKS_HTTP_PATH: ${{ secrets.DBT_DATABRICKS_HTTP_PATH }}
@@ -144,6 +159,7 @@ jobs:
         uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5
         with:
           python-version: '3.11'
+          cache: 'pip'
 
       - name: Install dbt + DuckDB adapter
         run: |

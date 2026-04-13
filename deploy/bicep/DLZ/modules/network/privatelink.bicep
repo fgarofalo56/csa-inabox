@@ -47,7 +47,7 @@ var dnsZoneMap = {
 }
 
 // Determine whether the location is a US Gov region
-var isGovCloud = contains(['usgovvirginia', 'usgovarizona', 'usgovtexas'], toLower(serviceSubResource == serviceSubResource ? privateEndpointSubnets[0].vNetLocation : ''))
+var isGovCloud = contains(['usgovvirginia', 'usgovarizona', 'usgovtexas'], toLower(privateEndpointSubnets[0].vNetLocation))
 
 // Look up the DNS zone name for the given serviceSubResource; fall back to blob if not found
 var dnsZoneEntry = contains(dnsZoneMap, serviceSubResource) ? dnsZoneMap[serviceSubResource] : dnsZoneMap.blob

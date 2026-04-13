@@ -7,6 +7,10 @@ sources:
       via dbt seed. In production, ADF Copy Activity ingests from source
       systems to ADLS Bronze.
     schema: seeds
+    loaded_at_field: _ingested_at
+    freshness:
+      warn_after: {count: 24, period: hour}
+      error_after: {count: 48, period: hour}
     tables:
       - name: raw_sales_orders
         description: >

@@ -13,9 +13,7 @@
 
 with orders as (
     select * from {{ ref('slv_sales_orders') }}
-    where not _is_negative_price
-      and not _is_future_date
-      and not _is_invalid_quantity
+    where is_valid = true
 ),
 
 daily_metrics as (

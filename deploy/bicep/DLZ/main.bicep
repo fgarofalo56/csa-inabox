@@ -199,6 +199,7 @@ module cosmosdb 'modules/cosmos/cosmosdb.bicep' = if (bool(deployModules.cosmosD
     ipRules: parCosmosDB.ipRules
     virtualNetworkRules: parCosmosDB.virtualNetworkRules
     tags: varCosmosTags
+    logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
   }
   dependsOn: [
     cosmosdbresourcegroup
@@ -228,6 +229,8 @@ module storageServices 'modules/storage/lakezones.bicep' = if (bool(deployModule
     domainFileSystemNames: parStorage.domainFileSystemNames
     dataProductFileSystemNames: parStorage.dataProductFileSystemNames
     tags: varStorageTags
+    logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
+    enableResourceLock: contains(parStorage, 'enableResourceLock') ? parStorage.enableResourceLock : true
   }
   dependsOn: [
     storageResourceGroup
@@ -242,7 +245,7 @@ module externalStorageResourceGroup 'modules/resourceGroup/resourceGroup.bicep' 
   params: {
     parLocation: location
     parResourceGroupName: 'rg-${basename}-externalstorage-${parLocationShort}'
-    parTags: varStorageTags
+    parTags: varExternalStorageTags
   }
 }
 
@@ -250,7 +253,7 @@ module externalStorageResourceGroup 'modules/resourceGroup/resourceGroup.bicep' 
 // Check for Private DNS Zone ID for Blob
 
 // External Storage Module
-module externalStorageServices 'modules/storage/externalstorageMain.bicep' = {
+module externalStorageServices 'modules/storage/externalstorageMain.bicep' = if (bool(deployModules.externalStorage)) {
   name: 'externalStorageServices'
   scope: resourceGroup('rg-${basename}-externalstorage-${parLocationShort}')
   params: {

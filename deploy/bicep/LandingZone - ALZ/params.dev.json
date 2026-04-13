@@ -12,11 +12,11 @@
             "value": "dmlz"
         },
         "parALZ_SubscriptionId": {
-            "value": "a60a2fdd-c133-4845-9beb-31f470bf3ef5"
+            "value": "<ALZ_SUBSCRIPTION_ID>"
         },
         "deployModules": {
             "value": {
-                "requirments": false,
+                "requirements": false,
                 "logging": false,
                 "policy": false,
                 "initiatives": false,
@@ -372,7 +372,7 @@
         },
         "hubNetwork": {
             "value": {
-                "parHubSubscriptionId": "a60a2fdd-c133-4845-9beb-31f470bf3ef5",
+                "parHubSubscriptionId": "<ALZ_SUBSCRIPTION_ID>",
                 "parLocation": "eastus",
                 "parHubNetworkName": "hubVnet",
                 "parHubNetworkAddressPrefix": {
@@ -600,7 +600,7 @@
         "parSpokeNetworks": {
             "value": [
                 {
-                    "parHubSubscriptionId": "a60a2fdd-c133-4845-9beb-31f470bf3ef5",
+                    "parHubSubscriptionId": "<ALZ_SUBSCRIPTION_ID>",
                     "parHubAlreadyExists": true,
                     "parLocation": "eastus",
                     "parSpokeNetworkName": "spokeVnet-dmlz",

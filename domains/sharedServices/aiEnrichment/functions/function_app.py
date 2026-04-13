@@ -29,6 +29,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 import azure.functions as func
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from azure.core.exceptions import ServiceRequestError, HttpResponseError
 
 from governance.common.logging import (
     bind_trace_context,
@@ -43,12 +45,59 @@ logger = get_logger(__name__)
 app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
 
 # ---------------------------------------------------------------------------
-# Configuration
+# Configuration and Constants
 # ---------------------------------------------------------------------------
 AI_ENDPOINT = os.environ.get("AZURE_AI_ENDPOINT", "")
 STORAGE_CONNECTION = os.environ.get("AzureWebJobsStorage", "")
 ENRICHED_CONTAINER = os.environ.get("ENRICHED_CONTAINER", "enriched")
 INBOX_CONTAINER = os.environ.get("INBOX_CONTAINER", "inbox")
+
+# Text processing limits - Azure AI Services constraints
+TEXT_CHUNK_SIZE = 5120  # Maximum text length for single API call to Azure Text Analytics
+MAX_TEXT_LENGTH = 125000  # Maximum total text length for HTTP endpoint processing
+
+# ---------------------------------------------------------------------------
+# Module-level client setup for connection pooling
+# ---------------------------------------------------------------------------
+_text_analytics_client = None
+_document_analysis_client = None
+_credential = None
+
+def _get_credential():
+    """Get shared Azure credential for connection pooling."""
+    global _credential
+    if _credential is None:
+        from azure.identity.aio import DefaultAzureCredential
+        _credential = DefaultAzureCredential()
+    return _credential
+
+def _get_text_analytics_client():
+    """Get shared Text Analytics client for connection pooling."""
+    global _text_analytics_client
+    if _text_analytics_client is None and AI_ENDPOINT:
+        try:
+            from azure.ai.textanalytics.aio import TextAnalyticsClient
+            _text_analytics_client = TextAnalyticsClient(
+                endpoint=AI_ENDPOINT,
+                credential=_get_credential(),
+            )
+        except ImportError:
+            pass
+    return _text_analytics_client
+
+def _get_document_analysis_client():
+    """Get shared Document Analysis client for connection pooling."""
+    global _document_analysis_client
+    if _document_analysis_client is None and AI_ENDPOINT:
+        try:
+            from azure.ai.formrecognizer.aio import DocumentAnalysisClient
+            _document_analysis_client = DocumentAnalysisClient(
+                endpoint=AI_ENDPOINT,
+                credential=_get_credential(),
+            )
+        except ImportError:
+            pass
+    return _document_analysis_client
 
 
 # ---------------------------------------------------------------------------
@@ -79,13 +128,16 @@ def _form_recognizer_available() -> bool:
 # ---------------------------------------------------------------------------
 # Async enrichment pipelines
 # ---------------------------------------------------------------------------
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=30),
+    retry=retry_if_exception_type((ServiceRequestError, HttpResponseError))
+)
 async def _enrich_text(text: str) -> dict[str, Any]:
     """Run text enrichment pipeline: language detection, sentiment, entities, PII.
 
-    Uses the azure.ai.textanalytics.aio client so every outbound call is
-    awaited and the event loop can service other invocations in parallel.
-    The client is opened inside an ``async with`` so its aiohttp transport
-    is always closed, even on exceptions.
+    Uses the shared module-level client for connection pooling and retries
+    Azure SDK calls automatically via the retry decorator.
     """
     results: dict[str, Any] = {
         "enriched_at": datetime.now(timezone.utc).isoformat(),
@@ -96,89 +148,91 @@ async def _enrich_text(text: str) -> dict[str, Any]:
         "pii_entities": [],
     }
 
-    try:
-        from azure.ai.textanalytics.aio import TextAnalyticsClient
-        from azure.identity.aio import DefaultAzureCredential
-    except ImportError:
-        logger.warning("ai_client.import_failed", package="azure-ai-textanalytics")
+    client = _get_text_analytics_client()
+    if not client:
         results["error"] = "AI client not configured"
         return results
 
-    if not AI_ENDPOINT:
-        results["error"] = "AI client not configured"
-        return results
-
-    docs = [{"id": "1", "text": text[:5120]}]
+    docs = [{"id": "1", "text": text[:TEXT_CHUNK_SIZE]}]
 
     try:
-        async with DefaultAzureCredential() as credential:
-            async with TextAnalyticsClient(
-                endpoint=AI_ENDPOINT,
-                credential=credential,
-            ) as client:
-                # Language detection
-                lang_result = await client.detect_language(documents=docs)
-                if lang_result and not lang_result[0].is_error:
-                    detected = lang_result[0].primary_language
-                    results["language"] = {
-                        "name": detected.name,
-                        "iso_code": detected.iso6391_name,
-                        "confidence": detected.confidence_score,
-                    }
+        # Language detection
+        lang_result = await client.detect_language(documents=docs)
+        if lang_result and not lang_result[0].is_error:
+            detected = lang_result[0].primary_language
+            results["language"] = {
+                "name": detected.name,
+                "iso_code": detected.iso6391_name,
+                "confidence": detected.confidence_score,
+            }
 
-                # Sentiment analysis
-                sentiment_result = await client.analyze_sentiment(documents=docs)
-                if sentiment_result and not sentiment_result[0].is_error:
-                    doc = sentiment_result[0]
-                    results["sentiment"] = {
-                        "overall": doc.sentiment,
-                        "scores": {
-                            "positive": doc.confidence_scores.positive,
-                            "neutral": doc.confidence_scores.neutral,
-                            "negative": doc.confidence_scores.negative,
-                        },
-                    }
+        # Sentiment analysis
+        sentiment_result = await client.analyze_sentiment(documents=docs)
+        if sentiment_result and not sentiment_result[0].is_error:
+            doc = sentiment_result[0]
+            results["sentiment"] = {
+                "overall": doc.sentiment,
+                "scores": {
+                    "positive": doc.confidence_scores.positive,
+                    "neutral": doc.confidence_scores.neutral,
+                    "negative": doc.confidence_scores.negative,
+                },
+            }
 
-                # Key phrases
-                phrases_result = await client.extract_key_phrases(documents=docs)
-                if phrases_result and not phrases_result[0].is_error:
-                    results["key_phrases"] = list(phrases_result[0].key_phrases)
+        # Key phrases
+        phrases_result = await client.extract_key_phrases(documents=docs)
+        if phrases_result and not phrases_result[0].is_error:
+            results["key_phrases"] = list(phrases_result[0].key_phrases)
 
-                # Named entity recognition
-                entity_result = await client.recognize_entities(documents=docs)
-                if entity_result and not entity_result[0].is_error:
-                    results["entities"] = [
-                        {
-                            "text": e.text,
-                            "category": e.category,
-                            "subcategory": e.subcategory,
-                            "confidence": e.confidence_score,
-                        }
-                        for e in entity_result[0].entities
-                    ]
+        # Named entity recognition
+        entity_result = await client.recognize_entities(documents=docs)
+        if entity_result and not entity_result[0].is_error:
+            results["entities"] = [
+                {
+                    "text": e.text,
+                    "category": e.category,
+                    "subcategory": e.subcategory,
+                    "confidence": e.confidence_score,
+                }
+                for e in entity_result[0].entities
+            ]
 
-                # PII detection
-                pii_result = await client.recognize_pii_entities(documents=docs)
-                if pii_result and not pii_result[0].is_error:
-                    results["pii_entities"] = [
-                        {
-                            "text": f"{e.text[:3]}***",  # Redact in results
-                            "category": e.category,
-                            "subcategory": e.subcategory,
-                            "confidence": e.confidence_score,
-                        }
-                        for e in pii_result[0].entities
-                    ]
+        # PII detection
+        pii_result = await client.recognize_pii_entities(documents=docs)
+        if pii_result and not pii_result[0].is_error:
+            results["pii_redacted_text"] = pii_result[0].redacted_text
+            results["pii_entities"] = [
+                {
+                    "category": e.category,
+                    "subcategory": e.subcategory,
+                    "confidence": e.confidence_score,
+                }
+                for e in pii_result[0].entities
+            ]
 
-    except Exception:
-        logger.exception("enrichment.text_failed")
+    except (ServiceRequestError, HttpResponseError) as e:
+        logger.error("enrichment.azure_sdk_failed", error_type=type(e).__name__, error_message=str(e))
+        results["error"] = f"Azure SDK error: {str(e)}"
+    except ImportError as e:
+        logger.warning("enrichment.import_failed", error=str(e))
+        results["error"] = "AI client not configured"
+    except Exception as e:
+        logger.exception("enrichment.text_failed", error_type=type(e).__name__)
         results["error"] = "Text enrichment failed. Check service logs for details."
 
     return results
 
 
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=30),
+    retry=retry_if_exception_type((ServiceRequestError, HttpResponseError))
+)
 async def _analyze_document(blob_data: bytes, content_type: str) -> dict[str, Any]:
-    """Analyze document using the async Azure AI Document Intelligence client."""
+    """Analyze document using the shared Azure AI Document Intelligence client.
+
+    Includes size check to prevent reading excessive blob data into memory.
+    """
     results: dict[str, Any] = {
         "analyzed_at": datetime.now(timezone.utc).isoformat(),
         "pages": 0,
@@ -187,47 +241,47 @@ async def _analyze_document(blob_data: bytes, content_type: str) -> dict[str, An
         "content_preview": "",
     }
 
-    try:
-        from azure.ai.formrecognizer.aio import DocumentAnalysisClient
-        from azure.identity.aio import DefaultAzureCredential
-    except ImportError:
-        logger.warning("ai_client.import_failed", package="azure-ai-formrecognizer")
+    # Check blob size limit (50 MB)
+    MAX_BLOB_SIZE = 50 * 1024 * 1024  # 50 MB
+    if len(blob_data) > MAX_BLOB_SIZE:
+        results["error"] = f"Document too large: {len(blob_data)} bytes (max: {MAX_BLOB_SIZE})"
+        return results
+
+    client = _get_document_analysis_client()
+    if not client:
         results["error"] = "Document Intelligence client not configured"
         return results
 
-    if not AI_ENDPOINT:
-        results["error"] = "Document Intelligence client not configured"
-        return results
-
     try:
-        async with DefaultAzureCredential() as credential:
-            async with DocumentAnalysisClient(
-                endpoint=AI_ENDPOINT,
-                credential=credential,
-            ) as client:
-                poller = await client.begin_analyze_document(
-                    model_id="prebuilt-document",
-                    document=blob_data,
-                    content_type=content_type,
-                )
-                result = await poller.result()
+        poller = await client.begin_analyze_document(
+            model_id="prebuilt-document",
+            document=blob_data,
+            content_type=content_type,
+        )
+        result = await poller.result()
 
-                results["pages"] = len(result.pages) if result.pages else 0
-                results["tables"] = len(result.tables) if result.tables else 0
-                results["content_preview"] = (result.content or "")[:500]
+        results["pages"] = len(result.pages) if result.pages else 0
+        results["tables"] = len(result.tables) if result.tables else 0
+        results["content_preview"] = (result.content or "")[:500]
 
-                if result.key_value_pairs:
-                    results["key_value_pairs"] = [
-                        {
-                            "key": kvp.key.content if kvp.key else None,
-                            "value": kvp.value.content if kvp.value else None,
-                            "confidence": kvp.confidence,
-                        }
-                        for kvp in result.key_value_pairs[:50]
-                    ]
+        if result.key_value_pairs:
+            results["key_value_pairs"] = [
+                {
+                    "key": kvp.key.content if kvp.key else None,
+                    "value": kvp.value.content if kvp.value else None,
+                    "confidence": kvp.confidence,
+                }
+                for kvp in result.key_value_pairs[:50]
+            ]
 
-    except Exception:
-        logger.exception("enrichment.document_failed")
+    except (ServiceRequestError, HttpResponseError) as e:
+        logger.error("enrichment.document_azure_sdk_failed", error_type=type(e).__name__, error_message=str(e))
+        results["error"] = f"Azure SDK error: {str(e)}"
+    except ImportError as e:
+        logger.warning("enrichment.document_import_failed", error=str(e))
+        results["error"] = "Document Intelligence client not configured"
+    except Exception as e:
+        logger.exception("enrichment.document_failed", error_type=type(e).__name__)
         results["error"] = "Document analysis failed. Check service logs for details."
 
     return results
@@ -271,10 +325,10 @@ async def enrich_text(req: func.HttpRequest) -> func.HttpResponse:
                 mimetype="application/json",
             )
 
-        if len(text) > 125000:
+        if len(text) > MAX_TEXT_LENGTH:
             logger.warning("request.payload_too_large", input_length=len(text))
             return func.HttpResponse(
-                json.dumps({"error": "Text exceeds 125,000 character limit"}),
+                json.dumps({"error": f"Text exceeds {MAX_TEXT_LENGTH:,} character limit"}),
                 status_code=413,
                 mimetype="application/json",
             )
@@ -324,6 +378,21 @@ async def process_inbox_document(
     ):
         logger.info("blob.received")
 
+        # Check blob size before reading into memory
+        MAX_BLOB_SIZE = 50 * 1024 * 1024  # 50 MB
+        if blob.length and blob.length > MAX_BLOB_SIZE:
+            enrichment: dict[str, Any] = {
+                "source_blob": blob.name,
+                "source_size": blob.length,
+                "processed_at": datetime.now(timezone.utc).isoformat(),
+                "skipped": True,
+                "reason": f"Blob too large: {blob.length} bytes (max: {MAX_BLOB_SIZE})",
+            }
+            output_json = json.dumps(enrichment, default=str, indent=2)
+            outputBlob.set(output_json)
+            logger.warning("blob.too_large", blob_size=blob.length, max_size=MAX_BLOB_SIZE)
+            return
+
         blob_data = blob.read()
         content_type = blob.name.rsplit(".", 1)[-1].lower() if blob.name else ""
 
@@ -358,7 +427,7 @@ async def process_inbox_document(
 
         elif content_type in ("txt", "csv", "json", "md"):
             text_content = blob_data.decode("utf-8", errors="replace")
-            enrichment["text_enrichment"] = await _enrich_text(text_content[:125000])
+            enrichment["text_enrichment"] = await _enrich_text(text_content[:MAX_TEXT_LENGTH])
 
         else:
             enrichment["skipped"] = True

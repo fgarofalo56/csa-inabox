@@ -26,6 +26,7 @@ correlation works out of the box.
 
 import json
 import os
+import uuid
 from datetime import datetime, timezone
 from typing import Any, List
 
@@ -52,6 +53,39 @@ COSMOS_CONTAINER = os.environ.get("COSMOS_CONTAINER", "processed_events")
 OUTPUT_CONTAINER = os.environ.get("OUTPUT_CONTAINER", "events-archive")
 
 
+def _validate_event_data(event_data: dict[str, Any]) -> tuple[bool, str]:
+    """Validate incoming event data against basic schema.
+
+    Args:
+        event_data: Raw event payload to validate.
+
+    Returns:
+        Tuple of (is_valid, error_message).
+    """
+    if not isinstance(event_data, dict):
+        return False, "Event data must be a JSON object"
+
+    # Check for required fields
+    if "data" not in event_data and "payload" not in event_data:
+        return False, "Event must contain 'data' or 'payload' field"
+
+    # Validate event type if present
+    event_type = event_data.get("type") or event_data.get("event_type")
+    if event_type and not isinstance(event_type, str):
+        return False, "Event type must be a string"
+
+    # Validate source if present
+    source = event_data.get("source")
+    if source and not isinstance(source, str):
+        return False, "Event source must be a string"
+
+    # Check for oversized payloads (1 MB limit)
+    if len(json.dumps(event_data)) > 1024 * 1024:
+        return False, "Event payload exceeds 1 MB size limit"
+
+    return True, ""
+
+
 def _process_event(event_data: dict[str, Any]) -> dict[str, Any]:
     """Process a single event: validate, enrich, and transform.
 
@@ -61,12 +95,20 @@ def _process_event(event_data: dict[str, Any]) -> dict[str, Any]:
     Returns:
         Enriched event with processing metadata.
     """
+    # Validate input data
+    is_valid, error_msg = _validate_event_data(event_data)
+    if not is_valid:
+        raise ValueError(f"Invalid event data: {error_msg}")
+
+    # Generate UUID instead of datetime-based ID to prevent collisions
+    event_id = event_data.get("id") or str(uuid.uuid4())
+
     processed: dict[str, Any] = {
-        "id": event_data.get("id", f"evt-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"),
+        "id": event_id,
         "source": event_data.get("source", "unknown"),
         "event_type": event_data.get("type", event_data.get("event_type", "unknown")),
         "timestamp": event_data.get("timestamp", datetime.now(timezone.utc).isoformat()),
-        "data": event_data.get("data", event_data),
+        "data": event_data.get("data", event_data.get("payload", event_data)),
         "processing": {
             "processed_at": datetime.now(timezone.utc).isoformat(),
             "processor": "csa-event-processing",
@@ -77,9 +119,17 @@ def _process_event(event_data: dict[str, Any]) -> dict[str, Any]:
     # Derive partition key for Cosmos DB
     processed["partition_key"] = f"{processed['source']}_{processed['event_type']}"
 
-    # Basic validation
+    # Additional validation warnings
+    warnings = []
     if not processed.get("data"):
-        processed["processing"]["warnings"] = ["Empty event data"]
+        warnings.append("Empty event data")
+    if processed["source"] == "unknown":
+        warnings.append("Missing event source")
+    if processed["event_type"] == "unknown":
+        warnings.append("Missing event type")
+
+    if warnings:
+        processed["processing"]["warnings"] = warnings
 
     return processed
 
@@ -150,8 +200,14 @@ async def process_events(
             except json.JSONDecodeError as e:
                 logger.error("event.invalid_json", error=str(e), sequence_number=event.sequence_number)
                 errors += 1
-            except Exception:
-                logger.exception("event.processing_failed", sequence_number=event.sequence_number)
+            except ValueError as e:
+                logger.error("event.validation_failed", error=str(e), sequence_number=event.sequence_number)
+                errors += 1
+            except UnicodeDecodeError as e:
+                logger.error("event.encoding_failed", error=str(e), sequence_number=event.sequence_number)
+                errors += 1
+            except Exception as e:
+                logger.exception("event.processing_failed", sequence_number=event.sequence_number, error_type=type(e).__name__)
                 errors += 1
 
         # Write batch to Cosmos DB
@@ -237,19 +293,30 @@ async def replay_events(
             )
 
         processed = []
+        validation_errors = 0
+
         for event_data in events:
-            event_data["_replay"] = {
-                "replayed_at": datetime.now(timezone.utc).isoformat(),
-                "original_id": event_data.get("id"),
-            }
-            processed.append(_process_event(event_data))
+            try:
+                event_data["_replay"] = {
+                    "replayed_at": datetime.now(timezone.utc).isoformat(),
+                    "original_id": event_data.get("id"),
+                }
+                processed.append(_process_event(event_data))
+            except ValueError as e:
+                logger.error("replay.validation_failed", error=str(e), event_id=event_data.get("id"))
+                validation_errors += 1
+            except Exception as e:
+                logger.exception("replay.processing_failed", error_type=type(e).__name__, event_id=event_data.get("id"))
+                validation_errors += 1
 
-        cosmosOutput.set(json.dumps(processed, default=str))
+        if processed:
+            cosmosOutput.set(json.dumps(processed, default=str))
 
-        logger.info("replay.completed", replayed=len(processed))
+        logger.info("replay.completed", replayed=len(processed), errors=validation_errors)
         return func.HttpResponse(
             json.dumps({
                 "replayed": len(processed),
+                "errors": validation_errors,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }),
             status_code=200,

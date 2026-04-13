@@ -1,3 +1,5 @@
+{# NOTE: This macro is available for SCD Type 2 transformations but is not currently used by any model. #}
+
 {#
     SCD Type 2 macro for slowly changing dimensions.
 

@@ -23,7 +23,7 @@ SELECT
     last_restocked_at,
     _ingested_at,
     current_timestamp() AS _dbt_loaded_at,
-    '{{ invocation_id }}' AS _dbt_invocation_id
+    '{{ invocation_id }}' AS _dbt_run_id
 FROM {{ source('raw_inventory', 'sample_inventory') }}
 
 {% if is_incremental() %}

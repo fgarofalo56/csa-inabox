@@ -28,6 +28,9 @@ with customers as (
 orders as (
     select * from {{ ref('slv_orders') }}
     where is_valid = true
+    {% if is_incremental() %}
+      and _dbt_loaded_at > (select max(_dbt_refreshed_at) from {{ this }})
+    {% endif %}
 ),
 
 customer_orders as (
@@ -65,15 +68,15 @@ final as (
         -- Derived metrics
         case
             when total_orders = 0 then 'never_purchased'
-            when datediff(current_date(), last_order_date) <= 90 then 'active'
-            when datediff(current_date(), last_order_date) <= 365 then 'at_risk'
+            when datediff(current_date(), last_order_date) <= {{ var('clv_new_days', 90) }} then 'active'
+            when datediff(current_date(), last_order_date) <= {{ var('clv_active_days', 365) }} then 'at_risk'
             else 'churned'
         end as customer_segment,
 
         case
-            when lifetime_revenue >= 10000 then 'platinum'
-            when lifetime_revenue >= 5000 then 'gold'
-            when lifetime_revenue >= 1000 then 'silver'
+            when lifetime_revenue >= {{ var('clv_platinum_threshold', 10000) }} then 'platinum'
+            when lifetime_revenue >= {{ var('clv_gold_threshold', 5000) }} then 'gold'
+            when lifetime_revenue >= {{ var('clv_silver_threshold', 1000) }} then 'silver'
             else 'bronze'
         end as value_tier,
 
@@ -88,10 +91,3 @@ final as (
 )
 
 select * from final
-{% if is_incremental() %}
-WHERE customer_id IN (
-    SELECT DISTINCT customer_id
-    FROM {{ ref('slv_orders') }}
-    WHERE _dbt_loaded_at > (SELECT MAX(_dbt_refreshed_at) FROM {{ this }})
-)
-{% endif %}

@@ -12,7 +12,7 @@ param location string
 @description('Deployment prefix')
 param prefix string
 
-@description('Private endpoint subnet ID')
+@description('Tags for resource organization')
 param tags object
 
 @description('Base Storage account name')

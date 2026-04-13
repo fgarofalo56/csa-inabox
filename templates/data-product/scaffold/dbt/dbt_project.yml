@@ -2,7 +2,7 @@ name: DOMAIN_NAME
 version: '1.0.0'
 config-version: 2
 
-profile: csa_databricks
+profile: 'csa_analytics'
 
 model-paths: ["models"]
 test-paths: ["tests"]

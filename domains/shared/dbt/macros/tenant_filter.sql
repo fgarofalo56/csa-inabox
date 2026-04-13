@@ -1,3 +1,5 @@
+{# NOTE: This macro is available for multi-tenant row-level filtering but is not currently used by any model. #}
+
 {#
     Tenant-scoped data filtering macro for multi-tenant deployments.
 

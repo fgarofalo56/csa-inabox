@@ -41,7 +41,7 @@ param location string
 @description('Specify the environment of the deployment.')
 param environment string = 'dev'
 
-//Moddules and Resources to deploy
+//Modules and Resources to deploy
 @description('Specify the modules and resources to deploy')
 param deployModules object = {}
 

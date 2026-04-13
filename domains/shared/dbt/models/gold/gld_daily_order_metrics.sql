@@ -21,6 +21,9 @@
 WITH orders AS (
     SELECT * FROM {{ ref('slv_orders') }}
     WHERE is_valid = TRUE
+    {% if is_incremental() %}
+      AND order_date > (SELECT MAX(order_date) FROM {{ this }})
+    {% endif %}
 ),
 
 daily_metrics AS (

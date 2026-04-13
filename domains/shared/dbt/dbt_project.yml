@@ -30,6 +30,18 @@ vars:
   freshness_warn_hours: 24
   freshness_error_hours: 48
 
+  # Customer Lifetime Value thresholds
+  clv_platinum_threshold: 10000
+  clv_gold_threshold: 5000
+  clv_silver_threshold: 1000
+  clv_active_days: 365
+  clv_new_days: 90
+
+  # Product price tier boundaries
+  price_tier_premium: 100
+  price_tier_standard: 50
+  price_tier_value: 25
+
   # Shared validation patterns — KEEP IN SYNC with EMAIL_REGEX_PATTERN in
   # governance/common/validation.py.  The Spark SQL ``rlike`` operator
   # consumes this directly via the flag_invalid_email macro.

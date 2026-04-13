@@ -95,13 +95,13 @@ jobs:
             path: deploy/bicep/DMLZ
             main: main.bicep
             params: params.dev.json
-            subscription_secret: DMLZ_SUBSCRIPTION_ID
+            subscription_secret: AZURE_DMLZ_SUBSCRIPTION_ID
             changed: ${{ needs.detect-changes.outputs.dmlz_changed }}
           - zone: DLZ
             path: deploy/bicep/DLZ
             main: main.bicep
             params: params.dev.json
-            subscription_secret: DLZ_SUBSCRIPTION_ID
+            subscription_secret: AZURE_DLZ_SUBSCRIPTION_ID
             changed: ${{ needs.detect-changes.outputs.dlz_changed }}
     steps:
       - name: Checkout

@@ -33,6 +33,27 @@ param domainFileSystemNames array = []
 @description('File system names for data products storage')
 param dataProductFileSystemNames array = []
 
+@description('Log Analytics workspace resource ID for diagnostic settings. Leave empty to skip diagnostics.')
+param logAnalyticsWorkspaceId string = ''
+
+@description('Attach a CanNotDelete resource lock to each storage account. Default true for production safety.')
+param enableResourceLock bool = true
+
+@description('Enable Customer-Managed Key (CMK) encryption. Default false for dev; set true for prod/compliance.')
+param parEnableCmk bool = false
+
+@description('Key Vault URI (e.g. https://myvault.vault.azure.net) when CMK is enabled.')
+param parCmkKeyVaultUri string = ''
+
+@description('Key name in the Key Vault for CMK encryption.')
+param parCmkKeyName string = ''
+
+@description('Key version. Leave empty for automatic key rotation (recommended).')
+param parCmkKeyVersion string = ''
+
+@description('Resource ID of the user-assigned managed identity for CMK.')
+param parCmkIdentityId string = ''
+
 // Variables
 var storageRawName = '${prefix}-${storageAccountName}-raw'
 var storageEnrichedCuratedName = '${prefix}-${storageAccountName}-encur'
@@ -50,6 +71,13 @@ module storageRaw 'storage.bicep' = {
     storageName: storageRawName
     privateDNSZones: privateDNSZones
     fileSystemNames: domainFileSystemNames
+    logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
+    enableResourceLock: enableResourceLock
+    parEnableCmk: parEnableCmk
+    parCmkKeyVaultUri: parCmkKeyVaultUri
+    parCmkKeyName: parCmkKeyName
+    parCmkKeyVersion: parCmkKeyVersion
+    parCmkIdentityId: parCmkIdentityId
   }
 }
 
@@ -64,6 +92,13 @@ module storageEnrichedCurated 'storage.bicep' = {
     storageName: storageEnrichedCuratedName
     privateDNSZones: privateDNSZones
     fileSystemNames: domainFileSystemNames
+    logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
+    enableResourceLock: enableResourceLock
+    parEnableCmk: parEnableCmk
+    parCmkKeyVaultUri: parCmkKeyVaultUri
+    parCmkKeyName: parCmkKeyName
+    parCmkKeyVersion: parCmkKeyVersion
+    parCmkIdentityId: parCmkIdentityId
   }
 }
 
@@ -78,6 +113,13 @@ module storageWorkspace 'storage.bicep' = {
     storageName: storageWorkspaceName
     privateDNSZones: privateDNSZones
     fileSystemNames: dataProductFileSystemNames
+    logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
+    enableResourceLock: enableResourceLock
+    parEnableCmk: parEnableCmk
+    parCmkKeyVaultUri: parCmkKeyVaultUri
+    parCmkKeyName: parCmkKeyName
+    parCmkKeyVersion: parCmkKeyVersion
+    parCmkIdentityId: parCmkIdentityId
   }
 }
 

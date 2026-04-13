@@ -5,8 +5,11 @@
     "url": "https://${PURVIEW_ACCOUNT_NAME}.purview.azure.com",
     "endpoint": "/api/atlas/v2/entity",
     "auth": {
-      "type": "api_key",
-      "apiKey": "${PURVIEW_API_KEY}"
+      "type": "oauth",
+      "grant_type": "client_credentials",
+      "client_id": "${AZURE_CLIENT_ID}",
+      "token_url": "${AZURE_TOKEN_URL}",
+      "scope": "${PURVIEW_SCOPE}"
     }
   },
   "facets": {

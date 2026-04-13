@@ -6,6 +6,47 @@ Cosmos DB keys, and SQL/Synapse admin passwords.
 
 Part of the CSA-in-a-Box shared services layer.
 
+Manual Recovery Procedures
+--------------------------
+
+If automatic secret rotation fails, follow these manual recovery steps:
+
+1. **Storage Account Key Rotation Failure**:
+   - Navigate to Azure Portal → Storage Account → Access Keys
+   - Click "Regenerate" for key1 or key2
+   - Copy the new key value
+   - Update Key Vault secret manually using:
+     ``az keyvault secret set --vault-name <vault> --name <secret> --value <key>``
+
+2. **Cosmos DB Key Rotation Failure**:
+   - Navigate to Azure Portal → Cosmos DB Account → Keys
+   - Click "Regenerate Primary Key"
+   - Wait for regeneration to complete (may take several minutes)
+   - Copy the new primary key value
+   - Update Key Vault secret manually
+
+3. **SQL/Synapse Password Rotation Failure**:
+   - If password is stored in Key Vault but not applied to the service:
+     - Use deployment pipeline to update Bicep templates with new password reference
+     - Or use Azure CLI: ``az synapse sql pool update --admin-password <new-password>``
+   - If password generation failed entirely:
+     - Generate secure password manually and store in Key Vault
+     - Apply via deployment pipeline
+
+4. **Event Grid Subscription Issues**:
+   - Verify Event Grid subscription exists: ``az eventgrid event-subscription list``
+   - Check Function App endpoint is accessible
+   - Review Function App logs for processing errors
+   - Manually trigger rotation via HTTP endpoint: ``POST /api/rotate``
+
+5. **Key Vault Access Issues**:
+   - Verify Function App managed identity has "Key Vault Secrets Officer" role
+   - Check Key Vault firewall settings allow Function App access
+   - Validate Key Vault URL environment variable is correctly set
+
+For all recovery procedures, ensure you update any downstream services that
+depend on the rotated secrets (application settings, connection strings, etc.).
+
 Async / concurrency model
 -------------------------
 Every trigger is ``async def`` and all Azure SDK calls use the ``.aio``
@@ -42,6 +83,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 import azure.functions as func
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from azure.core.exceptions import ServiceRequestError, HttpResponseError
 
 from governance.common.logging import (
     bind_trace_context,
@@ -136,6 +179,11 @@ def _parse_secret_name(secret_name: str) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 # Rotation handlers (per service type)
 # ---------------------------------------------------------------------------
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=30),
+    retry=retry_if_exception_type((ServiceRequestError, HttpResponseError))
+)
 async def _rotate_storage_key(
     secret_name: str,
     parsed: dict[str, str],
@@ -193,6 +241,11 @@ async def _rotate_storage_key(
     return result
 
 
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=30),
+    retry=retry_if_exception_type((ServiceRequestError, HttpResponseError))
+)
 async def _rotate_cosmos_key(
     secret_name: str,
     parsed: dict[str, str],
@@ -257,6 +310,11 @@ async def _rotate_cosmos_key(
     return result
 
 
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=30),
+    retry=retry_if_exception_type((ServiceRequestError, HttpResponseError))
+)
 async def _rotate_sql_password(
     secret_name: str,
     parsed: dict[str, str],
@@ -377,11 +435,27 @@ async def secret_rotation_handler(event: func.EventGridEvent) -> None:
                 service=service,
                 success=result.get("success", False),
             )
-        except Exception:
-            logger.exception(
-                "rotation.failed",
+        except (ServiceRequestError, HttpResponseError) as e:
+            logger.error(
+                "rotation.azure_sdk_failed",
                 secret_name=secret_name,
                 service=service,
+                error_type=type(e).__name__,
+                error_message=str(e),
+            )
+        except ValueError as e:
+            logger.error(
+                "rotation.invalid_parameters",
+                secret_name=secret_name,
+                service=service,
+                error=str(e),
+            )
+        except Exception as e:
+            logger.exception(
+                "rotation.unexpected_error",
+                secret_name=secret_name,
+                service=service,
+                error_type=type(e).__name__,
             )
 
 
@@ -462,13 +536,41 @@ async def rotate(req: func.HttpRequest) -> func.HttpResponse:
                 status_code=200,
                 mimetype="application/json",
             )
-        except Exception:
+        except (ServiceRequestError, HttpResponseError) as e:
+            logger.error(
+                "rotation.azure_sdk_failed",
+                secret_name=secret_name,
+                error_type=type(e).__name__,
+                error_message=str(e),
+            )
+            return func.HttpResponse(
+                json.dumps({
+                    "error": f"Azure SDK error: {str(e)}",
+                    "secret_name": secret_name,
+                    "service": service,
+                }),
+                status_code=503,  # Service Unavailable for retriable errors
+                mimetype="application/json",
+            )
+        except ValueError as e:
+            logger.error("rotation.validation_failed", secret_name=secret_name, error=str(e))
+            return func.HttpResponse(
+                json.dumps({
+                    "error": f"Invalid parameters: {str(e)}",
+                    "secret_name": secret_name,
+                    "service": service,
+                }),
+                status_code=400,
+                mimetype="application/json",
+            )
+        except Exception as e:
             logger.exception("rotation.manual_failed", secret_name=secret_name)
             return func.HttpResponse(
                 json.dumps({
                     "error": "Rotation failed. Check service logs for details.",
                     "secret_name": secret_name,
                     "service": service,
+                    "error_type": type(e).__name__,
                 }),
                 status_code=500,
                 mimetype="application/json",
