@@ -84,14 +84,94 @@ AzureActivity
 3. Remediate or create exemptions with justification
 4. Update policy assignments if false positive
 
+### Scenario D: Cosmos DB Unauthorized Access
+1. Check Cosmos DB diagnostic logs for unusual query patterns
+   ```kql
+   CDBDataPlaneRequests
+   | where TimeGenerated > ago(24h)
+   | where StatusCode >= 400
+   | summarize count() by ClientIpAddress, OperationName, bin(TimeGenerated, 1h)
+   | order by count_ desc
+   ```
+2. Rotate Cosmos DB primary and secondary keys
+3. Update all Key Vault secrets referencing Cosmos DB keys
+4. Review firewall rules — restrict to VNet-only access
+5. If data was read: assess PII exposure and activate data breach protocol
+
+### Scenario E: ADF Pipeline Tampering
+1. Check ADF activity runs for unauthorized modifications
+   ```kql
+   ADFActivityRun
+   | where TimeGenerated > ago(7d)
+   | where Status == "Succeeded" and ActivityType == "Copy"
+   | where Sink !contains "bronze" and Sink !contains "silver" and Sink !contains "gold"
+   | project TimeGenerated, PipelineName, ActivityName, Sink, Source
+   ```
+2. Compare current pipeline definitions to Git (source of truth)
+3. Redeploy pipelines from Git: `./scripts/deploy/deploy-adf.sh`
+4. Review ADF managed identity permissions
+5. Check for unauthorized linked services or datasets
+
+### Scenario F: Key Vault Secret Expiry or Compromise
+1. List expired or expiring secrets
+   ```bash
+   az keyvault secret list --vault-name <vault> \
+       --query "[?attributes.expires < '$(date -u +%Y-%m-%dT%H:%M:%SZ)']"
+   ```
+2. Rotate affected secrets using the secret rotation function
+3. Verify all dependent services restart with new secrets
+4. Check audit logs for unauthorized secret reads
+
+## Evidence Preservation Checklist
+
+Before any remediation, preserve evidence:
+
+- [ ] Screenshot or export of the security alert
+- [ ] Export relevant Log Analytics queries to CSV
+- [ ] Take ADLS storage account snapshots (if data breach suspected)
+- [ ] Export AAD sign-in logs for the affected identities
+- [ ] Save NSG flow logs for the relevant time window
+- [ ] Document the timeline of events in the incident ticket
+
+## Communication Templates
+
+### Internal notification (P1/P2)
+
+> **Subject:** [P1/P2] Security Incident — CSA Data Platform
+>
+> **Summary:** [Brief description of the incident]
+> **Detected:** [Timestamp UTC]
+> **Impact:** [What data/services are affected]
+> **Status:** [Investigating / Contained / Remediated]
+> **Next update:** [Time]
+>
+> **Actions taken:**
+> 1. [Action 1]
+> 2. [Action 2]
+
+### Stakeholder update
+
+> **Subject:** Security Incident Update #[N]
+>
+> **Current status:** [Contained / Under investigation]
+> **Root cause:** [Known / Under investigation]
+> **Data impact:** [No PII exposed / Assessing / Confirmed exposure]
+> **Remediation ETA:** [Time]
+
 ## Contact Information
 
-| Role | Contact | Phone |
-|------|---------|-------|
-| Platform Team Lead | [PLACEHOLDER] | [PLACEHOLDER] |
-| Security Officer | [PLACEHOLDER] | [PLACEHOLDER] |
-| Azure Support | [Case via Portal] | N/A |
+> **Action Required:** Update these contacts with your organization's actual
+> personnel before using this runbook in production.  File a PR against this
+> table whenever roles change.
+
+| Role | Contact | Phone | Escalation |
+|------|---------|-------|------------|
+| Platform Team Lead | *(set via your org's on-call roster)* | *(see PagerDuty / OpsGenie)* | First responder |
+| Security Officer | *(set via your org's security team DL)* | *(see PagerDuty / OpsGenie)* | P1/P2 escalation |
+| Data Protection Officer | *(set via your org's DPO)* | *(office hours)* | PII breach only |
+| Legal Counsel | *(set via your org's legal team)* | *(office hours)* | P1 with data exposure |
+| Azure Support | [Case via Portal](https://portal.azure.com/#blade/Microsoft_Azure_Support/HelpAndSupportBlade) | N/A | Platform issues |
 
 ---
 
-*Last Updated: 2026-04-09*
+*Last Updated: 2026-04-13*
