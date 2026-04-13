@@ -52,6 +52,24 @@ param privateDnsZoneId string = ''
 @description('Resource ID of the Log Analytics workspace for diagnostics.')
 param logAnalyticsWorkspaceId string = ''
 
+@description('Attach a CanNotDelete resource lock to the Event Hubs namespace. Default true for production safety.')
+param enableResourceLock bool = true
+
+@description('Enable Customer-Managed Key (CMK) encryption.  Default false for dev; set true for prod/compliance.')
+param parEnableCmk bool = false
+
+@description('Key Vault URI (e.g. https://myvault.vault.azure.net) when CMK is enabled.')
+param parCmkKeyVaultUri string = ''
+
+@description('Key name in the Key Vault for CMK encryption.')
+param parCmkKeyName string = ''
+
+@description('Key version.  Leave empty for automatic key rotation (recommended).')
+param parCmkKeyVersion string = ''
+
+@description('Resource ID of the user-assigned managed identity for CMK.  Created by cmkIdentity.bicep.')
+param parCmkIdentityId string = ''
+
 // Resources
 resource eventHubNamespace 'Microsoft.EventHub/namespaces@2024-01-01' = {
   name: namespaceName
@@ -63,7 +81,10 @@ resource eventHubNamespace 'Microsoft.EventHub/namespaces@2024-01-01' = {
     capacity: capacity
   }
   identity: {
-    type: 'SystemAssigned'
+    type: parEnableCmk ? 'SystemAssigned,UserAssigned' : 'SystemAssigned'
+    userAssignedIdentities: parEnableCmk ? {
+      '${parCmkIdentityId}': {}
+    } : null
   }
   properties: {
     isAutoInflateEnabled: sku == 'Standard' ? isAutoInflateEnabled : false
@@ -72,6 +93,19 @@ resource eventHubNamespace 'Microsoft.EventHub/namespaces@2024-01-01' = {
     disableLocalAuth: true
     minimumTlsVersion: '1.2'
     kafkaEnabled: sku != 'Basic'
+    encryption: parEnableCmk ? {
+      keySource: 'Microsoft.KeyVault'
+      keyVaultProperties: [
+        {
+          keyName: parCmkKeyName
+          keyVaultUri: parCmkKeyVaultUri
+          keyVersion: !empty(parCmkKeyVersion) ? parCmkKeyVersion : null
+          identity: {
+            userAssignedIdentity: parCmkIdentityId
+          }
+        }
+      ]
+    } : null
   }
 }
 
@@ -153,24 +187,33 @@ resource eventHubDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-p
   properties: {
     workspaceId: logAnalyticsWorkspaceId
     logs: [
-      { category: 'ArchiveLogs'; enabled: true }
-      { category: 'OperationalLogs'; enabled: true }
-      { category: 'AutoScaleLogs'; enabled: true }
-      { category: 'KafkaCoordinatorLogs'; enabled: true }
-      { category: 'KafkaUserErrorLogs'; enabled: true }
-      { category: 'EventHubVNetConnectionEvent'; enabled: true }
-      { category: 'CustomerManagedKeyUserLogs'; enabled: true }
-      { category: 'RuntimeAuditLogs'; enabled: true }
-      { category: 'ApplicationMetricsLogs'; enabled: true }
+      { category: 'ArchiveLogs', enabled: true }
+      { category: 'OperationalLogs', enabled: true }
+      { category: 'AutoScaleLogs', enabled: true }
+      { category: 'KafkaCoordinatorLogs', enabled: true }
+      { category: 'KafkaUserErrorLogs', enabled: true }
+      { category: 'EventHubVNetConnectionEvent', enabled: true }
+      { category: 'CustomerManagedKeyUserLogs', enabled: true }
+      { category: 'RuntimeAuditLogs', enabled: true }
+      { category: 'ApplicationMetricsLogs', enabled: true }
     ]
     metrics: [
-      { category: 'AllMetrics'; enabled: true }
+      { category: 'AllMetrics', enabled: true }
     ]
   }
 }
 
+// Resource lock — protects the Event Hubs namespace from accidental deletion.
+resource eventHubLock 'Microsoft.Authorization/locks@2020-05-01' = if (enableResourceLock) {
+  scope: eventHubNamespace
+  name: '${namespaceName}-no-delete'
+  properties: {
+    level: 'CanNotDelete'
+    notes: 'CSA-in-a-Box: Event Hubs namespace. Remove lock before deleting.'
+  }
+}
+
 // Outputs
-@description('Resource ID of the Event Hubs namespace.')
 output namespaceId string = eventHubNamespace.id
 
 @description('Name of the Event Hubs namespace.')

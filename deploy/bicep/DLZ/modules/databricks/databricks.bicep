@@ -50,6 +50,24 @@ param privateDnsZoneId string = ''
 @description('Resource ID of the Log Analytics workspace for diagnostics.')
 param logAnalyticsWorkspaceId string = ''
 
+@description('Attach a CanNotDelete resource lock to the Databricks workspace. Default true for production safety.')
+param enableResourceLock bool = true
+
+@description('Enable Customer-Managed Key (CMK) encryption.  Default false for dev; set true for prod/compliance.')
+param parEnableCmk bool = false
+
+@description('Key Vault URI (e.g. https://myvault.vault.azure.net) when CMK is enabled.')
+param parCmkKeyVaultUri string = ''
+
+@description('Key name in the Key Vault for CMK encryption.')
+param parCmkKeyName string = ''
+
+@description('Key version.  Leave empty for automatic key rotation (recommended).')
+param parCmkKeyVersion string = ''
+
+@description('Resource ID of the user-assigned managed identity for CMK.  Created by cmkIdentity.bicep.')
+param parCmkIdentityId string = ''
+
 // Variables
 var managedRgId = '${subscription().id}/resourceGroups/${managedResourceGroupName}'
 
@@ -68,6 +86,27 @@ resource databricksWorkspace 'Microsoft.Databricks/workspaces@2024-05-01' = {
     managedResourceGroupId: managedRgId
     publicNetworkAccess: publicNetworkAccess
     requiredNsgRules: requiredNsgRules
+    encryption: parEnableCmk ? {
+      entities: {
+        managedServices: {
+          keySource: 'Microsoft.Keyvault'
+          keyVaultProperties: {
+            keyVaultUri: parCmkKeyVaultUri
+            keyName: parCmkKeyName
+            keyVersion: !empty(parCmkKeyVersion) ? parCmkKeyVersion : null
+          }
+        }
+        managedDisk: {
+          keySource: 'Microsoft.Keyvault'
+          keyVaultProperties: {
+            keyVaultUri: parCmkKeyVaultUri
+            keyName: parCmkKeyName
+            keyVersion: !empty(parCmkKeyVersion) ? parCmkKeyVersion : null
+          }
+          rotationToLatestKeyVersionEnabled: true
+        }
+      }
+    } : null
     parameters: {
       enableNoPublicIp: {
         value: enableNoPublicIp
@@ -140,37 +179,47 @@ resource databricksDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01
   properties: {
     workspaceId: logAnalyticsWorkspaceId
     logs: [
-      { category: 'dbfs'; enabled: true }
-      { category: 'clusters'; enabled: true }
-      { category: 'accounts'; enabled: true }
-      { category: 'jobs'; enabled: true }
-      { category: 'notebook'; enabled: true }
-      { category: 'ssh'; enabled: true }
-      { category: 'workspace'; enabled: true }
-      { category: 'secrets'; enabled: true }
-      { category: 'sqlPermissions'; enabled: true }
-      { category: 'instancePools'; enabled: true }
-      { category: 'sqlanalytics'; enabled: true }
-      { category: 'genie'; enabled: true }
-      { category: 'globalInitScripts'; enabled: true }
-      { category: 'iamRole'; enabled: true }
-      { category: 'mlflowExperiment'; enabled: true }
-      { category: 'featureStore'; enabled: true }
-      { category: 'RemoteHistoryService'; enabled: true }
-      { category: 'mlflowAcledArtifact'; enabled: true }
-      { category: 'databrickssql'; enabled: true }
-      { category: 'deltaPipelines'; enabled: true }
-      { category: 'modelRegistry'; enabled: true }
-      { category: 'repos'; enabled: true }
-      { category: 'unityCatalog'; enabled: true }
-      { category: 'gitCredentials'; enabled: true }
-      { category: 'webTerminal'; enabled: true }
-      { category: 'serverlessRealTimeInference'; enabled: true }
-      { category: 'clusterLibraries'; enabled: true }
-      { category: 'partnerHub'; enabled: true }
-      { category: 'clamAVScan'; enabled: true }
-      { category: 'capsule8Dataplane'; enabled: true }
+      { category: 'dbfs', enabled: true }
+      { category: 'clusters', enabled: true }
+      { category: 'accounts', enabled: true }
+      { category: 'jobs', enabled: true }
+      { category: 'notebook', enabled: true }
+      { category: 'ssh', enabled: true }
+      { category: 'workspace', enabled: true }
+      { category: 'secrets', enabled: true }
+      { category: 'sqlPermissions', enabled: true }
+      { category: 'instancePools', enabled: true }
+      { category: 'sqlanalytics', enabled: true }
+      { category: 'genie', enabled: true }
+      { category: 'globalInitScripts', enabled: true }
+      { category: 'iamRole', enabled: true }
+      { category: 'mlflowExperiment', enabled: true }
+      { category: 'featureStore', enabled: true }
+      { category: 'RemoteHistoryService', enabled: true }
+      { category: 'mlflowAcledArtifact', enabled: true }
+      { category: 'databrickssql', enabled: true }
+      { category: 'deltaPipelines', enabled: true }
+      { category: 'modelRegistry', enabled: true }
+      { category: 'repos', enabled: true }
+      { category: 'unityCatalog', enabled: true }
+      { category: 'gitCredentials', enabled: true }
+      { category: 'webTerminal', enabled: true }
+      { category: 'serverlessRealTimeInference', enabled: true }
+      { category: 'clusterLibraries', enabled: true }
+      { category: 'partnerHub', enabled: true }
+      { category: 'clamAVScan', enabled: true }
+      { category: 'capsule8Dataplane', enabled: true }
     ]
+  }
+}
+
+// Resource lock — protects the Databricks workspace from accidental deletion.
+resource databricksLock 'Microsoft.Authorization/locks@2020-05-01' = if (enableResourceLock) {
+  scope: databricksWorkspace
+  name: '${workspaceName}-no-delete'
+  properties: {
+    level: 'CanNotDelete'
+    notes: 'CSA-in-a-Box: Databricks workspace. Remove lock before deleting.'
   }
 }
 

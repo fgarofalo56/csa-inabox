@@ -225,62 +225,6 @@ module privateEndpointModuleDfs '../network/privatelink.bicep' = [
   }
 ]
 
-// Private Endpoints for Blob
-// resource storagePrivateEndpointsBlob 'Microsoft.Network/privateEndpoints@2024-05-01' = [
-//   for peSubnet in privateEndpointSubnets: {
-//     name: '${storagePrivateEndpointNameBlob}-${peSubnet.vNetName}'
-//     location: peSubnet.vNetLocation
-//     tags: tags
-//     properties: {
-//       manualPrivateLinkServiceConnections: []
-//       privateLinkServiceConnections: [
-//         {
-//           name: '${storagePrivateEndpointNameBlob}-${peSubnet.vNetName}'
-//           properties: {
-//             groupIds: ['blob']
-//             privateLinkServiceId: resourceId(subscription().id, storage.id)
-//             requestMessage: ''
-//           }
-//         }
-//       ]
-//       subnet: {
-//         id: resourceId(
-//           peSubnet.subscriptionId,
-//           peSubnet.vNetResourceGroup,
-//           'Microsoft.Network/virtualNetworks/subnets',
-//           peSubnet.vNetName,
-//           peSubnet.subnetName
-//         )
-//       }
-//     }
-//     dependsOn: [
-//       storage // Ensure storage account is created first
-//       storageBlobServices
-//     ]
-//   }
-// ]
-
-// // Private DNS Zone Group for Blob
-// resource storagePrivateEndpointBlobARecords 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = [
-//   for (peSubnet, i) in privateEndpointSubnets: if (!empty(privateDNSZones.subscriptionId)) {
-//     parent: storagePrivateEndpointsBlob[i]
-//     name: 'default'
-//     properties: {
-//       privateDnsZoneConfigs: [
-//         {
-//           name: '${storagePrivateEndpointNameBlob}-${peSubnet.vNetName}-arecord'
-//           properties: {
-//             privateDnsZoneId: contains(['usgovvirginia', 'usgovarizona', 'usgovtexas'], toLower(location))
-//               ? '/subscriptions/${privateDNSZones.subscriptionId}/resourceGroups/${privateDNSZones.resourceGroupName}/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.usgovcloudapi.net'
-//               : '/subscriptions/${privateDNSZones.subscriptionId}/resourceGroups/${privateDNSZones.resourceGroupName}/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net'
-//           }
-//         }
-//       ]
-//     }
-//     dependsOn: [storagePrivateEndpointsBlob[i]]
-//   }
-// ]
-
 // Diagnostic settings — storage account diagnostics flow at the
 // blobServices / fileServices sub-resource level, not the account
 // itself.  The account still gets a metric-only diagnostic setting so

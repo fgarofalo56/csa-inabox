@@ -24,7 +24,7 @@ var storageExternalPrivateEndpointNameBlob = '${storageNameCleaned}-blob-pe'
 
 // Resources
 
-resource storageExternal 'Microsoft.Storage/storageAccounts@2021-02-01' = {
+resource storageExternal 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   name: storageNameCleaned
   location: location
   tags: tags
@@ -41,12 +41,12 @@ resource storageExternal 'Microsoft.Storage/storageAccounts@2021-02-01' = {
     allowSharedKeyAccess: false
     encryption: {
       keySource: 'Microsoft.Storage'
-      requireInfrastructureEncryption: false
+      requireInfrastructureEncryption: true
       services: {
         blob: { enabled: true, keyType: 'Account' }
         file: { enabled: true, keyType: 'Account' }
-        queue: { enabled: true, keyType: 'Service' }
-        table: { enabled: true, keyType: 'Service' }
+        queue: { enabled: true, keyType: 'Account' }
+        table: { enabled: true, keyType: 'Account' }
       }
     }
     isHnsEnabled: false
@@ -64,7 +64,7 @@ resource storageExternal 'Microsoft.Storage/storageAccounts@2021-02-01' = {
 }
 
 // Storage Lifecycle Management Policy
-resource storageExternalManagementPolicies 'Microsoft.Storage/storageAccounts/managementPolicies@2021-02-01' = {
+resource storageExternalManagementPolicies 'Microsoft.Storage/storageAccounts/managementPolicies@2023-05-01' = {
   parent: storageExternal
   name: 'default'
   properties: {
@@ -92,17 +92,20 @@ resource storageExternalManagementPolicies 'Microsoft.Storage/storageAccounts/ma
 }
 
 // Blob Services
-resource storageExternalBlobServices 'Microsoft.Storage/storageAccounts/blobServices@2021-02-01' = {
+resource storageExternalBlobServices 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = {
   parent: storageExternal
   name: 'default'
   properties: {
-    containerDeleteRetentionPolicy: { enabled: true, days: 7 }
+    deleteRetentionPolicy: { enabled: true, days: 30 }
+    containerDeleteRetentionPolicy: { enabled: true, days: 30 }
+    isVersioningEnabled: true
+    changeFeed: { enabled: true, retentionInDays: 30 }
     cors: { corsRules: [] }
   }
 }
 
 // File Systems
-resource storageExternalFileSystems 'Microsoft.Storage/storageAccounts/blobServices/containers@2021-02-01' = [
+resource storageExternalFileSystems 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = [
   for fileSystemName in fileSystemNames: {
     parent: storageExternalBlobServices
     name: fileSystemName
@@ -132,62 +135,6 @@ module privateEndpointModuleBlob '../network/privatelink.bicep' = [
     ]
   }
 ]
-
-// // Private Endpoints for Blob
-// resource storageExternalPrivateEndpointBlob 'Microsoft.Network/privateEndpoints@2022-07-01' = [
-//   for peSubnet in privateEndpointSubnets: {
-//     name: '${storageExternalPrivateEndpointNameBlob}-${peSubnet.vNetName}'
-//     location: peSubnet.vNetLocation
-//     tags: tags
-//     properties: {
-//       manualPrivateLinkServiceConnections: []
-//       privateLinkServiceConnections: [
-//         {
-//           name: '${storageExternalPrivateEndpointNameBlob}-${peSubnet.vNetName}'
-//           properties: {
-//             groupIds: ['blob']
-//             privateLinkServiceId: resourceId(subscription().id, storageExternal.id)
-//             requestMessage: ''
-//           }
-//         }
-//       ]
-//       subnet: {
-//         id: resourceId(
-//           peSubnet.subscriptionId,
-//           peSubnet.vNetResourceGroup,
-//           'Microsoft.Network/virtualNetworks/subnets',
-//           peSubnet.vNetName,
-//           peSubnet.subnetName
-//         )
-//       }
-//     }
-//     dependsOn: [
-//       storageExternal
-//       storageExternalBlobServices
-//     ]
-//   }
-// ]
-
-// // Private DNS Zone Group for Blob
-// resource storageExternalPrivateEndpointBlobARecord 'Microsoft.Network/privateEndpoints/privateDnsZoneGroup@2024-05-01' = [
-//   for (peSubnet, i) in privateEndpointSubnets: if (!empty(privateDNSZones.subscriptionId)) {
-//     parent: storageExternalPrivateEndpointBlob[i]
-//     name: 'default'
-//     properties: {
-//       privateDnsZoneConfigs: [
-//         {
-//           name: '${storageExternalPrivateEndpointNameBlob}-${peSubnet.vNetName}-arecord'
-//           properties: {
-//             privateDnsZoneId: contains(['usgovvirginia', 'usgovarizona', 'usgovtexas'], toLower(location))
-//               ? '/subscriptions/${privateDNSZones.subscriptionId}/resourceGroups/${privateDNSZones.resourceGroupName}/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.usgovcloudapi.net'
-//               : '/subscriptions/${privateDNSZones.subscriptionId}/resourceGroups/${privateDNSZones.resourceGroupName}/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net'
-//           }
-//         }
-//       ]
-//     }
-//     dependsOn: [storageExternalPrivateEndpointBlob[i]]
-//   }
-// ]
 
 // Outputs
 output storageId string = storageExternal.id

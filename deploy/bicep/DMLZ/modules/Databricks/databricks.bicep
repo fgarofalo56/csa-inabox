@@ -129,17 +129,17 @@ resource databricksDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01
   properties: {
     workspaceId: logAnalyticsWorkspaceId
     logs: [
-      { category: 'dbfs'; enabled: true }
-      { category: 'clusters'; enabled: true }
-      { category: 'accounts'; enabled: true }
-      { category: 'jobs'; enabled: true }
-      { category: 'notebook'; enabled: true }
-      { category: 'workspace'; enabled: true }
-      { category: 'secrets'; enabled: true }
-      { category: 'unityCatalog'; enabled: true }
-      { category: 'repos'; enabled: true }
-      { category: 'mlflowExperiment'; enabled: true }
-      { category: 'modelRegistry'; enabled: true }
+      { category: 'dbfs', enabled: true }
+      { category: 'clusters', enabled: true }
+      { category: 'accounts', enabled: true }
+      { category: 'jobs', enabled: true }
+      { category: 'notebook', enabled: true }
+      { category: 'workspace', enabled: true }
+      { category: 'secrets', enabled: true }
+      { category: 'unityCatalog', enabled: true }
+      { category: 'repos', enabled: true }
+      { category: 'mlflowExperiment', enabled: true }
+      { category: 'modelRegistry', enabled: true }
     ]
   }
 }

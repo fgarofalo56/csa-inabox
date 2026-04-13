@@ -18,7 +18,7 @@
         },
         "privateDNSZones": {
             "value": {
-                "subscriptionId": "c36bc643-b071-42f8-8197-4c787fcf5549",
+                "subscriptionId": "<SUBSCRIPTION_ID>",
                 "resourceGroupName": "rg-alz-dev-dns-usgovvirginia"
             }
         },

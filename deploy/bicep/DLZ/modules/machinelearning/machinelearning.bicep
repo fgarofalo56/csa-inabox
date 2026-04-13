@@ -50,11 +50,26 @@ param privateDnsZoneIdNotebooks string = ''
 @description('Resource ID of the Log Analytics workspace for diagnostics.')
 param logAnalyticsWorkspaceId string = ''
 
+@description('Attach a CanNotDelete resource lock to the AML workspace. Default true for production safety.')
+param enableResourceLock bool = true
+
 @description('Deploy a default compute instance.')
 param deployCompute bool = false
 
 @description('VM size for compute instance.')
 param computeVmSize string = 'Standard_DS3_v2'
+
+@description('Enable Customer-Managed Key (CMK) encryption.  Default false for dev; set true for prod/compliance.')
+param parEnableCmk bool = false
+
+@description('Resource ID of the Key Vault for CMK encryption (e.g. /subscriptions/.../Microsoft.KeyVault/vaults/myvault).')
+param parCmkKeyVaultId string = ''
+
+@description('Full key identifier URI for CMK encryption (e.g. https://myvault.vault.azure.net/keys/mykey/version).')
+param parCmkKeyIdentifier string = ''
+
+@description('Resource ID of the user-assigned managed identity for CMK.  Created by cmkIdentity.bicep.')
+param parCmkIdentityId string = ''
 
 // Resources
 resource amlWorkspace 'Microsoft.MachineLearningServices/workspaces@2024-04-01' = {
@@ -66,7 +81,10 @@ resource amlWorkspace 'Microsoft.MachineLearningServices/workspaces@2024-04-01' 
     tier: skuName
   }
   identity: {
-    type: 'SystemAssigned'
+    type: parEnableCmk ? 'SystemAssigned,UserAssigned' : 'SystemAssigned'
+    userAssignedIdentities: parEnableCmk ? {
+      '${parCmkIdentityId}': {}
+    } : null
   }
   properties: {
     friendlyName: workspaceName
@@ -79,6 +97,17 @@ resource amlWorkspace 'Microsoft.MachineLearningServices/workspaces@2024-04-01' 
       isolationMode: 'AllowOnlyApprovedOutbound'
     }
     v1LegacyMode: false
+    encryption: parEnableCmk ? {
+      status: 'Enabled'
+      keyVaultProperties: {
+        keyVaultArmId: parCmkKeyVaultId
+        keyIdentifier: parCmkKeyIdentifier
+      }
+      identity: {
+        userAssignedIdentity: parCmkIdentityId
+      }
+    } : null
+    primaryUserAssignedIdentity: parEnableCmk ? parCmkIdentityId : null
   }
 }
 
@@ -161,40 +190,49 @@ resource amlDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-previe
   properties: {
     workspaceId: logAnalyticsWorkspaceId
     logs: [
-      { category: 'AmlComputeClusterEvent'; enabled: true }
-      { category: 'AmlComputeClusterNodeEvent'; enabled: true }
-      { category: 'AmlComputeJobEvent'; enabled: true }
-      { category: 'AmlComputeCpuGpuUtilization'; enabled: true }
-      { category: 'AmlRunStatusChangedEvent'; enabled: true }
-      { category: 'ModelsChangeEvent'; enabled: true }
-      { category: 'ModelsReadEvent'; enabled: true }
-      { category: 'ModelsActionEvent'; enabled: true }
-      { category: 'DeploymentReadEvent'; enabled: true }
-      { category: 'DeploymentEventACI'; enabled: true }
-      { category: 'DeploymentEventAKS'; enabled: true }
-      { category: 'InferencingOperationAKS'; enabled: true }
-      { category: 'EnvironmentChangeEvent'; enabled: true }
-      { category: 'EnvironmentReadEvent'; enabled: true }
-      { category: 'DataLabelChangeEvent'; enabled: true }
-      { category: 'DataLabelReadEvent'; enabled: true }
-      { category: 'ComputeInstanceEvent'; enabled: true }
-      { category: 'DataStoreChangeEvent'; enabled: true }
-      { category: 'DataStoreReadEvent'; enabled: true }
-      { category: 'DataSetChangeEvent'; enabled: true }
-      { category: 'DataSetReadEvent'; enabled: true }
-      { category: 'PipelineChangeEvent'; enabled: true }
-      { category: 'PipelineReadEvent'; enabled: true }
-      { category: 'RunEvent'; enabled: true }
-      { category: 'RunReadEvent'; enabled: true }
+      { category: 'AmlComputeClusterEvent', enabled: true }
+      { category: 'AmlComputeClusterNodeEvent', enabled: true }
+      { category: 'AmlComputeJobEvent', enabled: true }
+      { category: 'AmlComputeCpuGpuUtilization', enabled: true }
+      { category: 'AmlRunStatusChangedEvent', enabled: true }
+      { category: 'ModelsChangeEvent', enabled: true }
+      { category: 'ModelsReadEvent', enabled: true }
+      { category: 'ModelsActionEvent', enabled: true }
+      { category: 'DeploymentReadEvent', enabled: true }
+      { category: 'DeploymentEventACI', enabled: true }
+      { category: 'DeploymentEventAKS', enabled: true }
+      { category: 'InferencingOperationAKS', enabled: true }
+      { category: 'EnvironmentChangeEvent', enabled: true }
+      { category: 'EnvironmentReadEvent', enabled: true }
+      { category: 'DataLabelChangeEvent', enabled: true }
+      { category: 'DataLabelReadEvent', enabled: true }
+      { category: 'ComputeInstanceEvent', enabled: true }
+      { category: 'DataStoreChangeEvent', enabled: true }
+      { category: 'DataStoreReadEvent', enabled: true }
+      { category: 'DataSetChangeEvent', enabled: true }
+      { category: 'DataSetReadEvent', enabled: true }
+      { category: 'PipelineChangeEvent', enabled: true }
+      { category: 'PipelineReadEvent', enabled: true }
+      { category: 'RunEvent', enabled: true }
+      { category: 'RunReadEvent', enabled: true }
     ]
     metrics: [
-      { category: 'AllMetrics'; enabled: true }
+      { category: 'AllMetrics', enabled: true }
     ]
   }
 }
 
+// Resource lock — protects the AML workspace from accidental deletion.
+resource amlLock 'Microsoft.Authorization/locks@2020-05-01' = if (enableResourceLock) {
+  scope: amlWorkspace
+  name: '${workspaceName}-no-delete'
+  properties: {
+    level: 'CanNotDelete'
+    notes: 'CSA-in-a-Box: Azure ML workspace. Remove lock before deleting.'
+  }
+}
+
 // Outputs
-@description('Resource ID of the AML workspace.')
 output workspaceId string = amlWorkspace.id
 
 @description('Name of the AML workspace.')

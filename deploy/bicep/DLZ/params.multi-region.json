@@ -1,0 +1,368 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "_comment": [
+        "Multi-Region Active-Active Deployment Parameters",
+        "",
+        "This parameter file configures CSA-in-a-Box for an active-active",
+        "multi-region deployment across eastus2 (primary) and westus2 (secondary).",
+        "",
+        "Services with built-in multi-region support:",
+        "  - Cosmos DB:  Multi-region writes + automatic failover (native)",
+        "  - Storage:    RA-GZRS replication (native)",
+        "  - Key Vault:  Soft-delete + purge protection; Azure-managed geo-replication (native)",
+        "",
+        "Services requiring separate stamps per region:",
+        "  - Databricks:     Deploy a second workspace with a secondary params file (location=westus2)",
+        "  - Data Factory:   Deploy a second factory with a secondary params file (location=westus2)",
+        "  - Synapse:        Deploy a second workspace with a secondary params file (location=westus2)",
+        "  - Azure ML:       Deploy a second workspace with a secondary params file (location=westus2)",
+        "  - Data Explorer:  Use follower databases for read replicas (manual config)",
+        "  - Functions:      Deploy a second app with a secondary params file (location=westus2)",
+        "  - Stream Analytics: Deploy a second job with a secondary params file (location=westus2)",
+        "",
+        "Services with Geo-DR pairing (manual configuration required):",
+        "  - Event Hubs:  Geo-disaster recovery namespace pairing via",
+        "                 Microsoft.EventHub/namespaces/disasterRecoveryConfigs.",
+        "                 Primary: dlz-prod-ehns-eastus2, Secondary: dlz-prod-ehns-westus2.",
+        "                 See docs/MULTI_REGION.md for setup procedure.",
+        "",
+        "Deployment order:",
+        "  1. Deploy this file to the primary region (eastus2) subscription.",
+        "  2. Create a secondary params file changing location to westus2 and",
+        "     adjusting resource names for stamp-based services.",
+        "  3. Deploy the secondary params file to the same or paired subscription.",
+        "  4. Configure Event Hubs Geo-DR pairing between the two namespaces.",
+        "  5. Set up Azure Traffic Manager / Front Door for client routing.",
+        "",
+        "See docs/MULTI_REGION.md for the full deployment guide and failover procedures.",
+        "See docs/DR.md for the disaster recovery runbook."
+    ],
+    "parameters": {
+        "location": {
+            "value": "East US 2"
+        },
+        "environment": {
+            "value": "prod"
+        },
+        "prefix": {
+            "value": "dlz"
+        },
+        "logAnalyticsWorkspaceId": {
+            "value": "<LOG_ANALYTICS_WORKSPACE_RESOURCE_ID>"
+        },
+        "deployModules": {
+            "value": {
+                "cosmosDB": true,
+                "storageZones": true,
+                "externalStorage": true,
+                "synapse": true,
+                "databricks": true,
+                "dataFactory": true,
+                "eventHubs": true,
+                "dataExplorer": true,
+                "machineLearning": true,
+                "functions": false,
+                "streamAnalytics": false,
+                "appInsights": true,
+                "privateEndpoints": false,
+                "genericStorage": false,
+                "selfHostedIR": false
+            }
+        },
+        "privateDNSZones": {
+            "value": {
+                "subscriptionId": "<CONNECTIVITY_SUBSCRIPTION_ID>",
+                "resourceGroupName": "rg-connectivity-dns-eastus2"
+            }
+        },
+        "parCosmosDB": {
+            "value": {
+                "cosmosDbAccountName": "cosmos",
+                "enableAutomaticFailover": "Enabled",
+                "defaultDatabaseName": "default",
+                "_comment_multiRegion": "enableMultipleWriteLocations allows both regions to accept writes. secondaryLocation is passed to the Bicep module and configures the Cosmos DB locations array with failover priorities.",
+                "enableMultipleWriteLocations": "Enabled",
+                "secondaryLocation": "westus2",
+                "enableAnalyticalStorage": "Enabled",
+                "enableFreeTier": false,
+                "enableMaterializedViews": false,
+                "enableBurstCapacity": false,
+                "enableCassandraConnector": false,
+                "enablePartitionMerge": false,
+                "enablePerRegionPerPartitionAutoscale": true,
+                "enablePriorityBasedExecution": false,
+                "disableKeyBasedMetadataWriteAccess": true,
+                "disableLocalAuth": true,
+                "consistencyLevel": "Session",
+                "backupPolicyType": "Continuous",
+                "backupIntervalInMinutes": 60,
+                "backupRetentionInHours": 720,
+                "continuousBackupTier": "Continuous30Days",
+                "publicNetworkAccess": "Disabled",
+                "networkAclBypass": "AzureServices",
+                "ipRules": [],
+                "virtualNetworkRules": [],
+                "tags": {
+                    "Service": "CosmosDB",
+                    "MultiRegion": "active-active",
+                    "PrimaryRegion": "eastus2",
+                    "SecondaryRegion": "westus2"
+                }
+            }
+        },
+        "parStorage": {
+            "value": {
+                "storageAccountName": "csadlzprodst",
+                "_comment_sku": "Standard_RAGZRS provides read-access geo-zone-redundant storage. Data is replicated synchronously across 3 AZs in the primary region and asynchronously to the paired region. Read access to the secondary region is available at all times. See docs/DR.md for RPO/RTO targets.",
+                "sku": "Standard_RAGZRS",
+                "kind": "StorageV2",
+                "domainFileSystemNames": [
+                    "raw",
+                    "bronze",
+                    "silver",
+                    "gold",
+                    "curated",
+                    "enriched"
+                ],
+                "dataProductFileSystemNames": [
+                    "data",
+                    "workspace",
+                    "synapse"
+                ],
+                "privateEndpointSubnets": [
+                    {
+                        "subscriptionId": "<DLZ_SUBSCRIPTION_ID>",
+                        "vNetResourceGroup": "rg-dlz-prod-network-eastus2",
+                        "vNetName": "vnet-dlz-prod-eastus2",
+                        "subnetName": "snet-private-endpoints",
+                        "vNetLocation": "eastus2"
+                    }
+                ],
+                "virtualNetworkRules": [],
+                "tags": {
+                    "Service": "Storage",
+                    "DataClassification": "confidential",
+                    "MultiRegion": "ragzrs",
+                    "PrimaryRegion": "eastus2"
+                }
+            }
+        },
+        "parExternalStorage": {
+            "value": {
+                "storageAccountName": "csadlzprodextst",
+                "sku": "Standard_RAGZRS",
+                "kind": "StorageV2",
+                "fileSytemNames": [
+                    "inbox",
+                    "outbox"
+                ],
+                "privateEndpointSubnets": [
+                    {
+                        "subscriptionId": "<DLZ_SUBSCRIPTION_ID>",
+                        "vNetResourceGroup": "rg-dlz-prod-network-eastus2",
+                        "vNetName": "vnet-dlz-prod-eastus2",
+                        "subnetName": "snet-private-endpoints",
+                        "vNetLocation": "eastus2"
+                    }
+                ],
+                "virtualNetworkRules": [],
+                "tags": {
+                    "Service": "ExternalStorage",
+                    "MultiRegion": "ragzrs",
+                    "PrimaryRegion": "eastus2"
+                }
+            }
+        },
+        "parSynapse": {
+            "value": {
+                "_comment": "Synapse does not support built-in cross-region replication. Deploy a second stamp in westus2 with its own parameter file. Serverless SQL endpoints reconnect to the failover storage account.",
+                "synapseWorkspaceName": "dlz-prod-synapse-eastus2",
+                "sqlAdminUsername": "sqladmin",
+                "sqlAdminPassword": "<SQL_ADMIN_PASSWORD>",
+                "tags": {
+                    "Service": "Synapse",
+                    "MultiRegion": "stamp-per-region",
+                    "Region": "eastus2"
+                }
+            }
+        },
+        "parDatabricks": {
+            "value": {
+                "_comment": "Databricks workspaces are regional. Deploy a second workspace in westus2 for multi-region. Unity Catalog metadata is regional and must be re-created in the secondary workspace. See docs/DR.md §3.6 for failover procedure.",
+                "workspaceName": "dlz-prod-dbw-eastus2",
+                "pricingTier": "premium",
+                "enableNoPublicIp": true,
+                "vnetId": "<SPOKE_VNET_RESOURCE_ID_EASTUS2>",
+                "publicSubnetName": "databricks-public",
+                "privateSubnetName": "databricks-private",
+                "privateEndpointSubnets": [
+                    {
+                        "subscriptionId": "<DLZ_SUBSCRIPTION_ID>",
+                        "vNetResourceGroup": "rg-dlz-prod-network-eastus2",
+                        "vNetName": "vnet-dlz-prod-eastus2",
+                        "subnetName": "snet-private-endpoints",
+                        "vNetLocation": "eastus2"
+                    }
+                ],
+                "privateDnsZoneId": "<DATABRICKS_PRIVATE_DNS_ZONE_ID>",
+                "enableCmk": true,
+                "cmkKeyVaultUri": "<KEY_VAULT_URI>",
+                "cmkKeyName": "<CMK_KEY_NAME>",
+                "cmkKeyVersion": ""
+            }
+        },
+        "parDataFactory": {
+            "value": {
+                "_comment": "Data Factory is regional. Deploy a second factory in westus2 and re-point linked services to the failover storage/Cosmos accounts. See docs/DR.md §3.5.",
+                "factoryName": "dlz-prod-adf-eastus2",
+                "managedVirtualNetworkEnabled": true,
+                "privateEndpointSubnets": [
+                    {
+                        "subscriptionId": "<DLZ_SUBSCRIPTION_ID>",
+                        "vNetResourceGroup": "rg-dlz-prod-network-eastus2",
+                        "vNetName": "vnet-dlz-prod-eastus2",
+                        "subnetName": "snet-private-endpoints",
+                        "vNetLocation": "eastus2"
+                    }
+                ],
+                "privateDnsZoneIdDataFactory": "<ADF_PRIVATE_DNS_ZONE_ID>",
+                "privateDnsZoneIdPortal": "<ADF_PORTAL_PRIVATE_DNS_ZONE_ID>",
+                "enableCmk": true,
+                "cmkKeyVaultUri": "<KEY_VAULT_URI>",
+                "cmkKeyName": "<CMK_KEY_NAME>",
+                "cmkKeyVersion": "",
+                "cmkIdentityId": "<USER_ASSIGNED_IDENTITY_RESOURCE_ID>"
+            }
+        },
+        "parEventHubs": {
+            "value": {
+                "_comment_geoDR": [
+                    "Event Hubs supports Geo-disaster recovery via namespace pairing.",
+                    "Deploy this primary namespace, then deploy a secondary namespace in westus2,",
+                    "then create a disasterRecoveryConfig to pair them.",
+                    "",
+                    "Manual steps after deployment:",
+                    "  az eventhubs georecovery-alias create \\",
+                    "    --resource-group rg-dlz-prod-eventhubs-eastus2 \\",
+                    "    --namespace-name dlz-prod-ehns-eastus2 \\",
+                    "    --alias dlz-prod-ehns-geo \\",
+                    "    --partner-namespace <SECONDARY_NAMESPACE_RESOURCE_ID>",
+                    "",
+                    "Failover command:",
+                    "  az eventhubs georecovery-alias fail-over \\",
+                    "    --resource-group rg-dlz-prod-eventhubs-westus2 \\",
+                    "    --namespace-name dlz-prod-ehns-westus2 \\",
+                    "    --alias dlz-prod-ehns-geo"
+                ],
+                "namespaceName": "dlz-prod-ehns-eastus2",
+                "sku": "Standard",
+                "eventHubs": [
+                    {
+                        "name": "ingestion",
+                        "partitionCount": 8,
+                        "messageRetentionInDays": 7
+                    },
+                    {
+                        "name": "cdc-events",
+                        "partitionCount": 16,
+                        "messageRetentionInDays": 3
+                    }
+                ],
+                "privateEndpointSubnets": [
+                    {
+                        "subscriptionId": "<DLZ_SUBSCRIPTION_ID>",
+                        "vNetResourceGroup": "rg-dlz-prod-network-eastus2",
+                        "vNetName": "vnet-dlz-prod-eastus2",
+                        "subnetName": "snet-private-endpoints",
+                        "vNetLocation": "eastus2"
+                    }
+                ],
+                "privateDnsZoneId": "<EVENTHUB_PRIVATE_DNS_ZONE_ID>",
+                "enableCmk": true,
+                "cmkKeyVaultUri": "<KEY_VAULT_URI>",
+                "cmkKeyName": "<CMK_KEY_NAME>",
+                "cmkKeyVersion": "",
+                "cmkIdentityId": "<USER_ASSIGNED_IDENTITY_RESOURCE_ID>"
+            }
+        },
+        "parMachineLearning": {
+            "value": {
+                "_comment": "Azure ML workspaces are regional. Deploy a second workspace in westus2 for multi-region compute. Models and experiments stored in shared storage are available via RAGZRS replication.",
+                "workspaceName": "dlz-prod-ml-eastus2",
+                "storageAccountId": "<AML_STORAGE_ACCOUNT_ID>",
+                "keyVaultId": "<KEY_VAULT_RESOURCE_ID>",
+                "applicationInsightsId": "<APP_INSIGHTS_RESOURCE_ID>",
+                "privateEndpointSubnets": [
+                    {
+                        "subscriptionId": "<DLZ_SUBSCRIPTION_ID>",
+                        "vNetResourceGroup": "rg-dlz-prod-network-eastus2",
+                        "vNetName": "vnet-dlz-prod-eastus2",
+                        "subnetName": "snet-private-endpoints",
+                        "vNetLocation": "eastus2"
+                    }
+                ],
+                "enableCmk": true,
+                "cmkKeyVaultId": "<KEY_VAULT_RESOURCE_ID>",
+                "cmkKeyIdentifier": "<FULL_KEY_IDENTIFIER_URI>",
+                "cmkIdentityId": "<USER_ASSIGNED_IDENTITY_RESOURCE_ID>"
+            }
+        },
+        "parDataExplorer": {
+            "value": {
+                "_comment": "ADX supports follower databases for read replicas in a secondary region. Deploy a second cluster in westus2 and attach follower databases from this primary cluster. See: https://learn.microsoft.com/azure/data-explorer/follower",
+                "clusterName": "dlzprodadxeastus2",
+                "skuName": "Standard_E8as_v5+1TB_PS",
+                "skuCapacity": 2,
+                "databases": [
+                    {
+                        "name": "analytics",
+                        "softDeletePeriod": "P365D",
+                        "hotCachePeriod": "P31D"
+                    },
+                    {
+                        "name": "telemetry",
+                        "softDeletePeriod": "P90D",
+                        "hotCachePeriod": "P7D"
+                    }
+                ],
+                "privateEndpointSubnets": [
+                    {
+                        "subscriptionId": "<DLZ_SUBSCRIPTION_ID>",
+                        "vNetResourceGroup": "rg-dlz-prod-network-eastus2",
+                        "vNetName": "vnet-dlz-prod-eastus2",
+                        "subnetName": "snet-private-endpoints",
+                        "vNetLocation": "eastus2"
+                    }
+                ],
+                "privateDnsZoneId": "<ADX_PRIVATE_DNS_ZONE_ID>",
+                "enableCmk": true,
+                "cmkKeyVaultUri": "<KEY_VAULT_URI>",
+                "cmkKeyName": "<CMK_KEY_NAME>",
+                "cmkKeyVersion": "",
+                "cmkIdentityId": "<USER_ASSIGNED_IDENTITY_RESOURCE_ID>"
+            }
+        },
+        "parStreamAnalytics": {
+            "value": {
+                "jobName": "dlz-prod-asa-eastus2",
+                "streamingUnits": 6
+            }
+        },
+        "parFunctions": {
+            "value": {
+                "functionAppName": "dlz-prod-func-eastus2",
+                "runtime": "python",
+                "planSku": "EP1"
+            }
+        },
+        "parAppInsights": {
+            "value": {
+                "_comment": "Deploy a second App Insights instance in westus2. Configure cross-region diagnostic settings to ship logs to both regional workspaces.",
+                "appInsightsName": "dlz-prod-appi-eastus2",
+                "applicationType": "web",
+                "disableLocalAuth": true
+            }
+        }
+    }
+}

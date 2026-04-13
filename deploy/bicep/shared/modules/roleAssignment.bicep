@@ -23,7 +23,7 @@ param roleDefinitionId string
 param scope string = resourceGroup().id
 
 @description('Optional description for the role assignment.')
-param description string = ''
+param roleDescription string = ''
 
 // Variables
 var roleAssignmentName = guid(scope, principalId, roleDefinitionId)
@@ -35,7 +35,7 @@ resource roleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
     principalId: principalId
     principalType: principalType
     roleDefinitionId: roleDefinitionId
-    description: !empty(description) ? description : null
+    description: !empty(roleDescription) ? roleDescription : null
   }
 }
 

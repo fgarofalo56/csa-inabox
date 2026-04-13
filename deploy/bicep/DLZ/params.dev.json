@@ -16,12 +16,18 @@
                 "cosmosDB": true,
                 "storageZones": true,
                 "externalStorage": true,
-                "synapse": false
+                "synapse": false,
+                "functions": false,
+                "streamAnalytics": false,
+                "appInsights": false,
+                "privateEndpoints": false,
+                "genericStorage": false,
+                "selfHostedIR": false
             }
         },
         "privateDNSZones": {
             "value": {
-                "subscriptionId": "a60a2fdd-c133-4845-9beb-31f470bf3ef5",
+                "subscriptionId": "<SUBSCRIPTION_ID>",
                 "resourceGroupName": "rg-alz-dev-dns-eastus"
             }
         },
@@ -73,7 +79,7 @@
                 ],
                 "privateEndpointSubnets": [
                     {
-                        "subscriptionId": "a60a2fdd-c133-4845-9beb-31f470bf3ef5",
+                        "subscriptionId": "<SUBSCRIPTION_ID>",
                         "vNetResourceGroup": "rg-alz-dev-spokeVnet-eastus2",
                         "vNetName": "alz-dev-spokeVnet-eastus2",
                         "subnetName": "privatelinke",
@@ -97,7 +103,7 @@
                 ],
                 "privateEndpointSubnets": [
                     {
-                        "subscriptionId": "a60a2fdd-c133-4845-9beb-31f470bf3ef5",
+                        "subscriptionId": "<SUBSCRIPTION_ID>",
                         "vNetResourceGroup": "rg-alz-dev-spokeVnet-eastus2",
                         "vNetName": "alz-dev-spokeVnet-eastus2",
                         "subnetName": "privatelinke",

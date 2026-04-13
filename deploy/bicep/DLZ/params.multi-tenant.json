@@ -1,0 +1,334 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "_comment": [
+        "Multi-Tenant Stamped Deployment Parameters",
+        "",
+        "This parameter file demonstrates deploying a tenant-isolated 'stamp'",
+        "for the tenant 'contoso' with prefix 'ctso'. Each tenant gets its own",
+        "complete set of Azure resources deployed from the same Bicep templates.",
+        "",
+        "Stamped deployment model:",
+        "  - Every tenant gets their own subscription (or resource groups within a shared sub)",
+        "  - All resource names incorporate the tenant prefix for uniqueness",
+        "  - Tags include tenant-id for cost attribution and chargeback",
+        "  - Network isolation via separate VNets or NSG rules per tenant",
+        "  - RBAC scoped per-tenant — no cross-tenant access by default",
+        "",
+        "To onboard a new tenant:",
+        "  1. Copy this file to params.tenant-{tenantId}.json",
+        "  2. Replace 'contoso' / 'ctso' with the new tenant name / prefix",
+        "  3. Provision a new subscription (or designate resource groups)",
+        "  4. Update VNet, subnet, and DNS zone references",
+        "  5. Deploy: az deployment sub create --template-file main.bicep --parameters params.tenant-{tenantId}.json",
+        "  6. Configure RBAC for the tenant's admin group",
+        "  7. Run the tenant onboarding checklist in docs/MULTI_TENANT.md",
+        "",
+        "See docs/MULTI_TENANT.md for the full multi-tenant architecture guide."
+    ],
+    "parameters": {
+        "location": {
+            "value": "East US 2"
+        },
+        "environment": {
+            "value": "prod"
+        },
+        "prefix": {
+            "value": "ctso-dlz",
+            "_comment": "Tenant prefix 'ctso' prepended to the standard 'dlz' prefix. This flows through the basename variable ({prefix}-{environment}) to produce resource group names like rg-ctso-dlz-prod-cosmosdb-eastus2."
+        },
+        "logAnalyticsWorkspaceId": {
+            "value": "<TENANT_LOG_ANALYTICS_WORKSPACE_RESOURCE_ID>",
+            "_comment": "Each tenant can have their own Log Analytics workspace for data isolation, or share a central workspace with resource-scoped RBAC."
+        },
+        "primaryContact": {
+            "value": "platform-team@contoso.com"
+        },
+        "costCenter": {
+            "value": "CONTOSO-TENANT-001"
+        },
+        "deployModules": {
+            "value": {
+                "cosmosDB": true,
+                "storageZones": true,
+                "externalStorage": true,
+                "synapse": false,
+                "databricks": true,
+                "dataFactory": true,
+                "eventHubs": true,
+                "dataExplorer": false,
+                "machineLearning": false,
+                "functions": false,
+                "streamAnalytics": false,
+                "appInsights": true,
+                "privateEndpoints": false,
+                "genericStorage": false,
+                "selfHostedIR": false,
+                "_comment": "Enable only the modules required by this tenant. Disabling unused modules reduces cost and attack surface."
+            }
+        },
+        "privateDNSZones": {
+            "value": {
+                "subscriptionId": "<CONNECTIVITY_SUBSCRIPTION_ID>",
+                "resourceGroupName": "rg-connectivity-dns-eastus2",
+                "_comment": "Private DNS zones are typically shared across tenants in the connectivity subscription. Each tenant's private endpoints register in the shared zone."
+            }
+        },
+        "parCosmosDB": {
+            "value": {
+                "cosmosDbAccountName": "ctso-cosmos",
+                "enableAutomaticFailover": "Enabled",
+                "defaultDatabaseName": "contoso",
+                "enableMultipleWriteLocations": "Disabled",
+                "enableAnalyticalStorage": "Enabled",
+                "enableFreeTier": false,
+                "enableMaterializedViews": false,
+                "enableBurstCapacity": false,
+                "enableCassandraConnector": false,
+                "enablePartitionMerge": false,
+                "enablePerRegionPerPartitionAutoscale": true,
+                "enablePriorityBasedExecution": false,
+                "disableKeyBasedMetadataWriteAccess": true,
+                "disableLocalAuth": true,
+                "consistencyLevel": "Session",
+                "backupPolicyType": "Continuous",
+                "backupIntervalInMinutes": 60,
+                "backupRetentionInHours": 720,
+                "continuousBackupTier": "Continuous30Days",
+                "publicNetworkAccess": "Disabled",
+                "networkAclBypass": "AzureServices",
+                "ipRules": [],
+                "virtualNetworkRules": [],
+                "tags": {
+                    "Service": "CosmosDB",
+                    "tenant-id": "contoso",
+                    "tenant-prefix": "ctso",
+                    "cost-center": "CONTOSO-TENANT-001"
+                }
+            }
+        },
+        "parStorage": {
+            "value": {
+                "storageAccountName": "ctsodlzprodst",
+                "sku": "Standard_GRS",
+                "kind": "StorageV2",
+                "domainFileSystemNames": [
+                    "raw",
+                    "bronze",
+                    "silver",
+                    "gold",
+                    "curated",
+                    "enriched"
+                ],
+                "dataProductFileSystemNames": [
+                    "data",
+                    "workspace",
+                    "synapse"
+                ],
+                "privateEndpointSubnets": [
+                    {
+                        "subscriptionId": "<TENANT_DLZ_SUBSCRIPTION_ID>",
+                        "vNetResourceGroup": "rg-ctso-dlz-prod-network-eastus2",
+                        "vNetName": "vnet-ctso-dlz-prod-eastus2",
+                        "subnetName": "snet-private-endpoints",
+                        "vNetLocation": "eastus2"
+                    }
+                ],
+                "virtualNetworkRules": [],
+                "tags": {
+                    "Service": "Storage",
+                    "DataClassification": "confidential",
+                    "tenant-id": "contoso",
+                    "tenant-prefix": "ctso",
+                    "cost-center": "CONTOSO-TENANT-001"
+                }
+            }
+        },
+        "parExternalStorage": {
+            "value": {
+                "storageAccountName": "ctsodlzprodextst",
+                "sku": "Standard_GRS",
+                "kind": "StorageV2",
+                "fileSytemNames": [
+                    "inbox",
+                    "outbox"
+                ],
+                "privateEndpointSubnets": [
+                    {
+                        "subscriptionId": "<TENANT_DLZ_SUBSCRIPTION_ID>",
+                        "vNetResourceGroup": "rg-ctso-dlz-prod-network-eastus2",
+                        "vNetName": "vnet-ctso-dlz-prod-eastus2",
+                        "subnetName": "snet-private-endpoints",
+                        "vNetLocation": "eastus2"
+                    }
+                ],
+                "virtualNetworkRules": [],
+                "tags": {
+                    "Service": "ExternalStorage",
+                    "tenant-id": "contoso",
+                    "tenant-prefix": "ctso",
+                    "cost-center": "CONTOSO-TENANT-001"
+                }
+            }
+        },
+        "parSynapse": {
+            "value": {
+                "synapseWorkspaceName": "ctso-dlz-prod-synapse",
+                "sqlAdminUsername": "sqladmin",
+                "sqlAdminPassword": "<SQL_ADMIN_PASSWORD>",
+                "tags": {
+                    "Service": "Synapse",
+                    "tenant-id": "contoso",
+                    "tenant-prefix": "ctso",
+                    "cost-center": "CONTOSO-TENANT-001"
+                }
+            }
+        },
+        "parDatabricks": {
+            "value": {
+                "workspaceName": "ctso-dlz-prod-dbw",
+                "pricingTier": "premium",
+                "enableNoPublicIp": true,
+                "vnetId": "<TENANT_SPOKE_VNET_RESOURCE_ID>",
+                "publicSubnetName": "databricks-public",
+                "privateSubnetName": "databricks-private",
+                "privateEndpointSubnets": [
+                    {
+                        "subscriptionId": "<TENANT_DLZ_SUBSCRIPTION_ID>",
+                        "vNetResourceGroup": "rg-ctso-dlz-prod-network-eastus2",
+                        "vNetName": "vnet-ctso-dlz-prod-eastus2",
+                        "subnetName": "snet-private-endpoints",
+                        "vNetLocation": "eastus2"
+                    }
+                ],
+                "privateDnsZoneId": "<DATABRICKS_PRIVATE_DNS_ZONE_ID>",
+                "enableCmk": true,
+                "cmkKeyVaultUri": "<TENANT_KEY_VAULT_URI>",
+                "cmkKeyName": "<TENANT_CMK_KEY_NAME>",
+                "cmkKeyVersion": ""
+            }
+        },
+        "parDataFactory": {
+            "value": {
+                "factoryName": "ctso-dlz-prod-adf",
+                "managedVirtualNetworkEnabled": true,
+                "privateEndpointSubnets": [
+                    {
+                        "subscriptionId": "<TENANT_DLZ_SUBSCRIPTION_ID>",
+                        "vNetResourceGroup": "rg-ctso-dlz-prod-network-eastus2",
+                        "vNetName": "vnet-ctso-dlz-prod-eastus2",
+                        "subnetName": "snet-private-endpoints",
+                        "vNetLocation": "eastus2"
+                    }
+                ],
+                "privateDnsZoneIdDataFactory": "<ADF_PRIVATE_DNS_ZONE_ID>",
+                "privateDnsZoneIdPortal": "<ADF_PORTAL_PRIVATE_DNS_ZONE_ID>",
+                "enableCmk": true,
+                "cmkKeyVaultUri": "<TENANT_KEY_VAULT_URI>",
+                "cmkKeyName": "<TENANT_CMK_KEY_NAME>",
+                "cmkKeyVersion": "",
+                "cmkIdentityId": "<TENANT_USER_ASSIGNED_IDENTITY_RESOURCE_ID>"
+            }
+        },
+        "parEventHubs": {
+            "value": {
+                "namespaceName": "ctso-dlz-prod-ehns",
+                "sku": "Standard",
+                "eventHubs": [
+                    {
+                        "name": "ingestion",
+                        "partitionCount": 8,
+                        "messageRetentionInDays": 7
+                    },
+                    {
+                        "name": "cdc-events",
+                        "partitionCount": 16,
+                        "messageRetentionInDays": 3
+                    }
+                ],
+                "privateEndpointSubnets": [
+                    {
+                        "subscriptionId": "<TENANT_DLZ_SUBSCRIPTION_ID>",
+                        "vNetResourceGroup": "rg-ctso-dlz-prod-network-eastus2",
+                        "vNetName": "vnet-ctso-dlz-prod-eastus2",
+                        "subnetName": "snet-private-endpoints",
+                        "vNetLocation": "eastus2"
+                    }
+                ],
+                "privateDnsZoneId": "<EVENTHUB_PRIVATE_DNS_ZONE_ID>",
+                "enableCmk": true,
+                "cmkKeyVaultUri": "<TENANT_KEY_VAULT_URI>",
+                "cmkKeyName": "<TENANT_CMK_KEY_NAME>",
+                "cmkKeyVersion": "",
+                "cmkIdentityId": "<TENANT_USER_ASSIGNED_IDENTITY_RESOURCE_ID>"
+            }
+        },
+        "parMachineLearning": {
+            "value": {
+                "workspaceName": "ctso-dlz-prod-ml",
+                "storageAccountId": "<TENANT_AML_STORAGE_ACCOUNT_ID>",
+                "keyVaultId": "<TENANT_KEY_VAULT_RESOURCE_ID>",
+                "applicationInsightsId": "<TENANT_APP_INSIGHTS_RESOURCE_ID>",
+                "privateEndpointSubnets": [],
+                "enableCmk": true,
+                "cmkKeyVaultId": "<TENANT_KEY_VAULT_RESOURCE_ID>",
+                "cmkKeyIdentifier": "<TENANT_FULL_KEY_IDENTIFIER_URI>",
+                "cmkIdentityId": "<TENANT_USER_ASSIGNED_IDENTITY_RESOURCE_ID>"
+            }
+        },
+        "parDataExplorer": {
+            "value": {
+                "clusterName": "ctsodlzprodadx",
+                "skuName": "Standard_E8as_v5+1TB_PS",
+                "skuCapacity": 2,
+                "databases": [
+                    {
+                        "name": "analytics",
+                        "softDeletePeriod": "P365D",
+                        "hotCachePeriod": "P31D"
+                    },
+                    {
+                        "name": "telemetry",
+                        "softDeletePeriod": "P90D",
+                        "hotCachePeriod": "P7D"
+                    }
+                ],
+                "privateEndpointSubnets": [
+                    {
+                        "subscriptionId": "<TENANT_DLZ_SUBSCRIPTION_ID>",
+                        "vNetResourceGroup": "rg-ctso-dlz-prod-network-eastus2",
+                        "vNetName": "vnet-ctso-dlz-prod-eastus2",
+                        "subnetName": "snet-private-endpoints",
+                        "vNetLocation": "eastus2"
+                    }
+                ],
+                "privateDnsZoneId": "<ADX_PRIVATE_DNS_ZONE_ID>",
+                "enableCmk": true,
+                "cmkKeyVaultUri": "<TENANT_KEY_VAULT_URI>",
+                "cmkKeyName": "<TENANT_CMK_KEY_NAME>",
+                "cmkKeyVersion": "",
+                "cmkIdentityId": "<TENANT_USER_ASSIGNED_IDENTITY_RESOURCE_ID>"
+            }
+        },
+        "parStreamAnalytics": {
+            "value": {
+                "jobName": "ctso-dlz-prod-asa",
+                "streamingUnits": 6
+            }
+        },
+        "parFunctions": {
+            "value": {
+                "functionAppName": "ctso-dlz-prod-func",
+                "runtime": "python",
+                "planSku": "EP1"
+            }
+        },
+        "parAppInsights": {
+            "value": {
+                "appInsightsName": "ctso-dlz-prod-appi",
+                "applicationType": "web",
+                "disableLocalAuth": true
+            }
+        }
+    }
+}

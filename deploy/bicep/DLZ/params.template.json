@@ -24,7 +24,13 @@
                 "dataFactory": true,
                 "eventHubs": false,
                 "dataExplorer": false,
-                "machineLearning": false
+                "machineLearning": false,
+                "functions": false,
+                "streamAnalytics": false,
+                "appInsights": false,
+                "privateEndpoints": false,
+                "genericStorage": false,
+                "selfHostedIR": false
             }
         },
         "privateDNSZones": {
@@ -125,7 +131,18 @@
                         "vNetLocation": "<AZURE_REGION>"
                     }
                 ],
-                "privateDnsZoneId": "<DATABRICKS_PRIVATE_DNS_ZONE_ID>"
+                "privateDnsZoneId": "<DATABRICKS_PRIVATE_DNS_ZONE_ID>",
+                "enableCmk": false,
+                "_cmk_help": {
+                    "_description": "Customer-Managed Key (CMK) fields for Databricks workspace encryption",
+                    "enableCmk": "Set to true to enable CMK encryption for the Databricks workspace. Optional; defaults to false (uses Microsoft-managed keys).",
+                    "cmkKeyVaultUri": "The URI of the Key Vault containing the CMK. Get from: az keyvault show --name <name> --query properties.vaultUri -o tsv",
+                    "cmkKeyName": "The name of the key in Key Vault to use for encryption. Get from: az keyvault key list --vault-name <name> --query [].name -o tsv",
+                    "cmkKeyVersion": "Optional. Specific key version. Leave empty to use the latest version. Get from: az keyvault key show --vault-name <name> --name <key> --query key.kid -o tsv"
+                },
+                "cmkKeyVaultUri": "<KEY_VAULT_URI>",
+                "cmkKeyName": "<CMK_KEY_NAME>",
+                "cmkKeyVersion": ""
             }
         },
         "parDataFactory": {
@@ -142,7 +159,20 @@
                     }
                 ],
                 "privateDnsZoneIdDataFactory": "<ADF_PRIVATE_DNS_ZONE_ID>",
-                "privateDnsZoneIdPortal": "<ADF_PORTAL_PRIVATE_DNS_ZONE_ID>"
+                "privateDnsZoneIdPortal": "<ADF_PORTAL_PRIVATE_DNS_ZONE_ID>",
+                "enableCmk": false,
+                "_cmk_help": {
+                    "_description": "Customer-Managed Key (CMK) fields for Data Factory encryption at rest",
+                    "enableCmk": "Set to true to enable CMK encryption for Data Factory. Optional; defaults to false.",
+                    "cmkKeyVaultUri": "The URI of the Key Vault containing the CMK. Get from: az keyvault show --name <name> --query properties.vaultUri -o tsv",
+                    "cmkKeyName": "The name of the key in Key Vault. Get from: az keyvault key list --vault-name <name> --query [].name -o tsv",
+                    "cmkKeyVersion": "Optional. Specific key version. Leave empty for latest. Get from: az keyvault key show --vault-name <name> --name <key> --query key.kid -o tsv",
+                    "cmkIdentityId": "Required when enableCmk=true. Resource ID of the user-assigned managed identity with Key Vault access. Get from: az identity show --name <name> --resource-group <rg> --query id -o tsv"
+                },
+                "cmkKeyVaultUri": "<KEY_VAULT_URI>",
+                "cmkKeyName": "<CMK_KEY_NAME>",
+                "cmkKeyVersion": "",
+                "cmkIdentityId": "<USER_ASSIGNED_IDENTITY_RESOURCE_ID>"
             }
         },
         "parEventHubs": {
@@ -162,7 +192,20 @@
                     }
                 ],
                 "privateEndpointSubnets": [],
-                "privateDnsZoneId": "<EVENTHUB_PRIVATE_DNS_ZONE_ID>"
+                "privateDnsZoneId": "<EVENTHUB_PRIVATE_DNS_ZONE_ID>",
+                "enableCmk": false,
+                "_cmk_help": {
+                    "_description": "Customer-Managed Key (CMK) fields for Event Hubs namespace encryption",
+                    "enableCmk": "Set to true to enable CMK encryption for Event Hubs. Optional; defaults to false.",
+                    "cmkKeyVaultUri": "The URI of the Key Vault containing the CMK. Get from: az keyvault show --name <name> --query properties.vaultUri -o tsv",
+                    "cmkKeyName": "The name of the key in Key Vault. Get from: az keyvault key list --vault-name <name> --query [].name -o tsv",
+                    "cmkKeyVersion": "Optional. Specific key version. Leave empty for latest. Get from: az keyvault key show --vault-name <name> --name <key> --query key.kid -o tsv",
+                    "cmkIdentityId": "Required when enableCmk=true. Resource ID of the user-assigned managed identity with Key Vault Crypto User role. Get from: az identity show --name <name> --resource-group <rg> --query id -o tsv"
+                },
+                "cmkKeyVaultUri": "<KEY_VAULT_URI>",
+                "cmkKeyName": "<CMK_KEY_NAME>",
+                "cmkKeyVersion": "",
+                "cmkIdentityId": "<USER_ASSIGNED_IDENTITY_RESOURCE_ID>"
             }
         },
         "parMachineLearning": {
@@ -173,7 +216,18 @@
                 "applicationInsightsId": "<APP_INSIGHTS_RESOURCE_ID>",
                 "privateEndpointSubnets": [],
                 "privateDnsZoneIdApi": "<AML_API_PRIVATE_DNS_ZONE_ID>",
-                "privateDnsZoneIdNotebooks": "<AML_NOTEBOOKS_PRIVATE_DNS_ZONE_ID>"
+                "privateDnsZoneIdNotebooks": "<AML_NOTEBOOKS_PRIVATE_DNS_ZONE_ID>",
+                "enableCmk": false,
+                "_cmk_help": {
+                    "_description": "Customer-Managed Key (CMK) fields for Azure Machine Learning workspace encryption",
+                    "enableCmk": "Set to true to enable CMK encryption for the AML workspace. Optional; defaults to false.",
+                    "cmkKeyVaultId": "Full resource ID of the Key Vault (not the URI). Get from: az keyvault show --name <name> --query id -o tsv",
+                    "cmkKeyIdentifier": "Full key identifier URI including version, e.g. https://<vault>.vault.azure.net/keys/<key>/<version>. Get from: az keyvault key show --vault-name <name> --name <key> --query key.kid -o tsv",
+                    "cmkIdentityId": "Required when enableCmk=true. Resource ID of the user-assigned managed identity. Get from: az identity show --name <name> --resource-group <rg> --query id -o tsv"
+                },
+                "cmkKeyVaultId": "<KEY_VAULT_RESOURCE_ID>",
+                "cmkKeyIdentifier": "<FULL_KEY_IDENTIFIER_URI>",
+                "cmkIdentityId": "<USER_ASSIGNED_IDENTITY_RESOURCE_ID>"
             }
         },
         "parDataExplorer": {
@@ -189,7 +243,20 @@
                     }
                 ],
                 "privateEndpointSubnets": [],
-                "privateDnsZoneId": "<ADX_PRIVATE_DNS_ZONE_ID>"
+                "privateDnsZoneId": "<ADX_PRIVATE_DNS_ZONE_ID>",
+                "enableCmk": false,
+                "_cmk_help": {
+                    "_description": "Customer-Managed Key (CMK) fields for Data Explorer (Kusto) cluster encryption",
+                    "enableCmk": "Set to true to enable CMK encryption for the ADX cluster. Optional; defaults to false.",
+                    "cmkKeyVaultUri": "The URI of the Key Vault containing the CMK. Get from: az keyvault show --name <name> --query properties.vaultUri -o tsv",
+                    "cmkKeyName": "The name of the key in Key Vault. Get from: az keyvault key list --vault-name <name> --query [].name -o tsv",
+                    "cmkKeyVersion": "Optional. Specific key version. Leave empty for latest. Get from: az keyvault key show --vault-name <name> --name <key> --query key.kid -o tsv",
+                    "cmkIdentityId": "Required when enableCmk=true. Resource ID of the user-assigned managed identity with Key Vault access. Get from: az identity show --name <name> --resource-group <rg> --query id -o tsv"
+                },
+                "cmkKeyVaultUri": "<KEY_VAULT_URI>",
+                "cmkKeyName": "<CMK_KEY_NAME>",
+                "cmkKeyVersion": "",
+                "cmkIdentityId": "<USER_ASSIGNED_IDENTITY_RESOURCE_ID>"
             }
         },
         "parStreamAnalytics": {
@@ -203,6 +270,55 @@
                 "functionAppName": "<FUNCTION_APP_NAME>",
                 "runtime": "python",
                 "planSku": "EP1"
+            }
+        },
+        "parAppInsights": {
+            "value": {
+                "appInsightsName": "<APP_INSIGHTS_NAME>",
+                "applicationType": "web",
+                "disableLocalAuth": true
+            }
+        },
+        "parGenericStorage": {
+            "value": {
+                "storageName": "<GENERIC_STORAGE_ACCOUNT_NAME>",
+                "fileSystemNames": [
+                    "default"
+                ],
+                "privateEndpointSubnets": [],
+                "storageSku": "",
+                "enableResourceLock": true,
+                "enableCmk": false,
+                "_cmk_help": {
+                    "_description": "CMK for generic storage account. When enableCmk=true, the storage account uses a customer-managed key for encryption at rest. Requires a Key Vault key and managed identity with Key Vault Crypto Service Encryption User role on the Key Vault."
+                }
+            }
+        },
+        "parPrivateEndpoints": {
+            "value": {
+                "serviceSubResource": "blob",
+                "privateEndpointSubnets": [
+                    {
+                        "subscriptionId": "<DLZ_SUBSCRIPTION_ID>",
+                        "vNetResourceGroup": "<VNET_RESOURCE_GROUP>",
+                        "vNetName": "<SPOKE_VNET_NAME>",
+                        "subnetName": "<PRIVATE_ENDPOINT_SUBNET>",
+                        "vNetLocation": "<AZURE_REGION>"
+                    }
+                ],
+                "serviceName": "<SERVICE_NAME_FOR_PE>"
+            }
+        },
+        "parSelfHostedIR": {
+            "value": {
+                "subnetId": "<SHIR_SUBNET_RESOURCE_ID>",
+                "vmssName": "<SHIR_VMSS_NAME>",
+                "vmssSkuName": "Standard_DS2_v2",
+                "vmssSkuTier": "Standard",
+                "vmssSkuCapacity": 1,
+                "administratorUsername": "VmssMainUser",
+                "administratorPassword": "<SHIR_ADMIN_PASSWORD>",
+                "datafactoryIntegrationRuntimeAuthKey": "<ADF_IR_AUTH_KEY>"
             }
         }
     }

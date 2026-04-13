@@ -109,7 +109,7 @@ resource GetExistingVNetLinks 'Microsoft.Resources/deploymentScripts@2020-10-01'
     $output = @()
     foreach ($zone in $zones) {
       Try {
-        $existingLinks += Get-AzPrivateDnsVirtualNetworkLink -ZoneName $zone -ResourceGroupName $ResourceGroupName -ErrorAction 'Ignore' | Select ZoneName, @{label='vNetName'; expression={$_.VirtualNetworkId.Split('/')[-1]}}
+        $existingLinks += Get-AzPrivateDnsVirtualNetworkLink -ZoneName $zone -ResourceGroupName $ResourceGroupName -ErrorAction 'Ignore' | Select ZoneName, @{label='vNetName', expression={$_.VirtualNetworkId.Split('/')[-1]}}
       } Catch {
       }      
     }

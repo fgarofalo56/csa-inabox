@@ -66,6 +66,24 @@ param privateDnsZoneId string = ''
 @description('Resource ID of the Log Analytics workspace for diagnostics.')
 param logAnalyticsWorkspaceId string = ''
 
+@description('Attach a CanNotDelete resource lock to the Data Explorer cluster. Default true for production safety.')
+param enableResourceLock bool = true
+
+@description('Enable Customer-Managed Key (CMK) encryption.  Default false for dev; set true for prod/compliance.')
+param parEnableCmk bool = false
+
+@description('Key Vault URI (e.g. https://myvault.vault.azure.net) when CMK is enabled.')
+param parCmkKeyVaultUri string = ''
+
+@description('Key name in the Key Vault for CMK encryption.')
+param parCmkKeyName string = ''
+
+@description('Key version.  Leave empty for automatic key rotation (recommended).')
+param parCmkKeyVersion string = ''
+
+@description('Resource ID of the user-assigned managed identity for CMK.  Created by cmkIdentity.bicep.')
+param parCmkIdentityId string = ''
+
 // Resources
 resource kustoCluster 'Microsoft.Kusto/clusters@2023-08-15' = {
   name: clusterName
@@ -77,16 +95,25 @@ resource kustoCluster 'Microsoft.Kusto/clusters@2023-08-15' = {
     tier: skuTier
   }
   identity: {
-    type: 'SystemAssigned'
+    type: parEnableCmk ? 'SystemAssigned,UserAssigned' : 'SystemAssigned'
+    userAssignedIdentities: parEnableCmk ? {
+      '${parCmkIdentityId}': {}
+    } : null
   }
   properties: {
     enableStreamingIngest: enableStreamingIngest
     enableAutoStop: enableAutoStop
     publicNetworkAccess: publicNetworkAccess
     enablePurge: false
-    enableDoubleEncryption: false
+    enableDoubleEncryption: true
     engineType: 'V3'
-    restrictOutboundNetworkAccess: 'Disabled'
+    restrictOutboundNetworkAccess: 'Enabled'
+    keyVaultProperties: parEnableCmk ? {
+      keyVaultUri: parCmkKeyVaultUri
+      keyName: parCmkKeyName
+      keyVersion: !empty(parCmkKeyVersion) ? parCmkKeyVersion : null
+      userIdentity: parCmkIdentityId
+    } : null
   }
 }
 
@@ -159,23 +186,32 @@ resource kustoDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-prev
   properties: {
     workspaceId: logAnalyticsWorkspaceId
     logs: [
-      { category: 'SucceededIngestion'; enabled: true }
-      { category: 'FailedIngestion'; enabled: true }
-      { category: 'IngestionBatching'; enabled: true }
-      { category: 'Command'; enabled: true }
-      { category: 'Query'; enabled: true }
-      { category: 'TableUsageStatistics'; enabled: true }
-      { category: 'TableDetails'; enabled: true }
-      { category: 'Journal'; enabled: true }
+      { category: 'SucceededIngestion', enabled: true }
+      { category: 'FailedIngestion', enabled: true }
+      { category: 'IngestionBatching', enabled: true }
+      { category: 'Command', enabled: true }
+      { category: 'Query', enabled: true }
+      { category: 'TableUsageStatistics', enabled: true }
+      { category: 'TableDetails', enabled: true }
+      { category: 'Journal', enabled: true }
     ]
     metrics: [
-      { category: 'AllMetrics'; enabled: true }
+      { category: 'AllMetrics', enabled: true }
     ]
   }
 }
 
+// Resource lock — protects the Data Explorer cluster from accidental deletion.
+resource kustoLock 'Microsoft.Authorization/locks@2020-05-01' = if (enableResourceLock) {
+  scope: kustoCluster
+  name: '${clusterName}-no-delete'
+  properties: {
+    level: 'CanNotDelete'
+    notes: 'CSA-in-a-Box: Data Explorer cluster. Remove lock before deleting.'
+  }
+}
+
 // Outputs
-@description('Resource ID of the Data Explorer cluster.')
 output clusterId string = kustoCluster.id
 
 @description('URI of the Data Explorer cluster.')

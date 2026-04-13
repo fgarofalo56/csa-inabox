@@ -13,7 +13,8 @@ param monthlyBudgetUSD int = environment == 'dev' ? 5000 : 50000
 param startDate string = '2026-04-01'
 
 @description('Contact emails for budget alerts')
-param contactEmails array = []
+@minLength(1)
+param contactEmails array
 
 @description('Action group resource ID for alerts')
 param actionGroupId string = ''

@@ -7,6 +7,21 @@
         },
         "location": {
             "value": "eastus"
+        },
+        "eventHubSubscriptionId": {
+            "value": "<SUBSCRIPTION_ID>"
+        },
+        "eventHubResourceGroup": {
+            "value": "<RESOURCE_GROUP_NAME>"
+        },
+        "eventHubNamespaceName": {
+            "value": "dmz-eventhub-dev"
+        },
+        "notificationEventHubName": {
+            "value": "dms-purview-eh-dev"
+        },
+        "hookEventHubName": {
+            "value": "dmz-purview-hooks"
         }
     }
 }

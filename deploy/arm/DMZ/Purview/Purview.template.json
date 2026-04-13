@@ -7,6 +7,39 @@
         },
         "location": {
             "type": "String"
+        },
+        "eventHubSubscriptionId": {
+            "type": "String",
+            "metadata": {
+                "description": "Subscription ID where the Event Hub namespace resides."
+            }
+        },
+        "eventHubResourceGroup": {
+            "type": "String",
+            "metadata": {
+                "description": "Resource group name for the Event Hub namespace."
+            }
+        },
+        "eventHubNamespaceName": {
+            "type": "String",
+            "defaultValue": "dmz-eventhub-dev",
+            "metadata": {
+                "description": "Name of the Event Hub namespace."
+            }
+        },
+        "notificationEventHubName": {
+            "type": "String",
+            "defaultValue": "dms-purview-eh-dev",
+            "metadata": {
+                "description": "Name of the notification Event Hub."
+            }
+        },
+        "hookEventHubName": {
+            "type": "String",
+            "defaultValue": "dmz-purview-hooks",
+            "metadata": {
+                "description": "Name of the hook Event Hub."
+            }
         }
     },
     "variables": {},
@@ -26,8 +59,8 @@
                 "type": "SystemAssigned"
             },
             "properties": {
-                "publicNetworkAccess": "Enabled",
-                "managedResourcesPublicNetworkAccess": "Enabled",
+                "publicNetworkAccess": "Disabled",
+                "managedResourcesPublicNetworkAccess": "Disabled",
                 "managedResourceGroupName": "[concat('managed-rg-',parameters('purviewAccountName'))]"
             }
         },
@@ -51,7 +84,7 @@
                             "apiVersion": "2018-09-01-preview",
                             "name": "c9b01336-34d2-4de9-92d2-b167c6d8b049",
                             "type": "Microsoft.Authorization/roleAssignments",
-                            "scope": "/subscriptions/02cd7474-626e-4aa4-b21f-4856bdb92779/resourceGroups/dmz-cloudscale-dev/providers/Microsoft.EventHub/namespaces/dmz-eventhub-dev/eventhubs/dms-purview-eh-dev",
+                            "scope": "[concat('/subscriptions/', parameters('eventHubSubscriptionId'), '/resourceGroups/', parameters('eventHubResourceGroup'), '/providers/Microsoft.EventHub/namespaces/', parameters('eventHubNamespaceName'), '/eventhubs/', parameters('notificationEventHubName'))]",
                             "properties": {
                                 "principalId": "[reference(parameters('purviewAccountName'), '2021-07-01', 'Full').identity.principalId]",
                                 "principalType": "ServicePrincipal",
@@ -63,8 +96,8 @@
                 }
             },
             "resources": [],
-            "subscriptionId": "02cd7474-626e-4aa4-b21f-4856bdb92779",
-            "resourceGroup": "dmz-cloudscale-dev"
+            "subscriptionId": "[parameters('eventHubSubscriptionId')]",
+            "resourceGroup": "[parameters('eventHubResourceGroup')]"
         },
         {
             "type": "Microsoft.Purview/accounts/kafkaConfigurations",
@@ -77,7 +110,7 @@
                 "credentials": {
                     "type": "SystemAssigned"
                 },
-                "eventHubResourceId": "/subscriptions/02cd7474-626e-4aa4-b21f-4856bdb92779/resourceGroups/dmz-cloudscale-dev/providers/Microsoft.EventHub/namespaces/dmz-eventhub-dev/eventhubs/dms-purview-eh-dev",
+                "eventHubResourceId": "[concat('/subscriptions/', parameters('eventHubSubscriptionId'), '/resourceGroups/', parameters('eventHubResourceGroup'), '/providers/Microsoft.EventHub/namespaces/', parameters('eventHubNamespaceName'), '/eventhubs/', parameters('notificationEventHubName'))]",
                 "eventHubType": "Notification",
                 "eventStreamingState": "Enabled",
                 "eventStreamingType": "Azure"
@@ -103,7 +136,7 @@
                             "apiVersion": "2018-09-01-preview",
                             "name": "c9b01336-34d2-4de9-92d2-b167c6d8b04a",
                             "type": "Microsoft.Authorization/roleAssignments",
-                            "scope": "/subscriptions/02cd7474-626e-4aa4-b21f-4856bdb92779/resourceGroups/dmz-cloudscale-dev/providers/Microsoft.EventHub/namespaces/dmz-eventhub-dev/eventhubs/dmz-purview-hooks",
+                            "scope": "[concat('/subscriptions/', parameters('eventHubSubscriptionId'), '/resourceGroups/', parameters('eventHubResourceGroup'), '/providers/Microsoft.EventHub/namespaces/', parameters('eventHubNamespaceName'), '/eventhubs/', parameters('hookEventHubName'))]",
                             "properties": {
                                 "principalId": "[reference(parameters('purviewAccountName'), '2021-07-01', 'Full').identity.principalId]",
                                 "principalType": "ServicePrincipal",
@@ -115,8 +148,8 @@
                 }
             },
             "resources": [],
-            "subscriptionId": "02cd7474-626e-4aa4-b21f-4856bdb92779",
-            "resourceGroup": "dmz-cloudscale-dev"
+            "subscriptionId": "[parameters('eventHubSubscriptionId')]",
+            "resourceGroup": "[parameters('eventHubResourceGroup')]"
         },
         {
             "type": "Microsoft.Purview/accounts/kafkaConfigurations",
@@ -129,7 +162,7 @@
                 "credentials": {
                     "type": "SystemAssigned"
                 },
-                "eventHubResourceId": "/subscriptions/02cd7474-626e-4aa4-b21f-4856bdb92779/resourceGroups/dmz-cloudscale-dev/providers/Microsoft.EventHub/namespaces/dmz-eventhub-dev/eventhubs/dmz-purview-hooks",
+                "eventHubResourceId": "[concat('/subscriptions/', parameters('eventHubSubscriptionId'), '/resourceGroups/', parameters('eventHubResourceGroup'), '/providers/Microsoft.EventHub/namespaces/', parameters('eventHubNamespaceName'), '/eventhubs/', parameters('hookEventHubName'))]",
                 "eventHubType": "Hook",
                 "eventStreamingState": "Enabled",
                 "eventStreamingType": "Azure",

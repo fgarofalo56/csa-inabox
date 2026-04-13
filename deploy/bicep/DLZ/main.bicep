@@ -104,6 +104,22 @@ param parFunctions object = {}
 @description('Stream Analytics job parameters')
 param parStreamAnalytics object = {}
 
+// Application Insights parameters
+@description('Application Insights parameters')
+param parAppInsights object = {}
+
+// Storage (generic) parameters
+@description('Generic storage account parameters (separate from lake zones)')
+param parGenericStorage object = {}
+
+// Self-Hosted Integration Runtime parameters
+@description('Self-Hosted Integration Runtime VM Scale Set parameters')
+param parSelfHostedIR object = {}
+
+// Private Endpoints parameters
+@description('Private Endpoints configuration parameters')
+param parPrivateEndpoints object = {}
+
 // Log Analytics Workspace ID for diagnostics
 @description('Resource ID of the Log Analytics workspace for diagnostics across all services')
 param logAnalyticsWorkspaceId string = ''
@@ -188,9 +204,6 @@ module cosmosdb 'modules/cosmos/cosmosdb.bicep' = if (bool(deployModules.cosmosD
     cosmosdbresourcegroup
   ]
 }
-
-output cosmosDbAccountId string = cosmosdb.outputs.cosmosDbAccountId
-output defaultDatabaseId string = cosmosdb.outputs.defaultDatabaseId
 
 // Storage Resources:
 module storageResourceGroup 'modules/resourceGroup/resourceGroup.bicep' = if (bool(deployModules.storageZones)) {
@@ -307,6 +320,10 @@ module databricksWorkspace 'modules/databricks/databricks.bicep' = if (contains(
     privateSubnetName: contains(parDatabricks, 'privateSubnetName') ? parDatabricks.privateSubnetName : 'databricks-private'
     privateEndpointSubnets: contains(parDatabricks, 'privateEndpointSubnets') ? parDatabricks.privateEndpointSubnets : []
     privateDnsZoneId: contains(parDatabricks, 'privateDnsZoneId') ? parDatabricks.privateDnsZoneId : ''
+    parEnableCmk: contains(parDatabricks, 'enableCmk') ? parDatabricks.enableCmk : false
+    parCmkKeyVaultUri: contains(parDatabricks, 'cmkKeyVaultUri') ? parDatabricks.cmkKeyVaultUri : ''
+    parCmkKeyName: contains(parDatabricks, 'cmkKeyName') ? parDatabricks.cmkKeyName : ''
+    parCmkKeyVersion: contains(parDatabricks, 'cmkKeyVersion') ? parDatabricks.cmkKeyVersion : ''
     logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
   }
   dependsOn: [
@@ -336,6 +353,11 @@ module dataFactory 'modules/datafactory/datafactory.bicep' = if (contains(deploy
     privateEndpointSubnets: contains(parDataFactory, 'privateEndpointSubnets') ? parDataFactory.privateEndpointSubnets : []
     privateDnsZoneIdDataFactory: contains(parDataFactory, 'privateDnsZoneIdDataFactory') ? parDataFactory.privateDnsZoneIdDataFactory : ''
     privateDnsZoneIdPortal: contains(parDataFactory, 'privateDnsZoneIdPortal') ? parDataFactory.privateDnsZoneIdPortal : ''
+    parEnableCmk: contains(parDataFactory, 'enableCmk') ? parDataFactory.enableCmk : false
+    parCmkKeyVaultUri: contains(parDataFactory, 'cmkKeyVaultUri') ? parDataFactory.cmkKeyVaultUri : ''
+    parCmkKeyName: contains(parDataFactory, 'cmkKeyName') ? parDataFactory.cmkKeyName : ''
+    parCmkKeyVersion: contains(parDataFactory, 'cmkKeyVersion') ? parDataFactory.cmkKeyVersion : ''
+    parCmkIdentityId: contains(parDataFactory, 'cmkIdentityId') ? parDataFactory.cmkIdentityId : ''
     logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
   }
   dependsOn: [
@@ -365,6 +387,11 @@ module eventHubs 'modules/eventhubs/eventhubs.bicep' = if (contains(deployModule
     eventHubs: contains(parEventHubs, 'eventHubs') ? parEventHubs.eventHubs : []
     privateEndpointSubnets: contains(parEventHubs, 'privateEndpointSubnets') ? parEventHubs.privateEndpointSubnets : []
     privateDnsZoneId: contains(parEventHubs, 'privateDnsZoneId') ? parEventHubs.privateDnsZoneId : ''
+    parEnableCmk: contains(parEventHubs, 'enableCmk') ? parEventHubs.enableCmk : false
+    parCmkKeyVaultUri: contains(parEventHubs, 'cmkKeyVaultUri') ? parEventHubs.cmkKeyVaultUri : ''
+    parCmkKeyName: contains(parEventHubs, 'cmkKeyName') ? parEventHubs.cmkKeyName : ''
+    parCmkKeyVersion: contains(parEventHubs, 'cmkKeyVersion') ? parEventHubs.cmkKeyVersion : ''
+    parCmkIdentityId: contains(parEventHubs, 'cmkIdentityId') ? parEventHubs.cmkIdentityId : ''
     logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
   }
   dependsOn: [
@@ -395,6 +422,11 @@ module dataExplorer 'modules/dataexplorer/dataexplorer.bicep' = if (contains(dep
     databases: contains(parDataExplorer, 'databases') ? parDataExplorer.databases : []
     privateEndpointSubnets: contains(parDataExplorer, 'privateEndpointSubnets') ? parDataExplorer.privateEndpointSubnets : []
     privateDnsZoneId: contains(parDataExplorer, 'privateDnsZoneId') ? parDataExplorer.privateDnsZoneId : ''
+    parEnableCmk: contains(parDataExplorer, 'enableCmk') ? parDataExplorer.enableCmk : false
+    parCmkKeyVaultUri: contains(parDataExplorer, 'cmkKeyVaultUri') ? parDataExplorer.cmkKeyVaultUri : ''
+    parCmkKeyName: contains(parDataExplorer, 'cmkKeyName') ? parDataExplorer.cmkKeyName : ''
+    parCmkKeyVersion: contains(parDataExplorer, 'cmkKeyVersion') ? parDataExplorer.cmkKeyVersion : ''
+    parCmkIdentityId: contains(parDataExplorer, 'cmkIdentityId') ? parDataExplorer.cmkIdentityId : ''
     logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
   }
   dependsOn: [
@@ -424,10 +456,191 @@ module machineLearning 'modules/machinelearning/machinelearning.bicep' = if (con
     keyVaultId: contains(parMachineLearning, 'keyVaultId') ? parMachineLearning.keyVaultId : ''
     applicationInsightsId: contains(parMachineLearning, 'applicationInsightsId') ? parMachineLearning.applicationInsightsId : ''
     privateEndpointSubnets: contains(parMachineLearning, 'privateEndpointSubnets') ? parMachineLearning.privateEndpointSubnets : []
+    parEnableCmk: contains(parMachineLearning, 'enableCmk') ? parMachineLearning.enableCmk : false
+    parCmkKeyVaultId: contains(parMachineLearning, 'cmkKeyVaultId') ? parMachineLearning.cmkKeyVaultId : ''
+    parCmkKeyIdentifier: contains(parMachineLearning, 'cmkKeyIdentifier') ? parMachineLearning.cmkKeyIdentifier : ''
+    parCmkIdentityId: contains(parMachineLearning, 'cmkIdentityId') ? parMachineLearning.cmkIdentityId : ''
     logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
   }
   dependsOn: [
     mlResourceGroup
+  ]
+}
+
+// Deploy Application Insights
+module appInsightsResourceGroup 'modules/resourceGroup/resourceGroup.bicep' = if (contains(deployModules, 'appInsights') && bool(deployModules.appInsights)) {
+  name: 'rg-${basename}-monitoring-${parLocationShort}'
+  scope: subscription()
+  params: {
+    parLocation: location
+    parResourceGroupName: 'rg-${basename}-monitoring-${parLocationShort}'
+    parTags: tagsDefault
+  }
+}
+
+module appInsights 'modules/monitoring/appinsights.bicep' = if (contains(deployModules, 'appInsights') && bool(deployModules.appInsights)) {
+  name: 'appInsights'
+  scope: resourceGroup('rg-${basename}-monitoring-${parLocationShort}')
+  params: {
+    appInsightsName: contains(parAppInsights, 'appInsightsName') ? parAppInsights.appInsightsName : '${basename}-appi'
+    location: location
+    tags: tagsDefault
+    logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
+    applicationType: contains(parAppInsights, 'applicationType') ? parAppInsights.applicationType : 'web'
+    disableLocalAuth: contains(parAppInsights, 'disableLocalAuth') ? parAppInsights.disableLocalAuth : true
+  }
+  dependsOn: [
+    appInsightsResourceGroup
+  ]
+}
+
+// Deploy Azure Functions
+module functionsResourceGroup 'modules/resourceGroup/resourceGroup.bicep' = if (contains(deployModules, 'functions') && bool(deployModules.functions)) {
+  name: 'rg-${basename}-functions-${parLocationShort}'
+  scope: subscription()
+  params: {
+    parLocation: location
+    parResourceGroupName: 'rg-${basename}-functions-${parLocationShort}'
+    parTags: tagsDefault
+  }
+}
+
+module functions 'modules/functions/functions.bicep' = if (contains(deployModules, 'functions') && bool(deployModules.functions)) {
+  name: 'functions'
+  scope: resourceGroup('rg-${basename}-functions-${parLocationShort}')
+  params: {
+    functionAppName: contains(parFunctions, 'functionAppName') ? parFunctions.functionAppName : '${basename}-func'
+    location: location
+    tags: tagsDefault
+    runtime: contains(parFunctions, 'runtime') ? parFunctions.runtime : 'python'
+    runtimeVersion: contains(parFunctions, 'runtimeVersion') ? parFunctions.runtimeVersion : '3.11'
+    planSku: contains(parFunctions, 'planSku') ? parFunctions.planSku : 'EP1'
+    storageAccountId: contains(parFunctions, 'storageAccountId') ? parFunctions.storageAccountId : (contains(deployModules, 'storageZones') && bool(deployModules.storageZones) ? storageServices.outputs.storageRawId : '')
+    storageAccountName: contains(parFunctions, 'storageAccountName') ? parFunctions.storageAccountName : ''
+    applicationInsightsId: contains(parFunctions, 'applicationInsightsId') ? parFunctions.applicationInsightsId : (contains(deployModules, 'appInsights') && bool(deployModules.appInsights) ? appInsights.outputs.appInsightsId : '')
+    applicationInsightsConnectionString: contains(parFunctions, 'applicationInsightsConnectionString') ? parFunctions.applicationInsightsConnectionString : ''
+    enableVnetIntegration: contains(parFunctions, 'enableVnetIntegration') ? parFunctions.enableVnetIntegration : false
+    vnetIntegrationSubnetId: contains(parFunctions, 'vnetIntegrationSubnetId') ? parFunctions.vnetIntegrationSubnetId : ''
+    privateEndpointSubnets: contains(parFunctions, 'privateEndpointSubnets') ? parFunctions.privateEndpointSubnets : []
+    privateDnsZoneId: contains(parFunctions, 'privateDnsZoneId') ? parFunctions.privateDnsZoneId : ''
+    logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
+    enableResourceLock: contains(parFunctions, 'enableResourceLock') ? parFunctions.enableResourceLock : true
+  }
+  dependsOn: [
+    functionsResourceGroup
+  ]
+}
+
+// Deploy Stream Analytics
+module streamAnalyticsResourceGroup 'modules/resourceGroup/resourceGroup.bicep' = if (contains(deployModules, 'streamAnalytics') && bool(deployModules.streamAnalytics)) {
+  name: 'rg-${basename}-asa-${parLocationShort}'
+  scope: subscription()
+  params: {
+    parLocation: location
+    parResourceGroupName: 'rg-${basename}-asa-${parLocationShort}'
+    parTags: tagsDefault
+  }
+}
+
+module streamAnalytics 'modules/streamanalytics/streamanalytics.bicep' = if (contains(deployModules, 'streamAnalytics') && bool(deployModules.streamAnalytics)) {
+  name: 'streamAnalytics'
+  scope: resourceGroup('rg-${basename}-asa-${parLocationShort}')
+  params: {
+    jobName: contains(parStreamAnalytics, 'jobName') ? parStreamAnalytics.jobName : '${basename}-asa'
+    location: location
+    tags: tagsDefault
+    sku: contains(parStreamAnalytics, 'sku') ? parStreamAnalytics.sku : 'Standard'
+    streamingUnits: contains(parStreamAnalytics, 'streamingUnits') ? parStreamAnalytics.streamingUnits : 3
+    compatibilityLevel: contains(parStreamAnalytics, 'compatibilityLevel') ? parStreamAnalytics.compatibilityLevel : '1.2'
+    contentStoragePolicy: contains(parStreamAnalytics, 'contentStoragePolicy') ? parStreamAnalytics.contentStoragePolicy : 'SystemAccount'
+    logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
+  }
+  dependsOn: [
+    streamAnalyticsResourceGroup
+  ]
+}
+
+// Deploy Generic Storage Account (separate from lake zones)
+module genericStorageResourceGroup 'modules/resourceGroup/resourceGroup.bicep' = if (contains(deployModules, 'genericStorage') && bool(deployModules.genericStorage)) {
+  name: 'rg-${basename}-genericstorage-${parLocationShort}'
+  scope: subscription()
+  params: {
+    parLocation: location
+    parResourceGroupName: 'rg-${basename}-genericstorage-${parLocationShort}'
+    parTags: tagsDefault
+  }
+}
+
+module genericStorage 'modules/storage/storage.bicep' = if (contains(deployModules, 'genericStorage') && bool(deployModules.genericStorage)) {
+  name: 'genericStorage'
+  scope: resourceGroup('rg-${basename}-genericstorage-${parLocationShort}')
+  params: {
+    location: location
+    tags: tagsDefault
+    storageName: contains(parGenericStorage, 'storageName') ? parGenericStorage.storageName : '${basename}gen'
+    privateEndpointSubnets: contains(parGenericStorage, 'privateEndpointSubnets') ? parGenericStorage.privateEndpointSubnets : []
+    privateDNSZones: privateDNSZones
+    fileSystemNames: contains(parGenericStorage, 'fileSystemNames') ? parGenericStorage.fileSystemNames : []
+    storageSku: contains(parGenericStorage, 'storageSku') ? parGenericStorage.storageSku : ''
+    enableResourceLock: contains(parGenericStorage, 'enableResourceLock') ? parGenericStorage.enableResourceLock : true
+    logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
+    parEnableCmk: contains(parGenericStorage, 'enableCmk') ? parGenericStorage.enableCmk : false
+    parCmkKeyVaultUri: contains(parGenericStorage, 'cmkKeyVaultUri') ? parGenericStorage.cmkKeyVaultUri : ''
+    parCmkKeyName: contains(parGenericStorage, 'cmkKeyName') ? parGenericStorage.cmkKeyName : ''
+    parCmkKeyVersion: contains(parGenericStorage, 'cmkKeyVersion') ? parGenericStorage.cmkKeyVersion : ''
+    parCmkIdentityId: contains(parGenericStorage, 'cmkIdentityId') ? parGenericStorage.cmkIdentityId : ''
+  }
+  dependsOn: [
+    genericStorageResourceGroup
+  ]
+}
+
+// Deploy Private Endpoints (demonstration: wire for generic storage blob)
+module privateEndpoints 'modules/network/privatelink.bicep' = if (contains(deployModules, 'privateEndpoints') && bool(deployModules.privateEndpoints) && contains(deployModules, 'genericStorage') && bool(deployModules.genericStorage)) {
+  name: 'privateEndpoints'
+  scope: resourceGroup('rg-${basename}-genericstorage-${parLocationShort}')
+  params: {
+    serviceId: genericStorage.outputs.storageId
+    serviceSubResource: contains(parPrivateEndpoints, 'serviceSubResource') ? parPrivateEndpoints.serviceSubResource : 'blob'
+    tags: tagsDefault
+    privateEndpointSubnets: contains(parPrivateEndpoints, 'privateEndpointSubnets') ? parPrivateEndpoints.privateEndpointSubnets : []
+    privateDNSZones: privateDNSZones
+    serviceName: contains(parPrivateEndpoints, 'serviceName') ? parPrivateEndpoints.serviceName : '${basename}-gen-pe'
+  }
+  dependsOn: [
+    genericStorage
+  ]
+}
+
+// Deploy Self-Hosted Integration Runtime (VMSS for ADF)
+// Set deployModules.selfHostedIR = true in params to activate.
+module shirResourceGroup 'modules/resourceGroup/resourceGroup.bicep' = if (contains(deployModules, 'selfHostedIR') && bool(deployModules.selfHostedIR)) {
+  name: 'rg-${basename}-shir-${parLocationShort}'
+  scope: subscription()
+  params: {
+    parLocation: location
+    parResourceGroupName: 'rg-${basename}-shir-${parLocationShort}'
+    parTags: tagsDefault
+  }
+}
+
+module selfHostedIR 'modules/vms/selfHostedIntegrationRuntime.bicep' = if (contains(deployModules, 'selfHostedIR') && bool(deployModules.selfHostedIR)) {
+  name: 'selfHostedIR'
+  scope: resourceGroup('rg-${basename}-shir-${parLocationShort}')
+  params: {
+    location: location
+    tags: tagsDefault
+    subnetId: contains(parSelfHostedIR, 'subnetId') ? parSelfHostedIR.subnetId : ''
+    vmssName: contains(parSelfHostedIR, 'vmssName') ? parSelfHostedIR.vmssName : '${basename}-shir'
+    vmssSkuName: contains(parSelfHostedIR, 'vmssSkuName') ? parSelfHostedIR.vmssSkuName : 'Standard_DS2_v2'
+    vmssSkuTier: contains(parSelfHostedIR, 'vmssSkuTier') ? parSelfHostedIR.vmssSkuTier : 'Standard'
+    vmssSkuCapacity: contains(parSelfHostedIR, 'vmssSkuCapacity') ? parSelfHostedIR.vmssSkuCapacity : 1
+    administratorUsername: contains(parSelfHostedIR, 'administratorUsername') ? parSelfHostedIR.administratorUsername : 'VmssMainUser'
+    administratorPassword: parSelfHostedIR.administratorPassword
+    datafactoryIntegrationRuntimeAuthKey: parSelfHostedIR.datafactoryIntegrationRuntimeAuthKey
+  }
+  dependsOn: [
+    shirResourceGroup
   ]
 }
 
@@ -444,7 +657,7 @@ module roleAdfToStorage '../shared/modules/roleAssignment.bicep' = if (contains(
   params: {
     principalId: dataFactory.outputs.managedIdentityPrincipalId
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
-    description: 'ADF managed identity → Storage Blob Data Contributor on lake storage'
+    roleDescription: 'ADF managed identity → Storage Blob Data Contributor on lake storage'
   }
   dependsOn: [
     dataFactory
@@ -459,7 +672,7 @@ module roleAdfToExternalStorage '../shared/modules/roleAssignment.bicep' = if (c
   params: {
     principalId: dataFactory.outputs.managedIdentityPrincipalId
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
-    description: 'ADF managed identity → Storage Blob Data Contributor on external storage'
+    roleDescription: 'ADF managed identity → Storage Blob Data Contributor on external storage'
   }
   dependsOn: [
     dataFactory
@@ -474,7 +687,7 @@ module roleSynapseToStorage '../shared/modules/roleAssignment.bicep' = if (conta
   params: {
     principalId: synapseWorkspace.outputs.managedIdentityPrincipalId
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
-    description: 'Synapse managed identity → Storage Blob Data Contributor on lake storage'
+    roleDescription: 'Synapse managed identity → Storage Blob Data Contributor on lake storage'
   }
   dependsOn: [
     synapseWorkspace
@@ -489,7 +702,7 @@ module roleDatabricksToStorage '../shared/modules/roleAssignment.bicep' = if (co
   params: {
     principalId: databricksWorkspace.outputs.managedIdentityPrincipalId
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
-    description: 'Databricks managed identity → Storage Blob Data Contributor on lake storage'
+    roleDescription: 'Databricks managed identity → Storage Blob Data Contributor on lake storage'
   }
   dependsOn: [
     databricksWorkspace
@@ -504,7 +717,7 @@ module roleAdxToStorage '../shared/modules/roleAssignment.bicep' = if (contains(
   params: {
     principalId: dataExplorer.outputs.managedIdentityPrincipalId
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1')
-    description: 'Data Explorer managed identity → Storage Blob Data Reader on lake storage'
+    roleDescription: 'Data Explorer managed identity → Storage Blob Data Reader on lake storage'
   }
   dependsOn: [
     dataExplorer
@@ -519,7 +732,7 @@ module roleAdfToEventHubs '../shared/modules/roleAssignment.bicep' = if (contain
   params: {
     principalId: dataFactory.outputs.managedIdentityPrincipalId
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '2b629674-e913-4c01-ae53-ef4638d8f975')
-    description: 'ADF managed identity → Event Hubs Data Sender'
+    roleDescription: 'ADF managed identity → Event Hubs Data Sender'
   }
   dependsOn: [
     dataFactory
@@ -534,7 +747,7 @@ module roleAdxToEventHubs '../shared/modules/roleAssignment.bicep' = if (contain
   params: {
     principalId: dataExplorer.outputs.managedIdentityPrincipalId
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'a638d3c7-ab3a-418d-83e6-5f17a39d4fde')
-    description: 'Data Explorer managed identity → Event Hubs Data Receiver'
+    roleDescription: 'Data Explorer managed identity → Event Hubs Data Receiver'
   }
   dependsOn: [
     dataExplorer
@@ -555,3 +768,8 @@ output dataFactoryManagedIdentityPrincipalId string = contains(deployModules, 'd
 output eventHubsNamespaceId string = contains(deployModules, 'eventHubs') && bool(deployModules.eventHubs) ? eventHubs.outputs.namespaceId : ''
 output dataExplorerId string = contains(deployModules, 'dataExplorer') && bool(deployModules.dataExplorer) ? dataExplorer.outputs.clusterId : ''
 output machineLearningId string = contains(deployModules, 'machineLearning') && bool(deployModules.machineLearning) ? machineLearning.outputs.workspaceId : ''
+output appInsightsId string = contains(deployModules, 'appInsights') && bool(deployModules.appInsights) ? appInsights.outputs.appInsightsId : ''
+output functionsAppId string = contains(deployModules, 'functions') && bool(deployModules.functions) ? functions.outputs.functionAppId : ''
+output functionsManagedIdentityPrincipalId string = contains(deployModules, 'functions') && bool(deployModules.functions) ? functions.outputs.managedIdentityPrincipalId : ''
+output streamAnalyticsJobId string = contains(deployModules, 'streamAnalytics') && bool(deployModules.streamAnalytics) ? streamAnalytics.outputs.jobId : ''
+output genericStorageId string = contains(deployModules, 'genericStorage') && bool(deployModules.genericStorage) ? genericStorage.outputs.storageId : ''

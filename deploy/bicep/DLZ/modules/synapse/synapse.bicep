@@ -102,46 +102,6 @@ resource synapseSqlPool001 'Microsoft.Synapse/workspaces/sqlPools@2021-06-01' = 
   }
 }
 
-// resource synapseBigDataPool001 'Microsoft.Synapse/workspaces/bigDataPools@2021-06-01' = {  // Uncomment if you want to deploy a Synapse SQL Pool as part of your Data Landing Zone inside the shared product resource group
-//   parent: synapse
-//   name: 'bigDataPool001'
-//   location: location
-//   tags: tags
-//   properties: {
-//     autoPause: {
-//       enabled: true
-//       delayInMinutes: 15
-//     }
-//     autoScale: {
-//       enabled: true
-//       minNodeCount: 3
-//       maxNodeCount: 10
-//     }
-//     // cacheSize: 100  // Uncomment to set a specific cache size
-//     customLibraries: []
-//     defaultSparkLogFolder: 'logs/'
-//     dynamicExecutorAllocation: {
-//       enabled: true
-//       minExecutors: 1
-//       maxExecutors: 9
-//     }
-//     // isComputeIsolationEnabled: true  // Uncomment to enable compute isolation (only available in selective regions)
-//     // libraryRequirements: {  // Uncomment to install pip dependencies on the Spark cluster
-//     //   content: ''
-//     //   filename: 'requirements.txt'
-//     // }
-//     nodeSize: 'Small'
-//     nodeSizeFamily: 'MemoryOptimized'
-//     sessionLevelPackagesEnabled: true
-//     // sparkConfigProperties: {  // Uncomment to set spark conf on the Spark cluster
-//     //   content: ''
-//     //   filename: 'spark.conf'
-//     // }
-//     sparkEventsFolder: 'events/'
-//     sparkVersion: '3.1'
-//   }
-// }
-
 resource synapseManagedIdentitySqlControlSettings 'Microsoft.Synapse/workspaces/managedIdentitySqlControlSettings@2021-06-01' = {
   parent: synapse
   name: 'default'

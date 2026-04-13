@@ -148,7 +148,11 @@
                         "vNetLocation": "eastus"
                     }
                 ],
-                "privateDnsZoneId": "<DATABRICKS_PRIVATE_DNS_ZONE_ID>"
+                "privateDnsZoneId": "<DATABRICKS_PRIVATE_DNS_ZONE_ID>",
+                "enableCmk": true,
+                "cmkKeyVaultUri": "<KEY_VAULT_URI>",
+                "cmkKeyName": "<CMK_KEY_NAME>",
+                "cmkKeyVersion": ""
             }
         },
         "parDataFactory": {
@@ -165,7 +169,12 @@
                     }
                 ],
                 "privateDnsZoneIdDataFactory": "<ADF_PRIVATE_DNS_ZONE_ID>",
-                "privateDnsZoneIdPortal": "<ADF_PORTAL_PRIVATE_DNS_ZONE_ID>"
+                "privateDnsZoneIdPortal": "<ADF_PORTAL_PRIVATE_DNS_ZONE_ID>",
+                "enableCmk": true,
+                "cmkKeyVaultUri": "<KEY_VAULT_URI>",
+                "cmkKeyName": "<CMK_KEY_NAME>",
+                "cmkKeyVersion": "",
+                "cmkIdentityId": "<USER_ASSIGNED_IDENTITY_RESOURCE_ID>"
             }
         },
         "parEventHubs": {
@@ -193,7 +202,12 @@
                         "vNetLocation": "eastus"
                     }
                 ],
-                "privateDnsZoneId": "<EVENTHUB_PRIVATE_DNS_ZONE_ID>"
+                "privateDnsZoneId": "<EVENTHUB_PRIVATE_DNS_ZONE_ID>",
+                "enableCmk": true,
+                "cmkKeyVaultUri": "<KEY_VAULT_URI>",
+                "cmkKeyName": "<CMK_KEY_NAME>",
+                "cmkKeyVersion": "",
+                "cmkIdentityId": "<USER_ASSIGNED_IDENTITY_RESOURCE_ID>"
             }
         },
         "parMachineLearning": {
@@ -210,7 +224,11 @@
                         "subnetName": "snet-private-endpoints",
                         "vNetLocation": "eastus"
                     }
-                ]
+                ],
+                "enableCmk": true,
+                "cmkKeyVaultId": "<KEY_VAULT_RESOURCE_ID>",
+                "cmkKeyIdentifier": "<FULL_KEY_IDENTIFIER_URI>",
+                "cmkIdentityId": "<USER_ASSIGNED_IDENTITY_RESOURCE_ID>"
             }
         },
         "parDataExplorer": {
@@ -239,7 +257,12 @@
                         "vNetLocation": "eastus"
                     }
                 ],
-                "privateDnsZoneId": "<ADX_PRIVATE_DNS_ZONE_ID>"
+                "privateDnsZoneId": "<ADX_PRIVATE_DNS_ZONE_ID>",
+                "enableCmk": true,
+                "cmkKeyVaultUri": "<KEY_VAULT_URI>",
+                "cmkKeyName": "<CMK_KEY_NAME>",
+                "cmkKeyVersion": "",
+                "cmkIdentityId": "<USER_ASSIGNED_IDENTITY_RESOURCE_ID>"
             }
         },
         "parStreamAnalytics": {

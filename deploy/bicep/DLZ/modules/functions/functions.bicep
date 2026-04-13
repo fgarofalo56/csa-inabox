@@ -62,6 +62,15 @@ param privateDnsZoneId string = ''
 @description('Resource ID of the Log Analytics workspace for diagnostics.')
 param logAnalyticsWorkspaceId string = ''
 
+@description('Attach a CanNotDelete resource lock to the Function App. Default true for production safety.')
+param enableResourceLock bool = true
+
+// NOTE: Azure Functions CMK encryption is inherited from the underlying
+// storage account (storageAccountId parameter). To enable CMK for Functions:
+// 1. Deploy the storage account with CMK enabled (see storage.bicep parEnableCmk)
+// 2. The Function App will automatically use the CMK-encrypted storage
+// No additional CMK configuration is needed on the Function App resource itself.
+
 // Variables
 var appServicePlanName = '${functionAppName}-plan'
 var isConsumption = planSku == 'Y1'
@@ -100,11 +109,11 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
       ftpsState: 'Disabled'
       minTlsVersion: '1.2'
       appSettings: [
-        { name: 'AzureWebJobsStorage__accountName'; value: storageAccountName }
-        { name: 'FUNCTIONS_EXTENSION_VERSION'; value: '~4' }
-        { name: 'FUNCTIONS_WORKER_RUNTIME'; value: runtime }
-        { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'; value: applicationInsightsConnectionString }
-        { name: 'AzureWebJobsFeatureFlags'; value: 'EnableWorkerIndexing' }
+        { name: 'AzureWebJobsStorage__accountName', value: storageAccountName }
+        { name: 'FUNCTIONS_EXTENSION_VERSION', value: '~4' }
+        { name: 'FUNCTIONS_WORKER_RUNTIME', value: runtime }
+        { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: applicationInsightsConnectionString }
+        { name: 'AzureWebJobsFeatureFlags', value: 'EnableWorkerIndexing' }
       ]
     }
   }
@@ -165,16 +174,25 @@ resource functionDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-p
   properties: {
     workspaceId: logAnalyticsWorkspaceId
     logs: [
-      { category: 'FunctionAppLogs'; enabled: true }
+      { category: 'FunctionAppLogs', enabled: true }
     ]
     metrics: [
-      { category: 'AllMetrics'; enabled: true }
+      { category: 'AllMetrics', enabled: true }
     ]
   }
 }
 
+// Resource lock — protects the Function App from accidental deletion.
+resource functionLock 'Microsoft.Authorization/locks@2020-05-01' = if (enableResourceLock) {
+  scope: functionApp
+  name: '${functionAppName}-no-delete'
+  properties: {
+    level: 'CanNotDelete'
+    notes: 'CSA-in-a-Box: Function App. Remove lock before deleting.'
+  }
+}
+
 // Outputs
-@description('Resource ID of the Function App.')
 output functionAppId string = functionApp.id
 
 @description('Name of the Function App.')

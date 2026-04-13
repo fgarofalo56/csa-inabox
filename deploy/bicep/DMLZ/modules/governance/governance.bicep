@@ -45,22 +45,6 @@ var varPurview001Name = toLower(substring(
 var varPurviewTags = union(defaultTags, parGovernance.purviewTags)
 
 // Resources
-// module purview001 '../Purview/purview.bicep' = {
-//   name: 'purview001'
-//   scope: resourceGroup()
-//   params: {
-//     location: location
-//     tags: tags
-//     subnetId: subnetId
-//     purviewName: purview001Name
-//     privateDnsZoneIdPurview: privateDnsZoneIdPurview
-//     privateDnsZoneIdPurviewPortal: privateDnsZoneIdPurviewPortal
-//     privateDnsZoneIdStorageBlob: privateDnsZoneIdStorageBlob
-//     privateDnsZoneIdStorageQueue: privateDnsZoneIdStorageQueue
-//     privateDnsZoneIdEventhubNamespace: privateDnsZoneIdEventhubNamespace
-//   }
-// }
-
 //Deploy Purview
 module deployPurview '../Purview/purview.bicep' = if (bool(deployModules.governance)) {
   name: 'Deploy-${varPurview001Name}'
@@ -79,29 +63,3 @@ module deployPurview '../Purview/purview.bicep' = if (bool(deployModules.governa
     resourceGroup(governanceResourceGroup)
   ]
 }
-
-// module keyVault001 'services/keyvault.bicep' = {
-//   name: 'keyVault001'
-//   scope: resourceGroup()
-//   params: {
-//     location: location
-//     tags: tags
-//     subnetId: subnetId
-//     keyvaultName: keyvault001Name
-//     privateDnsZoneIdKeyVault: privateDnsZoneIdKeyVault
-//   }
-// }
-
-// module purviewKeyVaultRoleAssignment 'auxiliary/purviewRoleAssignmentKeyVault.bicep' = {
-//   name: 'purviewKeyVaultRoleAssignment'
-//   scope: resourceGroup()
-//   params: {
-//     purviewId: purview001.outputs.purviewId
-//     keyVaultId: keyVault001.outputs.keyvaultId
-//   }
-// }
-
-// // Outputs
-// output purviewId string = purview001.outputs.purviewId
-// output purviewManagedStorageId string = purview001.outputs.purviewManagedStorageId
-// output purviewManagedEventHubId string = purview001.outputs.purviewManagedEventHubId

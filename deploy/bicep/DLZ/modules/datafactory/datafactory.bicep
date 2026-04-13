@@ -34,8 +34,29 @@ param privateDnsZoneIdPortal string = ''
 @description('Resource ID of the Log Analytics workspace for diagnostics.')
 param logAnalyticsWorkspaceId string = ''
 
+@description('Attach a CanNotDelete resource lock to the Data Factory. Default true for production safety.')
+param enableResourceLock bool = true
+
 @description('Resource ID of an existing Key Vault for linked service secrets.')
 param keyVaultId string = ''
+
+@description('Enable Customer-Managed Key (CMK) encryption.  Default false for dev; set true for prod/compliance.')
+param parEnableCmk bool = false
+
+@description('Key Vault URI (e.g. https://myvault.vault.azure.net) when CMK is enabled.')
+param parCmkKeyVaultUri string = ''
+
+@description('Key name in the Key Vault for CMK encryption.')
+param parCmkKeyName string = ''
+
+@description('Key version.  Leave empty for automatic key rotation (recommended).')
+param parCmkKeyVersion string = ''
+
+@description('Resource ID of the user-assigned managed identity for CMK.  Created by cmkIdentity.bicep.')
+param parCmkIdentityId string = ''
+
+@description('Resource ID of a Microsoft Purview account for automatic lineage collection.  When set, ADF pushes lineage metadata to Purview on every pipeline run.')
+param purviewAccountId string = ''
 
 // Resources
 resource dataFactory 'Microsoft.DataFactory/factories@2018-06-01' = {
@@ -43,11 +64,25 @@ resource dataFactory 'Microsoft.DataFactory/factories@2018-06-01' = {
   location: location
   tags: tags
   identity: {
-    type: 'SystemAssigned'
+    type: parEnableCmk ? 'SystemAssigned,UserAssigned' : 'SystemAssigned'
+    userAssignedIdentities: parEnableCmk ? {
+      '${parCmkIdentityId}': {}
+    } : null
   }
   properties: {
     publicNetworkAccess: publicNetworkAccess
+    purviewConfiguration: !empty(purviewAccountId) ? {
+      purviewResourceId: purviewAccountId
+    } : null
     globalParameters: {}
+    encryption: parEnableCmk ? {
+      vaultBaseUrl: parCmkKeyVaultUri
+      keyName: parCmkKeyName
+      keyVersion: !empty(parCmkKeyVersion) ? parCmkKeyVersion : ''
+      identity: {
+        userAssignedIdentity: parCmkIdentityId
+      }
+    } : null
   }
 }
 
@@ -200,26 +235,35 @@ resource dataFactoryDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-0
   properties: {
     workspaceId: logAnalyticsWorkspaceId
     logs: [
-      { category: 'ActivityRuns'; enabled: true }
-      { category: 'PipelineRuns'; enabled: true }
-      { category: 'TriggerRuns'; enabled: true }
-      { category: 'SSISIntegrationRuntimeLogs'; enabled: true }
-      { category: 'SSISPackageEventMessageContext'; enabled: true }
-      { category: 'SSISPackageEventMessages'; enabled: true }
-      { category: 'SSISPackageExecutableStatistics'; enabled: true }
-      { category: 'SSISPackageExecutionComponentPhases'; enabled: true }
-      { category: 'SSISPackageExecutionDataStatistics'; enabled: true }
-      { category: 'SandboxActivityRuns'; enabled: true }
-      { category: 'SandboxPipelineRuns'; enabled: true }
+      { category: 'ActivityRuns', enabled: true }
+      { category: 'PipelineRuns', enabled: true }
+      { category: 'TriggerRuns', enabled: true }
+      { category: 'SSISIntegrationRuntimeLogs', enabled: true }
+      { category: 'SSISPackageEventMessageContext', enabled: true }
+      { category: 'SSISPackageEventMessages', enabled: true }
+      { category: 'SSISPackageExecutableStatistics', enabled: true }
+      { category: 'SSISPackageExecutionComponentPhases', enabled: true }
+      { category: 'SSISPackageExecutionDataStatistics', enabled: true }
+      { category: 'SandboxActivityRuns', enabled: true }
+      { category: 'SandboxPipelineRuns', enabled: true }
     ]
     metrics: [
-      { category: 'AllMetrics'; enabled: true }
+      { category: 'AllMetrics', enabled: true }
     ]
   }
 }
 
+// Resource lock — protects the Data Factory from accidental deletion.
+resource dataFactoryLock 'Microsoft.Authorization/locks@2020-05-01' = if (enableResourceLock) {
+  scope: dataFactory
+  name: '${factoryName}-no-delete'
+  properties: {
+    level: 'CanNotDelete'
+    notes: 'CSA-in-a-Box: Data Factory. Remove lock before deleting.'
+  }
+}
+
 // Outputs
-@description('Resource ID of the Data Factory.')
 output factoryId string = dataFactory.id
 
 @description('Name of the Data Factory.')

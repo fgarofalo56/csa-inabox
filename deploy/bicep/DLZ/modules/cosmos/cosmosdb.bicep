@@ -103,6 +103,9 @@ param virtualNetworkRules array = []
 @description('Tags for the Cosmos DB account')
 param tags object = {}
 
+@description('Enable zone redundancy for Cosmos DB locations. Default true for production resilience.')
+param enableZoneRedundancy bool = true
+
 @description('Attach a CanNotDelete resource lock to the Cosmos account. Default true for production safety.')
 param enableResourceLock bool = true
 
@@ -123,19 +126,19 @@ var cosmosLocations = empty(secondaryLocation)
       {
         locationName: parLocation
         failoverPriority: 0
-        isZoneRedundant: false
+        isZoneRedundant: enableZoneRedundancy
       }
     ]
   : [
       {
         locationName: parLocation
         failoverPriority: 0
-        isZoneRedundant: false
+        isZoneRedundant: enableZoneRedundancy
       }
       {
         locationName: secondaryLocation
         failoverPriority: 1
-        isZoneRedundant: false
+        isZoneRedundant: enableZoneRedundancy
       }
     ]
 

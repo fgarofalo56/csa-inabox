@@ -51,6 +51,13 @@ param contentStoragePolicy string = 'SystemAccount'
 @description('Resource ID of the Log Analytics workspace for diagnostics.')
 param logAnalyticsWorkspaceId string = ''
 
+// NOTE: Stream Analytics CMK is applied via a dedicated job storage account
+// rather than directly on the job resource. To enable CMK:
+// 1. Set contentStoragePolicy to 'JobStorageAccount'
+// 2. Provision a storage account with CMK enabled (see storage.bicep)
+// 3. Configure the job storage account connection post-deployment
+// The storage.bicep module already supports CMK — use that for the backing storage.
+
 // Resources
 resource streamAnalyticsJob 'Microsoft.StreamAnalytics/streamingjobs@2021-10-01-preview' = {
   name: jobName
@@ -87,11 +94,11 @@ resource streamAnalyticsDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-
   properties: {
     workspaceId: logAnalyticsWorkspaceId
     logs: [
-      { category: 'Execution'; enabled: true }
-      { category: 'Authoring'; enabled: true }
+      { category: 'Execution', enabled: true }
+      { category: 'Authoring', enabled: true }
     ]
     metrics: [
-      { category: 'AllMetrics'; enabled: true }
+      { category: 'AllMetrics', enabled: true }
     ]
   }
 }
