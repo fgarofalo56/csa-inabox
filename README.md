@@ -74,16 +74,33 @@ csa-inabox/
 |   +-- arm/                   # Legacy ARM templates (deprecated)
 |   +-- scripts/               # Deployment helper scripts
 |   +-- notebooks/             # Setup & config notebooks
-+-- domains/                   # Domain-specific configurations
++-- domains/                   # Domain-oriented data mesh
+|   +-- finance/               # Finance domain (aging reports, revenue reconciliation)
+|   +-- inventory/             # Inventory domain (turnover, reorder alerts, warehouses)
+|   +-- sales/                 # Sales domain (sales metrics, order analytics)
+|   +-- shared/                # Shared domain (customers, orders, products, CLV)
+|   +-- sharedServices/        # Azure Functions (AI enrichment, event processing)
 |   +-- dlz/                   # Data Landing Zone examples
-|   +-- sharedServices/        # Shared service configurations
 |   +-- spark/                 # Spark configurations & libraries
 +-- scripts/                   # Operations & management scripts
 |   +-- Azure IPs/            # Azure IP range management
 |   +-- Diagnostic Settings/  # Policy-based diagnostic settings
+|   +-- deploy/               # Deployment automation (ADF, cost estimation)
 |   +-- monitor/              # KQL queries & monitoring
+|   +-- purview/              # Purview catalog bootstrap & lineage
+|   +-- seed/                 # Sample data loading
+|   +-- streaming/            # Event Hub producer & Stream Analytics
 |   +-- PowerShell/           # Management automation
 |   +-- sql/                  # SQL & KQL references
++-- governance/                # Data governance framework
+|   +-- common/               # Shared logging, validation utilities
+|   +-- contracts/            # Data contracts & enforcement
+|   +-- dataquality/          # Quality rules, Great Expectations runner
+|   +-- finops/               # FinOps budget alerts (Bicep)
++-- great_expectations/        # GE checkpoints & DataContext config
++-- docs/                      # Platform documentation
+|   +-- runbooks/             # Incident response & DR runbooks
++-- tests/                     # pytest test suite (80%+ coverage gate)
 +-- tools/                    # Development tools
 |   +-- dbt/                  # dbt for data transformations
 +-- .github/                  # CI/CD workflows
@@ -102,44 +119,9 @@ csa-inabox/
 
 ## Quick Start
 
-### 1. Clone and Configure
-
-```bash
-git clone https://github.com/YOUR-ORG/csa-inabox.git
-cd csa-inabox
-
-# Create your environment configuration
-cp deploy/bicep/DLZ/params.template.json deploy/bicep/DLZ/params.dev.json
-# Edit params.dev.json with your subscription IDs, regions, and naming
-```
-
-### 2. Deploy Azure Landing Zone Foundation
-
-```bash
-# Deploy management and connectivity first
-az deployment sub create \
-  --location eastus \
-  --template-file deploy/bicep/LandingZone-ALZ/main.bicep \
-  --parameters @deploy/bicep/LandingZone-ALZ/params.dev.json
-```
-
-### 3. Deploy Data Management Landing Zone
-
-```bash
-az deployment sub create \
-  --location eastus \
-  --template-file deploy/bicep/DMLZ/main.bicep \
-  --parameters @deploy/bicep/DMLZ/params.dev.json
-```
-
-### 4. Deploy Data Landing Zone
-
-```bash
-az deployment sub create \
-  --location eastus \
-  --template-file deploy/bicep/DLZ/main.bicep \
-  --parameters @deploy/bicep/DLZ/params.dev.json
-```
+See [QUICKSTART.md](docs/QUICKSTART.md) for the complete setup guide, including
+infrastructure deployment, sample data loading, dbt pipeline execution, and
+expected row counts for every model.
 
 ## Configuration
 

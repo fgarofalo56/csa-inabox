@@ -5,6 +5,60 @@ end-of-session protocol in `.claude/rules/session-end.md`.
 
 ---
 
+## 2026-04-13 — Fill all remaining gaps (7/7 complete)
+
+**Archon project:** `1bd59749-db0a-4009-82c7-f1a56d24a820`
+
+Addressed all 7 identified gaps to bring the platform from 90% to 100%
+completion. 16 new files created, 7 modified. All 415 tests pass,
+85.17% coverage, mypy clean, Bicep clean.
+
+### Summary of work
+
+1. **ADF deployment automation** — `deploy-adf.sh` script, hourly and
+   daily trigger JSONs, Makefile target, `ADF_SETUP.md` documentation.
+2. **Great Expectations checkpoints** — `great_expectations/` directory
+   with DataContext config and 3 checkpoint YAMLs (bronze/silver/gold).
+   Updated `ge_runner.py` with checkpoint discovery.
+3. **Purview lineage** — `purviewAccountId` parameter on ADF Bicep,
+   `register_lineage.py` Atlas API script (4 process entities),
+   `--schedule-scans` flag on bootstrap, OpenLineage config for Databricks.
+4. **dbt snapshots + exposures** — 2 SCD Type 2 snapshot models
+   (customers, products), 4 exposure definitions on Gold schema.yml.
+5. **Documentation** — `DATABRICKS_GUIDE.md`, expanded security runbook
+   (3 new scenarios + evidence checklist + comms templates), expanded
+   `TROUBLESHOOTING.md` (86 -> 230+ lines, 8 new sections).
+6. **Tests** — 9 new lineage tests, all 415 pass, coverage maintained.
+
+### Files created
+- `scripts/deploy/deploy-adf.sh`
+- `domains/shared/pipelines/adf/triggers/tr_daily_medallion.json`
+- `domains/shared/pipelines/adf/triggers/tr_hourly_ingest.json`
+- `docs/ADF_SETUP.md`
+- `great_expectations/great_expectations.yml`
+- `great_expectations/checkpoints/bronze_customers_checkpoint.yml`
+- `great_expectations/checkpoints/silver_sales_orders_checkpoint.yml`
+- `great_expectations/checkpoints/gold_clv_checkpoint.yml`
+- `great_expectations/expectations/.gitkeep`
+- `scripts/purview/register_lineage.py`
+- `domains/shared/notebooks/databricks/config/openlineage.json`
+- `domains/shared/dbt/snapshots/snp_customers_history.sql`
+- `domains/shared/dbt/snapshots/snp_products_history.sql`
+- `domains/shared/dbt/snapshots/schema.yml`
+- `docs/DATABRICKS_GUIDE.md`
+- `tests/purview/test_register_lineage.py`
+
+### Files modified
+- `Makefile` (+deploy-adf target)
+- `governance/dataquality/ge_runner.py` (+checkpoint loading)
+- `deploy/bicep/DLZ/modules/datafactory/datafactory.bicep` (+purviewConfiguration)
+- `scripts/purview/bootstrap_catalog.py` (+create_scans, --schedule-scans)
+- `domains/shared/dbt/models/gold/schema.yml` (+exposures)
+- `docs/runbooks/security-incident.md` (+3 scenarios, evidence, comms)
+- `docs/TROUBLESHOOTING.md` (+8 sections, 150+ lines)
+
+---
+
 ## 2026-04-10 — Audit remediation sweep + Archon todo batch 1 (complete)
 
 **Archon project:** `1bd59749-db0a-4009-82c7-f1a56d24a820`
