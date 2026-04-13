@@ -1,0 +1,85 @@
+# Data product contract — finance.revenue_reconciliation
+#
+# Gold-layer cross-domain reconciliation between sales and finance.
+
+apiVersion: csa.microsoft.com/v1
+kind: DataProductContract
+
+metadata:
+  name: finance.revenue_reconciliation
+  domain: finance
+  owner: finance-data-engineering@contoso.com
+  version: "1.0.0"
+  description: >
+    Cross-domain reconciliation between sales orders (shared domain)
+    and finance invoices. Uses FULL OUTER JOIN to match orders with
+    invoices and detect mismatches. Demonstrates the Data Mesh pattern
+    of cross-domain data product consumption.
+
+schema:
+  primary_key: [reconciliation_key]
+  columns:
+    - name: reconciliation_key
+      type: string
+      nullable: false
+      description: >
+        Surrogate key for reconciliation records. Derived from
+        coalesce(order_id, invoice_id) to ensure uniqueness across
+        MATCHED, ORDER_ONLY, and INVOICE_ONLY rows.
+    - name: order_id
+      type: long
+      nullable: true
+      description: Order identifier. Null for INVOICE_ONLY records.
+    - name: customer_id
+      type: long
+      nullable: true
+      description: Customer identifier from whichever side is present.
+    - name: order_date
+      type: date
+      nullable: true
+      description: Date the order was placed. Null for INVOICE_ONLY.
+    - name: order_amount
+      type: decimal(18,2)
+      nullable: true
+      description: Order total from sales domain (USD). Null for INVOICE_ONLY.
+    - name: order_status
+      type: string
+      nullable: true
+      description: Order lifecycle state. Null for INVOICE_ONLY.
+    - name: invoice_id
+      type: long
+      nullable: true
+      description: Invoice identifier. Null for ORDER_ONLY records.
+    - name: invoice_date
+      type: date
+      nullable: true
+      description: Date the invoice was issued. Null for ORDER_ONLY.
+    - name: invoice_amount
+      type: decimal(18,2)
+      nullable: true
+      description: Invoice total from finance domain (USD). Null for ORDER_ONLY.
+    - name: reconciliation_status
+      type: string
+      nullable: false
+      description: Match outcome of the reconciliation.
+      allowed_values:
+        - MATCHED
+        - AMOUNT_MISMATCH
+        - ORDER_ONLY
+        - INVOICE_ONLY
+    - name: amount_difference
+      type: decimal(18,2)
+      nullable: false
+      description: order_amount minus invoice_amount. Zero for matched records.
+
+sla:
+  freshness_minutes: 240
+  valid_row_ratio: 1.0
+  supported_until: "2027-04-10"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: reconciliation_status
+  - rule: expect_column_values_to_be_in_set
+    column: reconciliation_status
+    value_set: [MATCHED, AMOUNT_MISMATCH, ORDER_ONLY, INVOICE_ONLY]

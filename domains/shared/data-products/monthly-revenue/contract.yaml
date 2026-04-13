@@ -1,0 +1,91 @@
+# Data product contract — shared.monthly_revenue
+#
+# Gold-layer monthly revenue metrics by geography.
+
+apiVersion: csa.microsoft.com/v1
+kind: DataProductContract
+
+metadata:
+  name: shared.monthly_revenue
+  domain: shared
+  owner: data-engineering@contoso.com
+  version: "1.0.0"
+  description: >
+    Monthly revenue metrics by country and state. Aggregates fact_orders
+    into monthly cohorts with status breakdowns for executive dashboards
+    and financial reporting. One row per month-country-state combination.
+
+schema:
+  primary_key: [month_key]
+  columns:
+    - name: month_key
+      type: string
+      nullable: false
+      description: Composite key (YYYY-MM-country-state) for merge.
+    - name: revenue_year
+      type: int
+      nullable: false
+      description: Calendar year.
+    - name: revenue_month
+      type: int
+      nullable: false
+      description: Calendar month (1-12).
+    - name: revenue_period
+      type: date
+      nullable: false
+      description: First day of the month.
+    - name: country
+      type: string
+      nullable: false
+      description: Customer country code (or UNKNOWN).
+    - name: state
+      type: string
+      nullable: false
+      description: Customer state code (or UNKNOWN).
+    - name: total_orders
+      type: int
+      nullable: false
+      description: Count of distinct orders.
+    - name: unique_customers
+      type: int
+      nullable: false
+      description: Count of distinct customers.
+    - name: gross_revenue
+      type: decimal(18,2)
+      nullable: false
+      description: Total revenue including cancellations and returns (USD).
+    - name: net_revenue
+      type: decimal(18,2)
+      nullable: false
+      description: Revenue excluding cancelled and returned orders (USD).
+    - name: cancellation_rate_pct
+      type: decimal(5,2)
+      nullable: true
+      description: Percentage of cancelled orders (0-100).
+    - name: return_rate_pct
+      type: decimal(5,2)
+      nullable: true
+      description: Percentage of returned orders (0-100).
+
+sla:
+  freshness_minutes: 240
+  valid_row_ratio: 1.0
+  supported_until: "2027-04-10"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: month_key
+  - rule: expect_column_values_to_be_unique
+    column: month_key
+  - rule: expect_column_values_to_be_between
+    column: revenue_month
+    min_value: 1
+    max_value: 12
+  - rule: expect_column_values_to_be_between
+    column: cancellation_rate_pct
+    min_value: 0
+    max_value: 100
+  - rule: expect_column_values_to_be_between
+    column: return_rate_pct
+    min_value: 0
+    max_value: 100

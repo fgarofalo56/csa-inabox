@@ -1,0 +1,100 @@
+# Data product contract — inventory.inventory_turnover
+#
+# Gold-layer inventory turnover analysis with health metrics.
+
+apiVersion: csa.microsoft.com/v1
+kind: DataProductContract
+
+metadata:
+  name: inventory.inventory_turnover
+  domain: inventory
+  owner: supply-chain-data-team@contoso.com
+  version: "1.0.0"
+  description: >
+    Inventory turnover analysis with health metrics per product.
+    Aggregates inventory positions across warehouses and joins with
+    shared.dim_products for enrichment. Demand-related columns
+    (daily_demand, days_of_supply, supply_demand_status) are NULL
+    because product-level order data is not yet available.
+
+schema:
+  primary_key: [product_id]
+  columns:
+    - name: product_id
+      type: long
+      nullable: false
+      description: Product identifier (FK to shared.products).
+    - name: product_name
+      type: string
+      nullable: true
+      description: Product display name (from shared.dim_products).
+    - name: product_category
+      type: string
+      nullable: true
+      description: Product category (from shared.dim_products).
+    - name: unit_price
+      type: decimal(18,2)
+      nullable: true
+      description: Unit price in USD (from shared.dim_products).
+    - name: total_on_hand
+      type: int
+      nullable: false
+      description: Sum of qty_on_hand across all warehouses.
+    - name: total_reserved
+      type: int
+      nullable: false
+      description: Sum of qty_reserved across all warehouses.
+    - name: total_available
+      type: int
+      nullable: false
+      description: Sum of available stock across all warehouses.
+    - name: warehouse_count
+      type: int
+      nullable: false
+      description: Number of warehouses stocking this product.
+    - name: inventory_status
+      type: string
+      nullable: false
+      description: Inventory level classification based on reorder points.
+      allowed_values:
+        - STOCKOUT
+        - LOW_STOCK
+        - ADEQUATE
+        - WELL_STOCKED
+    - name: daily_demand
+      type: decimal(18,2)
+      nullable: true
+      description: >
+        Average daily demand (currently NULL — requires product_id in
+        fact_orders to enable product-level demand attribution).
+    - name: days_of_supply
+      type: decimal(18,2)
+      nullable: true
+      description: >
+        Estimated days of supply remaining (currently NULL — requires
+        daily_demand calculation).
+    - name: supply_demand_status
+      type: string
+      nullable: true
+      description: >
+        Supply vs demand classification (currently NULL — requires
+        demand data).
+
+sla:
+  freshness_minutes: 240
+  valid_row_ratio: 1.0
+  supported_until: "2027-04-10"
+
+quality_rules:
+  - rule: expect_column_values_to_be_in_set
+    column: inventory_status
+    value_set: [STOCKOUT, LOW_STOCK, ADEQUATE, WELL_STOCKED]
+  - rule: expect_column_values_to_be_between
+    column: total_on_hand
+    min_value: 0
+  - rule: expect_column_values_to_be_between
+    column: total_reserved
+    min_value: 0
+  - rule: expect_column_values_to_be_between
+    column: warehouse_count
+    min_value: 1

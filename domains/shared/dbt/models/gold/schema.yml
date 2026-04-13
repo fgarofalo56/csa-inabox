@@ -142,7 +142,7 @@ models:
       executive dashboards and financial reporting.
     columns:
       - name: month_key
-        description: Composite key (YYYY-MM-country) for merge.
+        description: Composite key (YYYY-MM-country-state) for merge.
         tests:
           - unique
           - not_null
@@ -164,3 +164,64 @@ models:
         description: Percentage of cancelled orders.
       - name: return_rate_pct
         description: Percentage of returned orders.
+
+exposures:
+  - name: executive_revenue_dashboard
+    type: dashboard
+    maturity: medium
+    description: >
+      Power BI dashboard showing monthly and quarterly revenue trends,
+      regional breakdowns, and year-over-year comparisons. Used by the
+      executive team for board reporting and strategic planning.
+    owner:
+      name: Finance Analytics Team
+      email: finance-analytics@contoso.com
+    url: https://app.powerbi.com/groups/csa-inabox/dashboards/revenue
+    depends_on:
+      - ref('gld_monthly_revenue')
+      - ref('fact_orders')
+      - ref('dim_customers')
+
+  - name: customer_360_report
+    type: dashboard
+    maturity: medium
+    description: >
+      Customer lifetime value analysis, segmentation, and churn
+      prediction report. Powers the customer success team's outreach
+      and retention workflows.
+    owner:
+      name: Customer Success Team
+      email: customer-success@contoso.com
+    url: https://app.powerbi.com/groups/csa-inabox/reports/customer-360
+    depends_on:
+      - ref('gld_customer_lifetime_value')
+      - ref('dim_customers')
+
+  - name: sales_operations_dashboard
+    type: dashboard
+    maturity: high
+    description: >
+      Daily operational dashboard for the sales team showing order
+      volume, average order value, cancellation rates, and pipeline
+      health. Refreshed daily at 07:00 UTC.
+    owner:
+      name: Sales Operations
+      email: sales-ops@contoso.com
+    url: https://app.powerbi.com/groups/csa-inabox/dashboards/sales-ops
+    depends_on:
+      - ref('gld_daily_order_metrics')
+      - ref('fact_orders')
+      - ref('dim_products')
+
+  - name: finance_aging_report
+    type: analysis
+    maturity: medium
+    description: >
+      Accounts receivable aging analysis consumed by the finance team
+      for cash flow forecasting and collections prioritisation.
+      Refreshed daily from the finance domain Gold layer.
+    owner:
+      name: Finance Team
+      email: finance@contoso.com
+    depends_on:
+      - ref('gld_monthly_revenue')

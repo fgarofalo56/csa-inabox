@@ -15,7 +15,7 @@ models:
         tests:
           - not_null
           - accepted_values:
-              values: ['CURRENT', '1-30', '31-60', '61-90', '90+']
+              values: ['CURRENT', '1-30', '31-60', '61-90', '90+', 'PAID']
 
   - name: gld_revenue_reconciliation
     description: >

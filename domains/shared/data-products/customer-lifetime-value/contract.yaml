@@ -1,0 +1,90 @@
+# Data product contract — shared.customer_lifetime_value
+#
+# Gold-layer customer lifetime value metrics with segmentation.
+
+apiVersion: csa.microsoft.com/v1
+kind: DataProductContract
+
+metadata:
+  name: shared.customer_lifetime_value
+  domain: shared
+  owner: data-engineering@contoso.com
+  version: "1.0.0"
+  description: >
+    Customer lifetime value metrics with activity-based segmentation and
+    revenue-based tiering. Combines valid Silver customer and order data
+    for analytics and reporting. One row per customer.
+
+schema:
+  primary_key: [customer_id]
+  columns:
+    - name: customer_id
+      type: long
+      nullable: false
+      description: Unique customer identifier from the CRM.
+    - name: first_name
+      type: string
+      nullable: true
+      description: Customer first name.
+    - name: last_name
+      type: string
+      nullable: true
+      description: Customer last name.
+    - name: email
+      type: string
+      nullable: true
+      description: Customer email address.
+    - name: total_orders
+      type: int
+      nullable: false
+      description: Total number of orders placed.
+    - name: lifetime_revenue
+      type: decimal(18,2)
+      nullable: false
+      description: Total revenue from all completed orders (USD).
+    - name: avg_order_value
+      type: decimal(18,2)
+      nullable: false
+      description: Average order value (USD).
+    - name: customer_segment
+      type: string
+      nullable: false
+      description: "Activity-based segment: active, at_risk, churned, never_purchased."
+      allowed_values:
+        - active
+        - at_risk
+        - churned
+        - never_purchased
+    - name: value_tier
+      type: string
+      nullable: false
+      description: "Revenue-based tier: platinum (>=10k), gold (>=5k), silver (>=1k), bronze."
+      allowed_values:
+        - platinum
+        - gold
+        - silver
+        - bronze
+    - name: monthly_revenue_rate
+      type: decimal(18,2)
+      nullable: true
+      description: Average monthly revenue since customer creation.
+
+sla:
+  freshness_minutes: 120
+  valid_row_ratio: 1.0
+  supported_until: "2027-04-10"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: customer_id
+  - rule: expect_column_values_to_be_unique
+    column: customer_id
+  - rule: expect_column_values_to_be_in_set
+    column: customer_segment
+    value_set: [active, at_risk, churned, never_purchased]
+  - rule: expect_column_values_to_be_in_set
+    column: value_tier
+    value_set: [platinum, gold, silver, bronze]
+  - rule: expect_column_values_to_be_between
+    column: lifetime_revenue
+    min_value: 0

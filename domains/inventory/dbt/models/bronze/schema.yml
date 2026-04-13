@@ -8,6 +8,7 @@ models:
         description: Unique inventory record identifier.
         tests:
           - not_null
+          - unique
       - name: product_id
         description: FK to products. Nullable for quality testing.
       - name: warehouse_id

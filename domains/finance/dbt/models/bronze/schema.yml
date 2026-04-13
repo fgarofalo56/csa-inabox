@@ -8,6 +8,7 @@ models:
         description: Unique invoice identifier from the billing system.
         tests:
           - not_null
+          - unique
       - name: order_id
         description: FK to sales orders. Null for manual invoices.
       - name: customer_id
@@ -22,6 +23,7 @@ models:
         description: Unique payment identifier.
         tests:
           - not_null
+          - unique
       - name: invoice_id
         description: FK to invoices.
         tests:

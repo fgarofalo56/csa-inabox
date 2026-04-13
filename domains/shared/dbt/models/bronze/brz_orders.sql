@@ -2,7 +2,7 @@
   config(
     materialized='incremental',
     file_format='delta',
-    unique_key='order_id',
+    unique_key='_surrogate_key',
     incremental_strategy='merge',
     tags=['bronze', 'orders']
   )
@@ -15,6 +15,7 @@
 */
 
 SELECT
+    {{ dbt_utils.generate_surrogate_key(['order_id']) }} as _surrogate_key,
     order_id,
     customer_id,
     order_date,

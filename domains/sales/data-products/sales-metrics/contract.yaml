@@ -1,0 +1,89 @@
+# Data product contract — sales.sales_metrics
+#
+# Gold-layer daily sales metrics by region and channel.
+
+apiVersion: csa.microsoft.com/v1
+kind: DataProductContract
+
+metadata:
+  name: sales.sales_metrics
+  domain: sales
+  owner: sales-data-team@example.com
+  version: "1.0.0"
+  description: >
+    Daily sales metrics by region and channel. Aggregates valid sales
+    orders into KPIs: revenue, order count, units sold, average values,
+    and product diversity. Published as a data product for downstream
+    consumers.
+
+schema:
+  primary_key: [order_date, sales_region, sales_channel]
+  columns:
+    - name: order_date
+      type: date
+      nullable: false
+      description: Aggregation date.
+    - name: sales_region
+      type: string
+      nullable: false
+      description: Geographic sales region.
+    - name: sales_channel
+      type: string
+      nullable: false
+      description: Sales channel (e.g., online, retail).
+    - name: total_orders
+      type: int
+      nullable: false
+      description: Count of distinct orders.
+    - name: unique_customers
+      type: int
+      nullable: false
+      description: Count of distinct customers.
+    - name: total_revenue
+      type: decimal(18,2)
+      nullable: false
+      description: Sum of line totals (USD).
+    - name: avg_line_value
+      type: decimal(18,2)
+      nullable: true
+      description: Average line item value (USD).
+    - name: total_units_sold
+      type: int
+      nullable: false
+      description: Sum of quantities across all line items.
+    - name: avg_unit_price
+      type: decimal(18,2)
+      nullable: true
+      description: Average unit price across line items (USD).
+    - name: unique_products_sold
+      type: int
+      nullable: false
+      description: Count of distinct products sold.
+    - name: revenue_per_order
+      type: decimal(18,2)
+      nullable: true
+      description: Total revenue divided by total orders.
+    - name: units_per_order
+      type: decimal(18,2)
+      nullable: true
+      description: Total units divided by total orders.
+
+sla:
+  freshness_minutes: 120
+  valid_row_ratio: 1.0
+  supported_until: "2027-04-10"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: order_date
+  - rule: expect_column_values_to_not_be_null
+    column: sales_region
+  - rule: expect_column_values_to_not_be_null
+    column: sales_channel
+  - rule: expect_column_values_to_be_between
+    column: total_orders
+    min_value: 0
+  - rule: expect_column_values_to_be_between
+    column: total_revenue
+    min_value: 0
+    mostly: 0.99

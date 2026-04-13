@@ -32,8 +32,7 @@ customers AS (
         customer_id,
         country_code,
         state_code
-    FROM {{ ref('slv_customers') }}
-    WHERE is_valid = TRUE
+    FROM {{ ref('dim_customers') }}
 ),
 
 final AS (

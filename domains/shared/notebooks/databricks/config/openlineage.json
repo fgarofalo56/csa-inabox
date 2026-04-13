@@ -1,0 +1,23 @@
+{
+  "_comment": "OpenLineage configuration for Databricks clusters. Apply via cluster Spark config or init script. This sends lineage metadata to the Purview OpenLineage endpoint for automatic data flow tracking.",
+  "transport": {
+    "type": "http",
+    "url": "https://${PURVIEW_ACCOUNT_NAME}.purview.azure.com",
+    "endpoint": "/api/atlas/v2/entity",
+    "auth": {
+      "type": "api_key",
+      "apiKey": "${PURVIEW_API_KEY}"
+    }
+  },
+  "facets": {
+    "spark": {
+      "disabled": ["spark.logicalPlan"]
+    }
+  },
+  "sparkConfig": {
+    "spark.openlineage.transport.type": "http",
+    "spark.openlineage.transport.url": "https://${PURVIEW_ACCOUNT_NAME}.purview.azure.com",
+    "spark.openlineage.namespace": "csa-inabox-databricks",
+    "spark.extraListeners": "io.openlineage.spark.agent.OpenLineageSparkListener"
+  }
+}

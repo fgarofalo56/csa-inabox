@@ -49,7 +49,7 @@ invoices AS (
 reconciled AS (
     SELECT
         COALESCE(o.order_id, i.order_id) AS order_id,
-        o.customer_id,
+        COALESCE(o.customer_id, i.customer_id) AS customer_id,
         o.order_date,
         o.order_amount,
         o.order_status,

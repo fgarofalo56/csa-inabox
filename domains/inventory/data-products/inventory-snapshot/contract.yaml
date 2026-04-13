@@ -1,0 +1,109 @@
+# Data product contract — inventory.inventory_snapshot
+#
+# Gold-layer inventory snapshot fact table.
+
+apiVersion: csa.microsoft.com/v1
+kind: DataProductContract
+
+metadata:
+  name: inventory.inventory_snapshot
+  domain: inventory
+  owner: supply-chain-data-team@contoso.com
+  version: "1.0.0"
+  description: >
+    Inventory snapshot fact table at product-warehouse grain. Joins valid
+    Silver inventory with warehouse dimension for enriched stock position
+    analytics. Includes stock status classification and reorder flags.
+
+schema:
+  primary_key: [inventory_sk]
+  columns:
+    - name: inventory_sk
+      type: string
+      nullable: false
+      description: Surrogate key from Silver inventory.
+    - name: inventory_id
+      type: long
+      nullable: false
+      description: Unique inventory record identifier from the WMS.
+    - name: product_id
+      type: long
+      nullable: true
+      description: FK to shared.products.product_id.
+    - name: warehouse_id
+      type: long
+      nullable: false
+      description: FK to inventory.warehouses.warehouse_id.
+    - name: warehouse_sk
+      type: string
+      nullable: true
+      description: FK to dim_warehouses surrogate key.
+    - name: warehouse_name
+      type: string
+      nullable: true
+      description: Warehouse display name (denormalized from dim_warehouses).
+    - name: warehouse_region
+      type: string
+      nullable: true
+      description: Warehouse region (denormalized from dim_warehouses).
+    - name: qty_on_hand
+      type: int
+      nullable: false
+      description: Current quantity physically in warehouse.
+    - name: qty_reserved
+      type: int
+      nullable: false
+      description: Quantity reserved for pending orders.
+    - name: qty_available
+      type: int
+      nullable: false
+      description: Available quantity (qty_on_hand - qty_reserved).
+    - name: reorder_point
+      type: int
+      nullable: false
+      description: Threshold below which a reorder alert is triggered.
+    - name: stock_status
+      type: string
+      nullable: false
+      description: Stock level classification based on quantity vs. reorder point.
+      allowed_values:
+        - OUT_OF_STOCK
+        - LOW_STOCK
+        - ADEQUATE
+        - WELL_STOCKED
+    - name: needs_reorder
+      type: boolean
+      nullable: false
+      description: TRUE when available stock is at or below reorder point.
+    - name: last_restocked_at
+      type: timestamp
+      nullable: true
+      description: Timestamp of the most recent restocking event.
+    - name: days_since_restock
+      type: int
+      nullable: true
+      description: Number of days since the last restocking event.
+    - name: snapshot_date
+      type: date
+      nullable: false
+      description: Date of the snapshot.
+
+sla:
+  freshness_minutes: 120
+  valid_row_ratio: 1.0
+  supported_until: "2027-04-10"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: inventory_sk
+  - rule: expect_column_values_to_be_unique
+    column: inventory_sk
+  - rule: expect_column_values_to_be_in_set
+    column: stock_status
+    value_set: [OUT_OF_STOCK, LOW_STOCK, ADEQUATE, WELL_STOCKED]
+  - rule: expect_column_values_to_be_between
+    column: qty_on_hand
+    min_value: 0
+  - rule: expect_column_values_to_be_between
+    column: qty_reserved
+    min_value: 0

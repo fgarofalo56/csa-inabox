@@ -1,0 +1,82 @@
+# Data product contract — shared.daily_order_metrics
+#
+# Gold-layer daily order aggregations for operational dashboards.
+
+apiVersion: csa.microsoft.com/v1
+kind: DataProductContract
+
+metadata:
+  name: shared.daily_order_metrics
+  domain: shared
+  owner: data-engineering@contoso.com
+  version: "1.0.0"
+  description: >
+    Daily order aggregations for operational dashboards. Filters out
+    records with quality issues (negative amounts, future dates) by
+    consuming only valid Silver rows. One row per calendar date.
+
+schema:
+  primary_key: [order_date]
+  columns:
+    - name: order_date
+      type: date
+      nullable: false
+      description: Calendar date of the aggregation.
+    - name: total_orders
+      type: int
+      nullable: false
+      description: Count of distinct orders for the day.
+    - name: unique_customers
+      type: int
+      nullable: false
+      description: Count of distinct customers who placed orders.
+    - name: total_revenue
+      type: decimal(18,2)
+      nullable: false
+      description: Sum of order totals for the day (USD).
+    - name: avg_order_value
+      type: decimal(18,2)
+      nullable: true
+      description: Average order value for the day (USD).
+    - name: min_order_value
+      type: decimal(18,2)
+      nullable: true
+      description: Minimum order value for the day (USD).
+    - name: max_order_value
+      type: decimal(18,2)
+      nullable: true
+      description: Maximum order value for the day (USD).
+    - name: delivered_orders
+      type: int
+      nullable: false
+      description: Count of orders with status DELIVERED.
+    - name: cancelled_orders
+      type: int
+      nullable: false
+      description: Count of orders with status CANCELLED.
+    - name: pending_orders
+      type: int
+      nullable: false
+      description: Count of orders with status PENDING.
+    - name: cancellation_rate_pct
+      type: decimal(5,2)
+      nullable: true
+      description: Percentage of cancelled orders (0-100).
+
+sla:
+  freshness_minutes: 120
+  valid_row_ratio: 1.0
+  supported_until: "2027-04-10"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: order_date
+  - rule: expect_column_values_to_be_unique
+    column: order_date
+  - rule: expect_column_values_to_be_between
+    column: total_orders
+    min_value: 0
+  - rule: expect_column_values_to_be_between
+    column: cancellation_rate_pct
+    min_value: 0
+    max_value: 100

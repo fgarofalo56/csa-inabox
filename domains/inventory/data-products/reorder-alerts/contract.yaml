@@ -1,0 +1,109 @@
+# Data product contract — inventory.reorder_alerts
+#
+# Gold-layer reorder alerts enriched with product data.
+
+apiVersion: csa.microsoft.com/v1
+kind: DataProductContract
+
+metadata:
+  name: inventory.reorder_alerts
+  domain: inventory
+  owner: supply-chain-data-team@contoso.com
+  version: "1.0.0"
+  description: >
+    Products needing reorder, enriched with shared dim_products. Filters
+    to inventory items where available stock has fallen at or below the
+    reorder point. Cross-domain join to shared.dim_products for product
+    name and category enrichment.
+
+schema:
+  primary_key: [inventory_sk]
+  columns:
+    - name: inventory_sk
+      type: string
+      nullable: false
+      description: Surrogate key from fact_inventory_snapshot.
+    - name: inventory_id
+      type: long
+      nullable: false
+      description: Unique inventory record identifier.
+    - name: product_id
+      type: long
+      nullable: true
+      description: FK to shared.products.product_id.
+    - name: product_name
+      type: string
+      nullable: true
+      description: Product display name (from shared.dim_products).
+    - name: product_category
+      type: string
+      nullable: true
+      description: Product category (from shared.dim_products).
+    - name: unit_price
+      type: decimal(18,2)
+      nullable: true
+      description: Unit price in USD (from shared.dim_products).
+    - name: warehouse_id
+      type: long
+      nullable: false
+      description: Warehouse identifier.
+    - name: warehouse_name
+      type: string
+      nullable: true
+      description: Warehouse display name.
+    - name: warehouse_region
+      type: string
+      nullable: true
+      description: Warehouse geographic region.
+    - name: qty_on_hand
+      type: int
+      nullable: false
+      description: Current quantity in warehouse.
+    - name: qty_reserved
+      type: int
+      nullable: false
+      description: Quantity reserved for pending orders.
+    - name: qty_available
+      type: int
+      nullable: false
+      description: Available quantity (on_hand - reserved).
+    - name: reorder_point
+      type: int
+      nullable: false
+      description: Reorder threshold.
+    - name: qty_deficit
+      type: int
+      nullable: false
+      description: How far below reorder point (reorder_point - qty_available).
+    - name: alert_severity
+      type: string
+      nullable: false
+      description: Alert urgency level based on stock position.
+      allowed_values:
+        - CRITICAL
+        - URGENT
+        - WARNING
+    - name: stock_status
+      type: string
+      nullable: false
+      description: Stock level classification.
+      allowed_values:
+        - OUT_OF_STOCK
+        - LOW_STOCK
+        - ADEQUATE
+        - WELL_STOCKED
+
+sla:
+  freshness_minutes: 60
+  valid_row_ratio: 1.0
+  supported_until: "2027-04-10"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: inventory_sk
+  - rule: expect_column_values_to_be_in_set
+    column: alert_severity
+    value_set: [CRITICAL, URGENT, WARNING]
+  - rule: expect_column_values_to_be_between
+    column: qty_deficit
+    min_value: 0

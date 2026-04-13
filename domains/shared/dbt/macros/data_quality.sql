@@ -23,22 +23,3 @@
     case when {{ column_name }} rlike '{{ var("email_regex") }}'
          then false else true end
 {% endmacro %}
-
-{# Standardize string: trim + uppercase #}
-{% macro clean_string(column_name, case='upper') %}
-    {% if case == 'lower' %}
-        trim(lower(coalesce({{ column_name }}, '')))
-    {% elif case == 'title' %}
-        trim(initcap(coalesce({{ column_name }}, '')))
-    {% else %}
-        trim(upper(coalesce({{ column_name }}, '')))
-    {% endif %}
-{% endmacro %}
-
-{# Generate audit columns for bronze layer #}
-{% macro bronze_audit_columns() %}
-    current_timestamp() as _dbt_loaded_at,
-    _metadata.file_path as _source_file,
-    _metadata.file_modification_time as _source_modified_at,
-    '{{ invocation_id }}' as _dbt_run_id
-{% endmacro %}

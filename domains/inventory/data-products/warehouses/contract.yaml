@@ -1,0 +1,54 @@
+# Data product contract — inventory.warehouses
+#
+# Gold-layer warehouse dimension.
+
+apiVersion: csa.microsoft.com/v1
+kind: DataProductContract
+
+metadata:
+  name: inventory.warehouses
+  domain: inventory
+  owner: supply-chain-data-team@contoso.com
+  version: "1.0.0"
+  description: >
+    Warehouse dimension table. Valid warehouse records from the Silver
+    layer for star-schema joins in inventory analytics.
+
+schema:
+  primary_key: [warehouse_sk]
+  columns:
+    - name: warehouse_sk
+      type: string
+      nullable: false
+      description: Surrogate key (md5 of warehouse_id). Generated in Silver.
+    - name: warehouse_id
+      type: long
+      nullable: false
+      description: Original warehouse identifier from the WMS.
+    - name: warehouse_name
+      type: string
+      nullable: false
+      description: Warehouse display name.
+    - name: region
+      type: string
+      nullable: true
+      description: Geographic region of the warehouse.
+    - name: capacity
+      type: int
+      nullable: true
+      description: Maximum storage capacity of the warehouse.
+
+sla:
+  freshness_minutes: 240
+  valid_row_ratio: 1.0
+  supported_until: "2027-04-10"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: warehouse_sk
+  - rule: expect_column_values_to_be_unique
+    column: warehouse_sk
+  - rule: expect_column_values_to_not_be_null
+    column: warehouse_id
+  - rule: expect_column_values_to_be_unique
+    column: warehouse_id

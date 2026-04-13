@@ -1,0 +1,89 @@
+# Data product contract — finance.aging_report
+#
+# Gold-layer AR aging report for outstanding invoices.
+
+apiVersion: csa.microsoft.com/v1
+kind: DataProductContract
+
+metadata:
+  name: finance.aging_report
+  domain: finance
+  owner: finance-data-engineering@contoso.com
+  version: "1.0.0"
+  description: >
+    Accounts receivable aging report. Classifies outstanding invoices
+    into aging buckets (CURRENT, 1-30, 31-60, 61-90, 90+ days) with
+    estimated loss rates. Joins invoices with payments to compute
+    outstanding balances. Only includes invoices with balance > 0.
+
+schema:
+  primary_key: [invoice_id]
+  columns:
+    - name: invoice_id
+      type: long
+      nullable: false
+      description: Unique invoice identifier from the billing system.
+    - name: customer_id
+      type: long
+      nullable: false
+      description: Customer identifier, consistent with shared.customers.
+    - name: invoice_date
+      type: date
+      nullable: false
+      description: Date the invoice was issued.
+    - name: due_date
+      type: date
+      nullable: false
+      description: Payment due date.
+    - name: invoice_total
+      type: decimal(18,2)
+      nullable: false
+      description: Invoice total including tax (USD).
+    - name: total_paid
+      type: decimal(18,2)
+      nullable: false
+      description: Sum of payments received against this invoice (USD).
+    - name: outstanding_balance
+      type: decimal(18,2)
+      nullable: false
+      description: Remaining balance (invoice_total - total_paid).
+    - name: days_past_due
+      type: int
+      nullable: false
+      description: Number of days past the due date (negative means not yet due).
+    - name: aging_bucket
+      type: string
+      nullable: false
+      description: Aging classification bucket.
+      allowed_values:
+        - CURRENT
+        - 1-30
+        - 31-60
+        - 61-90
+        - 90+
+        - PAID
+    - name: estimated_loss_rate
+      type: decimal(5,2)
+      nullable: false
+      description: Estimated loss rate based on aging bucket (0.00 to 0.25).
+
+sla:
+  freshness_minutes: 120
+  valid_row_ratio: 1.0
+  supported_until: "2027-04-10"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: invoice_id
+  - rule: expect_column_values_to_not_be_null
+    column: aging_bucket
+  - rule: expect_column_values_to_be_in_set
+    column: aging_bucket
+    value_set: [CURRENT, "1-30", "31-60", "61-90", "90+", PAID]
+  - rule: expect_column_values_to_be_between
+    column: outstanding_balance
+    min_value: 0
+  - rule: expect_column_values_to_be_between
+    column: estimated_loss_rate
+    min_value: 0
+    max_value: 1

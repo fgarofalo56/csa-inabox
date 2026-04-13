@@ -1,0 +1,44 @@
+version: 2
+
+snapshots:
+  - name: snp_customers_history
+    description: >
+      SCD Type 2 history of customer records.  Each row represents a
+      version of a customer record, with dbt_valid_from / dbt_valid_to
+      timestamps indicating the active period.  Use for point-in-time
+      analytics and audit trails.
+    columns:
+      - name: customer_sk
+        description: Surrogate key from Silver layer.
+        tests:
+          - not_null
+      - name: customer_id
+        description: Natural customer identifier.
+        tests:
+          - not_null
+      - name: dbt_valid_from
+        description: Timestamp when this version became active.
+        tests:
+          - not_null
+      - name: dbt_valid_to
+        description: >
+          Timestamp when this version was superseded.  NULL means
+          this is the current version.
+
+  - name: snp_products_history
+    description: >
+      SCD Type 2 history of product records.  Tracks changes to
+      product name, category, and price over time.
+    columns:
+      - name: product_sk
+        description: Surrogate key from Silver layer.
+        tests:
+          - not_null
+      - name: product_id
+        description: Natural product identifier.
+        tests:
+          - not_null
+      - name: dbt_valid_from
+        description: Timestamp when this version became active.
+        tests:
+          - not_null

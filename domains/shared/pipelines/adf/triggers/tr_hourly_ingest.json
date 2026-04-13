@@ -1,0 +1,34 @@
+{
+  "name": "tr_hourly_ingest",
+  "properties": {
+    "description": "Triggers the bronze ingestion pipeline every hour to pick up new source files from the landing container. Runs on the hour, every hour.",
+    "annotations": [
+      "csa-inabox",
+      "scheduled",
+      "bronze-ingestion"
+    ],
+    "type": "ScheduleTrigger",
+    "typeProperties": {
+      "recurrence": {
+        "frequency": "Hour",
+        "interval": 1,
+        "startTime": "2026-01-01T00:00:00Z",
+        "timeZone": "UTC"
+      }
+    },
+    "pipelines": [
+      {
+        "pipelineReference": {
+          "referenceName": "pl_ingest_to_bronze",
+          "type": "PipelineReference"
+        },
+        "parameters": {
+          "sourceContainer": "landing",
+          "sourceFolder": "sales",
+          "targetContainer": "bronze",
+          "targetFolder": "sales"
+        }
+      }
+    ]
+  }
+}

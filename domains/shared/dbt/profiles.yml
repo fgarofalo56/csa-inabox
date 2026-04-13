@@ -1,20 +1,44 @@
+# CSA-in-a-Box dbt Profile
+#
+# Authentication modes (in order of preference):
+#   1. OAuth M2M (service principal) — production-ready, automated rotation
+#   2. OAuth U2M (user-to-machine)   — for interactive developer use
+#   3. PAT (personal access token)   — legacy fallback
+#
+# To use OAuth M2M, set these environment variables:
+#   DATABRICKS_CLIENT_ID     — Service principal application (client) ID
+#   DATABRICKS_CLIENT_SECRET — Service principal secret
+#
+# To fall back to PAT auth, set:
+#   DATABRICKS_TOKEN — Personal access token
+#
+# The profile auto-selects OAuth M2M when DATABRICKS_CLIENT_ID is set,
+# otherwise falls back to PAT auth.
+
 csa_analytics:
   target: dev
   outputs:
+    # ── Development (OAuth M2M with PAT fallback) ──────────────────────
     dev:
       type: databricks
       catalog: unity_catalog
       schema: "{{ env_var('DBT_SCHEMA', 'dev') }}"
       host: "{{ env_var('DATABRICKS_HOST') }}"
       http_path: "{{ env_var('DATABRICKS_HTTP_PATH') }}"
-      token: "{{ env_var('DATABRICKS_TOKEN') }}"  # TODO: migrate to OAuth M2M (service principal) auth
+      auth_type: "{{ env_var('DBT_DATABRICKS_AUTH_TYPE', 'oauth-m2m') }}"
+      client_id: "{{ env_var('DATABRICKS_CLIENT_ID', '') }}"
+      client_secret: "{{ env_var('DATABRICKS_CLIENT_SECRET', '') }}"
+      token: "{{ env_var('DATABRICKS_TOKEN', '') }}"
       threads: 4
 
+    # ── Production (OAuth M2M only — no PAT allowed) ──────────────────
     prod:
       type: databricks
       catalog: unity_catalog
       schema: prod
       host: "{{ env_var('DATABRICKS_HOST') }}"
       http_path: "{{ env_var('DATABRICKS_HTTP_PATH') }}"
-      token: "{{ env_var('DATABRICKS_TOKEN') }}"  # TODO: migrate to OAuth M2M (service principal) auth
+      auth_type: oauth-m2m
+      client_id: "{{ env_var('DATABRICKS_CLIENT_ID') }}"
+      client_secret: "{{ env_var('DATABRICKS_CLIENT_SECRET') }}"
       threads: 8

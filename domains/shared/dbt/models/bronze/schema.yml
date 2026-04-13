@@ -30,6 +30,7 @@ models:
         description: Source system product identifier
         tests:
           - not_null
+          - unique
       - name: product_name
         description: Product display name
       - name: category

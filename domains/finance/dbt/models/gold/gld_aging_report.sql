@@ -49,10 +49,10 @@ final AS (
         CASE
             WHEN outstanding_balance <= 0 THEN 'PAID'
             WHEN days_past_due <= 0 THEN 'CURRENT'
-            WHEN days_past_due <= 30 THEN '1-30_DAYS'
-            WHEN days_past_due <= 60 THEN '31-60_DAYS'
-            WHEN days_past_due <= 90 THEN '61-90_DAYS'
-            ELSE '90+_DAYS'
+            WHEN days_past_due <= 30 THEN '1-30'
+            WHEN days_past_due <= 60 THEN '31-60'
+            WHEN days_past_due <= 90 THEN '61-90'
+            ELSE '90+'
         END AS aging_bucket,
 
         CASE

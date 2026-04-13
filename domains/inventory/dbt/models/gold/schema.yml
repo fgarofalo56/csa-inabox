@@ -47,11 +47,12 @@ models:
 
   - name: gld_inventory_turnover
     description: >
-      Inventory turnover analysis. Cross-domain join with shared
-      fact_orders for demand-supply assessment.
+      Inventory turnover analysis with valid inventory health metrics.
+      Note: demand-related columns (daily_demand, days_of_supply, supply_demand_status)
+      are NULL because product-level order data is not available.
     columns:
-      - name: supply_demand_status
-        description: Supply-demand balance classification.
+      - name: inventory_status
+        description: Inventory level classification based on reorder points.
         tests:
           - accepted_values:
-              values: ['STOCKOUT', 'NO_DEMAND', 'UNDERSTOCKED', 'OVERSTOCKED', 'BALANCED']
+              values: ['STOCKOUT', 'LOW_STOCK', 'ADEQUATE', 'WELL_STOCKED']

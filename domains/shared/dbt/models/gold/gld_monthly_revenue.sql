@@ -30,11 +30,12 @@ customers AS (
 
 monthly AS (
     SELECT
-        -- Composite key for merge
+        -- Composite key for merge (includes state to match GROUP BY grain)
         CONCAT(
             CAST(YEAR(f.order_date) AS STRING), '-',
             LPAD(CAST(MONTH(f.order_date) AS STRING), 2, '0'), '-',
-            COALESCE(f.customer_country, 'UNKNOWN')
+            COALESCE(f.customer_country, 'UNKNOWN'), '-',
+            COALESCE(f.customer_state, 'UNKNOWN')
         ) AS month_key,
 
         YEAR(f.order_date) AS revenue_year,
