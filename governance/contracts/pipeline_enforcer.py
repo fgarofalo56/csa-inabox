@@ -93,6 +93,7 @@ class EnforcementResult:
     quarantine_count: int
     contract_name: str
     batch_id: str
+    _meets_sla: bool | None = field(default=None, repr=False)
 
     @property
     def clean_ratio(self) -> float:
@@ -104,10 +105,15 @@ class EnforcementResult:
     @property
     def meets_sla(self) -> bool | None:
         """True if the clean ratio meets the contract's ``valid_row_ratio``
-        SLA.  Returns None if the SLA is not defined."""
-        # The caller should check contract.sla.valid_row_ratio directly;
-        # this is a convenience for quick boolean checks.
-        return None  # placeholder — see ContractEnforcer for SLA-aware check
+        SLA.  Returns None if the SLA is not defined.
+
+        Note: This requires the contract to be available. For standalone
+        result inspection, use ``clean_ratio`` directly.
+        """
+        # SLA checks are performed in ContractEnforcer.enforce() which has
+        # access to the contract object. This property provides a read-only
+        # flag that callers can inspect after enforcement.
+        return self._meets_sla
 
 
 class ContractEnforcer:
@@ -162,16 +168,20 @@ class ContractEnforcer:
         )
 
         # Parse violations back to row indices.
+        # Violation strings follow the format "row <idx>: <message>".
+        # We parse carefully: the row index is always the token after "row "
+        # and before the first ": ", and the message is everything after.
         violations_by_row: dict[int, list[str]] = {}
         for v in all_violations:
-            # Format: "row <idx>: <message>"
             if v.startswith("row "):
-                parts = v.split(": ", 1)
                 try:
-                    idx = int(parts[0].split(" ")[1])
-                    msg = parts[1] if len(parts) > 1 else v
-                    violations_by_row.setdefault(idx, []).append(msg)
+                    # Extract "row <N>: <msg>" — split only on first ": "
+                    prefix, _, msg = v.partition(": ")
+                    # prefix is "row <N>", extract N
+                    idx = int(prefix.removeprefix("row ").strip())
+                    violations_by_row.setdefault(idx, []).append(msg if msg else v)
                 except (ValueError, IndexError):
+                    # Malformed violation — attach to a sentinel key
                     violations_by_row.setdefault(-1, []).append(v)
             else:
                 violations_by_row.setdefault(-1, []).append(v)
@@ -217,7 +227,8 @@ class ContractEnforcer:
 
         # Check SLA
         if self.contract.sla.valid_row_ratio is not None:
-            if result.clean_ratio < self.contract.sla.valid_row_ratio:
+            result._meets_sla = result.clean_ratio >= self.contract.sla.valid_row_ratio
+            if not result._meets_sla:
                 logger.warning(
                     "contract.sla_breach",
                     contract=self.contract.name,

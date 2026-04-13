@@ -27,7 +27,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Iterable, Mapping
+
+import yaml
 
 from governance.common.logging import get_logger
 
@@ -127,13 +130,14 @@ def _evaluate_expectation(
         )
 
     if exp_type == "expect_column_values_to_not_be_null":
-        nulls = sum(1 for row in rows if row.get(column) is None)
+        nulls = sum(1 for row in rows if column in row and row[column] is None)
+        missing = sum(1 for row in rows if column not in row)
         return ExpectationResult(
             expectation_type=exp_type,
             column=column,
             success=nulls == 0,
-            message=f"{nulls} null rows in {column!r}",
-            details={"null_count": nulls, "total": len(rows)},
+            message=f"{nulls} null values in {column!r} ({missing} rows missing the column entirely)",
+            details={"null_count": nulls, "missing_count": missing, "total": len(rows)},
         )
 
     if exp_type == "expect_column_values_to_be_unique":
@@ -251,6 +255,42 @@ def run_suite_in_memory(
     )
 
 
+# ── Checkpoint discovery ─────────────────────────────────────────────
+
+
+_CHECKPOINT_DIR = Path(__file__).resolve().parents[2] / "great_expectations" / "checkpoints"
+
+
+def _load_checkpoint_configs(
+    checkpoint_dir: Path | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Load checkpoint YAML files and return a mapping of suite name -> config.
+
+    Each checkpoint YAML is expected to have ``validations[*].expectation_suite_name``
+    which is used as the key.  If ``checkpoint_dir`` does not exist or contains
+    no YAML files, an empty dict is returned.
+    """
+    directory = checkpoint_dir or _CHECKPOINT_DIR
+    if not directory.is_dir():
+        return {}
+
+    configs: dict[str, dict[str, Any]] = {}
+    for path in sorted(directory.glob("*.yml")):
+        try:
+            raw: dict[str, Any] = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except Exception:  # noqa: BLE001
+            logger.warning("ge.checkpoint_load_failed", path=str(path))
+            continue
+
+        for validation in raw.get("validations", []):
+            suite_name = validation.get("expectation_suite_name")
+            if suite_name:
+                configs[suite_name] = raw
+                logger.debug("ge.checkpoint_loaded", suite=suite_name, path=str(path))
+
+    return configs
+
+
 def run_ge_checkpoints(
     config: Mapping[str, Any],
     *,
@@ -275,10 +315,48 @@ def run_ge_checkpoints(
 
     When the ``great_expectations`` package is installed and
     ``sample_data`` is ``None``, the runner will eventually delegate to
-    a real GE checkpoint run (left as a TODO — the live Spark datasource
-    wiring lives in the Databricks notebook side and is exercised in the
-    production pipeline, not in this CLI).  The fallback is the
-    sanctioned test path and covers the expectation types in use today.
+    a real GE checkpoint run.  The live Spark datasource wiring lives in
+    the Databricks notebook side and is exercised in the production
+    pipeline, not in this CLI.  The fallback evaluator is the sanctioned
+    test path and covers the expectation types in use today.
+
+    .. rubric:: Enabling live Spark GE checkpoints (future work)
+
+    To run expectations against real data via Spark rather than the
+    in-memory fallback, the following would be required:
+
+    1. **Active SparkSession** -- A ``SparkSession`` configured with the
+       cluster's Spark conf (typically available inside a Databricks
+       notebook via ``spark``).
+
+    2. **JDBC or ADLS connection** -- A ``RuntimeDataConnector`` or
+       ``InferredAssetFilesystemDataConnector`` pointing at the ADLS
+       Gen2 Delta tables produced by dbt.  The connection string format:
+       ``abfss://<container>@<account>.dfs.core.windows.net/<path>``.
+
+    3. **GE DataContext & Datasource registration** -- Create a
+       ``DataContext``, register a ``SparkDFDatasource`` using
+       ``spark_config`` or ``execution_engine``, and wire each suite to
+       a ``BatchRequest`` targeting the correct table asset.
+
+    4. **Checkpoint execution** -- Build a ``SimpleCheckpoint`` per
+       suite and call ``context.run_checkpoint()``.  Map the returned
+       ``CheckpointResult`` back to our ``SuiteResult`` dataclass.
+
+    5. **Dependencies** -- ``great_expectations``, ``pyspark``, and the
+       Azure ADLS Hadoop driver (``hadoop-azure``) must be available in
+       the cluster runtime.
+
+    **In-memory DuckDB fallback (current approach):**  When GE is not
+    installed or ``sample_data`` is provided, suites are evaluated by
+    :func:`run_suite_in_memory`, which iterates over plain Python dicts
+    (loaded from CSV/Parquet fixtures or generated in tests).  This
+    covers the six expectation types declared in
+    ``governance/dataquality/quality-rules.yaml`` and is exercised in
+    CI without needing a live Spark cluster or 200 MB+ GE install.
+
+    For full Spark datasource configuration reference, see:
+    https://docs.greatexpectations.io/docs/guides/connecting_to_your_data/datasource_configuration/how_to_configure_a_spark_datasource
     """
     ge_section = config.get("great_expectations") or {}
     suites: list[Mapping[str, Any]] = list(ge_section.get("suites", []))
@@ -289,10 +367,12 @@ def run_ge_checkpoints(
         return results
 
     ge_installed = _great_expectations_available()
+    checkpoint_configs = _load_checkpoint_configs()
     logger.info(
         "ge.runner_start",
         suite_count=len(suites),
         great_expectations_installed=ge_installed,
+        checkpoints_found=len(checkpoint_configs),
         fallback="in_memory" if not ge_installed or sample_data is not None else "live",
     )
 
@@ -303,22 +383,31 @@ def run_ge_checkpoints(
         if rows is not None:
             result = run_suite_in_memory(suite, rows)
         elif ge_installed:
-            # Real GE checkpoint runs require a live Spark datasource
-            # pointing at ADLS; that wiring lives outside this CLI
-            # runner (the Databricks notebooks call the GE API directly
-            # after materialising Silver/Gold tables).  From the CLI we
-            # mark the suite as skipped-with-context so operators know
-            # the suite exists and is ready to run.
+            # Real GE checkpoint runs require a live SparkSession and an
+            # ADLS-backed Spark datasource.  That wiring lives outside
+            # this CLI runner: the Databricks notebooks call the GE API
+            # directly after materialising Silver/Gold Delta tables.
+            #
+            # Checkpoint definitions are now available in
+            # great_expectations/checkpoints/ — the Databricks notebook
+            # can load them via:
+            #   context = ge.get_context("great_expectations/")
+            #   result = context.run_checkpoint(checkpoint_name="...")
+            #
+            # From the CLI we mark the suite as skipped-with-context so
+            # operators know the suite exists and is ready to run.
+            has_checkpoint = suite_name in checkpoint_configs
             result = SuiteResult(
                 suite_name=suite_name,
                 datasource=str(suite.get("datasource", "unknown")),
                 table=_infer_table_from_suite_name(suite_name),
                 status="skipped",
                 message=(
-                    "Great Expectations installed but no live datasource "
-                    "provided to the CLI runner. Run from a Databricks "
-                    "notebook with a Spark context, or pass sample_data= "
-                    "to run_ge_checkpoints() for in-memory evaluation."
+                    f"Great Expectations installed; checkpoint "
+                    f"{'found' if has_checkpoint else 'not found'} for "
+                    f"'{suite_name}'. Run from a Databricks notebook with "
+                    f"a Spark context, or pass sample_data= to "
+                    f"run_ge_checkpoints() for in-memory evaluation."
                 ),
             )
         else:

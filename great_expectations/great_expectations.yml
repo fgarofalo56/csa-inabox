@@ -1,0 +1,93 @@
+# Great Expectations DataContext configuration for CSA-in-a-Box.
+#
+# This config supports two modes:
+#   1. **CI / local dev** — the in-memory fallback evaluator in
+#      governance/dataquality/ge_runner.py handles expectations without
+#      needing a live Spark session or ADLS connectivity.
+#   2. **Databricks production** — a SparkDFDatasource is registered
+#      against the Delta tables in ADLS Gen2, and checkpoints run
+#      against real data after each dbt model materialisation.
+#
+# The checkpoint definitions in checkpoints/ map 1:1 to the suites
+# declared in governance/dataquality/quality-rules.yaml.
+
+config_version: 3.0
+
+datasources:
+  # ADLS Bronze layer — raw ingested data (Delta format)
+  adls_bronze:
+    class_name: Datasource
+    module_name: great_expectations.datasource
+    execution_engine:
+      class_name: SparkDFExecutionEngine
+      module_name: great_expectations.execution_engine
+    data_connectors:
+      bronze_connector:
+        class_name: RuntimeDataConnector
+        module_name: great_expectations.datasource.data_connector
+        batch_identifiers:
+          - run_id
+          - table_name
+
+  # ADLS Silver layer — validated, conformed data (Delta format)
+  adls_silver:
+    class_name: Datasource
+    module_name: great_expectations.datasource
+    execution_engine:
+      class_name: SparkDFExecutionEngine
+      module_name: great_expectations.execution_engine
+    data_connectors:
+      silver_connector:
+        class_name: RuntimeDataConnector
+        module_name: great_expectations.datasource.data_connector
+        batch_identifiers:
+          - run_id
+          - table_name
+
+  # ADLS Gold layer — business-ready aggregations (Delta format)
+  adls_gold:
+    class_name: Datasource
+    module_name: great_expectations.datasource
+    execution_engine:
+      class_name: SparkDFExecutionEngine
+      module_name: great_expectations.execution_engine
+    data_connectors:
+      gold_connector:
+        class_name: RuntimeDataConnector
+        module_name: great_expectations.datasource.data_connector
+        batch_identifiers:
+          - run_id
+          - table_name
+
+stores:
+  expectations_store:
+    class_name: ExpectationsStore
+    store_backend:
+      class_name: TupleFilesystemStoreBackend
+      base_directory: expectations/
+
+  validations_store:
+    class_name: ValidationsStore
+    store_backend:
+      class_name: TupleFilesystemStoreBackend
+      base_directory: uncommitted/validations/
+
+  checkpoint_store:
+    class_name: CheckpointStore
+    store_backend:
+      class_name: TupleFilesystemStoreBackend
+      base_directory: checkpoints/
+
+expectations_store_name: expectations_store
+validations_store_name: validations_store
+checkpoint_store_name: checkpoint_store
+
+data_docs_sites:
+  local_site:
+    class_name: SiteBuilder
+    show_how_to_buttons: false
+    store_backend:
+      class_name: TupleFilesystemStoreBackend
+      base_directory: uncommitted/data_docs/local_site/
+    site_index_builder:
+      class_name: DefaultSiteIndexBuilder

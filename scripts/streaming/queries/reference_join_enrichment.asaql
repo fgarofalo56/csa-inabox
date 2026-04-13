@@ -1,0 +1,76 @@
+-- =============================================================================
+-- CSA-in-a-Box: Reference Data JOIN for Event Enrichment
+-- =============================================================================
+-- Enriches streaming events with customer reference data stored in Azure Blob
+-- Storage. The reference dataset contains customer attributes such as tier,
+-- segment, and lifetime value that are not present in the raw event stream.
+--
+-- A LEFT JOIN ensures that events without a customer_id (anonymous sessions)
+-- still pass through to the output with NULL enrichment fields.
+--
+-- Pipeline:
+--   Event Hub (EventHubInput)  --+
+--                                |--> Stream Analytics --> Enriched sink (EnrichedOutput)
+--   Blob Storage (CustomerReference) --+
+--
+-- Reference data schema (CustomerReference, CSV or JSON in Blob Storage):
+--   {
+--     "customer_id": int,
+--     "tier": "free|basic|premium|enterprise",
+--     "segment": "new|returning|loyal|churned",
+--     "lifetime_value": float,
+--     "signup_date": "ISO8601"
+--   }
+--
+-- Compatibility Level: 1.2
+-- =============================================================================
+
+SELECT
+    -- Original event fields
+    e.id                                            AS event_id,
+    e.source,
+    e.type                                          AS event_type,
+    e.[timestamp]                                   AS event_timestamp,
+
+    -- Event data fields
+    e.data.session_id                               AS session_id,
+    e.data.customer_id                              AS customer_id,
+    e.data.device                                   AS device,
+    e.data.region                                   AS region,
+
+    -- Enrichment from reference data (NULL for anonymous events)
+    c.tier                                          AS customer_tier,
+    c.segment                                       AS customer_segment,
+    c.lifetime_value                                AS customer_lifetime_value,
+    c.signup_date                                   AS customer_signup_date,
+
+    -- Derived: is this a high-value customer? (premium/enterprise with LTV > 1000)
+    CASE
+        WHEN c.tier IN ('premium', 'enterprise')
+             AND c.lifetime_value > 1000
+            THEN 1
+        ELSE 0
+    END                                             AS is_high_value_customer,
+
+    -- Pass through type-specific data fields
+    e.data.load_time_ms,
+    e.data.amount,
+    e.data.error_code,
+    e.data.temperature,
+    e.data.humidity,
+
+    -- Processing metadata
+    System.Timestamp()                              AS processed_at
+
+INTO
+    [EnrichedOutput]
+
+FROM
+    -- Streaming input: events from Event Hub
+    [EventHubInput] e TIMESTAMP BY e.[timestamp]
+
+    -- Reference data: customer lookup table from Blob Storage.
+    -- Stream Analytics automatically refreshes reference data based on the
+    -- configured refresh interval (e.g., every 15 minutes or on blob update).
+    LEFT JOIN [CustomerReference] c
+        ON CAST(e.data.customer_id AS BIGINT) = c.customer_id

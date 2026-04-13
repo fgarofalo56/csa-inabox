@@ -372,7 +372,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"\n[FAIL] {len(all_errors)} contract error(s):", file=sys.stderr)
         for err in all_errors:
             print(f"  - {err}", file=sys.stderr)
-        return 1 if args.ci else 0
+        return 1 if args.ci else 0  # Non-CI: warn but don't fail (interactive use)
 
     print(f"[OK] {len(contract_files)} contract(s) valid")
     return 0

@@ -200,6 +200,46 @@ def register_scan_sources(client: Any, storage_account: str, dry_run: bool = Fal
             print(f"  Error registering {source['name']}: {e}")
 
 
+def create_scans(
+    client: Any,
+    storage_account: str,
+    *,
+    dry_run: bool = False,
+) -> None:
+    """Create scan definitions and weekly schedules for ADLS sources."""
+    print("\nCreating scan definitions ...")
+    for source in SCAN_SOURCES:
+        scan_name = f"weekly-{source['name']}"
+        scan_body = {
+            "kind": "AdlsGen2Msi",
+            "properties": {
+                "scanLevel": "Full",
+            },
+        }
+        trigger_body = {
+            "properties": {
+                "recurrence": {
+                    "frequency": "Week",
+                    "interval": 1,
+                    "startTime": "2026-01-06T02:00:00Z",
+                    "weekDays": ["Sunday"],
+                },
+                "scanLevel": "Full",
+            },
+        }
+
+        if dry_run:
+            print(f"  [DRY RUN] Would create scan '{scan_name}' on '{source['name']}' (weekly Sunday 02:00 UTC)")
+            continue
+
+        try:
+            client.scans.create_or_update(source["name"], scan_name, scan_body)
+            client.triggers.create_trigger(source["name"], scan_name, trigger_body)
+            print(f"  Created scan: {scan_name} (weekly Sunday 02:00 UTC)")
+        except Exception as e:
+            print(f"  Error creating scan {scan_name}: {e}")
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -208,6 +248,7 @@ def main() -> None:
     parser.add_argument("--purview-account", required=True, help="Purview account name")
     parser.add_argument("--storage-account", default="csadatalake", help="ADLS storage account name")
     parser.add_argument("--dry-run", action="store_true", help="Show what would happen")
+    parser.add_argument("--schedule-scans", action="store_true", help="Also create and schedule scans")
     args = parser.parse_args()
 
     print(f"Bootstrapping Purview catalog: {args.purview_account}")
@@ -217,6 +258,8 @@ def main() -> None:
         create_collections(None, dry_run=True)
         create_glossary_terms(None, dry_run=True)
         register_scan_sources(None, args.storage_account, dry_run=True)
+        if args.schedule_scans:
+            create_scans(None, args.storage_account, dry_run=True)
     else:
         catalog_client = get_catalog_client(args.purview_account)
         scanning_client = get_scanning_client(args.purview_account)
@@ -224,6 +267,8 @@ def main() -> None:
         create_collections(catalog_client)
         create_glossary_terms(catalog_client)
         register_scan_sources(scanning_client, args.storage_account)
+        if args.schedule_scans:
+            create_scans(scanning_client, args.storage_account)
 
     print("\nDone!")
 

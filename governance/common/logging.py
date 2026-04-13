@@ -29,6 +29,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import threading
 import uuid
 from contextlib import contextmanager
 from typing import Any, Iterator, Mapping
@@ -48,6 +49,7 @@ _TRACEPARENT_RE = re.compile(
 )
 
 _CONFIGURED = False
+_CONFIGURE_LOCK = threading.Lock()
 
 
 def configure_structlog(
@@ -71,57 +73,58 @@ def configure_structlog(
             Analytics both want JSON, so JSON is the default.
     """
     global _CONFIGURED
-    if _CONFIGURED:
-        # Re-binding the service name is the only thing safe to do on a
-        # second call — otherwise we keep the existing configuration so
-        # tests and importers don't stomp on each other.
+    with _CONFIGURE_LOCK:
+        if _CONFIGURED:
+            # Re-binding the service name is the only thing safe to do on a
+            # second call — otherwise we keep the existing configuration so
+            # tests and importers don't stomp on each other.
+            bind_contextvars(service=service)
+            return
+
+        if isinstance(level, str):
+            numeric_level = logging.getLevelName(level.upper())
+            if not isinstance(numeric_level, int):
+                numeric_level = logging.INFO
+        else:
+            numeric_level = level
+
+        # Route stdlib logging through structlog so third-party libraries
+        # (e.g. azure.*) still get JSON-formatted output.
+        logging.basicConfig(format="%(message)s", level=numeric_level)
+
+        if json_output is None:
+            json_output = os.environ.get("LOG_FORMAT", "json").lower() != "console"
+
+        # NOTE: we intentionally do not use ``structlog.stdlib.add_logger_name``
+        # because we use ``PrintLoggerFactory`` rather than the stdlib factory
+        # (PrintLogger has no ``name`` attribute).  Callers that want a logger
+        # name in the output should pass ``logger_name=...`` explicitly via
+        # kwargs.
+        shared_processors: list[Any] = [
+            merge_contextvars,
+            structlog.stdlib.add_log_level,
+            structlog.processors.TimeStamper(fmt="iso", utc=True, key="timestamp"),
+            structlog.processors.StackInfoRenderer(),
+            structlog.processors.format_exc_info,
+            structlog.processors.UnicodeDecoder(),
+        ]
+
+        renderer = (
+            structlog.processors.JSONRenderer()
+            if json_output
+            else structlog.dev.ConsoleRenderer(colors=False)
+        )
+
+        structlog.configure(
+            processors=[*shared_processors, renderer],
+            wrapper_class=structlog.make_filtering_bound_logger(numeric_level),
+            context_class=dict,
+            logger_factory=structlog.PrintLoggerFactory(),
+            cache_logger_on_first_use=True,
+        )
+
         bind_contextvars(service=service)
-        return
-
-    if isinstance(level, str):
-        numeric_level = logging.getLevelName(level.upper())
-        if not isinstance(numeric_level, int):
-            numeric_level = logging.INFO
-    else:
-        numeric_level = level
-
-    # Route stdlib logging through structlog so third-party libraries
-    # (e.g. azure.*) still get JSON-formatted output.
-    logging.basicConfig(format="%(message)s", level=numeric_level)
-
-    if json_output is None:
-        json_output = os.environ.get("LOG_FORMAT", "json").lower() != "console"
-
-    # NOTE: we intentionally do not use ``structlog.stdlib.add_logger_name``
-    # because we use ``PrintLoggerFactory`` rather than the stdlib factory
-    # (PrintLogger has no ``name`` attribute).  Callers that want a logger
-    # name in the output should pass ``logger_name=...`` explicitly via
-    # kwargs.
-    shared_processors: list[Any] = [
-        merge_contextvars,
-        structlog.stdlib.add_log_level,
-        structlog.processors.TimeStamper(fmt="iso", utc=True, key="timestamp"),
-        structlog.processors.StackInfoRenderer(),
-        structlog.processors.format_exc_info,
-        structlog.processors.UnicodeDecoder(),
-    ]
-
-    renderer = (
-        structlog.processors.JSONRenderer()
-        if json_output
-        else structlog.dev.ConsoleRenderer(colors=False)
-    )
-
-    structlog.configure(
-        processors=[*shared_processors, renderer],
-        wrapper_class=structlog.make_filtering_bound_logger(numeric_level),
-        context_class=dict,
-        logger_factory=structlog.PrintLoggerFactory(),
-        cache_logger_on_first_use=True,
-    )
-
-    bind_contextvars(service=service)
-    _CONFIGURED = True
+        _CONFIGURED = True
 
 
 def get_logger(name: str | None = None) -> structlog.stdlib.BoundLogger:

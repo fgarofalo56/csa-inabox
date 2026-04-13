@@ -1,4 +1,4 @@
-.PHONY: help setup lint test validate deploy-dev deploy-prod prerequisites seed seed-azure clean
+.PHONY: help setup lint test validate deploy-dev deploy-prod deploy-adf prerequisites seed seed-azure clean security
 
 # Default target
 help: ## Show this help
@@ -24,13 +24,13 @@ setup-win: ## Set up development environment (Windows)
 
 # --- Linting ---
 
-lint: ## Run all linters
-	ruff check domains/ scripts/ governance/ --select E,F,W --ignore E501
+lint: ## Run all linters (uses pyproject.toml rule config)
+	ruff check domains/ scripts/ governance/ tools/
 	@echo "Python lint passed"
 
 lint-fix: ## Auto-fix lint issues
-	ruff check domains/ scripts/ governance/ --fix --select E,F,W --ignore E501
-	ruff format domains/ scripts/ governance/
+	ruff check domains/ scripts/ governance/ tools/ --fix
+	ruff format domains/ scripts/ governance/ tools/
 
 typecheck: ## Run strict mypy on governance, tests, and both Function apps
 	mypy
@@ -44,10 +44,19 @@ lint-bicep: ## Lint all Bicep files
 lint-ps: ## Lint PowerShell scripts
 	pwsh -Command "Get-ChildItem -Recurse -Filter *.ps1 | ForEach-Object { Invoke-ScriptAnalyzer -Path $$_.FullName -Severity Warning }"
 
+security: ## Run Bandit security linter
+	bandit -r governance/ domains/ scripts/ -c pyproject.toml --skip B101
+
 # --- Testing ---
 
 test: ## Run all tests
-	pytest tests/ --tb=short -q 2>/dev/null || echo "No tests found yet"
+	pytest tests/ --tb=short -q
+
+test-e2e: ## Run end-to-end integration tests (offline, DuckDB only)
+	pytest tests/e2e/ -v --tb=short -m "not live"
+
+test-e2e-live: ## Run all end-to-end tests (requires Azure connection)
+	pytest tests/e2e/ -v --tb=short
 
 test-dbt: ## Compile and test dbt models
 	cd domains/shared/dbt && dbt compile --profiles-dir .
@@ -76,6 +85,9 @@ deploy-dev: ## Deploy to dev environment (what-if)
 deploy-prod: ## Deploy to production (requires confirmation)
 	@echo "Deploying to PRODUCTION..."
 	bash scripts/deploy/deploy-platform.sh --environment prod
+
+deploy-adf: ## Deploy ADF pipelines to a Data Factory instance
+	bash scripts/deploy/deploy-adf.sh --factory-name $(FACTORY_NAME) --resource-group $(RESOURCE_GROUP) $(if $(DRY_RUN),--dry-run)
 
 prerequisites: ## Validate deployment prerequisites
 	bash scripts/deploy/validate-prerequisites.sh

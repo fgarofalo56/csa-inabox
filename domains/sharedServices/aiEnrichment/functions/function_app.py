@@ -46,7 +46,6 @@ app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
 # Configuration
 # ---------------------------------------------------------------------------
 AI_ENDPOINT = os.environ.get("AZURE_AI_ENDPOINT", "")
-AI_KEY_SECRET = os.environ.get("AZURE_AI_KEY", "")  # From Key Vault reference
 STORAGE_CONNECTION = os.environ.get("AzureWebJobsStorage", "")
 ENRICHED_CONTAINER = os.environ.get("ENRICHED_CONTAINER", "enriched")
 INBOX_CONTAINER = os.environ.get("INBOX_CONTAINER", "inbox")
@@ -57,7 +56,7 @@ INBOX_CONTAINER = os.environ.get("INBOX_CONTAINER", "inbox")
 # ---------------------------------------------------------------------------
 def _text_analytics_available() -> bool:
     """Return True if the Text Analytics SDK + config are both ready."""
-    if not AI_ENDPOINT or not AI_KEY_SECRET:
+    if not AI_ENDPOINT:
         return False
     try:
         import azure.ai.textanalytics.aio  # noqa: F401
@@ -68,7 +67,7 @@ def _text_analytics_available() -> bool:
 
 def _form_recognizer_available() -> bool:
     """Return True if the Document Intelligence SDK + config are both ready."""
-    if not AI_ENDPOINT or not AI_KEY_SECRET:
+    if not AI_ENDPOINT:
         return False
     try:
         import azure.ai.formrecognizer.aio  # noqa: F401
@@ -99,76 +98,77 @@ async def _enrich_text(text: str) -> dict[str, Any]:
 
     try:
         from azure.ai.textanalytics.aio import TextAnalyticsClient
-        from azure.core.credentials import AzureKeyCredential
+        from azure.identity.aio import DefaultAzureCredential
     except ImportError:
         logger.warning("ai_client.import_failed", package="azure-ai-textanalytics")
         results["error"] = "AI client not configured"
         return results
 
-    if not AI_ENDPOINT or not AI_KEY_SECRET:
+    if not AI_ENDPOINT:
         results["error"] = "AI client not configured"
         return results
 
     docs = [{"id": "1", "text": text[:5120]}]
 
     try:
-        async with TextAnalyticsClient(
-            endpoint=AI_ENDPOINT,
-            credential=AzureKeyCredential(AI_KEY_SECRET),
-        ) as client:
-            # Language detection
-            lang_result = await client.detect_language(documents=docs)
-            if lang_result and not lang_result[0].is_error:
-                detected = lang_result[0].primary_language
-                results["language"] = {
-                    "name": detected.name,
-                    "iso_code": detected.iso6391_name,
-                    "confidence": detected.confidence_score,
-                }
-
-            # Sentiment analysis
-            sentiment_result = await client.analyze_sentiment(documents=docs)
-            if sentiment_result and not sentiment_result[0].is_error:
-                doc = sentiment_result[0]
-                results["sentiment"] = {
-                    "overall": doc.sentiment,
-                    "scores": {
-                        "positive": doc.confidence_scores.positive,
-                        "neutral": doc.confidence_scores.neutral,
-                        "negative": doc.confidence_scores.negative,
-                    },
-                }
-
-            # Key phrases
-            phrases_result = await client.extract_key_phrases(documents=docs)
-            if phrases_result and not phrases_result[0].is_error:
-                results["key_phrases"] = list(phrases_result[0].key_phrases)
-
-            # Named entity recognition
-            entity_result = await client.recognize_entities(documents=docs)
-            if entity_result and not entity_result[0].is_error:
-                results["entities"] = [
-                    {
-                        "text": e.text,
-                        "category": e.category,
-                        "subcategory": e.subcategory,
-                        "confidence": e.confidence_score,
+        async with DefaultAzureCredential() as credential:
+            async with TextAnalyticsClient(
+                endpoint=AI_ENDPOINT,
+                credential=credential,
+            ) as client:
+                # Language detection
+                lang_result = await client.detect_language(documents=docs)
+                if lang_result and not lang_result[0].is_error:
+                    detected = lang_result[0].primary_language
+                    results["language"] = {
+                        "name": detected.name,
+                        "iso_code": detected.iso6391_name,
+                        "confidence": detected.confidence_score,
                     }
-                    for e in entity_result[0].entities
-                ]
 
-            # PII detection
-            pii_result = await client.recognize_pii_entities(documents=docs)
-            if pii_result and not pii_result[0].is_error:
-                results["pii_entities"] = [
-                    {
-                        "text": f"{e.text[:3]}***",  # Redact in results
-                        "category": e.category,
-                        "subcategory": e.subcategory,
-                        "confidence": e.confidence_score,
+                # Sentiment analysis
+                sentiment_result = await client.analyze_sentiment(documents=docs)
+                if sentiment_result and not sentiment_result[0].is_error:
+                    doc = sentiment_result[0]
+                    results["sentiment"] = {
+                        "overall": doc.sentiment,
+                        "scores": {
+                            "positive": doc.confidence_scores.positive,
+                            "neutral": doc.confidence_scores.neutral,
+                            "negative": doc.confidence_scores.negative,
+                        },
                     }
-                    for e in pii_result[0].entities
-                ]
+
+                # Key phrases
+                phrases_result = await client.extract_key_phrases(documents=docs)
+                if phrases_result and not phrases_result[0].is_error:
+                    results["key_phrases"] = list(phrases_result[0].key_phrases)
+
+                # Named entity recognition
+                entity_result = await client.recognize_entities(documents=docs)
+                if entity_result and not entity_result[0].is_error:
+                    results["entities"] = [
+                        {
+                            "text": e.text,
+                            "category": e.category,
+                            "subcategory": e.subcategory,
+                            "confidence": e.confidence_score,
+                        }
+                        for e in entity_result[0].entities
+                    ]
+
+                # PII detection
+                pii_result = await client.recognize_pii_entities(documents=docs)
+                if pii_result and not pii_result[0].is_error:
+                    results["pii_entities"] = [
+                        {
+                            "text": f"{e.text[:3]}***",  # Redact in results
+                            "category": e.category,
+                            "subcategory": e.subcategory,
+                            "confidence": e.confidence_score,
+                        }
+                        for e in pii_result[0].entities
+                    ]
 
     except Exception:
         logger.exception("enrichment.text_failed")
@@ -189,41 +189,42 @@ async def _analyze_document(blob_data: bytes, content_type: str) -> dict[str, An
 
     try:
         from azure.ai.formrecognizer.aio import DocumentAnalysisClient
-        from azure.core.credentials import AzureKeyCredential
+        from azure.identity.aio import DefaultAzureCredential
     except ImportError:
         logger.warning("ai_client.import_failed", package="azure-ai-formrecognizer")
         results["error"] = "Document Intelligence client not configured"
         return results
 
-    if not AI_ENDPOINT or not AI_KEY_SECRET:
+    if not AI_ENDPOINT:
         results["error"] = "Document Intelligence client not configured"
         return results
 
     try:
-        async with DocumentAnalysisClient(
-            endpoint=AI_ENDPOINT,
-            credential=AzureKeyCredential(AI_KEY_SECRET),
-        ) as client:
-            poller = await client.begin_analyze_document(
-                model_id="prebuilt-document",
-                document=blob_data,
-                content_type=content_type,
-            )
-            result = await poller.result()
+        async with DefaultAzureCredential() as credential:
+            async with DocumentAnalysisClient(
+                endpoint=AI_ENDPOINT,
+                credential=credential,
+            ) as client:
+                poller = await client.begin_analyze_document(
+                    model_id="prebuilt-document",
+                    document=blob_data,
+                    content_type=content_type,
+                )
+                result = await poller.result()
 
-            results["pages"] = len(result.pages) if result.pages else 0
-            results["tables"] = len(result.tables) if result.tables else 0
-            results["content_preview"] = (result.content or "")[:500]
+                results["pages"] = len(result.pages) if result.pages else 0
+                results["tables"] = len(result.tables) if result.tables else 0
+                results["content_preview"] = (result.content or "")[:500]
 
-            if result.key_value_pairs:
-                results["key_value_pairs"] = [
-                    {
-                        "key": kvp.key.content if kvp.key else None,
-                        "value": kvp.value.content if kvp.value else None,
-                        "confidence": kvp.confidence,
-                    }
-                    for kvp in result.key_value_pairs[:50]
-                ]
+                if result.key_value_pairs:
+                    results["key_value_pairs"] = [
+                        {
+                            "key": kvp.key.content if kvp.key else None,
+                            "value": kvp.value.content if kvp.value else None,
+                            "confidence": kvp.confidence,
+                        }
+                        for kvp in result.key_value_pairs[:50]
+                    ]
 
     except Exception:
         logger.exception("enrichment.document_failed")
@@ -372,7 +373,7 @@ async def process_inbox_document(
 # ---------------------------------------------------------------------------
 # HTTP Trigger: Health check
 # ---------------------------------------------------------------------------
-@app.route(route="health", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+@app.route(route="health", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 async def health_check(req: func.HttpRequest) -> func.HttpResponse:
     """Health check endpoint for monitoring.
 

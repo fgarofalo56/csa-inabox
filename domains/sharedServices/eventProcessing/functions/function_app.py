@@ -112,10 +112,13 @@ async def process_events(
     1. Cosmos DB for low-latency queries
     2. Logs for ADLS archival via diagnostic settings
     """
+    if not events:
+        return
+
     batch_size = len(events)
     # Use the first event's sequence number as the trace anchor — it gives
     # us a deterministic ID per batch that maps back to Event Hub partitions.
-    first_seq = events[0].sequence_number if events else None
+    first_seq = events[0].sequence_number
     with bind_trace_context(
         trigger="eventhub",
         batch_size=batch_size,
@@ -257,7 +260,7 @@ async def replay_events(
 # ---------------------------------------------------------------------------
 # HTTP Trigger: Health check
 # ---------------------------------------------------------------------------
-@app.route(route="health", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+@app.route(route="health", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 async def health(req: func.HttpRequest) -> func.HttpResponse:
     """Health check for event processing service."""
     return func.HttpResponse(

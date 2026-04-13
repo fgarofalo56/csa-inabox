@@ -87,7 +87,7 @@ class DataQualityRunner:
 
     def run_dbt_tests(self, select: str = "") -> list[QualityCheckResult]:
         """Run dbt tests and parse results."""
-        logger.info("Running dbt tests...")
+        logger.info("dbt.tests.starting", select=select or "all")
         cmd = ["dbt", "test", "--profiles-dir", ".", "--project-dir", "."]
         if select:
             import re
@@ -108,7 +108,7 @@ class DataQualityRunner:
                     )
                 )
             else:
-                logger.warning(f"dbt tests had failures:\n{result.stdout}")
+                logger.warning("dbt.tests.failed", stdout=result.stdout[:2000])
                 # Parse individual test failures from dbt output
                 failures = self._parse_dbt_failures(result.stdout)
                 for failure in failures:
@@ -137,7 +137,7 @@ class DataQualityRunner:
 
     def check_freshness(self) -> list[QualityCheckResult]:
         """Check data freshness using dbt source freshness."""
-        logger.info("Checking data freshness...")
+        logger.info("freshness.checking")
         try:
             result = subprocess.run(
                 ["dbt", "source", "freshness", "--profiles-dir", ".", "--project-dir", "."],
@@ -165,7 +165,7 @@ class DataQualityRunner:
                     )
                 )
         except (subprocess.TimeoutExpired, FileNotFoundError) as e:
-            logger.warning(f"Freshness check skipped: {e}")
+            logger.warning("freshness.skipped", error=str(e))
 
         return self.results
 
@@ -180,7 +180,7 @@ class DataQualityRunner:
             table = rule["table"]
             min_rows = rule.get("min_rows", 0)
             max_growth_pct = rule.get("max_growth_pct", 200)
-            logger.info(f"Checking volume for {table} (min_rows={min_rows})")
+            logger.info("volume.checking", table=table, min_rows=min_rows)
 
             # Try to get actual row count via dbt
             try:
@@ -306,16 +306,105 @@ class DataQualityRunner:
         return report
 
     def emit_to_log_analytics(self, report: dict[str, Any]) -> None:
-        """Send quality metrics to Azure Log Analytics custom logs."""
-        try:
-            # Use Azure Monitor Ingestion client library
-            # In production, this uses DefaultAzureCredential and the DCR endpoint
-            logger.info(
-                f"Quality report: {report['summary']['health_score']}% health score "
-                f"({report['summary']['passed']}/{report['summary']['total_checks']} passed)"
+        """Send quality metrics to Azure Log Analytics via Azure Monitor Ingestion.
+
+        Uses the ``azure-monitor-ingestion`` SDK with ``DefaultAzureCredential``
+        to push quality check results to a Data Collection Rule (DCR) endpoint.
+        Falls back to structured logging if the Monitor Ingestion client is not
+        configured (missing env vars) or the SDK is unavailable.
+
+        Required environment variables for full ingestion:
+            MONITOR_DCR_ENDPOINT: Data Collection Endpoint URL
+            MONITOR_DCR_RULE_ID: Data Collection Rule immutable ID
+            MONITOR_DCR_STREAM:  Custom log stream name (default: Custom-DataQuality_CL)
+        """
+        import os
+
+        dcr_endpoint = os.environ.get("MONITOR_DCR_ENDPOINT", "")
+        dcr_rule_id = os.environ.get("MONITOR_DCR_RULE_ID", "")
+        dcr_stream = os.environ.get("MONITOR_DCR_STREAM", "Custom-DataQuality_CL")
+
+        # Always emit to structured logs (Log Analytics picks these up via
+        # diagnostic settings regardless of the Ingestion client).
+        logger.info(
+            "quality.report_summary",
+            health_score=report["summary"]["health_score"],
+            passed=report["summary"]["passed"],
+            total_checks=report["summary"]["total_checks"],
+            failures=report["summary"]["failures"],
+            warnings=report["summary"]["warnings"],
+        )
+
+        if not dcr_endpoint or not dcr_rule_id:
+            logger.debug(
+                "monitor.ingestion_skipped",
+                reason="MONITOR_DCR_ENDPOINT or MONITOR_DCR_RULE_ID not set",
             )
-        except Exception as e:
-            logger.error(f"Failed to emit to Log Analytics: {e}")
+            return
+
+        try:
+            from azure.identity import DefaultAzureCredential
+            from azure.monitor.ingestion import LogsIngestionClient
+        except ImportError:
+            logger.warning(
+                "monitor.sdk_not_installed",
+                package="azure-monitor-ingestion",
+            )
+            return
+
+        # Build log entries — one per quality check result.
+        entries = [
+            {
+                "TimeGenerated": r["timestamp"],
+                "CheckName": r["check_name"],
+                "Table": r["table"],
+                "Status": r["status"],
+                "Message": r["message"],
+                "HealthScore": report["summary"]["health_score"],
+                "TotalChecks": report["summary"]["total_checks"],
+                "Passed": report["summary"]["passed"],
+                "Failures": report["summary"]["failures"],
+                "Warnings": report["summary"]["warnings"],
+            }
+            for r in report.get("results", [])
+        ]
+
+        if not entries:
+            # At minimum, emit the summary even if no individual results
+            entries = [
+                {
+                    "TimeGenerated": report["report_timestamp"],
+                    "CheckName": "quality_summary",
+                    "Table": "all",
+                    "Status": "pass" if report["summary"]["failures"] == 0 else "fail",
+                    "Message": f"Health score: {report['summary']['health_score']}%",
+                    "HealthScore": report["summary"]["health_score"],
+                    "TotalChecks": report["summary"]["total_checks"],
+                    "Passed": report["summary"]["passed"],
+                    "Failures": report["summary"]["failures"],
+                    "Warnings": report["summary"]["warnings"],
+                }
+            ]
+
+        try:
+            credential = DefaultAzureCredential()
+            client = LogsIngestionClient(
+                endpoint=dcr_endpoint,
+                credential=credential,
+            )
+            client.upload(
+                rule_id=dcr_rule_id,
+                stream_name=dcr_stream,
+                logs=entries,
+            )
+            logger.info(
+                "monitor.ingestion_complete",
+                entries=len(entries),
+                dcr_endpoint=dcr_endpoint,
+            )
+        except Exception:
+            logger.exception("monitor.ingestion_failed")
+            # Non-fatal — quality checks still ran and results are in logs
 
     @staticmethod
     def _parse_dbt_failures(output: str) -> list[dict[str, str]]:
@@ -410,7 +499,7 @@ def main() -> None:
         if args.output:
             with open(args.output, "w") as f:
                 f.write(report_json)
-            logger.info(f"Report written to {args.output}")
+            logger.info("report.written", output=args.output)
         else:
             print(report_json)
 
@@ -418,10 +507,10 @@ def main() -> None:
 
     # Exit with non-zero if any failures
     if report["summary"]["failures"] > 0:
-        logger.error(f"{report['summary']['failures']} quality checks failed!")
+        logger.error("quality.checks_failed", failures=report["summary"]["failures"])
         sys.exit(1)
 
-    logger.info(f"All quality checks passed. Health score: {report['summary']['health_score']}%")
+    logger.info("quality.all_passed", health_score=report["summary"]["health_score"])
 
 
 if __name__ == "__main__":

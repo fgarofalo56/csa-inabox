@@ -1,0 +1,60 @@
+-- =============================================================================
+-- CSA-in-a-Box: Tumbling Window Event Counts
+-- =============================================================================
+-- Aggregates streaming events into 5-minute tumbling windows, counting events,
+-- distinct customers/sessions, and averaging page load times per event type
+-- and region.
+--
+-- Pipeline:  Event Hub (EventHubInput) --> Stream Analytics --> ADX (ADXOutput)
+--
+-- Compatibility Level: 1.2
+--
+-- Event schema (from produce_events.py):
+--   {
+--     "id": "uuid",
+--     "source": "csa-inabox-producer",
+--     "type": "page_view|button_click|form_submit|...|heartbeat",
+--     "timestamp": "ISO8601",
+--     "data": {
+--       "session_id": "sess-NNNN",
+--       "customer_id": int|null,
+--       "device": "desktop|mobile|tablet|iot_sensor|api_client",
+--       "region": "eastus|westus|northeurope|southeastasia|brazilsouth",
+--       "load_time_ms": int,
+--       ...
+--     }
+--   }
+-- =============================================================================
+
+-- Use the event-time timestamp for windowing so that late-arriving events
+-- are placed into the correct 5-minute bucket rather than using the system
+-- ingestion time.
+SELECT
+    -- Window boundaries for downstream dashboards
+    System.Timestamp()                              AS window_end,
+
+    -- Grouping dimensions
+    e.type                                          AS event_type,
+    e.data.region                                   AS region,
+
+    -- Metrics
+    COUNT(*)                                        AS event_count,
+    COUNT(DISTINCT e.data.session_id)               AS unique_sessions,
+    COUNT(DISTINCT e.data.customer_id)              AS unique_customers,
+    AVG(e.data.load_time_ms)                        AS avg_load_time_ms,
+    MIN(e.data.load_time_ms)                        AS min_load_time_ms,
+    MAX(e.data.load_time_ms)                        AS max_load_time_ms
+
+INTO
+    -- ADX (Azure Data Explorer) output sink
+    [ADXOutput]
+
+FROM
+    -- Event Hub streaming input
+    [EventHubInput] e TIMESTAMP BY e.[timestamp]
+
+GROUP BY
+    e.type,
+    e.data.region,
+    -- 5-minute non-overlapping tumbling window
+    TumblingWindow(minute, 5)

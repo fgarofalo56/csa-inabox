@@ -146,8 +146,12 @@ def _model_name_from_contract(contract: Contract) -> str:
 
     Convention: the Silver model for ``<domain>.<product>`` is named
     ``slv_<product>``  (e.g. ``sales.orders`` -> ``slv_orders``).
+
+    Multi-segment product names are joined with underscores to avoid
+    collisions (e.g. ``sales.ecommerce.orders`` -> ``slv_ecommerce_orders``).
     """
-    product = contract.name.split(".")[-1]
+    parts = contract.name.split(".")
+    product = "_".join(parts[1:]) if len(parts) > 1 else parts[0]
     return f"slv_{product}"
 
 

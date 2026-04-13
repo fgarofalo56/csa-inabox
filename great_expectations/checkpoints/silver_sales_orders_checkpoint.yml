@@ -1,0 +1,32 @@
+# Silver Sales Orders Checkpoint
+#
+# Validates conformed order data in the Silver layer after dbt Silver
+# model materialisation.  Maps to silver_sales_orders_suite in
+# quality-rules.yaml.
+#
+# Usage (Databricks notebook):
+#   context = ge.get_context("great_expectations/")
+#   result = context.run_checkpoint(checkpoint_name="silver_sales_orders_checkpoint")
+
+name: silver_sales_orders_checkpoint
+config_version: 1.0
+class_name: SimpleCheckpoint
+module_name: great_expectations.checkpoint
+
+validations:
+  - batch_request:
+      datasource_name: adls_silver
+      data_connector_name: silver_connector
+      data_asset_name: silver_orders
+      batch_identifiers:
+        table_name: silver.orders
+    expectation_suite_name: silver_sales_orders_suite
+
+action_list:
+  - name: store_validation_result
+    action:
+      class_name: StoreValidationResultAction
+
+  - name: update_data_docs
+    action:
+      class_name: UpdateDataDocsAction

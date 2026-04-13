@@ -93,19 +93,44 @@ def _generate_password(length: int = 32, *, include_special: bool = True) -> str
 def _parse_secret_name(secret_name: str) -> dict[str, str]:
     """Parse a secret name following ``{service}-{purpose}-{env}`` convention.
 
-    Returns a dict with ``service``, ``purpose``, and ``environment`` keys.
-    Falls back gracefully when the name doesn't match the expected pattern.
+    The environment is always the last segment (after the final ``-``).
+    The service is matched against known handler prefixes so multi-hyphen
+    service names like ``cosmosdb-primary-key-prod`` correctly resolve to
+    ``service="cosmosdb"``.  Falls back gracefully when the name doesn't
+    match the expected pattern.
+
+    Examples::
+
+        "storage-access-key-prod"   -> service="storage", purpose="access-key", env="prod"
+        "cosmosdb-primary-key-prod" -> service="cosmosdb", purpose="primary-key", env="prod"
+        "sql-admin-password-dev"    -> service="sql", purpose="admin-password", env="dev"
     """
-    parts = secret_name.rsplit("-", 2)
-    if len(parts) >= 3:
-        return {
-            "service": parts[0],
-            "purpose": parts[1],
-            "environment": parts[2],
-        }
-    if len(parts) == 2:
-        return {"service": parts[0], "purpose": parts[1], "environment": "unknown"}
-    return {"service": secret_name, "purpose": "unknown", "environment": "unknown"}
+    if "-" not in secret_name:
+        return {"service": secret_name, "purpose": "unknown", "environment": "unknown"}
+
+    # Environment is always the last segment
+    rest, environment = secret_name.rsplit("-", 1)
+
+    if "-" not in rest:
+        return {"service": rest, "purpose": "unknown", "environment": environment}
+
+    # Match the service prefix against known handler keys.  Try longest
+    # prefixes first so "cosmosdb" beats "cosmos" when both are registered.
+    known_services = sorted(_ROTATION_HANDLERS.keys(), key=len, reverse=True)
+    for svc in known_services:
+        if rest == svc:
+            return {"service": svc, "purpose": "default", "environment": environment}
+        if rest.startswith(svc + "-"):
+            purpose = rest[len(svc) + 1 :]
+            return {"service": svc, "purpose": purpose, "environment": environment}
+
+    # No known service prefix matched — split on first hyphen as best-effort
+    first_hyphen = rest.index("-")
+    return {
+        "service": rest[:first_hyphen],
+        "purpose": rest[first_hyphen + 1 :],
+        "environment": environment,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -127,7 +152,7 @@ async def _rotate_storage_key(
     from azure.keyvault.secrets.aio import SecretClient
     from azure.mgmt.storage.aio import StorageManagementClient
 
-    subscription_id = params.get("subscription_id", os.environ.get("AZURE_SUBSCRIPTION_ID", ""))
+    subscription_id = os.environ.get("AZURE_SUBSCRIPTION_ID", "")
     resource_group = params.get("resource_group", "")
     account_name = params.get("account_name", "")
 
@@ -184,7 +209,7 @@ async def _rotate_cosmos_key(
     from azure.keyvault.secrets.aio import SecretClient
     from azure.mgmt.cosmosdb.aio import CosmosDBManagementClient
 
-    subscription_id = params.get("subscription_id", os.environ.get("AZURE_SUBSCRIPTION_ID", ""))
+    subscription_id = os.environ.get("AZURE_SUBSCRIPTION_ID", "")
     resource_group = params.get("resource_group", "")
     account_name = params.get("account_name", "")
 
@@ -194,17 +219,19 @@ async def _rotate_cosmos_key(
     result: dict[str, Any] = {"service": "cosmosdb", "account": account_name}
 
     async with DefaultAzureCredential() as credential:
-        # Step 1: Regenerate primary key
+        # Step 1: Regenerate primary key (long-running operation)
         async with CosmosDBManagementClient(credential, subscription_id) as cosmos_client:
             from azure.mgmt.cosmosdb.models import DatabaseAccountRegenerateKeyParameters
-            await cosmos_client.database_accounts.begin_regenerate_key(
+            poller = await cosmos_client.database_accounts.begin_regenerate_key(
                 resource_group,
                 account_name,
                 DatabaseAccountRegenerateKeyParameters(key_kind="Primary"),
             )
+            # CRITICAL: await the poller — without this, list_keys returns the OLD key
+            await poller.result()
             logger.info("rotation.key_regenerated", service="cosmosdb", account=account_name)
 
-            # Step 2: Read back the new key
+            # Step 2: Read back the new key (safe now that regeneration is complete)
             keys = await cosmos_client.database_accounts.list_keys(
                 resource_group, account_name,
             )
@@ -451,7 +478,7 @@ async def rotate(req: func.HttpRequest) -> func.HttpResponse:
 # ---------------------------------------------------------------------------
 # HTTP Trigger: Health check
 # ---------------------------------------------------------------------------
-@app.route(route="health", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+@app.route(route="health", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 async def health(req: func.HttpRequest) -> func.HttpResponse:
     """Health check for secret rotation service.
 

@@ -3,7 +3,7 @@ name = "csa-inabox"
 version = "0.1.0"
 description = "Cloud-Scale Analytics in-a-Box — Azure Data Mesh Platform"
 requires-python = ">=3.10"
-license = {text = "MIT"}
+license = "MIT"
 
 dependencies = []
 
@@ -35,6 +35,12 @@ governance = [
     # Spark-backed checkpoint pipeline is implemented.
     # "great-expectations>=1.0.0",
 ]
+
+[tool.setuptools]
+# Only the governance package is a real installable Python package.
+# Everything else (deploy/, domains/, templates/, scripts/) is non-Python
+# or uses its own import mechanics (Azure Functions, dbt, Databricks).
+packages = ["governance", "governance.common", "governance.contracts", "governance.dataquality"]
 
 [tool.ruff]
 target-version = "py310"
@@ -83,6 +89,9 @@ testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
 python_functions = ["test_*"]
 addopts = "--tb=short -q --strict-markers"
+markers = [
+    "live: requires a live Azure connection (az login)",
+]
 
 [tool.coverage.run]
 # Only measure the code under test today.  As new areas grow a real test
@@ -102,11 +111,6 @@ omit = [
     "**/__init__.py",
     "**/conftest.py",
     "**/test_*.py",
-    # The quality-check CLI runner wraps third-party tools (dbt,
-    # great_expectations) and is exercised in integration tests, not
-    # unit tests.  Keep it out of the coverage gate until an
-    # integration test suite exists.
-    "governance/dataquality/run_quality_checks.py",
 ]
 
 [tool.coverage.report]

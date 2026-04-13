@@ -37,9 +37,9 @@ rules:
         - { name: customer_sk, type: string }
         - { name: customer_id, type: string }
         - { name: email, type: string }
-        - { name: full_name, type: string }
-        - { name: is_valid_email, type: boolean }
-        - { name: loaded_at, type: timestamp }
+        - { name: first_name, type: string }
+        - { name: last_name, type: string }
+        - { name: is_valid, type: boolean }
 
   # Uniqueness — no duplicates on these columns
   uniqueness:
@@ -69,7 +69,7 @@ rules:
       severity: error
     - name: clv_positive_for_active
       table: gold.gld_customer_lifetime_value
-      expression: "customer_segment = 'active' AND total_revenue > 0"
+      expression: "customer_segment = 'active' AND lifetime_revenue > 0"
       severity: warn
 
 # ─── dbt Test Mapping ────────────────────────────────────────────────────────

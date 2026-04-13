@@ -1,0 +1,91 @@
+-- =============================================================================
+-- CSA-in-a-Box: Session Window User Activity Tracking
+-- =============================================================================
+-- Tracks user behavior across sessions using a session window that:
+--   - Closes after 5 minutes of inactivity (timeout)
+--   - Forces closure after 30 minutes (max duration)
+--
+-- For each session, the query computes:
+--   - First and last event timestamps (session duration)
+--   - Total event count
+--   - Distinct pages visited
+--   - Whether a purchase occurred during the session
+--   - Total purchase amount (if any)
+--   - Devices used during the session
+--
+-- Pipeline:  Event Hub (EventHubInput) --> Stream Analytics --> Session sink (SessionOutput)
+--
+-- Compatibility Level: 1.2
+-- =============================================================================
+
+SELECT
+    -- Session identifier
+    e.data.session_id                               AS session_id,
+
+    -- Session time boundaries
+    System.Timestamp()                              AS session_end,
+    MIN(e.[timestamp])                              AS session_start,
+
+    -- Duration in seconds (calculated downstream from session_start/session_end)
+
+    -- Activity metrics
+    COUNT(*)                                        AS event_count,
+
+    -- Count distinct page views within the session
+    COUNT(DISTINCT
+        CASE
+            WHEN e.type = 'page_view' THEN e.data.page
+            ELSE NULL
+        END
+    )                                               AS pages_visited,
+
+    -- Purchase tracking: did the user complete a purchase in this session?
+    MAX(
+        CASE
+            WHEN e.type = 'purchase_complete' THEN 1
+            ELSE 0
+        END
+    )                                               AS purchase_occurred,
+
+    -- Total revenue from purchases in this session
+    SUM(
+        CASE
+            WHEN e.type = 'purchase_complete' THEN e.data.amount
+            ELSE 0.0
+        END
+    )                                               AS total_purchase_amount,
+
+    -- Count of items added to cart
+    SUM(
+        CASE
+            WHEN e.type = 'add_to_cart' THEN 1
+            ELSE 0
+        END
+    )                                               AS items_added_to_cart,
+
+    -- Count of errors encountered during the session
+    SUM(
+        CASE
+            WHEN e.type = 'error' THEN 1
+            ELSE 0
+        END
+    )                                               AS error_count,
+
+    -- Region (take the first observed region for the session)
+    MIN(e.data.region)                              AS region,
+
+    -- Customer ID (take the first non-null value observed)
+    MIN(e.data.customer_id)                         AS customer_id
+
+INTO
+    [SessionOutput]
+
+FROM
+    [EventHubInput] e TIMESTAMP BY e.[timestamp]
+
+GROUP BY
+    e.data.session_id,
+    -- Session window: 5-minute inactivity timeout, 30-minute maximum duration.
+    -- Events with the same session_id are grouped together until either
+    -- 5 minutes pass with no new events OR 30 minutes total have elapsed.
+    SessionWindow(minute, 5, 30)

@@ -1,0 +1,89 @@
+-- =============================================================================
+-- CSA-in-a-Box: Sliding Window Anomaly Detection
+-- =============================================================================
+-- Detects anomalous error rates using a 10-minute sliding window.
+-- An alert fires when:
+--   1. The error rate exceeds 5% of total events in the window, OR
+--   2. The current error count spikes to more than 3x the previous
+--      window's error count (detected via LAG).
+--
+-- Pipeline:  Event Hub (EventHubInput) --> Stream Analytics --> Alert sink (AlertOutput)
+--
+-- Compatibility Level: 1.2
+-- =============================================================================
+
+-- Step 1: Compute per-window error metrics with a sliding window.
+-- The sliding window emits a result for every event, using the most recent
+-- 10-minute span. We aggregate with HoppingWindow (1-min hop, 10-min size)
+-- for discrete results that approximate a sliding window at 1-min granularity.
+WITH ErrorMetrics AS (
+    SELECT
+        System.Timestamp()                          AS window_end,
+        COUNT(*)                                    AS total_events,
+        SUM(CASE WHEN e.type = 'error' THEN 1 ELSE 0 END)
+                                                    AS error_count,
+        -- Error rate as a percentage of total events in the window
+        CAST(
+            SUM(CASE WHEN e.type = 'error' THEN 1 ELSE 0 END) * 100.0
+            / COUNT(*)
+        AS FLOAT)                                   AS error_rate_pct
+    FROM
+        [EventHubInput] e TIMESTAMP BY e.[timestamp]
+    GROUP BY
+        SlidingWindow(minute, 10)
+    HAVING
+        COUNT(*) > 0
+),
+
+-- Step 2: Use LAG() to compare current error count with the previous window.
+-- A spike is flagged when the current count exceeds 3x the prior count.
+AnomalyDetection AS (
+    SELECT
+        *,
+        LAG(error_count, 1) OVER (LIMIT DURATION(minute, 20))
+                                                    AS prev_error_count
+    FROM
+        ErrorMetrics
+)
+
+-- Step 3: Emit alerts for anomalies that breach either threshold.
+SELECT
+    window_end,
+    total_events,
+    error_count,
+    error_rate_pct,
+    prev_error_count,
+
+    -- Classify the anomaly type for downstream alert routing
+    CASE
+        WHEN error_rate_pct > 5.0
+             AND error_count > 3 * prev_error_count
+            THEN 'CRITICAL: High error rate AND sudden spike'
+        WHEN error_count > 3 * prev_error_count
+            THEN 'WARNING: Sudden error spike (>3x previous window)'
+        WHEN error_rate_pct > 5.0
+            THEN 'WARNING: Error rate exceeds 5% threshold'
+    END                                             AS anomaly_type,
+
+    -- Severity for alert prioritization
+    CASE
+        WHEN error_rate_pct > 5.0
+             AND error_count > 3 * prev_error_count
+            THEN 'critical'
+        ELSE 'warning'
+    END                                             AS severity
+
+INTO
+    [AlertOutput]
+
+FROM
+    AnomalyDetection
+
+WHERE
+    -- Fire only when at least one anomaly condition is met
+    error_rate_pct > 5.0
+    OR (
+        prev_error_count IS NOT NULL
+        AND prev_error_count > 0
+        AND error_count > 3 * prev_error_count
+    )
