@@ -20,18 +20,17 @@ repos:
       - id: gitleaks
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.3.0
+    rev: v0.15.10
     hooks:
       - id: ruff
         args: ['--fix']
       - id: ruff-format
 
-  - repo: https://github.com/azure/bicep
-    rev: v0.25.3
+  - repo: local
     hooks:
-      - id: bicep-build
-        name: Bicep Build
-        entry: bicep build
+      - id: bicep-lint
+        name: Bicep Lint
+        entry: bicep lint
         language: system
         files: '\.bicep$'
         pass_filenames: true

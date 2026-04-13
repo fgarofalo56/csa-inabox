@@ -6,6 +6,10 @@ on:
   push:
     branches: [main]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   # Needed by py-cov-action to post/update the coverage comment on PRs.
@@ -38,7 +42,11 @@ jobs:
 
       - name: Lint with ruff
         run: |
-          ruff check domains/ scripts/ governance/ --select E,F,W --ignore E501 --output-format github
+          ruff check domains/ scripts/ governance/ tools/ --output-format github
+
+      - name: Security scan with Bandit
+        run: |
+          bandit -r governance/ domains/ scripts/ --skip B101
 
       - name: Typecheck with mypy (strict)
         run: |

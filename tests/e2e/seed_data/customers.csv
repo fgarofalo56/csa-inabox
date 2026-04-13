@@ -1,0 +1,11 @@
+customer_id,name,email,region,segment,created_at
+1,Patricia Patel,patricia.patel143@example.com,EAST,enterprise,2023-03-04T05:50:10
+2,John Green,john.green217@example.com,WEST,small_business,2023-09-16T04:30:26
+3,Susan Lopez,susan.lopez868@example.com,SOUTH,enterprise,2023-08-14T04:42:59
+4,Charles Collins,charles.collins737@example.com,CENTRAL,mid_market,2022-01-06T00:59:38
+5,Dorothy Clark,dorothy.clark624@example.com,EAST,small_business,2024-11-07T01:56:29
+6,Kimberly Myers,kimberly.myers409@example.com,EAST,enterprise,2024-06-27T02:56:43
+7,Scott Rodriguez,scott.rodriguez542@example.com,EAST,mid_market,2023-08-21T17:09:54
+8,Anna Jimenez,anna.jimenez614@example.com,WEST,enterprise,2025-12-03T22:50:06
+9,David Ross,david.ross132@example.com,SOUTH,small_business,2024-04-07T12:43:31
+10,Jeffrey Gutierrez,jeffrey.gutierrez231@example.com,WEST,mid_market,2023-12-03T08:37:24

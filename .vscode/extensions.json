@@ -3,6 +3,10 @@
     "ms-azuretools.vscode-azurefunctions",
     "github.copilot",
     "ms-vscode.azure-account",
-    "ms-azuretools.vscode-bicep"
+    "ms-azuretools.vscode-bicep",
+    "ms-python.python",
+    "charliermarsh.ruff",
+    "ms-vscode.powershell",
+    "DavidAnson.vscode-markdownlint"
   ]
 }

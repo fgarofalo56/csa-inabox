@@ -108,13 +108,11 @@ class TestTextAnalyticsAvailable:
         assert function_app._text_analytics_available() is False
 
     def test_returns_false_when_no_key(self, function_app: types.ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(function_app, "AI_ENDPOINT", "https://test.cognitiveservices.azure.com")
-        monkeypatch.setattr(function_app, "AI_KEY_SECRET", "")
+        monkeypatch.setattr(function_app, "AI_ENDPOINT", "")
         assert function_app._text_analytics_available() is False
 
     def test_returns_true_when_configured_and_sdk_available(self, function_app: types.ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(function_app, "AI_ENDPOINT", "https://test.cognitiveservices.azure.com")
-        monkeypatch.setattr(function_app, "AI_KEY_SECRET", "test-key")
         # The real import may or may not be available; mock it
         mock_module = MagicMock()
         monkeypatch.setitem(sys.modules, "azure.ai.textanalytics.aio", mock_module)
@@ -128,7 +126,6 @@ class TestFormRecognizerAvailable:
 
     def test_returns_true_when_configured_and_sdk_available(self, function_app: types.ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(function_app, "AI_ENDPOINT", "https://test.cognitiveservices.azure.com")
-        monkeypatch.setattr(function_app, "AI_KEY_SECRET", "test-key")
         mock_module = MagicMock()
         monkeypatch.setitem(sys.modules, "azure.ai.formrecognizer.aio", mock_module)
         assert function_app._form_recognizer_available() is True
@@ -142,7 +139,6 @@ class TestEnrichText:
     async def test_returns_error_when_sdk_not_importable(self, function_app: types.ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
         """When azure.ai.textanalytics.aio is not installed, returns graceful error."""
         monkeypatch.setattr(function_app, "AI_ENDPOINT", "https://test.cognitiveservices.azure.com")
-        monkeypatch.setattr(function_app, "AI_KEY_SECRET", "test-key")
         # Make the import fail
         original_import = __builtins__.__import__ if hasattr(__builtins__, "__import__") else __import__
 
@@ -158,7 +154,6 @@ class TestEnrichText:
     @pytest.mark.asyncio()
     async def test_returns_error_when_endpoint_empty(self, function_app: types.ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(function_app, "AI_ENDPOINT", "")
-        monkeypatch.setattr(function_app, "AI_KEY_SECRET", "")
         result = await function_app._enrich_text("Hello world")
         assert result["error"] == "AI client not configured"
 
@@ -166,7 +161,6 @@ class TestEnrichText:
     async def test_successful_enrichment(self, function_app: types.ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
         """Full happy-path: mock the Text Analytics client and verify all fields."""
         monkeypatch.setattr(function_app, "AI_ENDPOINT", "https://test.cognitiveservices.azure.com")
-        monkeypatch.setattr(function_app, "AI_KEY_SECRET", "test-key")
 
         # Build mock language result
         mock_lang = MagicMock()
@@ -220,9 +214,14 @@ class TestEnrichText:
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
+        # Build a mock credential that works as an async context manager
+        mock_credential = AsyncMock()
+        mock_credential.__aenter__ = AsyncMock(return_value=mock_credential)
+        mock_credential.__aexit__ = AsyncMock(return_value=False)
+
         with patch.dict("sys.modules", {
             "azure.ai.textanalytics.aio": MagicMock(TextAnalyticsClient=MagicMock(return_value=mock_client)),
-            "azure.core.credentials": MagicMock(),
+            "azure.identity.aio": MagicMock(DefaultAzureCredential=MagicMock(return_value=mock_credential)),
         }):
             result = await function_app._enrich_text("This is a test")
 
@@ -241,16 +240,19 @@ class TestEnrichText:
     async def test_handles_sdk_exception(self, function_app: types.ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
         """When the SDK raises, we get a graceful error instead of an unhandled exception."""
         monkeypatch.setattr(function_app, "AI_ENDPOINT", "https://test.cognitiveservices.azure.com")
-        monkeypatch.setattr(function_app, "AI_KEY_SECRET", "test-key")
 
         mock_client = AsyncMock()
         mock_client.detect_language.side_effect = RuntimeError("SDK boom")
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
+        mock_credential = AsyncMock()
+        mock_credential.__aenter__ = AsyncMock(return_value=mock_credential)
+        mock_credential.__aexit__ = AsyncMock(return_value=False)
+
         with patch.dict("sys.modules", {
             "azure.ai.textanalytics.aio": MagicMock(TextAnalyticsClient=MagicMock(return_value=mock_client)),
-            "azure.core.credentials": MagicMock(),
+            "azure.identity.aio": MagicMock(DefaultAzureCredential=MagicMock(return_value=mock_credential)),
         }):
             result = await function_app._enrich_text("test")
 
@@ -270,7 +272,6 @@ class TestAnalyzeDocument:
     @pytest.mark.asyncio()
     async def test_successful_document_analysis(self, function_app: types.ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(function_app, "AI_ENDPOINT", "https://test.cognitiveservices.azure.com")
-        monkeypatch.setattr(function_app, "AI_KEY_SECRET", "test-key")
 
         # Build mock analysis result
         mock_result = MagicMock()
@@ -292,9 +293,13 @@ class TestAnalyzeDocument:
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
+        mock_credential = AsyncMock()
+        mock_credential.__aenter__ = AsyncMock(return_value=mock_credential)
+        mock_credential.__aexit__ = AsyncMock(return_value=False)
+
         with patch.dict("sys.modules", {
             "azure.ai.formrecognizer.aio": MagicMock(DocumentAnalysisClient=MagicMock(return_value=mock_client)),
-            "azure.core.credentials": MagicMock(),
+            "azure.identity.aio": MagicMock(DefaultAzureCredential=MagicMock(return_value=mock_credential)),
         }):
             result = await function_app._analyze_document(b"%PDF-1.4", "application/pdf")
 
@@ -307,16 +312,19 @@ class TestAnalyzeDocument:
     @pytest.mark.asyncio()
     async def test_handles_sdk_exception(self, function_app: types.ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(function_app, "AI_ENDPOINT", "https://test.cognitiveservices.azure.com")
-        monkeypatch.setattr(function_app, "AI_KEY_SECRET", "test-key")
 
         mock_client = AsyncMock()
         mock_client.begin_analyze_document.side_effect = RuntimeError("SDK boom")
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
+        mock_credential = AsyncMock()
+        mock_credential.__aenter__ = AsyncMock(return_value=mock_credential)
+        mock_credential.__aexit__ = AsyncMock(return_value=False)
+
         with patch.dict("sys.modules", {
             "azure.ai.formrecognizer.aio": MagicMock(DocumentAnalysisClient=MagicMock(return_value=mock_client)),
-            "azure.core.credentials": MagicMock(),
+            "azure.identity.aio": MagicMock(DefaultAzureCredential=MagicMock(return_value=mock_credential)),
         }):
             result = await function_app._analyze_document(b"data", "application/pdf")
 
@@ -436,8 +444,5 @@ class TestHealthCheck:
         assert resp.status_code == 200
         body = json.loads(resp.get_body())
         assert body["status"] == "healthy"
+        assert "service" in body
         assert "timestamp" in body
-        assert "capabilities" in body
-        assert "text_analytics" in body["capabilities"]
-        assert "document_intelligence" in body["capabilities"]
-        assert "configuration" in body

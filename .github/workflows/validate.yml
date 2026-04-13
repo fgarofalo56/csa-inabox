@@ -16,6 +16,10 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   security-events: write
@@ -39,13 +43,16 @@ jobs:
       - name: Lint all Bicep files
         run: |
           echo "=== Linting Bicep files ==="
-          ERRORS=0
-          find . -name "*.bicep" -not -path "./codeqlDB/*" -not -path "*/node_modules/*" | while read -r file; do
+          ERROR_FILE=$(mktemp)
+          echo "0" > "$ERROR_FILE"
+          while IFS= read -r file; do
             echo "Linting: $file"
             if ! bicep lint "$file" 2>&1; then
-              ERRORS=$((ERRORS + 1))
+              echo $(( $(cat "$ERROR_FILE") + 1 )) > "$ERROR_FILE"
             fi
-          done
+          done < <(find . -name "*.bicep" -not -path "./codeqlDB/*" -not -path "*/node_modules/*")
+          ERRORS=$(cat "$ERROR_FILE")
+          rm -f "$ERROR_FILE"
           if [ "$ERRORS" -gt 0 ]; then
             echo "::error::$ERRORS Bicep file(s) failed linting"
             exit 1
@@ -54,13 +61,16 @@ jobs:
       - name: Build all Bicep files (compile check)
         run: |
           echo "=== Building Bicep files ==="
-          ERRORS=0
-          find . -name "*.bicep" -not -path "./codeqlDB/*" -not -path "*/node_modules/*" | while read -r file; do
+          ERROR_FILE=$(mktemp)
+          echo "0" > "$ERROR_FILE"
+          while IFS= read -r file; do
             echo "Building: $file"
             if ! bicep build "$file" --no-restore 2>&1; then
-              ERRORS=$((ERRORS + 1))
+              echo $(( $(cat "$ERROR_FILE") + 1 )) > "$ERROR_FILE"
             fi
-          done
+          done < <(find . -name "*.bicep" -not -path "./codeqlDB/*" -not -path "*/node_modules/*")
+          ERRORS=$(cat "$ERROR_FILE")
+          rm -f "$ERROR_FILE"
           if [ "$ERRORS" -gt 0 ]; then
             echo "::error::$ERRORS Bicep file(s) failed to build"
             exit 1
@@ -152,7 +162,7 @@ jobs:
 
       - name: Lint Python files
         run: |
-          ruff check scripts/ domains/ tools/ --ignore E501
+          ruff check domains/ scripts/ governance/ tools/
 
   # -------------------------------------------------------------------------
   # Repository Hygiene Check

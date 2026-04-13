@@ -21,10 +21,14 @@ Thank you for your interest in contributing to Cloud-Scale Analytics in-a-Box.
 
 3. Set up Python environment (for scripts/dbt):
    ```bash
-   python -m venv .venv
+   make setup            # Linux/Mac
+   make setup-win        # Windows
+   ```
+   This creates a `.venv`, activates it, and installs all dev dependencies
+   from `pyproject.toml`. To activate the venv manually afterwards:
+   ```bash
    source .venv/bin/activate  # Linux/Mac
    .venv\Scripts\activate     # Windows
-   pip install -r requirements.txt
    ```
 
 ## Repository Rules

@@ -12,7 +12,9 @@ sources:
       error_after: {count: 48, period: hour}
     tables:
       - name: raw_TABLE_NAME
-        description: "TODO: Describe this source table"
+        description: >
+          Raw TABLE_NAME records ingested from the source system via ADF.
+          Replace TABLE_NAME with the actual entity name (e.g., raw_invoices).
         columns:
           - name: id
             tests:

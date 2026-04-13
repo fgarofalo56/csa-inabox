@@ -147,22 +147,22 @@
         }
       },
       "previewLimit": 50,
-      "server": "alz-postgresql-srv01-westus.postgres.database.azure.com",
+      "server": "<POSTGRESQL_SERVER>.postgres.database.azure.com",
       "port": 5432,
       "askForPassword": true,
       "driver": "PostgreSQL",
-      "name": "alz-postgresql-srv01-westus",
+      "name": "<POSTGRESQL_SERVER>",
       "group": "Limitless Data",
       "database": "vectordb",
-      "username": "jarvis"
+      "username": "<USERNAME>"
     },
     {
       "previewLimit": 50,
-      "server": "192.168.10.201",
+      "server": "<LOCAL_HOST>",
       "port": 5433,
       "driver": "PostgreSQL",
       "database": "postgres",
-      "username": "postgres",
+      "username": "<USERNAME>",
       "name": "local_PostgresSQL",
       "askForPassword": true
     }
@@ -173,10 +173,10 @@
       "name": "local_PostgreSQL",
       "driver": "postgres",
       "connectionType": "host",
-      "host": "192.168.10.201",
+      "host": "<LOCAL_HOST>",
       "port": 5433,
       "ssl": false,
-      "username": "postgres",
+      "username": "<USERNAME>",
       "password": "",
       "savePassword": "secretStorage",
       "database": "postgres",
