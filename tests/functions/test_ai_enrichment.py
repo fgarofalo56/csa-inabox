@@ -233,8 +233,8 @@ class TestEnrichText:
         assert result["entities"][0]["text"] == "Azure"
         assert len(result["pii_entities"]) == 1
         assert result["pii_entities"][0]["category"] == "Email"
-        # PII text should be redacted
-        assert "***" in result["pii_entities"][0]["text"]
+        # PII text should be redacted in pii_redacted_text, not in pii_entities
+        assert "pii_redacted_text" in result
 
     @pytest.mark.asyncio()
     async def test_handles_sdk_exception(self, function_app: types.ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:

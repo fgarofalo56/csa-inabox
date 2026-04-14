@@ -25,6 +25,7 @@ Adding a new expectation type is a small addition to
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -258,7 +259,12 @@ def run_suite_in_memory(
 # ── Checkpoint discovery ─────────────────────────────────────────────
 
 
-_CHECKPOINT_DIR = Path(__file__).resolve().parents[2] / "great_expectations" / "checkpoints"
+_CHECKPOINT_DIR = Path(
+    os.environ.get(
+        "GE_CHECKPOINT_DIR",
+        str(Path(__file__).resolve().parents[2] / "great_expectations" / "checkpoints"),
+    ),
+)
 
 
 def _load_checkpoint_configs(

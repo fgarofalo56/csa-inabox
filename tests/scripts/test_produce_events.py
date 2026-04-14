@@ -2,19 +2,17 @@
 
 from __future__ import annotations
 
-import importlib.util
 import json
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from tests.conftest import load_script_module
+
 # Load module from scripts directory (not a package).
 _SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "streaming" / "produce_events.py"
-_spec = importlib.util.spec_from_file_location("produce_events", _SCRIPT_PATH)
-assert _spec is not None and _spec.loader is not None
-_mod = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_mod)
+_mod = load_script_module("produce_events", _SCRIPT_PATH)
 
 generate_event = _mod.generate_event  # type: ignore[attr-defined]
 EVENT_TYPES: list[str] = _mod.EVENT_TYPES  # type: ignore[attr-defined]

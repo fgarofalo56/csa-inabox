@@ -52,9 +52,10 @@ STORAGE_CONNECTION = os.environ.get("AzureWebJobsStorage", "")
 ENRICHED_CONTAINER = os.environ.get("ENRICHED_CONTAINER", "enriched")
 INBOX_CONTAINER = os.environ.get("INBOX_CONTAINER", "inbox")
 
-# Text processing limits - Azure AI Services constraints
-TEXT_CHUNK_SIZE = 5120  # Maximum text length for single API call to Azure Text Analytics
-MAX_TEXT_LENGTH = 125000  # Maximum total text length for HTTP endpoint processing
+# Text processing limits - Azure AI Services constraints.
+# Override via environment variables for different Azure AI tier limits.
+TEXT_CHUNK_SIZE = int(os.environ.get("AI_TEXT_CHUNK_SIZE", "5120"))
+MAX_TEXT_LENGTH = int(os.environ.get("AI_MAX_TEXT_LENGTH", "125000"))
 
 # ---------------------------------------------------------------------------
 # Module-level client setup for connection pooling
