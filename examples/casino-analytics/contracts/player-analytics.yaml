@@ -1,0 +1,310 @@
+# Player Analytics Data Contract — Casino Analytics Platform
+# Compliance: NIGC MICS, Title 31 BSA/AML, Tribal Gaming Commission
+
+apiVersion: v1
+kind: DataContract
+metadata:
+  name: player-analytics
+  version: "1.0.0"
+  domain: casino-analytics
+  owner: casino-analytics-team
+  description: >
+    Casino player analytics data products covering player lifetime value,
+    gaming floor optimization, and regulatory compliance monitoring.
+    All data is entirely synthetic — no real player data.
+
+classification:
+  level: CONFIDENTIAL
+  category: GAMING_OPERATIONS
+  handling_instructions: >
+    Contains synthetic player financial activity and compliance analytics.
+    In production, this data would be restricted per NIGC Minimum Internal
+    Control Standards (MICS) and tribal gaming commission regulations.
+    Title 31 compliance data is restricted to designated compliance officers.
+  nigc_regulated: true
+  title31_applicable: true
+  pii_categories: [player_id, financial_activity]
+
+compliance:
+  nigc_mics:
+    slot_accounting: true
+    table_game_tracking: true
+    player_rating: true
+    data_retention_years: 7
+  title31_bsa:
+    ctr_threshold: 10000
+    sar_detection: true
+    multiple_transaction_log: true
+    gaming_day_start_hour: 6
+    data_retention_years: 5
+  tribal_gaming_commission:
+    reporting_required: true
+    audit_trail: required
+
+deployment:
+  cloud: Azure  # Commercial or Government — see README for guidance
+  regions:
+    primary: eastus2  # Or usgovvirginia for Gov deployment
+  streaming:
+    event_hub_namespace: eh-casino-analytics
+    adx_cluster: casino-adx
+
+data_products:
+  # ──────────────────────────────────────────────
+  # Player Lifetime Value
+  # ──────────────────────────────────────────────
+  - name: player-value
+    description: >
+      Player lifetime value model with total ADT, visit frequency, churn probability,
+      tier calculation, and comp efficiency metrics.
+    model: gld_player_value
+    schema:
+      format: delta
+      primary_key: [player_id]
+    columns:
+      - name: player_id
+        type: STRING
+        description: Player tracking system identifier
+        pii: true
+        pii_type: pseudonymous_id
+      - name: lifetime_coin_in
+        type: DECIMAL(14,2)
+        description: Total lifetime amount wagered
+        pii: false
+        financial: true
+      - name: lifetime_theoretical
+        type: DECIMAL(14,2)
+        description: Total lifetime theoretical win (expected house revenue)
+        pii: false
+        financial: true
+      - name: adt
+        type: DECIMAL(10,2)
+        description: Average Daily Theoretical — primary player value metric
+        pii: false
+      - name: calculated_tier
+        type: STRING
+        description: Loyalty tier based on ADT (BRONZE/SILVER/GOLD/PLATINUM/DIAMOND)
+        pii: false
+      - name: visits_per_month
+        type: DECIMAL(6,2)
+        description: Average visit frequency per 30-day period
+        pii: false
+      - name: churn_probability_score
+        type: DECIMAL(5,1)
+        description: Churn risk (0-100, higher = more likely to leave)
+        pii: false
+      - name: activity_trend
+        type: STRING
+        description: Recent play trend (INCREASING/DECREASING/STABLE/DORMANT)
+        pii: false
+      - name: comp_efficiency_pct
+        type: DECIMAL(5,1)
+        description: Comp spend as percentage of theoretical win
+        pii: false
+      - name: preferred_game_type
+        type: STRING
+        description: Most frequently played game type
+        pii: false
+      - name: preferred_zone
+        type: STRING
+        description: Most frequently visited floor zone
+        pii: false
+    sla:
+      freshness: daily
+      freshness_hours: 24
+      availability: 99.5%
+    quality:
+      completeness: 98%
+      accuracy: 99%
+    access:
+      roles:
+        - player_development_host
+        - marketing_analyst
+        - casino_manager
+      restricted_fields:
+        - field: lifetime_coin_in
+          roles: [casino_manager, finance]
+      audit_logging: required
+
+  # ──────────────────────────────────────────────
+  # Floor Optimization
+  # ──────────────────────────────────────────────
+  - name: floor-optimization
+    description: >
+      Gaming floor zone performance with revenue per machine, utilization
+      rates, traffic patterns, and placement optimization scores.
+    model: gld_floor_optimization
+    schema:
+      format: delta
+      primary_key: [floor_zone]
+    columns:
+      - name: floor_zone
+        type: STRING
+        description: Gaming floor zone identifier
+        pii: false
+      - name: revenue_per_machine_day
+        type: DECIMAL(10,2)
+        description: Average daily revenue per machine in zone
+        pii: false
+        financial: true
+      - name: overall_hold_pct
+        type: DECIMAL(5,2)
+        description: Actual hold percentage for the zone
+        pii: false
+      - name: avg_machine_utilization_pct
+        type: DECIMAL(5,1)
+        description: Average machine uptime/utilization
+        pii: false
+      - name: optimization_score
+        type: DECIMAL(5,1)
+        description: Composite optimization score (0-100)
+        pii: false
+      - name: optimization_recommendation
+        type: STRING
+        description: Recommended operational action
+        pii: false
+    sla:
+      freshness: daily
+      freshness_hours: 24
+      availability: 99.5%
+    quality:
+      completeness: 99%
+      accuracy: 99%
+    access:
+      roles:
+        - slot_operations_manager
+        - casino_manager
+        - floor_supervisor
+      audit_logging: recommended
+
+  # ──────────────────────────────────────────────
+  # Title 31 Compliance Monitoring
+  # ──────────────────────────────────────────────
+  - name: compliance-monitoring
+    description: >
+      Title 31 BSA/AML compliance analytics including CTR detection,
+      structuring pattern analysis, and behavioral anomaly scoring.
+      ACCESS RESTRICTED to compliance officers.
+    model: gld_compliance_monitoring
+    schema:
+      format: delta
+      primary_key: [player_id, gaming_day]
+    columns:
+      - name: player_id
+        type: STRING
+        description: Player tracking system identifier
+        pii: true
+      - name: gaming_day
+        type: DATE
+        description: Gaming day (6 AM - 5:59 AM boundary)
+        pii: false
+      - name: total_coin_in
+        type: DECIMAL(12,2)
+        description: Total cash wagered in gaming day
+        pii: false
+        financial: true
+        title31_relevant: true
+      - name: total_coin_out
+        type: DECIMAL(12,2)
+        description: Total cash out in gaming day
+        pii: false
+        financial: true
+        title31_relevant: true
+      - name: ctr_required
+        type: BOOLEAN
+        description: Whether CTR filing is required (cash >= $10K)
+        title31_relevant: true
+      - name: structuring_pattern_detected
+        type: BOOLEAN
+        description: Whether structured transaction pattern detected
+        title31_relevant: true
+      - name: risk_score
+        type: DECIMAL(5,1)
+        description: Overall AML risk score (0-100)
+        title31_relevant: true
+      - name: sar_recommended
+        type: BOOLEAN
+        description: Whether SAR filing is recommended
+        title31_relevant: true
+      - name: recommended_action
+        type: STRING
+        description: Recommended compliance action
+        title31_relevant: true
+    sla:
+      freshness: real_time_with_daily_batch
+      freshness_hours: 1  # CTR detection within 1 hour
+      availability: 99.9%  # Critical compliance system
+    quality:
+      completeness: 100%  # All transactions must be captured
+      accuracy: 99.9%     # CTR threshold must be exact
+    access:
+      roles:
+        - compliance_officer
+        - aml_analyst
+        - tribal_gaming_commission
+      restricted: true
+      audit_logging: required
+      access_justification_required: true
+
+lineage:
+  sources:
+    - name: player_tracking_system
+      type: batch
+      format: csv
+      frequency: daily
+      description: Player session data from PTS nightly extract
+    - name: slot_management_system
+      type: streaming
+      format: json
+      frequency: real_time
+      description: Slot machine telemetry via SAS protocol
+      event_hub_topic: casino-slot-events
+    - name: fnb_pos_system
+      type: batch
+      format: csv
+      frequency: daily
+      description: F&B point-of-sale transaction extract
+  transformations:
+    - name: bronze_ingestion
+      description: Raw data landing with validation
+      models: [brz_player_sessions, brz_slot_events, brz_fnb_transactions]
+    - name: silver_enrichment
+      description: Session cleanup, slot aggregation, F&B analytics
+      models: [slv_player_sessions, slv_slot_performance, slv_fnb_analytics]
+    - name: gold_analytics
+      description: Player value, floor optimization, compliance monitoring
+      models: [gld_player_value, gld_floor_optimization, gld_compliance_monitoring]
+
+monitoring:
+  data_quality:
+    - test: ctr_threshold_accuracy
+      description: Verify CTR flag accuracy at $10K boundary
+      frequency: every_run
+      severity: critical
+    - test: hold_percentage_reasonable
+      description: Slot hold should be between -50% and +50%
+      frequency: every_run
+      severity: high
+    - test: coin_in_non_negative
+      description: All financial values must be non-negative
+      frequency: every_run
+      severity: critical
+  streaming:
+    - metric: event_hub_lag
+      description: Monitor consumer group lag on slot events
+      warn_threshold_seconds: 30
+      error_threshold_seconds: 120
+    - metric: adx_ingestion_latency
+      description: ADX ingestion delay from Event Hub
+      warn_threshold_seconds: 60
+      error_threshold_seconds: 300
+  freshness:
+    warn_after_hours: 24
+    error_after_hours: 48
+  alerting:
+    channels:
+      - type: email
+        recipients: casino-analytics-team@example.com
+      - type: pagerduty
+        service: casino-compliance
+        severity_filter: critical

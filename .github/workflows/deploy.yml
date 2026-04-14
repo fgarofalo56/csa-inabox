@@ -221,7 +221,7 @@ jobs:
         run: |
           python -m governance.contracts.contract_validator --ci --repo-root .
 
-      - name: Check Gold layer row counts
+      - name: Check Gold layer tables
         if: ${{ secrets.DBT_DATABRICKS_HOST != '' }}
         run: |
           echo "=== Gold Layer Smoke Test ==="
@@ -234,17 +234,14 @@ jobs:
             "gold.fact_inventory_snapshot"
             "gold.dim_warehouses"
           )
-          FAILED=0
           for table in "${TABLES[@]}"; do
-            echo -n "Checking $table... "
-            # This would use Databricks SQL or a lightweight query tool
-            # For now, validate that contracts and models are consistent
-            echo "OK (contract validated)"
+            echo -n "  $table ... "
+            # TODO: Implement real Databricks SQL query when SQL endpoint is available.
+            #   Example: ROW_COUNT=$(databricks sql query "SELECT COUNT(*) AS cnt FROM $table" --output json | jq '.[0].cnt')
+            echo "SKIPPED (no live SQL endpoint configured in CI)"
           done
-          if [ $FAILED -gt 0 ]; then
-            echo "::error::$FAILED table(s) failed smoke test"
-            exit 1
-          fi
+          echo ""
+          echo "::notice::Gold layer row-count validation requires a live Databricks SQL endpoint. Contract validation passed in the previous step."
 
   # -------------------------------------------------------------------------
   # Tag a successful, non-dry-run deployment so the Rollback workflow can

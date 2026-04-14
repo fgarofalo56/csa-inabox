@@ -1,7 +1,7 @@
 # CSA-in-a-Box: Quick Start Guide
 
 Get a working Cloud-Scale Analytics platform deployed and flowing data in
-under 30 minutes.
+about 60--90 minutes (assuming all prerequisites are met).
 
 ## Prerequisites
 
@@ -22,7 +22,7 @@ bash scripts/deploy/validate-prerequisites.sh
 
 ```bash
 # Clone the repo
-git clone https://github.com/your-org/csa-inabox.git
+git clone https://github.com/fgarofalo56/csa-inabox.git
 cd csa-inabox
 
 # Set up Python environment

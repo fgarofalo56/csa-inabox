@@ -1,0 +1,88 @@
+# CSA-in-a-Box Portal — Local Development Docker Compose
+#
+# Usage:
+#   cd portal/kubernetes/docker
+#   docker compose up --build
+#
+# This compose file builds from the repository root context.
+# Run from the repo root with:
+#   docker compose -f portal/kubernetes/docker/docker-compose.yml up --build
+
+services:
+  # ─── Frontend ──────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ../../../  # repo root
+      dockerfile: portal/kubernetes/docker/frontend/Dockerfile
+    container_name: csa-portal-frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      - NODE_ENV=production
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - csa-portal
+
+  # ─── Backend ───────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ../../../  # repo root
+      dockerfile: portal/kubernetes/docker/backend/Dockerfile
+    container_name: csa-portal-backend
+    ports:
+      - "8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - ENVIRONMENT=development
+      - REDIS_URL=redis://:csa-dev-password@redis:6379/0
+      - LOG_LEVEL=debug
+      # Azure AD (set in .env file or override)
+      - AZURE_AD_TENANT_ID=${AZURE_AD_TENANT_ID:-}
+      - AZURE_AD_CLIENT_ID=${AZURE_AD_CLIENT_ID:-}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+    networks:
+      - csa-portal
+
+  # ─── Redis ─────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: csa-portal-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --requirepass csa-dev-password --maxmemory 128mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "csa-dev-password", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+    networks:
+      - csa-portal
+
+volumes:
+  redis-data:
+    driver: local
+
+networks:
+  csa-portal:
+    driver: bridge

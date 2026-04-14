@@ -1,0 +1,111 @@
+{{- if .Values.superset.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "csa-oss.fullname" . }}-superset
+  labels:
+    {{- include "csa-oss.labels" . | nindent 4 }}
+    app.kubernetes.io/component: superset
+spec:
+  replicas: {{ .Values.superset.replicas }}
+  selector:
+    matchLabels:
+      {{- include "csa-oss.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: superset
+  template:
+    metadata:
+      labels:
+        {{- include "csa-oss.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: superset
+    spec:
+      containers:
+        - name: superset
+          image: "{{ .Values.superset.image.repository }}:{{ .Values.superset.image.tag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: 8088
+              protocol: TCP
+          env:
+            - name: SUPERSET_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "csa-oss.fullname" . }}-superset
+                  key: secret-key
+            - name: SQLALCHEMY_DATABASE_URI
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "csa-oss.fullname" . }}-superset
+                  key: database-uri
+          resources:
+            {{- toYaml .Values.superset.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8088
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8088
+            initialDelaySeconds: 60
+            periodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "csa-oss.fullname" . }}-superset
+  labels:
+    {{- include "csa-oss.labels" . | nindent 4 }}
+    app.kubernetes.io/component: superset
+spec:
+  type: {{ .Values.superset.service.type }}
+  ports:
+    - port: {{ .Values.superset.service.port }}
+      targetPort: 8088
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "csa-oss.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: superset
+{{- if .Values.superset.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "csa-oss.fullname" . }}-superset
+  labels:
+    {{- include "csa-oss.labels" . | nindent 4 }}
+  {{- with .Values.superset.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.superset.ingress.className }}
+  {{- if .Values.superset.ingress.tls }}
+  tls:
+    {{- range .Values.superset.ingress.tls }}
+    - hosts:
+        {{- range .hosts }}
+        - {{ . | quote }}
+        {{- end }}
+      secretName: {{ .secretName }}
+    {{- end }}
+  {{- end }}
+  rules:
+    {{- range .Values.superset.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType }}
+            backend:
+              service:
+                name: {{ include "csa-oss.fullname" $ }}-superset
+                port:
+                  number: {{ $.Values.superset.service.port }}
+          {{- end }}
+    {{- end }}
+{{- end }}
+{{- end }}

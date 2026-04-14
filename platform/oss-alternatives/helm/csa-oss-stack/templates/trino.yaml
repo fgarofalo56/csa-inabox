@@ -1,0 +1,154 @@
+{{- if .Values.trino.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "csa-oss.fullname" . }}-trino-coordinator
+  labels:
+    {{- include "csa-oss.labels" . | nindent 4 }}
+    app.kubernetes.io/component: trino-coordinator
+spec:
+  replicas: {{ .Values.trino.coordinator.replicas }}
+  selector:
+    matchLabels:
+      {{- include "csa-oss.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: trino-coordinator
+  template:
+    metadata:
+      labels:
+        {{- include "csa-oss.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: trino-coordinator
+    spec:
+      containers:
+        - name: trino
+          image: "{{ .Values.trino.coordinator.image.repository }}:{{ .Values.trino.coordinator.image.tag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: 8080
+              protocol: TCP
+          env:
+            - name: TRINO_NODE_TYPE
+              value: coordinator
+          resources:
+            {{- toYaml .Values.trino.coordinator.resources | nindent 12 }}
+          volumeMounts:
+            - name: trino-config
+              mountPath: /etc/trino/config.properties
+              subPath: coordinator-config.properties
+            - name: trino-catalog
+              mountPath: /etc/trino/catalog
+          readinessProbe:
+            httpGet:
+              path: /v1/info
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /v1/info
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 30
+      volumes:
+        - name: trino-config
+          configMap:
+            name: {{ include "csa-oss.fullname" . }}-trino-config
+        - name: trino-catalog
+          configMap:
+            name: {{ include "csa-oss.fullname" . }}-trino-catalogs
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "csa-oss.fullname" . }}-trino-worker
+  labels:
+    {{- include "csa-oss.labels" . | nindent 4 }}
+    app.kubernetes.io/component: trino-worker
+spec:
+  replicas: {{ .Values.trino.workers.replicas }}
+  selector:
+    matchLabels:
+      {{- include "csa-oss.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: trino-worker
+  template:
+    metadata:
+      labels:
+        {{- include "csa-oss.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: trino-worker
+    spec:
+      containers:
+        - name: trino
+          image: "{{ .Values.trino.coordinator.image.repository }}:{{ .Values.trino.coordinator.image.tag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: 8080
+              protocol: TCP
+          env:
+            - name: TRINO_NODE_TYPE
+              value: worker
+          resources:
+            {{- toYaml .Values.trino.workers.resources | nindent 12 }}
+          volumeMounts:
+            - name: trino-config
+              mountPath: /etc/trino/config.properties
+              subPath: worker-config.properties
+            - name: trino-catalog
+              mountPath: /etc/trino/catalog
+      volumes:
+        - name: trino-config
+          configMap:
+            name: {{ include "csa-oss.fullname" . }}-trino-config
+        - name: trino-catalog
+          configMap:
+            name: {{ include "csa-oss.fullname" . }}-trino-catalogs
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "csa-oss.fullname" . }}-trino
+  labels:
+    {{- include "csa-oss.labels" . | nindent 4 }}
+    app.kubernetes.io/component: trino-coordinator
+spec:
+  type: {{ .Values.trino.coordinator.service.type }}
+  ports:
+    - port: {{ .Values.trino.coordinator.service.port }}
+      targetPort: 8080
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "csa-oss.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: trino-coordinator
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "csa-oss.fullname" . }}-trino-config
+  labels:
+    {{- include "csa-oss.labels" . | nindent 4 }}
+data:
+  coordinator-config.properties: |
+    coordinator=true
+    node-scheduler.include-coordinator=false
+    http-server.http.port=8080
+    discovery.uri=http://{{ include "csa-oss.fullname" . }}-trino:8080
+    query.max-memory=4GB
+    query.max-memory-per-node=1GB
+  worker-config.properties: |
+    coordinator=false
+    http-server.http.port=8080
+    discovery.uri=http://{{ include "csa-oss.fullname" . }}-trino:8080
+    query.max-memory=4GB
+    query.max-memory-per-node=1GB
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "csa-oss.fullname" . }}-trino-catalogs
+  labels:
+    {{- include "csa-oss.labels" . | nindent 4 }}
+data:
+  delta.properties: |
+    connector.name=delta_lake
+    hive.metastore.uri=thrift://{{ include "csa-oss.fullname" . }}-hive-metastore:9083
+    delta.enable-non-concurrent-writes=true
+{{- end }}

@@ -1,0 +1,95 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "landingZoneName": {
+      "value": "lz-sales-transactions"
+    },
+    "storageAccountName": {
+      "value": "salestransactionsdlz"
+    },
+    "location": {
+      "value": "eastus2"
+    },
+    "environment": {
+      "value": "development"
+    },
+    "dataClassification": {
+      "value": "internal"
+    },
+    "containers": {
+      "value": [
+        "bronze",
+        "silver",
+        "gold",
+        "sandbox"
+      ]
+    },
+    "ownerEmail": {
+      "value": "sales-analytics@contoso.com"
+    },
+    "ownerDomain": {
+      "value": "sales"
+    },
+    "retentionDays": {
+      "value": 2555
+    },
+    "sourceMetadata": {
+      "value": {
+        "source_id": "550e8400-e29b-41d4-a716-446655440000",
+        "source_name": "Sales Database",
+        "source_type": "sql_server"
+      }
+    },
+    "rbacAssignments": {
+      "value": [
+        {
+          "principal_email": "sales-analytics@contoso.com",
+          "role_definition_name": "Storage Blob Data Contributor",
+          "scope": "storage_account:salestransactionsdlz",
+          "description": "Data owner access for lz-sales-transactions"
+        },
+        {
+          "principal_type": "ServicePrincipal",
+          "principal_name": "adf-csa-prod",
+          "role_definition_name": "Storage Blob Data Contributor",
+          "scope": "storage_account:salestransactionsdlz",
+          "description": "ADF pipeline access for lz-sales-transactions"
+        },
+        {
+          "principal_type": "ServicePrincipal",
+          "principal_name": "purview-csa-prod",
+          "role_definition_name": "Storage Blob Data Reader",
+          "scope": "storage_account:salestransactionsdlz",
+          "description": "Purview scanning access for lz-sales-transactions"
+        },
+        {
+          "principal_type": "Group",
+          "principal_name": "DataDomain-sales",
+          "role_definition_name": "Storage Blob Data Reader",
+          "scope": "storage_account:salestransactionsdlz",
+          "description": "Domain team read access for lz-sales-transactions"
+        }
+      ]
+    },
+    "tags": {
+      "value": {
+        "Environment": "development",
+        "Project": "CSA-in-a-Box",
+        "LandingZone": "lz-sales-transactions",
+        "DataDomain": "sales",
+        "DataClassification": "internal",
+        "Owner": "sales-analytics@contoso.com",
+        "CreatedBy": "MetadataFramework",
+        "CreatedAt": "2026-04-14"
+      }
+    },
+    "dataProduct": {
+      "value": {
+        "name": "Sales Transaction Data",
+        "domain": "sales",
+        "sla_freshness_minutes": 120
+      }
+    }
+  }
+}

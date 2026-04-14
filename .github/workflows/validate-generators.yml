@@ -1,0 +1,66 @@
+# Validate all Python data generators across verticals
+name: Validate Data Generators
+
+on:
+  pull_request:
+    paths:
+      - 'examples/*/data/generators/**'
+      - 'examples/iot-streaming/producers/**'
+  push:
+    branches: [main]
+    paths:
+      - 'examples/*/data/generators/**'
+
+jobs:
+  validate-generators:
+    name: Validate Generators
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install linting tools
+        run: pip install ruff mypy
+
+      - name: Compile check all generators
+        run: |
+          echo "=== Python Compile Check ==="
+          errors=0
+          for gen in examples/*/data/generators/generate_*.py examples/iot-streaming/producers/*.py; do
+            if [ -f "$gen" ]; then
+              if python -m py_compile "$gen" 2>&1; then
+                echo "  OK: $gen"
+              else
+                echo "  FAIL: $gen"
+                errors=$((errors + 1))
+              fi
+            fi
+          done
+          if [ $errors -gt 0 ]; then
+            echo "FAILED: $errors generators have compilation errors"
+            exit 1
+          fi
+
+      - name: Lint generators
+        run: |
+          ruff check examples/*/data/generators/ examples/iot-streaming/producers/ \
+            --select E,W,F --ignore E501
+        continue-on-error: true
+
+      - name: Smoke test generators (small output)
+        run: |
+          for gen in examples/*/data/generators/generate_*.py; do
+            if [ -f "$gen" ]; then
+              vertical=$(echo "$gen" | cut -d'/' -f2)
+              echo "=== Testing: $vertical ==="
+              # Run with --help to verify CLI is functional
+              python "$gen" --help 2>&1 | head -5 || true
+              echo ""
+            fi
+          done

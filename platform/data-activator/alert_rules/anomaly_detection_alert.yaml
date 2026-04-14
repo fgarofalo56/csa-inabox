@@ -1,0 +1,134 @@
+# Anomaly Detection Alert Rule
+# Triggers when data quality metrics show statistical anomalies.
+#
+# Uses a rolling-window z-score approach to detect deviations from normal
+# patterns in quality metrics (null rates, row counts, value distributions).
+
+apiVersion: csa.microsoft.com/v1
+kind: AlertRule
+
+metadata:
+  name: anomaly-detection-alert
+  version: "1.0.0"
+  description: >
+    Detects statistical anomalies in data quality metrics by comparing
+    current values against a rolling baseline. Uses z-score analysis to
+    identify values that deviate significantly from historical norms.
+  owner: platform-team@contoso.com
+  tags: [anomaly, data-quality, statistics]
+
+trigger:
+  eventTypes:
+    - csa.data.quality.check
+    - csa.data.anomaly.detected
+  # Run anomaly detection after every quality check completes.
+  schedule: "0 0 */4 * * *"  # Every 4 hours
+
+evaluation:
+  type: anomaly_detection
+  # Statistical method for anomaly detection.
+  method: z_score
+  # Rolling window size for baseline calculation (number of data points).
+  baselineWindowSize: 30
+  # Z-score threshold — values beyond this are considered anomalous.
+  # 2.0 ≈ 95th percentile, 3.0 ≈ 99.7th percentile.
+  zScoreThreshold: 3.0
+  # Minimum baseline data points required before anomaly detection activates.
+  minimumBaselinePoints: 7
+  # Metrics to monitor for anomalies.
+  metrics:
+    - name: null_rate
+      description: Percentage of null values in critical columns
+      higherIsBad: true
+    - name: row_count
+      description: Total row count of the data product
+      higherIsBad: false  # Both increases and decreases can be anomalous
+      bidirectional: true
+    - name: duplicate_rate
+      description: Percentage of duplicate primary key values
+      higherIsBad: true
+    - name: schema_drift_score
+      description: Number of schema changes detected
+      higherIsBad: true
+    - name: valid_row_ratio
+      description: Percentage of rows passing all quality rules
+      higherIsBad: false
+
+conditions:
+  - field: data.z_score
+    operator: greaterThan
+    value: 3.0
+  - field: data.environment
+    operator: in
+    value: [prod, stg]
+
+severity:
+  rules:
+    - condition: "abs(z_score) > 5.0"
+      level: critical
+    - condition: "abs(z_score) > 3.0"
+      level: warning
+  default: warning
+
+actions:
+  - type: teams_webhook
+    enabled: true
+    config:
+      title: "Data Quality Anomaly Detected"
+      messageTemplate: |
+        **Anomaly Detected**: {{data.domain}}/{{data.dataProduct}}
+        **Metric**: {{data.metric}}
+        **Current Value**: {{data.value}}
+        **Baseline Mean**: {{data.baseline_mean}}
+        **Z-Score**: {{data.z_score}} (threshold: {{evaluation.zScoreThreshold}})
+        **Direction**: {{data.direction}} ({{data.change_percent}}% change)
+        **Environment**: {{data.environment}}
+
+        _Baseline calculated from last {{evaluation.baselineWindowSize}} data points._
+      themeColor: "CC0000"
+
+  - type: email
+    enabled: true
+    config:
+      subject: "[CSA Anomaly] {{data.metric}} anomaly in {{data.domain}}/{{data.dataProduct}} (z={{data.z_score}})"
+      recipients:
+        - "{{data.owner}}"
+        - data-quality-team@contoso.com
+      includeChart: true  # Attach a sparkline chart of the metric history
+
+  - type: pagerduty
+    enabled: true
+    severityFilter: [critical]
+    config:
+      routingKey: "${PAGERDUTY_INTEGRATION_KEY}"
+      severity: critical
+      summary: "Statistical anomaly: {{data.metric}} z-score={{data.z_score}} for {{data.domain}}/{{data.dataProduct}}"
+
+  - type: custom_http
+    enabled: false
+    config:
+      url: "${ANOMALY_CALLBACK_URL}"
+      method: POST
+      headers:
+        Content-Type: application/json
+      bodyTemplate: |
+        {
+          "domain": "{{data.domain}}",
+          "dataProduct": "{{data.dataProduct}}",
+          "metric": "{{data.metric}}",
+          "zScore": {{data.z_score}},
+          "value": {{data.value}},
+          "baselineMean": {{data.baseline_mean}},
+          "baselineStddev": {{data.baseline_stddev}}
+        }
+
+suppression:
+  cooldownMinutes: 240  # 4 hours — anomalies persist, don't re-alert frequently
+  groupBy: [data.domain, data.dataProduct, data.metric]
+
+logging:
+  logAllEvaluations: true
+  customDimensions:
+    alert_type: anomaly_detection
+    component: data-activator
+    statistical_method: z_score

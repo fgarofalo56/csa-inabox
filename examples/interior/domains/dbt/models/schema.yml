@@ -1,0 +1,442 @@
+version: 2
+
+sources:
+  - name: interior
+    description: Department of Interior natural resource data sources
+    tables:
+      - name: usgs_earthquakes
+        description: USGS ComCat earthquake event catalog
+        columns:
+          - name: event_id
+            description: USGS unique earthquake event identifier
+            tests:
+              - not_null
+          - name: event_time
+            description: Earthquake origin time (UTC)
+            tests:
+              - not_null
+          - name: magnitude
+            description: Event magnitude
+            tests:
+              - not_null
+
+      - name: nps_visitors
+        description: National Park Service monthly visitor statistics
+        columns:
+          - name: park_code
+            description: NPS park unit code (e.g., YELL, GRCA)
+            tests:
+              - not_null
+          - name: year
+            description: Visit year
+            tests:
+              - not_null
+          - name: month
+            description: Visit month (1-12)
+            tests:
+              - not_null
+
+      - name: usgs_water_gauges
+        description: USGS NWIS water gauge measurement data
+        columns:
+          - name: site_id
+            description: USGS site number (8-15 digits)
+            tests:
+              - not_null
+          - name: measurement_date
+            description: Measurement date
+            tests:
+              - not_null
+          - name: parameter_code
+            description: USGS parameter code (e.g., 00060 for streamflow)
+            tests:
+              - not_null
+
+models:
+  # Bronze Models
+  - name: brz_earthquake_events
+    description: Bronze layer - Raw USGS earthquake events with basic validation
+    columns:
+      - name: event_id
+        description: USGS earthquake event identifier
+        tests:
+          - not_null
+          - unique
+      - name: event_time
+        description: Earthquake origin time (UTC)
+        tests:
+          - not_null
+      - name: latitude
+        description: Event latitude (-90 to 90)
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: -90
+              max_value: 90
+      - name: longitude
+        description: Event longitude (-180 to 180)
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: -180
+              max_value: 180
+      - name: depth_km
+        description: Event depth in kilometers (0-700)
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 700
+      - name: magnitude
+        description: Event magnitude
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: -2
+              max_value: 10
+      - name: is_valid_record
+        description: Flag indicating if record passes basic validation
+        tests:
+          - not_null
+      - name: record_hash
+        description: MD5 hash for deduplication
+        tests:
+          - not_null
+
+  - name: brz_park_visitors
+    description: Bronze layer - Raw NPS visitor statistics
+    columns:
+      - name: park_code
+        description: NPS park unit code
+        tests:
+          - not_null
+      - name: year
+        description: Visit year
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 1900
+              max_value: 2030
+      - name: month
+        description: Visit month
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 1
+              max_value: 12
+      - name: recreation_visits
+        description: Number of recreation visits
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: is_valid_record
+        description: Flag indicating if record passes basic validation
+        tests:
+          - not_null
+
+  - name: brz_water_resources
+    description: Bronze layer - Raw USGS water gauge data
+    columns:
+      - name: site_id
+        description: USGS site number
+        tests:
+          - not_null
+      - name: measurement_date
+        description: Measurement date
+        tests:
+          - not_null
+      - name: parameter_code
+        description: USGS parameter code
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['00060', '00065', '72019', '00010', '00300', '00400']
+      - name: is_valid_record
+        description: Flag indicating if record passes basic validation
+        tests:
+          - not_null
+
+  # Silver Models
+  - name: slv_earthquake_events
+    description: Silver layer - Cleaned seismic data with magnitude classification
+    columns:
+      - name: earthquake_sk
+        description: Surrogate key for earthquake record
+        tests:
+          - not_null
+          - unique
+      - name: event_id
+        description: USGS event identifier
+        tests:
+          - not_null
+          - unique
+      - name: magnitude
+        description: Event magnitude
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 10
+      - name: magnitude_class
+        description: Magnitude classification
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['MICRO', 'MINOR', 'LIGHT', 'MODERATE', 'STRONG', 'MAJOR', 'GREAT']
+      - name: depth_category
+        description: Depth classification
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['SHALLOW', 'INTERMEDIATE', 'DEEP']
+      - name: seismic_region
+        description: Geographic seismic region
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['CALIFORNIA', 'CASCADIA', 'ALASKA', 'HAWAII', 'INTERMOUNTAIN', 'CENTRAL_US', 'EASTERN_US', 'CARIBBEAN', 'OTHER']
+      - name: tectonic_setting
+        description: Tectonic setting classification
+        tests:
+          - accepted_values:
+              values: ['SUBDUCTION', 'TRANSFORM', 'EXTENSIONAL', 'HOTSPOT', 'INTRAPLATE']
+      - name: is_valid
+        description: Data quality validation flag
+        tests:
+          - not_null
+
+  - name: slv_park_visitors
+    description: Silver layer - Standardized visitor data with seasonality
+    columns:
+      - name: visitor_sk
+        description: Surrogate key for visitor record
+        tests:
+          - not_null
+          - unique
+      - name: park_code
+        description: NPS park unit code
+        tests:
+          - not_null
+      - name: year
+        description: Visit year
+        tests:
+          - not_null
+      - name: month
+        description: Visit month
+        tests:
+          - not_null
+      - name: recreation_visits
+        description: Recreation visit count
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: season_type
+        description: Season classification
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['PEAK', 'SHOULDER', 'OFF_PEAK']
+      - name: capacity_utilization_pct
+        description: Estimated capacity utilization percentage
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 500  # Allow overcapacity
+      - name: is_valid
+        description: Data quality validation flag
+        tests:
+          - not_null
+
+  - name: slv_water_resources
+    description: Silver layer - Normalized water data with drought and flood classification
+    columns:
+      - name: water_sk
+        description: Surrogate key for water measurement
+        tests:
+          - not_null
+          - unique
+      - name: site_id
+        description: USGS site number
+        tests:
+          - not_null
+      - name: measurement_date
+        description: Measurement date
+        tests:
+          - not_null
+      - name: parameter_code
+        description: USGS parameter code
+        tests:
+          - not_null
+      - name: measurement_value
+        description: Measured value (CFS for flow, feet for height)
+        tests:
+          - not_null
+      - name: drought_index
+        description: Drought classification
+        tests:
+          - accepted_values:
+              values: ['EXTREME_DROUGHT', 'MODERATE_DROUGHT', 'NORMAL', 'ABOVE_NORMAL', 'MUCH_ABOVE_NORMAL', 'INSUFFICIENT_HISTORY']
+      - name: flood_stage_class
+        description: Flood stage classification (gauge height only)
+        tests:
+          - accepted_values:
+              values: ['NORMAL', 'ACTION_STAGE', 'MINOR_FLOOD', 'MODERATE_FLOOD', 'MAJOR_FLOOD']
+      - name: data_quality_level
+        description: USGS data quality classification
+        tests:
+          - accepted_values:
+              values: ['APPROVED', 'PROVISIONAL', 'ESTIMATED', 'UNKNOWN']
+      - name: is_valid
+        description: Data quality validation flag
+        tests:
+          - not_null
+
+  # Gold Models
+  - name: gld_seismic_risk
+    description: Gold layer - Seismic risk model with Gutenberg-Richter analysis
+    columns:
+      - name: region_name
+        description: Seismic region
+        tests:
+          - not_null
+      - name: year
+        description: Analysis year
+        tests:
+          - not_null
+      - name: seismic_risk_score
+        description: Composite seismic risk score (0-100)
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+      - name: risk_category
+        description: Risk classification
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['VERY_HIGH', 'HIGH', 'MODERATE', 'LOW', 'MINIMAL']
+      - name: probability_m5_10yr
+        description: Probability of M5+ event in 10 years (%)
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+      - name: gutenberg_richter_b_value
+        description: Gutenberg-Richter b-value (typically ~1.0)
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0.3
+              max_value: 3.0
+
+  - name: gld_park_capacity
+    description: Gold layer - Park congestion analysis and visitor forecasting
+    columns:
+      - name: park_code
+        description: NPS park unit code
+        tests:
+          - not_null
+      - name: year
+        description: Visit year
+        tests:
+          - not_null
+      - name: month
+        description: Visit month
+        tests:
+          - not_null
+      - name: congestion_level
+        description: Congestion classification
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['MINIMAL', 'LOW', 'MODERATE', 'HIGH', 'CRITICAL']
+      - name: optimal_visit_window
+        description: Visit timing recommendation
+        tests:
+          - not_null
+      - name: management_recommendation
+        description: Capacity management recommendation
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['STANDARD_OPERATIONS', 'MONITOR_GROWTH_TREND', 'CONSIDER_TIMED_ENTRY', 'IMPLEMENT_RESERVATION_SYSTEM']
+
+  - name: gld_wildfire_risk
+    description: Gold layer - Composite wildfire risk from drought, vegetation, weather, history
+    columns:
+      - name: state_code
+        description: State abbreviation
+        tests:
+          - not_null
+      - name: analysis_year
+        description: Analysis year
+        tests:
+          - not_null
+      - name: composite_fire_risk
+        description: Composite wildfire risk score (0-100)
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+      - name: risk_category
+        description: Fire risk classification
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['EXTREME', 'HIGH', 'MODERATE', 'LOW', 'MINIMAL']
+      - name: recommended_alert_level
+        description: Recommended fire weather alert level
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['RED_FLAG_WARNING', 'FIRE_WEATHER_WATCH', 'ELEVATED_AWARENESS', 'NORMAL_OPERATIONS']
+      - name: dominant_risk_factor
+        description: Primary contributor to fire risk
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['DROUGHT', 'VEGETATION_DRYNESS', 'WIND_WEATHER', 'HISTORICAL_PATTERN']
+
+# Custom tests
+tests:
+  - name: test_magnitude_classification_consistency
+    description: Magnitude classification should match magnitude value
+    sql: |
+      SELECT *
+      FROM {{ ref('slv_earthquake_events') }}
+      WHERE (magnitude >= 7.0 AND magnitude_class != 'MAJOR' AND magnitude_class != 'GREAT')
+         OR (magnitude < 2.0 AND magnitude_class != 'MICRO')
+
+  - name: test_coordinate_bounds
+    description: Coordinates should be within valid ranges
+    sql: |
+      SELECT *
+      FROM {{ ref('slv_earthquake_events') }}
+      WHERE latitude < -90 OR latitude > 90
+         OR longitude < -180 OR longitude > 180
+
+  - name: test_visitor_count_non_negative
+    description: Visitor counts should never be negative
+    sql: |
+      SELECT *
+      FROM {{ ref('slv_park_visitors') }}
+      WHERE recreation_visits < 0
+
+  - name: test_streamflow_non_negative
+    description: Streamflow values should not be negative
+    sql: |
+      SELECT *
+      FROM {{ ref('slv_water_resources') }}
+      WHERE parameter_code = '00060'
+        AND measurement_value < 0
+
+macros:
+  - name: classify_magnitude
+    description: Classifies earthquake magnitude into USGS scale categories
+
+  - name: classify_depth
+    description: Classifies earthquake depth into shallow/intermediate/deep
+
+  - name: calculate_gutenberg_richter
+    description: Calculates Gutenberg-Richter b-value from earthquake catalog

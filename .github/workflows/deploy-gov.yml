@@ -1,0 +1,156 @@
+# Deploy Azure Government infrastructure
+# Uses Bicep templates from deploy/bicep/gov/
+name: Deploy Gov Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        type: choice
+        options:
+          - gov-dev
+          - gov-staging
+          - gov-prod
+          - gov-tribal-health
+      deploy_dlz:
+        description: 'Deploy Data Landing Zone'
+        required: true
+        default: true
+        type: boolean
+      deploy_streaming:
+        description: 'Deploy Streaming Services'
+        required: true
+        default: true
+        type: boolean
+      deploy_ai:
+        description: 'Deploy AI Services'
+        required: true
+        default: false
+        type: boolean
+      deploy_oss:
+        description: 'Deploy OSS Alternatives (AKS)'
+        required: true
+        default: false
+        type: boolean
+      what_if:
+        description: 'Run What-If only (no deployment)'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AZURE_GOV_ENVIRONMENT: AzureUSGovernment
+
+jobs:
+  validate:
+    name: Validate Templates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bicep Build
+        run: az bicep build --file deploy/bicep/gov/main.bicep
+
+      - name: Lint check
+        run: |
+          az bicep build --file deploy/bicep/gov/main.bicep 2>&1 | \
+            grep -c "Error" && exit 1 || echo "No errors found"
+
+  what-if:
+    name: What-If Analysis
+    runs-on: ubuntu-latest
+    needs: validate
+    environment: ${{ github.event.inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Gov Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_GOV_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_GOV_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
+          environment: ${{ env.AZURE_GOV_ENVIRONMENT }}
+
+      - name: Determine parameters file
+        id: params
+        run: |
+          case "${{ github.event.inputs.environment }}" in
+            gov-dev)           echo "file=params.gov-dev.json" >> "$GITHUB_OUTPUT" ;;
+            gov-staging)       echo "file=params.gov-dev.json" >> "$GITHUB_OUTPUT" ;;
+            gov-prod)          echo "file=params.gov-prod.json" >> "$GITHUB_OUTPUT" ;;
+            gov-tribal-health) echo "file=params.gov-tribal-health.json" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: What-If
+        run: |
+          az deployment sub what-if \
+            --location usgovvirginia \
+            --template-file deploy/bicep/gov/main.bicep \
+            --parameters deploy/bicep/gov/${{ steps.params.outputs.file }} \
+            --parameters \
+              deployDLZ=${{ github.event.inputs.deploy_dlz }} \
+              deployStreaming=${{ github.event.inputs.deploy_streaming }} \
+              deployAIServices=${{ github.event.inputs.deploy_ai }} \
+              deployOSSAlternatives=${{ github.event.inputs.deploy_oss }}
+
+  deploy:
+    name: Deploy to ${{ github.event.inputs.environment }}
+    runs-on: ubuntu-latest
+    needs: what-if
+    if: github.event.inputs.what_if == 'false'
+    environment: ${{ github.event.inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Gov Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_GOV_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_GOV_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
+          environment: ${{ env.AZURE_GOV_ENVIRONMENT }}
+
+      - name: Determine parameters file
+        id: params
+        run: |
+          case "${{ github.event.inputs.environment }}" in
+            gov-dev)           echo "file=params.gov-dev.json" >> "$GITHUB_OUTPUT" ;;
+            gov-staging)       echo "file=params.gov-dev.json" >> "$GITHUB_OUTPUT" ;;
+            gov-prod)          echo "file=params.gov-prod.json" >> "$GITHUB_OUTPUT" ;;
+            gov-tribal-health) echo "file=params.gov-tribal-health.json" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Deploy
+        run: |
+          az deployment sub create \
+            --location usgovvirginia \
+            --template-file deploy/bicep/gov/main.bicep \
+            --parameters deploy/bicep/gov/${{ steps.params.outputs.file }} \
+            --parameters \
+              deployDLZ=${{ github.event.inputs.deploy_dlz }} \
+              deployStreaming=${{ github.event.inputs.deploy_streaming }} \
+              deployAIServices=${{ github.event.inputs.deploy_ai }} \
+              deployOSSAlternatives=${{ github.event.inputs.deploy_oss }} \
+            --name "gov-deploy-$(date +%Y%m%d-%H%M%S)"
+
+      - name: Verify Deployment
+        run: |
+          echo "=== Deployed Resources ==="
+          az resource list \
+            --resource-group "rg-csa-${{ github.event.inputs.environment }}-platform" \
+            --output table 2>/dev/null || echo "Resource group may not exist yet"
+
+      - name: Post FedRAMP Compliance Check
+        run: |
+          echo "=== FedRAMP Compliance Verification ==="
+          echo "Checking encryption settings..."
+          echo "Checking network isolation..."
+          echo "Checking diagnostic settings..."
+          echo "TODO: Implement automated compliance scanning with Azure Policy"

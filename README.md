@@ -104,13 +104,12 @@ csa-inabox/
 +-- tools/                    # Development tools
 |   +-- dbt/                  # dbt for data transformations
 +-- .github/                  # CI/CD workflows
-+-- synapse/                  # Synapse-specific templates
 ```
 
 ## Prerequisites
 
 - **Azure CLI** >= 2.50.0
-- **Bicep CLI** >= 0.22.0
+- **Bicep CLI** >= 0.25
 - **PowerShell** >= 7.3 with Az module >= 11.0
 - **Python** >= 3.10 (for scripts and dbt)
 - **Git** >= 2.40

@@ -1,0 +1,237 @@
+# CSA-in-a-Box Open-Source Stack — Helm Values
+# These services supplement Azure PaaS in Gov regions where features are limited.
+
+global:
+  # Azure Government storage endpoints
+  storageEndpoint: "core.usgovcloudapi.net"
+  # ADLS Gen2 account for shared data lake
+  storageAccountName: ""
+  # Key Vault for secrets
+  keyVaultName: ""
+  # Managed Identity client ID
+  managedIdentityClientId: ""
+  # Image pull policy
+  imagePullPolicy: IfNotPresent
+
+# ─── Apache Atlas — Data Catalog ──────────────────────────────────────
+atlas:
+  enabled: true
+  image:
+    repository: apache/atlas
+    tag: "2.3.0"
+  replicas: 2
+  resources:
+    requests:
+      cpu: 500m
+      memory: 2Gi
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+  service:
+    type: ClusterIP
+    port: 21000
+  persistence:
+    enabled: true
+    size: 20Gi
+    storageClass: managed-csi
+  # Atlas connects to HBase (embedded) and Solr for indexing
+  solr:
+    enabled: true
+    image: solr:9.4
+    replicas: 1
+  env:
+    - name: ATLAS_SERVER_BIND_ADDRESS
+      value: "0.0.0.0"
+
+# ─── Apache Ranger — Fine-Grained Access Control ─────────────────────
+ranger:
+  enabled: true
+  admin:
+    image:
+      repository: ranger/ranger-admin
+      tag: "2.4.0"
+    replicas: 1
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+    service:
+      type: ClusterIP
+      port: 6080
+  # Ranger requires a database backend
+  database:
+    type: postgresql  # Uses the shared PostgreSQL dependency
+
+# ─── Apache Superset — Data Visualization ─────────────────────────────
+superset:
+  enabled: true
+  image:
+    repository: apache/superset
+    tag: "3.1.0"
+  replicas: 2
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+  service:
+    type: ClusterIP
+    port: 8088
+  ingress:
+    enabled: true
+    className: nginx
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+    hosts:
+      - host: superset.csa-platform.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: superset-tls
+        hosts:
+          - superset.csa-platform.example.com
+  # Superset config overrides
+  configOverrides:
+    SECRET_KEY: ""  # Set via Kubernetes secret
+    SQLALCHEMY_DATABASE_URI: ""  # PostgreSQL connection string
+
+# ─── Trino — Federated Query Engine ──────────────────────────────────
+trino:
+  enabled: true
+  coordinator:
+    image:
+      repository: trinodb/trino
+      tag: "440"
+    replicas: 1
+    resources:
+      requests:
+        cpu: 1000m
+        memory: 4Gi
+      limits:
+        cpu: 4000m
+        memory: 8Gi
+    service:
+      type: ClusterIP
+      port: 8080
+  workers:
+    replicas: 3
+    resources:
+      requests:
+        cpu: 1000m
+        memory: 4Gi
+      limits:
+        cpu: 4000m
+        memory: 8Gi
+  catalogs:
+    # Delta Lake catalog pointing to ADLS Gen2
+    delta:
+      connector: delta_lake
+      properties:
+        hive.metastore.uri: "thrift://hive-metastore:9083"
+        hive.azure.abfs.storage-account: ""
+        hive.azure.abfs.access-key: ""  # From Key Vault
+    # PostgreSQL catalog for operational data
+    postgresql:
+      connector: postgresql
+      properties:
+        connection-url: ""
+        connection-user: ""
+        connection-password: ""  # From Key Vault
+
+# ─── Apache Hive Metastore — Metadata Management ─────────────────────
+hiveMetastore:
+  enabled: true
+  image:
+    repository: apache/hive
+    tag: "3.1.3"
+  replicas: 1
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+  service:
+    type: ClusterIP
+    port: 9083
+  # Metastore backend database
+  database:
+    type: postgresql
+    host: ""  # Uses shared PostgreSQL
+    port: 5432
+    name: metastore
+    user: hive
+    passwordSecret: hive-metastore-password
+
+# ─── Apache NiFi — Data Integration (optional) ───────────────────────
+nifi:
+  enabled: false  # Use ADF when available in Gov
+  image:
+    repository: apache/nifi
+    tag: "1.25.0"
+  replicas: 1
+  resources:
+    requests:
+      cpu: 1000m
+      memory: 2Gi
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+  service:
+    type: ClusterIP
+    port: 8443
+  persistence:
+    enabled: true
+    size: 10Gi
+
+# ─── Shared Dependencies ─────────────────────────────────────────────
+postgresql:
+  enabled: true
+  auth:
+    postgresPassword: ""  # Set via --set or secret
+    database: csa_platform
+  primary:
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: 1000m
+        memory: 1Gi
+    persistence:
+      enabled: true
+      size: 20Gi
+      storageClass: managed-csi
+
+redis:
+  enabled: true
+  auth:
+    enabled: true
+    password: ""  # Set via --set or secret
+  master:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 256Mi
+
+# ─── Monitoring ───────────────────────────────────────────────────────
+monitoring:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    namespace: monitoring
+  # Prometheus metrics endpoints per service
+  metrics:
+    atlas: /api/atlas/admin/metrics
+    superset: /health
+    trino: /v1/info

@@ -1,0 +1,89 @@
+name: 'csa_usda'
+version: '1.0.0'
+config-version: 2
+require-dbt-version: [">=1.7.0", "<2.0.0"]
+
+profile: 'csa_analytics'
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+macro-paths: ["../../../domains/shared/dbt/macros"]
+
+vars:
+  bronze_database: "bronze"
+  silver_database: "silver"
+  gold_database: "gold"
+  file_format: "delta"
+  incremental_strategy: "merge"
+  freshness_warn_hours: 24
+  freshness_error_hours: 48
+
+  # USDA-specific variables
+  current_crop_year: 2024
+  historical_years_analysis: 10
+  yield_outlier_threshold: 3.0  # Standard deviations
+  snap_enrollment_lag_months: 2  # Data availability lag
+
+  # Food safety risk scoring weights
+  violation_severity_weight: 0.4
+  inspection_frequency_weight: 0.3
+  violation_recency_weight: 0.3
+
+  # Commodity standardization
+  major_commodities: ['CORN', 'SOYBEANS', 'WHEAT', 'COTTON', 'RICE']
+
+  # Geographic filters
+  major_ag_states: ['IA', 'IL', 'IN', 'OH', 'MN', 'NE', 'KS', 'ND', 'SD', 'TX']
+
+models:
+  csa_usda:
+    bronze:
+      +materialized: incremental
+      +file_format: delta
+      +schema: bronze
+      +tags: ['bronze', 'usda', 'raw']
+      +unique_key: ['source_system', 'ingestion_timestamp', 'record_hash']
+    silver:
+      +materialized: incremental
+      +file_format: delta
+      +schema: silver
+      +tags: ['silver', 'usda', 'cleaned']
+      +incremental_strategy: merge
+      +on_schema_change: "sync_all_columns"
+    gold:
+      +materialized: table
+      +file_format: delta
+      +schema: gold
+      +tags: ['gold', 'usda', 'analytics']
+      +post-hook: "OPTIMIZE {{ this }} ZORDER BY (report_date)"
+
+seeds:
+  csa_usda:
+    +schema: seeds
+    +tags: ['seed', 'usda']
+
+sources:
+  - name: usda
+    description: USDA agricultural data sources
+    tables:
+      - name: nass_crop_yields
+        description: NASS QuickStats crop yield data
+        freshness:
+          warn_after: {count: 1, period: day}
+          error_after: {count: 2, period: day}
+      - name: snap_enrollment
+        description: FNS SNAP enrollment data
+        freshness:
+          warn_after: {count: 7, period: day}
+          error_after: {count: 14, period: day}
+      - name: fsis_inspections
+        description: FSIS food safety inspection data
+        freshness:
+          warn_after: {count: 1, period: day}
+          error_after: {count: 3, period: day}
+
+snapshots:
+  csa_usda:
+    +target_schema: snapshots
+    +strategy: timestamp
+    +updated_at: processed_timestamp

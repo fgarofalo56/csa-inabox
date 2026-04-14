@@ -1,0 +1,259 @@
+# Data product contract — interior.natural_resources
+#
+# This file is the authoritative interface for the Interior Department
+# natural resources data product. It declares the schema, SLAs, and
+# quality rules for seismic risk, park capacity, and wildfire analytics.
+
+apiVersion: csa.interior.gov/v1
+kind: DataProductContract
+
+metadata:
+  name: interior.natural_resources
+  domain: interior
+  owner: interior-data-engineering@contoso.com
+  version: "1.0.0"
+  description: >
+    Natural resource analytics from USGS, NPS, and BLM data sources.
+    Provides seismic risk assessment using Gutenberg-Richter analysis,
+    national park capacity management with visitor forecasting, and
+    wildfire risk prediction from drought, vegetation, and weather data.
+    Supports emergency management, park operations, and resource allocation.
+
+schema:
+  primary_key: [record_type, region_id, year]
+  columns:
+    # Seismic Risk columns
+    - name: region_name
+      type: string
+      nullable: false
+      description: Seismic region or geographic area name
+
+    - name: risk_zone
+      type: string
+      nullable: true
+      description: Tectonic setting (SUBDUCTION, TRANSFORM, etc.)
+      allowed_values:
+        - SUBDUCTION
+        - TRANSFORM
+        - EXTENSIONAL
+        - HOTSPOT
+        - INTRAPLATE
+
+    - name: year
+      type: integer
+      nullable: false
+      description: Analysis year
+
+    - name: total_events
+      type: integer
+      nullable: true
+      description: Total earthquake events in the region for the year
+
+    - name: m5_plus_events
+      type: integer
+      nullable: true
+      description: Number of M5.0+ events
+
+    - name: max_historical_magnitude
+      type: decimal(4,2)
+      nullable: true
+      description: Maximum recorded magnitude in the region
+
+    - name: gutenberg_richter_b_value
+      type: decimal(5,3)
+      nullable: true
+      description: G-R b-value (typically ~1.0, lower = more large events)
+
+    - name: recurrence_interval_m5_years
+      type: decimal(8,1)
+      nullable: true
+      description: Average years between M5.0+ events
+
+    - name: probability_m5_10yr
+      type: decimal(5,2)
+      nullable: true
+      description: Probability of M5.0+ event in next 10 years (%)
+
+    - name: population_exposed
+      type: bigint
+      nullable: true
+      description: Estimated population in the seismic risk zone
+
+    - name: seismic_risk_score
+      type: decimal(5,2)
+      nullable: true
+      description: Composite seismic risk score (0-100)
+
+    - name: risk_category
+      type: string
+      nullable: false
+      description: Risk classification
+      allowed_values:
+        - VERY_HIGH
+        - HIGH
+        - MODERATE
+        - LOW
+        - MINIMAL
+
+    # Park Capacity columns
+    - name: park_code
+      type: string
+      nullable: true
+      description: NPS park unit code (e.g., YELL, GRCA)
+
+    - name: park_name
+      type: string
+      nullable: true
+      description: Full park name
+
+    - name: recreation_visits
+      type: bigint
+      nullable: true
+      description: Monthly recreation visit count
+
+    - name: utilization_pct
+      type: decimal(6,2)
+      nullable: true
+      description: Capacity utilization percentage
+
+    - name: congestion_level
+      type: string
+      nullable: true
+      description: Congestion classification
+      allowed_values:
+        - MINIMAL
+        - LOW
+        - MODERATE
+        - HIGH
+        - CRITICAL
+
+    - name: predicted_visitors_next_year
+      type: bigint
+      nullable: true
+      description: Forecasted visitors for same month next year
+
+    - name: optimal_visit_window
+      type: string
+      nullable: true
+      description: Visit timing recommendation text
+
+    # Wildfire Risk columns
+    - name: composite_fire_risk
+      type: decimal(5,2)
+      nullable: true
+      description: Composite wildfire risk score (0-100)
+
+    - name: drought_index
+      type: decimal(5,2)
+      nullable: true
+      description: Drought severity score (0-100)
+
+    - name: vegetation_dryness_score
+      type: decimal(5,2)
+      nullable: true
+      description: Vegetation dryness proxy score (0-100)
+
+    - name: wind_risk_factor
+      type: integer
+      nullable: true
+      description: Wind/weather risk factor (0-100)
+
+    - name: recommended_alert_level
+      type: string
+      nullable: true
+      description: Recommended fire weather alert level
+      allowed_values:
+        - RED_FLAG_WARNING
+        - FIRE_WEATHER_WATCH
+        - ELEVATED_AWARENESS
+        - NORMAL_OPERATIONS
+
+    - name: report_date
+      type: date
+      nullable: false
+      description: Date when analytics were generated
+
+sla:
+  freshness_minutes: 1440  # Daily for seismic, monthly for parks
+  valid_row_ratio: 0.98
+  supported_until: "2027-12-31"
+  update_frequency: >
+    Seismic: daily (real-time stream + daily batch reconciliation).
+    Parks: monthly (NPS reporting schedule).
+    Wildfire: weekly during fire season, monthly otherwise.
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: region_name
+  - rule: expect_column_values_to_not_be_null
+    column: year
+  - rule: expect_column_values_to_be_between
+    column: seismic_risk_score
+    min_value: 0
+    max_value: 100
+    mostly: 0.99
+  - rule: expect_column_values_to_be_in_set
+    column: risk_category
+    value_set: [VERY_HIGH, HIGH, MODERATE, LOW, MINIMAL]
+  - rule: expect_column_values_to_be_between
+    column: probability_m5_10yr
+    min_value: 0
+    max_value: 100
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: gutenberg_richter_b_value
+    min_value: 0.3
+    max_value: 3.0
+    mostly: 0.95
+  - rule: expect_column_values_to_be_between
+    column: composite_fire_risk
+    min_value: 0
+    max_value: 100
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: utilization_pct
+    min_value: 0
+    max_value: 500
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: year
+    min_value: 2000
+    max_value: 2030
+
+data_lineage:
+  upstream_sources:
+    - name: "USGS Earthquake API (ComCat)"
+      url: "https://earthquake.usgs.gov/fdsnws/event/1/"
+      description: "Earthquake event catalog with real-time updates"
+      refresh_schedule: "Real-time (streaming) + Daily (batch)"
+    - name: "NPS Visitor Statistics"
+      url: "https://irma.nps.gov/Stats/"
+      description: "Monthly recreation visit counts by park unit"
+      refresh_schedule: "Monthly (90-day lag)"
+    - name: "USGS Water Services (NWIS)"
+      url: "https://waterservices.usgs.gov/nwis/"
+      description: "Stream gauge measurements and statistics"
+      refresh_schedule: "Real-time (15-min) + Daily (daily values)"
+
+  downstream_consumers:
+    - name: "Emergency Management Dashboard"
+      description: "Real-time seismic and wildfire risk monitoring"
+    - name: "Park Operations Console"
+      description: "Park capacity management and visitor forecasting"
+    - name: "Resource Allocation APIs"
+      description: "APIs for budget and staffing optimization"
+    - name: "Public Safety Alert System"
+      description: "Automated alerts for seismic and fire events"
+
+usage_notes: |
+  - Earthquake magnitudes follow the moment magnitude scale (Mw) when available
+  - G-R b-values near 1.0 are typical; values < 0.7 may indicate stress accumulation
+  - Park visitor counts are preliminary for 90 days after the reference month
+  - COVID-19 significantly impacted 2020-2021 visitor data (flagged in model)
+  - Wildfire risk uses water gauge data as drought proxy; production should add NDVI
+  - Seismic probability assumes Poisson process (events are independent)
+  - Real-time earthquake data arrives within 1-5 minutes of event occurrence
+
+contact:
+  technical: interior-data-team@contoso.com
+  business: interior-analytics-lead@contoso.com

@@ -125,65 +125,6 @@
     }
   ],
   "terminal.integrated.smoothScrolling": true,
-  "mcp": {
-    "inputs": [],
-    "servers": {
-      "mcp-server-time": {
-        "command": "python",
-        "args": [
-          "-m",
-          "mcp_server_time",
-          "--local-timezone=America/Los_Angeles"
-        ],
-        "env": {}
-      }
-    }
-  },
-  "sqltools.connections": [
-    {
-      "pgOptions": {
-        "ssl": {
-          "rejectUnauthorized": true
-        }
-      },
-      "previewLimit": 50,
-      "server": "<POSTGRESQL_SERVER>.postgres.database.azure.com",
-      "port": 5432,
-      "askForPassword": true,
-      "driver": "PostgreSQL",
-      "name": "<POSTGRESQL_SERVER>",
-      "group": "Limitless Data",
-      "database": "vectordb",
-      "username": "<USERNAME>"
-    },
-    {
-      "previewLimit": 50,
-      "server": "<LOCAL_HOST>",
-      "port": 5433,
-      "driver": "PostgreSQL",
-      "database": "postgres",
-      "username": "<USERNAME>",
-      "name": "local_PostgresSQL",
-      "askForPassword": true
-    }
-  ],
-  "dbcode.connections": [
-    {
-      "connectionId": "SZhep_7GqqoDoCpInbd1b",
-      "name": "local_PostgreSQL",
-      "driver": "postgres",
-      "connectionType": "host",
-      "host": "<LOCAL_HOST>",
-      "port": 5433,
-      "ssl": false,
-      "username": "<USERNAME>",
-      "password": "",
-      "savePassword": "secretStorage",
-      "database": "postgres",
-      "readOnly": false,
-      "connectionTimeout": 30
-    }
-  ],
   "chat.mcp.discovery.enabled": {
     "claude-desktop": false,
     "windsurf": false,

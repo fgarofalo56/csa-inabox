@@ -28,7 +28,7 @@ The deploying identity needs:
 
 ### Step 1: Clone and Setup
 ```bash
-git clone https://github.com/your-org/csa-inabox.git
+git clone https://github.com/fgarofalo56/csa-inabox.git
 cd csa-inabox
 make setup  # or `make setup-win` on Windows
 ```

@@ -82,7 +82,7 @@
                         "subscriptionId": "<SUBSCRIPTION_ID>",
                         "vNetResourceGroup": "rg-alz-dev-spokeVnet-eastus2",
                         "vNetName": "alz-dev-spokeVnet-eastus2",
-                        "subnetName": "privatelinke",
+                        "subnetName": "private-endpoint",
                         "vNetLocation": "East US 2"
                     }
                 ],
@@ -106,7 +106,7 @@
                         "subscriptionId": "<SUBSCRIPTION_ID>",
                         "vNetResourceGroup": "rg-alz-dev-spokeVnet-eastus2",
                         "vNetName": "alz-dev-spokeVnet-eastus2",
-                        "subnetName": "privatelinke",
+                        "subnetName": "private-endpoint",
                         "vNetLocation": "East US 2"
                     }
                 ],

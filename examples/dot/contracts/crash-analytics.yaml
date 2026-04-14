@@ -1,0 +1,107 @@
+apiVersion: datacontract/v1
+kind: DataProduct
+metadata:
+  name: crash-analytics
+  domain: transportation
+  owner: DOT Analytics Team
+  version: "1.0.0"
+  classification: public
+  tags:
+    - safety
+    - nhtsa
+    - fars
+    - geospatial
+spec:
+  description: >
+    Highway crash analysis with severity scoring and hotspot identification.
+    Derived from NHTSA FARS data, this product provides crash clustering by
+    geographic grid cell, contributing factor analysis, and year-over-year
+    trend tracking. All data is public domain.
+  schema:
+    - name: crash_id
+      type: string
+      description: Unique crash identifier (FARS ST_CASE + state code)
+      required: true
+    - name: state_code
+      type: integer
+      description: FARS numeric state code (1-56)
+      required: true
+    - name: crash_date
+      type: date
+      description: Date of the crash event
+      required: true
+    - name: crash_year
+      type: integer
+      description: Year of the crash
+      required: true
+    - name: fatality_count
+      type: integer
+      description: Number of fatalities in the crash
+      required: true
+    - name: severity_score
+      type: decimal
+      description: >
+        Composite severity score weighted by fatalities (10x),
+        alcohol involvement (5x), pedestrian involvement (3x),
+        and vehicle count (1x)
+      required: true
+    - name: weather_category
+      type: string
+      description: Decoded weather condition (CLEAR, RAIN, SNOW, etc.)
+      required: true
+    - name: light_category
+      type: string
+      description: Decoded light condition (DAYLIGHT, DARK_LIGHTED, etc.)
+      required: true
+    - name: manner_of_collision
+      type: string
+      description: Type of collision (FRONT_TO_REAR, ANGLE, etc.)
+    - name: latitude
+      type: decimal
+      description: Crash location latitude (WGS84), validated within US bounds
+    - name: longitude
+      type: decimal
+      description: Crash location longitude (WGS84), validated within US bounds
+    - name: grid_cell_id
+      type: string
+      description: >
+        Geographic grid cell identifier (0.1-degree resolution)
+        for hotspot clustering
+    - name: is_alcohol_related
+      type: boolean
+      description: Whether the crash involved an alcohol-impaired driver
+    - name: is_pedestrian_involved
+      type: boolean
+      description: Whether the crash involved a pedestrian
+    - name: time_of_day_bucket
+      type: string
+      description: >
+        Time-of-day classification (MORNING_RUSH, MIDDAY,
+        EVENING_RUSH, EVENING, OVERNIGHT)
+  sla:
+    freshness: monthly
+    completeness: 0.95
+    availability: 99.5
+  quality:
+    completeness_target: 0.95
+    accuracy_target: 0.99
+    geographic_coverage: "All 50 US states plus DC and territories"
+    temporal_coverage: "2015-present"
+    known_limitations:
+      - "FARS final data has ~12-month lag from crash year"
+      - "Coordinates may be missing for ~15% of rural crashes"
+      - "Only includes fatal crashes (>=1 fatality within 30 days)"
+  access:
+    api_endpoint: /api/v1/crash-analytics
+    format: parquet
+    authentication: Azure AD OAuth 2.0
+    rate_limit: 1000 requests/hour
+  lineage:
+    sources:
+      - name: NHTSA FARS
+        url: https://www.nhtsa.gov/research-data/fatality-analysis-reporting-system-fars
+        type: government_api
+    transformations:
+      - bronze: Raw crash records with basic validation
+      - silver: Decoded enums, severity scoring, geographic validation
+      - gold: Grid-cell aggregation, trend analysis, hotspot ranking

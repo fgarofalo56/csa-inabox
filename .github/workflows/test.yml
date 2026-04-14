@@ -127,7 +127,7 @@ jobs:
 
       - name: Compile dbt models
         run: |
-          dbt compile --project-dir ${{ matrix.domain_path }} --profiles-dir ${{ matrix.domain_path }} 2>&1 || {
+          dbt compile --project-dir . --profiles-dir . 2>&1 || {
             exit_code=$?
             if [ $exit_code -eq 2 ]; then
               echo "::warning::dbt compile failed - may need database connection"

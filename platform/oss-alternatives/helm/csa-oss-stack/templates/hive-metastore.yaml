@@ -1,0 +1,75 @@
+{{- if .Values.hiveMetastore.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "csa-oss.fullname" . }}-hive-metastore
+  labels:
+    {{- include "csa-oss.labels" . | nindent 4 }}
+    app.kubernetes.io/component: hive-metastore
+spec:
+  replicas: {{ .Values.hiveMetastore.replicas }}
+  selector:
+    matchLabels:
+      {{- include "csa-oss.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: hive-metastore
+  template:
+    metadata:
+      labels:
+        {{- include "csa-oss.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: hive-metastore
+    spec:
+      containers:
+        - name: hive-metastore
+          image: "{{ .Values.hiveMetastore.image.repository }}:{{ .Values.hiveMetastore.image.tag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["/opt/hive/bin/hive", "--service", "metastore"]
+          ports:
+            - containerPort: 9083
+              protocol: TCP
+          env:
+            - name: HIVE_METASTORE_DB_TYPE
+              value: {{ .Values.hiveMetastore.database.type | quote }}
+            - name: HIVE_METASTORE_DB_HOST
+              value: {{ .Values.hiveMetastore.database.host | default (printf "%s-postgresql" (include "csa-oss.fullname" .)) | quote }}
+            - name: HIVE_METASTORE_DB_PORT
+              value: {{ .Values.hiveMetastore.database.port | quote }}
+            - name: HIVE_METASTORE_DB_NAME
+              value: {{ .Values.hiveMetastore.database.name | quote }}
+            - name: HIVE_METASTORE_DB_USER
+              value: {{ .Values.hiveMetastore.database.user | quote }}
+            - name: HIVE_METASTORE_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "csa-oss.fullname" . }}-hive-metastore
+                  key: db-password
+          resources:
+            {{- toYaml .Values.hiveMetastore.resources | nindent 12 }}
+          readinessProbe:
+            tcpSocket:
+              port: 9083
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 9083
+            initialDelaySeconds: 60
+            periodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "csa-oss.fullname" . }}-hive-metastore
+  labels:
+    {{- include "csa-oss.labels" . | nindent 4 }}
+    app.kubernetes.io/component: hive-metastore
+spec:
+  type: {{ .Values.hiveMetastore.service.type }}
+  ports:
+    - port: {{ .Values.hiveMetastore.service.port }}
+      targetPort: 9083
+      protocol: TCP
+      name: thrift
+  selector:
+    {{- include "csa-oss.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: hive-metastore
+{{- end }}

@@ -1,0 +1,218 @@
+# Data product contract — usda.snap_enrollment
+#
+# This file is the authoritative interface for the USDA SNAP enrollment
+# data product. It declares the schema, SLAs, and quality rules
+# for Supplemental Nutrition Assistance Program analytics.
+
+apiVersion: csa.usda.gov/v1
+kind: DataProductContract
+
+metadata:
+  name: usda.snap_enrollment
+  domain: usda
+  owner: fns-data-engineering@contoso.com
+  version: "1.0.0"
+  description: >
+    SNAP enrollment and benefits analytics from Food and Nutrition Service.
+    Provides monthly enrollment trends, demographic analysis, and program
+    effectiveness metrics across states and counties. Used for program
+    administration, policy analysis, and resource allocation.
+
+schema:
+  primary_key: [state_code, enrollment_date, program]
+  columns:
+    - name: state_code
+      type: string
+      nullable: false
+      description: 2-letter state abbreviation (ISO 3166-2:US)
+    - name: state_name
+      type: string
+      nullable: false
+      description: Full state name
+    - name: county_fips
+      type: string
+      nullable: true
+      description: 5-digit county FIPS code (null for state-level)
+    - name: county_name
+      type: string
+      nullable: true
+      description: County name or 'STATE LEVEL' for aggregated data
+    - name: fiscal_year
+      type: integer
+      nullable: false
+      description: Federal fiscal year (October-September)
+    - name: month_number
+      type: integer
+      nullable: false
+      description: Month number (1-12, fiscal year basis)
+    - name: enrollment_date
+      type: date
+      nullable: false
+      description: First day of enrollment month
+    - name: program
+      type: string
+      nullable: false
+      description: Program name
+      allowed_values:
+        - SNAP
+        - WIC
+        - TEFAP
+    - name: current_enrollment
+      type: bigint
+      nullable: false
+      description: Number of persons enrolled
+    - name: current_households
+      type: bigint
+      nullable: false
+      description: Number of households enrolled
+    - name: current_benefits_dollars
+      type: decimal(18,2)
+      nullable: false
+      description: Total benefits distributed (USD)
+    - name: avg_benefits_per_person
+      type: decimal(8,2)
+      nullable: false
+      description: Average monthly benefit per person
+    - name: avg_benefits_per_household
+      type: decimal(8,2)
+      nullable: false
+      description: Average monthly benefit per household
+    - name: avg_persons_per_household
+      type: decimal(4,2)
+      nullable: false
+      description: Average household size
+    - name: enrollment_change_1yr
+      type: decimal(6,2)
+      nullable: true
+      description: Year-over-year enrollment change percentage
+    - name: benefits_change_1yr
+      type: decimal(6,2)
+      nullable: true
+      description: Year-over-year benefits change percentage
+    - name: enrollment_trend
+      type: string
+      nullable: false
+      description: Enrollment trend classification
+      allowed_values:
+        - INCREASING
+        - DECREASING
+        - STABLE
+        - INSUFFICIENT_DATA
+    - name: enrollment_3mo_avg
+      type: bigint
+      nullable: true
+      description: 3-month rolling average enrollment
+    - name: counties_participating
+      type: integer
+      nullable: true
+      description: Number of counties with active participation
+    - name: enrollment_volatility
+      type: decimal(5,2)
+      nullable: true
+      description: Enrollment volatility score (coefficient of variation)
+    - name: is_current_data
+      type: boolean
+      nullable: false
+      description: True when data is within 90 days of current date
+    - name: is_latest_month
+      type: boolean
+      nullable: false
+      description: True for the most recent month available
+    - name: report_date
+      type: date
+      nullable: false
+      description: Date when analytics were generated
+
+sla:
+  freshness_minutes: 10080  # Weekly updates (data lags 6-8 weeks)
+  valid_row_ratio: 0.97
+  supported_until: "2027-12-31"
+  update_frequency: "Monthly, 6-8 week lag"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: state_code
+  - rule: expect_column_values_to_not_be_null
+    column: enrollment_date
+  - rule: expect_column_values_to_not_be_null
+    column: current_enrollment
+  - rule: expect_column_values_to_not_be_null
+    column: current_households
+  - rule: expect_column_values_to_be_in_set
+    column: program
+    value_set: [SNAP, WIC, TEFAP]
+  - rule: expect_column_values_to_be_between
+    column: current_enrollment
+    min_value: 0
+    max_value: 50000000  # National enrollment cap
+  - rule: expect_column_values_to_be_between
+    column: current_households
+    min_value: 0
+    max_value: 25000000  # National household cap
+  - rule: expect_column_values_to_be_between
+    column: current_benefits_dollars
+    min_value: 0
+    max_value: 10000000000  # $10B monthly cap
+  - rule: expect_column_values_to_be_between
+    column: avg_benefits_per_person
+    min_value: 0
+    max_value: 1000  # $1000 monthly per person cap
+  - rule: expect_column_values_to_be_between
+    column: avg_persons_per_household
+    min_value: 0.5
+    max_value: 15  # Reasonable household size range
+  - rule: expect_column_values_to_be_between
+    column: fiscal_year
+    min_value: 2009  # First year of comprehensive data
+    max_value: 2030
+  - rule: expect_column_values_to_be_between
+    column: month_number
+    min_value: 1
+    max_value: 12
+  - rule: expect_column_pair_values_a_to_be_greater_than_or_equal_to_b
+    column_a: current_enrollment
+    column_b: current_households
+    mostly: 0.99  # Persons >= households logical constraint
+  - rule: expect_column_values_to_be_between
+    column: enrollment_change_1yr
+    min_value: -50
+    max_value: 100
+    mostly: 0.95  # Reasonable YoY change bounds
+
+data_lineage:
+  upstream_sources:
+    - name: "FNS SNAP Data System"
+      url: "https://www.fns.usda.gov/pd/supplemental-nutrition-assistance-program-snap"
+      description: "Food and Nutrition Service administrative data"
+      refresh_schedule: "Monthly"
+    - name: "Data.gov FNS datasets"
+      url: "https://catalog.data.gov/organization/fns-usda-gov"
+      description: "Public FNS program statistics"
+
+  downstream_consumers:
+    - name: "SNAP Dashboard"
+      description: "Program administrator dashboard"
+    - name: "Congressional Reporting"
+      description: "Monthly reports to Congress"
+    - name: "Policy Analysis APIs"
+      description: "APIs for nutrition assistance research"
+    - name: "Economic Impact Models"
+      description: "USDA Economic Research Service analysis"
+
+privacy_notes: |
+  - Individual participant data is not included
+  - County-level data may be suppressed for small populations
+  - All data is aggregated to protect participant privacy
+  - Follows FNS data sharing guidelines and FISMA compliance
+
+usage_notes: |
+  - Data lags 6-8 weeks due to state reporting cycles
+  - Seasonal patterns exist (higher enrollment in winter months)
+  - Economic events (recessions, disasters) cause enrollment spikes
+  - State variations reflect different eligibility policies
+  - Benefits amounts adjusted annually for inflation
+
+contact:
+  technical: fns-data-team@contoso.com
+  business: fns-analytics-lead@contoso.com
+  privacy: fns-privacy-officer@contoso.com

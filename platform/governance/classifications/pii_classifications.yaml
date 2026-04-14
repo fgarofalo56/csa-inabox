@@ -1,0 +1,166 @@
+# PII Classification Rules for Azure Purview
+# Defines detection patterns for Personally Identifiable Information.
+#
+# These rules extend the built-in Microsoft Purview PII classifiers with
+# patterns specific to the CSA-in-a-Box data platform.
+
+apiVersion: csa.microsoft.com/v1
+kind: ClassificationRuleSet
+
+metadata:
+  name: pii-classifications
+  version: "1.0.0"
+  description: >
+    PII detection rules for Azure Purview. Covers US-centric PII patterns
+    including SSN, email, phone, address, and name fields. Rules apply a
+    sensitivity label of "Restricted" when matched.
+  owner: governance-team@contoso.com
+  tags: [pii, classification, purview, compliance]
+  regulations: [NIST-800-122, CCPA, HIPAA-Safe-Harbor]
+
+defaultSensitivity: Restricted
+minimumPercentageMatch: 60.0
+
+classifications:
+  - name: CSA_PII_SSN
+    description: US Social Security Number (with or without dashes)
+    category: PII
+    subcategory: Government ID
+    sensitivity: Restricted
+    dataPatterns:
+      - pattern: '\b\d{3}-\d{2}-\d{4}\b'
+        description: SSN with dashes (123-45-6789)
+      - pattern: '\b\d{9}\b'
+        description: SSN without dashes (123456789) — requires column name match
+        requireColumnMatch: true
+    columnPatterns:
+      - pattern: '(?i)(ssn|social_security|social_sec|ss_num|ss_number|soc_sec)'
+        description: Column names indicating SSN
+    minimumPercentageMatch: 80.0
+    builtInClassifier: MICROSOFT.PERSONAL.US.SOCIAL_SECURITY_NUMBER
+    remediationAction: mask
+    maskPattern: "***-**-{last4}"
+
+  - name: CSA_PII_EMAIL
+    description: Email address
+    category: PII
+    subcategory: Contact Information
+    sensitivity: Confidential
+    dataPatterns:
+      - pattern: '\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b'
+        description: Standard email address format
+    columnPatterns:
+      - pattern: '(?i)(email|e_mail|email_address|emailaddr|contact_email|user_email)'
+        description: Column names indicating email
+    minimumPercentageMatch: 60.0
+    builtInClassifier: MICROSOFT.PERSONAL.EMAIL
+    remediationAction: mask
+    maskPattern: "{first2}***@{domain}"
+
+  - name: CSA_PII_PHONE
+    description: US phone number (various formats)
+    category: PII
+    subcategory: Contact Information
+    sensitivity: Confidential
+    dataPatterns:
+      - pattern: '\b\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b'
+        description: US phone (123-456-7890, (123) 456-7890, 123.456.7890)
+      - pattern: '\b\+1[-.\s]?\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b'
+        description: US phone with country code (+1-123-456-7890)
+    columnPatterns:
+      - pattern: '(?i)(phone|telephone|tel|mobile|cell|fax|phone_number|contact_number)'
+        description: Column names indicating phone number
+    minimumPercentageMatch: 60.0
+    builtInClassifier: MICROSOFT.PERSONAL.US.PHONE_NUMBER
+    remediationAction: mask
+    maskPattern: "(***) ***-{last4}"
+
+  - name: CSA_PII_ADDRESS
+    description: US mailing or physical address
+    category: PII
+    subcategory: Contact Information
+    sensitivity: Confidential
+    dataPatterns:
+      - pattern: '\b\d{1,5}\s+\w+\s+(street|st|avenue|ave|road|rd|boulevard|blvd|drive|dr|lane|ln|court|ct|way|place|pl)\b'
+        description: Street address pattern
+    columnPatterns:
+      - pattern: '(?i)(address|addr|street|street_address|mailing_address|physical_address|address_line|addr_line)'
+        description: Column names indicating address
+    minimumPercentageMatch: 50.0
+    remediationAction: redact
+
+  - name: CSA_PII_FULL_NAME
+    description: Person's full name
+    category: PII
+    subcategory: Identity
+    sensitivity: Confidential
+    columnPatterns:
+      - pattern: '(?i)(full_name|fullname|person_name|customer_name|employee_name|first_name|last_name|given_name|surname|family_name)'
+        description: Column names indicating person name
+    minimumPercentageMatch: 40.0
+    remediationAction: mask
+
+  - name: CSA_PII_DOB
+    description: Date of birth
+    category: PII
+    subcategory: Identity
+    sensitivity: Restricted
+    dataPatterns:
+      - pattern: '\b(0[1-9]|1[0-2])/(0[1-9]|[12]\d|3[01])/\d{4}\b'
+        description: Date of birth (MM/DD/YYYY)
+      - pattern: '\b\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])\b'
+        description: Date of birth (YYYY-MM-DD)
+    columnPatterns:
+      - pattern: '(?i)(dob|date_of_birth|birth_date|birthdate|birthday)'
+        description: Column names indicating date of birth
+    minimumPercentageMatch: 70.0
+    builtInClassifier: MICROSOFT.PERSONAL.DATE_OF_BIRTH
+    remediationAction: mask
+    maskPattern: "****-**-**"
+
+  - name: CSA_PII_DRIVERS_LICENSE
+    description: US driver's license number
+    category: PII
+    subcategory: Government ID
+    sensitivity: Restricted
+    columnPatterns:
+      - pattern: '(?i)(driver.?license|dl_number|drivers_lic|license_number|dl_num)'
+        description: Column names indicating driver's license
+    minimumPercentageMatch: 70.0
+    builtInClassifier: MICROSOFT.PERSONAL.US.DRIVER_LICENSE_NUMBER
+    remediationAction: mask
+
+  - name: CSA_PII_IP_ADDRESS
+    description: IP address (v4 and v6)
+    category: PII
+    subcategory: Technical Identifier
+    sensitivity: Confidential
+    dataPatterns:
+      - pattern: '\b(?:\d{1,3}\.){3}\d{1,3}\b'
+        description: IPv4 address
+      - pattern: '\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b'
+        description: IPv6 address (full form)
+    columnPatterns:
+      - pattern: '(?i)(ip_address|ipaddress|ip_addr|source_ip|dest_ip|client_ip|remote_ip)'
+        description: Column names indicating IP address
+    minimumPercentageMatch: 60.0
+    remediationAction: mask
+
+autoLabelingPolicies:
+  - name: PII_Restricted_Auto_Label
+    description: Auto-label SSN, DOB, and driver's license as Restricted
+    classificationNames:
+      - CSA_PII_SSN
+      - CSA_PII_DOB
+      - CSA_PII_DRIVERS_LICENSE
+    targetLabel: Restricted
+
+  - name: PII_Confidential_Auto_Label
+    description: Auto-label email, phone, address, and name as Confidential
+    classificationNames:
+      - CSA_PII_EMAIL
+      - CSA_PII_PHONE
+      - CSA_PII_ADDRESS
+      - CSA_PII_FULL_NAME
+      - CSA_PII_IP_ADDRESS
+    targetLabel: Confidential

@@ -1,0 +1,174 @@
+# Data product contract — usda.crop_yields
+#
+# This file is the authoritative interface for the USDA crop yields
+# data product. It declares the schema, SLAs, and quality rules
+# for agricultural yield analytics and forecasting.
+
+apiVersion: csa.usda.gov/v1
+kind: DataProductContract
+
+metadata:
+  name: usda.crop_yields
+  domain: usda
+  owner: usda-data-engineering@contoso.com
+  version: "1.0.0"
+  description: >
+    Crop yield analytics from NASS QuickStats API. Provides historical
+    yield data, trends, and forecasting for major agricultural commodities
+    across states and counties. Used for agricultural planning, policy
+    analysis, and economic modeling.
+
+schema:
+  primary_key: [state_code, commodity, county_code, year]
+  columns:
+    - name: state_code
+      type: string
+      nullable: false
+      description: 2-letter state abbreviation (ISO 3166-2:US)
+    - name: state_name
+      type: string
+      nullable: false
+      description: Full state name
+    - name: county_code
+      type: string
+      nullable: false
+      description: 3-digit county FIPS code (999 for state-level)
+    - name: county_name
+      type: string
+      nullable: false
+      description: County name or 'STATE LEVEL' for aggregated data
+    - name: commodity
+      type: string
+      nullable: false
+      description: Standardized commodity name
+      allowed_values:
+        - CORN
+        - SOYBEANS
+        - WHEAT
+        - COTTON
+        - RICE
+        - BARLEY
+        - OATS
+        - HAY
+    - name: year
+      type: integer
+      nullable: false
+      description: Crop production year
+    - name: yield_per_acre
+      type: decimal(10,2)
+      nullable: false
+      description: Crop yield per harvested acre (bushels/tons per acre)
+    - name: production_amount
+      type: bigint
+      nullable: true
+      description: Total production (bushels/tons)
+    - name: planted_acres
+      type: bigint
+      nullable: true
+      description: Total acres planted
+    - name: harvested_acres
+      type: bigint
+      nullable: true
+      description: Total acres harvested
+    - name: harvest_efficiency_pct
+      type: decimal(5,2)
+      nullable: true
+      description: Percentage of planted acres successfully harvested
+    - name: yield_3yr_avg
+      type: decimal(10,2)
+      nullable: true
+      description: 3-year moving average yield
+    - name: yield_5yr_avg
+      type: decimal(10,2)
+      nullable: true
+      description: 5-year moving average yield
+    - name: yield_trend_5yr
+      type: string
+      nullable: true
+      description: 5-year yield trend classification
+      allowed_values:
+        - INCREASING
+        - STABLE
+        - DECREASING
+    - name: yield_forecast_next_year
+      type: decimal(10,2)
+      nullable: true
+      description: Forecasted yield for following year
+    - name: yield_volatility_score
+      type: decimal(5,2)
+      nullable: true
+      description: Yield volatility coefficient (0-100)
+    - name: is_forecast_reliable
+      type: boolean
+      nullable: false
+      description: True when sufficient historical data exists for forecasting
+    - name: report_date
+      type: date
+      nullable: false
+      description: Date when analytics were generated
+
+sla:
+  freshness_minutes: 1440  # Daily updates
+  valid_row_ratio: 0.98
+  supported_until: "2027-12-31"
+  update_frequency: "Daily during growing season, weekly otherwise"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: state_code
+  - rule: expect_column_values_to_not_be_null
+    column: commodity
+  - rule: expect_column_values_to_not_be_null
+    column: year
+  - rule: expect_column_values_to_not_be_null
+    column: yield_per_acre
+  - rule: expect_column_values_to_be_in_set
+    column: commodity
+    value_set: [CORN, SOYBEANS, WHEAT, COTTON, RICE, BARLEY, OATS, HAY]
+  - rule: expect_column_values_to_be_between
+    column: yield_per_acre
+    min_value: 0
+    max_value: 1000
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: year
+    min_value: 2000
+    max_value: 2030
+  - rule: expect_column_values_to_be_between
+    column: harvest_efficiency_pct
+    min_value: 0
+    max_value: 110  # Allow slight tolerance for data inconsistencies
+    mostly: 0.95
+  - rule: expect_column_pair_values_a_to_be_greater_than_or_equal_to_b
+    column_a: planted_acres
+    column_b: harvested_acres
+    mostly: 0.95  # Logical constraint with tolerance
+
+data_lineage:
+  upstream_sources:
+    - name: "NASS QuickStats API"
+      url: "https://quickstats.nass.usda.gov/api"
+      description: "USDA National Agricultural Statistics Service"
+      refresh_schedule: "Daily"
+    - name: "County FIPS codes"
+      url: "https://www.census.gov/geographies/reference-files/2023/demo/popest/2023-fips.html"
+      description: "US Census Bureau county codes"
+
+  downstream_consumers:
+    - name: "Agricultural Dashboard"
+      description: "Executive dashboard for USDA leadership"
+    - name: "Policy Analysis APIs"
+      description: "APIs for agricultural policy research"
+    - name: "Economic Forecasting Models"
+      description: "USDA Economic Research Service models"
+
+usage_notes: |
+  - Yield values vary by commodity (bushels for grains, tons for hay/cotton)
+  - County-level data may not be available for all commodities in all states
+  - Weather events can cause significant year-to-year volatility
+  - Forecasts become less reliable beyond one year
+  - Data lags 2-3 months for final annual totals
+
+contact:
+  technical: usda-data-team@contoso.com
+  business: usda-analytics-lead@contoso.com

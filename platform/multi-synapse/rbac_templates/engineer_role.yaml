@@ -1,0 +1,81 @@
+# RBAC Template: Data Engineer Role
+# Full SQL + Spark + storage read/write access for data engineers.
+
+apiVersion: csa.microsoft.com/v1
+kind: RbacTemplate
+
+metadata:
+  name: engineer-role
+  version: "1.0.0"
+  description: >
+    Full data engineering role with read/write access to SQL pools, Spark
+    pools, and all storage layers (bronze/silver/gold). Can create and
+    manage pipelines but cannot manage RBAC or workspace settings.
+  applicableTo: [synapse, storage, databricks]
+  tags: [rbac, engineer, read-write]
+
+azureRoles:
+  - role: Contributor
+    scope: resourceGroup
+    description: Create and manage resources in the organization's resource group
+    excludeActions:
+      - Microsoft.Authorization/roleAssignments/write
+      - Microsoft.Authorization/roleAssignments/delete
+
+  - role: Storage Blob Data Contributor
+    scope: storageAccount
+    containerFilter: [bronze, silver, gold, quarantine]
+    description: Read/write access to all medallion layers
+
+sqlPermissions:
+  dedicatedPool:
+    - grant: SELECT
+      on: "SCHEMA::*"
+    - grant: INSERT
+      on: "SCHEMA::*"
+    - grant: UPDATE
+      on: "SCHEMA::*"
+    - grant: DELETE
+      on: "SCHEMA::*"
+    - grant: CREATE TABLE
+      on: DATABASE
+    - grant: CREATE VIEW
+      on: DATABASE
+    - grant: CREATE PROCEDURE
+      on: DATABASE
+    - grant: ALTER
+      on: "SCHEMA::*"
+    - deny: ALTER ANY USER
+      on: DATABASE
+      description: Cannot manage database users
+
+  serverlessPool:
+    - grant: SELECT
+      on: "ALL EXTERNAL TABLES"
+    - grant: CREATE EXTERNAL TABLE
+      on: DATABASE
+    - grant: CREATE EXTERNAL DATA SOURCE
+      on: DATABASE
+
+synapseRoles:
+  - role: Synapse Contributor
+    scope: workspace
+    description: Full access to SQL, Spark, and pipelines
+
+  - role: Synapse Credential User
+    scope: workspace
+    description: Use linked service credentials in pipelines
+
+restrictions:
+  - action: Microsoft.Authorization/roleAssignments/*
+    effect: deny
+    description: Cannot manage RBAC assignments
+
+  - action: Microsoft.Synapse/workspaces/administrators/*
+    effect: deny
+    description: Cannot manage workspace admins
+
+conditions:
+  requireMFA: true
+  requireCompliantDevice: true
+  sessionTimeout: 12h

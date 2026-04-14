@@ -1,0 +1,105 @@
+name: 'csa_interior'
+version: '1.0.0'
+config-version: 2
+require-dbt-version: [">=1.7.0", "<2.0.0"]
+
+profile: 'csa_analytics'
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+macro-paths: ["../../../domains/shared/dbt/macros"]
+
+vars:
+  bronze_database: "bronze"
+  silver_database: "silver"
+  gold_database: "gold"
+  file_format: "delta"
+  incremental_strategy: "merge"
+  freshness_warn_hours: 24
+  freshness_error_hours: 48
+
+  # Interior-specific variables
+  current_analysis_year: 2024
+  historical_years_analysis: 10
+
+  # Earthquake analysis parameters
+  min_magnitude_analysis: 2.5          # Minimum magnitude for catalog completeness
+  significant_magnitude_threshold: 5.0  # Magnitude for "significant" events
+  gutenberg_richter_completeness: 2.5   # Completeness magnitude (Mc)
+  aftershock_distance_km: 50            # Spatial window for aftershock clustering
+  aftershock_time_days: 30              # Temporal window for aftershock clustering
+
+  # Park capacity parameters
+  peak_season_months: [6, 7, 8]
+  shoulder_season_months: [4, 5, 9, 10]
+  overcrowding_threshold: 0.85         # 85% of capacity = overcrowded
+  visitor_forecast_horizon_months: 12
+
+  # Wildfire risk scoring weights
+  drought_weight: 0.30
+  vegetation_weight: 0.25
+  weather_weight: 0.20
+  historical_fire_weight: 0.25
+
+  # Water resource thresholds
+  drought_percentile_threshold: 10     # Below 10th percentile = drought
+  flood_percentile_threshold: 90       # Above 90th percentile = flood risk
+
+  # Geographic scope
+  seismic_regions: ['WEST_COAST', 'INTERMOUNTAIN', 'CENTRAL_US',
+                    'EASTERN_US', 'ALASKA', 'HAWAII']
+  wildfire_states: ['CA', 'OR', 'WA', 'MT', 'ID', 'WY', 'CO',
+                    'NM', 'AZ', 'UT', 'NV', 'TX', 'OK']
+
+models:
+  csa_interior:
+    bronze:
+      +materialized: incremental
+      +file_format: delta
+      +schema: bronze
+      +tags: ['bronze', 'interior', 'raw']
+      +unique_key: ['source_system', 'ingestion_timestamp', 'record_hash']
+    silver:
+      +materialized: incremental
+      +file_format: delta
+      +schema: silver
+      +tags: ['silver', 'interior', 'cleaned']
+      +incremental_strategy: merge
+      +on_schema_change: "sync_all_columns"
+    gold:
+      +materialized: table
+      +file_format: delta
+      +schema: gold
+      +tags: ['gold', 'interior', 'analytics']
+      +post-hook: "OPTIMIZE {{ this }} ZORDER BY (year)"
+
+seeds:
+  csa_interior:
+    +schema: seeds
+    +tags: ['seed', 'interior']
+
+sources:
+  - name: interior
+    description: Department of Interior natural resource data sources
+    tables:
+      - name: usgs_earthquakes
+        description: USGS ComCat earthquake event catalog
+        freshness:
+          warn_after: {count: 1, period: day}
+          error_after: {count: 3, period: day}
+      - name: nps_visitors
+        description: National Park Service visitor statistics
+        freshness:
+          warn_after: {count: 30, period: day}
+          error_after: {count: 90, period: day}
+      - name: usgs_water_gauges
+        description: USGS NWIS water gauge measurements
+        freshness:
+          warn_after: {count: 1, period: day}
+          error_after: {count: 3, period: day}
+
+snapshots:
+  csa_interior:
+    +target_schema: snapshots
+    +strategy: timestamp
+    +updated_at: processed_timestamp

@@ -1,0 +1,23 @@
+import adapter from '@sveltejs/adapter-static';
+import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
+
+/** @type {import('@sveltejs/kit').Config} */
+const config = {
+	preprocess: vitePreprocess(),
+
+	kit: {
+		adapter: adapter({
+			// SPA mode — all routes fall back to index.html
+			// Azure Static Web Apps handles routing via staticwebapp.config.json
+			fallback: 'index.html',
+			pages: 'build',
+			assets: 'build',
+			strict: false
+		}),
+		alias: {
+			$lib: './src/lib'
+		}
+	}
+};
+
+export default config;

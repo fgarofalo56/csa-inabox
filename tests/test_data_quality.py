@@ -5,11 +5,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-# Add parent to path so we can import the module
-import sys
-sys.path.insert(0, str(Path(__file__).parent.parent / "governance" / "dataquality"))
-
-from run_quality_checks import DataQualityRunner, QualityCheckResult  # noqa: E402
+from governance.dataquality.run_quality_checks import DataQualityRunner, QualityCheckResult
 
 
 class TestQualityCheckResult:

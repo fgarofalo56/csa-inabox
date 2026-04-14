@@ -39,7 +39,7 @@
                     "capacity": 1
                 },
                 "purviewTenantEndpointState": "Disabled",
-                "purviewPublicNetworkAccess": "Enabled",
+                "purviewPublicNetworkAccess": "Disabled",
                 "purviewKafkaConfig": true
             }
         }

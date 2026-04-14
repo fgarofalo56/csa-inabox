@@ -1,0 +1,472 @@
+version: 2
+
+sources:
+  - name: noaa
+    description: NOAA environmental observation data sources
+    tables:
+      - name: ghcn_daily
+        description: GHCN-Daily weather station observations (temperature, precipitation, wind)
+        columns:
+          - name: station_id
+            description: GHCN station identifier (e.g., USW00094846)
+            tests:
+              - not_null
+          - name: observation_date
+            description: Date of observation
+            tests:
+              - not_null
+          - name: element
+            description: Observation element type (TMAX, TMIN, PRCP, SNOW, etc.)
+            tests:
+              - not_null
+
+      - name: storm_events
+        description: NCEI Storm Events Database records
+        columns:
+          - name: event_id
+            description: Unique storm event identifier
+            tests:
+              - not_null
+          - name: state
+            description: State where event occurred
+            tests:
+              - not_null
+          - name: begin_date
+            description: Event start date
+            tests:
+              - not_null
+
+      - name: ndbc_buoy
+        description: NDBC ocean buoy meteorological and oceanographic observations
+        columns:
+          - name: station_id
+            description: NDBC buoy station identifier (e.g., 41001)
+            tests:
+              - not_null
+          - name: observation_datetime
+            description: Observation timestamp
+            tests:
+              - not_null
+
+models:
+  # Bronze Models
+  - name: brz_weather_stations
+    description: >
+      Bronze layer — Raw GHCN-Daily weather station observations with basic
+      validation. Each row is a single element measurement at a station on a date.
+      Values are in original GHCN units (tenths of °C, tenths of mm).
+    columns:
+      - name: station_id
+        description: GHCN station identifier
+        tests:
+          - not_null
+      - name: observation_date
+        description: Date of observation
+        tests:
+          - not_null
+      - name: element
+        description: "Observation element: TMAX, TMIN, PRCP, SNOW, SNWD, AWND, WDF2"
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['TMAX', 'TMIN', 'PRCP', 'SNOW', 'SNWD', 'AWND', 'WDF2',
+                       'TAVG', 'TOBS', 'WESD', 'WESF', 'WSF2', 'WSF5', 'WSFG']
+      - name: value_raw
+        description: Raw value string from GHCN source
+      - name: is_valid_record
+        description: Basic validation flag
+        tests:
+          - not_null
+          - accepted_values:
+              values: [true, false]
+      - name: record_hash
+        description: MD5 hash for deduplication
+        tests:
+          - not_null
+          - unique
+
+  - name: brz_storm_events
+    description: >
+      Bronze layer — Raw NCEI storm event records. Damage values stored as raw
+      strings (e.g., "25K", "1.5M") for Silver layer parsing.
+    columns:
+      - name: event_id
+        description: Storm event unique identifier
+        tests:
+          - not_null
+          - unique
+      - name: event_type
+        description: Raw event type from NCEI
+        tests:
+          - not_null
+      - name: begin_date
+        description: Event start date
+        tests:
+          - not_null
+      - name: state
+        description: State abbreviation
+        tests:
+          - not_null
+      - name: is_valid_record
+        description: Basic validation flag
+        tests:
+          - not_null
+
+  - name: brz_ocean_buoys
+    description: >
+      Bronze layer — Raw NDBC ocean buoy observations. Missing values use
+      NDBC sentinel codes (99.0, 999.0) that are cleaned in Silver layer.
+    columns:
+      - name: station_id
+        description: NDBC buoy station identifier
+        tests:
+          - not_null
+      - name: observation_datetime
+        description: Observation timestamp
+        tests:
+          - not_null
+      - name: is_valid_record
+        description: Basic validation flag
+        tests:
+          - not_null
+      - name: record_hash
+        description: MD5 hash for deduplication
+        tests:
+          - not_null
+          - unique
+
+  # Silver Models
+  - name: slv_weather_observations
+    description: >
+      Silver layer — Cleaned and standardized weather observations. One row per
+      station per day with pivoted element columns. Units converted from GHCN
+      raw to standard (°C, mm, m/s). Includes climate region mapping and
+      outlier detection.
+    columns:
+      - name: observation_sk
+        description: Surrogate key (station_id + observation_date)
+        tests:
+          - not_null
+          - unique
+      - name: station_id
+        description: GHCN station identifier
+        tests:
+          - not_null
+      - name: climate_region
+        description: NOAA climate region classification
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['NORTHEAST', 'SOUTHEAST', 'UPPER_MIDWEST', 'OHIO_VALLEY',
+                       'SOUTH', 'NORTHERN_ROCKIES_PLAINS', 'SOUTHWEST', 'NORTHWEST',
+                       'WEST', 'ALASKA', 'HAWAII', 'OTHER']
+      - name: observation_date
+        description: Date of observation
+        tests:
+          - not_null
+      - name: temp_max_celsius
+        description: Maximum temperature in degrees Celsius
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: -90.0
+              max_value: 60.0
+      - name: temp_min_celsius
+        description: Minimum temperature in degrees Celsius
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: -90.0
+              max_value: 60.0
+      - name: temp_avg_celsius
+        description: Average temperature derived from (TMAX+TMIN)/2
+      - name: precip_mm
+        description: Precipitation in millimeters
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 1000
+      - name: wind_speed_ms
+        description: Average wind speed in meters per second
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 120
+      - name: is_valid
+        description: Data quality validation flag
+        tests:
+          - not_null
+      - name: data_quality_score
+        description: Completeness score 0.0–1.0
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 1.0
+      - name: is_temp_outlier
+        description: Flag for statistically outlying temperature readings
+        tests:
+          - not_null
+
+  - name: slv_storm_events
+    description: >
+      Silver layer — Standardized storm events with parsed damage values,
+      CPI-adjusted damages, severity classification, and season assignment.
+    columns:
+      - name: storm_event_sk
+        description: Surrogate key for storm event
+        tests:
+          - not_null
+          - unique
+      - name: event_type_std
+        description: Standardized event type
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['TORNADO', 'THUNDERSTORM_WIND', 'HAIL', 'FLASH_FLOOD', 'FLOOD',
+                       'HURRICANE', 'TROPICAL_STORM', 'WINTER_STORM', 'BLIZZARD',
+                       'ICE_STORM', 'HEAVY_SNOW', 'HEAVY_RAIN', 'HIGH_WIND',
+                       'STRONG_WIND', 'WILDFIRE', 'DROUGHT', 'EXTREME_COLD',
+                       'EXCESSIVE_HEAT', 'LIGHTNING', 'RIP_CURRENT', 'STORM_SURGE',
+                       'COASTAL_FLOOD']
+              config:
+                severity: warn
+      - name: severity_category
+        description: Event severity classification
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['CATASTROPHIC', 'SEVERE', 'SIGNIFICANT', 'MODERATE', 'MINOR']
+      - name: damage_property_usd
+        description: Property damage in nominal USD
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: damage_crops_usd
+        description: Crop damage in nominal USD
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: total_damage_adjusted_usd
+        description: Total damage adjusted to current-year dollars
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: is_valid
+        description: Data quality validation flag
+        tests:
+          - not_null
+
+  - name: slv_ocean_observations
+    description: >
+      Silver layer — Cleaned NDBC ocean buoy observations with sentinel
+      values replaced by NULLs, physical range validation, marine region
+      assignment, Beaufort scale, and sea state classification.
+    columns:
+      - name: buoy_observation_sk
+        description: Surrogate key (station_id + observation_datetime)
+        tests:
+          - not_null
+          - unique
+      - name: station_id
+        description: NDBC buoy station identifier
+        tests:
+          - not_null
+      - name: marine_region
+        description: Marine ecological region based on buoy location
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['ATLANTIC_EAST_COAST', 'GULF_OF_MEXICO', 'PACIFIC_WEST_COAST',
+                       'GULF_OF_ALASKA', 'HAWAII_PACIFIC', 'BERING_SEA', 'OTHER']
+      - name: sea_surface_temp_c
+        description: Sea surface temperature in degrees Celsius
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: -2.5
+              max_value: 35.0
+      - name: wave_height_m
+        description: Significant wave height in meters
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 30
+      - name: beaufort_scale
+        description: Beaufort wind scale classification
+        tests:
+          - accepted_values:
+              values: ['CALM', 'LIGHT_AIR', 'LIGHT_BREEZE', 'GENTLE_BREEZE',
+                       'MODERATE_BREEZE', 'FRESH_BREEZE', 'STRONG_BREEZE',
+                       'NEAR_GALE', 'GALE', 'STRONG_GALE', 'STORM',
+                       'VIOLENT_STORM', 'HURRICANE_FORCE']
+              config:
+                severity: warn
+      - name: sea_state
+        description: Sea state classification based on wave height
+      - name: data_completeness_score
+        description: Observation completeness score 0.0–1.0
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 1.0
+      - name: is_valid
+        description: Data quality validation flag
+        tests:
+          - not_null
+
+  # Gold Models
+  - name: gld_climate_trends
+    description: >
+      Gold layer — Multi-decadal temperature and precipitation trends by
+      NOAA climate region. Includes anomalies vs. 1901–2000 baseline,
+      linear regression trend slopes, and extreme event frequency.
+    columns:
+      - name: climate_region
+        description: NOAA climate region
+        tests:
+          - not_null
+      - name: year
+        description: Calendar year
+        tests:
+          - not_null
+      - name: avg_annual_temp_celsius
+        description: Regional average annual temperature (°C)
+        tests:
+          - not_null
+      - name: temp_anomaly_vs_baseline
+        description: Temperature anomaly vs. 1901–2000 baseline (°C)
+      - name: total_annual_precip_mm
+        description: Total annual precipitation (mm)
+      - name: trend_slope_per_decade
+        description: Temperature trend slope (°C per decade)
+      - name: trend_classification
+        description: Trend category
+        tests:
+          - accepted_values:
+              values: ['SIGNIFICANT_WARMING', 'MODERATE_WARMING', 'STABLE',
+                       'MODERATE_COOLING', 'SIGNIFICANT_COOLING', 'INSUFFICIENT_DATA']
+      - name: station_count
+        description: Number of stations contributing to the regional average
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 1
+
+  - name: gld_severe_weather_risk
+    description: >
+      Gold layer — Storm probability, impact scoring, and risk assessment
+      by state, event type, and season.
+    columns:
+      - name: state
+        description: State abbreviation
+        tests:
+          - not_null
+      - name: event_type_std
+        description: Standardized storm event type
+        tests:
+          - not_null
+      - name: event_season
+        description: Meteorological season
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['WINTER', 'SPRING', 'SUMMER', 'FALL']
+      - name: event_year
+        description: Calendar year
+        tests:
+          - not_null
+      - name: impact_score
+        description: Composite impact score (0–100)
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+      - name: risk_category
+        description: Risk classification
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['EXTREME', 'HIGH', 'MODERATE', 'ELEVATED', 'LOW']
+      - name: frequency_trend
+        description: Is event frequency increasing, decreasing, or stable?
+        tests:
+          - accepted_values:
+              values: ['INCREASING', 'DECREASING', 'STABLE', 'INSUFFICIENT_DATA']
+
+  - name: gld_marine_ecosystem_health
+    description: >
+      Gold layer — Composite marine ecosystem health index by region and year.
+      Combines SST anomalies, salinity, coral bleaching risk, and fish stock
+      health into a 0–100 composite score.
+    columns:
+      - name: marine_region
+        description: Marine ecological region
+        tests:
+          - not_null
+      - name: assessment_year
+        description: Assessment year
+        tests:
+          - not_null
+      - name: composite_health_score
+        description: Overall ecosystem health score (0–100, higher is healthier)
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+      - name: health_classification
+        description: Ecosystem health classification
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['EXCELLENT', 'GOOD', 'FAIR', 'POOR', 'CRITICAL']
+      - name: coral_bleaching_risk
+        description: Coral bleaching risk level based on DHW
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['NO_STRESS', 'THERMAL_STRESS', 'BLEACHING_WATCH', 'BLEACHING_LIKELY']
+      - name: health_trend
+        description: 5-year trend direction
+        tests:
+          - accepted_values:
+              values: ['IMPROVING', 'DECLINING', 'STABLE', 'INSUFFICIENT_DATA']
+
+# Custom tests
+tests:
+  - name: test_temperature_logical_constraints
+    description: TMAX must be >= TMIN for each station-day
+    sql: |
+      SELECT *
+      FROM {{ ref('slv_weather_observations') }}
+      WHERE temp_max_celsius IS NOT NULL
+        AND temp_min_celsius IS NOT NULL
+        AND temp_min_celsius > temp_max_celsius
+
+  - name: test_storm_damage_non_negative
+    description: All damage values must be non-negative
+    sql: |
+      SELECT *
+      FROM {{ ref('slv_storm_events') }}
+      WHERE damage_property_usd < 0
+         OR damage_crops_usd < 0
+
+  - name: test_observation_date_not_future
+    description: Weather observations should not be in the future
+    sql: |
+      SELECT *
+      FROM {{ ref('slv_weather_observations') }}
+      WHERE observation_date > CURRENT_DATE()
+
+  - name: test_buoy_sst_physical_range
+    description: Sea surface temperature must be within physical limits
+    sql: |
+      SELECT *
+      FROM {{ ref('slv_ocean_observations') }}
+      WHERE sea_surface_temp_c < -2.5
+         OR sea_surface_temp_c > 35.0
+
+  - name: test_composite_health_score_bounds
+    description: Marine health score must be between 0 and 100
+    sql: |
+      SELECT *
+      FROM {{ ref('gld_marine_ecosystem_health') }}
+      WHERE composite_health_score < 0
+         OR composite_health_score > 100

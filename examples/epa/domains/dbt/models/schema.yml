@@ -1,0 +1,447 @@
+version: 2
+
+sources:
+  - name: epa
+    description: EPA environmental monitoring data sources
+    tables:
+      - name: aqs_air_quality
+        description: AQS/AirNow air quality monitoring observations
+        columns:
+          - name: site_id
+            description: AQS monitoring site identifier
+            tests:
+              - not_null
+          - name: date_local
+            description: Local date of observation
+            tests:
+              - not_null
+          - name: parameter_code
+            description: AQS parameter code for the pollutant
+            tests:
+              - not_null
+
+      - name: sdwis_water_systems
+        description: SDWIS water system inventory and violation data
+        columns:
+          - name: pwsid
+            description: Public water system identifier
+            tests:
+              - not_null
+          - name: state_code
+            description: State abbreviation
+            tests:
+              - not_null
+
+      - name: tri_releases
+        description: TRI annual toxic release inventory reports
+        columns:
+          - name: trifid
+            description: TRI facility identifier
+            tests:
+              - not_null
+          - name: reporting_year
+            description: Annual reporting year
+            tests:
+              - not_null
+          - name: chemical_name
+            description: Name of the reported chemical
+            tests:
+              - not_null
+
+models:
+  # Bronze Models
+  - name: brz_air_quality
+    description: >
+      Bronze layer — Raw AQI monitor readings from AQS and AirNow. Each row
+      is one pollutant measurement at a site on a date. AQI values range 0–500.
+    columns:
+      - name: site_id
+        description: AQS site identifier (format SS-CCC-NNNN)
+        tests:
+          - not_null
+      - name: parameter_code
+        description: AQS pollutant parameter code
+        tests:
+          - not_null
+      - name: date_local
+        description: Local date of observation
+        tests:
+          - not_null
+      - name: aqi
+        description: Source-reported AQI value (0–500)
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 500
+              config:
+                severity: warn
+      - name: arithmetic_mean
+        description: Daily mean pollutant concentration
+      - name: is_valid_record
+        description: Basic validation flag
+        tests:
+          - not_null
+      - name: record_hash
+        description: MD5 hash for deduplication
+        tests:
+          - not_null
+          - unique
+
+  - name: brz_water_systems
+    description: >
+      Bronze layer — Raw SDWIS water system compliance records including
+      system inventory, violations, and enforcement actions.
+    columns:
+      - name: pwsid
+        description: Public water system ID
+        tests:
+          - not_null
+      - name: state_code
+        description: 2-letter state abbreviation
+        tests:
+          - not_null
+      - name: pws_type_code
+        description: Water system type (CWS, NTNCWS, TNCWS)
+        tests:
+          - accepted_values:
+              values: ['CWS', 'NTNCWS', 'TNCWS']
+              config:
+                severity: warn
+      - name: is_valid_record
+        description: Basic validation flag
+        tests:
+          - not_null
+
+  - name: brz_toxic_releases
+    description: >
+      Bronze layer — Raw TRI toxic release inventory reports. Each row is
+      one facility/chemical/year combination with release quantities in pounds.
+    columns:
+      - name: trifid
+        description: TRI facility identifier
+        tests:
+          - not_null
+      - name: reporting_year
+        description: Annual reporting year
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 1987
+              max_value: 2030
+      - name: chemical_name
+        description: Reported chemical name
+        tests:
+          - not_null
+      - name: total_releases_lbs
+        description: Total releases in pounds
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: is_valid_record
+        description: Basic validation flag
+        tests:
+          - not_null
+      - name: record_hash
+        description: MD5 hash for deduplication
+        tests:
+          - not_null
+          - unique
+
+  # Silver Models
+  - name: slv_air_quality
+    description: >
+      Silver layer — Cleaned AQI data with EPA breakpoint-based AQI
+      calculation, health advisory categories, and data quality scoring.
+    columns:
+      - name: aqi_observation_sk
+        description: Surrogate key (site_id + parameter + date)
+        tests:
+          - not_null
+          - unique
+      - name: site_id
+        description: AQS monitoring site identifier
+        tests:
+          - not_null
+      - name: pollutant
+        description: Standardized criteria pollutant name
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['PM2.5', 'PM10', 'O3', 'NO2', 'SO2', 'CO', 'Pb']
+              config:
+                severity: warn
+      - name: aqi_value
+        description: Calculated AQI value (0–500)
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 500
+      - name: aqi_category
+        description: EPA AQI health category
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['GOOD', 'MODERATE', 'UNHEALTHY_SENSITIVE', 'UNHEALTHY',
+                       'VERY_UNHEALTHY', 'HAZARDOUS', 'UNKNOWN']
+      - name: concentration
+        description: Pollutant concentration in standard units
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: is_valid
+        description: Data quality validation flag
+        tests:
+          - not_null
+      - name: data_quality_score
+        description: Quality score 0.0–1.0
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 1.0
+
+  - name: slv_water_systems
+    description: >
+      Silver layer — Standardized SDWIS compliance data with violation
+      severity classification, duration tracking, and enforcement linkage.
+    columns:
+      - name: water_system_sk
+        description: Surrogate key
+        tests:
+          - not_null
+          - unique
+      - name: pwsid
+        description: Public water system ID
+        tests:
+          - not_null
+      - name: system_type
+        description: Standardized system type classification
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['COMMUNITY', 'NON_TRANSIENT_NON_COMMUNITY',
+                       'TRANSIENT_NON_COMMUNITY', 'UNKNOWN']
+      - name: violation_severity
+        description: Violation severity classification
+        tests:
+          - accepted_values:
+              values: ['HEALTH_BASED', 'MONITORING_REPORTING', 'PUBLIC_NOTIFICATION', 'OTHER', 'UNKNOWN']
+      - name: system_size_category
+        description: System size based on population served
+        tests:
+          - accepted_values:
+              values: ['VERY_LARGE', 'LARGE', 'MEDIUM', 'SMALL', 'VERY_SMALL']
+      - name: is_valid
+        description: Data quality validation flag
+        tests:
+          - not_null
+
+  - name: slv_toxic_releases
+    description: >
+      Silver layer — Normalized TRI data with chemical classifications,
+      release media breakdown, and year-over-year trend indicators.
+    columns:
+      - name: tri_report_sk
+        description: Surrogate key (facility + year + chemical)
+        tests:
+          - not_null
+          - unique
+      - name: trifid
+        description: TRI facility identifier
+        tests:
+          - not_null
+      - name: chemical_name
+        description: Chemical name (uppercase standardized)
+        tests:
+          - not_null
+      - name: toxicity_tier
+        description: Chemical toxicity classification
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['HIGH', 'MEDIUM', 'STANDARD']
+      - name: industry_sector_std
+        description: Standardized industry sector from NAICS
+        tests:
+          - not_null
+      - name: total_releases_lbs
+        description: Total releases in pounds
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: waste_management_efficiency_pct
+        description: Percentage of waste managed vs. released
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+      - name: release_trend
+        description: Year-over-year release trend
+        tests:
+          - accepted_values:
+              values: ['INCREASING', 'DECREASING', 'STABLE', 'FIRST_REPORT']
+      - name: is_valid
+        description: Data quality validation flag
+        tests:
+          - not_null
+
+  # Gold Models
+  - name: gld_aqi_forecast
+    description: >
+      Gold layer — AQI prediction features and historical patterns.
+      Includes lag features, rolling averages, seasonal patterns, and
+      exceedance tracking for ML model input.
+    columns:
+      - name: site_id
+        description: AQS monitoring site identifier
+        tests:
+          - not_null
+      - name: observation_date
+        description: Date of observation
+        tests:
+          - not_null
+      - name: daily_aqi
+        description: Site-level daily AQI (max across pollutants)
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 500
+      - name: dominant_pollutant
+        description: Pollutant driving the daily AQI
+        tests:
+          - not_null
+      - name: aqi_category
+        description: AQI health category
+        tests:
+          - not_null
+      - name: aqi_7d_rolling_avg
+        description: 7-day rolling average AQI
+      - name: bad_air_days_30d
+        description: Count of days with AQI > 100 in past 30 days
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 30
+
+  - name: gld_environmental_justice
+    description: >
+      Gold layer — Pollution burden index by census tract with demographic
+      overlay. Identifies disadvantaged communities per EPA EJScreen methodology.
+    columns:
+      - name: census_tract
+        description: Census tract identifier (state + county FIPS)
+        tests:
+          - not_null
+      - name: assessment_year
+        description: Assessment year
+        tests:
+          - not_null
+      - name: ej_burden_score
+        description: Environmental burden score (0–100)
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+      - name: ej_percentile
+        description: Percentile ranking across all census tracts
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+      - name: ej_category
+        description: EJ burden category
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['HIGHEST_BURDEN', 'HIGH_BURDEN', 'MODERATE_BURDEN',
+                       'LOW_BURDEN', 'MINIMAL_BURDEN']
+      - name: is_disadvantaged_community
+        description: Disadvantaged community flag per EJScreen
+        tests:
+          - not_null
+
+  - name: gld_compliance_dashboard
+    description: >
+      Gold layer — Facility-level compliance scoring, violation trends,
+      and enforcement outcomes across EPA environmental programs.
+    columns:
+      - name: facility_id
+        description: Facility identifier (TRI ID)
+        tests:
+          - not_null
+      - name: reporting_year
+        description: Reporting year
+        tests:
+          - not_null
+      - name: compliance_score
+        description: Compliance score (0–100, higher is better)
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+      - name: compliance_status
+        description: Overall compliance status
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['IN_COMPLIANCE', 'UNDER_REVIEW', 'MINOR_VIOLATION', 'SIGNIFICANT_VIOLATION']
+      - name: release_trend
+        description: Year-over-year release trend direction
+        tests:
+          - accepted_values:
+              values: ['FIRST_YEAR', 'INCREASING', 'DECREASING', 'STABLE']
+      - name: total_releases_lbs
+        description: Total toxic releases in pounds
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+
+# Custom tests
+tests:
+  - name: test_aqi_category_matches_value
+    description: AQI category must correspond to AQI value range
+    sql: |
+      SELECT *
+      FROM {{ ref('slv_air_quality') }}
+      WHERE (aqi_value <= 50 AND aqi_category != 'GOOD')
+         OR (aqi_value BETWEEN 51 AND 100 AND aqi_category != 'MODERATE')
+         OR (aqi_value BETWEEN 101 AND 150 AND aqi_category != 'UNHEALTHY_SENSITIVE')
+
+  - name: test_concentration_non_negative
+    description: All pollutant concentrations must be non-negative
+    sql: |
+      SELECT *
+      FROM {{ ref('slv_air_quality') }}
+      WHERE concentration < 0
+
+  - name: test_tri_releases_sum
+    description: Total releases should approximate sum of release components
+    sql: |
+      SELECT *
+      FROM {{ ref('slv_toxic_releases') }}
+      WHERE ABS(
+        total_releases_lbs - (
+          fugitive_air_lbs + stack_air_lbs + water_discharge_lbs
+          + underground_injection_lbs + land_disposal_lbs + offsite_transfer_lbs
+        )
+      ) > total_releases_lbs * 0.05
+      AND total_releases_lbs > 100
+
+  - name: test_ej_score_bounds
+    description: EJ burden scores must be between 0 and 100
+    sql: |
+      SELECT *
+      FROM {{ ref('gld_environmental_justice') }}
+      WHERE ej_burden_score < 0
+         OR ej_burden_score > 100
+
+  - name: test_compliance_score_bounds
+    description: Compliance scores must be between 0 and 100
+    sql: |
+      SELECT *
+      FROM {{ ref('gld_compliance_dashboard') }}
+      WHERE compliance_score < 0
+         OR compliance_score > 100

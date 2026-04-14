@@ -1,0 +1,499 @@
+version: 2
+
+sources:
+  - name: casino
+    description: Casino analytics data sources — ALL DATA IS SYNTHETIC
+    tables:
+      - name: player_sessions
+        description: Synthetic player tracking session data from PTS
+        columns:
+          - name: session_id
+            description: Unique session identifier
+            tests:
+              - not_null
+          - name: player_id
+            description: Player tracking ID
+            tests:
+              - not_null
+          - name: session_date
+            description: Date of gaming session
+            tests:
+              - not_null
+
+      - name: slot_events
+        description: Synthetic slot machine telemetry events
+        columns:
+          - name: event_id
+            description: Unique event identifier
+            tests:
+              - not_null
+          - name: machine_id
+            description: Slot machine identifier
+            tests:
+              - not_null
+          - name: event_timestamp
+            description: Timestamp of event
+            tests:
+              - not_null
+
+      - name: fnb_transactions
+        description: Synthetic F&B POS transaction data
+        columns:
+          - name: transaction_id
+            description: Unique transaction identifier
+            tests:
+              - not_null
+          - name: transaction_date
+            description: Date of transaction
+            tests:
+              - not_null
+
+models:
+  # ──────────────────────────────────────────────
+  # Bronze Models
+  # ──────────────────────────────────────────────
+  - name: brz_player_sessions
+    description: >
+      Bronze layer — Raw player tracking session data. Captures rated play from
+      slot machines and table games with coin-in/coin-out and theoretical win.
+    columns:
+      - name: session_id
+        description: Unique session identifier
+        tests:
+          - not_null
+          - unique
+      - name: player_id
+        description: Player tracking ID
+        tests:
+          - not_null
+      - name: machine_id
+        description: Machine or table identifier
+      - name: session_date
+        description: Date of session
+        tests:
+          - not_null
+      - name: coin_in
+        description: Total money wagered
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: coin_out
+        description: Total money returned to player
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: theoretical_win
+        description: Expected house win based on game math
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              where: "theoretical_win IS NOT NULL"
+      - name: is_valid_record
+        description: Data quality validation flag
+        tests:
+          - not_null
+
+  - name: brz_slot_events
+    description: >
+      Bronze layer — Raw slot machine telemetry events. High-volume streaming
+      data capturing individual spins, jackpots, bonus rounds, and errors.
+    columns:
+      - name: event_id
+        description: Unique event identifier
+        tests:
+          - not_null
+          - unique
+      - name: machine_id
+        description: Slot machine identifier
+        tests:
+          - not_null
+      - name: event_timestamp
+        description: Timestamp of event
+        tests:
+          - not_null
+      - name: event_type
+        description: Type of slot event
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['SPIN', 'JACKPOT', 'BONUS', 'ERROR', 'CASH_IN', 'CASH_OUT', 'TILT']
+      - name: denomination
+        description: Machine denomination in dollars
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0.01
+              max_value: 100
+      - name: credits_wagered
+        description: Credits wagered on this event
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              where: "credits_wagered IS NOT NULL"
+      - name: is_valid_record
+        description: Data quality validation flag
+        tests:
+          - not_null
+
+  - name: brz_fnb_transactions
+    description: >
+      Bronze layer — Raw F&B POS transaction data. Captures dining
+      transactions across all casino venues with comp tracking.
+    columns:
+      - name: transaction_id
+        description: Unique transaction identifier
+        tests:
+          - not_null
+          - unique
+      - name: player_id
+        description: Player ID (NULL for non-rated guests)
+      - name: venue
+        description: Restaurant/bar venue name
+        tests:
+          - not_null
+      - name: transaction_date
+        description: Date of transaction
+        tests:
+          - not_null
+      - name: total
+        description: Total transaction amount
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: payment_type
+        description: Payment method
+        tests:
+          - not_null
+      - name: satisfaction_score
+        description: Guest satisfaction score (1-5 or NULL)
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 1
+              max_value: 5
+              where: "satisfaction_score IS NOT NULL"
+      - name: is_valid_record
+        description: Data quality validation flag
+        tests:
+          - not_null
+
+  # ──────────────────────────────────────────────
+  # Silver Models
+  # ──────────────────────────────────────────────
+  - name: slv_player_sessions
+    description: >
+      Silver layer — Cleaned player sessions with duration calculation,
+      win/loss categorization, ADT computation, and session rating.
+    columns:
+      - name: session_sk
+        description: Surrogate key
+        tests:
+          - not_null
+          - unique
+      - name: session_id
+        description: Original session identifier
+        tests:
+          - not_null
+      - name: player_id
+        description: Player tracking ID
+        tests:
+          - not_null
+      - name: session_date
+        description: Session date
+        tests:
+          - not_null
+      - name: coin_in
+        description: Total money wagered
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: net_result
+        description: Net win to house (positive) or player (negative)
+      - name: win_loss_category
+        description: Session outcome classification
+        tests:
+          - accepted_values:
+              values: ['HOUSE_WIN', 'PLAYER_WIN', 'PUSH']
+      - name: session_hold_pct
+        description: Actual hold percentage for session
+      - name: session_duration_category
+        description: Duration classification
+        tests:
+          - accepted_values:
+              values: ['BRIEF', 'SHORT', 'MEDIUM', 'LONG', 'EXTENDED']
+      - name: session_rating
+        description: Session quality rating (1-5)
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 1
+              max_value: 5
+      - name: time_of_day
+        description: Time period classification
+        tests:
+          - accepted_values:
+              values: ['MORNING', 'AFTERNOON', 'EVENING', 'LATE_NIGHT', 'UNKNOWN']
+      - name: is_valid
+        description: Data quality flag
+        tests:
+          - not_null
+
+  - name: slv_slot_performance
+    description: >
+      Silver layer — Aggregated slot machine metrics by machine and day.
+      Hold percentage, utilization, and revenue calculations.
+    columns:
+      - name: machine_period_sk
+        description: Surrogate key (machine × date)
+        tests:
+          - not_null
+          - unique
+      - name: machine_id
+        description: Slot machine identifier
+        tests:
+          - not_null
+      - name: metric_date
+        description: Date of metrics
+        tests:
+          - not_null
+      - name: total_spins
+        description: Total spins on this machine this day
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 1
+      - name: actual_hold_pct
+        description: Actual hold percentage
+      - name: hold_variance_pct
+        description: Variance from target hold
+      - name: hold_variance_alert
+        description: Flag if hold variance exceeds threshold
+        tests:
+          - not_null
+      - name: uptime_pct
+        description: Machine uptime percentage (active hours / 24)
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+
+  - name: slv_fnb_analytics
+    description: >
+      Silver layer — F&B analytics with comp ratio analysis, venue
+      categorization, and satisfaction scoring.
+    columns:
+      - name: fnb_analytics_sk
+        description: Surrogate key
+        tests:
+          - not_null
+          - unique
+      - name: transaction_id
+        description: Original transaction identifier
+        tests:
+          - not_null
+      - name: venue
+        description: Venue name
+        tests:
+          - not_null
+      - name: venue_category
+        description: Venue classification
+        tests:
+          - accepted_values:
+              values: ['UPSCALE', 'CASUAL', 'BAR', 'QUICK_SERVICE', 'OTHER']
+      - name: total
+        description: Transaction total
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: comp_ratio_pct
+        description: Percentage of total that was comped
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+      - name: satisfaction_category
+        description: Satisfaction classification
+        tests:
+          - accepted_values:
+              values: ['SATISFIED', 'NEUTRAL', 'DISSATISFIED', 'NOT_RATED']
+      - name: is_valid
+        description: Data quality flag
+        tests:
+          - not_null
+
+  # ──────────────────────────────────────────────
+  # Gold Models
+  # ──────────────────────────────────────────────
+  - name: gld_player_value
+    description: >
+      Gold layer — Player lifetime value model with ADT, visit frequency,
+      churn scoring, tier calculation, and comp efficiency metrics.
+    columns:
+      - name: player_id
+        description: Player tracking ID
+        tests:
+          - not_null
+          - unique
+      - name: lifetime_theoretical
+        description: Total lifetime theoretical win
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: adt
+        description: Average Daily Theoretical
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: calculated_tier
+        description: Tier based on ADT thresholds
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['BRONZE', 'SILVER', 'GOLD', 'PLATINUM', 'DIAMOND']
+      - name: churn_probability_score
+        description: Churn risk score (0-100, higher = more likely to churn)
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+      - name: activity_trend
+        description: Recent activity trend
+        tests:
+          - accepted_values:
+              values: ['INCREASING', 'DECREASING', 'STABLE', 'DORMANT']
+      - name: comp_efficiency_pct
+        description: Comp value as percentage of theo (should be < 40%)
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+
+  - name: gld_floor_optimization
+    description: >
+      Gold layer — Floor performance analytics with zone-level revenue,
+      machine utilization, and placement optimization scores.
+    columns:
+      - name: floor_zone
+        description: Gaming floor zone identifier
+        tests:
+          - not_null
+          - unique
+      - name: revenue_per_machine_day
+        description: Average daily revenue per machine
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: overall_hold_pct
+        description: Actual hold percentage for the zone
+      - name: hold_status
+        description: Hold performance vs target
+        tests:
+          - accepted_values:
+              values: ['ON_TARGET', 'ABOVE_TARGET', 'BELOW_TARGET', 'UNKNOWN']
+      - name: avg_machine_utilization_pct
+        description: Average machine uptime percentage
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+      - name: optimization_score
+        description: Composite optimization score (0-100)
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+      - name: optimization_recommendation
+        description: Recommended action for this zone
+        tests:
+          - accepted_values:
+              values: ['ADD_MACHINES', 'REMOVE_MACHINES', 'CHANGE_DENOMINATION_MIX', 'REVIEW_PAR_SHEETS', 'MONITOR']
+
+  - name: gld_compliance_monitoring
+    description: >
+      Gold layer — Title 31 BSA/AML compliance monitoring with CTR detection,
+      structuring analysis, and behavioral anomaly scoring.
+      ACCESS RESTRICTED to compliance officers.
+    columns:
+      - name: player_id
+        description: Player tracking ID
+        tests:
+          - not_null
+      - name: gaming_day
+        description: Gaming day (6 AM to 5:59 AM boundary)
+        tests:
+          - not_null
+      - name: ctr_required
+        description: Whether CTR filing is required
+        tests:
+          - not_null
+      - name: pct_of_ctr_threshold
+        description: Cash amount as percentage of $10K CTR threshold
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: structuring_pattern_detected
+        description: Whether structuring pattern was detected
+      - name: risk_score
+        description: Overall compliance risk score (0-100)
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+      - name: sar_recommended
+        description: Whether SAR filing is recommended
+        tests:
+          - not_null
+      - name: recommended_action
+        description: Recommended compliance action
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['FILE_CTR', 'INVESTIGATE_STRUCTURING', 'MONITOR_THRESHOLD_APPROACH', 'REVIEW_BEHAVIOR', 'NO_ACTION']
+
+# ──────────────────────────────────────────────
+# Custom Data Quality Tests
+# ──────────────────────────────────────────────
+tests:
+  - name: test_ctr_threshold_accuracy
+    description: Verify CTR flag is set when cash exceeds $10K
+    sql: |
+      SELECT *
+      FROM {{ ref('gld_compliance_monitoring') }}
+      WHERE (total_coin_in >= {{ var('ctr_threshold') }} OR total_coin_out >= {{ var('ctr_threshold') }})
+        AND ctr_required = FALSE
+    tags: ['title31', 'compliance']
+
+  - name: test_player_coin_in_non_negative
+    description: All coin-in values should be non-negative
+    sql: |
+      SELECT *
+      FROM {{ ref('slv_player_sessions') }}
+      WHERE coin_in < 0
+    tags: ['data_quality']
+
+  - name: test_hold_percentage_reasonable
+    description: Hold percentage should be between -50% and 50%
+    sql: |
+      SELECT *
+      FROM {{ ref('slv_slot_performance') }}
+      WHERE actual_hold_pct < -50 OR actual_hold_pct > 50
+    tags: ['gaming_math']
+
+  - name: test_session_date_not_future
+    description: No sessions should have future dates
+    sql: |
+      SELECT *
+      FROM {{ ref('slv_player_sessions') }}
+      WHERE session_date > CURRENT_DATE()
+    tags: ['data_quality']
+
+  - name: test_comp_ratio_reasonable
+    description: Comp ratio should not exceed 100%
+    sql: |
+      SELECT *
+      FROM {{ ref('slv_fnb_analytics') }}
+      WHERE comp_ratio_pct > 100
+    tags: ['data_quality']

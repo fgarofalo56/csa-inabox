@@ -1,0 +1,85 @@
+# CSA-in-a-Box Portal — Helm Values
+
+global:
+  environment: production
+  azureAdTenantId: ""
+  azureAdClientId: ""
+  domain: portal.csa-inabox.example.com
+
+frontend:
+  image:
+    repository: csaregistry.azurecr.io/csa-portal-frontend
+    tag: latest
+    pullPolicy: Always
+  replicas: 2
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilization: 70
+  service:
+    port: 3000
+    type: ClusterIP
+
+backend:
+  image:
+    repository: csaregistry.azurecr.io/csa-portal-backend
+    tag: latest
+    pullPolicy: Always
+  replicas: 2
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilization: 70
+  service:
+    port: 8000
+    type: ClusterIP
+  env: []
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+  hosts:
+    - host: portal.csa-inabox.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+          service: frontend
+        - path: /api
+          pathType: Prefix
+          service: backend
+  tls:
+    - secretName: portal-tls
+      hosts:
+        - portal.csa-inabox.example.com
+
+redis:
+  enabled: true
+  architecture: standalone
+  auth:
+    enabled: true
+
+monitoring:
+  serviceMonitor:
+    enabled: true
+    interval: 30s

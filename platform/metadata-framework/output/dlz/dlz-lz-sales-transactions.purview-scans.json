@@ -1,0 +1,106 @@
+[
+  {
+    "scan_name": "scan-lz-sales-transactions-bronze",
+    "data_source_name": "dlz-salestransactionsdlz",
+    "collection_name": "data-landing-zones",
+    "scope": {
+      "storage_account": "salestransactionsdlz",
+      "container": "bronze",
+      "path": "/"
+    },
+    "scan_rule_set": "AdlsGen2",
+    "schedule": {
+      "kind": "Weekly",
+      "day_of_week": "Sunday",
+      "time": "02:00:00"
+    },
+    "classification_rules": [
+      "System"
+    ],
+    "metadata": {
+      "source_name": "Sales Database",
+      "source_type": "sql_server",
+      "owner": "sales-analytics@contoso.com",
+      "domain": "sales",
+      "classification": "internal"
+    }
+  },
+  {
+    "scan_name": "scan-lz-sales-transactions-silver",
+    "data_source_name": "dlz-salestransactionsdlz",
+    "collection_name": "data-landing-zones",
+    "scope": {
+      "storage_account": "salestransactionsdlz",
+      "container": "silver",
+      "path": "/"
+    },
+    "scan_rule_set": "AdlsGen2",
+    "schedule": {
+      "kind": "Weekly",
+      "day_of_week": "Sunday",
+      "time": "02:00:00"
+    },
+    "classification_rules": [
+      "System"
+    ],
+    "metadata": {
+      "source_name": "Sales Database",
+      "source_type": "sql_server",
+      "owner": "sales-analytics@contoso.com",
+      "domain": "sales",
+      "classification": "internal"
+    }
+  },
+  {
+    "scan_name": "scan-lz-sales-transactions-gold",
+    "data_source_name": "dlz-salestransactionsdlz",
+    "collection_name": "data-landing-zones",
+    "scope": {
+      "storage_account": "salestransactionsdlz",
+      "container": "gold",
+      "path": "/"
+    },
+    "scan_rule_set": "AdlsGen2",
+    "schedule": {
+      "kind": "Weekly",
+      "day_of_week": "Sunday",
+      "time": "02:00:00"
+    },
+    "classification_rules": [
+      "System"
+    ],
+    "metadata": {
+      "source_name": "Sales Database",
+      "source_type": "sql_server",
+      "owner": "sales-analytics@contoso.com",
+      "domain": "sales",
+      "classification": "internal"
+    }
+  },
+  {
+    "scan_name": "scan-lz-sales-transactions-sandbox",
+    "data_source_name": "dlz-salestransactionsdlz",
+    "collection_name": "data-landing-zones",
+    "scope": {
+      "storage_account": "salestransactionsdlz",
+      "container": "sandbox",
+      "path": "/"
+    },
+    "scan_rule_set": "AdlsGen2",
+    "schedule": {
+      "kind": "Weekly",
+      "day_of_week": "Sunday",
+      "time": "02:00:00"
+    },
+    "classification_rules": [
+      "System"
+    ],
+    "metadata": {
+      "source_name": "Sales Database",
+      "source_type": "sql_server",
+      "owner": "sales-analytics@contoso.com",
+      "domain": "sales",
+      "classification": "internal"
+    }
+  }
+]

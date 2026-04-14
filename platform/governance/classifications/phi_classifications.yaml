@@ -1,0 +1,154 @@
+# PHI Classification Rules for Azure Purview
+# Defines detection patterns for Protected Health Information (HIPAA).
+
+apiVersion: csa.microsoft.com/v1
+kind: ClassificationRuleSet
+
+metadata:
+  name: phi-classifications
+  version: "1.0.0"
+  description: >
+    PHI detection rules for Azure Purview. Covers HIPAA-regulated health
+    information including medical record numbers, diagnoses, treatments,
+    prescriptions, and insurance identifiers.
+  owner: governance-team@contoso.com
+  tags: [phi, classification, purview, hipaa, compliance]
+  regulations: [HIPAA, HITECH, 42-CFR-Part-2]
+
+defaultSensitivity: Restricted
+minimumPercentageMatch: 70.0
+
+classifications:
+  - name: CSA_PHI_MEDICAL_RECORD_NUMBER
+    description: Medical Record Number (MRN)
+    category: PHI
+    subcategory: Medical Identifier
+    sensitivity: Restricted
+    dataPatterns:
+      - pattern: '\bMRN[-:\s]?\d{6,12}\b'
+        description: MRN with prefix (MRN-123456, MRN:123456)
+      - pattern: '\b[A-Z]{2,3}\d{6,10}\b'
+        description: Alphanumeric MRN (ABC123456)
+        requireColumnMatch: true
+    columnPatterns:
+      - pattern: '(?i)(mrn|medical_record|med_rec|medical_record_number|patient_id|patient_number|chart_number)'
+        description: Column names indicating medical record number
+    minimumPercentageMatch: 80.0
+    remediationAction: mask
+    maskPattern: "MRN-****{last4}"
+
+  - name: CSA_PHI_DIAGNOSIS_CODE
+    description: ICD-10 diagnosis codes
+    category: PHI
+    subcategory: Clinical Data
+    sensitivity: Restricted
+    dataPatterns:
+      - pattern: '\b[A-Z]\d{2}(\.\d{1,4})?\b'
+        description: ICD-10-CM code (A01.0, M79.3)
+        requireColumnMatch: true
+    columnPatterns:
+      - pattern: '(?i)(icd|diagnosis|dx_code|diag_code|diagnosis_code|icd_10|icd10|primary_diagnosis|secondary_diagnosis)'
+        description: Column names indicating diagnosis codes
+    minimumPercentageMatch: 60.0
+    remediationAction: redact
+
+  - name: CSA_PHI_PROCEDURE_CODE
+    description: CPT/HCPCS procedure codes
+    category: PHI
+    subcategory: Clinical Data
+    sensitivity: Restricted
+    dataPatterns:
+      - pattern: '\b\d{5}\b'
+        description: CPT code (5 digits)
+        requireColumnMatch: true
+      - pattern: '\b[A-V]\d{4}[A-Z]?\b'
+        description: HCPCS Level II code
+        requireColumnMatch: true
+    columnPatterns:
+      - pattern: '(?i)(cpt|procedure_code|proc_code|hcpcs|service_code|treatment_code)'
+        description: Column names indicating procedure codes
+    minimumPercentageMatch: 70.0
+    remediationAction: redact
+
+  - name: CSA_PHI_PRESCRIPTION
+    description: Prescription and medication information
+    category: PHI
+    subcategory: Treatment Data
+    sensitivity: Restricted
+    columnPatterns:
+      - pattern: '(?i)(prescription|rx|medication|drug_name|med_name|dosage|rx_number|prescription_id|ndc_code|ndc)'
+        description: Column names indicating prescription data
+    minimumPercentageMatch: 50.0
+    remediationAction: redact
+
+  - name: CSA_PHI_INSURANCE_ID
+    description: Health insurance member/subscriber ID
+    category: PHI
+    subcategory: Insurance
+    sensitivity: Restricted
+    dataPatterns:
+      - pattern: '\b[A-Z]{3}\d{9,12}\b'
+        description: Insurance ID pattern (e.g., XYZ123456789)
+        requireColumnMatch: true
+    columnPatterns:
+      - pattern: '(?i)(insurance_id|member_id|subscriber_id|policy_number|group_number|plan_id|payer_id|insurance_number)'
+        description: Column names indicating insurance identifiers
+    minimumPercentageMatch: 70.0
+    remediationAction: mask
+
+  - name: CSA_PHI_PROVIDER_NPI
+    description: National Provider Identifier (NPI)
+    category: PHI
+    subcategory: Provider Data
+    sensitivity: Confidential
+    dataPatterns:
+      - pattern: '\b\d{10}\b'
+        description: 10-digit NPI
+        requireColumnMatch: true
+    columnPatterns:
+      - pattern: '(?i)(npi|provider_npi|national_provider|provider_id|physician_id|doctor_id|attending_npi)'
+        description: Column names indicating NPI
+    minimumPercentageMatch: 80.0
+    remediationAction: mask
+
+  - name: CSA_PHI_LAB_RESULT
+    description: Laboratory test results and values
+    category: PHI
+    subcategory: Clinical Data
+    sensitivity: Restricted
+    columnPatterns:
+      - pattern: '(?i)(lab_result|test_result|lab_value|blood_type|hba1c|glucose|cholesterol|hemoglobin|platelet|wbc|rbc|creatinine|bmi)'
+        description: Column names indicating lab results
+    minimumPercentageMatch: 50.0
+    remediationAction: redact
+
+  - name: CSA_PHI_ADMISSION_DATE
+    description: Hospital admission and discharge dates
+    category: PHI
+    subcategory: Encounter Data
+    sensitivity: Restricted
+    columnPatterns:
+      - pattern: '(?i)(admission_date|admit_date|discharge_date|encounter_date|visit_date|service_date|date_of_service|dos)'
+        description: Column names indicating clinical encounter dates
+    minimumPercentageMatch: 60.0
+    remediationAction: generalize
+    generalizationRule: "truncate_to_year"
+
+autoLabelingPolicies:
+  - name: PHI_Auto_Label
+    description: Auto-label all PHI fields as Restricted
+    classificationNames:
+      - CSA_PHI_MEDICAL_RECORD_NUMBER
+      - CSA_PHI_DIAGNOSIS_CODE
+      - CSA_PHI_PROCEDURE_CODE
+      - CSA_PHI_PRESCRIPTION
+      - CSA_PHI_INSURANCE_ID
+      - CSA_PHI_LAB_RESULT
+      - CSA_PHI_ADMISSION_DATE
+    targetLabel: Restricted
+
+  - name: PHI_Provider_Auto_Label
+    description: Auto-label provider identifiers as Confidential
+    classificationNames:
+      - CSA_PHI_PROVIDER_NPI
+    targetLabel: Confidential

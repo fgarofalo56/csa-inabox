@@ -3,6 +3,8 @@
 > **Research Report** | April 2026
 > Comprehensive guide for deploying a Cloud-Scale Analytics platform across 4 Azure subscriptions using Bicep and GitHub Actions.
 
+> **Note:** This document describes the target-state architecture and recommended improvements. For current CI/CD workflows, see `.github/workflows/`. For current deployment instructions, see [QUICKSTART.md](QUICKSTART.md) or [GETTING_STARTED.md](GETTING_STARTED.md).
+
 ---
 
 ## Table of Contents

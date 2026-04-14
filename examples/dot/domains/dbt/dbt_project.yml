@@ -1,0 +1,98 @@
+name: 'dot_analytics'
+version: '1.0.0'
+config-version: 2
+require-dbt-version: [">=1.7.0", "<2.0.0"]
+
+profile: 'dot_analytics'
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+macro-paths: ["../../../domains/shared/dbt/macros"]
+clean-targets: ["target", "dbt_packages"]
+
+vars:
+  bronze_database: "bronze"
+  silver_database: "silver"
+  gold_database: "gold"
+  file_format: "delta"
+  incremental_strategy: "merge"
+  freshness_warn_hours: 48
+  freshness_error_hours: 96
+
+  # DOT-specific variables
+  current_analysis_year: 2024
+  historical_years: 10
+  crash_severity_weights:
+    fatality: 10
+    serious_injury: 5
+    minor_injury: 2
+    property_damage: 1
+
+  # Safety hotspot grid resolution (degrees lat/lon)
+  grid_cell_size: 0.1
+
+  # Infrastructure scoring weights
+  condition_weight: 0.40
+  traffic_weight: 0.30
+  age_weight: 0.20
+  trend_weight: 0.10
+
+  # Bridge condition thresholds (NBI 0-9 scale)
+  condition_critical_threshold: 3
+  condition_poor_threshold: 5
+  condition_fair_threshold: 7
+
+  # Transit performance targets
+  on_time_target_pct: 85.0
+  ridership_trend_window_months: 12
+
+  # Geographic filters for focused analysis
+  high_fatality_states: ['TX', 'CA', 'FL', 'GA', 'NC', 'SC', 'AL', 'MS', 'LA', 'TN']
+
+models:
+  dot_analytics:
+    bronze:
+      +materialized: incremental
+      +file_format: delta
+      +schema: bronze
+      +tags: ['bronze', 'dot', 'raw']
+      +unique_key: ['source_system', 'ingestion_timestamp', 'record_hash']
+    silver:
+      +materialized: incremental
+      +file_format: delta
+      +schema: silver
+      +tags: ['silver', 'dot', 'cleaned']
+      +incremental_strategy: merge
+      +on_schema_change: "sync_all_columns"
+    gold:
+      +materialized: table
+      +file_format: delta
+      +schema: gold
+      +tags: ['gold', 'dot', 'analytics']
+      +post-hook: "OPTIMIZE {{ this }}"
+
+seeds:
+  dot_analytics:
+    +schema: seeds
+    +tags: ['seed', 'dot']
+
+sources:
+  - name: dot
+    description: DOT transportation data sources
+    tables:
+      - name: fars_crash_data
+        description: NHTSA FARS fatal crash records
+        freshness:
+          warn_after: {count: 30, period: day}
+          error_after: {count: 60, period: day}
+      - name: highway_conditions
+        description: FHWA bridge and pavement condition data
+        freshness:
+          warn_after: {count: 30, period: day}
+          error_after: {count: 90, period: day}
+      - name: ntd_transit_performance
+        description: NTD transit agency performance metrics
+        freshness:
+          warn_after: {count: 7, period: day}
+          error_after: {count: 30, period: day}

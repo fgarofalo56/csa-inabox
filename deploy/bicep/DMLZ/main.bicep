@@ -105,7 +105,7 @@ Resource Modules and Deployments
 ***************************************************************************************************************************************************/
 
 // Governance resources
-resource governanceResourceGroup 'Microsoft.Resources/resourceGroups@2021-01-01' = if (bool(deployModules.governance)) {
+resource governanceResourceGroup 'Microsoft.Resources/resourceGroups@2024-03-01' = if (bool(deployModules.governance)) {
   name: 'rg-${parBaseName}-governance-${parLocationShort}'
   location: location
   tags: varRGGovernanceTags
@@ -130,7 +130,7 @@ module governanceResources 'modules/governance/governance.bicep' = if (bool(depl
 }
 
 // Deploy Governance Databricks Workspace (Unity Catalog)
-resource databricksResourceGroup 'Microsoft.Resources/resourceGroups@2021-01-01' = if (contains(deployModules, 'databricks') && bool(deployModules.databricks)) {
+resource databricksResourceGroup 'Microsoft.Resources/resourceGroups@2024-03-01' = if (contains(deployModules, 'databricks') && bool(deployModules.databricks)) {
   name: 'rg-${parBaseName}-databricks-gov-${parLocationShort}'
   location: location
   tags: tagsJoined

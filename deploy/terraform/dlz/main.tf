@@ -377,7 +377,7 @@ module "machinelearning" {
   tags                = local.tags
 
   storage_account_id      = var.deploy_storage ? module.storage[0].storage_account_id : ""
-  key_vault_id            = ""
+  key_vault_id            = var.key_vault_id != "" ? var.key_vault_id : var.cmk_key_vault_id
   application_insights_id = var.deploy_app_insights ? module.monitoring[0].app_insights_id : ""
 
   log_analytics_workspace_id = var.log_analytics_workspace_id

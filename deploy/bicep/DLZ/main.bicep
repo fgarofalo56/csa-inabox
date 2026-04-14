@@ -116,6 +116,18 @@ param parGenericStorage object = {}
 @description('Self-Hosted Integration Runtime VM Scale Set parameters')
 param parSelfHostedIR object = {}
 
+@secure()
+@description('SQL admin password for Synapse workspace. Prefer Key Vault reference over plaintext.')
+param synapseSqlAdminPassword string = ''
+
+@secure()
+@description('Administrator password for Self-Hosted Integration Runtime VMSS.')
+param shirAdminPassword string = ''
+
+@secure()
+@description('Data Factory Integration Runtime authentication key for SHIR.')
+param shirAuthKey string = ''
+
 // Private Endpoints parameters
 @description('Private Endpoints configuration parameters')
 param parPrivateEndpoints object = {}
@@ -159,7 +171,7 @@ Resource Modules and Deployments
 ***************************************************************************************************************************************************/
 
 // Cosmos DB RG
-module cosmosdbresourcegroup 'modules/resourceGroup/resourceGroup.bicep' = if (bool(deployModules.cosmosDB)) {
+module cosmosdbresourcegroup 'modules/resourceGroup/resourceGroup.bicep' = if (contains(deployModules, 'cosmosDB') && bool(deployModules.cosmosDB)) {
   name: 'deployCosmosDbRg'
   scope: subscription()
   params: {
@@ -170,7 +182,7 @@ module cosmosdbresourcegroup 'modules/resourceGroup/resourceGroup.bicep' = if (b
 }
 
 // Cosmos DB Module
-module cosmosdb 'modules/cosmos/cosmosdb.bicep' = if (bool(deployModules.cosmosDB)) {
+module cosmosdb 'modules/cosmos/cosmosdb.bicep' = if (contains(deployModules, 'cosmosDB') && bool(deployModules.cosmosDB)) {
   name: 'DeployCosmosDb'
   scope: resourceGroup('rg-${basename}-cosmosdb-${parLocationShort}')
   params: {
@@ -207,7 +219,7 @@ module cosmosdb 'modules/cosmos/cosmosdb.bicep' = if (bool(deployModules.cosmosD
 }
 
 // Storage Resources:
-module storageResourceGroup 'modules/resourceGroup/resourceGroup.bicep' = if (bool(deployModules.storageZones)) {
+module storageResourceGroup 'modules/resourceGroup/resourceGroup.bicep' = if (contains(deployModules, 'storageZones') && bool(deployModules.storageZones)) {
   name: 'rg-${basename}-storage-${parLocationShort}'
   scope: subscription()
   params: {
@@ -217,7 +229,7 @@ module storageResourceGroup 'modules/resourceGroup/resourceGroup.bicep' = if (bo
   }
 }
 
-module storageServices 'modules/storage/lakezones.bicep' = if (bool(deployModules.storageZones)) {
+module storageServices 'modules/storage/lakezones.bicep' = if (contains(deployModules, 'storageZones') && bool(deployModules.storageZones)) {
   name: 'storageServices'
   scope: resourceGroup('rg-${basename}-storage-${parLocationShort}')
   params: {
@@ -239,7 +251,7 @@ module storageServices 'modules/storage/lakezones.bicep' = if (bool(deployModule
 
 // External storage resources
 // External Storage Resource Group
-module externalStorageResourceGroup 'modules/resourceGroup/resourceGroup.bicep' = if (bool(deployModules.externalStorage)) {
+module externalStorageResourceGroup 'modules/resourceGroup/resourceGroup.bicep' = if (contains(deployModules, 'externalStorage') && bool(deployModules.externalStorage)) {
   name: 'rg-${basename}-externalstorage-${parLocationShort}'
   scope: subscription()
   params: {
@@ -253,7 +265,7 @@ module externalStorageResourceGroup 'modules/resourceGroup/resourceGroup.bicep' 
 // Check for Private DNS Zone ID for Blob
 
 // External Storage Module
-module externalStorageServices 'modules/storage/externalstorageMain.bicep' = if (bool(deployModules.externalStorage)) {
+module externalStorageServices 'modules/storage/externalstorageMain.bicep' = if (contains(deployModules, 'externalStorage') && bool(deployModules.externalStorage)) {
   name: 'externalStorageServices'
   scope: resourceGroup('rg-${basename}-externalstorage-${parLocationShort}')
   params: {
@@ -288,7 +300,7 @@ module synapseWorkspace 'modules/synapse/synapse.bicep' = if (contains(deployMod
     tags: varSynapseTags
     synapseName: contains(parSynapse, 'synapseWorkspaceName') ? parSynapse.synapseWorkspaceName : '${basename}-synapse'
     administratorUsername: contains(parSynapse, 'sqlAdminUsername') ? parSynapse.sqlAdminUsername : 'synadmin_${uniqueString(subscription().subscriptionId)}'
-    administratorPassword: parSynapse.sqlAdminPassword // REQUIRED: Must be provided via parameter file or Key Vault reference
+    administratorPassword: synapseSqlAdminPassword != '' ? synapseSqlAdminPassword : (contains(parSynapse, 'sqlAdminPassword') ? parSynapse.sqlAdminPassword : '')
     synapseDefaultStorageAccountFileSystemId: storageServices.outputs.storageWorkspaceFileSystemId
     privateEndpointSubnets: contains(parSynapse, 'privateEndpointSubnets') ? parSynapse.privateEndpointSubnets : parStorage.privateEndpointSubnets
   }
@@ -639,8 +651,8 @@ module selfHostedIR 'modules/vms/selfHostedIntegrationRuntime.bicep' = if (conta
     vmssSkuTier: contains(parSelfHostedIR, 'vmssSkuTier') ? parSelfHostedIR.vmssSkuTier : 'Standard'
     vmssSkuCapacity: contains(parSelfHostedIR, 'vmssSkuCapacity') ? parSelfHostedIR.vmssSkuCapacity : 1
     administratorUsername: contains(parSelfHostedIR, 'administratorUsername') ? parSelfHostedIR.administratorUsername : 'VmssMainUser'
-    administratorPassword: parSelfHostedIR.administratorPassword
-    datafactoryIntegrationRuntimeAuthKey: parSelfHostedIR.datafactoryIntegrationRuntimeAuthKey
+    administratorPassword: shirAdminPassword != '' ? shirAdminPassword : (contains(parSelfHostedIR, 'administratorPassword') ? parSelfHostedIR.administratorPassword : '')
+    datafactoryIntegrationRuntimeAuthKey: shirAuthKey != '' ? shirAuthKey : (contains(parSelfHostedIR, 'datafactoryIntegrationRuntimeAuthKey') ? parSelfHostedIR.datafactoryIntegrationRuntimeAuthKey : '')
   }
   dependsOn: [
     shirResourceGroup

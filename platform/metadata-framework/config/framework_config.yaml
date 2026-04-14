@@ -1,0 +1,365 @@
+# CSA-in-a-Box Metadata Framework Configuration
+
+# Framework-wide settings
+framework:
+  version: "1.0.0"
+  log_level: "INFO"
+  enable_debug_mode: false
+  validate_schemas: true
+
+# Landing Zone Configuration
+landing_zones:
+  default_location: "eastus2"
+  storage_account_suffix: "dlz"
+  default_retention_days: 2555  # 7 years
+  naming_convention:
+    pattern: "lz-{domain}-{source_name}"
+    max_length: 24
+    allowed_characters: "abcdefghijklmnopqrstuvwxyz0123456789-"
+
+  # Medallion architecture containers
+  medallion_containers:
+    bronze:
+      purpose: "Raw ingested data"
+      retention_days: 365
+      archive_after_days: 90
+      compression: "snappy"
+    silver:
+      purpose: "Cleaned and standardized data"
+      retention_days: 1095  # 3 years
+      archive_after_days: 180
+      compression: "snappy"
+    gold:
+      purpose: "Business-ready aggregated data"
+      retention_days: 2555  # 7 years
+      archive_after_days: 365
+      compression: "zstd"
+    sandbox:
+      purpose: "Experimental and development data"
+      retention_days: 90
+      archive_after_days: 30
+      compression: "gzip"
+
+  # Data classification policies
+  data_classification:
+    public:
+      retention_years: 1
+      encryption: "microsoft_managed"
+      access_tier: "hot"
+      backup_enabled: false
+    internal:
+      retention_years: 3
+      encryption: "microsoft_managed"
+      access_tier: "hot"
+      backup_enabled: true
+    confidential:
+      retention_years: 7
+      encryption: "customer_managed"
+      access_tier: "hot"
+      backup_enabled: true
+      private_endpoint_required: true
+    restricted:
+      retention_years: 7
+      encryption: "customer_managed"
+      access_tier: "hot"
+      backup_enabled: true
+      private_endpoint_required: true
+      network_isolation_required: true
+
+# Azure Data Factory Configuration
+azure_data_factory:
+  default_location: "eastus2"
+  integration_runtime: "ir-azure-default"
+  compute_type: "General"
+  core_count: 8
+  time_to_live: 60  # minutes
+
+  # Pipeline naming conventions
+  naming_convention:
+    prefix: "pl_"
+    separator: "_"
+    max_length: 260
+    include_source_type: true
+    include_ingestion_mode: true
+
+  # Default pipeline settings
+  default_settings:
+    timeout_minutes: 60
+    retry_count: 3
+    retry_interval_seconds: 30
+    enable_staging: false
+    enable_logging: true
+    log_level: "INFO"
+
+  # Activity-specific configurations
+  copy_activity:
+    default_parallelism: 4
+    max_parallelism: 32
+    enable_skip_incompatible_row: true
+    enable_staged_copy: false
+    staged_copy_settings:
+      linked_service: ""
+      path: "staging"
+
+  # Trigger configurations
+  triggers:
+    schedule:
+      default_timezone: "UTC"
+      max_concurrency: 1
+      delay_between_runs: "00:00:00"
+    tumbling_window:
+      default_frequency: "Hour"
+      default_interval: 1
+      max_concurrency: 1
+
+# Purview Integration
+purview:
+  account_name: "purview-csa-prod"
+  endpoint: "https://purview-csa-prod.purview.azure.com"
+  collection_name: "data-landing-zones"
+  api_version: "2022-08-01-preview"
+
+  # Scan configuration
+  scan_settings:
+    default_scan_rule_set: "AdlsGen2"
+    scan_frequency: "Weekly"
+    scan_day_of_week: "Sunday"
+    scan_time: "02:00:00"
+
+  # Classification settings
+  classification:
+    enable_system_classifications: true
+    custom_classifications:
+      - "ContosoPII"
+      - "ContosoFinancial"
+      - "ContosoSensitive"
+
+  # Lineage settings
+  lineage:
+    enable_adf_lineage: true
+    capture_column_lineage: true
+    track_data_transformations: true
+
+# RBAC Configuration
+rbac:
+  # Standard role assignments for different personas
+  role_mappings:
+    data_owner:
+      - "Storage Blob Data Contributor"
+    data_consumer:
+      - "Storage Blob Data Reader"
+    data_engineer:
+      - "Storage Blob Data Contributor"
+      - "Data Factory Contributor"
+    data_steward:
+      - "Storage Blob Data Reader"
+      - "Purview Data Curator"
+
+  # Service principal assignments
+  service_principals:
+    data_factory:
+      object_id: "$(ADF_MANAGED_IDENTITY_OBJECT_ID)"
+      roles:
+        - "Storage Blob Data Contributor"
+        - "Key Vault Secrets User"
+    purview:
+      object_id: "$(PURVIEW_MANAGED_IDENTITY_OBJECT_ID)"
+      roles:
+        - "Storage Blob Data Reader"
+
+# Monitoring and Alerting
+monitoring:
+  log_analytics_workspace: "law-data-platform"
+  application_insights: "ai-data-platform"
+  action_group: "ag-data-platform-alerts"
+
+  # Alert configurations
+  alerts:
+    pipeline_failure:
+      severity: 1  # Critical
+      threshold: 1
+      frequency_minutes: 5
+      suppress_duration_minutes: 60
+    data_quality_failure:
+      severity: 2  # Error
+      threshold: 1
+      frequency_minutes: 15
+      suppress_duration_minutes: 120
+    ingestion_delay:
+      severity: 3  # Warning
+      threshold_minutes: 60
+      frequency_minutes: 30
+      suppress_duration_minutes: 240
+
+  # Metrics to collect
+  metrics:
+    - pipeline_run_duration
+    - pipeline_success_rate
+    - data_volume_ingested
+    - data_quality_score
+    - cost_per_pipeline_run
+    - storage_utilization
+
+# Data Quality Configuration
+data_quality:
+  enable_validation: true
+  quarantine_enabled: true
+
+  # Great Expectations integration
+  great_expectations:
+    enable: false  # Placeholder for future implementation
+    backend: "spark"
+    checkpoint_store: "azure_blob"
+
+  # Built-in quality rules
+  builtin_rules:
+    not_null:
+      severity: "error"
+      action_on_failure: "quarantine"
+    unique:
+      severity: "error"
+      action_on_failure: "quarantine"
+    range:
+      severity: "warning"
+      action_on_failure: "log"
+    pattern:
+      severity: "warning"
+      action_on_failure: "log"
+    custom:
+      severity: "configurable"
+      action_on_failure: "configurable"
+
+# Security Configuration
+security:
+  # Encryption settings
+  encryption:
+    enable_encryption_at_rest: true
+    enable_encryption_in_transit: true
+    key_management: "microsoft_managed"  # or "customer_managed"
+    key_vault_name: "kv-csa-prod"
+
+  # Network security
+  network:
+    enable_private_endpoints: false  # Set to true for production
+    enable_firewall_rules: true
+    allowed_ip_ranges:
+      - "10.0.0.0/8"    # Corporate network
+      - "172.16.0.0/12" # Azure VNet ranges
+    enable_vnet_integration: false
+
+  # Compliance
+  compliance:
+    enable_defender_for_storage: true
+    enable_audit_logs: true
+    retain_audit_logs_days: 365
+    enable_advanced_threat_protection: true
+
+# Cost Management
+cost_management:
+  # Budget alerts
+  budget_threshold_percent: 80
+  budget_contact_emails:
+    - "data-platform-admins@contoso.com"
+
+  # Cost optimization
+  enable_auto_pause: false  # For development environments
+  auto_pause_delay_minutes: 60
+  enable_cost_alerts: true
+  cost_alert_threshold_dollars: 1000
+
+# Environment-specific overrides
+environments:
+  development:
+    landing_zones:
+      default_retention_days: 90
+    azure_data_factory:
+      default_settings:
+        timeout_minutes: 30
+    security:
+      network:
+        enable_private_endpoints: false
+    cost_management:
+      enable_auto_pause: true
+
+  staging:
+    landing_zones:
+      default_retention_days: 180
+    security:
+      network:
+        enable_private_endpoints: false
+
+  production:
+    landing_zones:
+      default_retention_days: 2555
+    security:
+      encryption:
+        key_management: "customer_managed"
+      network:
+        enable_private_endpoints: true
+        enable_vnet_integration: true
+    monitoring:
+      alerts:
+        pipeline_failure:
+          severity: 0  # Critical
+        data_quality_failure:
+          severity: 1  # Error
+
+# Template Mappings
+template_mappings:
+  # Database sources
+  sql_server:
+    full: "adf_batch_copy.json"
+    incremental: "adf_incremental.json"
+    cdc: "adf_cdc.json"
+  azure_sql:
+    full: "adf_batch_copy.json"
+    incremental: "adf_incremental.json"
+    cdc: "adf_cdc.json"
+  oracle:
+    full: "adf_batch_copy.json"
+    incremental: "adf_incremental.json"
+    cdc: "adf_cdc.json"
+  mysql:
+    full: "adf_batch_copy.json"
+    incremental: "adf_incremental.json"
+    cdc: "adf_cdc.json"
+  postgres:
+    full: "adf_batch_copy.json"
+    incremental: "adf_incremental.json"
+    cdc: "adf_cdc.json"
+
+  # NoSQL sources
+  cosmos_db:
+    full: "adf_batch_copy.json"
+    incremental: "adf_incremental.json"
+    cdc: "adf_cdc.json"
+
+  # API sources
+  rest_api:
+    full: "adf_api_ingestion.json"
+    incremental: "adf_api_ingestion.json"
+  dynamics365:
+    full: "adf_api_ingestion.json"
+    incremental: "adf_api_ingestion.json"
+
+  # File sources
+  file_drop:
+    full: "adf_batch_copy.json"
+    incremental: "adf_incremental.json"
+  blob_storage:
+    full: "adf_batch_copy.json"
+    incremental: "adf_incremental.json"
+  s3:
+    full: "adf_batch_copy.json"
+    incremental: "adf_incremental.json"
+
+  # Streaming sources
+  event_hub:
+    streaming: "adf_streaming.json"
+  kafka:
+    streaming: "adf_streaming.json"
+
+  # Collaboration sources
+  sharepoint:
+    full: "adf_batch_copy.json"
+    incremental: "adf_incremental.json"

@@ -1,0 +1,54 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "location": {
+            "value": "usgovvirginia"
+        },
+        "environment": {
+            "value": "prod"
+        },
+        "prefix": {
+            "value": "csa"
+        },
+        "enableFedRAMPHigh": {
+            "value": true
+        },
+        "dataClassification": {
+            "value": "PHI"
+        },
+        "impactLevel": {
+            "value": "IL5"
+        },
+        "deployDLZ": {
+            "value": true
+        },
+        "deployDMLZ": {
+            "value": true
+        },
+        "deployOSSAlternatives": {
+            "value": false
+        },
+        "deployAIServices": {
+            "value": true
+        },
+        "deployStreaming": {
+            "value": false
+        },
+        "enableHIPAA": {
+            "value": true
+        },
+        "tags": {
+            "value": {
+                "Project": "CSA-in-a-Box",
+                "Environment": "Production",
+                "Vertical": "Tribal-Health",
+                "CostCenter": "IHS-Analytics",
+                "ManagedBy": "Bicep",
+                "DataSovereignty": "US-Only",
+                "HIPAA": "Required",
+                "TribalSovereignty": "Enforced"
+            }
+        }
+    }
+}

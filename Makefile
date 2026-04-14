@@ -15,10 +15,9 @@ setup: ## Set up development environment
 	@echo "Activate with: source .venv/bin/activate"
 
 setup-win: ## Set up development environment (Windows)
-	python -m venv .venv && \
-	.venv\Scripts\activate && \
-	pip install --upgrade pip && \
-	pip install -e ".[dev]"
+	python -m venv .venv
+	.venv\Scripts\pip install --upgrade pip
+	.venv\Scripts\pip install -e ".[dev]"
 	@echo ""
 	@echo "Activate with: .venv\Scripts\activate"
 
@@ -75,6 +74,18 @@ validate-python: ## Validate Python code only
 
 validate-dbt: ## Validate dbt models only
 	pwsh -File agent-harness/gates/validate-dbt.ps1
+
+# --- Terraform ---
+
+tf-init: ## Initialize Terraform (DLZ)
+	cd deploy/terraform/dlz && terraform init
+
+tf-plan: ## Plan Terraform changes (DLZ, dev)
+	cd deploy/terraform/dlz && terraform plan -var-file=environments/dev.tfvars
+
+tf-validate: ## Validate all Terraform configurations
+	cd deploy/terraform/dlz && terraform validate
+	cd deploy/terraform/dmlz && terraform validate
 
 # --- Deployment ---
 

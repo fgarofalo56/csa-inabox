@@ -1,0 +1,490 @@
+version: 2
+
+sources:
+  - name: commerce
+    description: Department of Commerce data sources from Census Bureau, BEA, and ITA
+    tables:
+      - name: census_demographics
+        description: Census Bureau ACS demographic and economic data by census tract
+        columns:
+          - name: geo_id
+            description: Census GEOID (state+county+tract FIPS concatenation)
+            tests:
+              - not_null
+          - name: variable_code
+            description: Census variable identifier (e.g., B01001_001E)
+            tests:
+              - not_null
+          - name: year
+            description: Data year (ACS vintage)
+            tests:
+              - not_null
+
+      - name: bea_gdp
+        description: BEA GDP and economic indicator data by state and industry
+        columns:
+          - name: state_fips
+            description: 2-digit FIPS state code (00 for national)
+            tests:
+              - not_null
+          - name: year
+            description: Data year
+            tests:
+              - not_null
+          - name: quarter
+            description: Quarter (1-4)
+            tests:
+              - not_null
+
+      - name: trade_transactions
+        description: International trade flow data from ITA/Census
+        columns:
+          - name: partner_country_code
+            description: ISO 3166-1 alpha-3 partner country code
+            tests:
+              - not_null
+          - name: flow_type
+            description: Trade flow direction (EXPORT or IMPORT)
+            tests:
+              - not_null
+          - name: year
+            description: Trade year
+            tests:
+              - not_null
+
+models:
+  # Bronze Models
+  - name: brz_census_demographics
+    description: Bronze layer - Raw Census ACS demographic data with basic validation
+    columns:
+      - name: geo_id
+        description: Census GEOID (full geographic identifier)
+        tests:
+          - not_null
+      - name: state_fips
+        description: 2-digit state FIPS code
+        tests:
+          - not_null
+      - name: variable_code
+        description: Census API variable code
+        tests:
+          - not_null
+      - name: year
+        description: ACS data vintage year
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 2000
+              max_value: 2030
+      - name: estimate
+        description: Census estimate value
+      - name: margin_of_error
+        description: Margin of error at 90% confidence
+      - name: is_valid_record
+        description: Flag indicating if record passes basic validation
+        tests:
+          - not_null
+      - name: record_hash
+        description: MD5 hash for deduplication
+        tests:
+          - not_null
+          - unique
+
+  - name: brz_gdp_data
+    description: Bronze layer - Raw BEA GDP and economic indicator data
+    columns:
+      - name: state_fips
+        description: 2-digit state FIPS code (00 for national)
+        tests:
+          - not_null
+      - name: naics_sector
+        description: 2-digit NAICS industry sector code
+      - name: year
+        description: GDP data year
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 1997
+              max_value: 2030
+      - name: quarter
+        description: Quarter (1-4)
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 1
+              max_value: 4
+      - name: gdp_current_dollars
+        description: GDP in current (nominal) dollars, millions
+      - name: gdp_chained_dollars
+        description: GDP in chained 2017 dollars (real), millions
+      - name: is_valid_record
+        description: Flag indicating if record passes basic validation
+        tests:
+          - not_null
+      - name: record_hash
+        description: MD5 hash for deduplication
+        tests:
+          - not_null
+          - unique
+
+  - name: brz_trade_data
+    description: Bronze layer - Raw international trade flow data
+    columns:
+      - name: trade_id
+        description: Unique trade record identifier
+        tests:
+          - not_null
+          - unique
+      - name: partner_country_code
+        description: ISO 3166-1 alpha-3 partner country code
+        tests:
+          - not_null
+      - name: flow_type
+        description: Trade direction (EXPORT or IMPORT)
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['EXPORT', 'IMPORT']
+      - name: hs_code
+        description: Harmonized System commodity code
+        tests:
+          - not_null
+      - name: year
+        description: Trade year
+        tests:
+          - not_null
+      - name: month
+        description: Trade month (1-12)
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 1
+              max_value: 12
+      - name: trade_value_usd
+        description: Trade value in US dollars
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: is_valid_record
+        description: Flag indicating if record passes basic validation
+        tests:
+          - not_null
+
+  # Silver Models
+  - name: slv_census_demographics
+    description: Silver layer - Cleaned demographics with geographic standardization
+    columns:
+      - name: census_sk
+        description: Surrogate key for census record
+        tests:
+          - not_null
+          - unique
+      - name: state_fips
+        description: 2-digit state FIPS code
+        tests:
+          - not_null
+      - name: year
+        description: Data year
+        tests:
+          - not_null
+      - name: total_population
+        description: Total population estimate
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: median_household_income
+        description: Median household income in dollars
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 500000
+      - name: unemployment_rate
+        description: Unemployment rate percentage
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+      - name: poverty_rate
+        description: Poverty rate percentage
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+      - name: pct_bachelors_or_higher
+        description: Percentage of population 25+ with bachelor's degree or higher
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+      - name: region
+        description: Census Bureau region
+        tests:
+          - accepted_values:
+              values: ['NORTHEAST', 'MIDWEST', 'SOUTH', 'WEST', 'OTHER']
+      - name: is_valid
+        description: Data quality validation flag
+        tests:
+          - not_null
+
+  - name: slv_gdp_data
+    description: Silver layer - Normalized GDP with inflation adjustment
+    columns:
+      - name: gdp_sk
+        description: Surrogate key for GDP record
+        tests:
+          - not_null
+          - unique
+      - name: state_fips
+        description: 2-digit state FIPS code
+        tests:
+          - not_null
+      - name: year
+        description: GDP year
+        tests:
+          - not_null
+      - name: quarter
+        description: Quarter (1-4)
+        tests:
+          - not_null
+      - name: naics_sector
+        description: NAICS industry sector code
+        tests:
+          - not_null
+      - name: gdp_real_dollars
+        description: Real GDP in chained dollars (millions)
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: gdp_growth_rate_yoy
+        description: Year-over-year GDP growth rate (%)
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: -50
+              max_value: 100
+      - name: industry_gdp_share_pct
+        description: Industry share of state GDP (%)
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+      - name: is_valid
+        description: Data quality validation flag
+        tests:
+          - not_null
+
+  - name: slv_trade_data
+    description: Silver layer - Standardized trade with harmonized commodity codes
+    columns:
+      - name: trade_sk
+        description: Surrogate key for trade record
+        tests:
+          - not_null
+          - unique
+      - name: partner_country_code
+        description: ISO 3166-1 alpha-3 country code
+        tests:
+          - not_null
+      - name: flow_type
+        description: Trade direction
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['EXPORT', 'IMPORT']
+      - name: hs_code
+        description: Harmonized System code (6 digits)
+        tests:
+          - not_null
+      - name: year
+        description: Trade year
+        tests:
+          - not_null
+      - name: trade_value_usd
+        description: Trade value in USD
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: effective_tariff_rate_pct
+        description: Effective tariff rate (duty/value * 100)
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 200
+      - name: trade_bloc
+        description: Trade bloc classification
+        tests:
+          - accepted_values:
+              values: ['USMCA', 'ASIA_PACIFIC', 'EUROPE', 'SOUTH_AMERICA', 'MIDDLE_EAST', 'AFRICA', 'OTHER']
+      - name: is_valid
+        description: Data quality validation flag
+        tests:
+          - not_null
+
+  # Gold Models
+  - name: gld_economic_resilience
+    description: Gold layer - Regional economic resilience index combining employment diversity, HHI, and GDP stability
+    columns:
+      - name: state_code
+        description: State FIPS code
+        tests:
+          - not_null
+      - name: year
+        description: Analysis year
+        tests:
+          - not_null
+      - name: resilience_score
+        description: Composite resilience score (0-100)
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+      - name: resilience_category
+        description: Resilience classification
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['HIGHLY_RESILIENT', 'RESILIENT', 'MODERATE', 'VULNERABLE', 'AT_RISK']
+      - name: employment_diversity_index
+        description: Shannon entropy of employment distribution (0-1)
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 1
+      - name: hhi_score
+        description: Herfindahl-Hirschman Index for industry concentration
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 10000
+      - name: gdp_stability_score
+        description: GDP stability score (0-100, higher = more stable)
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+      - name: national_resilience_rank
+        description: National ranking by resilience score
+        tests:
+          - not_null
+
+  - name: gld_trade_patterns
+    description: Gold layer - Bilateral trade analysis, commodity trends, and balance of trade
+    columns:
+      - name: partner_country_code
+        description: Partner country or commodity identifier
+        tests:
+          - not_null
+      - name: year
+        description: Trade year
+        tests:
+          - not_null
+      - name: flow_type
+        description: Record type (BILATERAL_SUMMARY or COMMODITY_TREND)
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['BILATERAL_SUMMARY', 'COMMODITY_TREND']
+      - name: total_exports
+        description: Total export value in USD
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: total_imports
+        description: Total import value in USD
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: trade_balance
+        description: Trade balance (exports - imports)
+      - name: trade_balance_direction
+        description: SURPLUS, DEFICIT, or BALANCED
+        tests:
+          - accepted_values:
+              values: ['SURPLUS', 'DEFICIT', 'BALANCED']
+
+  - name: gld_business_growth
+    description: Gold layer - Small business formation trends, survival curves, and growth prediction
+    columns:
+      - name: state_code
+        description: State FIPS code
+        tests:
+          - not_null
+      - name: year
+        description: Analysis year
+        tests:
+          - not_null
+      - name: growth_score
+        description: Composite business growth score (0-100)
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+      - name: growth_prediction_category
+        description: Growth prediction classification
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['HIGH_GROWTH', 'MODERATE_GROWTH', 'STABLE', 'SLOW_GROWTH', 'DECLINING']
+      - name: net_business_formation_rate
+        description: Net new business formation rate per 1000 population
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 50
+      - name: business_survival_rate_5yr
+        description: Estimated 5-year business survival rate (%)
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+      - name: national_growth_rank
+        description: National ranking by growth score
+        tests:
+          - not_null
+
+# Custom tests
+tests:
+  - name: test_gdp_component_consistency
+    description: GDP components should approximately sum to total
+    sql: |
+      SELECT *
+      FROM {{ ref('slv_gdp_data') }}
+      WHERE naics_sector = 'ALL'
+        AND gdp_current_dollars > 0
+        AND ABS(gdp_current_dollars - gdp_real_dollars) / gdp_current_dollars > 0.5
+        AND year >= 2010
+
+  - name: test_trade_balance_arithmetic
+    description: Trade balance should equal exports minus imports
+    sql: |
+      SELECT *
+      FROM {{ ref('gld_trade_patterns') }}
+      WHERE flow_type = 'BILATERAL_SUMMARY'
+        AND ABS(trade_balance - (total_exports - total_imports)) > 0.01
+
+  - name: test_resilience_score_bounds
+    description: Resilience score should be between 0 and 100
+    sql: |
+      SELECT *
+      FROM {{ ref('gld_economic_resilience') }}
+      WHERE resilience_score < 0 OR resilience_score > 100
+
+  - name: test_census_unemployment_rate_bounds
+    description: Unemployment rate should be reasonable (0-50%)
+    sql: |
+      SELECT *
+      FROM {{ ref('slv_census_demographics') }}
+      WHERE unemployment_rate > 50 OR unemployment_rate < 0
+
+macros:
+  - name: calculate_hhi
+    description: Calculates Herfindahl-Hirschman Index from industry shares
+
+  - name: shannon_entropy
+    description: Calculates Shannon entropy for diversity measurement
+
+  - name: normalize_z_score
+    description: Z-score normalization with 0-100 scale conversion

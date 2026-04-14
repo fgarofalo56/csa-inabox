@@ -1,0 +1,91 @@
+{{- if .Values.atlas.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "csa-oss.fullname" . }}-atlas
+  labels:
+    {{- include "csa-oss.labels" . | nindent 4 }}
+    app.kubernetes.io/component: atlas
+spec:
+  replicas: {{ .Values.atlas.replicas }}
+  selector:
+    matchLabels:
+      {{- include "csa-oss.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: atlas
+  template:
+    metadata:
+      labels:
+        {{- include "csa-oss.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: atlas
+    spec:
+      containers:
+        - name: atlas
+          image: "{{ .Values.atlas.image.repository }}:{{ .Values.atlas.image.tag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: 21000
+              protocol: TCP
+          {{- with .Values.atlas.env }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.atlas.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /api/atlas/admin/version
+              port: 21000
+            initialDelaySeconds: 60
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/atlas/admin/version
+              port: 21000
+            initialDelaySeconds: 120
+            periodSeconds: 30
+          {{- if .Values.atlas.persistence.enabled }}
+          volumeMounts:
+            - name: atlas-data
+              mountPath: /opt/atlas/data
+          {{- end }}
+      {{- if .Values.atlas.persistence.enabled }}
+      volumes:
+        - name: atlas-data
+          persistentVolumeClaim:
+            claimName: {{ include "csa-oss.fullname" . }}-atlas-data
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "csa-oss.fullname" . }}-atlas
+  labels:
+    {{- include "csa-oss.labels" . | nindent 4 }}
+    app.kubernetes.io/component: atlas
+spec:
+  type: {{ .Values.atlas.service.type }}
+  ports:
+    - port: {{ .Values.atlas.service.port }}
+      targetPort: 21000
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "csa-oss.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: atlas
+{{- if .Values.atlas.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "csa-oss.fullname" . }}-atlas-data
+  labels:
+    {{- include "csa-oss.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ .Values.atlas.persistence.storageClass }}
+  resources:
+    requests:
+      storage: {{ .Values.atlas.persistence.size }}
+{{- end }}
+{{- end }}
