@@ -1,5 +1,5 @@
--- Bronze source definitions
--- Raw data sources from ADLS Gen2 storage (raw container)
+# Bronze source definitions
+# Raw data sources from ADLS Gen2 storage (raw container)
 
 version: 2
 

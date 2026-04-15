@@ -1,8 +1,8 @@
+-- materialized='table': Full rebuild required — reorder status changes as
+-- inventory levels fluctuate, no reliable incremental key.
 {{
   config(
     materialized='table',
-    -- materialized='table': Full rebuild required — reorder status changes as
-    -- inventory levels fluctuate, no reliable incremental key.
     file_format='delta',
     tags=['gold', 'inventory', 'alerts']
   )

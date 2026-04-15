@@ -1,8 +1,8 @@
+-- materialized='table': Dimension table — small dataset, SCD Type 1
+-- full rebuild ensures all attribute changes are captured.
 {{
   config(
     materialized='table',
-    -- materialized='table': Dimension table — small dataset, SCD Type 1
-    -- full rebuild ensures all attribute changes are captured.
     file_format='delta',
     tags=['gold', 'customers', 'dimension']
   )

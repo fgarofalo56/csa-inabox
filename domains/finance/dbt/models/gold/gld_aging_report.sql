@@ -1,8 +1,8 @@
+-- materialized='table': Full rebuild required — aging buckets are recalculated
+-- daily based on current_date() making incremental unreliable.
 {{
   config(
     materialized='table',
-    -- materialized='table': Full rebuild required — aging buckets are recalculated
-    -- daily based on current_date() making incremental unreliable.
     file_format='delta',
     tags=['gold', 'finance', 'aging']
   )
