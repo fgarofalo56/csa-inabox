@@ -7,7 +7,6 @@
 
 {{
     config(
-        target_database = var('gold_database', 'gold'),
         target_schema   = 'snapshots',
         unique_key      = 'product_sk',
         strategy        = 'check',

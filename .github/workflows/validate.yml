@@ -122,6 +122,7 @@ jobs:
         uses: github/codeql-action/upload-sarif@65216971a11ded447a6b76263d5a144519e5eee1 # v3
         with:
           sarif_file: results.sarif
+        continue-on-error: true  # Gracefully skip if code scanning is not enabled
 
   # -------------------------------------------------------------------------
   # PowerShell Linting

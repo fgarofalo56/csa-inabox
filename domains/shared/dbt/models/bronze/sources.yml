@@ -6,7 +6,6 @@ version: 2
 sources:
   - name: raw_data
     description: "Raw data ingested from external sources into ADLS Gen2 raw container"
-    database: "{{ var('bronze_database') }}"
     schema: raw
     loader: "Azure Data Factory / Event Hubs"
     loaded_at_field: _ingested_at
