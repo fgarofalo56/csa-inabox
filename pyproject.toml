@@ -49,10 +49,10 @@ functions = [
     "azure-mgmt-storage>=21.0.0,<25.0.0",
     "azure-mgmt-cosmosdb>=9.0.0,<10.0.0",
     "azure-mgmt-sql>=3.0.0,<4.0.0",
-    "structlog>=24.1.0,<25.0.0",
+    "structlog>=24.1.0,<26.0.0",
 ]
 platform = [
-    "structlog>=24.1.0,<25.0.0",
+    "structlog>=24.1.0,<26.0.0",
     "tenacity>=8.2.0,<10.0.0",
     "openai>=1.0.0,<2.0.0",
     "azure-identity>=1.14.0,<2.0.0",
