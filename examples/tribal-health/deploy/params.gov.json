@@ -1,0 +1,454 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "location": {
+            "value": "USGov Virginia"
+        },
+        "environment": {
+            "value": "gov"
+        },
+        "prefix": {
+            "value": "tribal"
+        },
+        "workloadName": {
+            "value": "population-health"
+        },
+        "deployModules": {
+            "value": {
+                "cosmosDB": true,
+                "storageZones": true,
+                "externalStorage": false,
+                "synapse": true,
+                "functions": true,
+                "streamAnalytics": false,
+                "appInsights": true,
+                "privateEndpoints": true,
+                "genericStorage": false,
+                "selfHostedIR": false,
+                "dataExplorer": true,
+                "mlWorkspace": true
+            }
+        },
+        "privateDNSZones": {
+            "value": {
+                "subscriptionId": "[subscription().subscriptionId]",
+                "resourceGroupName": "rg-dns-zones-gov"
+            }
+        },
+        "tags": {
+            "value": {
+                "Domain": "TribalHealth",
+                "Environment": "Government",
+                "WorkloadType": "Analytics",
+                "CostCenter": "IHS-IT-GOV",
+                "Owner": "Tribal Health Data Engineering Team",
+                "Project": "Population Health Analytics Platform",
+                "Compliance": "FISMA-High",
+                "DataClassification": "CUI",
+                "AuthorityToOperate": "TRI-ATO-2024"
+            }
+        },
+        "databricksConfig": {
+            "value": {
+                "pricingTier": "premium",
+                "enableNoPublicIp": true,
+                "skuName": "premium",
+                "customVirtualNetworkId": "",
+                "customPublicSubnetName": "",
+                "customPrivateSubnetName": "",
+                "enableAutomaticClusterTermination": true,
+                "enableEncryption": true
+            }
+        },
+        "synapseConfig": {
+            "value": {
+                "sqlAdministratorLogin": "sqladmin",
+                "sqlAdministratorLoginPassword": "[parameters('sqlAdministratorPassword')]",
+                "allowedIpAddresses": [
+                    {
+                        "name": "TribalHealth-GOV-HQ",
+                        "startIpAddress": "192.168.130.0",
+                        "endIpAddress": "192.168.130.255"
+                    },
+                    {
+                        "name": "TribalHealth-GOV-FIELD",
+                        "startIpAddress": "192.168.131.0",
+                        "endIpAddress": "192.168.131.255"
+                    }
+                ],
+                "enableDataExfiltrationProtection": true,
+                "managedVirtualNetwork": "default",
+                "enableDoubleEncryption": true,
+                "gitConfig": {
+                    "accountName": "TribalHealth-Analytics-Gov",
+                    "repositoryName": "tribal-population-health-gov",
+                    "collaborationBranch": "main",
+                    "rootFolder": "/synapse"
+                }
+            }
+        },
+        "storageConfig": {
+            "value": {
+                "accountType": "Standard_GRS",
+                "accessTier": "Hot",
+                "supportsHttpsTrafficOnly": true,
+                "enableHierarchicalNamespace": true,
+                "minimumTlsVersion": "TLS1_2",
+                "allowBlobPublicAccess": false,
+                "enableCrossTenantReplication": false,
+                "containers": [
+                    {
+                        "name": "raw",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "bronze",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "silver",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "gold",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "exports",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "synthetic-clinical-data",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "patient-analytics",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "facility-metrics",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "audit-logs",
+                        "publicAccess": "None"
+                    }
+                ],
+                "enableVersioning": true,
+                "enableDeleteRetention": true,
+                "deleteRetentionDays": 365
+            }
+        },
+        "keyVaultConfig": {
+            "value": {
+                "enableRbacAuthorization": true,
+                "enableSoftDelete": true,
+                "softDeleteRetentionDays": 90,
+                "enablePurgeProtection": true,
+                "enabledForDiskEncryption": true,
+                "enabledForDeployment": false,
+                "enabledForTemplateDeployment": false,
+                "networkAccessPolicy": "deny",
+                "secrets": [
+                    {
+                        "name": "sql-administrator-password",
+                        "description": "SQL administrator password for Synapse"
+                    },
+                    {
+                        "name": "fhir-server-auth-token",
+                        "description": "FHIR server authentication token"
+                    },
+                    {
+                        "name": "encryption-key",
+                        "description": "Customer-managed encryption key"
+                    }
+                ]
+            }
+        },
+        "dataFactoryConfig": {
+            "value": {
+                "publicNetworkAccess": "Disabled",
+                "managedVirtualNetworkSettings": {
+                    "allowedPrivateEndpointConnections": [],
+                    "preventDataExfiltration": true
+                },
+                "gitConfig": {
+                    "accountName": "TribalHealth-Analytics-Gov",
+                    "repositoryName": "tribal-population-health-gov",
+                    "collaborationBranch": "main",
+                    "rootFolder": "/datafactory"
+                },
+                "integrationRuntimes": [
+                    {
+                        "name": "AutoResolveIntegrationRuntime",
+                        "type": "Managed",
+                        "location": "USGov Virginia"
+                    }
+                ],
+                "linkedServices": [
+                    {
+                        "name": "ls_keyvault",
+                        "type": "AzureKeyVault"
+                    },
+                    {
+                        "name": "ls_storage_raw",
+                        "type": "AzureDataLakeStorage"
+                    },
+                    {
+                        "name": "ls_synapse",
+                        "type": "AzureSqlDW"
+                    }
+                ]
+            }
+        },
+        "dataExplorerConfig": {
+            "value": {
+                "skuName": "Standard_D11_v2",
+                "skuTier": "Standard",
+                "capacity": 2,
+                "enableDiskEncryption": true,
+                "enableStreamingIngest": true,
+                "enablePurge": true,
+                "enableDoubleEncryption": true,
+                "databases": [
+                    {
+                        "name": "tribalhealthanalytics",
+                        "hotCachePeriod": "P30D",
+                        "softDeletePeriod": "P2555D"
+                    }
+                ],
+                "enableAutoStop": false,
+                "enableAutoScale": true,
+                "minimumInstances": 2,
+                "maximumInstances": 10
+            }
+        },
+        "mlWorkspaceConfig": {
+            "value": {
+                "friendlyName": "Tribal Health Population Analytics ML (Gov)",
+                "description": "ML workspace for population health analytics - Government Cloud",
+                "enablePublicNetworkAccess": "Disabled",
+                "enableHbiWorkspace": true,
+                "computeInstances": [
+                    {
+                        "name": "chronic-disease-vm",
+                        "vmSize": "Standard_DS3_v2",
+                        "enableNodePublicIp": false
+                    }
+                ],
+                "datastores": [
+                    {
+                        "name": "clinical_data",
+                        "type": "AzureDataLakeGen2",
+                        "description": "Synthetic clinical datasets"
+                    }
+                ]
+            }
+        },
+        "monitoringConfig": {
+            "value": {
+                "enableApplicationInsights": true,
+                "enableLogAnalytics": true,
+                "retentionInDays": 2555,
+                "enableSecurityCenter": true,
+                "alertRules": [
+                    {
+                        "name": "Data Pipeline Failure",
+                        "severity": 1,
+                        "evaluationFrequency": "PT5M",
+                        "windowSize": "PT15M",
+                        "actionGroupName": "tribal-health-gov-alerts"
+                    },
+                    {
+                        "name": "PHI Access Anomaly",
+                        "severity": 0,
+                        "evaluationFrequency": "PT5M",
+                        "windowSize": "PT15M",
+                        "actionGroupName": "tribal-health-gov-alerts"
+                    },
+                    {
+                        "name": "Unauthorized Access Attempt",
+                        "severity": 0,
+                        "evaluationFrequency": "PT1M",
+                        "windowSize": "PT5M",
+                        "actionGroupName": "tribal-health-security-alerts"
+                    },
+                    {
+                        "name": "Data Exfiltration Alert",
+                        "severity": 0,
+                        "evaluationFrequency": "PT5M",
+                        "windowSize": "PT15M",
+                        "actionGroupName": "tribal-health-security-alerts"
+                    }
+                ],
+                "actionGroups": [
+                    {
+                        "name": "tribal-health-gov-alerts",
+                        "emailReceivers": [
+                            {
+                                "name": "TribalHealth Gov Data Team",
+                                "emailAddress": "tribal-health-gov-team@ihs.gov"
+                            }
+                        ]
+                    },
+                    {
+                        "name": "tribal-health-security-alerts",
+                        "emailReceivers": [
+                            {
+                                "name": "TribalHealth Security Operations",
+                                "emailAddress": "tribal-health-security@ihs.gov"
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        "networkingConfig": {
+            "value": {
+                "enablePrivateEndpoints": true,
+                "subnetName": "snet-tribal-analytics-gov",
+                "vnetName": "vnet-tribal-analytics-gov",
+                "vnetAddressPrefix": "10.105.0.0/16",
+                "subnetAddressPrefix": "10.105.1.0/24",
+                "enableNetworkSecurityGroup": true,
+                "allowedSourceIpRanges": [
+                    "192.168.130.0/24"
+                ],
+                "enableDdosProtection": true,
+                "enableBastionHost": true
+            }
+        },
+        "securityConfig": {
+            "value": {
+                "enableDefender": true,
+                "enableSentinel": true,
+                "enableKeyVaultFirewall": true,
+                "enableStorageFirewall": true,
+                "requireHttpsTrafficOnly": true,
+                "enableAuditLogs": true,
+                "enableAdvancedThreatProtection": true,
+                "dataClassification": {
+                    "enabled": true,
+                    "level": "CUI"
+                },
+                "encryptionAtRest": true,
+                "enablePrivateLink": true,
+                "enableCustomerManagedKeys": true,
+                "complianceStandards": [
+                    "FISMA",
+                    "NIST-800-53",
+                    "FedRAMP"
+                ],
+                "enableIdentityGovernance": true
+            }
+        },
+        "automationConfig": {
+            "value": {
+                "enableAutoShutdown": false,
+                "enableCostOptimization": true,
+                "enableResourceTagging": true,
+                "backupRetentionDays": 2555,
+                "enableDisasterRecovery": true,
+                "drRegion": "USGov Texas"
+            }
+        },
+        "dataGovernanceConfig": {
+            "value": {
+                "enablePurview": true,
+                "dataRetentionPolicies": [
+                    {
+                        "dataType": "Synthetic Clinical Data",
+                        "retentionDays": 2555,
+                        "complianceReason": "HIPAA - 45 CFR 164.530(j)"
+                    },
+                    {
+                        "dataType": "Patient Analytics",
+                        "retentionDays": 2555,
+                        "complianceReason": "Federal Records Act"
+                    },
+                    {
+                        "dataType": "Facility Metrics",
+                        "retentionDays": 2555,
+                        "complianceReason": "IHS Reporting Requirements"
+                    },
+                    {
+                        "dataType": "Audit Logs",
+                        "retentionDays": 2555,
+                        "complianceReason": "HIPAA Security Rule"
+                    }
+                ],
+                "enableDataLineage": true,
+                "enableDataQualityMonitoring": true,
+                "enableDataLossPrevention": true,
+                "piiDetection": true,
+                "enableDataEncryption": true
+            }
+        },
+        "complianceConfig": {
+            "value": {
+                "fismaLevel": "High",
+                "enableFedRAMP": true,
+                "fedRAMPBaseline": "High",
+                "enableSOC2": false,
+                "enableNIST": true,
+                "enableHIPAA": true,
+                "hipaaComplianceConfig": {
+                    "enablePHIEncryption": true,
+                    "enableAccessControls": true,
+                    "enableAuditControls": true,
+                    "enableTransmissionSecurity": true,
+                    "minimumRetentionYears": 6,
+                    "businessAssociateAgreement": true,
+                    "breachNotificationEnabled": true,
+                    "breachNotificationWindowHours": 60
+                },
+                "tribalDataSovereignty": {
+                    "enabled": true,
+                    "tribalConsultationRequired": true,
+                    "dataOwnership": "Tribal Nation",
+                    "dataSharingFramework": "IHS Tribal Data Sharing Agreement",
+                    "tribalApprovalRequired": true,
+                    "dataResidencyRestriction": "US Government Cloud Only",
+                    "repatriationPolicy": "Data must be returned to tribal ownership upon request",
+                    "consentManagement": {
+                        "enabled": true,
+                        "granularity": "individual",
+                        "withdrawalSupported": true
+                    }
+                },
+                "ihsDataSharingFramework": {
+                    "enabled": true,
+                    "agreementType": "IHS-Tribal Data Sharing MOU",
+                    "dataSharingLevels": [
+                        {
+                            "level": "aggregate",
+                            "approval": "automatic",
+                            "description": "De-identified aggregate statistics"
+                        },
+                        {
+                            "level": "facility",
+                            "approval": "facility-director",
+                            "description": "Facility-level operational data"
+                        },
+                        {
+                            "level": "patient",
+                            "approval": "tribal-council",
+                            "description": "Patient-level data requires tribal council approval"
+                        }
+                    ],
+                    "prohibitedUses": [
+                        "Commercial exploitation of tribal health data",
+                        "Research without tribal IRB approval",
+                        "Cross-tribal data linkage without consent"
+                    ]
+                },
+                "auditRetentionYears": 7,
+                "enableContinuousMonitoring": true,
+                "securityContactEmail": "tribal-health-security@ihs.gov",
+                "privacyContactEmail": "tribal-health-privacy@ihs.gov",
+                "hipaaPrivacyOfficer": "tribal-health-hipaa-officer@ihs.gov"
+            }
+        }
+    }
+}

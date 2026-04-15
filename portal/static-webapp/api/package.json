@@ -8,7 +8,9 @@
     "watch": "tsc -w",
     "start": "func start"
   },
-  "dependencies": {},
+  "dependencies": {
+    "node-fetch": "^3.3.0"
+  },
   "devDependencies": {
     "@azure/functions": "^4.5.0",
     "typescript": "^5.3.3"

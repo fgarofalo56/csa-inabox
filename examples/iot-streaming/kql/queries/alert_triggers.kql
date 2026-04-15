@@ -1,0 +1,142 @@
+// ═══════════════════════════════════════════════════════════════
+// Alert Triggers
+// Threshold-based alerting queries for operational monitoring
+// ═══════════════════════════════════════════════════════════════
+
+// ─── Temperature threshold alerts ────────────────────────────
+// Fires when any sensor exceeds configured temperature bounds.
+let temp_upper = 45.0;   // °C — adjust per deployment
+let temp_lower = -20.0;  // °C — adjust per deployment
+let lookback = 15m;
+SensorTelemetry
+| where timestamp > ago(lookback)
+| where temperature_c > temp_upper or temperature_c < temp_lower
+| project
+    alert_time = timestamp,
+    sensor_id,
+    sensor_type,
+    temperature_c,
+    threshold_violated = iff(temperature_c > temp_upper,
+        strcat("UPPER (", tostring(temp_upper), "°C)"),
+        strcat("LOWER (", tostring(temp_lower), "°C)")),
+    severity = iff(
+        abs(temperature_c - iff(temperature_c > temp_upper, temp_upper, temp_lower)) > 10,
+        "critical", "warning"),
+    latitude,
+    longitude
+| order by alert_time desc;
+
+// ─── AQI unhealthy alerts ────────────────────────────────────
+// Fires when AQI exceeds the "Unhealthy for Sensitive Groups" threshold.
+let aqi_warning_threshold = 100;
+let aqi_critical_threshold = 150;
+let lookback = 30m;
+AQIReadings
+| where timestamp > ago(lookback)
+| where aqi > aqi_warning_threshold
+| project
+    alert_time = timestamp,
+    sensor_id,
+    aqi,
+    aqi_category,
+    pm25_ugm3,
+    pm10_ugm3,
+    ozone_ppb,
+    no2_ppb,
+    severity = iff(aqi > aqi_critical_threshold, "critical", "warning"),
+    latitude,
+    longitude
+| order by aqi desc;
+
+// ─── Battery critical alerts ─────────────────────────────────
+// Fires when any sensor battery drops below 10%.
+let battery_warning = 20.0;
+let battery_critical = 10.0;
+SensorTelemetry
+| where timestamp > ago(1h)
+| summarize
+    latest_battery = arg_max(timestamp, battery_pct)
+    by sensor_id, sensor_type
+| extend
+    battery = latest_battery_battery_pct,
+    last_seen = latest_battery_timestamp
+| where battery < battery_warning
+| extend severity = iff(battery < battery_critical, "critical", "warning")
+| project
+    sensor_id,
+    sensor_type,
+    battery,
+    severity,
+    last_seen
+| order by battery asc;
+
+// ─── Wind speed alerts (weather stations) ────────────────────
+// Fires when wind speed exceeds storm thresholds.
+let gale_threshold = 17.2;  // m/s (Beaufort 8 — gale)
+let storm_threshold = 24.5; // m/s (Beaufort 10 — storm)
+let lookback = 15m;
+WeatherObservations
+| where timestamp > ago(lookback)
+| where wind_speed_ms > gale_threshold or wind_gust_ms > storm_threshold
+| project
+    alert_time = timestamp,
+    station_id,
+    wind_speed_ms,
+    wind_gust_ms,
+    wind_direction_deg,
+    severity = case(
+        wind_gust_ms > storm_threshold, "critical",
+        wind_speed_ms > storm_threshold, "critical",
+        "warning"
+    ),
+    latitude,
+    longitude,
+    elevation_m
+| order by wind_gust_ms desc;
+
+// ─── Casino hold percentage alerts ───────────────────────────
+// Fires when machine hold deviates significantly from expected range.
+let expected_hold_low = 4.0;    // Minimum expected hold %
+let expected_hold_high = 15.0;  // Maximum expected hold %
+let lookback = 1h;
+SlotEvents
+| where timestamp > ago(lookback)
+| summarize
+    total_coin_in = sum(coin_in),
+    total_coin_out = sum(coin_out),
+    spin_count = count()
+    by machine_id, floor_zone, game_theme
+| where spin_count > 50 // Need enough samples
+| extend hold_pct = round((total_coin_in - total_coin_out) / total_coin_in * 100, 2)
+| where hold_pct < expected_hold_low or hold_pct > expected_hold_high
+| extend
+    severity = iff(hold_pct < 0 or hold_pct > 20, "critical", "warning"),
+    alert_type = iff(hold_pct < expected_hold_low, "low_hold", "high_hold")
+| project
+    machine_id,
+    floor_zone,
+    game_theme,
+    hold_pct,
+    total_coin_in,
+    total_coin_out,
+    spin_count,
+    alert_type,
+    severity
+| order by abs(hold_pct - 8) desc; // Sort by deviation from ~8% expected
+
+// ─── Device offline alerts ───────────────────────────────────
+// Fires when devices have not reported within their expected interval.
+let expected_interval = 10m;
+SensorTelemetry
+| summarize last_seen = max(timestamp) by sensor_id, sensor_type
+| where last_seen < ago(expected_interval)
+| extend
+    minutes_offline = datetime_diff('minute', now(), last_seen),
+    severity = iff(datetime_diff('minute', now(), last_seen) > 60, "critical", "warning")
+| project
+    sensor_id,
+    sensor_type,
+    last_seen,
+    minutes_offline,
+    severity
+| order by minutes_offline desc;

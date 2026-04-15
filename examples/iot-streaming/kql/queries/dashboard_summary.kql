@@ -1,0 +1,125 @@
+// ═══════════════════════════════════════════════════════════════
+// Dashboard Summary
+// Top-level KPI queries for real-time monitoring dashboards
+// ═══════════════════════════════════════════════════════════════
+
+// ─── Fleet overview KPIs ─────────────────────────────────────
+// Single-row summary for dashboard header tiles.
+SensorTelemetry
+| summarize
+    total_sensors = dcount(sensor_id),
+    active_sensors_1h = dcountif(sensor_id, timestamp > ago(1h)),
+    total_readings_24h = countif(timestamp > ago(24h)),
+    readings_per_minute = round(
+        countif(timestamp > ago(1h)) / 60.0, 1
+    ),
+    avg_battery = round(avg(battery_pct), 1),
+    low_battery_count = dcountif(sensor_id, battery_pct < 20),
+    avg_temperature = round(avgif(temperature_c, timestamp > ago(1h)), 1)
+| extend
+    fleet_health_pct = round(todouble(active_sensors_1h) / total_sensors * 100, 1);
+
+// ─── Readings volume over time (for sparkline) ──────────────
+SensorTelemetry
+| where timestamp > ago(24h)
+| summarize readings = count() by bin(timestamp, 15m)
+| order by timestamp asc
+| render timechart;
+
+// ─── Sensor type distribution ────────────────────────────────
+SensorTelemetry
+| where timestamp > ago(24h)
+| summarize
+    sensor_count = dcount(sensor_id),
+    reading_count = count()
+    by sensor_type
+| order by reading_count desc
+| render piechart;
+
+// ─── Geographic heatmap data ─────────────────────────────────
+SensorTelemetry
+| where timestamp > ago(1h)
+| summarize
+    avg_temp = round(avg(temperature_c), 1),
+    latest_reading = max(timestamp),
+    reading_count = count()
+    by sensor_id, latitude, longitude
+| project
+    sensor_id,
+    latitude,
+    longitude,
+    avg_temp,
+    latest_reading,
+    reading_count;
+
+// ─── AQI dashboard summary ──────────────────────────────────
+AQIReadings
+| where timestamp > ago(1h)
+| summarize
+    total_sensors = dcount(sensor_id),
+    avg_aqi = round(avg(aqi), 0),
+    max_aqi = max(aqi),
+    good_count = dcountif(sensor_id, aqi <= 50),
+    moderate_count = dcountif(sensor_id, aqi > 50 and aqi <= 100),
+    unhealthy_count = dcountif(sensor_id, aqi > 100),
+    avg_pm25 = round(avg(pm25_ugm3), 1)
+| extend
+    overall_status = case(
+        max_aqi > 150, "Unhealthy",
+        max_aqi > 100, "Unhealthy for Sensitive Groups",
+        max_aqi > 50, "Moderate",
+        "Good"
+    );
+
+// ─── AQI trend by category ──────────────────────────────────
+AQIReadings
+| where timestamp > ago(24h)
+| summarize sensor_count = dcount(sensor_id) by aqi_category, bin(timestamp, 1h)
+| render areachart;
+
+// ─── Casino floor KPIs ──────────────────────────────────────
+SlotEvents
+| where timestamp > ago(1h)
+| summarize
+    active_machines = dcount(machine_id),
+    total_spins = count(),
+    total_coin_in = round(sum(coin_in), 2),
+    total_coin_out = round(sum(coin_out), 2),
+    net_revenue = round(sum(coin_in) - sum(coin_out), 2),
+    hold_pct = round((sum(coin_in) - sum(coin_out)) / sum(coin_in) * 100, 2),
+    jackpots = countif(event_type == "jackpot"),
+    avg_denomination = round(avg(denomination), 2);
+
+// ─── Casino floor revenue by zone ────────────────────────────
+SlotEvents
+| where timestamp > ago(4h)
+| summarize
+    revenue = round(sum(coin_in) - sum(coin_out), 2),
+    machines = dcount(machine_id),
+    spins = count()
+    by floor_zone, bin(timestamp, 30m)
+| render columnchart;
+
+// ─── Weather dashboard summary ──────────────────────────────
+WeatherObservations
+| where timestamp > ago(1h)
+| summarize
+    total_stations = dcount(station_id),
+    avg_temp = round(avg(temperature_c), 1),
+    max_wind = round(max(wind_gust_ms), 1),
+    total_precip = round(sum(precipitation_mm), 2),
+    avg_visibility = round(avg(visibility_km), 1),
+    avg_pressure = round(avg(pressure_hpa), 1),
+    min_pressure = round(min(pressure_hpa), 1)
+| extend
+    weather_alert = iff(max_wind > 20 or min_pressure < 995, "Storm Warning", "Normal");
+
+// ─── System throughput metrics ───────────────────────────────
+// Cross-table ingestion rate for monitoring dashboard.
+union
+    (SensorTelemetry | where timestamp > ago(1h) | summarize count = count() | extend table = "SensorTelemetry"),
+    (WeatherObservations | where timestamp > ago(1h) | summarize count = count() | extend table = "WeatherObservations"),
+    (AQIReadings | where timestamp > ago(1h) | summarize count = count() | extend table = "AQIReadings"),
+    (SlotEvents | where timestamp > ago(1h) | summarize count = count() | extend table = "SlotEvents")
+| project table, events_per_hour = count
+| extend events_per_second = round(todouble(events_per_hour) / 3600, 2);

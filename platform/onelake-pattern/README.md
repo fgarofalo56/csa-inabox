@@ -202,4 +202,4 @@ to move to Azure Government:
 See also:
 - `platform/direct-lake/` — Power BI Direct Lake equivalent
 - `platform/data-activator/` — Data Activator equivalent
-- `platform/data-marketplace/` — Data marketplace / product discovery
+- `platform/data_marketplace/` — Data marketplace / product discovery

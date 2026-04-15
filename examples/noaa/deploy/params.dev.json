@@ -1,0 +1,326 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "location": {
+            "value": "East US 2"
+        },
+        "environment": {
+            "value": "dev"
+        },
+        "prefix": {
+            "value": "noaa"
+        },
+        "workloadName": {
+            "value": "climate-weather-analytics"
+        },
+        "deployModules": {
+            "value": {
+                "cosmosDB": true,
+                "storageZones": true,
+                "externalStorage": false,
+                "synapse": true,
+                "functions": true,
+                "streamAnalytics": false,
+                "appInsights": true,
+                "privateEndpoints": true,
+                "genericStorage": false,
+                "selfHostedIR": false,
+                "dataExplorer": true,
+                "mlWorkspace": true
+            }
+        },
+        "privateDNSZones": {
+            "value": {
+                "subscriptionId": "[subscription().subscriptionId]",
+                "resourceGroupName": "rg-dns-zones"
+            }
+        },
+        "tags": {
+            "value": {
+                "Domain": "NOAA",
+                "Environment": "Development",
+                "WorkloadType": "Analytics",
+                "CostCenter": "NOAA-IT",
+                "Owner": "NOAA Data Engineering Team",
+                "Project": "Climate and Weather Analytics Platform"
+            }
+        },
+        "databricksConfig": {
+            "value": {
+                "pricingTier": "premium",
+                "enableNoPublicIp": true,
+                "skuName": "premium",
+                "customVirtualNetworkId": "",
+                "customPublicSubnetName": "",
+                "customPrivateSubnetName": "",
+                "enableAutomaticClusterTermination": true
+            }
+        },
+        "synapseConfig": {
+            "value": {
+                "sqlAdministratorLogin": "sqladmin",
+                "sqlAdministratorLoginPassword": "[parameters('sqlAdministratorPassword')]",
+                "allowedIpAddresses": [
+                    {
+                        "name": "NOAA-HQ",
+                        "startIpAddress": "192.168.4.0",
+                        "endIpAddress": "192.168.4.255"
+                    }
+                ],
+                "enableDataExfiltrationProtection": true,
+                "managedVirtualNetwork": "default",
+                "gitConfig": {
+                    "accountName": "NOAA-Analytics",
+                    "repositoryName": "noaa-climate-weather-analytics",
+                    "collaborationBranch": "main",
+                    "rootFolder": "/synapse"
+                }
+            }
+        },
+        "storageConfig": {
+            "value": {
+                "accountType": "Standard_LRS",
+                "accessTier": "Hot",
+                "supportsHttpsTrafficOnly": true,
+                "enableHierarchicalNamespace": true,
+                "containers": [
+                    {
+                        "name": "raw",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "bronze",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "silver",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "gold",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "exports",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "ghcnd-observations",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "storm-events",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "buoy-data",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "climate-normals",
+                        "publicAccess": "None"
+                    }
+                ]
+            }
+        },
+        "keyVaultConfig": {
+            "value": {
+                "enableRbacAuthorization": true,
+                "enableSoftDelete": true,
+                "softDeleteRetentionDays": 90,
+                "enablePurgeProtection": true,
+                "secrets": [
+                    {
+                        "name": "ncei-cdo-token",
+                        "description": "NOAA NCEI Climate Data Online API token"
+                    },
+                    {
+                        "name": "coops-app-key",
+                        "description": "NOAA CO-OPS Tides and Currents application key"
+                    },
+                    {
+                        "name": "sql-administrator-password",
+                        "description": "SQL administrator password for Synapse"
+                    }
+                ]
+            }
+        },
+        "dataFactoryConfig": {
+            "value": {
+                "publicNetworkAccess": "Enabled",
+                "gitConfig": {
+                    "accountName": "NOAA-Analytics",
+                    "repositoryName": "noaa-climate-weather-analytics",
+                    "collaborationBranch": "main",
+                    "rootFolder": "/datafactory"
+                },
+                "integrationRuntimes": [
+                    {
+                        "name": "AutoResolveIntegrationRuntime",
+                        "type": "Managed",
+                        "location": "AutoResolve"
+                    }
+                ],
+                "linkedServices": [
+                    {
+                        "name": "ls_keyvault",
+                        "type": "AzureKeyVault"
+                    },
+                    {
+                        "name": "ls_storage_raw",
+                        "type": "AzureDataLakeStorage"
+                    },
+                    {
+                        "name": "ls_synapse",
+                        "type": "AzureSqlDW"
+                    },
+                    {
+                        "name": "ls_ncei_cdo",
+                        "type": "RestService",
+                        "baseUrl": "https://www.ncei.noaa.gov/cdo-web/api/v2/"
+                    },
+                    {
+                        "name": "ls_coops_api",
+                        "type": "RestService",
+                        "baseUrl": "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter"
+                    }
+                ]
+            }
+        },
+        "dataExplorerConfig": {
+            "value": {
+                "skuName": "Dev(No SLA)_Standard_D11_v2",
+                "skuTier": "Basic",
+                "capacity": 1,
+                "enableDiskEncryption": false,
+                "enableStreamingIngest": true,
+                "enablePurge": true,
+                "databases": [
+                    {
+                        "name": "noaaanalytics",
+                        "hotCachePeriod": "P7D",
+                        "softDeletePeriod": "P365D"
+                    }
+                ],
+                "enableAutoStop": true,
+                "enableAutoScale": false
+            }
+        },
+        "mlWorkspaceConfig": {
+            "value": {
+                "friendlyName": "NOAA Climate and Weather ML",
+                "description": "Machine learning workspace for severe weather prediction and climate trend analytics",
+                "enablePublicNetworkAccess": "Enabled",
+                "computeInstances": [
+                    {
+                        "name": "weather-prediction-vm",
+                        "vmSize": "Standard_DS3_v2",
+                        "enableNodePublicIp": false
+                    }
+                ],
+                "datastores": [
+                    {
+                        "name": "climate_data",
+                        "type": "AzureDataLakeGen2",
+                        "description": "Primary climate and weather datasets"
+                    }
+                ]
+            }
+        },
+        "monitoringConfig": {
+            "value": {
+                "enableApplicationInsights": true,
+                "enableLogAnalytics": true,
+                "retentionInDays": 90,
+                "alertRules": [
+                    {
+                        "name": "Weather Data Pipeline Failure",
+                        "severity": 2,
+                        "evaluationFrequency": "PT5M",
+                        "windowSize": "PT15M",
+                        "actionGroupName": "noaa-alerts"
+                    },
+                    {
+                        "name": "Severe Weather Event Alert",
+                        "severity": 1,
+                        "evaluationFrequency": "PT1H",
+                        "windowSize": "PT1H",
+                        "actionGroupName": "noaa-alerts"
+                    }
+                ],
+                "actionGroups": [
+                    {
+                        "name": "noaa-alerts",
+                        "emailReceivers": [
+                            {
+                                "name": "NOAA Data Team",
+                                "emailAddress": "noaa-data-team@contoso.com"
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        "networkingConfig": {
+            "value": {
+                "enablePrivateEndpoints": true,
+                "subnetName": "snet-noaa-analytics",
+                "vnetName": "vnet-noaa-analytics",
+                "vnetAddressPrefix": "10.5.0.0/16",
+                "subnetAddressPrefix": "10.5.1.0/24",
+                "enableNetworkSecurityGroup": true,
+                "allowedSourceIpRanges": [
+                    "192.168.4.0/24",
+                    "10.0.0.0/8"
+                ]
+            }
+        },
+        "securityConfig": {
+            "value": {
+                "enableDefender": true,
+                "enableKeyVaultFirewall": true,
+                "enableStorageFirewall": true,
+                "requireHttpsTrafficOnly": true,
+                "enableAuditLogs": true,
+                "dataClassification": {
+                    "enabled": true,
+                    "level": "Sensitive"
+                },
+                "encryptionAtRest": true,
+                "enablePrivateLink": true
+            }
+        },
+        "automationConfig": {
+            "value": {
+                "enableAutoShutdown": true,
+                "autoShutdownTime": "19:00",
+                "autoShutdownTimeZone": "Eastern Standard Time",
+                "enableCostOptimization": true,
+                "enableResourceTagging": true,
+                "backupRetentionDays": 30
+            }
+        },
+        "dataGovernanceConfig": {
+            "value": {
+                "enablePurview": false,
+                "dataRetentionPolicies": [
+                    {
+                        "dataType": "Raw GHCND Observations",
+                        "retentionDays": 2555
+                    },
+                    {
+                        "dataType": "Processed Climate Analytics",
+                        "retentionDays": 1825
+                    },
+                    {
+                        "dataType": "Audit Logs",
+                        "retentionDays": 2190
+                    }
+                ],
+                "enableDataLineage": true,
+                "enableDataQualityMonitoring": true
+            }
+        }
+    }
+}

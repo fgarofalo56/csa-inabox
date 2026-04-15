@@ -1,0 +1,440 @@
+# =============================================================================
+# Azure Video Analyzer Pipeline Configuration
+# Casino Analytics - Crowd Density & Floor Monitoring
+#
+# This configuration defines video analytics pipelines for:
+#   1. Crowd density estimation at key floor zones
+#   2. Queue length monitoring at cage/cashier windows
+#   3. Table occupancy detection
+#   4. Emergency evacuation zone monitoring
+#
+# Architecture:
+#   RTSP Camera Feed → Video Analyzer Edge Module → IoT Hub → Event Hub → ADX
+#
+# Prerequisites:
+#   - Azure Video Analyzer resource provisioned
+#   - IoT Edge runtime on floor gateway devices
+#   - RTSP-compatible IP cameras on casino network
+#   - Custom Vision model deployed (see custom_vision_setup.py)
+# =============================================================================
+
+apiVersion: "1.0"
+kind: VideoAnalyzerPipelineConfig
+metadata:
+  name: casino-floor-analytics
+  namespace: casino-analytics
+  labels:
+    domain: casino-analytics
+    workload: video-analytics
+    compliance: NIGC
+    data-classification: proprietary
+
+# =============================================================================
+# Pipeline Topologies
+# =============================================================================
+pipelineTopologies:
+
+  # ---------------------------------------------------------------------------
+  # 1. Crowd Density Estimation Pipeline
+  # ---------------------------------------------------------------------------
+  - name: crowd-density-pipeline
+    description: >
+      Estimates crowd density across casino floor zones using spatial analysis.
+      Outputs density classification (low/medium/high/critical) per zone.
+    properties:
+      kind: live
+      parameters:
+        - name: rtspUrl
+          type: string
+          description: RTSP stream URL from floor camera
+        - name: rtspUsername
+          type: string
+          description: Camera authentication username
+        - name: rtspPassword
+          type: secretstring
+          description: Camera authentication password
+        - name: floorZone
+          type: string
+          description: Floor zone identifier (e.g., Main Floor A)
+        - name: cameraId
+          type: string
+          description: Camera identifier for tracking
+        - name: inferenceUrl
+          type: string
+          default: http://custom-vision-server:80/score
+          description: Custom Vision inference endpoint
+        - name: confidenceThreshold
+          type: double
+          default: "0.65"
+          description: Minimum detection confidence
+        - name: frameRate
+          type: int
+          default: "5"
+          description: Frames per second to process
+
+      sources:
+        - name: rtspSource
+          type: "#Microsoft.VideoAnalyzer.RtspSource"
+          transport: tcp
+          endpoint:
+            type: "#Microsoft.VideoAnalyzer.UnsecuredEndpoint"
+            url: "${rtspUrl}"
+            credentials:
+              type: "#Microsoft.VideoAnalyzer.UsernamePasswordCredentials"
+              username: "${rtspUsername}"
+              password: "${rtspPassword}"
+
+      processors:
+        - name: frameRateFilter
+          type: "#Microsoft.VideoAnalyzer.FrameRateFilterProcessor"
+          inputs:
+            - nodeName: rtspSource
+          maximumFps: "${frameRate}"
+
+        - name: crowdDensityInference
+          type: "#Microsoft.VideoAnalyzer.HttpExtension"
+          inputs:
+            - nodeName: frameRateFilter
+          endpoint:
+            type: "#Microsoft.VideoAnalyzer.UnsecuredEndpoint"
+            url: "${inferenceUrl}"
+          image:
+            format:
+              type: "#Microsoft.VideoAnalyzer.ImageFormatJpeg"
+              quality: "80"
+            scale:
+              mode: preserveAspectRatio
+              width: "640"
+              height: "480"
+          samplingOptions:
+            skipSamplesWithoutAnnotation: false
+            maximumSamplesPerSecond: "${frameRate}"
+
+        - name: densityClassifier
+          type: "#Microsoft.VideoAnalyzer.SignalGateProcessor"
+          inputs:
+            - nodeName: crowdDensityInference
+          activationEvaluationWindow: PT10S
+          activationSignalOffset: PT0S
+          minimumActivationTime: PT5S
+          maximumActivationTime: PT60S
+
+      sinks:
+        - name: iotHubSink
+          type: "#Microsoft.VideoAnalyzer.IotHubMessageSink"
+          inputs:
+            - nodeName: crowdDensityInference
+          hubOutputName: crowd-density-events
+          properties:
+            floorZone: "${floorZone}"
+            cameraId: "${cameraId}"
+            pipelineType: crowd-density
+
+        - name: videoSink
+          type: "#Microsoft.VideoAnalyzer.VideoSink"
+          inputs:
+            - nodeName: densityClassifier
+              outputSelectors:
+                - property: mediaType
+                  operator: is
+                  value: video
+          videoName: "crowd-density-${floorZone}"
+          videoCreationProperties:
+            title: "Crowd Density - ${floorZone}"
+            description: "Crowd density monitoring for ${floorZone}"
+            segmentLength: PT30S
+          localMediaCachePath: /var/lib/videoanalyzer/tmp/
+          localMediaCacheMaximumSizeMiB: "2048"
+
+  # ---------------------------------------------------------------------------
+  # 2. Queue Monitoring Pipeline
+  # ---------------------------------------------------------------------------
+  - name: queue-monitoring-pipeline
+    description: >
+      Monitors queue length at cage windows, cashier stations, and
+      restaurant host stands. Triggers alerts when queue exceeds thresholds.
+    properties:
+      kind: live
+      parameters:
+        - name: rtspUrl
+          type: string
+        - name: rtspUsername
+          type: string
+        - name: rtspPassword
+          type: secretstring
+        - name: locationId
+          type: string
+          description: Queue location identifier
+        - name: locationType
+          type: string
+          description: "cage | cashier | restaurant | valet"
+        - name: maxQueueThreshold
+          type: int
+          default: "10"
+          description: Queue length alert threshold
+        - name: inferenceUrl
+          type: string
+          default: http://custom-vision-server:80/score
+
+      sources:
+        - name: rtspSource
+          type: "#Microsoft.VideoAnalyzer.RtspSource"
+          transport: tcp
+          endpoint:
+            type: "#Microsoft.VideoAnalyzer.UnsecuredEndpoint"
+            url: "${rtspUrl}"
+            credentials:
+              type: "#Microsoft.VideoAnalyzer.UsernamePasswordCredentials"
+              username: "${rtspUsername}"
+              password: "${rtspPassword}"
+
+      processors:
+        - name: frameRateFilter
+          type: "#Microsoft.VideoAnalyzer.FrameRateFilterProcessor"
+          inputs:
+            - nodeName: rtspSource
+          maximumFps: 2
+
+        - name: queueDetection
+          type: "#Microsoft.VideoAnalyzer.HttpExtension"
+          inputs:
+            - nodeName: frameRateFilter
+          endpoint:
+            type: "#Microsoft.VideoAnalyzer.UnsecuredEndpoint"
+            url: "${inferenceUrl}"
+          image:
+            format:
+              type: "#Microsoft.VideoAnalyzer.ImageFormatJpeg"
+              quality: "80"
+            scale:
+              mode: preserveAspectRatio
+              width: "640"
+              height: "480"
+
+      sinks:
+        - name: iotHubSink
+          type: "#Microsoft.VideoAnalyzer.IotHubMessageSink"
+          inputs:
+            - nodeName: queueDetection
+          hubOutputName: queue-events
+          properties:
+            locationId: "${locationId}"
+            locationType: "${locationType}"
+            maxQueueThreshold: "${maxQueueThreshold}"
+
+  # ---------------------------------------------------------------------------
+  # 3. Table Occupancy Pipeline
+  # ---------------------------------------------------------------------------
+  - name: table-occupancy-pipeline
+    description: >
+      Detects table game occupancy status (empty, partial, full) for
+      real-time floor management and dealer staffing optimization.
+    properties:
+      kind: live
+      parameters:
+        - name: rtspUrl
+          type: string
+        - name: rtspUsername
+          type: string
+        - name: rtspPassword
+          type: secretstring
+        - name: tableId
+          type: string
+        - name: gameType
+          type: string
+          description: "blackjack | roulette | craps | poker | baccarat"
+        - name: maxSeats
+          type: int
+          default: "7"
+        - name: inferenceUrl
+          type: string
+          default: http://custom-vision-server:80/score
+
+      sources:
+        - name: rtspSource
+          type: "#Microsoft.VideoAnalyzer.RtspSource"
+          transport: tcp
+          endpoint:
+            type: "#Microsoft.VideoAnalyzer.UnsecuredEndpoint"
+            url: "${rtspUrl}"
+            credentials:
+              type: "#Microsoft.VideoAnalyzer.UsernamePasswordCredentials"
+              username: "${rtspUsername}"
+              password: "${rtspPassword}"
+
+      processors:
+        - name: frameRateFilter
+          type: "#Microsoft.VideoAnalyzer.FrameRateFilterProcessor"
+          inputs:
+            - nodeName: rtspSource
+          maximumFps: 1
+
+        - name: occupancyDetection
+          type: "#Microsoft.VideoAnalyzer.HttpExtension"
+          inputs:
+            - nodeName: frameRateFilter
+          endpoint:
+            type: "#Microsoft.VideoAnalyzer.UnsecuredEndpoint"
+            url: "${inferenceUrl}"
+          image:
+            format:
+              type: "#Microsoft.VideoAnalyzer.ImageFormatJpeg"
+              quality: "80"
+            scale:
+              mode: preserveAspectRatio
+              width: "640"
+              height: "480"
+
+      sinks:
+        - name: iotHubSink
+          type: "#Microsoft.VideoAnalyzer.IotHubMessageSink"
+          inputs:
+            - nodeName: occupancyDetection
+          hubOutputName: table-occupancy-events
+          properties:
+            tableId: "${tableId}"
+            gameType: "${gameType}"
+            maxSeats: "${maxSeats}"
+
+# =============================================================================
+# Live Pipeline Instances
+# =============================================================================
+livePipelines:
+
+  # Main Floor cameras
+  - name: crowd-main-floor-a
+    topologyName: crowd-density-pipeline
+    parameters:
+      - name: rtspUrl
+        value: "rtsp://cam-mfa-01.casino.local:554/stream1"
+      - name: rtspUsername
+        value: "analytics"
+      - name: rtspPassword
+        value: "${CAMERA_PASSWORD}"
+      - name: floorZone
+        value: "Main Floor A"
+      - name: cameraId
+        value: "CAM-MFA-01"
+
+  - name: crowd-main-floor-b
+    topologyName: crowd-density-pipeline
+    parameters:
+      - name: rtspUrl
+        value: "rtsp://cam-mfb-01.casino.local:554/stream1"
+      - name: rtspUsername
+        value: "analytics"
+      - name: rtspPassword
+        value: "${CAMERA_PASSWORD}"
+      - name: floorZone
+        value: "Main Floor B"
+      - name: cameraId
+        value: "CAM-MFB-01"
+
+  - name: crowd-high-limit
+    topologyName: crowd-density-pipeline
+    parameters:
+      - name: rtspUrl
+        value: "rtsp://cam-hlr-01.casino.local:554/stream1"
+      - name: rtspUsername
+        value: "analytics"
+      - name: rtspPassword
+        value: "${CAMERA_PASSWORD}"
+      - name: floorZone
+        value: "High Limit Room"
+      - name: cameraId
+        value: "CAM-HLR-01"
+
+  # Queue monitoring
+  - name: queue-main-cage
+    topologyName: queue-monitoring-pipeline
+    parameters:
+      - name: rtspUrl
+        value: "rtsp://cam-cage-01.casino.local:554/stream1"
+      - name: rtspUsername
+        value: "analytics"
+      - name: rtspPassword
+        value: "${CAMERA_PASSWORD}"
+      - name: locationId
+        value: "CAGE-MAIN"
+      - name: locationType
+        value: "cage"
+      - name: maxQueueThreshold
+        value: "8"
+
+  - name: queue-vip-cage
+    topologyName: queue-monitoring-pipeline
+    parameters:
+      - name: rtspUrl
+        value: "rtsp://cam-cage-vip.casino.local:554/stream1"
+      - name: rtspUsername
+        value: "analytics"
+      - name: rtspPassword
+        value: "${CAMERA_PASSWORD}"
+      - name: locationId
+        value: "CAGE-VIP"
+      - name: locationType
+        value: "cage"
+      - name: maxQueueThreshold
+        value: "3"
+
+# =============================================================================
+# IoT Edge Deployment Configuration
+# =============================================================================
+edgeDeployment:
+  moduleName: videoAnalyzerModule
+  createOptions:
+    HostConfig:
+      Binds:
+        - "/var/lib/videoanalyzer/tmp/:/var/lib/videoanalyzer/tmp/"
+        - "/var/media/:/var/media/"
+      IpcMode: host
+      ShmSize: 1610612736  # 1.5 GB shared memory
+    NetworkingConfig:
+      EndpointsConfig:
+        camera-network:
+          IPAMConfig:
+            IPv4Address: "172.20.0.10"
+  env:
+    APPDATA_FOLDER:
+      value: "/var/lib/videoanalyzer/"
+    SUBSCRIPTION_ID:
+      value: "${AZURE_SUBSCRIPTION_ID}"
+    RESOURCE_GROUP:
+      value: "${RESOURCE_GROUP}"
+    AVA_ACCOUNT:
+      value: "${VIDEO_ANALYZER_ACCOUNT}"
+
+# =============================================================================
+# Alert Configuration
+# =============================================================================
+alerts:
+  crowdDensity:
+    critical:
+      threshold: 0.90  # 90% of max capacity
+      action: "notify-security-ops"
+      cooldownMinutes: 5
+    high:
+      threshold: 0.75
+      action: "notify-floor-manager"
+      cooldownMinutes: 15
+    medium:
+      threshold: 0.50
+      action: "log-only"
+
+  queueLength:
+    critical:
+      threshold: 15
+      action: "notify-operations"
+      cooldownMinutes: 5
+    warning:
+      threshold: 10
+      action: "notify-floor-manager"
+      cooldownMinutes: 10
+
+  systemHealth:
+    cameraOffline:
+      timeoutSeconds: 60
+      action: "notify-it-ops"
+    inferenceLatency:
+      maxLatencyMs: 2000
+      action: "notify-it-ops"

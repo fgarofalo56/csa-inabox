@@ -1,0 +1,206 @@
+{{- if .Values.ranger.enabled }}
+# ──────────────────────────────────────────────────────────────────────
+# Apache Ranger — Fine-Grained Access Control
+# Provides centralized security policy administration and enforcement
+# for Trino, Hive, and ADLS Gen2 data access.
+# ──────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "csa-oss.fullname" . }}-ranger-admin
+  labels:
+    {{- include "csa-oss.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ranger-admin
+spec:
+  replicas: {{ .Values.ranger.admin.replicas }}
+  selector:
+    matchLabels:
+      {{- include "csa-oss.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: ranger-admin
+  template:
+    metadata:
+      labels:
+        {{- include "csa-oss.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: ranger-admin
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/ranger.yaml") . | sha256sum | trunc 16 }}
+    spec:
+      initContainers:
+        - name: wait-for-db
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z {{ include "csa-oss.fullname" . }}-postgresql 5432; do
+                echo "Waiting for PostgreSQL..."
+                sleep 5
+              done
+      containers:
+        - name: ranger-admin
+          image: "{{ .Values.ranger.admin.image.repository }}:{{ .Values.ranger.admin.image.tag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: 6080
+              protocol: TCP
+          env:
+            - name: RANGER_ADMIN_DB_HOST
+              value: "{{ include "csa-oss.fullname" . }}-postgresql"
+            - name: RANGER_ADMIN_DB_NAME
+              value: "ranger"
+            - name: RANGER_ADMIN_DB_USER
+              value: "ranger"
+            - name: RANGER_ADMIN_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "csa-oss.fullname" . }}-ranger-db
+                  key: password
+            - name: RANGER_AUDIT_SOLR_URLS
+              value: "http://{{ include "csa-oss.fullname" . }}-atlas-solr:8983/solr/ranger_audits"
+            - name: JAVA_OPTS
+              value: "-Xmx1536m -Xms512m"
+          resources:
+            {{- toYaml .Values.ranger.admin.resources | nindent 12 }}
+          volumeMounts:
+            - name: ranger-site-config
+              mountPath: /opt/ranger/admin/conf/ranger-admin-site.xml
+              subPath: ranger-admin-site.xml
+            - name: ranger-policy-store
+              mountPath: /opt/ranger/admin/policy-store
+          readinessProbe:
+            httpGet:
+              path: /login.jsp
+              port: 6080
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /login.jsp
+              port: 6080
+            initialDelaySeconds: 120
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 5
+      volumes:
+        - name: ranger-site-config
+          configMap:
+            name: {{ include "csa-oss.fullname" . }}-ranger-config
+        - name: ranger-policy-store
+          persistentVolumeClaim:
+            claimName: {{ include "csa-oss.fullname" . }}-ranger-policy-store
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "csa-oss.fullname" . }}-ranger
+  labels:
+    {{- include "csa-oss.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ranger-admin
+spec:
+  type: {{ .Values.ranger.admin.service.type }}
+  ports:
+    - port: {{ .Values.ranger.admin.service.port }}
+      targetPort: 6080
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "csa-oss.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: ranger-admin
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "csa-oss.fullname" . }}-ranger-config
+  labels:
+    {{- include "csa-oss.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ranger-admin
+data:
+  ranger-admin-site.xml: |
+    <?xml version="1.0" encoding="UTF-8"?>
+    <configuration>
+      <!-- Database Configuration -->
+      <property>
+        <name>ranger.jpa.jdbc.driver</name>
+        <value>org.postgresql.Driver</value>
+      </property>
+      <property>
+        <name>ranger.jpa.jdbc.url</name>
+        <value>jdbc:postgresql://{{ include "csa-oss.fullname" . }}-postgresql:5432/ranger</value>
+      </property>
+
+      <!-- Authentication Configuration (LDAP/AD) -->
+      <property>
+        <name>ranger.authentication.method</name>
+        <value>ACTIVE_DIRECTORY</value>
+      </property>
+      <property>
+        <name>ranger.ldap.ad.domain</name>
+        <value></value>
+      </property>
+      <property>
+        <name>ranger.ldap.ad.url</name>
+        <value></value>
+      </property>
+      <property>
+        <name>ranger.ldap.ad.base.dn</name>
+        <value></value>
+      </property>
+      <property>
+        <name>ranger.ldap.ad.bind.dn</name>
+        <value></value>
+      </property>
+      <property>
+        <name>ranger.ldap.ad.referral</name>
+        <value>ignore</value>
+      </property>
+
+      <!-- Audit Logging -->
+      <property>
+        <name>ranger.audit.solr.urls</name>
+        <value>http://{{ include "csa-oss.fullname" . }}-atlas-solr:8983/solr/ranger_audits</value>
+      </property>
+      <property>
+        <name>ranger.audit.source.type</name>
+        <value>solr</value>
+      </property>
+
+      <!-- Security -->
+      <property>
+        <name>ranger.service.https.attrib.ssl.enabled</name>
+        <value>false</value>
+      </property>
+      <property>
+        <name>ranger.externalurl</name>
+        <value>http://{{ include "csa-oss.fullname" . }}-ranger:6080</value>
+      </property>
+
+      <!-- Trino Plugin Service -->
+      <property>
+        <name>ranger.plugins.trino.serviceType</name>
+        <value>trino</value>
+      </property>
+
+      <!-- Password Policies -->
+      <property>
+        <name>ranger.password.min.length</name>
+        <value>12</value>
+      </property>
+    </configuration>
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "csa-oss.fullname" . }}-ranger-policy-store
+  labels:
+    {{- include "csa-oss.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ranger-admin
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: managed-csi
+  resources:
+    requests:
+      storage: 5Gi
+{{- end }}

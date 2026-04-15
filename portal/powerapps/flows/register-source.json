@@ -1,0 +1,97 @@
+{
+  "properties": {
+    "displayName": "CSA Portal - Register Data Source",
+    "description": "Triggered when a user submits a new data source registration in the PowerApps portal. Validates the input, creates the record via the shared backend API, and sends a confirmation.",
+    "definition": {
+      "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+      "contentVersion": "1.0.0.0",
+      "triggers": {
+        "PowerApps_Trigger": {
+          "type": "Request",
+          "kind": "PowerApp",
+          "inputs": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "sourceName": { "type": "string", "title": "Source Name" },
+                "sourceType": { "type": "string", "title": "Source Type" },
+                "domain": { "type": "string", "title": "Domain" },
+                "description": { "type": "string", "title": "Description" },
+                "classification": { "type": "string", "title": "Classification" },
+                "ownerName": { "type": "string", "title": "Owner Name" },
+                "ownerEmail": { "type": "string", "title": "Owner Email" },
+                "ownerTeam": { "type": "string", "title": "Owner Team" }
+              },
+              "required": ["sourceName", "sourceType", "domain", "ownerEmail"]
+            }
+          }
+        }
+      },
+      "actions": {
+        "Validate_Input": {
+          "type": "Compose",
+          "runAfter": {},
+          "inputs": {
+            "isValid": "@and(greater(length(triggerBody()?['sourceName']), 0), greater(length(triggerBody()?['sourceType']), 0))"
+          }
+        },
+        "Call_Backend_API": {
+          "type": "Http",
+          "runAfter": { "Validate_Input": ["Succeeded"] },
+          "inputs": {
+            "method": "POST",
+            "uri": "@{parameters('backendApiUrl')}/api/v1/sources",
+            "headers": { "Content-Type": "application/json" },
+            "body": {
+              "name": "@triggerBody()?['sourceName']",
+              "source_type": "@triggerBody()?['sourceType']",
+              "domain": "@triggerBody()?['domain']",
+              "description": "@coalesce(triggerBody()?['description'], '')",
+              "classification": "@coalesce(triggerBody()?['classification'], 'internal')",
+              "connection": {},
+              "owner": {
+                "name": "@triggerBody()?['ownerName']",
+                "email": "@triggerBody()?['ownerEmail']",
+                "team": "@coalesce(triggerBody()?['ownerTeam'], 'Unassigned')"
+              }
+            }
+          }
+        },
+        "Parse_Response": {
+          "type": "ParseJson",
+          "runAfter": { "Call_Backend_API": ["Succeeded"] },
+          "inputs": {
+            "content": "@body('Call_Backend_API')",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string" },
+                "status": { "type": "string" },
+                "name": { "type": "string" }
+              }
+            }
+          }
+        },
+        "Respond_to_PowerApps": {
+          "type": "Response",
+          "runAfter": { "Parse_Response": ["Succeeded"] },
+          "inputs": {
+            "statusCode": 200,
+            "body": {
+              "sourceId": "@body('Parse_Response')?['id']",
+              "status": "@body('Parse_Response')?['status']",
+              "message": "Source registered successfully."
+            }
+          }
+        }
+      },
+      "parameters": {
+        "backendApiUrl": {
+          "defaultValue": "http://localhost:8000",
+          "type": "String"
+        }
+      }
+    },
+    "state": "Started"
+  }
+}

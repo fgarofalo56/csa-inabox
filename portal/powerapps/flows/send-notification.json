@@ -1,0 +1,102 @@
+{
+  "properties": {
+    "displayName": "CSA Portal - Send Notification",
+    "description": "Generic notification flow triggered by other flows or Power Apps. Sends Teams adaptive card notifications and optional email alerts for important portal events.",
+    "definition": {
+      "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+      "contentVersion": "1.0.0.0",
+      "triggers": {
+        "PowerApps_Trigger": {
+          "type": "Request",
+          "kind": "PowerApp",
+          "inputs": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "title": { "type": "string", "title": "Notification Title" },
+                "message": { "type": "string", "title": "Notification Message" },
+                "severity": { "type": "string", "title": "Severity (info|warning|critical)" },
+                "recipientEmail": { "type": "string", "title": "Recipient Email" },
+                "linkUrl": { "type": "string", "title": "Link URL" },
+                "linkText": { "type": "string", "title": "Link Text" }
+              },
+              "required": ["title", "message"]
+            }
+          }
+        }
+      },
+      "actions": {
+        "Initialize_Severity": {
+          "type": "InitializeVariable",
+          "runAfter": {},
+          "inputs": {
+            "variables": [
+              {
+                "name": "severityLevel",
+                "type": "string",
+                "value": "@coalesce(triggerBody()?['severity'], 'info')"
+              }
+            ]
+          }
+        },
+        "Post_Teams_Message": {
+          "type": "OpenApiConnection",
+          "runAfter": { "Initialize_Severity": ["Succeeded"] },
+          "inputs": {
+            "host": { "apiId": "shared_teams", "operationId": "PostCardToConversation" },
+            "parameters": {
+              "poster": "CSA-in-a-Box Portal",
+              "location": "Channel",
+              "body/recipient/groupId": "@parameters('teamsGroupId')",
+              "body/recipient/channelId": "@parameters('teamsChannelId')",
+              "body/messageBody": "@{triggerBody()?['title']}\n\n@{triggerBody()?['message']}\n\nSeverity: @{variables('severityLevel')}"
+            }
+          }
+        },
+        "Condition_Send_Email": {
+          "type": "If",
+          "runAfter": { "Post_Teams_Message": ["Succeeded", "Failed"] },
+          "expression": {
+            "or": [
+              { "equals": ["@variables('severityLevel')", "critical"] },
+              { "not": { "equals": ["@coalesce(triggerBody()?['recipientEmail'], '')", ""] } }
+            ]
+          },
+          "actions": {
+            "Send_Email_Notification": {
+              "type": "OpenApiConnection",
+              "inputs": {
+                "host": { "apiId": "shared_office365", "operationId": "SendEmailV2" },
+                "parameters": {
+                  "emailMessage/To": "@coalesce(triggerBody()?['recipientEmail'], parameters('fallbackEmail'))",
+                  "emailMessage/Subject": "@{if(equals(variables('severityLevel'), 'critical'), 'CRITICAL: ', '')}CSA Portal: @{triggerBody()?['title']}",
+                  "emailMessage/Body": "<h2>@{triggerBody()?['title']}</h2><p>@{triggerBody()?['message']}</p><p>Severity: <strong>@{variables('severityLevel')}</strong></p>@{if(not(equals(coalesce(triggerBody()?['linkUrl'], ''), '')), concat('<p><a href=\"', triggerBody()?['linkUrl'], '\">', coalesce(triggerBody()?['linkText'], 'View Details'), '</a></p>'), '')}",
+                  "emailMessage/Importance": "@{if(equals(variables('severityLevel'), 'critical'), 'High', 'Normal')}"
+                }
+              }
+            }
+          },
+          "else": { "actions": {} }
+        },
+        "Respond_to_PowerApps": {
+          "type": "Response",
+          "runAfter": { "Condition_Send_Email": ["Succeeded"] },
+          "inputs": {
+            "statusCode": 200,
+            "body": {
+              "sent": true,
+              "channels": "@{if(equals(variables('severityLevel'), 'critical'), 'teams,email', 'teams')}",
+              "message": "Notification sent successfully."
+            }
+          }
+        }
+      },
+      "parameters": {
+        "teamsGroupId": { "defaultValue": "", "type": "String" },
+        "teamsChannelId": { "defaultValue": "", "type": "String" },
+        "fallbackEmail": { "defaultValue": "platform-team@contoso.com", "type": "String" }
+      }
+    },
+    "state": "Started"
+  }
+}

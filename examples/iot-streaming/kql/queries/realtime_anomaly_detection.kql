@@ -1,0 +1,93 @@
+// ═══════════════════════════════════════════════════════════════
+// Real-Time Anomaly Detection
+// Detect sensor anomalies using time-series analysis in ADX
+// ═══════════════════════════════════════════════════════════════
+
+// ─── Temperature anomaly detection using series_decompose_anomalies ──
+// Identifies readings that deviate significantly from the expected
+// seasonal + trend pattern over the past 24 hours.
+let anomaly_window = 24h;
+let sensitivity = 1.5; // Lower = more sensitive
+SensorTelemetry
+| where timestamp > ago(anomaly_window)
+| make-series avg_temp = avg(temperature_c) on timestamp
+    from ago(anomaly_window) to now() step 5m
+    by sensor_id
+| extend (anomalies, score, baseline) =
+    series_decompose_anomalies(avg_temp, sensitivity)
+| mv-expand
+    timestamp to typeof(datetime),
+    avg_temp to typeof(real),
+    anomalies to typeof(int),
+    score to typeof(real),
+    baseline to typeof(real)
+| where anomalies != 0
+| project
+    timestamp,
+    sensor_id,
+    avg_temp,
+    baseline,
+    deviation = avg_temp - baseline,
+    anomaly_direction = iff(anomalies > 0, "spike", "dip"),
+    anomaly_score = round(score, 2)
+| order by abs(anomaly_score) desc;
+
+// ─── Humidity sudden-change detection ────────────────────────
+// Flags sensors where humidity changed more than 20% in 15 minutes.
+SensorTelemetry
+| where timestamp > ago(1h)
+| sort by sensor_id, timestamp asc
+| extend prev_humidity = prev(humidity_pct, 1),
+         prev_sensor = prev(sensor_id, 1),
+         prev_ts = prev(timestamp, 1)
+| where sensor_id == prev_sensor
+| extend humidity_change = abs(humidity_pct - prev_humidity),
+         time_delta = datetime_diff('second', timestamp, prev_ts)
+| where humidity_change > 20 and time_delta < 900
+| project
+    timestamp,
+    sensor_id,
+    humidity_pct,
+    prev_humidity,
+    humidity_change,
+    time_delta_seconds = time_delta
+| order by humidity_change desc;
+
+// ─── Pressure anomaly detection (IQR method) ────────────────
+// Uses interquartile range to flag outlier pressure readings.
+let pressure_stats = SensorTelemetry
+| where timestamp > ago(24h)
+| summarize
+    q1 = percentile(pressure_hpa, 25),
+    q3 = percentile(pressure_hpa, 75)
+    by sensor_id
+| extend iqr = q3 - q1,
+         lower_bound = q1 - 1.5 * (q3 - q1),
+         upper_bound = q3 + 1.5 * (q3 - q1);
+SensorTelemetry
+| where timestamp > ago(1h)
+| join kind=inner pressure_stats on sensor_id
+| where pressure_hpa < lower_bound or pressure_hpa > upper_bound
+| project
+    timestamp,
+    sensor_id,
+    pressure_hpa,
+    lower_bound = round(lower_bound, 1),
+    upper_bound = round(upper_bound, 1),
+    anomaly_type = iff(pressure_hpa < lower_bound, "low_pressure", "high_pressure")
+| order by timestamp desc;
+
+// ─── Multi-metric correlation anomaly ────────────────────────
+// Detects sensors where temperature and humidity are anti-correlated
+// beyond normal bounds (potential sensor malfunction).
+SensorTelemetry
+| where timestamp > ago(6h)
+| make-series
+    temp = avg(temperature_c),
+    humidity = avg(humidity_pct)
+    on timestamp from ago(6h) to now() step 10m
+    by sensor_id
+| extend correlation = series_pearson_correlation(temp, humidity)
+| where correlation > 0.5 // Normally anti-correlated; positive = suspicious
+| project sensor_id, correlation = round(correlation, 3)
+| order by correlation desc;

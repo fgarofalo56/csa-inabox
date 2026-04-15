@@ -1,0 +1,381 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.40.2.10011",
+      "templateHash": "16620750900491145077"
+    }
+  },
+  "parameters": {
+    "budgetNamePrefix": {
+      "type": "string",
+      "defaultValue": "csa-budget",
+      "metadata": {
+        "description": "Budget name prefix"
+      }
+    },
+    "startDate": {
+      "type": "string",
+      "defaultValue": "[utcNow('yyyy-MM-01')]",
+      "metadata": {
+        "description": "Start date for budget period (YYYY-MM-DD)"
+      }
+    },
+    "timeGrain": {
+      "type": "string",
+      "defaultValue": "Monthly",
+      "allowedValues": [
+        "Monthly",
+        "Quarterly",
+        "Annually"
+      ],
+      "metadata": {
+        "description": "Time grain for the budget"
+      }
+    },
+    "budgets": {
+      "type": "array",
+      "defaultValue": [
+        {
+          "name": "shared",
+          "amount": 5000,
+          "resourceGroupName": "rg-csa-shared"
+        },
+        {
+          "name": "finance",
+          "amount": 2000,
+          "resourceGroupName": "rg-csa-finance"
+        },
+        {
+          "name": "inventory",
+          "amount": 2000,
+          "resourceGroupName": "rg-csa-inventory"
+        },
+        {
+          "name": "sales",
+          "amount": 2000,
+          "resourceGroupName": "rg-csa-sales"
+        },
+        {
+          "name": "streaming",
+          "amount": 3000,
+          "resourceGroupName": "rg-csa-streaming"
+        },
+        {
+          "name": "platform",
+          "amount": 4000,
+          "resourceGroupName": "rg-csa-platform"
+        }
+      ],
+      "metadata": {
+        "description": "Budget configurations per domain/vertical"
+      }
+    },
+    "thresholds": {
+      "type": "array",
+      "defaultValue": [
+        {
+          "operator": "GreaterThan",
+          "percentage": 50,
+          "contactType": "email"
+        },
+        {
+          "operator": "GreaterThan",
+          "percentage": 75,
+          "contactType": "email"
+        },
+        {
+          "operator": "GreaterThan",
+          "percentage": 90,
+          "contactType": "both"
+        },
+        {
+          "operator": "GreaterThan",
+          "percentage": 100,
+          "contactType": "both"
+        },
+        {
+          "operator": "GreaterThanOrEqualTo",
+          "percentage": 120,
+          "contactType": "both"
+        }
+      ],
+      "metadata": {
+        "description": "Alert threshold percentages (each creates a notification)"
+      }
+    },
+    "notificationEmails": {
+      "type": "array",
+      "defaultValue": [
+        "platform-team@example.com",
+        "finance-team@example.com"
+      ],
+      "metadata": {
+        "description": "Email addresses for budget alerts"
+      }
+    },
+    "teamsWebhookUrl": {
+      "type": "string",
+      "metadata": {
+        "description": "Teams webhook URL for budget alerts"
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "eastus",
+      "metadata": {
+        "description": "Azure region for action group resources"
+      }
+    },
+    "tags": {
+      "type": "object",
+      "defaultValue": {
+        "Project": "CSA-in-a-Box",
+        "Component": "Monitoring",
+        "Environment": "dev"
+      },
+      "metadata": {
+        "description": "Tags to apply to all resources"
+      }
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Resources/resourceGroups",
+      "apiVersion": "2024-03-01",
+      "name": "rg-csa-monitoring",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]"
+    },
+    {
+      "copy": {
+        "name": "budget",
+        "count": "[length(parameters('budgets'))]"
+      },
+      "type": "Microsoft.Consumption/budgets",
+      "apiVersion": "2023-11-01",
+      "name": "[format('{0}-{1}', parameters('budgetNamePrefix'), parameters('budgets')[copyIndex()].name)]",
+      "properties": {
+        "category": "Cost",
+        "amount": "[parameters('budgets')[copyIndex()].amount]",
+        "timeGrain": "[parameters('timeGrain')]",
+        "timePeriod": {
+          "startDate": "[parameters('startDate')]"
+        },
+        "filter": {
+          "dimensions": {
+            "name": "ResourceGroupName",
+            "operator": "In",
+            "values": [
+              "[parameters('budgets')[copyIndex()].resourceGroupName]"
+            ]
+          }
+        },
+        "notifications": {
+          "50pct": {
+            "enabled": true,
+            "operator": "GreaterThan",
+            "threshold": 50,
+            "thresholdType": "Actual",
+            "contactEmails": "[parameters('notificationEmails')]",
+            "contactGroups": [
+              "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, 'rg-csa-monitoring'), 'Microsoft.Resources/deployments', 'deploy-action-group'), '2025-04-01').outputs.actionGroupId.value]"
+            ]
+          },
+          "75pct": {
+            "enabled": true,
+            "operator": "GreaterThan",
+            "threshold": 75,
+            "thresholdType": "Actual",
+            "contactEmails": "[parameters('notificationEmails')]",
+            "contactGroups": [
+              "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, 'rg-csa-monitoring'), 'Microsoft.Resources/deployments', 'deploy-action-group'), '2025-04-01').outputs.actionGroupId.value]"
+            ]
+          },
+          "90pct": {
+            "enabled": true,
+            "operator": "GreaterThan",
+            "threshold": 90,
+            "thresholdType": "Actual",
+            "contactEmails": "[parameters('notificationEmails')]",
+            "contactGroups": [
+              "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, 'rg-csa-monitoring'), 'Microsoft.Resources/deployments', 'deploy-action-group'), '2025-04-01').outputs.actionGroupId.value]"
+            ]
+          },
+          "100pct": {
+            "enabled": true,
+            "operator": "GreaterThanOrEqualTo",
+            "threshold": 100,
+            "thresholdType": "Actual",
+            "contactEmails": "[parameters('notificationEmails')]",
+            "contactGroups": [
+              "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, 'rg-csa-monitoring'), 'Microsoft.Resources/deployments', 'deploy-action-group'), '2025-04-01').outputs.actionGroupId.value]"
+            ]
+          },
+          "120pct_forecast": {
+            "enabled": true,
+            "operator": "GreaterThan",
+            "threshold": 120,
+            "thresholdType": "Forecasted",
+            "contactEmails": "[parameters('notificationEmails')]",
+            "contactGroups": [
+              "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, 'rg-csa-monitoring'), 'Microsoft.Resources/deployments', 'deploy-action-group'), '2025-04-01').outputs.actionGroupId.value]"
+            ]
+          }
+        }
+      },
+      "dependsOn": [
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, 'rg-csa-monitoring'), 'Microsoft.Resources/deployments', 'deploy-action-group')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "deploy-action-group",
+      "resourceGroup": "rg-csa-monitoring",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "actionGroupName": {
+            "value": "ag-csa-budget-alerts"
+          },
+          "shortName": {
+            "value": "csabudget"
+          },
+          "emailReceivers": {
+            "copy": [
+              {
+                "name": "value",
+                "count": "[length(parameters('notificationEmails'))]",
+                "input": "[createObject('name', format('email-{0}', copyIndex('value')), 'emailAddress', parameters('notificationEmails')[copyIndex('value')], 'useCommonAlertSchema', true())]"
+              }
+            ]
+          },
+          "webhookReceivers": {
+            "value": [
+              {
+                "name": "teams-webhook",
+                "serviceUri": "[parameters('teamsWebhookUrl')]",
+                "useCommonAlertSchema": true,
+                "useAadAuth": false
+              }
+            ]
+          },
+          "tags": {
+            "value": "[parameters('tags')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.40.2.10011",
+              "templateHash": "3110224040392464670"
+            }
+          },
+          "parameters": {
+            "actionGroupName": {
+              "type": "string",
+              "metadata": {
+                "description": "Name of the action group"
+              }
+            },
+            "shortName": {
+              "type": "string",
+              "maxLength": 12,
+              "metadata": {
+                "description": "Short name for the action group (max 12 characters)"
+              }
+            },
+            "emailReceivers": {
+              "type": "array",
+              "defaultValue": [],
+              "metadata": {
+                "description": "Email receivers configuration"
+              }
+            },
+            "webhookReceivers": {
+              "type": "array",
+              "defaultValue": [],
+              "metadata": {
+                "description": "Webhook receivers configuration (Teams, PagerDuty, etc.)"
+              }
+            },
+            "tags": {
+              "type": "object",
+              "defaultValue": {},
+              "metadata": {
+                "description": "Tags to apply"
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Insights/actionGroups",
+              "apiVersion": "2023-01-01",
+              "name": "[parameters('actionGroupName')]",
+              "location": "global",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "enabled": true,
+                "groupShortName": "[parameters('shortName')]",
+                "emailReceivers": "[parameters('emailReceivers')]",
+                "webhookReceivers": "[parameters('webhookReceivers')]",
+                "smsReceivers": [],
+                "azureAppPushReceivers": [],
+                "automationRunbookReceivers": [],
+                "voiceReceivers": [],
+                "logicAppReceivers": [],
+                "azureFunctionReceivers": [],
+                "armRoleReceivers": [
+                  {
+                    "name": "Monitoring Contributor",
+                    "roleId": "749f88d5-cbae-40b8-bcfc-e573ddc772fa",
+                    "useCommonAlertSchema": true
+                  }
+                ]
+              }
+            }
+          ],
+          "outputs": {
+            "actionGroupId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Insights/actionGroups', parameters('actionGroupName'))]"
+            },
+            "actionGroupName": {
+              "type": "string",
+              "value": "[parameters('actionGroupName')]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', 'rg-csa-monitoring')]"
+      ]
+    }
+  ],
+  "outputs": {
+    "budgetNames": {
+      "type": "array",
+      "copy": {
+        "count": "[length(parameters('budgets'))]",
+        "input": "[format('{0}-{1}', parameters('budgetNamePrefix'), parameters('budgets')[copyIndex()].name)]"
+      }
+    },
+    "actionGroupId": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, 'rg-csa-monitoring'), 'Microsoft.Resources/deployments', 'deploy-action-group'), '2025-04-01').outputs.actionGroupId.value]"
+    },
+    "monitoringResourceGroup": {
+      "type": "string",
+      "value": "rg-csa-monitoring"
+    }
+  }
+}

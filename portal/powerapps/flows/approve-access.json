@@ -1,0 +1,121 @@
+{
+  "properties": {
+    "displayName": "CSA Portal - Approve Access Request",
+    "description": "Processes access request approvals from the PowerApps portal. Sends approval email, waits for response, and updates the request status via the shared backend API.",
+    "definition": {
+      "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+      "contentVersion": "1.0.0.0",
+      "triggers": {
+        "PowerApps_Trigger": {
+          "type": "Request",
+          "kind": "PowerApp",
+          "inputs": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "requestId": { "type": "string", "title": "Request ID" },
+                "approverEmail": { "type": "string", "title": "Approver Email" },
+                "dataProductName": { "type": "string", "title": "Data Product Name" },
+                "requesterEmail": { "type": "string", "title": "Requester Email" },
+                "justification": { "type": "string", "title": "Justification" },
+                "accessLevel": { "type": "string", "title": "Access Level" }
+              },
+              "required": ["requestId", "approverEmail"]
+            }
+          }
+        }
+      },
+      "actions": {
+        "Start_Approval": {
+          "type": "OpenApiConnection",
+          "runAfter": {},
+          "inputs": {
+            "host": { "apiId": "shared_approvals", "operationId": "StartAndWaitForAnApproval" },
+            "parameters": {
+              "approvalType": "Basic",
+              "title": "Access Request: @{triggerBody()?['dataProductName']}",
+              "assignedTo": "@triggerBody()?['approverEmail']",
+              "details": "**Requester:** @{triggerBody()?['requesterEmail']}\n**Data Product:** @{triggerBody()?['dataProductName']}\n**Access Level:** @{triggerBody()?['accessLevel']}\n**Justification:** @{triggerBody()?['justification']}",
+              "itemLink": "@{parameters('portalBaseUrl')}/access/@{triggerBody()?['requestId']}"
+            }
+          }
+        },
+        "Check_Approval_Result": {
+          "type": "If",
+          "runAfter": { "Start_Approval": ["Succeeded"] },
+          "expression": {
+            "equals": ["@body('Start_Approval')?['outcome']", "Approve"]
+          },
+          "actions": {
+            "Approve_Request": {
+              "type": "Http",
+              "inputs": {
+                "method": "POST",
+                "uri": "@{parameters('backendApiUrl')}/api/v1/access/@{triggerBody()?['requestId']}/approve",
+                "headers": { "Content-Type": "application/json" },
+                "body": {
+                  "notes": "@body('Start_Approval')?['comments']"
+                }
+              }
+            },
+            "Notify_Approved": {
+              "type": "OpenApiConnection",
+              "runAfter": { "Approve_Request": ["Succeeded"] },
+              "inputs": {
+                "host": { "apiId": "shared_office365", "operationId": "SendEmailV2" },
+                "parameters": {
+                  "emailMessage/To": "@triggerBody()?['requesterEmail']",
+                  "emailMessage/Subject": "Access Approved: @{triggerBody()?['dataProductName']}",
+                  "emailMessage/Body": "Your access request for @{triggerBody()?['dataProductName']} has been approved."
+                }
+              }
+            }
+          },
+          "else": {
+            "actions": {
+              "Deny_Request": {
+                "type": "Http",
+                "inputs": {
+                  "method": "POST",
+                  "uri": "@{parameters('backendApiUrl')}/api/v1/access/@{triggerBody()?['requestId']}/deny",
+                  "headers": { "Content-Type": "application/json" },
+                  "body": {
+                    "notes": "@body('Start_Approval')?['comments']"
+                  }
+                }
+              },
+              "Notify_Denied": {
+                "type": "OpenApiConnection",
+                "runAfter": { "Deny_Request": ["Succeeded"] },
+                "inputs": {
+                  "host": { "apiId": "shared_office365", "operationId": "SendEmailV2" },
+                  "parameters": {
+                    "emailMessage/To": "@triggerBody()?['requesterEmail']",
+                    "emailMessage/Subject": "Access Denied: @{triggerBody()?['dataProductName']}",
+                    "emailMessage/Body": "Your access request for @{triggerBody()?['dataProductName']} has been denied."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "Respond_to_PowerApps": {
+          "type": "Response",
+          "runAfter": { "Check_Approval_Result": ["Succeeded"] },
+          "inputs": {
+            "statusCode": 200,
+            "body": {
+              "requestId": "@triggerBody()?['requestId']",
+              "outcome": "@body('Start_Approval')?['outcome']"
+            }
+          }
+        }
+      },
+      "parameters": {
+        "backendApiUrl": { "defaultValue": "http://localhost:8000", "type": "String" },
+        "portalBaseUrl": { "defaultValue": "https://portal.csainabox.local", "type": "String" }
+      }
+    },
+    "state": "Started"
+  }
+}

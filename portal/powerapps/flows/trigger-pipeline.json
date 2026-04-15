@@ -1,0 +1,100 @@
+{
+  "properties": {
+    "displayName": "CSA Portal - Trigger Pipeline",
+    "description": "Manually triggers a data pipeline execution from the PowerApps portal. Calls the shared backend API to initiate the pipeline run and monitors its status.",
+    "definition": {
+      "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+      "contentVersion": "1.0.0.0",
+      "triggers": {
+        "PowerApps_Trigger": {
+          "type": "Request",
+          "kind": "PowerApp",
+          "inputs": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "pipelineId": { "type": "string", "title": "Pipeline ID" },
+                "pipelineName": { "type": "string", "title": "Pipeline Name" },
+                "triggeredBy": { "type": "string", "title": "Triggered By" }
+              },
+              "required": ["pipelineId"]
+            }
+          }
+        }
+      },
+      "actions": {
+        "Trigger_Pipeline": {
+          "type": "Http",
+          "runAfter": {},
+          "inputs": {
+            "method": "POST",
+            "uri": "@{parameters('backendApiUrl')}/api/v1/pipelines/@{triggerBody()?['pipelineId']}/trigger",
+            "headers": { "Content-Type": "application/json" }
+          }
+        },
+        "Parse_Run_Response": {
+          "type": "ParseJson",
+          "runAfter": { "Trigger_Pipeline": ["Succeeded"] },
+          "inputs": {
+            "content": "@body('Trigger_Pipeline')",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string" },
+                "pipeline_id": { "type": "string" },
+                "status": { "type": "string" },
+                "started_at": { "type": "string" }
+              }
+            }
+          }
+        },
+        "Wait_For_Completion": {
+          "type": "Until",
+          "runAfter": { "Parse_Run_Response": ["Succeeded"] },
+          "limit": { "count": 60, "timeout": "PT2H" },
+          "expression": "@or(equals(variables('runStatus'), 'succeeded'), equals(variables('runStatus'), 'failed'))",
+          "actions": {
+            "Delay_30_Seconds": {
+              "type": "Wait",
+              "inputs": { "interval": { "count": 30, "unit": "Second" } }
+            },
+            "Check_Run_Status": {
+              "type": "Http",
+              "runAfter": { "Delay_30_Seconds": ["Succeeded"] },
+              "inputs": {
+                "method": "GET",
+                "uri": "@{parameters('backendApiUrl')}/api/v1/pipelines/@{triggerBody()?['pipelineId']}/runs",
+                "queries": { "limit": "1" }
+              }
+            },
+            "Update_Status_Variable": {
+              "type": "SetVariable",
+              "runAfter": { "Check_Run_Status": ["Succeeded"] },
+              "inputs": {
+                "name": "runStatus",
+                "value": "@body('Check_Run_Status')?[0]?['status']"
+              }
+            }
+          }
+        },
+        "Respond_to_PowerApps": {
+          "type": "Response",
+          "runAfter": { "Wait_For_Completion": ["Succeeded", "TimedOut"] },
+          "inputs": {
+            "statusCode": 200,
+            "body": {
+              "runId": "@body('Parse_Run_Response')?['id']",
+              "pipelineId": "@triggerBody()?['pipelineId']",
+              "status": "@variables('runStatus')",
+              "message": "@{if(equals(variables('runStatus'), 'succeeded'), 'Pipeline completed successfully.', 'Pipeline run ended with status: ' + variables('runStatus'))}"
+            }
+          }
+        }
+      },
+      "parameters": {
+        "backendApiUrl": { "defaultValue": "http://localhost:8000", "type": "String" }
+      }
+    },
+    "state": "Started"
+  }
+}

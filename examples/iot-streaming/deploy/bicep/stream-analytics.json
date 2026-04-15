@@ -1,0 +1,316 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.40.2.10011",
+      "templateHash": "13675335484959632711"
+    }
+  },
+  "parameters": {
+    "baseName": {
+      "type": "string",
+      "defaultValue": "csaiot",
+      "metadata": {
+        "description": "Base name for all resources"
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Azure region for deployment"
+      }
+    },
+    "asaSku": {
+      "type": "string",
+      "defaultValue": "Standard",
+      "allowedValues": [
+        "Standard"
+      ],
+      "metadata": {
+        "description": "Stream Analytics SKU"
+      }
+    },
+    "streamingUnits": {
+      "type": "int",
+      "defaultValue": 6,
+      "allowedValues": [
+        1,
+        3,
+        6,
+        12,
+        18,
+        24,
+        30,
+        36,
+        42,
+        48
+      ],
+      "metadata": {
+        "description": "Streaming Units (1, 3, 6, 12, 18, 24, 30, 36, 42, 48)"
+      }
+    },
+    "eventHubNamespaceName": {
+      "type": "string",
+      "metadata": {
+        "description": "Event Hub namespace name (from iot-hub.bicep output)"
+      }
+    },
+    "telemetryHubName": {
+      "type": "string",
+      "defaultValue": "telemetry",
+      "metadata": {
+        "description": "Event Hub name for telemetry input"
+      }
+    },
+    "consumerGroupName": {
+      "type": "string",
+      "defaultValue": "asa-consumer",
+      "metadata": {
+        "description": "Event Hub consumer group for ASA"
+      }
+    },
+    "eventHubConnectionString": {
+      "type": "string",
+      "metadata": {
+        "description": "Event Hub namespace connection string (Listen policy)"
+      }
+    },
+    "adlsAccountName": {
+      "type": "string",
+      "metadata": {
+        "description": "ADLS Gen2 storage account name for raw output"
+      }
+    },
+    "adlsAccountKey": {
+      "type": "securestring",
+      "metadata": {
+        "description": "ADLS Gen2 account key"
+      }
+    },
+    "adxClusterUri": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "ADX cluster URI (e.g., https://csaadx.eastus.kusto.windows.net)"
+      }
+    },
+    "adxDatabaseName": {
+      "type": "string",
+      "defaultValue": "realtime",
+      "metadata": {
+        "description": "ADX database name"
+      }
+    },
+    "logAnalyticsWorkspaceId": {
+      "type": "string",
+      "metadata": {
+        "description": "Log Analytics workspace resource ID for diagnostics"
+      }
+    },
+    "tags": {
+      "type": "object",
+      "defaultValue": {
+        "Project": "CSA-in-a-Box",
+        "Component": "IoT-Streaming",
+        "Environment": "dev"
+      },
+      "metadata": {
+        "description": "Tags to apply to all resources"
+      }
+    }
+  },
+  "variables": {
+    "jobName": "[format('{0}-asa', parameters('baseName'))]",
+    "adlsContainerRaw": "bronze",
+    "adlsContainerProcessed": "silver"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.StreamAnalytics/streamingjobs",
+      "apiVersion": "2021-10-01-preview",
+      "name": "[variables('jobName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "sku": {
+          "name": "[parameters('asaSku')]"
+        },
+        "eventsOutOfOrderPolicy": "Adjust",
+        "outputErrorPolicy": "Stop",
+        "eventsOutOfOrderMaxDelayInSeconds": 5,
+        "eventsLateArrivalMaxDelayInSeconds": 16,
+        "dataLocale": "en-US",
+        "compatibilityLevel": "1.2",
+        "contentStoragePolicy": "SystemAccount",
+        "jobType": "Cloud",
+        "transformation": {
+          "name": "TelemetryTransformation",
+          "properties": {
+            "streamingUnits": "[parameters('streamingUnits')]",
+            "query": "          -- ═══════════════════════════════════════════════════════════\n          -- Transformation: Parse and enrich raw IoT telemetry\n          -- ═══════════════════════════════════════════════════════════\n\n          -- Pass-through to raw storage (cold path)\n          SELECT\n              sensor_id,\n              sensor_type,\n              CAST(timestamp AS datetime) AS event_time,\n              temperature_c,\n              humidity_pct,\n              pressure_hpa,\n              battery_pct,\n              latitude,\n              longitude,\n              System.Timestamp() AS processing_time,\n              EventProcessedUtcTime AS ingestion_time\n          INTO [RawOutput]\n          FROM [TelemetryInput]\n          TIMESTAMP BY CAST(timestamp AS datetime);\n\n          -- 5-minute tumbling window aggregation for dashboards\n          SELECT\n              sensor_id,\n              sensor_type,\n              System.Timestamp() AS window_end,\n              AVG(temperature_c) AS avg_temperature,\n              MIN(temperature_c) AS min_temperature,\n              MAX(temperature_c) AS max_temperature,\n              AVG(humidity_pct) AS avg_humidity,\n              AVG(pressure_hpa) AS avg_pressure,\n              COUNT(*) AS reading_count,\n              MIN(battery_pct) AS min_battery\n          INTO [ADXOutput]\n          FROM [TelemetryInput]\n          TIMESTAMP BY CAST(timestamp AS datetime)\n          GROUP BY\n              sensor_id,\n              sensor_type,\n              TumblingWindow(minute, 5);\n\n          -- Anomaly detection on temperature readings\n          SELECT\n              sensor_id,\n              CAST(timestamp AS datetime) AS event_time,\n              temperature_c,\n              AnomalyDetection_SpikeAndDip(\n                  CAST(temperature_c AS float), 95, 120, 'spikesanddips'\n              ) OVER (\n                  PARTITION BY sensor_id\n                  LIMIT DURATION(minute, 120)\n              ) AS anomaly_score\n          INTO [AlertOutput]\n          FROM [TelemetryInput]\n          TIMESTAMP BY CAST(timestamp AS datetime)\n          WHERE sensor_type = 'temperature';\n        "
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.StreamAnalytics/streamingjobs/inputs",
+      "apiVersion": "2021-10-01-preview",
+      "name": "[format('{0}/{1}', variables('jobName'), 'TelemetryInput')]",
+      "properties": {
+        "type": "Stream",
+        "datasource": {
+          "type": "Microsoft.ServiceBus/EventHub",
+          "properties": {
+            "serviceBusNamespace": "[parameters('eventHubNamespaceName')]",
+            "sharedAccessPolicyName": "ListenRule",
+            "sharedAccessPolicyKey": "[listKeys(resourceId('Microsoft.EventHub/namespaces/eventhubs/authorizationRules', parameters('eventHubNamespaceName'), parameters('telemetryHubName'), 'ListenRule'), '2024-01-01').primaryKey]",
+            "eventHubName": "[parameters('telemetryHubName')]",
+            "consumerGroupName": "[parameters('consumerGroupName')]",
+            "authenticationMode": "ConnectionString"
+          }
+        },
+        "serialization": {
+          "type": "Json",
+          "properties": {
+            "encoding": "UTF8"
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.StreamAnalytics/streamingjobs', variables('jobName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.StreamAnalytics/streamingjobs/outputs",
+      "apiVersion": "2021-10-01-preview",
+      "name": "[format('{0}/{1}', variables('jobName'), 'RawOutput')]",
+      "properties": {
+        "datasource": {
+          "type": "Microsoft.Storage/Blob",
+          "properties": {
+            "storageAccounts": [
+              {
+                "accountName": "[parameters('adlsAccountName')]",
+                "accountKey": "[parameters('adlsAccountKey')]"
+              }
+            ],
+            "container": "[variables('adlsContainerRaw')]",
+            "pathPattern": "iot-streaming/telemetry/{date}/{time}",
+            "dateFormat": "yyyy/MM/dd",
+            "timeFormat": "HH",
+            "authenticationMode": "ConnectionString"
+          }
+        },
+        "serialization": {
+          "type": "Parquet"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.StreamAnalytics/streamingjobs', variables('jobName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.StreamAnalytics/streamingjobs/outputs",
+      "apiVersion": "2021-10-01-preview",
+      "name": "[format('{0}/{1}', variables('jobName'), 'ADXOutput')]",
+      "properties": {
+        "datasource": {
+          "type": "Microsoft.Storage/Blob",
+          "properties": {
+            "storageAccounts": [
+              {
+                "accountName": "[parameters('adlsAccountName')]",
+                "accountKey": "[parameters('adlsAccountKey')]"
+              }
+            ],
+            "container": "[variables('adlsContainerProcessed')]",
+            "pathPattern": "iot-streaming/aggregated/{date}/{time}",
+            "dateFormat": "yyyy/MM/dd",
+            "timeFormat": "HH",
+            "authenticationMode": "ConnectionString"
+          }
+        },
+        "serialization": {
+          "type": "Parquet"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.StreamAnalytics/streamingjobs', variables('jobName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.StreamAnalytics/streamingjobs/outputs",
+      "apiVersion": "2021-10-01-preview",
+      "name": "[format('{0}/{1}', variables('jobName'), 'AlertOutput')]",
+      "properties": {
+        "datasource": {
+          "type": "Microsoft.Storage/Blob",
+          "properties": {
+            "storageAccounts": [
+              {
+                "accountName": "[parameters('adlsAccountName')]",
+                "accountKey": "[parameters('adlsAccountKey')]"
+              }
+            ],
+            "container": "[variables('adlsContainerProcessed')]",
+            "pathPattern": "iot-streaming/alerts/{date}/{time}",
+            "dateFormat": "yyyy/MM/dd",
+            "timeFormat": "HH",
+            "authenticationMode": "ConnectionString"
+          }
+        },
+        "serialization": {
+          "type": "Json",
+          "properties": {
+            "encoding": "UTF8",
+            "format": "LineSeparated"
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.StreamAnalytics/streamingjobs', variables('jobName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Insights/diagnosticSettings",
+      "apiVersion": "2021-05-01-preview",
+      "scope": "[resourceId('Microsoft.StreamAnalytics/streamingjobs', variables('jobName'))]",
+      "name": "[format('{0}-diag', variables('jobName'))]",
+      "properties": {
+        "workspaceId": "[parameters('logAnalyticsWorkspaceId')]",
+        "logs": [
+          {
+            "category": "Execution",
+            "enabled": true
+          },
+          {
+            "category": "Authoring",
+            "enabled": true
+          }
+        ],
+        "metrics": [
+          {
+            "category": "AllMetrics",
+            "enabled": true
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.StreamAnalytics/streamingjobs', variables('jobName'))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "jobName": {
+      "type": "string",
+      "value": "[variables('jobName')]"
+    },
+    "jobId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.StreamAnalytics/streamingjobs', variables('jobName'))]"
+    }
+  }
+}

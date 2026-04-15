@@ -15,11 +15,11 @@ functionality using Azure PaaS services and open-source tooling.
 | [onelake-pattern](onelake-pattern/) | OneLake | Unified data lake using ADLS Gen2 + Unity Catalog metadata |
 | [data-activator](data-activator/) | Data Activator | Event-driven alerting with Logic Apps + Event Grid + Functions |
 | [direct-lake](direct-lake/) | Direct Lake | Power BI direct access to Delta Lake via Databricks SQL |
-| [data-marketplace](data-marketplace/) | Data Sharing / Marketplace | Self-service data product discovery, access request, quality tracking |
+| [data_marketplace](data_marketplace/) | Data Sharing / Marketplace | Self-service data product discovery, access request, quality tracking |
 | [governance](governance/) | Purview Integration | Automated classification, lineage, MDM, sensitivity labels |
 | [multi-synapse](multi-synapse/) | Multi-workspace | Shared Synapse environment with per-org isolation |
 | [metadata-framework](metadata-framework/) | Data Factory (metadata-driven) | Auto-generate pipelines from source registration metadata |
-| [ai-integration](ai-integration/) | Copilot / AI | RAG patterns, embeddings, model serving per domain |
+| [ai_integration](ai_integration/) | Copilot / AI | RAG patterns, embeddings, model serving per domain |
 | [shared-services](shared-services/) | Shared Functions | Reusable Azure Function library for data operations |
 | [oss-alternatives](oss-alternatives/) | N/A (Gov gaps) | Open-source alternatives for Gov-unavailable services |
 

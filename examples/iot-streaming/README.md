@@ -6,40 +6,61 @@ and event streaming. These patterns are used across multiple verticals
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Data Sources                              │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────┐   │
-│  │   IoT    │ │ Weather  │ │ AQI      │ │ Casino Slot  │   │
-│  │  Sensors │ │ Stations │ │ Monitors │ │ Machines     │   │
-│  └────┬─────┘ └────┬─────┘ └────┬─────┘ └──────┬───────┘   │
-└───────┼──────────────┼───────────┼───────────────┼──────────┘
-        │              │           │               │
-        └──────────────┴─────┬─────┴───────────────┘
-                             │
-                    ┌────────┴────────┐
-                    │   Azure IoT Hub  │ (optional — for managed devices)
-                    └────────┬────────┘
-                             │
-                    ┌────────┴────────┐
-                    │  Event Hubs      │  (Kafka-compatible)
-                    │  Namespace       │
-                    │  ├── raw-events  │
-                    │  ├── processed   │
-                    │  └── alerts      │
-                    └──┬──────┬───┬───┘
-                       │      │   │
-              ┌────────┘      │   └────────────┐
-              │               │                 │
-     ┌────────┴───────┐  ┌───┴──────────┐  ┌──┴──────────────┐
-     │  Azure Data    │  │  Stream      │  │  ADLS Gen2      │
-     │  Explorer      │  │  Analytics   │  │  Capture        │
-     │  (Real-time)   │  │  (Transform) │  │  (Cold storage) │
-     │                │  │              │  │                  │
-     │  KQL Queries   │  │  Windowed    │  │  Bronze layer    │
-     │  Real-time     │  │  Aggregation │  │  (Parquet/Delta) │
-     │  Dashboards    │  │  Alerts      │  │                  │
-     └────────────────┘  └──────────────┘  └──────────────────┘
+```mermaid
+graph TB
+    subgraph Sources["Data Sources"]
+        IoT["IoT Sensors<br/>(temp, humidity, pressure)"]
+        Weather["Weather Stations<br/>(NOAA-style)"]
+        AQI["AQI Monitors<br/>(EPA-style)"]
+        Slots["Casino Slot<br/>Machines"]
+    end
+
+    subgraph Ingestion["Ingestion Layer"]
+        IoTHub["Azure IoT Hub<br/>+ DPS"]
+        EH["Event Hubs<br/>Namespace"]
+    end
+
+    subgraph Processing["Processing"]
+        direction TB
+        Hot["Hot Path<br/>Azure Data Explorer<br/>(sub-second KQL)"]
+        Warm["Warm Path<br/>Stream Analytics<br/>(windowed aggregation)"]
+        Cold["Cold Path<br/>Event Hub Capture<br/>(ADLS Gen2 Parquet)"]
+    end
+
+    subgraph Storage["Storage"]
+        Bronze["ADLS Gen2<br/>Bronze (raw)"]
+        Silver["ADLS Gen2<br/>Silver (enriched)"]
+        Gold["ADLS Gen2<br/>Gold (aggregated)"]
+        ADX["ADX Tables<br/>(real-time)"]
+    end
+
+    subgraph Consumers["Consumers"]
+        PBI["Power BI<br/>Dashboards"]
+        Alerts["Teams / Email<br/>Alerts"]
+        API["REST APIs"]
+    end
+
+    IoT --> IoTHub
+    Weather --> IoTHub
+    AQI --> EH
+    Slots --> EH
+    IoTHub --> EH
+
+    EH --> Hot
+    EH --> Warm
+    EH --> Cold
+
+    Hot --> ADX
+    Warm --> Silver
+    Warm --> ADX
+    Cold --> Bronze
+    Bronze --> Silver
+    Silver --> Gold
+
+    ADX --> PBI
+    Gold --> PBI
+    Warm --> Alerts
+    ADX --> API
 ```
 
 ## Streaming Patterns
@@ -121,61 +142,192 @@ WHERE anomaly_score > 0.8
 
 ```
 examples/iot-streaming/
-├── README.md                        # This file
+├── README.md                          # This file
 ├── producers/
-│   ├── iot_simulator.py             # Generic IoT sensor simulator
-│   ├── weather_station_producer.py  # NOAA weather station producer
-│   ├── aqi_sensor_producer.py       # EPA AQI sensor producer
-│   └── slot_machine_producer.py     # Casino slot event producer
-├── consumers/
-│   ├── adx_consumer.py              # ADX ingestion consumer
-│   └── adls_consumer.py             # ADLS capture consumer
-├── stream-analytics/
-│   ├── weather_aggregation.asaql    # Weather windowed aggregation
-│   ├── aqi_anomaly_detection.asaql  # AQI anomaly detection
-│   └── slot_realtime_metrics.asaql  # Casino real-time metrics
-├── kql/
-│   ├── tables.kql                   # ADX table definitions
-│   ├── ingestion_mappings.kql       # JSON/Avro ingestion mappings
-│   ├── weather_queries.kql          # Weather analytics queries
-│   ├── aqi_queries.kql              # Air quality queries
-│   └── casino_queries.kql          # Casino floor queries
+│   └── iot_simulator.py               # Multi-type IoT sensor simulator
+├── data/
+│   └── generators/                    # Seed data generators
 ├── deploy/
-│   ├── streaming.bicep              # IaC for streaming infrastructure
-│   └── params.json                  # Deployment parameters
-└── dashboards/
-    ├── realtime_weather.json        # ADX dashboard for weather
-    ├── aqi_monitoring.json          # AQI real-time monitoring
-    └── casino_floor.json            # Casino floor dashboard
+│   └── bicep/
+│       ├── iot-hub.bicep              # IoT Hub + DPS + Event Hubs
+│       └── stream-analytics.bicep     # Stream Analytics job
+├── kql/
+│   ├── tables.kql                     # ADX table + mapping definitions
+│   └── queries/
+│       ├── realtime_anomaly_detection.kql  # Time-series anomaly detection
+│       ├── hourly_aggregation.kql          # Hourly rollups by device
+│       ├── device_health.kql               # Connectivity & battery monitoring
+│       ├── alert_triggers.kql              # Threshold-based alerting
+│       └── dashboard_summary.kql           # Top-level KPI queries
+└── stream-analytics/
+    ├── transform_telemetry.asaql      # Parse & enrich raw telemetry
+    ├── aggregate_metrics.asaql        # Tumbling & hopping window aggregation
+    └── detect_anomalies.asaql         # Spike/dip & change-point detection
 ```
 
-## Quick Start
+## Deployment
+
+### Prerequisites
+
+- Azure subscription with Event Hubs, IoT Hub, and ADX resource providers registered
+- ADLS Gen2 storage account for Event Hub Capture and processed output
+- Log Analytics workspace for diagnostic settings
+- Azure CLI with Bicep installed
+
+### Step 1: Deploy IoT Hub and Event Hubs
 
 ```bash
-# Deploy streaming infrastructure
-az deployment group create \
-  --template-file deploy/streaming.bicep \
-  --parameters deploy/params.json
+# Create resource group
+az group create --name rg-iot-streaming --location eastus
 
-# Start a sensor simulator
+# Deploy IoT Hub + Event Hubs
+az deployment group create \
+  --resource-group rg-iot-streaming \
+  --template-file deploy/bicep/iot-hub.bicep \
+  --parameters \
+      baseName=csaiot \
+      captureStorageAccountName=<your-adls-account> \
+      logAnalyticsWorkspaceId=<your-law-id>
+```
+
+This deploys:
+- **IoT Hub** (S1) with Device Provisioning Service
+- **Event Hub Namespace** (Standard, auto-inflate) with three hubs:
+  - `telemetry` — raw device data with Capture to ADLS
+  - `alerts` — anomaly and threshold alerts
+  - `processed` — enriched/aggregated output
+- **Consumer groups** for ADX, Stream Analytics, and Capture
+- **Diagnostic settings** to Log Analytics
+
+### Step 2: Deploy Stream Analytics
+
+```bash
+# Get the Event Hub connection string from Step 1 output
+EH_CONN=$(az deployment group show \
+  --resource-group rg-iot-streaming \
+  --name iot-hub \
+  --query properties.outputs.telemetryHubListenConnectionString.value -o tsv)
+
+# Deploy Stream Analytics job
+az deployment group create \
+  --resource-group rg-iot-streaming \
+  --template-file deploy/bicep/stream-analytics.bicep \
+  --parameters \
+      baseName=csaiot \
+      eventHubNamespaceName=csaiot-ehns \
+      eventHubConnectionString="$EH_CONN" \
+      adlsAccountName=<your-adls-account> \
+      adlsAccountKey=<your-adls-key> \
+      logAnalyticsWorkspaceId=<your-law-id>
+```
+
+### Step 3: Create ADX Tables
+
+```bash
+# Connect to your ADX cluster
+az kusto query \
+  --cluster-name <adx-cluster> \
+  --database-name realtime \
+  --query "$(cat kql/tables.kql)"
+
+# Or using the Kusto CLI
+kusto query -database realtime -script kql/tables.kql
+```
+
+### Step 4: Start the Simulator
+
+```bash
+# Install dependencies
+pip install azure-eventhub
+
+# Run the IoT simulator (stdout mode for testing)
+python producers/iot_simulator.py \
+  --sensor-type temperature \
+  --sensor-count 10 \
+  --interval 5 \
+  --max-events 1000
+
+# Run with Event Hub output
 python producers/iot_simulator.py \
   --connection-string "$EVENTHUB_CONNECTION_STRING" \
+  --event-hub-name telemetry \
+  --sensor-type temperature \
   --sensor-count 10 \
-  --interval-seconds 5
-
-# Create ADX tables and mappings
-kusto query -database realtime -script kql/tables.kql
-kusto query -database realtime -script kql/ingestion_mappings.kql
-
-# Open ADX dashboard
-az kusto dashboard show --cluster-name csa-adx --database realtime
+  --interval 5
 ```
+
+Available sensor types:
+- `temperature` — Temperature, humidity, pressure sensors
+- `aqi` — EPA-style air quality index sensors
+- `weather` — NOAA-style weather station readings
+- `slot_machine` — Casino slot machine telemetry
+
+### Step 5: Start Stream Analytics Job
+
+```bash
+az stream-analytics job start \
+  --resource-group rg-iot-streaming \
+  --name csaiot-asa \
+  --output-start-mode Now
+```
+
+### Step 6: Query Real-Time Data in ADX
+
+```kql
+// Fleet overview
+SensorTelemetry
+| where timestamp > ago(15m)
+| summarize
+    count(),
+    avg(temperature_c),
+    dcount(sensor_id)
+  by bin(timestamp, 1m)
+| render timechart
+
+// Anomaly detection
+// See kql/queries/realtime_anomaly_detection.kql
+```
+
+## KQL Queries Reference
+
+| Query File | Purpose |
+|-----------|---------|
+| `realtime_anomaly_detection.kql` | Time-series decomposition, IQR outliers, correlation anomalies |
+| `hourly_aggregation.kql` | Hourly rollups for all sensor types (temp, weather, AQI, slots) |
+| `device_health.kql` | Connectivity status, battery monitoring, data freshness, quality checks |
+| `alert_triggers.kql` | Temperature, AQI, wind, battery, hold%, and offline device alerts |
+| `dashboard_summary.kql` | Fleet KPIs, geographic heatmap, throughput metrics, per-vertical summaries |
+
+## Stream Analytics Queries Reference
+
+| Query File | Purpose |
+|-----------|---------|
+| `transform_telemetry.asaql` | Raw passthrough + enrichment (heat index, dew point, quality flags) |
+| `aggregate_metrics.asaql` | Tumbling (5min), hopping (1min/5min), regional, and session windows |
+| `detect_anomalies.asaql` | SpikeAndDip, ChangePoint, and combined threshold+anomaly alerts |
+
+## Integration with Other Verticals
+
+This streaming infrastructure is shared across verticals:
+
+| Vertical | Sensor Type | Event Hub | ADX Table |
+|----------|------------|-----------|-----------|
+| NOAA Weather | `weather` | `telemetry` | `WeatherObservations` |
+| EPA Air Quality | `aqi` | `telemetry` | `AQIReadings` |
+| Casino Analytics | `slot_machine` | `telemetry` | `SlotEvents` |
+| Generic IoT | `temperature` | `telemetry` | `SensorTelemetry` |
+
+Each vertical can add its own KQL queries and Stream Analytics jobs while
+sharing the same Event Hub namespace and ADX cluster.
 
 ## Azure Government
 
 All streaming services are available in Azure Government:
-- Event Hubs: GA
-- Azure Data Explorer: GA
-- Stream Analytics: GA
-- IoT Hub: GA
-- ADLS Gen2 (Capture): GA
+- Event Hubs: GA (FedRAMP High, IL4, IL5)
+- Azure Data Explorer: GA (FedRAMP High, IL4, IL5)
+- Stream Analytics: GA (FedRAMP High, IL4, IL5)
+- IoT Hub: GA (FedRAMP High, IL4, IL5)
+- ADLS Gen2 (Capture): GA (FedRAMP High, IL4, IL5)
+
+Use the Government parameter files in `deploy/bicep/gov/` and set your
+Azure CLI cloud to `AzureUSGovernment`.
