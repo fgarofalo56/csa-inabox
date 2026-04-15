@@ -251,7 +251,7 @@ class TestEnrichText:
 
     @pytest.mark.asyncio
     async def test_handles_sdk_exception(self, function_app: types.ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
-        """When the SDK raises, we get a graceful error instead of an unhandled exception."""
+        """When the SDK raises an unexpected error, it propagates (retryable errors are retried by tenacity)."""
         monkeypatch.setattr(function_app, "AI_ENDPOINT", "https://test.cognitiveservices.azure.com")
 
         mock_client = AsyncMock()
@@ -270,9 +270,8 @@ class TestEnrichText:
                 "azure.identity.aio": MagicMock(DefaultAzureCredential=MagicMock(return_value=mock_credential)),
             },
         ):
-            result = await function_app._enrich_text("test")
-
-        assert "error" in result
+            with pytest.raises(RuntimeError, match="SDK boom"):
+                await function_app._enrich_text("test")
 
 
 # ---------------------------------------------------------------------------
@@ -334,6 +333,7 @@ class TestAnalyzeDocument:
 
     @pytest.mark.asyncio
     async def test_handles_sdk_exception(self, function_app: types.ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When the SDK raises an unexpected error, it propagates (retryable errors are retried by tenacity)."""
         monkeypatch.setattr(function_app, "AI_ENDPOINT", "https://test.cognitiveservices.azure.com")
 
         mock_client = AsyncMock()
@@ -352,9 +352,8 @@ class TestAnalyzeDocument:
                 "azure.identity.aio": MagicMock(DefaultAzureCredential=MagicMock(return_value=mock_credential)),
             },
         ):
-            result = await function_app._analyze_document(b"data", "application/pdf")
-
-        assert "error" in result
+            with pytest.raises(RuntimeError, match="SDK boom"):
+                await function_app._analyze_document(b"data", "application/pdf")
 
 
 # ---------------------------------------------------------------------------
