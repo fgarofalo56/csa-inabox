@@ -160,6 +160,11 @@ def test_main_write_creates_per_domain_files(tmp_path: Path) -> None:
     domains_dir = tmp_path / "domains" / "sales" / "data-products" / "orders"
     domains_dir.mkdir(parents=True)
 
+    # Create a stub SQL file so the generator recognises the model as existing
+    silver_dir = tmp_path / "domains" / "sales" / "dbt" / "models" / "silver"
+    silver_dir.mkdir(parents=True)
+    (silver_dir / "slv_orders.sql").write_text("SELECT 1")
+
     # Copy the real contract
     import shutil
 
@@ -180,6 +185,10 @@ def test_main_check_passes_when_up_to_date(tmp_path: Path) -> None:
     domains_dir = tmp_path / "domains" / "sales" / "data-products" / "orders"
     domains_dir.mkdir(parents=True)
 
+    silver_dir = tmp_path / "domains" / "sales" / "dbt" / "models" / "silver"
+    silver_dir.mkdir(parents=True)
+    (silver_dir / "slv_orders.sql").write_text("SELECT 1")
+
     import shutil
 
     shutil.copy(SALES_ORDERS_CONTRACT, domains_dir / "contract.yaml")
@@ -194,6 +203,10 @@ def test_main_check_passes_when_up_to_date(tmp_path: Path) -> None:
 def test_main_check_fails_when_out_of_date(tmp_path: Path) -> None:
     domains_dir = tmp_path / "domains" / "sales" / "data-products" / "orders"
     domains_dir.mkdir(parents=True)
+
+    silver_dir = tmp_path / "domains" / "sales" / "dbt" / "models" / "silver"
+    silver_dir.mkdir(parents=True)
+    (silver_dir / "slv_orders.sql").write_text("SELECT 1")
 
     import shutil
 

@@ -159,7 +159,11 @@ def _model_name_from_contract(contract: Contract) -> str:
 # ---- YAML generation -------------------------------------------------------
 
 
-def generate_schema_yml(contracts: list[Contract], exclude_models: set[str] | None = None) -> str:
+def generate_schema_yml(
+    contracts: list[Contract],
+    exclude_models: set[str] | None = None,
+    existing_models: set[str] | None = None,
+) -> str:
     """Render a dbt ``schema.yml`` string from a list of contracts.
 
     The output is a valid dbt schema file with ``version: 2`` and a
@@ -167,6 +171,10 @@ def generate_schema_yml(contracts: list[Contract], exclude_models: set[str] | No
 
     Models whose names appear in *exclude_models* are silently skipped
     so that hand-written ``schema.yml`` definitions take precedence.
+
+    When *existing_models* is provided, only models whose names appear
+    in this set are included — contracts for models that don't have a
+    corresponding ``.sql`` file yet are skipped to avoid dbt warnings.
     """
     models: list[dict[str, Any]] = []
     exclude = exclude_models or set()
@@ -174,6 +182,8 @@ def generate_schema_yml(contracts: list[Contract], exclude_models: set[str] | No
     for contract in sorted(contracts, key=lambda c: c.name):
         model_name = _model_name_from_contract(contract)
         if model_name in exclude:
+            continue
+        if existing_models is not None and model_name not in existing_models:
             continue
         col_tests = _build_column_tests(contract)
 
@@ -260,6 +270,19 @@ def _read_handwritten_model_names(repo_root: Path, domain: str) -> set[str]:
         return set()
 
 
+def _existing_model_names(repo_root: Path, domain: str) -> set[str]:
+    """Return the set of dbt model names that have a .sql file on disk.
+
+    Only models with an actual SQL file should appear in the generated
+    schema — referencing contract-defined models that haven't been built
+    yet produces dbt warnings and can break ``dbt run``/``dbt test``.
+    """
+    silver_dir = repo_root / f"domains/{domain}/dbt/models/silver"
+    if not silver_dir.is_dir():
+        return set()
+    return {p.stem for p in silver_dir.glob("*.sql")}
+
+
 # ---- CLI entry-point -------------------------------------------------------
 
 
@@ -319,7 +342,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.write:
         for domain, domain_contracts in sorted(by_domain.items()):
             exclude = _read_handwritten_model_names(repo_root, domain)
-            generated = generate_schema_yml(domain_contracts, exclude_models=exclude)
+            existing = _existing_model_names(repo_root, domain)
+            generated = generate_schema_yml(domain_contracts, exclude_models=exclude, existing_models=existing)
             out = output_path_for_domain(repo_root, domain)
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(generated, encoding="utf-8")
@@ -337,7 +361,8 @@ def main(argv: list[str] | None = None) -> int:
         has_drift = False
         for domain, domain_contracts in sorted(by_domain.items()):
             exclude = _read_handwritten_model_names(repo_root, domain)
-            generated = generate_schema_yml(domain_contracts, exclude_models=exclude)
+            existing = _existing_model_names(repo_root, domain)
+            generated = generate_schema_yml(domain_contracts, exclude_models=exclude, existing_models=existing)
             out = output_path_for_domain(repo_root, domain)
             if not out.exists():
                 print(
@@ -367,8 +392,9 @@ def main(argv: list[str] | None = None) -> int:
     # Default: preview to stdout
     for domain, domain_contracts in sorted(by_domain.items()):
         exclude = _read_handwritten_model_names(repo_root, domain)
+        existing = _existing_model_names(repo_root, domain)
         print(f"\n# === Domain: {domain} ===")
-        print(generate_schema_yml(domain_contracts, exclude_models=exclude))
+        print(generate_schema_yml(domain_contracts, exclude_models=exclude, existing_models=existing))
     return 0
 
 

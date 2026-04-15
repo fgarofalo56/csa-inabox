@@ -57,3 +57,7 @@ for _dirname, _pyname in _HYPHEN_DIRS.items():
             _sub.__path__ = [str(_dirpath)]  # type: ignore[attr-defined]
             _sub.__package__ = _full_name
             sys.modules[_full_name] = _sub
+            # Also set as attribute on the stdlib platform module so that
+            # unittest.mock.patch() can traverse the dotted path (it uses
+            # getattr on parent modules, not sys.modules lookup).
+            setattr(_stdlib_platform, _pyname, _sub)
