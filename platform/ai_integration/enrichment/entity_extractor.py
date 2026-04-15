@@ -20,8 +20,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Sequence
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -241,7 +242,7 @@ class EntityExtractor:
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         records: list[dict[str, Any]] = []
-        with open(input_path, "r", encoding="utf-8") as f:
+        with open(input_path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if line:

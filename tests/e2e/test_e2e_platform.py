@@ -271,7 +271,7 @@ class TestContractSchemaAlignment:
     def test_gold_schema_has_contract_columns(
         self,
         duckdb_conn: Any,
-        contract_schemas: dict[str, dict[str, Any]],  # noqa: ARG002
+        contract_schemas: dict[str, dict[str, Any]],
     ) -> None:
         """For each contract referencing a Gold-layer model, ensure the
         Gold table in DuckDB contains at least the columns declared in

@@ -17,11 +17,11 @@ import json
 import logging
 import sys
 import time
-from datetime import datetime, date
+from datetime import date
 from pathlib import Path
-from typing import Dict, List, Optional, Any
-import requests
+from typing import Any
 
+import requests
 
 # Configure logging
 logging.basicConfig(
@@ -96,13 +96,13 @@ class NOAADataFetcher:
     def fetch_cdo_data(
         self,
         dataset_id: str = 'GHCND',
-        station_ids: List[str] = None,
-        data_types: List[str] = None,
+        station_ids: list[str] = None,
+        data_types: list[str] = None,
         start_date: str = None,
         end_date: str = None,
         location_id: str = None,
         limit: int = 1000
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Fetch data from CDO API.
 
         Args:
@@ -186,7 +186,7 @@ class NOAADataFetcher:
         location_id: str = None,
         extent: str = None,
         limit: int = 1000
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Fetch station metadata from CDO API.
 
         Args:
@@ -251,7 +251,7 @@ class NOAADataFetcher:
         datum: str = 'MLLW',
         units: str = 'metric',
         time_zone: str = 'gmt'
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Fetch data from NOAA CO-OPS Tides & Currents API.
 
         Args:
@@ -309,12 +309,12 @@ class NOAADataFetcher:
 
     def fetch_multiple_stations_cdo(
         self,
-        station_ids: List[str],
-        data_types: List[str],
+        station_ids: list[str],
+        data_types: list[str],
         start_date: str,
         end_date: str,
         dataset_id: str = 'GHCND'
-    ) -> Dict[str, List[Dict[str, Any]]]:
+    ) -> dict[str, list[dict[str, Any]]]:
         """Fetch CDO data for multiple stations.
 
         Args:
@@ -343,7 +343,7 @@ class NOAADataFetcher:
 
     def save_data(
         self,
-        data: List[Dict[str, Any]],
+        data: list[dict[str, Any]],
         output_path: Path,
         format_type: str = 'csv'
     ) -> None:
@@ -358,7 +358,7 @@ class NOAADataFetcher:
             fieldnames = set()
             for record in data:
                 fieldnames.update(record.keys())
-            fieldnames = sorted(list(fieldnames))
+            fieldnames = sorted(fieldnames)
 
             with open(output_path, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -382,9 +382,8 @@ class NOAADataFetcher:
             if data.get('results'):
                 logger.info("NOAA CDO API connection test successful")
                 return True
-            else:
-                logger.error("CDO API returned empty response")
-                return False
+            logger.error("CDO API returned empty response")
+            return False
         except Exception as e:
             logger.error(f"CDO API connection test failed: {e}")
             return False

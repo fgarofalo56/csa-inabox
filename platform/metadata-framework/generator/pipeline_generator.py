@@ -8,18 +8,16 @@ pipeline templates, and outputs deployable ARM/Bicep templates.
 from __future__ import annotations
 
 import json
-import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 import yaml
-from jsonschema import validate, ValidationError
+from jsonschema import ValidationError, validate
 
 from governance.common.logging import configure_structlog, get_logger
-
 
 # Configure structured logging
 configure_structlog(service="metadata-framework-pipeline-generator")
@@ -33,31 +31,29 @@ class PipelineGenerationResult:
     pipeline_id: str
     pipeline_name: str
     template_type: str
-    arm_template: Dict[str, Any]
-    bicep_template: Optional[str] = None
-    parameters_file: Optional[Dict[str, Any]] = None
-    deployment_config: Optional[Dict[str, Any]] = None
+    arm_template: dict[str, Any]
+    bicep_template: str | None = None
+    parameters_file: dict[str, Any] | None = None
+    deployment_config: dict[str, Any] | None = None
 
 
 @dataclass
 class SourceDetectionResult:
     """Result of automatic schema detection."""
 
-    tables: List[Dict[str, Any]]
-    estimated_row_counts: Dict[str, int]
-    primary_keys: Dict[str, List[str]]
-    data_types: Dict[str, Dict[str, str]]
-    recommended_watermark_columns: Dict[str, List[str]]
+    tables: list[dict[str, Any]]
+    estimated_row_counts: dict[str, int]
+    primary_keys: dict[str, list[str]]
+    data_types: dict[str, dict[str, str]]
+    recommended_watermark_columns: dict[str, list[str]]
 
 
 class SchemaDetectionError(Exception):
     """Raised when schema detection fails."""
-    pass
 
 
 class PipelineGenerationError(Exception):
     """Raised when pipeline generation fails."""
-    pass
 
 
 class PipelineGenerator:
@@ -70,9 +66,9 @@ class PipelineGenerator:
 
     def __init__(
         self,
-        template_directory: Optional[Path] = None,
-        schema_directory: Optional[Path] = None,
-        output_directory: Optional[Path] = None,
+        template_directory: Path | None = None,
+        schema_directory: Path | None = None,
+        output_directory: Path | None = None,
         debug: bool = False
     ) -> None:
         """Initialize the pipeline generator.
@@ -143,12 +139,12 @@ class PipelineGenerator:
         try:
             # Load source registration schema
             source_schema_path = self.schema_directory / "source_registration.json"
-            with open(source_schema_path, "r", encoding="utf-8") as f:
+            with open(source_schema_path, encoding="utf-8") as f:
                 self.source_schema = json.load(f)
 
             # Load pipeline template schema
             pipeline_schema_path = self.schema_directory / "pipeline_template.json"
-            with open(pipeline_schema_path, "r", encoding="utf-8") as f:
+            with open(pipeline_schema_path, encoding="utf-8") as f:
                 self.pipeline_schema = json.load(f)
 
             logger.info("JSON schemas loaded successfully")
@@ -158,7 +154,7 @@ class PipelineGenerator:
         except json.JSONDecodeError as e:
             raise PipelineGenerationError(f"Invalid JSON in schema file: {e}") from e
 
-    def validate_source_registration(self, source_config: Dict[str, Any]) -> None:
+    def validate_source_registration(self, source_config: dict[str, Any]) -> None:
         """Validate source registration against JSON schema.
 
         Args:
@@ -180,7 +176,7 @@ class PipelineGenerator:
 
     def detect_source_schema(
         self,
-        source_config: Dict[str, Any],
+        source_config: dict[str, Any],
         connection_test: bool = True
     ) -> SourceDetectionResult:
         """Automatically detect schema from the source system.
@@ -203,16 +199,15 @@ class PipelineGenerator:
         try:
             if source_type in ["sql_server", "azure_sql", "oracle", "mysql", "postgres"]:
                 return self._detect_database_schema(source_config)
-            elif source_type == "rest_api":
+            if source_type == "rest_api":
                 return self._detect_api_schema(source_config)
-            elif source_type == "cosmos_db":
+            if source_type == "cosmos_db":
                 return self._detect_cosmos_schema(source_config)
-            elif source_type in ["file_drop", "blob_storage", "s3"]:
+            if source_type in ["file_drop", "blob_storage", "s3"]:
                 return self._detect_file_schema(source_config)
-            elif source_type in ["event_hub", "kafka"]:
+            if source_type in ["event_hub", "kafka"]:
                 return self._detect_stream_schema(source_config)
-            else:
-                raise SchemaDetectionError(f"Schema detection not implemented for {source_type}")
+            raise SchemaDetectionError(f"Schema detection not implemented for {source_type}")
 
         except Exception as e:
             logger.error("Schema detection failed",
@@ -220,7 +215,7 @@ class PipelineGenerator:
                         error=str(e))
             raise SchemaDetectionError(f"Schema detection failed: {e}") from e
 
-    def _detect_database_schema(self, source_config: Dict[str, Any]) -> SourceDetectionResult:
+    def _detect_database_schema(self, source_config: dict[str, Any]) -> SourceDetectionResult:
         """Detect schema for database sources.
 
         This would typically connect to the database and query system tables
@@ -247,7 +242,7 @@ class PipelineGenerator:
             recommended_watermark_columns={"example_table": ["created_date"]}
         )
 
-    def _detect_api_schema(self, source_config: Dict[str, Any]) -> SourceDetectionResult:
+    def _detect_api_schema(self, source_config: dict[str, Any]) -> SourceDetectionResult:
         """Detect schema for REST API sources."""
         logger.info("Detecting API schema (mock implementation)")
         # Would typically make API calls to introspect endpoints
@@ -259,7 +254,7 @@ class PipelineGenerator:
             recommended_watermark_columns={}
         )
 
-    def _detect_cosmos_schema(self, source_config: Dict[str, Any]) -> SourceDetectionResult:
+    def _detect_cosmos_schema(self, source_config: dict[str, Any]) -> SourceDetectionResult:
         """Detect schema for Cosmos DB sources."""
         logger.info("Detecting Cosmos schema (mock implementation)")
         # Would query Cosmos DB metadata
@@ -271,7 +266,7 @@ class PipelineGenerator:
             recommended_watermark_columns={}
         )
 
-    def _detect_file_schema(self, source_config: Dict[str, Any]) -> SourceDetectionResult:
+    def _detect_file_schema(self, source_config: dict[str, Any]) -> SourceDetectionResult:
         """Detect schema for file-based sources."""
         logger.info("Detecting file schema (mock implementation)")
         # Would sample files to determine schema
@@ -283,7 +278,7 @@ class PipelineGenerator:
             recommended_watermark_columns={}
         )
 
-    def _detect_stream_schema(self, source_config: Dict[str, Any]) -> SourceDetectionResult:
+    def _detect_stream_schema(self, source_config: dict[str, Any]) -> SourceDetectionResult:
         """Detect schema for streaming sources."""
         logger.info("Detecting stream schema (mock implementation)")
         # Would sample stream messages
@@ -325,7 +320,7 @@ class PipelineGenerator:
 
         return template_name
 
-    def generate_pipeline_name(self, source_config: Dict[str, Any]) -> str:
+    def generate_pipeline_name(self, source_config: dict[str, Any]) -> str:
         """Generate a unique pipeline name from source configuration.
 
         Args:
@@ -349,7 +344,7 @@ class PipelineGenerator:
 
         return pipeline_name
 
-    def load_template(self, template_name: str) -> Dict[str, Any]:
+    def load_template(self, template_name: str) -> dict[str, Any]:
         """Load ARM template from file.
 
         Args:
@@ -364,7 +359,7 @@ class PipelineGenerator:
         template_path = self.template_directory / template_name
 
         try:
-            with open(template_path, "r", encoding="utf-8") as f:
+            with open(template_path, encoding="utf-8") as f:
                 template = json.load(f)
 
             logger.info("Template loaded", template=template_name)
@@ -377,9 +372,9 @@ class PipelineGenerator:
 
     def customize_template(
         self,
-        template: Dict[str, Any],
-        source_config: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        template: dict[str, Any],
+        source_config: dict[str, Any]
+    ) -> dict[str, Any]:
         """Customize template with source-specific parameters.
 
         Args:
@@ -424,8 +419,8 @@ class PipelineGenerator:
 
     def _customize_database_template(
         self,
-        template: Dict[str, Any],
-        source_config: Dict[str, Any]
+        template: dict[str, Any],
+        source_config: dict[str, Any]
     ) -> None:
         """Customize template for database sources."""
         connection = source_config["connection"]
@@ -452,8 +447,8 @@ class PipelineGenerator:
 
     def _customize_api_template(
         self,
-        template: Dict[str, Any],
-        source_config: Dict[str, Any]
+        template: dict[str, Any],
+        source_config: dict[str, Any]
     ) -> None:
         """Customize template for API sources."""
         connection = source_config["connection"]
@@ -481,8 +476,8 @@ class PipelineGenerator:
 
     def _customize_streaming_template(
         self,
-        template: Dict[str, Any],
-        source_config: Dict[str, Any]
+        template: dict[str, Any],
+        source_config: dict[str, Any]
     ) -> None:
         """Customize template for streaming sources."""
         connection = source_config["connection"]
@@ -500,9 +495,9 @@ class PipelineGenerator:
 
     def generate_parameters_file(
         self,
-        source_config: Dict[str, Any],
+        source_config: dict[str, Any],
         deployment_environment: str = "development"
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Generate ARM template parameters file.
 
         Args:
@@ -538,7 +533,7 @@ class PipelineGenerator:
 
         return parameters
 
-    def generate_bicep_template(self, arm_template: Dict[str, Any]) -> str:
+    def generate_bicep_template(self, arm_template: dict[str, Any]) -> str:
         """Convert ARM template to Bicep format.
 
         Args:
@@ -591,7 +586,7 @@ class PipelineGenerator:
 
     def generate_from_config(
         self,
-        source_config: Dict[str, Any],
+        source_config: dict[str, Any],
         output_format: str = "arm",
         deployment_environment: str = "development"
     ) -> PipelineGenerationResult:
@@ -668,7 +663,7 @@ class PipelineGenerator:
 
     def generate_from_file(
         self,
-        source_file: Union[str, Path],
+        source_file: str | Path,
         output_format: str = "arm",
         deployment_environment: str = "development"
     ) -> PipelineGenerationResult:
@@ -686,7 +681,7 @@ class PipelineGenerator:
 
         try:
             # Load source configuration
-            with open(source_path, "r", encoding="utf-8") as f:
+            with open(source_path, encoding="utf-8") as f:
                 if source_path.suffix.lower() in (".yaml", ".yml"):
                     source_config = yaml.safe_load(f)
                 else:
@@ -710,8 +705,8 @@ class PipelineGenerator:
     def save_generated_artifacts(
         self,
         result: PipelineGenerationResult,
-        output_directory: Optional[Path] = None
-    ) -> Dict[str, Path]:
+        output_directory: Path | None = None
+    ) -> dict[str, Path]:
         """Save generated pipeline artifacts to files.
 
         Args:
@@ -764,7 +759,7 @@ class PipelineGenerator:
     def validate_generated_pipeline(
         self,
         result: PipelineGenerationResult
-    ) -> List[str]:
+    ) -> list[str]:
         """Validate generated pipeline against schema and best practices.
 
         Args:
@@ -840,7 +835,7 @@ if __name__ == "__main__":
         if args.validate_only:
             # Load and validate only
             source_path = Path(args.source_file)
-            with open(source_path, "r", encoding="utf-8") as f:
+            with open(source_path, encoding="utf-8") as f:
                 if source_path.suffix.lower() in (".yaml", ".yml"):
                     source_config = yaml.safe_load(f)
                 else:

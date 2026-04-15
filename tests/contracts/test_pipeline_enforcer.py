@@ -8,17 +8,14 @@ from typing import Any
 import pytest
 
 from governance.contracts.contract_validator import (
+    SLA,
     Column,
     Contract,
-    SLA,
     load_contract,
 )
 from governance.contracts.pipeline_enforcer import (
     ContractEnforcer,
-    EnforcementResult,
-    QuarantineRecord,
 )
-
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SALES_ORDERS_CONTRACT = (

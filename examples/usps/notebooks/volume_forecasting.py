@@ -23,29 +23,29 @@
 # COMMAND ----------
 
 # Import required libraries
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from datetime import datetime, timedelta
 import warnings
+from datetime import datetime
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import seaborn as sns
+
 warnings.filterwarnings('ignore')
 
 # Statistical and ML libraries
-from scipy import stats
-from sklearn.linear_model import LinearRegression, Ridge
-from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
-from sklearn.model_selection import train_test_split, cross_val_score, TimeSeriesSplit
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-from sklearn.preprocessing import StandardScaler, LabelEncoder
-from sklearn.pipeline import Pipeline
-
-# Spark and Delta libraries
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import *
-from pyspark.sql.types import *
 import mlflow
 import mlflow.sklearn
+
+# Spark and Delta libraries
+from pyspark.sql.functions import *
+from pyspark.sql.types import *
+from scipy import stats
+from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
+from sklearn.linear_model import LinearRegression, Ridge
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.model_selection import TimeSeriesSplit, cross_val_score
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 
 # Configuration
 plt.style.use('seaborn-v0_8')
@@ -469,7 +469,7 @@ def compare_models(results, y_test):
         ax.plot([vmin, vmax], [vmin, vmax], 'r--', alpha=0.8)
         ax.text(0.05, 0.95, f"R2={r['test_r2']:.3f}\nMAE={r['test_mae']:,.0f}\nMAPE={r['mape']:.1f}%",
                 transform=ax.transAxes, va='top',
-                bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+                bbox={'boxstyle': 'round', 'facecolor': 'white', 'alpha': 0.8})
         ax.set_xlabel('Actual Volume')
         ax.set_ylabel('Predicted Volume')
         ax.set_title(name, fontweight='bold')
@@ -704,7 +704,7 @@ print("=" * 60)
 print("MAIL VOLUME FORECASTING - SUMMARY REPORT")
 print("=" * 60)
 
-print(f"\nDataset Overview:")
+print("\nDataset Overview:")
 print(f"  Total volume records: {len(df_ml):,}")
 print(f"  Facilities: {df_ml['facility_id'].nunique()}")
 print(f"  Product classes: {df_ml['product_class'].nunique()}")
@@ -720,24 +720,24 @@ print(f"  Test R2: {best['test_r2']:.3f}")
 print(f"  MAPE: {best['mape']:.1f}%")
 print(f"  CV MAE: {best['cv_mae']:,.0f}")
 
-print(f"\nTop Predictive Features:")
+print("\nTop Predictive Features:")
 if feature_importance is not None:
     for _, row in feature_importance.head(5).iterrows():
         print(f"  - {row['feature']}: {row['importance']:.4f}")
 
-print(f"\nForecast Summary:")
+print("\nForecast Summary:")
 avg_change = forecast_results['predicted_change_pct'].mean()
 positive = (forecast_results['predicted_change_pct'] > 0).sum()
 total = len(forecast_results)
 print(f"  Average predicted change: {avg_change:.1f}%")
 print(f"  Increasing forecasts: {positive}/{total} ({positive/total*100:.1f}%)")
 
-print(f"\nOutputs:")
-print(f"  - Volume forecasts: gold.gld_mail_volume_forecasts")
-print(f"  - Model metrics: gold.gld_volume_model_metrics")
-print(f"  - Feature importance: gold.gld_volume_feature_importance")
-print(f"  - Visualizations: /tmp/usps_*.png")
-print(f"  - MLflow: /USPS/mail_volume_forecasting")
+print("\nOutputs:")
+print("  - Volume forecasts: gold.gld_mail_volume_forecasts")
+print("  - Model metrics: gold.gld_volume_model_metrics")
+print("  - Feature importance: gold.gld_volume_feature_importance")
+print("  - Visualizations: /tmp/usps_*.png")
+print("  - MLflow: /USPS/mail_volume_forecasting")
 
 print("=" * 60)
 

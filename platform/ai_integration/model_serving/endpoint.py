@@ -371,7 +371,7 @@ class ModelEndpoint:
                 scoring_uri=endpoint.scoring_uri or "",
                 is_healthy=is_healthy,
             )
-        except Exception as exc:
+        except Exception:
             logger.exception("Health check failed for %s", endpoint_name)
             return EndpointHealth(
                 endpoint_name=endpoint_name,

@@ -26,14 +26,17 @@ print(f"Processing: {domain}/{entity} ({environment})")
 
 # COMMAND ----------
 
+from datetime import datetime
+
+from delta.tables import DeltaTable
 from pyspark.sql import functions as F
 from pyspark.sql.types import (
-    StructType, StructField, StringType, IntegerType,
-    DoubleType, TimestampType, DateType, LongType, DecimalType,
+    DecimalType,
+    LongType,
+    StringType,
+    StructField,
+    StructType,
 )
-from delta.tables import DeltaTable
-import yaml
-from datetime import datetime
 
 # COMMAND ----------
 
@@ -305,4 +308,5 @@ summary = {
 }
 
 import json
+
 dbutils.notebook.exit(json.dumps(summary))

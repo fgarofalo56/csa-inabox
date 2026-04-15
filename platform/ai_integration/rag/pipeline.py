@@ -30,10 +30,10 @@ import json
 import logging
 import re
 import sys
-import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, AsyncIterator, Sequence
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -144,8 +144,7 @@ class DocumentChunker:
         if self.split_strategy == "sentence":
             return [s.strip() for s in self._SENTENCE_RE.split(text) if s.strip()]
         # token-level: split on whitespace, rejoin in fixed windows
-        words = text.split()
-        return words
+        return text.split()
 
     def _merge_segments(self, segments: list[str]) -> list[str]:
         """Merge atomic segments into chunks respecting size and overlap."""
@@ -321,8 +320,8 @@ class EmbeddingGenerator:
                 api_version=self.api_version,
             )
         else:
-            from azure.identity.aio import DefaultAzureCredential as AsyncDefaultAzureCredential
             from azure.identity import get_bearer_token_provider
+            from azure.identity.aio import DefaultAzureCredential as AsyncDefaultAzureCredential
 
             credential = AsyncDefaultAzureCredential()
             token_provider = get_bearer_token_provider(
@@ -433,10 +432,9 @@ class VectorStore:
             from azure.core.credentials import AzureKeyCredential
 
             return AzureKeyCredential(self.api_key)
-        else:
-            from azure.identity import DefaultAzureCredential
+        from azure.identity import DefaultAzureCredential
 
-            return DefaultAzureCredential()
+        return DefaultAzureCredential()
 
     def create_index(self) -> None:
         """Create or update the search index with vector and semantic configurations.

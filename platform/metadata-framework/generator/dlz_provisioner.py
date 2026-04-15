@@ -12,12 +12,11 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 import yaml
 
 from governance.common.logging import configure_structlog, get_logger
-
 
 # Configure structured logging
 configure_structlog(service="metadata-framework-dlz-provisioner")
@@ -30,17 +29,16 @@ class DLZProvisioningResult:
 
     dlz_id: str
     landing_zone_name: str
-    bicep_template_path: Optional[str] = None
-    parameters_file: Optional[Dict[str, Any]] = None
-    rbac_assignments: Optional[List[Dict[str, Any]]] = None
-    purview_scans: Optional[List[Dict[str, Any]]] = None
-    storage_structure: Optional[Dict[str, Any]] = None
-    deployment_config: Optional[Dict[str, Any]] = None
+    bicep_template_path: str | None = None
+    parameters_file: dict[str, Any] | None = None
+    rbac_assignments: list[dict[str, Any]] | None = None
+    purview_scans: list[dict[str, Any]] | None = None
+    storage_structure: dict[str, Any] | None = None
+    deployment_config: dict[str, Any] | None = None
 
 
 class DLZProvisioningError(Exception):
     """Raised when DLZ provisioning fails."""
-    pass
 
 
 class DLZProvisioner:
@@ -53,8 +51,8 @@ class DLZProvisioner:
 
     def __init__(
         self,
-        template_directory: Optional[Path] = None,
-        output_directory: Optional[Path] = None,
+        template_directory: Path | None = None,
+        output_directory: Path | None = None,
         debug: bool = False
     ) -> None:
         """Initialize the DLZ provisioner.
@@ -93,7 +91,7 @@ class DLZProvisioner:
                    template_dir=str(self.template_directory),
                    output_dir=str(self.output_directory))
 
-    def generate_landing_zone_name(self, source_config: Dict[str, Any]) -> str:
+    def generate_landing_zone_name(self, source_config: dict[str, Any]) -> str:
         """Generate a unique landing zone name.
 
         Args:
@@ -138,9 +136,9 @@ class DLZProvisioner:
 
     def generate_medallion_structure(
         self,
-        source_config: Dict[str, Any],
+        source_config: dict[str, Any],
         landing_zone_name: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Generate medallion architecture storage structure.
 
         Args:
@@ -192,7 +190,7 @@ class DLZProvisioner:
 
             # Retention policies based on classification
             classification = source_config.get("classification", "internal")
-            retention_config = self.default_config["data_classification_tags"][classification]
+            self.default_config["data_classification_tags"][classification]
 
             structure["retention_policies"][container] = {
                 "retention_days": self.default_config["retention_days"],
@@ -211,10 +209,10 @@ class DLZProvisioner:
 
     def generate_rbac_assignments(
         self,
-        source_config: Dict[str, Any],
+        source_config: dict[str, Any],
         landing_zone_name: str,
         storage_account_name: str
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Generate RBAC assignments for the landing zone.
 
         Args:
@@ -268,10 +266,10 @@ class DLZProvisioner:
 
     def generate_purview_scans(
         self,
-        source_config: Dict[str, Any],
+        source_config: dict[str, Any],
         landing_zone_name: str,
         storage_account_name: str
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Generate Purview scan configurations.
 
         Args:
@@ -315,7 +313,7 @@ class DLZProvisioner:
 
         return scans
 
-    def _get_classification_rules(self, source_config: Dict[str, Any]) -> List[str]:
+    def _get_classification_rules(self, source_config: dict[str, Any]) -> list[str]:
         """Get classification rules based on source configuration."""
         classification = source_config.get("classification", "internal")
         base_rules = ["System"]
@@ -332,13 +330,13 @@ class DLZProvisioner:
 
     def generate_bicep_parameters(
         self,
-        source_config: Dict[str, Any],
+        source_config: dict[str, Any],
         landing_zone_name: str,
         storage_account_name: str,
-        storage_structure: Dict[str, Any],
-        rbac_assignments: List[Dict[str, Any]],
+        storage_structure: dict[str, Any],
+        rbac_assignments: list[dict[str, Any]],
         environment: str = "development"
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Generate Bicep parameters file for DLZ deployment.
 
         Args:
@@ -423,10 +421,10 @@ class DLZProvisioner:
 
     def generate_deployment_config(
         self,
-        source_config: Dict[str, Any],
+        source_config: dict[str, Any],
         landing_zone_name: str,
         environment: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Generate deployment configuration.
 
         Args:
@@ -479,7 +477,7 @@ class DLZProvisioner:
 
     def provision_dlz_from_config(
         self,
-        source_config: Dict[str, Any],
+        source_config: dict[str, Any],
         environment: str = "development"
     ) -> DLZProvisioningResult:
         """Provision DLZ from source configuration.
@@ -564,7 +562,7 @@ class DLZProvisioner:
 
     def provision_dlz_from_file(
         self,
-        source_file: Union[str, Path],
+        source_file: str | Path,
         environment: str = "development"
     ) -> DLZProvisioningResult:
         """Provision DLZ from source registration file.
@@ -580,7 +578,7 @@ class DLZProvisioner:
 
         try:
             # Load source configuration
-            with open(source_path, "r", encoding="utf-8") as f:
+            with open(source_path, encoding="utf-8") as f:
                 if source_path.suffix.lower() in (".yaml", ".yml"):
                     source_config = yaml.safe_load(f)
                 else:
@@ -600,8 +598,8 @@ class DLZProvisioner:
     def save_provisioning_artifacts(
         self,
         result: DLZProvisioningResult,
-        output_directory: Optional[Path] = None
-    ) -> Dict[str, Path]:
+        output_directory: Path | None = None
+    ) -> dict[str, Path]:
         """Save DLZ provisioning artifacts to files.
 
         Args:
@@ -662,7 +660,7 @@ class DLZProvisioner:
     def validate_dlz_configuration(
         self,
         result: DLZProvisioningResult
-    ) -> List[str]:
+    ) -> list[str]:
         """Validate DLZ configuration.
 
         Args:

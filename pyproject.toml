@@ -75,6 +75,101 @@ ignore = [
     "E501",   # line too long (handled by formatter)
     "COM812", # missing trailing comma (conflicts with formatter)
     "ISC001", # single-line implicit string concat (conflicts with formatter)
+    "RUF013", # implicit-optional (codebase uses `param: X = None` style)
+    "TC003",  # typing-only-standard-library-import (optimization, not a bug)
+    "TC002",  # typing-only-third-party-import (optimization, not a bug)
+    "TC001",  # typing-only-first-party-import (optimization, not a bug)
+    "SIM108", # if-else-block-instead-of-if-exp (readability preference)
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Databricks notebooks use `spark`, `dbutils`, `display` as runtime globals,
+# `# MAGIC` / `# COMMAND` comment syntax, `from pyspark.sql.functions import *`,
+# top-of-cell imports, and PySpark naming conventions (`functions as F`).
+# These are all inherent to the Databricks notebook format — not real issues.
+"**/notebooks/**/*.py" = [
+    "F821",    # undefined-name (spark, dbutils, display)
+    "F403",    # undefined-local-with-import-star
+    "F405",    # undefined-local-with-import-star-usage
+    "ERA001",  # commented-out code (# MAGIC / # COMMAND lines)
+    "E402",    # module-import-not-at-top-of-file (cell-based execution)
+    "N806",    # non-lowercase-variable-in-function (PySpark conventions)
+    "N812",    # lowercase-imported-as-non-lowercase (functions as F)
+    "N803",    # invalid-argument-name (X for feature matrix — ML convention)
+    "E712",    # true-false-comparison (PySpark Column == True)
+    "E701",    # multiple-statements-on-one-line (notebook compact style)
+    "RUF059",  # unused-unpacked-variable (exploratory analysis)
+    "F841",    # unused-variable (intermediate analysis variables)
+    "F401",    # unused-import (notebook cell imports)
+    "B023",    # function-uses-loop-variable (notebook closures)
+    "ARG001",  # unused-function-argument (UDF signatures)
+    "ARG005",  # unused-lambda-argument (UDF signatures)
+    "DTZ003",  # call-datetime-utcnow (notebook logging/display)
+    "DTZ005",  # call-datetime-now-without-tzinfo (notebook timestamps)
+    "DTZ001",  # call-datetime-without-tzinfo (notebook date ranges)
+    "DTZ007",  # call-datetime-strptime-without-zone (notebook date parsing)
+    "B905",    # zip-without-explicit-strict (notebook iteration)
+]
+# Azure Functions use camelCase binding names (cosmosOutput, outputBlob)
+# enforced by the host, and `req` parameters required by the framework.
+"**/functions/function_app.py" = [
+    "N803",    # invalid-argument-name (Azure binding names)
+    "ARG001",  # unused-function-argument (req in health checks)
+    "N806",    # non-lowercase-variable-in-function (MAX_BLOB_SIZE constants)
+]
+# FastAPI routers use Depends(), Query(), Header() in default args (idiomatic).
+"**/api/**/*.py" = [
+    "B008",    # function-call-in-default-argument (FastAPI DI)
+]
+# Data generators and ETL scripts use datetime freely for synthetic data.
+"**/data/generators/**/*.py" = [
+    "DTZ005",  # call-datetime-now-without-tzinfo (synthetic timestamps)
+    "DTZ001",  # call-datetime-without-tzinfo (synthetic date ranges)
+    "DTZ003",  # call-datetime-utcnow (generator timestamps)
+    "DTZ007",  # call-datetime-strptime-without-zone (parsing CSV dates)
+    "DTZ004",  # call-datetime-utcfromtimestamp (epoch conversion)
+    "DTZ011",  # call-date-today (date generation)
+    "B905",    # zip-without-explicit-strict (data pairing)
+    "RUF012",  # mutable-class-default (data model classes)
+]
+"**/data/open-data/**/*.py" = [
+    "DTZ005",  # call-datetime-now-without-tzinfo
+    "DTZ001",  # call-datetime-without-tzinfo
+    "DTZ003",  # call-datetime-utcnow
+    "DTZ007",  # call-datetime-strptime-without-zone
+    "DTZ004",  # call-datetime-utcfromtimestamp
+    "DTZ011",  # call-date-today
+    "B905",    # zip-without-explicit-strict
+]
+# The metadata-framework directory uses hyphens (valid package structure choice).
+"platform/metadata-framework/**/*.py" = [
+    "N999",    # invalid-module-name (hyphenated directory name)
+]
+# Test files may use mock objects with unused arguments and datetime freely.
+"tests/**/*.py" = [
+    "ARG001",  # unused-function-argument (mock/fixture params)
+    "ARG002",  # unused-method-argument (mock overrides)
+    "B008",    # function-call-in-default-argument (pytest fixtures)
+]
+# Exclude broken notebook (empty/malformed)
+"scripts/monitor/SynapseTroubleshooting.ipynb" = [
+    "E999",    # syntax-error (empty notebook file)
+]
+# Example streaming producers use signal handler signatures (signum, frame).
+"examples/**/streaming/**/*.py" = [
+    "ARG001",  # unused-function-argument (signal handler params)
+]
+# Example IoT producers have stub event generators.
+"examples/iot-streaming/**/*.py" = [
+    "ARG001",  # unused-function-argument (stub params)
+]
+# Platform code has many stub/mock method implementations.
+"platform/**/tests/**/*.py" = [
+    "ARG001",  # unused-function-argument (fixtures)
+    "ARG002",  # unused-method-argument (test fixtures)
+]
+"platform/**/generator/**/*.py" = [
+    "ARG002",  # unused-method-argument (mock schema detectors)
 ]
 
 [tool.ruff.lint.isort]

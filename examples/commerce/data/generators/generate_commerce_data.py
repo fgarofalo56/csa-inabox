@@ -20,7 +20,6 @@ import random
 from datetime import datetime
 from typing import Any
 
-
 # ---------------------------------------------------------------------------
 # Reference data
 # ---------------------------------------------------------------------------
@@ -197,7 +196,7 @@ def generate_census_data(rng: random.Random, tracts: int = 5000) -> list[dict]:
         base_pop = state["pop"] // (tracts_per_state * 10)
         base_income = state["income"]
 
-        for t in range(tracts_per_state):
+        for _t in range(tracts_per_state):
             county_fips = f"{rng.randint(1, 200):03d}"
             tract_fips = f"{rng.randint(100, 999999):06d}"
             geo_id = f"{state['fips']}{county_fips}{tract_fips}"

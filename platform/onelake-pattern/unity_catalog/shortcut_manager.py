@@ -28,7 +28,6 @@ Usage::
 
 from __future__ import annotations
 
-import json
 import logging
 import uuid
 from dataclasses import dataclass, field
@@ -177,7 +176,7 @@ class ShortcutManager:
                 )
 
             # Check if we can list blobs (validates read access)
-            blobs = list(container_client.list_blobs(
+            list(container_client.list_blobs(
                 name_starts_with=blob_path,
                 results_per_page=1,
             ))

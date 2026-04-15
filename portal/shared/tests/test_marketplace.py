@@ -4,7 +4,6 @@ Tests for the marketplace router — data product discovery and quality metrics.
 
 from __future__ import annotations
 
-import pytest
 from fastapi.testclient import TestClient
 
 

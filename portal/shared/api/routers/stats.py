@@ -13,7 +13,6 @@ GET    /api/v1/domains                    — all domain overviews (mounted on m
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 

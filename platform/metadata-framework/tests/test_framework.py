@@ -10,7 +10,6 @@ This script validates the framework by:
 Run this after setting up the framework to ensure everything works correctly.
 """
 
-import json
 import sys
 from pathlib import Path
 
@@ -18,8 +17,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 try:
-    from platform.metadata_framework.generator.pipeline_generator import PipelineGenerator
     from platform.metadata_framework.generator.dlz_provisioner import DLZProvisioner
+    from platform.metadata_framework.generator.pipeline_generator import PipelineGenerator
 except ImportError as e:
     print(f"❌ Failed to import framework modules: {e}")
     print("Make sure you're running from the correct directory and dependencies are installed")
@@ -256,9 +255,8 @@ def main():
     if failed == 0:
         print("🎉 All tests passed! The metadata framework is working correctly.")
         return 0
-    else:
-        print("⚠️ Some tests failed. Please check the output above for details.")
-        return 1
+    print("⚠️ Some tests failed. Please check the output above for details.")
+    return 1
 
 
 if __name__ == "__main__":

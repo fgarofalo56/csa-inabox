@@ -4,7 +4,6 @@ Tests for the access router — access request lifecycle management.
 
 from __future__ import annotations
 
-import pytest
 from fastapi.testclient import TestClient
 
 

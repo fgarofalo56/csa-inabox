@@ -18,24 +18,21 @@
 
 # COMMAND ----------
 
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from datetime import datetime
 import warnings
+
+import matplotlib.pyplot as plt
+import pandas as pd
+import seaborn as sns
+
 warnings.filterwarnings('ignore')
 
-from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
-from sklearn.linear_model import Ridge
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_absolute_error, r2_score
-from sklearn.preprocessing import StandardScaler, LabelEncoder
-
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import *
 import mlflow
 import mlflow.sklearn
+from pyspark.sql.functions import *
+from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.metrics import mean_absolute_error, r2_score
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 
 plt.style.use('seaborn-v0_8')
 mlflow.set_experiment("/Casino/floor_optimization")
@@ -270,8 +267,8 @@ print("=" * 65)
 print(f"\nMachines analyzed: {len(machine_perf):,}")
 print(f"Floor zones: {machine_perf['floor_zone'].nunique()}")
 print(f"Revenue prediction R2: {rev_r2:.4f}")
-print(f"\nOutputs:")
-print(f"  gold.gld_machine_performance")
-print(f"  gold.gld_zone_revenue_density")
-print(f"  MLflow: /Casino/floor_optimization")
+print("\nOutputs:")
+print("  gold.gld_machine_performance")
+print("  gold.gld_zone_revenue_density")
+print("  MLflow: /Casino/floor_optimization")
 print("=" * 65)

@@ -4,7 +4,6 @@ Tests for the pipelines router — pipeline listing, details, and triggering.
 
 from __future__ import annotations
 
-import pytest
 from fastapi.testclient import TestClient
 
 

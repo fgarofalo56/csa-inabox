@@ -36,8 +36,7 @@ import os
 from typing import Any
 
 import azure.functions as func
-import jsonschema
-from jsonschema import Draft7Validator, ValidationError
+from jsonschema import Draft7Validator
 
 try:
     import yaml
@@ -81,7 +80,7 @@ def _load_yaml_schema(schema_path: str) -> dict[str, Any]:
     if not os.path.exists(full_path):
         raise FileNotFoundError(f"Schema file not found: {full_path}")
 
-    with open(full_path, "r", encoding="utf-8") as f:
+    with open(full_path, encoding="utf-8") as f:
         raw = yaml.safe_load(f)
 
     if isinstance(raw, dict) and "schema" in raw:

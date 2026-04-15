@@ -83,8 +83,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 import azure.functions as func
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-from azure.core.exceptions import ServiceRequestError, HttpResponseError
+from azure.core.exceptions import HttpResponseError, ServiceRequestError
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from governance.common.logging import (
     bind_trace_context,
@@ -339,7 +339,7 @@ async def _rotate_sql_password(
 
     new_password = _generate_password(length, include_special=include_special)
 
-    async with DefaultAzureCredential() as credential:
+    async with DefaultAzureCredential() as credential:  # noqa: SIM117 (SecretClient depends on credential)
         async with SecretClient(vault_url=KEY_VAULT_URL, credential=credential) as kv_client:
             from datetime import timedelta
             expires_on = datetime.now(timezone.utc) + timedelta(days=DEFAULT_VALIDITY_DAYS)
@@ -545,7 +545,7 @@ async def rotate(req: func.HttpRequest) -> func.HttpResponse:
             )
             return func.HttpResponse(
                 json.dumps({
-                    "error": f"Azure SDK error: {str(e)}",
+                    "error": f"Azure SDK error: {e!s}",
                     "secret_name": secret_name,
                     "service": service,
                 }),
@@ -556,7 +556,7 @@ async def rotate(req: func.HttpRequest) -> func.HttpResponse:
             logger.error("rotation.validation_failed", secret_name=secret_name, error=str(e))
             return func.HttpResponse(
                 json.dumps({
-                    "error": f"Invalid parameters: {str(e)}",
+                    "error": f"Invalid parameters: {e!s}",
                     "secret_name": secret_name,
                     "service": service,
                 }),

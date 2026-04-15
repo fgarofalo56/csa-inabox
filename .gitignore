@@ -15,12 +15,19 @@ deploy/bicep/**/*.json
 !deploy/bicep/**/params*.json
 !deploy/bicep/**/main.bicep
 
+# IoT streaming & monitoring compiled Bicep ARM templates
+examples/iot-streaming/deploy/bicep/*.json
+monitoring/alerts/*.json
+!monitoring/alerts/*.bicep
+
 # ---------------------------
 # Secrets & Environment Files
 # NEVER commit secrets, keys, tokens, or connection strings
 # ---------------------------
 .env
 .env.*
+!.env.example
+!**/.env.example
 *.env
 local.settings.json
 **/local.settings.json

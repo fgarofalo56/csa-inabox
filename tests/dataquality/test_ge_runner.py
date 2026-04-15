@@ -14,7 +14,6 @@ import pytest
 
 from governance.common.validation import EMAIL_REGEX_PATTERN
 from governance.dataquality.ge_runner import (
-    ExpectationResult,
     SuiteResult,
     _evaluate_expectation,
     _infer_table_from_suite_name,
@@ -22,14 +21,13 @@ from governance.dataquality.ge_runner import (
     run_suite_in_memory,
 )
 
-
 # ---------------------------------------------------------------------------
 # _infer_table_from_suite_name
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
-    "suite_name,expected",
+    ("suite_name", "expected"),
     [
         ("bronze_customers_suite", "bronze.customers"),
         ("silver_sales_orders_suite", "silver.sales_orders"),

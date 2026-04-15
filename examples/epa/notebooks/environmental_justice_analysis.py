@@ -22,23 +22,18 @@
 # COMMAND ----------
 
 # Import required libraries
-import pandas as pd
-import numpy as np
+import warnings
+
 import matplotlib.pyplot as plt
 import seaborn as sns
-from datetime import datetime, timedelta
-import warnings
+
 warnings.filterwarnings('ignore')
 
 # Statistical libraries
-from scipy import stats
-from scipy.stats import pearsonr, spearmanr, kruskal, chi2_contingency
-import statsmodels.api as sm
-
 # Spark and Delta
-from pyspark.sql import SparkSession
 from pyspark.sql.functions import *
 from pyspark.sql.types import *
+from scipy.stats import kruskal, spearmanr
 
 # Configuration
 plt.style.use('seaborn-v0_8')
@@ -605,18 +600,18 @@ print("=" * 60)
 print("ENVIRONMENTAL JUSTICE ANALYSIS - SUMMARY REPORT")
 print("=" * 60)
 
-print(f"\nAir Quality:")
+print("\nAir Quality:")
 print(f"  Total records: {len(df_air):,}")
 print(f"  States monitored: {df_air['state_name'].nunique()}")
 print(f"  Average AQI: {df_air['aqi'].mean():.1f}")
 print(f"  Max AQI observed: {df_air['aqi'].max():.0f}")
 
-print(f"\nWater Systems:")
+print("\nWater Systems:")
 print(f"  Total violations: {len(df_water):,}")
 print(f"  Systems affected: {df_water['pwsid'].nunique()}")
 print(f"  Contaminants: {df_water['contaminant_name'].nunique()}")
 
-print(f"\nToxic Release Inventory:")
+print("\nToxic Release Inventory:")
 print(f"  TRI facilities: {df_tri['trifid'].nunique()}")
 print(f"  Chemicals tracked: {df_tri['chemical_name'].nunique()}")
 print(f"  Total releases: {df_tri['total_releases'].sum():,.0f} lbs")
@@ -626,18 +621,18 @@ pfas_pct = (df_tri['pfas_chemical'] == True).sum() / len(df_tri) * 100
 print(f"  Carcinogen releases: {carc_pct:.1f}% of records")
 print(f"  PFAS releases: {pfas_pct:.1f}% of records")
 
-print(f"\nRecommendations:")
-print(f"  1. Prioritize air quality monitoring in high-burden states")
-print(f"  2. Focus drinking water enforcement on underperforming systems")
-print(f"  3. Target PFAS and carcinogen source reduction programs")
-print(f"  4. Develop cumulative impact screening tools for permitting")
-print(f"  5. Increase environmental monitoring in underserved communities")
+print("\nRecommendations:")
+print("  1. Prioritize air quality monitoring in high-burden states")
+print("  2. Focus drinking water enforcement on underperforming systems")
+print("  3. Target PFAS and carcinogen source reduction programs")
+print("  4. Develop cumulative impact screening tools for permitting")
+print("  5. Increase environmental monitoring in underserved communities")
 
-print(f"\nOutputs:")
-print(f"  - gold.gld_air_quality_by_state")
-print(f"  - gold.gld_water_violations_by_state")
-print(f"  - gold.gld_toxic_releases_by_state")
-print(f"  - gold.gld_environmental_burden_scores")
-print(f"  - Visualizations: /tmp/epa_*.png")
+print("\nOutputs:")
+print("  - gold.gld_air_quality_by_state")
+print("  - gold.gld_water_violations_by_state")
+print("  - gold.gld_toxic_releases_by_state")
+print("  - gold.gld_environmental_burden_scores")
+print("  - Visualizations: /tmp/epa_*.png")
 
 print("=" * 60)

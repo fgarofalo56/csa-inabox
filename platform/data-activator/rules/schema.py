@@ -17,11 +17,10 @@ from __future__ import annotations
 
 from enum import Enum
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import yaml
 from pydantic import BaseModel, Field, field_validator
-
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -248,7 +247,7 @@ def load_rules_from_yaml(path: str | Path) -> list[AlertRule]:
     if not path.exists():
         raise FileNotFoundError(f"Rules file not found: {path}")
 
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         raw = yaml.safe_load(f)
 
     rule_set = AlertRuleSet.model_validate(raw)

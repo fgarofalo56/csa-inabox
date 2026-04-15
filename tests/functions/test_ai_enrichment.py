@@ -21,7 +21,6 @@ import json
 import sys
 import types
 from collections.abc import Iterator
-from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -41,7 +40,7 @@ def _reset_logging() -> Iterator[None]:
     reset_logging_state()
 
 
-@pytest.fixture()
+@pytest.fixture
 def function_app() -> types.ModuleType:
     """Import (or reimport) the AI enrichment function_app module.
 
@@ -55,8 +54,7 @@ def function_app() -> types.ModuleType:
     # Force a fresh import each time
     if "function_app" in sys.modules:
         del sys.modules["function_app"]
-    mod = importlib.import_module("function_app")
-    return mod
+    return importlib.import_module("function_app")
 
 
 def _make_http_request(
@@ -135,7 +133,7 @@ class TestFormRecognizerAvailable:
 # _enrich_text pipeline tests
 # ---------------------------------------------------------------------------
 class TestEnrichText:
-    @pytest.mark.asyncio()
+    @pytest.mark.asyncio
     async def test_returns_error_when_sdk_not_importable(self, function_app: types.ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
         """When azure.ai.textanalytics.aio is not installed, returns graceful error."""
         monkeypatch.setattr(function_app, "AI_ENDPOINT", "https://test.cognitiveservices.azure.com")
@@ -151,13 +149,13 @@ class TestEnrichText:
         result = await function_app._enrich_text("Hello world")
         assert "error" in result
 
-    @pytest.mark.asyncio()
+    @pytest.mark.asyncio
     async def test_returns_error_when_endpoint_empty(self, function_app: types.ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(function_app, "AI_ENDPOINT", "")
         result = await function_app._enrich_text("Hello world")
         assert result["error"] == "AI client not configured"
 
-    @pytest.mark.asyncio()
+    @pytest.mark.asyncio
     async def test_successful_enrichment(self, function_app: types.ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
         """Full happy-path: mock the Text Analytics client and verify all fields."""
         monkeypatch.setattr(function_app, "AI_ENDPOINT", "https://test.cognitiveservices.azure.com")
@@ -236,7 +234,7 @@ class TestEnrichText:
         # PII text should be redacted in pii_redacted_text, not in pii_entities
         assert "pii_redacted_text" in result
 
-    @pytest.mark.asyncio()
+    @pytest.mark.asyncio
     async def test_handles_sdk_exception(self, function_app: types.ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
         """When the SDK raises, we get a graceful error instead of an unhandled exception."""
         monkeypatch.setattr(function_app, "AI_ENDPOINT", "https://test.cognitiveservices.azure.com")
@@ -263,13 +261,13 @@ class TestEnrichText:
 # _analyze_document pipeline tests
 # ---------------------------------------------------------------------------
 class TestAnalyzeDocument:
-    @pytest.mark.asyncio()
+    @pytest.mark.asyncio
     async def test_returns_error_when_endpoint_empty(self, function_app: types.ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(function_app, "AI_ENDPOINT", "")
         result = await function_app._analyze_document(b"%PDF-1.4", "application/pdf")
         assert "error" in result
 
-    @pytest.mark.asyncio()
+    @pytest.mark.asyncio
     async def test_successful_document_analysis(self, function_app: types.ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(function_app, "AI_ENDPOINT", "https://test.cognitiveservices.azure.com")
 
@@ -309,7 +307,7 @@ class TestAnalyzeDocument:
         assert len(result["key_value_pairs"]) == 1
         assert result["key_value_pairs"][0]["key"] == "Invoice Number"
 
-    @pytest.mark.asyncio()
+    @pytest.mark.asyncio
     async def test_handles_sdk_exception(self, function_app: types.ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(function_app, "AI_ENDPOINT", "https://test.cognitiveservices.azure.com")
 
@@ -335,7 +333,7 @@ class TestAnalyzeDocument:
 # HTTP Trigger: enrich_text
 # ---------------------------------------------------------------------------
 class TestEnrichTextTrigger:
-    @pytest.mark.asyncio()
+    @pytest.mark.asyncio
     async def test_200_success(self, function_app: types.ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
         """Happy path: valid JSON body with text field."""
         # Bypass the actual enrichment — we tested that above
@@ -349,7 +347,7 @@ class TestEnrichTextTrigger:
         body = json.loads(resp.get_body())
         assert body["input_length"] == 11
 
-    @pytest.mark.asyncio()
+    @pytest.mark.asyncio
     async def test_400_invalid_json(self, function_app: types.ModuleType) -> None:
         req = _make_http_request(body=None)  # triggers JSONDecodeError
         resp = await function_app.enrich_text(req)
@@ -357,7 +355,7 @@ class TestEnrichTextTrigger:
         body = json.loads(resp.get_body())
         assert "Invalid JSON" in body["error"]
 
-    @pytest.mark.asyncio()
+    @pytest.mark.asyncio
     async def test_400_missing_text(self, function_app: types.ModuleType) -> None:
         req = _make_http_request(body=json.dumps({"other": "field"}).encode())
         resp = await function_app.enrich_text(req)
@@ -365,7 +363,7 @@ class TestEnrichTextTrigger:
         body = json.loads(resp.get_body())
         assert "text" in body["error"]
 
-    @pytest.mark.asyncio()
+    @pytest.mark.asyncio
     async def test_413_too_large(self, function_app: types.ModuleType) -> None:
         big_text = "x" * 130000
         req = _make_http_request(body=json.dumps({"text": big_text}).encode())
@@ -377,7 +375,7 @@ class TestEnrichTextTrigger:
 # Blob Trigger: process_inbox_document
 # ---------------------------------------------------------------------------
 class TestProcessInboxDocument:
-    @pytest.mark.asyncio()
+    @pytest.mark.asyncio
     async def test_pdf_routes_to_document_analysis(self, function_app: types.ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
         analyze_called = False
 
@@ -403,7 +401,7 @@ class TestProcessInboxDocument:
         assert "document_analysis" in result
         assert "text_enrichment" in result
 
-    @pytest.mark.asyncio()
+    @pytest.mark.asyncio
     async def test_txt_routes_to_text_enrichment(self, function_app: types.ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
         async def _mock_enrich(text: str) -> dict[str, Any]:
             return {"language": {"name": "English"}}
@@ -420,7 +418,7 @@ class TestProcessInboxDocument:
         assert "text_enrichment" in result
         assert "document_analysis" not in result
 
-    @pytest.mark.asyncio()
+    @pytest.mark.asyncio
     async def test_unsupported_type_is_skipped(self, function_app: types.ModuleType) -> None:
         blob = _make_blob(name="inbox/binary.exe", data=b"\x00\x01\x02")
         output = MagicMock()
@@ -437,7 +435,7 @@ class TestProcessInboxDocument:
 # HTTP Trigger: health_check
 # ---------------------------------------------------------------------------
 class TestHealthCheck:
-    @pytest.mark.asyncio()
+    @pytest.mark.asyncio
     async def test_returns_200_with_schema(self, function_app: types.ModuleType) -> None:
         req = _make_http_request(method="GET", url="/api/health")
         resp = await function_app.health_check(req)

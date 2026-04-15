@@ -17,11 +17,10 @@ import json
 import logging
 import sys
 import time
-from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Any
-import requests
+from typing import Any
 
+import requests
 
 # Configure logging
 logging.basicConfig(
@@ -101,7 +100,7 @@ class FARSDataFetcher:
         state: int,
         year: int,
         max_results: int = 5000
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Fetch crash case list for a state and year.
 
         Args:
@@ -160,7 +159,7 @@ class FARSDataFetcher:
         state: int,
         case_year: int,
         case_number: int
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Fetch detailed crash case information.
 
         Args:
@@ -201,7 +200,7 @@ class FARSDataFetcher:
         year: int = None,
         limit: int = 10000,
         offset: int = 0
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Fetch data from data.transportation.gov SODA API.
 
         Args:
@@ -274,10 +273,10 @@ class FARSDataFetcher:
 
     def fetch_multiple_states(
         self,
-        states: List[str],
-        years: List[int],
+        states: list[str],
+        years: list[int],
         data_source: str = 'crash_api'
-    ) -> Dict[str, List[Dict[str, Any]]]:
+    ) -> dict[str, list[dict[str, Any]]]:
         """Fetch data for multiple states and years.
 
         Args:
@@ -316,7 +315,7 @@ class FARSDataFetcher:
 
     def save_data(
         self,
-        data: List[Dict[str, Any]],
+        data: list[dict[str, Any]],
         output_path: Path,
         format_type: str = 'csv'
     ) -> None:
@@ -337,7 +336,7 @@ class FARSDataFetcher:
             fieldnames = set()
             for record in data:
                 fieldnames.update(record.keys())
-            fieldnames = sorted(list(fieldnames))
+            fieldnames = sorted(fieldnames)
 
             with open(output_path, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -376,9 +375,8 @@ class FARSDataFetcher:
             if data:
                 logger.info("FARS CrashAPI connection test successful")
                 return True
-            else:
-                logger.error("FARS CrashAPI returned empty response")
-                return False
+            logger.error("FARS CrashAPI returned empty response")
+            return False
 
         except Exception as e:
             logger.error(f"FARS CrashAPI connection test failed: {e}")
@@ -405,9 +403,8 @@ class FARSDataFetcher:
             if data:
                 logger.info("SODA API connection test successful")
                 return True
-            else:
-                logger.error("SODA API returned empty response")
-                return False
+            logger.error("SODA API returned empty response")
+            return False
 
         except Exception as e:
             logger.error(f"SODA API connection test failed: {e}")

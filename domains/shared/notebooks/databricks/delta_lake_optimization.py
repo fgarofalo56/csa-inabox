@@ -17,9 +17,8 @@
 
 # COMMAND ----------
 
-from pyspark.sql import SparkSession
-from datetime import datetime
 import json
+from datetime import datetime
 
 # Configuration
 CATALOG = spark.conf.get("spark.databricks.unityCatalog.catalog", "csa_analytics")

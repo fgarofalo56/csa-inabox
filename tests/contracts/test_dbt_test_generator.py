@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import yaml
 
 from governance.contracts.contract_validator import load_contract
@@ -11,7 +12,6 @@ from governance.contracts.dbt_test_generator import (
     generate_schema_yml,
     main,
 )
-
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SALES_ORDERS_CONTRACT = (
@@ -108,7 +108,7 @@ def test_header_contains_regeneration_instructions() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_main_preview_mode_prints_yaml(capsys: "pytest.CaptureFixture[str]") -> None:
+def test_main_preview_mode_prints_yaml(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["--repo-root", str(REPO_ROOT)])
     assert rc == 0
     captured = capsys.readouterr()

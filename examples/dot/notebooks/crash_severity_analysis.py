@@ -22,16 +22,17 @@
 # COMMAND ----------
 
 # Import required libraries
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from datetime import datetime, timedelta
 import warnings
+from datetime import datetime
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import seaborn as sns
+
 warnings.filterwarnings('ignore')
 
 # Statistical libraries
-from scipy import stats
 from scipy.stats import chi2_contingency, pearsonr
 
 # Geospatial and advanced viz
@@ -45,7 +46,6 @@ except ImportError:
     PLOTLY_AVAILABLE = False
 
 # Spark and Delta libraries
-from pyspark.sql import SparkSession
 from pyspark.sql.functions import *
 from pyspark.sql.types import *
 
@@ -97,16 +97,15 @@ def prepare_crash_data(df):
     def classify_time_of_day(hour):
         if pd.isna(hour) or hour == 99:
             return 'Unknown'
-        elif 6 <= hour < 10:
+        if 6 <= hour < 10:
             return 'Morning Rush'
-        elif 10 <= hour < 16:
+        if 10 <= hour < 16:
             return 'Midday'
-        elif 16 <= hour < 20:
+        if 16 <= hour < 20:
             return 'Evening Rush'
-        elif 20 <= hour < 24 or 0 <= hour < 2:
+        if 20 <= hour < 24 or 0 <= hour < 2:
             return 'Night'
-        else:
-            return 'Late Night'
+        return 'Late Night'
 
     df_clean['time_of_day'] = df_clean['crash_hour'].apply(classify_time_of_day)
 
@@ -142,14 +141,13 @@ def prepare_crash_data(df):
     def classify_severity(row):
         if row['fatality_count'] >= 3:
             return 'Mass Casualty (3+)'
-        elif row['fatality_count'] == 2:
+        if row['fatality_count'] == 2:
             return 'Multiple Fatality'
-        elif row['drunk_driver_count'] > 0:
+        if row['drunk_driver_count'] > 0:
             return 'DUI-Related'
-        elif row['pedestrians_involved'] > 0:
+        if row['pedestrians_involved'] > 0:
             return 'Pedestrian-Involved'
-        else:
-            return 'Single Fatality'
+        return 'Single Fatality'
 
     df_clean['severity_class'] = df_clean.apply(classify_severity, axis=1)
 
@@ -157,16 +155,15 @@ def prepare_crash_data(df):
     def speed_category(limit):
         if pd.isna(limit) or limit == 0:
             return 'Unknown'
-        elif limit <= 30:
+        if limit <= 30:
             return 'Low (≤30 mph)'
-        elif limit <= 45:
+        if limit <= 45:
             return 'Medium (31-45 mph)'
-        elif limit <= 55:
+        if limit <= 55:
             return 'Moderate (46-55 mph)'
-        elif limit <= 65:
+        if limit <= 65:
             return 'High (56-65 mph)'
-        else:
-            return 'Very High (>65 mph)'
+        return 'Very High (>65 mph)'
 
     df_clean['speed_category'] = df_clean['posted_speed_limit'].apply(speed_category)
 
@@ -503,7 +500,7 @@ def analyze_environmental_factors():
     ax1.grid(True, alpha=0.3, axis='x')
 
     # Add avg fatalities annotation
-    for i, (idx, row) in enumerate(top_weather.iterrows()):
+    for i, (_idx, row) in enumerate(top_weather.iterrows()):
         ax1.text(row['crashes'] + max(top_weather['crashes']) * 0.01, i,
                 f"avg: {row['avg_fatalities']:.2f}", va='center', fontsize=9)
 
@@ -748,13 +745,13 @@ print("=" * 60)
 print("CRASH SEVERITY ANALYSIS - SUMMARY REPORT")
 print("=" * 60)
 
-print(f"\nDataset Overview:")
+print("\nDataset Overview:")
 print(f"  Total records analyzed: {len(df_prepared):,}")
 print(f"  States covered: {df_prepared['state_fips'].nunique()}")
 print(f"  Year range: {df_prepared['crash_year'].min()}-{df_prepared['crash_year'].max()}")
 print(f"  Total fatalities: {df_prepared['fatality_count'].sum():,}")
 
-print(f"\nKey Findings:")
+print("\nKey Findings:")
 total = len(df_prepared)
 dui_pct = (df_prepared['drunk_driver_count'] > 0).sum() / total * 100
 ped_pct = (df_prepared['pedestrians_involved'] > 0).sum() / total * 100
@@ -766,14 +763,14 @@ print(f"  Pedestrian-involved: {ped_pct:.1f}%")
 print(f"  Nighttime crashes: {night_pct:.1f}%")
 print(f"  Rural area crashes: {rural_pct:.1f}%")
 
-print(f"\nRecommendations:")
-print(f"  1. Increase nighttime enforcement during weekend hours")
-print(f"  2. Prioritize pedestrian infrastructure in urban areas")
-print(f"  3. Target high-speed rural corridors for safety improvements")
-print(f"  4. Deploy DUI checkpoints during peak risk periods (Fri-Sun, 10pm-3am)")
+print("\nRecommendations:")
+print("  1. Increase nighttime enforcement during weekend hours")
+print("  2. Prioritize pedestrian infrastructure in urban areas")
+print("  3. Target high-speed rural corridors for safety improvements")
+print("  4. Deploy DUI checkpoints during peak risk periods (Fri-Sun, 10pm-3am)")
 
-print(f"\nOutputs:")
-print(f"  - Analysis tables saved to gold layer")
-print(f"  - Visualizations saved to /tmp/dot_*.png")
+print("\nOutputs:")
+print("  - Analysis tables saved to gold layer")
+print("  - Visualizations saved to /tmp/dot_*.png")
 
 print("=" * 60)

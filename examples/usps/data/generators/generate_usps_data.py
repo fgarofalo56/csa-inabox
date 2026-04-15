@@ -19,10 +19,8 @@ import math
 import os
 import random
 import sys
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta
-from typing import List, Optional
-
 
 # ---------------------------------------------------------------------------
 # Reference data
@@ -191,7 +189,7 @@ class FacilityRecord:
     revenue_daily: float
     square_footage: int
     year_built: int
-    last_renovation_year: Optional[int]
+    last_renovation_year: int | None
     po_boxes: int
     delivery_routes: int
     load_time: str
@@ -220,8 +218,8 @@ class VolumeRecord:
     avg_weight_per_piece_oz: float
     postage_revenue: float
     avg_revenue_per_piece: float
-    volume_prior_year_same_day: Optional[int]
-    volume_prior_week: Optional[int]
+    volume_prior_year_same_day: int | None
+    volume_prior_week: int | None
     is_holiday: bool
     is_business_day: bool
     load_time: str
@@ -233,10 +231,7 @@ class VolumeRecord:
 
 def weighted_choice(options, rng: random.Random):
     """Pick from a list of (value, ..., weight, ...) tuples using second element as weight."""
-    if len(options[0]) == 2:
-        values = [o[0] for o in options]
-        weights = [o[1] for o in options]
-    elif len(options[0]) >= 3:
+    if len(options[0]) == 2 or len(options[0]) >= 3:
         values = [o[0] for o in options]
         weights = [o[1] for o in options]
     else:
@@ -298,7 +293,7 @@ def is_business_day(d: date) -> bool:
 # Generator functions
 # ---------------------------------------------------------------------------
 
-def generate_delivery_records(n: int, rng: random.Random) -> List[DeliveryRecord]:
+def generate_delivery_records(n: int, rng: random.Random) -> list[DeliveryRecord]:
     """
     Generate n synthetic delivery performance records.
 
@@ -434,7 +429,7 @@ def generate_delivery_records(n: int, rng: random.Random) -> List[DeliveryRecord
     return records
 
 
-def generate_facility_data(n: int, rng: random.Random) -> List[FacilityRecord]:
+def generate_facility_data(n: int, rng: random.Random) -> list[FacilityRecord]:
     """
     Generate n synthetic facility operational records.
 
@@ -571,7 +566,7 @@ def generate_facility_data(n: int, rng: random.Random) -> List[FacilityRecord]:
 
 def generate_mail_volume(
     days: int, facilities: int, rng: random.Random
-) -> List[VolumeRecord]:
+) -> list[VolumeRecord]:
     """
     Generate daily mail volume records for multiple facilities.
 

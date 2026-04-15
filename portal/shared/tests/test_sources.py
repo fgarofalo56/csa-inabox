@@ -4,7 +4,6 @@ Tests for the sources router — CRUD operations on data source registrations.
 
 from __future__ import annotations
 
-import pytest
 from fastapi.testclient import TestClient
 
 

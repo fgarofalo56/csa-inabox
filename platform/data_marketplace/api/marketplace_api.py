@@ -19,15 +19,10 @@ from __future__ import annotations
 import logging
 import os
 import uuid
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Any, AsyncIterator
-
-from fastapi import Depends, FastAPI, HTTPException, Query, status
-from fastapi.middleware.cors import CORSMiddleware
-
 from platform.data_marketplace.models.data_product import (
-    AccessLevel,
     AccessRequest,
     AccessRequestApproval,
     AccessRequestCreate,
@@ -38,8 +33,11 @@ from platform.data_marketplace.models.data_product import (
     PaginatedResponse,
     QualityHistoryResponse,
     QualityMetric,
-    QualityScore,
 )
+from typing import Any
+
+from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi.middleware.cors import CORSMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -210,7 +208,7 @@ async def get_store() -> InMemoryStore:
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Application lifecycle manager."""
     logger.info("Data Marketplace starting up")
     environment = os.environ.get("ENVIRONMENT", "dev")

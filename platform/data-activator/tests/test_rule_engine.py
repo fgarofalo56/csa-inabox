@@ -6,12 +6,7 @@ batch evaluation, and alert notification routing.
 
 from __future__ import annotations
 
-import time
-from unittest.mock import MagicMock, patch
-
-import pytest
-
-from platform.data_activator.rules.engine import FiredAlert, RuleEngine, WindowedEvent
+from platform.data_activator.rules.engine import RuleEngine
 from platform.data_activator.rules.schema import (
     Action,
     ActionConfig,
@@ -22,6 +17,7 @@ from platform.data_activator.rules.schema import (
     ConditionOperator,
 )
 
+import pytest
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -61,7 +57,7 @@ def _make_rule(
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 def engine() -> RuleEngine:
     """Create a fresh RuleEngine."""
     return RuleEngine()

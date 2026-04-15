@@ -22,24 +22,22 @@
 # COMMAND ----------
 
 # Import required libraries
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from datetime import datetime, timedelta
 import warnings
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import seaborn as sns
+
 warnings.filterwarnings('ignore')
 
 # Statistical libraries
-from scipy import stats
-from scipy.stats import mannwhitneyu, kruskal
-import statsmodels.api as sm
-from statsmodels.tsa.seasonal import seasonal_decompose
 
 # Spark and Delta libraries
-from pyspark.sql import SparkSession
 from pyspark.sql.functions import *
 from pyspark.sql.types import *
+from scipy import stats
+from scipy.stats import kruskal
 
 # Configuration
 plt.style.use('seaborn-v0_8')
@@ -217,7 +215,7 @@ def analyze_temperature_trends():
         ax1.plot(annual_avg['year'], p(annual_avg['year']), '--', color='darkred', linewidth=2)
         slope = z[0]
         ax1.text(0.05, 0.95, f"Trend: {slope:.3f} C/year", transform=ax1.transAxes,
-                va='top', bbox=dict(facecolor='white', alpha=0.8))
+                va='top', bbox={'facecolor': 'white', 'alpha': 0.8})
     ax1.set_title('Annual Average Temperature Trend', fontsize=14, fontweight='bold')
     ax1.set_xlabel('Year')
     ax1.set_ylabel('Temperature (C)')
@@ -371,12 +369,11 @@ def analyze_storm_events():
         try:
             if val.endswith('K'):
                 return float(val[:-1]) * 1000
-            elif val.endswith('M'):
+            if val.endswith('M'):
                 return float(val[:-1]) * 1000000
-            elif val.endswith('B'):
+            if val.endswith('B'):
                 return float(val[:-1]) * 1000000000
-            else:
-                return float(val)
+            return float(val)
         except (ValueError, IndexError):
             return 0.0
 
@@ -644,41 +641,41 @@ print("=" * 60)
 print("CLIMATE TREND ANALYSIS - SUMMARY REPORT")
 print("=" * 60)
 
-print(f"\nWeather Observations:")
+print("\nWeather Observations:")
 print(f"  Total records: {len(df_prepared):,}")
 print(f"  Stations: {df_prepared['station_id'].nunique()}")
 print(f"  States: {df_prepared['state_code'].nunique()}")
 
 if 'TAVG' in df_prepared.columns:
-    print(f"\nTemperature Summary:")
+    print("\nTemperature Summary:")
     print(f"  Overall avg temp: {df_prepared['TAVG'].mean():.1f} C")
     print(f"  Max recorded: {df_prepared['TMAX'].max():.1f} C")
     print(f"  Min recorded: {df_prepared['TMIN'].min():.1f} C")
 
 if 'PRCP' in df_prepared.columns:
-    print(f"\nPrecipitation Summary:")
+    print("\nPrecipitation Summary:")
     print(f"  Avg daily precip: {df_prepared['PRCP'].mean():.1f} mm")
     print(f"  Max daily precip: {df_prepared['PRCP'].max():.1f} mm")
     rain_days = (df_prepared['PRCP'] > 0).sum()
     total_days = len(df_prepared)
     print(f"  Rain day frequency: {rain_days/total_days*100:.1f}%")
 
-print(f"\nStorm Events:")
+print("\nStorm Events:")
 print(f"  Total events: {len(df_storms):,}")
 print(f"  Event types: {df_storms['event_type'].nunique()}")
 
-print(f"\nOcean Buoys:")
+print("\nOcean Buoys:")
 print(f"  Total observations: {len(df_buoys):,}")
 print(f"  Stations: {df_buoys['station_id'].nunique()}")
 
-print(f"\nRecommendations:")
-print(f"  1. Monitor temperature trends for long-term climate planning")
-print(f"  2. Track severe storm frequency increases for emergency preparedness")
-print(f"  3. Correlate SST anomalies with coastal storm patterns")
-print(f"  4. Integrate drought indices for agricultural impact assessment")
+print("\nRecommendations:")
+print("  1. Monitor temperature trends for long-term climate planning")
+print("  2. Track severe storm frequency increases for emergency preparedness")
+print("  3. Correlate SST anomalies with coastal storm patterns")
+print("  4. Integrate drought indices for agricultural impact assessment")
 
-print(f"\nOutputs:")
-print(f"  - Analysis tables saved to gold layer")
-print(f"  - Visualizations saved to /tmp/noaa_*.png")
+print("\nOutputs:")
+print("  - Analysis tables saved to gold layer")
+print("  - Visualizations saved to /tmp/noaa_*.png")
 
 print("=" * 60)

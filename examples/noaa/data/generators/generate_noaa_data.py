@@ -21,7 +21,6 @@ import random
 from datetime import datetime, timedelta
 from typing import Any
 
-
 # ---------------------------------------------------------------------------
 # Reference data: realistic station metadata
 # ---------------------------------------------------------------------------
@@ -232,8 +231,8 @@ def generate_weather_observations(
             tmin_c = base_t - abs(rng.gauss(4, 1.5)) + daily_var
 
             # GHCN units: tenths of degrees Celsius
-            tmax_raw = int(round(tmax_c * 10))
-            tmin_raw = int(round(tmin_c * 10))
+            tmax_raw = round(tmax_c * 10)
+            tmin_raw = round(tmin_c * 10)
 
             # Precipitation (log-normal when it rains)
             precip_chance = _seasonal_precip(doy, 0.35, station["region"])
@@ -241,18 +240,18 @@ def generate_weather_observations(
                 precip_mm = rng.lognormvariate(1.0, 1.2)
             else:
                 precip_mm = 0.0
-            prcp_raw = int(round(precip_mm * 10))  # tenths of mm
+            prcp_raw = round(precip_mm * 10)  # tenths of mm
 
             # Snowfall (only when cold enough)
             snow_raw = 0
             if tmin_c < 1.0 and precip_mm > 0:
                 snow_ratio = rng.uniform(8, 15)
-                snow_raw = int(round(precip_mm * snow_ratio * 10))  # tenths of mm
+                snow_raw = round(precip_mm * snow_ratio * 10)  # tenths of mm
 
             # Wind speed (m/s * 10)
             base_wind = rng.uniform(1.5, 5.0)
             wind_ms = max(0, base_wind + rng.gauss(0, 1.5))
-            awnd_raw = int(round(wind_ms * 10))
+            awnd_raw = round(wind_ms * 10)
 
             # Quality flag: mostly empty (pass), occasionally flagged
             qc_flag = "" if rng.random() > 0.02 else rng.choice(["S", "R", ""])
@@ -386,12 +385,11 @@ def generate_storm_events(n: int = 2000) -> list[dict[str, Any]]:
         def _fmt_damage(val: float) -> str:
             if val >= 1e9:
                 return f"{val/1e9:.2f}B"
-            elif val >= 1e6:
+            if val >= 1e6:
                 return f"{val/1e6:.2f}M"
-            elif val >= 1e3:
+            if val >= 1e3:
                 return f"{val/1e3:.2f}K"
-            else:
-                return f"{val:.0f}"
+            return f"{val:.0f}"
 
         # Casualties (rare, correlated to severity)
         deaths_direct = 0

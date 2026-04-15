@@ -17,11 +17,10 @@ import json
 import logging
 import sys
 import time
-from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Any
-import requests
+from typing import Any
 
+import requests
 
 # Configure logging
 logging.basicConfig(
@@ -107,10 +106,10 @@ class NASSDataFetcher:
     def fetch_commodity_data(
         self,
         commodity: str,
-        states: List[str],
-        years: List[int],
+        states: list[str],
+        years: list[int],
         geographic_level: str = 'STATE'
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Fetch data for a specific commodity.
 
         Args:
@@ -155,7 +154,7 @@ class NASSDataFetcher:
 
                         data = response.json()
 
-                        if 'data' in data and data['data']:
+                        if data.get('data'):
                             records = data['data']
                             all_records.extend(records)
                             logger.debug(f"Retrieved {len(records)} records")
@@ -182,11 +181,11 @@ class NASSDataFetcher:
 
     def fetch_multiple_commodities(
         self,
-        commodities: List[str],
-        states: List[str],
-        years: List[int],
+        commodities: list[str],
+        states: list[str],
+        years: list[int],
         geographic_level: str = 'STATE'
-    ) -> Dict[str, List[Dict[str, Any]]]:
+    ) -> dict[str, list[dict[str, Any]]]:
         """Fetch data for multiple commodities.
 
         Args:
@@ -218,7 +217,7 @@ class NASSDataFetcher:
 
     def save_data(
         self,
-        data: List[Dict[str, Any]],
+        data: list[dict[str, Any]],
         output_path: Path,
         format_type: str = 'csv'
     ) -> None:
@@ -240,7 +239,7 @@ class NASSDataFetcher:
             fieldnames = set()
             for record in data:
                 fieldnames.update(record.keys())
-            fieldnames = sorted(list(fieldnames))
+            fieldnames = sorted(fieldnames)
 
             with open(output_path, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -256,7 +255,7 @@ class NASSDataFetcher:
 
         logger.info(f"Saved {len(data)} records to {output_path}")
 
-    def get_available_data_items(self, commodity: str, state: str = None) -> List[str]:
+    def get_available_data_items(self, commodity: str, state: str = None) -> list[str]:
         """Get available data items for a commodity.
 
         Args:
@@ -280,7 +279,7 @@ class NASSDataFetcher:
             response.raise_for_status()
 
             data = response.json()
-            if 'data' in data and data['data']:
+            if data.get('data'):
                 return [item['data_item'] for item in data['data']]
 
         except Exception as e:
@@ -305,12 +304,11 @@ class NASSDataFetcher:
             response.raise_for_status()
 
             data = response.json()
-            if 'data' in data and data['data']:
+            if data.get('data'):
                 logger.info("API connection test successful")
                 return True
-            else:
-                logger.error("API connection test failed: no data returned")
-                return False
+            logger.error("API connection test failed: no data returned")
+            return False
 
         except Exception as e:
             logger.error(f"API connection test failed: {e}")

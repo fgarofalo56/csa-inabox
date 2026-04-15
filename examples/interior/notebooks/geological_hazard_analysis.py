@@ -20,22 +20,19 @@
 
 # COMMAND ----------
 
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from datetime import datetime, timedelta
 import warnings
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import seaborn as sns
+
 warnings.filterwarnings('ignore')
 
-from scipy import stats
-from scipy.signal import find_peaks
-from scipy.spatial.distance import pdist, squareform
-from sklearn.cluster import DBSCAN
-
-from pyspark.sql import SparkSession
 from pyspark.sql.functions import *
 from pyspark.sql.types import *
+from scipy import stats
+from sklearn.cluster import DBSCAN
 
 plt.style.use('seaborn-v0_8')
 sns.set_palette("husl")
@@ -339,5 +336,5 @@ print(f"Magnitude range: {df_eq['magnitude'].min():.1f} - {df_eq['magnitude'].ma
 print(f"Seismic clusters identified: {len(cluster_stats)}")
 print(f"\nWater Measurements: {len(df_water):,}")
 print(f"Monitoring sites: {df_water['site_id'].nunique()}")
-print(f"\nOutputs: gold.gld_seismic_clusters")
+print("\nOutputs: gold.gld_seismic_clusters")
 print("=" * 65)

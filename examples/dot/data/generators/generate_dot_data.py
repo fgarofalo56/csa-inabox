@@ -17,10 +17,8 @@ import csv
 import os
 import random
 import sys
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta
-from typing import List, Optional
-
 
 # ---------------------------------------------------------------------------
 # Reference data: US states, major corridors, transit agencies
@@ -191,13 +189,13 @@ class HighwayCondition:
     county_name: str
     year: int
     year_built: int
-    year_reconstructed: Optional[int]
+    year_reconstructed: int | None
     inspection_date: str
     deck_cond: int
     superstructure_cond: int
     substructure_cond: int
     channel_cond: int
-    culvert_cond: Optional[int]
+    culvert_cond: int | None
     structure_type: str
     structure_len: float
     deck_width: float
@@ -206,10 +204,10 @@ class HighwayCondition:
     adt: int
     adt_year: int
     truck_pct: float
-    iri: Optional[float]
-    psr: Optional[float]
-    rutting: Optional[float]
-    cracking_pct: Optional[float]
+    iri: float | None
+    psr: float | None
+    rutting: float | None
+    cracking_pct: float | None
     lanes: int
     sufficiency_rating: float
     status: str
@@ -300,7 +298,7 @@ def hour_distribution(rng: random.Random) -> int:
 # Generator functions
 # ---------------------------------------------------------------------------
 
-def generate_crash_records(n: int, rng: random.Random) -> List[CrashRecord]:
+def generate_crash_records(n: int, rng: random.Random) -> list[CrashRecord]:
     """
     Generate n synthetic FARS-like crash records.
 
@@ -384,7 +382,7 @@ def generate_crash_records(n: int, rng: random.Random) -> List[CrashRecord]:
     return records
 
 
-def generate_highway_conditions(n: int, rng: random.Random) -> List[HighwayCondition]:
+def generate_highway_conditions(n: int, rng: random.Random) -> list[HighwayCondition]:
     """
     Generate n synthetic bridge/highway condition records.
 
@@ -513,7 +511,7 @@ def generate_highway_conditions(n: int, rng: random.Random) -> List[HighwayCondi
 
 def generate_transit_metrics(
     days: int, agencies: int, rng: random.Random
-) -> List[TransitMetric]:
+) -> list[TransitMetric]:
     """
     Generate synthetic NTD-like transit performance metrics.
 

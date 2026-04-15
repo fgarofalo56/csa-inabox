@@ -70,6 +70,7 @@ for lyr in ["bronze", "silver", "gold"]:
 
 from pyspark.sql import functions as F
 
+
 def list_tables_in_layer(layer_name: str) -> list[str]:
     """List Delta table paths within a medallion layer mount."""
     mount = f"/mnt/{layer_name}"
@@ -200,7 +201,6 @@ else:
 
 # COMMAND ----------
 
-from pyspark.sql.types import NumericType, StringType
 
 def table_stats(fqn: str) -> dict:
     """Compute basic stats for a table: row count, null counts, distinct values."""

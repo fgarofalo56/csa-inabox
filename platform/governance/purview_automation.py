@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import json
 import logging
-import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -443,8 +442,8 @@ class PurviewAutomation:
             "/catalog/api/atlas/v2/glossary",
             body={
                 "name": glossary_name,
-                "shortDescription": f"Business glossary for CSA-in-a-Box",
-                "longDescription": f"Automatically managed business glossary for the CSA-in-a-Box data platform.",
+                "shortDescription": "Business glossary for CSA-in-a-Box",
+                "longDescription": "Automatically managed business glossary for the CSA-in-a-Box data platform.",
             },
         )
         return str(response["guid"])
@@ -612,7 +611,7 @@ class PurviewAutomation:
         sources = manifest.get("sources", {})
         relationships: list[LineageRelationship] = []
 
-        for node_id, node in nodes.items():
+        for _node_id, node in nodes.items():
             if node.get("resource_type") != "model":
                 continue
 

@@ -10,9 +10,6 @@ import json
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-
 # ---------------------------------------------------------------------------
 # Mock Azure Functions HTTP objects
 # ---------------------------------------------------------------------------

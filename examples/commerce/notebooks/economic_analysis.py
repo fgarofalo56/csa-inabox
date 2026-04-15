@@ -21,22 +21,20 @@
 # COMMAND ----------
 
 # Import required libraries
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from datetime import datetime, timedelta
 import warnings
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import seaborn as sns
+
 warnings.filterwarnings('ignore')
 
 # Statistical libraries
-from scipy import stats
-from scipy.stats import pearsonr, spearmanr
-
 # Spark and Delta libraries
-from pyspark.sql import SparkSession
 from pyspark.sql.functions import *
 from pyspark.sql.types import *
+from scipy.stats import pearsonr
 
 # Plotly for interactive visualizations
 try:
@@ -389,7 +387,7 @@ def analyze_cross_domain(df_census, df_gdp, df_trade):
         r, pval = pearsonr(merged['median_income'], merged['total_gdp'] / 1e6)
         axes[0].text(0.05, 0.95, f'r = {r:.3f}\np = {pval:.4f}',
                     transform=axes[0].transAxes, verticalalignment='top',
-                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+                    bbox={'boxstyle': 'round', 'facecolor': 'white', 'alpha': 0.8})
 
     axes[0].set_title('Median Income vs Total GDP', fontweight='bold')
     axes[0].set_xlabel('Median Household Income ($)')
@@ -467,12 +465,12 @@ print("=" * 65)
 print("COMMERCE ECONOMIC ANALYSIS - SUMMARY REPORT")
 print("=" * 65)
 
-print(f"\nDataset Overview:")
+print("\nDataset Overview:")
 print(f"  Census ACS records: {len(df_census):,}")
 print(f"  GDP records: {len(df_gdp):,}")
 print(f"  Trade records: {len(df_trade):,}")
 
-print(f"\nKey Findings:")
+print("\nKey Findings:")
 print(f"  GDP data covers {df_gdp['state_name'].nunique()} states, {df_gdp['industry_name'].nunique()} industries")
 print(f"  Trade data covers {df_trade['partner_country_name'].nunique()} partner countries")
 
@@ -488,9 +486,9 @@ if len(df_trade) > 0:
     print(f"  Total imports: ${imports/1e9:,.1f}B")
     print(f"  Trade balance: ${balance/1e9:,.1f}B")
 
-print(f"\nOutputs Generated:")
-print(f"  gold.gld_economic_summary")
-print(f"  gold.gld_trade_balance_summary")
-print(f"  Visualizations: /tmp/*.png")
+print("\nOutputs Generated:")
+print("  gold.gld_economic_summary")
+print("  gold.gld_trade_balance_summary")
+print("  Visualizations: /tmp/*.png")
 
 print("=" * 65)

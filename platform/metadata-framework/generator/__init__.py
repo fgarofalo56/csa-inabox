@@ -21,12 +21,12 @@ Example usage:
 
 __version__ = "1.0.0"
 
-from .pipeline_generator import PipelineGenerator, PipelineGenerationError
 from .dlz_provisioner import DLZProvisioner, DLZProvisioningError
+from .pipeline_generator import PipelineGenerationError, PipelineGenerator
 
 __all__ = [
-    "PipelineGenerator",
-    "PipelineGenerationError",
     "DLZProvisioner",
-    "DLZProvisioningError"
+    "DLZProvisioningError",
+    "PipelineGenerationError",
+    "PipelineGenerator"
 ]

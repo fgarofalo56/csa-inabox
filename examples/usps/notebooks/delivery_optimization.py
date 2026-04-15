@@ -22,24 +22,20 @@
 # COMMAND ----------
 
 # Import required libraries
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from datetime import datetime, timedelta
 import warnings
+
+import matplotlib.pyplot as plt
+import pandas as pd
+import seaborn as sns
+
 warnings.filterwarnings('ignore')
 
 # Statistical libraries
-from scipy import stats
-from scipy.stats import chi2_contingency, mannwhitneyu
-import statsmodels.api as sm
-from statsmodels.tsa.seasonal import seasonal_decompose
-
 # Spark and Delta libraries
-from pyspark.sql import SparkSession
 from pyspark.sql.functions import *
 from pyspark.sql.types import *
+from scipy.stats import chi2_contingency, mannwhitneyu
+from statsmodels.tsa.seasonal import seasonal_decompose
 
 # Configuration
 plt.style.use('seaborn-v0_8')
@@ -67,7 +63,7 @@ def load_delivery_data():
 
     print(f"Loaded {len(delivery_df):,} delivery records")
     print(f"Product classes: {', '.join(delivery_df['product_class'].unique())}")
-    print(f"Status distribution:")
+    print("Status distribution:")
     print(delivery_df['delivery_status'].value_counts().to_string())
 
     return delivery_df
@@ -144,16 +140,15 @@ def prepare_delivery_data(df):
     def speed_category(days):
         if pd.isna(days):
             return 'Unknown'
-        elif days <= 1:
+        if days <= 1:
             return 'Same/Next Day'
-        elif days <= 3:
+        if days <= 3:
             return '2-3 Days'
-        elif days <= 5:
+        if days <= 5:
             return '4-5 Days'
-        elif days <= 7:
+        if days <= 7:
             return '6-7 Days'
-        else:
-            return '8+ Days'
+        return '8+ Days'
 
     df_clean['speed_category'] = df_clean['delivery_time_days'].apply(speed_category)
 
@@ -700,7 +695,7 @@ print("=" * 60)
 delivered = df_prepared[df_prepared['delivery_status'] == 'DELIVERED']
 total = len(delivered)
 
-print(f"\nDataset Overview:")
+print("\nDataset Overview:")
 print(f"  Total delivery records: {len(df_prepared):,}")
 print(f"  Delivered: {total:,}")
 print(f"  Product classes: {df_prepared['product_class'].nunique()}")
@@ -711,27 +706,27 @@ if total > 0:
     avg_days = delivered['delivery_time_days'].mean()
     interstate_pct = delivered['is_interstate'].mean() * 100
 
-    print(f"\nDelivery Performance:")
+    print("\nDelivery Performance:")
     print(f"  Overall on-time rate: {on_time_pct:.1f}%")
     print(f"  Average delivery time: {avg_days:.1f} days")
     print(f"  Interstate deliveries: {interstate_pct:.1f}%")
 
-print(f"\nFacility Operations:")
+print("\nFacility Operations:")
 print(f"  Facilities monitored: {df_facility['facility_id'].nunique()}")
 print(f"  Avg daily throughput: {df_facility['actual_throughput_daily'].mean():,.0f} pieces")
 
-print(f"\nMail Volume:")
+print("\nMail Volume:")
 print(f"  Total volume records: {len(df_volume):,}")
 print(f"  Total pieces tracked: {df_volume['total_pieces'].sum():,.0f}")
 
-print(f"\nRecommendations:")
-print(f"  1. Focus improvement efforts on underperforming product classes")
-print(f"  2. Monitor high-utilization facilities for capacity expansion needs")
-print(f"  3. Optimize weekend processing to reduce Monday delivery backlogs")
-print(f"  4. Investigate interstate routing for cross-region delivery delays")
+print("\nRecommendations:")
+print("  1. Focus improvement efforts on underperforming product classes")
+print("  2. Monitor high-utilization facilities for capacity expansion needs")
+print("  3. Optimize weekend processing to reduce Monday delivery backlogs")
+print("  4. Investigate interstate routing for cross-region delivery delays")
 
-print(f"\nOutputs:")
-print(f"  - Analysis tables saved to gold layer")
-print(f"  - Visualizations saved to /tmp/usps_*.png")
+print("\nOutputs:")
+print("  - Analysis tables saved to gold layer")
+print("  - Visualizations saved to /tmp/usps_*.png")
 
 print("=" * 60)

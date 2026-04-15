@@ -19,27 +19,24 @@
 
 # COMMAND ----------
 
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from datetime import datetime
 import warnings
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import seaborn as sns
+
 warnings.filterwarnings('ignore')
 
-from scipy import stats
-from sklearn.linear_model import LinearRegression, Ridge, Lasso
-from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
-from sklearn.model_selection import train_test_split, cross_val_score, TimeSeriesSplit
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-from sklearn.preprocessing import StandardScaler, LabelEncoder
-from sklearn.pipeline import Pipeline
-
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import *
-from pyspark.sql.types import *
 import mlflow
 import mlflow.sklearn
+from pyspark.sql.functions import *
+from pyspark.sql.types import *
+from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
+from sklearn.linear_model import Ridge
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.model_selection import TimeSeriesSplit, train_test_split
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 
 plt.style.use('seaborn-v0_8')
 sns.set_palette("husl")
@@ -207,7 +204,7 @@ def visualize_model_comparison(results, y_test):
         axes[i].plot([min_val, max_val], [min_val, max_val], 'r--', alpha=0.8)
         axes[i].text(0.05, 0.95, f"R2={res['test_r2']:.3f}\nMAE={res['test_mae']:.3f}",
                     transform=axes[i].transAxes, va='top',
-                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+                    bbox={'boxstyle': 'round', 'facecolor': 'white', 'alpha': 0.8})
         axes[i].set_title(f'{name}', fontweight='bold')
         axes[i].set_xlabel('Actual (log)')
         axes[i].set_ylabel('Predicted (log)')
@@ -395,10 +392,10 @@ print(f"\nBest trade model: {best_model}")
 print(f"  Test MAE: {results[best_model]['test_mae']:.4f}")
 print(f"  Test R2: {results[best_model]['test_r2']:.4f}")
 
-print(f"\nGDP Growth Prediction trained successfully")
+print("\nGDP Growth Prediction trained successfully")
 print(f"Partner risk scores computed for {len(risk_scores)} countries")
 
-print(f"\nOutputs:")
-print(f"  gold.gld_partner_risk_scores")
-print(f"  MLflow: /Commerce/trade_pattern_prediction")
+print("\nOutputs:")
+print("  gold.gld_partner_risk_scores")
+print("  MLflow: /Commerce/trade_pattern_prediction")
 print("=" * 65)

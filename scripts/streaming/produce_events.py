@@ -23,8 +23,6 @@ import argparse
 import asyncio
 import json
 import random
-import signal
-import sys
 import time
 import uuid
 from datetime import datetime, timezone
@@ -120,8 +118,8 @@ async def produce_to_eventhub(
     duration: int,
 ) -> None:
     """Publish events to Azure Event Hub."""
-    from azure.eventhub.aio import EventHubProducerClient
     from azure.eventhub import EventData
+    from azure.eventhub.aio import EventHubProducerClient
 
     if connection_string:
         producer = EventHubProducerClient.from_connection_string(

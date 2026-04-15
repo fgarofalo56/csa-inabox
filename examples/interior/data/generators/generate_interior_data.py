@@ -19,7 +19,6 @@ import random
 from datetime import datetime, timedelta
 from typing import Any
 
-
 # ---------------------------------------------------------------------------
 # Reference data
 # ---------------------------------------------------------------------------
@@ -142,7 +141,7 @@ def generate_earthquake_data(rng: random.Random, n: int = 5000) -> list[dict]:
     # Fault zone weights (proportional to rate)
     zone_weights = [z["rate"] for z in FAULT_ZONES]
 
-    for i in range(n):
+    for _i in range(n):
         # Select fault zone with weighted probability
         zone = rng.choices(FAULT_ZONES, weights=zone_weights, k=1)[0]
 

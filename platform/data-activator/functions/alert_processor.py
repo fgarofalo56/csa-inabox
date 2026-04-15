@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 import os
 import statistics
 from dataclasses import dataclass, field
@@ -22,7 +21,6 @@ from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any
-from urllib.parse import urljoin
 
 import yaml
 
@@ -794,7 +792,7 @@ def send_email_notification(
     """
     recipients = action.config.get("recipients", [])
     subject = action.config.get("subject", f"CSA Alert: {evaluation.rule_name}")
-    rendered_subject = _render_template(subject, {
+    _render_template(subject, {
         **evaluation.event_data,
         **evaluation.details,
     })

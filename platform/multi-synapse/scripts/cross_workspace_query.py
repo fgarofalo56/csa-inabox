@@ -19,7 +19,6 @@ Usage::
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import sys
 from dataclasses import dataclass, field
@@ -322,7 +321,7 @@ class CrossWorkspaceQueryRunner:
 
     def close(self) -> None:
         """Close all open connections."""
-        for key, conn in self._connections.items():
+        for _key, conn in self._connections.items():
             try:
                 conn.close()
             except Exception:
@@ -354,7 +353,7 @@ def _cli_query(args: argparse.Namespace) -> None:
         print(header)
         print("-" * len(header))
         for row in result.rows:
-            print(" | ".join(f"{str(v):>15s}" for v in row))
+            print(" | ".join(f"{v!s:>15s}" for v in row))
 
     print(f"\n({result.row_count} rows, {result.execution_time_ms:.1f}ms)")
     runner.close()

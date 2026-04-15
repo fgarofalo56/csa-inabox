@@ -248,12 +248,9 @@ async def marketplace_stats(
             sum(p.quality_score for p in products) / len(products) if products else 0,
             1,
         ),
-        "products_by_domain": {
-            domain: count
-            for domain, count in sorted(
+        "products_by_domain": dict(sorted(
                 _count_by_key(products, lambda p: p.domain).items()
-            )
-        },
+            )),
     }
 
 

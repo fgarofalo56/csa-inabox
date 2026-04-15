@@ -25,7 +25,7 @@ from typing import Any
 
 # Optional: azure-eventhub for actual publishing
 try:
-    from azure.eventhub import EventHubProducerClient, EventData
+    from azure.eventhub import EventData, EventHubProducerClient
 
     HAS_EVENTHUB = True
 except ImportError:
@@ -163,7 +163,7 @@ def _generate_slot_event(sensor: SensorConfig, t: float) -> dict[str, Any]:
     """Generate a slot machine telemetry event."""
     denomination = random.choice([0.01, 0.05, 0.25, 1.00, 5.00])
     credits_wagered = random.choice([1, 2, 3, 5, 10, 20, 50, 100])
-    _rtp = sensor.baseline.get("rtp", 0.92)  # noqa: F841 — reserved for future RTP-based payout modeling
+    _rtp = sensor.baseline.get("rtp", 0.92)
 
     # Most spins are losses, some small wins, rare big wins
     r = random.random()

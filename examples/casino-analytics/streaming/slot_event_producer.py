@@ -31,8 +31,8 @@ import signal
 import sys
 import time
 import uuid
-from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import datetime
+from typing import Any
 
 logging.basicConfig(
     level=logging.INFO,
@@ -121,9 +121,9 @@ class SlotEventSimulator:
         self.num_machines = num_machines
         self.num_players = num_players
         self.machines = self._init_machines()
-        self.active_sessions: Dict[str, Dict[str, Any]] = {}
+        self.active_sessions: dict[str, dict[str, Any]] = {}
 
-    def _init_machines(self) -> Dict[str, Dict[str, Any]]:
+    def _init_machines(self) -> dict[str, dict[str, Any]]:
         """Initialize synthetic machine fleet."""
         machines = {}
         for i in range(self.num_machines):
@@ -136,12 +136,12 @@ class SlotEventSimulator:
             }
         return machines
 
-    def _weighted_choice(self, options: List[Tuple[Any, float]]) -> Any:
+    def _weighted_choice(self, options: list[tuple[Any, float]]) -> Any:
         items = [o[0] for o in options]
         weights = [o[1] for o in options]
         return self.rng.choices(items, weights=weights, k=1)[0]
 
-    def generate_event(self) -> Dict[str, Any]:
+    def generate_event(self) -> dict[str, Any]:
         """Generate a single slot machine event."""
         machine_id = self.rng.choice(list(self.machines.keys()))
         machine = self.machines[machine_id]
@@ -223,7 +223,7 @@ class SlotEventSimulator:
 
         return event
 
-    def generate_batch(self, batch_size: int = 100) -> List[Dict[str, Any]]:
+    def generate_batch(self, batch_size: int = 100) -> list[dict[str, Any]]:
         """Generate a batch of events."""
         return [self.generate_event() for _ in range(batch_size)]
 
@@ -250,7 +250,7 @@ class EventHubProducer:
     def connect(self):
         """Initialize Event Hub producer client."""
         try:
-            from azure.eventhub import EventHubProducerClient, EventData
+            from azure.eventhub import EventData, EventHubProducerClient
             self.EventData = EventData
             self.producer = EventHubProducerClient.from_connection_string(
                 conn_str=self.connection_string,
@@ -264,7 +264,7 @@ class EventHubProducer:
             )
             raise
 
-    def send_batch(self, events: List[Dict[str, Any]]) -> int:
+    def send_batch(self, events: list[dict[str, Any]]) -> int:
         """Send a batch of events to Event Hub.
 
         Args:
@@ -503,7 +503,7 @@ def main() -> int:
         try:
             batch = []
             total = 0
-            with open(args.input, "r") as fh:
+            with open(args.input) as fh:
                 for line in fh:
                     line = line.strip()
                     if not line:

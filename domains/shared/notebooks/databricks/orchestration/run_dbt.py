@@ -24,6 +24,7 @@ full_refresh = dbutils.widgets.get("full_refresh").lower() == "true"
 
 # Validate inputs to prevent command injection
 import re
+
 VALID_DBT_COMMANDS = {"run", "test", "build", "compile", "seed", "snapshot"}
 if dbt_command not in VALID_DBT_COMMANDS:
     raise ValueError(f"Invalid dbt command: {dbt_command!r}. Must be one of {VALID_DBT_COMMANDS}")
@@ -51,10 +52,9 @@ print(f"Full refresh: {full_refresh}")
 
 # COMMAND ----------
 
-import subprocess
-import sys
-import os
 import json
+import os
+import subprocess
 from datetime import datetime
 
 # COMMAND ----------

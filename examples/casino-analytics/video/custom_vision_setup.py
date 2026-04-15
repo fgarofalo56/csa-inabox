@@ -40,7 +40,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 logging.basicConfig(
     level=logging.INFO,
@@ -146,11 +146,11 @@ class CustomVisionManager:
     def connect(self):
         """Initialize Custom Vision SDK clients."""
         try:
-            from azure.cognitiveservices.vision.customvision.training import (
-                CustomVisionTrainingClient,
-            )
             from azure.cognitiveservices.vision.customvision.prediction import (
                 CustomVisionPredictionClient,
+            )
+            from azure.cognitiveservices.vision.customvision.training import (
+                CustomVisionTrainingClient,
             )
             from msrest.authentication import ApiKeyCredentials
 
@@ -178,7 +178,7 @@ class CustomVisionManager:
             )
             raise
 
-    def create_project(self, model_type: str) -> Dict[str, Any]:
+    def create_project(self, model_type: str) -> dict[str, Any]:
         """Create a Custom Vision project.
 
         Args:
@@ -248,7 +248,7 @@ class CustomVisionManager:
         project_id: str,
         image_dir: str,
         batch_size: int = 64,
-    ) -> Dict[str, int]:
+    ) -> dict[str, int]:
         """Upload training images with region annotations.
 
         Expected directory structure:
@@ -369,7 +369,7 @@ class CustomVisionManager:
         project_id: str,
         training_type: str = "Regular",
         reserved_budget_hours: int = 1,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Start model training.
 
         Args:
@@ -416,20 +416,19 @@ class CustomVisionManager:
 
             logger.info("Performance: %s", json.dumps(result, indent=2))
             return result
-        else:
-            logger.error("Training failed with status: %s", iteration.status)
-            return {
-                "iteration_id": str(iteration.id),
-                "status": iteration.status,
-                "error": "Training did not complete successfully",
-            }
+        logger.error("Training failed with status: %s", iteration.status)
+        return {
+            "iteration_id": str(iteration.id),
+            "status": iteration.status,
+            "error": "Training did not complete successfully",
+        }
 
     def export_model(
         self,
         project_id: str,
         iteration_id: str,
         platform: str = "ONNX",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Export trained model for edge deployment.
 
         Args:
@@ -486,7 +485,7 @@ class CustomVisionManager:
         project_id: str,
         iteration_id: str,
         model_type: str = "crowd-density",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Evaluate model against target metrics.
 
         Args:

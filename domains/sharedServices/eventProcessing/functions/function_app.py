@@ -28,7 +28,7 @@ import json
 import os
 import uuid
 from datetime import datetime, timezone
-from typing import Any, List
+from typing import Any
 
 import azure.functions as func
 
@@ -153,7 +153,7 @@ def _process_event(event_data: dict[str, Any]) -> dict[str, Any]:
     partition_key="/partition_key",
 )
 async def process_events(
-    events: List[func.EventHubEvent],
+    events: list[func.EventHubEvent],
     cosmosOutput: func.Out[str],
 ) -> None:
     """Process batch of events from Event Hub.

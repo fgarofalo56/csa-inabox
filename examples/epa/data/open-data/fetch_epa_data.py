@@ -17,11 +17,10 @@ import json
 import logging
 import sys
 import time
-from datetime import datetime, date, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Any
-import requests
+from typing import Any
 
+import requests
 
 # Configure logging
 logging.basicConfig(
@@ -102,7 +101,7 @@ class EPADataFetcher:
         latitude: float = None,
         longitude: float = None,
         distance: int = 25
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Fetch current air quality observations from AirNow.
 
         Args:
@@ -143,9 +142,8 @@ class EPADataFetcher:
                 logger.debug(f"Retrieved {len(data)} current AQI observations")
                 time.sleep(self.delay)
                 return data
-            else:
-                logger.warning("Unexpected response format from AirNow")
-                return []
+            logger.warning("Unexpected response format from AirNow")
+            return []
 
         except Exception as e:
             logger.error(f"AirNow current observation failed: {e}")
@@ -158,7 +156,7 @@ class EPADataFetcher:
         longitude: float = None,
         forecast_date: str = None,
         distance: int = 25
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Fetch AQI forecast from AirNow.
 
         Args:
@@ -209,7 +207,7 @@ class EPADataFetcher:
         zip_code: str,
         observation_date: str,
         distance: int = 25
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Fetch historical AQI observations from AirNow.
 
         Args:
@@ -246,7 +244,7 @@ class EPADataFetcher:
         program: str = 'air',
         page_size: int = 100,
         max_pages: int = 10
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Fetch facility data from EPA ECHO API.
 
         Args:
@@ -321,9 +319,9 @@ class EPADataFetcher:
 
     def fetch_multiple_zips_airnow(
         self,
-        zip_codes: List[str],
+        zip_codes: list[str],
         data_type: str = 'current'
-    ) -> Dict[str, List[Dict[str, Any]]]:
+    ) -> dict[str, list[dict[str, Any]]]:
         """Fetch AirNow data for multiple ZIP codes.
 
         Args:
@@ -352,7 +350,7 @@ class EPADataFetcher:
 
     def save_data(
         self,
-        data: List[Dict[str, Any]],
+        data: list[dict[str, Any]],
         output_path: Path,
         format_type: str = 'csv'
     ) -> None:
@@ -368,7 +366,7 @@ class EPADataFetcher:
             for record in data:
                 if isinstance(record, dict):
                     fieldnames.update(record.keys())
-            fieldnames = sorted(list(fieldnames))
+            fieldnames = sorted(fieldnames)
 
             with open(output_path, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.DictWriter(f, fieldnames=fieldnames)

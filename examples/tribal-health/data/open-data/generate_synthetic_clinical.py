@@ -29,13 +29,11 @@ import argparse
 import csv
 import json
 import logging
-import os
 import random
 import sys
-import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 logging.basicConfig(
     level=logging.INFO,
@@ -174,9 +172,9 @@ class SyntheticClinicalGenerator:
             seed: Random seed for reproducibility.
         """
         self.rng = random.Random(seed)
-        self._patient_cache: Dict[str, Dict[str, Any]] = {}
+        self._patient_cache: dict[str, dict[str, Any]] = {}
 
-    def _weighted_choice(self, options: List[Tuple[str, float]]) -> str:
+    def _weighted_choice(self, options: list[tuple[str, float]]) -> str:
         """Select from weighted options."""
         items = [o[0] for o in options]
         weights = [o[1] for o in options]
@@ -199,7 +197,7 @@ class SyntheticClinicalGenerator:
     # ===================================================================
     # Patient Demographics
     # ===================================================================
-    def generate_patients(self, count: int = 150) -> List[Dict[str, Any]]:
+    def generate_patients(self, count: int = 150) -> list[dict[str, Any]]:
         """Generate synthetic patient demographic records.
 
         Args:
@@ -208,7 +206,7 @@ class SyntheticClinicalGenerator:
         Returns:
             List of dicts matching brz_patient_demographics columns.
         """
-        records: List[Dict[str, Any]] = []
+        records: list[dict[str, Any]] = []
         enrollment_start = datetime(2018, 1, 1)
         enrollment_end = datetime(2024, 12, 31)
 
@@ -247,7 +245,7 @@ class SyntheticClinicalGenerator:
         count: int = 200,
         start_date: str = "2023-01-01",
         end_date: str = "2024-12-31",
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Generate synthetic clinical encounter records.
 
         Args:
@@ -258,7 +256,7 @@ class SyntheticClinicalGenerator:
         Returns:
             List of dicts matching brz_encounters columns.
         """
-        records: List[Dict[str, Any]] = []
+        records: list[dict[str, Any]] = []
         start_dt = datetime.strptime(start_date, "%Y-%m-%d")
         end_dt = datetime.strptime(end_date, "%Y-%m-%d")
 
@@ -308,7 +306,7 @@ class SyntheticClinicalGenerator:
     # ===================================================================
     # Facilities
     # ===================================================================
-    def generate_facilities(self, count: int = 25) -> List[Dict[str, Any]]:
+    def generate_facilities(self, count: int = 25) -> list[dict[str, Any]]:
         """Generate synthetic IHS/tribal facility records.
 
         Args:
@@ -317,7 +315,7 @@ class SyntheticClinicalGenerator:
         Returns:
             List of dicts matching brz_facilities columns.
         """
-        records: List[Dict[str, Any]] = []
+        records: list[dict[str, Any]] = []
         states = ["AZ", "NM", "SD", "MT", "OK", "WA", "ND", "MN", "WI", "AK"]
 
         used_names = set()
@@ -364,7 +362,7 @@ class SyntheticClinicalGenerator:
     # ===================================================================
     # Output
     # ===================================================================
-    def write_csv(self, records: List[Dict[str, Any]], output_path: str) -> str:
+    def write_csv(self, records: list[dict[str, Any]], output_path: str) -> str:
         """Write records to CSV."""
         if not records:
             logger.warning("No records to write for %s", output_path)
@@ -382,7 +380,7 @@ class SyntheticClinicalGenerator:
         logger.info("Wrote %d records to %s", len(records), path)
         return str(path.resolve())
 
-    def write_json(self, records: List[Dict[str, Any]], output_path: str) -> str:
+    def write_json(self, records: list[dict[str, Any]], output_path: str) -> str:
         """Write records to JSON (FHIR-like structure)."""
         path = Path(output_path)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -519,7 +517,7 @@ def main() -> int:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    results: Dict[str, int] = {}
+    results: dict[str, int] = {}
 
     # ---- Patients ----
     if args.dataset in ("patients", "all"):

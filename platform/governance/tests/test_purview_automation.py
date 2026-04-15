@@ -7,29 +7,22 @@ scan scheduling, and lineage registration with mocked Purview client.
 from __future__ import annotations
 
 import json
-import tempfile
 from pathlib import Path
-from typing import Any
+from platform.governance.purview_automation import (
+    PurviewAutomation,
+    ScanSchedule,
+)
 from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
-
-from platform.governance.purview_automation import (
-    ClassificationRule,
-    GlossaryTerm,
-    LineageRelationship,
-    PurviewAutomation,
-    ScanSchedule,
-)
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture()
+@pytest.fixture
 def mock_credential() -> MagicMock:
     """Create a mock Azure credential."""
     cred = MagicMock()
@@ -39,7 +32,7 @@ def mock_credential() -> MagicMock:
     return cred
 
 
-@pytest.fixture()
+@pytest.fixture
 def purview(mock_credential: MagicMock) -> PurviewAutomation:
     """Create a PurviewAutomation instance with mocked credential."""
     return PurviewAutomation(
@@ -48,7 +41,7 @@ def purview(mock_credential: MagicMock) -> PurviewAutomation:
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 def classification_yaml(tmp_path: Path) -> Path:
     """Create a temporary classification rules YAML file."""
     rules = {
@@ -79,7 +72,7 @@ def classification_yaml(tmp_path: Path) -> Path:
     return yaml_path
 
 
-@pytest.fixture()
+@pytest.fixture
 def glossary_yaml(tmp_path: Path) -> Path:
     """Create a temporary glossary YAML file."""
     glossary = {
@@ -107,7 +100,7 @@ def glossary_yaml(tmp_path: Path) -> Path:
     return yaml_path
 
 
-@pytest.fixture()
+@pytest.fixture
 def dbt_manifest(tmp_path: Path) -> Path:
     """Create a temporary dbt manifest.json file."""
     manifest = {

@@ -23,16 +23,15 @@ import argparse
 import csv
 import json
 import logging
+import os
 import random
 import sys
-from datetime import datetime, date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional
-import os
-import requests
-import pandas as pd
-import numpy as np
 
+import numpy as np
+import pandas as pd
+import requests
 
 # Configure logging
 logging.basicConfig(
@@ -47,8 +46,8 @@ class USDADataGenerator:
 
     def __init__(
         self,
-        nass_api_key: Optional[str] = None,
-        datagov_api_key: Optional[str] = None,
+        nass_api_key: str | None = None,
+        datagov_api_key: str | None = None,
         use_real_data: bool = False
     ):
         """Initialize the data generator.
@@ -95,10 +94,10 @@ class USDADataGenerator:
 
     def fetch_nass_data(
         self,
-        states: List[str],
-        commodities: List[str],
-        years: List[int]
-    ) -> Optional[pd.DataFrame]:
+        states: list[str],
+        commodities: list[str],
+        years: list[int]
+    ) -> pd.DataFrame | None:
         """Fetch real crop yield data from NASS QuickStats API.
 
         Args:
@@ -140,7 +139,7 @@ class USDADataGenerator:
                         response.raise_for_status()
 
                         data = response.json()
-                        if 'data' in data and data['data']:
+                        if data.get('data'):
                             all_data.extend(data['data'])
                             logger.info(f"Fetched {len(data['data'])} records for {state} {commodity} {year}")
                         else:
@@ -157,17 +156,16 @@ class USDADataGenerator:
             df = pd.DataFrame(all_data)
             logger.info(f"Successfully fetched {len(df)} total records from NASS")
             return df
-        else:
-            logger.warning("No real data fetched, falling back to synthetic generation")
-            return None
+        logger.warning("No real data fetched, falling back to synthetic generation")
+        return None
 
     def generate_crop_yields(
         self,
-        states: List[str] = None,
-        commodities: List[str] = None,
-        years: List[int] = None,
+        states: list[str] = None,
+        commodities: list[str] = None,
+        years: list[int] = None,
         counties_per_state: int = 3
-    ) -> List[Dict]:
+    ) -> list[dict]:
         """Generate crop yield data.
 
         Args:
@@ -197,7 +195,7 @@ class USDADataGenerator:
         for state in states:
             state_name = self.states.get(state, state)
 
-            for county_idx in range(counties_per_state):
+            for _county_idx in range(counties_per_state):
                 county_code = f"{county_counter:03d}"
                 county_name = f"COUNTY_{county_counter:03d}"
                 county_counter += 1
@@ -247,7 +245,7 @@ class USDADataGenerator:
         logger.info(f"Generated {len(records)} crop yield records")
         return records
 
-    def _convert_nass_to_standard_format(self, nass_df: pd.DataFrame) -> List[Dict]:
+    def _convert_nass_to_standard_format(self, nass_df: pd.DataFrame) -> list[dict]:
         """Convert NASS API response to standard format."""
         records = []
 
@@ -283,10 +281,10 @@ class USDADataGenerator:
 
     def generate_snap_enrollment(
         self,
-        states: List[str] = None,
+        states: list[str] = None,
         start_year: int = 2022,
         months: int = 24
-    ) -> List[Dict]:
+    ) -> list[dict]:
         """Generate SNAP enrollment data.
 
         Args:
@@ -368,10 +366,10 @@ class USDADataGenerator:
 
     def generate_food_inspections(
         self,
-        states: List[str] = None,
+        states: list[str] = None,
         establishments_per_state: int = 15,
         inspections_per_establishment: int = 6
-    ) -> List[Dict]:
+    ) -> list[dict]:
         """Generate food safety inspection data.
 
         Args:
@@ -390,7 +388,7 @@ class USDADataGenerator:
         establishment_counter = 1
 
         for state in states:
-            for est_idx in range(establishments_per_state):
+            for _est_idx in range(establishments_per_state):
                 establishment_number = f"EST-{establishment_counter:03d}"
 
                 # Generate establishment characteristics
@@ -477,7 +475,7 @@ class USDADataGenerator:
 
     def save_data(
         self,
-        data: List[Dict],
+        data: list[dict],
         output_path: Path,
         format_type: str = 'csv'
     ) -> None:

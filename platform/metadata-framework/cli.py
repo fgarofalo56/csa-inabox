@@ -9,24 +9,16 @@ This CLI provides commands for:
 """
 
 import argparse
-import json
 import sys
 from pathlib import Path
-from typing import Optional
 
 # Add the framework modules to Python path
 framework_root = Path(__file__).parent
 sys.path.insert(0, str(framework_root))
 
 try:
-    from generator.pipeline_generator import (
-        PipelineGenerator,
-        PipelineGenerationError
-    )
-    from generator.dlz_provisioner import (
-        DLZProvisioner,
-        DLZProvisioningError
-    )
+    from generator.dlz_provisioner import DLZProvisioner, DLZProvisioningError
+    from generator.pipeline_generator import PipelineGenerationError, PipelineGenerator
 except ImportError as e:
     print(f"ERROR: Failed to import framework modules: {e}")
     print("Make sure you're running from the correct directory and dependencies are installed")
@@ -189,8 +181,7 @@ def cmd_generate_all(args: argparse.Namespace) -> int:
     if pipeline_result == 0 and dlz_result == 0:
         print("\nSUCCESS: Complete infrastructure generated successfully!")
         return 0
-    else:
-        return 1
+    return 1
 
 
 def cmd_list_templates(args: argparse.Namespace) -> int:
@@ -260,7 +251,7 @@ def cmd_example(args: argparse.Namespace) -> int:
 
         # Read first few lines to show the source type and description
         try:
-            with open(example_file, "r", encoding="utf-8") as f:
+            with open(example_file, encoding="utf-8") as f:
                 lines = f.readlines()[:10]  # First 10 lines
 
             source_type = None
@@ -283,13 +274,13 @@ def cmd_example(args: argparse.Namespace) -> int:
             print(f"   Path: {example_file}")
             if args.output_content:
                 try:
-                    with open(example_file, "r", encoding="utf-8") as f:
+                    with open(example_file, encoding="utf-8") as f:
                         content = f.read()
                     print(f"\n{content}")
                 except Exception as e:
                     print(f"   Error reading file: {e}")
 
-    print(f"\nUSAGE: Use any of these files with: metadata-framework generate <file>")
+    print("\nUSAGE: Use any of these files with: metadata-framework generate <file>")
     return 0
 
 
@@ -415,13 +406,13 @@ Examples:
     )
 
     # List templates command
-    templates_parser = subparsers.add_parser(
+    subparsers.add_parser(
         "list-templates",
         help="List available pipeline templates"
     )
 
     # Schema info command
-    schema_parser = subparsers.add_parser(
+    subparsers.add_parser(
         "schema-info",
         help="Show source registration schema information"
     )
@@ -461,9 +452,8 @@ Examples:
 
     if args.command in commands:
         return commands[args.command](args)
-    else:
-        print(f"ERROR: Unknown command: {args.command}")
-        return 1
+    print(f"ERROR: Unknown command: {args.command}")
+    return 1
 
 
 if __name__ == "__main__":

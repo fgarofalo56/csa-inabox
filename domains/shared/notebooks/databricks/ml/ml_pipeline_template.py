@@ -19,24 +19,24 @@
 
 # COMMAND ----------
 
+from datetime import datetime
+
 import mlflow
 import mlflow.sklearn
+import pandas as pd
 from mlflow.models.signature import infer_signature
 from pyspark.sql import functions as F
-from sklearn.model_selection import train_test_split
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.metrics import (
     accuracy_score,
+    classification_report,
+    f1_score,
     precision_score,
     recall_score,
-    f1_score,
     roc_auc_score,
-    classification_report,
 )
+from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
-import pandas as pd
-import numpy as np
-from datetime import datetime
 
 # COMMAND ----------
 
@@ -216,10 +216,10 @@ with mlflow.start_run(run_name=f"churn_model_{datetime.utcnow().strftime('%Y%m%d
     mlflow.log_text(report, "classification_report.txt")
 
     print(f"\nRun ID: {run.info.run_id}")
-    print(f"\nMetrics:")
+    print("\nMetrics:")
     for k, v in metrics.items():
         print(f"  {k}: {v:.4f}")
-    print(f"\nFeature Importance:")
+    print("\nFeature Importance:")
     print(importance.to_string(index=False))
 
 # COMMAND ----------

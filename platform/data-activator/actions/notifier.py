@@ -26,7 +26,7 @@ import logging
 import os
 import smtplib
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from email.message import EmailMessage
 from typing import Any
 

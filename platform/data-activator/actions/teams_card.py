@@ -21,7 +21,6 @@ from typing import Any
 # Import within package
 from .notifier import AlertPayload
 
-
 # ---------------------------------------------------------------------------
 # Severity → colour mapping
 # ---------------------------------------------------------------------------

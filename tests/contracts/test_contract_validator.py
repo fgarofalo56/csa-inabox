@@ -8,17 +8,16 @@ from typing import Any
 import pytest
 
 from governance.contracts.contract_validator import (
+    SLA,
     Column,
     Contract,
     ContractValidationError,
-    SLA,
     find_contracts,
     load_contract,
     main,
     validate_contract_structure,
     validate_rows_against_contract,
 )
-
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SALES_ORDERS_CONTRACT = REPO_ROOT / "domains" / "sales" / "data-products" / "orders" / "contract.yaml"

@@ -27,9 +27,10 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 import yaml
 
@@ -183,9 +184,7 @@ def _evaluate_expectation(
             value = row.get(column)
             if value is None:
                 continue
-            if min_value is not None and value < min_value:
-                out_of_range += 1
-            elif max_value is not None and value > max_value:
+            if (min_value is not None and value < min_value) or (max_value is not None and value > max_value):
                 out_of_range += 1
         return ExpectationResult(
             expectation_type=exp_type,
@@ -284,7 +283,7 @@ def _load_checkpoint_configs(
     for path in sorted(directory.glob("*.yml")):
         try:
             raw: dict[str, Any] = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.warning("ge.checkpoint_load_failed", path=str(path))
             continue
 

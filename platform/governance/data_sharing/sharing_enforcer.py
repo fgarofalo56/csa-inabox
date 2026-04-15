@@ -30,7 +30,6 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 import yaml
 
@@ -416,9 +415,7 @@ class SharingEnforcer:
         """
         results: list[SharingAgreement] = []
         for agreement in self.agreements:
-            if role in ("any", "provider") and agreement.provider_domain.lower() == domain.lower():
-                results.append(agreement)
-            elif role in ("any", "consumer") and agreement.consumer_domain.lower() == domain.lower():
+            if (role in ("any", "provider") and agreement.provider_domain.lower() == domain.lower()) or (role in ("any", "consumer") and agreement.consumer_domain.lower() == domain.lower()):
                 results.append(agreement)
         return results
 

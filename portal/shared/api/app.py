@@ -9,12 +9,11 @@ pipeline generation, DLZ provisioning, and marketplace functionality.
 from __future__ import annotations
 
 import logging
-import uuid
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import AsyncGenerator
 
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .routers import access, marketplace, pipelines, sources, stats
@@ -23,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan: startup and shutdown hooks."""
     logger.info("Starting CSA Data Onboarding Portal API")
     yield

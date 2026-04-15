@@ -17,14 +17,14 @@ Usage::
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import os
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 import yaml
 
@@ -92,7 +92,7 @@ def load_taxonomy(path: str | Path) -> list[TaxonomyCategory]:
     if not path.exists():
         raise FileNotFoundError(f"Taxonomy file not found: {path}")
 
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         raw = yaml.safe_load(f)
 
     if not isinstance(raw, dict) or "categories" not in raw:

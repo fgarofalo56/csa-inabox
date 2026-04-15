@@ -22,16 +22,14 @@
 
 # COMMAND ----------
 
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from datetime import datetime
 import warnings
+
+import matplotlib.pyplot as plt
+import pandas as pd
+import seaborn as sns
+
 warnings.filterwarnings('ignore')
 
-from scipy import stats
-from pyspark.sql import SparkSession
 from pyspark.sql.functions import *
 
 plt.style.use('seaborn-v0_8')
@@ -278,6 +276,6 @@ print(f"Encounters: {len(df_encounters):,}")
 print(f"Facilities: {len(df_facilities):,}")
 print(f"Tribes: {df_patients['tribal_affiliation'].nunique()}")
 print(f"Service Units: {df_patients['service_unit'].nunique()}")
-print(f"\nAll data is SYNTHETIC - no real PHI")
-print(f"Output: gold.gld_population_health_summary")
+print("\nAll data is SYNTHETIC - no real PHI")
+print("Output: gold.gld_population_health_summary")
 print("=" * 65)

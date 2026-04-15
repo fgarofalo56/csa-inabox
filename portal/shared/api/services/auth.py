@@ -103,7 +103,8 @@ async def _validate_token(token: str) -> dict[str, Any]:
 
     # ── Production: validate with python-jose ────────────────────────────
     try:
-        from jose import JWTError, jwt as jose_jwt  # type: ignore[import-untyped]
+        from jose import JWTError  # type: ignore[import-untyped]
+        from jose import jwt as jose_jwt
 
         jwks = await _get_jwks()
 
@@ -129,14 +130,13 @@ async def _validate_token(token: str) -> dict[str, Any]:
                 detail="Unable to find appropriate signing key.",
             )
 
-        claims = jose_jwt.decode(
+        return jose_jwt.decode(
             token,
             rsa_key,
             algorithms=["RS256"],
             audience=settings.AZURE_CLIENT_ID,
             issuer=f"{_authority_url()}/v2.0",
         )
-        return claims
 
     except JWTError as exc:
         logger.warning("JWT validation failed: %s", exc)

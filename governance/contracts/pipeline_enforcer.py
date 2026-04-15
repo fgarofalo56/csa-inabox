@@ -49,11 +49,12 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping, TypeVar
+from typing import Any, TypeVar
 
 from governance.common.logging import get_logger
 from governance.contracts.contract_validator import (

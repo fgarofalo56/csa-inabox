@@ -22,7 +22,6 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-
 SEED_DIR = Path(__file__).resolve().parent.parent.parent / "domains" / "shared" / "dbt" / "seeds"
 DBT_PROJECT_DIR = Path(__file__).resolve().parent.parent.parent / "domains" / "shared" / "dbt"
 

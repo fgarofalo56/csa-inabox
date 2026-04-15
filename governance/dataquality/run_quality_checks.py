@@ -291,7 +291,7 @@ class DataQualityRunner:
         warned = sum(1 for r in self.results if r.status == "warn")
         failed = sum(1 for r in self.results if r.status == "fail")
 
-        report = {
+        return {
             "report_timestamp": datetime.now(timezone.utc).isoformat(),
             "summary": {
                 "total_checks": total,
@@ -303,7 +303,6 @@ class DataQualityRunner:
             "results": [r.to_dict() for r in self.results],
         }
 
-        return report
 
     def emit_to_log_analytics(self, report: dict[str, Any]) -> None:
         """Send quality metrics to Azure Log Analytics via Azure Monitor Ingestion.

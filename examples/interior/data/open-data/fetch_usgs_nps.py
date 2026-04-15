@@ -29,10 +29,9 @@ import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import requests
-
 
 logging.basicConfig(
     level=logging.INFO,
@@ -109,7 +108,7 @@ class USGSNPSDataFetcher:
             "Accept": "application/json",
         })
 
-    def _get(self, url: str, params: Dict[str, Any], label: str) -> Any:
+    def _get(self, url: str, params: dict[str, Any], label: str) -> Any:
         """Execute GET with retry and rate limiting."""
         max_retries = 3
         for attempt in range(max_retries):
@@ -149,7 +148,7 @@ class USGSNPSDataFetcher:
         min_magnitude: float = 2.5,
         max_magnitude: float = 10.0,
         limit: int = 5000,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Fetch earthquake events from USGS ComCat.
 
         Args:
@@ -180,7 +179,7 @@ class USGSNPSDataFetcher:
 
         data = resp.json()
         features = data.get("features", [])
-        records: List[Dict[str, Any]] = []
+        records: list[dict[str, Any]] = []
 
         for feat in features:
             props = feat.get("properties", {})
@@ -232,11 +231,11 @@ class USGSNPSDataFetcher:
     # ===================================================================
     def fetch_water_resources(
         self,
-        sites: List[str],
-        parameter_codes: List[str],
+        sites: list[str],
+        parameter_codes: list[str],
         start_date: str,
         end_date: str,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Fetch daily water resource data from USGS NWIS.
 
         Args:
@@ -248,7 +247,7 @@ class USGSNPSDataFetcher:
         Returns:
             List of dicts matching brz_water_resources columns.
         """
-        records: List[Dict[str, Any]] = []
+        records: list[dict[str, Any]] = []
         sites_str = ",".join(sites)
         params_str = ",".join(parameter_codes)
 
@@ -344,9 +343,9 @@ class USGSNPSDataFetcher:
     # ===================================================================
     def fetch_park_visitors(
         self,
-        park_codes: Optional[List[str]] = None,
-        years: Optional[List[int]] = None,
-    ) -> List[Dict[str, Any]]:
+        park_codes: list[str] | None = None,
+        years: list[int] | None = None,
+    ) -> list[dict[str, Any]]:
         """Fetch NPS visitation statistics.
 
         Args:
@@ -361,7 +360,7 @@ class USGSNPSDataFetcher:
         if years is None:
             years = [2022, 2023]
 
-        records: List[Dict[str, Any]] = []
+        records: list[dict[str, Any]] = []
 
         for park_code in park_codes:
             park_info = PARK_CODES.get(park_code, {
@@ -447,7 +446,7 @@ class USGSNPSDataFetcher:
     # ===================================================================
     # Output
     # ===================================================================
-    def write_csv(self, records: List[Dict[str, Any]], output_path: str) -> str:
+    def write_csv(self, records: list[dict[str, Any]], output_path: str) -> str:
         """Write records to CSV."""
         if not records:
             logger.warning("No records to write for %s", output_path)
@@ -465,7 +464,7 @@ class USGSNPSDataFetcher:
         logger.info("Wrote %d records to %s", len(records), path)
         return str(path.resolve())
 
-    def write_json(self, records: List[Dict[str, Any]], output_path: str) -> str:
+    def write_json(self, records: list[dict[str, Any]], output_path: str) -> str:
         """Write records to JSON."""
         path = Path(output_path)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -586,7 +585,7 @@ def main() -> int:
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    results: Dict[str, int] = {}
+    results: dict[str, int] = {}
 
     # ---- Earthquakes ----
     if args.dataset in ("earthquakes", "all"):

@@ -22,20 +22,19 @@
 # COMMAND ----------
 
 # Import required libraries
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from datetime import datetime, timedelta
 import warnings
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import seaborn as sns
+
 warnings.filterwarnings('ignore')
 
 # Statistical libraries
-from scipy import stats
-from scipy.stats import pearsonr, spearmanr
 import statsmodels.api as sm
+from scipy.stats import pearsonr
 from statsmodels.tsa.seasonal import seasonal_decompose
-from statsmodels.tsa.arima.model import ARIMA
 
 # Geospatial libraries
 try:
@@ -49,7 +48,6 @@ except ImportError:
     GEOSPATIAL_AVAILABLE = False
 
 # Spark and Delta libraries
-from pyspark.sql import SparkSession
 from pyspark.sql.functions import *
 from pyspark.sql.types import *
 
@@ -362,7 +360,7 @@ def analyze_state_patterns():
     corr, p_value = pearsonr(latest_state_data['poverty_rate'], latest_state_data['enrollment_per_1000'])
     axes[1].text(0.05, 0.95, f'Correlation: {corr:.3f}\np-value: {p_value:.3f}',
                 transform=axes[1].transAxes, verticalalignment='top',
-                bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+                bbox={'boxstyle': 'round', 'facecolor': 'white', 'alpha': 0.8})
 
     axes[1].set_xlabel('Poverty Rate (%)')
     axes[1].set_ylabel('SNAP Enrollment per 1000 Population')
@@ -685,7 +683,7 @@ def analyze_policy_impacts():
     # Add correlation
     corr, _ = pearsonr(effectiveness_data['under_18_percent'], effectiveness_data['benefit_adequacy'])
     axes[0, 1].text(0.05, 0.95, f'Correlation: {corr:.3f}', transform=axes[0, 1].transAxes,
-                   verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+                   verticalalignment='top', bbox={'boxstyle': 'round', 'facecolor': 'white', 'alpha': 0.8})
 
     # 3. Program reach vs income
     axes[1, 0].scatter(effectiveness_data['median_income']/1000, effectiveness_data['program_reach'],
@@ -784,7 +782,7 @@ print("SNAP DEMOGRAPHICS AND ECONOMIC ANALYSIS - SUMMARY REPORT")
 print("=" * 70)
 
 # Dataset summary
-print(f"\n📊 Dataset Overview:")
+print("\n📊 Dataset Overview:")
 print(f"   • SNAP enrollment records: {len(df_snap):,}")
 print(f"   • Analysis period: {df_analysis['enrollment_date'].min().strftime('%Y-%m-%d')} to {df_analysis['enrollment_date'].max().strftime('%Y-%m-%d')}")
 print(f"   • States analyzed: {df_analysis['state_code'].nunique()}")
@@ -793,14 +791,14 @@ print(f"   • Total monthly benefits: ${latest_state_data['current_benefits_dol
 
 # National trends
 latest_national = national_trends.iloc[-1]
-print(f"\n📈 National Trends (Latest Month):")
+print("\n📈 National Trends (Latest Month):")
 print(f"   • National enrollment: {latest_national['current_enrollment']:,.0f} people")
 print(f"   • Average benefit per person: ${latest_national['avg_benefit_per_person']:.0f}")
 print(f"   • YoY enrollment change: {latest_national['enrollment_yoy']:+.1f}%")
 print(f"   • YoY benefits change: {latest_national['benefits_yoy']:+.1f}%")
 
 # Economic correlations
-print(f"\n🔗 Key Economic Correlations:")
+print("\n🔗 Key Economic Correlations:")
 poverty_corr = correlation_matrix.loc['poverty_rate', 'enrollment_per_1000']
 income_corr = correlation_matrix.loc['median_income', 'enrollment_per_1000']
 unemployment_corr = correlation_matrix.loc['unemployment_rate', 'enrollment_per_1000']
@@ -810,40 +808,40 @@ print(f"   • Median income correlation: {income_corr:+.3f}")
 print(f"   • Unemployment correlation: {unemployment_corr:+.3f}")
 
 # Regional patterns
-print(f"\n🗺️  Regional Analysis:")
+print("\n🗺️  Regional Analysis:")
 latest_regional_summary = regional_stats[regional_stats['enrollment_date'] == regional_stats['enrollment_date'].max()]
 for _, region in latest_regional_summary.iterrows():
     print(f"   • {region['region']}: {region['enrollment_rate']:.1f} per 1000 population")
 
 # Program effectiveness
-print(f"\n📋 Program Effectiveness:")
+print("\n📋 Program Effectiveness:")
 print(f"   • Average program reach: {effectiveness_data['program_reach'].mean():.2f}")
 print(f"   • High-performing states: {len(efficient_states)}")
 print(f"   • Average benefit adequacy: {effectiveness_data['benefit_adequacy'].mean():.1f}% of median income")
 
 # Top insights
-print(f"\n💡 Key Insights:")
+print("\n💡 Key Insights:")
 highest_enrollment_state = latest_state_data.iloc[0]
 lowest_enrollment_state = latest_state_data.iloc[-1]
 
 print(f"   • Highest enrollment rate: {highest_enrollment_state['state_code']} ({highest_enrollment_state['enrollment_per_1000']:.1f} per 1000)")
 print(f"   • Lowest enrollment rate: {lowest_enrollment_state['state_code']} ({lowest_enrollment_state['enrollment_per_1000']:.1f} per 1000)")
-print(f"   • Strong correlation between poverty and SNAP enrollment")
-print(f"   • Regional variations reflect different economic conditions")
-print(f"   • Program reach varies significantly across states")
+print("   • Strong correlation between poverty and SNAP enrollment")
+print("   • Regional variations reflect different economic conditions")
+print("   • Program reach varies significantly across states")
 
 # Recommendations
-print(f"\n🎯 Policy Recommendations:")
-print(f"   • Focus outreach in states with low program reach relative to poverty")
-print(f"   • Consider benefit adjustments in high-cost states")
-print(f"   • Investigate best practices from high-performing states")
-print(f"   • Monitor seasonal patterns for resource planning")
-print(f"   • Address geographic disparities in program access")
+print("\n🎯 Policy Recommendations:")
+print("   • Focus outreach in states with low program reach relative to poverty")
+print("   • Consider benefit adjustments in high-cost states")
+print("   • Investigate best practices from high-performing states")
+print("   • Monitor seasonal patterns for resource planning")
+print("   • Address geographic disparities in program access")
 
-print(f"\n📁 Outputs Generated:")
-print(f"   • Demographics analysis: gold.gld_snap_demographics_analysis")
-print(f"   • Effectiveness metrics: gold.gld_snap_effectiveness_metrics")
-print(f"   • Regional statistics: gold.gld_snap_regional_statistics")
-print(f"   • Visualizations saved to: /tmp/*.png")
+print("\n📁 Outputs Generated:")
+print("   • Demographics analysis: gold.gld_snap_demographics_analysis")
+print("   • Effectiveness metrics: gold.gld_snap_effectiveness_metrics")
+print("   • Regional statistics: gold.gld_snap_regional_statistics")
+print("   • Visualizations saved to: /tmp/*.png")
 
 print("=" * 70)

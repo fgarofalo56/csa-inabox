@@ -23,34 +23,44 @@
 # COMMAND ----------
 
 # Import required libraries
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from datetime import datetime, timedelta
 import warnings
+from datetime import datetime
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import seaborn as sns
+
 warnings.filterwarnings('ignore')
 
 # Statistical and ML libraries
-from scipy import stats
-from sklearn.linear_model import LinearRegression, Ridge, LogisticRegression
-from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
-from sklearn.ensemble import GradientBoostingRegressor, GradientBoostingClassifier
-from sklearn.model_selection import train_test_split, cross_val_score, GridSearchCV
-from sklearn.metrics import (
-    mean_absolute_error, mean_squared_error, r2_score,
-    accuracy_score, precision_score, recall_score, f1_score,
-    classification_report, confusion_matrix, roc_auc_score, roc_curve
-)
-from sklearn.preprocessing import StandardScaler, LabelEncoder, OneHotEncoder
-from sklearn.pipeline import Pipeline
-
-# Spark and Delta libraries
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import *
-from pyspark.sql.types import *
 import mlflow
 import mlflow.sklearn
+
+# Spark and Delta libraries
+from pyspark.sql.functions import *
+from pyspark.sql.types import *
+from sklearn.ensemble import (
+    GradientBoostingClassifier,
+    GradientBoostingRegressor,
+    RandomForestClassifier,
+    RandomForestRegressor,
+)
+from sklearn.linear_model import LinearRegression, LogisticRegression, Ridge
+from sklearn.metrics import (
+    accuracy_score,
+    confusion_matrix,
+    f1_score,
+    mean_absolute_error,
+    mean_squared_error,
+    precision_score,
+    r2_score,
+    recall_score,
+    roc_auc_score,
+    roc_curve,
+)
+from sklearn.model_selection import cross_val_score
+from sklearn.preprocessing import StandardScaler
 
 # Configuration
 plt.style.use('seaborn-v0_8')
@@ -621,7 +631,7 @@ def compare_regression_models(results, y_test):
         ax.plot([min_val, max_val], [min_val, max_val], 'r--', alpha=0.8)
         ax.text(0.05, 0.95, f"R2={r['test_r2']:.3f}\nMAE={r['test_mae']:.3f}",
                 transform=ax.transAxes, va='top',
-                bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+                bbox={'boxstyle': 'round', 'facecolor': 'white', 'alpha': 0.8})
         ax.set_xlabel('Actual Fatalities')
         ax.set_ylabel('Predicted Fatalities')
         ax.set_title(name, fontweight='bold')
@@ -697,9 +707,8 @@ def analyze_feature_importance(clf_results, feature_names):
         plt.show()
 
         return importance_df
-    else:
-        print(f"Model {best_name} does not support feature_importances_")
-        return None
+    print(f"Model {best_name} does not support feature_importances_")
+    return None
 
 feature_importance = analyze_feature_importance(clf_results, feature_names)
 
@@ -839,13 +848,13 @@ print("=" * 60)
 print("HIGHWAY SAFETY PREDICTION - SUMMARY REPORT")
 print("=" * 60)
 
-print(f"\nDataset Overview:")
+print("\nDataset Overview:")
 print(f"  Total records: {len(df_model):,}")
 print(f"  Features: {len(feature_names)}")
 print(f"  Severe crashes (2+ fatalities): {df_model['is_severe'].sum():,} "
       f"({df_model['is_severe'].mean()*100:.1f}%)")
 
-print(f"\nClassification Performance (Severity Prediction):")
+print("\nClassification Performance (Severity Prediction):")
 best_clf = max(clf_results.keys(), key=lambda k: clf_results[k]['f1'])
 print(f"  Best model: {best_clf}")
 print(f"  F1 Score: {clf_results[best_clf]['f1']:.3f}")
@@ -853,31 +862,31 @@ print(f"  AUC: {clf_results[best_clf]['auc']:.3f}")
 print(f"  Precision: {clf_results[best_clf]['precision']:.3f}")
 print(f"  Recall: {clf_results[best_clf]['recall']:.3f}")
 
-print(f"\nRegression Performance (Fatality Count):")
+print("\nRegression Performance (Fatality Count):")
 best_reg = min(reg_results.keys(), key=lambda k: reg_results[k]['test_mae'])
 print(f"  Best model: {best_reg}")
 print(f"  Test MAE: {reg_results[best_reg]['test_mae']:.3f}")
 print(f"  Test R2: {reg_results[best_reg]['test_r2']:.3f}")
 
-print(f"\nTop Risk Factors:")
+print("\nTop Risk Factors:")
 if feature_importance is not None:
     for _, row in feature_importance.head(5).iterrows():
         print(f"  - {row['feature']}: {row['importance']:.4f}")
 
-print(f"\nRisk Scoring Summary:")
+print("\nRisk Scoring Summary:")
 if 'risk_category' in risk_scores.columns:
     for cat in ['Critical', 'High', 'Moderate', 'Low']:
         count = (risk_scores['risk_category'] == cat).sum()
         if count > 0:
             print(f"  {cat}: {count} states")
 
-print(f"\nOutputs:")
-print(f"  - Classification metrics: gold.gld_highway_safety_clf_metrics")
-print(f"  - Regression metrics: gold.gld_highway_safety_reg_metrics")
-print(f"  - Risk scores: gold.gld_highway_risk_scores")
-print(f"  - Feature importance: gold.gld_highway_safety_feature_importance")
-print(f"  - Visualizations: /tmp/dot_*.png")
-print(f"  - MLflow experiments: /DOT/highway_safety_prediction")
+print("\nOutputs:")
+print("  - Classification metrics: gold.gld_highway_safety_clf_metrics")
+print("  - Regression metrics: gold.gld_highway_safety_reg_metrics")
+print("  - Risk scores: gold.gld_highway_risk_scores")
+print("  - Feature importance: gold.gld_highway_safety_feature_importance")
+print("  - Visualizations: /tmp/dot_*.png")
+print("  - MLflow experiments: /DOT/highway_safety_prediction")
 
 print("=" * 60)
 

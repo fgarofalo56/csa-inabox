@@ -451,7 +451,7 @@ def _cli_generate(args: argparse.Namespace) -> None:
     measures = generator.generate_dax_measures(tables)
 
     files = generator.export_pbip(model, measures, output_path=args.output)
-    print(f"Generated semantic model:")
+    print("Generated semantic model:")
     for fmt, path in files.items():
         print(f"  {fmt}: {path}")
 

@@ -7,14 +7,14 @@ can exercise endpoints without requiring Azure AD.
 
 from __future__ import annotations
 
-from typing import Any, AsyncGenerator, Generator
+from collections.abc import Generator
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 
 # Patch the auth dependency before importing the app
-from portal.shared.api.services.auth import get_current_user, require_role
-
+from portal.shared.api.services.auth import get_current_user
 
 # ── Mock Auth ──────────────────────────────────────────────────────────────
 
@@ -35,7 +35,7 @@ async def mock_get_current_user() -> dict[str, Any]:
     return MOCK_USER
 
 
-def mock_require_role(*allowed_roles: str):
+def mock_require_role(*_allowed_roles: str):
     """Return a mock dependency that always allows access."""
     async def _check_role() -> dict[str, Any]:
         return MOCK_USER
@@ -77,7 +77,7 @@ def client(app) -> Generator[TestClient, None, None]:
 @pytest.fixture(autouse=True)
 def _reset_stores():
     """Reset in-memory stores between tests to ensure isolation."""
-    from portal.shared.api.routers import sources, pipelines, access, marketplace
+    from portal.shared.api.routers import access, marketplace, pipelines, sources
 
     # Clear in-memory stores
     sources._sources.clear()

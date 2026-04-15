@@ -29,7 +29,7 @@ import json
 import logging
 import sys
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -143,7 +143,6 @@ class CostAllocator:
         """
         from azure.mgmt.costmanagement.models import (
             QueryAggregation,
-            QueryColumnType,
             QueryDataset,
             QueryDefinition,
             QueryFilter,

@@ -25,11 +25,10 @@ print(f"Quality monitoring: {domain} ({environment})")
 
 # COMMAND ----------
 
-from pyspark.sql import functions as F
-from datetime import datetime, timezone
 import json
-import os
-import yaml
+from datetime import datetime, timezone
+
+from pyspark.sql import functions as F
 
 # COMMAND ----------
 

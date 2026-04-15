@@ -10,7 +10,8 @@ from __future__ import annotations
 import io
 import json
 import re
-import sys
+from collections.abc import Iterator
+from typing import Any
 
 import pytest
 import structlog
@@ -24,10 +25,6 @@ from governance.common.logging import (
     new_trace_id,
     reset_logging_state,
 )
-
-
-from collections.abc import Iterator
-from typing import Any
 
 
 @pytest.fixture(autouse=True)

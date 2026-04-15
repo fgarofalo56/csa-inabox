@@ -29,10 +29,9 @@ import time
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import requests
-
 
 # Configure logging
 logging.basicConfig(
@@ -114,7 +113,7 @@ class CensusBEADataFetcher:
         self.session.headers.update({"User-Agent": "csa-inabox/1.0 Commerce Fetcher"})
 
     # ----- helpers ----
-    def _get(self, url: str, params: Dict[str, Any], label: str) -> Any:
+    def _get(self, url: str, params: dict[str, Any], label: str) -> Any:
         """Execute GET with retry logic and rate limiting."""
         max_retries = 3
         for attempt in range(max_retries):
@@ -149,10 +148,10 @@ class CensusBEADataFetcher:
     # ===================================================================
     def fetch_census_demographics(
         self,
-        states: List[str],
-        years: List[int],
+        states: list[str],
+        years: list[int],
         dataset: str = "acs/acs5",
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Fetch ACS 5-Year demographic estimates.
 
         Args:
@@ -165,7 +164,7 @@ class CensusBEADataFetcher:
         """
         var_codes = list(ACS_VARIABLES.keys())
         var_string = ",".join(var_codes)
-        records: List[Dict[str, Any]] = []
+        records: list[dict[str, Any]] = []
 
         for year in years:
             for state_fips in states:
@@ -173,7 +172,7 @@ class CensusBEADataFetcher:
                 url = f"{self.CENSUS_BASE_URL}/{year}/{dataset}"
                 params = {
                     "get": f"NAME,{var_string}",
-                    "for": f"county:*",
+                    "for": "county:*",
                     "in": f"state:{state_fips}",
                     "key": self.census_api_key,
                 }
@@ -224,10 +223,10 @@ class CensusBEADataFetcher:
     # ===================================================================
     def fetch_gdp_data(
         self,
-        years: List[int],
+        years: list[int],
         table_name: str = "SQGDP2",
-        line_codes: Optional[List[str]] = None,
-    ) -> List[Dict[str, Any]]:
+        line_codes: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
         """Fetch BEA Regional GDP data.
 
         Args:
@@ -238,7 +237,7 @@ class CensusBEADataFetcher:
         Returns:
             List of dicts matching brz_gdp_data columns.
         """
-        records: List[Dict[str, Any]] = []
+        records: list[dict[str, Any]] = []
         if line_codes is None:
             line_codes = ["1", "2", "3", "6", "10", "34", "50", "59", "68", "75", "82"]
 
@@ -319,10 +318,10 @@ class CensusBEADataFetcher:
     # ===================================================================
     def fetch_trade_data(
         self,
-        years: List[int],
-        months: Optional[List[str]] = None,
+        years: list[int],
+        months: list[str] | None = None,
         flow_type: str = "imports",
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Fetch international trade data from Census Bureau.
 
         Args:
@@ -333,7 +332,7 @@ class CensusBEADataFetcher:
         Returns:
             List of dicts matching brz_trade_data columns.
         """
-        records: List[Dict[str, Any]] = []
+        records: list[dict[str, Any]] = []
         endpoint = "imports/hs" if flow_type == "imports" else "exports/hs"
         url = f"{self.TRADE_BASE_URL}/{endpoint}"
 
@@ -410,7 +409,7 @@ class CensusBEADataFetcher:
     # ===================================================================
     def write_csv(
         self,
-        records: List[Dict[str, Any]],
+        records: list[dict[str, Any]],
         output_path: str,
     ) -> str:
         """Write records to CSV file.
@@ -440,7 +439,7 @@ class CensusBEADataFetcher:
 
     def write_json(
         self,
-        records: List[Dict[str, Any]],
+        records: list[dict[str, Any]],
         output_path: str,
     ) -> str:
         """Write records to JSON file.
@@ -578,7 +577,7 @@ def main() -> int:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    results: Dict[str, int] = {}
+    results: dict[str, int] = {}
 
     # ---- Census Demographics ----
     if args.dataset in ("census", "all"):

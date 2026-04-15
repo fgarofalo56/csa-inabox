@@ -19,10 +19,10 @@ import csv
 import logging
 import random
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Sequence
 
 logger = logging.getLogger(__name__)
 

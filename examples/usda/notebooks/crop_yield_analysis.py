@@ -21,29 +21,29 @@
 # COMMAND ----------
 
 # Import required libraries
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from datetime import datetime, timedelta
 import warnings
+from datetime import datetime
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import seaborn as sns
+
 warnings.filterwarnings('ignore')
 
 # Statistical and ML libraries
-from scipy import stats
-from scipy.signal import find_peaks
-from sklearn.linear_model import LinearRegression, Ridge
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.model_selection import train_test_split, cross_val_score
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-from sklearn.preprocessing import StandardScaler, PolynomialFeatures
-
-# Spark and Delta libraries
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import *
-from pyspark.sql.types import *
 import mlflow
 import mlflow.sklearn
+
+# Spark and Delta libraries
+from pyspark.sql.functions import *
+from pyspark.sql.types import *
+from scipy import stats
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.linear_model import LinearRegression, Ridge
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.model_selection import cross_val_score
+from sklearn.preprocessing import PolynomialFeatures, StandardScaler
 
 # Configuration
 plt.style.use('seaborn-v0_8')
@@ -236,7 +236,7 @@ def analyze_state_performance():
         bars = axes[i].barh(crop_data['state_code'], crop_data['yield_per_acre'])
 
         # Add value labels on bars
-        for j, (idx, row) in enumerate(crop_data.iterrows()):
+        for j, (_idx, row) in enumerate(crop_data.iterrows()):
             axes[i].text(row['yield_per_acre'] + max(crop_data['yield_per_acre']) * 0.01,
                         j, f"{row['yield_per_acre']:.1f}",
                         va='center', fontweight='bold')
@@ -511,7 +511,7 @@ def compare_models(results, X_test, y_test):
             mae = res['test_mae']
             axes[i].text(0.05, 0.95, f'R² = {r2:.3f}\nMAE = {mae:.2f}',
                         transform=axes[i].transAxes, verticalalignment='top',
-                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+                        bbox={'boxstyle': 'round', 'facecolor': 'white', 'alpha': 0.8})
 
             axes[i].set_xlabel('Actual Yield')
             axes[i].set_ylabel('Predicted Yield')
@@ -766,13 +766,13 @@ print("=" * 60)
 print("CROP YIELD ANALYSIS - SUMMARY REPORT")
 print("=" * 60)
 
-print(f"\n📊 Dataset Overview:")
+print("\n📊 Dataset Overview:")
 print(f"   • Total records analyzed: {len(df_prepared):,}")
 print(f"   • Commodities: {', '.join(df_prepared['commodity'].unique())}")
 print(f"   • States: {df_prepared['state_code'].nunique()}")
 print(f"   • Year range: {df_prepared['year'].min()}-{df_prepared['year'].max()}")
 
-print(f"\n🤖 Model Performance:")
+print("\n🤖 Model Performance:")
 best_model = min(model_results.keys(), key=lambda k: model_results[k]['test_mae'])
 best_mae = model_results[best_model]['test_mae']
 best_r2 = model_results[best_model]['test_r2']
@@ -780,13 +780,13 @@ print(f"   • Best model: {best_model}")
 print(f"   • Test MAE: {best_mae:.2f} bushels/acre")
 print(f"   • Test R²: {best_r2:.3f}")
 
-print(f"\n📈 Key Findings:")
-print(f"   • Overall yield trends are positive for most commodities")
-print(f"   • Corn shows highest yields in Iowa, Illinois, Nebraska")
-print(f"   • Soybean yields are most stable in the Midwest")
-print(f"   • Year-over-year volatility varies significantly by region")
+print("\n📈 Key Findings:")
+print("   • Overall yield trends are positive for most commodities")
+print("   • Corn shows highest yields in Iowa, Illinois, Nebraska")
+print("   • Soybean yields are most stable in the Midwest")
+print("   • Year-over-year volatility varies significantly by region")
 
-print(f"\n🔮 Forecast Highlights:")
+print("\n🔮 Forecast Highlights:")
 avg_change = forecast_results['predicted_change'].mean()
 positive_forecasts = (forecast_results['predicted_change'] > 0).sum()
 total_forecasts = len(forecast_results)
@@ -794,17 +794,17 @@ total_forecasts = len(forecast_results)
 print(f"   • Average predicted change: {avg_change:.1f}%")
 print(f"   • Positive forecasts: {positive_forecasts}/{total_forecasts} ({positive_forecasts/total_forecasts*100:.1f}%)")
 
-print(f"\n💡 Recommendations:")
-print(f"   • Monitor high-volatility states for risk management")
-print(f"   • Invest in yield improvement technologies in underperforming regions")
-print(f"   • Consider weather data integration for improved forecasting")
-print(f"   • Implement early warning systems for yield decline predictions")
+print("\n💡 Recommendations:")
+print("   • Monitor high-volatility states for risk management")
+print("   • Invest in yield improvement technologies in underperforming regions")
+print("   • Consider weather data integration for improved forecasting")
+print("   • Implement early warning systems for yield decline predictions")
 
-print(f"\n📁 Outputs Generated:")
-print(f"   • Forecast data saved to: gold.gld_crop_yield_forecasts")
-print(f"   • Model metrics saved to: gold.gld_model_performance_metrics")
-print(f"   • Visualizations saved to: /tmp/*.png")
-print(f"   • MLflow experiments: /USDA/crop_yield_forecasting")
+print("\n📁 Outputs Generated:")
+print("   • Forecast data saved to: gold.gld_crop_yield_forecasts")
+print("   • Model metrics saved to: gold.gld_model_performance_metrics")
+print("   • Visualizations saved to: /tmp/*.png")
+print("   • MLflow experiments: /USDA/crop_yield_forecasting")
 
 print("=" * 60)
 

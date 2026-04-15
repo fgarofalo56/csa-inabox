@@ -5,10 +5,9 @@ Parses Azure Service Tags JSON files, extracts IP prefixes,
 and merges/collapses them into the most compact CIDR representation.
 """
 
-import os
-import sys
-import json
 import ipaddress
+import json
+import sys
 from pathlib import Path
 
 
@@ -38,7 +37,7 @@ def extract_address_prefixes(directory: str) -> tuple[set[str], set[str]]:
 
     for filepath in json_files:
         try:
-            with open(filepath, "r", encoding="utf-8") as file:
+            with open(filepath, encoding="utf-8") as file:
                 data = json.load(file)
         except (json.JSONDecodeError, OSError) as e:
             print(f"Error reading {filepath}: {e}")

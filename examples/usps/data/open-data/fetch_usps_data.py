@@ -17,11 +17,10 @@ import logging
 import sys
 import time
 import xml.etree.ElementTree as ET
-from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Any
-import requests
+from typing import Any
 
+import requests
 
 # Configure logging
 logging.basicConfig(
@@ -84,7 +83,7 @@ class USPSDataFetcher:
         """
         return f'<{api}Request USERID="{self.api_key}">{xml_body}</{api}Request>'
 
-    def validate_address(self, addresses: List[Dict[str, str]]) -> List[Dict[str, Any]]:
+    def validate_address(self, addresses: list[dict[str, str]]) -> list[dict[str, Any]]:
         """Validate and standardize mailing addresses.
 
         Args:
@@ -151,7 +150,7 @@ class USPSDataFetcher:
         logger.info(f"Validated {len(results)} addresses")
         return results
 
-    def city_state_lookup(self, zip_codes: List[str]) -> List[Dict[str, Any]]:
+    def city_state_lookup(self, zip_codes: list[str]) -> list[dict[str, Any]]:
         """Look up city and state for ZIP codes.
 
         Args:
@@ -202,7 +201,7 @@ class USPSDataFetcher:
         logger.info(f"Looked up {len(results)} ZIP codes")
         return results
 
-    def track_packages(self, tracking_ids: List[str]) -> List[Dict[str, Any]]:
+    def track_packages(self, tracking_ids: list[str]) -> list[dict[str, Any]]:
         """Track package delivery status.
 
         Args:
@@ -217,7 +216,7 @@ class USPSDataFetcher:
             batch = tracking_ids[batch_start:batch_start + 10]
 
             xml_parts = []
-            for i, track_id in enumerate(batch):
+            for _i, track_id in enumerate(batch):
                 xml_parts.append(
                     f'<TrackID ID="{track_id}"></TrackID>'
                 )
@@ -260,7 +259,7 @@ class USPSDataFetcher:
         logger.info(f"Tracked {len(results)} packages")
         return results
 
-    def fetch_census_zip_geography(self, zip_codes: List[str]) -> List[Dict[str, Any]]:
+    def fetch_census_zip_geography(self, zip_codes: list[str]) -> list[dict[str, Any]]:
         """Fetch ZIP code geographic data from Census TIGER/Line.
 
         Args:
@@ -306,7 +305,7 @@ class USPSDataFetcher:
 
     def save_data(
         self,
-        data: List[Dict[str, Any]],
+        data: list[dict[str, Any]],
         output_path: Path,
         format_type: str = 'csv'
     ) -> None:
@@ -327,7 +326,7 @@ class USPSDataFetcher:
             fieldnames = set()
             for record in data:
                 fieldnames.update(record.keys())
-            fieldnames = sorted(list(fieldnames))
+            fieldnames = sorted(fieldnames)
 
             with open(output_path, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -354,12 +353,11 @@ class USPSDataFetcher:
             if test_result and 'error' not in test_result[0]:
                 logger.info("USPS Web Tools API connection test successful")
                 return True
-            elif test_result:
+            if test_result:
                 logger.warning(f"API returned error: {test_result[0].get('error', 'Unknown')}")
                 return False
-            else:
-                logger.error("API returned empty response")
-                return False
+            logger.error("API returned empty response")
+            return False
         except Exception as e:
             logger.error(f"USPS API connection test failed: {e}")
             return False

@@ -22,34 +22,44 @@
 # COMMAND ----------
 
 # Import required libraries
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from datetime import datetime, timedelta
 import warnings
+from datetime import datetime
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import seaborn as sns
+
 warnings.filterwarnings('ignore')
 
 # ML libraries
-from scipy import stats
-from sklearn.linear_model import LogisticRegression, Ridge
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
-from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor
-from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold
-from sklearn.metrics import (
-    accuracy_score, precision_score, recall_score, f1_score,
-    classification_report, confusion_matrix, roc_auc_score, roc_curve,
-    mean_absolute_error, mean_squared_error, r2_score
-)
-from sklearn.preprocessing import StandardScaler, LabelEncoder
-from sklearn.pipeline import Pipeline
-
-# Spark and Delta
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import *
-from pyspark.sql.types import *
 import mlflow
 import mlflow.sklearn
+
+# Spark and Delta
+from pyspark.sql.functions import *
+from pyspark.sql.types import *
+from sklearn.ensemble import (
+    GradientBoostingClassifier,
+    GradientBoostingRegressor,
+    RandomForestClassifier,
+    RandomForestRegressor,
+)
+from sklearn.linear_model import LogisticRegression, Ridge
+from sklearn.metrics import (
+    accuracy_score,
+    confusion_matrix,
+    f1_score,
+    mean_absolute_error,
+    mean_squared_error,
+    precision_score,
+    r2_score,
+    recall_score,
+    roc_auc_score,
+    roc_curve,
+)
+from sklearn.model_selection import cross_val_score, train_test_split
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 
 # Configuration
 plt.style.use('seaborn-v0_8')
@@ -146,9 +156,9 @@ def prepare_storm_features(storms, weather):
         try:
             if val.endswith('K'):
                 return float(val[:-1]) * 1000
-            elif val.endswith('M'):
+            if val.endswith('M'):
                 return float(val[:-1]) * 1000000
-            elif val.endswith('B'):
+            if val.endswith('B'):
                 return float(val[:-1]) * 1000000000
             return float(val)
         except (ValueError, IndexError):
@@ -166,14 +176,13 @@ def prepare_storm_features(storms, weather):
     def classify_severity(row):
         if row['total_deaths'] > 0:
             return 3  # Fatal
-        elif row['total_injuries'] > 0:
+        if row['total_injuries'] > 0:
             return 2  # Injury
-        elif row['total_damage'] > 100000:
+        if row['total_damage'] > 100000:
             return 2  # Major damage
-        elif row['total_damage'] > 10000:
+        if row['total_damage'] > 10000:
             return 1  # Moderate
-        else:
-            return 0  # Minor
+        return 0  # Minor
 
     df['severity_class'] = df.apply(classify_severity, axis=1)
 
@@ -577,7 +586,7 @@ print("=" * 60)
 print("SEVERE WEATHER PREDICTION - SUMMARY REPORT")
 print("=" * 60)
 
-print(f"\nDataset Overview:")
+print("\nDataset Overview:")
 print(f"  Storm events: {len(df_model):,}")
 print(f"  Event types: {df_model['event_type'].nunique()}")
 print(f"  Features: {len(feature_names)}")
@@ -595,16 +604,16 @@ print(f"\nDamage Regression (Best: {best_reg}):")
 print(f"  MAE (log): {reg_results[best_reg]['test_mae']:.3f}")
 print(f"  R2: {reg_results[best_reg]['test_r2']:.3f}")
 
-print(f"\nTop Predictive Features:")
+print("\nTop Predictive Features:")
 if feature_importance is not None:
     for _, row in feature_importance.head(5).iterrows():
         print(f"  - {row['feature']}: {row['importance']:.4f}")
 
-print(f"\nOutputs:")
-print(f"  - gold.gld_weather_severity_metrics")
-print(f"  - gold.gld_weather_damage_metrics")
-print(f"  - gold.gld_weather_feature_importance")
-print(f"  - Visualizations: /tmp/noaa_*.png")
-print(f"  - MLflow: /NOAA/severe_weather_prediction")
+print("\nOutputs:")
+print("  - gold.gld_weather_severity_metrics")
+print("  - gold.gld_weather_damage_metrics")
+print("  - gold.gld_weather_feature_importance")
+print("  - Visualizations: /tmp/noaa_*.png")
+print("  - MLflow: /NOAA/severe_weather_prediction")
 
 print("=" * 60)

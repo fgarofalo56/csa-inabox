@@ -6,24 +6,23 @@ the in-memory store (no external dependencies required).
 
 from __future__ import annotations
 
-import pytest
-from httpx import ASGITransport, AsyncClient
-
 from platform.data_marketplace.api.marketplace_api import InMemoryStore, app, get_store
 
+import pytest
+from httpx import ASGITransport, AsyncClient
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture()
+@pytest.fixture
 def fresh_store() -> InMemoryStore:
     """Return a clean in-memory store for each test."""
     return InMemoryStore()
 
 
-@pytest.fixture()
+@pytest.fixture
 def test_client(fresh_store: InMemoryStore):
     """Create a test client with a fresh store injected."""
 

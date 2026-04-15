@@ -16,13 +16,17 @@
 
 # COMMAND ----------
 
-import yaml
-import json
 from datetime import datetime, timezone
+
+import yaml
 from pyspark.sql import functions as F
 from pyspark.sql.types import (
-    StructType, StructField, StringType, IntegerType,
-    DoubleType, TimestampType, BooleanType,
+    BooleanType,
+    DoubleType,
+    StringType,
+    StructField,
+    StructType,
+    TimestampType,
 )
 
 dbutils.widgets.text("rules_path", "/Workspace/Repos/csa-inabox/governance/dataquality/quality-rules.yaml", "Quality Rules Path")
@@ -47,7 +51,7 @@ print(f"Results table: {RESULTS_TABLE}")
 
 # Load the YAML rules file
 try:
-    with open(rules_path.replace("/Workspace/Repos/csa-inabox/", ""), "r") as f:
+    with open(rules_path.replace("/Workspace/Repos/csa-inabox/", "")) as f:
         rules_config = yaml.safe_load(f)
     print(f"Loaded {len(rules_config.get('rules', {}))} rule categories")
 except FileNotFoundError:
@@ -272,7 +276,7 @@ def check_custom_rule(table_fqn: str, rule_name: str, expression: str,
 
     add_result(
         table_fqn, "accuracy", f"custom:{rule_name}", None,
-        passed, f"all rows match", f"{row_count - passing} violations",
+        passed, "all rows match", f"{row_count - passing} violations",
         score, severity,
     )
 

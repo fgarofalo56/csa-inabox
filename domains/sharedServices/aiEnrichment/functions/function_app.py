@@ -29,8 +29,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 import azure.functions as func
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-from azure.core.exceptions import ServiceRequestError, HttpResponseError
+from azure.core.exceptions import HttpResponseError, ServiceRequestError
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from governance.common.logging import (
     bind_trace_context,
@@ -48,7 +48,7 @@ app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
 # Configuration and Constants
 # ---------------------------------------------------------------------------
 AI_ENDPOINT = os.environ.get("AZURE_AI_ENDPOINT", "")
-STORAGE_CONNECTION = os.environ.get("AzureWebJobsStorage", "")
+STORAGE_CONNECTION = os.environ.get("AzureWebJobsStorage", "")  # noqa: SIM112 (Azure-defined name)
 ENRICHED_CONTAINER = os.environ.get("ENRICHED_CONTAINER", "enriched")
 INBOX_CONTAINER = os.environ.get("INBOX_CONTAINER", "inbox")
 
@@ -213,7 +213,7 @@ async def _enrich_text(text: str) -> dict[str, Any]:
 
     except (ServiceRequestError, HttpResponseError) as e:
         logger.error("enrichment.azure_sdk_failed", error_type=type(e).__name__, error_message=str(e))
-        results["error"] = f"Azure SDK error: {str(e)}"
+        results["error"] = f"Azure SDK error: {e!s}"
     except ImportError as e:
         logger.warning("enrichment.import_failed", error=str(e))
         results["error"] = "AI client not configured"
@@ -277,7 +277,7 @@ async def _analyze_document(blob_data: bytes, content_type: str) -> dict[str, An
 
     except (ServiceRequestError, HttpResponseError) as e:
         logger.error("enrichment.document_azure_sdk_failed", error_type=type(e).__name__, error_message=str(e))
-        results["error"] = f"Azure SDK error: {str(e)}"
+        results["error"] = f"Azure SDK error: {e!s}"
     except ImportError as e:
         logger.warning("enrichment.document_import_failed", error=str(e))
         results["error"] = "Document Intelligence client not configured"

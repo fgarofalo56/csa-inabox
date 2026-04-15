@@ -17,7 +17,6 @@ Usage::
 from __future__ import annotations
 
 import logging
-import math
 import statistics
 import time
 from collections import defaultdict
@@ -319,7 +318,7 @@ class RuleEngine:
         """
         # We need at least 7 data points for meaningful z-score
         buffer_key = None
-        for key, events in self._window_buffer.items():
+        for key, _events in self._window_buffer.items():
             if key[1] == condition.field:
                 buffer_key = key
                 break

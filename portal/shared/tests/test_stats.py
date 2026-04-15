@@ -4,7 +4,6 @@ Tests for the stats router — platform statistics and domain overviews.
 
 from __future__ import annotations
 
-import pytest
 from fastapi.testclient import TestClient
 
 

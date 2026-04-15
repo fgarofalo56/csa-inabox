@@ -17,25 +17,26 @@
 
 # COMMAND ----------
 
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from datetime import datetime
 import warnings
+
+import matplotlib.pyplot as plt
+import pandas as pd
+import seaborn as sns
+
 warnings.filterwarnings('ignore')
 
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold
-from sklearn.metrics import (classification_report, confusion_matrix, roc_auc_score,
-                             roc_curve, precision_recall_curve, f1_score)
-from sklearn.preprocessing import StandardScaler, LabelEncoder
-
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import *
 import mlflow
 import mlflow.sklearn
+from pyspark.sql.functions import *
+from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import (
+    f1_score,
+    roc_auc_score,
+    roc_curve,
+)
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 
 plt.style.use('seaborn-v0_8')
 mlflow.set_experiment("/TribalHealth/chronic_disease_prediction")
@@ -315,7 +316,7 @@ best = max(diabetes_results.keys(), key=lambda k: diabetes_results[k]['auc'])
 print(f"\nBest diabetes model: {best}")
 print(f"  AUC: {diabetes_results[best]['auc']:.3f}")
 print(f"  F1: {diabetes_results[best]['f1']:.3f}")
-print(f"\nAll data is SYNTHETIC")
-print(f"Output: gold.gld_health_disparity_index")
-print(f"MLflow: /TribalHealth/chronic_disease_prediction")
+print("\nAll data is SYNTHETIC")
+print("Output: gold.gld_health_disparity_index")
+print("MLflow: /TribalHealth/chronic_disease_prediction")
 print("=" * 65)

@@ -7,11 +7,6 @@ package.  The canonical marketplace models now live in ``marketplace.py``.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from enum import Enum
-
-from pydantic import BaseModel, Field
-
 # Re-export from the marketplace module so existing routes/ imports still work.
 from .marketplace import (  # noqa: F401
     AccessLevel,

@@ -228,7 +228,7 @@ def _check_uniqueness(
         seen.setdefault(value, []).append(idx)
 
     duplicate_indices: list[int] = []
-    for value, indices in seen.items():
+    for _value, indices in seen.items():
         if len(indices) > 1:
             duplicate_indices.extend(indices)
 

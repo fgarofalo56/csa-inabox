@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -78,7 +77,7 @@ class TestExtractAddressPrefixes:
             ],
         }
         (tmp_path / "bad.json").write_text(json.dumps(data), encoding="utf-8")
-        v4, v6 = extract_address_prefixes(str(tmp_path))
+        v4, _v6 = extract_address_prefixes(str(tmp_path))
         assert "10.0.0.0/8" in v4
         assert len(v4) == 1
 

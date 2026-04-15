@@ -16,8 +16,8 @@ __version__ = "1.0.0"
 
 # Make key classes available at package level for convenience
 try:
-    from .generator import PipelineGenerator, DLZProvisioner
-    __all__ = ["PipelineGenerator", "DLZProvisioner"]
+    from .generator import DLZProvisioner, PipelineGenerator
+    __all__ = ["DLZProvisioner", "PipelineGenerator"]
 except ImportError:
     # Gracefully handle import errors during development
     __all__ = []

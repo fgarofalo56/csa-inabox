@@ -7,12 +7,6 @@ OpenAI and AI Search clients.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any
-from unittest.mock import MagicMock, patch
-
-import pytest
-
 from platform.ai_integration.rag.pipeline import (
     Chunk,
     DocumentChunker,
@@ -21,7 +15,9 @@ from platform.ai_integration.rag.pipeline import (
     SearchResult,
     VectorStore,
 )
+from unittest.mock import MagicMock
 
+import pytest
 
 # ---------------------------------------------------------------------------
 # DocumentChunker Tests
@@ -107,7 +103,7 @@ class TestDocumentChunker:
 class TestRAGPipeline:
     """Test the RAG pipeline query flow with mocked dependencies."""
 
-    @pytest.fixture()
+    @pytest.fixture
     def mock_pipeline(self):
         """Create a RAG pipeline with mocked embedder and vector store."""
         chunker = DocumentChunker(chunk_size=512, chunk_overlap=64, min_chunk_length=50)
@@ -153,7 +149,7 @@ class TestRAGPipeline:
         embedder.embed_single.assert_called_once_with("What are the crop yield trends?")
 
     def test_query_no_results_returns_message(self, mock_pipeline):
-        pipeline, embedder, vector_store = mock_pipeline
+        pipeline, _embedder, vector_store = mock_pipeline
         vector_store.search.return_value = []
 
         result = pipeline.query("Something with no context")
@@ -162,7 +158,7 @@ class TestRAGPipeline:
         assert result["sources"] == []
 
     def test_query_passes_filters(self, mock_pipeline):
-        pipeline, embedder, vector_store = mock_pipeline
+        pipeline, _embedder, vector_store = mock_pipeline
         vector_store.search.return_value = []
 
         pipeline.query("test", filters="source eq 'usda'")
@@ -195,9 +191,7 @@ class TestEntityExtractor:
 
     def test_extract_entities(self):
         from platform.ai_integration.enrichment.entity_extractor import (
-            Entity,
             EntityExtractor,
-            ExtractionResult,
         )
 
         extractor = EntityExtractor(endpoint="https://test.cognitiveservices.azure.com", api_key="test-key")
@@ -247,7 +241,6 @@ class TestDocumentClassifier:
 
     def test_classify_single(self):
         from platform.ai_integration.enrichment.document_classifier import (
-            ClassificationResult,
             DocumentClassifier,
         )
 
@@ -274,7 +267,6 @@ class TestTextSummarizer:
 
     def test_summarize(self):
         from platform.ai_integration.enrichment.text_summarizer import (
-            SummarizationResult,
             TextSummarizer,
         )
 

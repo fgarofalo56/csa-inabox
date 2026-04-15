@@ -18,19 +18,17 @@
 
 # COMMAND ----------
 
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from datetime import datetime, timedelta
 import warnings
+from datetime import timedelta
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import seaborn as sns
+
 warnings.filterwarnings('ignore')
 
-from sklearn.cluster import KMeans
-from sklearn.preprocessing import StandardScaler
-from scipy import stats
 
-from pyspark.sql import SparkSession
 from pyspark.sql.functions import *
 
 plt.style.use('seaborn-v0_8')
@@ -108,11 +106,11 @@ def compute_rfm(sessions, fnb):
     def segment(row):
         r, f, m = row['recency_days_score'], row['frequency_score'], row['monetary_coin_in_score']
         if r >= 4 and f >= 4 and m >= 4: return 'VIP'
-        elif r >= 3 and f >= 3: return 'Loyal'
-        elif r >= 4 and f <= 2: return 'New'
-        elif r <= 2 and f >= 3: return 'At Risk'
-        elif r <= 2 and f <= 2: return 'Lost'
-        else: return 'Regular'
+        if r >= 3 and f >= 3: return 'Loyal'
+        if r >= 4 and f <= 2: return 'New'
+        if r <= 2 and f >= 3: return 'At Risk'
+        if r <= 2 and f <= 2: return 'Lost'
+        return 'Regular'
 
     player_rfm['segment'] = player_rfm.apply(segment, axis=1)
 
@@ -231,5 +229,5 @@ print("=" * 65)
 print(f"\nPlayers analyzed: {len(player_rfm):,}")
 for seg in player_rfm['segment'].value_counts().items():
     print(f"  {seg[0]}: {seg[1]} ({seg[1]/len(player_rfm)*100:.1f}%)")
-print(f"\nOutput: gold.gld_player_rfm_segments")
+print("\nOutput: gold.gld_player_rfm_segments")
 print("=" * 65)

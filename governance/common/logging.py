@@ -31,8 +31,9 @@ import os
 import re
 import threading
 import uuid
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
-from typing import Any, Iterator, Mapping
+from typing import Any
 
 import structlog
 from structlog.contextvars import (

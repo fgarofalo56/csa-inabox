@@ -22,34 +22,41 @@
 # COMMAND ----------
 
 # Import required libraries
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from datetime import datetime, timedelta
 import warnings
+from datetime import datetime
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import seaborn as sns
+
 warnings.filterwarnings('ignore')
 
 # ML libraries
-from scipy import stats
-from sklearn.linear_model import LinearRegression, Ridge, LogisticRegression
-from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
-from sklearn.ensemble import GradientBoostingRegressor, GradientBoostingClassifier
-from sklearn.model_selection import train_test_split, cross_val_score, TimeSeriesSplit
-from sklearn.metrics import (
-    mean_absolute_error, mean_squared_error, r2_score,
-    accuracy_score, precision_score, recall_score, f1_score,
-    roc_auc_score, roc_curve, confusion_matrix
-)
-from sklearn.preprocessing import StandardScaler, LabelEncoder
-from sklearn.pipeline import Pipeline
-
-# Spark and Delta
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import *
-from pyspark.sql.types import *
 import mlflow
 import mlflow.sklearn
+
+# Spark and Delta
+from pyspark.sql.functions import *
+from pyspark.sql.types import *
+from sklearn.ensemble import (
+    GradientBoostingClassifier,
+    GradientBoostingRegressor,
+    RandomForestClassifier,
+    RandomForestRegressor,
+)
+from sklearn.linear_model import LogisticRegression, Ridge
+from sklearn.metrics import (
+    confusion_matrix,
+    f1_score,
+    mean_absolute_error,
+    mean_squared_error,
+    r2_score,
+    roc_auc_score,
+    roc_curve,
+)
+from sklearn.model_selection import TimeSeriesSplit, cross_val_score
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 
 # Configuration
 plt.style.use('seaborn-v0_8')
@@ -350,7 +357,7 @@ def compare_regression_models(results, y_test):
         ax.plot([vmin, vmax], [vmin, vmax], 'r--', alpha=0.8)
         ax.text(0.05, 0.95, f"R2={r['test_r2']:.3f}\nMAE={r['test_mae']:.1f}\nMAPE={r['mape']:.1f}%",
                 transform=ax.transAxes, va='top',
-                bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+                bbox={'boxstyle': 'round', 'facecolor': 'white', 'alpha': 0.8})
         ax.set_xlabel('Actual AQI')
         ax.set_ylabel('Predicted AQI')
         ax.set_title(name, fontweight='bold')
@@ -555,7 +562,7 @@ print("=" * 60)
 print("AIR QUALITY FORECASTING - SUMMARY REPORT")
 print("=" * 60)
 
-print(f"\nDataset Overview:")
+print("\nDataset Overview:")
 print(f"  Total records: {len(df_ml):,}")
 print(f"  Sites: {df_ml['site_id'].nunique()}")
 print(f"  Pollutants: {df_ml['parameter_name'].nunique()}")
@@ -573,16 +580,16 @@ print(f"\nExceedance Classification (Best: {best_cls}):")
 print(f"  F1: {cls_results[best_cls]['f1']:.3f}")
 print(f"  AUC: {cls_results[best_cls]['auc']:.3f}")
 
-print(f"\nTop Features:")
+print("\nTop Features:")
 if feature_importance is not None:
     for _, row in feature_importance.head(5).iterrows():
         print(f"  - {row['feature']}: {row['importance']:.4f}")
 
-print(f"\nOutputs:")
-print(f"  - gold.gld_aqi_regression_metrics")
-print(f"  - gold.gld_aqi_exceedance_metrics")
-print(f"  - gold.gld_aqi_feature_importance")
-print(f"  - Visualizations: /tmp/epa_*.png")
-print(f"  - MLflow: /EPA/air_quality_forecasting")
+print("\nOutputs:")
+print("  - gold.gld_aqi_regression_metrics")
+print("  - gold.gld_aqi_exceedance_metrics")
+print("  - gold.gld_aqi_feature_importance")
+print("  - Visualizations: /tmp/epa_*.png")
+print("  - MLflow: /EPA/air_quality_forecasting")
 
 print("=" * 60)
