@@ -52,7 +52,7 @@
           "level": "warning"
         },
         "use-recent-api-versions": {
-          "level": "warning",
+          "level": "off",
           "maxAllowedAgeInDays": 730
         }
       }

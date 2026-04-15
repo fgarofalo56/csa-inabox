@@ -12,7 +12,6 @@
 
 {{
     config(
-        target_database = var('gold_database', 'gold'),
         target_schema   = 'snapshots',
         unique_key      = 'customer_sk',
         strategy        = 'check',

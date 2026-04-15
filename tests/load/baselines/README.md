@@ -1,5 +1,7 @@
 # Load Test Baselines
 
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** QA Engineers / Developers
+
 Performance baselines for load testing. Add baseline JSON files here.
 
 ## Structure
@@ -10,4 +12,4 @@ Performance baselines for load testing. Add baseline JSON files here.
 
 ## Related Documentation
 
-- [Production Checklist](../../../docs/PRODUCTION_CHECKLIST.md) - Pre-deployment verification steps
+- [Production Checklist](../../../docs/PRODUCTION_CHECKLIST.md) — Pre-deployment verification steps

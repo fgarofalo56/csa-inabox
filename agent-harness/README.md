@@ -1,6 +1,17 @@
 # CSA-in-a-Box Agent Harness — Ralph Loop
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Developers
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Developers
+
+## Table of Contents
+
+- [Overview](#overview)
+- [How It Works](#how-it-works)
+- [Task Lifecycle](#task-lifecycle)
+- [Validation Gates](#validation-gates)
+- [Integration Points](#integration-points)
+- [Configuration](#configuration)
+- [Archon Project](#archon-project)
+- [Related Documentation](#related-documentation)
 
 ## Overview
 
@@ -80,6 +91,6 @@ Query tasks: `find_tasks(filter_by="project", filter_value="1bd59749-db0a-4009-8
 
 ## Related Documentation
 
-- [Architecture Overview](../docs/ARCHITECTURE.md) - Platform architecture reference
-- [Getting Started](../docs/GETTING_STARTED.md) - Platform setup and onboarding
-- [Contributing](../CONTRIBUTING.md) - Development guidelines and PR process
+- [Architecture Overview](../docs/ARCHITECTURE.md) — Platform architecture reference
+- [Getting Started](../docs/GETTING_STARTED.md) — Platform setup and onboarding
+- [Contributing](../CONTRIBUTING.md) — Development guidelines and PR process

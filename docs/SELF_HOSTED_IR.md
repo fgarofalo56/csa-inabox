@@ -1,6 +1,6 @@
 # Self-Hosted Integration Runtime (SHIR)
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** DevOps Engineers
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** DevOps Engineers
 
 The Self-Hosted Integration Runtime (SHIR) module enables CSA-in-a-Box to securely connect to on-premises and private network data sources from Azure Data Factory. This module deploys a highly available, auto-scaling Windows Server infrastructure that bridges your private networks with Azure's cloud analytics services.
 
@@ -1052,12 +1052,8 @@ SELECT MAX(LastModified) FROM SyncMetadata WHERE Status = 'Success'
 
 ---
 
-This comprehensive documentation provides the foundation for deploying, operating, and troubleshooting the Self-Hosted Integration Runtime module in CSA-in-a-Box. Refer to the Azure Data Factory documentation and Microsoft Learn resources for additional details on specific integration scenarios and advanced configurations.
-
----
-
 ## Related Documentation
 
-- [ADF_SETUP.md](ADF_SETUP.md) - Azure Data Factory pipeline setup and orchestration
-- [IaC-CICD-Best-Practices.md](IaC-CICD-Best-Practices.md) - Infrastructure-as-Code and CI/CD patterns
-- [ARCHITECTURE.md](ARCHITECTURE.md) - Platform architecture overview
+- [ADF_SETUP.md](ADF_SETUP.md) — Azure Data Factory pipeline setup and orchestration
+- [IaC-CICD-Best-Practices.md](IaC-CICD-Best-Practices.md) — Infrastructure-as-Code and CI/CD patterns
+- [ARCHITECTURE.md](ARCHITECTURE.md) — Platform architecture overview

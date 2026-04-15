@@ -1,9 +1,9 @@
 # CSA-in-a-Box: Quick Start Guide
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** New Users
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** New Users
 
 Get a working Cloud-Scale Analytics platform deployed and flowing data in
-about 60--90 minutes (assuming all prerequisites are met).
+about 60-90 minutes (assuming all prerequisites are met).
 
 ## Table of Contents
 
@@ -539,7 +539,7 @@ az storage account show \
 
 ## Related Documentation
 
-- [Getting Started](GETTING_STARTED.md) - Prerequisites and deployment walkthrough
-- [Architecture](ARCHITECTURE.md) - Comprehensive architecture reference
-- [Troubleshooting](TROUBLESHOOTING.md) - Common issues and fixes
-- [ADF Setup](../scripts/deploy/deploy-adf.sh) - ADF deployment helper script
+- [Getting Started](GETTING_STARTED.md) — Prerequisites and deployment walkthrough
+- [Architecture](ARCHITECTURE.md) — Comprehensive architecture reference
+- [Troubleshooting](TROUBLESHOOTING.md) — Common issues and fixes
+- [ADF Setup](../scripts/deploy/deploy-adf.sh) — ADF deployment helper script

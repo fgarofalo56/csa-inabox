@@ -1,6 +1,6 @@
 # Multi-Region Deployment Guide
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Platform Engineers
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Platform Engineers
 
 This guide covers deploying CSA-in-a-Box in an active-active
 multi-region configuration for high availability and disaster recovery.
@@ -692,7 +692,7 @@ and naming conventions.
 
 ## Related Documentation
 
-- [MULTI_TENANT.md](MULTI_TENANT.md) - Multi-tenant stamped deployment model
-- [DR.md](DR.md) - Disaster recovery runbook and failover procedures
-- [ARCHITECTURE.md](ARCHITECTURE.md) - Platform architecture overview
-- [PLATFORM_SERVICES.md](PLATFORM_SERVICES.md) - Platform services reference and SKU details
+- [MULTI_TENANT.md](MULTI_TENANT.md) — Multi-tenant stamped deployment model
+- [DR.md](DR.md) — Disaster recovery runbook and failover procedures
+- [ARCHITECTURE.md](ARCHITECTURE.md) — Platform architecture overview
+- [PLATFORM_SERVICES.md](PLATFORM_SERVICES.md) — Platform services reference and SKU details

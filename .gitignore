@@ -237,6 +237,11 @@ instance/
 .claude/skills/
 
 # ---------------------------
+# Bicep CLI binary (downloaded during CI lint; not a project artifact)
+# ---------------------------
+/bicep
+
+# ---------------------------
 # Stray VS Code Bicep extension installs under deploy/bicep/
 # (Created by the azext-azureauth auto-install; not project dependencies.)
 # ---------------------------

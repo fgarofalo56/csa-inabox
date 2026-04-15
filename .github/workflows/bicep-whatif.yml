@@ -86,6 +86,8 @@ jobs:
     name: What-If (${{ matrix.zone }})
     runs-on: ubuntu-latest
     needs: [detect-changes, bicep-build]
+    # Skip when OIDC credentials are not configured (e.g. community forks / PRs from forks).
+    if: vars.AZURE_CREDENTIALS_CONFIGURED == 'true'
     environment: dev
     strategy:
       fail-fast: false
@@ -201,7 +203,7 @@ jobs:
     name: Cost Estimate (${{ matrix.zone }})
     runs-on: ubuntu-latest
     needs: [detect-changes, whatif]
-    if: always() && !cancelled()
+    if: always() && !cancelled() && vars.AZURE_CREDENTIALS_CONFIGURED == 'true'
     strategy:
       fail-fast: false
       matrix:

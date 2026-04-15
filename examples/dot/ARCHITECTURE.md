@@ -1,6 +1,6 @@
 # DOT Transportation Analytics Architecture
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Architects / Data Engineers
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Architects / Data Engineers
 
 ## Table of Contents
 - [Overview](#overview)
@@ -496,8 +496,8 @@ alerts:
 
 ## Related Documentation
 
-- [DOT README](README.md) - Deployment guide, quick start, and analytics scenarios
-- [Platform Architecture](../../docs/ARCHITECTURE.md) - Core CSA platform architecture
-- [Platform Services](../../docs/PLATFORM_SERVICES.md) - Shared Azure service configurations
-- [Interior Architecture](../interior/ARCHITECTURE.md) - Related federal infrastructure architecture
-- [USPS Architecture](../usps/ARCHITECTURE.md) - Related federal logistics architecture
+- [DOT README](README.md) — Deployment guide, quick start, and analytics scenarios
+- [Platform Architecture](../../docs/ARCHITECTURE.md) — Core CSA platform architecture
+- [Platform Services](../../docs/PLATFORM_SERVICES.md) — Shared Azure service configurations
+- [Interior Architecture](../interior/ARCHITECTURE.md) — Related federal infrastructure architecture
+- [USPS Architecture](../usps/ARCHITECTURE.md) — Related federal logistics architecture

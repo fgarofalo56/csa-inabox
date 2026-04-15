@@ -1,6 +1,6 @@
 # Platform Services Guide
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Architects
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Architects
 
 Platform services are the Fabric-equivalent capabilities that extend the base
 landing zones. Each service is independently deployable and has its own README
@@ -383,6 +383,6 @@ See the root [`.env.example`](../.env.example) for all required environment vari
 
 ## Related Documentation
 
-- [Architecture](ARCHITECTURE.md) - Comprehensive architecture reference
-- [Multi-Region DR](DR.md) - Multi-region disaster recovery runbook
-- [Cost Management](../governance/finops/) - FinOps budget alerts
+- [Architecture](ARCHITECTURE.md) — Comprehensive architecture reference
+- [Multi-Region DR](DR.md) — Multi-region disaster recovery runbook
+- [Cost Management](COST_MANAGEMENT.md) — FinOps budget alerts and cost optimization

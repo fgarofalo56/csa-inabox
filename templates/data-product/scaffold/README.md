@@ -1,5 +1,15 @@
 # DOMAIN_NAME Data Product
 
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers / Domain Owners
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Data Products](#data-products)
+- [Ownership](#ownership)
+- [Directory Structure](#directory-structure)
+- [Related Documentation](#related-documentation)
+
 ## Overview
 <!-- Replace DOMAIN_NAME with your domain (e.g., "Sales", "Finance").
      Describe the business purpose, key entities, and data sources. -->
@@ -44,5 +54,5 @@ DOMAIN_NAME/
 
 ## Related Documentation
 
-- [Getting Started Guide](../../../docs/GETTING_STARTED.md) - Platform setup and onboarding
-- [USDA Example](../../../examples/usda/README.md) - Reference domain implementation
+- [Getting Started Guide](../../../docs/GETTING_STARTED.md) — Platform setup and onboarding
+- [USDA Example](../../../examples/usda/README.md) — Reference domain implementation

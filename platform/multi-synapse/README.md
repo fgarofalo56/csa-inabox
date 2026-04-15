@@ -1,6 +1,6 @@
 # Multi-Synapse — Shared Analytics Environment
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Platform Engineers
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Platform Engineers
 
 > **Multi-organization Synapse workspace architecture**
 
@@ -175,7 +175,7 @@ All workspaces share a managed VNet with:
 
 ## Related Documentation
 
-- [Platform Components](../README.md) - Platform component index
-- [Platform Services](../../docs/PLATFORM_SERVICES.md) - Detailed platform service descriptions
-- [Architecture](../../docs/ARCHITECTURE.md) - Overall system architecture
-- [Direct Lake](../direct-lake/README.md) - Power BI direct access to Delta Lake
+- [Platform Components](../README.md) — Platform component index
+- [Platform Services](../../docs/PLATFORM_SERVICES.md) — Detailed platform service descriptions
+- [Architecture](../../docs/ARCHITECTURE.md) — Overall system architecture
+- [Direct Lake](../direct-lake/README.md) — Power BI direct access to Delta Lake

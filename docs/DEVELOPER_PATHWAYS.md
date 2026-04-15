@@ -213,3 +213,12 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system architecture.
 - **Medallion architecture**: Bronze (raw) -> Silver (cleaned) -> Gold (business-ready)
 - **Governance as code**: Data contracts, quality rules, and RBAC policies defined in YAML/JSON
 - **Platform services**: AI enrichment, metadata framework, and data marketplace as shared services
+
+---
+
+## Related Documentation
+
+- [Architecture](ARCHITECTURE.md) — Comprehensive architecture reference
+- [Getting Started](GETTING_STARTED.md) — Prerequisites and deployment walkthrough
+- [Platform Services](PLATFORM_SERVICES.md) — Platform component deep-dive
+- [Troubleshooting](TROUBLESHOOTING.md) — Common issues and fixes

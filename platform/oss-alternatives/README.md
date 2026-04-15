@@ -1,10 +1,18 @@
 # Open-Source Alternatives for Azure Government
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Platform Engineers
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Platform Engineers
 
 When deploying Cloud Scale Analytics in Azure Government, some services may have
 limited availability or missing features. This directory provides open-source
 alternatives that can be deployed on AKS (Azure Kubernetes Service) in Gov regions.
+
+## Table of Contents
+
+- [When to Use Open-Source Alternatives](#when-to-use-open-source-alternatives)
+- [Deployment Patterns](#deployment-patterns)
+- [Helm Charts](#helm-charts)
+- [Integration with CSA Platform](#integration-with-csa-platform)
+- [Related Documentation](#related-documentation)
 
 ## When to Use Open-Source Alternatives
 
@@ -84,8 +92,8 @@ All open-source alternatives integrate with the core CSA platform via:
 
 ## Related Documentation
 
-- [Platform Components](../README.md) - Platform component index
-- [Platform Services](../../docs/PLATFORM_SERVICES.md) - Detailed platform service descriptions
-- [Architecture](../../docs/ARCHITECTURE.md) - Overall system architecture
-- [Governance](../governance/README.md) - Purview automation and classification
-- [Shared Services](../shared-services/README.md) - Reusable function library
+- [Platform Components](../README.md) — Platform component index
+- [Platform Services](../../docs/PLATFORM_SERVICES.md) — Detailed platform service descriptions
+- [Architecture](../../docs/ARCHITECTURE.md) — Overall system architecture
+- [Governance](../governance/README.md) — Purview automation and classification
+- [Shared Services](../shared-services/README.md) — Reusable function library

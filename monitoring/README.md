@@ -5,6 +5,13 @@
 This directory contains the operational monitoring infrastructure for CSA-in-a-Box,
 including Azure Monitor alert rules (Bicep) and Grafana dashboard definitions.
 
+## Table of Contents
+
+- [Structure](#structure)
+- [Getting Started](#getting-started)
+- [Alert Categories](#alert-categories)
+- [Related Documentation](#related-documentation)
+
 ## Structure
 
 ```text

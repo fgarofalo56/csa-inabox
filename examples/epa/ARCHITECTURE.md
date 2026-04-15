@@ -1,6 +1,6 @@
 # EPA Environmental Monitoring Analytics Architecture
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Architects / Data Engineers
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Architects / Data Engineers
 
 ## Table of Contents
 - [Overview](#overview)
@@ -558,8 +558,8 @@ spec:
 
 ## Related Documentation
 
-- [EPA README](README.md) - Deployment guide, quick start, and analytics scenarios
-- [Platform Architecture](../../docs/ARCHITECTURE.md) - Core CSA platform architecture
-- [Platform Services](../../docs/PLATFORM_SERVICES.md) - Shared Azure service configurations
-- [NOAA Architecture](../noaa/ARCHITECTURE.md) - Related environmental/climate architecture
-- [USDA Architecture](../usda/ARCHITECTURE.md) - Related agriculture/environment architecture
+- [EPA README](README.md) — Deployment guide, quick start, and analytics scenarios
+- [Platform Architecture](../../docs/ARCHITECTURE.md) — Core CSA platform architecture
+- [Platform Services](../../docs/PLATFORM_SERVICES.md) — Shared Azure service configurations
+- [NOAA Architecture](../noaa/ARCHITECTURE.md) — Related environmental/climate architecture
+- [USDA Architecture](../usda/ARCHITECTURE.md) — Related agriculture/environment architecture

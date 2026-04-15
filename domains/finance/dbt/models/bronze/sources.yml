@@ -3,7 +3,6 @@ version: 2
 sources:
   - name: raw_finance
     description: "Raw finance data ingested from source systems"
-    database: "{{ var('bronze_database') }}"
     schema: raw
     loaded_at_field: _ingested_at
     freshness:

@@ -1,8 +1,18 @@
 # Contributing to CSA-in-a-Box
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Contributors
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Contributors
 
 Thank you for your interest in contributing to Cloud-Scale Analytics in-a-Box.
+
+## Table of Contents
+
+- [Development Setup](#development-setup)
+- [Repository Rules](#repository-rules)
+- [Code Style](#code-style)
+- [Pull Request Process](#pull-request-process)
+- [Branch Naming](#branch-naming)
+- [Reporting Issues](#reporting-issues)
+- [Related Documentation](#related-documentation)
 
 ## Development Setup
 
@@ -110,5 +120,5 @@ Use GitHub Issues with the appropriate template. Include:
 
 ## Related Documentation
 
-- [README](README.md) - Project overview and quick start
-- [Changelog](CHANGELOG.md) - All notable changes to the project
+- [README](README.md) — Project overview and quick start
+- [Changelog](CHANGELOG.md) — All notable changes to the project

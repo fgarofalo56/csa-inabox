@@ -1,6 +1,6 @@
 # Azure Government Service Availability Matrix
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Security / Compliance
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Security / Compliance
 
 This document tracks the availability of every Azure service used by CSA-in-a-Box
 across Azure Commercial and Azure Government regions, including FedRAMP
@@ -182,6 +182,6 @@ deployable on AKS:
 
 ## Related Documentation
 
-- [Environment Protection](ENVIRONMENT_PROTECTION.md) - GitHub Environment protection rules
-- [Production Checklist](PRODUCTION_CHECKLIST.md) - Production readiness checklist
-- [Gov Bicep Templates](../deploy/bicep/gov/README.md) - Azure Government deployment templates
+- [Environment Protection](ENVIRONMENT_PROTECTION.md) — GitHub Environment protection rules
+- [Production Checklist](PRODUCTION_CHECKLIST.md) — Production readiness checklist
+- [Gov Bicep Templates](../deploy/bicep/gov/README.md) — Azure Government deployment templates

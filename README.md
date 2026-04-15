@@ -1,6 +1,6 @@
 # CSA-in-a-Box: Cloud-Scale Analytics Platform
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** All Users
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** All Users
 
 > An open-source, Azure-native data platform that delivers Data Mesh, Data Fabric, and Data Lakehouse capabilities as a deployable "in-a-box" solution -- a fully featured alternative to Microsoft Fabric built on Azure services and open-source technologies.
 
@@ -216,8 +216,8 @@ This project is licensed under the MIT License -- see the [LICENSE](LICENSE) fil
 
 ## Related Documentation
 
-- [Getting Started](docs/GETTING_STARTED.md) - Prerequisites and deployment walkthrough
-- [Quick Start](docs/QUICKSTART.md) - 60-minute hands-on tutorial
-- [Architecture](docs/ARCHITECTURE.md) - Comprehensive architecture reference
-- [Contributing](CONTRIBUTING.md) - Development guidelines and PR process
-- [Changelog](CHANGELOG.md) - All notable changes to the project
+- [Getting Started](docs/GETTING_STARTED.md) — Prerequisites and deployment walkthrough
+- [Quick Start](docs/QUICKSTART.md) — 60-minute hands-on tutorial
+- [Architecture](docs/ARCHITECTURE.md) — Comprehensive architecture reference
+- [Contributing](CONTRIBUTING.md) — Development guidelines and PR process
+- [Changelog](CHANGELOG.md) — All notable changes to the project

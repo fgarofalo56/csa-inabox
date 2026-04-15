@@ -1,6 +1,6 @@
 # Department of Commerce Economic Analytics Architecture
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Architects / Data Engineers
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Architects / Data Engineers
 
 ## Table of Contents
 - [Overview](#overview)
@@ -432,8 +432,8 @@ alert:
 
 ## Related Documentation
 
-- [Commerce README](README.md) - Deployment guide, quick start, and analytics scenarios
-- [Platform Architecture](../../docs/ARCHITECTURE.md) - Core CSA platform architecture
-- [Platform Services](../../docs/PLATFORM_SERVICES.md) - Shared Azure service configurations
-- [Casino Analytics Architecture](../casino-analytics/ARCHITECTURE.md) - Related economic analytics architecture
-- [USPS Architecture](../usps/ARCHITECTURE.md) - Related logistics and trade architecture
+- [Commerce README](README.md) — Deployment guide, quick start, and analytics scenarios
+- [Platform Architecture](../../docs/ARCHITECTURE.md) — Core CSA platform architecture
+- [Platform Services](../../docs/PLATFORM_SERVICES.md) — Shared Azure service configurations
+- [Casino Analytics Architecture](../casino-analytics/ARCHITECTURE.md) — Related economic analytics architecture
+- [USPS Architecture](../usps/ARCHITECTURE.md) — Related logistics and trade architecture

@@ -1,8 +1,15 @@
 # Data Product Template
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Developers
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Developers
 
 Use this template to create a new data product domain in the CSA-in-a-Box Data Mesh platform.
+
+## Table of Contents
+
+- [Quick Start](#quick-start)
+- [Template Contents](#template-contents)
+- [Data Mesh Principles](#data-mesh-principles)
+- [Related Documentation](#related-documentation)
 
 ## Quick Start
 
@@ -62,5 +69,5 @@ templates/data-product/
 
 ## Related Documentation
 
-- [Getting Started Guide](../../docs/GETTING_STARTED.md) - Platform setup and onboarding
-- [USDA Example](../../examples/usda/README.md) - Reference domain implementation
+- [Getting Started Guide](../../docs/GETTING_STARTED.md) — Platform setup and onboarding
+- [USDA Example](../../examples/usda/README.md) — Reference domain implementation

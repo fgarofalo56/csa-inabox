@@ -1,9 +1,16 @@
 # Shared Contracts Directory
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Data Engineers
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers
 
 > **Note:** This directory is intentionally empty. Data contracts in CSA-in-a-Box
 > are defined alongside their data products, not in a centralized location.
+
+## Table of Contents
+
+- [Where to Find Data Contracts](#where-to-find-data-contracts)
+- [Creating New Contracts](#creating-new-contracts)
+- [Contract Validation](#contract-validation)
+- [Related Documentation](#related-documentation)
 
 ## Where to Find Data Contracts
 
@@ -49,5 +56,5 @@ Tooling for validating contracts against the schema lives in:
 
 ## Related Documentation
 
-- [Architecture Overview](../../../docs/ARCHITECTURE.md) - Platform architecture reference
-- [Examples](../../../examples/README.md) - Sample data pipelines and use cases
+- [Architecture Overview](../../../docs/ARCHITECTURE.md) — Platform architecture reference
+- [Examples](../../../examples/README.md) — Sample data pipelines and use cases

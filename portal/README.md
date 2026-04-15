@@ -1,10 +1,18 @@
 # Data Onboarding Portal — Multiple Implementations
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Frontend Developers
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Frontend Developers
 
 This directory contains **four different implementations** of the autonomous data
 onboarding portal, each using a different technology stack. All implementations share
 the same backend API and provide the same functionality.
+
+## Table of Contents
+
+- [What the Portal Does](#what-the-portal-does)
+- [Implementations](#implementations)
+- [Shared Backend](#shared-backend-shared)
+- [Quick Comparison](#quick-comparison)
+- [Related Documentation](#related-documentation)
 
 ## What the Portal Does
 
@@ -113,5 +121,5 @@ portal/shared/
 
 ## Related Documentation
 
-- [Architecture](../docs/ARCHITECTURE.md) - Overall system architecture
-- [Platform Components](../platform/README.md) - Platform component index
+- [Architecture](../docs/ARCHITECTURE.md) — Overall system architecture
+- [Platform Components](../platform/README.md) — Platform component index

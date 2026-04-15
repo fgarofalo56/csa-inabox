@@ -1,10 +1,20 @@
 # End-to-End Integration Tests
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** QA Engineers / Developers
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** QA Engineers / Developers
 
 This directory contains end-to-end integration tests for the CSA-in-a-Box
 platform. The tests validate the full data pipeline from Bronze ingestion
 through Gold business tables, data contracts, and the streaming pipeline.
+
+## Table of Contents
+
+- [Quick Start](#quick-start)
+- [Prerequisites](#prerequisites)
+- [Test Files](#test-files)
+- [Seed Data](#seed-data)
+- [Architecture](#architecture)
+- [Markers](#markers)
+- [Related Documentation](#related-documentation)
 
 ## Quick Start
 
@@ -117,5 +127,5 @@ Databricks or any external services.
 
 ## Related Documentation
 
-- [Production Checklist](../../docs/PRODUCTION_CHECKLIST.md) - Pre-deployment verification steps
-- [Troubleshooting Guide](../../docs/TROUBLESHOOTING.md) - Common issues and solutions
+- [Production Checklist](../../docs/PRODUCTION_CHECKLIST.md) — Pre-deployment verification steps
+- [Troubleshooting Guide](../../docs/TROUBLESHOOTING.md) — Common issues and solutions

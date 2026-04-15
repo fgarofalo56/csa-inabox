@@ -1,6 +1,6 @@
 # Streaming Analytics Pipeline
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Developers
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Developers
 
 ## Table of Contents
 
@@ -389,5 +389,5 @@ scripts/streaming/
 
 ## Related Documentation
 
-- [IoT Streaming Example](../../examples/iot-streaming/README.md) - End-to-end streaming example
-- [Architecture Overview](../../docs/ARCHITECTURE.md) - Platform architecture reference
+- [IoT Streaming Example](../../examples/iot-streaming/README.md) — End-to-end streaming example
+- [Architecture Overview](../../docs/ARCHITECTURE.md) — Platform architecture reference

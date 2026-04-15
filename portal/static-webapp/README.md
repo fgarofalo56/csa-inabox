@@ -1,6 +1,6 @@
 # Azure Static Web Apps + Functions Portal
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Frontend Developers
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Frontend Developers
 
 ## Table of Contents
 
@@ -227,6 +227,6 @@ This is the most cost-effective portal option for small to medium deployments.
 
 ## Related Documentation
 
-- [Portal Implementations](../README.md) - Portal implementation index
-- [Shared Backend](../shared/README.md) - Shared backend API
-- [Architecture](../../docs/ARCHITECTURE.md) - Overall system architecture
+- [Portal Implementations](../README.md) — Portal implementation index
+- [Shared Backend](../shared/README.md) — Shared backend API
+- [Architecture](../../docs/ARCHITECTURE.md) — Overall system architecture
