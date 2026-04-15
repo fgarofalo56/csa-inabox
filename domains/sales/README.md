@@ -1,5 +1,7 @@
 # Sales Domain — Data Mesh Domain Template
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Data Engineers / Domain Owners
+
 This is a sample business domain showing the **Data Mesh** pattern for CSA-in-a-Box. Copy this structure to onboard new domains.
 
 ## Structure

@@ -2,6 +2,18 @@
 
 > **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Platform Engineers
 
+## Table of Contents
+
+- [Capabilities](#capabilities)
+  - [RAG Pattern — Document Intelligence](#1-rag-pattern--document-intelligence)
+  - [Embeddings Pipeline](#2-embeddings-pipeline)
+  - [AI-Enriched Data Pipelines](#3-ai-enriched-data-pipelines)
+  - [Model Serving](#4-model-serving)
+- [Directory Structure](#directory-structure)
+- [Integration with Data Landing Zones](#integration-with-data-landing-zones)
+- [Azure Government](#azure-government)
+- [Quick Start](#quick-start)
+
 This directory provides patterns for integrating Azure AI services with the
 CSA-in-a-Box data platform. Every data landing zone can leverage AI for
 enrichment, classification, and analysis.

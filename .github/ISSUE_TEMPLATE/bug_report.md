@@ -26,7 +26,7 @@ What actually happens.
 - **Azure Region**: (e.g., East US)
 
 ## Logs / Screenshots
-```
+```text
 Paste relevant logs here
 ```
 

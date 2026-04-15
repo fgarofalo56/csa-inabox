@@ -2,6 +2,22 @@
 
 > **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Developers
 
+## Table of Contents
+
+- [Scripts](#scripts)
+- [Prerequisites](#prerequisites)
+- [Backup Strategy](#backup-strategy)
+  - [Incremental Backup](#incremental-backup)
+  - [Retention Policy](#retention-policy)
+  - [Scheduling](#scheduling)
+- [Recovery Procedures](#recovery-procedures)
+  - [Standard Restore](#standard-restore)
+  - [Overwrite Existing Data](#overwrite-existing-data)
+  - [Restore with VACUUM](#restore-with-vacuum)
+  - [Dry Run](#dry-run)
+- [Data Seeding for Development](#data-seeding-for-development)
+- [Log Files](#log-files)
+
 Shell scripts for managing Delta Lake table data on ADLS Gen2 across the CSA-in-a-Box medallion architecture.
 
 ## Scripts

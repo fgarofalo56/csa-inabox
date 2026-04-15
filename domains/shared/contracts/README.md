@@ -1,5 +1,7 @@
 # Shared Contracts Directory
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Data Engineers
+
 > **Note:** This directory is intentionally empty. Data contracts in CSA-in-a-Box
 > are defined alongside their data products, not in a centralized location.
 
