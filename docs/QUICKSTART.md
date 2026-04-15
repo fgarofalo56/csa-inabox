@@ -325,13 +325,13 @@ infrastructure (uses local Databricks or DuckDB adapter).
 cd examples/usda
 
 # Generate realistic USDA NASS-style seed data
-python data/generators/generate_crop_data.py --output data/seeds/
+python data/generators/generate_usda_data.py --output data/seeds/
 ```
 
 ### Step B: Load Seeds and Run dbt
 
 ```bash
-cd domains/agriculture/dbt
+cd examples/usda/domains/dbt
 
 # Install dependencies
 dbt deps
@@ -354,7 +354,7 @@ dbt test
 -- Crop production by state
 SELECT state_name, commodity_desc, year,
        SUM(value) AS total_production
-FROM gold.gld_crop_production
+FROM gold.gld_crop_yield_forecast
 WHERE year >= 2020
 GROUP BY state_name, commodity_desc, year
 ORDER BY total_production DESC

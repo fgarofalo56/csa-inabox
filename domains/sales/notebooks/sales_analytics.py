@@ -46,8 +46,7 @@ sales_df = spark.table(SALES_TABLE)
 
 # Summary by region
 region_summary = (
-    sales_df
-    .groupBy("sales_region")
+    sales_df.groupBy("sales_region")
     .agg(
         F.sum("total_revenue").alias("total_revenue"),
         F.sum("total_orders").alias("total_orders"),
@@ -71,8 +70,7 @@ display(region_summary)
 
 # Summary by channel
 channel_summary = (
-    sales_df
-    .groupBy("sales_channel")
+    sales_df.groupBy("sales_channel")
     .agg(
         F.sum("total_revenue").alias("total_revenue"),
         F.sum("total_orders").alias("total_orders"),
@@ -89,8 +87,7 @@ display(channel_summary)
 
 # Region x Channel heatmap data
 region_channel = (
-    sales_df
-    .groupBy("sales_region", "sales_channel")
+    sales_df.groupBy("sales_region", "sales_channel")
     .agg(
         F.sum("total_revenue").alias("total_revenue"),
         F.sum("total_orders").alias("total_orders"),
@@ -120,59 +117,56 @@ clv_df = spark.table(CLV_TABLE)
 
 # Calculate RFM metrics
 rfm_df = (
-    clv_df
-    .where(F.col("total_orders") > 0)  # Exclude never_purchased
+    clv_df.where(F.col("total_orders") > 0)  # Exclude never_purchased
     .withColumn(
         "recency_days",
         F.datediff(F.current_date(), F.col("last_order_date")),
     )
     .select(
-        "customer_id", "first_name", "last_name",
-        "recency_days", "total_orders", "lifetime_revenue",
-        "customer_segment", "value_tier",
+        "customer_id",
+        "first_name",
+        "last_name",
+        "recency_days",
+        "total_orders",
+        "lifetime_revenue",
+        "customer_segment",
+        "value_tier",
     )
 )
 
 # Score RFM dimensions using quintiles (1=worst, 5=best)
 # Recency: lower days = better (invert scoring)
 for col_name, alias, ascending in [
-    ("recency_days", "r_score", False),   # Lower recency = higher score
-    ("total_orders", "f_score", True),    # More orders = higher score
-    ("lifetime_revenue", "m_score", True), # More revenue = higher score
+    ("recency_days", "r_score", False),  # Lower recency = higher score
+    ("total_orders", "f_score", True),  # More orders = higher score
+    ("lifetime_revenue", "m_score", True),  # More revenue = higher score
 ]:
     rfm_df = rfm_df.withColumn(
         alias,
-        F.ntile(5).over(
-            Window.orderBy(F.col(col_name).asc() if ascending else F.col(col_name).desc())
-        ),
+        F.ntile(5).over(Window.orderBy(F.col(col_name).asc() if ascending else F.col(col_name).desc())),
     )
 
 # Combined RFM score and segment label
-rfm_df = (
-    rfm_df
-    .withColumn("rfm_score", F.col("r_score") + F.col("f_score") + F.col("m_score"))
-    .withColumn(
-        "rfm_segment",
-        F.when(F.col("rfm_score") >= 13, "Champions")
-        .when(F.col("rfm_score") >= 10, "Loyal Customers")
-        .when(
-            (F.col("r_score") >= 4) & (F.col("f_score") <= 2),
-            "New Customers",
-        )
-        .when(
-            (F.col("r_score") <= 2) & (F.col("f_score") >= 3),
-            "At Risk",
-        )
-        .when(F.col("rfm_score") >= 7, "Potential Loyalists")
-        .when(F.col("r_score") <= 2, "Lost")
-        .otherwise("Need Attention"),
+rfm_df = rfm_df.withColumn("rfm_score", F.col("r_score") + F.col("f_score") + F.col("m_score")).withColumn(
+    "rfm_segment",
+    F.when(F.col("rfm_score") >= 13, "Champions")
+    .when(F.col("rfm_score") >= 10, "Loyal Customers")
+    .when(
+        (F.col("r_score") >= 4) & (F.col("f_score") <= 2),
+        "New Customers",
     )
+    .when(
+        (F.col("r_score") <= 2) & (F.col("f_score") >= 3),
+        "At Risk",
+    )
+    .when(F.col("rfm_score") >= 7, "Potential Loyalists")
+    .when(F.col("r_score") <= 2, "Lost")
+    .otherwise("Need Attention"),
 )
 
 # Segment summary
 rfm_summary = (
-    rfm_df
-    .groupBy("rfm_segment")
+    rfm_df.groupBy("rfm_segment")
     .agg(
         F.count("*").alias("customer_count"),
         F.round(F.avg("lifetime_revenue"), 2).alias("avg_revenue"),
@@ -188,12 +182,7 @@ display(rfm_summary)
 
 # Top champions
 print("\nTOP 10 CHAMPION CUSTOMERS:")
-display(
-    rfm_df
-    .where(F.col("rfm_segment") == "Champions")
-    .orderBy(F.desc("lifetime_revenue"))
-    .limit(10)
-)
+display(rfm_df.where(F.col("rfm_segment") == "Champions").orderBy(F.desc("lifetime_revenue")).limit(10))
 
 # COMMAND ----------
 
@@ -204,8 +193,7 @@ display(
 
 # Daily revenue from sales metrics
 daily_revenue = (
-    sales_df
-    .groupBy("order_date")
+    sales_df.groupBy("order_date")
     .agg(
         F.sum("total_revenue").alias("daily_revenue"),
         F.sum("total_orders").alias("daily_orders"),
@@ -214,15 +202,10 @@ daily_revenue = (
 )
 
 # Calculate moving average
-window_ma = (
-    Window
-    .orderBy("order_date")
-    .rowsBetween(-forecast_window + 1, 0)
-)
+window_ma = Window.orderBy("order_date").rowsBetween(-forecast_window + 1, 0)
 
 forecast_df = (
-    daily_revenue
-    .withColumn(
+    daily_revenue.withColumn(
         f"ma_{forecast_window}d",
         F.round(F.avg("daily_revenue").over(window_ma), 2),
     )
@@ -232,10 +215,7 @@ forecast_df = (
     )
     .withColumn(
         "deviation_pct",
-        F.round(
-            (F.col("daily_revenue") - F.col(f"ma_{forecast_window}d"))
-            / F.col(f"ma_{forecast_window}d") * 100, 1
-        ),
+        F.round((F.col("daily_revenue") - F.col(f"ma_{forecast_window}d")) / F.col(f"ma_{forecast_window}d") * 100, 1),
     )
 )
 
@@ -258,21 +238,16 @@ if latest:
 # COMMAND ----------
 
 # Product performance from sales metrics
-product_performance = (
-    sales_df
-    .groupBy("order_date")
-    .agg(
-        F.sum("total_revenue").alias("revenue"),
-        F.sum("unique_products_sold").alias("products_sold"),
-        F.sum("total_units_sold").alias("units_sold"),
-    )
+product_performance = sales_df.groupBy("order_date").agg(
+    F.sum("total_revenue").alias("revenue"),
+    F.sum("unique_products_sold").alias("products_sold"),
+    F.sum("total_units_sold").alias("units_sold"),
 )
 
 # Revenue per product (aggregate view)
 # Since gld_sales_metrics doesn't have product_id, we use unit-level metrics
 product_efficiency = (
-    sales_df
-    .groupBy("sales_region", "sales_channel")
+    sales_df.groupBy("sales_region", "sales_channel")
     .agg(
         F.sum("total_revenue").alias("total_revenue"),
         F.sum("unique_products_sold").alias("unique_products"),
@@ -299,8 +274,7 @@ display(product_efficiency)
 
 # Daily trends by region
 region_daily = (
-    sales_df
-    .groupBy("order_date", "sales_region")
+    sales_df.groupBy("order_date", "sales_region")
     .agg(
         F.sum("total_revenue").alias("revenue"),
         F.sum("total_orders").alias("orders"),
@@ -316,8 +290,7 @@ display(region_daily)
 
 # Regional growth comparison (week-over-week)
 weekly_region = (
-    sales_df
-    .withColumn("week", F.weekofyear("order_date"))
+    sales_df.withColumn("week", F.weekofyear("order_date"))
     .withColumn("year", F.year("order_date"))
     .groupBy("year", "week", "sales_region")
     .agg(
@@ -328,13 +301,14 @@ weekly_region = (
 
 window_wow = Window.partitionBy("sales_region").orderBy("year", "week")
 weekly_region = (
-    weekly_region
-    .withColumn("prev_week_revenue", F.lag("weekly_revenue").over(window_wow))
+    weekly_region.withColumn("prev_week_revenue", F.lag("weekly_revenue").over(window_wow))
     .withColumn(
         "wow_growth_pct",
         F.round(
             (F.col("weekly_revenue") - F.col("prev_week_revenue"))
-            / F.abs(F.coalesce("prev_week_revenue", F.lit(1))) * 100, 1
+            / F.abs(F.coalesce("prev_week_revenue", F.lit(1)))
+            * 100,
+            1,
         ),
     )
     .orderBy(F.desc("year"), F.desc("week"), "sales_region")

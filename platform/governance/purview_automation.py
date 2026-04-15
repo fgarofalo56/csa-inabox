@@ -123,9 +123,7 @@ class PurviewAutomation:
     ) -> None:
         self.account_name = account_name
         self.credential = credential
-        self.catalog_endpoint = catalog_endpoint or (
-            f"https://{account_name}.purview.azure.com"
-        )
+        self.catalog_endpoint = catalog_endpoint or (f"https://{account_name}.purview.azure.com")
         self._client: Any | None = None
 
     def _get_catalog_client(self) -> Any:
@@ -137,8 +135,7 @@ class PurviewAutomation:
             from azure.purview.catalog import PurviewCatalogClient
         except ImportError:
             logger.warning(
-                "azure-purview-catalog package not installed. "
-                "Install with: pip install azure-purview-catalog"
+                "azure-purview-catalog package not installed. Install with: pip install azure-purview-catalog"
             )
             return None
 
@@ -224,18 +221,20 @@ class PurviewAutomation:
 
         rules: list[ClassificationRule] = []
         for item in raw.get("classifications", []):
-            rules.append(ClassificationRule(
-                name=item["name"],
-                description=item.get("description", ""),
-                category=item.get("category", ""),
-                subcategory=item.get("subcategory", ""),
-                sensitivity=item.get("sensitivity", "Confidential"),
-                data_patterns=item.get("dataPatterns", []),
-                column_patterns=item.get("columnPatterns", []),
-                minimum_percentage_match=item.get("minimumPercentageMatch", 60.0),
-                built_in_classifier=item.get("builtInClassifier"),
-                remediation_action=item.get("remediationAction", "none"),
-            ))
+            rules.append(
+                ClassificationRule(
+                    name=item["name"],
+                    description=item.get("description", ""),
+                    category=item.get("category", ""),
+                    subcategory=item.get("subcategory", ""),
+                    sensitivity=item.get("sensitivity", "Confidential"),
+                    data_patterns=item.get("dataPatterns", []),
+                    column_patterns=item.get("columnPatterns", []),
+                    minimum_percentage_match=item.get("minimumPercentageMatch", 60.0),
+                    built_in_classifier=item.get("builtInClassifier"),
+                    remediation_action=item.get("remediationAction", "none"),
+                )
+            )
 
         logger.info("Loaded %d classification rules from %s", len(rules), rules_path)
         return rules
@@ -276,18 +275,22 @@ class PurviewAutomation:
                     body=payload,
                 )
                 logger.info("Applied classification rule: %s", rule.name)
-                results.append({
-                    "name": rule.name,
-                    "status": "applied",
-                    "response": response,
-                })
+                results.append(
+                    {
+                        "name": rule.name,
+                        "status": "applied",
+                        "response": response,
+                    }
+                )
             except Exception as exc:
                 logger.error("Failed to apply classification rule %s: %s", rule.name, exc)
-                results.append({
-                    "name": rule.name,
-                    "status": "error",
-                    "error": str(exc),
-                })
+                results.append(
+                    {
+                        "name": rule.name,
+                        "status": "error",
+                        "error": str(exc),
+                    }
+                )
 
         return results
 
@@ -309,14 +312,10 @@ class PurviewAutomation:
         }
 
         if rule.data_patterns:
-            payload["properties"]["dataPatterns"] = [
-                {"pattern": p["pattern"]} for p in rule.data_patterns
-            ]
+            payload["properties"]["dataPatterns"] = [{"pattern": p["pattern"]} for p in rule.data_patterns]
 
         if rule.column_patterns:
-            payload["properties"]["columnPatterns"] = [
-                {"pattern": p["pattern"]} for p in rule.column_patterns
-            ]
+            payload["properties"]["columnPatterns"] = [{"pattern": p["pattern"]} for p in rule.column_patterns]
 
         return payload
 
@@ -353,16 +352,18 @@ class PurviewAutomation:
 
         terms: list[GlossaryTerm] = []
         for item in raw.get("terms", []):
-            terms.append(GlossaryTerm(
-                name=item["name"],
-                definition=item.get("definition", ""),
-                abbreviation=item.get("abbreviation", ""),
-                status=item.get("status", "Approved"),
-                contacts=item.get("contacts", []),
-                related_terms=item.get("relatedTerms", []),
-                classifications=item.get("classifications", []),
-                resources=item.get("resources", []),
-            ))
+            terms.append(
+                GlossaryTerm(
+                    name=item["name"],
+                    definition=item.get("definition", ""),
+                    abbreviation=item.get("abbreviation", ""),
+                    status=item.get("status", "Approved"),
+                    contacts=item.get("contacts", []),
+                    related_terms=item.get("relatedTerms", []),
+                    classifications=item.get("classifications", []),
+                    resources=item.get("resources", []),
+                )
+            )
 
         logger.info("Loaded %d glossary terms from %s", len(terms), glossary_path)
         return terms
@@ -400,11 +401,11 @@ class PurviewAutomation:
                 "status": term.status,
                 "anchor": {"glossaryGuid": glossary_guid} if glossary_guid else {},
                 "contacts": {
-                    contact.get("type", "Expert"): [
-                        {"id": contact.get("email", ""), "info": contact.get("email", "")}
-                    ]
+                    contact.get("type", "Expert"): [{"id": contact.get("email", ""), "info": contact.get("email", "")}]
                     for contact in term.contacts
-                } if term.contacts else {},
+                }
+                if term.contacts
+                else {},
             }
 
             if dry_run:
@@ -629,15 +630,17 @@ class PurviewAutomation:
                 dep_type = dep_node.get("resource_type", "model")
                 dep_qn = f"dbt://{dep_node.get('package_name', 'default')}/{dep_type}s/{dep_name}"
 
-                relationships.append(LineageRelationship(
-                    source_type="azure_datalake_gen2_resource_set",
-                    source_qualified_name=dep_qn,
-                    target_type="azure_datalake_gen2_resource_set",
-                    target_qualified_name=model_qn,
-                    process_type="dbt_model",
-                    process_qualified_name=f"dbt://process/{model_name}",
-                    process_name=f"dbt: {model_name}",
-                ))
+                relationships.append(
+                    LineageRelationship(
+                        source_type="azure_datalake_gen2_resource_set",
+                        source_qualified_name=dep_qn,
+                        target_type="azure_datalake_gen2_resource_set",
+                        target_qualified_name=model_qn,
+                        process_type="dbt_model",
+                        process_qualified_name=f"dbt://process/{model_name}",
+                        process_name=f"dbt: {model_name}",
+                    )
+                )
 
         if dry_run:
             logger.info(
@@ -653,27 +656,29 @@ class PurviewAutomation:
         # Batch register lineage entities
         entities: list[dict[str, Any]] = []
         for rel in relationships:
-            entities.append({
-                "typeName": rel.process_type,
-                "attributes": {
-                    "qualifiedName": rel.process_qualified_name,
-                    "name": rel.process_name,
-                },
-                "relationshipAttributes": {
-                    "inputs": [
-                        {
-                            "typeName": rel.source_type,
-                            "uniqueAttributes": {"qualifiedName": rel.source_qualified_name},
-                        }
-                    ],
-                    "outputs": [
-                        {
-                            "typeName": rel.target_type,
-                            "uniqueAttributes": {"qualifiedName": rel.target_qualified_name},
-                        }
-                    ],
-                },
-            })
+            entities.append(
+                {
+                    "typeName": rel.process_type,
+                    "attributes": {
+                        "qualifiedName": rel.process_qualified_name,
+                        "name": rel.process_name,
+                    },
+                    "relationshipAttributes": {
+                        "inputs": [
+                            {
+                                "typeName": rel.source_type,
+                                "uniqueAttributes": {"qualifiedName": rel.source_qualified_name},
+                            }
+                        ],
+                        "outputs": [
+                            {
+                                "typeName": rel.target_type,
+                                "uniqueAttributes": {"qualifiedName": rel.target_qualified_name},
+                            }
+                        ],
+                    },
+                }
+            )
 
         try:
             response = self._make_request(
@@ -731,12 +736,14 @@ class PurviewAutomation:
                     target_label,
                     classification_names,
                 )
-                results.append({
-                    "policy": policy_name,
-                    "label": target_label,
-                    "classifications": classification_names,
-                    "status": "dry_run",
-                })
+                results.append(
+                    {
+                        "policy": policy_name,
+                        "label": target_label,
+                        "classifications": classification_names,
+                        "status": "dry_run",
+                    }
+                )
                 continue
 
             logger.info(
@@ -745,12 +752,14 @@ class PurviewAutomation:
                 target_label,
                 classification_names,
             )
-            results.append({
-                "policy": policy_name,
-                "label": target_label,
-                "classifications": classification_names,
-                "status": "applied",
-            })
+            results.append(
+                {
+                    "policy": policy_name,
+                    "label": target_label,
+                    "classifications": classification_names,
+                    "status": "applied",
+                }
+            )
 
         return results
 
@@ -864,4 +873,5 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     import sys
+
     sys.exit(main())

@@ -64,20 +64,24 @@ _text_analytics_client = None
 _document_analysis_client = None
 _credential = None
 
-def _get_credential():
+
+def _get_credential() -> Any:
     """Get shared Azure credential for connection pooling."""
     global _credential
     if _credential is None:
         from azure.identity.aio import DefaultAzureCredential
+
         _credential = DefaultAzureCredential()
     return _credential
 
-def _get_text_analytics_client():
+
+def _get_text_analytics_client() -> Any:
     """Get shared Text Analytics client for connection pooling."""
     global _text_analytics_client
     if _text_analytics_client is None and AI_ENDPOINT:
         try:
             from azure.ai.textanalytics.aio import TextAnalyticsClient
+
             _text_analytics_client = TextAnalyticsClient(
                 endpoint=AI_ENDPOINT,
                 credential=_get_credential(),
@@ -86,12 +90,14 @@ def _get_text_analytics_client():
             pass
     return _text_analytics_client
 
-def _get_document_analysis_client():
+
+def _get_document_analysis_client() -> Any:
     """Get shared Document Analysis client for connection pooling."""
     global _document_analysis_client
     if _document_analysis_client is None and AI_ENDPOINT:
         try:
             from azure.ai.formrecognizer.aio import DocumentAnalysisClient
+
             _document_analysis_client = DocumentAnalysisClient(
                 endpoint=AI_ENDPOINT,
                 credential=_get_credential(),
@@ -110,6 +116,7 @@ def _text_analytics_available() -> bool:
         return False
     try:
         import azure.ai.textanalytics.aio  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -121,6 +128,7 @@ def _form_recognizer_available() -> bool:
         return False
     try:
         import azure.ai.formrecognizer.aio  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -132,7 +140,7 @@ def _form_recognizer_available() -> bool:
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=30),
-    retry=retry_if_exception_type((ServiceRequestError, HttpResponseError))
+    retry=retry_if_exception_type((ServiceRequestError, HttpResponseError)),
 )
 async def _enrich_text(text: str) -> dict[str, Any]:
     """Run text enrichment pipeline: language detection, sentiment, entities, PII.
@@ -227,7 +235,7 @@ async def _enrich_text(text: str) -> dict[str, Any]:
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=30),
-    retry=retry_if_exception_type((ServiceRequestError, HttpResponseError))
+    retry=retry_if_exception_type((ServiceRequestError, HttpResponseError)),
 )
 async def _analyze_document(blob_data: bytes, content_type: str) -> dict[str, Any]:
     """Analyze document using the shared Azure AI Document Intelligence client.
@@ -382,14 +390,14 @@ async def process_inbox_document(
         # Check blob size before reading into memory
         MAX_BLOB_SIZE = 50 * 1024 * 1024  # 50 MB
         if blob.length and blob.length > MAX_BLOB_SIZE:
-            enrichment: dict[str, Any] = {
+            skip_result: dict[str, Any] = {
                 "source_blob": blob.name,
                 "source_size": blob.length,
                 "processed_at": datetime.now(timezone.utc).isoformat(),
                 "skipped": True,
                 "reason": f"Blob too large: {blob.length} bytes (max: {MAX_BLOB_SIZE})",
             }
-            output_json = json.dumps(enrichment, default=str, indent=2)
+            output_json = json.dumps(skip_result, default=str, indent=2)
             outputBlob.set(output_json)
             logger.warning("blob.too_large", blob_size=blob.length, max_size=MAX_BLOB_SIZE)
             return

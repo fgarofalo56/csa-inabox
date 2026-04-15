@@ -42,12 +42,24 @@ LINEAGE_ENTRIES: list[dict[str, Any]] = [
         "description": "ADF pl_ingest_to_bronze: Raw file ingestion from landing to Bronze layer.",
         "owner": "data-engineering@contoso.com",
         "inputs": [
-            {"qualifiedName": "adls://csadatalake.dfs.core.windows.net/landing/sales", "typeName": "azure_datalake_gen2_path"},
-            {"qualifiedName": "adls://csadatalake.dfs.core.windows.net/landing/finance", "typeName": "azure_datalake_gen2_path"},
+            {
+                "qualifiedName": "adls://csadatalake.dfs.core.windows.net/landing/sales",
+                "typeName": "azure_datalake_gen2_path",
+            },
+            {
+                "qualifiedName": "adls://csadatalake.dfs.core.windows.net/landing/finance",
+                "typeName": "azure_datalake_gen2_path",
+            },
         ],
         "outputs": [
-            {"qualifiedName": "adls://csadatalake.dfs.core.windows.net/bronze/sales", "typeName": "azure_datalake_gen2_path"},
-            {"qualifiedName": "adls://csadatalake.dfs.core.windows.net/bronze/finance", "typeName": "azure_datalake_gen2_path"},
+            {
+                "qualifiedName": "adls://csadatalake.dfs.core.windows.net/bronze/sales",
+                "typeName": "azure_datalake_gen2_path",
+            },
+            {
+                "qualifiedName": "adls://csadatalake.dfs.core.windows.net/bronze/finance",
+                "typeName": "azure_datalake_gen2_path",
+            },
         ],
     },
     {
@@ -55,12 +67,24 @@ LINEAGE_ENTRIES: list[dict[str, Any]] = [
         "description": "Databricks notebook bronze_to_silver_spark.py: Schema enforcement, dedup, validation flags.",
         "owner": "data-engineering@contoso.com",
         "inputs": [
-            {"qualifiedName": "adls://csadatalake.dfs.core.windows.net/bronze/sales", "typeName": "azure_datalake_gen2_path"},
-            {"qualifiedName": "adls://csadatalake.dfs.core.windows.net/bronze/finance", "typeName": "azure_datalake_gen2_path"},
+            {
+                "qualifiedName": "adls://csadatalake.dfs.core.windows.net/bronze/sales",
+                "typeName": "azure_datalake_gen2_path",
+            },
+            {
+                "qualifiedName": "adls://csadatalake.dfs.core.windows.net/bronze/finance",
+                "typeName": "azure_datalake_gen2_path",
+            },
         ],
         "outputs": [
-            {"qualifiedName": "adls://csadatalake.dfs.core.windows.net/silver/sales", "typeName": "azure_datalake_gen2_path"},
-            {"qualifiedName": "adls://csadatalake.dfs.core.windows.net/silver/finance", "typeName": "azure_datalake_gen2_path"},
+            {
+                "qualifiedName": "adls://csadatalake.dfs.core.windows.net/silver/sales",
+                "typeName": "azure_datalake_gen2_path",
+            },
+            {
+                "qualifiedName": "adls://csadatalake.dfs.core.windows.net/silver/finance",
+                "typeName": "azure_datalake_gen2_path",
+            },
         ],
     },
     {
@@ -68,14 +92,32 @@ LINEAGE_ENTRIES: list[dict[str, Any]] = [
         "description": "dbt models: Business aggregations, star schema dimensions, KPI metrics.",
         "owner": "data-engineering@contoso.com",
         "inputs": [
-            {"qualifiedName": "adls://csadatalake.dfs.core.windows.net/silver/sales", "typeName": "azure_datalake_gen2_path"},
-            {"qualifiedName": "adls://csadatalake.dfs.core.windows.net/silver/finance", "typeName": "azure_datalake_gen2_path"},
+            {
+                "qualifiedName": "adls://csadatalake.dfs.core.windows.net/silver/sales",
+                "typeName": "azure_datalake_gen2_path",
+            },
+            {
+                "qualifiedName": "adls://csadatalake.dfs.core.windows.net/silver/finance",
+                "typeName": "azure_datalake_gen2_path",
+            },
         ],
         "outputs": [
-            {"qualifiedName": "adls://csadatalake.dfs.core.windows.net/gold/fact_orders", "typeName": "azure_datalake_gen2_path"},
-            {"qualifiedName": "adls://csadatalake.dfs.core.windows.net/gold/dim_customers", "typeName": "azure_datalake_gen2_path"},
-            {"qualifiedName": "adls://csadatalake.dfs.core.windows.net/gold/gld_monthly_revenue", "typeName": "azure_datalake_gen2_path"},
-            {"qualifiedName": "adls://csadatalake.dfs.core.windows.net/gold/gld_customer_lifetime_value", "typeName": "azure_datalake_gen2_path"},
+            {
+                "qualifiedName": "adls://csadatalake.dfs.core.windows.net/gold/fact_orders",
+                "typeName": "azure_datalake_gen2_path",
+            },
+            {
+                "qualifiedName": "adls://csadatalake.dfs.core.windows.net/gold/dim_customers",
+                "typeName": "azure_datalake_gen2_path",
+            },
+            {
+                "qualifiedName": "adls://csadatalake.dfs.core.windows.net/gold/gld_monthly_revenue",
+                "typeName": "azure_datalake_gen2_path",
+            },
+            {
+                "qualifiedName": "adls://csadatalake.dfs.core.windows.net/gold/gld_customer_lifetime_value",
+                "typeName": "azure_datalake_gen2_path",
+            },
         ],
     },
     {
@@ -83,11 +125,20 @@ LINEAGE_ENTRIES: list[dict[str, Any]] = [
         "description": "Event processing function: Real-time events from Event Hub to Cosmos DB + ADLS archival.",
         "owner": "data-engineering@contoso.com",
         "inputs": [
-            {"qualifiedName": "eventhub://csa-eventhub.servicebus.windows.net/csa-events", "typeName": "azure_event_hubs_topic"},
+            {
+                "qualifiedName": "eventhub://csa-eventhub.servicebus.windows.net/csa-events",
+                "typeName": "azure_event_hubs_topic",
+            },
         ],
         "outputs": [
-            {"qualifiedName": "cosmosdb://csacosmosdb.documents.azure.com/csa-events/events", "typeName": "azure_cosmosdb_collection"},
-            {"qualifiedName": "adls://csadatalake.dfs.core.windows.net/bronze/streaming", "typeName": "azure_datalake_gen2_path"},
+            {
+                "qualifiedName": "cosmosdb://csacosmosdb.documents.azure.com/csa-events/events",
+                "typeName": "azure_cosmosdb_collection",
+            },
+            {
+                "qualifiedName": "adls://csadatalake.dfs.core.windows.net/bronze/streaming",
+                "typeName": "azure_datalake_gen2_path",
+            },
         ],
     },
 ]

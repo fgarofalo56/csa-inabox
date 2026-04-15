@@ -29,7 +29,7 @@ VALID_DBT_COMMANDS = {"run", "test", "build", "compile", "seed", "snapshot"}
 if dbt_command not in VALID_DBT_COMMANDS:
     raise ValueError(f"Invalid dbt command: {dbt_command!r}. Must be one of {VALID_DBT_COMMANDS}")
 
-if models != "+" and not re.match(r'^[a-zA-Z0-9_.,+*/:@-]+$', models):
+if models != "+" and not re.match(r"^[a-zA-Z0-9_.,+*/:@-]+$", models):
     raise ValueError(f"Invalid model selection pattern: {models!r}")
 
 VALID_TARGETS = {"dev", "staging", "prod"}
@@ -146,11 +146,15 @@ if os.path.exists(run_results_path):
     dbutils.notebook.exit(json.dumps(summary))
 else:
     print("No run_results.json found")
-    dbutils.notebook.exit(json.dumps({
-        "exit_code": result.returncode,
-        "error": "No run_results.json found",
-        "stdout": result.stdout[-2000:] if result.stdout else "",
-    }))
+    dbutils.notebook.exit(
+        json.dumps(
+            {
+                "exit_code": result.returncode,
+                "error": "No run_results.json found",
+                "stdout": result.stdout[-2000:] if result.stdout else "",
+            }
+        )
+    )
 
 # COMMAND ----------
 

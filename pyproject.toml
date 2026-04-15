@@ -35,6 +35,21 @@ governance = [
     # Spark-backed checkpoint pipeline is implemented.
     # "great-expectations>=1.0.0",
 ]
+functions = [
+    # Azure Functions host SDK — required by all function_app.py modules.
+    "azure-functions>=1.18.0,<2.0.0",
+    # Retry logic for transient Azure SDK failures.
+    "tenacity>=8.2.0,<10.0.0",
+    # Azure SDK packages used by the shared-services functions.
+    "azure-core>=1.28.0,<2.0.0",
+    "azure-identity>=1.14.0,<2.0.0",
+    "azure-keyvault-secrets>=4.7.0,<5.0.0",
+    "azure-storage-blob>=12.19.0,<13.0.0",
+    "azure-mgmt-storage>=21.0.0,<25.0.0",
+    "azure-mgmt-cosmosdb>=9.0.0,<10.0.0",
+    "azure-mgmt-sql>=3.0.0,<4.0.0",
+    "structlog>=24.1.0,<25.0.0",
+]
 
 [tool.setuptools]
 # Only the governance package is a real installable Python package.
@@ -47,7 +62,7 @@ target-version = "py310"
 line-length = 120
 src = ["domains", "scripts", "governance", "agent-harness"]
 # Exclude empty/placeholder files that aren't valid Python/Notebook.
-extend-exclude = ["scripts/monitor/SynapseTroubleshooting.ipynb"]
+extend-exclude = ["scripts/monitor/SynapseTroubleshooting.ipynb", "domains/spark/ArcGIS_GeoAnalyticsEngine"]
 
 [tool.ruff.lint]
 select = [
@@ -277,14 +292,3 @@ module = [
     "tests.load.*",
 ]
 ignore_errors = true
-
-[[tool.mypy.overrides]]
-# The Azure Functions host imports function_app.py by path, not as a
-# regular Python module, so these files are stand-alone. Test cases do
-# not import them as modules either — we only need mypy to check them.
-module = [
-    "azure.ai.*",
-    "azure.cosmos.*",
-    "azure.eventhub.*",
-]
-ignore_missing_imports = true

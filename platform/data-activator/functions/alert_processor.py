@@ -376,10 +376,17 @@ def evaluate_freshness(
     threshold = float(sla_minutes) + float(grace)
     fired = staleness_minutes > threshold
 
-    severity = _determine_severity(rule, {
-        **event,
-        "data": {**data, "staleness_minutes": staleness_minutes},
-    }) if fired else Severity.INFO
+    severity = (
+        _determine_severity(
+            rule,
+            {
+                **event,
+                "data": {**data, "staleness_minutes": staleness_minutes},
+            },
+        )
+        if fired
+        else Severity.INFO
+    )
 
     domain = data.get("domain", "unknown")
     product = data.get("dataProduct", "unknown")
@@ -440,8 +447,7 @@ def evaluate_anomaly(
             fired=False,
             severity=Severity.INFO,
             message=(
-                f"Insufficient baseline data for {metric_name}: "
-                f"{len(baseline_values or [])} < {min_baseline} points"
+                f"Insufficient baseline data for {metric_name}: {len(baseline_values or [])} < {min_baseline} points"
             ),
             event_data=data,
         )
@@ -457,10 +463,17 @@ def evaluate_anomaly(
 
     fired = abs(z_score) > z_threshold
 
-    severity = _determine_severity(rule, {
-        **event,
-        "data": {**data, "z_score": z_score},
-    }) if fired else Severity.INFO
+    severity = (
+        _determine_severity(
+            rule,
+            {
+                **event,
+                "data": {**data, "z_score": z_score},
+            },
+        )
+        if fired
+        else Severity.INFO
+    )
 
     domain = data.get("domain", "unknown")
     product = data.get("dataProduct", "unknown")
@@ -557,10 +570,17 @@ def evaluate_threshold(
                     }
                     break
 
-    severity = _determine_severity(rule, {
-        **event,
-        "data": {**data, "threshold_breached": breached, "value": current_value},
-    }) if breached else Severity.INFO
+    severity = (
+        _determine_severity(
+            rule,
+            {
+                **event,
+                "data": {**data, "threshold_breached": breached, "value": current_value},
+            },
+        )
+        if breached
+        else Severity.INFO
+    )
 
     domain = data.get("domain", "unknown")
     product = data.get("dataProduct", "unknown")
@@ -675,10 +695,13 @@ def send_teams_notification(
     title = action.config.get("title", f"Alert: {evaluation.rule_name}")
     theme_color = action.config.get("themeColor", "FF6600")
     template = action.config.get("messageTemplate", evaluation.message)
-    rendered_message = _render_template(template, {
-        **evaluation.event_data,
-        **evaluation.details,
-    })
+    rendered_message = _render_template(
+        template,
+        {
+            **evaluation.event_data,
+            **evaluation.details,
+        },
+    )
 
     # Adaptive Card payload for Teams
     payload = {
@@ -743,10 +766,13 @@ def send_pagerduty_notification(
 
     pd_severity = action.config.get("severity", evaluation.severity.value)
     summary = action.config.get("summary", evaluation.message)
-    rendered_summary = _render_template(summary, {
-        **evaluation.event_data,
-        **evaluation.details,
-    })
+    rendered_summary = _render_template(
+        summary,
+        {
+            **evaluation.event_data,
+            **evaluation.details,
+        },
+    )
 
     payload = {
         "routing_key": routing_key,
@@ -792,10 +818,13 @@ def send_email_notification(
     """
     recipients = action.config.get("recipients", [])
     subject = action.config.get("subject", f"CSA Alert: {evaluation.rule_name}")
-    _render_template(subject, {
-        **evaluation.event_data,
-        **evaluation.details,
-    })
+    _render_template(
+        subject,
+        {
+            **evaluation.event_data,
+            **evaluation.details,
+        },
+    )
     logger.info(
         "Email notification queued for %s → %s",
         evaluation.rule_name,
@@ -977,13 +1006,15 @@ def process_event(
 
         # Check suppression
         if _is_suppressed(rule, event):
-            evaluations.append(AlertEvaluation(
-                rule_name=rule.name,
-                fired=False,
-                severity=Severity.INFO,
-                message=f"Alert suppressed (cooldown: {rule.suppression.cooldown_minutes} min)",
-                event_data=event.get("data", {}),
-            ))
+            evaluations.append(
+                AlertEvaluation(
+                    rule_name=rule.name,
+                    fired=False,
+                    severity=Severity.INFO,
+                    message=f"Alert suppressed (cooldown: {rule.suppression.cooldown_minutes} min)",
+                    event_data=event.get("data", {}),
+                )
+            )
             continue
 
         # Get baseline values for anomaly detection
@@ -1077,14 +1108,16 @@ if func is not None:
         for event in events:
             evaluations = process_event(event, rules)
             for evaluation in evaluations:
-                all_evaluations.append({
-                    "rule": evaluation.rule_name,
-                    "fired": evaluation.fired,
-                    "severity": evaluation.severity.value,
-                    "message": evaluation.message,
-                    "details": evaluation.details,
-                    "timestamp": evaluation.timestamp,
-                })
+                all_evaluations.append(
+                    {
+                        "rule": evaluation.rule_name,
+                        "fired": evaluation.fired,
+                        "severity": evaluation.severity.value,
+                        "message": evaluation.message,
+                        "details": evaluation.details,
+                        "timestamp": evaluation.timestamp,
+                    }
+                )
 
         fired_count = sum(1 for e in all_evaluations if e["fired"])
         logger.info(
@@ -1095,11 +1128,13 @@ if func is not None:
         )
 
         return func.HttpResponse(
-            json.dumps({
-                "processed": len(events),
-                "evaluations": len(all_evaluations),
-                "fired": fired_count,
-                "results": all_evaluations,
-            }),
+            json.dumps(
+                {
+                    "processed": len(events),
+                    "evaluations": len(all_evaluations),
+                    "fired": fired_count,
+                    "results": all_evaluations,
+                }
+            ),
             mimetype="application/json",
         )

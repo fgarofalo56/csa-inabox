@@ -12,10 +12,10 @@ from tests.conftest import load_script_module
 _SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "seed" / "load_sample_data.py"
 _mod = load_script_module("load_sample_data", _SCRIPT_PATH)
 
-upload_to_adls = _mod.upload_to_adls  # type: ignore[attr-defined]
-run_dbt_seed = _mod.run_dbt_seed  # type: ignore[attr-defined]
-SEED_DIR: Path = _mod.SEED_DIR  # type: ignore[attr-defined]
-DBT_PROJECT_DIR: Path = _mod.DBT_PROJECT_DIR  # type: ignore[attr-defined]
+upload_to_adls = _mod.upload_to_adls
+run_dbt_seed = _mod.run_dbt_seed
+SEED_DIR: Path = _mod.SEED_DIR
+DBT_PROJECT_DIR: Path = _mod.DBT_PROJECT_DIR
 
 
 class TestConstants:

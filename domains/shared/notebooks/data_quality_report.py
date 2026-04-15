@@ -29,7 +29,9 @@ from pyspark.sql.types import (
     TimestampType,
 )
 
-dbutils.widgets.text("rules_path", "/Workspace/Repos/csa-inabox/governance/dataquality/quality-rules.yaml", "Quality Rules Path")
+dbutils.widgets.text(
+    "rules_path", "/Workspace/Repos/csa-inabox/governance/dataquality/quality-rules.yaml", "Quality Rules Path"
+)
 dbutils.widgets.text("catalog", "csa_inabox", "Unity Catalog Name")
 
 rules_path = dbutils.widgets.get("rules_path")
@@ -71,32 +73,44 @@ print(f"Rule categories: {list(rules.keys())}")
 # COMMAND ----------
 
 # Results schema
-result_schema = StructType([
-    StructField("run_id", StringType(), False),
-    StructField("run_timestamp", TimestampType(), False),
-    StructField("table_name", StringType(), False),
-    StructField("check_category", StringType(), False),
-    StructField("check_name", StringType(), False),
-    StructField("column_name", StringType(), True),
-    StructField("passed", BooleanType(), False),
-    StructField("expected_value", StringType(), True),
-    StructField("actual_value", StringType(), True),
-    StructField("score", DoubleType(), True),
-    StructField("severity", StringType(), True),
-    StructField("details", StringType(), True),
-])
+result_schema = StructType(
+    [
+        StructField("run_id", StringType(), False),
+        StructField("run_timestamp", TimestampType(), False),
+        StructField("table_name", StringType(), False),
+        StructField("check_category", StringType(), False),
+        StructField("check_name", StringType(), False),
+        StructField("column_name", StringType(), True),
+        StructField("passed", BooleanType(), False),
+        StructField("expected_value", StringType(), True),
+        StructField("actual_value", StringType(), True),
+        StructField("score", DoubleType(), True),
+        StructField("severity", StringType(), True),
+        StructField("details", StringType(), True),
+    ]
+)
 
 check_results = []
 
 
-def add_result(table, category, check, column, passed, expected, actual,
-               score=None, severity="error", details=None):
+def add_result(table, category, check, column, passed, expected, actual, score=None, severity="error", details=None):
     """Append a quality check result."""
-    check_results.append((
-        RUN_ID, RUN_TIMESTAMP, table, category, check,
-        column, passed, str(expected), str(actual),
-        score, severity, details,
-    ))
+    check_results.append(
+        (
+            RUN_ID,
+            RUN_TIMESTAMP,
+            table,
+            category,
+            check,
+            column,
+            passed,
+            str(expected),
+            str(actual),
+            score,
+            severity,
+            details,
+        )
+    )
 
 
 def resolve_table(table_ref: str) -> str:
@@ -106,6 +120,7 @@ def resolve_table(table_ref: str) -> str:
         return f"{catalog}.{parts[0]}.{parts[1]}"
     return table_ref
 
+
 # COMMAND ----------
 
 # MAGIC %md
@@ -113,36 +128,41 @@ def resolve_table(table_ref: str) -> str:
 
 # COMMAND ----------
 
+
 def check_completeness(table_fqn: str, required_columns: list[dict]) -> None:
     """Check that required columns have no nulls."""
     try:
         df = spark.table(table_fqn)
     except Exception as exc:
-        add_result(table_fqn, "completeness", "table_exists", None,
-                   False, "exists", str(exc), 0.0)
+        add_result(table_fqn, "completeness", "table_exists", None, False, "exists", str(exc), 0.0)
         return
 
     row_count = df.count()
     if row_count == 0:
-        add_result(table_fqn, "completeness", "has_rows", None,
-                   False, ">0", "0", 0.0)
+        add_result(table_fqn, "completeness", "has_rows", None, False, ">0", "0", 0.0)
         return
 
     for col_def in required_columns:
         col_name = col_def["name"]
         if col_name not in df.columns:
-            add_result(table_fqn, "completeness", "column_exists",
-                       col_name, False, "exists", "missing", 0.0)
+            add_result(table_fqn, "completeness", "column_exists", col_name, False, "exists", "missing", 0.0)
             continue
 
         null_count = df.where(F.col(col_name).isNull()).count()
         completeness = round((row_count - null_count) / row_count * 100, 2)
         passed = null_count == 0
         add_result(
-            table_fqn, "completeness", "not_null", col_name,
-            passed, "0 nulls", f"{null_count} nulls",
-            completeness, "warn" if null_count < row_count * 0.05 else "error",
+            table_fqn,
+            "completeness",
+            "not_null",
+            col_name,
+            passed,
+            "0 nulls",
+            f"{null_count} nulls",
+            completeness,
+            "warn" if null_count < row_count * 0.05 else "error",
         )
+
 
 # Run completeness checks from schema rules
 for schema_rule in rules.get("schema", []):
@@ -158,6 +178,7 @@ print(f"Completeness checks done: {len(check_results)} results so far")
 
 # COMMAND ----------
 
+
 def check_uniqueness(table_fqn: str, columns: list[str]) -> None:
     """Check that column combinations are unique."""
     try:
@@ -172,10 +193,16 @@ def check_uniqueness(table_fqn: str, columns: list[str]) -> None:
     passed = duplicate_count == 0
 
     add_result(
-        table_fqn, "accuracy", "uniqueness", ", ".join(columns),
-        passed, f"{row_count} unique", f"{duplicate_count} duplicates",
+        table_fqn,
+        "accuracy",
+        "uniqueness",
+        ", ".join(columns),
+        passed,
+        f"{row_count} unique",
+        f"{duplicate_count} duplicates",
         score,
     )
+
 
 for uniqueness_rule in rules.get("uniqueness", []):
     table_fqn = resolve_table(uniqueness_rule["table"])
@@ -189,6 +216,7 @@ print(f"Uniqueness checks done: {len(check_results)} results so far")
 # MAGIC ### 3c. Consistency Checks (Referential Integrity)
 
 # COMMAND ----------
+
 
 def check_referential_integrity(child_fqn, child_col, parent_fqn, parent_col):
     """Check that all child FK values exist in the parent table."""
@@ -207,17 +235,25 @@ def check_referential_integrity(child_fqn, child_col, parent_fqn, parent_col):
     passed = orphans == 0
 
     add_result(
-        child_fqn, "consistency", "referential_integrity",
+        child_fqn,
+        "consistency",
+        "referential_integrity",
         f"{child_col} -> {parent_fqn}.{parent_col}",
-        passed, "0 orphans", f"{orphans} orphans", score,
+        passed,
+        "0 orphans",
+        f"{orphans} orphans",
+        score,
     )
+
 
 for ri_rule in rules.get("referential_integrity", []):
     child_fqn = resolve_table(ri_rule["child"])
     parent_fqn = resolve_table(ri_rule["parent"])
     check_referential_integrity(
-        child_fqn, ri_rule["child_column"],
-        parent_fqn, ri_rule["parent_column"],
+        child_fqn,
+        ri_rule["child_column"],
+        parent_fqn,
+        ri_rule["parent_column"],
     )
 
 print(f"Consistency checks done: {len(check_results)} results so far")
@@ -228,6 +264,7 @@ print(f"Consistency checks done: {len(check_results)} results so far")
 # MAGIC ### 3d. Volume Checks
 
 # COMMAND ----------
+
 
 def check_volume(table_fqn: str, min_rows: int, max_growth_pct: int = None):
     """Check table row count against expected bounds."""
@@ -241,9 +278,16 @@ def check_volume(table_fqn: str, min_rows: int, max_growth_pct: int = None):
     score = 100.0 if passed else round(row_count / max(min_rows, 1) * 100, 2)
 
     add_result(
-        table_fqn, "completeness", "min_row_count", None,
-        passed, f">= {min_rows}", str(row_count), score,
+        table_fqn,
+        "completeness",
+        "min_row_count",
+        None,
+        passed,
+        f">= {min_rows}",
+        str(row_count),
+        score,
     )
+
 
 for vol_rule in rules.get("volume", []):
     table_fqn = resolve_table(vol_rule["table"])
@@ -258,8 +302,8 @@ print(f"Volume checks done: {len(check_results)} results so far")
 
 # COMMAND ----------
 
-def check_custom_rule(table_fqn: str, rule_name: str, expression: str,
-                      severity: str = "error"):
+
+def check_custom_rule(table_fqn: str, rule_name: str, expression: str, severity: str = "error"):
     """Evaluate a custom SQL expression against a table."""
     try:
         df = spark.table(table_fqn)
@@ -275,16 +319,25 @@ def check_custom_rule(table_fqn: str, rule_name: str, expression: str,
     passed = passing == row_count
 
     add_result(
-        table_fqn, "accuracy", f"custom:{rule_name}", None,
-        passed, "all rows match", f"{row_count - passing} violations",
-        score, severity,
+        table_fqn,
+        "accuracy",
+        f"custom:{rule_name}",
+        None,
+        passed,
+        "all rows match",
+        f"{row_count - passing} violations",
+        score,
+        severity,
     )
+
 
 for custom_rule in rules.get("custom", []):
     table_fqn = resolve_table(custom_rule["table"])
     check_custom_rule(
-        table_fqn, custom_rule["name"],
-        custom_rule["expression"], custom_rule.get("severity", "error"),
+        table_fqn,
+        custom_rule["name"],
+        custom_rule["expression"],
+        custom_rule.get("severity", "error"),
     )
 
 print(f"Custom checks done: {len(check_results)} results so far")

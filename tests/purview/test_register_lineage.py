@@ -12,9 +12,9 @@ from tests.conftest import load_script_module
 _SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "purview" / "register_lineage.py"
 register_lineage_mod = load_script_module("register_lineage", _SCRIPT_PATH)
 
-LINEAGE_ENTRIES: list[dict[str, Any]] = register_lineage_mod.LINEAGE_ENTRIES  # type: ignore[attr-defined]
-_build_atlas_entity = register_lineage_mod._build_atlas_entity  # type: ignore[attr-defined]
-register_lineage_fn = register_lineage_mod.register_lineage  # type: ignore[attr-defined]
+LINEAGE_ENTRIES: list[dict[str, Any]] = register_lineage_mod.LINEAGE_ENTRIES
+_build_atlas_entity = register_lineage_mod._build_atlas_entity
+register_lineage_fn = register_lineage_mod.register_lineage
 
 
 class TestBuildAtlasEntity:

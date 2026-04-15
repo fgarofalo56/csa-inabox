@@ -117,20 +117,24 @@ def _build_adaptive_card(
             fact_items = [{"title": k, "value": str(v)} for k, v in facts.items()]
         else:
             fact_items = [{"title": f.get("title", ""), "value": f.get("value", "")} for f in facts]
-        body.append({
-            "type": "FactSet",
-            "facts": fact_items,
-            "spacing": "Medium",
-        })
+        body.append(
+            {
+                "type": "FactSet",
+                "facts": fact_items,
+                "spacing": "Medium",
+            }
+        )
 
     card_actions: list[dict[str, Any]] = []
     if actions:
         for action in actions:
-            card_actions.append({
-                "type": "Action.OpenUrl",
-                "title": action.get("title", "View"),
-                "url": action.get("url", "#"),
-            })
+            card_actions.append(
+                {
+                    "type": "Action.OpenUrl",
+                    "title": action.get("title", "View"),
+                    "url": action.get("url", "#"),
+                }
+            )
 
     card_content: dict[str, Any] = {
         "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
@@ -201,9 +205,9 @@ def send_teams_alert(req: func.HttpRequest) -> func.HttpResponse:
 
     if not webhook_url:
         return func.HttpResponse(
-            json.dumps({
-                "error": "No webhook URL provided. Set 'webhook_url' in request or TEAMS_WEBHOOK_URL env var."
-            }),
+            json.dumps(
+                {"error": "No webhook URL provided. Set 'webhook_url' in request or TEAMS_WEBHOOK_URL env var."}
+            ),
             status_code=400,
             mimetype="application/json",
         )
@@ -251,22 +255,26 @@ def send_teams_alert(req: func.HttpRequest) -> func.HttpResponse:
     except requests.exceptions.Timeout:
         logger.error("Teams webhook request timed out")
         return func.HttpResponse(
-            json.dumps({
-                "delivered": False,
-                "status_code": 408,
-                "message": "Webhook request timed out",
-            }),
+            json.dumps(
+                {
+                    "delivered": False,
+                    "status_code": 408,
+                    "message": "Webhook request timed out",
+                }
+            ),
             status_code=200,
             mimetype="application/json",
         )
     except Exception as exc:
         logger.exception("Failed to send Teams alert")
         return func.HttpResponse(
-            json.dumps({
-                "delivered": False,
-                "status_code": 500,
-                "message": f"Error: {exc}",
-            }),
+            json.dumps(
+                {
+                    "delivered": False,
+                    "status_code": 500,
+                    "message": f"Error: {exc}",
+                }
+            ),
             status_code=500,
             mimetype="application/json",
         )

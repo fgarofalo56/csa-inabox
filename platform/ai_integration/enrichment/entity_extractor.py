@@ -135,8 +135,7 @@ class EntityExtractor:
             except Exception:
                 logger.exception("NER batch %d failed", i)
                 all_results.extend(
-                    ExtractionResult(text=t, is_error=True, error_message="API call failed")
-                    for t in batch
+                    ExtractionResult(text=t, is_error=True, error_message="API call failed") for t in batch
                 )
                 continue
 
@@ -161,9 +160,7 @@ class EntityExtractor:
                         )
                         for ent in doc_result.entities
                     ]
-                    all_results.append(
-                        ExtractionResult(text=doc_result.id, entities=entities)
-                    )
+                    all_results.append(ExtractionResult(text=doc_result.id, entities=entities))
 
         return all_results
 
@@ -252,9 +249,7 @@ class EntityExtractor:
             logger.warning("No records found in %s", bronze_path)
             return {"total": 0, "enriched": 0, "errors": 0}
 
-        enriched_records = self.extract_entities_from_records(
-            records, text_field=text_field, id_field=id_field
-        )
+        enriched_records = self.extract_entities_from_records(records, text_field=text_field, id_field=id_field)
 
         error_count = sum(1 for r in enriched_records if r.get("entity_extraction_error"))
 

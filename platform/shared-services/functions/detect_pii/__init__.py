@@ -85,9 +85,19 @@ _PII_PATTERNS: list[tuple[str, re.Pattern[str], float, str]] = [
     ("email", re.compile(r"\b([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\b"), 0.98, "Email address"),
     ("phone", re.compile(r"\b(\+?1?[-.\s]?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4})\b"), 0.90, "US phone number"),
     ("credit_card", re.compile(r"\b(4\d{3}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4})\b"), 0.95, "Credit card (Visa)"),
-    ("credit_card", re.compile(r"\b(5[1-5]\d{2}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4})\b"), 0.95, "Credit card (Mastercard)"),
+    (
+        "credit_card",
+        re.compile(r"\b(5[1-5]\d{2}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4})\b"),
+        0.95,
+        "Credit card (Mastercard)",
+    ),
     ("credit_card", re.compile(r"\b(3[47]\d{2}[-\s]?\d{6}[-\s]?\d{5})\b"), 0.95, "Credit card (Amex)"),
-    ("date_of_birth", re.compile(r"\b((?:0[1-9]|1[0-2])[/\-](?:0[1-9]|[12]\d|3[01])[/\-](?:19|20)\d{2})\b"), 0.70, "Date of birth"),
+    (
+        "date_of_birth",
+        re.compile(r"\b((?:0[1-9]|1[0-2])[/\-](?:0[1-9]|[12]\d|3[01])[/\-](?:19|20)\d{2})\b"),
+        0.70,
+        "Date of birth",
+    ),
     ("passport", re.compile(r"\b([A-Z]\d{8})\b"), 0.65, "Possible US passport number"),
     ("ip_address", re.compile(r"\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b"), 0.80, "IPv4 address"),
     ("iban", re.compile(r"\b([A-Z]{2}\d{2}[A-Z0-9]{4}\d{7}(?:[A-Z0-9]?){0,16})\b"), 0.85, "IBAN"),
@@ -230,12 +240,14 @@ def detect_pii(req: func.HttpRequest) -> func.HttpResponse:
 
         preview = text[:50] + "..." if len(text) > 50 else text
 
-        results.append({
-            "index": label,
-            "text_preview": preview,
-            "pii_detected": has_pii,
-            "detections": [asdict(d) for d in detections],
-        })
+        results.append(
+            {
+                "index": label,
+                "text_preview": preview,
+                "pii_detected": has_pii,
+                "detections": [asdict(d) for d in detections],
+            }
+        )
 
     response = {
         "pii_detected": total_detections > 0,

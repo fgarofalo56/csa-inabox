@@ -64,9 +64,7 @@ class TestParseAbfssPath:
         assert path == "orders/2024/"
 
     def test_path_without_trailing_path(self, manager):
-        container, account, path = manager._parse_abfss_path(
-            "abfss://container@myaccount.dfs.core.windows.net/"
-        )
+        container, account, path = manager._parse_abfss_path("abfss://container@myaccount.dfs.core.windows.net/")
         assert container == "container"
         assert account == "myaccount"
         assert path == ""
@@ -76,9 +74,7 @@ class TestParseAbfssPath:
             manager._parse_abfss_path("https://datalake.blob.core.windows.net/data")
 
     def test_govcloud_path(self, manager):
-        container, account, _ = manager._parse_abfss_path(
-            "abfss://gold@datalake.dfs.core.usgovcloudapi.net/data/"
-        )
+        container, account, _ = manager._parse_abfss_path("abfss://gold@datalake.dfs.core.usgovcloudapi.net/data/")
         assert container == "gold"
         assert account == "datalake"
 
@@ -157,9 +153,7 @@ class TestValidateAccess:
         mock_service.get_container_client.return_value = mock_container
         mock_blob_cls.return_value = mock_service
 
-        result = manager.validate_access(
-            "abfss://gold@datalake.dfs.core.windows.net/data/"
-        )
+        result = manager.validate_access("abfss://gold@datalake.dfs.core.windows.net/data/")
 
         assert isinstance(result, ValidationResult)
         assert result.exists is True
@@ -176,9 +170,7 @@ class TestValidateAccess:
         mock_service.get_container_client.return_value = mock_container
         mock_blob_cls.return_value = mock_service
 
-        result = manager.validate_access(
-            "abfss://missing@datalake.dfs.core.windows.net/data/"
-        )
+        result = manager.validate_access("abfss://missing@datalake.dfs.core.windows.net/data/")
 
         assert result.exists is False
         assert result.accessible is False
@@ -228,12 +220,16 @@ class TestListShortcuts:
 
     def test_list_by_target_domain(self, manager):
         manager.create_shortcut(
-            name="s1", source_path="abfss://c@a.dfs.core.windows.net/",
-            target_domain="usda", validate=False,
+            name="s1",
+            source_path="abfss://c@a.dfs.core.windows.net/",
+            target_domain="usda",
+            validate=False,
         )
         manager.create_shortcut(
-            name="s2", source_path="abfss://c@a.dfs.core.windows.net/",
-            target_domain="dod", validate=False,
+            name="s2",
+            source_path="abfss://c@a.dfs.core.windows.net/",
+            target_domain="dod",
+            validate=False,
         )
 
         results = manager.list_shortcuts(domain="usda")

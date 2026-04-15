@@ -57,8 +57,7 @@ def cmd_generate(args: argparse.Namespace) -> int:
     """Generate ADF pipelines from source registrations."""
     try:
         generator = PipelineGenerator(
-            output_directory=Path(args.output_dir) if args.output_dir else None,
-            debug=args.debug
+            output_directory=Path(args.output_dir) if args.output_dir else None, debug=args.debug
         )
 
         for source_file in args.source_files:
@@ -70,11 +69,7 @@ def cmd_generate(args: argparse.Namespace) -> int:
             print(f"GENERATE: Creating pipeline for {source_file}...")
 
             # Generate pipeline
-            result = generator.generate_from_file(
-                source_path,
-                args.format,
-                args.environment
-            )
+            result = generator.generate_from_file(source_path, args.format, args.environment)
 
             # Save artifacts
             saved_files = generator.save_generated_artifacts(result)
@@ -97,6 +92,7 @@ def cmd_generate(args: argparse.Namespace) -> int:
         print(f"ERROR: Pipeline generation failed: {e}")
         if args.debug:
             import traceback
+
             traceback.print_exc()
         return 1
 
@@ -105,8 +101,7 @@ def cmd_provision_dlz(args: argparse.Namespace) -> int:
     """Provision data landing zones from source registrations."""
     try:
         provisioner = DLZProvisioner(
-            output_directory=Path(args.output_dir) if args.output_dir else None,
-            debug=args.debug
+            output_directory=Path(args.output_dir) if args.output_dir else None, debug=args.debug
         )
 
         for source_file in args.source_files:
@@ -118,10 +113,7 @@ def cmd_provision_dlz(args: argparse.Namespace) -> int:
             print(f"PROVISION: Creating DLZ for {source_file}...")
 
             # Provision DLZ
-            result = provisioner.provision_dlz_from_file(
-                source_path,
-                args.environment
-            )
+            result = provisioner.provision_dlz_from_file(source_path, args.environment)
 
             # Save artifacts
             saved_files = provisioner.save_provisioning_artifacts(result)
@@ -144,6 +136,7 @@ def cmd_provision_dlz(args: argparse.Namespace) -> int:
         print(f"ERROR: DLZ provisioning failed: {e}")
         if args.debug:
             import traceback
+
             traceback.print_exc()
         return 1
 
@@ -158,7 +151,7 @@ def cmd_generate_all(args: argparse.Namespace) -> int:
         output_dir=args.output_dir,
         format=args.format,
         environment=args.environment,
-        debug=args.debug
+        debug=args.debug,
     )
 
     pipeline_result = cmd_generate(pipeline_args)
@@ -170,10 +163,7 @@ def cmd_generate_all(args: argparse.Namespace) -> int:
 
     # Then provision DLZs
     dlz_args = argparse.Namespace(
-        source_files=args.source_files,
-        output_dir=args.output_dir,
-        environment=args.environment,
-        debug=args.debug
+        source_files=args.source_files, output_dir=args.output_dir, environment=args.environment, debug=args.debug
     )
 
     dlz_result = cmd_provision_dlz(dlz_args)
@@ -311,127 +301,53 @@ Examples:
 
   # Show examples
   %(prog)s examples --show-content
-        """
+        """,
     )
 
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Enable debug logging and detailed error messages"
-    )
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging and detailed error messages")
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     # Validate command
-    validate_parser = subparsers.add_parser(
-        "validate",
-        help="Validate source registration files"
-    )
-    validate_parser.add_argument(
-        "source_files",
-        nargs="+",
-        help="Source registration files to validate"
-    )
+    validate_parser = subparsers.add_parser("validate", help="Validate source registration files")
+    validate_parser.add_argument("source_files", nargs="+", help="Source registration files to validate")
 
     # Generate command
-    generate_parser = subparsers.add_parser(
-        "generate",
-        help="Generate ADF pipelines from source registrations"
+    generate_parser = subparsers.add_parser("generate", help="Generate ADF pipelines from source registrations")
+    generate_parser.add_argument("source_files", nargs="+", help="Source registration files")
+    generate_parser.add_argument(
+        "--format", choices=["arm", "bicep", "both"], default="arm", help="Output format (default: arm)"
     )
     generate_parser.add_argument(
-        "source_files",
-        nargs="+",
-        help="Source registration files"
+        "--environment", default="development", help="Target environment (default: development)"
     )
-    generate_parser.add_argument(
-        "--format",
-        choices=["arm", "bicep", "both"],
-        default="arm",
-        help="Output format (default: arm)"
-    )
-    generate_parser.add_argument(
-        "--environment",
-        default="development",
-        help="Target environment (default: development)"
-    )
-    generate_parser.add_argument(
-        "--output-dir",
-        help="Output directory for generated files"
-    )
+    generate_parser.add_argument("--output-dir", help="Output directory for generated files")
 
     # Provision DLZ command
-    dlz_parser = subparsers.add_parser(
-        "provision-dlz",
-        help="Provision data landing zones"
-    )
-    dlz_parser.add_argument(
-        "source_files",
-        nargs="+",
-        help="Source registration files"
-    )
-    dlz_parser.add_argument(
-        "--environment",
-        default="development",
-        help="Target environment (default: development)"
-    )
-    dlz_parser.add_argument(
-        "--output-dir",
-        help="Output directory for generated files"
-    )
+    dlz_parser = subparsers.add_parser("provision-dlz", help="Provision data landing zones")
+    dlz_parser.add_argument("source_files", nargs="+", help="Source registration files")
+    dlz_parser.add_argument("--environment", default="development", help="Target environment (default: development)")
+    dlz_parser.add_argument("--output-dir", help="Output directory for generated files")
 
     # Generate all command
-    all_parser = subparsers.add_parser(
-        "generate-all",
-        help="Generate both pipelines and DLZs"
-    )
+    all_parser = subparsers.add_parser("generate-all", help="Generate both pipelines and DLZs")
+    all_parser.add_argument("source_files", nargs="+", help="Source registration files")
     all_parser.add_argument(
-        "source_files",
-        nargs="+",
-        help="Source registration files"
+        "--format", choices=["arm", "bicep", "both"], default="arm", help="Pipeline output format (default: arm)"
     )
-    all_parser.add_argument(
-        "--format",
-        choices=["arm", "bicep", "both"],
-        default="arm",
-        help="Pipeline output format (default: arm)"
-    )
-    all_parser.add_argument(
-        "--environment",
-        default="development",
-        help="Target environment (default: development)"
-    )
-    all_parser.add_argument(
-        "--output-dir",
-        help="Output directory for generated files"
-    )
+    all_parser.add_argument("--environment", default="development", help="Target environment (default: development)")
+    all_parser.add_argument("--output-dir", help="Output directory for generated files")
 
     # List templates command
-    subparsers.add_parser(
-        "list-templates",
-        help="List available pipeline templates"
-    )
+    subparsers.add_parser("list-templates", help="List available pipeline templates")
 
     # Schema info command
-    subparsers.add_parser(
-        "schema-info",
-        help="Show source registration schema information"
-    )
+    subparsers.add_parser("schema-info", help="Show source registration schema information")
 
     # Examples command
-    examples_parser = subparsers.add_parser(
-        "examples",
-        help="Show example source registration files"
-    )
-    examples_parser.add_argument(
-        "--show-content",
-        action="store_true",
-        help="Show file paths"
-    )
-    examples_parser.add_argument(
-        "--output-content",
-        action="store_true",
-        help="Output full file content"
-    )
+    examples_parser = subparsers.add_parser("examples", help="Show example source registration files")
+    examples_parser.add_argument("--show-content", action="store_true", help="Show file paths")
+    examples_parser.add_argument("--output-content", action="store_true", help="Output full file content")
 
     args = parser.parse_args()
 

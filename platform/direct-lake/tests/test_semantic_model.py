@@ -19,8 +19,11 @@ if _scripts not in sys.path:
     sys.path.insert(0, _scripts)
 
 for _m in [
-    "databricks", "databricks.sdk", "databricks.sdk.service",
-    "databricks.sdk.service.sql", "databricks.sdk.service.iam",
+    "databricks",
+    "databricks.sdk",
+    "databricks.sdk.service",
+    "databricks.sdk.service.sql",
+    "databricks.sdk.service.iam",
 ]:
     sys.modules.setdefault(_m, MagicMock())
 # ---------------------------------------------------------------------------
@@ -198,7 +201,10 @@ class TestGenerateModelYaml:
         """Columns starting with _ should be marked as hidden."""
         tables = [
             DeltaTableInfo(
-                catalog="c", schema_name="s", name="t", full_name="c.s.t",
+                catalog="c",
+                schema_name="s",
+                name="t",
+                full_name="c.s.t",
                 columns=[
                     DeltaColumn(name="_internal", type="string"),
                     DeltaColumn(name="visible", type="string"),

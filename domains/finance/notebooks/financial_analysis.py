@@ -42,15 +42,13 @@ aging_df = spark.table(AGING_TABLE)
 
 # Summary by aging bucket
 aging_summary = (
-    aging_df
-    .groupBy("aging_bucket")
+    aging_df.groupBy("aging_bucket")
     .agg(
         F.count("*").alias("invoice_count"),
         F.sum("outstanding_balance").alias("total_outstanding"),
         F.avg("outstanding_balance").alias("avg_outstanding"),
         F.avg("estimated_loss_rate").alias("avg_loss_rate"),
-        F.sum(F.col("outstanding_balance") * F.col("estimated_loss_rate"))
-            .alias("estimated_loss_provision"),
+        F.sum(F.col("outstanding_balance") * F.col("estimated_loss_rate")).alias("estimated_loss_provision"),
     )
     .orderBy(
         F.when(F.col("aging_bucket") == "CURRENT", 1)
@@ -68,9 +66,7 @@ display(aging_summary)
 
 # Total exposure
 total_outstanding = aging_df.agg(F.sum("outstanding_balance")).collect()[0][0] or 0
-total_provision = aging_df.agg(
-    F.sum(F.col("outstanding_balance") * F.col("estimated_loss_rate"))
-).collect()[0][0] or 0
+total_provision = aging_df.agg(F.sum(F.col("outstanding_balance") * F.col("estimated_loss_rate"))).collect()[0][0] or 0
 
 print(f"\nTotal Outstanding: ${total_outstanding:,.2f}")
 print(f"Estimated Loss Provision: ${total_provision:,.2f}")
@@ -84,13 +80,10 @@ print(f"Provision Rate: {total_provision / max(total_outstanding, 1) * 100:.1f}%
 # COMMAND ----------
 
 # Prepare data for pie/bar chart
-aging_viz = (
-    aging_summary
-    .select(
-        "aging_bucket",
-        F.round("total_outstanding", 2).alias("total_outstanding"),
-        "invoice_count",
-    )
+aging_viz = aging_summary.select(
+    "aging_bucket",
+    F.round("total_outstanding", 2).alias("total_outstanding"),
+    "invoice_count",
 )
 
 display(aging_viz)
@@ -103,8 +96,7 @@ display(aging_viz)
 # COMMAND ----------
 
 overdue_customers = (
-    aging_df
-    .where(F.col("days_past_due") > 0)
+    aging_df.where(F.col("days_past_due") > 0)
     .groupBy("customer_id")
     .agg(
         F.count("*").alias("overdue_invoices"),
@@ -146,14 +138,13 @@ monthly_revenue = (
 
 # Add month-over-month growth
 window = Window.orderBy("revenue_period")
-monthly_revenue = monthly_revenue.withColumn(
-    "prev_month_revenue", F.lag("net_revenue").over(window)
-).withColumn(
+monthly_revenue = monthly_revenue.withColumn("prev_month_revenue", F.lag("net_revenue").over(window)).withColumn(
     "mom_growth_pct",
     F.round(
         (F.col("net_revenue") - F.col("prev_month_revenue"))
         / F.abs(F.coalesce(F.col("prev_month_revenue"), F.lit(1)))
-        * 100, 2
+        * 100,
+        2,
     ),
 )
 
@@ -172,10 +163,9 @@ quarterly_revenue = (
     .groupBy("order_year", "order_quarter")
     .agg(
         F.sum("total_amount").alias("gross_revenue"),
-        F.sum(F.when(
-            (F.col("is_cancelled") == 0) & (F.col("is_returned") == 0),
-            F.col("total_amount")
-        ).otherwise(0)).alias("net_revenue"),
+        F.sum(
+            F.when((F.col("is_cancelled") == 0) & (F.col("is_returned") == 0), F.col("total_amount")).otherwise(0)
+        ).alias("net_revenue"),
         F.count("*").alias("total_orders"),
         F.countDistinct("customer_id").alias("unique_customers"),
         F.avg("total_amount").alias("avg_order_value"),
@@ -195,8 +185,7 @@ display(quarterly_revenue)
 
 # Days between invoice date and payment (using aging report data)
 payment_velocity = (
-    aging_df
-    .withColumn(
+    aging_df.withColumn(
         "days_to_due",
         F.datediff("due_date", "invoice_date"),
     )
@@ -235,14 +224,10 @@ display(payment_velocity)
 recon_df = spark.table(RECONCILIATION_TABLE)
 
 # Reconciliation status breakdown
-recon_summary = (
-    recon_df
-    .groupBy("reconciliation_status")
-    .agg(
-        F.count("*").alias("record_count"),
-        F.sum(F.abs("amount_difference")).alias("total_discrepancy"),
-        F.avg(F.abs("amount_difference")).alias("avg_discrepancy"),
-    )
+recon_summary = recon_df.groupBy("reconciliation_status").agg(
+    F.count("*").alias("record_count"),
+    F.sum(F.abs("amount_difference")).alias("total_discrepancy"),
+    F.avg(F.abs("amount_difference")).alias("avg_discrepancy"),
 )
 
 print("RECONCILIATION STATUS BREAKDOWN")
@@ -250,10 +235,7 @@ display(recon_summary)
 
 # Unmatched items needing attention
 mismatches = (
-    recon_df
-    .where(F.col("reconciliation_status") != "MATCHED")
-    .orderBy(F.abs("amount_difference").desc())
-    .limit(25)
+    recon_df.where(F.col("reconciliation_status") != "MATCHED").orderBy(F.abs("amount_difference").desc()).limit(25)
 )
 
 print("\nTOP MISMATCHES / UNMATCHED ITEMS")
@@ -268,8 +250,7 @@ display(mismatches)
 
 # Create a consolidated dashboard dataset
 dashboard_metrics = (
-    monthly_revenue
-    .select(
+    monthly_revenue.select(
         "revenue_period",
         "revenue_year",
         "revenue_month",

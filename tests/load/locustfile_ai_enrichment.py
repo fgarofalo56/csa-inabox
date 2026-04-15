@@ -22,8 +22,7 @@ from typing import Any
 from locust import HttpUser, between, events, task
 
 SAMPLE_TEXTS: tuple[str, ...] = (
-    "The quick brown fox jumps over the lazy dog. "
-    "This is a short sample for language and sentiment detection.",
+    "The quick brown fox jumps over the lazy dog. This is a short sample for language and sentiment detection.",
     "Customer reported a positive experience with the new onboarding flow, "
     "completing signup in under two minutes with no support tickets raised.",
     "Invoice INV-2026-04-123 for $4,780.42 was processed on 2026-04-10 "

@@ -27,14 +27,14 @@ from .notifier import AlertPayload
 
 _SEVERITY_COLOURS: dict[str, str] = {
     "critical": "attention",  # Red
-    "warning": "warning",     # Yellow / Orange
-    "info": "accent",         # Blue
+    "warning": "warning",  # Yellow / Orange
+    "info": "accent",  # Blue
 }
 
 _SEVERITY_EMOJI: dict[str, str] = {
     "critical": "\U0001f534",  # Red circle
-    "warning": "\U0001f7e0",   # Orange circle
-    "info": "\U0001f535",      # Blue circle
+    "warning": "\U0001f7e0",  # Orange circle
+    "info": "\U0001f535",  # Blue circle
 }
 
 _SEVERITY_HEX: dict[str, str] = {
@@ -198,7 +198,7 @@ def _build_actions_section(payload: AlertPayload) -> list[dict[str, Any]]:
         List of Adaptive Card ``TextBlock`` elements.
     """
     actions = _get_recommended_actions(payload)
-    action_text = "\n".join(f"{i+1}. {a}" for i, a in enumerate(actions))
+    action_text = "\n".join(f"{i + 1}. {a}" for i, a in enumerate(actions))
     return [
         {
             "type": "TextBlock",

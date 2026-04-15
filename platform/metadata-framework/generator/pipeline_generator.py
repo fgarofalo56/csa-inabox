@@ -69,7 +69,7 @@ class PipelineGenerator:
         template_directory: Path | None = None,
         schema_directory: Path | None = None,
         output_directory: Path | None = None,
-        debug: bool = False
+        debug: bool = False,
     ) -> None:
         """Initialize the pipeline generator.
 
@@ -129,10 +129,12 @@ class PipelineGenerator:
             ("dynamics365", "incremental"): "adf_api_ingestion.json",
         }
 
-        logger.info("Pipeline generator initialized",
-                   template_dir=str(self.template_directory),
-                   schema_dir=str(self.schema_directory),
-                   output_dir=str(self.output_directory))
+        logger.info(
+            "Pipeline generator initialized",
+            template_dir=str(self.template_directory),
+            schema_dir=str(self.schema_directory),
+            output_dir=str(self.output_directory),
+        )
 
     def _load_schemas(self) -> None:
         """Load JSON schemas for validation."""
@@ -165,19 +167,14 @@ class PipelineGenerator:
         """
         try:
             validate(instance=source_config, schema=self.source_schema)
-            logger.info("Source registration validation passed",
-                       source_id=source_config.get("source_id"))
+            logger.info("Source registration validation passed", source_id=source_config.get("source_id"))
 
         except ValidationError as e:
-            logger.error("Source registration validation failed",
-                        error=str(e),
-                        schema_path=list(e.absolute_path))
+            logger.error("Source registration validation failed", error=str(e), schema_path=list(e.absolute_path))
             raise PipelineGenerationError(f"Schema validation failed: {e.message}") from e
 
     def detect_source_schema(
-        self,
-        source_config: dict[str, Any],
-        connection_test: bool = True
+        self, source_config: dict[str, Any], connection_test: bool = True
     ) -> SourceDetectionResult:
         """Automatically detect schema from the source system.
 
@@ -192,9 +189,7 @@ class PipelineGenerator:
             SchemaDetectionError: If schema detection fails
         """
         source_type = source_config["source_type"]
-        logger.info("Starting schema detection",
-                   source_type=source_type,
-                   source_id=source_config.get("source_id"))
+        logger.info("Starting schema detection", source_type=source_type, source_id=source_config.get("source_id"))
 
         try:
             if source_type in ["sql_server", "azure_sql", "oracle", "mysql", "postgres"]:
@@ -210,9 +205,7 @@ class PipelineGenerator:
             raise SchemaDetectionError(f"Schema detection not implemented for {source_type}")
 
         except Exception as e:
-            logger.error("Schema detection failed",
-                        source_type=source_type,
-                        error=str(e))
+            logger.error("Schema detection failed", source_type=source_type, error=str(e))
             raise SchemaDetectionError(f"Schema detection failed: {e}") from e
 
     def _detect_database_schema(self, source_config: dict[str, Any]) -> SourceDetectionResult:
@@ -232,14 +225,14 @@ class PipelineGenerator:
                     "columns": [
                         {"name": "id", "type": "int", "nullable": False, "is_primary_key": True},
                         {"name": "name", "type": "varchar", "nullable": True},
-                        {"name": "created_date", "type": "datetime", "nullable": False}
-                    ]
+                        {"name": "created_date", "type": "datetime", "nullable": False},
+                    ],
                 }
             ],
             estimated_row_counts={"example_table": 1000000},
             primary_keys={"example_table": ["id"]},
             data_types={"example_table": {"id": "int", "name": "varchar", "created_date": "datetime"}},
-            recommended_watermark_columns={"example_table": ["created_date"]}
+            recommended_watermark_columns={"example_table": ["created_date"]},
         )
 
     def _detect_api_schema(self, source_config: dict[str, Any]) -> SourceDetectionResult:
@@ -247,11 +240,7 @@ class PipelineGenerator:
         logger.info("Detecting API schema (mock implementation)")
         # Would typically make API calls to introspect endpoints
         return SourceDetectionResult(
-            tables=[],
-            estimated_row_counts={},
-            primary_keys={},
-            data_types={},
-            recommended_watermark_columns={}
+            tables=[], estimated_row_counts={}, primary_keys={}, data_types={}, recommended_watermark_columns={}
         )
 
     def _detect_cosmos_schema(self, source_config: dict[str, Any]) -> SourceDetectionResult:
@@ -259,11 +248,7 @@ class PipelineGenerator:
         logger.info("Detecting Cosmos schema (mock implementation)")
         # Would query Cosmos DB metadata
         return SourceDetectionResult(
-            tables=[],
-            estimated_row_counts={},
-            primary_keys={},
-            data_types={},
-            recommended_watermark_columns={}
+            tables=[], estimated_row_counts={}, primary_keys={}, data_types={}, recommended_watermark_columns={}
         )
 
     def _detect_file_schema(self, source_config: dict[str, Any]) -> SourceDetectionResult:
@@ -271,11 +256,7 @@ class PipelineGenerator:
         logger.info("Detecting file schema (mock implementation)")
         # Would sample files to determine schema
         return SourceDetectionResult(
-            tables=[],
-            estimated_row_counts={},
-            primary_keys={},
-            data_types={},
-            recommended_watermark_columns={}
+            tables=[], estimated_row_counts={}, primary_keys={}, data_types={}, recommended_watermark_columns={}
         )
 
     def _detect_stream_schema(self, source_config: dict[str, Any]) -> SourceDetectionResult:
@@ -283,11 +264,7 @@ class PipelineGenerator:
         logger.info("Detecting stream schema (mock implementation)")
         # Would sample stream messages
         return SourceDetectionResult(
-            tables=[],
-            estimated_row_counts={},
-            primary_keys={},
-            data_types={},
-            recommended_watermark_columns={}
+            tables=[], estimated_row_counts={}, primary_keys={}, data_types={}, recommended_watermark_columns={}
         )
 
     def select_template(self, source_type: str, ingestion_mode: str) -> str:
@@ -313,10 +290,7 @@ class PipelineGenerator:
             )
 
         template_name = self.template_mapping[template_key]
-        logger.info("Template selected",
-                   source_type=source_type,
-                   ingestion_mode=ingestion_mode,
-                   template=template_name)
+        logger.info("Template selected", source_type=source_type, ingestion_mode=ingestion_mode, template=template_name)
 
         return template_name
 
@@ -370,11 +344,7 @@ class PipelineGenerator:
         except json.JSONDecodeError as e:
             raise PipelineGenerationError(f"Invalid JSON in template: {e}") from e
 
-    def customize_template(
-        self,
-        template: dict[str, Any],
-        source_config: dict[str, Any]
-    ) -> dict[str, Any]:
+    def customize_template(self, template: dict[str, Any], source_config: dict[str, Any]) -> dict[str, Any]:
         """Customize template with source-specific parameters.
 
         Args:
@@ -394,12 +364,7 @@ class PipelineGenerator:
         if "parameters" not in customized:
             customized["parameters"] = {}
 
-        customized["parameters"].update({
-            "pipelineName": {
-                "type": "string",
-                "defaultValue": pipeline_name
-            }
-        })
+        customized["parameters"].update({"pipelineName": {"type": "string", "defaultValue": pipeline_name}})
 
         # Add source-specific parameters based on source type
         source_type = source_config["source_type"]
@@ -411,92 +376,59 @@ class PipelineGenerator:
         elif source_type in ["event_hub", "kafka"]:
             self._customize_streaming_template(customized, source_config)
 
-        logger.info("Template customized",
-                   pipeline_name=pipeline_name,
-                   source_type=source_type)
+        logger.info("Template customized", pipeline_name=pipeline_name, source_type=source_type)
 
         return customized
 
-    def _customize_database_template(
-        self,
-        template: dict[str, Any],
-        source_config: dict[str, Any]
-    ) -> None:
+    def _customize_database_template(self, template: dict[str, Any], source_config: dict[str, Any]) -> None:
         """Customize template for database sources."""
         connection = source_config["connection"]
         ingestion = source_config["ingestion"]
 
         # Add database-specific parameters
-        template["parameters"].update({
-            "serverName": {
-                "type": "string",
-                "defaultValue": connection["server"]
-            },
-            "databaseName": {
-                "type": "string",
-                "defaultValue": connection["database"]
+        template["parameters"].update(
+            {
+                "serverName": {"type": "string", "defaultValue": connection["server"]},
+                "databaseName": {"type": "string", "defaultValue": connection["database"]},
             }
-        })
+        )
 
         # Add watermark parameter for incremental loads
         if ingestion["mode"] == "incremental":
             template["parameters"]["watermarkColumnName"] = {
                 "type": "string",
-                "defaultValue": ingestion["watermark_column"]
+                "defaultValue": ingestion["watermark_column"],
             }
 
-    def _customize_api_template(
-        self,
-        template: dict[str, Any],
-        source_config: dict[str, Any]
-    ) -> None:
+    def _customize_api_template(self, template: dict[str, Any], source_config: dict[str, Any]) -> None:
         """Customize template for API sources."""
         connection = source_config["connection"]
 
-        template["parameters"].update({
-            "apiBaseUrl": {
-                "type": "string",
-                "defaultValue": connection["base_url"]
-            }
-        })
+        template["parameters"].update({"apiBaseUrl": {"type": "string", "defaultValue": connection["base_url"]}})
 
         # Add pagination parameters if specified
         if "pagination" in connection:
             pagination = connection["pagination"]
-            template["parameters"].update({
-                "paginationType": {
-                    "type": "string",
-                    "defaultValue": pagination.get("type", "none")
-                },
-                "pageSize": {
-                    "type": "int",
-                    "defaultValue": pagination.get("page_size", 100)
+            template["parameters"].update(
+                {
+                    "paginationType": {"type": "string", "defaultValue": pagination.get("type", "none")},
+                    "pageSize": {"type": "int", "defaultValue": pagination.get("page_size", 100)},
                 }
-            })
+            )
 
-    def _customize_streaming_template(
-        self,
-        template: dict[str, Any],
-        source_config: dict[str, Any]
-    ) -> None:
+    def _customize_streaming_template(self, template: dict[str, Any], source_config: dict[str, Any]) -> None:
         """Customize template for streaming sources."""
         connection = source_config["connection"]
 
-        template["parameters"].update({
-            "eventHubName": {
-                "type": "string",
-                "defaultValue": connection["name"]
-            },
-            "consumerGroup": {
-                "type": "string",
-                "defaultValue": connection.get("consumer_group", "$Default")
+        template["parameters"].update(
+            {
+                "eventHubName": {"type": "string", "defaultValue": connection["name"]},
+                "consumerGroup": {"type": "string", "defaultValue": connection.get("consumer_group", "$Default")},
             }
-        })
+        )
 
     def generate_parameters_file(
-        self,
-        source_config: dict[str, Any],
-        deployment_environment: str = "development"
+        self, source_config: dict[str, Any], deployment_environment: str = "development"
     ) -> dict[str, Any]:
         """Generate ARM template parameters file.
 
@@ -511,25 +443,19 @@ class PipelineGenerator:
             "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
             "contentVersion": "1.0.0.0",
             "parameters": {
-                "dataFactoryName": {
-                    "value": f"adf-csa-{deployment_environment}"
-                },
-                "pipelineName": {
-                    "value": self.generate_pipeline_name(source_config)
-                }
-            }
+                "dataFactoryName": {"value": f"adf-csa-{deployment_environment}"},
+                "pipelineName": {"value": self.generate_pipeline_name(source_config)},
+            },
         }
 
         # Add environment-specific parameters
         target = source_config["target"]
-        parameters["parameters"].update({
-            "containerName": {
-                "value": target["container"]
-            },
-            "folderPath": {
-                "value": target.get("path_pattern", "{source_name}/{table_name}")
+        parameters["parameters"].update(
+            {
+                "containerName": {"value": target["container"]},
+                "folderPath": {"value": target.get("path_pattern", "{source_name}/{table_name}")},
             }
-        })
+        )
 
         return parameters
 
@@ -567,28 +493,27 @@ class PipelineGenerator:
                 bicep_lines.append("")
 
         # Add resource definition (simplified)
-        bicep_lines.extend([
-            "// Resources",
-            "resource dataFactory 'Microsoft.DataFactory/factories@2018-06-01' existing = {",
-            "  name: dataFactoryName",
-            "}",
-            "",
-            "resource pipeline 'Microsoft.DataFactory/factories/pipelines@2018-06-01' = {",
-            "  parent: dataFactory",
-            "  name: pipelineName",
-            "  properties: {",
-            "    // Pipeline definition would go here",
-            "  }",
-            "}"
-        ])
+        bicep_lines.extend(
+            [
+                "// Resources",
+                "resource dataFactory 'Microsoft.DataFactory/factories@2018-06-01' existing = {",
+                "  name: dataFactoryName",
+                "}",
+                "",
+                "resource pipeline 'Microsoft.DataFactory/factories/pipelines@2018-06-01' = {",
+                "  parent: dataFactory",
+                "  name: pipelineName",
+                "  properties: {",
+                "    // Pipeline definition would go here",
+                "  }",
+                "}",
+            ]
+        )
 
         return "\n".join(bicep_lines)
 
     def generate_from_config(
-        self,
-        source_config: dict[str, Any],
-        output_format: str = "arm",
-        deployment_environment: str = "development"
+        self, source_config: dict[str, Any], output_format: str = "arm", deployment_environment: str = "development"
     ) -> PipelineGenerationResult:
         """Generate pipeline from source configuration.
 
@@ -621,10 +546,7 @@ class PipelineGenerator:
             pipeline_id = str(uuid.uuid4())
 
             # Generate parameters file
-            parameters_file = self.generate_parameters_file(
-                source_config,
-                deployment_environment
-            )
+            parameters_file = self.generate_parameters_file(source_config, deployment_environment)
 
             # Generate Bicep if requested
             bicep_template = None
@@ -638,14 +560,16 @@ class PipelineGenerator:
                 "environment": deployment_environment,
                 "generated_at": datetime.now(timezone.utc).isoformat(),
                 "source_id": source_config["source_id"],
-                "pipeline_type": template_name.replace(".json", "")
+                "pipeline_type": template_name.replace(".json", ""),
             }
 
-            logger.info("Pipeline generation completed",
-                       pipeline_id=pipeline_id,
-                       pipeline_name=pipeline_name,
-                       template_type=template_name,
-                       output_format=output_format)
+            logger.info(
+                "Pipeline generation completed",
+                pipeline_id=pipeline_id,
+                pipeline_name=pipeline_name,
+                template_type=template_name,
+                output_format=output_format,
+            )
 
             return PipelineGenerationResult(
                 pipeline_id=pipeline_id,
@@ -654,7 +578,7 @@ class PipelineGenerator:
                 arm_template=customized_template,
                 bicep_template=bicep_template,
                 parameters_file=parameters_file,
-                deployment_config=deployment_config
+                deployment_config=deployment_config,
             )
 
         except Exception as e:
@@ -662,10 +586,7 @@ class PipelineGenerator:
             raise PipelineGenerationError(f"Failed to generate pipeline: {e}") from e
 
     def generate_from_file(
-        self,
-        source_file: str | Path,
-        output_format: str = "arm",
-        deployment_environment: str = "development"
+        self, source_file: str | Path, output_format: str = "arm", deployment_environment: str = "development"
     ) -> PipelineGenerationResult:
         """Generate pipeline from source registration file.
 
@@ -687,15 +608,9 @@ class PipelineGenerator:
                 else:
                     source_config = json.load(f)
 
-            logger.info("Source configuration loaded",
-                       file=str(source_path),
-                       source_id=source_config.get("source_id"))
+            logger.info("Source configuration loaded", file=str(source_path), source_id=source_config.get("source_id"))
 
-            return self.generate_from_config(
-                source_config,
-                output_format,
-                deployment_environment
-            )
+            return self.generate_from_config(source_config, output_format, deployment_environment)
 
         except FileNotFoundError as e:
             raise PipelineGenerationError(f"Source file not found: {source_path}") from e
@@ -703,9 +618,7 @@ class PipelineGenerator:
             raise PipelineGenerationError(f"Invalid source file format: {e}") from e
 
     def save_generated_artifacts(
-        self,
-        result: PipelineGenerationResult,
-        output_directory: Path | None = None
+        self, result: PipelineGenerationResult, output_directory: Path | None = None
     ) -> dict[str, Path]:
         """Save generated pipeline artifacts to files.
 
@@ -749,17 +662,16 @@ class PipelineGenerator:
                 json.dump(result.deployment_config, f, indent=2)
             saved_files["deployment_config"] = config_path
 
-        logger.info("Generated artifacts saved",
-                   pipeline_name=result.pipeline_name,
-                   output_directory=str(output_dir),
-                   files=list(saved_files.keys()))
+        logger.info(
+            "Generated artifacts saved",
+            pipeline_name=result.pipeline_name,
+            output_directory=str(output_dir),
+            files=list(saved_files.keys()),
+        )
 
         return saved_files
 
-    def validate_generated_pipeline(
-        self,
-        result: PipelineGenerationResult
-    ) -> list[str]:
+    def validate_generated_pipeline(self, result: PipelineGenerationResult) -> list[str]:
         """Validate generated pipeline against schema and best practices.
 
         Args:
@@ -790,47 +702,20 @@ if __name__ == "__main__":
     import argparse
     import sys
 
-    parser = argparse.ArgumentParser(
-        description="Generate ADF pipelines from metadata source registrations"
-    )
+    parser = argparse.ArgumentParser(description="Generate ADF pipelines from metadata source registrations")
+    parser.add_argument("source_file", help="Path to source registration YAML/JSON file")
+    parser.add_argument("--output-dir", type=Path, help="Output directory for generated files")
+    parser.add_argument("--format", choices=["arm", "bicep", "both"], default="arm", help="Output format")
+    parser.add_argument("--environment", default="development", help="Target deployment environment")
     parser.add_argument(
-        "source_file",
-        help="Path to source registration YAML/JSON file"
+        "--validate-only", action="store_true", help="Only validate source registration, don't generate"
     )
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        help="Output directory for generated files"
-    )
-    parser.add_argument(
-        "--format",
-        choices=["arm", "bicep", "both"],
-        default="arm",
-        help="Output format"
-    )
-    parser.add_argument(
-        "--environment",
-        default="development",
-        help="Target deployment environment"
-    )
-    parser.add_argument(
-        "--validate-only",
-        action="store_true",
-        help="Only validate source registration, don't generate"
-    )
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Enable debug logging"
-    )
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
 
     args = parser.parse_args()
 
     try:
-        generator = PipelineGenerator(
-            output_directory=args.output_dir,
-            debug=args.debug
-        )
+        generator = PipelineGenerator(output_directory=args.output_dir, debug=args.debug)
 
         if args.validate_only:
             # Load and validate only
@@ -846,11 +731,7 @@ if __name__ == "__main__":
 
         else:
             # Generate pipeline
-            result = generator.generate_from_file(
-                args.source_file,
-                args.format,
-                args.environment
-            )
+            result = generator.generate_from_file(args.source_file, args.format, args.environment)
 
             # Save artifacts
             saved_files = generator.save_generated_artifacts(result)
@@ -874,5 +755,6 @@ if __name__ == "__main__":
         print(f"❌ Unexpected error: {e}", file=sys.stderr)
         if args.debug:
             import traceback
+
             traceback.print_exc()
         sys.exit(1)

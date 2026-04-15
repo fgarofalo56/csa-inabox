@@ -43,7 +43,9 @@ def agreements_dir(tmp_path) -> Path:
     d = tmp_path / "agreements"
     d.mkdir()
 
-    _write_agreement_yaml(d / "finance-to-sales.yaml", """\
+    _write_agreement_yaml(
+        d / "finance-to-sales.yaml",
+        """\
         metadata:
           name: finance-to-sales
         provider:
@@ -65,9 +67,12 @@ def agreements_dir(tmp_path) -> Path:
           auditRequired: true
           copyAllowed: false
           retentionDays: 90
-    """)
+    """,
+    )
 
-    _write_agreement_yaml(d / "health-to-research.yaml", """\
+    _write_agreement_yaml(
+        d / "health-to-research.yaml",
+        """\
         metadata:
           name: health-to-research
         provider:
@@ -88,7 +93,8 @@ def agreements_dir(tmp_path) -> Path:
           auditRequired: true
           copyAllowed: true
           retentionDays: 365
-    """)
+    """,
+    )
 
     return d
 
@@ -129,7 +135,9 @@ class TestLoadAgreement:
             _ = SharingEnforcer(agreements_dir="/nonexistent/path").agreements
 
     def test_template_files_skipped(self, agreements_dir):
-        _write_agreement_yaml(agreements_dir / "template-sharing.yaml", """\
+        _write_agreement_yaml(
+            agreements_dir / "template-sharing.yaml",
+            """\
             metadata:
               name: template
             provider:
@@ -141,7 +149,8 @@ class TestLoadAgreement:
               owner: "{consumer_owner}"
             terms:
               accessLevel: read
-        """)
+        """,
+        )
         enforcer = SharingEnforcer(agreements_dir)
         # Template should be skipped because domain contains '{'
         names = [a.name for a in enforcer.agreements]
@@ -302,7 +311,9 @@ class TestExpiredDetection:
     def test_get_expiring_soon_with_near_expiry(self, agreements_dir):
         """Add an agreement expiring in 15 days to test near-expiry detection."""
         near_expiry = (datetime.now(timezone.utc) + timedelta(days=15)).isoformat()
-        _write_agreement_yaml(agreements_dir / "near-expiry.yaml", f"""\
+        _write_agreement_yaml(
+            agreements_dir / "near-expiry.yaml",
+            f"""\
             metadata:
               name: near-expiry
             provider:
@@ -322,7 +333,8 @@ class TestExpiredDetection:
               auditRequired: false
               copyAllowed: false
               retentionDays: 30
-        """)
+        """,
+        )
 
         enforcer = SharingEnforcer(agreements_dir)
         expiring = enforcer.get_expiring_soon(days=30)

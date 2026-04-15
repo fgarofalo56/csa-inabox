@@ -52,7 +52,7 @@ jobs:
     name: Validate Templates
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
       - name: Bicep Build
         run: az bicep build --file deploy/bicep/gov/main.bicep
@@ -68,10 +68,10 @@ jobs:
     needs: validate
     environment: ${{ github.event.inputs.environment }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
       - name: Azure Gov Login
-        uses: azure/login@v2
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
         with:
           client-id: ${{ secrets.AZURE_GOV_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_GOV_TENANT_ID }}
@@ -83,7 +83,7 @@ jobs:
         run: |
           case "${{ github.event.inputs.environment }}" in
             gov-dev)           echo "file=params.gov-dev.json" >> "$GITHUB_OUTPUT" ;;
-            gov-staging)       echo "file=params.gov-dev.json" >> "$GITHUB_OUTPUT" ;;
+            gov-staging)       echo "file=params.gov-dev.json" >> "$GITHUB_OUTPUT" ;; # intentional: staging uses dev params until a dedicated staging params file is created
             gov-prod)          echo "file=params.gov-prod.json" >> "$GITHUB_OUTPUT" ;;
             gov-tribal-health) echo "file=params.gov-tribal-health.json" >> "$GITHUB_OUTPUT" ;;
           esac
@@ -107,10 +107,10 @@ jobs:
     if: github.event.inputs.what_if == 'false'
     environment: ${{ github.event.inputs.environment }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
       - name: Azure Gov Login
-        uses: azure/login@v2
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
         with:
           client-id: ${{ secrets.AZURE_GOV_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_GOV_TENANT_ID }}
@@ -122,7 +122,7 @@ jobs:
         run: |
           case "${{ github.event.inputs.environment }}" in
             gov-dev)           echo "file=params.gov-dev.json" >> "$GITHUB_OUTPUT" ;;
-            gov-staging)       echo "file=params.gov-dev.json" >> "$GITHUB_OUTPUT" ;;
+            gov-staging)       echo "file=params.gov-dev.json" >> "$GITHUB_OUTPUT" ;; # intentional: staging uses dev params until a dedicated staging params file is created
             gov-prod)          echo "file=params.gov-prod.json" >> "$GITHUB_OUTPUT" ;;
             gov-tribal-health) echo "file=params.gov-tribal-health.json" >> "$GITHUB_OUTPUT" ;;
           esac

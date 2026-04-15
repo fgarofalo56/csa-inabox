@@ -14,9 +14,9 @@ from tests.conftest import load_script_module
 _SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "Azure IPs" / "parseIPs.py"
 _mod = load_script_module("parseIPs", _SCRIPT_PATH)
 
-extract_address_prefixes = _mod.extract_address_prefixes  # type: ignore[attr-defined]
-merge_prefixes = _mod.merge_prefixes  # type: ignore[attr-defined]
-write_to_file = _mod.write_to_file  # type: ignore[attr-defined]
+extract_address_prefixes = _mod.extract_address_prefixes
+merge_prefixes = _mod.merge_prefixes
+write_to_file = _mod.write_to_file
 
 
 # ── Fixtures ────────────────────────────────────────────────────────

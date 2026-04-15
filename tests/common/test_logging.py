@@ -76,10 +76,7 @@ def test_extract_trace_id_from_headers_parses_valid_traceparent() -> None:
     headers = {
         "Traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
     }
-    assert (
-        extract_trace_id_from_headers(headers)
-        == "0af7651916cd43dd8448eb211c80319c"
-    )
+    assert extract_trace_id_from_headers(headers) == "0af7651916cd43dd8448eb211c80319c"
 
 
 def test_extract_trace_id_from_headers_case_insensitive() -> None:

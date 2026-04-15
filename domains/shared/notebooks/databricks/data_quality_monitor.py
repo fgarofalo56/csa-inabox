@@ -40,6 +40,7 @@ from pyspark.sql import functions as F
 REPO_ROOT = "/Workspace/Repos/csa-inabox"
 CONTRACTS_DIR = f"{REPO_ROOT}/domains/{domain}/data-products"
 
+
 def find_contracts(base_path: str) -> list:
     """Find all contract.yaml files under the given path."""
     contracts = []
@@ -52,6 +53,7 @@ def find_contracts(base_path: str) -> list:
     except Exception as e:
         print(f"Warning: Could not scan {base_path}: {e}")
     return contracts
+
 
 # Fallback: use known contract paths
 KNOWN_CONTRACTS = {
@@ -114,11 +116,13 @@ def check_completeness(table_path: str, key_columns: list, threshold_pct: float)
             if col in df.columns:
                 non_null = df.filter(F.col(col).isNotNull()).count()
                 pct = round(non_null / total * 100, 2)
-                results.append({
-                    "column": col,
-                    "completeness_pct": pct,
-                    "pass": pct >= threshold_pct,
-                })
+                results.append(
+                    {
+                        "column": col,
+                        "completeness_pct": pct,
+                        "pass": pct >= threshold_pct,
+                    }
+                )
 
         all_pass = all(r["pass"] for r in results)
         return {
@@ -147,12 +151,7 @@ def check_validity(table_path: str) -> dict:
         # Sample invalid reasons
         invalid_reasons = []
         if invalid > 0:
-            reasons = (
-                df.filter(F.col("is_valid") == False)
-                .select("validation_errors")
-                .limit(5)
-                .collect()
-            )
+            reasons = df.filter(F.col("is_valid") == False).select("validation_errors").limit(5).collect()
             invalid_reasons = [r.validation_errors for r in reasons if r.validation_errors]
 
         return {
@@ -167,6 +166,7 @@ def check_validity(table_path: str) -> dict:
     except Exception as e:
         return {"check": "validity", "status": "ERROR", "message": str(e)}
 
+
 # COMMAND ----------
 
 # MAGIC %md
@@ -177,13 +177,38 @@ def check_validity(table_path: str) -> dict:
 # Define tables to check
 TABLES = {
     "shared": [
-        {"name": "slv_orders", "path": f"abfss://curated@{STORAGE_ACCOUNT}.dfs.core.windows.net/silver/shared/sample_orders", "layer": "silver", "key_columns": ["order_id", "customer_id", "order_date"]},
-        {"name": "slv_customers", "path": f"abfss://curated@{STORAGE_ACCOUNT}.dfs.core.windows.net/silver/shared/sample_customers", "layer": "silver", "key_columns": ["customer_id", "email"]},
-        {"name": "slv_products", "path": f"abfss://curated@{STORAGE_ACCOUNT}.dfs.core.windows.net/silver/shared/sample_products", "layer": "silver", "key_columns": ["product_id", "product_name"]},
+        {
+            "name": "slv_orders",
+            "path": f"abfss://curated@{STORAGE_ACCOUNT}.dfs.core.windows.net/silver/shared/sample_orders",
+            "layer": "silver",
+            "key_columns": ["order_id", "customer_id", "order_date"],
+        },
+        {
+            "name": "slv_customers",
+            "path": f"abfss://curated@{STORAGE_ACCOUNT}.dfs.core.windows.net/silver/shared/sample_customers",
+            "layer": "silver",
+            "key_columns": ["customer_id", "email"],
+        },
+        {
+            "name": "slv_products",
+            "path": f"abfss://curated@{STORAGE_ACCOUNT}.dfs.core.windows.net/silver/shared/sample_products",
+            "layer": "silver",
+            "key_columns": ["product_id", "product_name"],
+        },
     ],
     "finance": [
-        {"name": "slv_invoices", "path": f"abfss://curated@{STORAGE_ACCOUNT}.dfs.core.windows.net/silver/finance/sample_invoices", "layer": "silver", "key_columns": ["invoice_id", "order_id"]},
-        {"name": "slv_payments", "path": f"abfss://curated@{STORAGE_ACCOUNT}.dfs.core.windows.net/silver/finance/sample_payments", "layer": "silver", "key_columns": ["payment_id", "invoice_id"]},
+        {
+            "name": "slv_invoices",
+            "path": f"abfss://curated@{STORAGE_ACCOUNT}.dfs.core.windows.net/silver/finance/sample_invoices",
+            "layer": "silver",
+            "key_columns": ["invoice_id", "order_id"],
+        },
+        {
+            "name": "slv_payments",
+            "path": f"abfss://curated@{STORAGE_ACCOUNT}.dfs.core.windows.net/silver/finance/sample_payments",
+            "layer": "silver",
+            "key_columns": ["payment_id", "invoice_id"],
+        },
     ],
 }
 
@@ -222,6 +247,7 @@ for table in tables:
 
 # COMMAND ----------
 
+
 def log_to_azure_monitor(results: list, endpoint: str) -> None:
     """Send quality check results to Log Analytics via Data Collection Endpoint."""
     if not endpoint:
@@ -238,15 +264,17 @@ def log_to_azure_monitor(results: list, endpoint: str) -> None:
         # Transform results for Log Analytics
         logs = []
         for result in results:
-            logs.append({
-                "TimeGenerated": datetime.now(timezone.utc).isoformat(),
-                "Domain": result.get("domain", "unknown"),
-                "Table": result.get("table", "unknown"),
-                "Check": result.get("check", "unknown"),
-                "Status": result.get("status", "unknown"),
-                "Details": json.dumps(result),
-                "Environment": environment,
-            })
+            logs.append(
+                {
+                    "TimeGenerated": datetime.now(timezone.utc).isoformat(),
+                    "Domain": result.get("domain", "unknown"),
+                    "Table": result.get("table", "unknown"),
+                    "Check": result.get("check", "unknown"),
+                    "Status": result.get("status", "unknown"),
+                    "Details": json.dumps(result),
+                    "Environment": environment,
+                }
+            )
 
         # Would need a DCR rule ID and stream name configured
         print(f"Would send {len(logs)} log entries to Azure Monitor")
@@ -273,15 +301,15 @@ warn_count = sum(1 for r in all_results if r["status"] == "WARN")
 fail_count = sum(1 for r in all_results if r["status"] == "FAIL")
 error_count = sum(1 for r in all_results if r["status"] == "ERROR")
 
-print(f"\n{'='*60}")
+print(f"\n{'=' * 60}")
 print(f"Quality Monitor Summary: {domain} ({environment})")
-print(f"{'='*60}")
+print(f"{'=' * 60}")
 print(f"  PASS:  {pass_count}")
 print(f"  WARN:  {warn_count}")
 print(f"  FAIL:  {fail_count}")
 print(f"  ERROR: {error_count}")
 print(f"  Total: {len(all_results)} checks")
-print(f"{'='*60}")
+print(f"{'=' * 60}")
 
 overall = "PASS" if fail_count == 0 and error_count == 0 else "FAIL"
 summary = {

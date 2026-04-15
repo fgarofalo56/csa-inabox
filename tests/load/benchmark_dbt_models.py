@@ -59,10 +59,14 @@ def _run_dbt(
     cmd = [
         "dbt",
         "run",
-        "--target", target,
-        "--select", select,
-        "--profiles-dir", str(project_dir),
-        "--project-dir", str(project_dir),
+        "--target",
+        target,
+        "--select",
+        select,
+        "--profiles-dir",
+        str(project_dir),
+        "--project-dir",
+        str(project_dir),
     ]
     subprocess.run(cmd, check=True, capture_output=True, text=True)
 
@@ -160,8 +164,7 @@ def main() -> int:
     project_dir = Path(args.project_dir).resolve()
 
     print(
-        f"Benchmarking dbt select={args.models!r} target={args.target!r} "
-        f"runs={args.runs} project_dir={project_dir}",
+        f"Benchmarking dbt select={args.models!r} target={args.target!r} runs={args.runs} project_dir={project_dir}",
     )
     timings = benchmark(args.target, args.models, project_dir, args.runs)
 

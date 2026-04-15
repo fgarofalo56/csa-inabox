@@ -109,6 +109,7 @@ class SynapseWorkspaceManager:
 
         if self._credential is None:
             from azure.identity import DefaultAzureCredential
+
             self._credential = DefaultAzureCredential()
 
         self._client = SynapseManagementClient(
@@ -210,15 +211,17 @@ class SynapseWorkspaceManager:
 
         results: list[WorkspaceInfo] = []
         for ws in workspaces:
-            results.append(WorkspaceInfo(
-                name=ws.name,
-                resource_group=resource_group,
-                location=ws.location,
-                state=ws.provisioning_state or "Unknown",
-                managed_vnet=ws.managed_virtual_network is not None,
-                connectivity_endpoints=dict(ws.connectivity_endpoints or {}),
-                tags=dict(ws.tags or {}),
-            ))
+            results.append(
+                WorkspaceInfo(
+                    name=ws.name,
+                    resource_group=resource_group,
+                    location=ws.location,
+                    state=ws.provisioning_state or "Unknown",
+                    managed_vnet=ws.managed_virtual_network is not None,
+                    connectivity_endpoints=dict(ws.connectivity_endpoints or {}),
+                    tags=dict(ws.tags or {}),
+                )
+            )
 
         logger.info("Found %d workspaces in %s", len(results), resource_group)
         return results
@@ -258,11 +261,13 @@ class SynapseWorkspaceManager:
                 ip_firewall_rule_info=rule,
             )
             poller.result()
-            results.append({
-                "name": "AllowAllWindowsAzureIps",
-                "range": "0.0.0.0/0",
-                "status": "created",
-            })
+            results.append(
+                {
+                    "name": "AllowAllWindowsAzureIps",
+                    "range": "0.0.0.0/0",
+                    "status": "created",
+                }
+            )
 
         for i, cidr in enumerate(allowed_ip_ranges):
             parts = cidr.split("/")
@@ -283,11 +288,13 @@ class SynapseWorkspaceManager:
                 ip_firewall_rule_info=rule,
             )
             poller.result()
-            results.append({
-                "name": rule_name,
-                "range": cidr,
-                "status": "created",
-            })
+            results.append(
+                {
+                    "name": rule_name,
+                    "range": cidr,
+                    "status": "created",
+                }
+            )
             logger.info(
                 "Firewall rule '%s' created for %s: %s",
                 rule_name,

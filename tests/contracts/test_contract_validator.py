@@ -214,8 +214,8 @@ def test_validate_rows_allows_null_on_nullable_columns(orders_contract: Contract
     rows = [
         {
             "order_sk": "abc",
-            "order_id": None,         # nullable in the contract
-            "customer_id": None,      # nullable
+            "order_id": None,  # nullable in the contract
+            "customer_id": None,  # nullable
             "total_amount": 1.0,
             "status": "DELIVERED",
             "is_valid": False,
@@ -230,7 +230,7 @@ def test_validate_rows_fail_fast_returns_first_violation(orders_contract: Contra
         {"order_sk": None, "order_id": 1, "total_amount": 1.0, "status": "DELIVERED", "is_valid": True},
         {"order_sk": "abc", "order_id": 2, "total_amount": 2.0, "status": "DELIVERED", "is_valid": True},
     ]
-    violations = validate_rows_against_contract(orders_contract, rows, fail_fast=True)
+    violations = validate_rows_against_contract(orders_contract, rows, fail_fast=True)  # type: ignore[arg-type]
     assert len(violations) == 1
 
 

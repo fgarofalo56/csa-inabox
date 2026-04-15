@@ -154,20 +154,12 @@ class CustomVisionManager:
             )
             from msrest.authentication import ApiKeyCredentials
 
-            training_credentials = ApiKeyCredentials(
-                in_headers={"Training-key": self.training_key}
-            )
-            self.trainer = CustomVisionTrainingClient(
-                self.training_endpoint, training_credentials
-            )
+            training_credentials = ApiKeyCredentials(in_headers={"Training-key": self.training_key})
+            self.trainer = CustomVisionTrainingClient(self.training_endpoint, training_credentials)
 
             if self.prediction_key:
-                prediction_credentials = ApiKeyCredentials(
-                    in_headers={"Prediction-key": self.prediction_key}
-                )
-                self.predictor = CustomVisionPredictionClient(
-                    self.prediction_endpoint, prediction_credentials
-                )
+                prediction_credentials = ApiKeyCredentials(in_headers={"Prediction-key": self.prediction_key})
+                self.predictor = CustomVisionPredictionClient(self.prediction_endpoint, prediction_credentials)
 
             logger.info("Connected to Custom Vision service")
 
@@ -188,10 +180,7 @@ class CustomVisionManager:
             Dict with project_id, name, tags created.
         """
         if model_type not in MODEL_CONFIGS:
-            raise ValueError(
-                f"Unknown model type: {model_type}. "
-                f"Choose from: {list(MODEL_CONFIGS.keys())}"
-            )
+            raise ValueError(f"Unknown model type: {model_type}. Choose from: {list(MODEL_CONFIGS.keys())}")
 
         config = MODEL_CONFIGS[model_type]
 
@@ -291,10 +280,7 @@ class CustomVisionManager:
         logger.info("Tag mapping: %s", tag_map)
 
         # Collect image files
-        image_files = sorted(
-            p for p in image_path.iterdir()
-            if p.suffix.lower() in (".jpg", ".jpeg", ".png", ".bmp")
-        )
+        image_files = sorted(p for p in image_path.iterdir() if p.suffix.lower() in (".jpg", ".jpeg", ".png", ".bmp"))
         logger.info("Found %d images in %s", len(image_files), image_path)
 
         stats = {"uploaded": 0, "skipped": 0, "errors": 0}
@@ -320,13 +306,15 @@ class CustomVisionManager:
                         tag_name = ann.get("tag", "")
                         tag_id = tag_map.get(tag_name)
                         if tag_id:
-                            regions.append(Region(
-                                tag_id=tag_id,
-                                left=ann["left"],
-                                top=ann["top"],
-                                width=ann["width"],
-                                height=ann["height"],
-                            ))
+                            regions.append(
+                                Region(
+                                    tag_id=tag_id,
+                                    left=ann["left"],
+                                    top=ann["top"],
+                                    width=ann["width"],
+                                    height=ann["height"],
+                                )
+                            )
 
                     for tag_name in annotations.get("tags", []):
                         tag_id = tag_map.get(tag_name)
@@ -402,9 +390,7 @@ class CustomVisionManager:
         if iteration.status == "Completed":
             logger.info("Training completed successfully!")
 
-            performance = self.trainer.get_iteration_performance(
-                project_id, iteration.id
-            )
+            performance = self.trainer.get_iteration_performance(project_id, iteration.id)
             result = {
                 "iteration_id": str(iteration.id),
                 "status": iteration.status,
@@ -499,9 +485,7 @@ class CustomVisionManager:
         config = MODEL_CONFIGS.get(model_type, {})
         targets = config.get("target_metrics", {})
 
-        performance = self.trainer.get_iteration_performance(
-            project_id, iteration_id
-        )
+        performance = self.trainer.get_iteration_performance(project_id, iteration_id)
 
         results = {
             "iteration_id": iteration_id,
@@ -537,12 +521,14 @@ class CustomVisionManager:
         # Per-tag performance
         per_tag = []
         for tag_perf in performance.per_tag_performance:
-            per_tag.append({
-                "tag": tag_perf.name,
-                "precision": tag_perf.precision,
-                "recall": tag_perf.recall,
-                "average_precision": getattr(tag_perf, "average_precision", None),
-            })
+            per_tag.append(
+                {
+                    "tag": tag_perf.name,
+                    "precision": tag_perf.precision,
+                    "recall": tag_perf.recall,
+                    "average_precision": getattr(tag_perf, "average_precision", None),
+                }
+            )
         results["per_tag"] = per_tag
         results["overall_status"] = "PASS" if all_pass else "NEEDS_IMPROVEMENT"
 

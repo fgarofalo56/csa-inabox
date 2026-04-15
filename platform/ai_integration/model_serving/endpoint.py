@@ -350,17 +350,18 @@ class ModelEndpoint:
 
             deployment_info: list[dict[str, Any]] = []
             for dep in deployments_list:
-                deployment_info.append({
-                    "name": dep.name,
-                    "model": f"{dep.model.name}:{dep.model.version}" if dep.model else "unknown",
-                    "instance_type": dep.instance_type,
-                    "instance_count": dep.instance_count,
-                    "provisioning_state": dep.provisioning_state,
-                })
+                deployment_info.append(
+                    {
+                        "name": dep.name,
+                        "model": f"{dep.model.name}:{dep.model.version}" if dep.model else "unknown",
+                        "instance_type": dep.instance_type,
+                        "instance_count": dep.instance_count,
+                        "provisioning_state": dep.provisioning_state,
+                    }
+                )
 
-            is_healthy = (
-                endpoint.provisioning_state == "Succeeded"
-                and all(d.get("provisioning_state") == "Succeeded" for d in deployment_info)
+            is_healthy = endpoint.provisioning_state == "Succeeded" and all(
+                d.get("provisioning_state") == "Succeeded" for d in deployment_info
             )
 
             return EndpointHealth(
@@ -430,11 +431,13 @@ class ModelEndpoint:
 
         result: list[dict[str, Any]] = []
         for ep in endpoints:
-            result.append({
-                "name": ep.name,
-                "provisioning_state": ep.provisioning_state,
-                "scoring_uri": ep.scoring_uri or "",
-                "traffic": dict(ep.traffic) if ep.traffic else {},
-                "tags": dict(ep.tags) if ep.tags else {},
-            })
+            result.append(
+                {
+                    "name": ep.name,
+                    "provisioning_state": ep.provisioning_state,
+                    "scoring_uri": ep.scoring_uri or "",
+                    "traffic": dict(ep.traffic) if ep.traffic else {},
+                    "tags": dict(ep.tags) if ep.tags else {},
+                }
+            )
         return result

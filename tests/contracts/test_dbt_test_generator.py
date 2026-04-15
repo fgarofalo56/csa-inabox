@@ -14,9 +14,7 @@ from governance.contracts.dbt_test_generator import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SALES_ORDERS_CONTRACT = (
-    REPO_ROOT / "domains" / "sales" / "data-products" / "orders" / "contract.yaml"
-)
+SALES_ORDERS_CONTRACT = REPO_ROOT / "domains" / "sales" / "data-products" / "orders" / "contract.yaml"
 
 
 # ---------------------------------------------------------------------------
@@ -80,8 +78,7 @@ def test_generated_model_has_expression_is_true_for_between_rule() -> None:
 
     total_amount = col_map["total_amount"]
     expr_tests = [
-        t for t in total_amount.get("tests", [])
-        if isinstance(t, dict) and "dbt_utils.expression_is_true" in t
+        t for t in total_amount.get("tests", []) if isinstance(t, dict) and "dbt_utils.expression_is_true" in t
     ]
     assert len(expr_tests) >= 1
     assert "total_amount >= 0" in expr_tests[0]["dbt_utils.expression_is_true"]["expression"]
@@ -123,6 +120,7 @@ def test_main_write_creates_file(tmp_path: Path) -> None:
 
     # Copy the real contract
     import shutil
+
     shutil.copy(SALES_ORDERS_CONTRACT, domains_dir / "contract.yaml")
 
     # Also need the output dir to exist
@@ -144,6 +142,7 @@ def test_main_check_passes_when_up_to_date(tmp_path: Path) -> None:
     domains_dir.mkdir(parents=True)
 
     import shutil
+
     shutil.copy(SALES_ORDERS_CONTRACT, domains_dir / "contract.yaml")
 
     output_dir = tmp_path / "domains" / "shared" / "dbt" / "models" / "silver"
@@ -161,6 +160,7 @@ def test_main_check_fails_when_out_of_date(tmp_path: Path) -> None:
     domains_dir.mkdir(parents=True)
 
     import shutil
+
     shutil.copy(SALES_ORDERS_CONTRACT, domains_dir / "contract.yaml")
 
     output_dir = tmp_path / "domains" / "shared" / "dbt" / "models" / "silver"

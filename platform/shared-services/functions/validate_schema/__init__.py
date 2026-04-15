@@ -103,32 +103,36 @@ def _validate_against_contract(data: dict[str, Any], contract: dict[str, Any]) -
     columns = schema_section.get("columns", [])
 
     if not columns:
-        errors.append({
-            "path": "$",
-            "message": "Contract has no columns defined",
-            "validator": "contract",
-        })
+        errors.append(
+            {
+                "path": "$",
+                "message": "Contract has no columns defined",
+                "validator": "contract",
+            }
+        )
         return errors
 
     column_map = {col["name"]: col for col in columns}
 
     for col_name, col_spec in column_map.items():
         if not col_spec.get("nullable", True) and col_name not in data:
-            errors.append({
-                "path": f"$.{col_name}",
-                "message": f"Required column '{col_name}' is missing",
-                "validator": "required",
-            })
+            errors.append(
+                {
+                    "path": f"$.{col_name}",
+                    "message": f"Required column '{col_name}' is missing",
+                    "validator": "required",
+                }
+            )
         if col_name in data and data[col_name] is not None:
             allowed = col_spec.get("allowed_values")
             if allowed and data[col_name] not in allowed:
-                errors.append({
-                    "path": f"$.{col_name}",
-                    "message": (
-                        f"Value '{data[col_name]}' not in allowed values: {allowed}"
-                    ),
-                    "validator": "enum",
-                })
+                errors.append(
+                    {
+                        "path": f"$.{col_name}",
+                        "message": (f"Value '{data[col_name]}' not in allowed values: {allowed}"),
+                        "validator": "enum",
+                    }
+                )
 
     return errors
 
@@ -148,14 +152,14 @@ def _validate_data(data: Any, schema: dict[str, Any]) -> list[dict[str, str]]:
     errors: list[dict[str, str]] = []
 
     for error in sorted(validator.iter_errors(data), key=lambda e: list(e.absolute_path)):
-        path = "$.{}".format(
-            ".".join(str(p) for p in error.absolute_path)
-        ) if error.absolute_path else "$"
-        errors.append({
-            "path": path,
-            "message": error.message,
-            "validator": error.validator,  # type: ignore[arg-type]
-        })
+        path = "$.{}".format(".".join(str(p) for p in error.absolute_path)) if error.absolute_path else "$"
+        errors.append(
+            {
+                "path": path,
+                "message": error.message,
+                "validator": error.validator,  # type: ignore[arg-type]
+            }
+        )
 
     return errors
 
@@ -186,7 +190,9 @@ def validate_schema(req: func.HttpRequest) -> func.HttpResponse:
         body = req.get_json()
     except ValueError:
         return func.HttpResponse(
-            json.dumps({"valid": False, "errors": [{"path": "$", "message": "Invalid JSON body", "validator": "parse"}]}),
+            json.dumps(
+                {"valid": False, "errors": [{"path": "$", "message": "Invalid JSON body", "validator": "parse"}]}
+            ),
             status_code=400,
             mimetype="application/json",
         )
@@ -198,14 +204,30 @@ def validate_schema(req: func.HttpRequest) -> func.HttpResponse:
 
     if data is None:
         return func.HttpResponse(
-            json.dumps({"valid": False, "errors": [{"path": "$", "message": "'data' field is required", "validator": "required"}]}),
+            json.dumps(
+                {
+                    "valid": False,
+                    "errors": [{"path": "$", "message": "'data' field is required", "validator": "required"}],
+                }
+            ),
             status_code=400,
             mimetype="application/json",
         )
 
     if not inline_schema and not schema_path and not contract_yaml:
         return func.HttpResponse(
-            json.dumps({"valid": False, "errors": [{"path": "$", "message": "Provide 'schema', 'schema_path', or 'contract'", "validator": "required"}]}),
+            json.dumps(
+                {
+                    "valid": False,
+                    "errors": [
+                        {
+                            "path": "$",
+                            "message": "Provide 'schema', 'schema_path', or 'contract'",
+                            "validator": "required",
+                        }
+                    ],
+                }
+            ),
             status_code=400,
             mimetype="application/json",
         )
@@ -236,7 +258,12 @@ def validate_schema(req: func.HttpRequest) -> func.HttpResponse:
         )
     except Exception as exc:
         return func.HttpResponse(
-            json.dumps({"valid": False, "errors": [{"path": "$", "message": f"Schema processing error: {exc}", "validator": "schema_load"}]}),
+            json.dumps(
+                {
+                    "valid": False,
+                    "errors": [{"path": "$", "message": f"Schema processing error: {exc}", "validator": "schema_load"}],
+                }
+            ),
             status_code=500,
             mimetype="application/json",
         )

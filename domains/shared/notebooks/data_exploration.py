@@ -30,6 +30,7 @@ print(f"Domain: {domain} | Layer: {layer} | Storage: {storage_account}")
 
 # COMMAND ----------
 
+
 # Mount ADLS Gen2 using service principal (idempotent)
 def mount_adls(container: str, storage_account: str, mount_point: str) -> None:
     """Mount an ADLS Gen2 container if not already mounted."""
@@ -39,15 +40,11 @@ def mount_adls(container: str, storage_account: str, mount_point: str) -> None:
 
     configs = {
         "fs.azure.account.auth.type": "OAuth",
-        "fs.azure.account.oauth.provider.type":
-            "org.apache.hadoop.fs.azurebfs.oauth2.ClientCredsTokenProvider",
-        "fs.azure.account.oauth2.client.id":
-            dbutils.secrets.get(scope="csa-keyvault", key="sp-client-id"),
-        "fs.azure.account.oauth2.client.secret":
-            dbutils.secrets.get(scope="csa-keyvault", key="sp-client-secret"),
-        "fs.azure.account.oauth2.client.endpoint":
-            f"https://login.microsoftonline.com/"
-            f"{dbutils.secrets.get(scope='csa-keyvault', key='tenant-id')}/oauth2/token",
+        "fs.azure.account.oauth.provider.type": "org.apache.hadoop.fs.azurebfs.oauth2.ClientCredsTokenProvider",
+        "fs.azure.account.oauth2.client.id": dbutils.secrets.get(scope="csa-keyvault", key="sp-client-id"),
+        "fs.azure.account.oauth2.client.secret": dbutils.secrets.get(scope="csa-keyvault", key="sp-client-secret"),
+        "fs.azure.account.oauth2.client.endpoint": f"https://login.microsoftonline.com/"
+        f"{dbutils.secrets.get(scope='csa-keyvault', key='tenant-id')}/oauth2/token",
     }
 
     dbutils.fs.mount(
@@ -56,6 +53,7 @@ def mount_adls(container: str, storage_account: str, mount_point: str) -> None:
         extra_configs=configs,
     )
     print(f"Mounted: {mount_point}")
+
 
 # Mount all medallion layers
 for lyr in ["bronze", "silver", "gold"]:
@@ -76,15 +74,12 @@ def list_tables_in_layer(layer_name: str) -> list[str]:
     mount = f"/mnt/{layer_name}"
     try:
         entries = dbutils.fs.ls(mount)
-        tables = [
-            e.name.rstrip("/")
-            for e in entries
-            if e.isDir() and not e.name.startswith("_")
-        ]
+        tables = [e.name.rstrip("/") for e in entries if e.isDir() and not e.name.startswith("_")]
         return sorted(tables)
     except Exception as exc:
         print(f"Could not list {mount}: {exc}")
         return []
+
 
 print("=" * 60)
 for lyr in ["bronze", "silver", "gold"]:
@@ -107,7 +102,7 @@ catalog = "csa_inabox"
 schemas = {
     "bronze": f"{catalog}.bronze",
     "silver": f"{catalog}.silver",
-    "gold":   f"{catalog}.gold",
+    "gold": f"{catalog}.gold",
 }
 
 # Key tables per domain for quick preview
@@ -115,25 +110,29 @@ domain_tables = {
     "shared": {
         "bronze": ["brz_customers", "brz_orders", "brz_products"],
         "silver": ["slv_customers", "slv_orders", "slv_products"],
-        "gold":   ["dim_customers", "dim_products", "fact_orders",
-                    "gld_customer_lifetime_value", "gld_monthly_revenue",
-                    "gld_daily_order_metrics"],
+        "gold": [
+            "dim_customers",
+            "dim_products",
+            "fact_orders",
+            "gld_customer_lifetime_value",
+            "gld_monthly_revenue",
+            "gld_daily_order_metrics",
+        ],
     },
     "finance": {
         "bronze": ["brz_invoices", "brz_payments"],
         "silver": ["slv_invoices", "slv_payments"],
-        "gold":   ["gld_aging_report", "gld_revenue_reconciliation"],
+        "gold": ["gld_aging_report", "gld_revenue_reconciliation"],
     },
     "inventory": {
         "bronze": ["brz_inventory", "brz_warehouses"],
         "silver": ["slv_inventory", "slv_warehouses"],
-        "gold":   ["dim_warehouses", "fact_inventory_snapshot",
-                    "gld_inventory_turnover", "gld_reorder_alerts"],
+        "gold": ["dim_warehouses", "fact_inventory_snapshot", "gld_inventory_turnover", "gld_reorder_alerts"],
     },
     "sales": {
         "bronze": ["brz_sales_orders"],
         "silver": ["slv_sales_orders"],
-        "gold":   ["gld_sales_metrics"],
+        "gold": ["gld_sales_metrics"],
     },
 }
 
@@ -158,6 +157,7 @@ for table_name in tables_to_preview:
 
 # COMMAND ----------
 
+
 def get_schema_dict(fqn: str) -> dict:
     """Return {column_name: data_type} for a table."""
     try:
@@ -165,6 +165,7 @@ def get_schema_dict(fqn: str) -> dict:
         return {f.name: str(f.dataType) for f in df.schema.fields}
     except Exception:
         return {}
+
 
 # Compare schemas for the selected domain across bronze -> silver -> gold
 print(f"\nSchema comparison for domain '{domain}':")
@@ -219,12 +220,11 @@ def table_stats(fqn: str) -> dict:
             "null_count": df.where(F.col(field.name).isNull()).count(),
             "distinct_count": df.select(field.name).distinct().count(),
         }
-        col_stats["null_pct"] = round(
-            col_stats["null_count"] / max(row_count, 1) * 100, 2
-        )
+        col_stats["null_pct"] = round(col_stats["null_count"] / max(row_count, 1) * 100, 2)
         stats["columns"].append(col_stats)
 
     return stats
+
 
 # Run stats for the selected domain + layer
 for tbl in domain_tables.get(domain, {}).get(layer, []):
@@ -240,8 +240,7 @@ for tbl in domain_tables.get(domain, {}).get(layer, []):
     print("-" * 80)
     for c in result["columns"]:
         print(
-            f"{c['name']:<30} {c['type']:<20} {c['null_count']:>8,} "
-            f"{c['null_pct']:>6.1f}% {c['distinct_count']:>10,}"
+            f"{c['name']:<30} {c['type']:<20} {c['null_count']:>8,} {c['null_pct']:>6.1f}% {c['distinct_count']:>10,}"
         )
 
 # COMMAND ----------
@@ -251,14 +250,20 @@ for tbl in domain_tables.get(domain, {}).get(layer, []):
 
 # COMMAND ----------
 
+
 def print_lineage(domain_name: str) -> None:
     """Print an ASCII lineage diagram for a domain's medallion pipeline."""
     lineage = {
         "shared": {
             "bronze": ["brz_customers", "brz_orders", "brz_products"],
             "silver": ["slv_customers", "slv_orders", "slv_products"],
-            "gold": ["dim_customers", "dim_products", "fact_orders",
-                      "gld_customer_lifetime_value", "gld_monthly_revenue"],
+            "gold": [
+                "dim_customers",
+                "dim_products",
+                "fact_orders",
+                "gld_customer_lifetime_value",
+                "gld_monthly_revenue",
+            ],
         },
         "finance": {
             "bronze": ["brz_invoices", "brz_payments"],
@@ -268,8 +273,7 @@ def print_lineage(domain_name: str) -> None:
         "inventory": {
             "bronze": ["brz_inventory", "brz_warehouses"],
             "silver": ["slv_inventory", "slv_warehouses"],
-            "gold": ["dim_warehouses", "fact_inventory_snapshot",
-                      "gld_inventory_turnover", "gld_reorder_alerts"],
+            "gold": ["dim_warehouses", "fact_inventory_snapshot", "gld_inventory_turnover", "gld_reorder_alerts"],
         },
         "sales": {
             "bronze": ["brz_sales_orders"],
@@ -299,5 +303,6 @@ def print_lineage(domain_name: str) -> None:
     if domain_name == "inventory":
         print("\n  [CROSS-DOMAIN]")
         print("    shared.dim_products --> gld_inventory_turnover, gld_reorder_alerts")
+
 
 print_lineage(domain)

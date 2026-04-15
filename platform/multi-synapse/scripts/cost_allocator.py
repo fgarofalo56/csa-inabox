@@ -116,6 +116,7 @@ class CostAllocator:
 
         if self._credential is None:
             from azure.identity import DefaultAzureCredential
+
             self._credential = DefaultAzureCredential()
 
         self._client = CostManagementClient(
@@ -193,7 +194,9 @@ class CostAllocator:
                         "Bandwidth",
                     ],
                 },
-            ) if False else None,  # Filter optionally
+            )
+            if False
+            else None,  # Filter optionally
         )
 
         query_def = QueryDefinition(
@@ -218,18 +221,20 @@ class CostAllocator:
         entries: list[CostEntry] = []
         columns = [col.name for col in (result.columns or [])]
 
-        for row in (result.rows or []):
+        for row in result.rows or []:
             row_dict = dict(zip(columns, row, strict=True))
-            entries.append(CostEntry(
-                resource_name=row_dict.get("ResourceGroupName", ""),
-                resource_group=row_dict.get("ResourceGroupName", ""),
-                meter_category=row_dict.get("MeterCategory", ""),
-                meter_subcategory="",
-                cost=float(row_dict.get("Cost", 0.0)),
-                usage_quantity=float(row_dict.get("UsageQuantity", 0.0)),
-                date=str(row_dict.get("UsageDate", "")),
-                tags={tag_name: row_dict.get(f"Tag_{tag_name}", row_dict.get(tag_name, "untagged"))},
-            ))
+            entries.append(
+                CostEntry(
+                    resource_name=row_dict.get("ResourceGroupName", ""),
+                    resource_group=row_dict.get("ResourceGroupName", ""),
+                    meter_category=row_dict.get("MeterCategory", ""),
+                    meter_subcategory="",
+                    cost=float(row_dict.get("Cost", 0.0)),
+                    usage_quantity=float(row_dict.get("UsageQuantity", 0.0)),
+                    date=str(row_dict.get("UsageDate", "")),
+                    tags={tag_name: row_dict.get(f"Tag_{tag_name}", row_dict.get(tag_name, "untagged"))},
+                )
+            )
 
         logger.info("Retrieved %d cost entries", len(entries))
         return entries
@@ -344,10 +349,7 @@ class CostAllocator:
         lines.append(f"Total Cost:  ${report.total_cost:>12,.2f}")
         lines.append(f"Shared Cost: ${report.shared_cost:>12,.2f}")
         lines.append("-" * 72)
-        lines.append(
-            f"{'Organization':<20s} {'Total':>12s} {'Compute':>12s} "
-            f"{'Storage':>12s} {'Shared':>12s}"
-        )
+        lines.append(f"{'Organization':<20s} {'Total':>12s} {'Compute':>12s} {'Storage':>12s} {'Shared':>12s}")
         lines.append("-" * 72)
 
         for summary in report.org_summaries:
@@ -394,17 +396,19 @@ class CostAllocator:
         writer.writeheader()
 
         for summary in report.org_summaries:
-            writer.writerow({
-                "org_name": summary.org_name,
-                "total_cost": f"{summary.total_cost:.2f}",
-                "compute_cost": f"{summary.compute_cost:.2f}",
-                "storage_cost": f"{summary.storage_cost:.2f}",
-                "network_cost": f"{summary.network_cost:.2f}",
-                "other_cost": f"{summary.other_cost:.2f}",
-                "shared_cost_allocation": f"{summary.shared_cost_allocation:.2f}",
-                "resource_count": summary.resource_count,
-                "currency": summary.currency,
-            })
+            writer.writerow(
+                {
+                    "org_name": summary.org_name,
+                    "total_cost": f"{summary.total_cost:.2f}",
+                    "compute_cost": f"{summary.compute_cost:.2f}",
+                    "storage_cost": f"{summary.storage_cost:.2f}",
+                    "network_cost": f"{summary.network_cost:.2f}",
+                    "other_cost": f"{summary.other_cost:.2f}",
+                    "shared_cost_allocation": f"{summary.shared_cost_allocation:.2f}",
+                    "resource_count": summary.resource_count,
+                    "currency": summary.currency,
+                }
+            )
 
         csv_content = output.getvalue()
 
@@ -443,19 +447,24 @@ def _cli_allocate(args: argparse.Namespace) -> None:
     allocator = CostAllocator(args.subscription_id)
     entries = allocator.get_costs_by_tag(args.tag_name, start, end)
     report = allocator.allocate_to_orgs(entries, args.tag_name, args.shared_cost_strategy)
-    print(json.dumps({
-        "total_cost": report.total_cost,
-        "shared_cost": report.shared_cost,
-        "strategy": report.allocation_strategy,
-        "orgs": [
+    print(
+        json.dumps(
             {
-                "name": s.org_name,
-                "total": s.total_cost,
-                "shared_allocation": s.shared_cost_allocation,
-            }
-            for s in report.org_summaries
-        ],
-    }, indent=2))
+                "total_cost": report.total_cost,
+                "shared_cost": report.shared_cost,
+                "strategy": report.allocation_strategy,
+                "orgs": [
+                    {
+                        "name": s.org_name,
+                        "total": s.total_cost,
+                        "shared_allocation": s.shared_cost_allocation,
+                    }
+                    for s in report.org_summaries
+                ],
+            },
+            indent=2,
+        )
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

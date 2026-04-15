@@ -519,9 +519,7 @@ class VectorStore:
             ValueError: If the number of chunks and embeddings do not match.
         """
         if len(chunks) != len(embeddings):
-            raise ValueError(
-                f"Chunk count ({len(chunks)}) must match embedding count ({len(embeddings)})"
-            )
+            raise ValueError(f"Chunk count ({len(chunks)}) must match embedding count ({len(embeddings)})")
 
         documents = [
             {
@@ -819,12 +817,14 @@ class RAGPipeline:
         sources: list[dict[str, Any]] = []
         for r in results:
             context_parts.append(f"[Source: {r.source}]\n{r.text}")
-            sources.append({
-                "id": r.id,
-                "source": r.source,
-                "score": r.score,
-                "metadata": r.metadata,
-            })
+            sources.append(
+                {
+                    "id": r.id,
+                    "source": r.source,
+                    "score": r.score,
+                    "metadata": r.metadata,
+                }
+            )
 
         context = "\n\n".join(context_parts)
         user_message = self._USER_PROMPT_TEMPLATE.format(

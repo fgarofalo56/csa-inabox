@@ -10,31 +10,32 @@ setup: ## Set up development environment
 	python -m venv .venv && \
 	. .venv/bin/activate && \
 	pip install --upgrade pip && \
-	pip install -e ".[dev]"
+	pip install -e ".[dev,governance,functions]"
 	@echo ""
 	@echo "Activate with: source .venv/bin/activate"
 
 setup-win: ## Set up development environment (Windows)
 	python -m venv .venv
 	.venv\Scripts\pip install --upgrade pip
-	.venv\Scripts\pip install -e ".[dev]"
+	.venv\Scripts\pip install -e ".[dev,governance,functions]"
 	@echo ""
 	@echo "Activate with: .venv\Scripts\activate"
 
 # --- Linting ---
 
 lint: ## Run all linters (uses pyproject.toml rule config)
-	ruff check domains/ scripts/ governance/ tools/
+	ruff check domains/ scripts/ governance/ tools/ platform/ portal/ examples/
 	@echo "Python lint passed"
 
 lint-fix: ## Auto-fix lint issues
-	ruff check domains/ scripts/ governance/ tools/ --fix
-	ruff format domains/ scripts/ governance/ tools/
+	ruff check domains/ scripts/ governance/ tools/ platform/ portal/ examples/ --fix
+	ruff format domains/ scripts/ governance/ tools/ platform/ portal/ examples/
 
-typecheck: ## Run strict mypy on governance, tests, and both Function apps
+typecheck: ## Run strict mypy on governance, tests, and all three Function apps
 	mypy
 	mypy domains/sharedServices/aiEnrichment/functions/function_app.py
 	mypy domains/sharedServices/eventProcessing/functions/function_app.py
+	mypy domains/sharedServices/secretRotation/functions/function_app.py
 	@echo "mypy strict passed"
 
 lint-bicep: ## Lint all Bicep files
@@ -81,7 +82,7 @@ tf-init: ## Initialize Terraform (DLZ)
 	cd deploy/terraform/dlz && terraform init
 
 tf-plan: ## Plan Terraform changes (DLZ, dev)
-	cd deploy/terraform/dlz && terraform plan -var-file=environments/dev.tfvars
+	cd deploy/terraform/dlz && terraform plan
 
 tf-validate: ## Validate all Terraform configurations
 	cd deploy/terraform/dlz && terraform validate

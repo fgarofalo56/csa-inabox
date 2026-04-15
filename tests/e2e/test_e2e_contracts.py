@@ -37,8 +37,15 @@ _REQUIRED_COLUMN_FIELDS = {"name", "type"}
 
 # Supported column types (base types before parenthesised precision).
 _SUPPORTED_TYPES = {
-    "string", "long", "int", "double", "float",
-    "boolean", "date", "timestamp", "decimal",
+    "string",
+    "long",
+    "int",
+    "double",
+    "float",
+    "boolean",
+    "date",
+    "timestamp",
+    "decimal",
 }
 
 
@@ -76,79 +83,57 @@ class TestContractYamlValidity:
 
     @pytest.mark.parametrize(
         "contract_path",
-        sorted(
-            Path(__file__).resolve().parents[2]
-            .joinpath("domains")
-            .glob("*/data-products/**/contract.yaml")
-        ),
+        sorted(Path(__file__).resolve().parents[2].joinpath("domains").glob("*/data-products/**/contract.yaml")),
         ids=lambda p: str(p.relative_to(Path(__file__).resolve().parents[2])),
     )
     def test_contract_is_valid_yaml(self, contract_path: Path) -> None:
         data = _load_contract_yaml(contract_path)
         missing = _REQUIRED_CONTRACT_FIELDS - set(data.keys())
-        assert not missing, (
-            f"{contract_path.name}: missing required top-level fields: {missing}"
-        )
+        assert not missing, f"{contract_path.name}: missing required top-level fields: {missing}"
 
     @pytest.mark.parametrize(
         "contract_path",
-        sorted(
-            Path(__file__).resolve().parents[2]
-            .joinpath("domains")
-            .glob("*/data-products/**/contract.yaml")
-        ),
+        sorted(Path(__file__).resolve().parents[2].joinpath("domains").glob("*/data-products/**/contract.yaml")),
         ids=lambda p: str(p.relative_to(Path(__file__).resolve().parents[2])),
     )
     def test_contract_metadata_has_required_fields(
-        self, contract_path: Path,
+        self,
+        contract_path: Path,
     ) -> None:
         data = _load_contract_yaml(contract_path)
         metadata = data.get("metadata", {})
         missing = _REQUIRED_METADATA_FIELDS - set(metadata.keys())
-        assert not missing, (
-            f"{contract_path.name}: metadata missing fields: {missing}"
-        )
+        assert not missing, f"{contract_path.name}: metadata missing fields: {missing}"
 
     @pytest.mark.parametrize(
         "contract_path",
-        sorted(
-            Path(__file__).resolve().parents[2]
-            .joinpath("domains")
-            .glob("*/data-products/**/contract.yaml")
-        ),
+        sorted(Path(__file__).resolve().parents[2].joinpath("domains").glob("*/data-products/**/contract.yaml")),
         ids=lambda p: str(p.relative_to(Path(__file__).resolve().parents[2])),
     )
     def test_contract_schema_has_required_fields(
-        self, contract_path: Path,
+        self,
+        contract_path: Path,
     ) -> None:
         data = _load_contract_yaml(contract_path)
         schema = data.get("schema", {})
         missing = _REQUIRED_SCHEMA_FIELDS - set(schema.keys())
-        assert not missing, (
-            f"{contract_path.name}: schema missing fields: {missing}"
-        )
+        assert not missing, f"{contract_path.name}: schema missing fields: {missing}"
 
     @pytest.mark.parametrize(
         "contract_path",
-        sorted(
-            Path(__file__).resolve().parents[2]
-            .joinpath("domains")
-            .glob("*/data-products/**/contract.yaml")
-        ),
+        sorted(Path(__file__).resolve().parents[2].joinpath("domains").glob("*/data-products/**/contract.yaml")),
         ids=lambda p: str(p.relative_to(Path(__file__).resolve().parents[2])),
     )
     def test_contract_columns_have_name_and_type(
-        self, contract_path: Path,
+        self,
+        contract_path: Path,
     ) -> None:
         data = _load_contract_yaml(contract_path)
         columns = data.get("schema", {}).get("columns", [])
         assert columns, f"{contract_path.name}: schema.columns is empty"
         for col in columns:
             missing = _REQUIRED_COLUMN_FIELDS - set(col.keys())
-            assert not missing, (
-                f"{contract_path.name}: column {col.get('name', '?')} "
-                f"missing fields: {missing}"
-            )
+            assert not missing, f"{contract_path.name}: column {col.get('name', '?')} missing fields: {missing}"
 
 
 # ===================================================================
@@ -161,19 +146,13 @@ class TestContractVersioning:
 
     @pytest.mark.parametrize(
         "contract_path",
-        sorted(
-            Path(__file__).resolve().parents[2]
-            .joinpath("domains")
-            .glob("*/data-products/**/contract.yaml")
-        ),
+        sorted(Path(__file__).resolve().parents[2].joinpath("domains").glob("*/data-products/**/contract.yaml")),
         ids=lambda p: str(p.relative_to(Path(__file__).resolve().parents[2])),
     )
     def test_version_follows_semver(self, contract_path: Path) -> None:
         data = _load_contract_yaml(contract_path)
         version = str(data.get("metadata", {}).get("version", ""))
-        assert _SEMVER_PATTERN.match(version), (
-            f"{contract_path.name}: version {version!r} is not valid semver"
-        )
+        assert _SEMVER_PATTERN.match(version), f"{contract_path.name}: version {version!r} is not valid semver"
 
 
 # ===================================================================
@@ -186,15 +165,12 @@ class TestContractColumnTypes:
 
     @pytest.mark.parametrize(
         "contract_path",
-        sorted(
-            Path(__file__).resolve().parents[2]
-            .joinpath("domains")
-            .glob("*/data-products/**/contract.yaml")
-        ),
+        sorted(Path(__file__).resolve().parents[2].joinpath("domains").glob("*/data-products/**/contract.yaml")),
         ids=lambda p: str(p.relative_to(Path(__file__).resolve().parents[2])),
     )
     def test_all_column_types_are_supported(
-        self, contract_path: Path,
+        self,
+        contract_path: Path,
     ) -> None:
         data = _load_contract_yaml(contract_path)
         columns = data.get("schema", {}).get("columns", [])
@@ -203,8 +179,7 @@ class TestContractColumnTypes:
             # Strip precision, e.g. "decimal(18,2)" -> "decimal"
             base_type = col_type.split("(")[0]
             assert base_type in _SUPPORTED_TYPES, (
-                f"{contract_path.name}: column {col['name']!r} uses "
-                f"unsupported type {col_type!r}"
+                f"{contract_path.name}: column {col['name']!r} uses unsupported type {col_type!r}"
             )
 
 
@@ -225,9 +200,7 @@ class TestGoldContractAlignment:
         models = _gold_schema_models()
         for name, model in models.items():
             columns = model.get("columns", [])
-            assert columns, (
-                f"Gold model {name!r} in schema.yml has no columns defined"
-            )
+            assert columns, f"Gold model {name!r} in schema.yml has no columns defined"
 
 
 # ===================================================================
@@ -240,57 +213,43 @@ class TestNoOrphanContracts:
 
     @pytest.mark.parametrize(
         "contract_path",
-        sorted(
-            Path(__file__).resolve().parents[2]
-            .joinpath("domains")
-            .glob("*/data-products/**/contract.yaml")
-        ),
+        sorted(Path(__file__).resolve().parents[2].joinpath("domains").glob("*/data-products/**/contract.yaml")),
         ids=lambda p: str(p.relative_to(Path(__file__).resolve().parents[2])),
     )
     def test_contract_domain_directory_exists(
-        self, contract_path: Path,
+        self,
+        contract_path: Path,
     ) -> None:
         data = _load_contract_yaml(contract_path)
         domain = data.get("metadata", {}).get("domain", "")
         domain_dir = _REPO_ROOT / "domains" / domain
         assert domain_dir.is_dir(), (
-            f"Contract {contract_path.name} references domain {domain!r} "
-            f"but {domain_dir} does not exist"
+            f"Contract {contract_path.name} references domain {domain!r} but {domain_dir} does not exist"
         )
 
     @pytest.mark.parametrize(
         "contract_path",
-        sorted(
-            Path(__file__).resolve().parents[2]
-            .joinpath("domains")
-            .glob("*/data-products/**/contract.yaml")
-        ),
+        sorted(Path(__file__).resolve().parents[2].joinpath("domains").glob("*/data-products/**/contract.yaml")),
         ids=lambda p: str(p.relative_to(Path(__file__).resolve().parents[2])),
     )
     def test_contract_has_api_version(
-        self, contract_path: Path,
+        self,
+        contract_path: Path,
     ) -> None:
         data = _load_contract_yaml(contract_path)
-        assert data.get("apiVersion") == "csa.microsoft.com/v1", (
-            f"{contract_path.name}: unexpected apiVersion"
-        )
+        assert data.get("apiVersion") == "csa.microsoft.com/v1", f"{contract_path.name}: unexpected apiVersion"
 
     @pytest.mark.parametrize(
         "contract_path",
-        sorted(
-            Path(__file__).resolve().parents[2]
-            .joinpath("domains")
-            .glob("*/data-products/**/contract.yaml")
-        ),
+        sorted(Path(__file__).resolve().parents[2].joinpath("domains").glob("*/data-products/**/contract.yaml")),
         ids=lambda p: str(p.relative_to(Path(__file__).resolve().parents[2])),
     )
     def test_contract_has_correct_kind(
-        self, contract_path: Path,
+        self,
+        contract_path: Path,
     ) -> None:
         data = _load_contract_yaml(contract_path)
-        assert data.get("kind") == "DataProductContract", (
-            f"{contract_path.name}: unexpected kind"
-        )
+        assert data.get("kind") == "DataProductContract", f"{contract_path.name}: unexpected kind"
 
 
 # ===================================================================
@@ -320,21 +279,17 @@ class TestRequiredFieldConstraints:
                 # If column has 'unique' test, it should also have 'not_null'
                 if "unique" in test_names:
                     assert "not_null" in test_names, (
-                        f"Gold model {name!r}, column {col['name']!r} has "
-                        f"'unique' test but no 'not_null' test"
+                        f"Gold model {name!r}, column {col['name']!r} has 'unique' test but no 'not_null' test"
                     )
 
     @pytest.mark.parametrize(
         "contract_path",
-        sorted(
-            Path(__file__).resolve().parents[2]
-            .joinpath("domains")
-            .glob("*/data-products/**/contract.yaml")
-        ),
+        sorted(Path(__file__).resolve().parents[2].joinpath("domains").glob("*/data-products/**/contract.yaml")),
         ids=lambda p: str(p.relative_to(Path(__file__).resolve().parents[2])),
     )
     def test_contract_pk_columns_are_not_nullable(
-        self, contract_path: Path,
+        self,
+        contract_path: Path,
     ) -> None:
         """Primary key columns declared in a contract must have
         ``nullable: false``."""
@@ -345,12 +300,8 @@ class TestRequiredFieldConstraints:
 
         for pk in pk_cols:
             col = columns.get(pk)
-            assert col is not None, (
-                f"{contract_path.name}: PK column {pk!r} not in columns list"
-            )
-            assert col.get("nullable") is False, (
-                f"{contract_path.name}: PK column {pk!r} must be nullable: false"
-            )
+            assert col is not None, f"{contract_path.name}: PK column {pk!r} not in columns list"
+            assert col.get("nullable") is False, f"{contract_path.name}: PK column {pk!r} must be nullable: false"
 
 
 # ===================================================================
@@ -363,24 +314,18 @@ class TestQualityRuleConsistency:
 
     @pytest.mark.parametrize(
         "contract_path",
-        sorted(
-            Path(__file__).resolve().parents[2]
-            .joinpath("domains")
-            .glob("*/data-products/**/contract.yaml")
-        ),
+        sorted(Path(__file__).resolve().parents[2].joinpath("domains").glob("*/data-products/**/contract.yaml")),
         ids=lambda p: str(p.relative_to(Path(__file__).resolve().parents[2])),
     )
     def test_quality_rule_columns_exist(
-        self, contract_path: Path,
+        self,
+        contract_path: Path,
     ) -> None:
         data = _load_contract_yaml(contract_path)
-        column_names = {
-            c["name"] for c in data.get("schema", {}).get("columns", [])
-        }
+        column_names = {c["name"] for c in data.get("schema", {}).get("columns", [])}
         for rule in data.get("quality_rules", []) or []:
             col = rule.get("column")
             if col:
                 assert col in column_names, (
-                    f"{contract_path.name}: quality_rule {rule['rule']!r} "
-                    f"references unknown column {col!r}"
+                    f"{contract_path.name}: quality_rule {rule['rule']!r} references unknown column {col!r}"
                 )

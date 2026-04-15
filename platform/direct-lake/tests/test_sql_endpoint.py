@@ -19,8 +19,11 @@ if _scripts not in sys.path:
     sys.path.insert(0, _scripts)
 
 for _m in [
-    "databricks", "databricks.sdk", "databricks.sdk.service",
-    "databricks.sdk.service.sql", "databricks.sdk.service.iam",
+    "databricks",
+    "databricks.sdk",
+    "databricks.sdk.service",
+    "databricks.sdk.service.sql",
+    "databricks.sdk.service.iam",
 ]:
     sys.modules.setdefault(_m, MagicMock())
 # ---------------------------------------------------------------------------
@@ -133,9 +136,7 @@ class TestConfigureWarehouse:
     """Test DatabricksSQLEndpointManager.configure_warehouse."""
 
     def test_configure_updates_size(self, manager, mock_workspace_client):
-        mock_workspace_client.warehouses.get.return_value = _mock_warehouse(
-            cluster_size="Medium"
-        )
+        mock_workspace_client.warehouses.get.return_value = _mock_warehouse(cluster_size="Medium")
 
         info = manager.configure_warehouse(
             endpoint_id="warehouse-001",

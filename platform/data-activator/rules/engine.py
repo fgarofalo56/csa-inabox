@@ -164,15 +164,11 @@ class RuleEngine:
     def _prune_window(self, key: tuple[str, str], window_minutes: int) -> None:
         """Remove expired events from the sliding window."""
         cutoff = time.monotonic() - (window_minutes * 60)
-        self._window_buffer[key] = [
-            e for e in self._window_buffer[key] if e.timestamp >= cutoff
-        ]
+        self._window_buffer[key] = [e for e in self._window_buffer[key] if e.timestamp >= cutoff]
 
     def _add_to_window(self, key: tuple[str, str], value: float) -> None:
         """Add a new event to the sliding window."""
-        self._window_buffer[key].append(
-            WindowedEvent(value=value, timestamp=time.monotonic())
-        )
+        self._window_buffer[key].append(WindowedEvent(value=value, timestamp=time.monotonic()))
 
     def _aggregate_window(
         self,

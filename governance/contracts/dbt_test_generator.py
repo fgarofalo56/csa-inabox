@@ -78,9 +78,7 @@ def _build_column_tests(contract: Contract) -> dict[str, list[Any]]:
         if not col.nullable:
             tests.append("not_null")
         if col.allowed_values:
-            tests.append(
-                {"accepted_values": {"values": col.allowed_values}}
-            )
+            tests.append({"accepted_values": {"values": col.allowed_values}})
         if tests:
             col_tests[col.name] = tests
 
@@ -112,13 +110,9 @@ def _apply_quality_rule(
     elif rule.rule == "expect_column_values_to_be_in_set":
         # Avoid duplicating an accepted_values test that might already
         # be there from the column-level allowed_values.
-        has_av = any(
-            isinstance(t, dict) and "accepted_values" in t for t in entries
-        )
+        has_av = any(isinstance(t, dict) and "accepted_values" in t for t in entries)
         if not has_av and rule.value_set:
-            entries.append(
-                {"accepted_values": {"values": rule.value_set}}
-            )
+            entries.append({"accepted_values": {"values": rule.value_set}})
 
     elif rule.rule == "expect_column_values_to_be_between":
         # dbt doesn't have a built-in "between" test so we use
@@ -295,8 +289,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.check:
         if not output_path.exists():
             print(
-                f"[FAIL] {output_path} does not exist.  "
-                f"Run with --write to create it.",
+                f"[FAIL] {output_path} does not exist.  Run with --write to create it.",
                 file=sys.stderr,
             )
             return 1
@@ -312,8 +305,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         sys.stderr.writelines(diff)
         print(
-            f"\n[FAIL] {output_path} is out of date.  "
-            f"Run with --write to regenerate.",
+            f"\n[FAIL] {output_path} is out of date.  Run with --write to regenerate.",
             file=sys.stderr,
         )
         return 1

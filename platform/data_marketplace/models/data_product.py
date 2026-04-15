@@ -238,13 +238,7 @@ class QualityScore(BaseModel):
             - Consistency: 0.15
             - Uniqueness: 0.15
         """
-        overall = (
-            completeness * 0.25
-            + freshness * 0.25
-            + accuracy * 0.20
-            + consistency * 0.15
-            + uniqueness * 0.15
-        )
+        overall = completeness * 0.25 + freshness * 0.25 + accuracy * 0.20 + consistency * 0.15 + uniqueness * 0.15
         return cls(
             overall_score=round(overall, 4),
             completeness=completeness,
@@ -320,8 +314,7 @@ class DataProductBase(BaseModel):
 
         if not re.match(r"^[a-z0-9][a-z0-9\-]*[a-z0-9]$", v) and len(v) > 1:
             raise ValueError(
-                "Product name must be lowercase alphanumeric with hyphens "
-                "(e.g., 'orders', 'sales-metrics')"
+                "Product name must be lowercase alphanumeric with hyphens (e.g., 'orders', 'sales-metrics')"
             )
         return v
 
@@ -381,9 +374,7 @@ class DataProductSummary(BaseModel):
             version=product.version,
             tags=product.tags,
             sensitivity=product.sensitivity,
-            quality_score=(
-                product.quality_score.overall_score if product.quality_score else None
-            ),
+            quality_score=(product.quality_score.overall_score if product.quality_score else None),
             status=product.status,
             last_refreshed_at=product.last_refreshed_at,
         )

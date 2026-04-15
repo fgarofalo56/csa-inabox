@@ -24,9 +24,4 @@ __version__ = "1.0.0"
 from .dlz_provisioner import DLZProvisioner, DLZProvisioningError
 from .pipeline_generator import PipelineGenerationError, PipelineGenerator
 
-__all__ = [
-    "DLZProvisioner",
-    "DLZProvisioningError",
-    "PipelineGenerationError",
-    "PipelineGenerator"
-]
+__all__ = ["DLZProvisioner", "DLZProvisioningError", "PipelineGenerationError", "PipelineGenerator"]

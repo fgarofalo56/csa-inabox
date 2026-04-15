@@ -36,8 +36,8 @@ def test_is_valid_email_accepts_valid_addresses(email: str) -> None:
         "no-at-symbol",
         "@example.com",
         "user@",
-        "user@example",          # missing TLD
-        "user@example.c",        # TLD too short
+        "user@example",  # missing TLD
+        "user@example.c",  # TLD too short
         "user name@example.com",  # space in local part
         None,
     ],

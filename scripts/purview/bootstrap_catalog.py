@@ -8,6 +8,7 @@ Usage:
 Prerequisites:
     pip install azure-identity azure-purview-catalog azure-purview-scanning
 """
+
 from __future__ import annotations
 
 import argparse

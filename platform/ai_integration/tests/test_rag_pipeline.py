@@ -63,7 +63,10 @@ class TestDocumentChunker:
 
     def test_paragraph_strategy(self):
         chunker = DocumentChunker(
-            chunk_size=200, chunk_overlap=20, min_chunk_length=10, split_strategy="paragraph",
+            chunk_size=200,
+            chunk_overlap=20,
+            min_chunk_length=10,
+            split_strategy="paragraph",
         )
         text = "First paragraph with content.\n\nSecond paragraph with more.\n\nThird paragraph final."
         chunks = chunker.chunk_text(text, source="test.txt")
@@ -71,7 +74,10 @@ class TestDocumentChunker:
 
     def test_token_strategy(self):
         chunker = DocumentChunker(
-            chunk_size=5, chunk_overlap=2, min_chunk_length=3, split_strategy="token",
+            chunk_size=5,
+            chunk_overlap=2,
+            min_chunk_length=3,
+            split_strategy="token",
         )
         text = "one two three four five six seven eight nine ten"
         chunks = chunker.chunk_text(text, source="test.txt")
@@ -137,7 +143,9 @@ class TestRAGPipeline:
 
         vector_store.search.return_value = [
             SearchResult(id="1", text="Crop yields in 2023 increased by 15%.", score=0.95, source="usda_report.txt"),
-            SearchResult(id="2", text="USDA data shows improvement in wheat production.", score=0.88, source="usda_wheat.txt"),
+            SearchResult(
+                id="2", text="USDA data shows improvement in wheat production.", score=0.88, source="usda_wheat.txt"
+            ),
         ]
 
         result = pipeline.query("What are the crop yield trends?")
@@ -164,8 +172,9 @@ class TestRAGPipeline:
         pipeline.query("test", filters="source eq 'usda'")
 
         call_kwargs = vector_store.search.call_args
-        assert call_kwargs.kwargs.get("filters") == "source eq 'usda'" or \
-               (len(call_kwargs.args) > 4 and call_kwargs.args[4] == "source eq 'usda'")
+        assert call_kwargs.kwargs.get("filters") == "source eq 'usda'" or (
+            len(call_kwargs.args) > 4 and call_kwargs.args[4] == "source eq 'usda'"
+        )
 
     def test_ingest_text(self, mock_pipeline):
         pipeline, embedder, vector_store = mock_pipeline

@@ -126,6 +126,7 @@ class CrossWorkspaceQueryRunner:
 
         if self._credential is None:
             from azure.identity import DefaultAzureCredential
+
             self._credential = DefaultAzureCredential()
 
         # Get access token for SQL
@@ -288,11 +289,13 @@ class CrossWorkspaceQueryRunner:
 
         if not result.is_error:
             for row in result.rows:
-                databases.append(AccessibleDatabase(
-                    name=row[0],
-                    workspace=workspace_endpoint,
-                    type="local",
-                ))
+                databases.append(
+                    AccessibleDatabase(
+                        name=row[0],
+                        workspace=workspace_endpoint,
+                        type="local",
+                    )
+                )
 
         # List external data sources from each database
         for db in list(databases):
@@ -307,11 +310,13 @@ class CrossWorkspaceQueryRunner:
 
             if not ext_result.is_error:
                 for row in ext_result.rows:
-                    databases.append(AccessibleDatabase(
-                        name=f"{db.name}.{row[0]}",
-                        workspace=row[1] if row[1] else workspace_endpoint,
-                        type="external",
-                    ))
+                    databases.append(
+                        AccessibleDatabase(
+                            name=f"{db.name}.{row[0]}",
+                            workspace=row[1] if row[1] else workspace_endpoint,
+                            type="external",
+                        )
+                    )
 
         logger.info(
             "Found %d accessible databases from %s",

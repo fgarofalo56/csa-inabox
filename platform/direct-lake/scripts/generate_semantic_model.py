@@ -182,13 +182,15 @@ class SemanticModelGenerator:
                 columns: list[DeltaColumn] = []
                 if table.columns:
                     for col in table.columns:
-                        columns.append(DeltaColumn(
-                            name=col.name or "",
-                            type=str(col.type_text or col.type_name or "string").lower(),
-                            nullable=col.nullable if col.nullable is not None else True,
-                            comment=col.comment or "",
-                            is_partition=col.partition_index is not None,
-                        ))
+                        columns.append(
+                            DeltaColumn(
+                                name=col.name or "",
+                                type=str(col.type_text or col.type_name or "string").lower(),
+                                nullable=col.nullable if col.nullable is not None else True,
+                                comment=col.comment or "",
+                                is_partition=col.partition_index is not None,
+                            )
+                        )
 
                 info = DeltaTableInfo(
                     catalog=catalog,
@@ -241,29 +243,35 @@ class SemanticModelGenerator:
                     continue  # Skip partition columns in semantic model
 
                 pbi_type = self._map_type(col.type)
-                pbi_columns.append({
-                    "name": col.name,
-                    "dataType": pbi_type,
-                    "sourceColumn": col.name,
-                    "description": col.comment,
-                    "isNullable": col.nullable,
-                    "isHidden": col.name.startswith("_"),
-                })
+                pbi_columns.append(
+                    {
+                        "name": col.name,
+                        "dataType": pbi_type,
+                        "sourceColumn": col.name,
+                        "description": col.comment,
+                        "isNullable": col.nullable,
+                        "isHidden": col.name.startswith("_"),
+                    }
+                )
 
-            model_tables.append({
-                "name": table.name,
-                "source": table.full_name,
-                "description": table.comment,
-                "columns": pbi_columns,
-                "partitions": [{
-                    "name": "DirectLake",
-                    "mode": "directLake",
-                    "source": {
-                        "type": "entity",
-                        "entityName": table.full_name,
-                    },
-                }],
-            })
+            model_tables.append(
+                {
+                    "name": table.name,
+                    "source": table.full_name,
+                    "description": table.comment,
+                    "columns": pbi_columns,
+                    "partitions": [
+                        {
+                            "name": "DirectLake",
+                            "mode": "directLake",
+                            "source": {
+                                "type": "entity",
+                                "entityName": table.full_name,
+                            },
+                        }
+                    ],
+                }
+            )
 
         host = self.workspace_url.replace("https://", "")
         connection = {
@@ -315,38 +323,49 @@ class SemanticModelGenerator:
 
                 # Numeric aggregation measures
                 if col_type in ("int", "bigint", "long", "float", "double", "decimal") or "decimal" in col_type:  # noqa: SIM102
-                    if any(kw in col_lower for kw in ("amount", "total", "revenue", "cost", "price", "value", "qty", "quantity")):
-                        measures.append(DAXMeasure(
-                            name=f"Total {col.name}",
-                            expression=f'SUM(\'{table.name}\'[{col.name}])',
-                            table_name=table.name,
-                            format_string="#,##0.00",
-                            description=f"Sum of {col.name} from {table.name}",
-                        ))
-                        measures.append(DAXMeasure(
-                            name=f"Avg {col.name}",
-                            expression=f'AVERAGE(\'{table.name}\'[{col.name}])',
-                            table_name=table.name,
-                            format_string="#,##0.00",
-                            description=f"Average of {col.name} from {table.name}",
-                        ))
+                    if any(
+                        kw in col_lower
+                        for kw in ("amount", "total", "revenue", "cost", "price", "value", "qty", "quantity")
+                    ):
+                        measures.append(
+                            DAXMeasure(
+                                name=f"Total {col.name}",
+                                expression=f"SUM('{table.name}'[{col.name}])",
+                                table_name=table.name,
+                                format_string="#,##0.00",
+                                description=f"Sum of {col.name} from {table.name}",
+                            )
+                        )
+                        measures.append(
+                            DAXMeasure(
+                                name=f"Avg {col.name}",
+                                expression=f"AVERAGE('{table.name}'[{col.name}])",
+                                table_name=table.name,
+                                format_string="#,##0.00",
+                                description=f"Average of {col.name} from {table.name}",
+                            )
+                        )
 
                 # Count measures for ID columns
                 if col_lower.endswith("_id") or col_lower == "id":
-                    measures.append(DAXMeasure(
-                        name=f"Count {table.name}",
-                        expression=f'COUNTROWS(\'{table.name}\')',
-                        table_name=table.name,
-                        format_string="#,##0",
-                        description=f"Row count of {table.name}",
-                    ))
-                    measures.append(DAXMeasure(
-                        name=f"Distinct {col.name}",
-                        expression=f'DISTINCTCOUNT(\'{table.name}\'[{col.name}])',
-                        table_name=table.name,
-                        format_string="#,##0",
-                        description=f"Distinct count of {col.name}",
-                    ))
+                    measures.append(
+                        DAXMeasure(
+                            name=f"Count {table.name}",
+                            expression=f"COUNTROWS('{table.name}')",
+                            table_name=table.name,
+                            format_string="#,##0",
+                            description=f"Row count of {table.name}",
+                        )
+                    )
+                    measures.append(
+                        DAXMeasure(
+                            name=f"Distinct {col.name}",
+                            expression=f"DISTINCTCOUNT('{table.name}'[{col.name}])",
+                            table_name=table.name,
+                            format_string="#,##0",
+                            description=f"Distinct count of {col.name}",
+                        )
+                    )
 
         logger.info("Generated %d DAX measures", len(measures))
         return measures

@@ -43,9 +43,7 @@ class SensorConfig:
     noise_scale: float = 0.1
 
 
-def _generate_temperature_reading(
-    sensor: SensorConfig, t: float
-) -> dict[str, Any]:
+def _generate_temperature_reading(sensor: SensorConfig, t: float) -> dict[str, Any]:
     """Generate a temperature/humidity reading with diurnal pattern."""
     base_temp = sensor.baseline.get("temperature", 20.0)
     # Diurnal cycle: warmer midday, cooler at night
@@ -64,12 +62,8 @@ def _generate_temperature_reading(
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "temperature_c": round(temp, 2),
         "humidity_pct": round(humidity, 1),
-        "pressure_hpa": round(
-            sensor.baseline.get("pressure", 1013.25) + random.gauss(0, 1), 1
-        ),
-        "battery_pct": max(
-            0, sensor.baseline.get("battery", 95) - random.random() * 0.01
-        ),
+        "pressure_hpa": round(sensor.baseline.get("pressure", 1013.25) + random.gauss(0, 1), 1),
+        "battery_pct": max(0, sensor.baseline.get("battery", 95) - random.random() * 0.01),
         "latitude": sensor.location.get("lat", 38.9),
         "longitude": sensor.location.get("lon", -77.0),
     }
@@ -80,10 +74,7 @@ def _generate_aqi_reading(sensor: SensorConfig, t: float) -> dict[str, Any]:
     base_pm25 = sensor.baseline.get("pm25", 12.0)
     # Morning and evening rush hour spikes
     hour_of_day = (t % 86400) / 3600
-    rush_hour = 8.0 * (
-        math.exp(-((hour_of_day - 8) ** 2) / 4)
-        + math.exp(-((hour_of_day - 17) ** 2) / 4)
-    )
+    rush_hour = 8.0 * (math.exp(-((hour_of_day - 8) ** 2) / 4) + math.exp(-((hour_of_day - 17) ** 2) / 4))
     noise = max(0, random.gauss(0, 3))
     pm25 = max(0, base_pm25 + rush_hour + noise)
 
@@ -105,9 +96,7 @@ def _generate_aqi_reading(sensor: SensorConfig, t: float) -> dict[str, Any]:
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "pm25_ugm3": round(pm25, 1),
         "pm10_ugm3": round(pm25 * 1.5 + random.gauss(0, 5), 1),
-        "ozone_ppb": round(
-            max(0, sensor.baseline.get("ozone", 30) + noise * 2), 1
-        ),
+        "ozone_ppb": round(max(0, sensor.baseline.get("ozone", 30) + noise * 2), 1),
         "no2_ppb": round(max(0, 15 + rush_hour * 2 + random.gauss(0, 3)), 1),
         "aqi": round(aqi),
         "aqi_category": (
@@ -124,9 +113,7 @@ def _generate_aqi_reading(sensor: SensorConfig, t: float) -> dict[str, Any]:
     }
 
 
-def _generate_weather_reading(
-    sensor: SensorConfig, t: float
-) -> dict[str, Any]:
+def _generate_weather_reading(sensor: SensorConfig, t: float) -> dict[str, Any]:
     """Generate a weather station reading (NOAA-style)."""
     temp_reading = _generate_temperature_reading(sensor, t)
     wind_speed = max(0, sensor.baseline.get("wind", 10) + random.gauss(0, 5))
@@ -147,12 +134,8 @@ def _generate_weather_reading(
         "wind_direction_deg": round(wind_dir, 0),
         "wind_gust_ms": round(wind_speed * (1 + random.random() * 0.5), 1),
         "precipitation_mm": round(precip, 2),
-        "visibility_km": round(
-            max(0.1, 10 - precip * 2 + random.gauss(0, 1)), 1
-        ),
-        "cloud_cover_pct": round(
-            max(0, min(100, 50 + random.gauss(0, 25))), 0
-        ),
+        "visibility_km": round(max(0.1, 10 - precip * 2 + random.gauss(0, 1)), 1),
+        "cloud_cover_pct": round(max(0, min(100, 50 + random.gauss(0, 25))), 0),
         "latitude": sensor.location.get("lat", 38.9),
         "longitude": sensor.location.get("lon", -77.0),
         "elevation_m": sensor.location.get("elevation", 100),
@@ -205,9 +188,7 @@ GENERATORS = {
 }
 
 
-def create_sensors(
-    sensor_type: str, count: int, seed: int = 42
-) -> list[SensorConfig]:
+def create_sensors(sensor_type: str, count: int, seed: int = 42) -> list[SensorConfig]:
     """Create a fleet of sensor instances with varied baselines."""
     rng = random.Random(seed)
     sensors = []
@@ -229,7 +210,7 @@ def create_sensors(
             )
             sensors.append(
                 SensorConfig(
-                    sensor_id=f"SLOT-{i+1:04d}",
+                    sensor_id=f"SLOT-{i + 1:04d}",
                     sensor_type=sensor_type,
                     location={"zone": zone, "row": rng.randint(1, 20)},
                     baseline={"rtp": rng.uniform(0.88, 0.96), "theme": theme},
@@ -238,7 +219,7 @@ def create_sensors(
         else:
             sensors.append(
                 SensorConfig(
-                    sensor_id=f"{sensor_type.upper()}-{i+1:04d}",
+                    sensor_id=f"{sensor_type.upper()}-{i + 1:04d}",
                     sensor_type=sensor_type,
                     location={"lat": lat, "lon": lon, "elevation": rng.uniform(0, 2000)},
                     baseline={
@@ -272,9 +253,7 @@ def run_simulator(
 
     producer = None
     if connection_string and HAS_EVENTHUB:
-        producer = EventHubProducerClient.from_connection_string(
-            connection_string, eventhub_name=event_hub_name
-        )
+        producer = EventHubProducerClient.from_connection_string(connection_string, eventhub_name=event_hub_name)
         print(f"Connected to Event Hub: {event_hub_name}")
     elif connection_string and not HAS_EVENTHUB:
         print("WARNING: azure-eventhub not installed. Outputting to stdout.")
@@ -324,18 +303,14 @@ def run_simulator(
 
 def main() -> None:
     """CLI entry point."""
-    parser = argparse.ArgumentParser(
-        description="IoT Sensor Simulator for CSA-in-a-Box"
-    )
+    parser = argparse.ArgumentParser(description="IoT Sensor Simulator for CSA-in-a-Box")
     parser.add_argument(
         "--sensor-type",
         choices=list(GENERATORS.keys()),
         default="temperature",
         help="Type of sensor to simulate",
     )
-    parser.add_argument(
-        "--sensor-count", type=int, default=10, help="Number of sensors"
-    )
+    parser.add_argument("--sensor-count", type=int, default=10, help="Number of sensors")
     parser.add_argument(
         "--interval",
         type=float,
@@ -347,12 +322,8 @@ def main() -> None:
         default=None,
         help="Event Hub connection string (omit for stdout)",
     )
-    parser.add_argument(
-        "--event-hub-name", default="raw-events", help="Event Hub name"
-    )
-    parser.add_argument(
-        "--max-events", type=int, default=None, help="Max events then stop"
-    )
+    parser.add_argument("--event-hub-name", default="raw-events", help="Event Hub name")
+    parser.add_argument("--max-events", type=int, default=None, help="Max events then stop")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
 
     args = parser.parse_args()

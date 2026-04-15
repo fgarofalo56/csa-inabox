@@ -49,7 +49,9 @@ dbutils.widgets.text("catalog", "csa_analytics", "Unity Catalog")
 dbutils.widgets.text("experiment_name", "/Shared/csa-inabox/ml/customer_churn", "MLflow Experiment")
 dbutils.widgets.text("model_name", "customer_churn_model", "Model Registry Name")
 dbutils.widgets.dropdown("register_model", "false", ["true", "false"], "Register Model")
-dbutils.widgets.dropdown("promote_to_production", "false", ["true", "false"], "Promote to Production (requires thresholds)")
+dbutils.widgets.dropdown(
+    "promote_to_production", "false", ["true", "false"], "Promote to Production (requires thresholds)"
+)
 dbutils.widgets.text("min_auc_for_prod", "0.80", "Min ROC-AUC for Production promotion")
 dbutils.widgets.text("min_f1_for_prod", "0.65", "Min F1 for Production promotion")
 
@@ -72,6 +74,7 @@ print(f"Production gate: AUC >= {MIN_AUC_FOR_PROD}, F1 >= {MIN_F1_FOR_PROD}")
 # MAGIC ## Feature Engineering
 
 # COMMAND ----------
+
 
 def build_features(catalog: str) -> pd.DataFrame:
     """Build feature set from gold layer tables.
@@ -150,9 +153,7 @@ TARGET_COL = "is_churned"
 X = features_pdf[FEATURE_COLS].fillna(0)
 y = features_pdf[TARGET_COL]
 
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, random_state=42, stratify=y
-)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
 
 print(f"Train set: {X_train.shape[0]} rows")
 print(f"Test set:  {X_test.shape[0]} rows")
@@ -205,10 +206,12 @@ with mlflow.start_run(run_name=f"churn_model_{datetime.utcnow().strftime('%Y%m%d
     )
 
     # Feature importance
-    importance = pd.DataFrame({
-        "feature": FEATURE_COLS,
-        "importance": model.feature_importances_,
-    }).sort_values("importance", ascending=False)
+    importance = pd.DataFrame(
+        {
+            "feature": FEATURE_COLS,
+            "importance": model.feature_importances_,
+        }
+    ).sort_values("importance", ascending=False)
     mlflow.log_table(importance, "feature_importance.json")
 
     # Log classification report
@@ -292,13 +295,9 @@ if REGISTER_MODEL:
     # ---------------------------------------------------------------
     gate_failures: list[str] = []
     if metrics["roc_auc"] < MIN_AUC_FOR_PROD:
-        gate_failures.append(
-            f"roc_auc={metrics['roc_auc']:.4f} < {MIN_AUC_FOR_PROD}"
-        )
+        gate_failures.append(f"roc_auc={metrics['roc_auc']:.4f} < {MIN_AUC_FOR_PROD}")
     if metrics["f1"] < MIN_F1_FOR_PROD:
-        gate_failures.append(
-            f"f1={metrics['f1']:.4f} < {MIN_F1_FOR_PROD}"
-        )
+        gate_failures.append(f"f1={metrics['f1']:.4f} < {MIN_F1_FOR_PROD}")
 
     if PROMOTE_TO_PRODUCTION and not gate_failures:
         client.set_registered_model_alias(
@@ -348,15 +347,15 @@ else:
 # COMMAND ----------
 
 print(f"""
-{'='*60}
+{"=" * 60}
 ML Pipeline Complete
-{'='*60}
+{"=" * 60}
 
 Experiment: {EXPERIMENT_NAME}
 Run ID:     {run.info.run_id}
 Model:      GradientBoostingClassifier
-AUC:        {metrics['roc_auc']:.4f}
-F1:         {metrics['f1']:.4f}
+AUC:        {metrics["roc_auc"]:.4f}
+F1:         {metrics["f1"]:.4f}
 
 Top Features:
 {importance.head(5).to_string(index=False)}

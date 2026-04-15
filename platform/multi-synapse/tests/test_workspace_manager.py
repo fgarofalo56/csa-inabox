@@ -20,8 +20,12 @@ if _scripts not in sys.path:
     sys.path.insert(0, _scripts)
 
 for _m in [
-    "azure", "azure.mgmt", "azure.mgmt.synapse", "azure.mgmt.synapse.models",
-    "azure.mgmt.authorization", "azure.mgmt.authorization.models",
+    "azure",
+    "azure.mgmt",
+    "azure.mgmt.synapse",
+    "azure.mgmt.synapse.models",
+    "azure.mgmt.authorization",
+    "azure.mgmt.authorization.models",
     "azure.identity",
 ]:
     sys.modules.setdefault(_m, MagicMock())

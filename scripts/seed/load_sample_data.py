@@ -14,6 +14,7 @@ Usage:
 Prerequisites:
     pip install azure-storage-blob azure-identity
 """
+
 from __future__ import annotations
 
 import argparse

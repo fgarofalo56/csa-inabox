@@ -121,7 +121,7 @@ class ShortcutManager:
             raise ValueError(f"Path must start with 'abfss://': {path}")
 
         # abfss://container@account.dfs.core.windows.net/path/
-        without_scheme = path[len("abfss://"):]
+        without_scheme = path[len("abfss://") :]
         container, rest = without_scheme.split("@", 1)
         host, *path_parts = rest.split("/", 1)
         account = host.split(".")[0]
@@ -154,6 +154,7 @@ class ShortcutManager:
 
             if self._credential is None:
                 from azure.identity import DefaultAzureCredential
+
                 self._credential = DefaultAzureCredential()
 
             account_url = f"https://{account}.blob.core.windows.net"
@@ -176,10 +177,12 @@ class ShortcutManager:
                 )
 
             # Check if we can list blobs (validates read access)
-            list(container_client.list_blobs(
-                name_starts_with=blob_path,
-                results_per_page=1,
-            ))
+            list(
+                container_client.list_blobs(
+                    name_starts_with=blob_path,
+                    results_per_page=1,
+                )
+            )
 
             return ValidationResult(
                 path=path,
@@ -298,10 +301,7 @@ class ShortcutManager:
         shortcuts = list(self._shortcuts.values())
 
         if domain:
-            shortcuts = [
-                s for s in shortcuts
-                if s.target_domain == domain or s.source_domain == domain
-            ]
+            shortcuts = [s for s in shortcuts if s.target_domain == domain or s.source_domain == domain]
         if active_only:
             shortcuts = [s for s in shortcuts if s.is_active]
 
@@ -360,13 +360,15 @@ class ShortcutManager:
             shortcut.validation_error = validation.error
             shortcut.updated_at = datetime.now(timezone.utc).isoformat()
 
-            results.append({
-                "shortcut_id": shortcut.id,
-                "name": shortcut.name,
-                "source_path": shortcut.source_path,
-                "accessible": validation.accessible,
-                "error": validation.error,
-            })
+            results.append(
+                {
+                    "shortcut_id": shortcut.id,
+                    "name": shortcut.name,
+                    "source_path": shortcut.source_path,
+                    "accessible": validation.accessible,
+                    "error": validation.error,
+                }
+            )
 
         logger.info(
             "Validated %d shortcuts: %d accessible",

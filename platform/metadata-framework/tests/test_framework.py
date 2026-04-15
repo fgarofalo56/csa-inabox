@@ -95,6 +95,7 @@ def test_pipeline_generation():
     except Exception as e:
         print(f"❌ Pipeline generation failed: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 
@@ -133,7 +134,9 @@ def test_dlz_provisioning():
 
         # Check RBAC assignments
         rbac = result.rbac_assignments
-        has_owner_access = any("Storage Blob Data Contributor" in assignment.get("role_definition_name", "") for assignment in rbac)
+        has_owner_access = any(
+            "Storage Blob Data Contributor" in assignment.get("role_definition_name", "") for assignment in rbac
+        )
         assert has_owner_access, "Should have owner access assignment"
 
         # Check Purview scans
@@ -147,6 +150,7 @@ def test_dlz_provisioning():
     except Exception as e:
         print(f"❌ DLZ provisioning failed: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 
@@ -193,6 +197,7 @@ def test_artifact_generation():
         # Clean output directory
         if test_output_dir.exists():
             import shutil
+
             shutil.rmtree(test_output_dir)
 
         # Generate pipeline artifacts
@@ -219,6 +224,7 @@ def test_artifact_generation():
     except Exception as e:
         print(f"❌ Artifact generation failed: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 

@@ -54,6 +54,7 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     )
     # Initialize data directory for JSON persistence
     from pathlib import Path
+
     data_dir = Path(settings.DATA_DIR)
     data_dir.mkdir(parents=True, exist_ok=True)
     logger.info(f"JSON persistence data directory: {data_dir}")

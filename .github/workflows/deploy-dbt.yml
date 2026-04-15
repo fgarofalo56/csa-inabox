@@ -7,7 +7,7 @@ on:
     branches: [main]
     paths:
       - 'examples/*/domains/dbt/**'
-      - 'domains/dbt/**'
+      - 'domains/*/dbt/**'
   workflow_dispatch:
     inputs:
       vertical:
@@ -54,7 +54,7 @@ jobs:
     outputs:
       verticals: ${{ steps.detect.outputs.verticals }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
           fetch-depth: 2
 
@@ -89,9 +89,9 @@ jobs:
     environment: ${{ github.event.inputs.environment || 'dev' }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5
         with:
           python-version: '3.12'
 
@@ -136,7 +136,7 @@ jobs:
         id: dbt-path
         run: |
           if [ "${{ matrix.vertical }}" = "shared" ]; then
-            echo "path=domains/dbt" >> "$GITHUB_OUTPUT"
+            echo "path=domains/shared/dbt" >> "$GITHUB_OUTPUT"
           else
             echo "path=examples/${{ matrix.vertical }}/domains/dbt" >> "$GITHUB_OUTPUT"
           fi
@@ -164,7 +164,7 @@ jobs:
         run: dbt test --target ${{ github.event.inputs.environment || 'dev' }}
 
       - name: Upload dbt artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b # v4
         if: always()
         with:
           name: dbt-artifacts-${{ matrix.vertical }}

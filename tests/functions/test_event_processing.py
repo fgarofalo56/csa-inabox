@@ -131,6 +131,7 @@ class TestProcessEvent:
         result = function_app._process_event({"data": {"key": "value"}})
         # ID is a UUID4 string when not provided in event data
         import uuid
+
         uuid.UUID(result["id"], version=4)  # raises ValueError if not valid UUID4
 
     def test_derives_partition_key(self, function_app: types.ModuleType) -> None:

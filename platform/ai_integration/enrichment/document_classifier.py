@@ -303,10 +303,12 @@ class DocumentClassifier:
                         is_error=True,
                         error_message=str(exc),
                     )
-                time.sleep(2 ** attempt)
+                time.sleep(2**attempt)
 
         # Should not reach here, but satisfy type checker
-        return ClassificationResult(text_preview=preview, category="other", is_error=True, error_message="Exhausted retries")
+        return ClassificationResult(
+            text_preview=preview, category="other", is_error=True, error_message="Exhausted retries"
+        )
 
     def classify(self, texts: list[str]) -> list[ClassificationResult]:
         """Classify a batch of texts with rate limiting.

@@ -22,8 +22,11 @@ if _scripts not in sys.path:
     sys.path.insert(0, _scripts)
 
 for _m in [
-    "azure", "azure.mgmt", "azure.mgmt.costmanagement",
-    "azure.mgmt.costmanagement.models", "azure.identity",
+    "azure",
+    "azure.mgmt",
+    "azure.mgmt.costmanagement",
+    "azure.mgmt.costmanagement.models",
+    "azure.identity",
 ]:
     sys.modules.setdefault(_m, MagicMock())
 # ---------------------------------------------------------------------------
@@ -255,9 +258,15 @@ class TestExportCsv:
         row = next(reader)
 
         expected_cols = {
-            "org_name", "total_cost", "compute_cost", "storage_cost",
-            "network_cost", "other_cost", "shared_cost_allocation",
-            "resource_count", "currency",
+            "org_name",
+            "total_cost",
+            "compute_cost",
+            "storage_cost",
+            "network_cost",
+            "other_cost",
+            "shared_cost_allocation",
+            "resource_count",
+            "currency",
         }
         assert expected_cols.issubset(row.keys())
 

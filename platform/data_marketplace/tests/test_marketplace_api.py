@@ -65,9 +65,7 @@ class TestCreateProduct:
 
     @pytest.mark.anyio
     async def test_create_product_success(self, test_client):
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             payload = _product_payload()
             resp = await client.post("/products", json=payload)
 
@@ -80,9 +78,7 @@ class TestCreateProduct:
 
     @pytest.mark.anyio
     async def test_create_product_invalid_name(self, test_client):
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             payload = _product_payload(name="Invalid Name!")
             resp = await client.post("/products", json=payload)
 
@@ -90,9 +86,7 @@ class TestCreateProduct:
 
     @pytest.mark.anyio
     async def test_create_product_missing_required_fields(self, test_client):
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post("/products", json={"name": "test"})
             assert resp.status_code == 422
 
@@ -102,9 +96,7 @@ class TestGetProduct:
 
     @pytest.mark.anyio
     async def test_get_product_success(self, test_client):
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             create_resp = await client.post("/products", json=_product_payload())
             product_id = create_resp.json()["id"]
 
@@ -114,9 +106,7 @@ class TestGetProduct:
 
     @pytest.mark.anyio
     async def test_get_product_not_found(self, test_client):
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get("/products/nonexistent-id")
             assert resp.status_code == 404
 
@@ -126,9 +116,7 @@ class TestListProducts:
 
     @pytest.mark.anyio
     async def test_list_empty(self, test_client):
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get("/products")
             assert resp.status_code == 200
             data = resp.json()
@@ -137,9 +125,7 @@ class TestListProducts:
 
     @pytest.mark.anyio
     async def test_list_with_products(self, test_client):
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             await client.post("/products", json=_product_payload(name="prod-a"))
             await client.post("/products", json=_product_payload(name="prod-b"))
 
@@ -150,9 +136,7 @@ class TestListProducts:
 
     @pytest.mark.anyio
     async def test_list_filter_by_domain(self, test_client):
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             await client.post("/products", json=_product_payload(name="prod-a", domain="finance"))
             await client.post("/products", json=_product_payload(name="prod-b", domain="health"))
 
@@ -163,9 +147,7 @@ class TestListProducts:
 
     @pytest.mark.anyio
     async def test_list_search(self, test_client):
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             await client.post(
                 "/products",
                 json=_product_payload(name="revenue-data", description="Monthly revenue figures"),
@@ -191,18 +173,19 @@ class TestAccessRequestWorkflow:
 
     @pytest.mark.anyio
     async def test_create_access_request(self, test_client):
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             create_resp = await client.post("/products", json=_product_payload())
             product_id = create_resp.json()["id"]
 
-            req_resp = await client.post("/access-requests", json={
-                "productId": product_id,
-                "requester": "analyst@contoso.com",
-                "requested_role": "read",
-                "justification": "Need access for quarterly reporting analysis",
-            })
+            req_resp = await client.post(
+                "/access-requests",
+                json={
+                    "productId": product_id,
+                    "requester": "analyst@contoso.com",
+                    "requested_role": "read",
+                    "justification": "Need access for quarterly reporting analysis",
+                },
+            )
             assert req_resp.status_code == 201
             req_data = req_resp.json()
             assert req_data["status"] == "pending"
@@ -210,96 +193,112 @@ class TestAccessRequestWorkflow:
 
     @pytest.mark.anyio
     async def test_access_request_product_not_found(self, test_client):
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
-            resp = await client.post("/access-requests", json={
-                "productId": "nonexistent",
-                "requester": "analyst@contoso.com",
-                "requested_role": "read",
-                "justification": "Need access for quarterly reporting analysis",
-            })
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.post(
+                "/access-requests",
+                json={
+                    "productId": "nonexistent",
+                    "requester": "analyst@contoso.com",
+                    "requested_role": "read",
+                    "justification": "Need access for quarterly reporting analysis",
+                },
+            )
             assert resp.status_code == 404
 
     @pytest.mark.anyio
     async def test_approve_access_request(self, test_client):
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             # Create product
             product_resp = await client.post("/products", json=_product_payload())
             product_id = product_resp.json()["id"]
 
             # Create access request
-            req_resp = await client.post("/access-requests", json={
-                "productId": product_id,
-                "requester": "analyst@contoso.com",
-                "requested_role": "read",
-                "justification": "Need access for quarterly reporting analysis",
-            })
+            req_resp = await client.post(
+                "/access-requests",
+                json={
+                    "productId": product_id,
+                    "requester": "analyst@contoso.com",
+                    "requested_role": "read",
+                    "justification": "Need access for quarterly reporting analysis",
+                },
+            )
             request_id = req_resp.json()["id"]
 
             # Approve
-            approve_resp = await client.put(f"/access-requests/{request_id}/approve", json={
-                "reviewer": "admin@contoso.com",
-                "approved": True,
-                "notes": "Approved for Q4 reporting",
-            })
+            approve_resp = await client.put(
+                f"/access-requests/{request_id}/approve",
+                json={
+                    "reviewer": "admin@contoso.com",
+                    "approved": True,
+                    "notes": "Approved for Q4 reporting",
+                },
+            )
             assert approve_resp.status_code == 200
             assert approve_resp.json()["status"] == "approved"
             assert approve_resp.json()["reviewer"] == "admin@contoso.com"
 
     @pytest.mark.anyio
     async def test_deny_access_request(self, test_client):
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             product_resp = await client.post("/products", json=_product_payload())
             product_id = product_resp.json()["id"]
 
-            req_resp = await client.post("/access-requests", json={
-                "productId": product_id,
-                "requester": "analyst@contoso.com",
-                "requested_role": "read",
-                "justification": "Need access for quarterly reporting analysis",
-            })
+            req_resp = await client.post(
+                "/access-requests",
+                json={
+                    "productId": product_id,
+                    "requester": "analyst@contoso.com",
+                    "requested_role": "read",
+                    "justification": "Need access for quarterly reporting analysis",
+                },
+            )
             request_id = req_resp.json()["id"]
 
-            deny_resp = await client.put(f"/access-requests/{request_id}/approve", json={
-                "reviewer": "admin@contoso.com",
-                "approved": False,
-                "notes": "Insufficient justification",
-            })
+            deny_resp = await client.put(
+                f"/access-requests/{request_id}/approve",
+                json={
+                    "reviewer": "admin@contoso.com",
+                    "approved": False,
+                    "notes": "Insufficient justification",
+                },
+            )
             assert deny_resp.status_code == 200
             assert deny_resp.json()["status"] == "denied"
 
     @pytest.mark.anyio
     async def test_cannot_approve_already_approved(self, test_client):
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             product_resp = await client.post("/products", json=_product_payload())
             product_id = product_resp.json()["id"]
 
-            req_resp = await client.post("/access-requests", json={
-                "productId": product_id,
-                "requester": "analyst@contoso.com",
-                "requested_role": "read",
-                "justification": "Need access for quarterly reporting analysis",
-            })
+            req_resp = await client.post(
+                "/access-requests",
+                json={
+                    "productId": product_id,
+                    "requester": "analyst@contoso.com",
+                    "requested_role": "read",
+                    "justification": "Need access for quarterly reporting analysis",
+                },
+            )
             request_id = req_resp.json()["id"]
 
             # Approve first time
-            await client.put(f"/access-requests/{request_id}/approve", json={
-                "reviewer": "admin@contoso.com",
-                "approved": True,
-            })
+            await client.put(
+                f"/access-requests/{request_id}/approve",
+                json={
+                    "reviewer": "admin@contoso.com",
+                    "approved": True,
+                },
+            )
 
             # Try to approve again
-            resp = await client.put(f"/access-requests/{request_id}/approve", json={
-                "reviewer": "admin@contoso.com",
-                "approved": True,
-            })
+            resp = await client.put(
+                f"/access-requests/{request_id}/approve",
+                json={
+                    "reviewer": "admin@contoso.com",
+                    "approved": True,
+                },
+            )
             assert resp.status_code == 409
 
 
@@ -308,9 +307,7 @@ class TestHealthCheck:
 
     @pytest.mark.anyio
     async def test_health(self, test_client):
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get("/health")
             assert resp.status_code == 200
             assert resp.json()["status"] == "healthy"

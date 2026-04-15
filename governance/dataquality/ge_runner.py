@@ -74,6 +74,7 @@ def _great_expectations_available() -> bool:
     """Return True if the ``great_expectations`` package is importable."""
     try:
         import great_expectations  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -423,7 +424,7 @@ def run_ge_checkpoints(
                 status="skipped",
                 message=(
                     "great_expectations not installed. "
-                    "Install `pip install -e \".[governance]\"` to enable, "
+                    'Install `pip install -e ".[governance]"` to enable, '
                     "or pass sample_data= to run in-memory."
                 ),
             )

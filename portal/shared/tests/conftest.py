@@ -37,8 +37,10 @@ async def mock_get_current_user() -> dict[str, Any]:
 
 def mock_require_role(*_allowed_roles: str):
     """Return a mock dependency that always allows access."""
+
     async def _check_role() -> dict[str, Any]:
         return MOCK_USER
+
     return _check_role
 
 
@@ -57,6 +59,7 @@ def app():
     # The actual dependency returned by require_role is different each time,
     # so we monkey-patch the module-level function instead.
     import portal.shared.api.services.auth as auth_module
+
     original_require_role = auth_module.require_role
     auth_module.require_role = mock_require_role
 

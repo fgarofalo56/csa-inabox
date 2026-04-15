@@ -235,26 +235,35 @@ class DatabricksSQLEndpointManager:
             try:
                 acl_items = []
                 if grant.principal_type == "user":
-                    acl_items.append({
-                        "user_name": grant.principal,
-                        "permission_level": permission_map.get(
-                            grant.permission, PermissionLevel.CAN_USE,
-                        ),
-                    })
+                    acl_items.append(
+                        {
+                            "user_name": grant.principal,
+                            "permission_level": permission_map.get(
+                                grant.permission,
+                                PermissionLevel.CAN_USE,
+                            ),
+                        }
+                    )
                 elif grant.principal_type == "group":
-                    acl_items.append({
-                        "group_name": grant.principal,
-                        "permission_level": permission_map.get(
-                            grant.permission, PermissionLevel.CAN_USE,
-                        ),
-                    })
+                    acl_items.append(
+                        {
+                            "group_name": grant.principal,
+                            "permission_level": permission_map.get(
+                                grant.permission,
+                                PermissionLevel.CAN_USE,
+                            ),
+                        }
+                    )
                 elif grant.principal_type == "service_principal":
-                    acl_items.append({
-                        "service_principal_name": grant.principal,
-                        "permission_level": permission_map.get(
-                            grant.permission, PermissionLevel.CAN_USE,
-                        ),
-                    })
+                    acl_items.append(
+                        {
+                            "service_principal_name": grant.principal,
+                            "permission_level": permission_map.get(
+                                grant.permission,
+                                PermissionLevel.CAN_USE,
+                            ),
+                        }
+                    )
 
                 client.permissions.update(
                     request_object_type="sql/warehouses",
@@ -262,11 +271,13 @@ class DatabricksSQLEndpointManager:
                     access_control_list=acl_items,
                 )
 
-                results.append({
-                    "principal": grant.principal,
-                    "permission": grant.permission,
-                    "status": "granted",
-                })
+                results.append(
+                    {
+                        "principal": grant.principal,
+                        "permission": grant.permission,
+                        "status": "granted",
+                    }
+                )
                 logger.info(
                     "Granted %s to %s on warehouse %s",
                     grant.permission,
@@ -274,12 +285,14 @@ class DatabricksSQLEndpointManager:
                     endpoint_id,
                 )
             except Exception as exc:
-                results.append({
-                    "principal": grant.principal,
-                    "permission": grant.permission,
-                    "status": "error",
-                    "error": str(exc),
-                })
+                results.append(
+                    {
+                        "principal": grant.principal,
+                        "permission": grant.permission,
+                        "status": "error",
+                        "error": str(exc),
+                    }
+                )
 
         return results
 
@@ -394,11 +407,16 @@ def _cli_create(args: argparse.Namespace) -> None:
         token=args.token or "",
     )
     info = manager.create_endpoint(config)
-    print(json.dumps({
-        "id": info.id,
-        "name": info.name,
-        "state": info.state,
-    }, indent=2))
+    print(
+        json.dumps(
+            {
+                "id": info.id,
+                "name": info.name,
+                "state": info.state,
+            },
+            indent=2,
+        )
+    )
 
 
 def _cli_configure(args: argparse.Namespace) -> None:
@@ -413,11 +431,16 @@ def _cli_configure(args: argparse.Namespace) -> None:
         auto_stop_mins=args.auto_stop_minutes,
         enable_serverless=args.enable_serverless,
     )
-    print(json.dumps({
-        "id": info.id,
-        "name": info.name,
-        "state": info.state,
-    }, indent=2))
+    print(
+        json.dumps(
+            {
+                "id": info.id,
+                "name": info.name,
+                "state": info.state,
+            },
+            indent=2,
+        )
+    )
 
 
 def _cli_status(args: argparse.Namespace) -> None:

@@ -50,10 +50,7 @@ class DLZProvisioner:
     """
 
     def __init__(
-        self,
-        template_directory: Path | None = None,
-        output_directory: Path | None = None,
-        debug: bool = False
+        self, template_directory: Path | None = None, output_directory: Path | None = None, debug: bool = False
     ) -> None:
         """Initialize the DLZ provisioner.
 
@@ -83,13 +80,15 @@ class DLZProvisioner:
                 "public": {"retention": "1year", "encryption": "standard"},
                 "internal": {"retention": "3years", "encryption": "standard"},
                 "confidential": {"retention": "7years", "encryption": "customer_managed"},
-                "restricted": {"retention": "7years", "encryption": "customer_managed"}
-            }
+                "restricted": {"retention": "7years", "encryption": "customer_managed"},
+            },
         }
 
-        logger.info("DLZ provisioner initialized",
-                   template_dir=str(self.template_directory),
-                   output_dir=str(self.output_directory))
+        logger.info(
+            "DLZ provisioner initialized",
+            template_dir=str(self.template_directory),
+            output_dir=str(self.output_directory),
+        )
 
     def generate_landing_zone_name(self, source_config: dict[str, Any]) -> str:
         """Generate a unique landing zone name.
@@ -134,11 +133,7 @@ class DLZProvisioner:
 
         return f"{clean_name}{suffix}"
 
-    def generate_medallion_structure(
-        self,
-        source_config: dict[str, Any],
-        landing_zone_name: str
-    ) -> dict[str, Any]:
+    def generate_medallion_structure(self, source_config: dict[str, Any], landing_zone_name: str) -> dict[str, Any]:
         """Generate medallion architecture storage structure.
 
         Args:
@@ -151,12 +146,7 @@ class DLZProvisioner:
         source_name = source_config["source_name"]
         clean_source = source_name.replace(" ", "_").replace("-", "_").lower()
 
-        structure = {
-            "containers": {},
-            "folder_structure": {},
-            "retention_policies": {},
-            "access_policies": {}
-        }
+        structure = {"containers": {}, "folder_structure": {}, "retention_policies": {}, "access_policies": {}}
 
         for container in self.default_config["medallion_containers"]:
             structure["containers"][container] = {
@@ -165,8 +155,8 @@ class DLZProvisioner:
                 "metadata": {
                     "purpose": f"{container.title()} layer data",
                     "source": source_name,
-                    "landing_zone": landing_zone_name
-                }
+                    "landing_zone": landing_zone_name,
+                },
             }
 
             # Define folder structure within container
@@ -185,7 +175,7 @@ class DLZProvisioner:
 
             structure["folder_structure"][container] = {
                 "base_path": folder_path,
-                "partitioning": "date" if container != "sandbox" else "user_experiment"
+                "partitioning": "date" if container != "sandbox" else "user_experiment",
             }
 
             # Retention policies based on classification
@@ -195,23 +185,20 @@ class DLZProvisioner:
             structure["retention_policies"][container] = {
                 "retention_days": self.default_config["retention_days"],
                 "delete_after_retention": False,
-                "archive_after_days": 365 if container == "bronze" else 90
+                "archive_after_days": 365 if container == "bronze" else 90,
             }
 
             # Access policies
             structure["access_policies"][container] = {
                 "owner_access": "rwx",  # Full access for data owner
                 "reader_access": "rx",  # Read access for consumers
-                "service_principal_access": "rwx"  # Full access for pipelines
+                "service_principal_access": "rwx",  # Full access for pipelines
             }
 
         return structure
 
     def generate_rbac_assignments(
-        self,
-        source_config: dict[str, Any],
-        landing_zone_name: str,
-        storage_account_name: str
+        self, source_config: dict[str, Any], landing_zone_name: str, storage_account_name: str
     ) -> list[dict[str, Any]]:
         """Generate RBAC assignments for the landing zone.
 
@@ -227,48 +214,53 @@ class DLZProvisioner:
 
         # Data owner gets Storage Blob Data Contributor
         owner_email = source_config["owner"]["email"]
-        assignments.append({
-            "principal_email": owner_email,
-            "role_definition_name": "Storage Blob Data Contributor",
-            "scope": f"storage_account:{storage_account_name}",
-            "description": f"Data owner access for {landing_zone_name}"
-        })
+        assignments.append(
+            {
+                "principal_email": owner_email,
+                "role_definition_name": "Storage Blob Data Contributor",
+                "scope": f"storage_account:{storage_account_name}",
+                "description": f"Data owner access for {landing_zone_name}",
+            }
+        )
 
         # Data Factory managed identity gets Storage Blob Data Contributor
-        assignments.append({
-            "principal_type": "ServicePrincipal",
-            "principal_name": "adf-csa-prod",  # Data Factory managed identity
-            "role_definition_name": "Storage Blob Data Contributor",
-            "scope": f"storage_account:{storage_account_name}",
-            "description": f"ADF pipeline access for {landing_zone_name}"
-        })
+        assignments.append(
+            {
+                "principal_type": "ServicePrincipal",
+                "principal_name": "adf-csa-prod",  # Data Factory managed identity
+                "role_definition_name": "Storage Blob Data Contributor",
+                "scope": f"storage_account:{storage_account_name}",
+                "description": f"ADF pipeline access for {landing_zone_name}",
+            }
+        )
 
         # Purview managed identity gets Storage Blob Data Reader
-        assignments.append({
-            "principal_type": "ServicePrincipal",
-            "principal_name": "purview-csa-prod",
-            "role_definition_name": "Storage Blob Data Reader",
-            "scope": f"storage_account:{storage_account_name}",
-            "description": f"Purview scanning access for {landing_zone_name}"
-        })
+        assignments.append(
+            {
+                "principal_type": "ServicePrincipal",
+                "principal_name": "purview-csa-prod",
+                "role_definition_name": "Storage Blob Data Reader",
+                "scope": f"storage_account:{storage_account_name}",
+                "description": f"Purview scanning access for {landing_zone_name}",
+            }
+        )
 
         # Data domain team gets Storage Blob Data Reader
         domain = source_config["owner"]["domain"]
-        assignments.append({
-            "principal_type": "Group",
-            "principal_name": f"DataDomain-{domain}",
-            "role_definition_name": "Storage Blob Data Reader",
-            "scope": f"storage_account:{storage_account_name}",
-            "description": f"Domain team read access for {landing_zone_name}"
-        })
+        assignments.append(
+            {
+                "principal_type": "Group",
+                "principal_name": f"DataDomain-{domain}",
+                "role_definition_name": "Storage Blob Data Reader",
+                "scope": f"storage_account:{storage_account_name}",
+                "description": f"Domain team read access for {landing_zone_name}",
+            }
+        )
 
         return assignments
 
     def generate_purview_scans(
-        self,
-        source_config: dict[str, Any],
-        landing_zone_name: str,
-        storage_account_name: str
+        self, source_config: dict[str, Any], landing_zone_name: str, storage_account_name: str
     ) -> list[dict[str, Any]]:
         """Generate Purview scan configurations.
 
@@ -286,30 +278,24 @@ class DLZProvisioner:
         for container in self.default_config["medallion_containers"]:
             scan_name = f"scan-{landing_zone_name}-{container}"
 
-            scans.append({
-                "scan_name": scan_name,
-                "data_source_name": f"dlz-{storage_account_name}",
-                "collection_name": self.default_config["purview_collection"],
-                "scope": {
-                    "storage_account": storage_account_name,
-                    "container": container,
-                    "path": "/"
-                },
-                "scan_rule_set": "AdlsGen2",
-                "schedule": {
-                    "kind": "Weekly",
-                    "day_of_week": "Sunday",
-                    "time": "02:00:00"
-                },
-                "classification_rules": self._get_classification_rules(source_config),
-                "metadata": {
-                    "source_name": source_config["source_name"],
-                    "source_type": source_config["source_type"],
-                    "owner": source_config["owner"]["email"],
-                    "domain": source_config["owner"]["domain"],
-                    "classification": source_config.get("classification", "internal")
+            scans.append(
+                {
+                    "scan_name": scan_name,
+                    "data_source_name": f"dlz-{storage_account_name}",
+                    "collection_name": self.default_config["purview_collection"],
+                    "scope": {"storage_account": storage_account_name, "container": container, "path": "/"},
+                    "scan_rule_set": "AdlsGen2",
+                    "schedule": {"kind": "Weekly", "day_of_week": "Sunday", "time": "02:00:00"},
+                    "classification_rules": self._get_classification_rules(source_config),
+                    "metadata": {
+                        "source_name": source_config["source_name"],
+                        "source_type": source_config["source_type"],
+                        "owner": source_config["owner"]["email"],
+                        "domain": source_config["owner"]["domain"],
+                        "classification": source_config.get("classification", "internal"),
+                    },
                 }
-            })
+            )
 
         return scans
 
@@ -319,12 +305,14 @@ class DLZProvisioner:
         base_rules = ["System"]
 
         if classification in ["confidential", "restricted"]:
-            base_rules.extend([
-                "MICROSOFT.PERSONAL.NAME",
-                "MICROSOFT.PERSONAL.EMAIL",
-                "MICROSOFT.PERSONAL.PHONENUMBER",
-                "MICROSOFT.FINANCIAL.CREDIT_CARD_NUMBER"
-            ])
+            base_rules.extend(
+                [
+                    "MICROSOFT.PERSONAL.NAME",
+                    "MICROSOFT.PERSONAL.EMAIL",
+                    "MICROSOFT.PERSONAL.PHONENUMBER",
+                    "MICROSOFT.FINANCIAL.CREDIT_CARD_NUMBER",
+                ]
+            )
 
         return base_rules
 
@@ -335,7 +323,7 @@ class DLZProvisioner:
         storage_account_name: str,
         storage_structure: dict[str, Any],
         rbac_assignments: list[dict[str, Any]],
-        environment: str = "development"
+        environment: str = "development",
     ) -> dict[str, Any]:
         """Generate Bicep parameters file for DLZ deployment.
 
@@ -354,43 +342,23 @@ class DLZProvisioner:
             "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
             "contentVersion": "1.0.0.0",
             "parameters": {
-                "landingZoneName": {
-                    "value": landing_zone_name
-                },
-                "storageAccountName": {
-                    "value": storage_account_name
-                },
-                "location": {
-                    "value": self.default_config["location"]
-                },
-                "environment": {
-                    "value": environment
-                },
-                "dataClassification": {
-                    "value": source_config.get("classification", "internal")
-                },
-                "containers": {
-                    "value": list(storage_structure["containers"].keys())
-                },
-                "ownerEmail": {
-                    "value": source_config["owner"]["email"]
-                },
-                "ownerDomain": {
-                    "value": source_config["owner"]["domain"]
-                },
-                "retentionDays": {
-                    "value": self.default_config["retention_days"]
-                },
+                "landingZoneName": {"value": landing_zone_name},
+                "storageAccountName": {"value": storage_account_name},
+                "location": {"value": self.default_config["location"]},
+                "environment": {"value": environment},
+                "dataClassification": {"value": source_config.get("classification", "internal")},
+                "containers": {"value": list(storage_structure["containers"].keys())},
+                "ownerEmail": {"value": source_config["owner"]["email"]},
+                "ownerDomain": {"value": source_config["owner"]["domain"]},
+                "retentionDays": {"value": self.default_config["retention_days"]},
                 "sourceMetadata": {
                     "value": {
                         "source_id": source_config["source_id"],
                         "source_name": source_config["source_name"],
-                        "source_type": source_config["source_type"]
+                        "source_type": source_config["source_type"],
                     }
                 },
-                "rbacAssignments": {
-                    "value": rbac_assignments
-                },
+                "rbacAssignments": {"value": rbac_assignments},
                 "tags": {
                     "value": {
                         "Environment": environment,
@@ -400,10 +368,10 @@ class DLZProvisioner:
                         "DataClassification": source_config.get("classification", "internal"),
                         "Owner": source_config["owner"]["email"],
                         "CreatedBy": "MetadataFramework",
-                        "CreatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                        "CreatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
                     }
-                }
-            }
+                },
+            },
         }
 
         # Add data product information if available
@@ -413,17 +381,14 @@ class DLZProvisioner:
                 "value": {
                     "name": data_product["name"],
                     "domain": data_product["domain"],
-                    "sla_freshness_minutes": data_product.get("sla_freshness_minutes", 1440)
+                    "sla_freshness_minutes": data_product.get("sla_freshness_minutes", 1440),
                 }
             }
 
         return parameters
 
     def generate_deployment_config(
-        self,
-        source_config: dict[str, Any],
-        landing_zone_name: str,
-        environment: str
+        self, source_config: dict[str, Any], landing_zone_name: str, environment: str
     ) -> dict[str, Any]:
         """Generate deployment configuration.
 
@@ -449,7 +414,7 @@ class DLZProvisioner:
                 "source_id": source_config["source_id"],
                 "source_name": source_config["source_name"],
                 "owner": source_config["owner"]["email"],
-                "domain": source_config["owner"]["domain"]
+                "domain": source_config["owner"]["domain"],
             },
             "post_deployment_tasks": [
                 {
@@ -457,28 +422,22 @@ class DLZProvisioner:
                     "type": "purview_api",
                     "config": {
                         "account_name": "purview-csa-prod",
-                        "collection_name": self.default_config["purview_collection"]
-                    }
+                        "collection_name": self.default_config["purview_collection"],
+                    },
                 },
-                {
-                    "name": "create_purview_scans",
-                    "type": "purview_api",
-                    "depends_on": ["register_purview_data_source"]
-                },
+                {"name": "create_purview_scans", "type": "purview_api", "depends_on": ["register_purview_data_source"]},
                 {
                     "name": "validate_rbac_assignments",
                     "type": "azure_cli",
                     "config": {
                         "command": "az role assignment list --scope /subscriptions/$(AZURE_SUBSCRIPTION_ID)/resourceGroups/$(RESOURCE_GROUP)/providers/Microsoft.Storage/storageAccounts/$(STORAGE_ACCOUNT_NAME)"
-                    }
-                }
-            ]
+                    },
+                },
+            ],
         }
 
     def provision_dlz_from_config(
-        self,
-        source_config: dict[str, Any],
-        environment: str = "development"
+        self, source_config: dict[str, Any], environment: str = "development"
     ) -> DLZProvisioningResult:
         """Provision DLZ from source configuration.
 
@@ -498,52 +457,34 @@ class DLZProvisioner:
             storage_account_name = self.generate_storage_account_name(landing_zone_name)
 
             # Generate storage structure
-            storage_structure = self.generate_medallion_structure(
-                source_config,
-                landing_zone_name
-            )
+            storage_structure = self.generate_medallion_structure(source_config, landing_zone_name)
 
             # Generate RBAC assignments
-            rbac_assignments = self.generate_rbac_assignments(
-                source_config,
-                landing_zone_name,
-                storage_account_name
-            )
+            rbac_assignments = self.generate_rbac_assignments(source_config, landing_zone_name, storage_account_name)
 
             # Generate Purview scans
-            purview_scans = self.generate_purview_scans(
-                source_config,
-                landing_zone_name,
-                storage_account_name
-            )
+            purview_scans = self.generate_purview_scans(source_config, landing_zone_name, storage_account_name)
 
             # Generate Bicep parameters
             parameters_file = self.generate_bicep_parameters(
-                source_config,
-                landing_zone_name,
-                storage_account_name,
-                storage_structure,
-                rbac_assignments,
-                environment
+                source_config, landing_zone_name, storage_account_name, storage_structure, rbac_assignments, environment
             )
 
             # Generate deployment config
-            deployment_config = self.generate_deployment_config(
-                source_config,
-                landing_zone_name,
-                environment
-            )
+            deployment_config = self.generate_deployment_config(source_config, landing_zone_name, environment)
 
             # Determine Bicep template path (would use a standard DLZ template)
             bicep_template_path = str(self.template_directory / "data-landing-zone.bicep")
 
             dlz_id = str(uuid.uuid4())
 
-            logger.info("DLZ provisioning completed",
-                       dlz_id=dlz_id,
-                       landing_zone_name=landing_zone_name,
-                       storage_account_name=storage_account_name,
-                       environment=environment)
+            logger.info(
+                "DLZ provisioning completed",
+                dlz_id=dlz_id,
+                landing_zone_name=landing_zone_name,
+                storage_account_name=storage_account_name,
+                environment=environment,
+            )
 
             return DLZProvisioningResult(
                 dlz_id=dlz_id,
@@ -553,7 +494,7 @@ class DLZProvisioner:
                 rbac_assignments=rbac_assignments,
                 purview_scans=purview_scans,
                 storage_structure=storage_structure,
-                deployment_config=deployment_config
+                deployment_config=deployment_config,
             )
 
         except Exception as e:
@@ -561,9 +502,7 @@ class DLZProvisioner:
             raise DLZProvisioningError(f"Failed to provision DLZ: {e}") from e
 
     def provision_dlz_from_file(
-        self,
-        source_file: str | Path,
-        environment: str = "development"
+        self, source_file: str | Path, environment: str = "development"
     ) -> DLZProvisioningResult:
         """Provision DLZ from source registration file.
 
@@ -584,9 +523,11 @@ class DLZProvisioner:
                 else:
                     source_config = json.load(f)
 
-            logger.info("Source configuration loaded for DLZ provisioning",
-                       file=str(source_path),
-                       source_id=source_config.get("source_id"))
+            logger.info(
+                "Source configuration loaded for DLZ provisioning",
+                file=str(source_path),
+                source_id=source_config.get("source_id"),
+            )
 
             return self.provision_dlz_from_config(source_config, environment)
 
@@ -596,9 +537,7 @@ class DLZProvisioner:
             raise DLZProvisioningError(f"Invalid source file format: {e}") from e
 
     def save_provisioning_artifacts(
-        self,
-        result: DLZProvisioningResult,
-        output_directory: Path | None = None
+        self, result: DLZProvisioningResult, output_directory: Path | None = None
     ) -> dict[str, Path]:
         """Save DLZ provisioning artifacts to files.
 
@@ -650,17 +589,16 @@ class DLZProvisioner:
                 json.dump(result.deployment_config, f, indent=2)
             saved_files["deployment_config"] = deploy_path
 
-        logger.info("DLZ provisioning artifacts saved",
-                   landing_zone_name=result.landing_zone_name,
-                   output_directory=str(output_dir),
-                   files=list(saved_files.keys()))
+        logger.info(
+            "DLZ provisioning artifacts saved",
+            landing_zone_name=result.landing_zone_name,
+            output_directory=str(output_dir),
+            files=list(saved_files.keys()),
+        )
 
         return saved_files
 
-    def validate_dlz_configuration(
-        self,
-        result: DLZProvisioningResult
-    ) -> list[str]:
+    def validate_dlz_configuration(self, result: DLZProvisioningResult) -> list[str]:
         """Validate DLZ configuration.
 
         Args:
@@ -700,42 +638,19 @@ if __name__ == "__main__":
     import argparse
     import sys
 
-    parser = argparse.ArgumentParser(
-        description="Provision data landing zones from metadata source registrations"
-    )
-    parser.add_argument(
-        "source_file",
-        help="Path to source registration YAML/JSON file"
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        help="Output directory for generated files"
-    )
-    parser.add_argument(
-        "--environment",
-        default="development",
-        help="Target deployment environment"
-    )
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Enable debug logging"
-    )
+    parser = argparse.ArgumentParser(description="Provision data landing zones from metadata source registrations")
+    parser.add_argument("source_file", help="Path to source registration YAML/JSON file")
+    parser.add_argument("--output-dir", type=Path, help="Output directory for generated files")
+    parser.add_argument("--environment", default="development", help="Target deployment environment")
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
 
     args = parser.parse_args()
 
     try:
-        provisioner = DLZProvisioner(
-            output_directory=args.output_dir,
-            debug=args.debug
-        )
+        provisioner = DLZProvisioner(output_directory=args.output_dir, debug=args.debug)
 
         # Provision DLZ
-        result = provisioner.provision_dlz_from_file(
-            args.source_file,
-            args.environment
-        )
+        result = provisioner.provision_dlz_from_file(args.source_file, args.environment)
 
         # Save artifacts
         saved_files = provisioner.save_provisioning_artifacts(result)
@@ -759,5 +674,6 @@ if __name__ == "__main__":
         print(f"❌ Unexpected error: {e}", file=sys.stderr)
         if args.debug:
             import traceback
+
             traceback.print_exc()
         sys.exit(1)

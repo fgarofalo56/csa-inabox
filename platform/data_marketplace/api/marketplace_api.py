@@ -129,16 +129,13 @@ class InMemoryStore:
         if domain:
             items = [i for i in items if i.get("domain") == domain]
         if tags:
-            items = [
-                i for i in items
-                if any(t in i.get("tags", []) for t in tags)
-            ]
+            items = [i for i in items if any(t in i.get("tags", []) for t in tags)]
         if search:
             search_lower = search.lower()
             items = [
-                i for i in items
-                if search_lower in i.get("name", "").lower()
-                or search_lower in i.get("description", "").lower()
+                i
+                for i in items
+                if search_lower in i.get("name", "").lower() or search_lower in i.get("description", "").lower()
             ]
 
         total = len(items)
@@ -461,9 +458,7 @@ async def approve_access_request(
     request.reviewer = body.reviewer
     request.review_notes = body.notes
     request.reviewed_at = now
-    request.status = (
-        AccessRequestStatus.APPROVED if body.approved else AccessRequestStatus.DENIED
-    )
+    request.status = AccessRequestStatus.APPROVED if body.approved else AccessRequestStatus.DENIED
     if body.expires_at:
         request.expires_at = body.expires_at
 

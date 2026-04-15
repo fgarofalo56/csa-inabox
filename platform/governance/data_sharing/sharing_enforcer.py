@@ -130,7 +130,12 @@ def load_agreement(path: Path) -> SharingAgreement:
         access_level=terms.get("accessLevel", "read"),
         pii_allowed=terms.get("piiAllowed", False),
         phi_allowed=terms.get("phiAllowed", False),
-        max_sensitivity=terms.get("maxSensitivity", provider.get("dataProducts", [{}])[0].get("maxSensitivity", "Confidential") if product_entries and isinstance(product_entries[0], dict) else "Confidential"),
+        max_sensitivity=terms.get(
+            "maxSensitivity",
+            provider.get("dataProducts", [{}])[0].get("maxSensitivity", "Confidential")
+            if product_entries and isinstance(product_entries[0], dict)
+            else "Confidential",
+        ),
         expires_at=expires_at,
         audit_required=terms.get("auditRequired", True),
         copy_allowed=terms.get("copyAllowed", False),
@@ -282,14 +287,12 @@ class SharingEnforcer:
     ) -> list[SharingAgreement]:
         """Find agreements matching the provider, consumer, and product."""
         return [
-            a for a in self.agreements
+            a
+            for a in self.agreements
             if (
                 a.provider_domain.lower() == provider_domain.lower()
                 and a.consumer_domain.lower() == consumer_domain.lower()
-                and (
-                    data_product.lower() in [p.lower() for p in a.data_products]
-                    or "*" in a.data_products
-                )
+                and (data_product.lower() in [p.lower() for p in a.data_products] or "*" in a.data_products)
             )
         ]
 
@@ -311,10 +314,7 @@ class SharingEnforcer:
         if agreement.expires_at and now > agreement.expires_at:
             return ValidationResult(
                 approved=False,
-                reason=(
-                    f"Sharing agreement '{agreement.name}' expired on "
-                    f"{agreement.expires_at.isoformat()}"
-                ),
+                reason=(f"Sharing agreement '{agreement.name}' expired on {agreement.expires_at.isoformat()}"),
                 agreement_name=agreement.name,
             )
 
@@ -336,10 +336,7 @@ class SharingEnforcer:
         if includes_pii and not agreement.pii_allowed:
             return ValidationResult(
                 approved=False,
-                reason=(
-                    f"Data product contains PII but agreement '{agreement.name}' "
-                    f"does not allow PII sharing"
-                ),
+                reason=(f"Data product contains PII but agreement '{agreement.name}' does not allow PII sharing"),
                 agreement_name=agreement.name,
             )
 
@@ -347,10 +344,7 @@ class SharingEnforcer:
         if includes_phi and not agreement.phi_allowed:
             return ValidationResult(
                 approved=False,
-                reason=(
-                    f"Data product contains PHI but agreement '{agreement.name}' "
-                    f"does not allow PHI sharing"
-                ),
+                reason=(f"Data product contains PHI but agreement '{agreement.name}' does not allow PHI sharing"),
                 agreement_name=agreement.name,
             )
 
@@ -377,10 +371,7 @@ class SharingEnforcer:
         if requires_copy and not agreement.copy_allowed:
             return ValidationResult(
                 approved=False,
-                reason=(
-                    f"Data copy requested but agreement '{agreement.name}' "
-                    f"does not allow data copying"
-                ),
+                reason=(f"Data copy requested but agreement '{agreement.name}' does not allow data copying"),
                 agreement_name=agreement.name,
             )
 
@@ -415,17 +406,16 @@ class SharingEnforcer:
         """
         results: list[SharingAgreement] = []
         for agreement in self.agreements:
-            if (role in ("any", "provider") and agreement.provider_domain.lower() == domain.lower()) or (role in ("any", "consumer") and agreement.consumer_domain.lower() == domain.lower()):
+            if (role in ("any", "provider") and agreement.provider_domain.lower() == domain.lower()) or (
+                role in ("any", "consumer") and agreement.consumer_domain.lower() == domain.lower()
+            ):
                 results.append(agreement)
         return results
 
     def get_expired_agreements(self) -> list[SharingAgreement]:
         """Return all expired agreements (for cleanup/renewal workflows)."""
         now = datetime.now(timezone.utc)
-        return [
-            a for a in self.agreements
-            if a.expires_at is not None and now > a.expires_at
-        ]
+        return [a for a in self.agreements if a.expires_at is not None and now > a.expires_at]
 
     def get_expiring_soon(self, days: int = 30) -> list[SharingAgreement]:
         """Return agreements expiring within the next ``days`` days."""
@@ -433,7 +423,4 @@ class SharingEnforcer:
 
         now = datetime.now(timezone.utc)
         cutoff = now + timedelta(days=days)
-        return [
-            a for a in self.agreements
-            if a.expires_at is not None and now < a.expires_at <= cutoff
-        ]
+        return [a for a in self.agreements if a.expires_at is not None and now < a.expires_at <= cutoff]

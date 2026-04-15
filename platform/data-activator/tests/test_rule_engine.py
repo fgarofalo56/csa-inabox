@@ -49,7 +49,8 @@ def _make_rule(
             aggregation=aggregation,
             z_score_threshold=z_score_threshold,
         ),
-        actions=actions or [
+        actions=actions
+        or [
             Action(type=ActionType.TEAMS, config=ActionConfig(webhook_url="https://test.webhook.url")),
         ],
         enabled=enabled,
@@ -234,8 +235,12 @@ class TestBatchEvaluation:
     """Test evaluating multiple events against multiple rules."""
 
     def test_batch_evaluation(self, engine):
-        engine.add_rule(_make_rule(name="high-temp", field="temperature", operator=ConditionOperator.GT, threshold=100.0))
-        engine.add_rule(_make_rule(name="low-pressure", field="pressure", operator=ConditionOperator.LT, threshold=900.0))
+        engine.add_rule(
+            _make_rule(name="high-temp", field="temperature", operator=ConditionOperator.GT, threshold=100.0)
+        )
+        engine.add_rule(
+            _make_rule(name="low-pressure", field="pressure", operator=ConditionOperator.LT, threshold=900.0)
+        )
 
         events = [
             {"temperature": 120.0, "pressure": 1013.0},
@@ -291,13 +296,15 @@ class TestAlertMetadata:
     """Test that fired alerts contain correct metadata."""
 
     def test_fired_alert_has_correct_fields(self, engine):
-        engine.add_rule(_make_rule(
-            name="test-alert",
-            field="cpu_percent",
-            operator=ConditionOperator.GT,
-            threshold=90.0,
-            tags={"env": "prod"},
-        ))
+        engine.add_rule(
+            _make_rule(
+                name="test-alert",
+                field="cpu_percent",
+                operator=ConditionOperator.GT,
+                threshold=90.0,
+                tags={"env": "prod"},
+            )
+        )
 
         alerts = engine.evaluate({"cpu_percent": 95.0})
 

@@ -194,21 +194,26 @@ class TestParseSecretName:
 # ---------------------------------------------------------------------------
 class TestRotateStorageKey:
     @pytest.mark.asyncio
-    async def test_returns_error_when_missing_params(self, function_app: types.ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_returns_error_when_missing_params(
+        self, function_app: types.ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Should return error when required parameters are missing."""
         monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "")
 
         # Mock the Azure SDK modules that are imported inside the function
-        with patch.dict("sys.modules", {
-            "azure.identity.aio": MagicMock(),
-            "azure.keyvault.secrets.aio": MagicMock(),
-            "azure.mgmt.storage.aio": MagicMock(),
-            "azure.mgmt.storage.models": MagicMock(),
-        }):
+        with patch.dict(
+            "sys.modules",
+            {
+                "azure.identity.aio": MagicMock(),
+                "azure.keyvault.secrets.aio": MagicMock(),
+                "azure.mgmt.storage.aio": MagicMock(),
+                "azure.mgmt.storage.models": MagicMock(),
+            },
+        ):
             result = await function_app._rotate_storage_key(
                 "storage-access-key-prod",
                 {"service": "storage", "purpose": "access-key", "environment": "prod"},
-                {"resource_group": "rg", "account_name": "account"}
+                {"resource_group": "rg", "account_name": "account"},
             )
 
         assert not result["success"]
@@ -246,16 +251,21 @@ class TestRotateStorageKey:
         mock_credential.__aenter__ = AsyncMock(return_value=mock_credential)
         mock_credential.__aexit__ = AsyncMock(return_value=False)
 
-        with patch.dict("sys.modules", {
-            "azure.identity.aio": MagicMock(DefaultAzureCredential=MagicMock(return_value=mock_credential)),
-            "azure.keyvault.secrets.aio": MagicMock(SecretClient=MagicMock(return_value=mock_kv_client)),
-            "azure.mgmt.storage.aio": MagicMock(StorageManagementClient=MagicMock(return_value=mock_storage_client)),
-            "azure.mgmt.storage.models": MagicMock(StorageAccountRegenerateKeyParameters=MagicMock()),
-        }):
+        with patch.dict(
+            "sys.modules",
+            {
+                "azure.identity.aio": MagicMock(DefaultAzureCredential=MagicMock(return_value=mock_credential)),
+                "azure.keyvault.secrets.aio": MagicMock(SecretClient=MagicMock(return_value=mock_kv_client)),
+                "azure.mgmt.storage.aio": MagicMock(
+                    StorageManagementClient=MagicMock(return_value=mock_storage_client)
+                ),
+                "azure.mgmt.storage.models": MagicMock(StorageAccountRegenerateKeyParameters=MagicMock()),
+            },
+        ):
             result = await function_app._rotate_storage_key(
                 "storage-access-key-prod",
                 {"service": "storage", "purpose": "access-key", "environment": "prod"},
-                {"resource_group": "test-rg", "account_name": "testaccount"}
+                {"resource_group": "test-rg", "account_name": "testaccount"},
             )
 
         assert result["success"] is True
@@ -277,15 +287,23 @@ class TestRotateStorageKey:
         mock_credential.__aenter__ = AsyncMock(return_value=mock_credential)
         mock_credential.__aexit__ = AsyncMock(return_value=False)
 
-        with patch.dict("sys.modules", {
-            "azure.identity.aio": MagicMock(DefaultAzureCredential=MagicMock(return_value=mock_credential)),
-            "azure.mgmt.storage.aio": MagicMock(StorageManagementClient=MagicMock(return_value=mock_storage_client)),
-            "azure.mgmt.storage.models": MagicMock(StorageAccountRegenerateKeyParameters=MagicMock()),
-        }), pytest.raises(RuntimeError):
+        with (
+            patch.dict(
+                "sys.modules",
+                {
+                    "azure.identity.aio": MagicMock(DefaultAzureCredential=MagicMock(return_value=mock_credential)),
+                    "azure.mgmt.storage.aio": MagicMock(
+                        StorageManagementClient=MagicMock(return_value=mock_storage_client)
+                    ),
+                    "azure.mgmt.storage.models": MagicMock(StorageAccountRegenerateKeyParameters=MagicMock()),
+                },
+            ),
+            pytest.raises(RuntimeError),
+        ):
             await function_app._rotate_storage_key(
                 "storage-access-key-prod",
                 {"service": "storage", "purpose": "access-key", "environment": "prod"},
-                {"resource_group": "test-rg", "account_name": "testaccount"}
+                {"resource_group": "test-rg", "account_name": "testaccount"},
             )
 
 
@@ -294,21 +312,26 @@ class TestRotateStorageKey:
 # ---------------------------------------------------------------------------
 class TestRotateCosmosKey:
     @pytest.mark.asyncio
-    async def test_returns_error_when_missing_params(self, function_app: types.ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_returns_error_when_missing_params(
+        self, function_app: types.ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Should return error when required parameters are missing."""
         monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "")
 
         # Mock the Azure SDK modules that are imported inside the function
-        with patch.dict("sys.modules", {
-            "azure.identity.aio": MagicMock(),
-            "azure.keyvault.secrets.aio": MagicMock(),
-            "azure.mgmt.cosmosdb.aio": MagicMock(),
-            "azure.mgmt.cosmosdb.models": MagicMock(),
-        }):
+        with patch.dict(
+            "sys.modules",
+            {
+                "azure.identity.aio": MagicMock(),
+                "azure.keyvault.secrets.aio": MagicMock(),
+                "azure.mgmt.cosmosdb.aio": MagicMock(),
+                "azure.mgmt.cosmosdb.models": MagicMock(),
+            },
+        ):
             result = await function_app._rotate_cosmos_key(
                 "cosmosdb-primary-key-prod",
                 {"service": "cosmosdb", "purpose": "primary-key", "environment": "prod"},
-                {"resource_group": "rg", "account_name": "account"}
+                {"resource_group": "rg", "account_name": "account"},
             )
 
         assert not result["success"]
@@ -348,16 +371,21 @@ class TestRotateCosmosKey:
         mock_credential.__aenter__ = AsyncMock(return_value=mock_credential)
         mock_credential.__aexit__ = AsyncMock(return_value=False)
 
-        with patch.dict("sys.modules", {
-            "azure.identity.aio": MagicMock(DefaultAzureCredential=MagicMock(return_value=mock_credential)),
-            "azure.keyvault.secrets.aio": MagicMock(SecretClient=MagicMock(return_value=mock_kv_client)),
-            "azure.mgmt.cosmosdb.aio": MagicMock(CosmosDBManagementClient=MagicMock(return_value=mock_cosmos_client)),
-            "azure.mgmt.cosmosdb.models": MagicMock(DatabaseAccountRegenerateKeyParameters=MagicMock()),
-        }):
+        with patch.dict(
+            "sys.modules",
+            {
+                "azure.identity.aio": MagicMock(DefaultAzureCredential=MagicMock(return_value=mock_credential)),
+                "azure.keyvault.secrets.aio": MagicMock(SecretClient=MagicMock(return_value=mock_kv_client)),
+                "azure.mgmt.cosmosdb.aio": MagicMock(
+                    CosmosDBManagementClient=MagicMock(return_value=mock_cosmos_client)
+                ),
+                "azure.mgmt.cosmosdb.models": MagicMock(DatabaseAccountRegenerateKeyParameters=MagicMock()),
+            },
+        ):
             result = await function_app._rotate_cosmos_key(
                 "cosmosdb-primary-key-prod",
                 {"service": "cosmosdb", "purpose": "primary-key", "environment": "prod"},
-                {"resource_group": "test-rg", "account_name": "testaccount"}
+                {"resource_group": "test-rg", "account_name": "testaccount"},
             )
 
         assert result["success"] is True
@@ -379,15 +407,23 @@ class TestRotateCosmosKey:
         mock_credential.__aenter__ = AsyncMock(return_value=mock_credential)
         mock_credential.__aexit__ = AsyncMock(return_value=False)
 
-        with patch.dict("sys.modules", {
-            "azure.identity.aio": MagicMock(DefaultAzureCredential=MagicMock(return_value=mock_credential)),
-            "azure.mgmt.cosmosdb.aio": MagicMock(CosmosDBManagementClient=MagicMock(return_value=mock_cosmos_client)),
-            "azure.mgmt.cosmosdb.models": MagicMock(DatabaseAccountRegenerateKeyParameters=MagicMock()),
-        }), pytest.raises(RuntimeError):
+        with (
+            patch.dict(
+                "sys.modules",
+                {
+                    "azure.identity.aio": MagicMock(DefaultAzureCredential=MagicMock(return_value=mock_credential)),
+                    "azure.mgmt.cosmosdb.aio": MagicMock(
+                        CosmosDBManagementClient=MagicMock(return_value=mock_cosmos_client)
+                    ),
+                    "azure.mgmt.cosmosdb.models": MagicMock(DatabaseAccountRegenerateKeyParameters=MagicMock()),
+                },
+            ),
+            pytest.raises(RuntimeError),
+        ):
             await function_app._rotate_cosmos_key(
                 "cosmosdb-primary-key-prod",
                 {"service": "cosmosdb", "purpose": "primary-key", "environment": "prod"},
-                {"resource_group": "test-rg", "account_name": "testaccount"}
+                {"resource_group": "test-rg", "account_name": "testaccount"},
             )
 
 
@@ -403,13 +439,14 @@ class TestRotateSqlPassword:
         # Mock Key Vault secret client
         stored_password = None
 
-        async def mock_set_secret(secret_name, value, **kwargs):
+        async def mock_set_secret(secret_name: str, value: str, **kwargs: Any) -> None:
             nonlocal stored_password
             stored_password = value
             return
 
         mock_secret = MagicMock()
-        async def mock_get_secret(secret_name):
+
+        async def mock_get_secret(secret_name: str) -> MagicMock:
             mock_secret.value = stored_password
             return mock_secret
 
@@ -424,14 +461,15 @@ class TestRotateSqlPassword:
         mock_credential.__aenter__ = AsyncMock(return_value=mock_credential)
         mock_credential.__aexit__ = AsyncMock(return_value=False)
 
-        with patch.dict("sys.modules", {
-            "azure.identity.aio": MagicMock(DefaultAzureCredential=MagicMock(return_value=mock_credential)),
-            "azure.keyvault.secrets.aio": MagicMock(SecretClient=MagicMock(return_value=mock_kv_client)),
-        }):
+        with patch.dict(
+            "sys.modules",
+            {
+                "azure.identity.aio": MagicMock(DefaultAzureCredential=MagicMock(return_value=mock_credential)),
+                "azure.keyvault.secrets.aio": MagicMock(SecretClient=MagicMock(return_value=mock_kv_client)),
+            },
+        ):
             result = await function_app._rotate_sql_password(
-                "sql-admin-password-prod",
-                {"service": "sql", "purpose": "admin-password", "environment": "prod"},
-                {}
+                "sql-admin-password-prod", {"service": "sql", "purpose": "admin-password", "environment": "prod"}, {}
             )
 
         assert result["success"] is True
@@ -441,20 +479,23 @@ class TestRotateSqlPassword:
         assert "Password stored in Key Vault" in result["note"]
 
     @pytest.mark.asyncio
-    async def test_custom_password_length(self, function_app: types.ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_custom_password_length(
+        self, function_app: types.ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Should use custom password length from params."""
         monkeypatch.setattr(function_app, "KEY_VAULT_URL", "https://test-kv.vault.azure.net/")
 
         # Mock Key Vault secret client
         stored_password = None
 
-        async def mock_set_secret(secret_name, value, **kwargs):
+        async def mock_set_secret(secret_name: str, value: str, **kwargs: Any) -> None:
             nonlocal stored_password
             stored_password = value
             return
 
         mock_secret = MagicMock()
-        async def mock_get_secret(secret_name):
+
+        async def mock_get_secret(secret_name: str) -> MagicMock:
             mock_secret.value = stored_password
             return mock_secret
 
@@ -469,17 +510,21 @@ class TestRotateSqlPassword:
         mock_credential.__aenter__ = AsyncMock(return_value=mock_credential)
         mock_credential.__aexit__ = AsyncMock(return_value=False)
 
-        with patch.dict("sys.modules", {
-            "azure.identity.aio": MagicMock(DefaultAzureCredential=MagicMock(return_value=mock_credential)),
-            "azure.keyvault.secrets.aio": MagicMock(SecretClient=MagicMock(return_value=mock_kv_client)),
-        }):
+        with patch.dict(
+            "sys.modules",
+            {
+                "azure.identity.aio": MagicMock(DefaultAzureCredential=MagicMock(return_value=mock_credential)),
+                "azure.keyvault.secrets.aio": MagicMock(SecretClient=MagicMock(return_value=mock_kv_client)),
+            },
+        ):
             result = await function_app._rotate_sql_password(
                 "sql-admin-password-prod",
                 {"service": "sql", "purpose": "admin-password", "environment": "prod"},
-                {"secret_length": 64}
+                {"secret_length": 64},
             )
 
         assert result["success"] is True
+        assert stored_password is not None
         assert len(stored_password) == 64
 
 
@@ -490,19 +535,17 @@ class TestSecretRotationHandler:
     @pytest.mark.asyncio
     async def test_handles_storage_event(self, function_app: types.ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
         """Should successfully handle storage secret rotation event."""
+
         # Mock the storage rotation handler
-        async def mock_storage_handler(secret_name, parsed, params):
+        async def mock_storage_handler(
+            secret_name: str, parsed: dict[str, str], params: dict[str, Any]
+        ) -> dict[str, Any]:
             return {"success": True, "service": "storage"}
 
         # Patch the handler in the module's _ROTATION_HANDLERS dict
         monkeypatch.setitem(function_app._ROTATION_HANDLERS, "storage", mock_storage_handler)
 
-        event = _make_event_grid_event(
-            data={
-                "ObjectName": "storage-access-key-prod",
-                "VaultName": "test-kv"
-            }
-        )
+        event = _make_event_grid_event(data={"ObjectName": "storage-access-key-prod", "VaultName": "test-kv"})
 
         # Should not raise any exceptions
         await function_app.secret_rotation_handler(event)
@@ -510,12 +553,7 @@ class TestSecretRotationHandler:
     @pytest.mark.asyncio
     async def test_handles_unknown_service(self, function_app: types.ModuleType) -> None:
         """Should gracefully handle unknown service types."""
-        event = _make_event_grid_event(
-            data={
-                "ObjectName": "unknown-service-key-prod",
-                "VaultName": "test-kv"
-            }
-        )
+        event = _make_event_grid_event(data={"ObjectName": "unknown-service-key-prod", "VaultName": "test-kv"})
 
         # Should not raise any exceptions
         await function_app.secret_rotation_handler(event)
@@ -534,21 +572,21 @@ class TestSecretRotationHandler:
         await function_app.secret_rotation_handler(event)
 
     @pytest.mark.asyncio
-    async def test_handles_handler_exception(self, function_app: types.ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_handles_handler_exception(
+        self, function_app: types.ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Should handle exceptions from rotation handlers gracefully."""
+
         # Mock the storage rotation handler to raise an exception
-        async def mock_failing_handler(secret_name, parsed, params):
+        async def mock_failing_handler(
+            secret_name: str, parsed: dict[str, str], params: dict[str, Any]
+        ) -> dict[str, Any]:
             raise RuntimeError("Handler failed")
 
         # Patch the handler in the module's _ROTATION_HANDLERS dict
         monkeypatch.setitem(function_app._ROTATION_HANDLERS, "storage", mock_failing_handler)
 
-        event = _make_event_grid_event(
-            data={
-                "ObjectName": "storage-access-key-prod",
-                "VaultName": "test-kv"
-            }
-        )
+        event = _make_event_grid_event(data={"ObjectName": "storage-access-key-prod", "VaultName": "test-kv"})
 
         # Should not raise any exceptions, just log the error
         await function_app.secret_rotation_handler(event)
@@ -561,18 +599,23 @@ class TestRotateEndpoint:
     @pytest.mark.asyncio
     async def test_200_success(self, function_app: types.ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
         """Happy path: valid JSON with secret_name."""
+
         # Mock the storage rotation handler
-        async def mock_storage_handler(secret_name, parsed, params):
+        async def mock_storage_handler(
+            secret_name: str, parsed: dict[str, str], params: dict[str, Any]
+        ) -> dict[str, Any]:
             return {"success": True, "service": "storage", "account": "testaccount"}
 
         # Patch the handler in the module's _ROTATION_HANDLERS dict
         monkeypatch.setitem(function_app._ROTATION_HANDLERS, "storage", mock_storage_handler)
 
         req = _make_http_request(
-            body=json.dumps({
-                "secret_name": "storage-access-key-prod",
-                "params": {"resource_group": "rg", "account_name": "testaccount"}
-            }).encode()
+            body=json.dumps(
+                {
+                    "secret_name": "storage-access-key-prod",
+                    "params": {"resource_group": "rg", "account_name": "testaccount"},
+                }
+            ).encode()
         )
 
         resp = await function_app.rotate(req)
@@ -596,9 +639,7 @@ class TestRotateEndpoint:
     @pytest.mark.asyncio
     async def test_400_missing_secret_name(self, function_app: types.ModuleType) -> None:
         """Should return 400 when secret_name is missing."""
-        req = _make_http_request(
-            body=json.dumps({"other": "field"}).encode()
-        )
+        req = _make_http_request(body=json.dumps({"other": "field"}).encode())
         resp = await function_app.rotate(req)
         assert resp.status_code == 400
 
@@ -608,9 +649,7 @@ class TestRotateEndpoint:
     @pytest.mark.asyncio
     async def test_400_unsupported_service(self, function_app: types.ModuleType) -> None:
         """Should return 400 for unsupported service types."""
-        req = _make_http_request(
-            body=json.dumps({"secret_name": "unknown-service-key-prod"}).encode()
-        )
+        req = _make_http_request(body=json.dumps({"secret_name": "unknown-service-key-prod"}).encode())
         resp = await function_app.rotate(req)
         assert resp.status_code == 400
 
@@ -621,16 +660,17 @@ class TestRotateEndpoint:
     @pytest.mark.asyncio
     async def test_500_handler_exception(self, function_app: types.ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
         """Should return 500 when handler raises an exception."""
+
         # Mock the storage rotation handler to raise an exception
-        async def mock_failing_handler(secret_name, parsed, params):
+        async def mock_failing_handler(
+            secret_name: str, parsed: dict[str, str], params: dict[str, Any]
+        ) -> dict[str, Any]:
             raise RuntimeError("Handler boom")
 
         # Patch the handler in the module's _ROTATION_HANDLERS dict
         monkeypatch.setitem(function_app._ROTATION_HANDLERS, "storage", mock_failing_handler)
 
-        req = _make_http_request(
-            body=json.dumps({"secret_name": "storage-access-key-prod"}).encode()
-        )
+        req = _make_http_request(body=json.dumps({"secret_name": "storage-access-key-prod"}).encode())
 
         resp = await function_app.rotate(req)
         assert resp.status_code == 500
@@ -645,7 +685,9 @@ class TestRotateEndpoint:
 # ---------------------------------------------------------------------------
 class TestHealthEndpoint:
     @pytest.mark.asyncio
-    async def test_healthy_when_kv_configured(self, function_app: types.ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_healthy_when_kv_configured(
+        self, function_app: types.ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Should return healthy status when Key Vault URL is configured."""
         monkeypatch.setattr(function_app, "KEY_VAULT_URL", "https://test-kv.vault.azure.net/")
 
@@ -659,7 +701,9 @@ class TestHealthEndpoint:
         assert "timestamp" in body
 
     @pytest.mark.asyncio
-    async def test_degraded_when_kv_not_configured(self, function_app: types.ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_degraded_when_kv_not_configured(
+        self, function_app: types.ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Should return degraded status when Key Vault URL is not configured."""
         monkeypatch.setattr(function_app, "KEY_VAULT_URL", "")
 

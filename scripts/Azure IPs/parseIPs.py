@@ -48,13 +48,9 @@ def extract_address_prefixes(directory: str) -> tuple[set[str], set[str]]:
             for prefix in prefixes:
                 try:
                     if ":" in prefix:
-                        ipv6_prefixes.add(
-                            str(ipaddress.IPv6Network(prefix, strict=False))
-                        )
+                        ipv6_prefixes.add(str(ipaddress.IPv6Network(prefix, strict=False)))
                     else:
-                        ipv4_prefixes.add(
-                            str(ipaddress.IPv4Network(prefix, strict=False))
-                        )
+                        ipv4_prefixes.add(str(ipaddress.IPv4Network(prefix, strict=False)))
                 except ValueError:
                     print(f"Invalid IP prefix found and skipped: {prefix}")
 

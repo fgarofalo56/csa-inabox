@@ -88,18 +88,31 @@ EVENT_TYPES = [
 ]
 
 FLOOR_ZONES = [
-    "Main Floor A", "Main Floor B", "Main Floor C",
-    "High Limit Room", "VIP Salon", "Poker Room",
-    "Non-Smoking Section", "Sports Lounge",
-    "Entry Plaza", "Resort Wing",
+    "Main Floor A",
+    "Main Floor B",
+    "Main Floor C",
+    "High Limit Room",
+    "VIP Salon",
+    "Poker Room",
+    "Non-Smoking Section",
+    "Sports Lounge",
+    "Entry Plaza",
+    "Resort Wing",
 ]
 
 DENOMINATIONS = [0.01, 0.05, 0.25, 1.00, 5.00, 25.00, 100.00]
 
 TILT_CODES = [
-    "COIN_JAM", "BILL_JAM", "DOOR_AJAR", "HOPPER_EMPTY",
-    "PRINTER_ERROR", "COMM_LOST", "RAM_ERROR", "POWER_RESET",
-    "REEL_TILT", "LOW_BATTERY",
+    "COIN_JAM",
+    "BILL_JAM",
+    "DOOR_AJAR",
+    "HOPPER_EMPTY",
+    "PRINTER_ERROR",
+    "COMM_LOST",
+    "RAM_ERROR",
+    "POWER_RESET",
+    "REEL_TILT",
+    "LOW_BATTERY",
 ]
 
 PROGRESSIVE_POOLS = ["Mini", "Minor", "Major", "Grand", "Mega"]
@@ -160,7 +173,9 @@ class SlotEventSimulator:
         # Add player context (most events have a player)
         if self.rng.random() > 0.1:
             player_id = f"PLR-{self.rng.randint(100000, 100000 + self.num_players)}"
-            session_id = self.active_sessions.get(player_id, {}).get("session_id", f"SES-{self.rng.randint(10000000, 99999999)}")
+            session_id = self.active_sessions.get(player_id, {}).get(
+                "session_id", f"SES-{self.rng.randint(10000000, 99999999)}"
+            )
             event["player_id"] = player_id
             event["session_id"] = session_id
             self.active_sessions[player_id] = {"session_id": session_id, "machine_id": machine_id}
@@ -193,8 +208,13 @@ class SlotEventSimulator:
 
         elif event_type == "progressive_hit":
             pool = self.rng.choice(PROGRESSIVE_POOLS)
-            amounts = {"Mini": (100, 500), "Minor": (500, 2500), "Major": (2500, 25000),
-                       "Grand": (25000, 100000), "Mega": (100000, 1000000)}
+            amounts = {
+                "Mini": (100, 500),
+                "Minor": (500, 2500),
+                "Major": (2500, 25000),
+                "Grand": (25000, 100000),
+                "Mega": (100000, 1000000),
+            }
             amount_range = amounts.get(pool, (100, 500))
             event["jackpot_amount"] = round(self.rng.uniform(*amount_range), 2)
             event["progressive_pool"] = pool
@@ -251,6 +271,7 @@ class EventHubProducer:
         """Initialize Event Hub producer client."""
         try:
             from azure.eventhub import EventData, EventHubProducerClient
+
             self.EventData = EventData
             self.producer = EventHubProducerClient.from_connection_string(
                 conn_str=self.connection_string,
@@ -258,10 +279,7 @@ class EventHubProducer:
             )
             logger.info("Connected to Event Hub: %s", self.event_hub_name)
         except ImportError:
-            logger.error(
-                "azure-eventhub package not installed. "
-                "Install with: pip install azure-eventhub"
-            )
+            logger.error("azure-eventhub package not installed. Install with: pip install azure-eventhub")
             raise
 
     def send_batch(self, events: list[dict[str, Any]]) -> int:
@@ -316,8 +334,7 @@ class EventHubProducer:
         """Close the producer connection."""
         if self.producer:
             self.producer.close()
-            logger.info("Producer closed. Total sent: %d, Errors: %d",
-                        self.total_sent, self.total_errors)
+            logger.info("Producer closed. Total sent: %d, Errors: %d", self.total_sent, self.total_errors)
 
 
 # ---------------------------------------------------------------------------
@@ -432,7 +449,9 @@ def main() -> int:
         producer = None
         if not args.dry_run:
             if not args.event_hub_connection:
-                logger.error("Event Hub connection string required. Use --event-hub-connection or set EVENT_HUB_CONNECTION_STRING")
+                logger.error(
+                    "Event Hub connection string required. Use --event-hub-connection or set EVENT_HUB_CONNECTION_STRING"
+                )
                 return 1
             producer = EventHubProducer(
                 connection_string=args.event_hub_connection,
@@ -445,8 +464,7 @@ def main() -> int:
         total_events = 0
         batch_interval = args.batch_size / max(args.events_per_second, 1)
 
-        logger.info("Starting simulation: %d events/sec, batch_size=%d",
-                     args.events_per_second, args.batch_size)
+        logger.info("Starting simulation: %d events/sec, batch_size=%d", args.events_per_second, args.batch_size)
 
         try:
             while running:
@@ -469,7 +487,9 @@ def main() -> int:
                     logger.info("Progress: %d events sent (%.1f events/sec)", total_events, rate)
 
                 # Throttle to target rate
-                sleep_time = batch_interval - (time.time() - start_time - (total_events / max(args.events_per_second, 1)))
+                sleep_time = batch_interval - (
+                    time.time() - start_time - (total_events / max(args.events_per_second, 1))
+                )
                 if sleep_time > 0:
                     time.sleep(sleep_time)
 
@@ -478,8 +498,12 @@ def main() -> int:
                 producer.close()
 
         elapsed = time.time() - start_time
-        logger.info("Simulation complete: %d events in %.1fs (%.1f events/sec)",
-                     total_events, elapsed, total_events / elapsed if elapsed > 0 else 0)
+        logger.info(
+            "Simulation complete: %d events in %.1fs (%.1f events/sec)",
+            total_events,
+            elapsed,
+            total_events / elapsed if elapsed > 0 else 0,
+        )
 
     # ---- File mode ----
     elif args.mode == "file":

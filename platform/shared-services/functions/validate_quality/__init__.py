@@ -83,14 +83,16 @@ def _check_completeness(
                 field_issues.append(idx)
         if field_issues:
             all_issue_rows.update(field_issues)
-            violations.append({
-                "rule": "completeness",
-                "field": field_name,
-                "row_indices": field_issues,
-                "message": f"Empty or null values found in '{field_name}'",
-                "score": 1.0 - (len(field_issues) / max(len(data), 1)),
-                "null_count": len(field_issues),
-            })
+            violations.append(
+                {
+                    "rule": "completeness",
+                    "field": field_name,
+                    "row_indices": field_issues,
+                    "message": f"Empty or null values found in '{field_name}'",
+                    "score": 1.0 - (len(field_issues) / max(len(data), 1)),
+                    "null_count": len(field_issues),
+                }
+            )
 
     score = 1.0 - (len(all_issue_rows) / max(len(data), 1))
     return {"violations": violations, "score": score}
@@ -139,15 +141,17 @@ def _check_range(
     score = 1.0 - (len(violations_idx) / max(len(data), 1))
     result_violations: list[dict[str, Any]] = []
     if violations_idx:
-        result_violations.append({
-            "rule": "range",
-            "field": field_name,
-            "row_indices": violations_idx,
-            "message": f"Values outside range [{min_val}, {max_val}] in '{field_name}'",
-            "score": score,
-            "violation_count": len(violations_idx),
-            "examples": violation_details,
-        })
+        result_violations.append(
+            {
+                "rule": "range",
+                "field": field_name,
+                "row_indices": violations_idx,
+                "message": f"Values outside range [{min_val}, {max_val}] in '{field_name}'",
+                "score": score,
+                "violation_count": len(violations_idx),
+                "examples": violation_details,
+            }
+        )
 
     return {"violations": result_violations, "score": score}
 
@@ -173,13 +177,15 @@ def _check_regex(
         pattern = re.compile(pattern_str)
     except re.error as exc:
         return {
-            "violations": [{
-                "rule": "regex",
-                "field": field_name,
-                "row_indices": [],
-                "message": f"Invalid regex pattern: {exc}",
-                "score": 0.0,
-            }],
+            "violations": [
+                {
+                    "rule": "regex",
+                    "field": field_name,
+                    "row_indices": [],
+                    "message": f"Invalid regex pattern: {exc}",
+                    "score": 0.0,
+                }
+            ],
             "score": 0.0,
         }
 
@@ -193,14 +199,16 @@ def _check_regex(
     score = 1.0 - (len(violations_idx) / max(len(data), 1))
     result_violations: list[dict[str, Any]] = []
     if violations_idx:
-        result_violations.append({
-            "rule": "regex",
-            "field": field_name,
-            "row_indices": violations_idx,
-            "message": f"Values not matching pattern '{pattern_str}' in '{field_name}'",
-            "score": score,
-            "violation_count": len(violations_idx),
-        })
+        result_violations.append(
+            {
+                "rule": "regex",
+                "field": field_name,
+                "row_indices": violations_idx,
+                "message": f"Values not matching pattern '{pattern_str}' in '{field_name}'",
+                "score": score,
+                "violation_count": len(violations_idx),
+            }
+        )
 
     return {"violations": result_violations, "score": score}
 
@@ -235,14 +243,16 @@ def _check_uniqueness(
     score = 1.0 - (len(duplicate_indices) / max(len(data), 1))
     result_violations: list[dict[str, Any]] = []
     if duplicate_indices:
-        result_violations.append({
-            "rule": "uniqueness",
-            "field": field_name,
-            "row_indices": sorted(duplicate_indices),
-            "message": f"Duplicate values found in '{field_name}'",
-            "score": score,
-            "duplicate_count": len(duplicate_indices),
-        })
+        result_violations.append(
+            {
+                "rule": "uniqueness",
+                "field": field_name,
+                "row_indices": sorted(duplicate_indices),
+                "message": f"Duplicate values found in '{field_name}'",
+                "score": score,
+                "duplicate_count": len(duplicate_indices),
+            }
+        )
 
     return {"violations": result_violations, "score": score}
 
@@ -275,13 +285,15 @@ def _check_referential(
     score = 1.0 - (len(violations_idx) / max(len(data), 1))
     result_violations: list[dict[str, Any]] = []
     if violations_idx:
-        result_violations.append({
-            "rule": "referential",
-            "field": field_name,
-            "row_indices": violations_idx,
-            "message": f"Values not in allowed set for '{field_name}'",
-            "score": score,
-        })
+        result_violations.append(
+            {
+                "rule": "referential",
+                "field": field_name,
+                "row_indices": violations_idx,
+                "message": f"Values not in allowed set for '{field_name}'",
+                "score": score,
+            }
+        )
 
     return {"violations": result_violations, "score": score}
 
@@ -355,13 +367,15 @@ def validate_quality(req: func.HttpRequest) -> func.HttpResponse:
         evaluator = _RULE_EVALUATORS.get(rule_type)
 
         if evaluator is None:
-            all_violations.append({
-                "rule": rule_type,
-                "field": rule.get("field", ""),
-                "row_indices": [],
-                "message": f"Unknown rule type: '{rule_type}'",
-                "score": 0.0,
-            })
+            all_violations.append(
+                {
+                    "rule": rule_type,
+                    "field": rule.get("field", ""),
+                    "row_indices": [],
+                    "message": f"Unknown rule type: '{rule_type}'",
+                    "score": 0.0,
+                }
+            )
             rule_scores.append(0.0)
             rules_failed += 1
             continue
@@ -376,13 +390,15 @@ def validate_quality(req: func.HttpRequest) -> func.HttpResponse:
                 rules_failed += 1
         except Exception as exc:
             logger.exception("Error evaluating rule %s", rule_type)
-            all_violations.append({
-                "rule": rule_type,
-                "field": rule.get("field", ""),
-                "row_indices": [],
-                "message": f"Evaluation error: {exc}",
-                "score": 0.0,
-            })
+            all_violations.append(
+                {
+                    "rule": rule_type,
+                    "field": rule.get("field", ""),
+                    "row_indices": [],
+                    "message": f"Evaluation error: {exc}",
+                    "score": 0.0,
+                }
+            )
             rule_scores.append(0.0)
             rules_failed += 1
 

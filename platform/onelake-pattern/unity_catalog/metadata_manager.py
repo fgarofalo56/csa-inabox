@@ -187,11 +187,7 @@ class InMemoryMetadataStore:
         for table in self.tables.values():
             if catalog and table.catalog_name != catalog:
                 continue
-            if (
-                q in table.name.lower()
-                or q in table.description.lower()
-                or any(q in tag.lower() for tag in table.tags)
-            ):
+            if q in table.name.lower() or q in table.description.lower() or any(q in tag.lower() for tag in table.tags):
                 results.append(table)
         return results
 
@@ -358,11 +354,13 @@ class MetadataManager:
             # Create a new schema version if columns changed
             if columns and columns != existing.columns:
                 existing.schema_version += 1
-                existing.versions.append(TableVersion(
-                    version=existing.schema_version,
-                    columns=columns,
-                    change_description="Schema updated",
-                ))
+                existing.versions.append(
+                    TableVersion(
+                        version=existing.schema_version,
+                        columns=columns,
+                        change_description="Schema updated",
+                    )
+                )
 
             self._store.upsert_table(existing)
             logger.info("Updated table: %s (v%d)", full_name, existing.schema_version)
@@ -524,7 +522,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Schema registered: {entry.catalog_name}.{entry.name}")
     elif args.command == "register-table":
         entry = manager.register_table(
-            args.catalog, args.schema, args.name, args.location, owner=args.owner,
+            args.catalog,
+            args.schema,
+            args.name,
+            args.location,
+            owner=args.owner,
         )
         print(f"Table registered: {entry.full_name}")
     elif args.command == "list-tables":
