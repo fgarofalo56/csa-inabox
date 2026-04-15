@@ -11,6 +11,131 @@ metadata:
     daily AQI values, health advisory levels, pollutant breakdowns, and
     meteorological context for 500+ metropolitan areas.
 
+schema:
+  primary_key: [site_id, pollutant, observation_date]
+  columns:
+    - name: site_id
+      type: string
+      nullable: false
+      description: AQS site identifier (format SS-CCC-NNNN)
+
+    - name: state_code
+      type: string
+      nullable: false
+      description: 2-digit FIPS state code
+
+    - name: county_code
+      type: string
+      nullable: false
+      description: 3-digit FIPS county code
+
+    - name: cbsa_name
+      type: string
+      nullable: true
+      description: Core Based Statistical Area (metro area) name
+
+    - name: latitude
+      type: decimal(9,6)
+      nullable: false
+      description: Monitor latitude
+
+    - name: longitude
+      type: decimal(9,6)
+      nullable: false
+      description: Monitor longitude
+
+    - name: observation_date
+      type: date
+      nullable: false
+      description: Date of observation
+
+    - name: pollutant
+      type: string
+      nullable: false
+      description: Criteria pollutant name
+      allowed_values:
+        - PM2.5
+        - PM10
+        - O3
+        - NO2
+        - SO2
+        - CO
+        - Pb
+
+    - name: concentration
+      type: decimal(12,6)
+      nullable: true
+      description: Pollutant concentration in standard units
+
+    - name: aqi_value
+      type: integer
+      nullable: false
+      description: Air Quality Index value (0-500)
+
+    - name: aqi_category
+      type: string
+      nullable: false
+      description: EPA AQI health category
+      allowed_values:
+        - GOOD
+        - MODERATE
+        - UNHEALTHY_SENSITIVE
+        - UNHEALTHY
+        - VERY_UNHEALTHY
+        - HAZARDOUS
+
+    - name: is_preliminary
+      type: boolean
+      nullable: true
+      description: >
+        TRUE for AirNow real-time data; FALSE for QA'd AQS data.
+
+    - name: report_date
+      type: date
+      nullable: false
+      description: Date when analytics were generated
+
+sla:
+  freshness_minutes: 1440  # Daily for QA'd data; real-time streaming < 5 min
+  valid_row_ratio: 0.95
+  supported_until: "2027-12-31"
+  update_frequency: >
+    Real-time via streaming (< 5 min) for AirNow.
+    Daily batch for historical QA'd AQS data.
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: site_id
+  - rule: expect_column_values_to_not_be_null
+    column: observation_date
+  - rule: expect_column_values_to_not_be_null
+    column: pollutant
+  - rule: expect_column_values_to_not_be_null
+    column: aqi_value
+  - rule: expect_column_values_to_be_in_set
+    column: pollutant
+    value_set: [PM2.5, PM10, O3, NO2, SO2, CO, Pb]
+  - rule: expect_column_values_to_be_between
+    column: aqi_value
+    min_value: 0
+    max_value: 500
+  - rule: expect_column_values_to_be_in_set
+    column: aqi_category
+    value_set: [GOOD, MODERATE, UNHEALTHY_SENSITIVE, UNHEALTHY, VERY_UNHEALTHY, HAZARDOUS]
+  - rule: expect_column_values_to_be_between
+    column: concentration
+    min_value: 0
+    max_value: 10000
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: latitude
+    min_value: 17.0
+    max_value: 72.0
+  - rule: expect_column_values_to_be_between
+    column: longitude
+    min_value: -180.0
+    max_value: -60.0
+
 spec:
   # Schema definition
   schema:

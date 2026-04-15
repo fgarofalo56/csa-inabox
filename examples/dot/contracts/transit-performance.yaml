@@ -5,12 +5,136 @@ metadata:
   domain: transportation
   owner: DOT Analytics Team
   version: "1.0.0"
+  description: >
+    Public transit performance analytics from National Transit Database (NTD)
+    data. Provides route-level on-time performance, ridership metrics,
+    vehicle utilization, financial efficiency, and safety incident tracking
+    across transit agencies. Used for FTA grant oversight, service planning,
+    and transit investment decisions.
   classification: public
   tags:
     - transit
     - ntd
     - fta
     - ridership
+
+schema:
+  primary_key: [ntd_id, mode, report_year, report_month]
+  columns:
+    - name: ntd_id
+      type: string
+      nullable: false
+      description: National Transit Database agency identifier
+
+    - name: agency_name
+      type: string
+      nullable: false
+      description: Transit agency name
+
+    - name: state
+      type: string
+      nullable: false
+      description: 2-letter state abbreviation
+
+    - name: mode
+      type: string
+      nullable: false
+      description: Transit mode code (HR, LR, MB, CR, etc.)
+
+    - name: mode_name
+      type: string
+      nullable: false
+      description: Full transit mode name (Heavy Rail, Light Rail, Bus, etc.)
+
+    - name: report_year
+      type: integer
+      nullable: false
+      description: Reporting year
+
+    - name: report_month
+      type: integer
+      nullable: false
+      description: Reporting month (1-12)
+
+    - name: unlinked_passenger_trips
+      type: integer
+      nullable: true
+      description: Total unlinked passenger trips (boardings)
+
+    - name: vehicle_revenue_hours
+      type: decimal(12,2)
+      nullable: true
+      description: Total vehicle revenue hours of service
+
+    - name: vehicle_revenue_miles
+      type: decimal(12,2)
+      nullable: true
+      description: Total vehicle revenue miles of service
+
+    - name: operating_expense
+      type: decimal(14,2)
+      nullable: true
+      description: Total operating expenses (USD)
+
+    - name: fare_revenue
+      type: decimal(14,2)
+      nullable: true
+      description: Total fare revenue (USD)
+
+    - name: incidents
+      type: integer
+      nullable: true
+      description: Total safety incidents reported
+
+    - name: fatalities
+      type: integer
+      nullable: true
+      description: Number of fatalities
+
+    - name: report_date
+      type: date
+      nullable: false
+      description: Date when analytics were generated
+
+sla:
+  freshness_minutes: 43200  # Monthly updates
+  valid_row_ratio: 0.95
+  supported_until: "2027-12-31"
+  update_frequency: "Monthly for selected large agencies; annual for full NTD dataset (~18-month lag)"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: ntd_id
+  - rule: expect_column_values_to_not_be_null
+    column: agency_name
+  - rule: expect_column_values_to_not_be_null
+    column: mode
+  - rule: expect_column_values_to_not_be_null
+    column: report_year
+  - rule: expect_column_values_to_be_between
+    column: report_year
+    min_value: 2010
+    max_value: 2030
+  - rule: expect_column_values_to_be_between
+    column: report_month
+    min_value: 1
+    max_value: 12
+  - rule: expect_column_values_to_be_between
+    column: unlinked_passenger_trips
+    min_value: 0
+    max_value: 1000000000
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: operating_expense
+    min_value: 0
+    max_value: 50000000000
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: fatalities
+    min_value: 0
+    max_value: 1000
+    mostly: 0.99
+
 spec:
   description: >
     Public transit performance analytics from National Transit Database (NTD)

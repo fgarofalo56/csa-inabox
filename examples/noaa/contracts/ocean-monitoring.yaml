@@ -12,6 +12,128 @@ metadata:
     monitoring stations. Used for marine forecasting, climate research,
     and coastal hazard assessment.
 
+schema:
+  primary_key: [station_id, observation_datetime]
+  columns:
+    - name: station_id
+      type: string
+      nullable: false
+      description: NDBC station identifier (numeric for buoys, alphanumeric for C-MAN)
+
+    - name: station_name
+      type: string
+      nullable: false
+      description: Station name and location description
+
+    - name: station_type
+      type: string
+      nullable: false
+      description: Station type (Buoy, C-MAN, DART, etc.)
+      allowed_values:
+        - Buoy
+        - C-MAN
+        - DART
+        - Ship
+        - Platform
+
+    - name: latitude
+      type: decimal(8,3)
+      nullable: false
+      description: Station latitude (WGS84)
+
+    - name: longitude
+      type: decimal(8,3)
+      nullable: false
+      description: Station longitude (WGS84)
+
+    - name: observation_datetime
+      type: timestamp
+      nullable: false
+      description: UTC timestamp of the observation
+
+    - name: wind_speed_ms
+      type: decimal(6,2)
+      nullable: true
+      description: Wind speed in meters per second
+
+    - name: wave_height_m
+      type: decimal(5,2)
+      nullable: true
+      description: Significant wave height in meters
+
+    - name: sea_surface_temp_c
+      type: decimal(5,2)
+      nullable: true
+      description: Sea surface temperature in degrees Celsius
+
+    - name: pressure_hpa
+      type: decimal(7,2)
+      nullable: true
+      description: Sea level pressure in hectopascals (millibars)
+
+    - name: air_temperature_c
+      type: decimal(5,2)
+      nullable: true
+      description: Air temperature in degrees Celsius
+
+    - name: salinity_psu
+      type: decimal(5,2)
+      nullable: true
+      description: Sea surface salinity in practical salinity units (PSU)
+
+    - name: ocean_current_speed_ms
+      type: decimal(5,2)
+      nullable: true
+      description: Ocean current speed in meters per second
+
+    - name: report_date
+      type: date
+      nullable: false
+      description: Date portion of the observation timestamp
+
+sla:
+  freshness_minutes: 120  # 2 hours (hourly buoy observations)
+  valid_row_ratio: 0.90
+  supported_until: "2027-12-31"
+  update_frequency: "Hourly for real-time buoy observations; daily for historical reconciliation"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: station_id
+  - rule: expect_column_values_to_not_be_null
+    column: observation_datetime
+  - rule: expect_column_values_to_be_in_set
+    column: station_type
+    value_set: [Buoy, C-MAN, DART, Ship, Platform]
+  - rule: expect_column_values_to_be_between
+    column: latitude
+    min_value: -90.0
+    max_value: 90.0
+  - rule: expect_column_values_to_be_between
+    column: longitude
+    min_value: -180.0
+    max_value: 180.0
+  - rule: expect_column_values_to_be_between
+    column: wave_height_m
+    min_value: 0
+    max_value: 25
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: sea_surface_temp_c
+    min_value: -5.0
+    max_value: 40.0
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: pressure_hpa
+    min_value: 870
+    max_value: 1084
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: wind_speed_ms
+    min_value: 0
+    max_value: 100
+    mostly: 0.99
+
 spec:
   # Schema definition
   schema:

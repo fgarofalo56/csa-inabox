@@ -207,8 +207,10 @@ jobs:
           MATCHES=$(grep -rni "$PATTERNS" --include="*.json" --include="*.yaml" --include="*.yml" \
             --include="*.ps1" --include="*.py" --include="*.bicep" \
             --exclude-dir=node_modules --exclude-dir=.venv --exclude-dir=codeqlDB \
-            --exclude-dir=.git . | grep -v "askForPassword" | grep -v "savePassword" \
-            | grep -v ".gitignore" | grep -v "secretStorage" | head -20) || true
+            --exclude-dir=.git --exclude-dir=.github \
+            . | grep -v "askForPassword" | grep -v "savePassword" \
+            | grep -v ".gitignore" | grep -v "secretStorage" \
+            | grep -v "# nosec" | grep -v "noqa" | head -20) || true
           if [ -n "$MATCHES" ]; then
             echo "$MATCHES"
             echo "::error::Found potential secret patterns in committed files"

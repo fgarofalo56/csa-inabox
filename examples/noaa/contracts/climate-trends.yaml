@@ -11,6 +11,130 @@ metadata:
     1901–2000 baseline, linear trend slopes with statistical significance,
     extreme event frequency, and growing season length metrics.
 
+schema:
+  primary_key: [climate_region, year]
+  columns:
+    - name: climate_region
+      type: string
+      nullable: false
+      description: NOAA climate region name (e.g., NORTHEAST, SOUTHEAST)
+      allowed_values:
+        - NORTHEAST
+        - SOUTHEAST
+        - UPPER_MIDWEST
+        - OHIO_VALLEY
+        - SOUTH
+        - NORTHERN_ROCKIES_PLAINS
+        - SOUTHWEST
+        - NORTHWEST
+        - WEST
+
+    - name: state_code
+      type: string
+      nullable: false
+      description: Representative 2-letter state code within the climate region
+
+    - name: year
+      type: integer
+      nullable: false
+      description: Calendar year of observation
+
+    - name: avg_annual_temp_celsius
+      type: decimal(5,2)
+      nullable: true
+      description: Average annual temperature in degrees Celsius
+
+    - name: temp_anomaly_vs_baseline
+      type: decimal(5,2)
+      nullable: true
+      description: >
+        Temperature anomaly relative to 1901-2000 baseline period
+        (positive = warmer than normal)
+
+    - name: total_annual_precip_mm
+      type: decimal(8,2)
+      nullable: true
+      description: Total annual precipitation in millimeters
+
+    - name: days_above_35c
+      type: integer
+      nullable: true
+      description: Number of days with maximum temperature above 35C (95F)
+
+    - name: days_below_0c
+      type: integer
+      nullable: true
+      description: Number of days with minimum temperature below 0C (32F)
+
+    - name: growing_season_days
+      type: integer
+      nullable: true
+      description: Length of frost-free growing season in days
+
+    - name: trend_slope_per_decade
+      type: decimal(6,4)
+      nullable: true
+      description: Linear regression slope of temperature trend per decade (C/decade)
+
+    - name: trend_classification
+      type: string
+      nullable: true
+      description: Human-readable trend classification
+      allowed_values:
+        - SIGNIFICANT_WARMING
+        - MODERATE_WARMING
+        - STABLE
+        - MODERATE_COOLING
+        - SIGNIFICANT_COOLING
+        - INSUFFICIENT_DATA
+
+    - name: report_date
+      type: date
+      nullable: false
+      description: Date when this record was last computed
+
+sla:
+  freshness_minutes: 44640  # ~31 days (monthly updates)
+  valid_row_ratio: 0.95
+  supported_until: "2027-12-31"
+  update_frequency: "Monthly with annual recalibration of baselines"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: climate_region
+  - rule: expect_column_values_to_not_be_null
+    column: year
+  - rule: expect_column_values_to_be_in_set
+    column: climate_region
+    value_set: [NORTHEAST, SOUTHEAST, UPPER_MIDWEST, OHIO_VALLEY, SOUTH, NORTHERN_ROCKIES_PLAINS, SOUTHWEST, NORTHWEST, WEST]
+  - rule: expect_column_values_to_be_between
+    column: year
+    min_value: 1895
+    max_value: 2030
+  - rule: expect_column_values_to_be_between
+    column: avg_annual_temp_celsius
+    min_value: -30.0
+    max_value: 40.0
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: temp_anomaly_vs_baseline
+    min_value: -10.0
+    max_value: 10.0
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: total_annual_precip_mm
+    min_value: 0
+    max_value: 5000
+    mostly: 0.99
+  - rule: expect_column_values_to_be_in_set
+    column: trend_classification
+    value_set: [SIGNIFICANT_WARMING, MODERATE_WARMING, STABLE, MODERATE_COOLING, SIGNIFICANT_COOLING, INSUFFICIENT_DATA]
+  - rule: expect_column_values_to_be_between
+    column: growing_season_days
+    min_value: 0
+    max_value: 366
+    mostly: 0.99
+
 spec:
   # Schema definition
   schema:

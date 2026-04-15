@@ -52,7 +52,7 @@ jobs:
 
       - name: Security scan with Bandit
         run: |
-          bandit -r governance/ domains/ scripts/ --skip B101
+          bandit -r governance/ domains/ scripts/ -c pyproject.toml
 
       - name: Typecheck with mypy (strict)
         run: |
@@ -184,13 +184,13 @@ jobs:
         run: dbt deps || echo "dbt deps skipped (no packages)"
 
       - name: dbt seed
-        run: dbt seed --target ci
+        run: dbt seed --target ci --profiles-dir ~/.dbt
 
       - name: dbt run
-        run: dbt run --target ci
+        run: dbt run --target ci --profiles-dir ~/.dbt
 
       - name: dbt test
-        run: dbt test --target ci
+        run: dbt test --target ci --profiles-dir ~/.dbt
 
   pr-summary:
     name: PR Summary

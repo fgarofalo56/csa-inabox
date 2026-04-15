@@ -52,7 +52,7 @@ lint-ps: ## Lint PowerShell scripts
 	pwsh -Command "Get-ChildItem -Recurse -Filter *.ps1 | ForEach-Object { Invoke-ScriptAnalyzer -Path $$_.FullName -Severity Warning }"
 
 security: ## Run Bandit security linter
-	bandit -r governance/ domains/ scripts/ -c pyproject.toml --skip B101
+	bandit -r governance/ domains/ scripts/ -c pyproject.toml
 
 # --- Testing ---
 

@@ -13,6 +13,113 @@ metadata:
     gaming floor optimization, and regulatory compliance monitoring.
     All data is entirely synthetic — no real player data.
 
+schema:
+  primary_key: [player_id]
+  columns:
+    - name: player_id
+      type: string
+      nullable: false
+      description: Player tracking system identifier
+
+    - name: lifetime_coin_in
+      type: decimal(14,2)
+      nullable: true
+      description: Total lifetime amount wagered
+
+    - name: lifetime_theoretical
+      type: decimal(14,2)
+      nullable: true
+      description: Total lifetime theoretical win (expected house revenue)
+
+    - name: adt
+      type: decimal(10,2)
+      nullable: true
+      description: Average Daily Theoretical — primary player value metric
+
+    - name: calculated_tier
+      type: string
+      nullable: true
+      description: Loyalty tier based on ADT
+      allowed_values:
+        - BRONZE
+        - SILVER
+        - GOLD
+        - PLATINUM
+        - DIAMOND
+
+    - name: visits_per_month
+      type: decimal(6,2)
+      nullable: true
+      description: Average visit frequency per 30-day period
+
+    - name: churn_probability_score
+      type: decimal(5,1)
+      nullable: true
+      description: Churn risk (0-100, higher = more likely to leave)
+
+    - name: activity_trend
+      type: string
+      nullable: true
+      description: Recent play trend
+      allowed_values:
+        - INCREASING
+        - DECREASING
+        - STABLE
+        - DORMANT
+
+    - name: comp_efficiency_pct
+      type: decimal(5,1)
+      nullable: true
+      description: Comp spend as percentage of theoretical win
+
+    - name: preferred_game_type
+      type: string
+      nullable: true
+      description: Most frequently played game type
+
+    - name: report_date
+      type: date
+      nullable: false
+      description: Date when analytics were computed
+
+sla:
+  freshness_minutes: 1440  # Daily
+  valid_row_ratio: 0.98
+  supported_until: "2027-12-31"
+  update_frequency: >
+    Daily for player value and floor optimization.
+    Real-time with daily batch reconciliation for compliance monitoring.
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: player_id
+  - rule: expect_column_values_to_be_between
+    column: churn_probability_score
+    min_value: 0
+    max_value: 100
+    mostly: 0.99
+  - rule: expect_column_values_to_be_in_set
+    column: calculated_tier
+    value_set: [BRONZE, SILVER, GOLD, PLATINUM, DIAMOND]
+  - rule: expect_column_values_to_be_in_set
+    column: activity_trend
+    value_set: [INCREASING, DECREASING, STABLE, DORMANT]
+  - rule: expect_column_values_to_be_between
+    column: lifetime_coin_in
+    min_value: 0
+    max_value: 100000000
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: comp_efficiency_pct
+    min_value: 0
+    max_value: 500
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: visits_per_month
+    min_value: 0
+    max_value: 31
+    mostly: 0.99
+
 classification:
   level: CONFIDENTIAL
   category: GAMING_OPERATIONS

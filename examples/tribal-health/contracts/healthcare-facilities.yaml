@@ -15,6 +15,115 @@ metadata:
     and services offered. Used for network adequacy assessment, resource
     allocation, and healthcare access analysis across Indian Country.
 
+schema:
+  primary_key: [facility_id]
+  columns:
+    - name: facility_id
+      type: string
+      nullable: false
+      description: Unique facility identifier (FAC-NNN)
+
+    - name: facility_name
+      type: string
+      nullable: false
+      description: Official facility name
+
+    - name: facility_type
+      type: string
+      nullable: false
+      description: Facility type classification
+      allowed_values:
+        - HOSPITAL
+        - HEALTH_CENTER
+        - HEALTH_STATION
+        - URBAN_PROGRAM
+        - YOUTH_CENTER
+
+    - name: service_unit
+      type: string
+      nullable: false
+      description: IHS service unit name
+
+    - name: tribal_affiliation
+      type: string
+      nullable: true
+      description: Primary tribal nation affiliation
+
+    - name: state
+      type: string
+      nullable: false
+      description: 2-letter state abbreviation
+
+    - name: bed_count
+      type: integer
+      nullable: false
+      description: Number of inpatient beds (0 for outpatient-only facilities)
+
+    - name: provider_count
+      type: integer
+      nullable: false
+      description: Total clinical provider count (physicians, NPs, PAs)
+
+    - name: services_offered
+      type: string
+      nullable: true
+      description: >
+        Pipe-delimited list of services offered (e.g.,
+        SUBSTANCE_ABUSE|PHARMACY|RADIOLOGY|SURGERY|BEHAVIORAL_HEALTH|
+        OPTOMETRY|TELEHEALTH|PEDIATRICS|DENTAL|LAB)
+
+    - name: telehealth_capable
+      type: boolean
+      nullable: true
+      description: Whether the facility offers telehealth services
+
+    - name: provider_to_population_ratio
+      type: decimal(8,2)
+      nullable: true
+      description: Providers per 10,000 enrolled population
+
+    - name: services_gap_count
+      type: integer
+      nullable: true
+      description: Number of essential services not available locally
+
+    - name: report_date
+      type: date
+      nullable: false
+      description: Date when facility data was last updated
+
+sla:
+  freshness_minutes: 43200  # 30 days
+  valid_row_ratio: 0.98
+  supported_until: "2027-12-31"
+  update_frequency: "Monthly for facility profiles; quarterly for capacity analytics"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: facility_id
+  - rule: expect_column_values_to_not_be_null
+    column: facility_name
+  - rule: expect_column_values_to_not_be_null
+    column: facility_type
+  - rule: expect_column_values_to_be_in_set
+    column: facility_type
+    value_set: [HOSPITAL, HEALTH_CENTER, HEALTH_STATION, URBAN_PROGRAM, YOUTH_CENTER]
+  - rule: expect_column_values_to_not_be_null
+    column: service_unit
+  - rule: expect_column_values_to_be_between
+    column: bed_count
+    min_value: 0
+    max_value: 1000
+  - rule: expect_column_values_to_be_between
+    column: provider_count
+    min_value: 0
+    max_value: 500
+  - rule: expect_column_values_to_be_between
+    column: provider_to_population_ratio
+    min_value: 0
+    max_value: 500
+    mostly: 0.99
+
 classification:
   level: CUI
   category: SP-HLTH

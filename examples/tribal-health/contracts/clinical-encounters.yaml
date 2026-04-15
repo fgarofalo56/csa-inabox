@@ -16,6 +16,117 @@ metadata:
     All data is synthetic. Used for clinical operations analysis, utilization
     management, and population health surveillance.
 
+schema:
+  primary_key: [encounter_id]
+  columns:
+    - name: encounter_id
+      type: string
+      nullable: false
+      description: Unique encounter identifier (ENC-NNNNNNN)
+
+    - name: patient_id
+      type: string
+      nullable: false
+      description: Patient tracking identifier (PTH-NNNNNN)
+
+    - name: facility_id
+      type: string
+      nullable: false
+      description: IHS/tribal facility identifier (FAC-NNN)
+
+    - name: encounter_date
+      type: date
+      nullable: false
+      description: Date of the clinical encounter
+
+    - name: encounter_type
+      type: string
+      nullable: false
+      description: Type of clinical encounter
+      allowed_values:
+        - OUTPATIENT
+        - ED
+        - INPATIENT
+        - TELEHEALTH
+        - DENTAL
+        - OPTOMETRY
+        - BEHAVIORAL_HEALTH
+        - PHARMACY
+
+    - name: primary_dx_icd10
+      type: string
+      nullable: false
+      description: Primary diagnosis ICD-10-CM code
+
+    - name: secondary_dx_codes
+      type: string
+      nullable: true
+      description: Pipe-delimited secondary ICD-10-CM diagnosis codes
+
+    - name: provider_type
+      type: string
+      nullable: false
+      description: Type of provider seen
+      allowed_values:
+        - MD
+        - DO
+        - NP
+        - PA
+        - RN
+        - PHARMACIST
+        - DENTIST
+        - OPTOMETRIST
+        - PSYCHOLOGIST
+        - LCSW
+        - CHR
+
+    - name: disposition
+      type: string
+      nullable: false
+      description: Encounter disposition/outcome
+      allowed_values:
+        - DISCHARGED
+        - ADMITTED
+        - TRANSFERRED
+        - LEFT_AMA
+        - DECEASED
+        - REFERRED
+
+    - name: report_date
+      type: date
+      nullable: false
+      description: Date when the record was loaded or updated
+
+sla:
+  freshness_minutes: 1440  # Daily
+  valid_row_ratio: 0.95
+  supported_until: "2027-12-31"
+  update_frequency: >
+    Daily for encounter records. Monthly for utilization analytics.
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: encounter_id
+  - rule: expect_column_values_to_not_be_null
+    column: patient_id
+  - rule: expect_column_values_to_not_be_null
+    column: facility_id
+  - rule: expect_column_values_to_not_be_null
+    column: encounter_date
+  - rule: expect_column_values_to_not_be_null
+    column: encounter_type
+  - rule: expect_column_values_to_be_in_set
+    column: encounter_type
+    value_set: [OUTPATIENT, ED, INPATIENT, TELEHEALTH, DENTAL, OPTOMETRY, BEHAVIORAL_HEALTH, PHARMACY]
+  - rule: expect_column_values_to_be_in_set
+    column: provider_type
+    value_set: [MD, DO, NP, PA, RN, PHARMACIST, DENTIST, OPTOMETRIST, PSYCHOLOGIST, LCSW, CHR]
+  - rule: expect_column_values_to_be_in_set
+    column: disposition
+    value_set: [DISCHARGED, ADMITTED, TRANSFERRED, LEFT_AMA, DECEASED, REFERRED]
+  - rule: expect_column_values_to_not_be_null
+    column: primary_dx_icd10
+
 classification:
   level: CUI
   category: SP-HLTH

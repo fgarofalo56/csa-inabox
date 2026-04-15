@@ -5,12 +5,140 @@ metadata:
   domain: postal-operations
   owner: USPS Analytics Team
   version: "1.0.0"
+  description: >
+    USPS delivery performance analytics with route optimization scoring,
+    on-time delivery tracking, and last-mile efficiency analysis. Derived
+    from synthetic delivery tracking data modeled on USPS operational
+    patterns. Provides route-level and ZIP-level performance metrics for
+    operational optimization.
   classification: public
   tags:
     - delivery
     - performance
     - logistics
     - optimization
+
+schema:
+  primary_key: [tracking_id]
+  columns:
+    - name: tracking_id
+      type: string
+      nullable: false
+      description: Unique tracking identifier for the mail piece or parcel
+
+    - name: origin_zip
+      type: string
+      nullable: false
+      description: Standardized 5-digit origin ZIP code
+
+    - name: destination_zip
+      type: string
+      nullable: false
+      description: Standardized 5-digit destination ZIP code
+
+    - name: product_class
+      type: string
+      nullable: false
+      description: Standardized mail product class
+      allowed_values:
+        - FIRST_CLASS
+        - PRIORITY
+        - PRIORITY_EXPRESS
+        - PARCEL_SELECT
+        - MEDIA_MAIL
+        - MARKETING_MAIL
+        - PERIODICALS
+
+    - name: acceptance_date
+      type: date
+      nullable: false
+      description: Date the piece was accepted into the mail stream
+
+    - name: actual_delivery_date
+      type: date
+      nullable: true
+      description: Date the piece was delivered (null if not yet delivered)
+
+    - name: is_on_time
+      type: boolean
+      nullable: true
+      description: Whether delivery met the product class service standard
+
+    - name: calculated_delivery_days
+      type: decimal(5,1)
+      nullable: true
+      description: Calendar days from acceptance to delivery
+
+    - name: service_standard_days
+      type: integer
+      nullable: false
+      description: Expected delivery days per product class service standard
+
+    - name: carrier_route
+      type: string
+      nullable: true
+      description: Carrier route identifier for last-mile analysis
+
+    - name: district
+      type: string
+      nullable: true
+      description: USPS postal district
+
+    - name: region
+      type: string
+      nullable: true
+      description: USPS region (Eastern, Western, etc.)
+
+    - name: delivery_attempt_count
+      type: integer
+      nullable: true
+      description: Number of delivery attempts before successful delivery
+
+    - name: days_from_expected
+      type: integer
+      nullable: true
+      description: Days early (negative) or late (positive) vs. expected delivery
+
+    - name: report_date
+      type: date
+      nullable: false
+      description: Date when analytics were generated
+
+sla:
+  freshness_minutes: 1440  # Daily
+  valid_row_ratio: 0.95
+  supported_until: "2027-12-31"
+  update_frequency: "Daily batch processing of delivery tracking records"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: tracking_id
+  - rule: expect_column_values_to_not_be_null
+    column: origin_zip
+  - rule: expect_column_values_to_not_be_null
+    column: destination_zip
+  - rule: expect_column_values_to_not_be_null
+    column: product_class
+  - rule: expect_column_values_to_not_be_null
+    column: acceptance_date
+  - rule: expect_column_values_to_be_in_set
+    column: product_class
+    value_set: [FIRST_CLASS, PRIORITY, PRIORITY_EXPRESS, PARCEL_SELECT, MEDIA_MAIL, MARKETING_MAIL, PERIODICALS]
+  - rule: expect_column_values_to_be_between
+    column: service_standard_days
+    min_value: 1
+    max_value: 30
+  - rule: expect_column_values_to_be_between
+    column: delivery_attempt_count
+    min_value: 0
+    max_value: 10
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: calculated_delivery_days
+    min_value: 0
+    max_value: 90
+    mostly: 0.99
+
 spec:
   description: >
     USPS delivery performance analytics with route optimization scoring,
