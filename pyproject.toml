@@ -23,6 +23,7 @@ dev = [
     # here (and not under governance extras) so mypy always sees them
     # during a `pip install -e ".[dev]"` workflow.
     "types-PyYAML>=6.0,<7.0",
+    "types-requests>=2.31.0,<3.0.0",
 ]
 governance = [
     "pyyaml>=6.0,<7.0",

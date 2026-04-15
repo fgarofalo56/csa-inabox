@@ -69,3 +69,8 @@ models:
 seeds:
   csa_analytics:
     +schema: seeds
+    sample_customers:
+      +column_types:
+        customer_id: bigint
+        phone: varchar
+        postal_code: varchar
