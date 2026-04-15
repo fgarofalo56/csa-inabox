@@ -1,12 +1,16 @@
 # Azure Functions: HTTP Trigger in Python
 
+[domains](../../../README.md) / [sharedServices](../../README.md) / [aiEnrichment](../README.md) / **functions**
+
 > **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Data Engineers
 
-## HTTP Trigger
+## 🔌 HTTP Trigger
 
 The HTTP trigger lets you invoke a function with an HTTP request. You can use an HTTP trigger to build serverless APIs and respond to webhooks.
 
-## Using the Template
+---
+
+## 💡 Using the Template
 
 Following is an example code snippet for HTTP Trigger using the [Python programming model V2](https://aka.ms/pythonprogrammingmodel) (currently in Preview).
 
@@ -39,17 +43,18 @@ def test_function(req: func.HttpRequest) -> func.HttpResponse:
         )
 ```
 
-To run the code snippet generated through the command palette, note the following:
+> [!NOTE]
+> - The function application is defined and named `app`.
+> - Confirm that the parameters within the trigger reflect values that correspond with your storage account.
+> - The name of the file must be `function_app.py`.
 
-- The function application is defined and named `app`.
-- Confirm that the parameters within the trigger reflect values that correspond with your storage account.
-- The name of the file must be `function_app.py`.
-  
 Note that HTTP output bindings are also supported in Azure Functions. To learn more, see [Azure Functions HTTP triggers and bindings overview](https://docs.microsoft.com/en-us/azure/azure-functions/functions-bindings-http-webhook?tabs=in-process%2Cfunctionsv2&pivots=programming-language-python)
 
-## Programming Model V2 
+---
 
-The new programming model in Azure Functions Python delivers an experience that aligns with Python development principles, and subsequently with commonly used Python frameworks. 
+## 🔌 Programming Model V2
+
+The new programming model in Azure Functions Python delivers an experience that aligns with Python development principles, and subsequently with commonly used Python frameworks.
 
 The improved programming model requires fewer files than the default model, and specifically eliminates the need for a configuration file (`function.json`). Instead, triggers and bindings are represented in the `function_app.py` file as decorators. Moreover, functions can be logically organized with support for multiple functions to be stored in the same file. Functions within the same function application can also be stored in different files, and be referenced as blueprints.
 
@@ -59,7 +64,7 @@ To learn more about the new programming model for Azure Functions in Python, see
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Architecture Overview](../../../../docs/ARCHITECTURE.md) - Platform architecture reference
 - [Examples](../../../../examples/README.md) - Sample data pipelines and use cases

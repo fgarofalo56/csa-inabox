@@ -1,39 +1,46 @@
+[Home](../README.md) > [Docs](./) > **Databricks Guide**
+
 # Databricks Guide
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers
+
+> [!NOTE]
+> **Quick Summary**: Setting up and operating Databricks within CSA-in-a-Box — workspace configuration, cluster sizing (dev vs prod), notebook orchestration (3 patterns), dbt integration with Unity Catalog, and troubleshooting common issues.
 
 This guide covers setting up and operating Databricks within the
 CSA-in-a-Box platform, including workspace configuration, notebook
 orchestration, dbt integration, and Unity Catalog.
 
-## Table of Contents
+## 📑 Table of Contents
 
-- [Workspace Setup](#workspace-setup)
+- [⚙️ Workspace Setup](#️-workspace-setup)
   - [Prerequisites](#prerequisites)
   - [Cluster Configuration](#cluster-configuration)
   - [Required Spark configuration](#required-spark-configuration)
-- [Notebook Inventory](#notebook-inventory)
+- [📁 Notebook Inventory](#-notebook-inventory)
   - [Naming conventions](#naming-conventions)
-- [Notebook Orchestration](#notebook-orchestration)
+- [🔄 Notebook Orchestration](#-notebook-orchestration)
   - [Pattern 1: dbutils.notebook.run() (simple)](#pattern-1-dbutilsnotebookrun-simple)
   - [Pattern 2: ADF orchestration (production)](#pattern-2-adf-orchestration-production)
   - [Pattern 3: Databricks Workflows (native)](#pattern-3-databricks-workflows-native)
-- [dbt on Databricks](#dbt-on-databricks)
+- [🗄️ dbt on Databricks](#️-dbt-on-databricks)
   - [Profile configuration](#profile-configuration)
   - [Environment variables](#environment-variables)
   - [Running dbt from a notebook](#running-dbt-from-a-notebook)
   - [Running dbt locally](#running-dbt-locally)
-- [Unity Catalog Setup](#unity-catalog-setup)
-- [Troubleshooting](#troubleshooting)
+- [📊 Unity Catalog Setup](#-unity-catalog-setup)
+- [🔧 Troubleshooting](#-troubleshooting)
 
-## Workspace Setup
+---
+
+## ⚙️ Workspace Setup
 
 ### Prerequisites
 
-1. Databricks workspace deployed via Bicep (`deploy/bicep/DLZ/modules/databricks/`)
-2. ADLS Gen2 storage with Bronze/Silver/Gold containers
-3. Key Vault with access tokens and connection secrets
-4. Unity Catalog metastore (see [Unity Catalog Setup](#unity-catalog-setup))
+- [ ] Databricks workspace deployed via Bicep (`deploy/bicep/DLZ/modules/databricks/`)
+- [ ] ADLS Gen2 storage with Bronze/Silver/Gold containers
+- [ ] Key Vault with access tokens and connection secrets
+- [ ] Unity Catalog metastore (see [Unity Catalog Setup](#-unity-catalog-setup))
 
 ### Cluster Configuration
 
@@ -79,17 +86,20 @@ spark.openlineage.namespace csa-inabox-databricks
 spark.extraListeners io.openlineage.spark.agent.OpenLineageSparkListener
 ```
 
-Replace `<STORAGE>` with your ADLS account name and `<PURVIEW_ACCOUNT>`
-with your Purview account name.
+> [!IMPORTANT]
+> Replace `<STORAGE>` with your ADLS account name and `<PURVIEW_ACCOUNT>`
+> with your Purview account name.
 
-## Notebook Inventory
+---
+
+## 📁 Notebook Inventory
 
 All notebooks live under `domains/shared/notebooks/databricks/`:
 
 | Notebook | Purpose | Layer |
 |----------|---------|-------|
-| `bronze_to_silver_spark.py` | Schema enforcement, dedup, validation flags | Bronze -> Silver |
-| `silver_to_gold_spark.py` | Business aggregations, star schema | Silver -> Gold |
+| `bronze_to_silver_spark.py` | Schema enforcement, dedup, validation flags | Bronze → Silver |
+| `silver_to_gold_spark.py` | Business aggregations, star schema | Silver → Gold |
 | `delta_lake_optimization.py` | OPTIMIZE, VACUUM, Z-ORDER maintenance | All layers |
 | `data_quality_monitor.py` | Contract validation, SLA monitoring | Silver/Gold |
 | `unity_catalog_setup.py` | Catalog, schema, permissions setup | Infrastructure |
@@ -101,7 +111,9 @@ All notebooks live under `domains/shared/notebooks/databricks/`:
 - `<action>_<subject>.py` for utility notebooks
 - Prefix with domain name for domain-specific: `sales_daily_transform.py`
 
-## Notebook Orchestration
+---
+
+## 🔄 Notebook Orchestration
 
 ### Pattern 1: dbutils.notebook.run() (simple)
 
@@ -149,13 +161,13 @@ print(results)
 The `pl_medallion_orchestration` ADF pipeline calls notebooks via the
 Databricks linked service:
 
-```text
-ADF Trigger (daily 06:00 UTC)
-  -> pl_medallion_orchestration
-     -> Databricks Activity: bronze_to_silver_spark
-     -> Databricks Activity: run_dbt.py (dbt run)
-     -> Databricks Activity: run_dbt.py (dbt test)
-     -> On Failure: Teams webhook alert
+```mermaid
+graph TD
+    T["ADF Trigger<br/>daily 06:00 UTC"] --> P["pl_medallion_orchestration"]
+    P --> B["Databricks Activity:<br/>bronze_to_silver_spark"]
+    B --> D1["Databricks Activity:<br/>run_dbt.py (dbt run)"]
+    D1 --> D2["Databricks Activity:<br/>run_dbt.py (dbt test)"]
+    D2 -->|On Failure| W["Teams webhook alert"]
 ```
 
 See [ADF_SETUP.md](ADF_SETUP.md) for pipeline configuration.
@@ -164,16 +176,18 @@ See [ADF_SETUP.md](ADF_SETUP.md) for pipeline configuration.
 
 Create a multi-task job in the Databricks UI:
 
-1. Go to **Workflows** > **Create Job**
-2. Add tasks in order:
-   - Task 1: `bronze_to_silver_spark` (notebook task)
-   - Task 2: `run_dbt` (depends on Task 1)
-   - Task 3: `data_quality_monitor` (depends on Task 2)
-   - Task 4: `delta_lake_optimization` (depends on Task 2, weekly schedule)
-3. Set the schedule to daily
-4. Configure email/webhook alerts on failure
+- [ ] Go to **Workflows** > **Create Job**
+- [ ] Add tasks in order:
+  - Task 1: `bronze_to_silver_spark` (notebook task)
+  - Task 2: `run_dbt` (depends on Task 1)
+  - Task 3: `data_quality_monitor` (depends on Task 2)
+  - Task 4: `delta_lake_optimization` (depends on Task 2, weekly schedule)
+- [ ] Set the schedule to daily
+- [ ] Configure email/webhook alerts on failure
 
-## dbt on Databricks
+---
+
+## 🗄️ dbt on Databricks
 
 ### Profile configuration
 
@@ -242,15 +256,17 @@ dbt test --profiles-dir .       # Run tests
 dbt snapshot --profiles-dir .   # Run SCD Type 2 snapshots
 ```
 
-## Unity Catalog Setup
+---
+
+## 📊 Unity Catalog Setup
 
 The `unity_catalog_setup.py` notebook configures:
 
-1. **Catalog creation** — `csa_analytics` catalog
-2. **Schema per domain** — `sales`, `finance`, `shared`
-3. **Schema per layer** — `bronze`, `silver`, `gold`, `snapshots`
-4. **RBAC permissions** — per-domain access controls mapped to AAD groups
-5. **External locations** — ADLS Gen2 paths for Delta tables
+- [ ] **Catalog creation** — `csa_analytics` catalog
+- [ ] **Schema per domain** — `sales`, `finance`, `shared`
+- [ ] **Schema per layer** — `bronze`, `silver`, `gold`, `snapshots`
+- [ ] **RBAC permissions** — per-domain access controls mapped to AAD groups
+- [ ] **External locations** — ADLS Gen2 paths for Delta tables
 
 Run it once per environment:
 
@@ -262,20 +278,22 @@ dbutils.notebook.run(
 )
 ```
 
-## Troubleshooting
+---
+
+## 🔧 Troubleshooting
 
 ### "Cluster not found" or "Cluster terminated"
 
-1. Check the cluster is running in **Compute** tab
-2. Verify the HTTP path matches an active SQL warehouse or cluster
-3. For auto-terminated clusters, start them manually or increase the timeout
+- [ ] Check the cluster is running in **Compute** tab
+- [ ] Verify the HTTP path matches an active SQL warehouse or cluster
+- [ ] For auto-terminated clusters, start them manually or increase the timeout
 
 ### "Permission denied" on ADLS paths
 
-1. Verify the cluster's managed identity has `Storage Blob Data Contributor`
+- [ ] Verify the cluster's managed identity has `Storage Blob Data Contributor`
    on the ADLS storage account
-2. Check the Spark config includes the correct OAuth settings
-3. For Unity Catalog, verify the external location is registered
+- [ ] Check the Spark config includes the correct OAuth settings
+- [ ] For Unity Catalog, verify the external location is registered
 
 ### "Module not found: governance"
 
@@ -290,9 +308,9 @@ Or add it to the cluster's Libraries configuration.
 
 ### dbt connection timeout
 
-1. Verify the SQL warehouse is running
-2. Check the `DBT_DATABRICKS_HTTP_PATH` matches the warehouse's HTTP path
-3. Increase `connect_retries` in profiles.yml if the warehouse is auto-starting
+- [ ] Verify the SQL warehouse is running
+- [ ] Check the `DBT_DATABRICKS_HTTP_PATH` matches the warehouse's HTTP path
+- [ ] Increase `connect_retries` in profiles.yml if the warehouse is auto-starting
 
 ### Notebook run timeout
 
@@ -307,7 +325,7 @@ See the general [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for more issues.
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [ADF Setup](ADF_SETUP.md) — Azure Data Factory pipeline setup and orchestration
 - [Getting Started](GETTING_STARTED.md) — Platform deployment quickstart

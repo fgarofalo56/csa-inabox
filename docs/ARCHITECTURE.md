@@ -1,31 +1,38 @@
+[Home](../README.md) > [Docs](./) > **Architecture**
+
 # CSA-in-a-Box Architecture
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Architects
+
+> [!NOTE]
+> **Quick Summary**: Comprehensive architecture reference for Cloud-Scale Analytics in a Box — an open-source "build-your-own Microsoft Fabric" using Azure PaaS services. Covers the DMLZ/DLZ landing zone pattern, medallion data flow (Bronze/Silver/Gold), streaming via Event Hubs + ADX, AI/ML integration, 9 vertical examples, and Azure Government compatibility.
 
 A comprehensive architecture reference for Cloud-Scale Analytics in a Box — an
 open-source "build-your-own Microsoft Fabric" using Azure PaaS services and
 open-source tooling.
 
-## Table of Contents
+## 📑 Table of Contents
 
-- [High-Level Architecture](#high-level-architecture)
-- [Architecture Layers](#architecture-layers)
+- [🏗️ High-Level Architecture](#️-high-level-architecture)
+- [🏗️ Architecture Layers](#️-architecture-layers)
   - [1. Data Management Landing Zone (DMLZ)](#1-data-management-landing-zone-dmlz)
   - [2. Data Landing Zone (DLZ)](#2-data-landing-zone-dlz)
   - [3. Platform Services](#3-platform-services)
   - [4. Consumer Layer](#4-consumer-layer)
   - [5. Azure Government Parallel](#5-azure-government-parallel)
-- [Data Flow](#data-flow)
+- [🔄 Data Flow](#-data-flow)
   - [Batch Data Flow](#batch-data-flow)
   - [Streaming Data Flow](#streaming-data-flow)
   - [Data Governance Flow](#data-governance-flow)
-- [Vertical Examples](#vertical-examples)
-- [Repository Structure](#repository-structure)
-- [Technology Decision Matrix](#technology-decision-matrix)
-- [Security Architecture](#security-architecture)
-- [Next Steps](#next-steps)
+- [💡 Vertical Examples](#-vertical-examples)
+- [📁 Repository Structure](#-repository-structure)
+- [⚙️ Technology Decision Matrix](#️-technology-decision-matrix)
+- [🔒 Security Architecture](#-security-architecture)
+- [🚀 Next Steps](#-next-steps)
 
-## High-Level Architecture
+---
+
+## 🏗️ High-Level Architecture
 
 ```mermaid
 graph TB
@@ -167,7 +174,9 @@ graph TB
     class PowerBI,Portal,APIs,Teams consumer
 ```
 
-## Architecture Layers
+---
+
+## 🏗️ Architecture Layers
 
 ### 1. Data Management Landing Zone (DMLZ)
 
@@ -193,7 +202,7 @@ Each DLZ represents a domain boundary — a self-contained analytics environment
 with its own storage, compute, and pipelines. Organizations deploy one or more
 DLZs based on data domain segmentation (e.g., Finance, Health, Environmental).
 
-#### Storage — OneLake Pattern
+#### 🗄️ Storage — OneLake Pattern
 
 The medallion architecture uses ADLS Gen2 containers mapped to quality tiers:
 
@@ -206,7 +215,7 @@ The medallion architecture uses ADLS Gen2 containers mapped to quality tiers:
 This mirrors Microsoft Fabric's OneLake with Unity Catalog providing the unified
 metadata layer across all storage accounts.
 
-#### Ingestion Layer
+#### ⚙️ Ingestion Layer
 
 - **Azure Data Factory** — Batch orchestration with parameterized, metadata-driven
   pipelines. The metadata framework (`platform/metadata-framework/`) auto-generates
@@ -216,7 +225,7 @@ metadata layer across all storage accounts.
 - **IoT Hub + DPS** — Managed device provisioning and telemetry routing for IoT
   scenarios (weather stations, AQI sensors, industrial equipment).
 
-#### Compute Layer
+#### ⚡ Compute Layer
 
 - **Azure Databricks** — Primary Spark engine with Unity Catalog for fine-grained
   access control. Used for complex transformations, ML feature engineering, and
@@ -226,14 +235,14 @@ metadata layer across all storage accounts.
 - **dbt Core** — SQL-first transformations implementing the medallion pattern.
   Each domain has its own dbt project with Bronze, Silver, and Gold models.
 
-#### Real-Time Analytics
+#### 📊 Real-Time Analytics
 
 - **Azure Data Explorer (ADX)** — Sub-second KQL queries over streaming data.
   Used for IoT dashboards, anomaly detection, and operational monitoring.
 - **Stream Analytics** — Windowed aggregation (tumbling, hopping, sliding) with
   built-in anomaly detection via `AnomalyDetection_SpikeAndDip`.
 
-#### AI / ML Layer
+#### 🤖 AI / ML Layer
 
 - **Azure ML** — Model training, registry, and deployment. Integrated with
   Databricks for feature store access.
@@ -290,37 +299,51 @@ Every component in CSA-in-a-Box is designed to run in Azure Government
 See [GOV_SERVICE_MATRIX.md](GOV_SERVICE_MATRIX.md) for the full service
 availability matrix.
 
-## Data Flow
+---
+
+## 🔄 Data Flow
 
 ### Batch Data Flow
 
-```text
-Source → ADF Copy Activity → Bronze (raw Parquet/JSON)
-    → dbt Bronze model (typed, partitioned)
-    → dbt Silver model (validated, deduplicated, flagged)
-    → dbt Gold model (business aggregates, dimensions, facts)
-    → Power BI / API / Data Product
+```mermaid
+graph LR
+    Source["Source"] --> ADF["ADF Copy Activity"]
+    ADF --> Bronze["Bronze<br/>(raw Parquet/JSON)"]
+    Bronze --> dbtB["dbt Bronze model<br/>(typed, partitioned)"]
+    dbtB --> dbtS["dbt Silver model<br/>(validated, deduplicated)"]
+    dbtS --> dbtG["dbt Gold model<br/>(business aggregates)"]
+    dbtG --> Consumer["Power BI / API<br/>Data Product"]
 ```
 
 ### Streaming Data Flow
 
-```text
-IoT Device → IoT Hub → Event Hub
-    ├── Hot Path:  Event Hub → ADX (sub-second KQL)
-    ├── Warm Path: Event Hub → Stream Analytics → Power BI / ADX
-    └── Cold Path: Event Hub Capture → ADLS Bronze → dbt → Gold
+```mermaid
+graph LR
+    IoT["IoT Device"] --> Hub["IoT Hub"]
+    Hub --> EH["Event Hub"]
+    EH --> Hot["Hot Path: ADX<br/>(sub-second KQL)"]
+    EH --> Warm["Warm Path: Stream Analytics<br/>(windowed aggregation)"]
+    EH --> Cold["Cold Path: ADLS Bronze<br/>(Event Hub Capture)"]
+    Warm --> PBI["Power BI / ADX"]
+    Cold --> dbt["dbt → Gold"]
 ```
 
 ### Data Governance Flow
 
-```text
-Source Registration → Purview Scan → Auto-Classification
-    → Sensitivity Labels → Access Policies
-    → Lineage Captured (ADF + dbt + Databricks)
-    → Data Marketplace Discovery → Access Request → Approval → Grant
+```mermaid
+graph LR
+    Reg["Source Registration"] --> Scan["Purview Scan"]
+    Scan --> Class["Auto-Classification"]
+    Class --> Labels["Sensitivity Labels"]
+    Labels --> Policies["Access Policies"]
+    Policies --> Lineage["Lineage Captured"]
+    Lineage --> Market["Data Marketplace Discovery"]
+    Market --> Grant["Access Request → Approval → Grant"]
 ```
 
-## Vertical Examples
+---
+
+## 💡 Vertical Examples
 
 CSA-in-a-Box includes 9 vertical-specific implementations that demonstrate
 end-to-end patterns for real agencies and industries:
@@ -341,7 +364,9 @@ end-to-end patterns for real agencies and industries:
 Each vertical includes seed data generators, dbt models, deployment templates,
 and domain-specific documentation.
 
-## Repository Structure
+---
+
+## 📁 Repository Structure
 
 ```text
 csa-inabox/
@@ -401,7 +426,9 @@ csa-inabox/
 └── scripts/                    # Utility scripts
 ```
 
-## Technology Decision Matrix
+---
+
+## ⚙️ Technology Decision Matrix
 
 | Concern | Primary Choice | Alternative | Rationale |
 |---------|---------------|-------------|-----------|
@@ -416,7 +443,9 @@ csa-inabox/
 | Secrets | Key Vault | HashiCorp Vault | Key Vault is native to Azure |
 | IaC | Bicep | Terraform | Bicep is Azure-native, Terraform for multi-cloud |
 
-## Security Architecture
+---
+
+## 🔒 Security Architecture
 
 All deployments enforce:
 
@@ -427,7 +456,9 @@ All deployments enforce:
 - **Audit logging** — Diagnostic settings to Log Analytics workspace
 - **Data classification** — Automated PII detection and sensitivity labeling via Purview
 
-## Next Steps
+---
+
+## 🚀 Next Steps
 
 - [GETTING_STARTED.md](GETTING_STARTED.md) — Prerequisites and deployment walkthrough
 - [QUICKSTART.md](QUICKSTART.md) — 60-minute hands-on tutorial
@@ -436,7 +467,7 @@ All deployments enforce:
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Platform Services](PLATFORM_SERVICES.md) — Platform component deep-dive
 - [Getting Started](GETTING_STARTED.md) — Prerequisites and deployment walkthrough

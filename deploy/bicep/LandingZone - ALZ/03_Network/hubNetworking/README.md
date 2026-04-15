@@ -14,11 +14,11 @@ Module deploys the following resources:
 - Bastion
 - Route Table
 
-## Parameters
+## ⚙️ Parameters
 
 - [Parameters for Azure Commercial Cloud](generateddocs/hubNetworking.bicep.md)
 
-> **NOTE:**
+> [!NOTE]
 > - Although there are generated parameter markdowns for Azure Commercial Cloud, this same module can still be used in Azure China. Example parameter are in the [parameters](./parameters/) folder.
 >
 > - The file `parameters/hubNetworking.parameters.az.all.json` contains parameter values for SKUs that are compatible with availability zones for relevant resource types. In cases where you are deploying to a region that does not support availability zones, you should opt for the `parameters/hubNetworking.parameters.all.json` file.
@@ -62,7 +62,7 @@ AAD Authentication Example:
 
 Replace the values for `aadTenant`, `aadAudience`, and `aadIssuer` as documented [here](https://learn.microsoft.com/en-us/azure/vpn-gateway/openvpn-azure-ad-tenant#enable-authentication)
 
-## Outputs
+## 📋 Outputs
 
 The module will generate the following outputs:
 
@@ -76,8 +76,10 @@ The module will generate the following outputs:
 | outHubVirtualNetworkName  | array  | MyHubVirtualNetworkName |
 | outHubVirtualNetworkId    | array  | /subscriptions/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx/resourceGroups/HUB_Networking_POC/providers/Microsoft.Network/virtualNetworks/my-hub-vnet   |
 
-## Deployment
-> **Note:** `bicepconfig.json` file is included in the module directory.  This file allows us to override Bicep Linters.  Currently there are two URLs which were removed because of linter warnings.  URLs removed are the following: database.windows.net and core.windows.net
+## 📦 Deployment
+
+> [!NOTE]
+> `bicepconfig.json` file is included in the module directory.  This file allows us to override Bicep Linters.  Currently there are two URLs which were removed because of linter warnings.  URLs removed are the following: database.windows.net and core.windows.net
 
 In this example, the hub resources will be deployed to the resource group specified. According to the Azure Landing Zone Conceptual Architecture, the hub resources should be deployed into the Platform connectivity subscription. During the deployment step, we will take the default values and not pass any parameters.
 
@@ -192,19 +194,19 @@ New-AzResourceGroup `
 
 New-AzResourceGroupDeployment @inputObject
 ```
-## Example Output in Azure global regions
+## 💡 Example Output in Azure global regions
 
 ![Example Deployment Output](media/exampleDeploymentOutput.png "Example Deployment Output in Azure global regions")
 
-## Example Output in Azure China regions
+## 💡 Example Output in Azure China regions
 ![Example Deployment Output](media/mc-exampleDeploymentOutput.png "Example Deployment Output in Azure China")
 
-## Bicep Visualizer
+## 🏗️ Bicep Visualizer
 
 ![Bicep Visualizer](media/bicepVisualizer.png "Bicep Visualizer")
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [IaC & CI/CD Best Practices](../../../../../docs/IaC-CICD-Best-Practices.md) - Deployment pipeline guidance

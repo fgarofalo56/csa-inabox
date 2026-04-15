@@ -1,6 +1,11 @@
+[← Metadata Framework](README.md) | [← Platform Components](../README.md)
+
 # CSA-in-a-Box Metadata Framework - Implementation Complete
 
 > **Last Updated:** 2026-04-15 | **Status:** Complete | **Audience:** Platform Engineers
+
+> [!NOTE]
+> **TL;DR:** The metadata-driven pipeline framework is fully implemented with 14+ source types, 5 ADF pipeline templates, a CLI for validation/generation/provisioning, medallion architecture DLZ provisioning, and comprehensive RBAC + Purview integration. Ready for production use.
 
 ## Table of Contents
 
@@ -12,15 +17,19 @@
 - [Usage Examples](#usage-examples)
 - [Generated Artifacts](#generated-artifacts)
 - [Framework Architecture](#framework-architecture)
-- [Security and Governance](#security--governance)
+- [Security and Governance](#security-and-governance)
 - [Next Steps](#next-steps)
 - [Documentation](#documentation)
 - [Success Metrics](#success-metrics)
 - [Related Documentation](#related-documentation)
 
-## ✅ Framework Implementation Summary
+---
+
+## 📋 Framework Implementation Summary
 
 The complete metadata-driven pipeline framework for CSA-in-a-Box has been successfully implemented. This framework enables declarative, schema-driven data ingestion that automatically generates Azure Data Factory pipelines and provisions data landing zones.
+
+---
 
 ## 📁 Created Files
 
@@ -59,52 +68,56 @@ platform/metadata-framework/
     └── test_framework.py             # Framework test suite
 ```
 
-## 🚀 Key Features Implemented
+---
 
-### 1. **Source Registration Schema**
-- ✅ Comprehensive JSON Schema supporting 14+ source types
-- ✅ Validates connection configs, schema definitions, ingestion modes
-- ✅ Supports full/incremental/CDC/streaming patterns
-- ✅ Data classification and governance integration
-- ✅ Quality rules and SLA definitions
+## ✨ Key Features Implemented
 
-### 2. **Pipeline Templates**
-- ✅ 5 complete ADF pipeline templates (ARM format)
-- ✅ Batch copy for full loads (SQL, files, APIs)
-- ✅ Incremental loads with watermark tracking
-- ✅ Change Data Capture with SQL Server CT/Cosmos change feed
-- ✅ REST API ingestion with pagination support
-- ✅ Event Hub streaming with quality validation
+### 1. Source Registration Schema
+- Comprehensive JSON Schema supporting 14+ source types
+- Validates connection configs, schema definitions, ingestion modes
+- Supports full/incremental/CDC/streaming patterns
+- Data classification and governance integration
+- Quality rules and SLA definitions
 
-### 3. **Pipeline Generator**
-- ✅ Validates source registrations against JSON schema
-- ✅ Automatic template selection based on source type + ingestion mode
-- ✅ Template customization with source-specific parameters
-- ✅ ARM template generation with proper parameterization
-- ✅ Bicep conversion support
-- ✅ Comprehensive error handling and logging
+### 2. Pipeline Templates
+- 5 complete ADF pipeline templates (ARM format)
+- Batch copy for full loads (SQL, files, APIs)
+- Incremental loads with watermark tracking
+- Change Data Capture with SQL Server CT/Cosmos change feed
+- REST API ingestion with pagination support
+- Event Hub streaming with quality validation
 
-### 4. **Data Landing Zone Provisioner**
-- ✅ Medallion architecture (bronze/silver/gold/sandbox)
-- ✅ RBAC assignments for owners, consumers, and service principals
-- ✅ Purview scan registration and classification rules
-- ✅ Storage structure with date partitioning
-- ✅ Bicep parameter file generation
+### 3. Pipeline Generator
+- Validates source registrations against JSON schema
+- Automatic template selection based on source type + ingestion mode
+- Template customization with source-specific parameters
+- ARM template generation with proper parameterization
+- Bicep conversion support
+- Comprehensive error handling and logging
 
-### 5. **Command Line Interface**
-- ✅ `validate` - Schema validation for source registrations
-- ✅ `generate` - Pipeline generation with ARM/Bicep output
-- ✅ `provision-dlz` - Landing zone provisioning
-- ✅ `generate-all` - Complete infrastructure generation
-- ✅ `list-templates` - Available template combinations
-- ✅ `examples` - View example source registrations
+### 4. Data Landing Zone Provisioner
+- Medallion architecture (bronze/silver/gold/sandbox)
+- RBAC assignments for owners, consumers, and service principals
+- Purview scan registration and classification rules
+- Storage structure with date partitioning
+- Bicep parameter file generation
 
-### 6. **Example Source Registrations**
-- ✅ **SQL Server**: Incremental loading with watermark, 3 tables, quality rules
-- ✅ **REST API**: OAuth2 authentication, pagination, PII data classification
-- ✅ **Event Hub**: IoT telemetry streaming, real-time quality checks
+### 5. Command Line Interface
+- `validate` - Schema validation for source registrations
+- `generate` - Pipeline generation with ARM/Bicep output
+- `provision-dlz` - Landing zone provisioning
+- `generate-all` - Complete infrastructure generation
+- `list-templates` - Available template combinations
+- `examples` - View example source registrations
 
-## 📊 Supported Source Types & Ingestion Modes
+### 6. Example Source Registrations
+- **SQL Server**: Incremental loading with watermark, 3 tables, quality rules
+- **REST API**: OAuth2 authentication, pagination, PII data classification
+- **Event Hub**: IoT telemetry streaming, real-time quality checks
+
+---
+
+## 🗄️ Supported Source Types & Ingestion Modes
 
 | Source Type | Full | Incremental | CDC | Streaming | Template Used |
 |-------------|------|-------------|-----|-----------|---------------|
@@ -123,11 +136,13 @@ platform/metadata-framework/
 | SharePoint | ✅ | ✅ | ❌ | ❌ | batch_copy/incremental |
 | Dynamics 365 | ✅ | ✅ | ❌ | ❌ | api_ingestion |
 
+---
+
 ## 🧪 Framework Testing
 
 The framework includes comprehensive testing:
 
-### Validation Tests ✅
+### Validation Tests
 ```bash
 cd platform/metadata-framework
 python cli.py validate examples/example_sql_source.yaml
@@ -136,21 +151,23 @@ python cli.py validate examples/example_sql_source.yaml
 # Template: adf_incremental.json
 ```
 
-### Pipeline Generation Tests ✅
+### Pipeline Generation Tests
 ```bash
 python cli.py generate examples/example_sql_source.yaml --format arm
 # OK: Pipeline generated: pl_sales_database_incremental
 # Files: arm_template, parameters_file, deployment_config
 ```
 
-### DLZ Provisioning Tests ✅
+### DLZ Provisioning Tests
 ```bash
 python cli.py provision-dlz examples/example_sql_source.yaml
 # OK: DLZ provisioned: lz-sales-transactions
 # Files: parameters_file, rbac_assignments, purview_scans, storage_structure
 ```
 
-## 🔧 Usage Examples
+---
+
+## 💡 Usage Examples
 
 ### 1. Quick Start - SQL Server
 ```bash
@@ -197,7 +214,9 @@ ingestion:
   sla_freshness_minutes: 5
 ```
 
-## 📈 Generated Artifacts
+---
+
+## 📁 Generated Artifacts
 
 ### Pipeline Artifacts
 - **ARM Template**: Complete ADF pipeline definition
@@ -211,6 +230,8 @@ ingestion:
 - **Purview Scans**: Data catalog scan configurations
 - **Storage Structure**: Medallion architecture folder structure
 - **Deployment Config**: Post-deployment task definitions
+
+---
 
 ## 🏗️ Framework Architecture
 
@@ -234,13 +255,18 @@ graph TB
     K --> N[Purview Catalog]
 ```
 
+---
+
 ## 🔒 Security & Governance
 
 ### Data Classification Support
-- **Public**: 1-year retention, standard encryption
-- **Internal**: 3-year retention, standard encryption, backup enabled
-- **Confidential**: 7-year retention, customer-managed keys, private endpoints
-- **Restricted**: 7-year retention, customer-managed keys, network isolation
+
+| Classification | Retention | Encryption | Additional Controls |
+|----------------|-----------|------------|---------------------|
+| **Public** | 1 year | Standard | — |
+| **Internal** | 3 years | Standard | Backup enabled |
+| **Confidential** | 7 years | Customer-managed keys | Private endpoints |
+| **Restricted** | 7 years | Customer-managed keys | Network isolation |
 
 ### RBAC Integration
 - Data owners get `Storage Blob Data Contributor`
@@ -254,6 +280,8 @@ graph TB
 - **range**: Numeric values within specified range
 - **pattern**: String values match regex pattern
 - **custom**: Custom SQL expressions
+
+---
 
 ## 🚀 Next Steps
 
@@ -275,7 +303,9 @@ graph TB
 3. **Create environment-specific** parameter files
 4. **Integrate with CI/CD** pipelines for automated deployment
 
-## 📖 Documentation
+---
+
+## 📋 Documentation
 
 The framework includes comprehensive documentation:
 - **README.md**: Complete user guide with examples
@@ -284,17 +314,21 @@ The framework includes comprehensive documentation:
 - **Template Documentation**: Comments in all ADF templates
 - **Configuration Guide**: Complete framework configuration options
 
+---
+
 ## ✨ Success Metrics
 
 The metadata framework achieves the original goals:
 
-✅ **Declarative Pipeline Creation** - YAML/JSON source registrations
-✅ **Automated Resource Provisioning** - Landing zones with proper governance
-✅ **Standardized Patterns** - Consistent templates across all source types
-✅ **Quality Integration** - Built-in data quality rules and validation
-✅ **Security by Default** - RBAC, encryption, and network isolation
-✅ **Scalable Architecture** - Support for 14+ source types and growing
-✅ **Developer Experience** - Simple CLI with comprehensive examples
+| Goal | Status |
+|------|--------|
+| Declarative Pipeline Creation | ✅ YAML/JSON source registrations |
+| Automated Resource Provisioning | ✅ Landing zones with proper governance |
+| Standardized Patterns | ✅ Consistent templates across all source types |
+| Quality Integration | ✅ Built-in data quality rules and validation |
+| Security by Default | ✅ RBAC, encryption, and network isolation |
+| Scalable Architecture | ✅ Support for 14+ source types and growing |
+| Developer Experience | ✅ Simple CLI with comprehensive examples |
 
 The framework is ready for immediate use and provides a solid foundation for scaling data ingestion across the CSA-in-a-Box platform.
 
@@ -306,7 +340,7 @@ The framework is ready for immediate use and provides a solid foundation for sca
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Platform Components](../README.md) — Platform component index
 - [Platform Services](../../docs/PLATFORM_SERVICES.md) — Detailed platform service descriptions

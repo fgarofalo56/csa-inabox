@@ -1,6 +1,11 @@
+[Home](../README.md) > [Docs](./) > **Multi-Region Deployment**
+
 # Multi-Region Deployment Guide
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Platform Engineers
+
+> [!NOTE]
+> **Quick Summary**: Active-active multi-region deployment for CSA-in-a-Box — service capability matrix (native replication vs stamp-per-region), data replication patterns (RA-GZRS, Cosmos multi-master, Event Hubs Geo-DR), failover procedures, RPO/RTO targets, step-by-step deployment, chaos testing, monitoring, and cost implications (+40-80% overhead).
 
 This guide covers deploying CSA-in-a-Box in an active-active
 multi-region configuration for high availability and disaster recovery.
@@ -8,52 +13,36 @@ It extends the standard deployment in
 [GETTING_STARTED.md](GETTING_STARTED.md) and pairs with the DR runbook
 in [DR.md](DR.md) which documents the operational failover procedures.
 
+> [!IMPORTANT]
 > **Scope:** the CSA-in-a-Box Data Landing Zone (DLZ) and its dependent
 > services. The Management and Connectivity landing zones have their own
 > multi-region considerations (Azure Policy replication, hub VNet per
 > region) that are out of scope here.
 
----
+## 📑 Table of Contents
 
-## Table of Contents
-
-- [1. Architecture Overview](#1-architecture-overview)
-- [2. Service Capability Matrix](#2-service-capability-matrix)
-  - [Legend](#legend)
-- [3. Data Replication Patterns](#3-data-replication-patterns)
+- [🏗️ 1. Architecture Overview](#️-1-architecture-overview)
+- [📊 2. Service Capability Matrix](#-2-service-capability-matrix)
+- [🔄 3. Data Replication Patterns](#-3-data-replication-patterns)
   - [3.1 Storage: RA-GZRS Automatic Replication](#31-storage-ra-gzrs-automatic-replication)
   - [3.2 Cosmos DB: Multi-Master Writes](#32-cosmos-db-multi-master-writes)
   - [3.3 dbt Models: Idempotent, Deploy to Both Regions](#33-dbt-models-idempotent-deploy-to-both-regions)
   - [3.4 Event Hubs: Geo-DR Namespace Pairing](#34-event-hubs-geo-dr-namespace-pairing)
-- [4. Failover Procedures](#4-failover-procedures)
-  - [4.1 Automatic Failover (No operator action required)](#41-automatic-failover-no-operator-action-required)
-  - [4.2 Manual Failover (Operator action required)](#42-manual-failover-operator-action-required)
+- [🚀 4. Failover Procedures](#-4-failover-procedures)
+  - [4.1 Automatic Failover](#41-automatic-failover-no-operator-action-required)
+  - [4.2 Manual Failover](#42-manual-failover-operator-action-required)
   - [4.3 DNS / Traffic Manager Configuration](#43-dns--traffic-manager-configuration)
-- [5. RPO / RTO Targets by Service Tier](#5-rpo--rto-targets-by-service-tier)
-- [6. Deployment Process](#6-deployment-process)
-  - [6.1 Prerequisites](#61-prerequisites)
-  - [6.2 Step 1 — Deploy the Primary Region](#62-step-1--deploy-the-primary-region)
-  - [6.3 Step 2 — Deploy Stamp-Based Services in the Secondary Region](#63-step-2--deploy-stamp-based-services-in-the-secondary-region)
-  - [6.4 Step 3 — Configure Geo-DR Pairing](#64-step-3--configure-geo-dr-pairing)
-  - [6.5 Step 4 — Configure ADX Follower Databases](#65-step-4--configure-adx-follower-databases)
-  - [6.6 Step 5 — Configure Traffic Manager](#66-step-5--configure-traffic-manager)
-  - [6.7 Step 6 — Verify](#67-step-6--verify)
-- [7. Chaos Testing](#7-chaos-testing)
-  - [7.1 Experiment: Storage Failover](#71-experiment-storage-failover)
-  - [7.2 Experiment: Cosmos DB Region Outage](#72-experiment-cosmos-db-region-outage)
-  - [7.3 Quarterly Drill Schedule](#73-quarterly-drill-schedule)
-- [8. Monitoring Multi-Region Health](#8-monitoring-multi-region-health)
-  - [8.1 Cross-Region Dashboard](#81-cross-region-dashboard)
-  - [8.2 Alerts](#82-alerts)
-  - [8.3 Azure Resource Graph: Multi-Region Inventory](#83-azure-resource-graph-multi-region-inventory)
-- [9. Cost Implications of Multi-Region](#9-cost-implications-of-multi-region)
-  - [9.1 Cost Multipliers by Service](#91-cost-multipliers-by-service)
-  - [9.2 Cost Optimization Strategies](#92-cost-optimization-strategies)
-  - [9.3 Estimated Monthly Cost Overhead](#93-estimated-monthly-cost-overhead)
-- [10. Combining Multi-Region with Multi-Tenant](#10-combining-multi-region-with-multi-tenant)
-- [11. Quick Reference](#11-quick-reference)
+- [📋 5. RPO / RTO Targets by Service Tier](#-5-rpo--rto-targets-by-service-tier)
+- [📦 6. Deployment Process](#-6-deployment-process)
+- [🧪 7. Chaos Testing](#-7-chaos-testing)
+- [📈 8. Monitoring Multi-Region Health](#-8-monitoring-multi-region-health)
+- [💰 9. Cost Implications of Multi-Region](#-9-cost-implications-of-multi-region)
+- [🏢 10. Combining Multi-Region with Multi-Tenant](#-10-combining-multi-region-with-multi-tenant)
+- [📋 11. Quick Reference](#-11-quick-reference)
 
-## 1. Architecture Overview
+---
+
+## 🏗️ 1. Architecture Overview
 
 CSA-in-a-Box multi-region uses an **active-active** topology where both
 regions serve traffic simultaneously. Services that support native
@@ -62,31 +51,33 @@ automatic data synchronization. Services without built-in multi-region
 support (Databricks, Data Factory, Synapse) are deployed as independent
 stamps in each region.
 
-```text
-                    ┌────────────────────────┐
-                    │  Azure Traffic Manager  │
-                    │  / Azure Front Door     │
-                    └───────────┬────────────┘
-                         ┌──────┴──────┐
-                         ▼             ▼
-              ┌──────────────┐  ┌──────────────┐
-              │  East US 2   │  │  West US 2   │
-              │  (Primary)   │  │  (Secondary) │
-              ├──────────────┤  ├──────────────┤
-              │              │  │              │
-  Native      │ Cosmos DB ◄──┼──┼──► Cosmos DB │  Multi-region writes
-  replication │ Storage ◄────┼──┼──► Storage   │  RA-GZRS replication
-              │ Key Vault ◄──┼──┼──► Key Vault │  Azure-managed
-              │              │  │              │
-  Geo-DR      │ Event Hubs ◄─┼──┼──► Event Hubs│  Namespace pairing
-  pairing     │              │  │              │
-              │              │  │              │
-  Stamp       │ Databricks   │  │ Databricks   │  Independent workspaces
-  per region  │ Data Factory │  │ Data Factory │  Independent factories
-              │ Synapse      │  │ Synapse      │  Independent workspaces
-              │ Azure ML     │  │ Azure ML     │  Independent workspaces
-              │ ADX ◄────────┼──┼──► ADX       │  Follower databases
-              └──────────────┘  └──────────────┘
+```mermaid
+graph TB
+    TM["Azure Traffic Manager<br/>/ Azure Front Door"] --> E["East US 2<br/>(Primary)"]
+    TM --> W["West US 2<br/>(Secondary)"]
+
+    subgraph E["East US 2 (Primary)"]
+        EC["Cosmos DB"] 
+        ES["Storage (RA-GZRS)"]
+        EK["Key Vault"]
+        EH["Event Hubs"]
+        ED["Databricks"]
+        EA["Data Factory"]
+    end
+
+    subgraph W["West US 2 (Secondary)"]
+        WC["Cosmos DB"]
+        WS["Storage (RA-GZRS)"]
+        WK["Key Vault"]
+        WH["Event Hubs"]
+        WD["Databricks"]
+        WA["Data Factory"]
+    end
+
+    EC <-->|"Multi-region writes"| WC
+    ES <-->|"RA-GZRS replication"| WS
+    EK <-->|"Azure-managed"| WK
+    EH <-->|"Geo-DR pairing"| WH
 ```
 
 The primary region handles all writes for stamp-based services. The
@@ -97,28 +88,29 @@ region can be promoted to primary with the failover procedures in
 
 ---
 
-## 2. Service Capability Matrix
+## 📊 2. Service Capability Matrix
 
 Not all Azure services support multi-region the same way. This matrix
 documents the strategy for each service deployed by CSA-in-a-Box.
 
-| Service | Multi-Region Support | Strategy | Bicep Configuration | RPO | RTO |
-|---|---|---|---|---|---|
-| **Cosmos DB** | Native multi-region writes | Active-active | `secondaryLocation`, `enableMultipleWriteLocations=true`, `enableAutomaticFailover=true` | < 15 min | < 30 min |
-| **Storage (Silver/Gold)** | RA-GZRS | Built-in geo-replication with read access | `sku=Standard_RAGZRS` | < 1 h | < 1 h |
-| **Storage (Bronze/raw)** | ZRS | Zone-redundant, single region | Default SKU | < 4 h | < 4 h |
-| **Key Vault** | Azure-managed geo-replication | Built-in (Standard/Premium) | `enableSoftDelete`, `enablePurgeProtection` | N/A | < 15 min |
-| **Event Hubs** | Geo-DR namespace pairing | Manual config post-deploy | `disasterRecoveryConfigs` (portal/CLI) | < 5 min | < 15 min |
-| **Databricks** | No native support | Stamp per region | Deploy `main.bicep` with secondary `location` | < 4 h | < 4 h |
-| **Data Factory** | No native support | Stamp per region | Deploy `main.bicep` with secondary `location` | < 4 h | < 8 h |
-| **Synapse** | No native support | Stamp per region | Deploy `main.bicep` with secondary `location` | < 1 h | < 2 h |
-| **Azure ML** | No native support | Stamp per region | Deploy `main.bicep` with secondary `location` | < 4 h | < 4 h |
-| **Data Explorer** | Follower databases | Read replicas in secondary | Manual follower config | < 30 min | < 1 h |
-| **App Insights** | Per-region instance | Stamp per region | Deploy with secondary `location` | N/A | N/A |
-| **Stream Analytics** | No native support | Stamp per region | Deploy with secondary `location` | < 4 h | < 4 h |
-| **Purview** | No native support | Accept 24h RPO | Manual re-scan | < 24 h | < 24 h |
+| Service | Multi-Region Support | Strategy | RPO | RTO |
+|---|---|---|---|---|
+| **Cosmos DB** | Native multi-region writes | Active-active | < 15 min | < 30 min |
+| **Storage (Silver/Gold)** | RA-GZRS | Built-in geo-replication | < 1 h | < 1 h |
+| **Storage (Bronze/raw)** | ZRS | Zone-redundant, single region | < 4 h | < 4 h |
+| **Key Vault** | Azure-managed geo-replication | Built-in | N/A | < 15 min |
+| **Event Hubs** | Geo-DR namespace pairing | Manual config post-deploy | < 5 min | < 15 min |
+| **Databricks** | No native support | Stamp per region | < 4 h | < 4 h |
+| **Data Factory** | No native support | Stamp per region | < 4 h | < 8 h |
+| **Synapse** | No native support | Stamp per region | < 1 h | < 2 h |
+| **Azure ML** | No native support | Stamp per region | < 4 h | < 4 h |
+| **Data Explorer** | Follower databases | Read replicas in secondary | < 30 min | < 1 h |
+| **App Insights** | Per-region instance | Stamp per region | N/A | N/A |
+| **Stream Analytics** | No native support | Stamp per region | < 4 h | < 4 h |
+| **Purview** | No native support | Accept 24h RPO | < 24 h | < 24 h |
 
-### Legend
+<details>
+<summary>Legend</summary>
 
 - **Native**: The service replicates data automatically across regions.
 - **Geo-DR pairing**: The service supports a disaster-recovery
@@ -129,9 +121,11 @@ documents the strategy for each service deployed by CSA-in-a-Box.
 - **Follower databases**: ADX-specific — a secondary cluster attaches
   read-only copies of databases from the primary cluster.
 
+</details>
+
 ---
 
-## 3. Data Replication Patterns
+## 🔄 3. Data Replication Patterns
 
 ### 3.1 Storage: RA-GZRS Automatic Replication
 
@@ -139,14 +133,6 @@ When `sku` is set to `Standard_RAGZRS`, Azure Storage replicates data
 synchronously across three availability zones in the primary region and
 asynchronously to the paired secondary region. The secondary region
 provides read-only access at all times.
-
-```text
-Primary (eastus2)                Secondary (westus2)
-┌─────────────────────┐          ┌─────────────────────┐
-│  Zone 1 │ Zone 2 │ Zone 3 │──async──►│  Zone 1 │ Zone 2 │ Zone 3 │
-│  (sync) │ (sync) │ (sync) │          │  (read) │ (read) │ (read) │
-└─────────────────────┘          └─────────────────────┘
-```
 
 **Key points:**
 - RPO is typically < 15 minutes but Azure does not guarantee a specific
@@ -172,14 +158,6 @@ With `enableMultipleWriteLocations=true` and `secondaryLocation` set,
 Cosmos DB accepts writes in both regions simultaneously. Conflict
 resolution uses Last-Writer-Wins (LWW) by default, based on the `_ts`
 (timestamp) property.
-
-```text
-Primary (eastus2)                Secondary (westus2)
-┌─────────────────────┐          ┌─────────────────────┐
-│  Writes + Reads     │◄──sync──►│  Writes + Reads     │
-│  Failover Priority 0│          │  Failover Priority 1│
-└─────────────────────┘          └─────────────────────┘
-```
 
 **Key points:**
 - Session consistency is maintained per-region. Cross-region reads may
@@ -216,11 +194,12 @@ dbt run --target prod_eastus2
 dbt run --target prod_westus2
 ```
 
-Since the source data (Storage RA-GZRS) is eventually consistent
-across regions, model outputs may differ slightly during replication
-lag. For critical aggregations, run dbt in the primary region first
-and let replication propagate the source data before running in the
-secondary.
+> [!NOTE]
+> Since the source data (Storage RA-GZRS) is eventually consistent
+> across regions, model outputs may differ slightly during replication
+> lag. For critical aggregations, run dbt in the primary region first
+> and let replication propagate the source data before running in the
+> secondary.
 
 ### 3.4 Event Hubs: Geo-DR Namespace Pairing
 
@@ -239,17 +218,17 @@ az eventhubs georecovery-alias create \
   --partner-namespace "/subscriptions/<SUB_ID>/resourceGroups/rg-dlz-prod-eventhubs-westus2/providers/Microsoft.EventHub/namespaces/dlz-prod-ehns-westus2"
 ```
 
-**Key points:**
-- Messages in-flight during failover may be lost. Design consumers for
-  at-least-once processing with idempotent writes.
-- After failover, the secondary becomes the new primary. The old primary
-  must be re-paired as the secondary.
-- Consumer offsets are not replicated — consumers restart from the latest
-  checkpoint or the beginning of the retention window.
+> [!WARNING]
+> - Messages in-flight during failover may be lost. Design consumers for
+>   at-least-once processing with idempotent writes.
+> - After failover, the secondary becomes the new primary. The old primary
+>   must be re-paired as the secondary.
+> - Consumer offsets are not replicated — consumers restart from the latest
+>   checkpoint or the beginning of the retention window.
 
 ---
 
-## 4. Failover Procedures
+## 🚀 4. Failover Procedures
 
 The detailed step-by-step failover procedure is in [DR.md](DR.md) §3.
 This section summarizes the decision framework.
@@ -306,11 +285,11 @@ az network traffic-manager endpoint create \
 
 ---
 
-## 5. RPO / RTO Targets by Service Tier
+## 📋 5. RPO / RTO Targets by Service Tier
 
 Services are classified into tiers that drive the SKU, replication mode,
 and expected recovery behavior. See [DR.md](DR.md) §1 for the
-authoritative table. The summary below focuses on multi-region impact.
+authoritative table.
 
 ### Tier: Critical (RPO < 1h, RTO < 1h)
 
@@ -340,7 +319,7 @@ authoritative table. The summary below focuses on multi-region impact.
 
 ---
 
-## 6. Deployment Process
+## 📦 6. Deployment Process
 
 ### 6.1 Prerequisites
 
@@ -365,14 +344,9 @@ az deployment sub create \
   --parameters deploy/bicep/DLZ/params.multi-region.json
 ```
 
-This deploys all services in East US 2 with multi-region settings
-enabled (Cosmos DB `secondaryLocation=westus2`, Storage
-`sku=Standard_RAGZRS`).
-
 ### 6.3 Step 2 — Deploy Stamp-Based Services in the Secondary Region
 
-Create a secondary parameter file for services that need separate
-stamps:
+Create a secondary parameter file for services that need separate stamps:
 
 ```bash
 cp deploy/bicep/DLZ/params.multi-region.json \
@@ -380,12 +354,11 @@ cp deploy/bicep/DLZ/params.multi-region.json \
 ```
 
 Edit the secondary file:
-- Change `location` to `"West US 2"`
-- Update resource names to include `westus2` suffix
-- Update VNet/subnet references to the secondary region's network
-- Disable services that are already multi-region (Cosmos DB, Storage —
-  set their `deployModules` flags to `false`)
-- Keep stamp-based services enabled (Databricks, Data Factory, etc.)
+- [ ] Change `location` to `"West US 2"`
+- [ ] Update resource names to include `westus2` suffix
+- [ ] Update VNet/subnet references to the secondary region's network
+- [ ] Disable services that are already multi-region (Cosmos DB, Storage)
+- [ ] Keep stamp-based services enabled (Databricks, Data Factory, etc.)
 
 ```bash
 az deployment sub create \
@@ -408,8 +381,6 @@ az eventhubs georecovery-alias create \
 
 ### 6.5 Step 4 — Configure ADX Follower Databases
 
-Attach follower databases from the primary ADX cluster to the secondary:
-
 ```bash
 az kusto attached-database-configuration create \
   --cluster-name dlzprodadxwestus2 \
@@ -425,8 +396,6 @@ az kusto attached-database-configuration create \
 Set up global routing as described in §4.3 above.
 
 ### 6.7 Step 6 — Verify
-
-Run the post-deploy verification:
 
 ```bash
 # Cosmos DB — verify both regions
@@ -452,7 +421,7 @@ az eventhubs georecovery-alias show \
 
 ---
 
-## 7. Chaos Testing
+## 🧪 7. Chaos Testing
 
 Use Azure Chaos Studio to validate failover behavior before a real
 outage occurs.
@@ -524,9 +493,6 @@ az cosmosdb failover-priority-change \
 
 ### 7.3 Quarterly Drill Schedule
 
-Follow the drill procedure in [DR.md](DR.md) §4. Rotate through
-services over the year:
-
 | Quarter | Service | Environment | Focus |
 |---|---|---|---|
 | Q1 | Cosmos DB | Dev | Automatic failover verification |
@@ -536,7 +502,7 @@ services over the year:
 
 ---
 
-## 8. Monitoring Multi-Region Health
+## 📈 8. Monitoring Multi-Region Health
 
 ### 8.1 Cross-Region Dashboard
 
@@ -556,7 +522,6 @@ AzureDiagnostics
 
 **Storage geo-replication status:**
 ```bash
-# Check replication status programmatically
 az storage account show \
   --name <ACCOUNT> \
   --query "geoReplicationStats.{Status:status, LastSync:lastSyncTime}" \
@@ -574,8 +539,6 @@ AzureDiagnostics
 ```
 
 ### 8.2 Alerts
-
-Configure alerts for multi-region health signals:
 
 | Alert | Metric | Threshold | Action |
 |---|---|---|---|
@@ -595,7 +558,7 @@ Resources
 
 ---
 
-## 9. Cost Implications of Multi-Region
+## 💰 9. Cost Implications of Multi-Region
 
 Multi-region deployments increase cost. Understanding the cost drivers
 helps right-size the secondary region.
@@ -615,29 +578,19 @@ helps right-size the secondary region.
 
 ### 9.2 Cost Optimization Strategies
 
-1. **Cold standby for stamp-based services**: Deploy Databricks and ADF
+- [ ] **Cold standby for stamp-based services**: Deploy Databricks and ADF
    in the secondary region but keep clusters stopped and pipelines
-   disabled. Activate only during failover. This reduces the 2× cost
-   to ~1.1× for these services.
-
-2. **Right-size the secondary ADX cluster**: Use a smaller SKU for the
+   disabled. Reduces 2× cost to ~1.1×.
+- [ ] **Right-size the secondary ADX cluster**: Use a smaller SKU for the
    follower cluster since it only handles read traffic.
-
-3. **Selective multi-region**: Not all data needs RA-GZRS. Use
-   `Standard_ZRS` (single-region zone-redundant) for Bronze/raw data
+- [ ] **Selective multi-region**: Use `Standard_ZRS` for Bronze/raw data
    and reserve RA-GZRS for Silver/Gold layers.
-
-4. **Reserved instances**: Commit to 1-year or 3-year reservations for
+- [ ] **Reserved instances**: Commit to 1-year or 3-year reservations for
    Cosmos DB RUs and Databricks DBUs in both regions.
-
-5. **Monitor and tune**: Use Azure Cost Management with the
-   `MultiRegion` and `PrimaryRegion` tags to track multi-region
-   overhead and identify optimization opportunities.
+- [ ] **Monitor and tune**: Use Azure Cost Management with the
+   `MultiRegion` and `PrimaryRegion` tags.
 
 ### 9.3 Estimated Monthly Cost Overhead
-
-For a typical CSA-in-a-Box production deployment, the multi-region
-overhead versus single-region is approximately:
 
 | Category | Single-Region | Multi-Region | Delta |
 |---|---|---|---|
@@ -649,7 +602,7 @@ overhead versus single-region is approximately:
 
 ---
 
-## 10. Combining Multi-Region with Multi-Tenant
+## 🏢 10. Combining Multi-Region with Multi-Tenant
 
 For deployments that require both multi-tenant isolation and
 multi-region availability, deploy each tenant stamp in both regions:
@@ -671,7 +624,7 @@ and naming conventions.
 
 ---
 
-## 11. Quick Reference
+## 📋 11. Quick Reference
 
 | Scenario | Guide |
 |---|---|
@@ -690,7 +643,7 @@ and naming conventions.
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [MULTI_TENANT.md](MULTI_TENANT.md) — Multi-tenant stamped deployment model
 - [DR.md](DR.md) — Disaster recovery runbook and failover procedures

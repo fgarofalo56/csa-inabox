@@ -1,30 +1,39 @@
+[Home](../README.md) > [Docs](./) > **Environment Protection**
+
 # GitHub Environment Protection Rules
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Security / Compliance
 
-## Table of Contents
+> [!NOTE]
+> **Quick Summary**: Setup procedure for GitHub Environment protection rules across dev/test/prod — required reviewers, branch restrictions, wait timers, environment secrets, and branch protection for `main`. Run through every step before the first production deploy.
 
-- [Environments to Create](#1-environments-to-create)
-- [Per-environment Configuration](#2-per-environment-configuration)
-- [Repository-level Branch Protection on main](#3-repository-level-branch-protection-on-main)
-- [Verification Checklist](#4-verification-checklist)
-- [Why This Lives in Docs, Not Bicep / YAML](#5-why-this-lives-in-docs-not-bicep--yaml)
-- [Related](#6-related) deployment workflows already reference GitHub
-Environments in their job definitions
+## 📑 Table of Contents
+
+- [🌍 1. Environments to Create](#-1-environments-to-create)
+- [⚙️ 2. Per-environment Configuration](#️-2-per-environment-configuration)
+- [🔒 3. Repository-level Branch Protection on main](#-3-repository-level-branch-protection-on-main)
+- [✅ 4. Verification Checklist](#-4-verification-checklist)
+- [📝 5. Why This Lives in Docs, Not Bicep / YAML](#-5-why-this-lives-in-docs-not-bicep--yaml)
+- [🔗 6. Related](#-6-related)
+
+---
+
+GitHub Environments are the primary approval-gate mechanism for the
+deployment workflows already referenced in their job definitions
 (`.github/workflows/deploy.yml` and `.github/workflows/rollback.yml`
 both set `environment: ${{ inputs.environment }}` on every landing-zone
-deploy job). GitHub Environments are the primary approval-gate mechanism
-— but the protection rules themselves (required reviewers, branch
+deploy job). The protection rules themselves (required reviewers, branch
 restrictions, wait timers) have to be configured in the GitHub UI,
 because the GitHub API for environment creation is scoped to
 repository admins and cannot be checked into the repo.
 
-This document is the authoritative setup procedure for the environments.
-**Run through every step before the first production deploy.**
+> [!IMPORTANT]
+> This document is the authoritative setup procedure for the environments.
+> **Run through every step before the first production deploy.**
 
 ---
 
-## 1. Environments to create
+## 🌍 1. Environments to Create
 
 Create three environments in
 `Settings → Environments → New environment`:
@@ -41,7 +50,7 @@ will fail the workflow at the `environment:` job property.
 
 ---
 
-## 2. Per-environment configuration
+## ⚙️ 2. Per-environment Configuration
 
 ### `dev`
 
@@ -73,28 +82,28 @@ will fail the workflow at the `environment:` job property.
 
 ---
 
-## 3. Repository-level branch protection on `main`
+## 🔒 3. Repository-level Branch Protection on `main`
 
 Environment rules are only half the story — the other half is making
 sure bad code can't land on `main` in the first place. In
 `Settings → Branches → Add rule` for `main`, require:
 
-- ✅ **Require a pull request before merging** (1 approval).
-- ✅ **Require status checks to pass before merging** — select:
+- [x] **Require a pull request before merging** (1 approval).
+- [x] **Require status checks to pass before merging** — select:
   - `Test Suite / Python Tests`
   - `Test Suite / dbt Compile Check`
   - `Test Suite / Bicep Lint`
   - `Test Suite / Security Scan`
   - `Bicep What-If / bicep-build` (all three zones)
-- ✅ **Require branches to be up to date before merging**
-- ✅ **Require conversation resolution before merging**
-- ✅ **Require signed commits** (optional but strongly recommended)
-- ✅ **Do not allow bypassing the above settings** — even admins should
+- [x] **Require branches to be up to date before merging**
+- [x] **Require conversation resolution before merging**
+- [x] **Require signed commits** (optional but strongly recommended)
+- [x] **Do not allow bypassing the above settings** — even admins should
   go through the PR flow for production-affecting changes.
 
 ---
 
-## 4. Verification checklist
+## ✅ 4. Verification Checklist
 
 After configuring the above, verify each gate works:
 
@@ -120,7 +129,7 @@ runbook folder so auditors have a record.
 
 ---
 
-## 5. Why this lives in docs, not Bicep / YAML
+## 📝 5. Why This Lives in Docs, Not Bicep / YAML
 
 GitHub Environments are a repo-level GitHub feature, not an Azure
 resource. They cannot be managed from Bicep, and the GitHub Actions
@@ -138,7 +147,7 @@ a new reviewer team is added), update this document in the same PR.
 
 ---
 
-## 6. Related
+## 🔗 6. Related
 
 - `.github/workflows/deploy.yml` — deploy jobs reference
   `environment: ${{ inputs.environment }}`.
@@ -152,7 +161,7 @@ a new reviewer team is added), update this document in the same PR.
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
-- [Gov Service Matrix](GOV_SERVICE_MATRIX.md) - Azure Government service availability
-- [Production Checklist](PRODUCTION_CHECKLIST.md) - Production readiness checklist
+- [Gov Service Matrix](GOV_SERVICE_MATRIX.md) — Azure Government service availability
+- [Production Checklist](PRODUCTION_CHECKLIST.md) — Production readiness checklist

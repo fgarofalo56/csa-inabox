@@ -1,8 +1,16 @@
 # NOAA Climate & Environmental Analytics Platform
 
+> [**Examples**](../README.md) > **NOAA**
+
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers
 
-## Table of Contents
+> [!TIP]
+> **TL;DR** — Climate and environmental analytics with real-time weather station streaming, 100K+ GHCN stations, ocean buoy telemetry, and storm event correlation. Provides multi-decadal climate trend analysis and severe weather early warning.
+
+
+---
+
+## 📋 Table of Contents
 - [Overview](#overview)
   - [Key Features](#key-features)
   - [Data Sources](#data-sources)
@@ -41,11 +49,14 @@
 
 A comprehensive climate and environmental analytics platform built on Azure Cloud Scale Analytics (CSA), providing insights into weather patterns, climate trends, marine ecosystems, and natural hazards using official NOAA data sources — including real-time streaming from weather stations and ocean buoys.
 
-## Overview
+
+---
+
+## 📋 Overview
 
 NOAA operates the world's largest environmental monitoring network: 11,000+ weather stations, 100+ ocean buoys, a constellation of weather satellites, and decades of climate records. This platform ingests both batch and real-time streaming data from NOAA's observation networks to enable severe weather early warning, climate trend analysis, and marine ecosystem health monitoring. The streaming pipeline demonstrates real-time sensor data flowing through Azure Event Hub into Azure Data Explorer (ADX) for sub-second analytics.
 
-### Key Features
+### ✨ Key Features
 
 - **Real-Time Weather Monitoring**: Live station data via Event Hub with ADX for hot analytics
 - **Climate Trend Dashboards**: Multi-decadal temperature, precipitation, and sea-level analysis
@@ -54,7 +65,7 @@ NOAA operates the world's largest environmental monitoring network: 11,000+ weat
 - **Satellite Imagery Processing**: GOES-16/17 and JPSS derived product ingestion
 - **Tides & Currents**: Coastal water level monitoring with flood risk scoring
 
-### Data Sources
+### 🗄️ Data Sources
 
 | Source | Description | URL |
 |--------|-------------|-----|
@@ -66,7 +77,10 @@ NOAA operates the world's largest environmental monitoring network: 11,000+ weat
 | ERDDAP | Oceanographic and fisheries gridded data server | https://coastwatch.pfeg.noaa.gov/erddap/index.html |
 | ISD | Integrated Surface Database — hourly surface weather | https://www.ncei.noaa.gov/products/land-based-station/integrated-surface-database |
 
-## Architecture Overview
+
+---
+
+## 🏗️ Architecture Overview
 
 ```mermaid
 graph TD
@@ -163,7 +177,10 @@ graph TD
     G5 --> C4
 ```
 
-## Real-Time Streaming Architecture
+
+---
+
+## ⚡ Real-Time Streaming Architecture
 
 This example includes a streaming pipeline for near-real-time weather and ocean buoy data:
 
@@ -202,7 +219,7 @@ graph LR
     SA --> ADLS
 ```
 
-### Streaming Quick Start
+### 🚀 Streaming Quick Start
 
 ```bash
 # Start the NOAA sensor simulator (generates realistic weather station data)
@@ -234,7 +251,10 @@ WeatherStationEvents
 | order by event_time desc
 ```
 
-## Prerequisites
+
+---
+
+## 📎 Prerequisites
 
 ### Azure Resources
 - Azure subscription with contributor access
@@ -255,7 +275,10 @@ WeatherStationEvents
 - CO-OPS API (no key required — open access)
 - ERDDAP (no key required — open access)
 
-## Quick Start
+
+---
+
+## 🚀 Quick Start
 
 ### 1. Environment Setup
 
@@ -328,7 +351,10 @@ dbt docs generate
 dbt docs serve
 ```
 
-## Sample Analytics Scenarios
+
+---
+
+## 💡 Sample Analytics Scenarios
 
 ### 1. Severe Weather Early Warning
 
@@ -394,7 +420,10 @@ WHERE assessment_year = 2023
 ORDER BY composite_health_score ASC;
 ```
 
-## Data Products
+
+---
+
+## ✨ Data Products
 
 ### Climate Trends (`climate-trends`)
 - **Description**: Multi-decadal temperature and precipitation trends by climate region
@@ -414,9 +443,12 @@ ORDER BY composite_health_score ASC;
 - **Coverage**: All U.S. EEZ marine regions
 - **API**: `/api/v1/marine-health`
 
-## Configuration
 
-### dbt Profiles
+---
+
+## ⚙️ Configuration
+
+### ⚙️ dbt Profiles
 
 Add to your `~/.dbt/profiles.yml`:
 
@@ -440,7 +472,7 @@ noaa_analytics:
       catalog: prod
 ```
 
-### Environment Variables
+### ⚙️ Environment Variables
 
 ```bash
 # Required for data fetching
@@ -458,7 +490,10 @@ NOAA_BATCH_SIZE=10000
 ADX_CLUSTER_URI=https://noaa-adx.region.kusto.windows.net
 ```
 
-## Azure Government Notes
+
+---
+
+## 🔒 Azure Government Notes
 
 This example is compatible with Azure Government (US) regions. When deploying to Azure Government:
 
@@ -469,16 +504,22 @@ This example is compatible with Azure Government (US) regions. When deploying to
 - All NOAA data is publicly accessible from government networks
 - NOAA satellite downlink data may have additional access requirements — contact NESDIS
 
-## Monitoring & Alerts
+
+---
+
+## 📊 Monitoring & Alerts
 
 - **Streaming Health**: Event Hub throughput, consumer lag, ADX ingestion latency
 - **Data Freshness**: Alerts when GHCN daily files or buoy feeds go stale
 - **Data Quality**: Automated tests for observation range validation and completeness
 - **Cost Management**: ADX cluster auto-scaling with cost guardrails
 
-## Troubleshooting
 
-### Common Issues
+---
+
+## 🔧 Troubleshooting
+
+### 🔧 Common Issues
 
 1. **CDO API Rate Limits**: Limited to 5 requests/second and 10,000 results per request. Use pagination with `--offset` and `--limit` parameters.
 2. **GHCN Data Gaps**: Historical station records contain gaps. Silver layer models apply interpolation flagging.
@@ -486,7 +527,10 @@ This example is compatible with Azure Government (US) regions. When deploying to
 4. **Event Hub Partitioning**: For high-throughput scenarios, increase partition count before deployment. Default is 4 partitions.
 5. **Large Satellite Files**: GOES-16 full-disk images are ~2 GB each. Use the `--product-filter` flag for specific bands.
 
-## Contributing
+
+---
+
+## 🔗 Contributing
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/new-data-source`)
@@ -494,11 +538,17 @@ This example is compatible with Azure Government (US) regions. When deploying to
 4. Run quality checks (`make lint test`)
 5. Submit a pull request
 
-## License
+
+---
+
+## 🔗 License
 
 This project is licensed under the MIT License. See `LICENSE` file for details.
 
-## Acknowledgments
+
+---
+
+## 🔗 Acknowledgments
 
 - NOAA for maintaining the world's most comprehensive environmental observation network
 - NCEI, NWS, NDBC, and CO-OPS for open data access and APIs
@@ -507,7 +557,7 @@ This project is licensed under the MIT License. See `LICENSE` file for details.
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [NOAA Architecture](ARCHITECTURE.md) - Detailed platform architecture and design decisions
 - [Examples Index](../README.md) - Overview of all CSA-in-a-Box example verticals

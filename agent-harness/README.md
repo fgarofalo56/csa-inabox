@@ -4,45 +4,38 @@
 
 ## Table of Contents
 
-- [Overview](#overview)
-- [How It Works](#how-it-works)
-- [Task Lifecycle](#task-lifecycle)
-- [Validation Gates](#validation-gates)
-- [Integration Points](#integration-points)
-- [Configuration](#configuration)
-- [Archon Project](#archon-project)
-- [Related Documentation](#related-documentation)
+- [Overview](#-overview)
+- [How It Works](#-how-it-works)
+- [Task Lifecycle](#-task-lifecycle)
+- [Validation Gates](#-validation-gates)
+- [Integration Points](#-integration-points)
+- [Configuration](#-configuration)
+- [Archon Project](#-archon-project)
+- [Related Documentation](#-related-documentation)
 
-## Overview
+---
+
+## 📋 Overview
 
 The Ralph loop is an autonomous agent harness for iterative implementation, testing, and validation of the CSA-in-a-Box platform. It follows a task-driven development cycle where agents pick up Archon tasks, implement changes, validate them through automated gates, and iterate until validation passes.
 
-## How It Works
+---
 
-```text
-┌─────────────────────────────────────────────────┐
-│                  Ralph Loop                      │
-│                                                  │
-│  ┌──────┐   ┌───────────┐   ┌──────────┐       │
-│  │ Pick │──>│ Implement │──>│ Validate │        │
-│  │ Task │   │  Changes  │   │  Gates   │        │
-│  └──────┘   └───────────┘   └────┬─────┘        │
-│       ^                          │               │
-│       │                    ┌─────┴─────┐         │
-│       │                    │   Pass?   │         │
-│       │                    └─────┬─────┘         │
-│       │                     No   │  Yes          │
-│       │              ┌───────┐   │               │
-│       └──────────────│ Fix   │   │               │
-│                      │ Issues│   v               │
-│                      └───────┘ ┌──────────┐      │
-│                                │ Complete │      │
-│                                │   Task   │      │
-│                                └──────────┘      │
-└─────────────────────────────────────────────────┘
+## 🏗️ How It Works
+
+```mermaid
+flowchart TD
+    A[Pick Task] --> B[Implement Changes]
+    B --> C[Validate Gates]
+    C --> D{Pass?}
+    D -- No --> E[Fix Issues]
+    E --> A
+    D -- Yes --> F[Complete Task]
 ```
 
-## Task Lifecycle
+---
+
+## 🔄 Task Lifecycle
 
 1. **Pick Task**: Query Archon for next `todo` task in the CSA project
 2. **Mark Doing**: Update task status to `doing` in Archon
@@ -52,7 +45,9 @@ The Ralph loop is an autonomous agent harness for iterative implementation, test
 6. **Complete**: Mark task as `done`, commit changes, pick next task
 7. **Escalate**: If max iterations reached, mark for human review
 
-## Validation Gates
+---
+
+## 🧪 Validation Gates
 
 Located in `agent-harness/gates/`:
 
@@ -64,7 +59,9 @@ Located in `agent-harness/gates/`:
 | Deployment | `validate-deployment.ps1` | Infrastructure changes |
 | All Gates | `validate-all.ps1` | Always (orchestrator) |
 
-## Integration Points
+---
+
+## 🔌 Integration Points
 
 - **Archon MCP**: Task management, project tracking, document storage
 - **GitHub Actions**: CI/CD pipeline execution
@@ -73,7 +70,9 @@ Located in `agent-harness/gates/`:
 - **ruff**: Python linting
 - **dbt**: Data model compilation and testing
 
-## Configuration
+---
+
+## ⚙️ Configuration
 
 See `agent-harness/config.yaml` for loop settings:
 - Max iterations per task
@@ -81,7 +80,9 @@ See `agent-harness/config.yaml` for loop settings:
 - Human review triggers
 - Escalation rules
 
-## Archon Project
+---
+
+## 📋 Archon Project
 
 Project ID: `1bd59749-db0a-4009-82c7-f1a56d24a820`
 
@@ -89,7 +90,7 @@ Query tasks: `find_tasks(filter_by="project", filter_value="1bd59749-db0a-4009-8
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Architecture Overview](../docs/ARCHITECTURE.md) — Platform architecture reference
 - [Getting Started](../docs/GETTING_STARTED.md) — Platform setup and onboarding

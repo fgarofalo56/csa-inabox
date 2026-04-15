@@ -7,12 +7,14 @@ managing the CSA-in-a-Box platform.
 
 ## Table of Contents
 
-- [Categories](#categories)
-- [Key Scripts](#key-scripts)
-- [Getting Started](#getting-started)
-- [Related Documentation](#related-documentation)
+- [Categories](#-categories)
+- [Key Scripts](#-key-scripts)
+- [Getting Started](#-getting-started)
+- [Related Documentation](#-related-documentation)
 
-## Categories
+---
+
+## 📁 Categories
 
 | Directory | Purpose | Language |
 |-----------|---------|----------|
@@ -31,7 +33,9 @@ managing the CSA-in-a-Box platform.
 | [sql/](sql/) | SQL Server / Synapse SQL scripts | SQL |
 | [synapse-dep/](synapse-dep/) | Synapse dependency management | — |
 
-## Key Scripts
+---
+
+## ✨ Key Scripts
 
 | Script | What It Does |
 |--------|-------------|
@@ -42,7 +46,9 @@ managing the CSA-in-a-Box platform.
 | `seed/load_sample_data.py` | Loads sample datasets into ADLS / Synapse |
 | `streaming/produce_events.py` | Generates streaming events for Event Hub |
 
-## Getting Started
+---
+
+## 🚀 Getting Started
 
 1. Review `deploy/validate-prerequisites.sh` to check your environment
 2. Run `make deploy-dev` for a dev deployment (uses `deploy/deploy-platform.sh`)
@@ -51,7 +57,7 @@ managing the CSA-in-a-Box platform.
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Getting Started](../docs/GETTING_STARTED.md) — Prerequisites and setup walkthrough
 - [Quick Start](../docs/QUICKSTART.md) — 60-minute hands-on tutorial

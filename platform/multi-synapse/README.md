@@ -1,6 +1,11 @@
+[← Platform Components](../README.md)
+
 # Multi-Synapse — Shared Analytics Environment
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Platform Engineers
+
+> [!NOTE]
+> **TL;DR:** Deploys per-organization Synapse workspaces with isolated compute and storage over shared network infrastructure, supporting cross-workspace query federation, pre-built RBAC templates, and cost allocation by organization tag.
 
 > **Multi-organization Synapse workspace architecture**
 
@@ -19,7 +24,9 @@
 > Deploys multiple Synapse Analytics workspaces with shared infrastructure
 > for multi-tenant or multi-organization data analytics scenarios.
 
-## Overview
+---
+
+## 📋 Overview
 
 In scenarios where multiple organizations (agencies, departments, business
 units) share a common data platform, each organization needs its own
@@ -34,42 +41,46 @@ This pattern deploys:
 - **RBAC templates** — per-org role assignments for analysts, engineers, and admins
 - **Cost allocation** — per-workspace cost tracking via resource tags
 
-## Architecture
+---
 
-```text
-┌──────────────────────────────────────────────────────────┐
-│                  Shared Infrastructure                    │
-│  ┌────────────┐  ┌────────────┐  ┌───────────────────┐  │
-│  │  Managed   │  │    Log     │  │     Purview       │  │
-│  │   VNet     │  │  Analytics │  │   (Governance)    │  │
-│  │            │  │  Workspace │  │                   │  │
-│  └─────┬──────┘  └────────────┘  └───────────────────┘  │
-│        │                                                 │
-│  ┌─────┴──────────────────────────────────────────────┐  │
-│  │              Private Endpoint Subnet               │  │
-│  └─────┬──────────────┬────────────────┬──────────────┘  │
-│        │              │                │                  │
-│  ┌─────▼──────┐ ┌─────▼──────┐  ┌─────▼──────┐         │
-│  │  Synapse   │ │  Synapse   │  │  Synapse   │         │
-│  │  Org A     │ │  Org B     │  │  Org C     │         │
-│  │            │ │            │  │            │         │
-│  │ ┌────────┐ │ │ ┌────────┐ │  │ ┌────────┐ │         │
-│  │ │SQL Pool│ │ │ │SQL Pool│ │  │ │Srvless │ │         │
-│  │ └────────┘ │ │ └────────┘ │  │ └────────┘ │         │
-│  │ ┌────────┐ │ │ ┌────────┐ │  │ ┌────────┐ │         │
-│  │ │Spark   │ │ │ │Spark   │ │  │ │Spark   │ │         │
-│  │ │Pool    │ │ │ │Pool    │ │  │ │Pool    │ │         │
-│  │ └────────┘ │ │ └────────┘ │  │ └────────┘ │         │
-│  │     │      │ │     │      │  │     │      │         │
-│  │  ┌──▼───┐  │ │  ┌──▼───┐  │  │  ┌──▼───┐  │         │
-│  │  │ ADLS │  │ │  │ ADLS │  │  │  │ ADLS │  │         │
-│  │  │ Gen2 │  │ │  │ Gen2 │  │  │  │ Gen2 │  │         │
-│  │  └──────┘  │ │  └──────┘  │  │  └──────┘  │         │
-│  └────────────┘ └────────────┘  └────────────┘         │
-└──────────────────────────────────────────────────────────┘
+## 🏗️ Architecture
+
+```mermaid
+graph TB
+    subgraph Shared[Shared Infrastructure]
+        VNet[Managed VNet]
+        LAW[Log Analytics]
+        Purview[Purview Governance]
+        PE[Private Endpoint Subnet]
+    end
+
+    subgraph OrgA[Synapse Org A]
+        SQLA[SQL Pool]
+        SparkA[Spark Pool]
+        ADLSA[ADLS Gen2]
+    end
+
+    subgraph OrgB[Synapse Org B]
+        SQLB[SQL Pool]
+        SparkB[Spark Pool]
+        ADLSB[ADLS Gen2]
+    end
+
+    subgraph OrgC[Synapse Org C]
+        SQLC[Serverless]
+        SparkC[Spark Pool]
+        ADLSC[ADLS Gen2]
+    end
+
+    VNet --> PE
+    PE --> OrgA
+    PE --> OrgB
+    PE --> OrgC
 ```
 
-## Cross-Workspace Query Federation
+---
+
+## 🗄️ Cross-Workspace Query Federation
 
 Synapse serverless SQL pools can query data across workspaces using
 external data sources:
@@ -96,7 +107,9 @@ JOIN OPENROWSET(
 ) AS b ON a.order_id = b.order_reference;
 ```
 
-## RBAC Templates
+---
+
+## 🔒 RBAC Templates
 
 Pre-defined role templates for each organization are in `rbac_templates/`:
 
@@ -117,7 +130,9 @@ python scripts/apply_rbac.py \
   --group-object-id "aad-group-id"
 ```
 
-## Cost Allocation
+---
+
+## 💡 Cost Allocation
 
 Each workspace is tagged with the organization name for cost tracking:
 
@@ -142,7 +157,9 @@ AzureDiagnostics
 | summarize TotalCost = sum(CostInBillingCurrency) by org, bin(TimeGenerated, 1mo)
 ```
 
-## Deployment
+---
+
+## 📦 Deployment
 
 ```bash
 # Deploy multi-Synapse environment
@@ -156,7 +173,12 @@ az deployment sub create \
     sqlAdminPassword='<secure-password>'
 ```
 
-## Network Isolation
+---
+
+## 🔒 Network Isolation
+
+> [!WARNING]
+> All workspaces enforce zero public network access. Ensure private endpoints are configured before deployment.
 
 All workspaces share a managed VNet with:
 
@@ -165,7 +187,9 @@ All workspaces share a managed VNet with:
 - **No public network access** — `publicNetworkAccess: Disabled`
 - **NSG rules** — restrict inter-workspace traffic to approved patterns
 
-## Governance Integration
+---
+
+## 🔒 Governance Integration
 
 - **Purview** — each workspace registers its lineage with a shared Purview account
 - **Diagnostic Settings** — all workspaces send logs to a shared Log Analytics workspace
@@ -173,7 +197,7 @@ All workspaces share a managed VNet with:
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Platform Components](../README.md) — Platform component index
 - [Platform Services](../../docs/PLATFORM_SERVICES.md) — Detailed platform service descriptions

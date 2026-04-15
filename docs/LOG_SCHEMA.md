@@ -1,6 +1,11 @@
+[Home](../README.md) > [Docs](./) > **Log Schema**
+
 # Log Schema
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers
+
+> [!NOTE]
+> **Quick Summary**: Structured JSON logging schema for all CSA-in-a-Box Python services via structlog — baseline fields (service, timestamp, level, event, trace_id, correlation_id), per-trigger binding conventions (HTTP, Blob, Event Hub, Timer, CLI), and KQL queries for Log Analytics parsing.
 
 All Python services in CSA-in-a-Box emit structured JSON log lines via
 `governance.common.logging` (which wraps [structlog](https://www.structlog.org)).
@@ -8,25 +13,25 @@ Each line is a single-line JSON object so that Azure Log Analytics can
 parse it with a single KQL expression regardless of which service emitted
 it.
 
----
+## 📑 Table of Contents
 
-## Table of Contents
-
-- [1. Baseline fields](#1-baseline-fields)
-- [2. Services and their canonical events](#2-services-and-their-canonical-events)
-- [3. Trigger bindings](#3-trigger-bindings)
+- [📋 1. Baseline Fields](#-1-baseline-fields)
+- [⚙️ 2. Services and Their Canonical Events](#️-2-services-and-their-canonical-events)
+- [🔗 3. Trigger Bindings](#-3-trigger-bindings)
   - [HTTP triggers](#http-triggers)
   - [Blob triggers](#blob-triggers)
   - [Event Hub (batch) triggers](#event-hub-batch-triggers)
   - [Timer triggers](#timer-triggers)
   - [CLI entry points](#cli-entry-points)
-- [4. Log Analytics parsing](#4-log-analytics-parsing)
+- [📊 4. Log Analytics Parsing](#-4-log-analytics-parsing)
   - [Follow a single request end-to-end](#follow-a-single-request-end-to-end)
   - [Top error events per service in the last hour](#top-error-events-per-service-in-the-last-hour)
   - [Batch throughput for the event processor](#batch-throughput-for-the-event-processor)
-- [5. Local and console output](#5-local-and-console-output)
+- [💻 5. Local and Console Output](#-5-local-and-console-output)
 
-## 1. Baseline fields
+---
+
+## 📋 1. Baseline Fields
 
 Every log line contains these fields, always at the top level:
 
@@ -43,7 +48,7 @@ Any additional key/value pairs come from the caller (via `logger.info("event", f
 
 ---
 
-## 2. Services and their canonical events
+## ⚙️ 2. Services and Their Canonical Events
 
 | Service | Emitting module | Canonical events |
 |---|---|---|
@@ -51,12 +56,13 @@ Any additional key/value pairs come from the caller (via `logger.info("event", f
 | `csa-ai-enrichment` | `domains/sharedServices/aiEnrichment/functions/function_app.py` | `request.received`, `request.invalid_json`, `request.missing_field`, `request.payload_too_large`, `request.completed`, `blob.received`, `blob.unsupported_type`, `blob.completed`, `enrichment.text_failed`, `enrichment.document_failed`, `ai_client.import_failed` |
 | `csa-event-processing` | `domains/sharedServices/eventProcessing/functions/function_app.py` | `batch.received`, `batch.completed`, `event.invalid_json`, `event.processing_failed`, `replay.request_received`, `replay.invalid_json`, `replay.empty_payload`, `replay.completed`, `heartbeat`, `timer.past_due` |
 
-When a service adds a new event, add it here so operators have a single
-index of what can appear in the log stream.
+> [!IMPORTANT]
+> When a service adds a new event, add it here so operators have a single
+> index of what can appear in the log stream.
 
 ---
 
-## 3. Trigger bindings
+## 🔗 3. Trigger Bindings
 
 `bind_trace_context(...)` is the only sanctioned way to attach per-request
 fields. The conventions per trigger type:
@@ -117,7 +123,7 @@ bind_contextvars(correlation_id=new_correlation_id(), suite=args.suite)
 
 ---
 
-## 4. Log Analytics parsing
+## 📊 4. Log Analytics Parsing
 
 Azure Functions ingests stdout into Application Insights `traces`, which
 Log Analytics exposes as the `AppTraces` table. Because we emit JSON, a
@@ -173,7 +179,7 @@ AppTraces
 
 ---
 
-## 5. Local and console output
+## 💻 5. Local and Console Output
 
 For local development set `LOG_FORMAT=console` to switch from JSON to the
 human-readable console renderer:
@@ -188,7 +194,7 @@ only the serialisation changes.
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Troubleshooting](TROUBLESHOOTING.md) — Common issues and fixes
 - [Production Checklist](PRODUCTION_CHECKLIST.md) — Production readiness checklist

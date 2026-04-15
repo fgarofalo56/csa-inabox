@@ -2,6 +2,9 @@
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Platform Engineers
 
+> [!NOTE]
+> **TL;DR:** This directory contains 10 core platform components that replicate Microsoft Fabric functionality using Azure PaaS services and open-source tooling, designed for Azure Government where Fabric is not yet available.
+
 This directory contains the **core platform capabilities** that replicate Microsoft Fabric
 functionality using Azure PaaS services and open-source tooling.
 
@@ -18,7 +21,9 @@ functionality using Azure PaaS services and open-source tooling.
 - [Azure Government Compatibility](#azure-government-compatibility)
 - [Related Documentation](#related-documentation)
 
-## Components
+---
+
+## ✨ Components
 
 | Component | Fabric Equivalent | Description |
 |---|---|---|
@@ -33,7 +38,9 @@ functionality using Azure PaaS services and open-source tooling.
 | [shared-services](shared-services/) | Shared Functions | Reusable Azure Function library for data operations |
 | [oss-alternatives](oss-alternatives/) | N/A (Gov gaps) | Open-source alternatives for Gov-unavailable services |
 
-## Architecture
+---
+
+## 🏗️ Architecture
 
 ```mermaid
 graph TB
@@ -82,7 +89,9 @@ graph TB
     AlertFunctions --> LogicApps
 ```
 
-## Quick Start
+---
+
+## 🚀 Quick Start
 
 1. Deploy the base infrastructure using the main `deploy/` templates
 2. Configure the OneLake pattern for your domain structure
@@ -90,7 +99,9 @@ graph TB
 4. Set up governance rules and classifications
 5. Deploy the data marketplace for self-service discovery
 
-## Azure Government Compatibility
+---
+
+## 🔒 Azure Government Compatibility
 
 All platform components are designed to work in both Azure Commercial and Azure Government.
 See [deploy/bicep/gov/](../deploy/bicep/gov/) for Government-specific templates and
@@ -98,7 +109,7 @@ See [deploy/bicep/gov/](../deploy/bicep/gov/) for Government-specific templates 
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Platform Services](../docs/PLATFORM_SERVICES.md) — Detailed platform service descriptions
 - [Architecture](../docs/ARCHITECTURE.md) — Overall system architecture

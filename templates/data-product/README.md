@@ -6,12 +6,14 @@ Use this template to create a new data product domain in the CSA-in-a-Box Data M
 
 ## Table of Contents
 
-- [Quick Start](#quick-start)
-- [Template Contents](#template-contents)
-- [Data Mesh Principles](#data-mesh-principles)
-- [Related Documentation](#related-documentation)
+- [Quick Start](#-quick-start)
+- [Template Contents](#-template-contents)
+- [Data Mesh Principles](#-data-mesh-principles)
+- [Related Documentation](#-related-documentation)
 
-## Quick Start
+---
+
+## 🚀 Quick Start
 
 ```bash
 # 1. Copy the template
@@ -33,7 +35,9 @@ cp -r templates/data-product/scaffold domains/<your-domain>
 # Update governance/purview/scanning/register_sources.ps1
 ```
 
-## Template Contents
+---
+
+## 📁 Template Contents
 
 ```text
 templates/data-product/
@@ -58,7 +62,9 @@ templates/data-product/
 └── README.md                  # This file
 ```
 
-## Data Mesh Principles
+---
+
+## 🏗️ Data Mesh Principles
 
 1. **Domain Ownership**: Each domain owns its data pipeline end-to-end
 2. **Data as a Product**: Gold layer tables are published products with contracts
@@ -67,7 +73,7 @@ templates/data-product/
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Getting Started Guide](../../docs/GETTING_STARTED.md) — Platform setup and onboarding
 - [USDA Example](../../examples/usda/README.md) — Reference domain implementation

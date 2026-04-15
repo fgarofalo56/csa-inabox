@@ -1,6 +1,11 @@
+[← Platform Components](../README.md)
+
 # Data Marketplace — Product Discovery, Access, and Quality
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Platform Engineers
+
+> [!NOTE]
+> **TL;DR:** A FastAPI + Cosmos DB self-service data marketplace where domain teams register data products and consumers discover, request access, and monitor quality. Includes Purview integration, access request workflows, and weighted quality scoring.
 
 > **CSA-in-a-Box data product marketplace**
 
@@ -21,7 +26,9 @@
 > products and consumers can discover, request access to, and monitor the
 > quality of available datasets.
 
-## Overview
+---
+
+## 📋 Overview
 
 The data marketplace is a FastAPI application backed by Cosmos DB that
 provides:
@@ -37,39 +44,22 @@ provides:
 - **Purview Integration** — registered products sync metadata to
   Azure Purview for enterprise-wide governance
 
-## Architecture
+---
 
-```text
-┌─────────────────┐     ┌──────────────────┐     ┌──────────────┐
-│   Portal UI     │     │   API Gateway    │     │   Cosmos DB  │
-│   (React SPA)   │────▶│   (APIM)         │────▶│              │
-│                 │     │                  │     │ • products   │
-│ • Browse        │     │ • Rate limiting  │     │ • requests   │
-│ • Search        │     │ • Auth (Azure AD)│     │ • quality    │
-│ • Request       │     │ • API versioning │     │ • audit log  │
-│ • Dashboard     │     │                  │     │              │
-└─────────────────┘     └──────────────────┘     └──────────────┘
-                               │
-                               ▼
-                        ┌──────────────────┐
-                        │   FastAPI App    │
-                        │   (App Service)  │
-                        │                  │
-                        │ • /products      │
-                        │ • /access-request│
-                        │ • /quality       │
-                        └──────────────────┘
-                               │
-                    ┌──────────┴──────────┐
-                    ▼                     ▼
-             ┌────────────┐       ┌──────────────┐
-             │  Purview    │       │  Event Grid  │
-             │  (metadata  │       │  (notifications│
-             │   sync)     │       │   & alerts)  │
-             └────────────┘       └──────────────┘
+## 🏗️ Architecture
+
+```mermaid
+graph TB
+    Portal[Portal UI<br/>React SPA] --> APIM[API Gateway<br/>APIM]
+    APIM --> API[FastAPI App<br/>App Service]
+    APIM --> Cosmos[Cosmos DB<br/>products / requests / quality]
+    API --> Purview[Purview<br/>metadata sync]
+    API --> EventGrid[Event Grid<br/>notifications & alerts]
 ```
 
-## API Endpoints
+---
+
+## 🔌 API Endpoints
 
 | Method | Path | Description |
 |---|---|---|
@@ -83,7 +73,9 @@ provides:
 
 See `api/marketplace_api.py` for the full implementation.
 
-## Data Product Schema
+---
+
+## 🗄️ Data Product Schema
 
 Every data product registered in the marketplace includes:
 
@@ -115,33 +107,27 @@ lineage:
   downstream: [gold.sales_metrics, gold.revenue_reconciliation]
 ```
 
-## Access Request Workflow
+---
 
-```text
-Consumer                  Marketplace API              Domain Owner
-   │                           │                           │
-   │  POST /access-requests    │                           │
-   │  {productId, justification│                           │
-   │   requestedRole}          │                           │
-   │──────────────────────────▶│                           │
-   │                           │  Event Grid notification  │
-   │                           │──────────────────────────▶│
-   │                           │                           │
-   │                           │  PUT /access-requests/    │
-   │                           │  {id}/approve             │
-   │                           │◀──────────────────────────│
-   │                           │                           │
-   │  GET /access-requests/{id}│                           │
-   │──────────────────────────▶│                           │
-   │  status: "approved"       │                           │
-   │◀──────────────────────────│                           │
-   │                           │                           │
-   │  RBAC role assigned       │                           │
-   │  automatically via        │                           │
-   │  managed identity         │                           │
+## 🔄 Access Request Workflow
+
+```mermaid
+sequenceDiagram
+    actor Consumer
+    participant API as Marketplace API
+    actor Owner as Domain Owner
+
+    Consumer->>API: POST /access-requests<br/>{productId, justification, requestedRole}
+    API->>Owner: Event Grid notification
+    Owner->>API: PUT /access-requests/{id}/approve
+    Consumer->>API: GET /access-requests/{id}
+    API-->>Consumer: status: "approved"
+    Note over Consumer: RBAC role assigned<br/>automatically via<br/>managed identity
 ```
 
-## Quality Scoring
+---
+
+## 📊 Quality Scoring
 
 Quality scores are calculated from the data contract's quality rules
 (see `governance/contracts/contract_validator.py`):
@@ -154,7 +140,9 @@ Quality scores are calculated from the data contract's quality rules
 | Consistency (cross-domain checks) | 0.15 | dbt test results |
 | Uniqueness (PK uniqueness) | 0.15 | Primary key validation |
 
-## Deployment
+---
+
+## 📦 Deployment
 
 ```bash
 # Deploy marketplace infrastructure
@@ -172,7 +160,9 @@ az webapp deploy \
   --src-path ./api/
 ```
 
-## Configuration
+---
+
+## ⚙️ Configuration
 
 ### Environment Variables
 
@@ -184,7 +174,9 @@ az webapp deploy \
 | `EVENT_GRID_TOPIC_ENDPOINT` | Event Grid topic for notifications |
 | `AZURE_CLIENT_ID` | Managed identity client ID |
 
-## Purview Integration
+---
+
+## 🔒 Purview Integration
 
 Registered data products are automatically synced to Azure Purview:
 
@@ -197,7 +189,7 @@ See `platform/governance/purview_automation.py` for the sync implementation.
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Platform Components](../README.md) — Platform component index
 - [Platform Services](../../docs/PLATFORM_SERVICES.md) — Detailed platform service descriptions

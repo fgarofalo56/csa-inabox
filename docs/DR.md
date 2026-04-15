@@ -1,6 +1,11 @@
+[Home](../README.md) > [Docs](./) > **Disaster Recovery**
+
 # Multi-Region Disaster Recovery Runbook
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Operations
+
+> [!NOTE]
+> **Quick Summary**: Authoritative DR runbook for CSA-in-a-Box covering RPO/RTO targets by service tier, primary/secondary region pairing, step-by-step failover procedures (Cosmos DB, Storage, ADF, Databricks, DNS), quarterly drill cadence, failback procedures, and known gaps.
 
 This runbook is the authoritative answer to "what do we do when a region
 goes down?" It pairs with the deploy-time rollback procedure in
@@ -9,18 +14,17 @@ covers *regional unavailability* (Azure region outage, networking
 partition, storage replication failure) where the fix is failing over to
 a different region, not redeploying.
 
+> [!IMPORTANT]
 > **Scope:** the CSA-in-a-Box platform's four landing zones (Management,
 > Connectivity, DMLZ, DLZ). Out of scope: application-layer DR for
 > workloads owned by domain teams — those are expected to follow the
 > per-service guidance in this runbook and document their own RPO/RTO.
 
----
+## 📑 Table of Contents
 
-## Table of Contents
-
-- [1. RPO / RTO targets by service tier](#1-rpo--rto-targets-by-service-tier)
-- [2. Primary / secondary region pairing](#2-primary--secondary-region-pairing)
-- [3. Failover procedure](#3-failover-procedure)
+- [📊 1. RPO / RTO Targets by Service Tier](#-1-rpo--rto-targets-by-service-tier)
+- [🌍 2. Primary / Secondary Region Pairing](#-2-primary--secondary-region-pairing)
+- [🚀 3. Failover Procedure](#-3-failover-procedure)
   - [Step 1 — Declare the incident](#step-1--declare-the-incident)
   - [Step 2 — Verify the scope](#step-2--verify-the-scope)
   - [Step 3 — Cosmos DB failover](#step-3--cosmos-db-failover)
@@ -29,17 +33,19 @@ a different region, not redeploying.
   - [Step 6 — Databricks failover](#step-6--databricks-failover)
   - [Step 7 — DNS, certificates, and clients](#step-7--dns-certificates-and-clients)
   - [Step 8 — Smoke test](#step-8--smoke-test)
-- [4. Failover readiness — quarterly drill](#4-failover-readiness--quarterly-drill)
-- [5. Failback procedure](#5-failback-procedure)
+- [🧪 4. Failover Readiness — Quarterly Drill](#-4-failover-readiness--quarterly-drill)
+- [🔄 5. Failback Procedure](#-5-failback-procedure)
   - [Step 1 — Re-enable geo replication](#step-1--re-enable-geo-replication)
   - [Step 2 — Swap Cosmos failover priorities back](#step-2--swap-cosmos-failover-priorities-back)
   - [Step 3 — Repoint ADF and Databricks](#step-3--repoint-adf-and-databricks)
   - [Step 4 — DNS and client reset](#step-4--dns-and-client-reset)
   - [Step 5 — Post-incident review](#step-5--post-incident-review)
-- [6. Known gaps and roadmap](#6-known-gaps-and-roadmap)
-- [7. Quick reference](#7-quick-reference)
+- [⚠️ 6. Known Gaps and Roadmap](#️-6-known-gaps-and-roadmap)
+- [📋 7. Quick Reference](#-7-quick-reference)
 
-## 1. RPO / RTO targets by service tier
+---
+
+## 📊 1. RPO / RTO Targets by Service Tier
 
 Every Azure service deployed by CSA-in-a-Box is classified into one of
 three tiers. The tier determines the SKU, replication mode, and expected
@@ -59,13 +65,14 @@ row to this table and wire up the matching configuration.
 | **Event Hub** | Critical | < 5 min | < 15 min | Geo-DR pairing | Manual: configure `Microsoft.EventHub/namespaces/disasterRecoveryConfigs` in a follow-up commit |
 | **Purview** | Standard | < 24 h | < 24 h | No built-in geo-replication; rely on the collection export + reimport procedure below | Manual |
 
-Tiers higher than "Critical" (near-zero RPO/RTO, e.g. for regulated
-workloads) require multi-region active/active and are out of scope for
-this runbook; those workloads should be reviewed individually.
+> [!NOTE]
+> Tiers higher than "Critical" (near-zero RPO/RTO, e.g. for regulated
+> workloads) require multi-region active/active and are out of scope for
+> this runbook; those workloads should be reviewed individually.
 
 ---
 
-## 2. Primary / secondary region pairing
+## 🌍 2. Primary / Secondary Region Pairing
 
 CSA-in-a-Box defaults to the following Azure region pairs. Every
 critical-tier service should be deployed in both regions of a single
@@ -86,19 +93,20 @@ parameters linked in the table above.
 
 ---
 
-## 3. Failover procedure
+## 🚀 3. Failover Procedure
 
-Trigger this procedure when the primary region is confirmed unavailable
-via the [Azure Service Health dashboard](https://status.azure.com/) and
-has been down for > 5 minutes (shorter incidents are usually cheaper to
-wait out).
+> [!CAUTION]
+> Trigger this procedure when the primary region is confirmed unavailable
+> via the [Azure Service Health dashboard](https://status.azure.com/) and
+> has been down for > 5 minutes (shorter incidents are usually cheaper to
+> wait out).
 
 ### Step 1 — Declare the incident
 
-1. Page the on-call engineer and open an incident in your tracker.
-2. Post to the incident channel: region, start time, services affected,
+- [ ] Page the on-call engineer and open an incident in your tracker.
+- [ ] Post to the incident channel: region, start time, services affected,
    decision authority for go/no-go on failover.
-3. Start a scribe log in the incident doc so every action below is
+- [ ] Start a scribe log in the incident doc so every action below is
    timestamped and attributable.
 
 ### Step 2 — Verify the scope
@@ -114,10 +122,11 @@ az account list-locations --query "[?metadata.regionType=='Physical'].{Name:name
 az resource list --location eastus --query "[?provisioningState!='Succeeded'].{Name:name, Type:type, State:provisioningState}" -o table
 ```
 
-If only one resource group or service is affected, use the
-[per-service rollback](ROLLBACK.md) procedure instead — failing over
-the whole platform for a single stuck resource is more risk than
-reward.
+> [!IMPORTANT]
+> If only one resource group or service is affected, use the
+> [per-service rollback](ROLLBACK.md) procedure instead — failing over
+> the whole platform for a single stuck resource is more risk than
+> reward.
 
 ### Step 3 — Cosmos DB failover
 
@@ -151,10 +160,11 @@ az storage account failover \
   --yes
 ```
 
-After the command returns, the account's primary region flips to the
-paired secondary and the replication type drops to LRS (you need to
-re-enable geo replication after the original region recovers — see
-§5 Failback). Expected time: 10–60 minutes.
+> [!WARNING]
+> After the command returns, the account's primary region flips to the
+> paired secondary and the replication type drops to LRS (you need to
+> re-enable geo replication after the original region recovers — see
+> §5 Failback). Expected time: 10–60 minutes.
 
 Verify:
 
@@ -176,27 +186,27 @@ gh workflow run deploy.yml -f environment=prod -f deploy_dlz=true -f dry_run=fal
 ```
 
 Linked services in the secondary factory must point at:
-- the restored Cosmos account (now in the failover region),
-- the failed-over Data Lake storage account,
-- the secondary Databricks workspace (if you're running Databricks
-  pipelines via ADF linked compute).
+- [ ] The restored Cosmos account (now in the failover region)
+- [ ] The failed-over Data Lake storage account
+- [ ] The secondary Databricks workspace (if you're running Databricks
+  pipelines via ADF linked compute)
 
 ### Step 6 — Databricks failover
 
-1. Stop any still-running jobs in the primary workspace (if the
+- [ ] Stop any still-running jobs in the primary workspace (if the
    control plane is still reachable).
-2. Activate the cold-standby workspace in the secondary region.
-3. Rehydrate the Unity Catalog metastore in the secondary workspace via
+- [ ] Activate the cold-standby workspace in the secondary region.
+- [ ] Rehydrate the Unity Catalog metastore in the secondary workspace via
    the Databricks Terraform provider export + import pattern (Unity
    Catalog is regional so metadata does not replicate).
-4. Repoint ADF linked services (step 5) at the new workspace URL.
+- [ ] Repoint ADF linked services (step 5) at the new workspace URL.
 
 ### Step 7 — DNS, certificates, and clients
 
-1. Update any CNAMEs / Traffic Manager endpoints to point at the
+- [ ] Update any CNAMEs / Traffic Manager endpoints to point at the
    secondary region.
-2. Verify that all client apps pick up the new DNS TTL.
-3. Rotate any Application Insights instrumentation keys that baked the
+- [ ] Verify that all client apps pick up the new DNS TTL.
+- [ ] Rotate any Application Insights instrumentation keys that baked the
    primary region into their instance ID.
 
 ### Step 8 — Smoke test
@@ -205,39 +215,41 @@ Run the post-deploy verification job from `deploy.yml` (or the load
 test harness from `tests/load/README.md`) against the failover region
 and confirm:
 
-- Cosmos writes and reads succeed from both regions (if using
+- [ ] Cosmos writes and reads succeed from both regions (if using
   `enableMultipleWriteLocations`).
-- Storage reads return expected content from the failover region.
-- A representative ADF pipeline completes end-to-end.
-- A dbt model run (`make test-dbt`) completes against the failover
+- [ ] Storage reads return expected content from the failover region.
+- [ ] A representative ADF pipeline completes end-to-end.
+- [ ] A dbt model run (`make test-dbt`) completes against the failover
   Databricks workspace.
 
 ---
 
-## 4. Failover readiness — quarterly drill
+## 🧪 4. Failover Readiness — Quarterly Drill
 
 Rollback procedures rot when they are not exercised. Schedule a
 chaos-engineering drill once per quarter:
 
-1. Pick one critical-tier service (rotate Cosmos → Storage → Databricks
+- [ ] Pick one critical-tier service (rotate Cosmos → Storage → Databricks
    over the year).
-2. Run the failover procedure against the **dev** environment only.
-3. Time each step and capture the durations in a drill report under
+- [ ] Run the failover procedure against the **dev** environment only.
+- [ ] Time each step and capture the durations in a drill report under
    `reports/dr-drills/<YYYY-MM-DD>.md` (gitignored — attach it to the
    incident tracker instead).
-4. Update this runbook with anything that drifted.
+- [ ] Update this runbook with anything that drifted.
 
-The dev-environment drill is the minimum bar. For regulated workloads
-add a second drill per year against a pre-prod clone of production.
+> [!NOTE]
+> The dev-environment drill is the minimum bar. For regulated workloads
+> add a second drill per year against a pre-prod clone of production.
 
 ---
 
-## 5. Failback procedure
+## 🔄 5. Failback Procedure
 
-Do **not** fail back at the first sign that the primary region is
-healthy again — you risk oscillating and losing data. Wait at least
-one full business day after the Azure Service Health dashboard shows
-the primary region as green, and only then start the failback.
+> [!CAUTION]
+> Do **not** fail back at the first sign that the primary region is
+> healthy again — you risk oscillating and losing data. Wait at least
+> one full business day after the Azure Service Health dashboard shows
+> the primary region as green, and only then start the failback.
 
 ### Step 1 — Re-enable geo replication
 
@@ -276,10 +288,10 @@ Flip CNAMEs / Traffic Manager priorities back to the primary region.
 
 Within two business days, write up:
 
-- Timeline from first alert to service restoration.
-- Which steps took longer than the documented RTO and why.
-- Any data loss (compare against RPO targets in §1).
-- Updates to this runbook captured as a follow-up PR.
+- [ ] Timeline from first alert to service restoration.
+- [ ] Which steps took longer than the documented RTO and why.
+- [ ] Any data loss (compare against RPO targets in §1).
+- [ ] Updates to this runbook captured as a follow-up PR.
 
 File the post-incident review under the tracking issue for the
 incident, and update `.claude/DEVELOPMENT_LOG.md` with a short pointer
@@ -287,7 +299,7 @@ so future sessions see it.
 
 ---
 
-## 6. Known gaps and roadmap
+## ⚠️ 6. Known Gaps and Roadmap
 
 The following items are intentionally left manual / unconfigured and
 tracked as follow-up work. They were too large for the initial DR
@@ -312,7 +324,7 @@ rollout:
 
 ---
 
-## 7. Quick reference
+## 📋 7. Quick Reference
 
 | Scenario | Runbook section |
 |---|---|
@@ -324,7 +336,7 @@ rollout:
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Rollback](ROLLBACK.md) — Deployment rollback runbook
 - [Multi-Region Deployment](MULTI_REGION.md) — Multi-region deployment guide

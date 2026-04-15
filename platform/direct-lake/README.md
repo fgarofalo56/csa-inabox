@@ -1,6 +1,11 @@
+[← Platform Components](../README.md)
+
 # Direct Lake Pattern — Power BI + Delta Lake via Databricks SQL
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Platform Engineers
+
+> [!NOTE]
+> **TL;DR:** Replicates Fabric's Direct Lake mode using Databricks SQL Warehouse + ADLS Gen2 Delta tables + Power BI DirectQuery. Includes setup guide, performance tuning, RLS configuration, and a feature comparison with native Fabric Direct Lake.
 
 > **CSA-in-a-Box equivalent of Microsoft Fabric Direct Lake mode**
 
@@ -19,7 +24,9 @@
 > tables without importing data. CSA-in-a-Box achieves the same pattern
 > using Databricks SQL endpoints connected to Delta tables in ADLS Gen2.
 
-## Overview
+---
+
+## 📋 Overview
 
 In Fabric, Direct Lake lets a Power BI semantic model point at Delta
 tables in a lakehouse, reading parquet files directly at query time.
@@ -32,21 +39,19 @@ CSA-in-a-Box replicates this via:
 2. **Databricks SQL Warehouse** as the SQL endpoint
 3. **Power BI Desktop / Service** connecting via the Databricks ODBC/JDBC connector
 
-## Architecture
+---
 
-```text
-┌──────────────┐     ┌───────────────────┐     ┌──────────────────┐
-│  ADLS Gen2   │     │  Databricks SQL   │     │    Power BI      │
-│  Gold Layer  │────▶│  Warehouse        │────▶│    Desktop /     │
-│              │     │                   │     │    Service       │
-│ Delta Tables │     │ • Unity Catalog   │     │ • DirectQuery    │
-│ • orders     │     │ • Query caching   │     │ • Semantic model │
-│ • invoices   │     │ • Result caching  │     │ • DAX measures   │
-│ • metrics    │     │ • Auto-scaling    │     │ • Row-level sec  │
-└──────────────┘     └───────────────────┘     └──────────────────┘
+## 🏗️ Architecture
+
+```mermaid
+graph LR
+    ADLS[ADLS Gen2<br/>Gold Layer<br/>Delta Tables] --> DBSQL[Databricks SQL<br/>Warehouse<br/>Unity Catalog + Caching]
+    DBSQL --> PBI[Power BI<br/>DirectQuery<br/>Semantic Model + RLS]
 ```
 
-## Setup Guide
+---
+
+## 🚀 Setup Guide
 
 ### Step 1: Configure Databricks SQL Warehouse
 
@@ -63,11 +68,12 @@ databricks sql warehouses create \
   --warehouse-type "PRO"
 ```
 
-Key settings for Direct Lake parity:
-- **Photon enabled** — columnar engine for parquet-native queries
-- **Result caching** — subsequent identical queries return cached results
-- **Query caching** — compiled query plans are cached
-- **Auto-scaling** — scales out for concurrent BI users
+> [!TIP]
+> Key settings for Direct Lake parity:
+> - **Photon enabled** — columnar engine for parquet-native queries
+> - **Result caching** — subsequent identical queries return cached results
+> - **Query caching** — compiled query plans are cached
+> - **Auto-scaling** — scales out for concurrent BI users
 
 ### Step 2: Register Delta Tables in Unity Catalog
 
@@ -122,7 +128,9 @@ See `semantic_model_template.yaml` for a template that defines:
 - DAX measures for common KPIs
 - Row-level security (RLS) roles
 
-## Performance Tuning
+---
+
+## ⚡ Performance Tuning
 
 ### Delta Lake Optimization
 
@@ -158,7 +166,9 @@ ALTER TABLE sales_catalog.gold.orders
 3. **Query reduction** — enable "Reduce queries sent" in report settings
 4. **Composite models** — combine DirectQuery tables with imported lookups
 
-## Row-Level Security
+---
+
+## 🔒 Row-Level Security
 
 Map Power BI RLS to Unity Catalog permissions:
 
@@ -177,7 +187,9 @@ In Power BI, define RLS roles that match:
 [Region] = USERPRINCIPALNAME()  // Or use a security table lookup
 ```
 
-## Comparison: Fabric Direct Lake vs CSA-in-a-Box
+---
+
+## 📋 Comparison: Fabric Direct Lake vs CSA-in-a-Box
 
 | Feature | Direct Lake (Fabric) | CSA-in-a-Box |
 |---|---|---|
@@ -190,14 +202,16 @@ In Power BI, define RLS roles that match:
 | RLS | Power BI native | Unity Catalog + Power BI |
 | Gov Cloud | Not available | Full support |
 
-## Semantic Model Template
+---
+
+## 💡 Semantic Model Template
 
 See `semantic_model_template.yaml` for a ready-to-use model definition
 that maps to the CSA-in-a-Box gold layer tables.
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Platform Components](../README.md) — Platform component index
 - [Platform Services](../../docs/PLATFORM_SERVICES.md) — Detailed platform service descriptions

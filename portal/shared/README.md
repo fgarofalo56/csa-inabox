@@ -1,6 +1,20 @@
+[← Portal Implementations](../README.md)
+
 # CSA-in-a-Box — Shared Backend API
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Frontend Developers
+
+> [!NOTE]
+> **TL;DR:** FastAPI shared backend providing common API surface for all four portal frontends — sources, pipelines, marketplace, access requests, and stats. Supports Azure AD/Entra ID JWT auth (Commercial + Gov), demo mode for local development, and Docker deployment.
+
+The **shared backend** is a FastAPI application that provides the common API surface for all four portal front-end implementations:
+
+| Frontend | Technology | Notes |
+|---|---|---|
+| React Web App | Next.js / React | `portal/react-webapp/` |
+| PowerApps | Power Platform | Custom connector |
+| Static Web App | Azure SWA | `portal/swa/` |
+| Kubernetes | AKS-hosted SPA | `portal/k8s/` |
 
 ## Table of Contents
 
@@ -13,16 +27,9 @@
 - [Demo Mode](#demo-mode)
 - [Related Documentation](#related-documentation)
 
-The **shared backend** is a FastAPI application that provides the common API surface for all four portal front-end implementations:
+---
 
-| Frontend | Technology | Notes |
-|---|---|---|
-| React Web App | Next.js / React | `portal/react-webapp/` |
-| PowerApps | Power Platform | Custom connector |
-| Static Web App | Azure SWA | `portal/swa/` |
-| Kubernetes | AKS-hosted SPA | `portal/k8s/` |
-
-## Architecture
+## 🏗️ Architecture
 
 ```text
 portal/shared/
@@ -47,7 +54,9 @@ portal/shared/
 └── README.md                 # ← you are here
 ```
 
-## Quick Start
+---
+
+## 🚀 Quick Start
 
 ```bash
 # From portal/shared/
@@ -60,7 +69,9 @@ uvicorn api.main:app --reload --port 8000
 open http://localhost:8000/api/docs
 ```
 
-## API Endpoints
+---
+
+## 🔌 API Endpoints
 
 ### Health
 | Method | Path | Description |
@@ -110,11 +121,14 @@ open http://localhost:8000/api/docs
 | GET | `/api/v1/stats/domains/{domain}` | Domain overview |
 | GET | `/api/v1/domains` | All domain overviews |
 
-## Authentication
+---
+
+## 🔒 Authentication
 
 The API uses **Azure AD / Entra ID** JWT bearer tokens. Both Commercial and Government cloud endpoints are supported, controlled by the `IS_GOVERNMENT_CLOUD` environment variable.
 
-In **demo mode** (no `AZURE_TENANT_ID` set), authentication is bypassed and all endpoints return data for a synthetic demo user.
+> [!TIP]
+> In **demo mode** (no `AZURE_TENANT_ID` set), authentication is bypassed and all endpoints return data for a synthetic demo user.
 
 ### Roles
 | Role | Permissions |
@@ -123,7 +137,9 @@ In **demo mode** (no `AZURE_TENANT_ID` set), authentication is bypassed and all 
 | Contributor | Read + write (register sources, trigger pipelines, approve access) |
 | Admin | Full access including decommission and configuration |
 
-## Configuration
+---
+
+## ⚙️ Configuration
 
 All settings are loaded from environment variables (or a `.env` file):
 
@@ -140,7 +156,9 @@ All settings are loaded from environment variables (or a `.env` file):
 | `LOG_LEVEL` | `INFO` | Logging level |
 | `CORS_ORIGINS` | `localhost:3000,5173,8080` | Allowed CORS origins |
 
-## Docker
+---
+
+## 📦 Docker
 
 ```bash
 # Build
@@ -153,7 +171,9 @@ docker run -p 8000:8000 \
   csainabox-api
 ```
 
-## Demo Mode
+---
+
+## 💡 Demo Mode
 
 When no `AZURE_TENANT_ID` is configured, the API runs in demo mode:
 
@@ -165,7 +185,7 @@ This is ideal for local development and CI testing.
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Portal Implementations](../README.md) — Portal implementation index
 - [Shared Backend](../shared/README.md) — Shared backend API

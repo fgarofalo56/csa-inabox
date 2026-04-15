@@ -1,26 +1,30 @@
+[Home](../README.md) > [Docs](./) > **IaC & CI/CD Best Practices**
+
 # Infrastructure-as-Code & CI/CD Best Practices for CSA-in-a-Box
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** DevOps Engineers
 
+> [!NOTE]
+> **Quick Summary**: Comprehensive guide for deploying a Cloud-Scale Analytics platform across 4 Azure subscriptions using Bicep and GitHub Actions — covers Bicep module organization, `.bicepparam` files, Deployment Stacks, what-if validation, OIDC auth, reusable workflows, matrix deployments, PSRule/Checkov/gitleaks security scanning, ALZ accelerators (AVM migration), progressive ring-based deployments, feature flags, policy-as-code, and a phased implementation plan with tool matrix.
+
 > **Research Report** | April 2026
 > Comprehensive guide for deploying a Cloud-Scale Analytics platform across 4 Azure subscriptions using Bicep and GitHub Actions.
 
-> **Note:** This document describes the target-state architecture and recommended improvements. For current CI/CD workflows, see `.github/workflows/`. For current deployment instructions, see [QUICKSTART.md](QUICKSTART.md) or [GETTING_STARTED.md](GETTING_STARTED.md).
+> [!IMPORTANT]
+> This document describes the target-state architecture and recommended improvements. For current CI/CD workflows, see `.github/workflows/`. For current deployment instructions, see [QUICKSTART.md](QUICKSTART.md) or [GETTING_STARTED.md](GETTING_STARTED.md).
 
----
+## 📑 Table of Contents
 
-## Table of Contents
-
-- [1. Bicep Best Practices for Large-Scale Azure Deployments](#1-bicep-best-practices-for-large-scale-azure-deployments)
+- [🏗️ 1. Bicep Best Practices for Large-Scale Azure Deployments](#️-1-bicep-best-practices-for-large-scale-azure-deployments)
   - [1.1 Module Organization and Naming Conventions](#11-module-organization-and-naming-conventions)
   - [1.2 Parameter Files per Environment](#12-parameter-files-per-environment)
-  - [1.3 Bicep Module Registry (Azure Container Registry)](#13-bicep-module-registry-azure-container-registry)
+  - [1.3 Bicep Module Registry (ACR)](#13-bicep-module-registry-azure-container-registry)
   - [1.4 Deployment Stacks vs Standard Deployments](#14-deployment-stacks-vs-standard-deployments)
   - [1.5 What-If Deployments and Validation](#15-what-if-deployments-and-validation)
   - [1.6 Cross-Subscription and Cross-Resource-Group Deployments](#16-cross-subscription-and-cross-resource-group-deployments)
   - [1.7 Conditional Deployment Patterns](#17-conditional-deployment-patterns)
   - [1.8 User-Defined Types and Compile-Time Imports](#18-user-defined-types-and-compile-time-imports)
-- [2. GitHub Actions CI/CD for Azure IaC](#2-github-actions-cicd-for-azure-iac)
+- [🔄 2. GitHub Actions CI/CD for Azure IaC](#-2-github-actions-cicd-for-azure-iac)
   - [2.1 Workflow Organization for Multi-Subscription Deploys](#21-workflow-organization-for-multi-subscription-deploys)
   - [2.2 OIDC Authentication (Federated Credentials)](#22-oidc-authentication-federated-credentials)
   - [2.3 Environment Protection Rules and Approvals](#23-environment-protection-rules-and-approvals)
@@ -29,38 +33,38 @@
   - [2.6 Bicep Lint, Validate, What-If in PR Checks](#26-bicep-lint-validate-what-if-in-pr-checks)
   - [2.7 Deployment Gates and Rollback Strategies](#27-deployment-gates-and-rollback-strategies)
   - [2.8 Matrix Deployments for Multiple Subscriptions](#28-matrix-deployments-for-multiple-subscriptions)
-- [3. Testing Infrastructure-as-Code](#3-testing-infrastructure-as-code)
+- [🧪 3. Testing Infrastructure-as-Code](#-3-testing-infrastructure-as-code)
   - [3.1 Bicep Linting with Linter Rules](#31-bicep-linting-with-linter-rules)
   - [3.2 PSRule for Azure (Policy Compliance Testing)](#32-psrule-for-azure-policy-compliance-testing)
   - [3.3 Checkov (IaC Security Scanning)](#33-checkov-iac-security-scanning)
   - [3.4 Additional Security Scanning Tools](#34-additional-security-scanning-tools)
   - [3.5 Cost Estimation in CI Pipelines](#35-cost-estimation-in-ci-pipelines)
-- [4. Azure Landing Zone Accelerators](#4-azure-landing-zone-accelerators)
+- [🏛️ 4. Azure Landing Zone Accelerators](#️-4-azure-landing-zone-accelerators)
   - [4.1 ALZ-Bicep vs Azure Verified Modules (AVM)](#41-alz-bicep-vs-azure-verified-modules-avm)
   - [4.2 Extending ALZ for Data Platforms](#42-extending-alz-for-data-platforms)
   - [4.3 Custom Policy Definitions for Data Governance](#43-custom-policy-definitions-for-data-governance)
-- [5. Multi-Environment Deployment Patterns](#5-multi-environment-deployment-patterns)
+- [🌍 5. Multi-Environment Deployment Patterns](#-5-multi-environment-deployment-patterns)
   - [5.1 Recommended: Progressive Deployment (Ring-Based)](#51-recommended-progressive-deployment-ring-based)
   - [5.2 Feature Flags for Infrastructure](#52-feature-flags-for-infrastructure)
   - [5.3 Blue-Green for Infrastructure](#53-blue-green-for-infrastructure)
   - [5.4 Canary Deployments for Data Pipelines](#54-canary-deployments-for-data-pipelines)
-- [6. Secret Scanning and Security in CI/CD](#6-secret-scanning-and-security-in-cicd)
+- [🔒 6. Secret Scanning and Security in CI/CD](#-6-secret-scanning-and-security-in-cicd)
   - [6.1 Gitleaks Integration](#61-gitleaks-integration)
   - [6.2 GitHub Advanced Security](#62-github-advanced-security)
   - [6.3 Pre-Commit Hooks for Secret Detection](#63-pre-commit-hooks-for-secret-detection)
   - [6.4 Policy-as-Code with Azure Policy](#64-policy-as-code-with-azure-policy)
-- [7. Recommended Implementation Plan for CSA-in-a-Box](#7-recommended-implementation-plan-for-csa-in-a-box)
+- [📋 7. Recommended Implementation Plan for CSA-in-a-Box](#-7-recommended-implementation-plan-for-csa-in-a-box)
   - [7.1 Current State Assessment](#71-current-state-assessment)
   - [7.2 Recommended Improvements (Priority Order)](#72-recommended-improvements-priority-order)
   - [7.3 Tool Matrix Summary](#73-tool-matrix-summary)
   - [7.4 CI/CD Pipeline Architecture (Target State)](#74-cicd-pipeline-architecture-target-state)
-- [Appendix A: Complete bicepconfig.json](#appendix-a-complete-bicepconfinjson)
-- [Appendix B: GitHub Secrets Required](#appendix-b-github-secrets-required)
-- [Appendix C: Key Microsoft Documentation References](#appendix-c-key-microsoft-documentation-references)
+- [📎 Appendix A: Complete bicepconfig.json](#-appendix-a-complete-bicepconfinjson)
+- [🔑 Appendix B: GitHub Secrets Required](#-appendix-b-github-secrets-required)
+- [📚 Appendix C: Key Microsoft Documentation References](#-appendix-c-key-microsoft-documentation-references)
 
 ---
 
-## 1. Bicep Best Practices for Large-Scale Azure Deployments
+## 🏗️ 1. Bicep Best Practices for Large-Scale Azure Deployments
 
 ### 1.1 Module Organization and Naming Conventions
 
@@ -253,12 +257,13 @@ az stack sub create \
   --deny-settings-excluded-principals '<deployment-sp-object-id>'
 ```
 
-**Known limitations (as of early 2026):**
-- Maximum 800 deployment stacks per scope
-- Maximum 2,000 deny assignments per scope
-- What-if is not yet supported with deployment stacks
-- Microsoft Graph provider is not supported
-- Deleting resource groups can bypass deny assignments
+> [!WARNING]
+> **Known limitations (as of early 2026):**
+> - Maximum 800 deployment stacks per scope
+> - Maximum 2,000 deny assignments per scope
+> - What-if is not yet supported with deployment stacks
+> - Microsoft Graph provider is not supported
+> - Deleting resource groups can bypass deny assignments
 
 ### 1.5 What-If Deployments and Validation
 
@@ -318,7 +323,8 @@ module networkResources 'modules/networking.bicep' = {
 }
 ```
 
-**Important:** The deploying identity needs appropriate RBAC on all target subscriptions. For management group scoped deployments, use `targetScope = 'managementGroup'` and deploy to child subscriptions.
+> [!IMPORTANT]
+> The deploying identity needs appropriate RBAC on all target subscriptions. For management group scoped deployments, use `targetScope = 'managementGroup'` and deploy to child subscriptions.
 
 ### 1.7 Conditional Deployment Patterns
 
@@ -349,6 +355,9 @@ var diagnosticsRetentionDays = isProduction ? 365 : 30
 ### 1.8 User-Defined Types and Compile-Time Imports
 
 User-defined types provide strong typing and validation. Combined with `@export()` and `import`, they enable shared type libraries:
+
+<details>
+<summary>Shared types library (_shared/types.bicep)</summary>
 
 ```bicep
 // _shared/types.bicep
@@ -394,6 +403,8 @@ type tagType = {
 }
 ```
 
+</details>
+
 **Consuming shared types:**
 ```bicep
 // orchestration/dmlz/main.bicep
@@ -413,7 +424,7 @@ type accountKind = resourceInput<'Microsoft.Storage/storageAccounts@2024-01-01'>
 
 ---
 
-## 2. GitHub Actions CI/CD for Azure IaC
+## 🔄 2. GitHub Actions CI/CD for Azure IaC
 
 ### 2.1 Workflow Organization for Multi-Subscription Deploys
 
@@ -534,7 +545,8 @@ jobs:
 
 ### 2.4 Reusable Workflows and Composite Actions
 
-**Reusable workflow for deploying to any subscription:**
+<details>
+<summary>Reusable workflow for deploying to any subscription</summary>
 
 ```yaml
 # .github/workflows/_deploy-subscription.yml
@@ -622,7 +634,11 @@ jobs:
           echo "name=$DEPLOYMENT_NAME" >> $GITHUB_OUTPUT
 ```
 
-**Caller workflow:**
+</details>
+
+<details>
+<summary>Caller workflow example</summary>
+
 ```yaml
 # .github/workflows/cd-dev.yml
 name: Deploy to Dev
@@ -658,6 +674,8 @@ jobs:
       AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
       AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_DLZ_SUBSCRIPTION_ID }}
 ```
+
+</details>
 
 **Composite action for Bicep validation:**
 ```yaml
@@ -725,7 +743,9 @@ GitHub Environments Configuration:
 
 ### 2.6 Bicep Lint, Validate, What-If in PR Checks
 
-**Complete PR validation workflow:**
+<details>
+<summary>Complete PR validation workflow</summary>
+
 ```yaml
 # .github/workflows/ci.yml
 name: PR Validation
@@ -838,6 +858,8 @@ jobs:
           sarif_file: results.sarif
 ```
 
+</details>
+
 ### 2.7 Deployment Gates and Rollback Strategies
 
 **Rollback approach for IaC:**
@@ -847,6 +869,9 @@ Infrastructure doesn't "roll back" like application code. Instead:
 1. **Redeploy previous known-good version**: Keep deployment artifacts (Bicep files + params) in git; redeploy the commit before the broken change.
 2. **Deployment Stacks with detach**: If using deployment stacks, unmanaged resources can be detached rather than deleted.
 3. **Git-based rollback workflow**:
+
+<details>
+<summary>Rollback workflow</summary>
 
 ```yaml
 # .github/workflows/rollback.yml
@@ -890,6 +915,8 @@ jobs:
             --parameters "deploy/bicep/orchestration/${{ inputs.zone }}/params.${{ inputs.environment }}.bicepparam"
 ```
 
+</details>
+
 ### 2.8 Matrix Deployments for Multiple Subscriptions
 
 ```yaml
@@ -929,11 +956,12 @@ jobs:
             --parameters "deploy/bicep/orchestration/${{ matrix.zone }}/params.${{ inputs.environment }}.bicepparam"
 ```
 
-> **Note:** For true ordered sequential deployment with dependencies, use separate jobs with `needs:` rather than a matrix. Matrices run jobs in parallel (or `max-parallel: 1` but without dependency outputs between runs).
+> [!NOTE]
+> For true ordered sequential deployment with dependencies, use separate jobs with `needs:` rather than a matrix. Matrices run jobs in parallel (or `max-parallel: 1` but without dependency outputs between runs).
 
 ---
 
-## 3. Testing Infrastructure-as-Code
+## 🧪 3. Testing Infrastructure-as-Code
 
 ### 3.1 Bicep Linting with Linter Rules
 
@@ -967,6 +995,7 @@ The Bicep linter is integrated into both the CLI and VS Code extension. Configur
 ```
 
 **Key rules for data platform deployments:**
+
 | Rule | Level | Why |
 |------|-------|-----|
 | `outputs-should-not-contain-secrets` | Error | Prevents leaking keys/connection strings in outputs |
@@ -1065,6 +1094,7 @@ Checkov supports both Bicep and ARM templates with 750+ built-in policies.
 ```
 
 **Key Checkov checks for data platforms:**
+
 | Check ID | Description |
 |----------|-------------|
 | CKV_AZURE_33 | Ensure storage account uses private endpoint |
@@ -1074,7 +1104,9 @@ Checkov supports both Bicep and ARM templates with 750+ built-in policies.
 | CKV_AZURE_110 | Ensure Key Vault enables purge protection |
 | CKV_AZURE_190 | Ensure Databricks workspace uses private endpoint |
 
-**Custom policy example:**
+<details>
+<summary>Custom policy example</summary>
+
 ```python
 # custom_checks/data_lake_security.py
 from checkov.common.models.enums import CheckResult, CheckCategories
@@ -1095,6 +1127,8 @@ class DataLakeEncryption(BaseResourceCheck):
         return CheckResult.FAILED
 ```
 
+</details>
+
 ### 3.4 Additional Security Scanning Tools
 
 | Tool | What It Scans | Bicep/ARM Support | GitHub Actions |
@@ -1106,10 +1140,10 @@ class DataLakeEncryption(BaseResourceCheck):
 | **KICS** | IaC misconfigurations | ARM JSON | `checkmarx/kics-github-action@v2` |
 
 **Recommended scanning stack for CSA-in-a-Box:**
-1. **Bicep Linter** (built-in) - Syntax and best practices
-2. **PSRule for Azure** - Azure Well-Architected compliance
-3. **Checkov** - Security misconfigurations
-4. **gitleaks** - Secret detection (covered in section 6)
+- [ ] **Bicep Linter** (built-in) - Syntax and best practices
+- [ ] **PSRule for Azure** - Azure Well-Architected compliance
+- [ ] **Checkov** - Security misconfigurations
+- [ ] **gitleaks** - Secret detection (covered in section 6)
 
 ### 3.5 Cost Estimation in CI Pipelines
 
@@ -1135,11 +1169,12 @@ class DataLakeEncryption(BaseResourceCheck):
 
 ---
 
-## 4. Azure Landing Zone Accelerators
+## 🏛️ 4. Azure Landing Zone Accelerators
 
 ### 4.1 ALZ-Bicep vs Azure Verified Modules (AVM)
 
-**Critical update: ALZ-Bicep is being deprecated.**
+> [!WARNING]
+> **Critical update: ALZ-Bicep is being deprecated.**
 
 | Aspect | ALZ-Bicep | Azure Verified Modules (AVM) |
 |--------|-----------|------------------------------|
@@ -1208,6 +1243,9 @@ Management Group Hierarchy:
 
 ### 4.3 Custom Policy Definitions for Data Governance
 
+<details>
+<summary>Custom policy Bicep examples</summary>
+
 ```bicep
 // Custom policy: Require private endpoints on Synapse workspaces
 resource synapsePrivateEndpointPolicy 'Microsoft.Authorization/policyDefinitions@2025-03-01' = {
@@ -1255,6 +1293,8 @@ resource dataGovernanceInitiative 'Microsoft.Authorization/policySetDefinitions@
 }
 ```
 
+</details>
+
 **Recommended built-in policies for data platforms:**
 - `Require secure transfer for storage accounts`
 - `Azure Synapse workspaces should use private link`
@@ -1265,16 +1305,20 @@ resource dataGovernanceInitiative 'Microsoft.Authorization/policySetDefinitions@
 
 ---
 
-## 5. Multi-Environment Deployment Patterns
+## 🌍 5. Multi-Environment Deployment Patterns
 
 ### 5.1 Recommended: Progressive Deployment (Ring-Based)
 
 For data platforms, use a ring-based deployment pattern:
 
-```text
-Ring 0: Dev          -> Automatic on merge to main
-Ring 1: Test/Staging -> Automatic after Ring 0 success + 5-min wait timer
-Ring 2: Production   -> Manual approval by 2+ reviewers + what-if review
+```mermaid
+graph LR
+    PR["PR Created"] --> Lint["Lint + Build + Security Scan"]
+    Lint --> WhatIf["What-If Preview"]
+    WhatIf --> Merge["Merge to main"]
+    Merge --> R0["Ring 0: Dev<br/>(Automatic)"]
+    R0 --> R1["Ring 1: Test<br/>(5-min wait)"]
+    R1 --> R2["Ring 2: Prod<br/>(Manual approval<br/>2+ reviewers)"]
 ```
 
 ```yaml
@@ -1344,16 +1388,10 @@ module synapse 'modules/compute/synapse.bicep' = if (features.enableSynapse) {
 
 True blue-green is complex for stateful infrastructure. For data platforms, use a **slot-based approach** for stateless components and **in-place updates** for stateful ones:
 
-```text
-Stateless (blue-green capable):
-  - Compute: Synapse SQL pools, Spark pools, ADF integration runtimes
-  - Networking: Load balancers, Application Gateways
-
-Stateful (in-place update only):
-  - Storage: Data Lake, Cosmos DB
-  - Metadata: Purview catalog, Key Vault
-  - DNS: Private DNS zones
-```
+| Component Type | Strategy | Examples |
+|----------------|----------|----------|
+| **Stateless** (blue-green capable) | Deploy alongside, swap routing | Synapse SQL pools, Spark pools, ADF IRs, Load balancers |
+| **Stateful** (in-place update only) | Incremental update | Data Lake, Cosmos DB, Purview catalog, Key Vault, Private DNS |
 
 **Pattern:** Deploy new stateless infrastructure alongside existing, test, then swap DNS/routing:
 
@@ -1380,20 +1418,17 @@ module activePool 'modules/synapseSqlPool.bicep' = {
 
 For data pipelines, canary means routing a percentage of data through the new pipeline:
 
-```text
-Canary Strategy for Data Pipelines:
-  1. Deploy new pipeline version alongside existing (v1 + v2)
-  2. Route 10% of incoming data to v2 pipeline
-  3. Compare output quality metrics (data quality, latency, completeness)
-  4. If metrics pass: increase to 50%, then 100%
-  5. If metrics fail: route 100% back to v1, investigate
-```
+- [ ] Deploy new pipeline version alongside existing (v1 + v2)
+- [ ] Route 10% of incoming data to v2 pipeline
+- [ ] Compare output quality metrics (data quality, latency, completeness)
+- [ ] If metrics pass: increase to 50%, then 100%
+- [ ] If metrics fail: route 100% back to v1, investigate
 
 This is implemented at the ADF/Synapse pipeline level rather than at the IaC level.
 
 ---
 
-## 6. Secret Scanning and Security in CI/CD
+## 🔒 6. Secret Scanning and Security in CI/CD
 
 ### 6.1 Gitleaks Integration
 
@@ -1413,7 +1448,9 @@ secret-scan:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-**Custom gitleaks configuration (`.gitleaks.toml`):**
+<details>
+<summary>Custom gitleaks configuration (.gitleaks.toml)</summary>
+
 ```toml
 title = "CSA-in-a-Box gitleaks config"
 
@@ -1440,6 +1477,8 @@ paths = [
   '''.*\.bicep$''',        # Bicep files use param references, not actual secrets
 ]
 ```
+
+</details>
 
 ### 6.2 GitHub Advanced Security
 
@@ -1503,6 +1542,9 @@ pre-commit install
 
 Azure Policy enforces governance at the Azure control plane level. Combine with OPA/Gatekeeper for Kubernetes workloads if applicable:
 
+<details>
+<summary>Policy-as-Code Bicep examples</summary>
+
 ```bicep
 // Deploy policies as part of the ALZ deployment
 targetScope = 'managementGroup'
@@ -1533,9 +1575,11 @@ resource encryptionPolicy 'Microsoft.Authorization/policyAssignments@2025-03-01'
 }
 ```
 
+</details>
+
 ---
 
-## 7. Recommended Implementation Plan for CSA-in-a-Box
+## 📋 7. Recommended Implementation Plan for CSA-in-a-Box
 
 ### 7.1 Current State Assessment
 
@@ -1549,35 +1593,35 @@ Based on the existing repository structure, the project already has:
 
 #### Phase 1: Foundation (Week 1-2)
 
-1. **Migrate to `.bicepparam` files** from JSON parameter files
-2. **Create shared types library** (`_shared/types.bicep`) with exported types
-3. **Add `bicepconfig.json`** with strict linter rules (see section 3.1)
-4. **Add PSRule for Azure** to the validation pipeline
-5. **Add `.pre-commit-config.yaml`** with gitleaks + bicep-lint hooks
+- [ ] **Migrate to `.bicepparam` files** from JSON parameter files
+- [ ] **Create shared types library** (`_shared/types.bicep`) with exported types
+- [ ] **Add `bicepconfig.json`** with strict linter rules (see section 3.1)
+- [ ] **Add PSRule for Azure** to the validation pipeline
+- [ ] **Add `.pre-commit-config.yaml`** with gitleaks + bicep-lint hooks
 
 #### Phase 2: CI/CD Enhancement (Week 3-4)
 
-6. **Refactor workflows to use reusable workflows** (`_deploy-subscription.yml`)
-7. **Configure GitHub Environments** with protection rules for test/prod
-8. **Add what-if PR comments** using the matrix strategy (section 2.6)
-9. **Set up OIDC federated credentials** per environment
-10. **Add Dependabot** for GitHub Actions version monitoring
+- [ ] **Refactor workflows to use reusable workflows** (`_deploy-subscription.yml`)
+- [ ] **Configure GitHub Environments** with protection rules for test/prod
+- [ ] **Add what-if PR comments** using the matrix strategy (section 2.6)
+- [ ] **Set up OIDC federated credentials** per environment
+- [ ] **Add Dependabot** for GitHub Actions version monitoring
 
 #### Phase 3: Module Registry & Governance (Week 5-6)
 
-11. **Set up Azure Container Registry** for Bicep module publishing
-12. **Publish shared modules** to ACR with semantic versioning
-13. **Adopt AVM modules** where available (networking, key vault, storage)
-14. **Deploy custom Azure Policy initiative** for data governance
-15. **Consider Deployment Stacks** for environment lifecycle management
+- [ ] **Set up Azure Container Registry** for Bicep module publishing
+- [ ] **Publish shared modules** to ACR with semantic versioning
+- [ ] **Adopt AVM modules** where available (networking, key vault, storage)
+- [ ] **Deploy custom Azure Policy initiative** for data governance
+- [ ] **Consider Deployment Stacks** for environment lifecycle management
 
 #### Phase 4: Advanced Patterns (Week 7-8)
 
-16. **Implement progressive (ring-based) deployment** across environments
-17. **Add cost estimation** to PR checks
-18. **Create rollback workflow** for emergency scenarios
-19. **Add post-deployment smoke tests** for each zone
-20. **Document architecture decisions** in ADRs
+- [ ] **Implement progressive (ring-based) deployment** across environments
+- [ ] **Add cost estimation** to PR checks
+- [ ] **Create rollback workflow** for emergency scenarios
+- [ ] **Add post-deployment smoke tests** for each zone
+- [ ] **Document architecture decisions** in ADRs
 
 ### 7.3 Tool Matrix Summary
 
@@ -1600,35 +1644,37 @@ Based on the existing repository structure, the project already has:
 
 ### 7.4 CI/CD Pipeline Architecture (Target State)
 
-```text
-PR Created/Updated
-  |
-  +-> Bicep Lint (all files)
-  +-> Bicep Build (compile check)
-  +-> PSRule for Azure (compliance)
-  +-> Checkov (security scan)
-  +-> gitleaks (secret detection)
-  +-> What-If Preview (per zone, posted as PR comment)
-  |
-PR Approved & Merged to main
-  |
-  +-> Ring 0: Deploy to Dev (automatic)
-  |     +-> ALZ -> Connectivity -> DMLZ -> DLZ (sequential)
-  |     +-> Post-deploy smoke tests
-  |
-  +-> Ring 1: Deploy to Test (automatic, 5-min wait)
-  |     +-> Same sequence
-  |     +-> Integration tests
-  |
-  +-> Ring 2: Deploy to Prod (manual approval required)
-        +-> Same sequence
-        +-> Production verification
-        +-> Notify team on completion
+```mermaid
+graph TD
+    PR["PR Created/Updated"] --> Lint["Bicep Lint<br/>(all files)"]
+    PR --> Build["Bicep Build<br/>(compile check)"]
+    PR --> PSRule["PSRule for Azure<br/>(compliance)"]
+    PR --> Checkov["Checkov<br/>(security scan)"]
+    PR --> Gitleaks["gitleaks<br/>(secret detection)"]
+    PR --> WhatIf["What-If Preview<br/>(per zone, PR comment)"]
+
+    Lint & Build & PSRule & Checkov & Gitleaks & WhatIf --> Merge["PR Approved & Merged"]
+
+    Merge --> R0["Ring 0: Deploy to Dev<br/>(automatic)"]
+    R0 --> R0Seq["ALZ → Connectivity → DMLZ → DLZ"]
+    R0Seq --> Smoke0["Post-deploy smoke tests"]
+
+    Smoke0 --> R1["Ring 1: Deploy to Test<br/>(automatic, 5-min wait)"]
+    R1 --> R1Seq["Same sequence"]
+    R1Seq --> IntTest["Integration tests"]
+
+    IntTest --> R2["Ring 2: Deploy to Prod<br/>(manual approval)"]
+    R2 --> R2Seq["Same sequence"]
+    R2Seq --> ProdVerify["Production verification"]
+    ProdVerify --> Notify["Notify team"]
 ```
 
 ---
 
-## Appendix A: Complete bicepconfig.json
+## 📎 Appendix A: Complete bicepconfig.json
+
+<details>
+<summary>Full bicepconfig.json</summary>
 
 ```json
 {
@@ -1681,7 +1727,11 @@ PR Approved & Merged to main
 }
 ```
 
-## Appendix B: GitHub Secrets Required
+</details>
+
+---
+
+## 🔑 Appendix B: GitHub Secrets Required
 
 ```text
 Repository-level secrets:
@@ -1703,7 +1753,9 @@ Environment: prod
   Protection rules: 2 required reviewers, main branch only
 ```
 
-## Appendix C: Key Microsoft Documentation References
+---
+
+## 📚 Appendix C: Key Microsoft Documentation References
 
 - [Bicep Best Practices](https://learn.microsoft.com/en-us/azure/azure-resource-manager/bicep/best-practices)
 - [Deployment Stacks](https://learn.microsoft.com/en-us/azure/azure-resource-manager/bicep/deployment-stacks)
@@ -1720,7 +1772,7 @@ Environment: prod
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Terraform Deployment](../deploy/terraform/README.md) — Terraform deployment path for CSA-in-a-Box
 - [Bicep Gov Deployment](../deploy/bicep/gov/README.md) — Government cloud Bicep deployment

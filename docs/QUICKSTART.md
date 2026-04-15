@@ -1,44 +1,36 @@
+[Home](../README.md) > [Docs](./) > **Quick Start**
+
 # CSA-in-a-Box: Quick Start Guide
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** New Users
 
+> [!NOTE]
+> **Quick Summary**: Get a working Cloud-Scale Analytics platform deployed and flowing data in 60-90 minutes — deploy infrastructure (ALZ → DMLZ → DLZ), load seed data, run the dbt medallion pipeline across 4 domains, set up streaming, bootstrap Purview, deploy the portal, and try vertical examples (USDA, Gov).
+
 Get a working Cloud-Scale Analytics platform deployed and flowing data in
 about 60-90 minutes (assuming all prerequisites are met).
 
-## Table of Contents
+## 📑 Table of Contents
 
-- [Prerequisites](#prerequisites)
-- [Step 1: Deploy Infrastructure](#step-1-deploy-infrastructure)
-- [Step 2: Load Sample Data](#step-2-load-sample-data)
-- [Step 3: Run the dbt Pipeline](#step-3-run-the-dbt-pipeline)
+- [📎 Prerequisites](#-prerequisites)
+- [📦 Step 1: Deploy Infrastructure](#-step-1-deploy-infrastructure)
+- [📊 Step 2: Load Sample Data](#-step-2-load-sample-data)
+- [🔄 Step 3: Run the dbt Pipeline](#-step-3-run-the-dbt-pipeline)
   - [Expected Row Counts](#expected-row-counts)
-- [Step 4: Run ADF Orchestration (Optional)](#step-4-run-adf-orchestration-optional)
-- [Step 5: Explore the Data](#step-5-explore-the-data)
-  - [Query Silver (validation results)](#query-silver-validation-results)
-  - [Query Gold (business metrics)](#query-gold-business-metrics)
-- [Step 6: Start Streaming (Optional)](#step-6-start-streaming-optional)
-- [Step 7: Bootstrap Purview Catalog (Optional)](#step-7-bootstrap-purview-catalog-optional)
-- [Project Structure](#project-structure)
-- [Quick Start: Run a Vertical Example (USDA)](#quick-start-run-a-vertical-example-usda)
-  - [Step A: Generate Seed Data](#step-a-generate-seed-data)
-  - [Step B: Load Seeds and Run dbt](#step-b-load-seeds-and-run-dbt)
-  - [Step C: Explore Results](#step-c-explore-results)
-- [Quick Start: Deploy the Portal](#quick-start-deploy-the-portal)
-  - [Step A: Start the Shared Backend](#step-a-start-the-shared-backend)
-  - [Step B: Start a Frontend](#step-b-start-a-frontend)
-  - [Step C: Register a Data Source](#step-c-register-a-data-source)
-- [Quick Start: Platform Services](#quick-start-platform-services)
-  - [Step A: Deploy Shared Services (Azure Functions)](#step-a-deploy-shared-services-azure-functions)
-  - [Step B: Deploy the Data Marketplace](#step-b-deploy-the-data-marketplace)
-  - [Step C: Configure AI Integration](#step-c-configure-ai-integration)
-- [Quick Start: Azure Government](#quick-start-azure-government)
-  - [Step A: Switch to Government Cloud](#step-a-switch-to-government-cloud)
-  - [Step B: Deploy with Gov Parameters](#step-b-deploy-with-gov-parameters)
-  - [Step C: Verify Compliance Tags](#step-c-verify-compliance-tags)
-  - [Government-Specific Notes](#government-specific-notes)
-- [Next Steps](#next-steps)
+- [⚙️ Step 4: Run ADF Orchestration (Optional)](#️-step-4-run-adf-orchestration-optional)
+- [🔍 Step 5: Explore the Data](#-step-5-explore-the-data)
+- [📡 Step 6: Start Streaming (Optional)](#-step-6-start-streaming-optional)
+- [📋 Step 7: Bootstrap Purview Catalog (Optional)](#-step-7-bootstrap-purview-catalog-optional)
+- [📁 Project Structure](#-project-structure)
+- [🌾 Quick Start: Run a Vertical Example (USDA)](#-quick-start-run-a-vertical-example-usda)
+- [🌐 Quick Start: Deploy the Portal](#-quick-start-deploy-the-portal)
+- [🏗️ Quick Start: Platform Services](#️-quick-start-platform-services)
+- [🏛️ Quick Start: Azure Government](#️-quick-start-azure-government)
+- [➡️ Next Steps](#️-next-steps)
 
-## Prerequisites
+---
+
+## 📎 Prerequisites
 
 | Tool | Minimum Version | Check |
 |------|----------------|-------|
@@ -53,7 +45,9 @@ about 60-90 minutes (assuming all prerequisites are met).
 bash scripts/deploy/validate-prerequisites.sh
 ```
 
-## Step 1: Deploy Infrastructure
+---
+
+## 📦 Step 1: Deploy Infrastructure
 
 ```bash
 # Clone the repo
@@ -71,11 +65,13 @@ bash scripts/deploy/deploy-platform.sh --environment dev
 ```
 
 The deployment script deploys three landing zones in order:
-1. **ALZ** (Management) - logging, monitoring, policies
-2. **DMLZ** (Data Management) - Purview, Key Vault, shared services
-3. **DLZ** (Data Landing Zone) - ADF, Databricks, Synapse, ADLS, Event Hub
+- [ ] **ALZ** (Management) — logging, monitoring, policies
+- [ ] **DMLZ** (Data Management) — Purview, Key Vault, shared services
+- [ ] **DLZ** (Data Landing Zone) — ADF, Databricks, Synapse, ADLS, Event Hub
 
-## Step 2: Load Sample Data
+---
+
+## 📊 Step 2: Load Sample Data
 
 CSA-in-a-Box ships with realistic seed data:
 
@@ -101,7 +97,9 @@ cd domains/shared/dbt
 dbt seed --profiles-dir .
 ```
 
-## Step 3: Run the dbt Pipeline
+---
+
+## 🔄 Step 3: Run the dbt Pipeline
 
 Each domain has its own dbt project. Run them in order:
 
@@ -145,7 +143,8 @@ dbt test
 
 ### Expected Row Counts
 
-**Shared Domain:**
+<details>
+<summary>Shared Domain</summary>
 
 | Layer | Model | Expected Rows |
 |-------|-------|--------------|
@@ -162,7 +161,10 @@ dbt test
 | Gold | `gld_customer_lifetime_value` | ~190 |
 | Gold | `gld_monthly_revenue` | ~36 (months x countries) |
 
-**Finance Domain:**
+</details>
+
+<details>
+<summary>Finance Domain</summary>
 
 | Layer | Model | Expected Rows |
 |-------|-------|--------------|
@@ -173,7 +175,10 @@ dbt test
 | Gold | `gld_aging_report` | ~485 (valid invoices) |
 | Gold | `gld_revenue_reconciliation` | ~2,000+ (full outer join orders↔invoices) |
 
-**Inventory Domain:**
+</details>
+
+<details>
+<summary>Inventory Domain</summary>
 
 | Layer | Model | Expected Rows |
 |-------|-------|--------------|
@@ -186,7 +191,10 @@ dbt test
 | Gold | `gld_reorder_alerts` | varies (products below reorder point) |
 | Gold | `gld_inventory_turnover` | ~50 (one per product) |
 
-**Sales Domain:**
+</details>
+
+<details>
+<summary>Sales Domain</summary>
 
 | Layer | Model | Expected Rows |
 |-------|-------|--------------|
@@ -194,7 +202,11 @@ dbt test
 | Silver | `slv_sales_orders` | 1,000 (all rows, ~45 flagged invalid) |
 | Gold | `gld_sales_metrics` | varies (date × region × channel) |
 
-## Step 4: Run ADF Orchestration (Optional)
+</details>
+
+---
+
+## ⚙️ Step 4: Run ADF Orchestration (Optional)
 
 If ADF is deployed, trigger the master pipeline:
 
@@ -207,13 +219,15 @@ az datafactory pipeline create-run \
 ```
 
 The orchestration pipeline:
-1. Ingests each entity to Bronze (parallel ForEach)
-2. Runs dbt Bronze models
-3. Runs dbt Silver models
-4. Runs dbt Gold models
-5. Sends alerts on failure
+- [ ] Ingests each entity to Bronze (parallel ForEach)
+- [ ] Runs dbt Bronze models
+- [ ] Runs dbt Silver models
+- [ ] Runs dbt Gold models
+- [ ] Sends alerts on failure
 
-## Step 5: Explore the Data
+---
+
+## 🔍 Step 5: Explore the Data
 
 ### Query Silver (validation results)
 ```sql
@@ -246,7 +260,9 @@ FROM gold.gld_revenue_reconciliation
 GROUP BY reconciliation_status;
 ```
 
-## Step 6: Start Streaming (Optional)
+---
+
+## 📡 Step 6: Start Streaming (Optional)
 
 ```bash
 # Produce sample events to Event Hub
@@ -257,7 +273,7 @@ python scripts/streaming/produce_events.py \
     --duration 120
 ```
 
-Events flow through: **Event Hub** -> **Event Processing Function** -> **Cosmos DB** + **ADX**
+Events flow through: **Event Hub** → **Event Processing Function** → **Cosmos DB** + **ADX**
 
 Monitor in real-time via ADX:
 ```kql
@@ -267,7 +283,9 @@ RawEvents
 | render timechart
 ```
 
-## Step 7: Bootstrap Purview Catalog (Optional)
+---
+
+## 📋 Step 7: Bootstrap Purview Catalog (Optional)
 
 ```bash
 python scripts/purview/bootstrap_catalog.py \
@@ -276,11 +294,13 @@ python scripts/purview/bootstrap_catalog.py \
 ```
 
 This creates:
-- Collection hierarchy (csa-inabox > shared, sales, finance)
-- Business glossary terms (Customer, Order, Product, Invoice, Revenue, etc.)
-- Scan sources for ADLS Bronze/Silver/Gold containers
+- [ ] Collection hierarchy (csa-inabox > shared, sales, finance)
+- [ ] Business glossary terms (Customer, Order, Product, Invoice, Revenue, etc.)
+- [ ] Scan sources for ADLS Bronze/Silver/Gold containers
 
-## Project Structure
+---
+
+## 📁 Project Structure
 
 ```text
 csa-inabox/
@@ -314,7 +334,9 @@ csa-inabox/
   tests/                  # Unit tests (pytest)
 ```
 
-## Quick Start: Run a Vertical Example (USDA)
+---
+
+## 🌾 Quick Start: Run a Vertical Example (USDA)
 
 Run the USDA agriculture analytics vertical end-to-end without deploying full
 infrastructure (uses local Databricks or DuckDB adapter).
@@ -363,7 +385,7 @@ LIMIT 20;
 
 ---
 
-## Quick Start: Deploy the Portal
+## 🌐 Quick Start: Deploy the Portal
 
 Run the data onboarding portal locally with the shared backend and React
 frontend.
@@ -410,14 +432,14 @@ docker-compose up
 
 ### Step C: Register a Data Source
 
-1. Open the portal at `http://localhost:3000`
-2. Click **Register New Source**
-3. Fill in source details (name, type, connection, schedule)
-4. The backend provisions a DLZ pipeline and registers the source in Purview
+- [ ] Open the portal at `http://localhost:3000`
+- [ ] Click **Register New Source**
+- [ ] Fill in source details (name, type, connection, schedule)
+- [ ] The backend provisions a DLZ pipeline and registers the source in Purview
 
 ---
 
-## Quick Start: Platform Services
+## 🏗️ Quick Start: Platform Services
 
 Deploy shared platform services that provide Fabric-equivalent capabilities.
 
@@ -468,7 +490,7 @@ See [PLATFORM_SERVICES.md](PLATFORM_SERVICES.md) for the full deployment guide.
 
 ---
 
-## Quick Start: Azure Government
+## 🏛️ Quick Start: Azure Government
 
 Deploy CSA-in-a-Box to Azure Government with FedRAMP-compliant configuration.
 
@@ -517,27 +539,28 @@ az storage account show \
 
 ### Government-Specific Notes
 
-- All services use `.us` / `.usgovcloudapi.net` endpoints
-- Compliance tags are auto-applied: FedRAMP High, FISMA, NIST 800-53 Rev5
-- Microsoft Fabric is NOT available in Gov — this repo provides the alternative
-- See [GOV_SERVICE_MATRIX.md](GOV_SERVICE_MATRIX.md) for service availability
+> [!NOTE]
+> - All services use `.us` / `.usgovcloudapi.net` endpoints
+> - Compliance tags are auto-applied: FedRAMP High, FISMA, NIST 800-53 Rev5
+> - Microsoft Fabric is NOT available in Gov — this repo provides the alternative
+> - See [GOV_SERVICE_MATRIX.md](GOV_SERVICE_MATRIX.md) for service availability
 
 ---
 
-## Next Steps
+## ➡️ Next Steps
 
-- **Add a new domain**: Copy `domains/finance/` as a template, update `dbt_project.yml`
-- **Add a data product**: Create `contract.yaml` under `data-products/`
-- **Add quality rules**: Extend `governance/dataquality/` with Great Expectations checkpoints
-- **Scale streaming**: Increase Event Hub partitions, add ADX scaling policies
-- **Production hardening**: See [`docs/PRODUCTION_CHECKLIST.md`](PRODUCTION_CHECKLIST.md)
-- **Architecture deep-dive**: See [`docs/ARCHITECTURE.md`](ARCHITECTURE.md)
-- **Platform services**: See [`docs/PLATFORM_SERVICES.md`](PLATFORM_SERVICES.md)
-- **Azure Government**: See [`docs/GOV_SERVICE_MATRIX.md`](GOV_SERVICE_MATRIX.md)
+- [ ] **Add a new domain**: Copy `domains/finance/` as a template, update `dbt_project.yml`
+- [ ] **Add a data product**: Create `contract.yaml` under `data-products/`
+- [ ] **Add quality rules**: Extend `governance/dataquality/` with Great Expectations checkpoints
+- [ ] **Scale streaming**: Increase Event Hub partitions, add ADX scaling policies
+- [ ] **Production hardening**: See [`docs/PRODUCTION_CHECKLIST.md`](PRODUCTION_CHECKLIST.md)
+- [ ] **Architecture deep-dive**: See [`docs/ARCHITECTURE.md`](ARCHITECTURE.md)
+- [ ] **Platform services**: See [`docs/PLATFORM_SERVICES.md`](PLATFORM_SERVICES.md)
+- [ ] **Azure Government**: See [`docs/GOV_SERVICE_MATRIX.md`](GOV_SERVICE_MATRIX.md)
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Getting Started](GETTING_STARTED.md) — Prerequisites and deployment walkthrough
 - [Architecture](ARCHITECTURE.md) — Comprehensive architecture reference

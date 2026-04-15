@@ -1,8 +1,16 @@
 # USPS Postal Operations Analytics Platform
 
+> [**Examples**](../README.md) > **USPS**
+
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers
 
-## Table of Contents
+> [!TIP]
+> **TL;DR** — Postal operations analytics for delivery performance, route optimization, and facility capacity planning across 34,000+ post offices and 230,000+ routes with seasonal volume prediction.
+
+
+---
+
+## 📋 Table of Contents
 - [Overview](#overview)
   - [Key Features](#key-features)
   - [Data Sources](#data-sources)
@@ -38,11 +46,14 @@
 
 A comprehensive postal operations analytics platform built on Azure Cloud Scale Analytics (CSA), providing insights into delivery performance, facility utilization, geographic coverage, and volume forecasting using USPS public data and APIs.
 
-## Overview
+
+---
+
+## 📋 Overview
 
 The United States Postal Service delivers 127 billion pieces of mail annually through a network of 34,000+ post offices, 230,000+ delivery routes, and 640,000+ employees. This platform ingests, processes, and analyzes USPS operational data — ZIP code geography, address validation, delivery performance, and facility metrics — to enable route optimization, capacity planning, and service-level management.
 
-### Key Features
+### ✨ Key Features
 
 - **Last-Mile Delivery Analytics**: Route-level performance with geospatial optimization
 - **Volume Forecasting**: Seasonal and trend-based mail/parcel volume prediction
@@ -51,7 +62,7 @@ The United States Postal Service delivers 127 billion pieces of mail annually th
 - **Service Performance Dashboards**: On-time delivery rates by product, region, and season
 - **ZIP Code Demographics**: Market analytics overlaying Census data on postal geography
 
-### Data Sources
+### 🗄️ Data Sources
 
 | Source | Description | URL |
 |--------|-------------|-----|
@@ -62,7 +73,10 @@ The United States Postal Service delivers 127 billion pieces of mail annually th
 | USPS Postal Bulletin | Rate changes, service updates, new ZIP codes | https://about.usps.com/postal-bulletin/ |
 | OpenAddresses | Open-source address point data for geocoding | https://openaddresses.io/ |
 
-## Architecture Overview
+
+---
+
+## 🏗️ Architecture Overview
 
 ```mermaid
 graph TD
@@ -149,7 +163,10 @@ graph TD
     G5 --> C4
 ```
 
-## Prerequisites
+
+---
+
+## 📎 Prerequisites
 
 ### Azure Resources
 - Azure subscription with contributor access
@@ -168,7 +185,10 @@ graph TD
 - USPS Web Tools API credentials (free registration at https://www.usps.com/business/web-tools-apis/documentation-updates.htm)
 - Census API key (free at https://api.census.gov/data/key_signup.html) for demographic overlays
 
-## Quick Start
+
+---
+
+## 🚀 Quick Start
 
 ### 1. Environment Setup
 
@@ -241,7 +261,10 @@ dbt docs generate
 dbt docs serve
 ```
 
-## Sample Analytics Scenarios
+
+---
+
+## 💡 Sample Analytics Scenarios
 
 ### 1. Last-Mile Delivery Optimization
 
@@ -312,7 +335,10 @@ WHERE current_utilization_pct < 50
 ORDER BY consolidation_score DESC;
 ```
 
-## Data Products
+
+---
+
+## ✨ Data Products
 
 ### Route Optimization (`route-optimization`)
 - **Description**: Delivery route metrics with optimization scoring
@@ -332,9 +358,12 @@ ORDER BY consolidation_score DESC;
 - **Coverage**: 200+ processing plants, 34,000+ post offices
 - **API**: `/api/v1/facility-utilization`
 
-## Configuration
 
-### dbt Profiles
+---
+
+## ⚙️ Configuration
+
+### ⚙️ dbt Profiles
 
 Add to your `~/.dbt/profiles.yml`:
 
@@ -358,7 +387,7 @@ usps_analytics:
       catalog: prod
 ```
 
-### Environment Variables
+### ⚙️ Environment Variables
 
 ```bash
 # Required for data fetching
@@ -375,7 +404,10 @@ USPS_LOG_LEVEL=INFO
 USPS_BATCH_SIZE=5000
 ```
 
-## Azure Government Notes
+
+---
+
+## 🔒 Azure Government Notes
 
 This example is compatible with Azure Government (US) regions. When deploying to Azure Government:
 
@@ -384,23 +416,32 @@ This example is compatible with Azure Government (US) regions. When deploying to
 - USPS APIs are accessible from government networks without special authorization
 - Note: USPS operational data at the route level may be considered sensitive — confirm data classification with your AO before deploying granular route data in cloud environments
 
-## Monitoring & Alerts
+
+---
+
+## 📊 Monitoring & Alerts
 
 - **Data Freshness**: Alerts when service performance reports or volume feeds are overdue
 - **Data Quality**: Automated dbt tests on address validation rates and volume anomalies
 - **API Health**: USPS Web Tools API availability monitoring
 - **Cost Management**: Daily compute spend tracking with budget thresholds
 
-## Troubleshooting
 
-### Common Issues
+---
+
+## 🔧 Troubleshooting
+
+### 🔧 Common Issues
 
 1. **USPS API Rate Limits**: Web Tools APIs throttle at ~5 requests/second. Use the `--delay` parameter in fetch scripts.
 2. **ZCTA vs. ZIP Mismatch**: Census ZCTAs approximate but do not exactly match USPS ZIP codes. See `data/schemas/zip_zcta_crosswalk.csv` for mapping.
 3. **Service Performance PDF Parsing**: Quarterly reports are published as PDFs. Use `data/parsers/parse_service_report.py` for extraction.
 4. **Large Address Datasets**: OpenAddresses files can exceed 5 GB per state. Use `--county-filter` for targeted loads.
 
-## Contributing
+
+---
+
+## 🔗 Contributing
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/new-data-source`)
@@ -408,11 +449,17 @@ This example is compatible with Azure Government (US) regions. When deploying to
 4. Run quality checks (`make lint test`)
 5. Submit a pull request
 
-## License
+
+---
+
+## 🔗 License
 
 This project is licensed under the MIT License. See `LICENSE` file for details.
 
-## Acknowledgments
+
+---
+
+## 🔗 Acknowledgments
 
 - USPS for public operational data and developer APIs
 - U.S. Census Bureau for ZCTA boundary and demographic data
@@ -421,7 +468,7 @@ This project is licensed under the MIT License. See `LICENSE` file for details.
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [USPS Architecture](ARCHITECTURE.md) — Detailed platform architecture and design decisions
 - [Examples Index](../README.md) — Overview of all CSA-in-a-Box example verticals

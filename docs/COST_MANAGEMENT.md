@@ -1,45 +1,50 @@
+[Home](../README.md) > [Docs](./) > **Cost Management**
+
 # Cost Management Guide
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** FinOps / Administrators
 
+> [!NOTE]
+> **Quick Summary**: FinOps practices for CSA-in-a-Box covering cost estimation (Bicep + Terraform paths), budget guardrails per environment, CI/CD cost comments, required tagging strategy, optimization tips (reserved instances, auto-pause, storage tiering, right-sizing), and a FinOps maturity roadmap (Crawl → Walk → Run).
+
 This document covers cost estimation, budget guardrails, and FinOps practices for the CSA-in-a-Box platform.
 
-## Table of Contents
+## 📑 Table of Contents
 
-- [Cost Estimation Approach](#cost-estimation-approach)
+- [💰 Cost Estimation Approach](#-cost-estimation-approach)
   - [Bicep Path (Primary)](#bicep-path-primary)
   - [Terraform Path (Future)](#terraform-path-future)
-- [Running Cost Estimates Locally](#running-cost-estimates-locally)
+- [🔧 Running Cost Estimates Locally](#-running-cost-estimates-locally)
   - [Prerequisites](#prerequisites)
   - [Basic Usage](#basic-usage)
   - [Understanding the Output](#understanding-the-output)
   - [Exit Codes](#exit-codes)
-- [CI/CD Integration](#cicd-integration)
+- [🔄 CI/CD Integration](#-cicd-integration)
   - [GitHub Actions — Cost Estimate Job](#github-actions--cost-estimate-job)
   - [Adding Cost Estimates to Other Workflows](#adding-cost-estimates-to-other-workflows)
   - [Infracost (Terraform Path)](#infracost-terraform-path)
-- [Budget Thresholds and Alerts](#budget-thresholds-and-alerts)
+- [🚨 Budget Thresholds and Alerts](#-budget-thresholds-and-alerts)
   - [Policy Rules](#policy-rules)
   - [Azure Cost Management Alerts](#azure-cost-management-alerts)
-- [Tagging Strategy](#tagging-strategy)
+- [🏷️ Tagging Strategy](#️-tagging-strategy)
   - [Required Tags](#required-tags)
   - [Enforcement](#enforcement)
-- [Cost Optimization Tips](#cost-optimization-tips)
+- [📉 Cost Optimization Tips](#-cost-optimization-tips)
   - [Reserved Instances & Savings Plans](#reserved-instances--savings-plans)
   - [Auto-Pause and Auto-Stop](#auto-pause-and-auto-stop)
   - [Spot VMs and Low-Priority Compute](#spot-vms-and-low-priority-compute)
   - [Storage Tiering](#storage-tiering)
   - [Right-Sizing](#right-sizing)
-- [FinOps Maturity Model](#finops-maturity-model)
+- [📊 FinOps Maturity Model](#-finops-maturity-model)
   - [Stage 1: Crawl (Current)](#stage-1-crawl-current)
   - [Stage 2: Walk](#stage-2-walk)
   - [Stage 3: Run](#stage-3-run)
-- [Resource-Specific Pricing Reference](#resource-specific-pricing-reference)
-- [Further Reading](#further-reading)
+- [📋 Resource-Specific Pricing Reference](#-resource-specific-pricing-reference)
+- [📚 Further Reading](#-further-reading)
 
 ---
 
-## Cost Estimation Approach
+## 💰 Cost Estimation Approach
 
 CSA-in-a-Box supports two IaC paths, each with its own cost estimation strategy.
 
@@ -54,7 +59,8 @@ The primary deployment path uses Azure Bicep templates under `deploy/bicep/`. Be
 
 **Script:** `scripts/deploy/estimate-costs.sh`
 
-> **Important:** Bicep estimates are best-effort. The Azure Retail Prices API returns list prices — actual costs depend on EA/CSP agreements, reserved instances, and consumption-based meters.
+> [!IMPORTANT]
+> Bicep estimates are best-effort. The Azure Retail Prices API returns list prices — actual costs depend on EA/CSP agreements, reserved instances, and consumption-based meters.
 
 ### Terraform Path (Future)
 
@@ -69,7 +75,7 @@ infracost breakdown --config-file .infracost/terraform.yml
 
 ---
 
-## Running Cost Estimates Locally
+## 🔧 Running Cost Estimates Locally
 
 ### Prerequisites
 
@@ -129,7 +135,7 @@ Resources without a pricing mapping or that cannot be found in the API are flagg
 
 ---
 
-## CI/CD Integration
+## 🔄 CI/CD Integration
 
 ### GitHub Actions — Cost Estimate Job
 
@@ -179,7 +185,7 @@ When the Terraform modules are available:
 
 ---
 
-## Budget Thresholds and Alerts
+## 🚨 Budget Thresholds and Alerts
 
 Budget thresholds are defined in `.infracost/policy.yml`:
 
@@ -226,7 +232,7 @@ az consumption budget create \
 
 ---
 
-## Tagging Strategy
+## 🏷️ Tagging Strategy
 
 All CSA-in-a-Box resources must include cost-attribution tags. These are enforced in the Bicep templates via the `tagsDefault` variable in each landing zone's `main.bicep`.
 
@@ -272,7 +278,7 @@ Azure Policy can further enforce tagging at the subscription or management group
 
 ---
 
-## Cost Optimization Tips
+## 📉 Cost Optimization Tips
 
 ### Reserved Instances & Savings Plans
 
@@ -293,11 +299,10 @@ autopauseDelayInMinutes: 60
 enableAutoStop: true
 ```
 
-
 In dev/staging, always enable auto-pause for:
-- Synapse dedicated SQL pools
-- Databricks clusters (via cluster policies)
-- Data Explorer clusters (Dev SKU auto-stop)
+- [ ] Synapse dedicated SQL pools
+- [ ] Databricks clusters (via cluster policies)
+- [ ] Data Explorer clusters (Dev SKU auto-stop)
 
 ### Spot VMs and Low-Priority Compute
 
@@ -345,7 +350,7 @@ Implement lifecycle management policies for each lake zone:
 
 ---
 
-## FinOps Maturity Model
+## 📊 FinOps Maturity Model
 
 ### Stage 1: Crawl (Current)
 
@@ -373,7 +378,7 @@ Implement lifecycle management policies for each lake zone:
 
 ---
 
-## Resource-Specific Pricing Reference
+## 📋 Resource-Specific Pricing Reference
 
 Quick reference for the CSA services tracked by `estimate-costs.sh`:
 
@@ -394,7 +399,7 @@ Quick reference for the CSA services tracked by `estimate-costs.sh`:
 
 ---
 
-## Further Reading
+## 📚 Further Reading
 
 - [Azure Pricing Calculator](https://azure.microsoft.com/pricing/calculator/)
 - [Azure Retail Prices API](https://learn.microsoft.com/en-us/rest/api/cost-management/retail-prices/azure-retail-prices)
@@ -404,7 +409,7 @@ Quick reference for the CSA services tracked by `estimate-costs.sh`:
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Production Checklist](PRODUCTION_CHECKLIST.md) — Pre-production readiness checklist
 - [Platform Services](PLATFORM_SERVICES.md) — Platform services reference and SKU details

@@ -1,16 +1,20 @@
 # Load & Performance Tests
 
+[tests](../../tests/) / **load**
+
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** QA Engineers / Developers
+
+> [!TIP]
+> **TL;DR** — Regression-detection harnesses for four platform targets: Azure Function HTTP triggers (Locust + k6), dbt model execution (pytest benchmark), Databricks notebooks (Jobs API), and ADF pipelines (REST API). These are on-demand tests requiring live environments, not part of the default CI run.
 
 ## Table of Contents
 
-- [Azure Function HTTP Triggers](#azure-function-http-triggers)
-  - [Locust](#locust)
-  - [k6](#k6)
-- [dbt Model Performance Benchmarks](#dbt-model-performance-benchmarks)
-- [Databricks Notebook Baselines](#databricks-notebook-baselines)
-- [ADF Pipeline Throughput](#adf-pipeline-throughput)
-- [Storing Results](#storing-results)
+- [Azure Function HTTP Triggers](#-azure-function-http-triggers)
+- [dbt Model Performance Benchmarks](#-dbt-model-performance-benchmarks)
+- [Databricks Notebook Baselines](#-databricks-notebook-baselines)
+- [ADF Pipeline Throughput](#-adf-pipeline-throughput)
+- [Storing Results](#-storing-results)
+- [Related Documentation](#-related-documentation)
 
 Regression-detection harnesses for the four moving parts of the CSA-in-a-Box
 platform that are sensitive to load:
@@ -22,18 +26,14 @@ platform that are sensitive to load:
 | dbt model execution | pytest + subprocess timing | `benchmark_dbt_models.py` |
 | Databricks notebooks & ADF | procedure + metrics contract | `README.md` section below |
 
-These are *not* part of the default CI run — they require a live
-environment (a running Function app URL, a Databricks SQL warehouse, or an
-ADF instance) and so are gated behind the optional `load-tests.yml`
-workflow (`workflow_dispatch` only). Run them on demand before shipping
-changes that touch hot paths, and capture the result in
-`.claude/DEVELOPMENT_LOG.md` so regressions show up in future diffs.
+> [!IMPORTANT]
+> These are *not* part of the default CI run — they require a live environment (a running Function app URL, a Databricks SQL warehouse, or an ADF instance) and so are gated behind the optional `load-tests.yml` workflow (`workflow_dispatch` only). Run them on demand before shipping changes that touch hot paths, and capture the result in `.claude/DEVELOPMENT_LOG.md` so regressions show up in future diffs.
 
 ---
 
-## Azure Function HTTP triggers
+## ⚡ Azure Function HTTP Triggers
 
-### Locust
+### ⚡ Locust
 
 ```bash
 pip install locust
@@ -61,7 +61,7 @@ Capture the generated `reports/locust-ai-enrichment_stats.csv` alongside
 the deploy tag (see `docs/ROLLBACK.md`) so regressions can be traced to a
 specific deployment.
 
-### k6
+### ⚡ k6
 
 ```bash
 k6 run tests/load/k6_ai_enrichment.js \
@@ -77,7 +77,7 @@ into CI as a blocking check if the team decides to move to k6 Cloud.
 
 ---
 
-## dbt model performance benchmarks
+## ⚡ dbt Model Performance Benchmarks
 
 ```bash
 # Single run
@@ -109,7 +109,7 @@ Acceptance targets — run on a small-but-realistic dataset
 
 ---
 
-## Databricks notebook baselines
+## ⚡ Databricks Notebook Baselines
 
 Baselines for `domains/shared/notebooks/databricks/delta_lake_optimization.py`
 should be captured directly in Databricks via the Jobs API. Procedure:
@@ -129,7 +129,7 @@ should complete in < 10 minutes.
 
 ---
 
-## ADF pipeline throughput
+## ⚡ ADF Pipeline Throughput
 
 ADF pipelines do not have a local harness today. The recommended
 procedure is:
@@ -147,7 +147,7 @@ Target: sustained ≥ 50k rows/sec on a DIU=4 copy activity.
 
 ---
 
-## Storing results
+## 📁 Storing Results
 
 All reports land under a top-level `reports/` directory (gitignored —
 see `.gitignore`). To preserve a run for regression tracking, copy the
@@ -156,6 +156,6 @@ deploy tag that produced it.
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Production Checklist](../../docs/PRODUCTION_CHECKLIST.md) — Pre-deployment verification steps

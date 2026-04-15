@@ -2,13 +2,21 @@
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Developers / Contributors
 
-All notable changes to the CSA-in-a-Box project will be documented in this file.
+> [!NOTE]
+> **Quick Summary**: All notable changes to the CSA-in-a-Box project are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+---
 
-## [Unreleased]
+## 📑 Table of Contents
 
-### Fixed
+- [🚧 Unreleased](#-unreleased)
+- [🔗 Related Documentation](#-related-documentation)
+
+---
+
+## 🚧 [Unreleased]
+
+### 🐛 Fixed
 - Fixed gld_inventory_turnover SQL syntax error (duplicate SELECT, stray parenthesis)
 - Fixed non-existent safety_stock column reference in inventory turnover model
 - Removed hardcoded subscription IDs, IPs, and PII from ALZ parameter files
@@ -23,7 +31,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Fixed privatelink.bicep always-true logic bug
 - Fixed DLZ storage modules missing monitoring and CMK parameter pass-through
 
-### Added
+### ✨ Added
 - Dependabot configuration for pip and GitHub Actions
 - CodeQL SAST analysis workflow
 - NSG outbound security rules for all subnet types
@@ -33,7 +41,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Load test baselines directory structure
 - DEPRECATED.md for ARM templates migration guide
 
-### Changed
+### 🔄 Changed
 - Standardized dbt metadata columns to `_dbt_run_id`
 - Moved SHIR VM auth key to protectedSettings
 - Changed OpenLineage auth from API key to OAuth/managed identity
@@ -43,14 +51,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Improved PII redaction to use service's built-in redacted_text
 - Added type hints and docstrings to Python modules
 
-### Security
+### 🔒 Security
 - Added encryption at host for SHIR VM
 - Added CMK parameter pass-through in lake zone storage
 - Added outbound NSG deny-all rules with service tag exceptions
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
-- [README](README.md) — Project overview and quick start
-- [Contributing](CONTRIBUTING.md) — Development guidelines and PR process
+| Document | Description |
+|---|---|
+| [README](README.md) | Project overview and quick start |
+| [Contributing](CONTRIBUTING.md) | Development guidelines and PR process |

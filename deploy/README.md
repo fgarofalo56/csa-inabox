@@ -2,19 +2,24 @@
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** DevOps Engineers
 
+> [!TIP]
+> **TL;DR** — All Azure Bicep IaC templates for the CSA-in-a-Box platform. Deploys across four subscriptions following the Azure Cloud Adoption Framework landing zone model.
+
 This directory contains all Infrastructure as Code (IaC) for provisioning the CSA-in-a-Box
 platform using Azure Bicep templates. The deployment follows the Azure Cloud Adoption Framework
 landing zone model across four subscriptions.
 
 ## Table of Contents
 
-- [Structure](#structure)
-- [Deployment Strategy](#deployment-strategy)
-- [Getting Started](#getting-started)
-- [Azure Government](#azure-government)
-- [Related Documentation](#related-documentation)
+- [Structure](#-structure)
+- [Deployment Strategy](#-deployment-strategy)
+- [Getting Started](#-getting-started)
+- [Azure Government](#-azure-government)
+- [Related Documentation](#-related-documentation)
 
-## Structure
+---
+
+## 📁 Structure
 
 | Directory | Purpose |
 |-----------|---------|
@@ -26,16 +31,28 @@ landing zone model across four subscriptions.
 | [bicep/code/](bicep/code/) | Utility scripts for Bicep deployment |
 | [notebooks/](notebooks/) | Deployment verification notebooks |
 
-## Deployment Strategy
+---
+
+## 🏗️ Deployment Strategy
 
 The platform deploys across four Azure subscriptions:
+
+```mermaid
+graph LR
+    A[Management] -->|Policy & Monitoring| B[Connectivity]
+    B -->|Hub VNet & DNS| C[Data Management - DMLZ]
+    B -->|Hub VNet & DNS| D[Data Landing Zone - DLZ]
+    C -->|Purview & Catalog| D
+```
 
 1. **Management** — Policy, monitoring, Log Analytics
 2. **Connectivity** — Hub VNet, Azure Firewall, Private DNS, VPN/ExpressRoute
 3. **Data Management (DMLZ)** — Purview, shared services, catalog
 4. **Data Landing Zone (DLZ)** — Per-domain compute and storage
 
-## Getting Started
+---
+
+## 🚀 Getting Started
 
 1. Install the [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) and [Bicep CLI](https://learn.microsoft.com/azure/azure-resource-manager/bicep/install)
 2. Run `make lint-bicep` to validate all templates
@@ -43,14 +60,16 @@ The platform deploys across four Azure subscriptions:
 4. Deploy to dev: `make deploy-dev` (runs a what-if dry run first)
 5. See `scripts/deploy/` for automated deployment scripts
 
-## Azure Government
+---
+
+## ⚙️ Azure Government
 
 All templates support Azure Government via the `bicep/gov/` overrides.
 See [gov/README.md](bicep/gov/README.md) for Government-specific guidance.
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Architecture](../docs/ARCHITECTURE.md) — System architecture reference
 - [IaC & CI/CD Best Practices](../docs/IaC-CICD-Best-Practices.md) — Deployment patterns and standards

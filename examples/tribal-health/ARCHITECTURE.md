@@ -1,8 +1,16 @@
 # Tribal Health Data Warehouse — Architecture
 
+> [**Examples**](../README.md) > [**Tribal Health**](README.md) > **Architecture**
+
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Architects / Data Engineers
 
-## Table of Contents
+> [!TIP]
+> **TL;DR** — Azure Government-exclusive architecture with HIPAA compliance, FedRAMP High controls, and tribal data sovereignty at every layer. Features per-tribe RLS isolation, consent-based data sharing, and HL7 FHIR resource mappings.
+
+
+---
+
+## 📋 Table of Contents
 - [Overview](#overview)
 - [Azure Government Topology](#azure-government-topology)
   - [Region Selection](#region-selection)
@@ -29,11 +37,17 @@
   - [Security & Compliance](#security--compliance)
   - [Development Tools](#development-tools)
 
-## Overview
+
+---
+
+## 📋 Overview
 
 The Tribal Health Data Warehouse is built on Azure Cloud Scale Analytics (CSA) and deployed exclusively within Azure Government regions. The architecture enforces HIPAA compliance, FedRAMP High controls, and tribal data sovereignty at every layer — from network topology to row-level security in analytical models.
 
-## Azure Government Topology
+
+---
+
+## 🔒 Azure Government Topology
 
 All resources are provisioned in Azure Government regions. No data leaves the US Government cloud boundary.
 
@@ -105,7 +119,10 @@ graph TD
 | Networking (Firewall, VPN) | US Gov Virginia | US Gov Arizona | IHS WAN connectivity |
 | Secrets (Key Vault) | US Gov Virginia | US Gov Arizona | HSM-backed, geo-replicated |
 
-## HIPAA Compliance Architecture
+
+---
+
+## 🔒 HIPAA Compliance Architecture
 
 ### Encryption
 
@@ -175,7 +192,10 @@ Audit fields captured:
 - `access_purpose`: Treatment / Operations / Research / PublicHealth
 - `timestamp_utc`: Event time in UTC
 
-## Tribal Data Sovereignty Zones
+
+---
+
+## 🔒 Tribal Data Sovereignty Zones
 
 ### Per-Tribe Data Isolation Model
 
@@ -234,7 +254,10 @@ sequenceDiagram
     Q-->>U: Results (with suppression applied)
 ```
 
-## HL7 FHIR Resource Mappings
+
+---
+
+## 🔌 HL7 FHIR Resource Mappings
 
 The data models align with HL7 FHIR R4 resources to enable interoperability with tribal health IT systems and IHS modernization efforts.
 
@@ -260,7 +283,10 @@ The data models align with HL7 FHIR R4 resources to enable interoperability with
 }
 ```
 
-## Network Architecture
+
+---
+
+## 🔒 Network Architecture
 
 ### Private Endpoints
 
@@ -294,7 +320,10 @@ Processing Subnet NSG:
   └── Deny: All outbound to Internet (except control plane)
 ```
 
-## Managed Identity Architecture
+
+---
+
+## 🔒 Managed Identity Architecture
 
 No shared secrets, passwords, or long-lived tokens. All service-to-service authentication uses Azure Managed Identity.
 
@@ -329,9 +358,12 @@ graph TD
     MI_FUNC -->|Event Hubs Data Sender| EH
 ```
 
-## Medallion Architecture Detail
 
-### Bronze Layer
+---
+
+## 🗄️ Medallion Architecture Detail
+
+### 🗄️ Bronze Layer
 
 - **Purpose**: Raw data landing with minimal transformation
 - **Storage**: ADLS Gen2, Delta format, partitioned by `ingestion_date`
@@ -339,7 +371,7 @@ graph TD
 - **Access**: Data engineering team only
 - **Encryption**: Platform-managed keys (option for CMK)
 
-### Silver Layer
+### 🗄️ Silver Layer
 
 - **Purpose**: Cleaned, validated, de-identified, clinically standardized data
 - **Storage**: ADLS Gen2, Delta format, partitioned by `tribal_affiliation` and `encounter_year`
@@ -347,7 +379,7 @@ graph TD
 - **Quality Gates**: ICD-10 validation, age-appropriate diagnosis checks, PHI de-identification verification
 - **Access**: Data engineering, tribal health analysts (RLS-filtered)
 
-### Gold Layer
+### 🗄️ Gold Layer
 
 - **Purpose**: Aggregated analytics models with small cell suppression
 - **Storage**: ADLS Gen2 + Azure SQL serving layer, Delta format
@@ -355,7 +387,10 @@ graph TD
 - **Access**: Tribal health authorities, IHS area epidemiologists, public health researchers (aggregate only)
 - **Freshness**: Monthly rebuild aligned with GPRA reporting cycles
 
-## Disaster Recovery
+
+---
+
+## 🔒 Disaster Recovery
 
 | Metric | Target | Implementation |
 |---|---|---|
@@ -364,22 +399,25 @@ graph TD
 | Retention | 7 years | HIPAA minimum; immutable storage for audit logs |
 | DR Region | US Gov Arizona | All critical services replicated |
 
-## Technology Stack
 
-### Core Platform (Azure Government)
+---
+
+## 📎 Technology Stack
+
+### 🔒 Core Platform (Azure Government)
 - **Compute**: Azure Databricks (HIPAA workspace), Azure Functions
 - **Storage**: Azure Data Lake Storage Gen2, Azure SQL Database
 - **Orchestration**: Azure Data Factory, Azure Logic Apps
 - **Analytics**: Synapse Analytics Serverless, Power BI (Gov)
 - **Governance**: Microsoft Purview (Gov), Unity Catalog
 
-### Security & Compliance
+### 🔒 Security & Compliance
 - **Identity**: Azure AD (Gov), Conditional Access, PIM
 - **Secrets**: Key Vault with HSM backing
 - **Networking**: Azure Firewall, Private Link, NSGs
 - **Monitoring**: Azure Monitor, Log Analytics, Microsoft Sentinel (Gov)
 
-### Development Tools
+### 🚀 Development Tools
 - **Data Modeling**: dbt (1.7+), Great Expectations
 - **Version Control**: Azure DevOps (Gov) or GitHub Enterprise
 - **CI/CD**: Azure Pipelines with Gov agent pools
@@ -387,7 +425,7 @@ graph TD
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Tribal Health README](README.md) — Deployment guide, quick start, and analytics scenarios
 - [Platform Architecture](../../docs/ARCHITECTURE.md) — Core CSA platform architecture

@@ -1,34 +1,41 @@
+[Home](../README.md) > [Docs](./) > **Getting Started**
+
 # Getting Started with CSA-in-a-Box
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** New Users
 
-## Table of Contents
+> [!NOTE]
+> **Quick Summary**: Prerequisites and deployment walkthrough for CSA-in-a-Box — clone, configure parameter files for 4 Azure subscriptions, deploy ALZ → DMLZ → DLZ in order, then layer on platform services, data portals, and vertical examples (USDA, DOT, USPS, NOAA, EPA, and more).
 
-- [Prerequisites](#prerequisites)
+## 📑 Table of Contents
+
+- [📎 Prerequisites](#-prerequisites)
   - [Azure Requirements](#azure-requirements)
   - [Local Tools](#local-tools)
   - [Azure RBAC Permissions](#azure-rbac-permissions)
-- [Quick Start (30 minutes)](#quick-start-30-minutes)
+- [🚀 Quick Start (30 minutes)](#-quick-start-30-minutes)
   - [Step 1: Clone and Setup](#step-1-clone-and-setup)
   - [Step 2: Configure Parameters](#step-2-configure-parameters)
   - [Step 3: Deploy Azure Landing Zone (Foundation)](#step-3-deploy-azure-landing-zone-foundation)
   - [Step 4: Deploy Data Management Landing Zone](#step-4-deploy-data-management-landing-zone)
   - [Step 5: Deploy Data Landing Zone](#step-5-deploy-data-landing-zone)
   - [Step 6: Verify Deployment](#step-6-verify-deployment)
-- [Deployment Order](#deployment-order)
-- [Common Issues](#common-issues)
-- [Platform Services](#platform-services)
-- [Data Onboarding Portal](#data-onboarding-portal)
+- [📦 Deployment Order](#-deployment-order)
+- [⚠️ Common Issues](#️-common-issues)
+- [🏗️ Platform Services](#️-platform-services)
+- [🌐 Data Onboarding Portal](#-data-onboarding-portal)
   - [Choosing a Frontend](#choosing-a-frontend)
-- [Vertical Examples](#vertical-examples)
+- [📊 Vertical Examples](#-vertical-examples)
   - [Available Verticals](#available-verticals)
   - [Running a Vertical Example](#running-a-vertical-example)
-- [Azure Government Deployment](#azure-government-deployment)
+- [🏛️ Azure Government Deployment](#️-azure-government-deployment)
   - [Quick Start (Gov)](#quick-start-gov)
-- [Quick Links](#quick-links)
-- [Next Steps](#next-steps)
+- [🔗 Quick Links](#-quick-links)
+- [➡️ Next Steps](#️-next-steps)
 
-## Prerequisites
+---
+
+## 📎 Prerequisites
 
 ### Azure Requirements
 - **4 Azure Subscriptions**: Management, Connectivity, Data Management (DMLZ), Data Landing Zone (DLZ)
@@ -52,7 +59,9 @@ The deploying identity needs:
 - **Contributor** on all other subscriptions
 - **User Access Administrator** for RBAC assignments
 
-## Quick Start (30 minutes)
+---
+
+## 🚀 Quick Start (30 minutes)
 
 ### Step 1: Clone and Setup
 ```bash
@@ -73,10 +82,10 @@ cp deploy/bicep/DLZ/params.dev.json deploy/bicep/DLZ/params.YOUR_ENV.json
 ```
 
 Edit each file and fill in your Azure-specific values:
-- Subscription IDs
-- VNet/Subnet resource IDs
-- Private DNS Zone configuration
-- Storage account names (must be globally unique)
+- [ ] Subscription IDs
+- [ ] VNet/Subnet resource IDs
+- [ ] Private DNS Zone configuration
+- [ ] Storage account names (must be globally unique)
 
 ### Step 3: Deploy Azure Landing Zone (Foundation)
 ```bash
@@ -121,19 +130,22 @@ az databricks workspace list -o table
 az storage account list --query "[?tags.Project]" -o table
 ```
 
-## Deployment Order
+---
 
-```text
-1. Landing Zone (ALZ)     → Management + Connectivity subscriptions
-       ↓
-2. DMLZ                   → Data Management subscription (Purview, Key Vault)
-       ↓
-3. DLZ                    → Data Landing Zone subscription (per domain)
+## 📦 Deployment Order
+
+```mermaid
+graph TD
+    A["1. Landing Zone (ALZ)<br/>Management + Connectivity"] --> B["2. DMLZ<br/>Data Management<br/>(Purview, Key Vault)"]
+    B --> C["3. DLZ<br/>Data Landing Zone<br/>(per domain)"]
 ```
 
-**Important**: Each layer depends on the previous one. Deploy in order.
+> [!IMPORTANT]
+> Each layer depends on the previous one. Deploy in order.
 
-## Common Issues
+---
+
+## ⚠️ Common Issues
 
 | Error | Cause | Fix |
 |-------|-------|-----|
@@ -143,7 +155,9 @@ az storage account list --query "[?tags.Project]" -o table
 | `RoleAssignmentExists` | Re-running deployment | Safe to ignore — assignment already exists |
 | `AuthorizationFailed` | Insufficient permissions | Verify you have Contributor on the target subscription |
 
-## Platform Services
+---
+
+## 🏗️ Platform Services
 
 After deploying the landing zones, you can layer on platform services that
 replicate Microsoft Fabric capabilities using Azure PaaS. These live in
@@ -163,7 +177,9 @@ replicate Microsoft Fabric capabilities using Azure PaaS. These live in
 
 See [PLATFORM_SERVICES.md](PLATFORM_SERVICES.md) for detailed deployment instructions.
 
-## Data Onboarding Portal
+---
+
+## 🌐 Data Onboarding Portal
 
 The `portal/` directory contains four implementations of an autonomous data
 onboarding portal — each with a different frontend but sharing the same FastAPI
@@ -192,7 +208,9 @@ cd ../react-webapp
 npm install && npm run dev
 ```
 
-## Vertical Examples
+---
+
+## 📊 Vertical Examples
 
 The `examples/` directory contains 9 vertical-specific implementations plus a
 generic IoT streaming pattern. Each vertical includes seed data, dbt models,
@@ -234,7 +252,9 @@ dbt test
 
 See each vertical's `README.md` and `ARCHITECTURE.md` for detailed instructions.
 
-## Azure Government Deployment
+---
+
+## 🏛️ Azure Government Deployment
 
 CSA-in-a-Box is fully compatible with Azure Government (FedRAMP High, IL4, IL5).
 Government-specific templates live in `deploy/bicep/gov/`.
@@ -258,15 +278,18 @@ az deployment sub create \
   --parameters deploy/bicep/gov/params.gov-dev.json
 ```
 
-Key differences for Government:
-- All endpoints use `.us` / `.usgovcloudapi.net` instead of `.com`
-- Compliance tags are automatically applied (FedRAMP, FISMA, NIST 800-53)
-- Microsoft Fabric is not available — this repo IS the alternative
+> [!NOTE]
+> Key differences for Government:
+> - All endpoints use `.us` / `.usgovcloudapi.net` instead of `.com`
+> - Compliance tags are automatically applied (FedRAMP, FISMA, NIST 800-53)
+> - Microsoft Fabric is not available — this repo IS the alternative
 
 See [GOV_SERVICE_MATRIX.md](GOV_SERVICE_MATRIX.md) for the full service
 availability matrix.
 
-## Quick Links
+---
+
+## 🔗 Quick Links
 
 | Resource | Link |
 |----------|------|
@@ -280,20 +303,22 @@ availability matrix.
 | Contributing Guide | [CONTRIBUTING.md](../CONTRIBUTING.md) |
 | Changelog | [CHANGELOG.md](../CHANGELOG.md) |
 
-## Next Steps
+---
 
-1. **Configure dbt**: Edit `domains/shared/dbt/profiles.yml` with your Databricks connection
-2. **Set up ADF pipelines**: Import pipeline definitions from `domains/shared/pipelines/adf/`
-3. **Apply RBAC**: Run `governance/rbac/apply-rbac.ps1` to set up access control
-4. **Data Quality**: Configure `governance/dataquality/quality-rules.yaml` for your tables
-5. **Deploy Platform Services**: Follow [PLATFORM_SERVICES.md](PLATFORM_SERVICES.md) for Fabric-equivalent capabilities
-6. **Try a Vertical**: Pick any vertical from `examples/` and run its pipeline end-to-end
-7. **Deploy the Portal**: Choose a frontend from `portal/` and connect it to the shared backend
-8. **Azure Government**: Use `deploy/bicep/gov/` for FedRAMP-compliant deployments
+## ➡️ Next Steps
+
+- [ ] **Configure dbt**: Edit `domains/shared/dbt/profiles.yml` with your Databricks connection
+- [ ] **Set up ADF pipelines**: Import pipeline definitions from `domains/shared/pipelines/adf/`
+- [ ] **Apply RBAC**: Run `governance/rbac/apply-rbac.ps1` to set up access control
+- [ ] **Data Quality**: Configure `governance/dataquality/quality-rules.yaml` for your tables
+- [ ] **Deploy Platform Services**: Follow [PLATFORM_SERVICES.md](PLATFORM_SERVICES.md) for Fabric-equivalent capabilities
+- [ ] **Try a Vertical**: Pick any vertical from `examples/` and run its pipeline end-to-end
+- [ ] **Deploy the Portal**: Choose a frontend from `portal/` and connect it to the shared backend
+- [ ] **Azure Government**: Use `deploy/bicep/gov/` for FedRAMP-compliant deployments
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Quick Start](QUICKSTART.md) — 60-minute hands-on tutorial
 - [Architecture](ARCHITECTURE.md) — Comprehensive architecture reference

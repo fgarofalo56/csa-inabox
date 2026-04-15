@@ -1,28 +1,35 @@
+[Home](../README.md) > [Docs](./) > **Platform Services**
+
 # Platform Services Guide
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Architects
+
+> [!NOTE]
+> **Quick Summary**: Detailed guide to 10 platform services that replicate Microsoft Fabric capabilities using Azure PaaS — OneLake pattern, Data Activator, Direct Lake, Data Marketplace, Governance Framework, Multi-Synapse, Metadata Framework, AI Integration, Shared Services, and OSS alternatives for Government gaps.
 
 Platform services are the Fabric-equivalent capabilities that extend the base
 landing zones. Each service is independently deployable and has its own README
 with detailed usage instructions.
 
-## Table of Contents
+## 📑 Table of Contents
 
-- [Services Overview](#services-overview)
-- [1. OneLake Pattern](#1-onelake-pattern)
-- [2. Data Activator](#2-data-activator)
-- [3. Direct Lake](#3-direct-lake)
-- [4. Data Marketplace](#4-data-marketplace)
-- [5. Governance Framework](#5-governance-framework)
-- [6. Multi-Synapse](#6-multi-synapse)
-- [7. Metadata Framework](#7-metadata-framework)
-- [8. AI Integration](#8-ai-integration)
-- [9. Shared Services](#9-shared-services)
-- [10. OSS Alternatives](#10-oss-alternatives)
-- [Service Dependency Map](#service-dependency-map)
-- [Configuration](#configuration)
+- [🏗️ Services Overview](#️-services-overview)
+- [1. 🗄️ OneLake Pattern](#1-️-onelake-pattern)
+- [2. ⚡ Data Activator](#2--data-activator)
+- [3. 📊 Direct Lake](#3--direct-lake)
+- [4. 🛒 Data Marketplace](#4--data-marketplace)
+- [5. 📋 Governance Framework](#5--governance-framework)
+- [6. 🔄 Multi-Synapse](#6--multi-synapse)
+- [7. ⚙️ Metadata Framework](#7-️-metadata-framework)
+- [8. 🤖 AI Integration](#8--ai-integration)
+- [9. 🔧 Shared Services](#9--shared-services)
+- [10. 🔓 OSS Alternatives](#10--oss-alternatives)
+- [📦 Service Dependency Map](#-service-dependency-map)
+- [⚙️ Configuration](#️-configuration)
 
-## Services Overview
+---
+
+## 🏗️ Services Overview
 
 ```mermaid
 graph LR
@@ -57,7 +64,9 @@ graph LR
     GV --> OL
 ```
 
-## 1. OneLake Pattern
+---
+
+## 1. 🗄️ OneLake Pattern
 
 **Location:** `platform/onelake-pattern/`
 **Fabric Equivalent:** OneLake
@@ -84,7 +93,7 @@ az deployment group create \
 
 ---
 
-## 2. Data Activator
+## 2. ⚡ Data Activator
 
 **Location:** `platform/data-activator/`
 **Fabric Equivalent:** Data Activator
@@ -110,7 +119,7 @@ az deployment group create \
 
 ---
 
-## 3. Direct Lake
+## 3. 📊 Direct Lake
 
 **Location:** `platform/direct-lake/`
 **Fabric Equivalent:** Direct Lake mode in Power BI
@@ -138,7 +147,7 @@ databricks sql-endpoints create \
 
 ---
 
-## 4. Data Marketplace
+## 4. 🛒 Data Marketplace
 
 **Location:** `platform/data_marketplace/`
 **Fabric Equivalent:** Data Sharing / OneLake Data Hub
@@ -169,7 +178,7 @@ python platform/data_marketplace/api/marketplace_api.py --init
 
 ---
 
-## 5. Governance Framework
+## 5. 📋 Governance Framework
 
 **Location:** `platform/governance/`
 **Fabric Equivalent:** Purview-integrated governance
@@ -196,7 +205,7 @@ python scripts/purview/bootstrap_catalog.py \
 
 ---
 
-## 6. Multi-Synapse
+## 6. 🔄 Multi-Synapse
 
 **Location:** `platform/multi-synapse/`
 **Fabric Equivalent:** Multi-workspace Synapse
@@ -222,7 +231,7 @@ az deployment group create \
 
 ---
 
-## 7. Metadata Framework
+## 7. ⚙️ Metadata Framework
 
 **Location:** `platform/metadata-framework/`
 **Fabric Equivalent:** Metadata-driven Data Factory pipelines
@@ -260,7 +269,7 @@ source:
 
 ---
 
-## 8. AI Integration
+## 8. 🤖 AI Integration
 
 **Location:** `platform/ai_integration/`
 **Fabric Equivalent:** Copilot / AI features
@@ -289,7 +298,7 @@ export AZURE_OPENAI_DEPLOYMENT=gpt-4
 
 ---
 
-## 9. Shared Services
+## 9. 🔧 Shared Services
 
 **Location:** `platform/shared-services/`
 **Fabric Equivalent:** Shared utility functions
@@ -323,7 +332,7 @@ az deployment group create \
 
 ---
 
-## 10. OSS Alternatives
+## 10. 🔓 OSS Alternatives
 
 **Location:** `platform/oss-alternatives/`
 **Fabric Equivalent:** N/A (fills Azure Government gaps)
@@ -352,24 +361,26 @@ helm install keycloak platform/oss-alternatives/keycloak/chart \
 
 ---
 
-## Service Dependency Map
+## 📦 Service Dependency Map
 
 Deploy platform services in this recommended order:
 
-```text
-1. OneLake Pattern         (foundation — storage + metadata)
-2. Shared Services         (reusable functions)
-3. Governance Framework    (classification + lineage)
-4. Metadata Framework      (auto-pipeline generation)
-5. Data Marketplace        (discovery + access)
-6. AI Integration          (enrichment + RAG)
-7. Data Activator          (alerting + automation)
-8. Direct Lake             (Power BI consumption)
-9. Multi-Synapse           (if multi-org needed)
-10. OSS Alternatives       (if Gov gaps exist)
-```
+| Order | Service | Foundation |
+|-------|---------|-----------|
+| 1 | OneLake Pattern | Storage + metadata |
+| 2 | Shared Services | Reusable functions |
+| 3 | Governance Framework | Classification + lineage |
+| 4 | Metadata Framework | Auto-pipeline generation |
+| 5 | Data Marketplace | Discovery + access |
+| 6 | AI Integration | Enrichment + RAG |
+| 7 | Data Activator | Alerting + automation |
+| 8 | Direct Lake | Power BI consumption |
+| 9 | Multi-Synapse | If multi-org needed |
+| 10 | OSS Alternatives | If Gov gaps exist |
 
-## Configuration
+---
+
+## ⚙️ Configuration
 
 All platform services read shared configuration from:
 
@@ -381,7 +392,7 @@ See the root [`.env.example`](../.env.example) for all required environment vari
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Architecture](ARCHITECTURE.md) — Comprehensive architecture reference
 - [Multi-Region DR](DR.md) — Multi-region disaster recovery runbook

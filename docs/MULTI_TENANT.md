@@ -1,6 +1,11 @@
+[Home](../README.md) > [Docs](./) > **Multi-Tenant**
+
 # Multi-Tenant Deployment Guide
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Platform Engineers
+
+> [!NOTE]
+> **Quick Summary**: Stamped multi-tenant deployment model for CSA-in-a-Box — resource naming conventions, three data isolation strategies (physical, logical, hybrid), tenant onboarding/offboarding procedures, cost attribution via tags, per-tenant IAM and monitoring, dbt multi-tenant configuration, and decommission runbook.
 
 This guide covers deploying CSA-in-a-Box in a multi-tenant configuration
 where each tenant (customer, business unit, or organizational boundary)
@@ -8,76 +13,68 @@ receives an isolated set of data platform resources. It pairs with the
 standard deployment procedure in [GETTING_STARTED.md](GETTING_STARTED.md)
 and the disaster recovery runbook in [DR.md](DR.md).
 
+> [!IMPORTANT]
 > **Scope:** the CSA-in-a-Box Data Landing Zone (DLZ). The Management,
 > Connectivity, and DMLZ landing zones are shared infrastructure and are
 > deployed once regardless of tenant count.
 
+## 📑 Table of Contents
+
+- [🏗️ 1. Architecture Overview](#️-1-architecture-overview)
+- [📛 2. Resource Naming Convention](#-2-resource-naming-convention)
+- [🔒 3. Data Isolation Strategies](#-3-data-isolation-strategies)
+  - [3.1 Physical Isolation](#31-physical-isolation-recommended-for-regulated-workloads)
+  - [3.2 Logical Isolation](#32-logical-isolation-shared-infrastructure-row-level-filtering)
+  - [3.3 Hybrid](#33-hybrid-separate-storage-shared-compute)
+- [📦 4. Deployment Process](#-4-deployment-process)
+- [💰 5. Cost Attribution via Tags](#-5-cost-attribution-via-tags)
+- [🔑 6. Identity & Access Management per Tenant](#-6-identity--access-management-per-tenant)
+- [📈 7. Monitoring & Alerting per Tenant](#-7-monitoring--alerting-per-tenant)
+- [🗄️ 8. dbt Multi-Tenant Configuration](#️-8-dbt-multi-tenant-configuration)
+- [🚪 9. Offboarding / Tenant Decommission](#-9-offboarding--tenant-decommission)
+- [📋 10. Quick Reference](#-10-quick-reference)
+
 ---
 
-## Table of Contents
-
-- [1. Architecture Overview](#1-architecture-overview)
-- [2. Resource Naming Convention](#2-resource-naming-convention)
-  - [Examples](#examples)
-  - [Naming constraints](#naming-constraints)
-- [3. Data Isolation Strategies](#3-data-isolation-strategies)
-  - [3.1 Physical Isolation (Recommended for regulated workloads)](#31-physical-isolation-recommended-for-regulated-workloads)
-  - [3.2 Logical Isolation (Shared infrastructure, row-level filtering)](#32-logical-isolation-shared-infrastructure-row-level-filtering)
-  - [3.3 Hybrid (Separate storage, shared compute)](#33-hybrid-separate-storage-shared-compute)
-- [4. Deployment Process](#4-deployment-process)
-  - [4.1 Prerequisites](#41-prerequisites)
-  - [4.2 Creating the Parameter File](#42-creating-the-parameter-file)
-  - [4.3 Deploying the Tenant Stamp](#43-deploying-the-tenant-stamp)
-  - [4.4 Post-Deployment RBAC](#44-post-deployment-rbac)
-  - [4.5 Tenant Onboarding Checklist](#45-tenant-onboarding-checklist)
-- [5. Cost Attribution via Tags](#5-cost-attribution-via-tags)
-  - [Cost Management queries](#cost-management-queries)
-  - [Chargeback report](#chargeback-report)
-- [6. Identity & Access Management per Tenant](#6-identity--access-management-per-tenant)
-  - [6.1 Azure AD Group Structure](#61-azure-ad-group-structure)
-  - [6.2 Cross-Tenant Access Controls](#62-cross-tenant-access-controls)
-  - [6.3 Managed Identity Isolation](#63-managed-identity-isolation)
-- [7. Monitoring & Alerting per Tenant](#7-monitoring--alerting-per-tenant)
-  - [7.1 Log Analytics Strategy](#71-log-analytics-strategy)
-  - [7.2 Tenant-Specific Alerts](#72-tenant-specific-alerts)
-  - [7.3 Cross-Tenant Dashboard](#73-cross-tenant-dashboard)
-- [8. dbt Multi-Tenant Configuration](#8-dbt-multi-tenant-configuration)
-  - [8.1 Per-Tenant dbt Profiles](#81-per-tenant-dbt-profiles)
-  - [8.2 Running dbt for a Specific Tenant](#82-running-dbt-for-a-specific-tenant)
-  - [8.3 Tenant Filter Macro](#83-tenant-filter-macro)
-- [9. Offboarding / Tenant Decommission](#9-offboarding--tenant-decommission)
-  - [9.1 Pre-Decommission Checklist](#91-pre-decommission-checklist)
-  - [9.2 Decommission Procedure](#92-decommission-procedure)
-  - [9.3 Data Retention](#93-data-retention)
-  - [9.4 Post-Decommission](#94-post-decommission)
-- [10. Quick Reference](#10-quick-reference)
-
-## 1. Architecture Overview
+## 🏗️ 1. Architecture Overview
 
 CSA-in-a-Box uses a **stamped deployment model** for multi-tenancy. Each
 tenant receives a complete, independent deployment ("stamp") of the DLZ
 Bicep templates. Stamps are identical in structure but isolated in
 resources, networking, and identity.
 
-```text
-┌──────────────────────────────────────────────────────────────┐
-│                    Shared Infrastructure                      │
-│  Management Sub │ Connectivity Sub │ DMLZ Sub                │
-│  (Policy, RBAC)   (Hub VNet, DNS)    (Purview, Catalog)      │
-└──────────────────────────────────────────────────────────────┘
-        │                    │                    │
-        ▼                    ▼                    ▼
-┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
-│  Tenant A (DLZ) │  │  Tenant B (DLZ) │  │  Tenant C (DLZ) │
-│  ctso-dlz-prod  │  │  fbkn-dlz-prod  │  │  acme-dlz-prod  │
-│  ─────────────  │  │  ─────────────  │  │  ─────────────  │
-│  Storage        │  │  Storage        │  │  Storage        │
-│  Cosmos DB      │  │  Cosmos DB      │  │  Cosmos DB      │
-│  Databricks     │  │  Databricks     │  │  Databricks     │
-│  Data Factory   │  │  Data Factory   │  │  Data Factory   │
-│  Event Hubs     │  │  Event Hubs     │  │  Event Hubs     │
-│  ...            │  │  ...            │  │  ...            │
-└─────────────────┘  └─────────────────┘  └─────────────────┘
+```mermaid
+graph TB
+    subgraph Shared["Shared Infrastructure"]
+        M["Management Sub<br/>(Policy, RBAC)"]
+        C["Connectivity Sub<br/>(Hub VNet, DNS)"]
+        D["DMLZ Sub<br/>(Purview, Catalog)"]
+    end
+
+    Shared --> TA
+    Shared --> TB
+    Shared --> TC
+
+    subgraph TA["Tenant A (DLZ)<br/>ctso-dlz-prod"]
+        TA1["Storage"]
+        TA2["Cosmos DB"]
+        TA3["Databricks"]
+        TA4["Data Factory"]
+    end
+
+    subgraph TB["Tenant B (DLZ)<br/>fbkn-dlz-prod"]
+        TB1["Storage"]
+        TB2["Cosmos DB"]
+        TB3["Databricks"]
+        TB4["Data Factory"]
+    end
+
+    subgraph TC["Tenant C (DLZ)<br/>acme-dlz-prod"]
+        TC1["Storage"]
+        TC2["Cosmos DB"]
+        TC3["Databricks"]
+        TC4["Data Factory"]
+    end
 ```
 
 **Why stamps?** Physical isolation provides the strongest security,
@@ -88,7 +85,7 @@ any scenario where a shared-nothing architecture is required.
 
 ---
 
-## 2. Resource Naming Convention
+## 📛 2. Resource Naming Convention
 
 All tenant resources follow a consistent naming pattern that embeds the
 tenant prefix, environment, service name, and region:
@@ -123,16 +120,17 @@ propagates through all resource group and resource names automatically.
 
 ### Naming constraints
 
-- **Storage accounts**: max 24 characters, lowercase alphanumeric only.
-  The Bicep module truncates and sanitizes names automatically.
-- **Cosmos DB accounts**: max 44 characters, lowercase alphanumeric and
-  hyphens only.
-- **ADX clusters**: max 22 characters, lowercase alphanumeric only.
-  Keep tenant prefixes short.
+> [!WARNING]
+> - **Storage accounts**: max 24 characters, lowercase alphanumeric only.
+>   The Bicep module truncates and sanitizes names automatically.
+> - **Cosmos DB accounts**: max 44 characters, lowercase alphanumeric and
+>   hyphens only.
+> - **ADX clusters**: max 22 characters, lowercase alphanumeric only.
+>   Keep tenant prefixes short.
 
 ---
 
-## 3. Data Isolation Strategies
+## 🔒 3. Data Isolation Strategies
 
 CSA-in-a-Box supports three isolation strategies. Choose based on your
 compliance requirements, cost tolerance, and operational complexity.
@@ -155,9 +153,6 @@ stamped model described in this guide.
 - Tenants that require dedicated encryption keys (CMK per tenant)
 - Contractual obligations for physical separation
 
-**Implementation:** Use `params.multi-tenant.json` as the template.
-Each tenant gets their own parameter file and deployment.
-
 ### 3.2 Logical Isolation (Shared infrastructure, row-level filtering)
 
 All tenants share the same Azure resources. Data is partitioned by a
@@ -168,29 +163,11 @@ All tenants share the same Azure resources. Data is partitioned by a
 - Data separated by partition key / folder structure / row-level filters
 - Lower cost (shared infrastructure amortized across tenants)
 - Higher operational complexity (RBAC, row-level security, auditing)
-- Requires careful query-layer enforcement
 
 **When to use:**
 - Internal business units within the same organization
 - Non-regulated workloads with low cross-tenant risk
 - Cost-sensitive deployments with many small tenants
-
-**Implementation:** Use the standard `params.prod.json` and add
-`tenant_id` columns to all data models. Use the `tenant_filter` dbt
-macro for query-time filtering:
-
-```sql
--- In a dbt model
-SELECT *
-FROM {{ ref('stg_orders') }}
-WHERE 1=1
-  {{ tenant_filter() }}
-```
-
-Run dbt with the tenant variable:
-```bash
-dbt run --vars '{"tenant_id": "contoso"}'
-```
 
 **Storage layout for logical isolation:**
 ```text
@@ -217,15 +194,12 @@ Tenants get dedicated storage and databases but share compute resources
 **When to use:**
 - Tenants that need data isolation but not compute isolation
 - Cost-conscious deployments that still need strong data boundaries
-- Scenarios where compute is stateless and tenant context is injected
 
 ---
 
-## 4. Deployment Process
+## 📦 4. Deployment Process
 
 ### 4.1 Prerequisites
-
-Before deploying a new tenant stamp:
 
 - [ ] Tenant subscription provisioned (or resource groups designated)
 - [ ] Spoke VNet deployed and peered to the hub
@@ -269,8 +243,6 @@ az deployment sub show \
 
 ### 4.4 Post-Deployment RBAC
 
-Assign the tenant admin group the required roles:
-
 ```bash
 TENANT_ADMIN_GROUP_ID="<AZURE_AD_GROUP_OBJECT_ID>"
 
@@ -308,11 +280,10 @@ az role assignment create \
 
 ---
 
-## 5. Cost Attribution via Tags
+## 💰 5. Cost Attribution via Tags
 
 Every resource in a tenant stamp carries tags for cost tracking and
-chargeback. The following tags are applied automatically through the
-Bicep `tagsDefault` variable and per-module tag overrides:
+chargeback:
 
 | Tag Key | Example Value | Purpose |
 |---|---|---|
@@ -324,8 +295,6 @@ Bicep `tagsDefault` variable and per-module tag overrides:
 | `PrimaryContact` | `platform-team@contoso.com` | Tenant contact |
 
 ### Cost Management queries
-
-Use Azure Cost Management to filter by tenant tags:
 
 ```kusto
 // Azure Resource Graph query — cost by tenant
@@ -339,8 +308,6 @@ Resources
 ```
 
 ### Chargeback report
-
-Generate monthly chargeback reports per tenant:
 
 ```bash
 # Export costs filtered by tenant tag
@@ -356,11 +323,9 @@ az costmanagement export create \
 
 ---
 
-## 6. Identity & Access Management per Tenant
+## 🔑 6. Identity & Access Management per Tenant
 
 ### 6.1 Azure AD Group Structure
-
-Create the following Azure AD groups per tenant:
 
 | Group Name | Role | Scope |
 |---|---|---|
@@ -394,7 +359,7 @@ from the tenant's own module outputs.
 
 ---
 
-## 7. Monitoring & Alerting per Tenant
+## 📈 7. Monitoring & Alerting per Tenant
 
 ### 7.1 Log Analytics Strategy
 
@@ -409,8 +374,6 @@ workspace-scoped.
 
 ### 7.2 Tenant-Specific Alerts
 
-Create metric alerts scoped to the tenant's resource groups:
-
 ```bash
 # Storage availability alert for tenant contoso
 az monitor metrics alert create \
@@ -424,9 +387,6 @@ az monitor metrics alert create \
 ```
 
 ### 7.3 Cross-Tenant Dashboard
-
-For platform operators who manage all tenants, create an Azure Dashboard
-that aggregates health across all tenant stamps:
 
 ```kusto
 // Azure Resource Graph — all tenant resources with health
@@ -447,11 +407,9 @@ Resources
 
 ---
 
-## 8. dbt Multi-Tenant Configuration
+## 🗄️ 8. dbt Multi-Tenant Configuration
 
 ### 8.1 Per-Tenant dbt Profiles
-
-Create a dbt profile per tenant in `profiles.yml`:
 
 ```yaml
 # domains/shared/dbt/profiles.yml
@@ -491,9 +449,17 @@ provides optional row-level filtering. It is a no-op when `tenant_id` is
 not set, making all models portable across single-tenant and multi-tenant
 deployments.
 
+```sql
+-- In a dbt model
+SELECT *
+FROM {{ ref('stg_orders') }}
+WHERE 1=1
+  {{ tenant_filter() }}
+```
+
 ---
 
-## 9. Offboarding / Tenant Decommission
+## 🚪 9. Offboarding / Tenant Decommission
 
 ### 9.1 Pre-Decommission Checklist
 
@@ -543,10 +509,11 @@ git commit -m "chore: decommission tenant contoso"
 
 ### 9.3 Data Retention
 
-After decommission, Cosmos DB data is retained for the soft-delete
-period (90 days with purge protection). Storage account data is
-available for 30 days via soft-delete. After these windows expire,
-data is irrecoverable.
+> [!WARNING]
+> After decommission, Cosmos DB data is retained for the soft-delete
+> period (90 days with purge protection). Storage account data is
+> available for 30 days via soft-delete. After these windows expire,
+> data is irrecoverable.
 
 For regulated workloads, export data to a long-term archive storage
 account before decommissioning the tenant stamp.
@@ -563,7 +530,7 @@ account before decommissioning the tenant stamp.
 
 ---
 
-## 10. Quick Reference
+## 📋 10. Quick Reference
 
 | Scenario | Guide |
 |---|---|
@@ -578,7 +545,7 @@ account before decommissioning the tenant stamp.
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [MULTI_REGION.md](MULTI_REGION.md) — Multi-region deployment for high availability
 - [COST_MANAGEMENT.md](COST_MANAGEMENT.md) — Cost estimation, budgets, and FinOps practices

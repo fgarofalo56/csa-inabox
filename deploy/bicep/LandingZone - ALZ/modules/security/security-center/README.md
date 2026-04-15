@@ -2,7 +2,7 @@
 
 This module deploys an Azure Security Center (Defender for Cloud) Configuration.
 
-## Navigation
+## 📋 Navigation
 
 - [Resource Types](#Resource-Types)
 - [Usage examples](#Usage-examples)
@@ -10,7 +10,7 @@ This module deploys an Azure Security Center (Defender for Cloud) Configuration.
 - [Outputs](#Outputs)
 - [Data Collection](#Data-Collection)
 
-## Resource Types
+## 🔌 Resource Types
 
 | Resource Type | API Version |
 | :-- | :-- |
@@ -21,7 +21,7 @@ This module deploys an Azure Security Center (Defender for Cloud) Configuration.
 | `Microsoft.Security/securityContacts` | [2017-08-01-preview](https://learn.microsoft.com/en-us/azure/templates/Microsoft.Security/2017-08-01-preview/securityContacts) |
 | `Microsoft.Security/workspaceSettings` | [2017-08-01-preview](https://learn.microsoft.com/en-us/azure/templates/Microsoft.Security/2017-08-01-preview/workspaceSettings) |
 
-## Usage examples
+## 💡 Usage examples
 
 The following section provides usage examples for the module, which were used to validate and deploy the module successfully. For a full reference, please review the module's test folder in its repository.
 
@@ -211,7 +211,7 @@ module securityCenter 'br/public:avm/ptn/security/security-center:<version>' = {
 </details>
 <p>
 
-## Parameters
+## ⚙️ Parameters
 
 **Required parameters**
 
@@ -508,19 +508,19 @@ The pricing tier value for VMs. Azure Security Center is provided in two pricing
   ]
   ```
 
-## Outputs
+## 📋 Outputs
 
 | Output | Type | Description |
 | :-- | :-- | :-- |
 | `name` | string | The name of the security center. |
 | `workspaceResourceId` | string | The resource ID of the used log analytics workspace. |
 
-## Data Collection
+## 🗄️ Data Collection
 
-The software may collect information about you and your use of the software and send it to Microsoft. Microsoft may use this information to provide services and improve our products and services. You may turn off the telemetry as described in the [repository](https://aka.ms/avm/telemetry). There are also some features in the software that may enable you and Microsoft to collect data from users of your applications. If you use these features, you must comply with applicable law, including providing appropriate notices to users of your applications together with a copy of Microsoft’s privacy statement. Our privacy statement is located at <https://go.microsoft.com/fwlink/?LinkID=824704>. You can learn more about data collection and use in the help documentation and our privacy statement. Your use of the software operates as your consent to these practices.
+The software may collect information about you and your use of the software and send it to Microsoft. Microsoft may use this information to provide services and improve our products and services. You may turn off the telemetry as described in the [repository](https://aka.ms/avm/telemetry). There are also some features in the software that may enable you and Microsoft to collect data from users of your applications. If you use these features, you must comply with applicable law, including providing appropriate notices to users of your applications together with a copy of Microsoft's privacy statement. Our privacy statement is located at <https://go.microsoft.com/fwlink/?LinkID=824704>. You can learn more about data collection and use in the help documentation and our privacy statement. Your use of the software operates as your consent to these practices.
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [IaC & CI/CD Best Practices](../../../../../../docs/IaC-CICD-Best-Practices.md) - Deployment pipeline guidance

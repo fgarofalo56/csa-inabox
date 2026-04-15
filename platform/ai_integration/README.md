@@ -1,14 +1,15 @@
+[← Platform Components](../README.md)
+
 # AI Integration — Data Landing Zone AI Enrichment
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Platform Engineers
 
+> [!NOTE]
+> **TL;DR:** Provides patterns for integrating Azure AI services (OpenAI, AI Search, ML, Document Intelligence) with CSA-in-a-Box data landing zones for enrichment, classification, RAG, embeddings, and model serving — all GA in Azure Government.
+
 ## Table of Contents
 
 - [Capabilities](#capabilities)
-  - [RAG Pattern — Document Intelligence](#1-rag-pattern--document-intelligence)
-  - [Embeddings Pipeline](#2-embeddings-pipeline)
-  - [AI-Enriched Data Pipelines](#3-ai-enriched-data-pipelines)
-  - [Model Serving](#4-model-serving)
 - [Directory Structure](#directory-structure)
 - [Integration with Data Landing Zones](#integration-with-data-landing-zones)
 - [Azure Government](#azure-government)
@@ -19,20 +20,20 @@ This directory provides patterns for integrating Azure AI services with the
 CSA-in-a-Box data platform. Every data landing zone can leverage AI for
 enrichment, classification, and analysis.
 
-## Capabilities
+---
 
-### 1. RAG Pattern — Document Intelligence
+## ✨ Capabilities
+
+### 🔌 1. RAG Pattern — Document Intelligence
 
 Retrieve-Augment-Generate over your data lake:
 
-```text
-Documents (ADLS)  →  Azure AI Document Intelligence  →  Chunks
-                          ↓
-                    Text Embedding (Azure OpenAI)
-                          ↓
-                    Vector Store (AI Search / pgvector)
-                          ↓
-                    Query Engine (Azure OpenAI GPT-4)
+```mermaid
+graph LR
+    A[Documents in ADLS] --> B[Azure AI Document Intelligence]
+    B --> C[Text Embedding via Azure OpenAI]
+    C --> D[Vector Store: AI Search / pgvector]
+    D --> E[Query Engine: Azure OpenAI GPT-4]
 ```
 
 **Use Cases:**
@@ -40,7 +41,7 @@ Documents (ADLS)  →  Azure AI Document Intelligence  →  Chunks
 - Search across unstructured data in the data lake
 - Auto-generate data documentation from schema metadata
 
-### 2. Embeddings Pipeline
+### 🗄️ 2. Embeddings Pipeline
 
 Convert any text data to vector embeddings for similarity search:
 
@@ -54,7 +55,7 @@ embedding_config:
   target: ai-search-index or pgvector
 ```
 
-### 3. AI-Enriched Data Pipelines
+### ⚡ 3. AI-Enriched Data Pipelines
 
 Inject AI capabilities into your ADF/Databricks pipelines:
 
@@ -68,7 +69,7 @@ Inject AI capabilities into your ADF/Databricks pipelines:
 | Sentiment | Azure AI Language | Customer feedback | Sentiment scores |
 | Anomaly Detection | Azure AI Anomaly Detector | Time series | Anomaly flags |
 
-### 4. Model Serving
+### 🔌 4. Model Serving
 
 Deploy ML models as Azure ML endpoints per data domain:
 
@@ -92,7 +93,9 @@ Deploy ML models as Azure ML endpoints per data domain:
 └──────────────────────────────────────────────────────┘
 ```
 
-## Directory Structure
+---
+
+## 📁 Directory Structure
 
 ```text
 platform/ai_integration/
@@ -122,9 +125,22 @@ platform/ai_integration/
     └── params.json              # Deployment parameters
 ```
 
-## Integration with Data Landing Zones
+---
+
+## 🏗️ Integration with Data Landing Zones
 
 AI services integrate at three points in the data pipeline:
+
+```mermaid
+graph LR
+    A[Bronze] -->|Enrichment| B[Silver]
+    B -->|Analysis| C[Gold]
+    C -->|Serving| D[Consumer]
+
+    A1[PII detection<br/>Entity extraction<br/>Classification] -.-> A
+    B1[ML inference<br/>Predictions<br/>Scoring] -.-> B
+    C1[RAG queries<br/>NL interfaces<br/>AI dashboards] -.-> C
+```
 
 1. **Bronze → Silver (Enrichment):** PII detection, entity extraction,
    classification applied during data cleansing
@@ -133,16 +149,22 @@ AI services integrate at three points in the data pipeline:
 3. **Gold → Consumer (Serving):** RAG queries, natural language interfaces,
    AI-powered dashboards
 
-## Azure Government
+---
 
-All AI services used here are GA in Azure Government:
+## 🔒 Azure Government
+
+> [!IMPORTANT]
+> All AI services used here are GA in Azure Government.
+
 - Azure OpenAI: GA (GPT-4, embeddings)
 - Azure AI Search: GA
 - Azure ML: GA
 - Azure AI Language: GA
 - Azure AI Document Intelligence: GA
 
-## Quick Start
+---
+
+## 🚀 Quick Start
 
 ```bash
 # Set up AI services
@@ -163,7 +185,7 @@ python rag/query_engine.py \
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Platform Components](../README.md) — Platform component index
 - [Platform Services](../../docs/PLATFORM_SERVICES.md) — Detailed platform service descriptions
