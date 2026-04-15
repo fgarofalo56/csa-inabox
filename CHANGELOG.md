@@ -1,6 +1,6 @@
 # Changelog
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Developers / Contributors
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Developers / Contributors
 
 All notable changes to the CSA-in-a-Box project will be documented in this file.
 
@@ -52,5 +52,5 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Related Documentation
 
-- [README](README.md) - Project overview and quick start
-- [Contributing](CONTRIBUTING.md) - Development guidelines and PR process
+- [README](README.md) — Project overview and quick start
+- [Contributing](CONTRIBUTING.md) — Development guidelines and PR process

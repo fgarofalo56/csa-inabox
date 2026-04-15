@@ -1,6 +1,6 @@
 # DOT Transportation Analytics Platform
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Data Engineers
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers
 
 ## Table of Contents
 - [Overview](#overview)
@@ -424,9 +424,9 @@ This project is licensed under the MIT License. See `LICENSE` file for details.
 
 ## Related Documentation
 
-- [DOT Architecture](ARCHITECTURE.md) - Detailed platform architecture and design decisions
-- [Examples Index](../README.md) - Overview of all CSA-in-a-Box example verticals
-- [Platform Architecture](../../docs/ARCHITECTURE.md) - Core CSA platform architecture
-- [Getting Started Guide](../../docs/GETTING_STARTED.md) - Platform setup and onboarding
-- [Interior Natural Resources](../interior/README.md) - Related federal infrastructure vertical
-- [USPS Postal Operations](../usps/README.md) - Related federal logistics vertical
+- [DOT Architecture](ARCHITECTURE.md) — Detailed platform architecture and design decisions
+- [Examples Index](../README.md) — Overview of all CSA-in-a-Box example verticals
+- [Platform Architecture](../../docs/ARCHITECTURE.md) — Core CSA platform architecture
+- [Getting Started Guide](../../docs/GETTING_STARTED.md) — Platform setup and onboarding
+- [Interior Natural Resources](../interior/README.md) — Related federal infrastructure vertical
+- [USPS Postal Operations](../usps/README.md) — Related federal logistics vertical

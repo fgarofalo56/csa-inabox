@@ -1,6 +1,6 @@
 # Incident Response Runbook — Security Events
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Operations
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Operations
 
 ## Table of Contents
 
@@ -200,12 +200,8 @@ Before any remediation, preserve evidence:
 
 ---
 
-*Last Updated: 2026-04-13*
-
----
-
 ## Related Documentation
 
-- [Troubleshooting](../TROUBLESHOOTING.md) - Common issues and fixes
-- [Log Schema](../LOG_SCHEMA.md) - Structured logging schema reference
-- [Gov Service Matrix](../GOV_SERVICE_MATRIX.md) - Azure Government service availability
+- [Troubleshooting](../TROUBLESHOOTING.md) — Common issues and fixes
+- [Log Schema](../LOG_SCHEMA.md) — Structured logging schema reference
+- [Gov Service Matrix](../GOV_SERVICE_MATRIX.md) — Azure Government service availability

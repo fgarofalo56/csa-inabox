@@ -1,6 +1,6 @@
 # CSA-in-a-Box: Comprehensive Platform Research Report
 
-> **Last Updated:** 2026-04-14 | **Status:** Reference | **Audience:** Architects / Leadership
+> **Last Updated:** 2026-04-15 | **Status:** Reference | **Audience:** Architects / Leadership
 
 **Date:** 2026-04-09
 **Purpose:** Deep research for building a complete Cloud-Scale Analytics / Data Mesh / Data Fabric platform in Azure as an open-source alternative to Microsoft Fabric.
@@ -1161,14 +1161,12 @@ Phase 5: Data Products
      d. dbt transformation models
 ```
 
----
-
 *This report was compiled from Microsoft's official Cloud Adoption Framework documentation, GitHub reference templates, and Azure architecture guidance. The information is current as of April 2026.*
 
 ---
 
 ## Related Documentation
 
-- [ARCHITECTURE.md](../ARCHITECTURE.md) - Platform architecture overview
-- [PLATFORM_SERVICES.md](../PLATFORM_SERVICES.md) - Platform services reference and SKU details
-- [MULTI_REGION.md](../MULTI_REGION.md) - Multi-region deployment for high availability
+- [ARCHITECTURE.md](../ARCHITECTURE.md) — Platform architecture overview
+- [PLATFORM_SERVICES.md](../PLATFORM_SERVICES.md) — Platform services reference and SKU details
+- [MULTI_REGION.md](../MULTI_REGION.md) — Multi-region deployment for high availability

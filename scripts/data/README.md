@@ -1,6 +1,6 @@
 # Data Lifecycle Scripts
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Developers
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Developers
 
 ## Table of Contents
 
@@ -167,5 +167,5 @@ Metadata JSON files are written alongside logs for audit purposes.
 
 ## Related Documentation
 
-- [Getting Started Guide](../../docs/GETTING_STARTED.md) - Platform setup and onboarding
-- [Examples](../../examples/README.md) - Sample data pipelines and use cases
+- [Getting Started Guide](../../docs/GETTING_STARTED.md) — Platform setup and onboarding
+- [Examples](../../examples/README.md) — Sample data pipelines and use cases

@@ -1,6 +1,6 @@
 # Cost Management Guide
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** FinOps / Administrators
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** FinOps / Administrators
 
 This document covers cost estimation, budget guardrails, and FinOps practices for the CSA-in-a-Box platform.
 
@@ -406,6 +406,6 @@ Quick reference for the CSA services tracked by `estimate-costs.sh`:
 
 ## Related Documentation
 
-- [PRODUCTION_CHECKLIST.md](PRODUCTION_CHECKLIST.md) - Pre-production readiness checklist
-- [PLATFORM_SERVICES.md](PLATFORM_SERVICES.md) - Platform services reference and SKU details
-- [MULTI_TENANT.md](MULTI_TENANT.md) - Multi-tenant deployment with per-tenant cost attribution
+- [Production Checklist](PRODUCTION_CHECKLIST.md) — Pre-production readiness checklist
+- [Platform Services](PLATFORM_SERVICES.md) — Platform services reference and SKU details
+- [Multi-Tenant](MULTI_TENANT.md) — Multi-tenant deployment with per-tenant cost attribution

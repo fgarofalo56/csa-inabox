@@ -1,6 +1,6 @@
 # CSA-in-a-Box Architecture
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Architects
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Architects
 
 A comprehensive architecture reference for Cloud-Scale Analytics in a Box — an
 open-source "build-your-own Microsoft Fabric" using Azure PaaS services and
@@ -438,7 +438,7 @@ All deployments enforce:
 
 ## Related Documentation
 
-- [Platform Services](PLATFORM_SERVICES.md) - Platform component deep-dive
-- [Getting Started](GETTING_STARTED.md) - Prerequisites and deployment walkthrough
-- [Multi-Region DR](DR.md) - Multi-region disaster recovery runbook
-- [Quick Start](QUICKSTART.md) - 60-minute hands-on tutorial
+- [Platform Services](PLATFORM_SERVICES.md) — Platform component deep-dive
+- [Getting Started](GETTING_STARTED.md) — Prerequisites and deployment walkthrough
+- [Multi-Region DR](DR.md) — Multi-region disaster recovery runbook
+- [Quick Start](QUICKSTART.md) — 60-minute hands-on tutorial

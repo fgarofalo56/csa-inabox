@@ -1,6 +1,6 @@
 # Platform Governance — Purview Automation, Classification, and Data Sharing
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Platform Engineers
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Platform Engineers
 
 > **Enhanced governance layer for CSA-in-a-Box**
 
@@ -208,8 +208,8 @@ This module extends the core `governance/` package:
 
 ## Related Documentation
 
-- [Platform Components](../README.md) - Platform component index
-- [Platform Services](../../docs/PLATFORM_SERVICES.md) - Detailed platform service descriptions
-- [Architecture](../../docs/ARCHITECTURE.md) - Overall system architecture
-- [Data Marketplace](../data_marketplace/README.md) - Data product discovery and access
-- [Shared Services](../shared-services/README.md) - Reusable function library
+- [Platform Components](../README.md) — Platform component index
+- [Platform Services](../../docs/PLATFORM_SERVICES.md) — Detailed platform service descriptions
+- [Architecture](../../docs/ARCHITECTURE.md) — Overall system architecture
+- [Data Marketplace](../data_marketplace/README.md) — Data product discovery and access
+- [Shared Services](../shared-services/README.md) — Reusable function library

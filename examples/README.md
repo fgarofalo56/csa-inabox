@@ -1,6 +1,6 @@
 # Examples — Industry Vertical Implementations
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Data Engineers
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers
 
 This directory contains **complete, working implementations** of Cloud Scale Analytics
 for specific federal agencies, tribal organizations, and commercial sectors.
@@ -93,6 +93,6 @@ All other verticals include `params.gov.json` for Government deployment.
 
 ## Related Documentation
 
-- [Architecture](../docs/ARCHITECTURE.md) - Comprehensive architecture reference
-- [Getting Started](../docs/GETTING_STARTED.md) - Prerequisites and deployment walkthrough
-- [Quick Start](../docs/QUICKSTART.md) - 60-minute hands-on tutorial
+- [Architecture](../docs/ARCHITECTURE.md) — Comprehensive architecture reference
+- [Getting Started](../docs/GETTING_STARTED.md) — Prerequisites and deployment walkthrough
+- [Quick Start](../docs/QUICKSTART.md) — 60-minute hands-on tutorial

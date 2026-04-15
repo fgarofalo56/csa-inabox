@@ -1,6 +1,6 @@
 # OneLake Pattern — ADLS Gen2 + Unity Catalog
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Platform Engineers
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Platform Engineers
 
 > **CSA-in-a-Box equivalent of Microsoft Fabric OneLake**
 
@@ -223,8 +223,8 @@ See also:
 
 ## Related Documentation
 
-- [Platform Components](../README.md) - Platform component index
-- [Platform Services](../../docs/PLATFORM_SERVICES.md) - Detailed platform service descriptions
-- [Architecture](../../docs/ARCHITECTURE.md) - Overall system architecture
-- [Metadata Framework](../metadata-framework/README.md) - Metadata-driven pipeline generation
-- [Direct Lake](../direct-lake/README.md) - Power BI direct access to Delta Lake
+- [Platform Components](../README.md) — Platform component index
+- [Platform Services](../../docs/PLATFORM_SERVICES.md) — Detailed platform service descriptions
+- [Architecture](../../docs/ARCHITECTURE.md) — Overall system architecture
+- [Metadata Framework](../metadata-framework/README.md) — Metadata-driven pipeline generation
+- [Direct Lake](../direct-lake/README.md) — Power BI direct access to Delta Lake

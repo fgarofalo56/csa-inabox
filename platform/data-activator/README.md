@@ -1,6 +1,6 @@
 # Data Activator — Event-Driven Alerting Engine
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Platform Engineers
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Platform Engineers
 
 > **CSA-in-a-Box equivalent of Microsoft Fabric Data Activator**
 >
@@ -8,6 +8,15 @@
 > delivers the same real-time alerting and action-triggering capabilities
 > using Event Grid, Azure Functions, and Logic Apps — all GA in Azure
 > Government.
+
+## Table of Contents
+
+- [Architecture](#architecture)
+- [Components](#components)
+- [Quick Start](#quick-start)
+- [Alert Rule Schema](#alert-rule-schema)
+- [Azure Government Compatibility](#azure-government-compatibility)
+- [Related Documentation](#related-documentation)
 
 ## Architecture
 
@@ -129,8 +138,8 @@ All services used are GA in Azure Government:
 
 ## Related Documentation
 
-- [Platform Components](../README.md) - Platform component index
-- [Platform Services](../../docs/PLATFORM_SERVICES.md) - Detailed platform service descriptions
-- [Architecture](../../docs/ARCHITECTURE.md) - Overall system architecture
-- [AI Integration](../ai_integration/README.md) - AI enrichment patterns
-- [Shared Services](../shared-services/README.md) - Reusable function library
+- [Platform Components](../README.md) — Platform component index
+- [Platform Services](../../docs/PLATFORM_SERVICES.md) — Detailed platform service descriptions
+- [Architecture](../../docs/ARCHITECTURE.md) — Overall system architecture
+- [AI Integration](../ai_integration/README.md) — AI enrichment patterns
+- [Shared Services](../shared-services/README.md) — Reusable function library

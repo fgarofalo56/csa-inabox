@@ -1,6 +1,6 @@
 # Data Marketplace — Product Discovery, Access, and Quality
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Platform Engineers
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Platform Engineers
 
 > **CSA-in-a-Box data product marketplace**
 
@@ -199,8 +199,8 @@ See `platform/governance/purview_automation.py` for the sync implementation.
 
 ## Related Documentation
 
-- [Platform Components](../README.md) - Platform component index
-- [Platform Services](../../docs/PLATFORM_SERVICES.md) - Detailed platform service descriptions
-- [Architecture](../../docs/ARCHITECTURE.md) - Overall system architecture
-- [AI Integration](../ai_integration/README.md) - AI enrichment patterns
-- [Governance](../governance/README.md) - Purview automation and classification
+- [Platform Components](../README.md) — Platform component index
+- [Platform Services](../../docs/PLATFORM_SERVICES.md) — Detailed platform service descriptions
+- [Architecture](../../docs/ARCHITECTURE.md) — Overall system architecture
+- [AI Integration](../ai_integration/README.md) — AI enrichment patterns
+- [Governance](../governance/README.md) — Purview automation and classification

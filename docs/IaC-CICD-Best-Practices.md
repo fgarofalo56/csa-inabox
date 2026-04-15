@@ -1,6 +1,6 @@
 # Infrastructure-as-Code & CI/CD Best Practices for CSA-in-a-Box
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** DevOps Engineers
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** DevOps Engineers
 
 > **Research Report** | April 2026
 > Comprehensive guide for deploying a Cloud-Scale Analytics platform across 4 Azure subscriptions using Bicep and GitHub Actions.
@@ -1722,7 +1722,7 @@ Environment: prod
 
 ## Related Documentation
 
-- [Terraform Deployment](../deploy/terraform/README.md) - Terraform deployment path for CSA-in-a-Box
-- [Bicep Gov Deployment](../deploy/bicep/gov/README.md) - Government cloud Bicep deployment
-- [ARCHITECTURE.md](ARCHITECTURE.md) - Platform architecture overview
-- [SELF_HOSTED_IR.md](SELF_HOSTED_IR.md) - Self-Hosted Integration Runtime setup and operations
+- [Terraform Deployment](../deploy/terraform/README.md) — Terraform deployment path for CSA-in-a-Box
+- [Bicep Gov Deployment](../deploy/bicep/gov/README.md) — Government cloud Bicep deployment
+- [ARCHITECTURE.md](ARCHITECTURE.md) — Platform architecture overview
+- [SELF_HOSTED_IR.md](SELF_HOSTED_IR.md) — Self-Hosted Integration Runtime setup and operations

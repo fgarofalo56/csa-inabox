@@ -5,6 +5,13 @@
 This directory contains operational scripts for deploying, seeding, monitoring, and
 managing the CSA-in-a-Box platform.
 
+## Table of Contents
+
+- [Categories](#categories)
+- [Key Scripts](#key-scripts)
+- [Getting Started](#getting-started)
+- [Related Documentation](#related-documentation)
+
 ## Categories
 
 | Directory | Purpose | Language |

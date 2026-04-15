@@ -6,6 +6,14 @@ This directory implements the **Data Mesh** pattern: each subdirectory is a doma
 its data models, pipelines, contracts, and quality rules. All domains follow the **medallion
 architecture** (Bronze → Silver → Gold) using dbt on Delta Lake.
 
+## Table of Contents
+
+- [Domains](#domains)
+- [Domain Structure](#domain-structure)
+- [Getting Started](#getting-started)
+- [Key Concepts](#key-concepts)
+- [Related Documentation](#related-documentation)
+
 ## Domains
 
 | Domain | Description |

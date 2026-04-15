@@ -1,6 +1,6 @@
 # Getting Started with CSA-in-a-Box
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** New Users
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** New Users
 
 ## Table of Contents
 
@@ -295,8 +295,8 @@ availability matrix.
 
 ## Related Documentation
 
-- [Quick Start](QUICKSTART.md) - 60-minute hands-on tutorial
-- [Architecture](ARCHITECTURE.md) - Comprehensive architecture reference
-- [Troubleshooting](TROUBLESHOOTING.md) - Common issues and fixes
-- [ADF Setup](../scripts/deploy/deploy-adf.sh) - ADF deployment helper script
-- [Databricks Guide](DATABRICKS_GUIDE.md) - Databricks setup and troubleshooting
+- [Quick Start](QUICKSTART.md) — 60-minute hands-on tutorial
+- [Architecture](ARCHITECTURE.md) — Comprehensive architecture reference
+- [Troubleshooting](TROUBLESHOOTING.md) — Common issues and fixes
+- [ADF Setup](../scripts/deploy/deploy-adf.sh) — ADF deployment helper script
+- [Databricks Guide](DATABRICKS_GUIDE.md) — Databricks setup and troubleshooting

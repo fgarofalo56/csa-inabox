@@ -1,6 +1,6 @@
 # Department of Interior Natural Resources Architecture
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Architects / Data Engineers
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Architects / Data Engineers
 
 ## Table of Contents
 - [Overview](#overview)
@@ -359,8 +359,8 @@ alert:
 
 ## Related Documentation
 
-- [Interior README](README.md) - Deployment guide, quick start, and analytics scenarios
-- [Platform Architecture](../../docs/ARCHITECTURE.md) - Core CSA platform architecture
-- [Platform Services](../../docs/PLATFORM_SERVICES.md) - Shared Azure service configurations
-- [DOT Architecture](../dot/ARCHITECTURE.md) - Related federal infrastructure architecture
-- [Tribal Health Architecture](../tribal-health/ARCHITECTURE.md) - Related federal/tribal architecture
+- [Interior README](README.md) — Deployment guide, quick start, and analytics scenarios
+- [Platform Architecture](../../docs/ARCHITECTURE.md) — Core CSA platform architecture
+- [Platform Services](../../docs/PLATFORM_SERVICES.md) — Shared Azure service configurations
+- [DOT Architecture](../dot/ARCHITECTURE.md) — Related federal infrastructure architecture
+- [Tribal Health Architecture](../tribal-health/ARCHITECTURE.md) — Related federal/tribal architecture

@@ -1,6 +1,6 @@
 # Databricks Guide
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Data Engineers
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers
 
 This guide covers setting up and operating Databricks within the
 CSA-in-a-Box platform, including workspace configuration, notebook
@@ -309,6 +309,6 @@ See the general [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for more issues.
 
 ## Related Documentation
 
-- [ADF_SETUP.md](ADF_SETUP.md) - Azure Data Factory pipeline setup and orchestration
-- [GETTING_STARTED.md](GETTING_STARTED.md) - Platform deployment quickstart
-- [ARCHITECTURE.md](ARCHITECTURE.md) - Platform architecture overview
+- [ADF Setup](ADF_SETUP.md) — Azure Data Factory pipeline setup and orchestration
+- [Getting Started](GETTING_STARTED.md) — Platform deployment quickstart
+- [Architecture](ARCHITECTURE.md) — Platform architecture overview

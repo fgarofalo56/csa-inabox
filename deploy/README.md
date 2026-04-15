@@ -6,6 +6,14 @@ This directory contains all Infrastructure as Code (IaC) for provisioning the CS
 platform using Azure Bicep templates. The deployment follows the Azure Cloud Adoption Framework
 landing zone model across four subscriptions.
 
+## Table of Contents
+
+- [Structure](#structure)
+- [Deployment Strategy](#deployment-strategy)
+- [Getting Started](#getting-started)
+- [Azure Government](#azure-government)
+- [Related Documentation](#related-documentation)
+
 ## Structure
 
 | Directory | Purpose |

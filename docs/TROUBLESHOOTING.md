@@ -1,6 +1,6 @@
 # Troubleshooting Guide
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Operations
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Operations
 
 ## Table of Contents
 
@@ -320,7 +320,7 @@ Check which files are below threshold and add tests.
 
 ## Related Documentation
 
-- [Getting Started](GETTING_STARTED.md) - Prerequisites and deployment walkthrough
-- [Rollback](ROLLBACK.md) - Deployment rollback runbook
-- [Disaster Recovery](DR.md) - Multi-region failover runbook
-- [Log Schema](LOG_SCHEMA.md) - Structured logging schema reference
+- [Getting Started](GETTING_STARTED.md) — Prerequisites and deployment walkthrough
+- [Rollback](ROLLBACK.md) — Deployment rollback runbook
+- [Disaster Recovery](DR.md) — Multi-region failover runbook
+- [Log Schema](LOG_SCHEMA.md) — Structured logging schema reference

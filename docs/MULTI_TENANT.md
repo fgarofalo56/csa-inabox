@@ -1,6 +1,6 @@
 # Multi-Tenant Deployment Guide
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Platform Engineers
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Platform Engineers
 
 This guide covers deploying CSA-in-a-Box in a multi-tenant configuration
 where each tenant (customer, business unit, or organizational boundary)
@@ -580,6 +580,6 @@ account before decommissioning the tenant stamp.
 
 ## Related Documentation
 
-- [MULTI_REGION.md](MULTI_REGION.md) - Multi-region deployment for high availability
-- [COST_MANAGEMENT.md](COST_MANAGEMENT.md) - Cost estimation, budgets, and FinOps practices
-- [ARCHITECTURE.md](ARCHITECTURE.md) - Platform architecture overview
+- [MULTI_REGION.md](MULTI_REGION.md) — Multi-region deployment for high availability
+- [COST_MANAGEMENT.md](COST_MANAGEMENT.md) — Cost estimation, budgets, and FinOps practices
+- [ARCHITECTURE.md](ARCHITECTURE.md) — Platform architecture overview

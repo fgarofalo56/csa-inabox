@@ -1,10 +1,19 @@
 # Azure Government Deployment Templates
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** DevOps Engineers
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** DevOps Engineers
 
 This directory contains **parallel deployment templates** for Azure Government (MAG).
 Every template in the main `deploy/bicep/` and `deploy/terraform/` directories has a
 corresponding Government-compatible version here.
+
+## Table of Contents
+
+- [Why Government Templates?](#why-government-templates)
+- [Service Availability Matrix](#service-availability-matrix)
+- [Government-Specific Configuration](#government-specific-configuration)
+- [Usage](#usage)
+- [Open-Source Alternatives](#open-source-alternatives)
+- [Related Documentation](#related-documentation)
 
 ## Why Government Templates?
 
@@ -103,6 +112,6 @@ replacements deployable on AKS in Azure Government.
 
 ## Related Documentation
 
-- [Government Service Matrix](../../../docs/GOV_SERVICE_MATRIX.md) - Full Gov service availability details
-- [Terraform IaC](../../terraform/README.md) - Terraform alternative deployment path
-- [IaC & CI/CD Best Practices](../../../docs/IaC-CICD-Best-Practices.md) - Deployment pipeline guidance
+- [Government Service Matrix](../../../docs/GOV_SERVICE_MATRIX.md) — Full Gov service availability details
+- [Terraform IaC](../../terraform/README.md) — Terraform alternative deployment path
+- [IaC & CI/CD Best Practices](../../../docs/IaC-CICD-Best-Practices.md) — Deployment pipeline guidance

@@ -1,6 +1,6 @@
 # AI Integration — Data Landing Zone AI Enrichment
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Platform Engineers
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Platform Engineers
 
 ## Table of Contents
 
@@ -13,6 +13,7 @@
 - [Integration with Data Landing Zones](#integration-with-data-landing-zones)
 - [Azure Government](#azure-government)
 - [Quick Start](#quick-start)
+- [Related Documentation](#related-documentation)
 
 This directory provides patterns for integrating Azure AI services with the
 CSA-in-a-Box data platform. Every data landing zone can leverage AI for
@@ -164,7 +165,7 @@ python rag/query_engine.py \
 
 ## Related Documentation
 
-- [Platform Components](../README.md) - Platform component index
-- [Platform Services](../../docs/PLATFORM_SERVICES.md) - Detailed platform service descriptions
-- [Architecture](../../docs/ARCHITECTURE.md) - Overall system architecture
-- [Data Marketplace](../data_marketplace/README.md) - Data product discovery and access
+- [Platform Components](../README.md) — Platform component index
+- [Platform Services](../../docs/PLATFORM_SERVICES.md) — Detailed platform service descriptions
+- [Architecture](../../docs/ARCHITECTURE.md) — Overall system architecture
+- [Data Marketplace](../data_marketplace/README.md) — Data product discovery and access

@@ -1,6 +1,6 @@
 # Deployment Rollback Runbook
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Operations
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Operations
 
 This runbook covers how to recover from a failed or bad deployment. It pairs
 with the `Rollback Deployment` GitHub Actions workflow
@@ -226,6 +226,6 @@ anything drifts.
 
 ## Related Documentation
 
-- [Troubleshooting](TROUBLESHOOTING.md) - Common issues and fixes
-- [Disaster Recovery](DR.md) - Multi-region failover runbook
-- [Production Checklist](PRODUCTION_CHECKLIST.md) - Production readiness checklist
+- [Troubleshooting](TROUBLESHOOTING.md) — Common issues and fixes
+- [Disaster Recovery](DR.md) — Multi-region failover runbook
+- [Production Checklist](PRODUCTION_CHECKLIST.md) — Production readiness checklist

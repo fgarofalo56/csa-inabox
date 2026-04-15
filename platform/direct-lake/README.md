@@ -1,6 +1,6 @@
 # Direct Lake Pattern — Power BI + Delta Lake via Databricks SQL
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Platform Engineers
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Platform Engineers
 
 > **CSA-in-a-Box equivalent of Microsoft Fabric Direct Lake mode**
 
@@ -199,8 +199,8 @@ that maps to the CSA-in-a-Box gold layer tables.
 
 ## Related Documentation
 
-- [Platform Components](../README.md) - Platform component index
-- [Platform Services](../../docs/PLATFORM_SERVICES.md) - Detailed platform service descriptions
-- [Architecture](../../docs/ARCHITECTURE.md) - Overall system architecture
-- [OneLake Pattern](../onelake-pattern/README.md) - ADLS Gen2 unified data lake
-- [Multi-Synapse](../multi-synapse/README.md) - Shared analytics environment
+- [Platform Components](../README.md) — Platform component index
+- [Platform Services](../../docs/PLATFORM_SERVICES.md) — Detailed platform service descriptions
+- [Architecture](../../docs/ARCHITECTURE.md) — Overall system architecture
+- [OneLake Pattern](../onelake-pattern/README.md) — ADLS Gen2 unified data lake
+- [Multi-Synapse](../multi-synapse/README.md) — Shared analytics environment

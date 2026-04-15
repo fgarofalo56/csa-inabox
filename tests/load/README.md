@@ -1,6 +1,6 @@
 # Load & Performance Tests
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** QA Engineers / Developers
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** QA Engineers / Developers
 
 ## Table of Contents
 
@@ -158,4 +158,4 @@ deploy tag that produced it.
 
 ## Related Documentation
 
-- [Production Checklist](../../docs/PRODUCTION_CHECKLIST.md) - Pre-deployment verification steps
+- [Production Checklist](../../docs/PRODUCTION_CHECKLIST.md) — Pre-deployment verification steps

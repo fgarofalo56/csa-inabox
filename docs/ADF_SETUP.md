@@ -1,6 +1,6 @@
 # Azure Data Factory Setup Guide
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Data Engineers
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers
 
 This guide covers deploying and managing ADF pipeline artifacts for the
 CSA-in-a-Box platform.
@@ -222,6 +222,6 @@ See the ADF section in [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 
 ## Related Documentation
 
-- [DATABRICKS_GUIDE.md](DATABRICKS_GUIDE.md) - Databricks workspace setup and dbt integration
-- [SELF_HOSTED_IR.md](SELF_HOSTED_IR.md) - Self-Hosted Integration Runtime for on-premises connectivity
-- [GETTING_STARTED.md](GETTING_STARTED.md) - Platform deployment quickstart
+- [Databricks Guide](DATABRICKS_GUIDE.md) — Databricks workspace setup and dbt integration
+- [Self-Hosted IR](SELF_HOSTED_IR.md) — Self-Hosted Integration Runtime for on-premises connectivity
+- [Getting Started](GETTING_STARTED.md) — Platform deployment quickstart

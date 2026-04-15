@@ -1,6 +1,6 @@
 # Log Schema
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Data Engineers
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers
 
 All Python services in CSA-in-a-Box emit structured JSON log lines via
 `governance.common.logging` (which wraps [structlog](https://www.structlog.org)).
@@ -190,6 +190,6 @@ only the serialisation changes.
 
 ## Related Documentation
 
-- [Troubleshooting](TROUBLESHOOTING.md) - Common issues and fixes
-- [Production Checklist](PRODUCTION_CHECKLIST.md) - Production readiness checklist
-- [Platform Services](PLATFORM_SERVICES.md) - Platform component deep-dive
+- [Troubleshooting](TROUBLESHOOTING.md) — Common issues and fixes
+- [Production Checklist](PRODUCTION_CHECKLIST.md) — Production readiness checklist
+- [Platform Services](PLATFORM_SERVICES.md) — Platform component deep-dive

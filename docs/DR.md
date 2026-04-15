@@ -1,6 +1,6 @@
 # Multi-Region Disaster Recovery Runbook
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Operations
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Operations
 
 This runbook is the authoritative answer to "what do we do when a region
 goes down?" It pairs with the deploy-time rollback procedure in
@@ -326,7 +326,7 @@ rollout:
 
 ## Related Documentation
 
-- [Rollback](ROLLBACK.md) - Deployment rollback runbook
-- [Multi-Region DR](DR.md) - This document
-- [Production Checklist](PRODUCTION_CHECKLIST.md) - Production readiness checklist
-- [Platform Services](PLATFORM_SERVICES.md) - Platform component deep-dive
+- [Rollback](ROLLBACK.md) — Deployment rollback runbook
+- [Multi-Region Deployment](MULTI_REGION.md) — Multi-region deployment guide
+- [Production Checklist](PRODUCTION_CHECKLIST.md) — Production readiness checklist
+- [Platform Services](PLATFORM_SERVICES.md) — Platform component deep-dive

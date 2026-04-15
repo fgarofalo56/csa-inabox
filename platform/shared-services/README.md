@@ -1,9 +1,17 @@
 # Shared Services — Reusable Function Library
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Platform Engineers
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Platform Engineers
 
 Reusable Azure Functions, Container Apps, and API patterns that can be
 shared across all data landing zones in the CSA-in-a-Box platform.
+
+## Table of Contents
+
+- [Services](#services)
+- [API Management Gateway](#api-management-gateway)
+- [Deployment](#deployment)
+- [Directory Structure](#directory-structure)
+- [Related Documentation](#related-documentation)
 
 ## Services
 
@@ -112,8 +120,8 @@ platform/shared-services/
 
 ## Related Documentation
 
-- [Platform Components](../README.md) - Platform component index
-- [Platform Services](../../docs/PLATFORM_SERVICES.md) - Detailed platform service descriptions
-- [Architecture](../../docs/ARCHITECTURE.md) - Overall system architecture
-- [Governance](../governance/README.md) - Purview automation and classification
-- [Data Activator](../data-activator/README.md) - Event-driven alerting engine
+- [Platform Components](../README.md) — Platform component index
+- [Platform Services](../../docs/PLATFORM_SERVICES.md) — Detailed platform service descriptions
+- [Architecture](../../docs/ARCHITECTURE.md) — Overall system architecture
+- [Governance](../governance/README.md) — Purview automation and classification
+- [Data Activator](../data-activator/README.md) — Event-driven alerting engine

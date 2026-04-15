@@ -1,6 +1,6 @@
 # Tribal Health Data Warehouse — IHS & Tribal Health Analytics
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Data Engineers
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers
 
 ## Table of Contents
 - [Overview](#overview)
@@ -580,9 +580,9 @@ This example uses **entirely synthetic data** generated to reflect publicly avai
 
 ## Related Documentation
 
-- [Tribal Health Architecture](ARCHITECTURE.md) - Detailed platform architecture and design decisions
-- [Examples Index](../README.md) - Overview of all CSA-in-a-Box example verticals
-- [Platform Architecture](../../docs/ARCHITECTURE.md) - Core CSA platform architecture
-- [Getting Started Guide](../../docs/GETTING_STARTED.md) - Platform setup and onboarding
-- [Interior Natural Resources](../interior/README.md) - Related federal/tribal vertical
-- [Casino Analytics](../casino-analytics/README.md) - Related tribal operations vertical
+- [Tribal Health Architecture](ARCHITECTURE.md) — Detailed platform architecture and design decisions
+- [Examples Index](../README.md) — Overview of all CSA-in-a-Box example verticals
+- [Platform Architecture](../../docs/ARCHITECTURE.md) — Core CSA platform architecture
+- [Getting Started Guide](../../docs/GETTING_STARTED.md) — Platform setup and onboarding
+- [Interior Natural Resources](../interior/README.md) — Related federal/tribal vertical
+- [Casino Analytics](../casino-analytics/README.md) — Related tribal operations vertical

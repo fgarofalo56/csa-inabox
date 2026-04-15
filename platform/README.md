@@ -1,6 +1,6 @@
 # Platform Components — Fabric-in-a-Box
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Platform Engineers
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Platform Engineers
 
 This directory contains the **core platform capabilities** that replicate Microsoft Fabric
 functionality using Azure PaaS services and open-source tooling.
@@ -9,6 +9,14 @@ functionality using Azure PaaS services and open-source tooling.
 > "Forecasted" as of April 2026). These components provide Fabric-equivalent capabilities
 > using services that ARE available in Azure Government today — ADLS Gen2, Databricks,
 > Synapse, ADF, Event Hubs, Purview, and Azure ML.
+
+## Table of Contents
+
+- [Components](#components)
+- [Architecture](#architecture)
+- [Quick Start](#quick-start)
+- [Azure Government Compatibility](#azure-government-compatibility)
+- [Related Documentation](#related-documentation)
 
 ## Components
 
@@ -92,5 +100,5 @@ See [deploy/bicep/gov/](../deploy/bicep/gov/) for Government-specific templates 
 
 ## Related Documentation
 
-- [Platform Services](../docs/PLATFORM_SERVICES.md) - Detailed platform service descriptions
-- [Architecture](../docs/ARCHITECTURE.md) - Overall system architecture
+- [Platform Services](../docs/PLATFORM_SERVICES.md) — Detailed platform service descriptions
+- [Architecture](../docs/ARCHITECTURE.md) — Overall system architecture

@@ -1,6 +1,6 @@
 # IoT & Streaming Analytics Examples
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Data Engineers
+> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers
 
 ## Table of Contents
 - [Architecture](#architecture)
@@ -359,9 +359,9 @@ Azure CLI cloud to `AzureUSGovernment`.
 
 ## Related Documentation
 
-- [Examples Index](../README.md) - Overview of all CSA-in-a-Box example verticals
-- [Platform Architecture](../../docs/ARCHITECTURE.md) - Core CSA platform architecture
-- [Getting Started Guide](../../docs/GETTING_STARTED.md) - Platform setup and onboarding
-- [Casino Analytics](../casino-analytics/README.md) - Streaming patterns for slot machine telemetry
-- [EPA Environmental Analytics](../epa/README.md) - Streaming patterns for AQI sensor data
-- [NOAA Climate Analytics](../noaa/README.md) - Streaming patterns for weather station data
+- [Examples Index](../README.md) — Overview of all CSA-in-a-Box example verticals
+- [Platform Architecture](../../docs/ARCHITECTURE.md) — Core CSA platform architecture
+- [Getting Started Guide](../../docs/GETTING_STARTED.md) — Platform setup and onboarding
+- [Casino Analytics](../casino-analytics/README.md) — Streaming patterns for slot machine telemetry
+- [EPA Environmental Analytics](../epa/README.md) — Streaming patterns for AQI sensor data
+- [NOAA Climate Analytics](../noaa/README.md) — Streaming patterns for weather station data
