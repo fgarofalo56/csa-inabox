@@ -179,7 +179,7 @@ def generate_schema_yml(contracts: list[Contract]) -> str:
             "description": (
                 f"Auto-generated dbt tests from data contract "
                 f"{contract.name!r} v{contract.version}. "
-                f"DO NOT EDIT — regenerate with: "
+                f"DO NOT EDIT -- regenerate with: "
                 f"python -m governance.contracts.dbt_test_generator --write"
             ),
             "columns": columns,

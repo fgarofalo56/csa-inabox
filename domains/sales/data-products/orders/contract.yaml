@@ -1,4 +1,4 @@
-# Data product contract — sales.orders
+# Data product contract -- sales.orders
 #
 # This file is the authoritative interface between the sales domain and
 # its consumers.  It declares the schema, SLAs, and quality rules for

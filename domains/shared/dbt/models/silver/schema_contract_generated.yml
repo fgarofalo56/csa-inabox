@@ -8,7 +8,7 @@
 version: 2
 models:
 - name: slv_aging_report
-  description: 'Auto-generated dbt tests from data contract ''finance.aging_report'' v1.0.0. DO NOT EDIT — regenerate with:
+  description: 'Auto-generated dbt tests from data contract ''finance.aging_report'' v1.0.0. DO NOT EDIT -- regenerate with:
     python -m governance.contracts.dbt_test_generator --write'
   columns:
   - name: invoice_id
@@ -64,7 +64,7 @@ models:
     - dbt_utils.expression_is_true:
         expression: estimated_loss_rate >= 0 AND estimated_loss_rate <= 1
 - name: slv_invoices
-  description: 'Auto-generated dbt tests from data contract ''finance.invoices'' v1.0.0. DO NOT EDIT — regenerate with: python
+  description: 'Auto-generated dbt tests from data contract ''finance.invoices'' v1.0.0. DO NOT EDIT -- regenerate with: python
     -m governance.contracts.dbt_test_generator --write'
   columns:
   - name: invoice_sk
@@ -121,7 +121,7 @@ models:
   - name: validation_errors
     description: Human-readable '; '-joined list of validation failures.
 - name: slv_revenue_reconciliation
-  description: 'Auto-generated dbt tests from data contract ''finance.revenue_reconciliation'' v1.0.0. DO NOT EDIT — regenerate
+  description: 'Auto-generated dbt tests from data contract ''finance.revenue_reconciliation'' v1.0.0. DO NOT EDIT -- regenerate
     with: python -m governance.contracts.dbt_test_generator --write'
   columns:
   - name: reconciliation_key
@@ -162,7 +162,7 @@ models:
     tests:
     - not_null
 - name: slv_inventory
-  description: 'Auto-generated dbt tests from data contract ''inventory.inventory'' v1.0.0. DO NOT EDIT — regenerate with:
+  description: 'Auto-generated dbt tests from data contract ''inventory.inventory'' v1.0.0. DO NOT EDIT -- regenerate with:
     python -m governance.contracts.dbt_test_generator --write'
   columns:
   - name: inventory_sk
@@ -209,7 +209,7 @@ models:
   - name: validation_errors
     description: Human-readable '; '-joined list of validation failures.
 - name: slv_inventory_snapshot
-  description: 'Auto-generated dbt tests from data contract ''inventory.inventory_snapshot'' v1.0.0. DO NOT EDIT — regenerate
+  description: 'Auto-generated dbt tests from data contract ''inventory.inventory_snapshot'' v1.0.0. DO NOT EDIT -- regenerate
     with: python -m governance.contracts.dbt_test_generator --write'
   columns:
   - name: inventory_sk
@@ -276,7 +276,7 @@ models:
     tests:
     - not_null
 - name: slv_inventory_turnover
-  description: 'Auto-generated dbt tests from data contract ''inventory.inventory_turnover'' v1.0.0. DO NOT EDIT — regenerate
+  description: 'Auto-generated dbt tests from data contract ''inventory.inventory_turnover'' v1.0.0. DO NOT EDIT -- regenerate
     with: python -m governance.contracts.dbt_test_generator --write'
   columns:
   - name: product_id
@@ -322,20 +322,20 @@ models:
         - ADEQUATE
         - WELL_STOCKED
   - name: daily_demand
-    description: 'Average daily demand (currently NULL â€” requires product_id in fact_orders to enable product-level demand
+    description: 'Average daily demand (currently NULL -- requires product_id in fact_orders to enable product-level demand
       attribution).
 
       '
   - name: days_of_supply
-    description: 'Estimated days of supply remaining (currently NULL â€” requires daily_demand calculation).
+    description: 'Estimated days of supply remaining (currently NULL -- requires daily_demand calculation).
 
       '
   - name: supply_demand_status
-    description: 'Supply vs demand classification (currently NULL â€” requires demand data).
+    description: 'Supply vs demand classification (currently NULL -- requires demand data).
 
       '
 - name: slv_reorder_alerts
-  description: 'Auto-generated dbt tests from data contract ''inventory.reorder_alerts'' v1.0.0. DO NOT EDIT — regenerate
+  description: 'Auto-generated dbt tests from data contract ''inventory.reorder_alerts'' v1.0.0. DO NOT EDIT -- regenerate
     with: python -m governance.contracts.dbt_test_generator --write'
   columns:
   - name: inventory_sk
@@ -404,7 +404,7 @@ models:
         - ADEQUATE
         - WELL_STOCKED
 - name: slv_warehouses
-  description: 'Auto-generated dbt tests from data contract ''inventory.warehouses'' v1.0.0. DO NOT EDIT — regenerate with:
+  description: 'Auto-generated dbt tests from data contract ''inventory.warehouses'' v1.0.0. DO NOT EDIT -- regenerate with:
     python -m governance.contracts.dbt_test_generator --write'
   columns:
   - name: warehouse_sk
@@ -426,7 +426,7 @@ models:
   - name: capacity
     description: Maximum storage capacity of the warehouse.
 - name: slv_orders
-  description: 'Auto-generated dbt tests from data contract ''sales.orders'' v1.0.0. DO NOT EDIT — regenerate with: python
+  description: 'Auto-generated dbt tests from data contract ''sales.orders'' v1.0.0. DO NOT EDIT -- regenerate with: python
     -m governance.contracts.dbt_test_generator --write'
   columns:
   - name: order_sk
@@ -468,7 +468,7 @@ models:
   - name: validation_errors
     description: Human-readable '; '-joined list of validation failures, empty for valid rows.
 - name: slv_sales_metrics
-  description: 'Auto-generated dbt tests from data contract ''sales.sales_metrics'' v1.0.0. DO NOT EDIT — regenerate with:
+  description: 'Auto-generated dbt tests from data contract ''sales.sales_metrics'' v1.0.0. DO NOT EDIT -- regenerate with:
     python -m governance.contracts.dbt_test_generator --write'
   columns:
   - name: order_date
@@ -518,7 +518,7 @@ models:
   - name: units_per_order
     description: Total units divided by total orders.
 - name: slv_customer_lifetime_value
-  description: 'Auto-generated dbt tests from data contract ''shared.customer_lifetime_value'' v1.0.0. DO NOT EDIT — regenerate
+  description: 'Auto-generated dbt tests from data contract ''shared.customer_lifetime_value'' v1.0.0. DO NOT EDIT -- regenerate
     with: python -m governance.contracts.dbt_test_generator --write'
   columns:
   - name: customer_id
@@ -569,7 +569,7 @@ models:
   - name: monthly_revenue_rate
     description: Average monthly revenue since customer creation.
 - name: slv_customers
-  description: 'Auto-generated dbt tests from data contract ''shared.customers'' v1.0.0. DO NOT EDIT — regenerate with: python
+  description: 'Auto-generated dbt tests from data contract ''shared.customers'' v1.0.0. DO NOT EDIT -- regenerate with: python
     -m governance.contracts.dbt_test_generator --write'
   columns:
   - name: customer_sk
@@ -596,7 +596,7 @@ models:
   - name: validation_errors
     description: Human-readable '; '-joined list of validation failures.
 - name: slv_daily_order_metrics
-  description: 'Auto-generated dbt tests from data contract ''shared.daily_order_metrics'' v1.0.0. DO NOT EDIT — regenerate
+  description: 'Auto-generated dbt tests from data contract ''shared.daily_order_metrics'' v1.0.0. DO NOT EDIT -- regenerate
     with: python -m governance.contracts.dbt_test_generator --write'
   columns:
   - name: order_date
@@ -642,7 +642,7 @@ models:
     - dbt_utils.expression_is_true:
         expression: cancellation_rate_pct >= 0 AND cancellation_rate_pct <= 100
 - name: slv_monthly_revenue
-  description: 'Auto-generated dbt tests from data contract ''shared.monthly_revenue'' v1.0.0. DO NOT EDIT — regenerate with:
+  description: 'Auto-generated dbt tests from data contract ''shared.monthly_revenue'' v1.0.0. DO NOT EDIT -- regenerate with:
     python -m governance.contracts.dbt_test_generator --write'
   columns:
   - name: month_key
@@ -699,7 +699,7 @@ models:
     - dbt_utils.expression_is_true:
         expression: return_rate_pct >= 0 AND return_rate_pct <= 100
 - name: slv_orders
-  description: 'Auto-generated dbt tests from data contract ''shared.orders'' v1.0.0. DO NOT EDIT — regenerate with: python
+  description: 'Auto-generated dbt tests from data contract ''shared.orders'' v1.0.0. DO NOT EDIT -- regenerate with: python
     -m governance.contracts.dbt_test_generator --write'
   columns:
   - name: order_sk
@@ -744,7 +744,7 @@ models:
   - name: validation_errors
     description: Human-readable '; '-joined list of validation failures.
 - name: slv_products
-  description: 'Auto-generated dbt tests from data contract ''shared.products'' v1.0.0. DO NOT EDIT — regenerate with: python
+  description: 'Auto-generated dbt tests from data contract ''shared.products'' v1.0.0. DO NOT EDIT -- regenerate with: python
     -m governance.contracts.dbt_test_generator --write'
   columns:
   - name: product_sk
