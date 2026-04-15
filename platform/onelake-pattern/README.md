@@ -1,6 +1,11 @@
+[← Platform Components](../README.md)
+
 # OneLake Pattern — ADLS Gen2 + Unity Catalog
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Platform Engineers
+
+> [!NOTE]
+> **TL;DR:** Replicates Microsoft Fabric's OneLake using ADLS Gen2 (with HNS) + Delta Lake + Databricks Unity Catalog. Provides unified data lake abstraction with Bronze/Silver/Gold medallion architecture, cross-domain "shortcut" patterns via managed identity, and a layered security model.
 
 > **CSA-in-a-Box equivalent of Microsoft Fabric OneLake**
 
@@ -21,7 +26,9 @@
 > pattern delivers the same logical data-lake abstraction using ADLS Gen2
 > with hierarchical namespace, Delta Lake, and Databricks Unity Catalog.
 
-## How OneLake Maps to CSA-in-a-Box
+---
+
+## 📋 How OneLake Maps to CSA-in-a-Box
 
 Microsoft Fabric's OneLake is a single, unified storage layer for every
 workspace in a tenant. Under the hood it is an ADLS Gen2 account with HNS
@@ -46,35 +53,32 @@ and metadata.
 | **Dataflow Gen2** | ADF Mapping Data Flows | Spark-based ETL |
 | **Notebook** | Databricks Notebooks | Interactive compute |
 
-## Architecture
+---
 
-```text
-┌─────────────────────────────────────────────────────┐
-│                   Azure Subscription                │
-│  ┌──────────────┐  ┌──────────────┐  ┌───────────┐ │
-│  │  RG: sales   │  │ RG: finance  │  │ RG: shared │ │
-│  │  ┌────────┐  │  │  ┌────────┐  │  │ ┌───────┐ │ │
-│  │  │ ADLS   │  │  │  │ ADLS   │  │  │ │ ADLS  │ │ │
-│  │  │ Gen2   │  │  │  │ Gen2   │  │  │ │ Gen2  │ │ │
-│  │  │ ┌────┐ │  │  │  │ ┌────┐ │  │  │ │┌────┐│ │ │
-│  │  │ │brz │ │  │  │  │ │brz │ │  │  │ ││brz ││ │ │
-│  │  │ │slv │ │  │  │  │ │slv │ │  │  │ ││slv ││ │ │
-│  │  │ │gld │ │  │  │  │ │gld │ │  │  │ ││gld ││ │ │
-│  │  │ └────┘ │  │  │  │ └────┘ │  │  │ │└────┘│ │ │
-│  │  └────────┘  │  │  └────────┘  │  │ └───────┘ │ │
-│  └──────────────┘  └──────────────┘  └───────────┘ │
-│         │                 │                │        │
-│         └─────────┬───────┘                │        │
-│                   ▼                        ▼        │
-│        ┌──────────────────┐     ┌─────────────────┐ │
-│        │  Unity Catalog   │     │  Azure Purview  │ │
-│        │  (Access Control │     │  (Discovery &   │ │
-│        │   & Metadata)    │     │   Governance)   │ │
-│        └──────────────────┘     └─────────────────┘ │
-└─────────────────────────────────────────────────────┘
+## 🏗️ Architecture
+
+```mermaid
+graph TB
+    subgraph Subscription[Azure Subscription]
+        subgraph Sales[RG: sales]
+            ADLS1[ADLS Gen2<br/>brz / slv / gld]
+        end
+        subgraph Finance[RG: finance]
+            ADLS2[ADLS Gen2<br/>brz / slv / gld]
+        end
+        subgraph Shared[RG: shared]
+            ADLS3[ADLS Gen2<br/>brz / slv / gld]
+        end
+    end
+
+    Sales --> UC[Unity Catalog<br/>Access Control & Metadata]
+    Finance --> UC
+    UC --> Purview[Azure Purview<br/>Discovery & Governance]
 ```
 
-## Naming Conventions
+---
+
+## 📁 Naming Conventions
 
 CSA-in-a-Box mirrors the OneLake workspace/lakehouse naming so teams
 familiar with Fabric can navigate the storage hierarchy intuitively.
@@ -110,7 +114,9 @@ Example:
 /silver/finance/invoices/_delta_log/
 ```
 
-## Shortcut Pattern
+---
+
+## 🔗 Shortcut Pattern
 
 In Fabric, **shortcuts** let a lakehouse reference data in another
 workspace without copying it. CSA-in-a-Box achieves the same via:
@@ -152,7 +158,9 @@ CREATE TABLE sales_catalog.shortcuts.finance_invoices
 Time-limited, scoped to a specific container and path prefix.
 Generated via `az storage container generate-sas` and stored in Key Vault.
 
-## Cross-Domain Access via Managed Identity
+---
+
+## 🔒 Cross-Domain Access via Managed Identity
 
 Every resource group has a user-assigned managed identity that acts as the
 domain's service principal. Cross-domain access is granted by assigning
@@ -169,7 +177,9 @@ az role assignment create \
   --scope "/subscriptions/{sub}/resourceGroups/rg-finance-prod/providers/Microsoft.Storage/storageAccounts/stprodfinanceeus2/blobServices/default/containers/gold"
 ```
 
-## Deployment
+---
+
+## 📦 Deployment
 
 The Bicep module at `deploy/onelake-storage.bicep` deploys a complete
 OneLake-equivalent storage account. Configuration is driven by
@@ -186,12 +196,16 @@ az deployment group create \
     location=eastus2
 ```
 
-## Configuration
+---
+
+## ⚙️ Configuration
 
 See `onelake_config.yaml` for the full workspace-to-storage mapping,
 shortcut definitions, and lifecycle policies.
 
-## Security Model
+---
+
+## 🔒 Security Model
 
 | Layer | Technology | Purpose |
 |---|---|---|
@@ -202,7 +216,9 @@ shortcut definitions, and lifecycle policies.
 | **Classification** | Purview + auto-labeling | PII/PHI detection |
 | **Audit** | Diagnostic Settings → Log Analytics | Full access audit trail |
 
-## Migration from Fabric
+---
+
+## 🔄 Migration from Fabric
 
 If your organization currently uses Fabric in commercial Azure and needs
 to move to Azure Government:
@@ -214,14 +230,15 @@ to move to Azure Government:
 5. Update Power BI connections to use Databricks SQL endpoint
 6. Migrate Dataflow Gen2 to ADF Mapping Data Flows
 
-See also:
-- `platform/direct-lake/` — Power BI Direct Lake equivalent
-- `platform/data-activator/` — Data Activator equivalent
-- `platform/data_marketplace/` — Data marketplace / product discovery
+> [!TIP]
+> See also:
+> - `platform/direct-lake/` — Power BI Direct Lake equivalent
+> - `platform/data-activator/` — Data Activator equivalent
+> - `platform/data_marketplace/` — Data marketplace / product discovery
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Platform Components](../README.md) — Platform component index
 - [Platform Services](../../docs/PLATFORM_SERVICES.md) — Detailed platform service descriptions

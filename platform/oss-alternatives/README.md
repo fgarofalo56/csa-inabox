@@ -1,6 +1,11 @@
+[← Platform Components](../README.md)
+
 # Open-Source Alternatives for Azure Government
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Platform Engineers
+
+> [!NOTE]
+> **TL;DR:** Provides open-source alternatives (Atlas, Ranger, Superset, Trino, NiFi, etc.) deployable on AKS for Azure Government scenarios where PaaS services have limited availability. Supports both full OSS and hybrid Azure+OSS deployment models.
 
 When deploying Cloud Scale Analytics in Azure Government, some services may have
 limited availability or missing features. This directory provides open-source
@@ -14,7 +19,9 @@ alternatives that can be deployed on AKS (Azure Kubernetes Service) in Gov regio
 - [Integration with CSA Platform](#integration-with-csa-platform)
 - [Related Documentation](#related-documentation)
 
-## When to Use Open-Source Alternatives
+---
+
+## 💡 When to Use Open-Source Alternatives
 
 | Scenario | Azure Service | Gov Status | Open-Source Alternative |
 |---|---|---|---|
@@ -30,7 +37,9 @@ alternatives that can be deployed on AKS (Azure Kubernetes Service) in Gov regio
 | Event Streaming | Event Hubs | GA | Apache Kafka on HDInsight |
 | Search | Azure AI Search | GA | OpenSearch |
 
-## Deployment Patterns
+---
+
+## 📦 Deployment Patterns
 
 ### Option 1: AKS-Hosted OSS Stack
 
@@ -71,7 +80,33 @@ Use Azure services where available, supplement with OSS:
 - **Access Control**: Purview + Ranger for row/column-level security
 - **Visualization**: Power BI + Superset for embedded analytics
 
-## Helm Charts
+```mermaid
+graph LR
+    subgraph Azure PaaS
+        ADLS[ADLS Gen2]
+        ADF[Azure Data Factory]
+        DBX[Databricks]
+        PV[Purview]
+    end
+
+    subgraph AKS OSS
+        Atlas[Apache Atlas]
+        Ranger[Apache Ranger]
+        Superset[Apache Superset]
+        Trino[Trino]
+    end
+
+    ADLS --> DBX
+    ADF --> ADLS
+    PV --> Atlas
+    Ranger --> ADLS
+    Trino --> ADLS
+    Superset --> Trino
+```
+
+---
+
+## ⚙️ Helm Charts
 
 Each alternative includes:
 - `helm/` — Helm chart for AKS deployment
@@ -79,7 +114,9 @@ Each alternative includes:
 - `docs/` — Setup and integration guide
 - `tests/` — Validation scripts
 
-## Integration with CSA Platform
+---
+
+## 🏗️ Integration with CSA Platform
 
 All open-source alternatives integrate with the core CSA platform via:
 1. **ADLS Gen2** — Shared storage layer (all tools read/write Delta Lake)
@@ -90,7 +127,7 @@ All open-source alternatives integrate with the core CSA platform via:
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Platform Components](../README.md) — Platform component index
 - [Platform Services](../../docs/PLATFORM_SERVICES.md) — Detailed platform service descriptions

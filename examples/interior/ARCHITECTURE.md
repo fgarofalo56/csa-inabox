@@ -1,8 +1,16 @@
 # Department of Interior Natural Resources Architecture
 
+> [**Examples**](../README.md) > [**Interior**](README.md) > **Architecture**
+
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Architects / Data Engineers
 
-## Table of Contents
+> [!TIP]
+> **TL;DR** — Hybrid batch + streaming architecture for natural resource data. Real-time earthquake alerts via Event Hub, batch USGS/NPS/BLM ingestion, and Gold-layer models for seismic risk, park capacity forecasting, and wildfire risk scoring.
+
+
+---
+
+## 📋 Table of Contents
 - [Overview](#overview)
 - [Domain Context](#domain-context)
   - [Natural Resource Data Landscape](#natural-resource-data-landscape)
@@ -34,11 +42,17 @@
   - [Development Tools](#development-tools)
   - [Programming Languages](#programming-languages)
 
-## Overview
+
+---
+
+## 📋 Overview
 
 The Interior Natural Resources Analytics platform is built on Azure Cloud Scale Analytics (CSA) and follows a domain-driven design approach with an added real-time streaming component. It ingests data from multiple Interior Department bureaus, transforms it through a medallion architecture, and provides analytical insights for resource management, public safety, and environmental monitoring.
 
-## Domain Context
+
+---
+
+## 📋 Domain Context
 
 ### Natural Resource Data Landscape
 
@@ -56,9 +70,12 @@ The Interior Department ecosystem produces diverse scientific and operational da
 - **Variety**: Time series (gauges), point events (earthquakes), aggregated counts (visitors), geospatial (boundaries)
 - **Veracity**: Scientific-grade instrumentation with published accuracy specifications
 
-## Architecture Layers
 
-### Streaming Ingestion Layer
+---
+
+## 🏗️ Architecture Layers
+
+### 🔄 Streaming Ingestion Layer
 
 ```mermaid
 graph TD
@@ -86,7 +103,7 @@ graph TD
     SA2 --> Bronze
 ```
 
-### Batch Ingestion Layer
+### 🔄 Batch Ingestion Layer
 
 ```mermaid
 graph TD
@@ -130,7 +147,7 @@ graph TD
 - Real-time data: 15-minute intervals
 - Historical data: daily mean values back to early 1900s
 
-### Bronze Layer (Raw Data)
+### 🗄️ Bronze Layer (Raw Data)
 
 The Bronze layer stores raw, unprocessed data exactly as received from source systems and streaming feeds.
 
@@ -164,7 +181,7 @@ USING DELTA
 PARTITIONED BY (YEAR(event_time), MONTH(event_time))
 ```
 
-### Silver Layer (Cleaned & Conformed)
+### 🗄️ Silver Layer (Cleaned & Conformed)
 
 #### Transformation Patterns
 
@@ -187,7 +204,7 @@ PARTITIONED BY (YEAR(event_time), MONTH(event_time))
 - Baseflow separation for stream gauges
 - Seasonal flow percentile ranking
 
-### Gold Layer (Business Analytics)
+### 🗄️ Gold Layer (Business Analytics)
 
 #### Analytical Models
 
@@ -210,9 +227,12 @@ PARTITIONED BY (YEAR(event_time), MONTH(event_time))
 - Historical fire frequency by geographic region
 - Composite risk score with calibrated weights
 
-## Data Flow Architecture
 
-### Hybrid Batch + Streaming Pipeline
+---
+
+## 🔄 Data Flow Architecture
+
+### 🔄 Hybrid Batch + Streaming Pipeline
 
 ```mermaid
 graph TD
@@ -245,9 +265,12 @@ graph TD
     end
 ```
 
-## Security Architecture
 
-### Data Protection
+---
+
+## 🔒 Security Architecture
+
+### 🔒 Data Protection
 
 - **Encryption at Rest**: Azure Storage Service Encryption (SSE) with AES-256
 - **Encryption in Transit**: TLS 1.2+ including Event Hub AMQP connections
@@ -267,7 +290,10 @@ graph TD
 - Archaeological site locations are withheld from public APIs (ARPA)
 - Individual water rights data may contain PII
 
-## Performance Optimization
+
+---
+
+## ⚡ Performance Optimization
 
 ### Data Partitioning Strategy
 
@@ -287,9 +313,12 @@ graph TD
 - **CDN**: Park information and static geospatial assets
 - **Query Result Cache**: Gold layer aggregations (6-hour TTL)
 
-## Monitoring & Observability
 
-### Data Quality Monitoring
+---
+
+## 📊 Monitoring & Observability
+
+### 📊 Data Quality Monitoring
 
 - **dbt Tests**: Schema and business logic validation
 - **Custom Monitors**: Earthquake magnitude distribution checks, gauge data continuity
@@ -318,7 +347,10 @@ alert:
     - slack: "#data-engineering"
 ```
 
-## Disaster Recovery
+
+---
+
+## 🔒 Disaster Recovery
 
 ### Backup Strategy
 
@@ -333,7 +365,10 @@ alert:
 - **RPO**: 0 data loss for streaming (Event Hub capture), 24 hours for batch
 - **Failover**: Automated for Event Hub, manual for batch pipelines
 
-## Technology Stack
+
+---
+
+## 📎 Technology Stack
 
 ### Core Platform
 - **Compute**: Azure Databricks, Azure Functions, Azure Stream Analytics
@@ -342,7 +377,7 @@ alert:
 - **Orchestration**: Azure Data Factory, Azure Logic Apps
 - **Analytics**: Azure Synapse Analytics, Power BI
 
-### Development Tools
+### 🚀 Development Tools
 - **Data Modeling**: dbt, Great Expectations
 - **Version Control**: Git, Azure DevOps
 - **CI/CD**: Azure Pipelines, GitHub Actions
@@ -357,7 +392,7 @@ alert:
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Interior README](README.md) — Deployment guide, quick start, and analytics scenarios
 - [Platform Architecture](../../docs/ARCHITECTURE.md) — Core CSA platform architecture

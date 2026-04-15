@@ -1,6 +1,11 @@
 # Azure Government Deployment Templates
 
+[deploy](../../README.md) / [bicep](../README.md) / **gov**
+
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** DevOps Engineers
+
+> [!TIP]
+> **TL;DR** — Parallel deployment templates for Azure Government (MAG). Provides Fabric-equivalent capabilities using FedRAMP High-authorized PaaS services available in Gov today.
 
 This directory contains **parallel deployment templates** for Azure Government (MAG).
 Every template in the main `deploy/bicep/` and `deploy/terraform/` directories has a
@@ -8,20 +13,24 @@ corresponding Government-compatible version here.
 
 ## Table of Contents
 
-- [Why Government Templates?](#why-government-templates)
-- [Service Availability Matrix](#service-availability-matrix)
-- [Government-Specific Configuration](#government-specific-configuration)
-- [Usage](#usage)
-- [Open-Source Alternatives](#open-source-alternatives)
-- [Related Documentation](#related-documentation)
+- [Why Government Templates?](#-why-government-templates)
+- [Service Availability Matrix](#-service-availability-matrix)
+- [Government-Specific Configuration](#%EF%B8%8F-government-specific-configuration)
+- [Usage](#-usage)
+- [Open-Source Alternatives](#-open-source-alternatives)
+- [Related Documentation](#-related-documentation)
 
-## Why Government Templates?
+---
+
+## 📋 Why Government Templates?
 
 Microsoft Fabric is **NOT yet available in Azure Government** (status: "Forecasted" as
 of April 2026). CSA-in-a-Box provides Fabric-equivalent capabilities using Azure PaaS
 services that ARE available in Azure Government today.
 
-## Service Availability Matrix
+---
+
+## ✨ Service Availability Matrix
 
 | Service | Commercial | Gov FedRAMP High | Gov IL4 | Gov IL5 | Notes |
 |---|---|---|---|---|---|
@@ -48,9 +57,11 @@ services that ARE available in Azure Government today.
 | **App Service** | GA | GA | GA | GA | Web hosting |
 | **Static Web Apps** | GA | GA | GA | GA | JAMstack hosting |
 
-## Government-Specific Configuration
+---
 
-### Endpoint Differences
+## ⚙️ Government-Specific Configuration
+
+### 🔌 Endpoint Differences
 
 ```text
 # Commercial Azure
@@ -68,7 +79,7 @@ login.microsoftonline.com
 login.microsoftonline.us
 ```
 
-### Compliance Tags
+### 🔒 Compliance Tags
 
 All Government templates automatically apply:
 - `FedRAMP_Level: High`
@@ -76,7 +87,7 @@ All Government templates automatically apply:
 - `Data_Classification: CUI` (configurable)
 - `Compliance_Framework: NIST-800-53-Rev5`
 
-### FedRAMP Requirements by Vertical
+### 🔒 FedRAMP Requirements by Vertical
 
 | Vertical | FedRAMP Level | Additional Compliance |
 |---|---|---|
@@ -89,7 +100,9 @@ All Government templates automatically apply:
 | USDA | Moderate | USDA cybersecurity framework |
 | Casino (Tribal) | N/A (Tribal) | NIGC regulations, Title 31 |
 
-## Usage
+---
+
+## 💡 Usage
 
 ```bash
 # Deploy DLZ to Azure Government
@@ -102,7 +115,9 @@ bash scripts/deploy/deploy-platform.sh \
   --location usgovvirginia
 ```
 
-## Open-Source Alternatives
+---
+
+## 📦 Open-Source Alternatives
 
 For services with limited Gov availability, see
 [platform/oss-alternatives/](../../platform/oss-alternatives/) for open-source
@@ -110,7 +125,7 @@ replacements deployable on AKS in Azure Government.
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Government Service Matrix](../../../docs/GOV_SERVICE_MATRIX.md) — Full Gov service availability details
 - [Terraform IaC](../../terraform/README.md) — Terraform alternative deployment path

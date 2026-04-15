@@ -1,6 +1,23 @@
 # Examples — Industry Vertical Implementations
 
+> [**CSA-in-a-Box**](../README.md) > **Examples**
+
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers
+
+> [!TIP]
+> **TL;DR** — This directory contains complete, working CSA implementations for 10 verticals spanning federal agencies, tribal organizations, and commercial sectors. Each includes real/synthetic data, dbt medallion models, data contracts, and deployment instructions for both Azure Commercial and Azure Government.
+
+---
+
+## 📋 Table of Contents
+
+- [Available Verticals](#-available-verticals)
+- [Vertical Structure](#-vertical-structure)
+- [Getting Started](#-getting-started)
+- [Azure Government](#-azure-government)
+- [Related Documentation](#-related-documentation)
+
+---
 
 This directory contains **complete, working implementations** of Cloud Scale Analytics
 for specific federal agencies, tribal organizations, and commercial sectors.
@@ -14,7 +31,9 @@ Each vertical is a self-contained example that:
 - Has step-by-step deployment instructions
 - Supports both Azure Commercial and Azure Government
 
-## Available Verticals
+---
+
+## ✨ Available Verticals
 
 ### Federal Agencies
 
@@ -41,7 +60,9 @@ Each vertical is a self-contained example that:
 |---|---|---|
 | [iot-streaming/](iot-streaming/) | Real-Time Analytics | IoT Hub → Event Hub → Stream Analytics → ADX patterns |
 
-## Vertical Structure
+---
+
+## 📁 Vertical Structure
 
 Every vertical follows this standard layout:
 
@@ -71,7 +92,9 @@ examples/{vertical}/
 └── reports/               # Power BI templates + KQL queries
 ```
 
-## Getting Started
+---
+
+## 🚀 Getting Started
 
 1. Deploy the base CSA platform (`make deploy-dev` or `deploy-platform.sh`)
 2. Navigate to the vertical you want: `cd examples/usda/`
@@ -80,7 +103,9 @@ examples/{vertical}/
 5. Run dbt: `cd domains/dbt && dbt seed && dbt run && dbt test`
 6. Open the analytics notebooks in Databricks
 
-## Azure Government
+---
+
+## 🔒 Azure Government
 
 Verticals that are specifically designed for government deployment:
 - **tribal-health/** — Deploys to Azure Government, FedRAMP High compliant
@@ -91,7 +116,7 @@ All other verticals include `params.gov.json` for Government deployment.
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Architecture](../docs/ARCHITECTURE.md) — Comprehensive architecture reference
 - [Getting Started](../docs/GETTING_STARTED.md) — Prerequisites and deployment walkthrough

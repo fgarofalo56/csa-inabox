@@ -1,6 +1,11 @@
+[← Platform Components](../README.md)
+
 # Metadata-Driven Pipeline Framework
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Platform Engineers
+
+> [!NOTE]
+> **TL;DR:** The core engine that auto-generates ADF pipelines from YAML/JSON metadata definitions. Supports 14+ source types, 4 ingestion modes (full/incremental/CDC/streaming), auto-provisions landing zones with RBAC and Purview registration, and provides a CLI for validation, generation, and deployment.
 
 ## Table of Contents
 
@@ -25,7 +30,9 @@
 
 The metadata-driven pipeline framework is the core engine of the CSA-in-a-Box platform that automatically generates Azure Data Factory (ADF) pipelines from metadata definitions. This framework enables a declarative, schema-driven approach to data ingestion that scales across diverse data sources and ingestion patterns.
 
-## Overview
+---
+
+## 📋 Overview
 
 Instead of manually creating and maintaining hundreds of ADF pipelines, the metadata framework allows you to:
 
@@ -34,7 +41,9 @@ Instead of manually creating and maintaining hundreds of ADF pipelines, the meta
 3. **Auto-provision landing zones** with proper RBAC, storage structure, and Purview registration
 4. **Standardize across patterns** ensuring consistent data governance, quality, and security
 
-## Architecture
+---
+
+## 🏗️ Architecture
 
 ```mermaid
 graph TB
@@ -87,7 +96,9 @@ graph TB
     M --> Q
 ```
 
-## Pipeline Generation Flow
+---
+
+## 🔄 Pipeline Generation Flow
 
 ```mermaid
 sequenceDiagram
@@ -107,7 +118,9 @@ sequenceDiagram
     DLZ->>PV: Catalog metadata
 ```
 
-## Core Components
+---
+
+## ✨ Core Components
 
 ### 1. Source Registration Schema
 
@@ -148,7 +161,9 @@ Python module that:
 - Registers Purview scan jobs
 - Integrates with existing landing zone templates
 
-## Supported Source Types
+---
+
+## 🗄️ Supported Source Types
 
 | Source Type | Ingestion Modes | Template | Notes |
 |-------------|-----------------|----------|-------|
@@ -167,7 +182,9 @@ Python module that:
 | `sharepoint` | full, incremental | `adf_batch_copy.json`, `adf_incremental.json` | SharePoint lists/libraries |
 | `dynamics365` | full, incremental | `adf_api_ingestion.json` | Dynamics 365 entities |
 
-## Ingestion Modes
+---
+
+## 💡 Ingestion Modes
 
 ### Full Load
 Complete extract and load of all data on each run. Simple but resource-intensive.
@@ -181,7 +198,9 @@ Track changes (inserts, updates, deletes) using database change tracking feature
 ### Streaming
 Real-time ingestion of events via Event Hub, Kafka, or similar streaming platforms.
 
-## Quick Start
+---
+
+## 🚀 Quick Start
 
 ### 1. Register a SQL Server Data Source
 
@@ -267,7 +286,9 @@ az deployment group create \
   --parameters @pipeline-sales-orders.parameters.json
 ```
 
-## Schema Detection
+---
+
+## 🗄️ Schema Detection
 
 The framework includes automatic schema detection for supported source types:
 
@@ -288,7 +309,9 @@ api_schema = detector.detect_api_schema(
 )
 ```
 
-## Governance Integration
+---
+
+## 🔒 Governance Integration
 
 The framework integrates with CSA-in-a-Box governance features:
 
@@ -298,7 +321,9 @@ The framework integrates with CSA-in-a-Box governance features:
 - **Data Quality**: Integration with Great Expectations rules
 - **Monitoring**: Azure Monitor alerts for pipeline failures
 
-## Configuration
+---
+
+## ⚙️ Configuration
 
 Framework configuration is stored in `config/framework_config.yaml`:
 
@@ -322,7 +347,9 @@ monitoring:
   alert_action_group: "ag-data-platform-alerts"
 ```
 
-## Examples
+---
+
+## 💡 Examples
 
 See the `examples/` directory for complete source registrations:
 
@@ -332,15 +359,17 @@ See the `examples/` directory for complete source registrations:
 - `example_cosmos_source.yaml` - Cosmos DB with change feed
 - `example_file_source.yaml` - File drop with pattern matching
 
-## Development
+---
 
-### Prerequisites
+## 🚀 Development
+
+### 📎 Prerequisites
 
 - Python 3.10+
 - Azure CLI
 - Azure subscription with Data Factory, Storage, and Purview
 
-### Setup
+### 🚀 Setup
 
 ```bash
 # Install dependencies
@@ -371,7 +400,9 @@ python -m generator.pipeline_generator generate examples/example_sql_source.yaml
 3. Add configuration validation
 4. Update documentation
 
-## Monitoring and Troubleshooting
+---
+
+## 📊 Monitoring and Troubleshooting
 
 ### Pipeline Monitoring
 
@@ -381,7 +412,7 @@ All generated pipelines include:
 - Structured logging with correlation IDs
 - Failure notifications via Action Groups
 
-### Common Issues
+### 🔧 Common Issues
 
 | Issue | Cause | Solution |
 |-------|-------|----------|
@@ -410,7 +441,12 @@ pipeline_def = generator.generate_from_file("source.yaml")
 print(json.dumps(pipeline_def, indent=2))
 ```
 
-## Security Considerations
+---
+
+## 🔒 Security Considerations
+
+> [!WARNING]
+> Never store connection strings in source registration files. Always use Azure Key Vault references.
 
 - **Connection Strings**: Store in Azure Key Vault, never in source registration files
 - **RBAC**: Follow principle of least privilege for data access
@@ -418,7 +454,9 @@ print(json.dumps(pipeline_def, indent=2))
 - **Data Classification**: Implement appropriate security controls based on classification level
 - **Audit Logging**: All framework operations are logged for compliance
 
-## Performance Guidelines
+---
+
+## ⚡ Performance Guidelines
 
 - **Incremental Loading**: Preferred for large tables (>1M rows)
 - **CDC**: Best for tables with frequent updates
@@ -426,7 +464,9 @@ print(json.dumps(pipeline_def, indent=2))
 - **Batch Size**: Optimize based on source system capabilities
 - **Parallelization**: Use multiple parallel copy activities for large datasets
 
-## Roadmap
+---
+
+## 🔄 Roadmap
 
 - **Enhanced Schema Detection**: AI-powered data profiling and classification
 - **Pipeline Optimization**: Cost optimization recommendations
@@ -435,7 +475,9 @@ print(json.dumps(pipeline_def, indent=2))
 - **Machine Learning Integration**: Auto-generation of ML feature pipelines
 - **DataOps**: GitOps workflow for metadata changes
 
-## Contributing
+---
+
+## 🤝 Contributing
 
 1. Create feature branch from `main`
 2. Update relevant schemas, templates, and generators
@@ -456,7 +498,7 @@ MIT License - see `LICENSE` file in repository root.
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Platform Components](../README.md) — Platform component index
 - [Platform Services](../../docs/PLATFORM_SERVICES.md) — Detailed platform service descriptions

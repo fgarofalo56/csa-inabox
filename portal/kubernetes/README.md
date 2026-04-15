@@ -1,6 +1,15 @@
+[← Portal Implementations](../README.md)
+
 # Kubernetes Portal Deployment
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Frontend Developers
+
+> [!NOTE]
+> **TL;DR:** Production-grade AKS deployment of the data onboarding portal with Helm charts, HPA auto-scaling (2-10 pods), NGINX ingress with TLS, Redis session cache, Prometheus/Grafana monitoring, ArgoCD GitOps, and FIPS 140-2 compliance for Azure Government.
+
+A production-grade, highly scalable deployment of the data onboarding portal
+on Azure Kubernetes Service (AKS). This option provides maximum control over
+infrastructure, auto-scaling, and multi-region deployment.
 
 ## Table of Contents
 
@@ -14,42 +23,24 @@
 - [Scaling Characteristics](#scaling-characteristics)
 - [Related Documentation](#related-documentation)
 
-A production-grade, highly scalable deployment of the data onboarding portal
-on Azure Kubernetes Service (AKS). This option provides maximum control over
-infrastructure, auto-scaling, and multi-region deployment.
+---
 
-## Architecture
+## 🏗️ Architecture
 
-```text
-┌─────────────────────────────────────────────────────────────┐
-│                    AKS Cluster                               │
-│                                                              │
-│  ┌────────────────────────────────────────────────────────┐  │
-│  │              Ingress Controller (NGINX)                 │  │
-│  │              + TLS Termination (cert-manager)           │  │
-│  └───────────┬──────────────────────────┬─────────────────┘  │
-│              │                          │                     │
-│  ┌───────────┴──────────┐  ┌───────────┴──────────────┐     │
-│  │   Frontend (React)   │  │   Backend API (FastAPI)   │     │
-│  │   Deployment: 2-10   │  │   Deployment: 2-10        │     │
-│  │   HPA: CPU 70%       │  │   HPA: CPU 70%            │     │
-│  │   Port: 3000         │  │   Port: 8000               │     │
-│  └──────────────────────┘  └───────────┬──────────────┘     │
-│                                         │                     │
-│                            ┌───────────┴──────────────┐     │
-│                            │   Redis (Session Cache)   │     │
-│                            │   StatefulSet: 3          │     │
-│                            └──────────────────────────┘     │
-│                                                              │
-│  ┌────────────────────────────────────────────────────────┐  │
-│  │   Monitoring: Prometheus + Grafana                      │  │
-│  │   Logging: Fluentd → Azure Monitor / Log Analytics      │  │
-│  │   Secrets: Azure Key Vault CSI Driver                   │  │
-│  └────────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────────┘
+```mermaid
+graph TB
+    subgraph AKS[AKS Cluster]
+        Ingress[NGINX Ingress + TLS]
+        Ingress --> FE[Frontend React<br/>2-10 pods, HPA 70%]
+        Ingress --> BE[Backend FastAPI<br/>2-10 pods, HPA 70%]
+        BE --> Redis[Redis Session Cache<br/>StatefulSet: 3]
+        Monitor[Prometheus + Grafana<br/>Fluentd → Log Analytics<br/>Key Vault CSI Driver]
+    end
 ```
 
-## Quick Start
+---
+
+## 🚀 Quick Start
 
 ```bash
 # Prerequisites: helm, kubectl, az cli
@@ -68,7 +59,9 @@ helm install csa-portal ./helm/csa-portal \
   --set api.apiUrl=http://csa-api:8000/api/v1
 ```
 
-## Helm Chart
+---
+
+## 📁 Helm Chart
 
 ```text
 portal/kubernetes/
@@ -111,7 +104,9 @@ portal/kubernetes/
     └── deploy.sh                   # Deployment script
 ```
 
-## Helm Values
+---
+
+## ⚙️ Helm Values
 
 ```yaml
 # helm/csa-portal/values.yaml
@@ -213,7 +208,9 @@ monitoring:
     enabled: true
 ```
 
-## Docker Images
+---
+
+## 📦 Docker Images
 
 ### Frontend
 
@@ -245,7 +242,9 @@ EXPOSE 8000
 CMD ["uvicorn", "api.app:app", "--host", "0.0.0.0", "--port", "8000"]
 ```
 
-## GitOps with ArgoCD
+---
+
+## 🔄 GitOps with ArgoCD
 
 ```yaml
 # argocd/application.yaml
@@ -275,7 +274,12 @@ spec:
       - CreateNamespace=true
 ```
 
-## Azure Government
+---
+
+## 🔒 Azure Government
+
+> [!IMPORTANT]
+> FIPS 140-2 compliant nodes are enabled by default in the Gov deployment.
 
 AKS is fully available in Azure Government:
 
@@ -296,9 +300,9 @@ az aks create \
   --network-policy calico
 ```
 
-FIPS 140-2 compliant nodes are enabled by default in the Gov deployment.
+---
 
-## Scaling Characteristics
+## ⚡ Scaling Characteristics
 
 | Metric | Value |
 |---|---|
@@ -316,7 +320,7 @@ multi-region deployments.
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Portal Implementations](../README.md) — Portal implementation index
 - [Shared Backend](../shared/README.md) — Shared backend API

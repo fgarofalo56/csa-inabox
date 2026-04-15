@@ -1,8 +1,16 @@
 # USDA Agricultural Analytics Platform
 
+> [**Examples**](../README.md) > **USDA**
+
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers
 
-## Table of Contents
+> [!TIP]
+> **TL;DR** — Agricultural analytics platform providing crop yield forecasting, SNAP enrollment analysis, and food safety risk scoring using official USDA data sources with NASS QuickStats API integration.
+
+
+---
+
+## 📋 Table of Contents
 - [Overview](#overview)
   - [Key Features](#key-features)
   - [Data Sources](#data-sources)
@@ -43,11 +51,14 @@
 
 A comprehensive agricultural analytics platform built on Azure Cloud Scale Analytics (CSA), providing insights into crop yields, food safety, nutrition assistance programs, and agricultural economic indicators using official USDA data sources.
 
-## Overview
+
+---
+
+## 📋 Overview
 
 This platform ingests, processes, and analyzes data from multiple USDA agencies to provide actionable insights for agricultural decision-making, policy analysis, and research. The platform follows the medallion architecture (Bronze → Silver → Gold) and implements modern data engineering best practices.
 
-### Key Features
+### ✨ Key Features
 
 - **Real-time Agricultural Data**: Automated ingestion from USDA NASS, FNS, FSIS, and FoodData Central
 - **Crop Yield Analytics**: Historical trends, forecasting, and regional comparisons
@@ -56,14 +67,17 @@ This platform ingests, processes, and analyzes data from multiple USDA agencies 
 - **Interactive Dashboards**: Executive dashboards with KPIs and drill-down capabilities
 - **API-First Architecture**: RESTful APIs for all data products
 
-### Data Sources
+### 🗄️ Data Sources
 
 - **NASS (National Agricultural Statistics Service)**: Crop yields, planted acres, production data
 - **FNS (Food and Nutrition Service)**: SNAP enrollment and benefits data
 - **FSIS (Food Safety and Inspection Service)**: Meat, poultry, and egg inspection records
 - **FoodData Central**: Nutritional information and food composition data
 
-## Architecture Overview
+
+---
+
+## 🏗️ Architecture Overview
 
 ```mermaid
 graph TD
@@ -133,7 +147,10 @@ graph TD
     D3 --> E3
 ```
 
-## Prerequisites
+
+---
+
+## 📎 Prerequisites
 
 ### Azure Resources
 - Azure subscription with contributor access
@@ -152,7 +169,10 @@ graph TD
 - USDA NASS QuickStats API key (free registration at https://quickstats.nass.usda.gov/api)
 - Data.gov API key (optional, for enhanced rate limits)
 
-## Quick Start
+
+---
+
+## 🚀 Quick Start
 
 ### 1. Environment Setup
 
@@ -223,7 +243,10 @@ dbt docs generate
 dbt docs serve
 ```
 
-## Sample Analytics Scenarios
+
+---
+
+## 💡 Sample Analytics Scenarios
 
 ### 1. Crop Yield Forecasting
 
@@ -289,7 +312,10 @@ WHERE report_date = CURRENT_DATE
 ORDER BY report_date DESC;
 ```
 
-## Data Products
+
+---
+
+## ✨ Data Products
 
 ### Crop Yields (`crop-yields`)
 - **Description**: Historical and forecasted crop yield data by commodity, state, and county
@@ -309,9 +335,12 @@ ORDER BY report_date DESC;
 - **Coverage**: 2015-present, all inspected facilities
 - **API**: `/api/v1/food-safety-risk`
 
-## Configuration
 
-### dbt Profiles
+---
+
+## ⚙️ Configuration
+
+### ⚙️ dbt Profiles
 
 Add to your `~/.dbt/profiles.yml`:
 
@@ -335,7 +364,7 @@ usda_analytics:
       catalog: prod
 ```
 
-### Environment Variables
+### ⚙️ Environment Variables
 
 ```bash
 # Required for data fetching
@@ -352,7 +381,10 @@ USDA_LOG_LEVEL=INFO
 USDA_BATCH_SIZE=1000
 ```
 
-## Monitoring & Alerts
+
+---
+
+## 📊 Monitoring & Alerts
 
 The platform includes built-in monitoring for:
 
@@ -361,9 +393,12 @@ The platform includes built-in monitoring for:
 - **API Performance**: Response time and error rate monitoring
 - **Cost Management**: Daily spend alerts and optimization recommendations
 
-## Development
 
-### Adding New Data Sources
+---
+
+## 🚀 Development
+
+### 🗄️ Adding New Data Sources
 
 1. Create Bronze model in `domains/dbt/models/bronze/`
 2. Add data quality tests in `schema.yml`
@@ -371,7 +406,7 @@ The platform includes built-in monitoring for:
 4. Add to Gold aggregations as needed
 5. Update data contracts in `contracts/`
 
-### Testing
+### 🧪 Testing
 
 ```bash
 # Unit tests
@@ -387,9 +422,12 @@ pytest data/tests/integration/
 python data/tests/load_test.py
 ```
 
-## Troubleshooting
 
-### Common Issues
+---
+
+## 🔧 Troubleshooting
+
+### 🔧 Common Issues
 
 1. **API Rate Limits**: NASS API has rate limits. Use the `--delay` parameter in data generation scripts.
 
@@ -399,13 +437,16 @@ python data/tests/load_test.py
 
 4. **Large Data Volumes**: Use incremental models and partitioning for historical data loads.
 
-### Logs
+### 📊 Logs
 
 - Application logs: `logs/usda-analytics.log`
 - dbt logs: `domains/dbt/logs/dbt.log` 
 - Data pipeline logs: Azure Data Factory monitoring
 
-## Contributing
+
+---
+
+## 🔗 Contributing
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/new-data-source`)
@@ -413,18 +454,27 @@ python data/tests/load_test.py
 4. Run quality checks (`make lint test`)
 5. Submit a pull request
 
-## License
+
+---
+
+## 🔗 License
 
 This project is licensed under the MIT License. See `LICENSE` file for details.
 
-## Support
+
+---
+
+## 🔗 Support
 
 - **Documentation**: https://csa-inabox.docs.microsoft.com/usda
 - **Issues**: Use GitHub Issues for bug reports and feature requests
 - **Security**: Report security issues to security@contoso.com
 - **Community**: Join our Slack channel `#csa-usda-analytics`
 
-## Acknowledgments
+
+---
+
+## 🔗 Acknowledgments
 
 - USDA for providing comprehensive public agricultural data APIs
 - Azure Cloud Scale Analytics team for the foundational platform
@@ -432,7 +482,7 @@ This project is licensed under the MIT License. See `LICENSE` file for details.
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [USDA Architecture](ARCHITECTURE.md) — Detailed platform architecture and design decisions
 - [USDA Implementation Summary](IMPLEMENTATION_SUMMARY.md) — Implementation details and file structure

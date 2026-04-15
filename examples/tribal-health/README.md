@@ -1,8 +1,16 @@
 # Tribal Health Data Warehouse — IHS & Tribal Health Analytics
 
+> [**Examples**](../README.md) > **Tribal Health**
+
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers
 
-## Table of Contents
+> [!TIP]
+> **TL;DR** — Population health analytics for IHS and tribal health programs, deployed exclusively in Azure Government. All data is synthetic. Features diabetes tracking, behavioral health resource allocation, and tribal data sovereignty.
+
+
+---
+
+## 📋 Table of Contents
 - [Overview](#overview)
   - [Key Features](#key-features)
   - [Data Sources](#data-sources)
@@ -47,22 +55,24 @@
 
 A population health analytics platform built on Azure Cloud Scale Analytics (CSA) for Indian Health Service (IHS) area offices, tribal health organizations, and urban Indian health programs. Deployed exclusively in Azure Government with HIPAA, FedRAMP High, and tribal data sovereignty compliance.
 
-## Overview
+
+---
+
+## 📋 Overview
 
 The Indian Health Service provides healthcare to approximately 2.6 million American Indians and Alaska Natives across 574 federally recognized tribes. Tribal health systems face unique challenges: vast geographic service areas, complex jurisdictional relationships, chronic disease burdens significantly exceeding national averages, and critical behavioral health needs. This platform ingests, transforms, and analyzes health data from IHS service units and tribal health programs to provide actionable insights for population health management, resource allocation, and health equity measurement.
 
 The platform follows the medallion architecture (Bronze → Silver → Gold), uses HL7 FHIR-aligned data models, and enforces tribal data sovereignty at every layer.
 
-> **⚠️ CRITICAL: All Data Is Synthetic**
->
-> Individual-level tribal health data is **restricted by tribal law, federal policy, and HIPAA**. This platform uses only:
+> [!WARNING]
+> **CRITICAL: All Data Is Synthetic** — Individual-level tribal health data is **restricted by tribal law, federal policy, and HIPAA**. This platform uses only:
 > - **Aggregate IHS public statistics** (published reports and fact sheets)
 > - **Fully synthetic RPMS-compatible data** generated for demonstration purposes
 > - **HL7 FHIR R4 schemas** for interoperability without exposing real patient data
 >
 > **No real patient data, tribal member data, or Protected Health Information (PHI) is included.** Any deployment with real data requires explicit tribal council authorization, a data sharing agreement, and IRB approval.
 
-### Key Features
+### ✨ Key Features
 
 - **Azure Government Deployment**: All resources provisioned in US Gov Virginia / US Gov Arizona — FedRAMP High baseline
 - **HIPAA-Compliant Architecture**: Encryption at rest (AES-256) and in transit (TLS 1.3), PHI audit logging, BAA coverage
@@ -71,7 +81,7 @@ The platform follows the medallion architecture (Bronze → Silver → Gold), us
 - **Population Health Analytics**: Chronic disease tracking, behavioral health metrics, maternal/child health outcomes
 - **De-identified Reporting**: Automated suppression of small cell sizes (<5) per IHS data release policy
 
-### Data Sources
+### 🗄️ Data Sources
 
 All source data is synthetic. The architecture supports these real-world source patterns:
 
@@ -83,7 +93,7 @@ All source data is synthetic. The architecture supports these real-world source 
 | CMS Quality Measures | Reference | HEDIS/GPRA clinical quality measures | https://www.cms.gov/ |
 | Tribal Epidemiology Centers | Aggregate | Regional health surveillance (consent-based) | By arrangement |
 
-### Compliance Framework
+### 🔒 Compliance Framework
 
 | Regulation | Requirement | Implementation |
 |---|---|---|
@@ -94,7 +104,10 @@ All source data is synthetic. The architecture supports these real-world source 
 | 42 CFR Part 2 | Substance use disorder record confidentiality | Segmented access, SUD consent tracking |
 | FISMA | Federal information security | Continuous monitoring, POA&M tracking |
 
-## Architecture Overview
+
+---
+
+## 🏗️ Architecture Overview
 
 ```mermaid
 graph TD
@@ -163,11 +176,15 @@ graph TD
     D3 --> E3
 ```
 
-## Prerequisites
 
-### Azure Government Resources
+---
 
-> **IMPORTANT**: This example deploys EXCLUSIVELY to Azure Government (usgovvirginia / usgovarizona). Azure Commercial is not supported for this workload due to FedRAMP High and IHS compliance requirements.
+## 📎 Prerequisites
+
+### 🔒 Azure Government Resources
+
+> [!IMPORTANT]
+> This example deploys EXCLUSIVELY to Azure Government (usgovvirginia / usgovarizona). Azure Commercial is not supported for this workload due to FedRAMP High and IHS compliance requirements.
 
 - Azure Government subscription with contributor access
 - Azure Data Factory (Gov) or Synapse Analytics (Gov)
@@ -184,16 +201,19 @@ graph TD
 - Python 3.9+
 - Git
 
-### Compliance Prerequisites
+### 📎 Compliance Prerequisites
 
 - FedRAMP High ATO or equivalent authorization
 - HIPAA BAA with Microsoft (included with Azure Government)
 - Tribal council data sharing agreement (for any real data deployment)
 - IRB approval (for research use cases)
 
-## Quick Start
 
-### 1. Configure Azure Government Environment
+---
+
+## 🚀 Quick Start
+
+### 🔒 1. Configure Azure Government Environment
 
 ```bash
 # Set cloud environment to Azure Government
@@ -266,7 +286,10 @@ dbt docs generate
 dbt docs serve
 ```
 
-## Analytics Scenarios
+
+---
+
+## 💡 Analytics Scenarios
 
 ### 1. Diabetes Prevalence Tracking
 
@@ -339,7 +362,10 @@ WHERE reporting_period >= '2023-01-01'
 ORDER BY prenatal_first_trimester_pct ASC;
 ```
 
-## Data Sovereignty
+
+---
+
+## 🔒 Data Sovereignty
 
 ### Tribal Control Over Health Data
 
@@ -379,7 +405,10 @@ tribal_data_sharing:
   tribal_resolution_number: "CJN-42-24"
 ```
 
-## Data Products
+
+---
+
+## ✨ Data Products
 
 ### Population Health Summary (`population-health`)
 - **Description**: Aggregated population health metrics by service unit and tribal affiliation
@@ -400,9 +429,12 @@ tribal_data_sharing:
 - **Freshness**: Monthly updates
 - **Coverage**: Mental health and SUD services
 
-## Configuration
 
-### dbt Profiles
+---
+
+## ⚙️ Configuration
+
+### ⚙️ dbt Profiles
 
 Add to your `~/.dbt/profiles.yml`:
 
@@ -433,7 +465,7 @@ tribal_health_analytics:
       catalog: prod
 ```
 
-### Environment Variables
+### ⚙️ Environment Variables
 
 ```bash
 # Azure Government configuration
@@ -459,7 +491,10 @@ HIPAA_AUDIT_ENABLED=true
 SMALL_CELL_THRESHOLD=5
 ```
 
-## Monitoring & Compliance
+
+---
+
+## 📊 Monitoring & Compliance
 
 ### HIPAA-Compliant Logging
 
@@ -484,7 +519,7 @@ az monitor log-analytics query \
     "
 ```
 
-### Data Quality Monitoring
+### 📊 Data Quality Monitoring
 
 - **dbt Tests**: Schema validation, referential integrity, clinical value range checks
 - **HIPAA Validation**: PHI field encryption verification, access control audit
@@ -492,7 +527,10 @@ az monitor log-analytics query \
 - **Small Cell Suppression**: Automated verification that no Gold-layer output contains cells < 5
 - **Data Freshness**: Alerts when source data hasn't updated within SLA
 
-## Development
+
+---
+
+## 🚀 Development
 
 ### Adding New Health Domains
 
@@ -503,7 +541,7 @@ az monitor log-analytics query \
 5. Update data contracts in `contracts/` with CUI classification
 6. Register new tribal data access policies
 
-### Testing
+### 🧪 Testing
 
 ```bash
 # Unit tests for data generator
@@ -520,9 +558,12 @@ dbt test --select tag:data_sovereignty
 pytest data/tests/integration/
 ```
 
-## Troubleshooting
 
-### Common Issues
+---
+
+## 🔧 Troubleshooting
+
+### 🔧 Common Issues
 
 1. **Azure Government Login**: Ensure `az cloud set --name AzureUSGovernment` before `az login`. Gov endpoints differ from commercial Azure.
 
@@ -534,14 +575,17 @@ pytest data/tests/integration/
 
 5. **42 CFR Part 2 Access Denied**: Substance use disorder data requires separate consent. Verify the SUD consent flag in the consent ledger.
 
-### Logs
+### 📊 Logs
 
 - Application logs: `logs/tribal-health-analytics.log`
 - dbt logs: `domains/dbt/logs/dbt.log`
 - HIPAA audit logs: Azure Monitor → Log Analytics workspace
 - Data pipeline logs: Azure Data Factory monitoring (Gov portal)
 
-## Ethical Considerations
+
+---
+
+## 🔒 Ethical Considerations
 
 This platform was designed with the following ethical principles:
 
@@ -551,7 +595,10 @@ This platform was designed with the following ethical principles:
 4. **No Harm**: Aggregate statistics are published at levels that prevent re-identification of individuals or small communities.
 5. **Reciprocity**: Findings and dashboards are shared with tribal health programs, not locked behind paywalls.
 
-## Contributing
+
+---
+
+## 🔗 Contributing
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/new-health-domain`)
@@ -560,11 +607,17 @@ This platform was designed with the following ethical principles:
 5. Run `dbt test --select tag:hipaa_compliance` before submitting
 6. Submit a pull request with security review tag
 
-## License
+
+---
+
+## 🔗 License
 
 This project is licensed under the MIT License. See `LICENSE` file for details.
 
-## Acknowledgments
+
+---
+
+## 🔗 Acknowledgments
 
 - Indian Health Service for publicly available aggregate health statistics
 - Tribal Epidemiology Centers for population health methodology guidance
@@ -572,13 +625,16 @@ This project is licensed under the MIT License. See `LICENSE` file for details.
 - Azure Government team for FedRAMP High platform support
 - Azure Cloud Scale Analytics team for the foundational platform architecture
 
-## Disclaimer
+
+---
+
+## 🔗 Disclaimer
 
 This example uses **entirely synthetic data** generated to reflect publicly available aggregate health statistics from IHS annual reports. No real patient data, tribal member data, or Protected Health Information (PHI) is included. The synthetic data generator produces statistically plausible distributions for development and demonstration purposes only. Any resemblance to real individuals is coincidental.
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Tribal Health Architecture](ARCHITECTURE.md) — Detailed platform architecture and design decisions
 - [Examples Index](../README.md) — Overview of all CSA-in-a-Box example verticals

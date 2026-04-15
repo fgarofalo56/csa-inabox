@@ -1,8 +1,16 @@
 # IoT & Streaming Analytics Examples
 
+> [**Examples**](../README.md) > **IoT Streaming**
+
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers
 
-## Table of Contents
+> [!TIP]
+> **TL;DR** — Reusable streaming patterns shared across verticals: hot path (Event Hub to ADX), warm path (Stream Analytics windowed aggregations), cold path (Event Hub Capture to ADLS), and anomaly detection for temperature, AQI, weather, and slot machine sensors.
+
+
+---
+
+## 📋 Table of Contents
 - [Architecture](#architecture)
 - [Streaming Patterns](#streaming-patterns)
   - [Pattern 1: Hot Path (Real-Time)](#pattern-1-hot-path-real-time)
@@ -26,6 +34,9 @@
 Real-time data ingestion and analytics patterns for IoT sensors, telemetry,
 and event streaming. These patterns are used across multiple verticals
 (NOAA weather stations, EPA air quality sensors, casino slot machines).
+
+
+---
 
 ## Architecture
 
@@ -85,6 +96,9 @@ graph TB
     Warm --> Alerts
     ADX --> API
 ```
+
+
+---
 
 ## Streaming Patterns
 
@@ -161,7 +175,10 @@ FROM [AQIInput]
 WHERE anomaly_score > 0.8
 ```
 
-## Directory Structure
+
+---
+
+## 📁 Directory Structure
 
 ```text
 examples/iot-streaming/
@@ -188,16 +205,19 @@ examples/iot-streaming/
     └── detect_anomalies.asaql         # Spike/dip & change-point detection
 ```
 
-## Deployment
 
-### Prerequisites
+---
+
+## 📦 Deployment
+
+### 📎 Prerequisites
 
 - Azure subscription with Event Hubs, IoT Hub, and ADX resource providers registered
 - ADLS Gen2 storage account for Event Hub Capture and processed output
 - Log Analytics workspace for diagnostic settings
 - Azure CLI with Bicep installed
 
-### Step 1: Deploy IoT Hub and Event Hubs
+### ⚡ Step 1: Deploy IoT Hub and Event Hubs
 
 ```bash
 # Create resource group
@@ -222,7 +242,7 @@ This deploys:
 - **Consumer groups** for ADX, Stream Analytics, and Capture
 - **Diagnostic settings** to Log Analytics
 
-### Step 2: Deploy Stream Analytics
+### 🔄 Step 2: Deploy Stream Analytics
 
 ```bash
 # Get the Event Hub connection string from Step 1 output
@@ -244,7 +264,7 @@ az deployment group create \
       logAnalyticsWorkspaceId=<your-law-id>
 ```
 
-### Step 3: Create ADX Tables
+### 🗄️ Step 3: Create ADX Tables
 
 ```bash
 # Connect to your ADX cluster
@@ -285,7 +305,7 @@ Available sensor types:
 - `weather` — NOAA-style weather station readings
 - `slot_machine` — Casino slot machine telemetry
 
-### Step 5: Start Stream Analytics Job
+### 🔄 Step 5: Start Stream Analytics Job
 
 ```bash
 az stream-analytics job start \
@@ -311,7 +331,10 @@ SensorTelemetry
 // See kql/queries/realtime_anomaly_detection.kql
 ```
 
-## KQL Queries Reference
+
+---
+
+## 🗄️ KQL Queries Reference
 
 | Query File | Purpose |
 |-----------|---------|
@@ -321,13 +344,19 @@ SensorTelemetry
 | `alert_triggers.kql` | Temperature, AQI, wind, battery, hold%, and offline device alerts |
 | `dashboard_summary.kql` | Fleet KPIs, geographic heatmap, throughput metrics, per-vertical summaries |
 
-## Stream Analytics Queries Reference
+
+---
+
+## 🔄 Stream Analytics Queries Reference
 
 | Query File | Purpose |
 |-----------|---------|
 | `transform_telemetry.asaql` | Raw passthrough + enrichment (heat index, dew point, quality flags) |
 | `aggregate_metrics.asaql` | Tumbling (5min), hopping (1min/5min), regional, and session windows |
 | `detect_anomalies.asaql` | SpikeAndDip, ChangePoint, and combined threshold+anomaly alerts |
+
+
+---
 
 ## Integration with Other Verticals
 
@@ -343,7 +372,10 @@ This streaming infrastructure is shared across verticals:
 Each vertical can add its own KQL queries and Stream Analytics jobs while
 sharing the same Event Hub namespace and ADX cluster.
 
-## Azure Government
+
+---
+
+## 🔒 Azure Government
 
 All streaming services are available in Azure Government:
 - Event Hubs: GA (FedRAMP High, IL4, IL5)
@@ -357,7 +389,7 @@ Azure CLI cloud to `AzureUSGovernment`.
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Examples Index](../README.md) — Overview of all CSA-in-a-Box example verticals
 - [Platform Architecture](../../docs/ARCHITECTURE.md) — Core CSA platform architecture

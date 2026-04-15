@@ -2,6 +2,9 @@
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Frontend Developers
 
+> [!NOTE]
+> **TL;DR:** Four portal implementations (PowerApps, React/Next.js, Static Web Apps, Kubernetes) all sharing the same FastAPI backend for self-service data source registration, pipeline monitoring, marketplace discovery, and access request workflows.
+
 This directory contains **four different implementations** of the autonomous data
 onboarding portal, each using a different technology stack. All implementations share
 the same backend API and provide the same functionality.
@@ -14,7 +17,9 @@ the same backend API and provide the same functionality.
 - [Quick Comparison](#quick-comparison)
 - [Related Documentation](#related-documentation)
 
-## What the Portal Does
+---
+
+## ✨ What the Portal Does
 
 The data onboarding portal enables **self-service data source registration**. Users can:
 
@@ -47,7 +52,9 @@ sequenceDiagram
     User->>Portal: Monitor dashboard
 ```
 
-## Implementations
+---
+
+## 🏗️ Implementations
 
 ### 1. PowerApps + Logic Apps (`powerapps/`)
 - **Best for:** Organizations already in M365 ecosystem
@@ -77,7 +84,9 @@ sequenceDiagram
 - **Cons:** Most complex, requires K8s expertise
 - **Deploy time:** ~60 minutes
 
-## Shared Backend (`shared/`)
+---
+
+## 🔌 Shared Backend (`shared/`)
 
 All portal implementations connect to the same **shared backend API**:
 
@@ -105,7 +114,9 @@ portal/shared/
 └── tests/
 ```
 
-## Quick Comparison
+---
+
+## 📋 Quick Comparison
 
 | Feature | PowerApps | React | Static Web App | Kubernetes |
 |---|---|---|---|---|
@@ -119,7 +130,7 @@ portal/shared/
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Architecture](../docs/ARCHITECTURE.md) — Overall system architecture
 - [Platform Components](../platform/README.md) — Platform component index

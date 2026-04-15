@@ -1,18 +1,23 @@
 # Shared Contracts Directory
 
+[domains](../../README.md) / [shared](../README.md) / **contracts**
+
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers
 
-> **Note:** This directory is intentionally empty. Data contracts in CSA-in-a-Box
+> [!NOTE]
+> This directory is intentionally empty. Data contracts in CSA-in-a-Box
 > are defined alongside their data products, not in a centralized location.
 
 ## Table of Contents
 
-- [Where to Find Data Contracts](#where-to-find-data-contracts)
-- [Creating New Contracts](#creating-new-contracts)
-- [Contract Validation](#contract-validation)
-- [Related Documentation](#related-documentation)
+- [Where to Find Data Contracts](#-where-to-find-data-contracts)
+- [Creating New Contracts](#-creating-new-contracts)
+- [Contract Validation](#-contract-validation)
+- [Related Documentation](#-related-documentation)
 
-## Where to Find Data Contracts
+---
+
+## 📁 Where to Find Data Contracts
 
 Data contracts live at the data product level within each domain:
 
@@ -20,7 +25,7 @@ Data contracts live at the data product level within each domain:
 domains/<domain>/data-products/<product>/contract.yaml
 ```
 
-### Existing contracts
+### 📋 Existing contracts
 
 | Domain | Product | Path |
 |---|---|---|
@@ -31,7 +36,9 @@ domains/<domain>/data-products/<product>/contract.yaml
 | inventory | inventory | `domains/inventory/data-products/inventory/contract.yaml` |
 | sales | orders | `domains/sales/data-products/orders/contract.yaml` |
 
-## Creating New Contracts
+---
+
+## 🚀 Creating New Contracts
 
 Use the contract template to scaffold a new data product contract:
 
@@ -44,17 +51,21 @@ Use the contract template to scaffold a new data product contract:
    python -m governance.contracts.contract_validator --ci
    ```
 
-## Contract Validation
+---
+
+## 🧪 Contract Validation
 
 Tooling for validating contracts against the schema lives in:
 
-- `governance/contracts/contract_validator.py` -- validates contract YAML against the JSON Schema template
-- `governance/contracts/dbt_test_generator.py` -- generates dbt tests from contract quality rules
-- `governance/contracts/pipeline_enforcer.py` -- enforces contract SLAs in pipeline runs
+| Tool | Purpose |
+|------|---------|
+| `governance/contracts/contract_validator.py` | Validates contract YAML against the JSON Schema template |
+| `governance/contracts/dbt_test_generator.py` | Generates dbt tests from contract quality rules |
+| `governance/contracts/pipeline_enforcer.py` | Enforces contract SLAs in pipeline runs |
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Architecture Overview](../../../docs/ARCHITECTURE.md) — Platform architecture reference
 - [Examples](../../../examples/README.md) — Sample data pipelines and use cases

@@ -1,6 +1,14 @@
+[← Portal Implementations](../README.md)
+
 # PowerApps + Logic Apps Portal
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Frontend Developers
+
+> [!NOTE]
+> **TL;DR:** Low-code data onboarding portal built on Microsoft Power Platform — Canvas App for source registration wizard, Model-Driven App for governance dashboard, Power Automate flows for approvals and monitoring. Supports GCC/GCC High/DoD. Deploy in ~30 minutes.
+
+A low-code/no-code data onboarding portal built with Microsoft Power Platform.
+Best suited for organizations already invested in the Microsoft 365 ecosystem.
 
 ## Table of Contents
 
@@ -13,35 +21,26 @@
 - [Pros and Cons](#pros-and-cons)
 - [Related Documentation](#related-documentation)
 
-A low-code/no-code data onboarding portal built with Microsoft Power Platform.
-Best suited for organizations already invested in the Microsoft 365 ecosystem.
+---
 
-## Architecture
+## 🏗️ Architecture
 
-```text
-┌────────────────────────────────────────────────────────────┐
-│              Power Platform                                 │
-│  ┌──────────────┐  ┌──────────────────────────────────┐    │
-│  │ Canvas App   │  │ Model-Driven App                  │    │
-│  │ (Data Source │  │ (Governance Dashboard)             │    │
-│  │  Registration│  │ - Approval workflows              │    │
-│  │  Wizard)     │  │ - Data product catalog             │    │
-│  └──────┬───────┘  │ - Access request management       │    │
-│         │          └─────────────┬────────────────────┘    │
-│         └────────────┬───────────┘                          │
-│              ┌───────┴──────────┐                           │
-│              │  Power Automate  │                           │
-│              │  (Flows)         │                           │
-│              └───────┬──────────┘                           │
-└──────────────────────┼─────────────────────────────────────┘
-                       │ HTTP Connectors
-┌──────────────────────┼─────────────────────────────────────┐
-│            Shared Backend (FastAPI)                          │
-│            portal/shared/api/                                │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+graph TB
+    subgraph PowerPlatform[Power Platform]
+        Canvas[Canvas App<br/>Source Registration Wizard]
+        Model[Model-Driven App<br/>Governance Dashboard]
+        PA[Power Automate Flows]
+    end
+
+    Canvas --> PA
+    Model --> PA
+    PA -->|HTTP Connectors| API[Shared Backend<br/>FastAPI]
 ```
 
-## Components
+---
+
+## ✨ Components
 
 ### Canvas App — Source Registration
 
@@ -80,9 +79,11 @@ Built on Dataverse tables for full CRUD with business rules:
 | Access Request | When access request created | Route to domain owner, apply RBAC on approval |
 | Quality Alert | When quality score < threshold | Send Teams notification, create incident |
 
-## Setup Instructions
+---
 
-### Prerequisites
+## 🚀 Setup Instructions
+
+### 📎 Prerequisites
 
 - Microsoft 365 license with Power Platform (E3/E5 or standalone)
 - Power Platform environment (with Dataverse)
@@ -121,7 +122,8 @@ pac solution import --path ./solution/CSAPortal_managed.zip
 
 ### Step 4: Set Up Dataverse Tables
 
-Tables are auto-created by the solution import. Verify:
+> [!TIP]
+> Tables are auto-created by the solution import. Verify them in the Dataverse admin center.
 
 ```text
 Data Sources     → csa_datasource
@@ -132,7 +134,9 @@ Quality Metrics  → csa_qualitymetric
 Domains          → csa_domain
 ```
 
-## Solution Structure
+---
+
+## 📁 Solution Structure
 
 ```text
 portal/powerapps/
@@ -161,7 +165,9 @@ portal/powerapps/
     └── config.json              # Environment configuration
 ```
 
-## Deployment
+---
+
+## 📦 Deployment
 
 ### Export Solution (for CI/CD)
 
@@ -178,7 +184,7 @@ pac solution export \
   --path ./solution/CSAPortal_unmanaged.zip
 ```
 
-### CI/CD with GitHub Actions
+### 🔄 CI/CD with GitHub Actions
 
 ```yaml
 # .github/workflows/deploy-powerapps.yml
@@ -201,17 +207,24 @@ jobs:
           solution-file: portal/powerapps/solution/CSAPortal_managed.zip
 ```
 
-## Azure Government
+---
+
+## 🔒 Azure Government
+
+> [!IMPORTANT]
+> Update all connection URLs and authentication endpoints for your Gov cloud tier.
 
 Power Platform is available in Azure Government (GCC/GCC High/DoD):
 
-- GCC: `*.crm9.dynamics.com`
-- GCC High: `*.crm.microsoftdynamics.us`
-- DoD: `*.crm.appsplatform.us`
+| Tier | Endpoint |
+|---|---|
+| GCC | `*.crm9.dynamics.com` |
+| GCC High | `*.crm.microsoftdynamics.us` |
+| DoD | `*.crm.appsplatform.us` |
 
-Update all connection URLs and authentication endpoints accordingly.
+---
 
-## Pros and Cons
+## 📋 Pros and Cons
 
 | Aspect | Assessment |
 |---|---|
@@ -226,7 +239,7 @@ Update all connection URLs and authentication endpoints accordingly.
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Portal Implementations](../README.md) — Portal implementation index
 - [Shared Backend](../shared/README.md) — Shared backend API

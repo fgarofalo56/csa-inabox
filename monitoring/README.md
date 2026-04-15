@@ -7,12 +7,14 @@ including Azure Monitor alert rules (Bicep) and Grafana dashboard definitions.
 
 ## Table of Contents
 
-- [Structure](#structure)
-- [Getting Started](#getting-started)
-- [Alert Categories](#alert-categories)
-- [Related Documentation](#related-documentation)
+- [Structure](#-structure)
+- [Getting Started](#-getting-started)
+- [Alert Categories](#-alert-categories)
+- [Related Documentation](#-related-documentation)
 
-## Structure
+---
+
+## 📁 Structure
 
 ```text
 monitoring/
@@ -34,13 +36,20 @@ monitoring/
         └── pipeline_health.json  # Pipeline execution dashboard
 ```
 
-## Getting Started
+---
 
-1. Deploy alerts to dev: `az deployment group create -g rg-monitoring --template-file alerts/main.bicep --parameters alerts/params.dev.json`
+## 🚀 Getting Started
+
+1. Deploy alerts to dev:
+   ```bash
+   az deployment group create -g rg-monitoring --template-file alerts/main.bicep --parameters alerts/params.dev.json
+   ```
 2. Import Grafana dashboards from `grafana/dashboards/*.json` into your Grafana instance
 3. Review `alerts/action-group.bicep` to configure notification targets
 
-## Alert Categories
+---
+
+## 📊 Alert Categories
 
 | Module | What It Monitors |
 |--------|-----------------|
@@ -53,7 +62,7 @@ monitoring/
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Architecture](../docs/ARCHITECTURE.md) — System architecture reference
 - [Troubleshooting](../docs/TROUBLESHOOTING.md) — Common issues and resolution

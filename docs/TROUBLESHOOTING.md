@@ -1,25 +1,32 @@
+[Home](../README.md) > [Docs](./) > **Troubleshooting**
+
 # Troubleshooting Guide
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Operations
 
-## Table of Contents
+> [!NOTE]
+> **Quick Summary**: Comprehensive troubleshooting guide covering Bicep deployment failures, dbt issues, data quality problems, Azure Functions, ADF pipelines, Stream Analytics, Databricks, Purview, Great Expectations, Key Vault, Cosmos DB, and CI/CD workflow issues.
 
-- [Bicep Deployment Issues](#bicep-deployment-issues)
-- [dbt Issues](#dbt-issues)
-- [Data Quality Issues](#data-quality-issues)
-- [Azure Functions Issues](#azure-functions-issues)
-- [Deployment Rollback](#deployment-rollback)
-- [Regional Outage / Disaster Recovery](#regional-outage--disaster-recovery)
-- [ADF Pipeline Issues](#adf-pipeline-issues)
-- [Stream Analytics Issues](#stream-analytics-issues)
-- [Databricks Issues](#databricks-issues)
-- [Purview Issues](#purview-issues)
-- [Great Expectations Issues](#great-expectations-issues)
-- [Key Vault Issues](#key-vault-issues)
-- [Cosmos DB Issues](#cosmos-db-issues)
-- [CI/CD Workflow Issues](#cicd-workflow-issues)
+## 📑 Table of Contents
 
-## Bicep Deployment Issues
+- [📦 Bicep Deployment Issues](#-bicep-deployment-issues)
+- [🗄️ dbt Issues](#️-dbt-issues)
+- [📊 Data Quality Issues](#-data-quality-issues)
+- [⚙️ Azure Functions Issues](#️-azure-functions-issues)
+- [🔄 Deployment Rollback](#-deployment-rollback)
+- [🏗️ Regional Outage / Disaster Recovery](#️-regional-outage--disaster-recovery)
+- [🔧 ADF Pipeline Issues](#-adf-pipeline-issues)
+- [📊 Stream Analytics Issues](#-stream-analytics-issues)
+- [⚡ Databricks Issues](#-databricks-issues)
+- [📊 Purview Issues](#-purview-issues)
+- [🧪 Great Expectations Issues](#-great-expectations-issues)
+- [🔒 Key Vault Issues](#-key-vault-issues)
+- [🗄️ Cosmos DB Issues](#️-cosmos-db-issues)
+- [🔄 CI/CD Workflow Issues](#-cicd-workflow-issues)
+
+---
+
+## 📦 Bicep Deployment Issues
 
 ### "Resource provider not registered"
 ```text
@@ -43,14 +50,16 @@ bicep build deploy/bicep/DLZ/main.bicep
 
 ### "DeploymentFailed - PrivateEndpoint"
 Private endpoints require:
-1. The target VNet/subnet exists
-2. The Private DNS Zone exists and is linked to the VNet
-3. The subnet has `privateEndpointNetworkPolicies` set to `Disabled`
+- [ ] The target VNet/subnet exists
+- [ ] The Private DNS Zone exists and is linked to the VNet
+- [ ] The subnet has `privateEndpointNetworkPolicies` set to `Disabled`
 
 ### "Conflict - RoleAssignment"
 Safe to ignore on re-deployments. The role assignment already exists.
 
-## dbt Issues
+---
+
+## 🗄️ dbt Issues
 
 ### "Connection refused" on dbt compile
 Ensure your `profiles.yml` has correct Databricks connection info:
@@ -71,7 +80,9 @@ Run Unity Catalog setup first:
 domains/shared/notebooks/databricks/unity_catalog_setup.py
 ```
 
-## Data Quality Issues
+---
+
+## 📊 Data Quality Issues
 
 ### Volume check shows "warn" instead of "pass"
 This means dbt CLI is not available in the current environment. Volume checks require dbt to query actual row counts. Install dbt: `pip install dbt-databricks`
@@ -79,7 +90,9 @@ This means dbt CLI is not available in the current environment. Volume checks re
 ### Freshness check times out
 Increase the timeout in `run_quality_checks.py` or check network connectivity to Databricks.
 
-## Azure Functions Issues
+---
+
+## ⚙️ Azure Functions Issues
 
 ### "AI client not configured"
 Set these environment variables in the Function App configuration:
@@ -89,21 +102,27 @@ Set these environment variables in the Function App configuration:
 ### "Event Hub connection failed"
 Verify `EVENT_HUB_CONNECTION` app setting points to a valid Event Hub namespace connection string.
 
-## Deployment Rollback
+---
+
+## 🔄 Deployment Rollback
 
 If a deployment landed broken state in Azure, see
 [`ROLLBACK.md`](ROLLBACK.md) for the step-by-step rollback runbook. It
 covers Bicep redeploy, ADF pipeline restore, dbt full-refresh, Cosmos DB
 point-in-time restore, and storage account blob recovery.
 
-## Regional Outage / Disaster Recovery
+---
+
+## 🏗️ Regional Outage / Disaster Recovery
 
 If the whole primary Azure region is down (not just a deploy gone bad),
 see [`DR.md`](DR.md) for the failover runbook. It documents RPO/RTO
 targets per service, the primary/secondary region pairs, and the
 step-by-step failover and failback procedures.
 
-## ADF Pipeline Issues
+---
+
+## 🔧 ADF Pipeline Issues
 
 ### Pipeline stuck in "InProgress"
 
@@ -132,11 +151,13 @@ Use the deployment script which handles ordering:
 
 ### Trigger not firing
 
-1. Verify the trigger is started: `az datafactory trigger show --name tr_daily_medallion ...`
-2. Check the trigger's `runtimeState` — must be `Started`
-3. If `Stopped`, start it: `az datafactory trigger start --name tr_daily_medallion ...`
+- [ ] Verify the trigger is started: `az datafactory trigger show --name tr_daily_medallion ...`
+- [ ] Check the trigger's `runtimeState` — must be `Started`
+- [ ] If `Stopped`, start it: `az datafactory trigger start --name tr_daily_medallion ...`
 
-## Stream Analytics Issues
+---
+
+## 📊 Stream Analytics Issues
 
 ### "Input deserialization error"
 
@@ -157,9 +178,9 @@ output matches the SA job input schema. Common issues:
 
 ### "Output sink error" (Event Hub / ADX / Blob)
 
-1. Verify the output connection string is valid
-2. Check Event Hub namespace isn't throttled (quota exceeded)
-3. For ADX: verify the table exists and streaming ingestion is enabled
+- [ ] Verify the output connection string is valid
+- [ ] Check Event Hub namespace isn't throttled (quota exceeded)
+- [ ] For ADX: verify the table exists and streaming ingestion is enabled
 
 ### Query syntax error on deployment
 
@@ -171,7 +192,9 @@ az stream-analytics query test --job-name <job> \
     --query-file scripts/streaming/queries/tumbling_window_event_counts.asaql
 ```
 
-## Databricks Issues
+---
+
+## ⚡ Databricks Issues
 
 See the detailed [DATABRICKS_GUIDE.md](DATABRICKS_GUIDE.md) for full
 coverage. Quick fixes for common issues:
@@ -200,38 +223,42 @@ spark.databricks.delta.retryWriteConflict.enabled true
 
 Or stagger job schedules to avoid overlap.
 
-## Purview Issues
+---
+
+## 📊 Purview Issues
 
 ### "Scan failed: Access denied"
 
 The Purview managed identity needs access to the data source:
-1. Storage: Assign `Storage Blob Data Reader` to the Purview MI
-2. Cosmos DB: Assign `Cosmos DB Account Reader` to the Purview MI
-3. Databricks: Generate a PAT and store in Purview credentials
+- [ ] Storage: Assign `Storage Blob Data Reader` to the Purview MI
+- [ ] Cosmos DB: Assign `Cosmos DB Account Reader` to the Purview MI
+- [ ] Databricks: Generate a PAT and store in Purview credentials
 
 ### "Classification rules not applied"
 
-1. Verify custom classification rules are loaded:
+- [ ] Verify custom classification rules are loaded:
    ```bash
    python scripts/purview/bootstrap_catalog.py --purview-account <name> --dry-run
    ```
-2. Check that the scan ruleset includes the custom rules
-3. Re-run the scan after updating classification rules
+- [ ] Check that the scan ruleset includes the custom rules
+- [ ] Re-run the scan after updating classification rules
 
 ### "Lineage not showing"
 
 For ADF-to-Purview lineage:
-1. Verify `purviewAccountId` is set in the ADF Bicep parameters
-2. Check that ADF's managed identity has `Purview Data Curator` role
-3. Run a pipeline and wait 5-10 minutes for lineage to propagate
+- [ ] Verify `purviewAccountId` is set in the ADF Bicep parameters
+- [ ] Check that ADF's managed identity has `Purview Data Curator` role
+- [ ] Run a pipeline and wait 5-10 minutes for lineage to propagate
 
-## Great Expectations Issues
+---
+
+## 🧪 Great Expectations Issues
 
 ### "No suites configured" warning
 
 The GE runner found no suites in `quality-rules.yaml`:
-1. Verify `quality-rules.yaml` has a `great_expectations.suites` section
-2. Check for YAML syntax errors: `python -c "import yaml; yaml.safe_load(open('governance/dataquality/quality-rules.yaml'))"`
+- [ ] Verify `quality-rules.yaml` has a `great_expectations.suites` section
+- [ ] Check for YAML syntax errors: `python -c "import yaml; yaml.safe_load(open('governance/dataquality/quality-rules.yaml'))"`
 
 ### "Checkpoint not found"
 
@@ -250,14 +277,16 @@ pip install great-expectations
 
 Or use the in-memory fallback by passing `sample_data=` to `run_ge_checkpoints()`.
 
-## Key Vault Issues
+---
+
+## 🔒 Key Vault Issues
 
 ### "SecretNotFound" or "Forbidden"
 
-1. Verify the secret exists: `az keyvault secret show --vault-name <vault> --name <secret>`
-2. Check access policy: the calling identity needs `Get` permission on secrets
-3. If using RBAC: verify the identity has `Key Vault Secrets User` role
-4. Check if Key Vault is behind a private endpoint — the caller must be in the VNet
+- [ ] Verify the secret exists: `az keyvault secret show --vault-name <vault> --name <secret>`
+- [ ] Check access policy: the calling identity needs `Get` permission on secrets
+- [ ] If using RBAC: verify the identity has `Key Vault Secrets User` role
+- [ ] Check if Key Vault is behind a private endpoint — the caller must be in the VNet
 
 ### "Key Vault is soft-deleted"
 
@@ -268,7 +297,9 @@ az keyvault recover --name <vault>  # Recover it
 az keyvault purge --name <vault>    # Permanently delete
 ```
 
-## Cosmos DB Issues
+---
+
+## 🗄️ Cosmos DB Issues
 
 ### "Request rate too large" (429 throttling)
 
@@ -292,14 +323,16 @@ Verify the partition key path matches between the Bicep template and
 the application code. The Cosmos Bicep module sets the partition key
 during container creation.
 
-## CI/CD Workflow Issues
+---
+
+## 🔄 CI/CD Workflow Issues
 
 ### "OIDC token request failed"
 
 The GitHub Actions OIDC federation to Azure failed:
-1. Verify the federated credential exists on the service principal
-2. Check the `subject` claim matches: `repo:<org>/<repo>:ref:refs/heads/main`
-3. Verify the `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` secrets
+- [ ] Verify the federated credential exists on the service principal
+- [ ] Check the `subject` claim matches: `repo:<org>/<repo>:ref:refs/heads/main`
+- [ ] Verify the `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` secrets
 
 ### Coverage gate failing
 
@@ -312,13 +345,13 @@ Check which files are below threshold and add tests.
 
 ### Bicep what-if PR comment not appearing
 
-1. The `bicep-whatif.yml` workflow requires Azure OIDC credentials
-2. It only runs on PRs that modify `deploy/bicep/**` files
-3. The bot needs write permissions on the PR — check `permissions: pull-requests: write`
+- [ ] The `bicep-whatif.yml` workflow requires Azure OIDC credentials
+- [ ] It only runs on PRs that modify `deploy/bicep/**` files
+- [ ] The bot needs write permissions on the PR — check `permissions: pull-requests: write`
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Getting Started](GETTING_STARTED.md) — Prerequisites and deployment walkthrough
 - [Rollback](ROLLBACK.md) — Deployment rollback runbook

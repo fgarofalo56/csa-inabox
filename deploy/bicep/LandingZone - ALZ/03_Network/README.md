@@ -6,11 +6,11 @@ Module deploys the following resources:
 
 - Resource Group
 
-## Parameters
+## ⚙️ Parameters
 
 - [Link to Parameters](generateddocs/resourceGroup.bicep.md)
 
-## Outputs
+## 📋 Outputs
 
 The module will generate the following outputs:
 
@@ -19,16 +19,16 @@ The module will generate the following outputs:
 | outResourceGroupName | string | `Hub` |
 | outResourceGroupId | string | `/subscriptions/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxx/resourceGroups/Hub` |
 
-## Deployment
+## 📦 Deployment
 
 Module is intended to be called from other modules as a reusable resource.
 
-## Bicep Visualizer
+## 🏗️ Bicep Visualizer
 
 ![Bicep Visualizer](media/bicepVisualizer.png "Bicep Visualizer")
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [IaC & CI/CD Best Practices](../../../../docs/IaC-CICD-Best-Practices.md) - Deployment pipeline guidance

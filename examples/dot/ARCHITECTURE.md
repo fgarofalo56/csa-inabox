@@ -1,8 +1,16 @@
 # DOT Transportation Analytics Architecture
 
+> [**Examples**](../README.md) > [**DOT**](README.md) > **Architecture**
+
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Architects / Data Engineers
 
-## Table of Contents
+> [!TIP]
+> **TL;DR** — Multi-modal transportation analytics architecture combining batch FARS/NBI/NTD data with real-time GTFS transit feeds. Features hot/warm/cold processing paths, ADX for sub-second transit queries, and safety hotspot detection.
+
+
+---
+
+## 📋 Table of Contents
 - [Overview](#overview)
 - [Domain Context](#domain-context)
   - [Transportation Data Landscape](#transportation-data-landscape)
@@ -39,11 +47,17 @@
   - [Development Tools](#development-tools)
   - [Programming Languages](#programming-languages)
 
-## Overview
+
+---
+
+## 📋 Overview
 
 The DOT Transportation Analytics platform is built on Azure Cloud Scale Analytics (CSA) and follows a domain-driven design approach. It ingests data from multiple DOT agencies — NHTSA, FHWA, FTA, and FAA — transforms it through a medallion architecture, and provides analytical insights for transportation safety, infrastructure planning, and transit operations.
 
-## Domain Context
+
+---
+
+## 📋 Domain Context
 
 ### Transportation Data Landscape
 
@@ -61,7 +75,10 @@ The US Department of Transportation ecosystem produces extensive data through mu
 - **Variety**: Structured tabular data (crashes, inspections), geospatial (coordinates, routes), time-series (ridership trends)
 - **Veracity**: Government-mandated reporting with standardized collection methodologies (FARS coding manual, NBI standards, NTD reporting guidelines)
 
-## System Context
+
+---
+
+## 🏗️ System Context
 
 ```mermaid
 graph TD
@@ -111,9 +128,12 @@ graph TD
     PBI --> OPS
 ```
 
-## Architecture Layers
 
-### Data Ingestion Layer
+---
+
+## 🏗️ Architecture Layers
+
+### 🔄 Data Ingestion Layer
 
 ```mermaid
 graph TD
@@ -170,7 +190,7 @@ graph TD
 - Sub-minute update frequency for vehicle positions
 - Ingested through Azure Event Hubs for streaming processing
 
-### Bronze Layer (Raw Data)
+### 🗄️ Bronze Layer (Raw Data)
 
 The Bronze layer stores raw, unprocessed data exactly as received from source systems.
 
@@ -212,7 +232,7 @@ PARTITIONED BY (state_code, YEAR(crash_date))
 - Original API responses stored as JSON for reprocessing
 - Record hashes for deduplication across incremental loads
 
-### Silver Layer (Cleaned & Conformed)
+### 🗄️ Silver Layer (Cleaned & Conformed)
 
 The Silver layer applies business rules, data quality checks, and standardization.
 
@@ -237,7 +257,7 @@ The Silver layer applies business rules, data quality checks, and standardizatio
 - Transit on-time rate: on_time_trips / scheduled_trips
 - Maintenance urgency score: function of condition, traffic, age
 
-### Gold Layer (Business Analytics)
+### 🗄️ Gold Layer (Business Analytics)
 
 The Gold layer contains aggregated, enriched data optimized for analytics and reporting.
 
@@ -262,9 +282,12 @@ The Gold layer contains aggregated, enriched data optimized for analytics and re
 - Mode comparison (bus, rail, ferry, demand-response)
 - Trend analysis with seasonally-adjusted metrics
 
-## Data Flow Architecture
 
-### Batch Processing Pipeline
+---
+
+## 🔄 Data Flow Architecture
+
+### 🔄 Batch Processing Pipeline
 
 ```mermaid
 graph TD
@@ -307,9 +330,12 @@ graph TD
 - **Warm path**: Databricks Structured Streaming for micro-batch Silver layer updates
 - **Cold path**: Standard batch pipeline for historical trend analysis
 
-## Integration Points
 
-### Event Hub Configuration
+---
+
+## 🔌 Integration Points
+
+### ⚙️ Event Hub Configuration
 
 ```yaml
 event_hub:
@@ -329,7 +355,7 @@ event_hub:
         - adx-ingestion
 ```
 
-### Azure Data Explorer (ADX) Integration
+### 🗄️ Azure Data Explorer (ADX) Integration
 
 ADX provides real-time analytics for streaming transit data:
 
@@ -345,7 +371,7 @@ TransitVehiclePositions
 | order by avg_delay_seconds desc
 ```
 
-### Power BI Dashboards
+### 📊 Power BI Dashboards
 
 Three primary dashboards serve different user personas:
 
@@ -367,9 +393,12 @@ Three primary dashboards serve different user personas:
 - Ridership trend sparklines by agency
 - Service gap alerts and notifications
 
-## Security Architecture
 
-### Data Protection
+---
+
+## 🔒 Security Architecture
+
+### 🔒 Data Protection
 
 - **Encryption at Rest**: Azure Storage Service Encryption (SSE) with Microsoft-managed keys
 - **Encryption in Transit**: TLS 1.2+ for all API communications
@@ -398,7 +427,10 @@ graph TD
     I[WAF Protection] --> B
 ```
 
-## Performance Optimization
+
+---
+
+## ⚡ Performance Optimization
 
 ### Data Partitioning Strategy
 
@@ -418,15 +450,18 @@ graph TD
 - **ADX Result Cache**: Hot query results for real-time transit (5-minute TTL)
 - **Synapse Result Cache**: Gold layer query results (24-hour TTL)
 
-## Monitoring & Observability
 
-### Data Quality Monitoring
+---
+
+## 📊 Monitoring & Observability
+
+### 📊 Data Quality Monitoring
 
 - **dbt Tests**: Schema validation, accepted values, range checks, custom SQL tests
 - **Great Expectations**: Statistical distribution tests and anomaly detection
 - **Custom Monitors**: Geospatial validation (coordinates within state boundaries)
 
-### Pipeline Monitoring
+### 📊 Pipeline Monitoring
 
 - **Azure Monitor**: Infrastructure health, pipeline run status, resource utilization
 - **Application Insights**: API performance, error rates, dependency tracking
@@ -452,7 +487,10 @@ alerts:
     channel: "#dot-transit-ops"
 ```
 
-## Disaster Recovery
+
+---
+
+## 🔒 Disaster Recovery
 
 ### Backup Strategy
 
@@ -467,7 +505,10 @@ alerts:
 - **RPO**: 24 hours for batch data, 15 minutes for streaming data
 - **Failover**: Automated for infrastructure, manual approval for data pipelines
 
-## Technology Stack
+
+---
+
+## 📎 Technology Stack
 
 ### Core Platform
 
@@ -477,7 +518,7 @@ alerts:
 - **Streaming**: Azure Event Hubs, Databricks Structured Streaming
 - **Analytics**: Azure Synapse Analytics, Azure Data Explorer, Power BI
 
-### Development Tools
+### 🚀 Development Tools
 
 - **Data Modeling**: dbt, Great Expectations
 - **Version Control**: Git, Azure DevOps
@@ -494,7 +535,7 @@ alerts:
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [DOT README](README.md) — Deployment guide, quick start, and analytics scenarios
 - [Platform Architecture](../../docs/ARCHITECTURE.md) — Core CSA platform architecture

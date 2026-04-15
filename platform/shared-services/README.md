@@ -1,6 +1,11 @@
+[← Platform Components](../README.md)
+
 # Shared Services — Reusable Function Library
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Platform Engineers
+
+> [!NOTE]
+> **TL;DR:** Reusable Azure Functions and Container Apps shared across all data landing zones — covering data validation, format conversion, AI enrichment, and notifications — all exposed via Azure API Management gateway.
 
 Reusable Azure Functions, Container Apps, and API patterns that can be
 shared across all data landing zones in the CSA-in-a-Box platform.
@@ -13,9 +18,11 @@ shared across all data landing zones in the CSA-in-a-Box platform.
 - [Directory Structure](#directory-structure)
 - [Related Documentation](#related-documentation)
 
-## Services
+---
 
-### 1. Data Validation Functions
+## ✨ Services
+
+### 🧪 1. Data Validation Functions
 
 Reusable validation logic deployed as Azure Functions:
 
@@ -26,7 +33,7 @@ Reusable validation logic deployed as Azure Functions:
 | `detect-pii` | HTTP | Scan text fields for PII patterns |
 | `validate-geospatial` | HTTP | Validate lat/lon coordinates and boundaries |
 
-### 2. Format Conversion Functions
+### 🔄 2. Format Conversion Functions
 
 | Function | Input | Output |
 |---|---|---|
@@ -36,7 +43,7 @@ Reusable validation logic deployed as Azure Functions:
 | `excel-to-csv` | XLSX blob trigger | CSV files |
 | `fhir-to-delta` | FHIR JSON | Delta Lake (for Tribal Health) |
 
-### 3. AI Enrichment Functions
+### ⚡ 3. AI Enrichment Functions
 
 | Function | Purpose |
 |---|---|
@@ -46,7 +53,7 @@ Reusable validation logic deployed as Azure Functions:
 | `detect-language` | Language detection via Azure AI Translator |
 | `generate-embeddings` | Vector embeddings via Azure OpenAI |
 
-### 4. Notification Functions
+### 📊 4. Notification Functions
 
 | Function | Purpose |
 |---|---|
@@ -55,7 +62,9 @@ Reusable validation logic deployed as Azure Functions:
 | `create-incident` | Create incidents in ServiceNow/PagerDuty |
 | `update-dashboard` | Push metrics to Grafana/Power BI |
 
-## API Management Gateway
+---
+
+## 🔌 API Management Gateway
 
 All shared functions are discoverable through Azure API Management:
 
@@ -77,7 +86,9 @@ https://csa-apim.azure-api.net/
     └── POST /email      → send-email-alert
 ```
 
-## Deployment
+---
+
+## 📦 Deployment
 
 ```bash
 # Deploy all shared functions
@@ -89,7 +100,9 @@ az deployment group create \
   --parameters deploy/params.json
 ```
 
-## Directory Structure
+---
+
+## 📁 Directory Structure
 
 ```text
 platform/shared-services/
@@ -118,7 +131,7 @@ platform/shared-services/
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Platform Components](../README.md) — Platform component index
 - [Platform Services](../../docs/PLATFORM_SERVICES.md) — Detailed platform service descriptions

@@ -1,8 +1,16 @@
 # USDA Agricultural Analytics Architecture
 
+> [**Examples**](../README.md) > [**USDA**](README.md) > **Architecture**
+
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Architects / Data Engineers
 
-## Table of Contents
+> [!TIP]
+> **TL;DR** — Agricultural analytics architecture ingesting NASS crop statistics, FNS SNAP data, and FSIS inspection records through a medallion pipeline. Features crop yield forecasting with ML integration and API-first data product delivery.
+
+
+---
+
+## 📋 Table of Contents
 - [Overview](#overview)
 - [Domain Context](#domain-context)
   - [Agricultural Data Landscape](#agricultural-data-landscape)
@@ -45,11 +53,17 @@
   - [Development Tools](#development-tools)
   - [Programming Languages](#programming-languages)
 
-## Overview
+
+---
+
+## 📋 Overview
 
 The USDA Agricultural Analytics platform is built on Azure Cloud Scale Analytics (CSA) and follows a domain-driven design approach. It ingests data from multiple USDA agencies, transforms it through a medallion architecture, and provides analytical insights for agricultural decision-making.
 
-## Domain Context
+
+---
+
+## 📋 Domain Context
 
 ### Agricultural Data Landscape
 
@@ -68,9 +82,12 @@ The USDA ecosystem produces vast amounts of agricultural data through multiple a
 - **Variety**: Structured (yields, enrollment), semi-structured (inspection reports), geospatial (farm locations)
 - **Veracity**: Government-grade data quality with standardized collection processes
 
-## Architecture Layers
 
-### Data Ingestion Layer
+---
+
+## 🏗️ Architecture Layers
+
+### 🔄 Data Ingestion Layer
 
 ```mermaid
 graph TD
@@ -111,7 +128,7 @@ graph TD
 - Daily batch processing recommended
 - Retention: 3+ years of historical data
 
-### Bronze Layer (Raw Data)
+### 🗄️ Bronze Layer (Raw Data)
 
 The Bronze layer stores raw, unprocessed data exactly as received from source systems.
 
@@ -144,7 +161,7 @@ PARTITIONED BY (year, state_fips_code)
 - Original API responses stored for reprocessing
 - Change data capture for incremental loads
 
-### Silver Layer (Cleaned & Conformed)
+### 🗄️ Silver Layer (Cleaned & Conformed)
 
 The Silver layer applies business rules, data quality checks, and standardization.
 
@@ -196,7 +213,7 @@ USING DELTA
 PARTITIONED BY (year, state_code)
 ```
 
-### Gold Layer (Business Analytics)
+### 🗄️ Gold Layer (Business Analytics)
 
 The Gold layer contains aggregated, enriched data optimized for analytics and reporting.
 
@@ -252,9 +269,12 @@ USING DELTA
 PARTITIONED BY (report_date, state_code)
 ```
 
-## Data Flow Architecture
 
-### Batch Processing Pipeline
+---
+
+## 🔄 Data Flow Architecture
+
+### 🔄 Batch Processing Pipeline
 
 ```mermaid
 graph TD
@@ -284,9 +304,12 @@ For time-sensitive data like food safety inspections:
 - Delta Live Tables for streaming transformations
 - Real-time dashboards via Power BI streaming datasets
 
-## Integration Patterns
 
-### API Gateway Architecture
+---
+
+## 🔌 Integration Patterns
+
+### 🔌 API Gateway Architecture
 
 ```mermaid
 graph TD
@@ -300,7 +323,7 @@ graph TD
     F -->|Caching| I[Azure Cache for Redis]
 ```
 
-### Data Contracts
+### 🔌 Data Contracts
 
 Each data product exposes a versioned contract:
 
@@ -323,9 +346,12 @@ spec:
     accuracy: 99%
 ```
 
-## Security Architecture
 
-### Data Protection
+---
+
+## 🔒 Security Architecture
+
+### 🔒 Data Protection
 
 - **Encryption at Rest**: Azure Storage Service Encryption (SSE)
 - **Encryption in Transit**: TLS 1.2+ for all API communications
@@ -353,7 +379,10 @@ graph TD
     I[WAF Protection] --> B
 ```
 
-## Performance Optimization
+
+---
+
+## ⚡ Performance Optimization
 
 ### Data Partitioning Strategy
 
@@ -378,15 +407,18 @@ CREATE INDEX idx_snap_enrollment_trend
 ON silver.slv_snap_enrollment (state_code, enrollment_date);
 ```
 
-## Monitoring & Observability
 
-### Data Quality Monitoring
+---
+
+## 📊 Monitoring & Observability
+
+### 📊 Data Quality Monitoring
 
 - **Great Expectations**: Automated data validation
 - **dbt Tests**: Schema and business logic validation
 - **Custom Monitors**: Domain-specific quality checks
 
-### Pipeline Monitoring
+### 📊 Pipeline Monitoring
 
 - **Azure Monitor**: Infrastructure and pipeline health
 - **Application Insights**: API performance and errors
@@ -405,7 +437,10 @@ alert:
     - email: "usda-data-team@contoso.com"
 ```
 
-## Disaster Recovery
+
+---
+
+## 🔒 Disaster Recovery
 
 ### Backup Strategy
 
@@ -419,7 +454,10 @@ alert:
 - **RPO**: 24 hours maximum data loss
 - **Failover**: Automated for infrastructure, manual for data pipelines
 
-## Cost Optimization
+
+---
+
+## ⚡ Cost Optimization
 
 ### Resource Management
 
@@ -433,7 +471,10 @@ alert:
 - **Partition Pruning**: Minimize data scanning
 - **Compression**: Delta table optimization
 
-## Future Architecture
+
+---
+
+## 🚀 Future Architecture
 
 ### Machine Learning Integration
 
@@ -465,7 +506,10 @@ graph TD
 - **Edge Analytics**: Real-time processing on farm equipment
 - **Hybrid Cloud**: On-premises data centers with cloud analytics
 
-## Technology Stack
+
+---
+
+## 📎 Technology Stack
 
 ### Core Platform
 - **Compute**: Azure Databricks, Azure Functions
@@ -473,7 +517,7 @@ graph TD
 - **Orchestration**: Azure Data Factory, Azure Logic Apps
 - **Analytics**: Azure Synapse Analytics, Power BI
 
-### Development Tools
+### 🚀 Development Tools
 - **Data Modeling**: dbt, Great Expectations
 - **Version Control**: Git, Azure DevOps
 - **CI/CD**: Azure Pipelines, GitHub Actions
@@ -487,7 +531,7 @@ graph TD
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [USDA README](README.md) — Deployment guide, quick start, and analytics scenarios
 - [Platform Architecture](../../docs/ARCHITECTURE.md) — Core CSA platform architecture

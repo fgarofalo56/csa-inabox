@@ -1,8 +1,15 @@
 # Casino Analytics Platform — Architecture
 
+> [**Examples**](../README.md) > [**Casino Analytics**](README.md) > **Architecture**
+
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Architects / Data Engineers
 
-## Table of Contents
+> [!TIP]
+> **TL;DR** — Real-time streaming architecture combining slot telemetry (15K events/sec), video analytics for floor density, and batch player analytics through a medallion pipeline. Supports Title 31 AML compliance, NIGC MICS reporting, and both Azure Commercial and Azure Government deployments.
+
+---
+
+## 📋 Table of Contents
 - [Overview](#overview)
 - [System Architecture](#system-architecture)
 - [Real-Time Data Flow](#real-time-data-flow)
@@ -37,11 +44,15 @@
   - [Video Analytics](#video-analytics)
   - [Development Tools](#development-tools)
 
-## Overview
+---
+
+## 📋 Overview
 
 The Casino Analytics Platform is built on Azure Cloud Scale Analytics (CSA) and combines high-velocity streaming ingestion (slot telemetry at thousands of events per second) with batch analytics for player lifetime value, floor optimization, and regulatory compliance. The architecture supports both Azure Commercial and Azure Government deployments, since tribal casinos on sovereign land may choose either cloud boundary based on their data residency requirements.
 
-## System Architecture
+---
+
+## 🏗️ System Architecture
 
 ```mermaid
 graph TD
@@ -136,7 +147,9 @@ graph TD
     SQL --> API
 ```
 
-## Real-Time Data Flow
+---
+
+## ⚡ Real-Time Data Flow
 
 ### Slot Machine Telemetry
 
@@ -154,7 +167,7 @@ Slot Machine (SAS Protocol)
                 └── Bronze Layer: brz_slot_events
 ```
 
-### Event Schema
+### ⚙️ Event Schema
 
 ```json
 {
@@ -184,9 +197,11 @@ Slot Machine (SAS Protocol)
 | Data retention (hot) | 7 days | 30 days |
 | Data retention (warm/ADLS) | 90 days | 7 years (NIGC MICS) |
 
-## Event Hub Streaming Architecture
+---
 
-### Namespace Configuration
+## 🏗️ Event Hub Streaming Architecture
+
+### ⚙️ Namespace Configuration
 
 ```text
 Event Hub Namespace: eh-casino-analytics
@@ -209,7 +224,9 @@ Event Hub Namespace: eh-casino-analytics
 - **Density events**: Partitioned by `zone_id` — enables zone-level processing
 - **Compliance alerts**: Partitioned by `player_id` — groups alerts per individual
 
-## Azure Data Explorer (ADX) Architecture
+---
+
+## 🗄️ Azure Data Explorer (ADX) Architecture
 
 ### Database Schema
 
@@ -261,7 +278,7 @@ Event Hub Namespace: eh-casino-analytics
 }
 ```
 
-### Key KQL Queries
+### 🗄️ Key KQL Queries
 
 ```kql
 // Real-time floor performance (last 15 minutes)
@@ -293,9 +310,11 @@ by player_id
 | order by ctr_pct desc
 ```
 
-## Video Analytics Pipeline
+---
 
-### Floor Density Monitoring
+## 📊 Video Analytics Pipeline
+
+### 📊 Floor Density Monitoring
 
 ```mermaid
 graph LR
@@ -332,9 +351,11 @@ graph LR
 - Surveillance footage retention follows NIGC MICS requirements (7 days minimum)
 - Video analytics processing occurs on-premise at the edge; only counts and heatmaps go to cloud
 
-## Player Data Privacy & NIGC Compliance
+---
 
-### Data Classification
+## 🔒 Player Data Privacy & NIGC Compliance
+
+### 🔒 Data Classification
 
 | Data Category | Classification | Access | Retention |
 |---|---|---|---|
@@ -376,7 +397,9 @@ graph TD
 
 The "gaming day" for Title 31 purposes is defined by the tribal gaming commission, typically 6:00 AM to 5:59 AM local time. All cash aggregation for CTR thresholds uses this boundary, not calendar day.
 
-## Integration Architecture
+---
+
+## 🔌 Integration Architecture
 
 ### Loyalty & PMS Integration
 
@@ -413,7 +436,9 @@ The "gaming day" for Title 31 purposes is defined by the tribal gaming commissio
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## Network Architecture
+---
+
+## 🔒 Network Architecture
 
 ### On-Premise to Cloud Connectivity
 
@@ -462,9 +487,11 @@ graph TD
 - Key Vault for any secrets (Event Hub connection strings, API keys)
 - NSGs restrict traffic to minimum necessary ports
 
-## Deployment Options
+---
 
-### Azure Commercial vs. Azure Government
+## 📦 Deployment Options
+
+### 🔒 Azure Commercial vs. Azure Government
 
 Tribal casinos operate on sovereign land, which creates flexibility in cloud deployment:
 
@@ -480,7 +507,9 @@ Tribal casinos operate on sovereign land, which creates flexibility in cloud dep
 
 **Recommendation**: Use Azure Government if the tribal casino handles federal reporting (e.g., Title 31 FinCEN filings) or if the tribal gaming commission requires government cloud. Use Azure Commercial for cost optimization when federal requirements don't mandate government cloud.
 
-## Performance & Scalability
+---
+
+## ⚡ Performance & Scalability
 
 ### Data Volume Estimates
 
@@ -499,7 +528,9 @@ Tribal casinos operate on sovereign land, which creates flexibility in cloud dep
 - **Warm (ADLS Bronze)**: Last 7 years — Parquet format, partitioned by date
 - **Cold (ADLS Archive)**: 7+ years — compressed Parquet, lifecycle management to Archive tier
 
-## Technology Stack
+---
+
+## 📎 Technology Stack
 
 ### Core Platform
 - **Streaming**: Azure Event Hub, Azure Data Explorer, Stream Analytics
@@ -508,12 +539,12 @@ Tribal casinos operate on sovereign land, which creates flexibility in cloud dep
 - **Orchestration**: Azure Data Factory
 - **Analytics**: Power BI (real-time tiles + batch reports)
 
-### Video Analytics
+### 📊 Video Analytics
 - **Edge**: Azure Video Analyzer on IoT Edge
 - **ML**: Custom Vision (person detection model)
 - **Processing**: Azure Functions (heatmap generation)
 
-### Development Tools
+### 🚀 Development Tools
 - **Data Modeling**: dbt (1.7+)
 - **Version Control**: Git, GitHub / Azure DevOps
 - **CI/CD**: GitHub Actions or Azure Pipelines
@@ -522,7 +553,7 @@ Tribal casinos operate on sovereign land, which creates flexibility in cloud dep
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Casino Analytics README](README.md) — Deployment guide, quick start, and analytics scenarios
 - [Platform Architecture](../../docs/ARCHITECTURE.md) — Core CSA platform architecture

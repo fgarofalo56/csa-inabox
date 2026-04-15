@@ -1,6 +1,11 @@
+[← Platform Components](../README.md)
+
 # Platform Governance — Purview Automation, Classification, and Data Sharing
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Platform Engineers
+
+> [!NOTE]
+> **TL;DR:** Production-ready automation for Azure Purview governance: classification rule management (PII/PHI/financial/government), bulk glossary import, scan scheduling, ADF/dbt lineage registration, sensitivity labeling, and inter-domain data sharing agreements with enforcement.
 
 > **Enhanced governance layer for CSA-in-a-Box**
 
@@ -19,7 +24,9 @@
 > classification rule management, lineage registration, and inter-domain
 > data sharing agreements.
 
-## Overview
+---
+
+## 📋 Overview
 
 This module provides production-ready automation for Azure Purview
 (Microsoft Purview) governance tasks that are typically manual in the
@@ -35,7 +42,9 @@ portal. It covers:
   classification results
 - **Data Sharing** — enforce inter-domain data sharing agreements
 
-## Components
+---
+
+## 📁 Components
 
 ```text
 platform/governance/
@@ -51,7 +60,9 @@ platform/governance/
     └── sharing_enforcer.py              # Validates sharing requests
 ```
 
-## Purview Automation
+---
+
+## 🔌 Purview Automation
 
 The `purview_automation.py` module wraps the Purview REST API to automate
 common governance tasks:
@@ -96,7 +107,9 @@ purview.register_dbt_lineage(
 )
 ```
 
-## Classification Rules
+---
+
+## 🔒 Classification Rules
 
 Classification rules are defined in YAML files under `classifications/`.
 Each file contains rules for a specific category:
@@ -124,7 +137,9 @@ classifications:
     minimumPercentageMatch: 60.0
 ```
 
-## Data Sharing Agreements
+---
+
+## 🔒 Data Sharing Agreements
 
 Inter-domain data sharing is governed by formal agreements defined in
 YAML. The `sharing_enforcer.py` module validates sharing requests
@@ -170,7 +185,9 @@ else:
     print(f"Denied: {result.reason}")
 ```
 
-## Deployment
+---
+
+## 📦 Deployment
 
 The governance automation scripts run as:
 
@@ -192,9 +209,9 @@ python -m platform.governance.purview_automation \
   --glossary-file glossary/business_terms.yaml
 ```
 
-## Relationship to Core Governance
+---
 
-This module extends the core `governance/` package:
+## 🏗️ Relationship to Core Governance
 
 | Core (`governance/`) | Platform (`platform/governance/`) |
 |---|---|
@@ -206,7 +223,7 @@ This module extends the core `governance/` package:
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Platform Components](../README.md) — Platform component index
 - [Platform Services](../../docs/PLATFORM_SERVICES.md) — Detailed platform service descriptions

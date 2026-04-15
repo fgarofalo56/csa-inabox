@@ -2,36 +2,44 @@
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Contributors
 
+> [!NOTE]
+> **Quick Summary**: This guide covers development setup, repository rules, code style conventions (Bicep, PowerShell, Python), the PR process, branch naming, and how to report issues. Follow the checklist below for a smooth contribution experience.
+
 Thank you for your interest in contributing to Cloud-Scale Analytics in-a-Box.
 
-## Table of Contents
+---
 
-- [Development Setup](#development-setup)
-- [Repository Rules](#repository-rules)
-- [Code Style](#code-style)
-- [Pull Request Process](#pull-request-process)
-- [Branch Naming](#branch-naming)
-- [Reporting Issues](#reporting-issues)
-- [Related Documentation](#related-documentation)
+## 📑 Table of Contents
 
-## Development Setup
+- [🚀 Development Setup](#-development-setup)
+- [⚠️ Repository Rules](#️-repository-rules)
+- [💡 Code Style](#-code-style)
+- [🤝 Pull Request Process](#-pull-request-process)
+- [🏷️ Branch Naming](#️-branch-naming)
+- [🔧 Reporting Issues](#-reporting-issues)
+- [🔗 Related Documentation](#-related-documentation)
 
-### Prerequisites
+---
 
-1. Install required tools:
-   - Azure CLI >= 2.50.0
-   - Bicep CLI >= 0.25
-   - PowerShell 7.3+ with Az module
-   - Python 3.10+
-   - Git 2.40+
+## 🚀 Development Setup
 
-2. Clone the repository:
+### 📎 Prerequisites
+
+- [ ] Azure CLI >= 2.50.0
+- [ ] Bicep CLI >= 0.25
+- [ ] PowerShell 7.3+ with Az module
+- [ ] Python 3.10+
+- [ ] Git 2.40+
+
+### 📦 Installation
+
+1. Clone the repository:
    ```bash
    git clone https://github.com/fgarofalo56/csa-inabox.git
    cd csa-inabox
    ```
 
-3. Set up Python environment (for scripts/dbt):
+2. Set up Python environment (for scripts/dbt):
    ```bash
    make setup            # Linux/Mac
    make setup-win        # Windows
@@ -43,15 +51,20 @@ Thank you for your interest in contributing to Cloud-Scale Analytics in-a-Box.
    .venv\Scripts\activate     # Windows
    ```
 
-4. Install pre-commit hooks:
+3. Install pre-commit hooks:
    ```bash
    pre-commit install
    ```
    This enables automatic linting, formatting, and secret detection on every commit.
 
-## Repository Rules
+---
+
+## ⚠️ Repository Rules
 
 ### Never Commit
+
+> [!CAUTION]
+> The following must **never** be committed to the repository:
 
 - Passwords, API keys, SAS tokens, or connection strings
 - `local.settings.json` files
@@ -63,6 +76,9 @@ Thank you for your interest in contributing to Cloud-Scale Analytics in-a-Box.
 
 ### Always Do
 
+> [!TIP]
+> Follow these practices for every contribution:
+
 - Use `params.template.json` with placeholder values for committed configs
 - Run `bicep lint` before submitting Bicep changes
 - Add `Try/Catch` error handling in PowerShell scripts
@@ -70,7 +86,9 @@ Thank you for your interest in contributing to Cloud-Scale Analytics in-a-Box.
 - Test deployments with `--what-if` before applying
 - Strip notebook outputs before committing (`nbstripout`)
 
-## Code Style
+---
+
+## 💡 Code Style
 
 ### Bicep
 - Use camelCase for parameters and variables
@@ -92,33 +110,59 @@ Thank you for your interest in contributing to Cloud-Scale Analytics in-a-Box.
 - Use `pathlib.Path` for file operations
 - Add docstrings to all public functions
 
-## Pull Request Process
+---
 
-1. Create a feature branch from `main`
-2. Make your changes following the code style guidelines
-3. Run linting and validation locally
-4. Submit a PR with a clear description of changes
-5. Ensure CI checks pass
-6. Get at least one approval before merging
+## 🤝 Pull Request Process
 
-## Branch Naming
+```mermaid
+graph LR
+    A["Create Branch"] --> B["Make Changes"]
+    B --> C["Run Lint & Validation"]
+    C --> D["Submit PR"]
+    D --> E["CI Checks Pass?"]
+    E -- Yes --> F["Code Review"]
+    E -- No --> C
+    F --> G["Approved?"]
+    G -- Yes --> H["Merge to main"]
+    G -- No --> B
+```
 
-- `feature/short-description` -- New features
-- `fix/short-description` -- Bug fixes
-- `infra/short-description` -- Infrastructure changes
-- `docs/short-description` -- Documentation updates
+### Contribution Checklist
 
-## Reporting Issues
-
-Use GitHub Issues with the appropriate template. Include:
-- Environment details (subscription type, region)
-- Steps to reproduce
-- Expected vs actual behavior
-- Relevant logs or error messages
+- [ ] Create a feature branch from `main`
+- [ ] Make your changes following the code style guidelines
+- [ ] Run linting and validation locally
+- [ ] Submit a PR with a clear description of changes
+- [ ] Ensure CI checks pass
+- [ ] Get at least one approval before merging
 
 ---
 
-## Related Documentation
+## 🏷️ Branch Naming
 
-- [README](README.md) — Project overview and quick start
-- [Changelog](CHANGELOG.md) — All notable changes to the project
+| Prefix | Purpose | Example |
+|---|---|---|
+| `feature/` | New features | `feature/add-streaming-domain` |
+| `fix/` | Bug fixes | `fix/inventory-turnover-sql` |
+| `infra/` | Infrastructure changes | `infra/nsg-outbound-rules` |
+| `docs/` | Documentation updates | `docs/update-quickstart` |
+
+---
+
+## 🔧 Reporting Issues
+
+Use GitHub Issues with the appropriate template. Include:
+
+- [ ] Environment details (subscription type, region)
+- [ ] Steps to reproduce
+- [ ] Expected vs actual behavior
+- [ ] Relevant logs or error messages
+
+---
+
+## 🔗 Related Documentation
+
+| Document | Description |
+|---|---|
+| [README](README.md) | Project overview and quick start |
+| [Changelog](CHANGELOG.md) | All notable changes to the project |

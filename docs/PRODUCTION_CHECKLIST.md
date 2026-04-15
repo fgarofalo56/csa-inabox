@@ -1,28 +1,33 @@
+[Home](../README.md) > [Docs](./) > **Production Checklist**
+
 # CSA-in-a-Box: Production Checklist
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Release Engineers
+
+> [!NOTE]
+> **Quick Summary**: Comprehensive pre-production readiness checklist covering environment promotion, infrastructure hardening, security, data platform validation, observability, disaster recovery, governance, operational readiness, cost management, and compliance — with sign-off table for stakeholder approval.
 
 Use this checklist when promoting CSA-in-a-Box from development to production.
 Each section includes actionable items with cross-references to detailed guides
 where available.
 
-## Table of Contents
+## 📑 Table of Contents
 
-- [1. Environment Promotion](#1-environment-promotion)
-- [2. Infrastructure Hardening](#2-infrastructure-hardening)
-- [3. Security](#3-security)
-- [4. Data Platform](#4-data-platform)
-- [5. Observability](#5-observability)
-- [6. Disaster Recovery](#6-disaster-recovery)
-- [7. Governance](#7-governance)
-- [8. Operational Readiness](#8-operational-readiness)
-- [9. Cost Management](#9-cost-management)
-- [10. Compliance](#10-compliance)
-- [Sign-Off](#sign-off)
+- [🌍 1. Environment Promotion](#-1-environment-promotion)
+- [🏗️ 2. Infrastructure Hardening](#️-2-infrastructure-hardening)
+- [🔒 3. Security](#-3-security)
+- [📊 4. Data Platform](#-4-data-platform)
+- [📈 5. Observability](#-5-observability)
+- [🔄 6. Disaster Recovery](#-6-disaster-recovery)
+- [📋 7. Governance](#-7-governance)
+- [⚙️ 8. Operational Readiness](#️-8-operational-readiness)
+- [💰 9. Cost Management](#-9-cost-management)
+- [🏛️ 10. Compliance](#️-10-compliance)
+- [✍️ Sign-Off](#️-sign-off)
 
 ---
 
-## 1. Environment Promotion
+## 🌍 1. Environment Promotion
 
 > See also: [ENVIRONMENT_PROTECTION.md](ENVIRONMENT_PROTECTION.md)
 
@@ -33,7 +38,9 @@ where available.
 - [ ] Deployment pipeline tested end-to-end in staging before production
 - [ ] Rollback procedure validated in staging (see [ROLLBACK.md](ROLLBACK.md))
 
-## 2. Infrastructure Hardening
+---
+
+## 🏗️ 2. Infrastructure Hardening
 
 - [ ] All PaaS services deployed with private endpoints (no public access)
 - [ ] Hub-spoke VNet topology deployed with NSG rules applied
@@ -46,7 +53,9 @@ where available.
 - [ ] Cosmos DB: public network access disabled, private endpoint configured
 - [ ] Event Hub: private endpoint, minimum TLS 1.2
 
-## 3. Security
+---
+
+## 🔒 3. Security
 
 > See also: Secret rotation functions in `domains/sharedServices/secretRotation/`
 
@@ -61,7 +70,9 @@ where available.
 - [ ] Service principals scoped to specific resource groups (not subscription-wide)
 - [ ] Network access reviewed: no storage keys in ADF linked services (use MSI)
 
-## 4. Data Platform
+---
+
+## 📊 4. Data Platform
 
 - [ ] dbt production profile configured (Databricks SQL warehouse, not interactive cluster)
 - [ ] dbt models tested: `dbt test` passes with zero failures in all domains
@@ -75,7 +86,9 @@ where available.
 - [ ] Data quality monitoring notebook scheduled (daily post-dbt run)
 - [ ] Contract SLAs validated: freshness, valid_row_ratio within thresholds
 
-## 5. Observability
+---
+
+## 📈 5. Observability
 
 - [ ] Log Analytics workspace deployed with appropriate retention (90+ days)
 - [ ] Diagnostic settings enabled on: ADF, Databricks, Storage, Key Vault, Cosmos DB, Event Hub
@@ -90,7 +103,9 @@ where available.
 - [ ] Event Hub: consumer group lag monitoring (for streaming pipeline)
 - [ ] Cost alerts: budget thresholds at 50%, 75%, 90%, 100%
 
-## 6. Disaster Recovery
+---
+
+## 🔄 6. Disaster Recovery
 
 > See also: [DR.md](DR.md), [ROLLBACK.md](ROLLBACK.md)
 
@@ -107,7 +122,9 @@ where available.
 - [ ] Infrastructure-as-Code: all resources rebuildable from Bicep + parameter files
 - [ ] Deployment tags created on every production deployment (see deploy.yml)
 
-## 7. Governance
+---
+
+## 📋 7. Governance
 
 - [ ] Purview catalog bootstrapped (collections, glossary, scan sources)
   - Run: `python scripts/purview/bootstrap_catalog.py`
@@ -119,7 +136,9 @@ where available.
 - [ ] Data retention policies defined per domain (Bronze: 2yr, Silver: 5yr, Gold: 7yr)
 - [ ] Access request workflow defined (who can request, who approves)
 
-## 8. Operational Readiness
+---
+
+## ⚙️ 8. Operational Readiness
 
 > See also: [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
 
@@ -136,7 +155,9 @@ where available.
 - [ ] Incident response playbook reviewed and tested
 - [ ] Knowledge base / wiki updated with architecture decisions
 
-## 9. Cost Management
+---
+
+## 💰 9. Cost Management
 
 - [ ] Azure budgets created per subscription (dev, staging, production)
 - [ ] Cost alerts configured at 50%, 75%, 90% of monthly budget
@@ -152,7 +173,9 @@ where available.
 - [ ] Resource tagging enforced via Azure Policy (CostCenter, Environment, Owner)
 - [ ] Monthly cost review scheduled with engineering leads
 
-## 10. Compliance
+---
+
+## 🏛️ 10. Compliance
 
 - [ ] Data residency requirements documented (which regions for which data)
 - [ ] All resources deployed to compliant Azure regions
@@ -167,7 +190,7 @@ where available.
 
 ---
 
-## Sign-Off
+## ✍️ Sign-Off
 
 | Role | Name | Date | Signature |
 |------|------|------|-----------|
@@ -180,14 +203,13 @@ where available.
 
 ---
 
-**Last updated:** 2026-04-15
-
+> [!NOTE]
 > This checklist complements the [Quick Start Guide](QUICKSTART.md) for development
 > and the [DR](DR.md) / [Rollback](ROLLBACK.md) guides for incident response.
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Environment Protection](ENVIRONMENT_PROTECTION.md) — GitHub Environment protection rules
 - [Disaster Recovery](DR.md) — Multi-region failover runbook

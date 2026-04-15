@@ -1,8 +1,16 @@
 # Department of Commerce Economic Analytics Platform
 
+> [**Examples**](../README.md) > **Commerce**
+
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers
 
-## Table of Contents
+> [!TIP]
+> **TL;DR** — Economic analytics platform analyzing Census demographics, BEA GDP/trade data, and business formation statistics. Provides regional economic resilience scoring, international trade pattern analysis, and small business growth prediction.
+
+
+---
+
+## 📋 Table of Contents
 - [Overview](#overview)
   - [Key Features](#key-features)
   - [Data Sources](#data-sources)
@@ -47,11 +55,14 @@
 
 A comprehensive economic analytics platform built on Azure Cloud Scale Analytics (CSA), providing insights into regional economic resilience, international trade patterns, and small business growth using official Commerce Department data sources.
 
-## Overview
+
+---
+
+## 📋 Overview
 
 This platform ingests, processes, and analyzes data from multiple Commerce Department bureaus to provide actionable insights for economic policy, trade analysis, and business development decision-making. The platform follows the medallion architecture (Bronze -> Silver -> Gold) and implements modern data engineering best practices for federal data systems.
 
-### Key Features
+### ✨ Key Features
 
 - **Regional Economic Analytics**: Employment diversity, industry concentration, and GDP stability scoring
 - **International Trade Intelligence**: Bilateral trade flows, commodity trends, and tariff impact analysis
@@ -60,14 +71,14 @@ This platform ingests, processes, and analyzes data from multiple Commerce Depar
 - **Interactive Dashboards**: Executive dashboards with KPIs and drill-down capabilities
 - **API-First Architecture**: RESTful APIs for all data products
 
-### Data Sources
+### 🗄️ Data Sources
 
 - **Census Bureau (ACS/Decennial)**: Demographic, economic, and housing data from the American Community Survey (1-year and 5-year estimates) and Decennial Census
 - **BEA (Bureau of Economic Analysis)**: GDP by state and industry, personal income, trade in goods and services, and national economic accounts
 - **NIST (National Institute of Standards and Technology)**: Manufacturing extension partnership data, industry competitiveness metrics
 - **ITA (International Trade Administration)**: Bilateral trade statistics, export/import data by partner country and commodity, tariff schedules
 
-### Open Data APIs
+### 🗄️ Open Data APIs
 
 | API | URL | Auth | Rate Limit |
 |-----|-----|------|------------|
@@ -76,7 +87,10 @@ This platform ingests, processes, and analyzes data from multiple Commerce Depar
 | USA Trade Online | https://usatrade.census.gov | Public | Varies |
 | Census Business Builder | https://www.census.gov/data/data-tools/cbb.html | Public | N/A |
 
-## Architecture Overview
+
+---
+
+## 🏗️ Architecture Overview
 
 ```mermaid
 graph TD
@@ -143,7 +157,10 @@ graph TD
     D3 --> E4
 ```
 
-## Prerequisites
+
+---
+
+## 📎 Prerequisites
 
 ### Azure Resources
 - Azure subscription with contributor access
@@ -162,7 +179,10 @@ graph TD
 - Census API key (free registration at https://api.census.gov/data/key_signup.html)
 - BEA API key (free registration at https://apps.bea.gov/API/signup/)
 
-## Quick Start
+
+---
+
+## 🚀 Quick Start
 
 ### 1. Environment Setup
 
@@ -240,7 +260,10 @@ dbt docs generate
 dbt docs serve
 ```
 
-## Sample Analytics Scenarios
+
+---
+
+## 💡 Sample Analytics Scenarios
 
 ### 1. Regional Economic Resilience Scoring
 
@@ -306,7 +329,10 @@ ORDER BY growth_score DESC
 LIMIT 15;
 ```
 
-## Data Products
+
+---
+
+## ✨ Data Products
 
 ### Economic Resilience Index (`economic-resilience`)
 - **Description**: Regional economic resilience scores combining employment diversity, industry concentration, and GDP stability
@@ -326,9 +352,12 @@ LIMIT 15;
 - **Coverage**: 2010-present, state and county level
 - **API**: `/api/v1/business-growth`
 
-## Configuration
 
-### dbt Profiles
+---
+
+## ⚙️ Configuration
+
+### ⚙️ dbt Profiles
 
 Add to your `~/.dbt/profiles.yml`:
 
@@ -352,7 +381,7 @@ commerce_analytics:
       catalog: prod
 ```
 
-### Environment Variables
+### ⚙️ Environment Variables
 
 ```bash
 # Required for data fetching
@@ -369,9 +398,12 @@ COMMERCE_LOG_LEVEL=INFO
 COMMERCE_BATCH_SIZE=1000
 ```
 
-## Government Cloud Deployment Notes
 
-### Azure Government (GovCloud)
+---
+
+## 🔒 Government Cloud Deployment Notes
+
+### 🔒 Azure Government (GovCloud)
 - Use `usgovvirginia` or `usgovarizona` regions
 - Azure Government endpoints differ from commercial Azure:
   - Storage: `*.blob.core.usgovcloudapi.net`
@@ -395,7 +427,10 @@ COMMERCE_BATCH_SIZE=1000
 - Trade data: Aggregated customs data (individual transaction details are restricted)
 - Apply data masking for any sub-threshold census cells to prevent re-identification
 
-## Monitoring & Alerts
+
+---
+
+## 📊 Monitoring & Alerts
 
 The platform includes built-in monitoring for:
 
@@ -405,9 +440,12 @@ The platform includes built-in monitoring for:
 - **Cost Management**: Daily Azure spend alerts and optimization recommendations
 - **Pipeline Health**: Azure Data Factory pipeline run monitoring with auto-retry
 
-## Troubleshooting
 
-### Common Issues
+---
+
+## 🔧 Troubleshooting
+
+### 🔧 Common Issues
 
 1. **Census API Rate Limits**: The Census API allows 500 requests/day with a free key. Use `--delay 2` in fetch scripts for bulk operations. Request a bulk data agreement for higher limits.
 
@@ -421,15 +459,18 @@ The platform includes built-in monitoring for:
 
 6. **Trade Data HS Code Changes**: Harmonized System codes are revised every 5 years. The silver layer includes a concordance table for cross-year comparisons.
 
-### Logs
+### 📊 Logs
 
 - Application logs: `logs/commerce-analytics.log`
 - dbt logs: `domains/dbt/logs/dbt.log`
 - Data pipeline logs: Azure Data Factory monitoring
 
-## Development
 
-### Adding New Data Sources
+---
+
+## 🚀 Development
+
+### 🗄️ Adding New Data Sources
 
 1. Create Bronze model in `domains/dbt/models/bronze/`
 2. Add data quality tests in `schema.yml`
@@ -437,7 +478,7 @@ The platform includes built-in monitoring for:
 4. Add to Gold aggregations as needed
 5. Update data contracts in `contracts/`
 
-### Testing
+### 🧪 Testing
 
 ```bash
 # Unit tests
@@ -453,7 +494,10 @@ pytest data/tests/integration/
 python data/tests/load_test.py
 ```
 
-## Contributing
+
+---
+
+## 🔗 Contributing
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/new-data-source`)
@@ -461,18 +505,27 @@ python data/tests/load_test.py
 4. Run quality checks (`make lint test`)
 5. Submit a pull request
 
-## License
+
+---
+
+## 🔗 License
 
 This project is licensed under the MIT License. See `LICENSE` file for details.
 
-## Support
+
+---
+
+## 🔗 Support
 
 - **Documentation**: https://csa-inabox.docs.microsoft.com/commerce
 - **Issues**: Use GitHub Issues for bug reports and feature requests
 - **Security**: Report security issues to security@contoso.com
 - **Community**: Join our Slack channel `#csa-commerce-analytics`
 
-## Acknowledgments
+
+---
+
+## 🔗 Acknowledgments
 
 - U.S. Census Bureau for comprehensive demographic and economic data APIs
 - Bureau of Economic Analysis for GDP and trade statistics
@@ -482,7 +535,7 @@ This project is licensed under the MIT License. See `LICENSE` file for details.
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Commerce Architecture](ARCHITECTURE.md) — Detailed platform architecture and design decisions
 - [Examples Index](../README.md) — Overview of all CSA-in-a-Box example verticals

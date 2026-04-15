@@ -1,12 +1,17 @@
+[Home](../README.md) > [Docs](./) > **Developer Pathways**
+
 # Developer Pathways
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** All Developers
+
+> [!NOTE]
+> **Quick Summary**: Role-based navigation guide for the CSA-in-a-Box codebase — find your area of focus (governance, pipelines, infra, portal, AI/ML, Functions, monitoring), jump to the relevant code, and get started with key commands and directory maps.
 
 This guide maps developer roles to the relevant parts of the codebase. Instead of trying to understand everything at once, focus on the area you'll be working in.
 
 ---
 
-## "Working on X?" Quick Reference
+## 🔍 "Working on X?" Quick Reference
 
 Find your task below and jump straight to the code.
 
@@ -89,65 +94,65 @@ Three function apps: `aiEnrichment/`, `eventProcessing/`, `secretRotation/`. Eac
 
 ---
 
-## Quick Start by Role
+## 🚀 Quick Start by Role
 
 ### Data Engineer
 **Focus areas:** `domains/`, `tools/dbt/`, `scripts/seed/`, `scripts/streaming/`
 **Technologies needed:** Python, PySpark, dbt (SQL + Jinja), Delta Lake
 **Getting started:**
-1. Run `make setup` (or `make setup-win` on Windows)
-2. Explore `domains/shared/dbt/` for the core data models
-3. Run `make test-dbt` to verify dbt compilation
-4. Review `domains/finance/`, `domains/sales/`, `domains/inventory/` for domain examples
+- [ ] Run `make setup` (or `make setup-win` on Windows)
+- [ ] Explore `domains/shared/dbt/` for the core data models
+- [ ] Run `make test-dbt` to verify dbt compilation
+- [ ] Review `domains/finance/`, `domains/sales/`, `domains/inventory/` for domain examples
 
 ### Governance Developer
 **Focus areas:** `governance/`, `tests/`
 **Technologies needed:** Python, structlog, pytest
 **Getting started:**
-1. Run `make setup`
-2. Run `make test` — this validates governance code with 80% coverage gate
-3. Key modules: `governance/contracts/` (data contracts), `governance/dataquality/` (quality rules)
-4. Run `make typecheck` for strict mypy validation
+- [ ] Run `make setup`
+- [ ] Run `make test` — this validates governance code with 80% coverage gate
+- [ ] Key modules: `governance/contracts/` (data contracts), `governance/dataquality/` (quality rules)
+- [ ] Run `make typecheck` for strict mypy validation
 
 ### Platform / AI Engineer
 **Focus areas:** `platform/ai_integration/`, `platform/metadata-framework/`, `platform/data_marketplace/`
 **Technologies needed:** Python, Azure OpenAI, Azure AI Search, FastAPI
 **Getting started:**
-1. Run `pip install -e ".[platform]"` for platform dependencies
-2. Explore `platform/ai_integration/rag/` for the RAG pipeline
-3. See `platform/metadata-framework/generator/` for pipeline auto-generation
-4. Run `make typecheck-platform` for type checking
+- [ ] Run `pip install -e ".[platform]"` for platform dependencies
+- [ ] Explore `platform/ai_integration/rag/` for the RAG pipeline
+- [ ] See `platform/metadata-framework/generator/` for pipeline auto-generation
+- [ ] Run `make typecheck-platform` for type checking
 
 ### Infrastructure / DevOps Engineer
 **Focus areas:** `deploy/bicep/`, `monitoring/`, `.github/workflows/`, `portal/kubernetes/`
 **Technologies needed:** Bicep, Azure CLI, GitHub Actions, Helm
 **Getting started:**
-1. Run `make lint-bicep` to validate Bicep templates
-2. Review `deploy/bicep/DLZ/` (Data Landing Zone) and `deploy/bicep/DMLZ/` (Data Management Landing Zone)
-3. Check `monitoring/alerts/` for operational alerting
-4. See `.github/workflows/deploy.yml` for CI/CD pipeline
+- [ ] Run `make lint-bicep` to validate Bicep templates
+- [ ] Review `deploy/bicep/DLZ/` (Data Landing Zone) and `deploy/bicep/DMLZ/` (Data Management Landing Zone)
+- [ ] Check `monitoring/alerts/` for operational alerting
+- [ ] See `.github/workflows/deploy.yml` for CI/CD pipeline
 
 ### Frontend Developer
 **Focus areas:** `portal/react-webapp/`, `portal/static-webapp/`, `portal/shared/`
 **Technologies needed:** TypeScript, React/Next.js or Svelte/SvelteKit, Tailwind CSS
 **Getting started:**
-1. `cd portal/react-webapp && npm install && npm run dev`
-2. Shared type definitions: `portal/shared/contracts/types.ts`
-3. Component library: `portal/react-webapp/src/components/`
-4. Auth config: `portal/react-webapp/src/services/authConfig.ts`
+- [ ] `cd portal/react-webapp && npm install && npm run dev`
+- [ ] Shared type definitions: `portal/shared/contracts/types.ts`
+- [ ] Component library: `portal/react-webapp/src/components/`
+- [ ] Auth config: `portal/react-webapp/src/services/authConfig.ts`
 
 ### Azure Functions Developer
 **Focus areas:** `domains/sharedServices/*/functions/`
 **Technologies needed:** Python, Azure Functions SDK, Azure SDKs
 **Getting started:**
-1. Run `pip install -e ".[functions]"`
-2. Three function apps: `aiEnrichment/`, `eventProcessing/`, `secretRotation/`
-3. Each has a `function_app.py` entry point
-4. Tests: `tests/functions/`
+- [ ] Run `pip install -e ".[functions]"`
+- [ ] Three function apps: `aiEnrichment/`, `eventProcessing/`, `secretRotation/`
+- [ ] Each has a `function_app.py` entry point
+- [ ] Tests: `tests/functions/`
 
 ---
 
-## Directory Map
+## 📁 Directory Map
 
 | Directory | Purpose | Owner Role |
 |-----------|---------|------------|
@@ -165,7 +170,7 @@ Three function apps: `aiEnrichment/`, `eventProcessing/`, `secretRotation/`. Eac
 
 ---
 
-## Common Tasks
+## ⌨️ Common Tasks
 
 | Task | Command |
 |------|---------|
@@ -183,9 +188,10 @@ Three function apps: `aiEnrichment/`, `eventProcessing/`, `secretRotation/`. Eac
 
 ---
 
-## Directory Naming Conventions
+## 📛 Directory Naming Conventions
 
-> **Note:** Directory names in this repo use **mixed conventions** for historical reasons. Do **not** rename existing directories, as doing so would break Python imports, Bicep module references, CI/CD paths, and dbt project references.
+> [!WARNING]
+> Directory names in this repo use **mixed conventions** for historical reasons. Do **not** rename existing directories, as doing so would break Python imports, Bicep module references, CI/CD paths, and dbt project references.
 
 The naming styles present in the codebase are:
 
@@ -204,19 +210,19 @@ The naming styles present in the codebase are:
 
 ---
 
-## Architecture Overview
+## 🏗️ Architecture Overview
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system architecture.
 
 **High-level structure:**
 - **Data Mesh pattern**: Each domain (finance, sales, inventory) owns its data models
-- **Medallion architecture**: Bronze (raw) -> Silver (cleaned) -> Gold (business-ready)
+- **Medallion architecture**: Bronze (raw) → Silver (cleaned) → Gold (business-ready)
 - **Governance as code**: Data contracts, quality rules, and RBAC policies defined in YAML/JSON
 - **Platform services**: AI enrichment, metadata framework, and data marketplace as shared services
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Architecture](ARCHITECTURE.md) — Comprehensive architecture reference
 - [Getting Started](GETTING_STARTED.md) — Prerequisites and deployment walkthrough

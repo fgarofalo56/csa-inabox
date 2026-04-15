@@ -1,66 +1,61 @@
+[Home](../README.md) > [Docs](./) > **ADF Setup**
+
 # Azure Data Factory Setup Guide
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers
 
-This guide covers deploying and managing ADF pipeline artifacts for the
-CSA-in-a-Box platform.
+> [!NOTE]
+> **Quick Summary**: Deploy and manage ADF pipeline artifacts for the CSA-in-a-Box platform, including linked services, datasets, pipelines, triggers, and CI/CD integration with Purview lineage.
 
-## Table of Contents
+## 📑 Table of Contents
 
-- [Architecture](#architecture)
-- [Prerequisites](#prerequisites)
-- [Pipeline Artifacts](#pipeline-artifacts)
-- [Deployment](#deployment)
-  - [Automated deployment (recommended)](#automated-deployment-recommended)
-  - [Manual deployment (Azure Portal)](#manual-deployment-azure-portal)
-- [Linked Service Configuration](#linked-service-configuration)
-  - [ls_adls_gen2 — Azure Data Lake Storage](#ls_adls_gen2--azure-data-lake-storage)
-  - [ls_databricks — Databricks Workspace](#ls_databricks--databricks-workspace)
-- [Trigger Configuration](#trigger-configuration)
-  - [Managing triggers](#managing-triggers)
-- [Pipeline Parameters](#pipeline-parameters)
-  - [pl_ingest_to_bronze](#pl_ingest_to_bronze)
-  - [pl_medallion_orchestration](#pl_medallion_orchestration)
-  - [pl_run_dbt_models](#pl_run_dbt_models)
-- [CI/CD Integration](#cicd-integration)
-- [Purview Lineage](#purview-lineage)
-- [Troubleshooting](#troubleshooting)
+- [🏗️ Architecture](#-architecture)
+- [📎 Prerequisites](#-prerequisites)
+- [📁 Pipeline Artifacts](#-pipeline-artifacts)
+- [📦 Deployment](#-deployment)
+- [⚙️ Linked Service Configuration](#️-linked-service-configuration)
+- [⚙️ Trigger Configuration](#️-trigger-configuration)
+- [⚙️ Pipeline Parameters](#️-pipeline-parameters)
+- [🔄 CI/CD Integration](#-cicd-integration)
+- [📊 Purview Lineage](#-purview-lineage)
+- [🔧 Troubleshooting](#-troubleshooting)
 
-## Architecture
+---
+
+## 🏗️ Architecture
 
 ADF orchestrates the batch data pipeline:
 
-```text
-Landing Container (CSV/Parquet)
-    |
-    v
-[pl_ingest_to_bronze]  -- hourly trigger
-    |
-    v
-Bronze (raw Delta in ADLS)
-    |
-    v
-[pl_medallion_orchestration]  -- daily trigger
-    |--- pl_run_dbt_models (Bronze -> Silver -> Gold)
-    |--- dbt test (quality gates)
-    |--- Databricks notebooks (Spark transforms)
-    v
-Silver / Gold (validated Delta in ADLS)
+```mermaid
+graph TD
+    Landing["Landing Container<br/>(CSV/Parquet)"] --> Ingest["pl_ingest_to_bronze<br/>⏰ hourly trigger"]
+    Ingest --> Bronze["Bronze<br/>(raw Delta in ADLS)"]
+    Bronze --> Orch["pl_medallion_orchestration<br/>⏰ daily trigger"]
+    Orch --> dbt["pl_run_dbt_models<br/>Bronze → Silver → Gold"]
+    Orch --> test["dbt test<br/>(quality gates)"]
+    Orch --> nb["Databricks notebooks<br/>(Spark transforms)"]
+    dbt --> SilverGold["Silver / Gold<br/>(validated Delta in ADLS)"]
+    test --> SilverGold
+    nb --> SilverGold
 ```
 
-## Prerequisites
+---
 
-1. **ADF instance deployed** via Bicep (`deploy/bicep/DLZ/main.bicep`)
-2. **ADLS Gen2 storage** with `landing`, `bronze`, `silver`, `gold` containers
-3. **Databricks workspace** with a running cluster or SQL warehouse
-4. **Key Vault** with connection secrets stored
-5. **Azure CLI** >= 2.50 with the `datafactory` extension
+## 📎 Prerequisites
+
+- [ ] **ADF instance deployed** via Bicep (`deploy/bicep/DLZ/main.bicep`)
+- [ ] **ADLS Gen2 storage** with `landing`, `bronze`, `silver`, `gold` containers
+- [ ] **Databricks workspace** with a running cluster or SQL warehouse
+- [ ] **Key Vault** with connection secrets stored
+- [ ] **Azure CLI** >= 2.50 with the `datafactory` extension
 
 ```bash
 az extension add --name datafactory
 ```
 
-## Pipeline Artifacts
+---
+
+## 📁 Pipeline Artifacts
 
 All ADF definitions live under `domains/*/pipelines/adf/`:
 
@@ -84,7 +79,9 @@ domains/sales/pipelines/adf/
   pl_sales_daily_load.json     # Sales-specific daily pipeline
 ```
 
-## Deployment
+---
+
+## 📦 Deployment
 
 ### Automated deployment (recommended)
 
@@ -109,48 +106,52 @@ Or via Make:
 make deploy-adf FACTORY_NAME=csadlzdevdf RESOURCE_GROUP=rg-csadlz-dev
 ```
 
-**Deployment order** (handled automatically):
-
-1. Linked Services (connections to ADLS, Databricks, Key Vault)
-2. Datasets (parameterized data shapes)
-3. Pipelines (orchestration logic)
-4. Triggers (schedules — started automatically after creation)
+> [!IMPORTANT]
+> **Deployment order** (handled automatically):
+> 1. Linked Services (connections to ADLS, Databricks, Key Vault)
+> 2. Datasets (parameterized data shapes)
+> 3. Pipelines (orchestration logic)
+> 4. Triggers (schedules — started automatically after creation)
 
 ### Manual deployment (Azure Portal)
 
-1. Open your Data Factory in the Azure Portal
-2. Go to **Author** > **Manage** > **Linked Services**
-3. Click **+ New** and import each `ls_*.json` file
-4. Repeat for Datasets, Pipelines, and Triggers
+- [ ] Open your Data Factory in the Azure Portal
+- [ ] Go to **Author** > **Manage** > **Linked Services**
+- [ ] Click **+ New** and import each `ls_*.json` file
+- [ ] Repeat for Datasets, Pipelines, and Triggers
 
-## Linked Service Configuration
+---
+
+## ⚙️ Linked Service Configuration
 
 ### ls_adls_gen2 — Azure Data Lake Storage
 
 Uses the ADF managed identity for authentication (no keys needed).
 
 **Required setup:**
-1. Assign `Storage Blob Data Contributor` to the ADF managed identity on
+- [ ] Assign `Storage Blob Data Contributor` to the ADF managed identity on
    the ADLS storage account
-2. The ADF Bicep module outputs `managedIdentityPrincipalId` for this purpose
+- [ ] The ADF Bicep module outputs `managedIdentityPrincipalId` for this purpose
 
 ### ls_databricks — Databricks Workspace
 
 Uses Key Vault to retrieve the Databricks access token.
 
 **Required setup:**
-1. Generate a personal access token (PAT) in Databricks
-2. Store it in Key Vault as secret `databricks-token`
-3. Update the linked service JSON if your workspace URL differs
+- [ ] Generate a personal access token (PAT) in Databricks
+- [ ] Store it in Key Vault as secret `databricks-token`
+- [ ] Update the linked service JSON if your workspace URL differs
 
-## Trigger Configuration
+---
+
+## ⚙️ Trigger Configuration
 
 | Trigger | Schedule | Pipeline | Purpose |
 |---------|----------|----------|---------|
 | `tr_hourly_ingest` | Every hour | `pl_ingest_to_bronze` | Pick up new landing files |
-| `tr_daily_medallion` | Daily 06:00 UTC | `pl_medallion_orchestration` | Full Bronze->Silver->Gold refresh |
+| `tr_daily_medallion` | Daily 06:00 UTC | `pl_medallion_orchestration` | Full Bronze→Silver→Gold refresh |
 
-### Managing triggers
+### ⌨️ Managing triggers
 
 ```bash
 # Stop a trigger
@@ -166,7 +167,9 @@ az datafactory trigger start \
     --trigger-name tr_daily_medallion
 ```
 
-## Pipeline Parameters
+---
+
+## ⚙️ Pipeline Parameters
 
 ### pl_ingest_to_bronze
 
@@ -194,7 +197,9 @@ az datafactory trigger start \
 | `dbtModels` | string | — | Model selector (e.g., `+gld_revenue`) |
 | `fullRefresh` | bool | `false` | Pass `--full-refresh` to dbt |
 
-## CI/CD Integration
+---
+
+## 🔄 CI/CD Integration
 
 The deploy workflow (`.github/workflows/deploy.yml`) deploys Bicep
 infrastructure. After infrastructure is up, run the ADF deployment:
@@ -208,19 +213,23 @@ infrastructure. After infrastructure is up, run the ADF deployment:
       --resource-group ${{ env.RESOURCE_GROUP }}
 ```
 
-## Purview Lineage
+---
+
+## 📊 Purview Lineage
 
 ADF natively pushes lineage to Microsoft Purview when configured. The
 Bicep module accepts a `purviewAccountId` parameter that wires this up
 automatically. See [Purview integration](#) in the architecture docs.
 
-## Troubleshooting
+---
+
+## 🔧 Troubleshooting
 
 See the ADF section in [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Databricks Guide](DATABRICKS_GUIDE.md) — Databricks workspace setup and dbt integration
 - [Self-Hosted IR](SELF_HOSTED_IR.md) — Self-Hosted Integration Runtime for on-premises connectivity

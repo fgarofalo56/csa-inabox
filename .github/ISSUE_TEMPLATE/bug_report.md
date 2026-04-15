@@ -6,31 +6,37 @@ labels: bug
 assignees: ''
 ---
 
-## Description
+[Home](../../README.md) > [Issues](../ISSUE_TEMPLATE) > **Bug Report**
+
+## 🐛 Description
 A clear description of the bug.
 
-## Steps to Reproduce
-1. Step 1
-2. Step 2
-3. Step 3
+## 🔄 Steps to Reproduce
+- [ ] Step 1
+- [ ] Step 2
+- [ ] Step 3
 
-## Expected Behavior
+## ✅ Expected Behavior
 What should happen.
 
-## Actual Behavior
+## ❌ Actual Behavior
 What actually happens.
 
-## Environment
-- **Component**: (Bicep / dbt / ADF / Databricks / Functions / Governance)
-- **Environment**: (dev / prod)
-- **Azure Region**: (e.g., East US)
+## ⚙️ Environment
 
-## Logs / Screenshots
+| Field | Value |
+|---|---|
+| **Component** | (Bicep / dbt / ADF / Databricks / Functions / Governance) |
+| **Environment** | (dev / prod) |
+| **Azure Region** | (e.g., East US) |
+
+## 📊 Logs / Screenshots
+
 ```text
 Paste relevant logs here
 ```
 
-## Impact
+## ⚠️ Impact
 - [ ] Data loss or corruption
 - [ ] Pipeline failure
 - [ ] Security concern

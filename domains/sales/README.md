@@ -1,18 +1,22 @@
 # Sales Domain — Data Mesh Domain Template
 
+[domains](../README.md) / **sales**
+
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers / Domain Owners
 
 This is a sample business domain showing the **Data Mesh** pattern for CSA-in-a-Box. Copy this structure to onboard new domains.
 
 ## Table of Contents
 
-- [Structure](#structure)
-- [Domain Ownership](#domain-ownership)
-- [Data Products Published](#data-products-published)
-- [Getting Started](#getting-started)
-- [Related Documentation](#related-documentation)
+- [Structure](#-structure)
+- [Domain Ownership](#-domain-ownership)
+- [Data Products Published](#-data-products-published)
+- [Getting Started](#-getting-started)
+- [Related Documentation](#-related-documentation)
 
-## Structure
+---
+
+## 📁 Structure
 
 ```text
 domains/sales/
@@ -31,7 +35,9 @@ domains/sales/
 └── README.md               # This file
 ```
 
-## Domain Ownership
+---
+
+## 📋 Domain Ownership
 
 | Role | Responsibility |
 |------|---------------|
@@ -39,14 +45,18 @@ domains/sales/
 | Data Engineer | Pipeline development, dbt models |
 | Data Steward | Purview classifications, access policies |
 
-## Data Products Published
+---
+
+## ✨ Data Products Published
 
 | Product | Layer | Format | SLA |
 |---------|-------|--------|-----|
 | `gld_sales_orders` | Gold | Delta | Daily by 06:00 UTC |
 | `gld_sales_metrics` | Gold | Delta | Daily by 07:00 UTC |
 
-## Getting Started
+---
+
+## 🚀 Getting Started
 
 1. Copy this domain folder: `cp -r domains/sales domains/<your-domain>`
 2. Update `dbt_project.yml` with your domain name
@@ -57,7 +67,7 @@ domains/sales/
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Architecture Overview](../../docs/ARCHITECTURE.md) — Platform architecture reference
 - [Examples](../../examples/README.md) — Sample data pipelines and use cases

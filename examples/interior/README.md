@@ -1,8 +1,16 @@
 # Department of Interior Natural Resources Analytics Platform
 
+> [**Examples**](../README.md) > **Interior**
+
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers
 
-## Table of Contents
+> [!TIP]
+> **TL;DR** — Natural resources analytics covering USGS seismic monitoring, NPS visitor management (300M+ visitors/year), wildfire risk prediction, and water resource optimization with real-time earthquake alerting.
+
+
+---
+
+## 📋 Table of Contents
 - [Overview](#overview)
   - [Key Features](#key-features)
   - [Data Sources](#data-sources)
@@ -38,11 +46,14 @@
 
 A comprehensive natural resources analytics platform built on Azure Cloud Scale Analytics (CSA), providing insights into seismic activity, water resources, national park management, wildfire risk, and wildlife conservation using official USGS, NPS, BLM, and FWS data sources.
 
-## Overview
+
+---
+
+## 📋 Overview
 
 The Department of Interior manages 500 million acres of federal land, monitors 1.5 million stream-flow measurements daily, tracks seismic activity from 8,000+ sensors, welcomes 300 million national park visitors annually, and oversees conservation of 2,700+ threatened and endangered species. This platform ingests, processes, and analyzes data from USGS, NPS, BLM, and FWS to enable earthquake probability assessment, national park capacity management, wildfire risk prediction, and water resource optimization.
 
-### Key Features
+### ✨ Key Features
 
 - **Earthquake Monitoring & Probability**: Real-time seismic event tracking with statistical forecasting
 - **Water Resource Analytics**: Stream-flow, groundwater, and water quality monitoring across 13,000+ sites
@@ -51,7 +62,7 @@ The Department of Interior manages 500 million acres of federal land, monitors 1
 - **Wildlife Conservation**: Species distribution, critical habitat, and population trend tracking
 - **Land Management Dashboards**: BLM resource extraction, grazing, and recreation permits
 
-### Data Sources
+### 🗄️ Data Sources
 
 | Source | Agency | Description | URL |
 |--------|--------|-------------|-----|
@@ -63,7 +74,10 @@ The Department of Interior manages 500 million acres of federal land, monitors 1
 | ECOS | FWS | Endangered species listings, critical habitat, recovery plans | https://ecos.fws.gov/ecp/ |
 | BLM Public Data | BLM | Land status, mining claims, grazing allotments, oil & gas leases | https://gbp-blm-egis.hub.arcgis.com/ |
 
-## Architecture Overview
+
+---
+
+## 🏗️ Architecture Overview
 
 ```mermaid
 graph TD
@@ -152,7 +166,10 @@ graph TD
     G5 --> C4
 ```
 
-## Prerequisites
+
+---
+
+## 📎 Prerequisites
 
 ### Azure Resources
 - Azure subscription with contributor access
@@ -173,7 +190,10 @@ graph TD
 - USGS APIs (no key required — open access)
 - NIFC ArcGIS (no key required — open access)
 
-## Quick Start
+
+---
+
+## 🚀 Quick Start
 
 ### 1. Environment Setup
 
@@ -254,7 +274,10 @@ dbt docs generate
 dbt docs serve
 ```
 
-## Sample Analytics Scenarios
+
+---
+
+## 💡 Sample Analytics Scenarios
 
 ### 1. Earthquake Probability Assessment
 
@@ -330,7 +353,10 @@ ORDER BY composite_fire_risk DESC
 LIMIT 50;
 ```
 
-## Data Products
+
+---
+
+## ✨ Data Products
 
 ### Earthquake Probability (`earthquake-probability`)
 - **Description**: Seismic zone risk assessment with Gutenberg-Richter modeling
@@ -350,9 +376,12 @@ LIMIT 50;
 - **Coverage**: All federal and adjacent lands in the western U.S.
 - **API**: `/api/v1/wildfire-risk`
 
-## Configuration
 
-### dbt Profiles
+---
+
+## ⚙️ Configuration
+
+### ⚙️ dbt Profiles
 
 Add to your `~/.dbt/profiles.yml`:
 
@@ -376,7 +405,7 @@ interior_analytics:
       catalog: prod
 ```
 
-### Environment Variables
+### ⚙️ Environment Variables
 
 ```bash
 # Required for data fetching
@@ -392,7 +421,10 @@ INTERIOR_LOG_LEVEL=INFO
 INTERIOR_BATCH_SIZE=5000
 ```
 
-## Azure Government Notes
+
+---
+
+## 🔒 Azure Government Notes
 
 This example is compatible with Azure Government (US) regions. When deploying to Azure Government:
 
@@ -403,7 +435,10 @@ This example is compatible with Azure Government (US) regions. When deploying to
 - NIFC fire data is public; operational fire data during active incidents may have access restrictions
 - Endangered species location data may be restricted to prevent poaching — consult FWS before exposing precise coordinates
 
-## Monitoring & Alerts
+
+---
+
+## 📊 Monitoring & Alerts
 
 - **Earthquake Alerts**: Automated notifications for M4.0+ events in monitored zones
 - **Data Freshness**: Alerts when USGS water data or NPS visitor counts are overdue
@@ -411,9 +446,12 @@ This example is compatible with Azure Government (US) regions. When deploying to
 - **Fire Season**: Elevated monitoring during April–October fire season
 - **Cost Management**: Daily compute spend tracking with budget thresholds
 
-## Troubleshooting
 
-### Common Issues
+---
+
+## 🔧 Troubleshooting
+
+### 🔧 Common Issues
 
 1. **USGS Earthquake API Limits**: Queries returning >20,000 events will fail. Use time and magnitude filters to partition requests.
 2. **Water Services Time Series**: Long time series (10+ years) should use the `--period` parameter rather than date ranges to avoid timeouts.
@@ -421,7 +459,10 @@ This example is compatible with Azure Government (US) regions. When deploying to
 4. **Fire Perimeter Shapefiles**: Active fire perimeters update multiple times daily. Use the `--latest` flag for current boundaries.
 5. **Geospatial Join Performance**: BLM land status data is large (~50 million polygons). Pre-filter by state before spatial joins.
 
-## Contributing
+
+---
+
+## 🔗 Contributing
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/new-data-source`)
@@ -429,11 +470,17 @@ This example is compatible with Azure Government (US) regions. When deploying to
 4. Run quality checks (`make lint test`)
 5. Submit a pull request
 
-## License
+
+---
+
+## 🔗 License
 
 This project is licensed under the MIT License. See `LICENSE` file for details.
 
-## Acknowledgments
+
+---
+
+## 🔗 Acknowledgments
 
 - USGS, NPS, BLM, and FWS for maintaining comprehensive natural resource data programs
 - NIFC for open wildfire data and the Wildland Fire Decision Support System
@@ -442,7 +489,7 @@ This project is licensed under the MIT License. See `LICENSE` file for details.
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Interior Architecture](ARCHITECTURE.md) — Detailed platform architecture and design decisions
 - [Examples Index](../README.md) — Overview of all CSA-in-a-Box example verticals

@@ -1,21 +1,24 @@
+[Home](../../README.md) > [Docs](../) > [Research](./) > **Platform Research Report**
+
 # CSA-in-a-Box: Comprehensive Platform Research Report
 
 > **Last Updated:** 2026-04-15 | **Status:** Reference | **Audience:** Architects / Leadership
 
+> [!NOTE]
+> **Quick Summary**: Deep research report for building a complete Cloud-Scale Analytics / Data Mesh / Data Fabric platform in Azure as an open-source alternative to Microsoft Fabric — covers CSA architecture (DMLZ + DLZ + Medallion), Data Mesh domain ownership, Data Fabric metadata layer, component mapping from Fabric to Azure PaaS, 50+ required Azure services, 4-subscription deployment strategy with VNet address spaces and RBAC, Well-Architected best practices, zero-trust networking, data classification, FinOps, DR/BCDR, and IaC reference templates.
+
 **Date:** 2026-04-09
 **Purpose:** Deep research for building a complete Cloud-Scale Analytics / Data Mesh / Data Fabric platform in Azure as an open-source alternative to Microsoft Fabric.
 
----
+## 📑 Table of Contents
 
-## Table of Contents
-
-- [1. Azure Cloud-Scale Analytics Architecture](#1-azure-cloud-scale-analytics-architecture)
+- [🏗️ 1. Azure Cloud-Scale Analytics Architecture](#️-1-azure-cloud-scale-analytics-architecture)
   - [1.1 Overview and Current Status](#11-overview-and-current-status)
   - [1.2 Core Architectural Concepts](#12-core-architectural-concepts)
   - [1.3 Data Lake Architecture (Medallion Pattern)](#13-data-lake-architecture-medallion-pattern)
   - [1.4 Hub-Spoke Network Topology](#14-hub-spoke-network-topology)
   - [1.5 Integration with Azure Landing Zones (ALZ)](#15-integration-with-azure-landing-zones-alz)
-- [2. Data Mesh Architecture in Azure](#2-data-mesh-architecture-in-azure)
+- [🔀 2. Data Mesh Architecture in Azure](#-2-data-mesh-architecture-in-azure)
   - [2.1 Core Principles](#21-core-principles)
   - [2.2 Mapping Data Mesh to Azure / CSA](#22-mapping-data-mesh-to-azure--csa)
   - [2.3 Data Domains](#23-data-domains)
@@ -23,48 +26,49 @@
   - [2.5 Self-Serve Data Infrastructure](#25-self-serve-data-infrastructure)
   - [2.6 Federated Governance](#26-federated-governance)
   - [2.7 Unity Catalog vs Purview for Governance](#27-unity-catalog-vs-purview-for-governance)
-- [3. Data Fabric Architecture](#3-data-fabric-architecture)
+- [🧵 3. Data Fabric Architecture](#-3-data-fabric-architecture)
   - [3.1 How Data Fabric Differs from Data Mesh](#31-how-data-fabric-differs-from-data-mesh)
   - [3.2 Data Fabric Core Components](#32-data-fabric-core-components)
   - [3.3 Azure Services for Data Fabric Patterns](#33-azure-services-for-data-fabric-patterns)
   - [3.4 Hybrid Approach for csa-inabox](#34-hybrid-approach-for-csa-inabox)
-- [4. Microsoft Fabric Alternative Components](#4-microsoft-fabric-alternative-components)
+- [🔄 4. Microsoft Fabric Alternative Components](#-4-microsoft-fabric-alternative-components)
   - [4.1 Complete Component Mapping](#41-complete-component-mapping)
   - [4.2 Detailed Component Analysis](#42-detailed-component-analysis)
-- [5. Required Azure Services for a Complete Platform](#5-required-azure-services-for-a-complete-platform)
+- [☁️ 5. Required Azure Services for a Complete Platform](#️-5-required-azure-services-for-a-complete-platform)
   - [5.1 Complete Service Catalog](#51-complete-service-catalog)
   - [5.2 Service Dependencies Map](#52-service-dependencies-map)
-- [6. Deployment Strategy for 4 Azure Subscriptions](#6-deployment-strategy-for-4-azure-subscriptions)
+- [📦 6. Deployment Strategy for 4 Azure Subscriptions](#-6-deployment-strategy-for-4-azure-subscriptions)
   - [6.1 Recommended Subscription Layout](#61-recommended-subscription-layout)
   - [6.2 Alternative: Scale-Out Layout](#62-alternative-scale-out-layout)
   - [6.3 Cross-Subscription Networking](#63-cross-subscription-networking)
   - [6.4 Policy Inheritance and Management Group Hierarchy](#64-policy-inheritance-and-management-group-hierarchy)
   - [6.5 RBAC Strategy](#65-rbac-strategy)
-- [7. Best Practices and Standards](#7-best-practices-and-standards)
+- [📋 7. Best Practices and Standards](#-7-best-practices-and-standards)
   - [7.1 Azure Well-Architected Framework for Data Platforms](#71-azure-well-architected-framework-for-data-platforms)
   - [7.2 Zero-Trust Network Architecture](#72-zero-trust-network-architecture)
   - [7.3 Data Classification and Sensitivity Labeling](#73-data-classification-and-sensitivity-labeling)
   - [7.4 Cost Management and FinOps](#74-cost-management-and-finops)
   - [7.5 Disaster Recovery and Business Continuity](#75-disaster-recovery-and-business-continuity)
-- [8. Reference Templates and IaC](#8-reference-templates-and-iac)
+- [📚 8. Reference Templates and IaC](#-8-reference-templates-and-iac)
   - [8.1 Microsoft Official Templates](#81-microsoft-official-templates)
   - [8.2 Template Architecture](#82-template-architecture)
   - [8.3 csa-inabox Deployment Approach](#83-csa-inabox-deployment-approach)
   - [8.4 Existing csa-inabox Assets](#84-existing-csa-inabox-assets)
-- [9. Sources and References](#9-sources-and-references)
-- [Appendix A: Service SKU Recommendations](#appendix-a-service-sku-recommendations)
-- [Appendix B: Naming Convention](#appendix-b-naming-convention)
-- [Appendix C: Deployment Order](#appendix-c-deployment-order)
+- [🔗 9. Sources and References](#-9-sources-and-references)
+- [📊 Appendix A: Service SKU Recommendations](#-appendix-a-service-sku-recommendations)
+- [📛 Appendix B: Naming Convention](#-appendix-b-naming-convention)
+- [🚀 Appendix C: Deployment Order](#-appendix-c-deployment-order)
 
 ---
 
-## 1. Azure Cloud-Scale Analytics Architecture
+## 🏗️ 1. Azure Cloud-Scale Analytics Architecture
 
 ### 1.1 Overview and Current Status
 
 Microsoft's Cloud-Scale Analytics (CSA) was the reference architecture for building enterprise data platforms on Azure. It was part of the Cloud Adoption Framework (CAF) and provided prescriptive guidance for data landing zones, governance, and scalable analytics.
 
-**Important Note:** As of early 2026, Microsoft has **deprecated** the Cloud-Scale Analytics scenario. The deprecation notice states: *"The Cloud-Scale Analytics scenario has been deprecated and is no longer maintained or supported. To ensure only the best guidance is surfaced, this guidance will be deleted April 2026."* Microsoft redirects to their new **"Unify your data platform"** guidance at `https://aka.ms/cafdata`.
+> [!WARNING]
+> As of early 2026, Microsoft has **deprecated** the Cloud-Scale Analytics scenario. The deprecation notice states: *"The Cloud-Scale Analytics scenario has been deprecated and is no longer maintained or supported. To ensure only the best guidance is surfaced, this guidance will be deleted April 2026."* Microsoft redirects to their new **"Unify your data platform"** guidance at `https://aka.ms/cafdata`.
 
 **What this means for csa-inabox:** The CSA architecture remains the best-documented and most comprehensive open reference for building a modular, enterprise-grade data platform on Azure. While Microsoft is consolidating guidance (likely pushing toward Fabric), the architectural patterns, landing zone structure, and IaC templates remain valid and are exactly what we need. Our project preserves and extends these patterns with open-source tooling.
 
@@ -89,7 +93,8 @@ A **separate Azure subscription** that provides centralized governance for the e
 | Networking | VNet, DNS, Peering | Hub connectivity to all data landing zones |
 | Security | Key Vault, Defender | Centralized secrets and threat protection |
 
-**Key Design Decision:** The DMLZ must be deployed as a separate subscription under a management group with appropriate governance policies. It connects to data landing zones via VNet peering and to the connectivity subscription.
+> [!IMPORTANT]
+> The DMLZ must be deployed as a separate subscription under a management group with appropriate governance policies. It connects to data landing zones via VNet peering and to the connectivity subscription.
 
 #### Data Landing Zone (DLZ)
 Each DLZ is a **separate Azure subscription** that hosts analytics workloads for a specific domain or business unit:
@@ -112,6 +117,9 @@ Each DLZ provisions **three ADLS Gen2 storage accounts** forming a logical data 
 | 2 | Enriched | Silver | `standardized` | Merged, cleansed, type-aligned data |
 | 2 | Curated | Gold | `data-products` | Aggregated, modeled, consumption-ready |
 | 3 | Development | N/A | `analytics-sandbox`, `synapse-primary-*` | Exploratory sandboxes, workspace storage |
+
+<details>
+<summary>Container Folder Structures</summary>
 
 **Container Folder Structure (Raw/Landing):**
 ```text
@@ -154,6 +162,8 @@ Standardized/
     Sensitive/{rundate=YYYY-MM-DD}/
 ```
 
+</details>
+
 **Key Configuration:**
 - Enable Hierarchical Namespace (HNS) on all ADLS Gen2 accounts
 - Use ACLs + Microsoft Entra groups for fine-grained access control
@@ -164,25 +174,37 @@ Standardized/
 
 The networking architecture follows a hub-spoke model integrated with Azure Landing Zones:
 
-```text
-                    ┌─────────────────────┐
-                    │   Connectivity Sub   │
-                    │   (Hub VNet)         │
-                    │   - Azure Firewall   │
-                    │   - ExpressRoute     │
-                    │   - VPN Gateway      │
-                    └──────────┬──────────┘
-                               │ VNet Peering
-              ┌────────────────┼────────────────┐
-              │                │                │
-    ┌─────────▼──────┐  ┌─────▼────────┐  ┌───▼──────────┐
-    │  DMLZ VNet     │  │  DLZ-1 VNet  │  │  DLZ-2 VNet  │
-    │  - Purview     │  │  - Storage   │  │  - Storage   │
-    │  - Governance  │  │  - Compute   │  │  - Compute   │
-    │  - ACR         │  │  - ADF       │  │  - ADF       │
-    └────────┬───────┘  └──────────────┘  └──────────────┘
-             │ VNet Peering to each DLZ
-             └──────────────────────────────────────────┘
+```mermaid
+graph TB
+    subgraph Connectivity["Connectivity Sub (Hub VNet)"]
+        FW["Azure Firewall"]
+        ER["ExpressRoute"]
+        VPN["VPN Gateway"]
+    end
+
+    subgraph DMLZ["DMLZ VNet"]
+        PV["Purview"]
+        GOV["Governance"]
+        ACR["ACR"]
+    end
+
+    subgraph DLZ1["DLZ-1 VNet"]
+        ST1["Storage"]
+        CMP1["Compute"]
+        ADF1["ADF"]
+    end
+
+    subgraph DLZ2["DLZ-2 VNet"]
+        ST2["Storage"]
+        CMP2["Compute"]
+        ADF2["ADF"]
+    end
+
+    Connectivity -->|"VNet Peering"| DMLZ
+    Connectivity -->|"VNet Peering"| DLZ1
+    Connectivity -->|"VNet Peering"| DLZ2
+    DMLZ -->|"VNet Peering"| DLZ1
+    DMLZ -->|"VNet Peering"| DLZ2
 ```
 
 **Design Principles:**
@@ -196,7 +218,9 @@ The networking architecture follows a hub-spoke model integrated with Azure Land
 - NSGs and route tables per subnet
 - Azure Firewall in the hub for traffic inspection
 
-**Private DNS Zones Required:**
+<details>
+<summary>Private DNS Zones Required</summary>
+
 - `privatelink.blob.core.windows.net`
 - `privatelink.dfs.core.windows.net`
 - `privatelink.database.windows.net`
@@ -212,6 +236,8 @@ The networking architecture follows a hub-spoke model integrated with Azure Land
 - `privatelink.azuredatabricks.net`
 - `privatelink.azurecr.io`
 - `privatelink.monitor.azure.com`
+
+</details>
 
 ### 1.5 Integration with Azure Landing Zones (ALZ)
 
@@ -235,26 +261,26 @@ Tenant Root Group
 ```
 
 **Platform Landing Zone Subscriptions:**
-1. **Management Subscription** - Log Analytics workspace, Azure Monitor, Automation, Sentinel
-2. **Connectivity Subscription** - Hub VNet, Azure Firewall, ExpressRoute, VPN, DNS zones
-3. **Identity Subscription** - AD domain controllers (if needed)
+1. **Management Subscription** — Log Analytics workspace, Azure Monitor, Automation, Sentinel
+2. **Connectivity Subscription** — Hub VNet, Azure Firewall, ExpressRoute, VPN, DNS zones
+3. **Identity Subscription** — AD domain controllers (if needed)
 
 **Application Landing Zone Subscriptions (for data):**
-4. **DMLZ Subscription** - Data governance, Purview, ACR, shared services
-5. **DLZ Subscription(s)** - One per data domain or environment
+4. **DMLZ Subscription** — Data governance, Purview, ACR, shared services
+5. **DLZ Subscription(s)** — One per data domain or environment
 
 ---
 
-## 2. Data Mesh Architecture in Azure
+## 🔀 2. Data Mesh Architecture in Azure
 
 ### 2.1 Core Principles
 
 Data mesh, as defined by Zhamak Dehghani, is an architectural pattern built on four principles:
 
-1. **Domain-Oriented Data Ownership** - Data is owned by domain teams who understand it best
-2. **Data as a Product** - Data products are first-class citizens with defined quality, SLAs, and discoverability
-3. **Self-Serve Data Infrastructure Platform** - A platform that enables domain teams to build data products autonomously
-4. **Federated Computational Governance** - Governance policies automated and embedded in the platform
+1. **Domain-Oriented Data Ownership** — Data is owned by domain teams who understand it best
+2. **Data as a Product** — Data products are first-class citizens with defined quality, SLAs, and discoverability
+3. **Self-Serve Data Infrastructure Platform** — A platform that enables domain teams to build data products autonomously
+4. **Federated Computational Governance** — Governance policies automated and embedded in the platform
 
 ### 2.2 Mapping Data Mesh to Azure / CSA
 
@@ -271,18 +297,18 @@ Data mesh, as defined by Zhamak Dehghani, is an architectural pattern built on f
 ### 2.3 Data Domains
 
 Three criteria for defining data domains:
-1. **Long-term ownership** - Boundaries must support identified, persistent owners
-2. **Match reality** - Domains should reflect actual business operations, not theoretical concepts
-3. **Atomic integrity** - Don't combine unrelated areas into a single domain
+1. **Long-term ownership** — Boundaries must support identified, persistent owners
+2. **Match reality** — Domains should reflect actual business operations, not theoretical concepts
+3. **Atomic integrity** — Don't combine unrelated areas into a single domain
 
 Domain examples: Sales, Marketing, Finance, Supply Chain, Customer, Product
 
 ### 2.4 Data Products
 
 A successful data product must be:
-- **Usable** - Has users outside the immediate data domain
-- **Valuable** - Maintains value over time
-- **Feasible** - Can be built from available data and technology
+- **Usable** — Has users outside the immediate data domain
+- **Valuable** — Maintains value over time
+- **Feasible** — Can be built from available data and technology
 
 Data product components:
 - Data (the actual datasets)
@@ -310,7 +336,7 @@ The DMLZ provides automation services (not products, but patterns to implement):
 
 Implementation approach:
 - **Automated policies** via Azure Policy (enforced at management group level)
-- **Code-first** - Standards, policies, and platform deployment as code
+- **Code-first** — Standards, policies, and platform deployment as code
 - **Purview** for cross-domain data cataloging, classification, and lineage
 - **Unity Catalog** (if using Databricks) for workspace-level governance
 - **Entra ID entitlement management** for access request/approval workflows
@@ -328,11 +354,12 @@ Implementation approach:
 | **Cost** | Included with Azure (consumption model) | Included with Databricks Premium |
 | **Recommendation** | Use as enterprise-wide catalog | Use in addition to Purview for Databricks-specific governance |
 
-**Best Practice:** Use **both** together. Purview provides the enterprise-wide catalog, classification, and cross-platform lineage. Unity Catalog provides fine-grained access control, auditing, and lineage within the Databricks ecosystem. They are complementary, not competing.
+> [!NOTE]
+> **Best Practice:** Use **both** together. Purview provides the enterprise-wide catalog, classification, and cross-platform lineage. Unity Catalog provides fine-grained access control, auditing, and lineage within the Databricks ecosystem. They are complementary, not competing.
 
 ---
 
-## 3. Data Fabric Architecture
+## 🧵 3. Data Fabric Architecture
 
 ### 3.1 How Data Fabric Differs from Data Mesh
 
@@ -385,13 +412,13 @@ Implementation approach:
 ### 3.4 Hybrid Approach for csa-inabox
 
 For `csa-inabox`, we recommend a **hybrid data mesh + data fabric** approach:
-- **Data Mesh organizational model** - Domain teams own data products in DLZs
-- **Data Fabric technical layer** - Centralized metadata, automated discovery, virtual access via DMLZ
+- **Data Mesh organizational model** — Domain teams own data products in DLZs
+- **Data Fabric technical layer** — Centralized metadata, automated discovery, virtual access via DMLZ
 - This gives the best of both: decentralized ownership with automated, AI-driven governance
 
 ---
 
-## 4. Microsoft Fabric Alternative Components
+## 🔄 4. Microsoft Fabric Alternative Components
 
 This section maps each Microsoft Fabric capability to equivalent Azure services for our open-source platform.
 
@@ -414,7 +441,8 @@ This section maps each Microsoft Fabric capability to equivalent Azure services 
 
 ### 4.2 Detailed Component Analysis
 
-#### 4.2.1 Data Lakehouse: Delta Lake on ADLS Gen2
+<details>
+<summary>4.2.1 Data Lakehouse: Delta Lake on ADLS Gen2</summary>
 
 **Architecture:**
 - **Storage:** ADLS Gen2 with Hierarchical Namespace enabled
@@ -429,7 +457,10 @@ This section maps each Microsoft Fabric capability to equivalent Azure services 
 - Storage redundancy: LRS for dev, GRS for production
 - Use customer-managed keys (CMK) via Key Vault for encryption
 
-#### 4.2.2 Compute: Synapse Spark Pools vs Databricks
+</details>
+
+<details>
+<summary>4.2.2 Compute: Synapse Spark Pools vs Databricks</summary>
 
 **Synapse Spark Pools:**
 - Integrated with Synapse workspace
@@ -449,7 +480,10 @@ This section maps each Microsoft Fabric capability to equivalent Azure services 
 
 **Recommendation:** Use **Databricks as primary compute** for its superior governance (Unity Catalog), ML capabilities, and ecosystem. Use **Synapse Serverless SQL** for ad-hoc querying of the data lake. This provides the best combination of capabilities.
 
-#### 4.2.3 Data Warehouse: Synapse SQL Options
+</details>
+
+<details>
+<summary>4.2.3 Data Warehouse: Synapse SQL Options</summary>
 
 **Synapse Dedicated SQL Pool:**
 - Traditional MPP data warehouse
@@ -468,7 +502,10 @@ This section maps each Microsoft Fabric capability to equivalent Azure services 
 
 **Recommendation:** Use **Serverless SQL as primary query engine** for the lakehouse. Use Dedicated SQL only for specific high-performance reporting marts if needed. This dramatically reduces cost.
 
-#### 4.2.4 Data Integration: Azure Data Factory
+</details>
+
+<details>
+<summary>4.2.4 Data Integration: Azure Data Factory</summary>
 
 **Core Capabilities:**
 - 100+ connectors (on-premises, cloud, SaaS)
@@ -487,7 +524,10 @@ This section maps each Microsoft Fabric capability to equivalent Azure services 
 
 **Alternative/Complement:** Use **dbt** (already in the csa-inabox repo) for transformation logic. ADF handles orchestration and data movement; dbt handles SQL-based transformations in the lakehouse.
 
-#### 4.2.5 Real-Time Analytics
+</details>
+
+<details>
+<summary>4.2.5 Real-Time Analytics</summary>
 
 **Azure Data Explorer (ADX / Kusto):**
 - Purpose-built for log and telemetry analytics
@@ -509,7 +549,10 @@ Sources → Event Hubs → Databricks Structured Streaming → Delta Lake
                     └→ Event Hubs Capture → ADLS Gen2 (archival)
 ```
 
-#### 4.2.6 Power BI
+</details>
+
+<details>
+<summary>4.2.6 Power BI</summary>
 
 Power BI standalone works identically to Fabric Power BI for reporting:
 - Direct Lake mode (connect to Delta Lake tables)
@@ -520,7 +563,10 @@ Power BI standalone works identically to Fabric Power BI for reporting:
 
 **Recommendation:** Use Power BI Premium Per Capacity for the organization, connected directly to Delta Lake tables via Synapse Serverless SQL or Databricks SQL Warehouses.
 
-#### 4.2.7 AI/ML
+</details>
+
+<details>
+<summary>4.2.7 AI/ML</summary>
 
 **Azure Machine Learning:**
 - End-to-end ML lifecycle
@@ -544,13 +590,17 @@ Power BI standalone works identically to Fabric Power BI for reporting:
 
 **Recommendation:** Use **Databricks ML + MLflow** as primary ML platform (open-source ML tracking). Add Azure ML for specialized needs (AutoML, Responsible AI). Use Azure OpenAI for generative AI workloads.
 
+</details>
+
 ---
 
-## 5. Required Azure Services for a Complete Platform
+## ☁️ 5. Required Azure Services for a Complete Platform
 
 ### 5.1 Complete Service Catalog
 
-#### Networking
+<details>
+<summary>Networking Services</summary>
+
 | Service | Purpose | Subscription |
 |---------|---------|-------------|
 | Azure Virtual Network (VNet) | Network isolation per landing zone | All |
@@ -564,7 +614,11 @@ Power BI standalone works identically to Fabric Power BI for reporting:
 | ExpressRoute | On-premises connectivity | Connectivity |
 | VPN Gateway | Site-to-Site for third-party clouds | Connectivity |
 
-#### Identity & Access
+</details>
+
+<details>
+<summary>Identity & Access Services</summary>
+
 | Service | Purpose | Subscription |
 |---------|---------|-------------|
 | Microsoft Entra ID | Identity provider | Tenant-wide |
@@ -575,7 +629,11 @@ Power BI standalone works identically to Fabric Power BI for reporting:
 | Privileged Identity Management | Just-in-time admin access | Tenant-wide |
 | Conditional Access | Context-aware access policies | Tenant-wide |
 
-#### Storage
+</details>
+
+<details>
+<summary>Storage Services</summary>
+
 | Service | Purpose | Subscription |
 |---------|---------|-------------|
 | ADLS Gen2 (HNS-enabled) | Data lake storage (3 per DLZ) | DLZ |
@@ -583,7 +641,11 @@ Power BI standalone works identically to Fabric Power BI for reporting:
 | Azure SQL Database | Metadata stores, ADF metastore | DLZ, DMLZ |
 | Cosmos DB | Knowledge graph (optional), app data | DMLZ |
 
-#### Compute
+</details>
+
+<details>
+<summary>Compute Services</summary>
+
 | Service | Purpose | Subscription |
 |---------|---------|-------------|
 | Azure Databricks | Primary Spark compute, ML, SQL analytics | DLZ |
@@ -592,7 +654,11 @@ Power BI standalone works identically to Fabric Power BI for reporting:
 | Azure Functions | Event-driven automation | DLZ, DMLZ |
 | Virtual Machines | Self-hosted IR, jumpboxes | DLZ |
 
-#### Data Integration
+</details>
+
+<details>
+<summary>Data Integration Services</summary>
+
 | Service | Purpose | Subscription |
 |---------|---------|-------------|
 | Azure Data Factory | Orchestration, data movement | DLZ |
@@ -602,7 +668,11 @@ Power BI standalone works identically to Fabric Power BI for reporting:
 | Service Bus | Reliable message queuing | DLZ, DMLZ |
 | IoT Hub | IoT device telemetry (optional) | DLZ |
 
-#### Governance
+</details>
+
+<details>
+<summary>Governance Services</summary>
+
 | Service | Purpose | Subscription |
 |---------|---------|-------------|
 | Microsoft Purview | Data catalog, classification, lineage | DMLZ (tenant-scoped) |
@@ -610,7 +680,11 @@ Power BI standalone works identically to Fabric Power BI for reporting:
 | Databricks Unity Catalog | Spark-level data governance | DLZ (Databricks) |
 | Management Groups | Policy hierarchy, RBAC inheritance | Tenant-wide |
 
-#### Security
+</details>
+
+<details>
+<summary>Security Services</summary>
+
 | Service | Purpose | Subscription |
 |---------|---------|-------------|
 | Azure Key Vault | Secrets, keys, certificates | All |
@@ -620,7 +694,11 @@ Power BI standalone works identically to Fabric Power BI for reporting:
 | Defender for Storage | Storage threat protection | DLZ |
 | Defender for SQL | Database threat protection | DLZ |
 
-#### Monitoring
+</details>
+
+<details>
+<summary>Monitoring Services</summary>
+
 | Service | Purpose | Subscription |
 |---------|---------|-------------|
 | Azure Monitor | Platform metrics and alerts | All |
@@ -629,7 +707,11 @@ Power BI standalone works identically to Fabric Power BI for reporting:
 | Azure Workbooks | Custom dashboards | Management |
 | Diagnostic Settings | Service-level telemetry | All |
 
-#### AI/ML
+</details>
+
+<details>
+<summary>AI/ML Services</summary>
+
 | Service | Purpose | Subscription |
 |---------|---------|-------------|
 | Azure Machine Learning | ML lifecycle management | DLZ |
@@ -637,47 +719,61 @@ Power BI standalone works identically to Fabric Power BI for reporting:
 | Azure Cognitive Services | Pre-built AI (Vision, Language, etc.) | DLZ |
 | Databricks ML / MLflow | Experiment tracking, model registry | DLZ |
 
+</details>
+
 ### 5.2 Service Dependencies Map
 
-```text
-                    ┌─────────────────────────────────┐
-                    │        Microsoft Entra ID         │
-                    │    (Tenant-wide identity)         │
-                    └──────────────┬──────────────────┘
-                                   │
-        ┌──────────────────────────┼──────────────────────────┐
-        │                          │                          │
-┌───────▼───────┐         ┌────────▼───────┐         ┌───────▼────────┐
-│  Management   │         │  Connectivity  │         │    Identity    │
-│  Subscription │         │  Subscription  │         │  Subscription  │
-│               │         │                │         │                │
-│ Log Analytics │         │ Hub VNet       │         │ AD DCs (opt)   │
-│ Sentinel      │         │ Firewall       │         │                │
-│ Automation    │         │ ExpressRoute   │         └────────────────┘
-│ Monitor       │         │ DNS Zones      │
-└───────────────┘         │ Bastion        │
-                          └───────┬────────┘
-                                  │ VNet Peering
-                    ┌─────────────┼──────────────┐
-                    │                            │
-           ┌────────▼───────┐          ┌─────────▼──────┐
-           │     DMLZ       │          │     DLZ(s)     │
-           │  Subscription  │          │  Subscription  │
-           │                │          │                │
-           │ Purview        │◄─peering─┤ ADLS Gen2 x3   │
-           │ Key Vault      │          │ Databricks     │
-           │ ACR            │          │ Synapse        │
-           │ SQL Database   │          │ ADF + IR       │
-           │ AKS (optional) │          │ Key Vault      │
-           │ API Management │          │ Event Hubs     │
-           └────────────────┘          │ Azure ML       │
-                                       │ Power BI       │
-                                       └────────────────┘
+```mermaid
+graph TB
+    EntraID["Microsoft Entra ID<br/>(Tenant-wide identity)"]
+
+    subgraph Mgmt["Management Subscription"]
+        LA["Log Analytics"]
+        Sentinel["Sentinel"]
+        Auto["Automation"]
+        Monitor["Monitor"]
+    end
+
+    subgraph Conn["Connectivity Subscription"]
+        Hub["Hub VNet"]
+        FW["Firewall"]
+        ER["ExpressRoute"]
+        DNS["DNS Zones"]
+        Bastion["Bastion"]
+    end
+
+    subgraph DMLZSub["DMLZ Subscription"]
+        Purview["Purview"]
+        KV1["Key Vault"]
+        ACR["ACR"]
+        SQLDB["SQL Database"]
+        APIM["API Management"]
+    end
+
+    subgraph DLZSub["DLZ Subscription(s)"]
+        ADLS["ADLS Gen2 x3"]
+        DBX["Databricks"]
+        Synapse["Synapse"]
+        ADF["ADF + IR"]
+        KV2["Key Vault"]
+        EH["Event Hubs"]
+        AML["Azure ML"]
+        PBI["Power BI"]
+    end
+
+    EntraID --> Mgmt
+    EntraID --> Conn
+    EntraID --> DMLZSub
+    EntraID --> DLZSub
+
+    Conn -->|"VNet Peering"| DMLZSub
+    Conn -->|"VNet Peering"| DLZSub
+    DMLZSub -->|"Peering + Scanning"| DLZSub
 ```
 
 ---
 
-## 6. Deployment Strategy for 4 Azure Subscriptions
+## 📦 6. Deployment Strategy for 4 Azure Subscriptions
 
 ### 6.1 Recommended Subscription Layout
 
@@ -758,6 +854,7 @@ DLZ-Prod VNet:               10.3.0.0/16
 ```
 
 **Peering Configuration:**
+
 | From | To | Direction | Purpose |
 |------|------|-----------|---------|
 | Hub | DMLZ | Bidirectional | Governance connectivity |
@@ -771,22 +868,11 @@ DLZ-Prod VNet:               10.3.0.0/16
 
 ### 6.4 Policy Inheritance and Management Group Hierarchy
 
-**Management Group Policies:**
-
 | Management Group | Key Policies |
 |-----------------|--------------|
-| **Root (csa-inabox)** | - Require tags (cost center, environment, owner) |
-|                        | - Allowed locations (restrict to approved regions) |
-|                        | - Audit diagnostic settings |
-|                        | - Deny public IP addresses |
-| **Platform** | - Require resource locks on critical resources |
-|              | - Deny unauthorized resource types |
-| **Landing Zones** | - Deploy Private DNS zone groups (deployIfNotExists) |
-|                    | - Require HTTPS/TLS |
-|                    | - Deploy Defender for Cloud |
-|                    | - Deny public network access on storage accounts |
-|                    | - Require encryption at rest with CMK |
-|                    | - Deny creation of classic resources |
+| **Root (csa-inabox)** | Require tags (cost center, environment, owner); Allowed locations; Audit diagnostic settings; Deny public IP addresses |
+| **Platform** | Require resource locks on critical resources; Deny unauthorized resource types |
+| **Landing Zones** | Deploy Private DNS zone groups (deployIfNotExists); Require HTTPS/TLS; Deploy Defender for Cloud; Deny public network access on storage accounts; Require encryption at rest with CMK; Deny creation of classic resources |
 
 ### 6.5 RBAC Strategy
 
@@ -807,7 +893,7 @@ DLZ-Prod VNet:               10.3.0.0/16
 
 ---
 
-## 7. Best Practices and Standards
+## 📋 7. Best Practices and Standards
 
 ### 7.1 Azure Well-Architected Framework for Data Platforms
 
@@ -854,17 +940,17 @@ DLZ-Prod VNet:               10.3.0.0/16
 
 **Principles applied to data platforms:**
 
-1. **Verify Explicitly** - Every access request is fully authenticated and authorized
+1. **Verify Explicitly** — Every access request is fully authenticated and authorized
    - Managed identities for service-to-service
    - Entra ID for user access
    - Conditional access policies
 
-2. **Use Least-Privilege Access** - Just-in-time, just-enough access
+2. **Use Least-Privilege Access** — Just-in-time, just-enough access
    - PIM for admin roles
    - ACLs on data lake folders (not container level)
    - Granular RBAC roles
 
-3. **Assume Breach** - Minimize blast radius
+3. **Assume Breach** — Minimize blast radius
    - Network segmentation (subnets per workload)
    - Private endpoints (no public access surface)
    - NSGs with deny-all default
@@ -953,7 +1039,7 @@ DLZ-Prod VNet:               10.3.0.0/16
 
 ---
 
-## 8. Reference Templates and IaC
+## 📚 8. Reference Templates and IaC
 
 ### 8.1 Microsoft Official Templates
 
@@ -1009,74 +1095,74 @@ data-landing-zone/
 
 For our project, we should:
 
-1. **Fork/adapt** the Microsoft templates as our baseline
-2. **Add Terraform** support alongside Bicep (for multi-cloud flexibility)
-3. **Create a unified deployment orchestrator** that:
-   - Deploys the platform subscription (management + connectivity)
-   - Deploys the DMLZ subscription
-   - Deploys DLZ subscriptions
-   - Configures cross-subscription networking
-   - Sets up governance policies
-4. **Add open-source tooling layer:**
-   - dbt for SQL transformations
-   - Great Expectations for data quality
-   - Apache Airflow or Dagster for orchestration (optional)
-   - MLflow for ML lifecycle
-   - OpenMetadata or DataHub as Purview alternative (optional)
+- [ ] **Fork/adapt** the Microsoft templates as our baseline
+- [ ] **Add Terraform** support alongside Bicep (for multi-cloud flexibility)
+- [ ] **Create a unified deployment orchestrator** that:
+  - Deploys the platform subscription (management + connectivity)
+  - Deploys the DMLZ subscription
+  - Deploys DLZ subscriptions
+  - Configures cross-subscription networking
+  - Sets up governance policies
+- [ ] **Add open-source tooling layer:**
+  - dbt for SQL transformations
+  - Great Expectations for data quality
+  - Apache Airflow or Dagster for orchestration (optional)
+  - MLflow for ML lifecycle
+  - OpenMetadata or DataHub as Purview alternative (optional)
 
 ### 8.4 Existing csa-inabox Assets
 
 Based on the current repo structure:
-- `deploy/arm/` - ARM templates (e.g., Purview)
-- `deploy/bicep/` - Bicep modules (DMLZ, network, private DNS zones)
-- `scripts/sql/` - SQL scripts, Hive metastore notebook
-- `tools/dbt/` - dbt environment for transformations
-- `codeqlDB/` - Code quality database
+- `deploy/arm/` — ARM templates (e.g., Purview)
+- `deploy/bicep/` — Bicep modules (DMLZ, network, private DNS zones)
+- `scripts/sql/` — SQL scripts, Hive metastore notebook
+- `tools/dbt/` — dbt environment for transformations
+- `codeqlDB/` — Code quality database
 
 ---
 
-## 9. Sources and References
+## 🔗 9. Sources and References
 
 ### Microsoft Official Documentation
 
-- [Cloud-Scale Analytics Overview](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/) - Main CSA scenario (deprecated, redirects to Unify your data platform)
-- [Data Landing Zone Architecture](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/architectures/data-landing-zone) - DLZ component architecture
-- [Data Management Landing Zone](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/architectures/data-management-landing-zone) - DMLZ governance architecture
-- [What is Data Mesh?](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/architectures/what-is-data-mesh) - Data mesh principles on Azure
-- [Network Topology and Connectivity](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/eslz-network-topology-and-connectivity) - Networking architecture
-- [Identity and Access Management](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/eslz-identity-and-access-management) - IAM for data platforms
-- [Security, Governance, and Compliance](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/eslz-security-governance-and-compliance) - Security architecture
-- [Data Lake Zones and Containers](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/best-practices/data-lake-zones) - Medallion architecture
-- [What is an Azure Landing Zone?](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/landing-zone/) - ALZ reference architecture
-- [Subscription Considerations](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/landing-zone/design-area/resource-org-subscriptions) - Subscription organization
-- [Unify Your Data Platform (new guidance)](https://aka.ms/cafdata) - Replacement for CSA
+- [Cloud-Scale Analytics Overview](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/) — Main CSA scenario (deprecated, redirects to Unify your data platform)
+- [Data Landing Zone Architecture](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/architectures/data-landing-zone) — DLZ component architecture
+- [Data Management Landing Zone](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/architectures/data-management-landing-zone) — DMLZ governance architecture
+- [What is Data Mesh?](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/architectures/what-is-data-mesh) — Data mesh principles on Azure
+- [Network Topology and Connectivity](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/eslz-network-topology-and-connectivity) — Networking architecture
+- [Identity and Access Management](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/eslz-identity-and-access-management) — IAM for data platforms
+- [Security, Governance, and Compliance](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/eslz-security-governance-and-compliance) — Security architecture
+- [Data Lake Zones and Containers](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/best-practices/data-lake-zones) — Medallion architecture
+- [What is an Azure Landing Zone?](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/landing-zone/) — ALZ reference architecture
+- [Subscription Considerations](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/landing-zone/design-area/resource-org-subscriptions) — Subscription organization
+- [Unify Your Data Platform (new guidance)](https://aka.ms/cafdata) — Replacement for CSA
 
 ### GitHub Repositories
 
-- [Azure/data-management-zone](https://github.com/Azure/data-management-zone) - DMLZ Bicep templates
-- [Azure/data-landing-zone](https://github.com/Azure/data-landing-zone) - DLZ Bicep templates
-- [Azure/data-product-batch](https://github.com/Azure/data-product-batch) - Batch processing template
-- [Azure/data-product-streaming](https://github.com/Azure/data-product-streaming) - Streaming template
-- [Azure/data-product-analytics](https://github.com/Azure/data-product-analytics) - Analytics/DS template
+- [Azure/data-management-zone](https://github.com/Azure/data-management-zone) — DMLZ Bicep templates
+- [Azure/data-landing-zone](https://github.com/Azure/data-landing-zone) — DLZ Bicep templates
+- [Azure/data-product-batch](https://github.com/Azure/data-product-batch) — Batch processing template
+- [Azure/data-product-streaming](https://github.com/Azure/data-product-streaming) — Streaming template
+- [Azure/data-product-analytics](https://github.com/Azure/data-product-analytics) — Analytics/DS template
 
 ### Architecture Frameworks
 
-- [Azure Well-Architected Framework](https://learn.microsoft.com/en-us/azure/well-architected/) - Five pillars
-- [Cloud Adoption Framework](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/) - Cloud adoption methodology
-- [Azure Landing Zone Accelerator](https://aka.ms/alz/accelerator) - IaC deployment
+- [Azure Well-Architected Framework](https://learn.microsoft.com/en-us/azure/well-architected/) — Five pillars
+- [Cloud Adoption Framework](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/) — Cloud adoption methodology
+- [Azure Landing Zone Accelerator](https://aka.ms/alz/accelerator) — IaC deployment
 
 ### Open Source Projects
 
-- [Delta Lake](https://delta.io/) - Open-source lakehouse storage layer
-- [Apache Spark](https://spark.apache.org/) - Distributed compute engine
-- [dbt](https://www.getdbt.com/) - SQL transformation framework
-- [MLflow](https://mlflow.org/) - ML lifecycle management
-- [Great Expectations](https://greatexpectations.io/) - Data quality validation
-- [Debezium](https://debezium.io/) - Change data capture
+- [Delta Lake](https://delta.io/) — Open-source lakehouse storage layer
+- [Apache Spark](https://spark.apache.org/) — Distributed compute engine
+- [dbt](https://www.getdbt.com/) — SQL transformation framework
+- [MLflow](https://mlflow.org/) — ML lifecycle management
+- [Great Expectations](https://greatexpectations.io/) — Data quality validation
+- [Debezium](https://debezium.io/) — Change data capture
 
 ---
 
-## Appendix A: Service SKU Recommendations
+## 📊 Appendix A: Service SKU Recommendations
 
 | Service | Development | Production |
 |---------|-------------|------------|
@@ -1091,7 +1177,9 @@ Based on the current repo structure:
 | Azure Firewall | Basic | Standard or Premium |
 | Log Analytics | Pay-as-you-go | Commitment tier (100GB/day+) |
 
-## Appendix B: Naming Convention
+---
+
+## 📛 Appendix B: Naming Convention
 
 ```text
 {resourceType}-{project}-{environment}-{region}-{instance}
@@ -1111,61 +1199,71 @@ Examples:
   pdz-blob-core-windows-net        (Private DNS Zone)
 ```
 
-## Appendix C: Deployment Order
+---
 
-```text
-Phase 1: Foundation
-  1. Management Groups and Policy Definitions
-  2. Platform Subscription (Management + Connectivity)
-     a. Log Analytics Workspace
-     b. Hub VNet + Azure Firewall
-     c. Private DNS Zones
-     d. Azure Bastion
+## 🚀 Appendix C: Deployment Order
 
-Phase 2: Governance
-  3. DMLZ Subscription
-     a. DMLZ VNet + Peering to Hub
-     b. Key Vault
-     c. Purview Account
-     d. Azure Container Registry
-     e. Shared SQL Database (metadata)
+```mermaid
+graph TD
+    subgraph P1["Phase 1: Foundation"]
+        MG["1. Management Groups<br/>+ Policy Definitions"]
+        PLAT["2. Platform Subscription"]
+        MG --> PLAT
+        PLAT --> LA["2a. Log Analytics"]
+        PLAT --> HUB["2b. Hub VNet + Firewall"]
+        PLAT --> PDNS["2c. Private DNS Zones"]
+        PLAT --> BAST["2d. Azure Bastion"]
+    end
 
-Phase 3: Data Landing Zones
-  4. DLZ Subscription (NonProd first, then Prod)
-     a. DLZ VNet + Peering to Hub + Peering to DMLZ
-     b. NSGs and Route Tables
-     c. Key Vault
-     d. ADLS Gen2 accounts (x3) + Private Endpoints
-     e. Databricks Workspace (VNet-injected) + Private Endpoints
-     f. Synapse Workspace + Private Endpoints
-     g. Azure Data Factory + Private Endpoints + Self-Hosted IR
-     h. Event Hubs Namespace + Private Endpoints
+    subgraph P2["Phase 2: Governance"]
+        DMLZ["3. DMLZ Subscription"]
+        DMLZ --> DMLZV["3a. DMLZ VNet + Peering"]
+        DMLZ --> KV["3b. Key Vault"]
+        DMLZ --> PV["3c. Purview"]
+        DMLZ --> ACR["3d. ACR"]
+        DMLZ --> SQL["3e. Shared SQL DB"]
+    end
 
-Phase 4: Governance Configuration
-  5. Purview Configuration
-     a. Register data sources (ADLS, SQL, Databricks)
-     b. Configure scanning schedules
-     c. Set up classification rules
-     d. Configure access policies
-  6. Unity Catalog Configuration
-     a. Create metastore
-     b. Configure external locations
-     c. Set up catalogs and schemas
-     d. Configure access controls
+    subgraph P3["Phase 3: Data Landing Zones"]
+        DLZ["4. DLZ Subscription<br/>(NonProd → Prod)"]
+        DLZ --> DLZV["4a. DLZ VNet + Peering"]
+        DLZ --> NSG["4b. NSGs + Route Tables"]
+        DLZ --> KV2["4c. Key Vault"]
+        DLZ --> ADLS["4d. ADLS Gen2 x3 + PE"]
+        DLZ --> DBX["4e. Databricks + PE"]
+        DLZ --> SYN["4f. Synapse + PE"]
+        DLZ --> ADF["4g. ADF + PE + SHIR"]
+        DLZ --> EH["4h. Event Hubs + PE"]
+    end
 
-Phase 5: Data Products
-  7. Deploy data product templates
-     a. Source-aligned data applications
-     b. Consumer-aligned data applications
-     c. ADF metadata-driven ingestion pipelines
-     d. dbt transformation models
+    subgraph P4["Phase 4: Governance Config"]
+        PVC["5. Purview Config"]
+        PVC --> REG["5a. Register sources"]
+        PVC --> SCAN["5b. Scanning schedules"]
+        PVC --> CLASS["5c. Classification rules"]
+
+        UC["6. Unity Catalog Config"]
+        UC --> META["6a. Create metastore"]
+        UC --> EXT["6b. External locations"]
+        UC --> CAT["6c. Catalogs + schemas"]
+    end
+
+    subgraph P5["Phase 5: Data Products"]
+        DP["7. Data Product Templates"]
+        DP --> SRC["7a. Source-aligned apps"]
+        DP --> CONS["7b. Consumer-aligned apps"]
+        DP --> ING["7c. ADF ingestion pipelines"]
+        DP --> DBT["7d. dbt transformations"]
+    end
+
+    P1 --> P2 --> P3 --> P4 --> P5
 ```
 
 *This report was compiled from Microsoft's official Cloud Adoption Framework documentation, GitHub reference templates, and Azure architecture guidance. The information is current as of April 2026.*
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [ARCHITECTURE.md](../ARCHITECTURE.md) — Platform architecture overview
 - [PLATFORM_SERVICES.md](../PLATFORM_SERVICES.md) — Platform services reference and SKU details

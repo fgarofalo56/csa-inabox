@@ -1,6 +1,15 @@
+[← Portal Implementations](../README.md)
+
 # React Web App — Data Onboarding Portal
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Frontend Developers
+
+> [!NOTE]
+> **TL;DR:** Full-featured Next.js 14 (App Router) portal with Tailwind CSS, MSAL auth, React Query, and multi-step source registration wizard. The most customizable portal implementation — deployable to App Service, Container Apps, or Static Web Apps.
+
+A full-featured React/Next.js web application for data source registration,
+pipeline management, and data marketplace discovery. This is the most
+customizable portal implementation in CSA-in-a-Box.
 
 ## Table of Contents
 
@@ -15,36 +24,38 @@
 - [Development](#development)
 - [Related Documentation](#related-documentation)
 
-A full-featured React/Next.js web application for data source registration,
-pipeline management, and data marketplace discovery. This is the most
-customizable portal implementation in CSA-in-a-Box.
+---
 
-## Architecture
+## 🏗️ Architecture
 
-```text
-┌─────────────────────────────────────────────────────────────┐
-│                    React Frontend (Next.js)                  │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────┐   │
-│  │ Register │ │ Pipeline │ │  Market- │ │    Access     │   │
-│  │  Source   │ │ Monitor  │ │  place   │ │  Requests    │   │
-│  └─────┬────┘ └─────┬────┘ └─────┬────┘ └──────┬───────┘   │
-│        └──────────┬──┴──────────┬─┘             │           │
-│              ┌────┴─────────────┴───────────────┘           │
-│              │     Shared API Client (axios/fetch)           │
-│              └──────────────┬────────────────────            │
-└─────────────────────────────┼───────────────────────────────┘
-                              │ REST API
-┌─────────────────────────────┼───────────────────────────────┐
-│               Shared Backend (FastAPI)                       │
-│  portal/shared/api/                                          │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────┐   │
-│  │ Sources  │ │Pipelines │ │Marketplace│ │   Access     │   │
-│  │  Routes  │ │  Routes  │ │  Routes   │ │  Routes      │   │
-│  └──────────┘ └──────────┘ └──────────┘ └──────────────┘   │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+graph TB
+    subgraph Frontend[React Frontend - Next.js]
+        Reg[Register Source]
+        Pipe[Pipeline Monitor]
+        Mkt[Marketplace]
+        Acc[Access Requests]
+        Client[Shared API Client<br/>axios/fetch]
+    end
+
+    Reg --> Client
+    Pipe --> Client
+    Mkt --> Client
+    Acc --> Client
+
+    Client -->|REST API| Backend
+
+    subgraph Backend[Shared Backend - FastAPI]
+        SR[Sources Routes]
+        PR[Pipelines Routes]
+        MR[Marketplace Routes]
+        AR[Access Routes]
+    end
 ```
 
-## Tech Stack
+---
+
+## 🏗️ Tech Stack
 
 | Layer | Technology | Why |
 |---|---|---|
@@ -56,7 +67,9 @@ customizable portal implementation in CSA-in-a-Box.
 | HTTP | Axios | HTTP client with interceptors |
 | Charts | Recharts | Dashboard visualizations |
 
-## Quick Start
+---
+
+## 🚀 Quick Start
 
 ```bash
 # Install dependencies
@@ -73,7 +86,9 @@ npm run dev
 # Open http://localhost:3000
 ```
 
-## Environment Variables
+---
+
+## ⚙️ Environment Variables
 
 ```bash
 # Azure AD / Entra ID
@@ -90,7 +105,12 @@ NEXT_PUBLIC_ENABLE_ACCESS_REQUESTS=true
 NEXT_PUBLIC_ENABLE_PIPELINE_MONITORING=true
 ```
 
-## Pages
+> [!WARNING]
+> Never commit `.env.local` files containing real credentials. Use Key Vault references in production.
+
+---
+
+## 📁 Pages
 
 | Route | Page | Description |
 |---|---|---|
@@ -104,7 +124,9 @@ NEXT_PUBLIC_ENABLE_PIPELINE_MONITORING=true
 | `/access` | Access Requests | Submit and track data access requests |
 | `/settings` | Settings | User preferences, API keys, notifications |
 
-## Components
+---
+
+## ✨ Components
 
 ### Source Registration Flow
 
@@ -126,7 +148,9 @@ The marketplace provides:
 - One-click access request with approval workflow
 - Data preview (sample rows with PII masking)
 
-## Deployment
+---
+
+## 📦 Deployment
 
 ### Azure App Service
 
@@ -170,7 +194,9 @@ npx @azure/static-web-apps-cli deploy \
   --api-location portal/shared/api
 ```
 
-## Azure Government
+---
+
+## 🔒 Azure Government
 
 This portal works in Azure Government with these changes:
 
@@ -179,7 +205,9 @@ This portal works in Azure Government with these changes:
 - Point `NEXT_PUBLIC_API_URL` to your Gov-hosted backend
 - All Entra ID endpoints use `.us` suffix
 
-## Development
+---
+
+## 💡 Development
 
 ```bash
 # Run tests
@@ -197,7 +225,7 @@ npm run storybook
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Portal Implementations](../README.md) — Portal implementation index
 - [Shared Backend](../shared/README.md) — Shared backend API

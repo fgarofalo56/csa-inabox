@@ -1,8 +1,16 @@
 # EPA Environmental Monitoring Analytics Architecture
 
+> [**Examples**](../README.md) > [**EPA**](README.md) > **Architecture**
+
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Architects / Data Engineers
 
-## Table of Contents
+> [!TIP]
+> **TL;DR** — Environmental monitoring architecture with real-time AQI sensor streaming (Event Hub to ADX) and batch ingestion from AQS, SDWIS, TRI, ECHO, and EJScreen. Features ML-based AQI prediction and environmental justice scoring.
+
+
+---
+
+## 📋 Table of Contents
 - [Overview](#overview)
 - [Domain Context](#domain-context)
   - [Environmental Monitoring Landscape](#environmental-monitoring-landscape)
@@ -35,13 +43,19 @@
   - [Core Platform](#core-platform)
   - [Development Tools](#development-tools)
 
-## Overview
+
+---
+
+## 📋 Overview
 
 The EPA Environmental Monitoring Analytics platform is built on Azure Cloud Scale Analytics (CSA) and follows a domain-driven design approach. It ingests data from multiple EPA programs — including real-time AQI sensor streaming — transforms it through a medallion architecture (Bronze → Silver → Gold), and provides analytical insights for air quality prediction, environmental justice analysis, and emissions compliance monitoring.
 
-## Domain Context
 
-### Environmental Monitoring Landscape
+---
+
+## 📋 Domain Context
+
+### 📊 Environmental Monitoring Landscape
 
 The EPA manages an extensive network of environmental monitoring programs:
 
@@ -59,9 +73,12 @@ The EPA manages an extensive network of environmental monitoring programs:
 - **Variety**: Structured (AQI readings, compliance records), semi-structured (facility inspection reports), geospatial (monitor locations, census tract boundaries, plume models)
 - **Veracity**: EPA applies rigorous QA/QC protocols; however, AirNow preliminary data may differ from quality-assured AQS data by 6–12 months
 
-## Architecture Layers
 
-### Data Ingestion Layer
+---
+
+## 🏗️ Architecture Layers
+
+### 🔄 Data Ingestion Layer
 
 ```mermaid
 graph TD
@@ -131,7 +148,7 @@ graph TD
 - Supports detailed facility search and compliance history
 - Maximum 10,000 records per query (pagination required)
 
-### Bronze Layer (Raw Data)
+### 🗄️ Bronze Layer (Raw Data)
 
 The Bronze layer preserves raw data from each EPA source system exactly as received.
 
@@ -178,7 +195,7 @@ PARTITIONED BY (date_local, state_code)
 - MD5 record hashes for deduplication
 - Source system version tracking for API changes
 
-### Silver Layer (Cleaned & Conformed)
+### 🗄️ Silver Layer (Cleaned & Conformed)
 
 The Silver layer applies EPA-specific business rules, standardization, and enrichment.
 
@@ -246,7 +263,7 @@ USING DELTA
 PARTITIONED BY (observation_date, state_code)
 ```
 
-### Gold Layer (Business Analytics)
+### 🗄️ Gold Layer (Business Analytics)
 
 The Gold layer contains aggregated, enriched data optimized for the three key analytics scenarios.
 
@@ -307,9 +324,12 @@ USING DELTA
 PARTITIONED BY (state)
 ```
 
-## Streaming Architecture
 
-### Real-Time AQI Monitoring Pipeline
+---
+
+## ⚡ Streaming Architecture
+
+### ⚡ Real-Time AQI Monitoring Pipeline
 
 The streaming pipeline handles sub-minute AQI sensor data for real-time air quality alerting and dashboard updates.
 
@@ -354,7 +374,7 @@ graph TD
     SA --> ML
 ```
 
-### Event Schema
+### ⚙️ Event Schema
 
 ```json
 {
@@ -384,7 +404,7 @@ graph TD
 }
 ```
 
-### ADX Table Design
+### 🗄️ ADX Table Design
 
 ```kql
 // Create AQI streaming table
@@ -420,9 +440,12 @@ graph TD
 }
 ```
 
-## Data Flow Architecture
 
-### Batch Processing Pipeline
+---
+
+## 🔄 Data Flow Architecture
+
+### 🔄 Batch Processing Pipeline
 
 ```mermaid
 graph TD
@@ -447,9 +470,12 @@ graph TD
     M --> Q[Alert: Data Quality Issue]
 ```
 
-## Integration Patterns
 
-### API Gateway Architecture
+---
+
+## 🔌 Integration Patterns
+
+### 🔌 API Gateway Architecture
 
 ```mermaid
 graph TD
@@ -464,7 +490,7 @@ graph TD
     F -->|Caching| J[Azure Cache for Redis]
 ```
 
-### Data Contracts
+### 🔌 Data Contracts
 
 ```yaml
 apiVersion: v1
@@ -485,29 +511,35 @@ spec:
     accuracy: 90%  # RMSE target for AQI predictions
 ```
 
-## Security Architecture
 
-### Data Protection
+---
+
+## 🔒 Security Architecture
+
+### 🔒 Data Protection
 
 - **Encryption at Rest**: Azure Storage Service Encryption (SSE)
 - **Encryption in Transit**: TLS 1.2+ for all API communications
 - **Network Security**: VNet integration with private endpoints
 - **Access Control**: Azure AD with RBAC; role-based data access
 
-### Federal Compliance
+### 🔒 Federal Compliance
 
 - **FedRAMP**: Azure Government meets FedRAMP High baseline
 - **FISMA**: NIST 800-53 control alignment
 - **FOIA**: Public data products designed for open access
 - **CUI**: Enforcement-sensitive data (ECHO) may require CUI marking — confirm with ISSO
 
-### Data Classification
+### 🔒 Data Classification
 
 - **PUBLIC**: AQI readings, TRI releases, EJScreen indicators
 - **CUI (potential)**: Enforcement strategy details, pending enforcement actions
 - **PII**: Facility owner contact information (redacted in public-facing products)
 
-## Performance Optimization
+
+---
+
+## ⚡ Performance Optimization
 
 ### Partitioning Strategy
 
@@ -523,22 +555,28 @@ spec:
 - **CDN**: EJScreen indicator data, chemical reference tables
 - **Query Result Cache**: Gold layer query results (1-hour TTL)
 
-## Monitoring & Observability
 
-### Data Quality Monitoring
+---
+
+## 📊 Monitoring & Observability
+
+### 📊 Data Quality Monitoring
 
 - **AQI Range Validation**: Flag readings outside 0–500 AQI range
 - **Pollutant Concentration Bounds**: Physical limits per pollutant
 - **Completeness Monitoring**: Alert when site reporting drops below 75%
 - **Cross-Source Reconciliation**: Compare AirNow vs. AQS for overlapping periods
 
-### Streaming Pipeline Health
+### ⚡ Streaming Pipeline Health
 
 - **Event Hub Metrics**: Throughput, partition lag, consumer group status
 - **ADX Ingestion**: Latency, failure rate, data volume
 - **Alert Latency**: Time from AQI threshold breach to alert delivery (target: < 30 seconds)
 
-## Technology Stack
+
+---
+
+## 📎 Technology Stack
 
 ### Core Platform
 - **Compute**: Azure Databricks, Azure Data Explorer, Azure Functions
@@ -548,7 +586,7 @@ spec:
 - **Orchestration**: Azure Data Factory, Azure Logic Apps
 - **Analytics**: Azure Synapse Analytics, Power BI
 
-### Development Tools
+### 🚀 Development Tools
 - **Data Modeling**: dbt (1.7+), Great Expectations
 - **Version Control**: Git, Azure DevOps / GitHub
 - **CI/CD**: Azure Pipelines, GitHub Actions
@@ -556,7 +594,7 @@ spec:
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [EPA README](README.md) — Deployment guide, quick start, and analytics scenarios
 - [Platform Architecture](../../docs/ARCHITECTURE.md) — Core CSA platform architecture

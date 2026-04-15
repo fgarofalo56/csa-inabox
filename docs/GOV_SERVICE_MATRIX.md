@@ -1,31 +1,39 @@
+[Home](../README.md) > [Docs](./) > **Gov Service Matrix**
+
 # Azure Government Service Availability Matrix
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Security / Compliance
+
+> [!NOTE]
+> **Quick Summary**: Comprehensive matrix of Azure service availability across Commercial vs Government regions (FedRAMP High, IL4, IL5), including endpoint URL differences, API version caveats, Bicep configuration for Gov, compliance requirements by vertical, and open-source alternatives for Government gaps.
 
 This document tracks the availability of every Azure service used by CSA-in-a-Box
 across Azure Commercial and Azure Government regions, including FedRAMP
 authorization levels and impact level (IL) support.
 
+> [!IMPORTANT]
 > **Last verified:** April 2026. Check
 > [Azure Government Services by Region](https://azure.microsoft.com/en-us/explore/global-infrastructure/government/by-region/)
 > for the latest status.
 
-## Table of Contents
+## 📑 Table of Contents
 
-- [Core Services](#core-services)
-- [Compute & Hosting](#compute--hosting)
-- [AI & ML](#ai--ml)
-- [Databases](#databases)
-- [Identity & Security](#identity--security)
-- [Monitoring & Management](#monitoring--management)
-- [Endpoint URL Differences](#endpoint-url-differences)
-- [API Version Differences](#api-version-differences)
-- [Bicep Configuration for Government](#bicep-configuration-for-government)
-- [Compliance Requirements by Vertical](#compliance-requirements-by-vertical)
-- [Open-Source Alternatives for Government Gaps](#open-source-alternatives-for-government-gaps)
-- [References](#references)
+- [☁️ Core Services](#️-core-services)
+- [💻 Compute & Hosting](#-compute--hosting)
+- [🤖 AI & ML](#-ai--ml)
+- [🗄️ Databases](#️-databases)
+- [🔒 Identity & Security](#-identity--security)
+- [📊 Monitoring & Management](#-monitoring--management)
+- [🌐 Endpoint URL Differences](#-endpoint-url-differences)
+- [⚙️ API Version Differences](#️-api-version-differences)
+- [📦 Bicep Configuration for Government](#-bicep-configuration-for-government)
+- [🏛️ Compliance Requirements by Vertical](#️-compliance-requirements-by-vertical)
+- [🔓 Open-Source Alternatives for Government Gaps](#-open-source-alternatives-for-government-gaps)
+- [📚 References](#-references)
 
-## Core Services
+---
+
+## ☁️ Core Services
 
 | Service | Commercial | Gov FedRAMP High | Gov IL4 | Gov IL5 | Alternative in This Repo |
 |---------|-----------|-----------------|---------|---------|-------------------------|
@@ -44,7 +52,9 @@ authorization levels and impact level (IL) support.
 | **Logic Apps** | GA | GA | GA | GA | Direct use (Consumption + Standard) |
 | **API Management** | GA | GA | GA | GA | Direct use |
 
-## Compute & Hosting
+---
+
+## 💻 Compute & Hosting
 
 | Service | Commercial | Gov FedRAMP High | Gov IL4 | Gov IL5 | Alternative |
 |---------|-----------|-----------------|---------|---------|-------------|
@@ -54,7 +64,9 @@ authorization levels and impact level (IL) support.
 | **Static Web Apps** | GA | GA | GA | GA | Direct use |
 | **Azure Batch** | GA | GA | GA | GA | Direct use |
 
-## AI & ML
+---
+
+## 🤖 AI & ML
 
 | Service | Commercial | Gov FedRAMP High | Gov IL4 | Gov IL5 | Alternative |
 |---------|-----------|-----------------|---------|---------|-------------|
@@ -63,7 +75,9 @@ authorization levels and impact level (IL) support.
 | **Cognitive Services** | GA | GA (select) | GA (select) | Limited | Hugging Face on AKS |
 | **Azure AI Search** | GA | GA | GA | N/A | OpenSearch on AKS |
 
-## Databases
+---
+
+## 🗄️ Databases
 
 | Service | Commercial | Gov FedRAMP High | Gov IL4 | Gov IL5 | Alternative |
 |---------|-----------|-----------------|---------|---------|-------------|
@@ -71,7 +85,9 @@ authorization levels and impact level (IL) support.
 | **Cosmos DB** | GA | GA | GA | GA | Direct use |
 | **Azure Database for PostgreSQL** | GA | GA | GA | GA | Direct use |
 
-## Identity & Security
+---
+
+## 🔒 Identity & Security
 
 | Service | Commercial | Gov FedRAMP High | Gov IL4 | Gov IL5 | Alternative |
 |---------|-----------|-----------------|---------|---------|-------------|
@@ -80,7 +96,9 @@ authorization levels and impact level (IL) support.
 | **Azure AD Conditional Access** | GA | GA | GA | GA | Direct use |
 | **Defender for Cloud** | GA | GA | GA | GA | Direct use |
 
-## Monitoring & Management
+---
+
+## 📊 Monitoring & Management
 
 | Service | Commercial | Gov FedRAMP High | Gov IL4 | Gov IL5 | Alternative |
 |---------|-----------|-----------------|---------|---------|-------------|
@@ -90,7 +108,9 @@ authorization levels and impact level (IL) support.
 | **Azure Policy** | GA | GA | GA | GA | Direct use |
 | **Power BI** | GA | GA | GA | GA | Direct use (Gov cloud) |
 
-## Endpoint URL Differences
+---
+
+## 🌐 Endpoint URL Differences
 
 When deploying to Azure Government, all service endpoints use different domains:
 
@@ -109,7 +129,9 @@ When deploying to Azure Government, all service endpoints use different domains:
 | IoT Hub | `*.azure-devices.net` | `*.azure-devices.us` |
 | Azure OpenAI | `*.openai.azure.com` | `*.openai.azure.us` |
 
-## API Version Differences
+---
+
+## ⚙️ API Version Differences
 
 Most Azure Resource Manager API versions are identical between Commercial and
 Government. However, verify these known cases:
@@ -122,7 +144,9 @@ Government. However, verify these known cases:
 | Event Hubs | Schema Registry availability | Use Avro/JSON without Schema Registry if unavailable |
 | Azure ML | Managed endpoints may lag | Test in Gov before production deployment |
 
-## Bicep Configuration for Government
+---
+
+## 📦 Bicep Configuration for Government
 
 ```bicep
 // In your Bicep parameters file for Gov:
@@ -143,7 +167,9 @@ param complianceTags object = {
 }
 ```
 
-## Compliance Requirements by Vertical
+---
+
+## 🏛️ Compliance Requirements by Vertical
 
 | Vertical | FedRAMP Level | Additional Compliance | Data Classification |
 |----------|---------------|----------------------|-------------------|
@@ -157,7 +183,9 @@ param complianceTags object = {
 | Tribal Health (BIA/IHS) | High | HIPAA, Tribal Data Sovereignty | PHI / CUI |
 | Casino Analytics | N/A (Tribal) | NIGC Regulations, Title 31 | PII / Financial |
 
-## Open-Source Alternatives for Government Gaps
+---
+
+## 🔓 Open-Source Alternatives for Government Gaps
 
 For the rare cases where a service is unavailable in Government at a required
 impact level, CSA-in-a-Box provides containerized open-source alternatives
@@ -171,7 +199,9 @@ deployable on AKS:
 | Azure ML (IL5) | MLflow + Kubeflow on AKS | `platform/oss-alternatives/mlflow/` |
 | Cognitive Services (select) | Hugging Face Inference on AKS | `platform/oss-alternatives/huggingface/` |
 
-## References
+---
+
+## 📚 References
 
 - [Azure Government Documentation](https://learn.microsoft.com/en-us/azure/azure-government/)
 - [Azure Government Services by Region](https://azure.microsoft.com/en-us/explore/global-infrastructure/government/by-region/)
@@ -180,7 +210,7 @@ deployable on AKS:
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Environment Protection](ENVIRONMENT_PROTECTION.md) — GitHub Environment protection rules
 - [Production Checklist](PRODUCTION_CHECKLIST.md) — Production readiness checklist

@@ -1,96 +1,96 @@
+[Home](../README.md) > [Docs](./) > **Self-Hosted Integration Runtime**
+
 # Self-Hosted Integration Runtime (SHIR)
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** DevOps Engineers
 
+> [!NOTE]
+> **Quick Summary**: Deploy a highly available, auto-scaling Self-Hosted Integration Runtime on Windows Server VMSS — bridges on-premises and private network data sources to Azure Data Factory via HTTPS/443 with internal load balancing, system-managed identity, auto-scale 1–10 nodes, and full monitoring/security/DR operations runbook.
+
 The Self-Hosted Integration Runtime (SHIR) module enables CSA-in-a-Box to securely connect to on-premises and private network data sources from Azure Data Factory. This module deploys a highly available, auto-scaling Windows Server infrastructure that bridges your private networks with Azure's cloud analytics services.
 
-> **Module Location:** `deploy/bicep/DLZ/modules/vms/selfHostedIntegrationRuntime.bicep`  
-> **Status:** Available but commented out in `deploy/bicep/DLZ/main.bicep`  
+> [!IMPORTANT]
+> **Module Location:** `deploy/bicep/DLZ/modules/vms/selfHostedIntegrationRuntime.bicep`
+> **Status:** Available but commented out in `deploy/bicep/DLZ/main.bicep`
 > **Prerequisites:** Requires `installSHIRGateway.ps1` script and ADF Integration Runtime auth key
 
----
+## 📑 Table of Contents
 
-## Table of Contents
-
-- [1. Architecture Overview](#1-architecture-overview)
+- [🏗️ 1. Architecture Overview](#️-1-architecture-overview)
   - [System Diagram](#system-diagram)
   - [Component Breakdown](#component-breakdown)
   - [Data Flow Architecture](#data-flow-architecture)
-- [2. Prerequisites](#2-prerequisites)
+- [📎 2. Prerequisites](#-2-prerequisites)
   - [Network Connectivity Requirements](#network-connectivity-requirements)
   - [DNS Resolution Requirements](#dns-resolution-requirements)
   - [Azure Data Factory Prerequisites](#azure-data-factory-prerequisites)
   - [Required Files](#required-files)
-- [3. Installation & Registration](#3-installation--registration)
+- [📦 3. Installation & Registration](#-3-installation--registration)
   - [Step 1: Prepare Installation Script](#step-1-prepare-installation-script)
   - [Step 2: Configure Deployment Parameters](#step-2-configure-deployment-parameters)
   - [Step 3: Deploy the Platform](#step-3-deploy-the-platform)
   - [Step 4: Verify Deployment](#step-4-verify-deployment)
-- [4. High Availability & Scaling](#4-high-availability--scaling)
+- [📈 4. High Availability & Scaling](#-4-high-availability--scaling)
   - [Recommended HA Configuration](#recommended-ha-configuration)
   - [Auto-Scaling Configuration](#auto-scaling-configuration)
   - [Load Balancer Distribution](#load-balancer-distribution)
   - [Fault Domain Considerations](#fault-domain-considerations)
-- [5. Monitoring & Troubleshooting](#5-monitoring--troubleshooting)
+- [🔍 5. Monitoring & Troubleshooting](#-5-monitoring--troubleshooting)
   - [ADF Integration Runtime Monitoring](#adf-integration-runtime-monitoring)
   - [VMSS Instance Diagnostics](#vmss-instance-diagnostics)
   - [Key Log Locations](#key-log-locations)
   - [Common Issues & Solutions](#common-issues--solutions)
   - [Log Analytics Integration](#log-analytics-integration)
-- [6. Security Considerations](#6-security-considerations)
+- [🔒 6. Security Considerations](#-6-security-considerations)
   - [Network Isolation](#network-isolation)
   - [Identity & Access Management](#identity--access-management)
   - [Credential Management](#credential-management)
   - [Disk Encryption & Patching](#disk-encryption--patching)
   - [Compliance Considerations](#compliance-considerations)
-- [7. Performance Tuning](#7-performance-tuning)
+- [⚡ 7. Performance Tuning](#-7-performance-tuning)
   - [VM Size Selection Guide](#vm-size-selection-guide)
   - [Concurrent Job Configuration](#concurrent-job-configuration)
   - [Data Transfer Optimization](#data-transfer-optimization)
   - [Network Bandwidth Optimization](#network-bandwidth-optimization)
   - [Memory Management](#memory-management)
-- [8. Operations Runbook](#8-operations-runbook)
+- [🔧 8. Operations Runbook](#-8-operations-runbook)
   - [Authentication Key Rotation](#authentication-key-rotation)
   - [Adding/Removing SHIR Nodes](#addingremoving-shir-nodes)
   - [SHIR Gateway Version Updates](#shir-gateway-version-updates)
   - [Disaster Recovery Procedures](#disaster-recovery-procedures)
   - [Emergency Procedures](#emergency-procedures)
 
-## 1. Architecture Overview
+---
+
+## 🏗️ 1. Architecture Overview
 
 ### System Diagram
-```text
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  Azure Data Factory                                                         │
-│  ┌─────────────────────────┐                                               │
-│  │ Integration Runtime     │◄─────── Authentication Key                     │
-│  │ (Self-Hosted)          │                                               │
-│  └─────────────────────────┘                                               │
-└─────────────────────────────┬───────────────────────────────────────────────┘
-                              │ HTTPS/443
-                              │ *.servicebus.windows.net
-┌─────────────────────────────▼───────────────────────────────────────────────┐
-│  CSA-in-a-Box DLZ Subnet (Private)                                         │
-│                                                                             │
-│  ┌─────────────────────────┐    ┌─────────────────────────┐                │
-│  │ Internal Load Balancer  │    │ Virtual Machine         │                │
-│  │ Standard SKU           │◄───┤ Scale Set (VMSS)        │                │
-│  │ TCP/80 Health Probe    │    │                         │                │
-│  └─────────────────────────┘    │ - Windows Server 2022   │                │
-│                                 │ - SHIR Gateway          │                │
-│                                 │ - System Managed ID     │                │
-│                                 │ - Auto-scale 1-10 nodes │                │
-│                                 └─────────────────────────┘                │
-└─────────────────────────────┬───────────────────────────────────────────────┘
-                              │ Private Connectivity
-                              │ (VPN/ExpressRoute/VNet Peering)
-┌─────────────────────────────▼───────────────────────────────────────────────┐
-│  On-Premises / Private Networks                                             │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────────────────┐  │
-│  │ SQL Server      │  │ File Shares     │  │ Oracle/SAP/Other Systems    │  │
-│  │ Databases       │  │ (SMB/NFS)      │  │                             │  │
-│  └─────────────────┘  └─────────────────┘  └─────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────────────┘
+
+```mermaid
+graph TB
+    subgraph ADF["Azure Data Factory"]
+        IR["Integration Runtime<br/>(Self-Hosted)"]
+    end
+
+    AuthKey["Authentication Key"] --> IR
+
+    subgraph DLZ["CSA-in-a-Box DLZ Subnet (Private)"]
+        ILB["Internal Load Balancer<br/>Standard SKU / TCP:80 Probe"]
+        VMSS["VMSS<br/>Windows Server 2022<br/>SHIR Gateway<br/>System Managed ID<br/>Auto-scale 1–10 nodes"]
+        ILB <--> VMSS
+    end
+
+    IR -->|"HTTPS/443<br/>*.servicebus.windows.net"| ILB
+
+    subgraph OnPrem["On-Premises / Private Networks"]
+        SQL["SQL Server<br/>Databases"]
+        FS["File Shares<br/>(SMB/NFS)"]
+        Other["Oracle / SAP /<br/>Other Systems"]
+    end
+
+    VMSS -->|"Private Connectivity<br/>(VPN/ExpressRoute/Peering)"| SQL
+    VMSS --> FS
+    VMSS --> Other
 ```
 
 ### Component Breakdown
@@ -106,28 +106,28 @@ The Self-Hosted Integration Runtime (SHIR) module enables CSA-in-a-Box to secure
 ### Data Flow Architecture
 
 1. **Registration Phase:**
-   - VMSS instances boot with Windows Server 2022
-   - Custom Script Extension executes `installSHIRGateway.ps1`
-   - Script downloads and installs SHIR gateway
-   - Registers with ADF using provided authentication key
-   - Node appears as "Online" in ADF Portal
+   - [ ] VMSS instances boot with Windows Server 2022
+   - [ ] Custom Script Extension executes `installSHIRGateway.ps1`
+   - [ ] Script downloads and installs SHIR gateway
+   - [ ] Registers with ADF using provided authentication key
+   - [ ] Node appears as "Online" in ADF Portal
 
 2. **Runtime Phase:**
-   - ADF pipelines target the SHIR by name
-   - Load balancer distributes requests across healthy nodes
-   - SHIR nodes execute copy activities and lookups
-   - Data flows directly from source to Azure (via SHIR proxy)
-   - Metadata and control plane use HTTPS/443 to Azure
+   - [ ] ADF pipelines target the SHIR by name
+   - [ ] Load balancer distributes requests across healthy nodes
+   - [ ] SHIR nodes execute copy activities and lookups
+   - [ ] Data flows directly from source to Azure (via SHIR proxy)
+   - [ ] Metadata and control plane use HTTPS/443 to Azure
 
 3. **High Availability:**
-   - Multiple VMSS instances provide redundancy
-   - Load balancer removes failed nodes from rotation
-   - ADF automatically retries on available nodes
-   - Auto-scale adds capacity during peak loads
+   - [ ] Multiple VMSS instances provide redundancy
+   - [ ] Load balancer removes failed nodes from rotation
+   - [ ] ADF automatically retries on available nodes
+   - [ ] Auto-scale adds capacity during peak loads
 
 ---
 
-## 2. Prerequisites
+## 📎 2. Prerequisites
 
 ### Network Connectivity Requirements
 
@@ -157,7 +157,7 @@ The SHIR nodes require outbound internet access to specific Azure Service Tags a
 
 **Required Service Tags:**
 - `DataFactory` (port 443) - Core SHIR communication
-- `ServiceBus` (port 443) - Message queuing and coordination  
+- `ServiceBus` (port 443) - Message queuing and coordination
 - `AzureActiveDirectory` (port 443) - Authentication flows
 - `Storage` (port 443) - Staging and metadata operations
 
@@ -178,26 +178,26 @@ nslookup download.microsoft.com
 
 Before deploying the SHIR module, create the Integration Runtime in your ADF instance:
 
-1. **Create Integration Runtime in ADF:**
-   ```bash
-   # Via Azure CLI (replace values)
-   az datafactory integration-runtime self-hosted create \
-     --resource-group "rg-csa-adf-prod" \
-     --factory-name "adf-csa-prod" \
-     --name "shir-onprem-prod" \
-     --description "Self-hosted IR for on-premises data sources"
-   ```
+- [ ] **Create Integration Runtime in ADF:**
+  ```bash
+  # Via Azure CLI (replace values)
+  az datafactory integration-runtime self-hosted create \
+    --resource-group "rg-csa-adf-prod" \
+    --factory-name "adf-csa-prod" \
+    --name "shir-onprem-prod" \
+    --description "Self-hosted IR for on-premises data sources"
+  ```
 
-2. **Retrieve Authentication Key:**
-   ```bash
-   # Get the auth key for deployment
-   az datafactory integration-runtime list-auth-key \
-     --resource-group "rg-csa-adf-prod" \
-     --factory-name "adf-csa-prod" \
-     --integration-runtime-name "shir-onprem-prod"
-   ```
+- [ ] **Retrieve Authentication Key:**
+  ```bash
+  # Get the auth key for deployment
+  az datafactory integration-runtime list-auth-key \
+    --resource-group "rg-csa-adf-prod" \
+    --factory-name "adf-csa-prod" \
+    --integration-runtime-name "shir-onprem-prod"
+  ```
 
-   Save the `authKey1` value for the deployment parameters.
+  Save the `authKey1` value for the deployment parameters.
 
 ### Required Files
 
@@ -205,7 +205,9 @@ The deployment expects the PowerShell installation script at:
 - **Path:** `deploy/bicep/DLZ/code/installSHIRGateway.ps1`
 - **Purpose:** Automated SHIR gateway installation and registration
 
-**Example script structure:**
+<details>
+<summary>Example script structure</summary>
+
 ```powershell
 param(
     [Parameter(Mandatory=$true)]
@@ -232,18 +234,25 @@ Start-Service "DIAHostService"
 Start-Service "Microsoft Integration Runtime Service"
 ```
 
+</details>
+
 ---
 
-## 3. Installation & Registration
+## 📦 3. Installation & Registration
 
 ### Step 1: Prepare Installation Script
 
-Create the required PowerShell script:
+- [ ] Create the required PowerShell script:
 
 ```bash
 # Create the code directory
 mkdir -p deploy/bicep/DLZ/code
+```
 
+<details>
+<summary>Full installSHIRGateway.ps1 script</summary>
+
+```bash
 # Create the installation script
 cat > deploy/bicep/DLZ/code/installSHIRGateway.ps1 << 'EOF'
 param(
@@ -324,9 +333,11 @@ finally {
 EOF
 ```
 
+</details>
+
 ### Step 2: Configure Deployment Parameters
 
-Edit your DLZ parameters file to enable SHIR:
+- [ ] Edit your DLZ parameters file to enable SHIR:
 
 ```json
 {
@@ -361,7 +372,7 @@ Edit your DLZ parameters file to enable SHIR:
 
 ### Step 3: Deploy the Platform
 
-Deploy with SHIR module enabled:
+- [ ] Deploy with SHIR module enabled:
 
 ```bash
 # Navigate to deployment directory
@@ -373,44 +384,44 @@ cd deploy
 
 ### Step 4: Verify Deployment
 
-**Check VMSS Status:**
-```bash
-# List VMSS instances
-az vmss list-instances \
-  --resource-group "rg-csa-shir-prod" \
-  --name "vmss-shir-prod" \
-  --output table
+- [ ] **Check VMSS Status:**
+  ```bash
+  # List VMSS instances
+  az vmss list-instances \
+    --resource-group "rg-csa-shir-prod" \
+    --name "vmss-shir-prod" \
+    --output table
 
-# Check instance health
-az vmss get-instance-view \
-  --resource-group "rg-csa-shir-prod" \
-  --name "vmss-shir-prod" \
-  --instance-id 0
-```
+  # Check instance health
+  az vmss get-instance-view \
+    --resource-group "rg-csa-shir-prod" \
+    --name "vmss-shir-prod" \
+    --instance-id 0
+  ```
 
-**Check ADF Integration Runtime:**
-```bash
-# List integration runtimes
-az datafactory integration-runtime list \
-  --resource-group "rg-csa-adf-prod" \
-  --factory-name "adf-csa-prod"
+- [ ] **Check ADF Integration Runtime:**
+  ```bash
+  # List integration runtimes
+  az datafactory integration-runtime list \
+    --resource-group "rg-csa-adf-prod" \
+    --factory-name "adf-csa-prod"
 
-# Get specific IR status
-az datafactory integration-runtime get \
-  --resource-group "rg-csa-adf-prod" \
-  --factory-name "adf-csa-prod" \
-  --integration-runtime-name "shir-onprem-prod"
-```
+  # Get specific IR status
+  az datafactory integration-runtime get \
+    --resource-group "rg-csa-adf-prod" \
+    --factory-name "adf-csa-prod" \
+    --integration-runtime-name "shir-onprem-prod"
+  ```
 
-**Verify in ADF Portal:**
-1. Navigate to Azure Data Factory Studio
-2. Go to **Manage** → **Integration runtimes**
-3. Locate your SHIR and verify status shows **"Running"**
-4. Click on the IR to see connected nodes and their health
+- [ ] **Verify in ADF Portal:**
+  1. Navigate to Azure Data Factory Studio
+  2. Go to **Manage** → **Integration runtimes**
+  3. Locate your SHIR and verify status shows **"Running"**
+  4. Click on the IR to see connected nodes and their health
 
 ---
 
-## 4. High Availability & Scaling
+## 📈 4. High Availability & Scaling
 
 ### Recommended HA Configuration
 
@@ -450,7 +461,7 @@ az monitor autoscale rule create \
   --condition "Percentage CPU > 75 avg 5m" \
   --scale out 1
 
-# Add CPU-based scale-in rule  
+# Add CPU-based scale-in rule
 az monitor autoscale rule create \
   --resource-group "rg-csa-shir-prod" \
   --autoscale-name "shir-autoscale" \
@@ -488,14 +499,14 @@ For multi-zone resilience in supported regions:
 
 ---
 
-## 5. Monitoring & Troubleshooting
+## 🔍 5. Monitoring & Troubleshooting
 
 ### ADF Integration Runtime Monitoring
 
 **Portal Monitoring:**
-1. **ADF Studio** → **Monitor** → **Integration runtime**
-2. View real-time status, activity runs, and performance metrics
-3. Check node connectivity and version information
+- [ ] **ADF Studio** → **Monitor** → **Integration runtime**
+- [ ] View real-time status, activity runs, and performance metrics
+- [ ] Check node connectivity and version information
 
 **Programmatic Monitoring:**
 ```bash
@@ -607,7 +618,7 @@ AzureDiagnostics
 
 // Failed activities by integration runtime
 AzureDiagnostics
-| where ResourceProvider == "MICROSOFT.DATAFACTORY" 
+| where ResourceProvider == "MICROSOFT.DATAFACTORY"
 | where Status == "Failed"
 | where IntegrationRuntimeName contains "shir"
 | summarize count() by ErrorCode, bin(TimeGenerated, 1h)
@@ -615,7 +626,7 @@ AzureDiagnostics
 
 ---
 
-## 6. Security Considerations
+## 🔒 6. Security Considerations
 
 ### Network Isolation
 
@@ -627,7 +638,9 @@ The SHIR module implements defense-in-depth security:
 - Outbound internet access controlled via NSG and firewall rules
 - VPN or ExpressRoute connectivity for on-premises access
 
-**NSG Rules (Recommended):**
+<details>
+<summary>NSG Rules (Recommended)</summary>
+
 ```json
 {
   "securityRules": [
@@ -667,6 +680,8 @@ The SHIR module implements defense-in-depth security:
   ]
 }
 ```
+
+</details>
 
 ### Identity & Access Management
 
@@ -753,7 +768,7 @@ For regulated environments, implement additional controls:
 
 ---
 
-## 7. Performance Tuning
+## ⚡ 7. Performance Tuning
 
 ### VM Size Selection Guide
 
@@ -800,7 +815,9 @@ Configure ADF linked services for optimal parallelism:
 
 ### Data Transfer Optimization
 
-**Copy Activity Settings:**
+<details>
+<summary>Copy Activity Settings (JSON)</summary>
+
 ```json
 {
   "type": "Copy",
@@ -828,6 +845,8 @@ Configure ADF linked services for optimal parallelism:
 }
 ```
 
+</details>
+
 **Key Parameters:**
 - **parallelCopies**: 2x vCPU count on SHIR (max 32)
 - **dataIntegrationUnits**: For cloud-to-cloud portions
@@ -837,7 +856,7 @@ Configure ADF linked services for optimal parallelism:
 ### Network Bandwidth Optimization
 
 **Bandwidth Planning:**
-```bash
+```powershell
 # Test network throughput to Azure
 # Run from SHIR node
 Invoke-WebRequest -Uri "https://download.microsoft.com/download/0/0/A/00A285B5-0806-4946-B47F-7CBA0A0447E7/SpeedTest.ps1" -OutFile "SpeedTest.ps1"
@@ -877,42 +896,42 @@ Set-WmiInstance -Class Win32_PageFileSetting -Arguments @{
 
 ---
 
-## 8. Operations Runbook
+## 🔧 8. Operations Runbook
 
 ### Authentication Key Rotation
 
 **Quarterly rotation procedure:**
 
-1. **Generate new key in ADF:**
-   ```bash
-   # Regenerate auth key (use authKey2 if authKey1 is active)
-   az datafactory integration-runtime regenerate-auth-key \
-     --resource-group "rg-csa-adf-prod" \
-     --factory-name "adf-csa-prod" \
-     --integration-runtime-name "shir-onprem-prod" \
-     --key-name "authKey2"
-   ```
+- [ ] **Generate new key in ADF:**
+  ```bash
+  # Regenerate auth key (use authKey2 if authKey1 is active)
+  az datafactory integration-runtime regenerate-auth-key \
+    --resource-group "rg-csa-adf-prod" \
+    --factory-name "adf-csa-prod" \
+    --integration-runtime-name "shir-onprem-prod" \
+    --key-name "authKey2"
+  ```
 
-2. **Update deployment parameters:**
-   ```json
-   {
-     "datafactoryIntegrationRuntimeAuthKey": "NEW_AUTH_KEY_HERE"
-   }
-   ```
+- [ ] **Update deployment parameters:**
+  ```json
+  {
+    "datafactoryIntegrationRuntimeAuthKey": "NEW_AUTH_KEY_HERE"
+  }
+  ```
 
-3. **Redeploy with rolling update:**
-   ```bash
-   ./deploy-platform.sh --environment prod --landing-zone DLZ
-   ```
+- [ ] **Redeploy with rolling update:**
+  ```bash
+  ./deploy-platform.sh --environment prod --landing-zone DLZ
+  ```
 
-4. **Verify all nodes are online:**
-   ```bash
-   # Check ADF portal or CLI
-   az datafactory integration-runtime get \
-     --resource-group "rg-csa-adf-prod" \
-     --factory-name "adf-csa-prod" \
-     --integration-runtime-name "shir-onprem-prod"
-   ```
+- [ ] **Verify all nodes are online:**
+  ```bash
+  # Check ADF portal or CLI
+  az datafactory integration-runtime get \
+    --resource-group "rg-csa-adf-prod" \
+    --factory-name "adf-csa-prod" \
+    --integration-runtime-name "shir-onprem-prod"
+  ```
 
 ### Adding/Removing SHIR Nodes
 
@@ -950,60 +969,57 @@ az vmss scale \
 
 **Quarterly update procedure:**
 
-1. **Check current version:**
-   ```powershell
-   # From SHIR node
-   Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Microsoft Integration Runtime" | Select-Object Version
-   ```
+- [ ] **Check current version:**
+  ```powershell
+  # From SHIR node
+  Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Microsoft Integration Runtime" | Select-Object Version
+  ```
 
-2. **Update installation script with latest MSI URL:**
-   ```powershell
-   # Check Microsoft Download Center for latest version
-   # Update installSHIRGateway.ps1 with new URL
-   $installerUrl = "https://download.microsoft.com/download/E/4/7/E47A6841-5DDD-4E76-A8D6-3D47B1595723/IntegrationRuntime_5.XX.XXXX.X.msi"
-   ```
+- [ ] **Update installation script with latest MSI URL:**
+  ```powershell
+  # Check Microsoft Download Center for latest version
+  # Update installSHIRGateway.ps1 with new URL
+  $installerUrl = "https://download.microsoft.com/download/E/4/7/E47A6841-5DDD-4E76-A8D6-3D47B1595723/IntegrationRuntime_5.XX.XXXX.X.msi"
+  ```
 
-3. **Deploy with rolling update:**
-   ```bash
-   # Redeploy VMSS with updated script
-   ./deploy-platform.sh --environment prod --landing-zone DLZ
-   ```
+- [ ] **Deploy with rolling update:**
+  ```bash
+  # Redeploy VMSS with updated script
+  ./deploy-platform.sh --environment prod --landing-zone DLZ
+  ```
 
-4. **Verify version update:**
-   ```bash
-   # Check from ADF portal or PowerShell on nodes
-   ```
+- [ ] **Verify version update** from ADF portal or PowerShell on nodes
 
 ### Disaster Recovery Procedures
 
 **Regional Failover:**
 
-1. **Deploy SHIR in secondary region:**
-   ```bash
-   # Deploy to DR region (e.g., West US 2 if primary is East US 2)
-   ./deploy-platform.sh --environment prod --landing-zone DLZ --region westus2
-   ```
+- [ ] **Deploy SHIR in secondary region:**
+  ```bash
+  # Deploy to DR region (e.g., West US 2 if primary is East US 2)
+  ./deploy-platform.sh --environment prod --landing-zone DLZ --region westus2
+  ```
 
-2. **Update ADF pipelines to use DR integration runtime:**
-   ```json
-   {
-     "connectVia": {
-       "referenceName": "shir-onprem-dr",
-       "type": "IntegrationRuntimeReference"
-     }
-   }
-   ```
+- [ ] **Update ADF pipelines to use DR integration runtime:**
+  ```json
+  {
+    "connectVia": {
+      "referenceName": "shir-onprem-dr",
+      "type": "IntegrationRuntimeReference"
+    }
+  }
+  ```
 
-3. **Verify connectivity from DR region to on-premises:**
-   ```bash
-   # Test from DR SHIR nodes
-   Test-NetConnection -ComputerName "onprem-sql.contoso.com" -Port 1433
-   ```
+- [ ] **Verify connectivity from DR region to on-premises:**
+  ```bash
+  # Test from DR SHIR nodes
+  Test-NetConnection -ComputerName "onprem-sql.contoso.com" -Port 1433
+  ```
 
-4. **Failback procedure:**
-   - Restore primary region SHIR
-   - Update pipelines back to primary IR
-   - Decommission DR resources if no longer needed
+- [ ] **Failback procedure:**
+  - Restore primary region SHIR
+  - Update pipelines back to primary IR
+  - Decommission DR resources if no longer needed
 
 **Data Consistency Verification:**
 ```sql
@@ -1018,29 +1034,30 @@ SELECT MAX(LastModified) FROM SyncMetadata WHERE Status = 'Success'
 
 ### Emergency Procedures
 
-**Complete SHIR outage response:**
+> [!CAUTION]
+> **Complete SHIR outage response** — follow these steps in order, escalating if unresolved within the stated timeframe.
 
-1. **Immediate assessment (0-15 minutes):**
-   - Check ADF pipeline status and failure patterns
-   - Verify VMSS health and instance status
-   - Review recent configuration changes
+- [ ] **Immediate assessment (0-15 minutes):**
+  - Check ADF pipeline status and failure patterns
+  - Verify VMSS health and instance status
+  - Review recent configuration changes
 
-2. **Mitigation (15-30 minutes):**
-   - Restart failed VMSS instances
-   - Scale out VMSS for additional capacity
-   - Disable non-critical pipelines to reduce load
+- [ ] **Mitigation (15-30 minutes):**
+  - Restart failed VMSS instances
+  - Scale out VMSS for additional capacity
+  - Disable non-critical pipelines to reduce load
 
-3. **Recovery (30-60 minutes):**
-   - Redeploy VMSS from last known good configuration
-   - Restore from backup if data corruption suspected
-   - Engage Microsoft support if Azure service issues
+- [ ] **Recovery (30-60 minutes):**
+  - Redeploy VMSS from last known good configuration
+  - Restore from backup if data corruption suspected
+  - Engage Microsoft support if Azure service issues
 
-4. **Communication:**
-   ```bash
-   # Notify stakeholders
-   echo "SHIR outage detected at $(date). ETR: 1 hour. Status updates every 15 minutes." | \
-   mail -s "CSA Platform Alert: SHIR Outage" stakeholders@company.com
-   ```
+- [ ] **Communication:**
+  ```bash
+  # Notify stakeholders
+  echo "SHIR outage detected at $(date). ETR: 1 hour. Status updates every 15 minutes." | \
+  mail -s "CSA Platform Alert: SHIR Outage" stakeholders@company.com
+  ```
 
 **Recovery verification checklist:**
 - [ ] All VMSS instances show "Succeeded" provisioning state
@@ -1052,7 +1069,7 @@ SELECT MAX(LastModified) FROM SyncMetadata WHERE Status = 'Success'
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [ADF_SETUP.md](ADF_SETUP.md) — Azure Data Factory pipeline setup and orchestration
 - [IaC-CICD-Best-Practices.md](IaC-CICD-Best-Practices.md) — Infrastructure-as-Code and CI/CD patterns

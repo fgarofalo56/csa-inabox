@@ -1,8 +1,16 @@
 # EPA Environmental Monitoring Analytics Platform
 
+> [**Examples**](../README.md) > **EPA**
+
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers
 
-## Table of Contents
+> [!TIP]
+> **TL;DR** — Environmental monitoring platform with real-time AQI streaming from 4,000+ stations, water safety tracking for 25,000+ systems, toxic release analysis, and environmental justice scoring with ML-based air quality prediction.
+
+
+---
+
+## 📋 Table of Contents
 - [Overview](#overview)
   - [Key Features](#key-features)
   - [Data Sources](#data-sources)
@@ -41,11 +49,14 @@
 
 A comprehensive environmental monitoring analytics platform built on Azure Cloud Scale Analytics (CSA), providing insights into air quality, water safety, toxic releases, and environmental justice using official EPA data sources — including real-time AQI sensor streaming for near-real-time air quality dashboards.
 
-## Overview
+
+---
+
+## 📋 Overview
 
 The Environmental Protection Agency monitors air quality at 4,000+ stations, tracks 25,000+ drinking water systems, catalogs toxic releases from 20,000+ facilities, and manages 1,300+ Superfund sites. This platform ingests, processes, and analyzes EPA data to enable air quality prediction, environmental justice analysis, and emissions compliance monitoring. The streaming pipeline demonstrates real-time AQI sensor data flowing through Azure Event Hub for sub-minute air quality alerting.
 
-### Key Features
+### ✨ Key Features
 
 - **Real-Time Air Quality Monitoring**: Live AQI data via Event Hub with ML-based prediction
 - **Drinking Water Safety**: SDWIS violation tracking with risk-based prioritization
@@ -54,7 +65,7 @@ The Environmental Protection Agency monitors air quality at 4,000+ stations, tra
 - **Environmental Justice Analysis**: Overlay pollution data with socioeconomic indicators
 - **Regulatory Compliance Dashboards**: Facility-level NESHAP, NPDES, and RCRA compliance
 
-### Data Sources
+### 🗄️ Data Sources
 
 | Source | Description | URL |
 |--------|-------------|-----|
@@ -67,7 +78,10 @@ The Environmental Protection Agency monitors air quality at 4,000+ stations, tra
 | EJScreen | Environmental justice screening and mapping | https://www.epa.gov/ejscreen |
 | Superfund / CERCLIS | NPL site locations, contaminants, and cleanup status | https://www.epa.gov/superfund/superfund-data-and-reports |
 
-## Architecture Overview
+
+---
+
+## 🏗️ Architecture Overview
 
 ```mermaid
 graph TD
@@ -169,7 +183,10 @@ graph TD
     G5 --> C4
 ```
 
-## Real-Time AQI Streaming Architecture
+
+---
+
+## ⚡ Real-Time AQI Streaming Architecture
 
 This example includes a streaming pipeline for near-real-time air quality index monitoring:
 
@@ -210,7 +227,7 @@ graph LR
     SA --> ADLS
 ```
 
-### Streaming Quick Start
+### 🚀 Streaming Quick Start
 
 ```bash
 # Start the AQI sensor simulator
@@ -228,7 +245,7 @@ az kusto script create \
   --script-content @streaming/adx/create_tables.kql
 ```
 
-### Sample KQL — Real-Time AQI Alerts
+### ⚡ Sample KQL — Real-Time AQI Alerts
 
 ```kql
 // Locations exceeding "Unhealthy" AQI in the last 30 minutes
@@ -247,7 +264,10 @@ AqiSensorEvents
 | order by avg_aqi desc
 ```
 
-## Prerequisites
+
+---
+
+## 📎 Prerequisites
 
 ### Azure Resources
 - Azure subscription with contributor access
@@ -270,7 +290,10 @@ AqiSensorEvents
 - ECHO API (no key required — open access)
 - Envirofacts (no key required — open access)
 
-## Quick Start
+
+---
+
+## 🚀 Quick Start
 
 ### 1. Environment Setup
 
@@ -346,7 +369,10 @@ dbt docs generate
 dbt docs serve
 ```
 
-## Sample Analytics Scenarios
+
+---
+
+## 💡 Sample Analytics Scenarios
 
 ### 1. Air Quality Prediction with ML
 
@@ -395,7 +421,7 @@ ORDER BY ej_burden_score DESC
 LIMIT 50;
 ```
 
-### 3. Emissions Compliance Monitoring
+### 📊 3. Emissions Compliance Monitoring
 
 Track facility-level compliance with Clean Air Act (CAA), Clean Water Act (CWA), and RCRA regulations, identifying repeat violators and enforcement gaps.
 
@@ -420,7 +446,10 @@ WHERE compliance_status = 'SIGNIFICANT_VIOLATION'
 ORDER BY days_in_violation DESC;
 ```
 
-## Data Products
+
+---
+
+## ✨ Data Products
 
 ### AQI Prediction (`aqi-prediction`)
 - **Description**: Next-day AQI forecasts with confidence intervals by metro area
@@ -440,9 +469,12 @@ ORDER BY days_in_violation DESC;
 - **Coverage**: 800,000+ regulated facilities
 - **API**: `/api/v1/emissions-compliance`
 
-## Configuration
 
-### dbt Profiles
+---
+
+## ⚙️ Configuration
+
+### ⚙️ dbt Profiles
 
 Add to your `~/.dbt/profiles.yml`:
 
@@ -466,7 +498,7 @@ epa_analytics:
       catalog: prod
 ```
 
-### Environment Variables
+### ⚙️ Environment Variables
 
 ```bash
 # Required for data fetching
@@ -486,7 +518,10 @@ EPA_BATCH_SIZE=5000
 ADX_CLUSTER_URI=https://epa-adx.region.kusto.windows.net
 ```
 
-## Azure Government Notes
+
+---
+
+## 🔒 Azure Government Notes
 
 This example is compatible with Azure Government (US) regions. When deploying to Azure Government:
 
@@ -497,7 +532,10 @@ This example is compatible with Azure Government (US) regions. When deploying to
 - ECHO data may contain enforcement-sensitive details — confirm classification with your ISSO
 - EJScreen data is public and unrestricted
 
-## Monitoring & Alerts
+
+---
+
+## 📊 Monitoring & Alerts
 
 - **Streaming Health**: Event Hub throughput, ADX ingestion latency, alert trigger rates
 - **AQI Thresholds**: Automated alerts when AQI exceeds 100 (Unhealthy for Sensitive Groups)
@@ -505,9 +543,12 @@ This example is compatible with Azure Government (US) regions. When deploying to
 - **Data Quality**: Automated tests on pollutant ranges, geographic bounds, and completeness
 - **Cost Management**: ADX auto-scale monitoring with spend guardrails
 
-## Troubleshooting
 
-### Common Issues
+---
+
+## 🔧 Troubleshooting
+
+### 🔧 Common Issues
 
 1. **AirNow API Rate Limits**: Limited to 500 requests/hour per key. Use the `--delay` parameter and cache responses.
 2. **AQS Data Lag**: Quality-assured AQS data lags 6–12 months behind real-time AirNow data. Use AirNow for current conditions, AQS for historical analysis.
@@ -515,7 +556,10 @@ This example is compatible with Azure Government (US) regions. When deploying to
 4. **ECHO Pagination**: ECHO API returns max 10,000 records per query. Use `--state-filter` and `--program-filter` to partition requests.
 5. **Sensor Simulator Memory**: For large-scale simulations (100+ sites), increase the `--batch-size` parameter to reduce event hub calls.
 
-## Contributing
+
+---
+
+## 🔗 Contributing
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/new-data-source`)
@@ -523,11 +567,17 @@ This example is compatible with Azure Government (US) regions. When deploying to
 4. Run quality checks (`make lint test`)
 5. Submit a pull request
 
-## License
+
+---
+
+## 🔗 License
 
 This project is licensed under the MIT License. See `LICENSE` file for details.
 
-## Acknowledgments
+
+---
+
+## 🔗 Acknowledgments
 
 - EPA for comprehensive environmental monitoring data and open APIs
 - AirNow for real-time air quality data infrastructure
@@ -536,7 +586,7 @@ This project is licensed under the MIT License. See `LICENSE` file for details.
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [EPA Architecture](ARCHITECTURE.md) — Detailed platform architecture and design decisions
 - [Examples Index](../README.md) — Overview of all CSA-in-a-Box example verticals

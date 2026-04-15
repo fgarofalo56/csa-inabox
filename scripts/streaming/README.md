@@ -1,40 +1,40 @@
 # Streaming Analytics Pipeline
 
+[scripts](../../scripts/) / **streaming**
+
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Developers
+
+> [!TIP]
+> **TL;DR** — Real-time event processing using Azure Event Hub, Stream Analytics (ASAQL), and ADX. Includes an event producer (`produce_events.py`), four windowed query patterns (tumbling, sliding, session, reference JOIN), and full deployment/testing/monitoring guidance.
 
 ## Table of Contents
 
-- [Architecture Overview](#architecture-overview)
-- [Event Schema](#event-schema)
-- [Sample Queries](#sample-queries)
-- [Deploying Queries](#deploying-queries)
-- [Input/Output Configuration](#inputoutput-configuration)
-- [Testing with VS Code](#testing-with-vs-code)
-- [Monitoring](#monitoring)
-- [Reference Data Setup](#reference-data-setup)
-- [File Index](#file-index)
+- [Architecture Overview](#-architecture-overview)
+- [Event Schema](#-event-schema)
+- [Sample Queries](#-sample-queries)
+- [Deploying Queries](#-deploying-queries)
+- [Input/Output Configuration](#-inputoutput-configuration)
+- [Testing with VS Code](#-testing-with-vs-code)
+- [Monitoring](#-monitoring)
+- [Reference Data Setup](#-reference-data-setup)
+- [File Index](#-file-index)
+- [Related Documentation](#-related-documentation)
 
 Real-time event processing for the CSA-in-a-Box platform using Azure Event Hub, Azure Stream Analytics, and Azure Data Explorer (ADX).
 
-## Architecture Overview
+---
 
-```text
-produce_events.py                Stream Analytics Jobs               Sinks
- (Event Producer)                (ASAQL Queries)
-                           +---------------------------------+
-                           |                                 |
-  +-----------------+      |  tumbling_window_event_counts   +----> ADX (RawEvents table)
-  |  Event Hub      +----->|  sliding_window_anomaly         +----> Blob / Alert sink
-  |  (events topic) |      |  session_window_user_activity   +----> ADX / Blob
-  |                 |      |  reference_join_enrichment      +----> ADX / Blob
-  +-----------------+      |         |                       |
-                           |         | LEFT JOIN             |
-                           |    +----+-----+                 |
-                           |    | Blob     |                 |
-                           |    | (Customer|                 |
-                           |    | Ref Data)|                 |
-                           |    +----------+                 |
-                           +---------------------------------+
+## 🏗️ Architecture Overview
+
+```mermaid
+flowchart LR
+    P[produce_events.py] --> EH[Event Hub<br/>events topic]
+    EH --> SA[Stream Analytics Jobs]
+    REF[(Blob Storage<br/>Customer Ref Data)] -.->|LEFT JOIN| SA
+    SA -->|tumbling_window| ADX1[ADX: RawEvents]
+    SA -->|sliding_window| ALERT[Blob / Alert Sink]
+    SA -->|session_window| ADX2[ADX / Blob]
+    SA -->|reference_join| ADX3[ADX / Blob]
 ```
 
 **Data flow:**
@@ -43,7 +43,9 @@ produce_events.py                Stream Analytics Jobs               Sinks
 2. Stream Analytics jobs consume events from Event Hub, apply windowed aggregations and transformations.
 3. Results are written to ADX tables (for dashboards/KQL queries), Blob Storage (for archival), or alert sinks.
 
-## Event Schema
+---
+
+## 🗄️ Event Schema
 
 Events produced by `produce_events.py` follow this schema:
 
@@ -94,7 +96,9 @@ Events produced by `produce_events.py` follow this schema:
 | `data.device` | string | `desktop`, `mobile`, `tablet`, `iot_sensor`, `api_client` |
 | `data.region` | string | `eastus`, `westus`, `northeurope`, `southeastasia`, `brazilsouth` |
 
-## Sample Queries
+---
+
+## 💡 Sample Queries
 
 All queries are in `queries/` and use Stream Analytics SQL (compatibility level 1.2).
 
@@ -124,13 +128,15 @@ Enriches streaming events with customer attributes from a **Blob-backed referenc
 
 **Use case:** Customer segmentation, personalized analytics, high-value customer tracking.
 
-## Deploying Queries
+---
+
+## 📦 Deploying Queries
 
 ### Option A: Azure Portal
 
 1. Navigate to your Stream Analytics job in the Azure Portal.
 2. Under **Job topology** > **Query**, paste the contents of an `.asaql` file.
-3. Configure the matching inputs and outputs (see [Input/Output Configuration](#inputoutput-configuration)).
+3. Configure the matching inputs and outputs (see [Input/Output Configuration](#-inputoutput-configuration)).
 4. Click **Save query**, then **Start** the job.
 
 ### Option B: Bicep / ARM Template
@@ -184,7 +190,9 @@ New-AzStreamAnalyticsTransformation `
   -Query $query
 ```
 
-## Input/Output Configuration
+---
+
+## ⚙️ Input/Output Configuration
 
 ### Input: Event Hub (`EventHubInput`)
 
@@ -221,7 +229,7 @@ New-AzStreamAnalyticsTransformation `
 | Path pattern | `{alias}/{date}/{time}` |
 | Serialization | JSON or Parquet |
 
-### Reference Data: Customer Lookup (`CustomerReference`)
+### 🗄️ Reference Data: Customer Lookup (`CustomerReference`)
 
 | Setting | Value |
 |---|---|
@@ -243,7 +251,9 @@ New-AzStreamAnalyticsTransformation `
 ]
 ```
 
-## Testing with VS Code
+---
+
+## 🧪 Testing with VS Code
 
 The [Azure Stream Analytics Tools for VS Code](https://marketplace.visualstudio.com/items?itemName=ms-bigdatatools.vscode-asa) extension enables local development and testing.
 
@@ -268,7 +278,9 @@ The [Azure Stream Analytics Tools for VS Code](https://marketplace.visualstudio.
 1. Right-click the `.asaql` file and select **ASA: Submit to Azure**.
 2. The extension will create/update the Stream Analytics job with the query.
 
-## Monitoring
+---
+
+## 📊 Monitoring
 
 ### Key Metrics
 
@@ -283,7 +295,7 @@ Monitor these metrics in the Azure Portal under your Stream Analytics job:
 | **Out-of-Order Events** | Low | Adjust `eventsOutOfOrderMaxDelayInSeconds` |
 | **Late Input Events** | Low | Adjust `eventsLateArrivalMaxDelayInSeconds` |
 
-### Diagnostic Logs
+### 📊 Diagnostic Logs
 
 Enable diagnostic logs for deeper troubleshooting:
 
@@ -315,7 +327,9 @@ AzureMetrics
 | render timechart
 ```
 
-## Reference Data Setup
+---
+
+## ⚙️ Reference Data Setup
 
 ### Creating the Customer Reference Dataset
 
@@ -371,7 +385,9 @@ Reference data in Stream Analytics can be refreshed by:
 - **Using a date/time path pattern** like `customers/{date}/customers.json` and configuring the refresh interval.
 - **Setting a refresh interval** (e.g., every 15 minutes) in the input configuration.
 
-## File Index
+---
+
+## 📁 File Index
 
 ```text
 scripts/streaming/
@@ -387,7 +403,7 @@ scripts/streaming/
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [IoT Streaming Example](../../examples/iot-streaming/README.md) — End-to-end streaming example
 - [Architecture Overview](../../docs/ARCHITECTURE.md) — Platform architecture reference

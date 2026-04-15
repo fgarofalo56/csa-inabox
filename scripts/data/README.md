@@ -1,26 +1,27 @@
 # Data Lifecycle Scripts
 
+[scripts](../../scripts/) / **data**
+
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Developers
+
+> [!TIP]
+> **TL;DR** — Shell scripts for backup, restore, and seeding of Delta Lake tables on ADLS Gen2. Use `backup-delta-tables.sh` for incremental backups with retention, `restore-delta-tables.sh` for point-in-time recovery, and `seed-sample-data.sh` for dev/test data population. All scripts support `--dry-run`.
 
 ## Table of Contents
 
-- [Scripts](#scripts)
-- [Prerequisites](#prerequisites)
-- [Backup Strategy](#backup-strategy)
-  - [Incremental Backup](#incremental-backup)
-  - [Retention Policy](#retention-policy)
-  - [Scheduling](#scheduling)
-- [Recovery Procedures](#recovery-procedures)
-  - [Standard Restore](#standard-restore)
-  - [Overwrite Existing Data](#overwrite-existing-data)
-  - [Restore with VACUUM](#restore-with-vacuum)
-  - [Dry Run](#dry-run)
-- [Data Seeding for Development](#data-seeding-for-development)
-- [Log Files](#log-files)
+- [Scripts](#-scripts)
+- [Prerequisites](#-prerequisites)
+- [Backup Strategy](#-backup-strategy)
+- [Recovery Procedures](#-recovery-procedures)
+- [Data Seeding for Development](#-data-seeding-for-development)
+- [Log Files](#-log-files)
+- [Related Documentation](#-related-documentation)
 
 Shell scripts for managing Delta Lake table data on ADLS Gen2 across the CSA-in-a-Box medallion architecture.
 
-## Scripts
+---
+
+## 📋 Scripts
 
 | Script | Purpose |
 |---|---|
@@ -28,7 +29,9 @@ Shell scripts for managing Delta Lake table data on ADLS Gen2 across the CSA-in-
 | `restore-delta-tables.sh` | Restore Delta tables from a timestamped backup |
 | `seed-sample-data.sh` | Upload seed CSVs and optionally generate synthetic data |
 
-## Prerequisites
+---
+
+## 📎 Prerequisites
 
 - **azcopy v10+** -- [Install guide](https://learn.microsoft.com/en-us/azure/storage/common/storage-use-azcopy-v10)
 - **Azure CLI** (`az`) -- logged in with `az login` and appropriate storage permissions
@@ -42,9 +45,11 @@ curl -sL https://aka.ms/downloadazcopy-v10-linux | tar xz --strip-components=1 -
 pip install faker
 ```
 
-## Backup Strategy
+---
 
-### Incremental Backup
+## 🗄️ Backup Strategy
+
+### 🗄️ Incremental Backup
 
 The backup script uses `azcopy sync` which only transfers files that are new or changed since the last sync. Each backup is stored in a timestamped subdirectory.
 
@@ -57,11 +62,11 @@ The backup script uses `azcopy sync` which only transfers files that are new or 
 
 This creates a backup at `backups/gold/20260412T120000Z/` and removes backups older than the 7 most recent.
 
-### Retention Policy
+### ⚙️ Retention Policy
 
 The `--retention N` flag keeps only the last N timestamped backup directories. Older backups are automatically removed after a successful sync.
 
-### Scheduling
+### ⚙️ Scheduling
 
 For production environments, schedule backups via Azure Data Factory, Databricks Jobs, or cron:
 
@@ -73,7 +78,9 @@ For production environments, schedule backups via Azure Data Factory, Databricks
     --retention 14
 ```
 
-## Recovery Procedures
+---
+
+## 🔧 Recovery Procedures
 
 ### Standard Restore
 
@@ -84,6 +91,9 @@ For production environments, schedule backups via Azure Data Factory, Databricks
 ```
 
 ### Overwrite Existing Data
+
+> [!WARNING]
+> This will overwrite existing data at the target path. Use `--dry-run` first to preview the operation.
 
 ```bash
 ./scripts/data/restore-delta-tables.sh \
@@ -103,7 +113,8 @@ After restoring, run VACUUM to clean up orphaned files:
     --force --vacuum
 ```
 
-Note: VACUUM requires a Spark environment (Databricks). The script will print the SQL command to run manually if Databricks CLI is not available.
+> [!NOTE]
+> VACUUM requires a Spark environment (Databricks). The script will print the SQL command to run manually if Databricks CLI is not available.
 
 ### Dry Run
 
@@ -114,7 +125,9 @@ Both backup and restore scripts support `--dry-run` to preview operations withou
 ./scripts/data/restore-delta-tables.sh --backup "..." --target "..." --dry-run
 ```
 
-## Data Seeding for Development
+---
+
+## 🗄️ Data Seeding for Development
 
 ### Upload Existing Seeds
 
@@ -128,9 +141,12 @@ Upload the CSV files from `domains/shared/dbt/seeds/` to ADLS bronze layer:
 ```
 
 Seed files and their target paths:
-- `sample_customers.csv` -> `bronze/shared/customers/`
-- `sample_orders.csv` -> `bronze/shared/orders/`
-- `sample_products.csv` -> `bronze/shared/products/`
+
+| Seed File | Target Path |
+|-----------|------------|
+| `sample_customers.csv` | `bronze/shared/customers/` |
+| `sample_orders.csv` | `bronze/shared/orders/` |
+| `sample_products.csv` | `bronze/shared/products/` |
 
 ### Generate Synthetic Data
 
@@ -146,26 +162,35 @@ Generate additional fake data for finance, inventory, and sales domains using Py
 ```
 
 This creates:
-- `synthetic_invoices.csv` -> `bronze/finance/invoices/`
-- `synthetic_inventory.csv` -> `bronze/inventory/inventory/`
-- `synthetic_sales_orders.csv` -> `bronze/sales/sales_orders/`
 
-### Safety
+| Generated File | Target Path |
+|----------------|------------|
+| `synthetic_invoices.csv` | `bronze/finance/invoices/` |
+| `synthetic_inventory.csv` | `bronze/inventory/inventory/` |
+| `synthetic_sales_orders.csv` | `bronze/sales/sales_orders/` |
 
-The seed script **only runs in dev or test environments**. It will refuse to execute if `--env` is set to `staging`, `production`, or any production-like value.
+### 🔒 Safety
 
-## Log Files
+> [!IMPORTANT]
+> The seed script **only runs in dev or test environments**. It will refuse to execute if `--env` is set to `staging`, `production`, or any production-like value.
+
+---
+
+## 📊 Log Files
 
 All scripts write logs to `./temp/` (gitignored):
-- `temp/backup-logs/backup_<timestamp>.log`
-- `temp/restore-logs/restore_<timestamp>.log`
-- `temp/seed-logs/seed_<timestamp>.log`
+
+| Log Directory | Pattern |
+|--------------|---------|
+| `temp/backup-logs/` | `backup_<timestamp>.log` |
+| `temp/restore-logs/` | `restore_<timestamp>.log` |
+| `temp/seed-logs/` | `seed_<timestamp>.log` |
 
 Metadata JSON files are written alongside logs for audit purposes.
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Getting Started Guide](../../docs/GETTING_STARTED.md) — Platform setup and onboarding
 - [Examples](../../examples/README.md) — Sample data pipelines and use cases

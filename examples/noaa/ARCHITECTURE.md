@@ -1,8 +1,16 @@
 # NOAA Climate & Environmental Analytics Architecture
 
+> [**Examples**](../README.md) > [**NOAA**](README.md) > **Architecture**
+
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Architects / Data Engineers
 
-## Table of Contents
+> [!TIP]
+> **TL;DR** — Climate analytics architecture with real-time weather station and ocean buoy streaming alongside batch GHCN/Storm Events/CO-OPS ingestion. Features QC flag processing, gap-filling interpolation, and marine ecosystem health scoring.
+
+
+---
+
+## 📋 Table of Contents
 - [Overview](#overview)
 - [Domain Context](#domain-context)
   - [Environmental Data Landscape](#environmental-data-landscape)
@@ -40,11 +48,17 @@
   - [Development Tools](#development-tools)
   - [Programming Languages](#programming-languages)
 
-## Overview
+
+---
+
+## 📋 Overview
 
 The NOAA Climate & Environmental Analytics platform is built on Azure Cloud Scale Analytics (CSA) and follows a domain-driven design approach. It ingests data from multiple NOAA observation networks — including real-time streaming from weather stations and ocean buoys — transforms it through a medallion architecture (Bronze → Silver → Gold), and provides analytical insights for severe weather prediction, climate trend analysis, and marine ecosystem health monitoring.
 
-## Domain Context
+
+---
+
+## 📋 Domain Context
 
 ### Environmental Data Landscape
 
@@ -64,9 +78,12 @@ NOAA operates the most extensive environmental observation network on Earth:
 - **Variety**: Structured (weather observations, storm records), semi-structured (buoy telemetry JSON), raster (satellite imagery), geospatial (station coordinates, storm tracks)
 - **Veracity**: NOAA applies multi-stage quality control; however, raw observations contain gaps, sensor drift, and equipment failures that require careful handling
 
-## Architecture Layers
 
-### Data Ingestion Layer
+---
+
+## 🏗️ Architecture Layers
+
+### 🔄 Data Ingestion Layer
 
 ```mermaid
 graph TD
@@ -134,7 +151,7 @@ graph TD
 - Tidal predictions, datums, and harmonic constituents
 - Response formats: JSON, CSV, XML
 
-### Bronze Layer (Raw Data)
+### 🗄️ Bronze Layer (Raw Data)
 
 The Bronze layer stores raw, unprocessed data exactly as received from NOAA source systems, with metadata for lineage tracking.
 
@@ -170,7 +187,7 @@ PARTITIONED BY (observation_date)
 - Original quality flags from NOAA retained for traceability
 - MD5 record hashes for deduplication across incremental loads
 
-### Silver Layer (Cleaned & Conformed)
+### 🗄️ Silver Layer (Cleaned & Conformed)
 
 The Silver layer applies NOAA-specific business rules, quality control, unit conversions, and gap-filling logic.
 
@@ -238,7 +255,7 @@ USING DELTA
 PARTITIONED BY (observation_date)
 ```
 
-### Gold Layer (Business Analytics)
+### 🗄️ Gold Layer (Business Analytics)
 
 The Gold layer contains aggregated, enriched data optimized for the three key analytics scenarios.
 
@@ -301,7 +318,10 @@ USING DELTA
 PARTITIONED BY (climate_region, decade)
 ```
 
-## Streaming Architecture
+
+---
+
+## ⚡ Streaming Architecture
 
 ### Real-Time Weather & Ocean Data Pipeline
 
@@ -346,7 +366,7 @@ graph TD
     ADLS --> DBT
 ```
 
-### Event Schema
+### ⚙️ Event Schema
 
 ```json
 {
@@ -371,7 +391,7 @@ graph TD
 }
 ```
 
-### ADX Table Design
+### 🗄️ ADX Table Design
 
 ```kql
 // Create streaming ingestion table
@@ -411,9 +431,12 @@ graph TD
 }
 ```
 
-## Data Flow Architecture
 
-### Batch Processing Pipeline
+---
+
+## 🔄 Data Flow Architecture
+
+### 🔄 Batch Processing Pipeline
 
 ```mermaid
 graph TD
@@ -446,9 +469,12 @@ The Gold layer merges batch-processed historical data with near-real-time stream
 - **Streaming path**: Live sensor → Event Hub → ADX (sub-minute) → warm path parquet → Bronze (T+5 min)
 - **Gold reconciliation**: Gold models use `COALESCE(streaming_latest, batch_latest)` to present the freshest data
 
-## Integration Patterns
 
-### API Gateway Architecture
+---
+
+## 🔌 Integration Patterns
+
+### 🔌 API Gateway Architecture
 
 ```mermaid
 graph TD
@@ -462,7 +488,7 @@ graph TD
     F -->|Caching| I[Azure Cache for Redis]
 ```
 
-### Data Contracts
+### 🔌 Data Contracts
 
 Each data product exposes a versioned contract:
 
@@ -486,23 +512,29 @@ spec:
     station_coverage: "500+ stations with 30+ year records"
 ```
 
-## Security Architecture
 
-### Data Protection
+---
+
+## 🔒 Security Architecture
+
+### 🔒 Data Protection
 
 - **Encryption at Rest**: Azure Storage Service Encryption (SSE) with Microsoft-managed keys
 - **Encryption in Transit**: TLS 1.2+ for all API and Event Hub communications
 - **Network Security**: VNet integration with private endpoints for storage and ADX
 - **Access Control**: Azure AD with RBAC; separate roles for data engineers, analysts, and API consumers
 
-### Federal Compliance
+### 🔒 Federal Compliance
 
 - **FedRAMP**: Azure Government regions meet FedRAMP High baseline
 - **FISMA**: Aligned with NIST 800-53 controls for federal information systems
 - **Section 508**: Dashboard accessibility compliance
 - **Open Data**: All NOAA source data is public domain; derived products follow data.gov standards
 
-## Performance Optimization
+
+---
+
+## ⚡ Performance Optimization
 
 ### Partitioning Strategy
 
@@ -518,16 +550,19 @@ spec:
 - **CDN**: Static reference data (station metadata, climate region boundaries)
 - **Synapse Result Cache**: Gold layer query results (12-hour TTL)
 
-## Monitoring & Observability
 
-### Data Quality Monitoring
+---
+
+## 📊 Monitoring & Observability
+
+### 📊 Data Quality Monitoring
 
 - **NOAA QC Flag Analysis**: Track percentage of observations with suspect/fail flags
 - **dbt Tests**: Schema validation, range checks, and temporal consistency tests
 - **Completeness Monitoring**: Alert when station reporting drops below 90%
 - **Anomaly Detection**: Statistical outlier flagging for temperature and precipitation
 
-### Streaming Pipeline Health
+### ⚡ Streaming Pipeline Health
 
 - **Event Hub Metrics**: Incoming messages, throughput units, consumer lag
 - **ADX Ingestion**: Ingestion latency, failure rate, batch size
@@ -553,7 +588,10 @@ alerts:
     channels: ["#noaa-data-eng", "pagerduty:noaa-oncall"]
 ```
 
-## Disaster Recovery
+
+---
+
+## 🔒 Disaster Recovery
 
 ### Backup Strategy
 
@@ -568,7 +606,10 @@ alerts:
 - **RPO**: 5 minutes for streaming data, 24 hours for batch data
 - **Failover**: Automated for ADX (follower promotion), manual for ADF pipelines
 
-## Technology Stack
+
+---
+
+## 📎 Technology Stack
 
 ### Core Platform
 - **Compute**: Azure Databricks, Azure Data Explorer, Azure Functions
@@ -577,7 +618,7 @@ alerts:
 - **Orchestration**: Azure Data Factory, Azure Logic Apps
 - **Analytics**: Azure Synapse Analytics, Power BI
 
-### Development Tools
+### 🚀 Development Tools
 - **Data Modeling**: dbt (1.7+), Great Expectations
 - **Version Control**: Git, Azure DevOps / GitHub
 - **CI/CD**: Azure Pipelines, GitHub Actions
@@ -592,7 +633,7 @@ alerts:
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [NOAA README](README.md) — Deployment guide, quick start, and analytics scenarios
 - [Platform Architecture](../../docs/ARCHITECTURE.md) — Core CSA platform architecture

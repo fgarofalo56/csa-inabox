@@ -1,8 +1,16 @@
 # DOT Transportation Analytics Platform
 
+> [**Examples**](../README.md) > **DOT**
+
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers
 
-## Table of Contents
+> [!TIP]
+> **TL;DR** — Transportation analytics covering highway safety (FARS crash data), infrastructure condition (620K+ bridges from NBI), and transit performance (900+ agencies from NTD). Includes geospatial hotspot analysis and bridge priority scoring.
+
+
+---
+
+## 📋 Table of Contents
 - [Overview](#overview)
   - [Key Features](#key-features)
   - [Data Sources](#data-sources)
@@ -38,11 +46,14 @@
 
 A comprehensive transportation analytics platform built on Azure Cloud Scale Analytics (CSA), providing insights into highway safety, infrastructure conditions, transit performance, and aviation operations using official Department of Transportation data sources.
 
-## Overview
+
+---
+
+## 📋 Overview
 
 The U.S. Department of Transportation oversees one of the most data-rich domains in the federal government — from 6.4 million reported crashes annually to real-time transit feeds from 900+ agencies. This platform ingests, processes, and analyzes data from NHTSA, FHWA, FAA, and FTA to enable evidence-based transportation policy, safety interventions, and infrastructure investment decisions.
 
-### Key Features
+### ✨ Key Features
 
 - **Highway Safety Analytics**: FARS fatality analysis with geospatial hotspot detection
 - **Infrastructure Health Scoring**: Bridge and pavement condition prioritization using NBI data
@@ -51,7 +62,7 @@ The U.S. Department of Transportation oversees one of the most data-rich domains
 - **Predictive Models**: Crash risk scoring and infrastructure deterioration forecasting
 - **Interactive Dashboards**: Multi-modal transportation KPIs with drill-down by state and corridor
 
-### Data Sources
+### 🗄️ Data Sources
 
 | Source | Agency | Description | URL |
 |--------|--------|-------------|-----|
@@ -62,7 +73,10 @@ The U.S. Department of Transportation oversees one of the most data-rich domains
 | ATADS | FAA | Air Traffic Activity Data System — airport operations counts | https://aspm.faa.gov/opsnet/sys/Airport.asp |
 | BTS | OST | Bureau of Transportation Statistics — cross-modal data | https://www.bts.gov/browse-statistical-products-and-data |
 
-## Architecture Overview
+
+---
+
+## 🏗️ Architecture Overview
 
 ```mermaid
 graph TD
@@ -147,7 +161,10 @@ graph TD
     G5 --> C4
 ```
 
-## Prerequisites
+
+---
+
+## 📎 Prerequisites
 
 ### Azure Resources
 - Azure subscription with contributor access
@@ -167,7 +184,10 @@ graph TD
 - data.transportation.gov Socrata API (app token recommended: https://data.transportation.gov)
 - BTS API key (free registration at https://www.bts.gov/developer)
 
-## Quick Start
+
+---
+
+## 🚀 Quick Start
 
 ### 1. Environment Setup
 
@@ -240,7 +260,10 @@ dbt docs generate
 dbt docs serve
 ```
 
-## Sample Analytics Scenarios
+
+---
+
+## 💡 Sample Analytics Scenarios
 
 ### 1. Highway Safety Hotspot Analysis
 
@@ -314,7 +337,10 @@ WHERE report_year = 2023
 ORDER BY recovery_pct DESC;
 ```
 
-## Data Products
+
+---
+
+## ✨ Data Products
 
 ### Crash Hotspots (`crash-hotspots`)
 - **Description**: Geospatially clustered fatal crash data with severity scoring
@@ -334,9 +360,12 @@ ORDER BY recovery_pct DESC;
 - **Coverage**: 900+ transit agencies, all modes
 - **API**: `/api/v1/transit-ridership`
 
-## Configuration
 
-### dbt Profiles
+---
+
+## ⚙️ Configuration
+
+### ⚙️ dbt Profiles
 
 Add to your `~/.dbt/profiles.yml`:
 
@@ -360,7 +389,7 @@ dot_analytics:
       catalog: prod
 ```
 
-### Environment Variables
+### ⚙️ Environment Variables
 
 ```bash
 # Required for data fetching
@@ -377,7 +406,10 @@ DOT_LOG_LEVEL=INFO
 DOT_BATCH_SIZE=5000
 ```
 
-## Azure Government Notes
+
+---
+
+## 🔒 Azure Government Notes
 
 This example is compatible with Azure Government (US) regions. When deploying to Azure Government:
 
@@ -386,23 +418,32 @@ This example is compatible with Azure Government (US) regions. When deploying to
 - FARS and NBI data are publicly accessible from both commercial and government networks
 - Ensure data residency requirements are met for any PII in crash records (person-level FARS data)
 
-## Monitoring & Alerts
+
+---
+
+## 📊 Monitoring & Alerts
 
 - **Data Freshness**: Alerts when FARS annual release or NTD monthly data is overdue
 - **Data Quality**: Automated dbt tests on all models with notification hooks
 - **Pipeline Health**: ADF pipeline run monitoring with failure alerts
 - **Cost Management**: Daily compute spend tracking with anomaly detection
 
-## Troubleshooting
 
-### Common Issues
+---
+
+## 🔧 Troubleshooting
+
+### 🔧 Common Issues
 
 1. **FARS API Pagination**: The CrashAPI returns max 5,000 records per call. Use the `--paginate` flag in fetch scripts.
 2. **NBI File Format Changes**: FHWA occasionally updates field layouts. Check `data/schemas/nbi_layout.json` for the current mapping.
 3. **NTD Data Lag**: Final NTD data lags 12–18 months. Use the monthly module for preliminary figures.
 4. **Large HPMS Downloads**: HPMS shapefiles can exceed 10 GB. Use the `--state-filter` parameter.
 
-## Contributing
+
+---
+
+## 🔗 Contributing
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/new-data-source`)
@@ -410,11 +451,17 @@ This example is compatible with Azure Government (US) regions. When deploying to
 4. Run quality checks (`make lint test`)
 5. Submit a pull request
 
-## License
+
+---
+
+## 🔗 License
 
 This project is licensed under the MIT License. See `LICENSE` file for details.
 
-## Acknowledgments
+
+---
+
+## 🔗 Acknowledgments
 
 - NHTSA, FHWA, FTA, and FAA for maintaining comprehensive public transportation data
 - Azure Cloud Scale Analytics team for the foundational platform
@@ -422,7 +469,7 @@ This project is licensed under the MIT License. See `LICENSE` file for details.
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [DOT Architecture](ARCHITECTURE.md) — Detailed platform architecture and design decisions
 - [Examples Index](../README.md) — Overview of all CSA-in-a-Box example verticals

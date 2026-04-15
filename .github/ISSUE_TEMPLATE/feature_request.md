@@ -6,19 +6,21 @@ labels: enhancement
 assignees: ''
 ---
 
-## Summary
+[Home](../../README.md) > [Issues](../ISSUE_TEMPLATE) > **Feature Request**
+
+## 📌 Summary
 Brief description of the feature.
 
-## Motivation
+## 💡 Motivation
 Why is this needed? What problem does it solve?
 
-## Proposed Solution
+## 🏗️ Proposed Solution
 How should this work?
 
-## Alternatives Considered
+## 🔄 Alternatives Considered
 Other approaches that were considered.
 
-## Affected Components
+## ⚙️ Affected Components
 - [ ] Infrastructure (Bicep modules)
 - [ ] Data Pipelines (dbt / ADF)
 - [ ] Compute (Databricks / Functions)
@@ -27,6 +29,6 @@ Other approaches that were considered.
 - [ ] CI/CD (Workflows / Validation)
 - [ ] Documentation
 
-## Acceptance Criteria
+## ✅ Acceptance Criteria
 - [ ] Criterion 1
 - [ ] Criterion 2

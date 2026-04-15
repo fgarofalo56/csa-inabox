@@ -1,8 +1,16 @@
 # Department of Commerce Economic Analytics Architecture
 
+> [**Examples**](../README.md) > [**Commerce**](README.md) > **Architecture**
+
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Architects / Data Engineers
 
-## Table of Contents
+> [!TIP]
+> **TL;DR** — Domain-driven architecture ingesting Census, BEA, ITA, and NIST data through a medallion pipeline. Features batch processing for quarterly GDP releases, API gateway with Redis caching, and FISMA-compliant security.
+
+
+---
+
+## 📋 Table of Contents
 - [Overview](#overview)
 - [Domain Context](#domain-context)
   - [Economic Data Landscape](#economic-data-landscape)
@@ -36,11 +44,17 @@
   - [Development Tools](#development-tools)
   - [Programming Languages](#programming-languages)
 
-## Overview
+
+---
+
+## 📋 Overview
 
 The Commerce Economic Analytics platform is built on Azure Cloud Scale Analytics (CSA) and follows a domain-driven design approach. It ingests data from multiple Commerce Department bureaus, transforms it through a medallion architecture, and provides analytical insights for economic policy, trade analysis, and business development.
 
-## Domain Context
+
+---
+
+## 📋 Domain Context
 
 ### Economic Data Landscape
 
@@ -58,9 +72,12 @@ The Commerce Department ecosystem produces vast amounts of economic data through
 - **Variety**: Structured (GDP tables, trade records), semi-structured (API responses), geospatial (census geographies)
 - **Veracity**: Government-grade statistical data with published methodologies and confidence intervals
 
-## Architecture Layers
 
-### Data Ingestion Layer
+---
+
+## 🏗️ Architecture Layers
+
+### 🔄 Data Ingestion Layer
 
 ```mermaid
 graph TD
@@ -101,7 +118,7 @@ graph TD
 - HS code-based commodity classification
 - Coverage: 200+ partner countries
 
-### Bronze Layer (Raw Data)
+### 🗄️ Bronze Layer (Raw Data)
 
 The Bronze layer stores raw, unprocessed data exactly as received from source systems.
 
@@ -136,7 +153,7 @@ PARTITIONED BY (year, state_fips)
 - Original API responses stored as JSON for reprocessing
 - Change data capture for incremental Census data loads
 
-### Silver Layer (Cleaned & Conformed)
+### 🗄️ Silver Layer (Cleaned & Conformed)
 
 The Silver layer applies business rules, data quality checks, and standardization.
 
@@ -206,7 +223,7 @@ USING DELTA
 PARTITIONED BY (year, state_code)
 ```
 
-### Gold Layer (Business Analytics)
+### 🗄️ Gold Layer (Business Analytics)
 
 The Gold layer contains aggregated, enriched data optimized for analytics and reporting.
 
@@ -260,9 +277,12 @@ USING DELTA
 PARTITIONED BY (year, state_code)
 ```
 
-## Data Flow Architecture
 
-### Batch Processing Pipeline
+---
+
+## 🔄 Data Flow Architecture
+
+### 🔄 Batch Processing Pipeline
 
 ```mermaid
 graph TD
@@ -285,9 +305,12 @@ graph TD
     L --> P[Alert System]
 ```
 
-## Integration Patterns
 
-### API Gateway Architecture
+---
+
+## 🔌 Integration Patterns
+
+### 🔌 API Gateway Architecture
 
 ```mermaid
 graph TD
@@ -301,7 +324,7 @@ graph TD
     F -->|Caching| I[Azure Cache for Redis]
 ```
 
-### Data Contracts
+### 🔌 Data Contracts
 
 Each data product exposes a versioned contract:
 
@@ -323,9 +346,12 @@ spec:
     accuracy: 99%
 ```
 
-## Security Architecture
 
-### Data Protection
+---
+
+## 🔒 Security Architecture
+
+### 🔒 Data Protection
 
 - **Encryption at Rest**: Azure Storage Service Encryption (SSE) with AES-256
 - **Encryption in Transit**: TLS 1.2+ for all API communications
@@ -340,7 +366,10 @@ spec:
 - **Open Data**: Public data products follow data.gov standards
 - **IRS Publication 1075**: For tax-linked economic data (if applicable)
 
-## Performance Optimization
+
+---
+
+## ⚡ Performance Optimization
 
 ### Data Partitioning Strategy
 
@@ -368,15 +397,18 @@ CREATE INDEX idx_trade_partner_hs
 ON silver.slv_trade_data (partner_country_code, hs_code, year, month);
 ```
 
-## Monitoring & Observability
 
-### Data Quality Monitoring
+---
+
+## 📊 Monitoring & Observability
+
+### 📊 Data Quality Monitoring
 
 - **dbt Tests**: Schema validation and business logic checks
 - **Custom Monitors**: Census margin-of-error thresholds, GDP revision tracking
 - **Anomaly Detection**: Statistical process control for economic indicators
 
-### Pipeline Monitoring
+### 📊 Pipeline Monitoring
 
 - **Azure Monitor**: Infrastructure and pipeline health
 - **Application Insights**: API performance and errors
@@ -394,7 +426,10 @@ alert:
     - email: "commerce-data-team@contoso.com"
 ```
 
-## Disaster Recovery
+
+---
+
+## 🔒 Disaster Recovery
 
 ### Backup Strategy
 
@@ -408,7 +443,10 @@ alert:
 - **RPO**: 24 hours maximum data loss
 - **Failover**: Automated for infrastructure, manual for data pipelines
 
-## Technology Stack
+
+---
+
+## 📎 Technology Stack
 
 ### Core Platform
 - **Compute**: Azure Databricks, Azure Functions
@@ -416,7 +454,7 @@ alert:
 - **Orchestration**: Azure Data Factory, Azure Logic Apps
 - **Analytics**: Azure Synapse Analytics, Power BI
 
-### Development Tools
+### 🚀 Development Tools
 - **Data Modeling**: dbt, Great Expectations
 - **Version Control**: Git, Azure DevOps
 - **CI/CD**: Azure Pipelines, GitHub Actions
@@ -430,7 +468,7 @@ alert:
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Commerce README](README.md) — Deployment guide, quick start, and analytics scenarios
 - [Platform Architecture](../../docs/ARCHITECTURE.md) — Core CSA platform architecture

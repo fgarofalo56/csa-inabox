@@ -1,8 +1,16 @@
 # USPS Postal Operations Analytics Architecture
 
+> [**Examples**](../README.md) > [**USPS**](README.md) > **Architecture**
+
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Architects / Data Engineers
 
-## Table of Contents
+> [!TIP]
+> **TL;DR** — Postal operations architecture analyzing delivery performance, facility utilization, and mail volume across 34,000+ post offices. Features geographic standardization with Census ZCTAs and seasonal volume forecasting.
+
+
+---
+
+## 📋 Table of Contents
 - [Overview](#overview)
 - [Domain Context](#domain-context)
   - [Postal Operations Data Landscape](#postal-operations-data-landscape)
@@ -32,11 +40,17 @@
   - [Development Tools](#development-tools)
   - [Programming Languages](#programming-languages)
 
-## Overview
+
+---
+
+## 📋 Overview
 
 The USPS Postal Operations Analytics platform is built on Azure Cloud Scale Analytics (CSA) and follows a domain-driven design approach. It ingests data from USPS public APIs, Census geographic data, and operational reporting to analyze delivery performance, facility utilization, and mail volume trends across the nation's largest logistics network.
 
-## Domain Context
+
+---
+
+## 📋 Domain Context
 
 ### Postal Operations Data Landscape
 
@@ -55,7 +69,10 @@ The United States Postal Service operates one of the world's largest logistics n
 - **Variety**: Structured (volumes, performance rates), geospatial (ZIP boundaries, route geometries), time-series (seasonal patterns)
 - **Veracity**: USPS service performance published quarterly; Census ZCTAs updated decennially with annual supplements
 
-## System Context
+
+---
+
+## 🏗️ System Context
 
 ```mermaid
 graph TD
@@ -100,9 +117,12 @@ graph TD
     PBI --> CAP
 ```
 
-## Architecture Layers
 
-### Data Ingestion Layer
+---
+
+## 🏗️ Architecture Layers
+
+### 🔄 Data Ingestion Layer
 
 ```mermaid
 graph TD
@@ -153,7 +173,7 @@ graph TD
 - Published as web pages and downloadable datasets
 - Historical data available back to 2000
 
-### Bronze Layer (Raw Data)
+### 🗄️ Bronze Layer (Raw Data)
 
 The Bronze layer stores raw, unprocessed data exactly as received from source systems.
 
@@ -187,7 +207,7 @@ USING DELTA
 PARTITIONED BY (product_class, YEAR(acceptance_date))
 ```
 
-### Silver Layer (Cleaned & Conformed)
+### 🗄️ Silver Layer (Cleaned & Conformed)
 
 #### Transformation Patterns
 
@@ -208,7 +228,7 @@ PARTITIONED BY (product_class, YEAR(acceptance_date))
 - Seasonal decomposition (trend + seasonal + residual)
 - Year-over-year growth rates with working day correction
 
-### Gold Layer (Business Analytics)
+### 🗄️ Gold Layer (Business Analytics)
 
 #### Analytical Models
 
@@ -230,9 +250,12 @@ PARTITIONED BY (product_class, YEAR(acceptance_date))
 - Equipment utilization and maintenance scheduling
 - Geographic coverage gap identification
 
-## Data Flow Architecture
 
-### Batch Processing Pipeline
+---
+
+## 🔄 Data Flow Architecture
+
+### 🔄 Batch Processing Pipeline
 
 ```mermaid
 graph TD
@@ -255,9 +278,12 @@ graph TD
     L --> P[Alert System]
 ```
 
-## Integration Points
 
-### Power BI Dashboards
+---
+
+## 🔌 Integration Points
+
+### 📊 Power BI Dashboards
 
 **1. Operations Dashboard**
 - National delivery performance heatmap
@@ -277,16 +303,19 @@ graph TD
 - Consolidation candidate map
 - Equipment utilization breakdown
 
-## Security Architecture
 
-### Data Protection
+---
+
+## 🔒 Security Architecture
+
+### 🔒 Data Protection
 
 - **Encryption at Rest**: Azure SSE with Microsoft-managed keys
 - **Encryption in Transit**: TLS 1.2+ for all communications
 - **Network Security**: VNet integration with private endpoints
 - **Access Control**: Azure AD RBAC for role-based access
 
-### Data Classification Notes
+### 🔒 Data Classification Notes
 
 - **Public**: Aggregate volume statistics, service performance rates, ZIP code boundaries
 - **Sensitive-Operational**: Route-level delivery data, facility throughput, carrier performance
@@ -298,7 +327,10 @@ graph TD
 - **Privacy Act**: Individual-level address data requires Privacy Act protections
 - **Postal Accountability and Enhancement Act**: Service performance reporting requirements
 
-## Performance Optimization
+
+---
+
+## ⚡ Performance Optimization
 
 ### Data Partitioning Strategy
 
@@ -317,9 +349,12 @@ graph TD
 - **CDN**: ZIP code boundary tiles and static assets
 - **Query Result Cache**: Gold layer results with 1-hour TTL
 
-## Monitoring & Observability
 
-### Data Quality Monitoring
+---
+
+## 📊 Monitoring & Observability
+
+### 📊 Data Quality Monitoring
 
 - **dbt Tests**: ZIP code format validation, delivery date logic, volume non-negative
 - **Custom Monitors**: Service standard compliance tracking, facility capacity alerts
@@ -345,7 +380,10 @@ alerts:
     channel: "#usps-facilities"
 ```
 
-## Technology Stack
+
+---
+
+## 📎 Technology Stack
 
 ### Core Platform
 
@@ -354,7 +392,7 @@ alerts:
 - **Orchestration**: Azure Data Factory, Azure Logic Apps
 - **Analytics**: Azure Synapse Analytics, Power BI
 
-### Development Tools
+### 🚀 Development Tools
 
 - **Data Modeling**: dbt, Great Expectations
 - **Version Control**: Git, Azure DevOps
@@ -371,7 +409,7 @@ alerts:
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [USPS README](README.md) — Deployment guide, quick start, and analytics scenarios
 - [Platform Architecture](../../docs/ARCHITECTURE.md) — Core CSA platform architecture

@@ -1,6 +1,15 @@
+[← Portal Implementations](../README.md)
+
 # Azure Static Web Apps + Functions Portal
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Frontend Developers
+
+> [!NOTE]
+> **TL;DR:** The cheapest portal option — SvelteKit/React frontend on Azure Static Web Apps with Azure Functions API backend. Free tier available ($0/month), built-in Azure AD auth, global CDN, PR-based preview environments, and GitHub Actions CI/CD. Available in Azure Government.
+
+A lightweight, cost-effective data onboarding portal using Azure Static Web Apps
+for the frontend and Azure Functions for the API. This is the simplest
+deployment option with built-in CI/CD from GitHub.
 
 ## Table of Contents
 
@@ -14,32 +23,23 @@
 - [Cost Comparison](#cost-comparison)
 - [Related Documentation](#related-documentation)
 
-A lightweight, cost-effective data onboarding portal using Azure Static Web Apps
-for the frontend and Azure Functions for the API. This is the simplest
-deployment option with built-in CI/CD from GitHub.
+---
 
-## Architecture
+## 🏗️ Architecture
 
-```text
-┌───────────────────────────────────────────────────────────┐
-│          Azure Static Web Apps                             │
-│  ┌─────────────────────────────────────────────────────┐  │
-│  │   SvelteKit / React Static Frontend                  │  │
-│  │   - Source registration form                         │  │
-│  │   - Pipeline dashboard                               │  │
-│  │   - Marketplace browser                              │  │
-│  │   - Access request manager                           │  │
-│  └──────────────────────┬──────────────────────────────┘  │
-│                         │ /api/* (proxied)                  │
-│  ┌──────────────────────┴──────────────────────────────┐  │
-│  │   Azure Functions (Managed API)                      │  │
-│  │   Proxies to portal/shared/api/ (FastAPI)            │  │
-│  │   OR implements routes directly in Functions          │  │
-│  └─────────────────────────────────────────────────────┘  │
-└───────────────────────────────────────────────────────────┘
+```mermaid
+graph TB
+    subgraph SWA[Azure Static Web Apps]
+        FE[SvelteKit / React<br/>Static Frontend]
+        FE -->|/api/* proxied| Functions[Azure Functions<br/>Managed API]
+    end
+
+    Functions -->|Proxy or Direct| Backend[portal/shared/api/<br/>FastAPI]
 ```
 
-## Why Static Web Apps?
+---
+
+## ✨ Why Static Web Apps?
 
 | Feature | Benefit |
 |---|---|
@@ -52,7 +52,9 @@ deployment option with built-in CI/CD from GitHub.
 | Preview environments | PR-based staging deployments |
 | Gov support | Available in Azure Government |
 
-## Quick Start
+---
+
+## 🚀 Quick Start
 
 ```bash
 cd portal/static-webapp
@@ -67,7 +69,9 @@ npx swa start http://localhost:5173 --api-location api
 npm run dev
 ```
 
-## Project Structure
+---
+
+## 📁 Project Structure
 
 ```text
 portal/static-webapp/
@@ -110,7 +114,9 @@ portal/static-webapp/
     └── swa-deploy.yml          # GitHub Actions workflow
 ```
 
-## SWA Configuration
+---
+
+## ⚙️ SWA Configuration
 
 ```json
 {
@@ -157,7 +163,9 @@ portal/static-webapp/
 }
 ```
 
-## Deployment
+---
+
+## 📦 Deployment
 
 ### Via SWA CLI
 
@@ -172,7 +180,7 @@ npx swa deploy \
   --deployment-token $SWA_DEPLOYMENT_TOKEN
 ```
 
-### Via GitHub Actions
+### 🔄 Via GitHub Actions
 
 ```yaml
 name: Deploy Static Web App
@@ -198,7 +206,9 @@ jobs:
           output_location: build
 ```
 
-## Azure Government
+---
+
+## 🔒 Azure Government
 
 Static Web Apps is available in Azure Government:
 
@@ -214,18 +224,21 @@ az staticwebapp create \
 # Use login.microsoftonline.us as the OpenID issuer
 ```
 
-## Cost Comparison
+---
+
+## 💡 Cost Comparison
 
 | Tier | Monthly Cost | Features |
 |---|---|---|
 | Free | $0 | 100 GB bandwidth, 2 custom domains, built-in auth |
 | Standard | ~$9/month | 100 GB, custom auth, SLA 99.95% |
 
-This is the most cost-effective portal option for small to medium deployments.
+> [!TIP]
+> This is the most cost-effective portal option for small to medium deployments.
 
 ---
 
-## Related Documentation
+## 🔗 Related Documentation
 
 - [Portal Implementations](../README.md) — Portal implementation index
 - [Shared Backend](../shared/README.md) — Shared backend API
