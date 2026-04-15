@@ -1,63 +1,9 @@
 version: 2
 
 models:
-  - name: slv_orders
-    description: >
-      Silver layer: Cleansed and enriched orders. Deduped by order_id,
-      type-cast, surrogate-keyed. Every row is kept, with is_valid /
-      validation_errors flagging records that failed quality checks (see
-      Archon tasks 310b5446 and 0ac384b5). Gold models filter on
-      is_valid = true.
-    columns:
-      - name: order_sk
-        description: Surrogate key (md5 of order_id), generated in Silver per 310b5446.
-        tests:
-          - unique
-          - not_null
-      - name: order_id
-        description: Natural order identifier from Bronze.
-        tests:
-          - not_null:
-              config:
-                severity: error  # PK must never be null
-      - name: customer_id
-        description: FK to slv_customers
-        tests:
-          - relationships:
-              to: ref('slv_customers')
-              field: customer_id
-              severity: warn
-      - name: order_date
-        description: Date the order was placed
-      - name: total_amount
-        description: Total order value in USD
-      - name: status
-        description: "Current order status: pending, completed, cancelled, returned, shipped, processing"
-        tests:
-          - accepted_values:
-              values: ['PENDING', 'COMPLETED', 'CANCELLED', 'RETURNED', 'SHIPPED', 'PROCESSING', 'DELIVERED', 'CONFIRMED']
-              severity: warn
-      - name: is_valid
-        description: >
-          True when the row passes every quality check (missing id/date,
-          negative amount, future date). Gold models should filter on
-          this column.
-        tests:
-          - not_null
-      - name: validation_errors
-        description: >
-          Human-readable '; '-joined list of failed quality checks for
-          rows with is_valid = false. Empty string for valid rows.
-      - name: _is_missing_order_id
-        description: Quality flag - true if order_id was null in Bronze.
-      - name: _is_missing_customer_id
-        description: Quality flag - true if customer_id was null in Bronze.
-      - name: _is_missing_order_date
-        description: Quality flag - true if order_date was null in Bronze.
-      - name: _is_negative_amount
-        description: Quality flag - true if total_amount < 0.
-      - name: _is_future_date
-        description: Quality flag - true if order_date > current_date.
+  # slv_orders is defined in schema_contract_generated.yml (auto-generated
+  # from data product contracts). Do not add it here — run:
+  #   python -m governance.contracts.dbt_test_generator --write
 
   - name: slv_customers
     description: >
