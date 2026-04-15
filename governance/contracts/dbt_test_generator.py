@@ -342,8 +342,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.write:
         for domain, domain_contracts in sorted(by_domain.items()):
             exclude = _read_handwritten_model_names(repo_root, domain)
-            existing = _existing_model_names(repo_root, domain)
-            generated = generate_schema_yml(domain_contracts, exclude_models=exclude, existing_models=existing)
+            on_disk_models = _existing_model_names(repo_root, domain)
+            generated = generate_schema_yml(domain_contracts, exclude_models=exclude, existing_models=on_disk_models)
             out = output_path_for_domain(repo_root, domain)
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(generated, encoding="utf-8")
@@ -361,8 +361,8 @@ def main(argv: list[str] | None = None) -> int:
         has_drift = False
         for domain, domain_contracts in sorted(by_domain.items()):
             exclude = _read_handwritten_model_names(repo_root, domain)
-            existing = _existing_model_names(repo_root, domain)
-            generated = generate_schema_yml(domain_contracts, exclude_models=exclude, existing_models=existing)
+            on_disk_models = _existing_model_names(repo_root, domain)
+            generated = generate_schema_yml(domain_contracts, exclude_models=exclude, existing_models=on_disk_models)
             out = output_path_for_domain(repo_root, domain)
             if not out.exists():
                 print(
@@ -392,9 +392,9 @@ def main(argv: list[str] | None = None) -> int:
     # Default: preview to stdout
     for domain, domain_contracts in sorted(by_domain.items()):
         exclude = _read_handwritten_model_names(repo_root, domain)
-        existing = _existing_model_names(repo_root, domain)
+        on_disk_models = _existing_model_names(repo_root, domain)
         print(f"\n# === Domain: {domain} ===")
-        print(generate_schema_yml(domain_contracts, exclude_models=exclude, existing_models=existing))
+        print(generate_schema_yml(domain_contracts, exclude_models=exclude, existing_models=on_disk_models))
     return 0
 
 
