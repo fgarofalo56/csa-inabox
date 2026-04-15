@@ -10,15 +10,15 @@ dependencies = []
 [project.optional-dependencies]
 dev = [
     "ruff>=0.3.0,<1.0.0",
-    "pytest>=7.0.0,<9.0.0",
+    "pytest>=7.0.0,<10.0.0",
     "pytest-cov>=4.0.0,<6.0.0",
-    "pytest-asyncio>=0.23.0,<1.0.0",
+    "pytest-asyncio>=0.23.0,<2.0.0",
     "mypy>=1.0.0,<2.0.0",
     "bandit>=1.7.5,<2.0.0",
     "pre-commit>=3.5.0,<5.0.0",
     # structlog is a governance runtime dep but tests for the shared
     # logging helper need it available in the dev env too.
-    "structlog>=24.1.0,<25.0.0",
+    "structlog>=24.1.0,<26.0.0",
     # Type stubs for third-party libraries that lack inline types — kept
     # here (and not under governance extras) so mypy always sees them
     # during a `pip install -e ".[dev]"` workflow.
@@ -30,9 +30,11 @@ governance = [
     "azure-monitor-ingestion>=1.0.0,<2.0.0",
     # Structured JSON logging with trace/correlation context — see
     # governance/common/logging.py and docs/LOG_SCHEMA.md.
-    "structlog>=24.1.0,<25.0.0",
-    "tenacity>=8.2.0,<10.0.0",
-    "great-expectations>=1.0.0,<2.0.0",
+    "structlog>=24.1.0,<26.0.0",
+    # great-expectations: The ge_runner.py checkpoint runner uses an in-memory
+    # fallback evaluator; no GE config/checkpoints exist yet. Re-add when a
+    # Spark-backed checkpoint pipeline is implemented.
+    # "great-expectations>=1.0.0",
 ]
 functions = [
     # Azure Functions host SDK — required by all function_app.py modules.
