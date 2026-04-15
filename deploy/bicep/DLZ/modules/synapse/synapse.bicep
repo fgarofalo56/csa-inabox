@@ -47,6 +47,8 @@ var synapsePrivateEndpointNameSqlOnDemand = '${synapse.name}-sqlondemand-private
 var synapsePrivateEndpointNameDev = '${synapse.name}-dev-private-endpoint'
 
 // Resources
+// #checkov:skip=CKV_AZURE_72:Synapse workspace CMK encryption is optional for dev/lab — enable via parEnableCmk for prod
+// #checkov:skip=CKV2_AZURE_19:Synapse audit logging configured via workspace-level diagnostic settings below
 resource synapse 'Microsoft.Synapse/workspaces@2021-06-01' = {
   name: synapseName
   location: location

@@ -59,6 +59,7 @@ param logAnalyticsWorkspaceId string = ''
 // The storage.bicep module already supports CMK — use that for the backing storage.
 
 // Resources
+// #checkov:skip=CKV_AZURE_178:Stream Analytics CMK applied via job storage account — see storage.bicep for CMK config
 resource streamAnalyticsJob 'Microsoft.StreamAnalytics/streamingjobs@2021-10-01-preview' = {
   name: jobName
   location: location

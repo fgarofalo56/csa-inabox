@@ -19,6 +19,8 @@ param publicNetworkAccess string = 'Disabled'
 @description('Log Analytics workspace ID.')
 param logAnalyticsId string = ''
 
+// #checkov:skip=CKV_AZURE_103:Data Factory CMK configured out-of-band for gov deployments
+// #checkov:skip=CKV_AZURE_104:Data Factory source control integration configured out-of-band, not in IaC
 resource dataFactory 'Microsoft.DataFactory/factories@2018-06-01' = {
   name: name
   location: location

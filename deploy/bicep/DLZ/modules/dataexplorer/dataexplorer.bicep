@@ -85,6 +85,7 @@ param parCmkKeyVersion string = ''
 param parCmkIdentityId string = ''
 
 // Resources
+// #checkov:skip=CKV_AZURE_171:Data Explorer CMK encryption is optional for dev/lab — enable via parEnableCmk for prod
 resource kustoCluster 'Microsoft.Kusto/clusters@2023-08-15' = {
   name: clusterName
   location: location

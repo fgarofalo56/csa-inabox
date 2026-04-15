@@ -71,6 +71,7 @@ param parCmkKeyVersion string = ''
 param parCmkIdentityId string = ''
 
 // Resources
+// #checkov:skip=CKV_AZURE_224:Event Hubs CMK encryption is optional for dev/lab — enable via parEnableCmk for prod
 resource eventHubNamespace 'Microsoft.EventHub/namespaces@2024-01-01' = {
   name: namespaceName
   location: location

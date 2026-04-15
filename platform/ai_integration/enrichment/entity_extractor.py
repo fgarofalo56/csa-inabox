@@ -25,6 +25,8 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from azure.ai.textanalytics import TextAnalyticsClient
+    from azure.core.credentials import AzureKeyCredential
+    from azure.identity import DefaultAzureCredential
 
 from governance.common.logging import configure_structlog, get_logger
 
@@ -97,6 +99,7 @@ class EntityExtractor:
         if self._client is None:
             from azure.ai.textanalytics import TextAnalyticsClient
 
+            credential: AzureKeyCredential | DefaultAzureCredential
             if self.api_key:
                 from azure.core.credentials import AzureKeyCredential
 

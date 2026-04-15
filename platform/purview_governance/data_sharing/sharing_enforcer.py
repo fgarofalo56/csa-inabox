@@ -279,7 +279,7 @@ class SharingEnforcer:
                 return result
 
         # If no agreement passed validation, return the last denial reason
-        return result  # type: ignore[possibly-undefined]
+        return result
 
     def _find_matching_agreements(
         self,

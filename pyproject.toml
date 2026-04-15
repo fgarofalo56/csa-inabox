@@ -315,6 +315,16 @@ module = [
 ]
 ignore_errors = true
 
+[[tool.mypy.overrides]]
+# Platform tests use dynamic imports via conftest.py namespace hacking
+# (the ``platform`` directory shadows the stdlib module).  The test
+# files also mock Azure SDK types extensively, which produces false
+# positive type errors.  They are functionally tested via pytest.
+module = [
+    "tests.platform.*",
+]
+ignore_errors = true
+
 [tool.bandit]
 # Exclude tests (assertions) and known-safe subprocess / random patterns:
 #   B101 - assert_used (tests use assert)

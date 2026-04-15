@@ -269,9 +269,8 @@ class TestEnrichText:
                 "azure.ai.textanalytics.aio": MagicMock(TextAnalyticsClient=MagicMock(return_value=mock_client)),
                 "azure.identity.aio": MagicMock(DefaultAzureCredential=MagicMock(return_value=mock_credential)),
             },
-        ):
-            with pytest.raises(RuntimeError, match="SDK boom"):
-                await function_app._enrich_text("test")
+        ), pytest.raises(RuntimeError, match="SDK boom"):
+            await function_app._enrich_text("test")
 
 
 # ---------------------------------------------------------------------------
@@ -351,9 +350,8 @@ class TestAnalyzeDocument:
                 "azure.ai.formrecognizer.aio": MagicMock(DocumentAnalysisClient=MagicMock(return_value=mock_client)),
                 "azure.identity.aio": MagicMock(DefaultAzureCredential=MagicMock(return_value=mock_credential)),
             },
-        ):
-            with pytest.raises(RuntimeError, match="SDK boom"):
-                await function_app._analyze_document(b"data", "application/pdf")
+        ), pytest.raises(RuntimeError, match="SDK boom"):
+            await function_app._analyze_document(b"data", "application/pdf")
 
 
 # ---------------------------------------------------------------------------

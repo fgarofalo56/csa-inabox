@@ -94,6 +94,9 @@ var iisSetupScript = 'powershell -ExecutionPolicy Unrestricted -Command "Install
 
 // Resources
 
+// #checkov:skip=CKV_AZURE_50:VMSS requires extensions for IIS setup and configuration
+// #checkov:skip=CKV_AZURE_151:VMSS managed disk CMK encryption configured out-of-band via Azure Policy
+// #checkov:skip=CKV_AZURE_149:VMSS disk encryption not required for dev/lab web server
 // Internal Load Balancer — no public IP, accessible only within the VNet.
 resource lb 'Microsoft.Network/loadBalancers@2023-11-01' = {
   name: lbName

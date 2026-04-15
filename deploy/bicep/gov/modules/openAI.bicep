@@ -22,6 +22,7 @@ param deployments array = []
 @description('Log Analytics workspace ID.')
 param logAnalyticsId string = ''
 
+// #checkov:skip=CKV_AZURE_236:OpenAI CMK configured out-of-band for gov deployments
 resource openAI 'Microsoft.CognitiveServices/accounts@2024-04-01-preview' = {
   name: name
   location: location

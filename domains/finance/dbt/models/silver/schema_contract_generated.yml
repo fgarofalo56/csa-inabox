@@ -1,0 +1,106 @@
+# =======================================================================
+# AUTO-GENERATED from data product contracts.  DO NOT EDIT.
+#
+# Regenerate:  python -m governance.contracts.dbt_test_generator --write
+# Check drift: python -m governance.contracts.dbt_test_generator --check
+# =======================================================================
+
+version: 2
+models:
+- name: slv_aging_report
+  description: 'Auto-generated dbt tests from data contract ''finance.aging_report'' v1.0.0. DO NOT EDIT -- regenerate with:
+    python -m governance.contracts.dbt_test_generator --write'
+  columns:
+  - name: invoice_id
+    description: Unique invoice identifier from the billing system.
+    tests:
+    - not_null
+  - name: customer_id
+    description: Customer identifier, consistent with shared.customers.
+    tests:
+    - not_null
+  - name: invoice_date
+    description: Date the invoice was issued.
+    tests:
+    - not_null
+  - name: due_date
+    description: Payment due date.
+    tests:
+    - not_null
+  - name: invoice_total
+    description: Invoice total including tax (USD).
+    tests:
+    - not_null
+  - name: total_paid
+    description: Sum of payments received against this invoice (USD).
+    tests:
+    - not_null
+  - name: outstanding_balance
+    description: Remaining balance (invoice_total - total_paid).
+    tests:
+    - not_null
+    - dbt_utils.expression_is_true:
+        expression: outstanding_balance >= 0
+  - name: days_past_due
+    description: Number of days past the due date (negative means not yet due).
+    tests:
+    - not_null
+  - name: aging_bucket
+    description: Aging classification bucket.
+    tests:
+    - not_null
+    - accepted_values:
+        values:
+        - CURRENT
+        - 1-30
+        - 31-60
+        - 61-90
+        - 90+
+        - PAID
+  - name: estimated_loss_rate
+    description: Estimated loss rate based on aging bucket (0.00 to 0.25).
+    tests:
+    - not_null
+    - dbt_utils.expression_is_true:
+        expression: estimated_loss_rate >= 0 AND estimated_loss_rate <= 1
+- name: slv_revenue_reconciliation
+  description: 'Auto-generated dbt tests from data contract ''finance.revenue_reconciliation'' v1.0.0. DO NOT EDIT -- regenerate
+    with: python -m governance.contracts.dbt_test_generator --write'
+  columns:
+  - name: reconciliation_key
+    description: 'Surrogate key for reconciliation records. Derived from coalesce(order_id, invoice_id) to ensure uniqueness
+      across MATCHED, ORDER_ONLY, and INVOICE_ONLY rows.
+
+      '
+    tests:
+    - not_null
+  - name: order_id
+    description: Order identifier. Null for INVOICE_ONLY records.
+  - name: customer_id
+    description: Customer identifier from whichever side is present.
+  - name: order_date
+    description: Date the order was placed. Null for INVOICE_ONLY.
+  - name: order_amount
+    description: Order total from sales domain (USD). Null for INVOICE_ONLY.
+  - name: order_status
+    description: Order lifecycle state. Null for INVOICE_ONLY.
+  - name: invoice_id
+    description: Invoice identifier. Null for ORDER_ONLY records.
+  - name: invoice_date
+    description: Date the invoice was issued. Null for ORDER_ONLY.
+  - name: invoice_amount
+    description: Invoice total from finance domain (USD). Null for ORDER_ONLY.
+  - name: reconciliation_status
+    description: Match outcome of the reconciliation.
+    tests:
+    - not_null
+    - accepted_values:
+        values:
+        - MATCHED
+        - AMOUNT_MISMATCH
+        - ORDER_ONLY
+        - INVOICE_ONLY
+  - name: amount_difference
+    description: order_amount minus invoice_amount. Zero for matched records.
+    tests:
+    - not_null

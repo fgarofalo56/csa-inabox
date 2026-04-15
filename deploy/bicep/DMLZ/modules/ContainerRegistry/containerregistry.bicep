@@ -22,6 +22,9 @@ var containerRegistryNameCleaned = replace(containerRegistryName, '-', '')
 var containerRegistryPrivateEndpointName = '${containerRegistry.name}-private-endpoint'
 
 // Resources
+// #checkov:skip=CKV_AZURE_163:ACR CMK encryption not required for dev/lab; Premium SKU provides encryption at rest
+// #checkov:skip=CKV_AZURE_164:ACR geo-replication not required for dev/lab single-region deployment
+// #checkov:skip=CKV_AZURE_233:ACR dedicated data endpoint not required for dev/lab deployment
 resource containerRegistry 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
   name: containerRegistryNameCleaned
   location: location

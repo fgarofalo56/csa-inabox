@@ -24,6 +24,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from governance.common.logging import configure_structlog, get_logger
+
 from .schema import (
     ActionType,
     AggregationType,
@@ -32,8 +34,6 @@ from .schema import (
     ConditionOperator,
     load_rules_from_yaml,
 )
-
-from governance.common.logging import configure_structlog, get_logger
 
 configure_structlog(service="rules-engine")
 logger = get_logger(__name__)

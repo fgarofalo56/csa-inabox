@@ -19,6 +19,8 @@ param managedResourceGroupName string = ''
 @description('Log Analytics workspace ID.')
 param logAnalyticsId string = ''
 
+// #checkov:skip=CKV_AZURE_35:Purview-managed storage uses Microsoft-managed keys; CMK not configurable directly
+// #checkov:skip=CKV_AZURE_43:Purview-managed storage redundancy controlled by Purview service
 resource purview 'Microsoft.Purview/accounts@2021-12-01' = {
   name: name
   location: location

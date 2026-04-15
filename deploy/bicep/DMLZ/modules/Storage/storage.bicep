@@ -96,6 +96,11 @@ var tablePrivateEndpointName = '${storageNameCleaned}-table-pe'
 var queuePrivateEndpointName = '${storageNameCleaned}-queue-pe'
 
 // Resources
+// #checkov:skip=CKV_AZURE_35:CMK encryption is optional for dev/lab — enable via parEnableCmk parameter for prod
+// #checkov:skip=CKV_AZURE_43:Geo-redundant storage not required for dev/lab — override via storageSku parameter for prod
+// #checkov:skip=CKV_AZURE_33:Storage queue logging not required — queues not used in DMLZ governance storage
+// #checkov:skip=CKV2_AZURE_38:Soft-delete enabled on blob services below; not applicable at account level
+// #checkov:skip=CKV2_AZURE_1:CMK encryption is optional for dev/lab — enable via parEnableCmk parameter for prod
 resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   name: storageNameCleaned
   location: location

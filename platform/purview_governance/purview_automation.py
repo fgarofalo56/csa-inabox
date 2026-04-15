@@ -136,7 +136,7 @@ class PurviewAutomation:
         try:
             from azure.purview.catalog import PurviewCatalogClient
         except ImportError:
-        logger.warning(
+            logger.warning(
                 "azure-purview-catalog package not installed. Install with: pip install azure-purview-catalog"
             )
             return None

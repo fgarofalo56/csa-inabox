@@ -1,0 +1,101 @@
+# =======================================================================
+# AUTO-GENERATED from data product contracts.  DO NOT EDIT.
+#
+# Regenerate:  python -m governance.contracts.dbt_test_generator --write
+# Check drift: python -m governance.contracts.dbt_test_generator --check
+# =======================================================================
+
+version: 2
+models:
+- name: slv_orders
+  description: 'Auto-generated dbt tests from data contract ''sales.orders'' v1.0.0. DO NOT EDIT -- regenerate with: python
+    -m governance.contracts.dbt_test_generator --write'
+  columns:
+  - name: order_sk
+    description: Surrogate key (md5 of order_id).  Generated in Silver per Archon task 310b5446.
+    tests:
+    - not_null
+    - unique
+  - name: order_id
+    description: Natural order identifier from the source system.
+  - name: customer_id
+    description: FK to sales.customers.customer_id.
+  - name: order_date
+    description: Date the order was placed.  Null rows are flagged, not filtered.
+  - name: total_amount
+    description: Order total in USD.  Negatives are flagged (is_valid=false) but retained for audit.
+    tests:
+    - not_null
+    - dbt_utils.expression_is_true:
+        expression: total_amount >= 0
+        config:
+          severity: warn
+  - name: status
+    description: Order lifecycle state.
+    tests:
+    - not_null
+    - accepted_values:
+        values:
+        - PENDING
+        - CONFIRMED
+        - SHIPPED
+        - PROCESSING
+        - DELIVERED
+        - CANCELLED
+        - RETURNED
+  - name: is_valid
+    description: True when every quality flag is clean.  Gold filters on this.
+    tests:
+    - not_null
+  - name: validation_errors
+    description: Human-readable '; '-joined list of validation failures, empty for valid rows.
+- name: slv_sales_metrics
+  description: 'Auto-generated dbt tests from data contract ''sales.sales_metrics'' v1.0.0. DO NOT EDIT -- regenerate with:
+    python -m governance.contracts.dbt_test_generator --write'
+  columns:
+  - name: order_date
+    description: Aggregation date.
+    tests:
+    - not_null
+  - name: sales_region
+    description: Geographic sales region.
+    tests:
+    - not_null
+  - name: sales_channel
+    description: Sales channel (e.g., online, retail).
+    tests:
+    - not_null
+  - name: total_orders
+    description: Count of distinct orders.
+    tests:
+    - not_null
+    - dbt_utils.expression_is_true:
+        expression: total_orders >= 0
+  - name: unique_customers
+    description: Count of distinct customers.
+    tests:
+    - not_null
+  - name: total_revenue
+    description: Sum of line totals (USD).
+    tests:
+    - not_null
+    - dbt_utils.expression_is_true:
+        expression: total_revenue >= 0
+        config:
+          severity: warn
+  - name: avg_line_value
+    description: Average line item value (USD).
+  - name: total_units_sold
+    description: Sum of quantities across all line items.
+    tests:
+    - not_null
+  - name: avg_unit_price
+    description: Average unit price across line items (USD).
+  - name: unique_products_sold
+    description: Count of distinct products sold.
+    tests:
+    - not_null
+  - name: revenue_per_order
+    description: Total revenue divided by total orders.
+  - name: units_per_order
+    description: Total units divided by total orders.

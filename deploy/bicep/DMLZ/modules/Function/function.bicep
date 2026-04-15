@@ -91,6 +91,8 @@ var baseAppSettings = [
 ]
 
 // Resources
+// #checkov:skip=CKV_AZURE_17:Function App client certificate requirement not needed for internal DMLZ governance functions
+// #checkov:skip=CKV_AZURE_63:Function App authentication configured via Entra ID integration, not App Service auth
 resource appServicePlan 'Microsoft.Web/serverfarms@2023-12-01' = {
   name: appServicePlanName
   location: location

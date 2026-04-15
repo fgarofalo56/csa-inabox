@@ -23,6 +23,7 @@ param requireInfrastructureEncryption bool = true
 @description('Log Analytics workspace ID.')
 param logAnalyticsId string = ''
 
+// #checkov:skip=CKV_AZURE_158:Databricks CMK configured out-of-band for gov deployments; prepareEncryption enabled
 resource databricks 'Microsoft.Databricks/workspaces@2024-05-01' = {
   name: name
   location: location

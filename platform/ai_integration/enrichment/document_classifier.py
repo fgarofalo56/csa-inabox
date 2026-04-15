@@ -287,7 +287,8 @@ class DocumentClassifier:
             response_format={"type": "json_object"},
         )
         raw_content = response.choices[0].message.content or "{}"
-        return json.loads(raw_content)
+        result: dict[str, Any] = json.loads(raw_content)
+        return result
 
     def classify_single(self, text: str) -> ClassificationResult:
         """Classify a single text document.

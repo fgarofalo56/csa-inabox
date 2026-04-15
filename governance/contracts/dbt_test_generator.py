@@ -1,7 +1,11 @@
 """Auto-generate dbt schema.yml tests from data product contracts.
 
 Reads every ``contract.yaml`` under ``domains/*/data-products/`` and
-produces a dbt-compatible ``schema.yml`` fragment for each data product.
+produces a dbt-compatible ``schema.yml`` fragment for each data product,
+grouped by domain.  Each domain gets its own generated schema file
+placed inside that domain's dbt project so cross-domain model collisions
+(e.g. ``sales.orders`` vs ``shared.orders``) are avoided.
+
 The generated tests map contract quality rules to native dbt test
 primitives:
 
@@ -21,16 +25,16 @@ Usage::
     # Preview what would be generated (stdout)
     python -m governance.contracts.dbt_test_generator --repo-root .
 
-    # Write / overwrite the auto-generated schema file
+    # Write / overwrite the auto-generated schema files (one per domain)
     python -m governance.contracts.dbt_test_generator --repo-root . --write
 
-    # Diff-check in CI (exit 1 if the generated file differs from what's on disk)
+    # Diff-check in CI (exit 1 if any generated file differs from what's on disk)
     python -m governance.contracts.dbt_test_generator --repo-root . --check
 
-The generated YAML is written to
-``domains/shared/dbt/models/silver/schema_contract_generated.yml`` and
-is meant to **complement** — not replace — the hand-written
-``schema.yml`` in the same directory.  The CI ``--check`` mode lets you
+The generated YAML files are written to
+``domains/<domain>/dbt/models/silver/schema_contract_generated.yml``
+and are meant to **complement** -- not replace -- the hand-written
+``schema.yml`` in each directory.  The CI ``--check`` mode lets you
 catch contract / schema drift early.
 """
 
@@ -39,6 +43,7 @@ from __future__ import annotations
 import argparse
 import difflib
 import sys
+from collections import defaultdict
 from io import StringIO
 from pathlib import Path
 from typing import Any
@@ -55,8 +60,10 @@ from governance.contracts.contract_validator import (
 
 logger = get_logger(__name__)
 
-# Where the generated schema file lives, relative to the repo root.
-_DEFAULT_OUTPUT = Path("domains/shared/dbt/models/silver/schema_contract_generated.yml")
+# Per-domain output path template, relative to the repo root.
+# Each domain gets its own generated schema file to avoid cross-project
+# model name collisions (e.g. sales.orders vs shared.orders).
+_DOMAIN_OUTPUT_TEMPLATE = "domains/{domain}/dbt/models/silver/schema_contract_generated.yml"
 
 
 # ---- Rule-to-dbt mapping ---------------------------------------------------
@@ -152,16 +159,22 @@ def _model_name_from_contract(contract: Contract) -> str:
 # ---- YAML generation -------------------------------------------------------
 
 
-def generate_schema_yml(contracts: list[Contract]) -> str:
+def generate_schema_yml(contracts: list[Contract], exclude_models: set[str] | None = None) -> str:
     """Render a dbt ``schema.yml`` string from a list of contracts.
 
     The output is a valid dbt schema file with ``version: 2`` and a
     ``models:`` section containing one entry per contract.
+
+    Models whose names appear in *exclude_models* are silently skipped
+    so that hand-written ``schema.yml`` definitions take precedence.
     """
     models: list[dict[str, Any]] = []
+    exclude = exclude_models or set()
 
     for contract in sorted(contracts, key=lambda c: c.name):
         model_name = _model_name_from_contract(contract)
+        if model_name in exclude:
+            continue
         col_tests = _build_column_tests(contract)
 
         columns: list[dict[str, Any]] = []
@@ -214,6 +227,39 @@ def generate_schema_yml(contracts: list[Contract]) -> str:
     return header + buf.getvalue()
 
 
+def group_contracts_by_domain(contracts: list[Contract]) -> dict[str, list[Contract]]:
+    """Group contracts by their domain name."""
+    by_domain: dict[str, list[Contract]] = defaultdict(list)
+    for contract in contracts:
+        by_domain[contract.domain].append(contract)
+    return dict(by_domain)
+
+
+def output_path_for_domain(repo_root: Path, domain: str) -> Path:
+    """Return the generated schema file path for a given domain."""
+    return repo_root / _DOMAIN_OUTPUT_TEMPLATE.format(domain=domain)
+
+
+def _read_handwritten_model_names(repo_root: Path, domain: str) -> set[str]:
+    """Return model names already defined in the hand-written schema.yml.
+
+    Models that have hand-written definitions should NOT be regenerated
+    by this tool -- the hand-written version takes precedence because it
+    typically includes richer column metadata (quality flags, etc.).
+    """
+    schema_path = repo_root / f"domains/{domain}/dbt/models/silver/schema.yml"
+    if not schema_path.exists():
+        return set()
+    try:
+        with open(schema_path) as f:
+            raw = yaml.safe_load(f)
+        if not raw or "models" not in raw:
+            return set()
+        return {m["name"] for m in raw["models"] if isinstance(m, dict) and "name" in m}
+    except Exception:
+        return set()
+
+
 # ---- CLI entry-point -------------------------------------------------------
 
 
@@ -227,32 +273,26 @@ def main(argv: list[str] | None = None) -> int:
         default=".",
         help="Repository root (default: cwd)",
     )
-    parser.add_argument(
-        "--output",
-        default=None,
-        help=f"Output path relative to repo root (default: {_DEFAULT_OUTPUT})",
-    )
     group = parser.add_mutually_exclusive_group()
     group.add_argument(
         "--write",
         action="store_true",
-        help="Write the generated schema file to disk",
+        help="Write the generated schema files to disk (one per domain)",
     )
     group.add_argument(
         "--check",
         action="store_true",
-        help="Exit non-zero if the generated file differs from what's on disk (CI mode)",
+        help="Exit non-zero if any generated file differs from what's on disk (CI mode)",
     )
     args = parser.parse_args(argv)
 
     configure_structlog(service="csa-dbt-test-generator")
     repo_root = Path(args.repo_root).resolve()
-    output_path = repo_root / (args.output or _DEFAULT_OUTPUT)
 
     contract_files = find_contracts(repo_root)
     if not contract_files:
         logger.info("dbt_test_gen.no_contracts_found", repo_root=str(repo_root))
-        print("No contracts found — nothing to generate.", file=sys.stderr)
+        print("No contracts found -- nothing to generate.", file=sys.stderr)
         return 0
 
     contracts: list[Contract] = []
@@ -273,45 +313,62 @@ def main(argv: list[str] | None = None) -> int:
             print(f"ERROR loading {path}: {exc}", file=sys.stderr)
             return 1
 
-    generated = generate_schema_yml(contracts)
+    # Group contracts by domain and generate per-domain schema files.
+    by_domain = group_contracts_by_domain(contracts)
 
     if args.write:
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(generated, encoding="utf-8")
-        logger.info(
-            "dbt_test_gen.written",
-            output=str(output_path),
-            models=len(contracts),
-        )
-        print(f"[OK] Written {output_path} ({len(contracts)} model(s))")
+        for domain, domain_contracts in sorted(by_domain.items()):
+            exclude = _read_handwritten_model_names(repo_root, domain)
+            generated = generate_schema_yml(domain_contracts, exclude_models=exclude)
+            out = output_path_for_domain(repo_root, domain)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(generated, encoding="utf-8")
+            logger.info(
+                "dbt_test_gen.written",
+                domain=domain,
+                output=str(out),
+                models=len(domain_contracts),
+                excluded=len(exclude),
+            )
+            print(f"[OK] Written {out} ({len(domain_contracts)} model(s), {len(exclude)} excluded)")
         return 0
 
     if args.check:
-        if not output_path.exists():
-            print(
-                f"[FAIL] {output_path} does not exist.  Run with --write to create it.",
-                file=sys.stderr,
-            )
-            return 1
-        existing = output_path.read_text(encoding="utf-8")
-        if existing == generated:
-            print(f"[OK] {output_path} is up to date")
-            return 0
-        diff = difflib.unified_diff(
-            existing.splitlines(keepends=True),
-            generated.splitlines(keepends=True),
-            fromfile=f"{output_path} (on disk)",
-            tofile=f"{output_path} (generated)",
-        )
-        sys.stderr.writelines(diff)
-        print(
-            f"\n[FAIL] {output_path} is out of date.  Run with --write to regenerate.",
-            file=sys.stderr,
-        )
-        return 1
+        has_drift = False
+        for domain, domain_contracts in sorted(by_domain.items()):
+            exclude = _read_handwritten_model_names(repo_root, domain)
+            generated = generate_schema_yml(domain_contracts, exclude_models=exclude)
+            out = output_path_for_domain(repo_root, domain)
+            if not out.exists():
+                print(
+                    f"[FAIL] {out} does not exist.  Run with --write to create it.",
+                    file=sys.stderr,
+                )
+                has_drift = True
+                continue
+            existing = out.read_text(encoding="utf-8")
+            if existing == generated:
+                print(f"[OK] {out} is up to date")
+            else:
+                diff = difflib.unified_diff(
+                    existing.splitlines(keepends=True),
+                    generated.splitlines(keepends=True),
+                    fromfile=f"{out} (on disk)",
+                    tofile=f"{out} (generated)",
+                )
+                sys.stderr.writelines(diff)
+                print(
+                    f"\n[FAIL] {out} is out of date.  Run with --write to regenerate.",
+                    file=sys.stderr,
+                )
+                has_drift = True
+        return 1 if has_drift else 0
 
     # Default: preview to stdout
-    print(generated)
+    for domain, domain_contracts in sorted(by_domain.items()):
+        exclude = _read_handwritten_model_names(repo_root, domain)
+        print(f"\n# === Domain: {domain} ===")
+        print(generate_schema_yml(domain_contracts, exclude_models=exclude))
     return 0
 
 

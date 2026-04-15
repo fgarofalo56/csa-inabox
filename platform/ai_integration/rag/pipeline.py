@@ -333,7 +333,7 @@ class EmbeddingGenerator:
 
             credential = AsyncDefaultAzureCredential()
             token_provider = get_bearer_token_provider(
-                credential,
+                credential,  # type: ignore[arg-type]  # Azure SDK async credential; type stubs expect sync
                 "https://cognitiveservices.azure.com/.default",
             )
             async_client = AsyncAzureOpenAI(
@@ -717,16 +717,15 @@ class RAGPipeline:
                 api_key=self.embedder.api_key,
                 api_version=self.embedder.api_version,
             )
-        else:
-            from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+        from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 
-            credential = DefaultAzureCredential()
-            token_provider = get_bearer_token_provider(credential, "https://cognitiveservices.azure.com/.default")
-            return AzureOpenAI(
-                azure_endpoint=self.embedder.endpoint,
-                azure_ad_token_provider=token_provider,
-                api_version=self.embedder.api_version,
-            )
+        credential = DefaultAzureCredential()
+        token_provider = get_bearer_token_provider(credential, "https://cognitiveservices.azure.com/.default")
+        return AzureOpenAI(
+            azure_endpoint=self.embedder.endpoint,
+            azure_ad_token_provider=token_provider,
+            api_version=self.embedder.api_version,
+        )
 
     # -- Ingestion ----------------------------------------------------------
 

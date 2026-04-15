@@ -294,7 +294,7 @@ async def list_products(
     summaries = [DataProductSummary.from_product(p) for p in products]
 
     return PaginatedResponse(
-        items=summaries,  # type: ignore[arg-type]
+        items=summaries,
         total=total,
         page=page,
         per_page=per_page,
@@ -388,7 +388,7 @@ async def create_access_request(
 
     access_request = AccessRequest(
         id=str(uuid.uuid4()),
-        product_id=body.product_id,
+        productId=body.product_id,
         requester=body.requester,
         requested_role=body.requested_role,
         justification=body.justification,

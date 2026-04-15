@@ -7,6 +7,7 @@ pipeline templates, and outputs deployable ARM/Bicep templates.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import uuid
 from dataclasses import dataclass
@@ -227,6 +228,7 @@ class PipelineGenerator:
         Raises:
             SchemaDetectionError: If schema detection fails
         """
+        _ = connection_test  # Accepted but unused for now
         source_type = source_config["source_type"]
         logger.info("Starting schema detection", source_type=source_type, source_id=source_config.get("source_id"))
 
@@ -580,7 +582,7 @@ class PipelineGenerator:
                 file_format = "parquet"
             elif file_path.endswith(".csv"):
                 file_format = "csv"
-            elif file_path.endswith(".json") or file_path.endswith(".jsonl"):
+            elif file_path.endswith((".json", ".jsonl")):
                 file_format = "json"
             else:
                 file_format = "csv"  # Default assumption
@@ -600,7 +602,7 @@ class PipelineGenerator:
                 ]
                 row_count = table.num_rows
             except ImportError:
-                raise SchemaDetectionError("pyarrow is required for Parquet schema detection")
+                raise SchemaDetectionError("pyarrow is required for Parquet schema detection") from None
             except Exception as exc:
                 raise SchemaDetectionError(f"Failed to parse Parquet: {exc}") from exc
 
@@ -676,7 +678,6 @@ class PipelineGenerator:
 
     def _detect_stream_schema(self, source_config: dict[str, Any]) -> SourceDetectionResult:
         """Detect schema by consuming sample events from Event Hub or Kafka."""
-        import json as json_module
 
         source_type = source_config.get("source_type", "event_hub")
 
@@ -697,7 +698,7 @@ class PipelineGenerator:
 
             samples: list[dict[str, Any]] = []
 
-            def on_event(partition_context, event):
+            def on_event(_partition_context, event):
                 if event and len(samples) < sample_count:
                     try:
                         body = event.body_as_json()
@@ -706,7 +707,7 @@ class PipelineGenerator:
                     except (ValueError, TypeError):
                         pass  # Skip non-JSON events
                 if len(samples) >= sample_count:
-                    raise StopIteration()  # Signal to stop
+                    raise StopIteration  # Signal to stop
 
             try:
                 fqns = f"{namespace}.servicebus.windows.net"
@@ -716,11 +717,8 @@ class PipelineGenerator:
                     consumer_group=consumer_group,
                     credential=DefaultAzureCredential(),
                 )
-                with client:
-                    try:
-                        client.receive(on_event=on_event, starting_position="-1", max_wait_time=10)
-                    except StopIteration:
-                        pass
+                with client, contextlib.suppress(StopIteration):
+                    client.receive(on_event=on_event, starting_position="-1", max_wait_time=10)
             except Exception as exc:
                 raise SchemaDetectionError(f"Event Hub connection failed: {exc}") from exc
 
@@ -758,8 +756,7 @@ class PipelineGenerator:
                 recommended_watermark_columns={hub_name: ["enqueuedTime", "timestamp"]},
             )
 
-        else:
-            raise SchemaDetectionError(f"Stream schema detection not yet implemented for {source_type}")
+        raise SchemaDetectionError(f"Stream schema detection not yet implemented for {source_type}")
 
     def select_template(self, source_type: str, ingestion_mode: str) -> str:
         """Select appropriate pipeline template.

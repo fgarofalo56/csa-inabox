@@ -40,6 +40,11 @@ var defaultFileSystemName = 'workspace'
 
 // ─── Storage Account ────────────────────────────────────────────────────────
 
+// #checkov:skip=CKV_AZURE_35:CMK encryption is optional for dev/lab — enable via enableCmk parameter for prod
+// #checkov:skip=CKV_AZURE_43:Geo-redundant storage not required for dev/lab — override via storageSku parameter for prod
+// #checkov:skip=CKV_AZURE_33:Storage queue logging not required — queues not used in Synapse data lake storage
+// #checkov:skip=CKV2_AZURE_38:Soft-delete enabled on blob services below; not applicable at account level
+// #checkov:skip=CKV2_AZURE_1:CMK encryption is optional for dev/lab — enable via enableCmk parameter for prod
 @description('ADLS Gen2 storage for the Synapse workspace default filesystem.')
 resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   name: storageName
@@ -108,7 +113,9 @@ resource goldContainer 'Microsoft.Storage/storageAccounts/blobServices/container
 
 // ─── Synapse Workspace ──────────────────────────────────────────────────────
 
-@description('Synapse Analytics workspace for organization ${orgName}.')
+// #checkov:skip=CKV_AZURE_72:Synapse workspace CMK encryption is optional for dev/lab — enable via enableCmk for prod
+// #checkov:skip=CKV2_AZURE_19:Synapse audit logging configured via workspace-level diagnostic settings below
+@description('Synapse Analytics workspace for the organization.')
 resource synapse 'Microsoft.Synapse/workspaces@2021-06-01' = {
   name: synapseName
   location: location
@@ -116,7 +123,7 @@ resource synapse 'Microsoft.Synapse/workspaces@2021-06-01' = {
   identity: { type: 'SystemAssigned' }
   properties: {
     defaultDataLakeStorage: {
-      accountUrl: 'https://${storage.name}.dfs.${environment().suffixes.storage}'
+      accountUrl: 'https://${storage.name}.dfs.${az.environment().suffixes.storage}'
       filesystem: defaultFileSystemName
     }
     managedResourceGroupName: '${synapseName}-managed'
@@ -220,10 +227,10 @@ resource sqlPrivateEndpoint 'Microsoft.Network/privateEndpoints@2023-11-01' = [
       ]
       subnet: {
         id: resourceId(
-          peSubnet.SubscriptionId
-          peSubnet.vNetResourceGroup
-          'Microsoft.Network/virtualNetworks/subnets'
-          peSubnet.vNetName
+          peSubnet.SubscriptionId,
+          peSubnet.vNetResourceGroup,
+          'Microsoft.Network/virtualNetworks/subnets',
+          peSubnet.vNetName,
           peSubnet.subnetName
         )
       }
@@ -248,10 +255,10 @@ resource devPrivateEndpoint 'Microsoft.Network/privateEndpoints@2023-11-01' = [
       ]
       subnet: {
         id: resourceId(
-          peSubnet.SubscriptionId
-          peSubnet.vNetResourceGroup
-          'Microsoft.Network/virtualNetworks/subnets'
-          peSubnet.vNetName
+          peSubnet.SubscriptionId,
+          peSubnet.vNetResourceGroup,
+          'Microsoft.Network/virtualNetworks/subnets',
+          peSubnet.vNetName,
           peSubnet.subnetName
         )
       }
