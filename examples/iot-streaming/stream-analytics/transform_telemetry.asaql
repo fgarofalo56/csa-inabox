@@ -6,7 +6,20 @@
 -- Input:  TelemetryInput (Event Hub — JSON)
 -- Output: RawStorageOutput (ADLS Gen2 — Parquet, Bronze layer)
 --         EnrichedOutput   (ADLS Gen2 — Parquet, Silver layer)
+--         DeadLetterOutput (ADLS Gen2 — malformed rows for investigation)
 -- ═══════════════════════════════════════════════════════════════
+
+-- ─── Dead-letter: capture rows where CAST fails (malformed data) ──
+-- Routes rows with unparseable timestamps or out-of-range sensor values
+-- to a dead-letter sink for investigation and reprocessing.
+SELECT
+    *,
+    System.Timestamp()                AS error_time,
+    'CAST_FAILURE'                    AS error_reason
+INTO [DeadLetterOutput]
+FROM [TelemetryInput]
+WHERE TRY_CAST(timestamp AS datetime) IS NULL
+  AND timestamp IS NOT NULL;
 
 -- ─── Raw passthrough to Bronze storage ───────────────────────
 -- Preserves all original fields plus processing metadata.

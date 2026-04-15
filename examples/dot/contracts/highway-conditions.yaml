@@ -5,12 +5,137 @@ metadata:
   domain: transportation
   owner: DOT Analytics Team
   version: "1.0.0"
+  description: >
+    Highway infrastructure condition analytics from the National Bridge
+    Inventory (NBI) and pavement condition data. Provides bridge condition
+    ratings, sufficiency scoring, pavement roughness (IRI), and structural
+    assessment for federal-aid highways. Used for infrastructure planning,
+    maintenance prioritization, and federal funding allocation.
   classification: public
   tags:
     - infrastructure
     - bridges
     - nbi
     - pavement
+
+schema:
+  primary_key: [structure_number, year]
+  columns:
+    - name: structure_number
+      type: string
+      nullable: false
+      description: NBI structure identifier (unique per bridge)
+
+    - name: route_number
+      type: string
+      nullable: false
+      description: Route designator (e.g., I-95, US-1)
+
+    - name: state_code
+      type: integer
+      nullable: false
+      description: FIPS state code
+
+    - name: state_name
+      type: string
+      nullable: false
+      description: Full state name
+
+    - name: county_name
+      type: string
+      nullable: false
+      description: County name
+
+    - name: year
+      type: integer
+      nullable: false
+      description: Inspection/reporting year
+
+    - name: deck_cond
+      type: integer
+      nullable: true
+      description: NBI deck condition rating (0-9, 9 = excellent)
+
+    - name: superstructure_cond
+      type: integer
+      nullable: true
+      description: NBI superstructure condition rating (0-9)
+
+    - name: substructure_cond
+      type: integer
+      nullable: true
+      description: NBI substructure condition rating (0-9)
+
+    - name: sufficiency_rating
+      type: decimal(5,1)
+      nullable: true
+      description: >
+        NBI sufficiency rating (0-100). Bridges below 50 are eligible
+        for federal replacement; below 80 for rehabilitation.
+
+    - name: adt
+      type: integer
+      nullable: true
+      description: Average Daily Traffic count
+
+    - name: iri
+      type: decimal(8,2)
+      nullable: true
+      description: International Roughness Index (inches/mile)
+
+    - name: status
+      type: string
+      nullable: true
+      description: Structure operational status (A = Active, etc.)
+
+    - name: report_date
+      type: date
+      nullable: false
+      description: Date when analytics were generated
+
+sla:
+  freshness_minutes: 525600  # Annual updates
+  valid_row_ratio: 0.95
+  supported_until: "2027-12-31"
+  update_frequency: "Annual, aligned with NBI submission cycle"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: structure_number
+  - rule: expect_column_values_to_not_be_null
+    column: state_code
+  - rule: expect_column_values_to_not_be_null
+    column: year
+  - rule: expect_column_values_to_be_between
+    column: deck_cond
+    min_value: 0
+    max_value: 9
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: superstructure_cond
+    min_value: 0
+    max_value: 9
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: substructure_cond
+    min_value: 0
+    max_value: 9
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: sufficiency_rating
+    min_value: 0
+    max_value: 100
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: iri
+    min_value: 0
+    max_value: 1000
+    mostly: 0.95
+  - rule: expect_column_values_to_be_between
+    column: year
+    min_value: 2010
+    max_value: 2030
+
 spec:
   description: >
     Highway infrastructure condition analytics from the National Bridge

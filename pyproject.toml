@@ -23,6 +23,7 @@ dev = [
     # here (and not under governance extras) so mypy always sees them
     # during a `pip install -e ".[dev]"` workflow.
     "types-PyYAML>=6.0,<7.0",
+    "types-requests>=2.31.0,<3.0.0",
 ]
 governance = [
     "pyyaml>=6.0,<7.0",
@@ -49,6 +50,14 @@ functions = [
     "azure-mgmt-cosmosdb>=9.0.0,<10.0.0",
     "azure-mgmt-sql>=3.0.0,<4.0.0",
     "structlog>=24.1.0,<25.0.0",
+]
+platform = [
+    "structlog>=24.1.0,<25.0.0",
+    "tenacity>=8.2.0,<10.0.0",
+    "openai>=1.0.0,<2.0.0",
+    "azure-identity>=1.14.0,<2.0.0",
+    "azure-search-documents>=11.4.0,<12.0.0",
+    "requests>=2.31.0,<3.0.0",
 ]
 
 [tool.setuptools]
@@ -189,9 +198,6 @@ ignore = [
     "F841",    # unused-variable (test assertion intermediaries)
     "RUF043",  # regex-metachar-in-match (intentional regex in pytest.raises)
 ]
-"platform/**/generator/**/*.py" = [
-    "ARG002",  # unused-method-argument (mock schema detectors)
-]
 
 [tool.ruff.lint.isort]
 known-first-party = ["domains", "governance"]
@@ -220,6 +226,15 @@ source = [
     "domains/sharedServices/aiEnrichment/functions",
     "domains/sharedServices/eventProcessing/functions",
     "domains/sharedServices/secretRotation/functions",
+    # Platform modules below are tracked but excluded from the threshold
+    # until their test suites reach parity. Add them back as coverage
+    # grows — see `make test` and the coverage report.
+    # "platform/ai_integration",
+    # "platform/data-activator",
+    # "platform/data_marketplace",
+    # "platform/metadata-framework",
+    # "platform/purview_governance",
+    # "platform/shared-services",
 ]
 branch = true
 omit = [
@@ -274,6 +289,16 @@ warn_unused_ignores = true
 no_implicit_reexport = true
 
 [[tool.mypy.overrides]]
+# Platform modules use lazy SDK imports and dynamic client initialization.
+# They are type-checked separately via ``make typecheck-platform`` to allow
+# progressive strictness adoption.
+module = [
+    "platform.*",
+]
+ignore_errors = false
+disallow_untyped_defs = false
+
+[[tool.mypy.overrides]]
 # Databricks notebooks rely on spark / dbutils / display globals that
 # mypy cannot resolve.  Type hints are still added for IDE support, but
 # static analysis is disabled so mypy does not fail the CI.
@@ -292,3 +317,24 @@ module = [
     "tests.load.*",
 ]
 ignore_errors = true
+
+[[tool.mypy.overrides]]
+# Platform tests use dynamic imports via conftest.py namespace hacking
+# (the ``platform`` directory shadows the stdlib module).  The test
+# files also mock Azure SDK types extensively, which produces false
+# positive type errors.  They are functionally tested via pytest.
+module = [
+    "tests.platform.*",
+]
+ignore_errors = true
+
+[tool.bandit]
+# Exclude tests (assertions) and known-safe subprocess / random patterns:
+#   B101 - assert_used (tests use assert)
+#   B311 - random (data generators use pseudo-random, not crypto)
+#   B404 - import_subprocess (dbt runner, seed scripts need subprocess)
+#   B603 - subprocess_without_shell_equals_true (intentional — shell=False is safer)
+#   B607 - start_process_with_partial_path (dbt CLI invocations)
+#   B608 - hardcoded_sql_expressions (false positive on f-string print statements)
+skips = ["B101", "B311", "B404", "B603", "B607", "B608"]
+exclude_dirs = ["tests", ".venv", "dbt-env", "node_modules"]

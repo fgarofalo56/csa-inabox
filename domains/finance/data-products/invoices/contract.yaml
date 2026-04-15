@@ -1,4 +1,4 @@
-# Data product contract — finance.invoices
+# Data product contract -- finance.invoices
 #
 # This file is the authoritative interface between the finance domain
 # and its consumers.  It declares the schema, SLAs, and quality rules

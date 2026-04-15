@@ -1,3 +1,5 @@
+-- materialized='table': Full rebuild required — this model aggregates across
+-- the entire dataset without a reliable incremental key.
 {{
   config(
     materialized='table',

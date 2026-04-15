@@ -2,7 +2,8 @@
     materialized='incremental',
     unique_key=['state_fips', 'naics_sector', 'year', 'quarter'],
     merge_exclude_columns=['_dbt_loaded_at'],
-    tags=['bronze', 'bea', 'gdp']
+    tags=['bronze', 'bea', 'gdp'],
+    on_schema_change='fail'
 ) }}
 
 {#

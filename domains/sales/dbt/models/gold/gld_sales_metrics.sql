@@ -1,8 +1,11 @@
 {{
     config(
-        materialized='table',
+        materialized='incremental',
+        unique_key=['order_date', 'sales_region', 'sales_channel'],
+        incremental_strategy='merge',
         file_format='delta',
-        tags=['gold', 'sales', 'metrics']
+        tags=['gold', 'sales', 'metrics'],
+        on_schema_change='fail'
     )
 }}
 
@@ -14,6 +17,9 @@
 with orders as (
     select * from {{ ref('slv_sales_orders') }}
     where is_valid = true
+    {% if is_incremental() %}
+      and order_date > (select max(order_date) from {{ this }})
+    {% endif %}
 ),
 
 daily_metrics as (

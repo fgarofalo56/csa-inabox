@@ -21,6 +21,8 @@ param logAnalyticsWorkspaceId string = ''
 var keyVaultPrivateEndpointName = '${keyVault.name}-private-endpoint'
 
 // Resources
+// #checkov:skip=CKV_AZURE_110:Key Vault secret expiration managed via operational process, not resource policy
+// #checkov:skip=CKV_AZURE_112:Key Vault key expiration managed via operational process, not resource policy
 resource keyVault 'Microsoft.KeyVault/vaults@2024-11-01' = {
   name: keyvaultName
   location: location

@@ -2,7 +2,8 @@
     materialized='incremental',
     unique_key=['site_id', 'measurement_date', 'parameter_code'],
     merge_exclude_columns=['_dbt_loaded_at'],
-    tags=['bronze', 'usgs', 'water', 'hydrology']
+    tags=['bronze', 'usgs', 'water', 'hydrology'],
+    on_schema_change='fail'
 ) }}
 
 {#

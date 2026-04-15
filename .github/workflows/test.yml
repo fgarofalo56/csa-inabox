@@ -14,7 +14,7 @@ concurrency:
 
 permissions:
   contents: read
-  # Needed by py-cov-action to post/update the coverage comment on PRs.
+  # Needed to post/update coverage and summary comments on PRs.
   pull-requests: write
 
 jobs:
@@ -52,7 +52,7 @@ jobs:
 
       - name: Security scan with Bandit
         run: |
-          bandit -r governance/ domains/ scripts/ --skip B101
+          bandit -r governance/ domains/ scripts/ -c pyproject.toml
 
       - name: Typecheck with mypy (strict)
         run: |
@@ -92,13 +92,29 @@ jobs:
             htmlcov/
           retention-days: 14
 
-      - name: Post coverage comment on PR
-        if: github.event_name == 'pull_request'
-        uses: py-cov-action/python-coverage-comment-action@4c2eefcda8b94596768855a80ac94edc61aba669 # v3
+      - name: Coverage summary
+        if: github.event_name == 'pull_request' && matrix.python-version == '3.11'
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          MINIMUM_GREEN: 80
-          MINIMUM_ORANGE: 60
+          script: |
+            const fs = require('fs');
+            const xml = fs.readFileSync('coverage.xml', 'utf8');
+            const match = xml.match(/line-rate="([\d.]+)"/);
+            const pct = match ? (parseFloat(match[1]) * 100).toFixed(1) : 'N/A';
+            const body = `## 📊 Coverage Report\n\nLine coverage: **${pct}%**\n\n> Full report available in the [coverage artifact](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}).`;
+
+            const marker = '## 📊 Coverage Report';
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find(c => c.body?.startsWith(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body });
+            }
 
   dbt-compile:
     name: dbt Compile (${{ matrix.domain }})
@@ -184,13 +200,13 @@ jobs:
         run: dbt deps || echo "dbt deps skipped (no packages)"
 
       - name: dbt seed
-        run: dbt seed --target ci
+        run: dbt seed --target ci --profiles-dir ~/.dbt
 
       - name: dbt run
-        run: dbt run --target ci
+        run: dbt run --target ci --profiles-dir ~/.dbt
 
       - name: dbt test
-        run: dbt test --target ci
+        run: dbt test --target ci --profiles-dir ~/.dbt
 
   pr-summary:
     name: PR Summary

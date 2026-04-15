@@ -2,7 +2,8 @@
     materialized='incremental',
     unique_key='tri_report_sk',
     merge_exclude_columns=['_dbt_loaded_at'],
-    tags=['silver', 'toxic_releases', 'cleaned']
+    tags=['silver', 'toxic_releases', 'cleaned'],
+    on_schema_change='fail'
 ) }}
 
 {#

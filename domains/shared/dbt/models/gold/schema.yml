@@ -30,6 +30,9 @@ models:
         tests:
           - unique
           - not_null
+          - relationships:
+              to: ref('dim_customers')
+              field: customer_id
       - name: customer_segment
         description: "Activity-based segment: active, at_risk, churned, never_purchased"
         tests:
@@ -113,6 +116,11 @@ models:
         description: Natural order identifier.
         tests:
           - not_null
+          - relationships:
+              to: ref('slv_orders')
+              field: order_id
+              config:
+                severity: warn
       - name: customer_sk
         description: FK to dim_customers.
         tests:

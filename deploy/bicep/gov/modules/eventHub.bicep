@@ -32,6 +32,7 @@ param zoneRedundant bool = false
 @description('Log Analytics workspace ID.')
 param logAnalyticsId string = ''
 
+// #checkov:skip=CKV_AZURE_224:Event Hubs CMK configured out-of-band for gov deployments
 resource eventHubNamespace 'Microsoft.EventHub/namespaces@2024-01-01' = {
   name: name
   location: location

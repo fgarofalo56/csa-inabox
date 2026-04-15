@@ -1,4 +1,4 @@
-"""Tests for scripts/Azure IPs/parseIPs.py — IP prefix parsing and merging."""
+"""Tests for scripts/azure-ips/parseIPs.py — IP prefix parsing and merging."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import pytest
 from tests.conftest import load_script_module
 
 # Load parseIPs as a module since it's in a directory with spaces (not a package).
-_SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "Azure IPs" / "parseIPs.py"
+_SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "azure-ips" / "parseIPs.py"
 _mod = load_script_module("parseIPs", _SCRIPT_PATH)
 
 extract_address_prefixes = _mod.extract_address_prefixes

@@ -28,13 +28,15 @@ Usage::
 
 from __future__ import annotations
 
-import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-logger = logging.getLogger(__name__)
+from governance.common.logging import configure_structlog, get_logger
+
+configure_structlog(service="shortcut-manager")
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------

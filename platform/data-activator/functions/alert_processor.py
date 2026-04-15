@@ -13,7 +13,6 @@ Deployment: Azure Functions v4, Python 3.11, HTTP trigger.
 from __future__ import annotations
 
 import json
-import logging
 import os
 import statistics
 from dataclasses import dataclass, field
@@ -23,6 +22,8 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+
+from governance.common.logging import configure_structlog, get_logger
 
 try:
     import azure.functions as func
@@ -34,7 +35,8 @@ try:
 except ImportError:
     requests = None  # type: ignore[assignment]
 
-logger = logging.getLogger(__name__)
+configure_structlog(service="alert-processor")
+logger = get_logger(__name__)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -148,9 +150,9 @@ def load_alert_rules(rules_dir: Path | str) -> list[AlertRule]:
         try:
             rule = _parse_rule_file(yaml_path)
             rules.append(rule)
-            logger.info("Loaded alert rule: %s from %s", rule.name, yaml_path.name)
+            logger.info("alert_rule.loaded", rule_name=rule.name, file=yaml_path.name)
         except Exception:
-            logger.exception("Failed to load alert rule from %s", yaml_path)
+            logger.exception("alert_rule.load_failed", file=str(yaml_path))
             raise
     return rules
 
@@ -247,7 +249,7 @@ def _evaluate_condition(event: dict[str, Any], condition: dict[str, Any]) -> boo
     if operator == "contains":
         return expected in str(actual)
 
-    logger.warning("Unknown operator: %s", operator)
+    logger.warning("unknown_operator", operator=operator)
     return False
 
 
@@ -728,13 +730,13 @@ def send_teams_notification(
         resp = requests.post(webhook_url, json=payload, timeout=10)
         resp.raise_for_status()
         logger.info(
-            "Teams notification sent for %s (severity=%s)",
-            evaluation.rule_name,
-            evaluation.severity.value,
+            "teams.notification_sent",
+            rule_name=evaluation.rule_name,
+            severity=evaluation.severity.value,
         )
         return True
     except Exception:
-        logger.exception("Failed to send Teams notification for %s", evaluation.rule_name)
+        logger.exception("teams.notification_failed", rule_name=evaluation.rule_name)
         return False
 
 
@@ -797,10 +799,10 @@ def send_pagerduty_notification(
             timeout=10,
         )
         resp.raise_for_status()
-        logger.info("PagerDuty event sent for %s", evaluation.rule_name)
+        logger.info("pagerduty.event_sent", rule_name=evaluation.rule_name)
         return True
     except Exception:
-        logger.exception("Failed to send PagerDuty event for %s", evaluation.rule_name)
+        logger.exception("pagerduty.event_failed", rule_name=evaluation.rule_name)
         return False
 
 
@@ -826,9 +828,9 @@ def send_email_notification(
         },
     )
     logger.info(
-        "Email notification queued for %s → %s",
-        evaluation.rule_name,
-        recipients,
+        "email.notification_queued",
+        rule_name=evaluation.rule_name,
+        recipients=recipients,
     )
     # Actual sending is delegated to the Logic App
     return True
@@ -873,10 +875,10 @@ def send_logic_app_notification(
     try:
         resp = requests.post(trigger_url, json=payload, timeout=15)
         resp.raise_for_status()
-        logger.info("Logic App triggered for %s", evaluation.rule_name)
+        logger.info("logic_app.triggered", rule_name=evaluation.rule_name)
         return True
     except Exception:
-        logger.exception("Failed to trigger Logic App for %s", evaluation.rule_name)
+        logger.exception("logic_app.trigger_failed", rule_name=evaluation.rule_name)
         return False
 
 
@@ -913,17 +915,17 @@ def dispatch_actions(
         # Check severity filter
         if action.severity_filter and evaluation.severity.value not in action.severity_filter:
             logger.debug(
-                "Skipping %s action for %s (severity %s not in filter %s)",
-                action.type,
-                evaluation.rule_name,
-                evaluation.severity.value,
-                action.severity_filter,
+                "action.skipped_severity_filter",
+                action_type=action.type,
+                rule_name=evaluation.rule_name,
+                severity=evaluation.severity.value,
+                severity_filter=action.severity_filter,
             )
             continue
 
         dispatcher = _ACTION_DISPATCHERS.get(action.type)
         if dispatcher is None:
-            logger.warning("Unknown action type: %s", action.type)
+            logger.warning("unknown_action_type", action_type=action.type)
             results[action.type] = False
             continue
 
@@ -953,10 +955,10 @@ def _is_suppressed(rule: AlertRule, event: dict[str, Any]) -> bool:
         elapsed = (datetime.now(timezone.utc) - last_fired).total_seconds() / 60.0
         if elapsed < rule.suppression.cooldown_minutes:
             logger.debug(
-                "Alert %s suppressed (%.1f min < %d min cooldown)",
-                rule.name,
-                elapsed,
-                rule.suppression.cooldown_minutes,
+                "alert.suppressed",
+                rule_name=rule.name,
+                elapsed_min=elapsed,
+                cooldown_min=rule.suppression.cooldown_minutes,
             )
             return True
 
@@ -1055,9 +1057,9 @@ def _get_rules() -> list[AlertRule]:
     if _RULES is None:
         try:
             _RULES = load_alert_rules(_RULES_DIR)
-            logger.info("Loaded %d alert rules from %s", len(_RULES), _RULES_DIR)
+            logger.info("alert_rules.loaded", count=len(_RULES), rules_dir=str(_RULES_DIR))
         except FileNotFoundError:
-            logger.warning("Alert rules directory not found: %s", _RULES_DIR)
+            logger.warning("alert_rules.directory_not_found", rules_dir=str(_RULES_DIR))
             _RULES = []
     return _RULES
 
@@ -1121,10 +1123,10 @@ if func is not None:
 
         fired_count = sum(1 for e in all_evaluations if e["fired"])
         logger.info(
-            "Processed %d event(s): %d evaluation(s), %d fired",
-            len(events),
-            len(all_evaluations),
-            fired_count,
+            "events.processed",
+            event_count=len(events),
+            evaluation_count=len(all_evaluations),
+            fired_count=fired_count,
         )
 
         return func.HttpResponse(

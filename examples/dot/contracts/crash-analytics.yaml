@@ -5,12 +5,137 @@ metadata:
   domain: transportation
   owner: DOT Analytics Team
   version: "1.0.0"
+  description: >
+    Highway crash analysis with severity scoring and hotspot identification.
+    Derived from NHTSA FARS data, this product provides crash clustering by
+    geographic grid cell, contributing factor analysis, and year-over-year
+    trend tracking. All data is public domain and covers fatal crashes only.
   classification: public
   tags:
     - safety
     - nhtsa
     - fars
     - geospatial
+
+schema:
+  primary_key: [crash_id]
+  columns:
+    - name: crash_id
+      type: string
+      nullable: false
+      description: Unique crash identifier (FARS ST_CASE + state code)
+
+    - name: state_code
+      type: integer
+      nullable: false
+      description: FARS numeric state code (1-56)
+
+    - name: crash_date
+      type: date
+      nullable: false
+      description: Date of the crash event
+
+    - name: crash_year
+      type: integer
+      nullable: false
+      description: Year of the crash
+
+    - name: fatality_count
+      type: integer
+      nullable: false
+      description: Number of fatalities in the crash
+
+    - name: severity_score
+      type: decimal(8,2)
+      nullable: false
+      description: >
+        Composite severity score weighted by fatalities (10x),
+        alcohol involvement (5x), pedestrian involvement (3x),
+        and vehicle count (1x)
+
+    - name: weather_category
+      type: string
+      nullable: false
+      description: Decoded weather condition (CLEAR, RAIN, SNOW, etc.)
+
+    - name: light_category
+      type: string
+      nullable: false
+      description: Decoded light condition (DAYLIGHT, DARK_LIGHTED, etc.)
+
+    - name: latitude
+      type: decimal(9,6)
+      nullable: true
+      description: Crash location latitude (WGS84), validated within US bounds
+
+    - name: longitude
+      type: decimal(9,6)
+      nullable: true
+      description: Crash location longitude (WGS84), validated within US bounds
+
+    - name: grid_cell_id
+      type: string
+      nullable: true
+      description: Geographic grid cell identifier (0.1-degree resolution) for hotspot clustering
+
+    - name: is_alcohol_related
+      type: boolean
+      nullable: true
+      description: Whether the crash involved an alcohol-impaired driver
+
+    - name: is_pedestrian_involved
+      type: boolean
+      nullable: true
+      description: Whether the crash involved a pedestrian
+
+    - name: report_date
+      type: date
+      nullable: false
+      description: Date when analytics were generated
+
+sla:
+  freshness_minutes: 43200  # Monthly updates
+  valid_row_ratio: 0.95
+  supported_until: "2027-12-31"
+  update_frequency: "Monthly, with ~12-month lag for FARS final data"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: crash_id
+  - rule: expect_column_values_to_not_be_null
+    column: state_code
+  - rule: expect_column_values_to_not_be_null
+    column: crash_date
+  - rule: expect_column_values_to_not_be_null
+    column: fatality_count
+  - rule: expect_column_values_to_be_between
+    column: fatality_count
+    min_value: 1
+    max_value: 100
+  - rule: expect_column_values_to_be_between
+    column: severity_score
+    min_value: 0
+    max_value: 10000
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: state_code
+    min_value: 1
+    max_value: 56
+  - rule: expect_column_values_to_be_between
+    column: latitude
+    min_value: 17.0
+    max_value: 72.0
+    mostly: 0.85
+  - rule: expect_column_values_to_be_between
+    column: longitude
+    min_value: -180.0
+    max_value: -60.0
+    mostly: 0.85
+  - rule: expect_column_values_to_be_between
+    column: crash_year
+    min_value: 2010
+    max_value: 2030
+
 spec:
   description: >
     Highway crash analysis with severity scoring and hotspot identification.

@@ -59,6 +59,8 @@ param parCmkIdentityId string = ''
 param purviewAccountId string = ''
 
 // Resources
+// #checkov:skip=CKV_AZURE_103:Data Factory CMK encryption is optional for dev/lab — enable via parEnableCmk for prod
+// #checkov:skip=CKV_AZURE_104:Data Factory source control integration configured out-of-band, not in IaC
 resource dataFactory 'Microsoft.DataFactory/factories@2018-06-01' = {
   name: factoryName
   location: location

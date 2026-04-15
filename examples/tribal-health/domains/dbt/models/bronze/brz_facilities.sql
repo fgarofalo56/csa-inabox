@@ -2,7 +2,8 @@
     materialized='incremental',
     unique_key=['facility_id'],
     merge_exclude_columns=['_dbt_loaded_at'],
-    tags=['bronze', 'facilities', 'reference', 'hipaa']
+    tags=['bronze', 'facilities', 'reference', 'hipaa'],
+    on_schema_change='fail'
 ) }}
 
 /*

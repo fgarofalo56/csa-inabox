@@ -2,7 +2,8 @@
     materialized='incremental',
     unique_key=['station_id', 'observation_datetime'],
     merge_exclude_columns=['_dbt_loaded_at'],
-    tags=['bronze', 'ndbc', 'ocean_buoys']
+    tags=['bronze', 'ndbc', 'ocean_buoys'],
+    on_schema_change='fail'
 ) }}
 
 {#

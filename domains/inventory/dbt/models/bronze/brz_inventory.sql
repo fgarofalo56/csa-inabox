@@ -4,7 +4,8 @@
     unique_key='inventory_id',
     incremental_strategy='merge',
     file_format='delta',
-    tags=['bronze', 'inventory']
+    tags=['bronze', 'inventory'],
+    on_schema_change='fail'
   )
 }}
 

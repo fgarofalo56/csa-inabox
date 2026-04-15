@@ -62,6 +62,7 @@ var openAiPrivateEndpointName = '${openAiName}-private-endpoint'
 var effectiveSubDomainName = !empty(customSubDomainName) ? customSubDomainName : openAiName
 
 // Resources
+// #checkov:skip=CKV_AZURE_236:OpenAI CMK encryption is optional for dev/lab — enable via parEnableCmk for prod
 resource openAi 'Microsoft.CognitiveServices/accounts@2024-10-01' = {
   name: openAiName
   location: location

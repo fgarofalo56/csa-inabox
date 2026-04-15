@@ -22,7 +22,6 @@ Usage::
 from __future__ import annotations
 
 import json
-import logging
 import os
 import smtplib
 from abc import ABC, abstractmethod
@@ -31,7 +30,10 @@ from dataclasses import field as dataclass_field
 from email.message import EmailMessage
 from typing import Any
 
-logger = logging.getLogger(__name__)
+from governance.common.logging import configure_structlog, get_logger
+
+configure_structlog(service="data-activator-notifier")
+logger = get_logger(__name__)
 
 try:
     import requests
@@ -151,10 +153,10 @@ class TeamsNotifier(BaseNotifier):
                 timeout=10,
             )
             resp.raise_for_status()
-            logger.info("Teams notification sent for %s", payload.rule_name)
+            logger.info("teams.notification_sent", rule_name=payload.rule_name)
             return True
         except Exception:
-            logger.exception("Failed to send Teams notification for %s", payload.rule_name)
+            logger.exception("teams.notification_failed", rule_name=payload.rule_name)
             return False
 
 
@@ -257,7 +259,7 @@ class EmailNotifier(BaseNotifier):
                 timeout=10,
             )
             resp.raise_for_status()
-            logger.info("Email sent via SendGrid to %s", self.recipients)
+            logger.info("sendgrid.email_sent", recipients=self.recipients)
             return True
         except Exception:
             logger.exception("SendGrid email failed")
@@ -280,7 +282,7 @@ class EmailNotifier(BaseNotifier):
                     server.login(smtp_user, smtp_pass)
                 server.send_message(msg)
 
-            logger.info("Email sent via SMTP to %s", self.recipients)
+            logger.info("smtp.email_sent", recipients=self.recipients)
             return True
         except Exception:
             logger.exception("SMTP email failed")
@@ -349,10 +351,10 @@ class WebhookNotifier(BaseNotifier):
                 timeout=10,
             )
             resp.raise_for_status()
-            logger.info("Webhook notification sent to %s", self.url)
+            logger.info("webhook.notification_sent", url=self.url)
             return True
         except Exception:
-            logger.exception("Webhook notification failed for %s", self.url)
+            logger.exception("webhook.notification_failed", url=self.url)
             return False
 
 
@@ -400,7 +402,7 @@ class IncidentCreator(BaseNotifier):
             ``True`` on success.
         """
         if not self.validate_config():
-            logger.warning("IncidentCreator (%s): API key not configured", self.service)
+            logger.warning("incident_creator.api_key_missing", service=self.service)
             return False
 
         if self.service == "pagerduty":
@@ -408,7 +410,7 @@ class IncidentCreator(BaseNotifier):
         if self.service == "servicenow":
             return self._create_servicenow_incident(payload)
 
-        logger.warning("IncidentCreator: unsupported service '%s'", self.service)
+        logger.warning("incident_creator.unsupported_service", service=self.service)
         return False
 
     def _create_pagerduty_incident(self, payload: AlertPayload) -> bool:
@@ -442,7 +444,7 @@ class IncidentCreator(BaseNotifier):
                 timeout=10,
             )
             resp.raise_for_status()
-            logger.info("PagerDuty incident created for %s", payload.rule_name)
+            logger.info("pagerduty.incident_created", rule_name=payload.rule_name)
             return True
         except Exception:
             logger.exception("PagerDuty incident creation failed")
@@ -484,7 +486,7 @@ class IncidentCreator(BaseNotifier):
                 timeout=15,
             )
             resp.raise_for_status()
-            logger.info("ServiceNow incident created for %s", payload.rule_name)
+            logger.info("servicenow.incident_created", rule_name=payload.rule_name)
             return True
         except Exception:
             logger.exception("ServiceNow incident creation failed")

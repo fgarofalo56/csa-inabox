@@ -1,3 +1,5 @@
+-- materialized='table': Dimension table — small reference dataset,
+-- full rebuild ensures all attribute changes are captured.
 {{
   config(
     materialized='table',

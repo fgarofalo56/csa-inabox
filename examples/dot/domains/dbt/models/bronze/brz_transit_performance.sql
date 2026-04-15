@@ -2,7 +2,8 @@
     materialized='incremental',
     unique_key=['agency_id', 'mode_code', 'route_id', 'service_date'],
     merge_exclude_columns=['_dbt_loaded_at'],
-    tags=['bronze', 'ntd', 'transit_performance']
+    tags=['bronze', 'ntd', 'transit_performance'],
+    on_schema_change='fail'
 ) }}
 
 /*

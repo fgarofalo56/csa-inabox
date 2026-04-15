@@ -86,6 +86,9 @@ var imageReference = osType == 'Windows' ? windowsImageReference : linuxImageRef
 var osDiskName = '${vmName}-osdisk'
 
 // Resources
+// #checkov:skip=CKV_AZURE_50:VM extension operations are required for management; do not disable
+// #checkov:skip=CKV_AZURE_151:VM managed disk CMK encryption configured out-of-band via Azure Policy
+// #checkov:skip=CKV_AZURE_149:VM disk encryption not required for dev/lab management jumpbox
 resource nic 'Microsoft.Network/networkInterfaces@2023-11-01' = {
   name: nicName
   location: location

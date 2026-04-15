@@ -72,6 +72,7 @@ param parCmkIdentityId string = ''
 var managedRgId = '${subscription().id}/resourceGroups/${managedResourceGroupName}'
 
 // Resources
+// #checkov:skip=CKV_AZURE_158:Databricks CMK encryption is optional for dev/lab — enable via parEnableCmk for prod
 resource databricksWorkspace 'Microsoft.Databricks/workspaces@2024-05-01' = {
   name: workspaceName
   location: location

@@ -18,13 +18,20 @@ Usage::
 from __future__ import annotations
 
 import json
-import logging
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-logger = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from azure.ai.textanalytics import TextAnalyticsClient
+    from azure.core.credentials import AzureKeyCredential
+    from azure.identity import DefaultAzureCredential
+
+from governance.common.logging import configure_structlog, get_logger
+
+configure_structlog(service="entity-extractor")
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -85,13 +92,14 @@ class EntityExtractor:
         self.api_key = api_key or os.environ.get("AZURE_LANGUAGE_API_KEY", "")
         self.language = language
         self.batch_size = min(batch_size, self._MAX_BATCH)
-        self._client: Any = None
+        self._client: TextAnalyticsClient | None = None
 
-    def _get_client(self) -> Any:
+    def _get_client(self) -> TextAnalyticsClient:
         """Lazily initialise the Azure AI Language text analytics client."""
         if self._client is None:
             from azure.ai.textanalytics import TextAnalyticsClient
 
+            credential: AzureKeyCredential | DefaultAzureCredential
             if self.api_key:
                 from azure.core.credentials import AzureKeyCredential
 
@@ -125,7 +133,7 @@ class EntityExtractor:
 
         for i in range(0, len(texts), self.batch_size):
             batch = texts[i : i + self.batch_size]
-            logger.info("Processing NER batch %d-%d of %d", i, i + len(batch), len(texts))
+            logger.info("ner_batch.processing", batch_start=i, batch_end=i + len(batch), total=len(texts))
 
             try:
                 response = client.recognize_entities(
@@ -133,7 +141,7 @@ class EntityExtractor:
                     language=self.language,
                 )
             except Exception:
-                logger.exception("NER batch %d failed", i)
+                logger.exception("ner_batch.failed", batch_start=i)
                 all_results.extend(
                     ExtractionResult(text=t, is_error=True, error_message="API call failed") for t in batch
                 )
@@ -246,7 +254,7 @@ class EntityExtractor:
                     records.append(json.loads(line))
 
         if not records:
-            logger.warning("No records found in %s", bronze_path)
+            logger.warning("no_records_found", path=bronze_path)
             return {"total": 0, "enriched": 0, "errors": 0}
 
         enriched_records = self.extract_entities_from_records(records, text_field=text_field, id_field=id_field)
@@ -263,9 +271,9 @@ class EntityExtractor:
             "errors": error_count,
         }
         logger.info(
-            "Bronze -> Silver NER enrichment complete: %d total, %d enriched, %d errors",
-            stats["total"],
-            stats["enriched"],
-            stats["errors"],
+            "bronze_to_silver.complete",
+            total=stats["total"],
+            enriched=stats["enriched"],
+            errors=stats["errors"],
         )
         return stats

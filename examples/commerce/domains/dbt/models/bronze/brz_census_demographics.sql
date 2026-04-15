@@ -2,7 +2,8 @@
     materialized='incremental',
     unique_key=['geo_id', 'variable_code', 'year', 'dataset'],
     merge_exclude_columns=['_dbt_loaded_at'],
-    tags=['bronze', 'census', 'demographics']
+    tags=['bronze', 'census', 'demographics'],
+    on_schema_change='fail'
 ) }}
 
 {#

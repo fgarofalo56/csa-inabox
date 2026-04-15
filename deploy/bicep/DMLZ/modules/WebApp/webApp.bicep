@@ -89,6 +89,9 @@ var baseAppSettings = [
 ]
 
 // Resources
+// #checkov:skip=CKV_AZURE_17:Web App client certificate requirement not needed for DMLZ internal portal
+// #checkov:skip=CKV_AZURE_63:Web App authentication configured via Entra ID integration, not App Service auth
+// #checkov:skip=CKV_AZURE_88:Web App uses managed identity for auth; App Service authentication configured out-of-band
 resource appServicePlan 'Microsoft.Web/serverfarms@2023-12-01' = {
   name: appServicePlanName
   location: location

@@ -4,7 +4,8 @@
     unique_key='warehouse_sk',
     incremental_strategy='merge',
     file_format='delta',
-    tags=['silver', 'inventory']
+    tags=['silver', 'inventory'],
+    on_schema_change='fail'
   )
 }}
 

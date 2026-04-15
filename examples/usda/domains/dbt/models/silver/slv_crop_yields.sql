@@ -2,7 +2,8 @@
     materialized='incremental',
     unique_key='crop_yield_sk',
     merge_exclude_columns=['_dbt_loaded_at'],
-    tags=['silver', 'crop_yields', 'cleaned']
+    tags=['silver', 'crop_yields', 'cleaned'],
+    on_schema_change='fail'
 ) }}
 
 WITH base AS (

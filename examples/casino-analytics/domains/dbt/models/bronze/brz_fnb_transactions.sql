@@ -2,7 +2,8 @@
     materialized='incremental',
     unique_key=['transaction_id'],
     merge_exclude_columns=['_dbt_loaded_at'],
-    tags=['bronze', 'fnb', 'pos', 'transactions']
+    tags=['bronze', 'fnb', 'pos', 'transactions'],
+    on_schema_change='fail'
 ) }}
 
 /*

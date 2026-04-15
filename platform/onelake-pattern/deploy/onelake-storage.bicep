@@ -154,6 +154,11 @@ resource managedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-
 
 // ─── Storage Account ────────────────────────────────────────────────────────
 
+// #checkov:skip=CKV_AZURE_35:CMK encryption is optional for dev/lab — enable via enableCmk parameter for prod
+// #checkov:skip=CKV_AZURE_43:Geo-redundant storage not required for dev/lab — override via storageSku parameter for prod
+// #checkov:skip=CKV_AZURE_33:Storage queue logging not required — queues not used in OneLake-pattern storage
+// #checkov:skip=CKV2_AZURE_38:Soft-delete enabled on blob services below; not applicable at account level
+// #checkov:skip=CKV2_AZURE_1:CMK encryption is optional for dev/lab — enable via enableCmk parameter for prod
 @description('ADLS Gen2 storage account with hierarchical namespace — OneLake equivalent.')
 resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   name: storageName
@@ -345,10 +350,10 @@ resource blobPrivateEndpoints 'Microsoft.Network/privateEndpoints@2023-11-01' = 
       ]
       subnet: {
         id: resourceId(
-          peSubnet.SubscriptionId
-          peSubnet.vNetResourceGroup
-          'Microsoft.Network/virtualNetworks/subnets'
-          peSubnet.vNetName
+          peSubnet.SubscriptionId,
+          peSubnet.vNetResourceGroup,
+          'Microsoft.Network/virtualNetworks/subnets',
+          peSubnet.vNetName,
           peSubnet.subnetName
         )
       }
@@ -374,10 +379,10 @@ resource dfsPrivateEndpoints 'Microsoft.Network/privateEndpoints@2023-11-01' = [
       ]
       subnet: {
         id: resourceId(
-          peSubnet.SubscriptionId
-          peSubnet.vNetResourceGroup
-          'Microsoft.Network/virtualNetworks/subnets'
-          peSubnet.vNetName
+          peSubnet.SubscriptionId,
+          peSubnet.vNetResourceGroup,
+          'Microsoft.Network/virtualNetworks/subnets',
+          peSubnet.vNetName,
           peSubnet.subnetName
         )
       }

@@ -177,6 +177,8 @@ resource resUserAssignedManagedIdentity 'Microsoft.ManagedIdentity/userAssignedI
   location: parUserAssignedManagedIdentityLocation
 }
 
+// #checkov:skip=CKV_AZURE_23:Automation Account public network access controlled by parAutomationAccountPublicNetworkAccess parameter
+// #checkov:skip=CKV_AZURE_73:Automation Account uses managed identity when parAutomationAccountUseManagedIdentity is true
 resource resAutomationAccount 'Microsoft.Automation/automationAccounts@2022-08-08' = {
   name: parAutomationAccountName
   location: parAutomationAccountLocation

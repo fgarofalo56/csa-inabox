@@ -28,6 +28,8 @@ param networkAcls object = {
   bypass: 'AzureServices'
 }
 
+// #checkov:skip=CKV_AZURE_110:Key Vault secret expiration managed via operational process, not resource policy
+// #checkov:skip=CKV_AZURE_112:Key Vault key expiration managed via operational process, not resource policy
 resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
   name: name
   location: location

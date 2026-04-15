@@ -119,6 +119,8 @@ param parTenantEndpointState string
 
 // A function that checks if a storage account exists
 
+// #checkov:skip=CKV_AZURE_35:Purview-managed storage uses Microsoft-managed keys; CMK not configurable directly
+// #checkov:skip=CKV_AZURE_43:Purview-managed storage redundancy is controlled by Purview service
 resource purviewAcct 'Microsoft.Purview/accounts@2024-04-01-preview' = {
   name: purviewAcctName
   tags: tags
@@ -205,6 +207,9 @@ resource eventHubNamespace 'Microsoft.EventHub/namespaces@2024-05-01-preview' = 
   properties: {
     isAutoInflateEnabled: false
     maximumThroughputUnits: 0
+    disableLocalAuth: true
+    minimumTlsVersion: '1.2'
+    publicNetworkAccess: 'Disabled'
   }
 }
 

@@ -2,7 +2,8 @@
     materialized='incremental',
     unique_key=['case_id', 'state_code'],
     merge_exclude_columns=['_dbt_loaded_at'],
-    tags=['bronze', 'fars', 'crash_data']
+    tags=['bronze', 'fars', 'crash_data'],
+    on_schema_change='fail'
 ) }}
 
 /*

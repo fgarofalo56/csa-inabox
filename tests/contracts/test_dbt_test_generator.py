@@ -10,7 +10,9 @@ import yaml
 from governance.contracts.contract_validator import load_contract
 from governance.contracts.dbt_test_generator import (
     generate_schema_yml,
+    group_contracts_by_domain,
     main,
+    output_path_for_domain,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -100,6 +102,46 @@ def test_header_contains_regeneration_instructions() -> None:
     assert "--check" in output
 
 
+def test_exclude_models_filters_out_specified_names() -> None:
+    contract = load_contract(SALES_ORDERS_CONTRACT)
+    output = generate_schema_yml([contract], exclude_models={"slv_orders"})
+    parsed = yaml.safe_load(output)
+    assert len(parsed["models"]) == 0
+
+
+# ---------------------------------------------------------------------------
+# group_contracts_by_domain
+# ---------------------------------------------------------------------------
+
+
+def test_group_contracts_by_domain_separates_correctly() -> None:
+    contracts = []
+    for domain_dir in (REPO_ROOT / "domains").iterdir():
+        contract_dir = domain_dir / "data-products"
+        if not contract_dir.exists():
+            continue
+        for product_dir in contract_dir.iterdir():
+            contract_path = product_dir / "contract.yaml"
+            if contract_path.exists():
+                contracts.append(load_contract(contract_path))
+
+    by_domain = group_contracts_by_domain(contracts)
+    # We know there are at least shared, sales, finance, inventory
+    assert "shared" in by_domain
+    assert "sales" in by_domain
+    assert len(by_domain) >= 4
+
+
+# ---------------------------------------------------------------------------
+# output_path_for_domain
+# ---------------------------------------------------------------------------
+
+
+def test_output_path_for_domain_uses_correct_template() -> None:
+    path = output_path_for_domain(Path("/repo"), "sales")
+    assert str(path).replace("\\", "/") == "/repo/domains/sales/dbt/models/silver/schema_contract_generated.yml"
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -113,24 +155,26 @@ def test_main_preview_mode_prints_yaml(capsys: pytest.CaptureFixture[str]) -> No
     assert "slv_orders" in captured.out
 
 
-def test_main_write_creates_file(tmp_path: Path) -> None:
+def test_main_write_creates_per_domain_files(tmp_path: Path) -> None:
     # Create a fake repo layout with the sales/orders contract
     domains_dir = tmp_path / "domains" / "sales" / "data-products" / "orders"
     domains_dir.mkdir(parents=True)
+
+    # Create a stub SQL file so the generator recognises the model as existing
+    silver_dir = tmp_path / "domains" / "sales" / "dbt" / "models" / "silver"
+    silver_dir.mkdir(parents=True)
+    (silver_dir / "slv_orders.sql").write_text("SELECT 1")
 
     # Copy the real contract
     import shutil
 
     shutil.copy(SALES_ORDERS_CONTRACT, domains_dir / "contract.yaml")
 
-    # Also need the output dir to exist
-    output_dir = tmp_path / "domains" / "shared" / "dbt" / "models" / "silver"
-    output_dir.mkdir(parents=True)
-
     rc = main(["--repo-root", str(tmp_path), "--write"])
     assert rc == 0
 
-    generated_file = output_dir / "schema_contract_generated.yml"
+    # The sales contract has domain=sales, so output goes to sales/dbt/
+    generated_file = tmp_path / "domains" / "sales" / "dbt" / "models" / "silver" / "schema_contract_generated.yml"
     assert generated_file.exists()
     content = generated_file.read_text()
     assert "slv_orders" in content
@@ -141,17 +185,18 @@ def test_main_check_passes_when_up_to_date(tmp_path: Path) -> None:
     domains_dir = tmp_path / "domains" / "sales" / "data-products" / "orders"
     domains_dir.mkdir(parents=True)
 
+    silver_dir = tmp_path / "domains" / "sales" / "dbt" / "models" / "silver"
+    silver_dir.mkdir(parents=True)
+    (silver_dir / "slv_orders.sql").write_text("SELECT 1")
+
     import shutil
 
     shutil.copy(SALES_ORDERS_CONTRACT, domains_dir / "contract.yaml")
 
-    output_dir = tmp_path / "domains" / "shared" / "dbt" / "models" / "silver"
-    output_dir.mkdir(parents=True)
-
     # Write first
     assert main(["--repo-root", str(tmp_path), "--write"]) == 0
 
-    # Then check — should pass
+    # Then check -- should pass
     assert main(["--repo-root", str(tmp_path), "--check"]) == 0
 
 
@@ -159,15 +204,20 @@ def test_main_check_fails_when_out_of_date(tmp_path: Path) -> None:
     domains_dir = tmp_path / "domains" / "sales" / "data-products" / "orders"
     domains_dir.mkdir(parents=True)
 
+    silver_dir = tmp_path / "domains" / "sales" / "dbt" / "models" / "silver"
+    silver_dir.mkdir(parents=True)
+    (silver_dir / "slv_orders.sql").write_text("SELECT 1")
+
     import shutil
 
     shutil.copy(SALES_ORDERS_CONTRACT, domains_dir / "contract.yaml")
 
-    output_dir = tmp_path / "domains" / "shared" / "dbt" / "models" / "silver"
-    output_dir.mkdir(parents=True)
+    # Write the correct generated file first
+    assert main(["--repo-root", str(tmp_path), "--write"]) == 0
 
-    # Write an outdated file
-    (output_dir / "schema_contract_generated.yml").write_text("old content\n")
+    # Now tamper with it
+    output_file = tmp_path / "domains" / "sales" / "dbt" / "models" / "silver" / "schema_contract_generated.yml"
+    output_file.write_text("old content\n")
 
     # Check should fail
     assert main(["--repo-root", str(tmp_path), "--check"]) == 1

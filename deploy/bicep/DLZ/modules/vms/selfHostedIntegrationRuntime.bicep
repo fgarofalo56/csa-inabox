@@ -22,6 +22,9 @@ param datafactoryIntegrationRuntimeAuthKey string
 var loadbalancerName = '${vmssName}-lb'
 
 // Resources
+// #checkov:skip=CKV_AZURE_50:VMSS requires CustomScriptExtension for SHIR gateway installation
+// #checkov:skip=CKV_AZURE_151:VMSS managed disk CMK encryption configured out-of-band via Azure Policy
+// #checkov:skip=CKV_AZURE_149:VMSS disk encryption not required for dev/lab SHIR
 resource loadbalancer001 'Microsoft.Network/loadBalancers@2021-03-01' = {
   name: loadbalancerName
   location: location

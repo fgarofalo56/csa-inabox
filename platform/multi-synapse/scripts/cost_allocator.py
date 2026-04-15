@@ -26,13 +26,15 @@ import argparse
 import csv
 import io
 import json
-import logging
 import sys
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from typing import Any
 
-logger = logging.getLogger(__name__)
+from governance.common.logging import configure_structlog, get_logger
+
+configure_structlog(service="cost-allocator")
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +107,7 @@ class CostAllocator:
     ) -> None:
         self.subscription_id = subscription_id
         self._credential = credential
-        self._client: Any = None
+        self._client: Any | None = None  # TODO: Replace with typed client when SDK stubs are available
 
     def _get_client(self) -> Any:
         """Lazily initialize the Cost Management client."""
@@ -236,7 +238,7 @@ class CostAllocator:
                 )
             )
 
-        logger.info("Retrieved %d cost entries", len(entries))
+        logger.info("cost_entries.retrieved", count=len(entries))
         return entries
 
     def allocate_to_orgs(
@@ -415,7 +417,7 @@ class CostAllocator:
         if output_path:
             with open(output_path, "w", newline="", encoding="utf-8") as f:
                 f.write(csv_content)
-            logger.info("CSV report written to %s", output_path)
+            logger.info("report.csv_written", output_path=str(output_path))
 
         return csv_content
 
@@ -495,7 +497,6 @@ def main(argv: list[str] | None = None) -> int:
     allocate_parser.set_defaults(func=_cli_allocate)
 
     args = parser.parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     args.func(args)
     return 0
 

@@ -4,7 +4,8 @@
     unique_key='product_sk',
     incremental_strategy='merge',
     file_format='delta',
-    tags=['silver', 'products']
+    tags=['silver', 'products'],
+    on_schema_change='fail'
   )
 }}
 

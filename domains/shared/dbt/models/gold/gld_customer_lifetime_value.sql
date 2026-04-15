@@ -6,7 +6,8 @@
         partition_by=['customer_segment'],
         clustered_by=['value_tier'],
         file_format='delta',
-        tags=['gold', 'customers', 'metrics']
+        tags=['gold', 'customers', 'metrics'],
+        on_schema_change='fail'
     )
 }}
 

@@ -142,6 +142,8 @@ var cosmosLocations = empty(secondaryLocation)
       }
     ]
 
+// #checkov:skip=CKV_AZURE_100:Cosmos DB access limited via private endpoints and network ACL; RBAC controls data-plane access
+// #checkov:skip=CKV_AZURE_132:Cosmos DB CMK encryption is optional for dev/lab — enable via parEnableCmk for prod
 resource cosmosDbAccount 'Microsoft.DocumentDB/databaseAccounts@2024-12-01-preview' = {
   name: cosmosDbAccountName
   location: parLocation
@@ -165,6 +167,7 @@ resource cosmosDbAccount 'Microsoft.DocumentDB/databaseAccounts@2024-12-01-previ
     enablePriorityBasedExecution: enablePriorityBasedExecution
     disableKeyBasedMetadataWriteAccess: disableKeyBasedMetadataWriteAccess
     disableLocalAuth: disableLocalAuth
+    minimalTlsVersion: 'Tls12'
     consistencyPolicy: {
       defaultConsistencyLevel: consistencyLevel
       maxIntervalInSeconds: 5

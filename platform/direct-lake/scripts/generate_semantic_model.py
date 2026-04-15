@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import logging
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -31,7 +30,10 @@ from typing import Any, ClassVar
 
 import yaml
 
-logger = logging.getLogger(__name__)
+from governance.common.logging import configure_structlog, get_logger
+
+configure_structlog(service="semantic-model-generator")
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -133,7 +135,7 @@ class SemanticModelGenerator:
     ) -> None:
         self.workspace_url = workspace_url.rstrip("/")
         self._token = token
-        self._client: Any = None
+        self._client: Any | None = None  # TODO: Replace with typed client when SDK stubs are available
 
     def _get_client(self) -> Any:
         """Lazily initialize the Databricks workspace client."""
@@ -167,7 +169,7 @@ class SemanticModelGenerator:
         client = self._get_client()
         tables: list[DeltaTableInfo] = []
 
-        logger.info("Scanning tables in %s.%s", catalog, schema_name)
+        logger.info("tables.scanning", catalog=catalog, schema=schema_name)
 
         try:
             table_list = client.tables.list(
@@ -207,9 +209,9 @@ class SemanticModelGenerator:
                 tables.append(info)
 
         except Exception:
-            logger.exception("Failed to scan tables in %s.%s", catalog, schema_name)
+            logger.exception("tables.scan_failed", catalog=catalog, schema=schema_name)
 
-        logger.info("Found %d tables in %s.%s", len(tables), catalog, schema_name)
+        logger.info("tables.found", count=len(tables), catalog=catalog, schema=schema_name)
         return tables
 
     def generate_model_yaml(
@@ -367,7 +369,7 @@ class SemanticModelGenerator:
                         )
                     )
 
-        logger.info("Generated %d DAX measures", len(measures))
+        logger.info("dax_measures.generated", count=len(measures))
         return measures
 
     def export_pbip(
@@ -428,7 +430,7 @@ class SemanticModelGenerator:
             "json": str(json_path),
         }
 
-        logger.info("Exported semantic model to %s", output)
+        logger.info("semantic_model.exported", output=str(output))
         return files
 
     def _map_type(self, databricks_type: str) -> str:
@@ -498,7 +500,6 @@ def main(argv: list[str] | None = None) -> int:
     gen_parser.set_defaults(func=_cli_generate)
 
     args = parser.parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     args.func(args)
     return 0
 

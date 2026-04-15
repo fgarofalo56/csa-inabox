@@ -1,3 +1,5 @@
+-- materialized='table': Full rebuild required — reorder status changes as
+-- inventory levels fluctuate, no reliable incremental key.
 {{
   config(
     materialized='table',

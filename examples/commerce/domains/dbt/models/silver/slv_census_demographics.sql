@@ -2,7 +2,8 @@
     materialized='incremental',
     unique_key='census_sk',
     merge_exclude_columns=['_dbt_loaded_at'],
-    tags=['silver', 'census', 'demographics', 'cleaned']
+    tags=['silver', 'census', 'demographics', 'cleaned'],
+    on_schema_change='fail'
 ) }}
 
 {#

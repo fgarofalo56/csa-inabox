@@ -2,7 +2,8 @@
     materialized='incremental',
     unique_key=['state_fips_code', 'county_code', 'commodity_desc', 'year', 'data_item'],
     merge_exclude_columns=['_dbt_loaded_at'],
-    tags=['bronze', 'nass', 'crop_yields']
+    tags=['bronze', 'nass', 'crop_yields'],
+    on_schema_change='fail'
 ) }}
 
 WITH source_data AS (

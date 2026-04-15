@@ -2,7 +2,8 @@
     materialized='incremental',
     unique_key=['park_code', 'year', 'month'],
     merge_exclude_columns=['_dbt_loaded_at'],
-    tags=['bronze', 'nps', 'visitors', 'parks']
+    tags=['bronze', 'nps', 'visitors', 'parks'],
+    on_schema_change='fail'
 ) }}
 
 {#

@@ -43,14 +43,14 @@
                 { "scope": "rg/storage", "role": "Storage Blob Data Reader" },
                 { "scope": "rg/purview", "role": "Purview Data Reader" },
                 { "scope": "rg/databricks", "role": "Reader" },
-                { "scope": "rg/synapse", "role": "Synapse User" }
+                { "scope": "rg/synapse", "role": "Synapse Artifact User" }
             ]
         },
         "Analyst": {
             "description": "Consume gold-layer data products for reporting and analysis",
             "assignments": [
                 { "scope": "rg/storage", "role": "Storage Blob Data Reader" },
-                { "scope": "rg/synapse", "role": "Synapse User" },
+                { "scope": "rg/synapse", "role": "Synapse Artifact User" },
                 { "scope": "rg/databricks", "role": "Reader" },
                 { "scope": "rg/purview", "role": "Purview Data Reader" }
             ]
@@ -83,7 +83,7 @@
         "Key Vault Reader": "21090545-7ca7-4776-b22c-e363652d74d2",
         "Synapse Administrator": "6e4bf58a-b8e1-4cc3-bbf9-d73143322b78",
         "Synapse SQL Administrator": "d7c8d0e4-4b20-4a1b-aca6-4bce4c9e4b6c",
-        "Synapse User": "6e4bf58a-b8e1-4cc3-bbf9-d73143322b78",
+        "Synapse Artifact User": "08ff67a6-44f2-4740-b155-f7670e760124",
         "Data Factory Contributor": "673868aa-7521-48a0-acc6-0f60742d39f5",
         "Contributor": "b24988ac-6180-42a0-ab88-20f7382dd24c",
         "Reader": "acdd72a7-3385-48ef-bd42-f606fba81ae7",

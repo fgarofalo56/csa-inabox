@@ -1,4 +1,4 @@
-# Data product contract — inventory.inventory
+# Data product contract -- inventory.inventory
 #
 # This file is the authoritative interface between the inventory domain
 # and its consumers.  It declares the schema, SLAs, and quality rules

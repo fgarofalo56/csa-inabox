@@ -2,7 +2,8 @@
     materialized='incremental',
     unique_key=['event_id'],
     merge_exclude_columns=['_dbt_loaded_at'],
-    tags=['bronze', 'usgs', 'earthquake', 'seismic']
+    tags=['bronze', 'usgs', 'earthquake', 'seismic'],
+    on_schema_change='fail'
 ) }}
 
 {#

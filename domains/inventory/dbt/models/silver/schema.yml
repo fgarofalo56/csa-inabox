@@ -17,8 +17,21 @@ models:
           - not_null
       - name: product_id
         description: FK to products. Null flagged by _is_missing_product_id.
+        tests:
+          - relationships:
+              to: ref('slv_products')
+              field: product_id
+              config:
+                severity: warn
+                where: "product_id IS NOT NULL"
       - name: warehouse_id
         description: FK to warehouses.
+        tests:
+          - relationships:
+              to: ref('slv_warehouses')
+              field: warehouse_id
+              config:
+                severity: warn
       - name: qty_on_hand
         description: Current stock quantity.
       - name: qty_reserved

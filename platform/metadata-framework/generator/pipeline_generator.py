@@ -7,6 +7,7 @@ pipeline templates, and outputs deployable ARM/Bicep templates.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import uuid
 from dataclasses import dataclass
@@ -54,6 +55,45 @@ class SchemaDetectionError(Exception):
 
 class PipelineGenerationError(Exception):
     """Raised when pipeline generation fails."""
+
+
+def _infer_column_type(values: list[str]) -> str:
+    """Infer column type from a sample of string values."""
+    if not values:
+        return "string"
+
+    # Try integer
+    try:
+        for v in values[:100]:
+            int(v)
+        return "integer"
+    except (ValueError, TypeError):
+        pass
+
+    # Try float
+    try:
+        for v in values[:100]:
+            float(v)
+        return "float"
+    except (ValueError, TypeError):
+        pass
+
+    # Try boolean
+    bool_values = {"true", "false", "yes", "no", "1", "0"}
+    if all(v.lower() in bool_values for v in values[:100]):
+        return "boolean"
+
+    # Try datetime (ISO format)
+    from datetime import datetime as dt
+
+    try:
+        for v in values[:20]:
+            dt.fromisoformat(v.replace("Z", "+00:00"))
+        return "datetime"
+    except (ValueError, TypeError):
+        pass
+
+    return "string"
 
 
 class PipelineGenerator:
@@ -188,6 +228,7 @@ class PipelineGenerator:
         Raises:
             SchemaDetectionError: If schema detection fails
         """
+        _ = connection_test  # Accepted but unused for now
         source_type = source_config["source_type"]
         logger.info("Starting schema detection", source_type=source_type, source_id=source_config.get("source_id"))
 
@@ -209,63 +250,513 @@ class PipelineGenerator:
             raise SchemaDetectionError(f"Schema detection failed: {e}") from e
 
     def _detect_database_schema(self, source_config: dict[str, Any]) -> SourceDetectionResult:
-        """Detect schema for database sources.
+        """Detect schema by querying INFORMATION_SCHEMA from a relational database."""
+        import pyodbc
 
-        This would typically connect to the database and query system tables
-        to get table metadata, column information, data types, etc.
-        """
-        # For demo purposes, return mock data
-        # In production, this would use database-specific connectors
-        logger.info("Detecting database schema (mock implementation)")
+        conn_str = source_config.get("connection_string", "")
+        schema_name = source_config.get("schema", "dbo")
+
+        if not conn_str:
+            host = source_config.get("host", "localhost")
+            port = source_config.get("port", 1433)
+            database = source_config.get("database", "master")
+            driver = source_config.get("driver", "{ODBC Driver 18 for SQL Server}")
+            # Build connection string — use trusted connection or credentials
+            if source_config.get("use_managed_identity", False):
+                conn_str = f"Driver={driver};Server={host},{port};Database={database};Authentication=ActiveDirectoryMsi"
+            else:
+                username = source_config.get("username", "")
+                password_ref = source_config.get("password_secret", "")
+                conn_str = f"Driver={driver};Server={host},{port};Database={database};UID={username};PWD={password_ref}"
+
+        logger.info("Connecting to database for schema detection", schema=schema_name)
+
+        tables: list[dict[str, Any]] = []
+        estimated_row_counts: dict[str, int] = {}
+        primary_keys: dict[str, list[str]] = {}
+        data_types: dict[str, dict[str, str]] = {}
+        watermark_columns: dict[str, list[str]] = {}
+
+        try:
+            with pyodbc.connect(conn_str, timeout=30) as conn:
+                cursor = conn.cursor()
+
+                # Get all tables in schema
+                cursor.execute("""
+                    SELECT TABLE_NAME
+                    FROM INFORMATION_SCHEMA.TABLES
+                    WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE'
+                    ORDER BY TABLE_NAME
+                """, schema_name)
+                table_names = [row.TABLE_NAME for row in cursor.fetchall()]
+
+                for table_name in table_names:
+                    # Get columns
+                    cursor.execute("""
+                        SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE,
+                               CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE,
+                               COLUMN_DEFAULT
+                        FROM INFORMATION_SCHEMA.COLUMNS
+                        WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+                        ORDER BY ORDINAL_POSITION
+                    """, schema_name, table_name)
+
+                    columns = []
+                    table_types: dict[str, str] = {}
+                    potential_watermarks: list[str] = []
+
+                    for col in cursor.fetchall():
+                        col_info: dict[str, Any] = {
+                            "name": col.COLUMN_NAME,
+                            "type": col.DATA_TYPE,
+                            "nullable": col.IS_NULLABLE == "YES",
+                        }
+                        if col.CHARACTER_MAXIMUM_LENGTH:
+                            col_info["max_length"] = col.CHARACTER_MAXIMUM_LENGTH
+                        if col.NUMERIC_PRECISION:
+                            col_info["precision"] = col.NUMERIC_PRECISION
+                            col_info["scale"] = col.NUMERIC_SCALE or 0
+                        columns.append(col_info)
+                        table_types[col.COLUMN_NAME] = col.DATA_TYPE
+
+                        # Identify watermark candidates (datetime/timestamp columns)
+                        if col.DATA_TYPE in ("datetime", "datetime2", "timestamp", "datetimeoffset", "date"):
+                            potential_watermarks.append(col.COLUMN_NAME)
+
+                    # Get primary keys
+                    cursor.execute("""
+                        SELECT c.COLUMN_NAME
+                        FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
+                        JOIN INFORMATION_SCHEMA.CONSTRAINT_COLUMN_USAGE c
+                          ON tc.CONSTRAINT_NAME = c.CONSTRAINT_NAME
+                        WHERE tc.TABLE_SCHEMA = ? AND tc.TABLE_NAME = ?
+                          AND tc.CONSTRAINT_TYPE = 'PRIMARY KEY'
+                        ORDER BY c.ORDINAL_POSITION
+                    """, schema_name, table_name)
+                    pk_cols = [row.COLUMN_NAME for row in cursor.fetchall()]
+
+                    # Mark PK columns
+                    for col in columns:
+                        col["is_primary_key"] = col["name"] in pk_cols
+
+                    # Estimated row count (from sys.partitions for speed)
+                    try:
+                        cursor.execute("""
+                            SELECT SUM(p.rows) AS row_count
+                            FROM sys.partitions p
+                            JOIN sys.tables t ON p.object_id = t.object_id
+                            JOIN sys.schemas s ON t.schema_id = s.schema_id
+                            WHERE s.name = ? AND t.name = ? AND p.index_id IN (0, 1)
+                        """, schema_name, table_name)
+                        row = cursor.fetchone()
+                        estimated_row_counts[table_name] = int(row.row_count) if row and row.row_count else 0
+                    except Exception:
+                        estimated_row_counts[table_name] = -1  # Unknown
+
+                    tables.append({"table_name": table_name, "schema": schema_name, "columns": columns})
+                    if pk_cols:
+                        primary_keys[table_name] = pk_cols
+                    data_types[table_name] = table_types
+                    if potential_watermarks:
+                        watermark_columns[table_name] = potential_watermarks
+
+            logger.info("Schema detection complete", tables_found=len(tables))
+
+        except pyodbc.Error as exc:
+            logger.error("Database connection failed", error=str(exc))
+            raise SchemaDetectionError(f"Database connection failed: {exc}") from exc
 
         return SourceDetectionResult(
-            tables=[
-                {
-                    "table_name": "example_table",
-                    "columns": [
-                        {"name": "id", "type": "int", "nullable": False, "is_primary_key": True},
-                        {"name": "name", "type": "varchar", "nullable": True},
-                        {"name": "created_date", "type": "datetime", "nullable": False},
-                    ],
-                }
-            ],
-            estimated_row_counts={"example_table": 1000000},
-            primary_keys={"example_table": ["id"]},
-            data_types={"example_table": {"id": "int", "name": "varchar", "created_date": "datetime"}},
-            recommended_watermark_columns={"example_table": ["created_date"]},
+            tables=tables,
+            estimated_row_counts=estimated_row_counts,
+            primary_keys=primary_keys,
+            data_types=data_types,
+            recommended_watermark_columns=watermark_columns,
         )
 
     def _detect_api_schema(self, source_config: dict[str, Any]) -> SourceDetectionResult:
-        """Detect schema for REST API sources."""
-        logger.info("Detecting API schema (mock implementation)")
-        # Would typically make API calls to introspect endpoints
+        """Detect schema by sampling a REST API endpoint response."""
+        import requests
+
+        api_url = source_config.get("api_url", "")
+        auth_method = source_config.get("authentication_method", "none")
+        headers: dict[str, str] = source_config.get("headers", {})
+
+        if not api_url:
+            raise SchemaDetectionError("api_url is required for REST API schema detection")
+
+        # Add authentication
+        if auth_method == "api_key":
+            key_header = source_config.get("api_key_header", "X-API-Key")
+            key_value = source_config.get("api_key", "")
+            headers[key_header] = key_value
+        elif auth_method == "bearer":
+            token = source_config.get("bearer_token", "")
+            headers["Authorization"] = f"Bearer {token}"
+
+        logger.info("Sampling API endpoint for schema detection", url=api_url)
+
+        try:
+            response = requests.get(api_url, headers=headers, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+        except requests.RequestException as exc:
+            raise SchemaDetectionError(f"API request failed: {exc}") from exc
+        except ValueError as exc:
+            raise SchemaDetectionError(f"Response is not valid JSON: {exc}") from exc
+
+        # Infer schema from response
+        def infer_columns(sample: dict) -> list[dict[str, Any]]:
+            columns = []
+            for key, value in sample.items():
+                col_type = type(value).__name__
+                type_map = {
+                    "str": "string",
+                    "int": "integer",
+                    "float": "float",
+                    "bool": "boolean",
+                    "NoneType": "string",
+                    "list": "array",
+                    "dict": "object",
+                }
+                columns.append({
+                    "name": key,
+                    "type": type_map.get(col_type, "string"),
+                    "nullable": value is None,
+                })
+            return columns
+
+        # Handle different response shapes
+        if isinstance(data, list) and len(data) > 0:
+            sample = data[0] if isinstance(data[0], dict) else {"value": data[0]}
+            columns = infer_columns(sample)
+            estimated_count = len(data)
+        elif isinstance(data, dict):
+            # Check common pagination patterns
+            columns = None
+            estimated_count = 1
+            for key in ("results", "data", "items", "value", "records"):
+                if key in data and isinstance(data[key], list) and len(data[key]) > 0:
+                    sample = data[key][0] if isinstance(data[key][0], dict) else {"value": data[key][0]}
+                    columns = infer_columns(sample)
+                    estimated_count = data.get("total", data.get("count", len(data[key])))
+                    break
+            if columns is None:
+                columns = infer_columns(data)
+        else:
+            raise SchemaDetectionError("Cannot infer schema from empty or non-JSON response")
+
+        table_name = source_config.get("entity_name", "api_response")
+
         return SourceDetectionResult(
-            tables=[], estimated_row_counts={}, primary_keys={}, data_types={}, recommended_watermark_columns={}
+            tables=[{"table_name": table_name, "columns": columns}],
+            estimated_row_counts={table_name: estimated_count},
+            primary_keys={},
+            data_types={table_name: {c["name"]: c["type"] for c in columns}},
+            recommended_watermark_columns={},
         )
 
     def _detect_cosmos_schema(self, source_config: dict[str, Any]) -> SourceDetectionResult:
-        """Detect schema for Cosmos DB sources."""
-        logger.info("Detecting Cosmos schema (mock implementation)")
-        # Would query Cosmos DB metadata
+        """Detect schema by sampling documents from a Cosmos DB container."""
+        from azure.cosmos import CosmosClient
+        from azure.identity import DefaultAzureCredential
+
+        endpoint = source_config.get("endpoint", "")
+        database_name = source_config.get("database", "")
+        container_name = source_config.get("container", "")
+        sample_size = source_config.get("sample_size", 100)
+
+        if not all([endpoint, database_name, container_name]):
+            raise SchemaDetectionError("endpoint, database, and container are required for Cosmos DB schema detection")
+
+        logger.info("Sampling Cosmos DB for schema detection",
+                    endpoint=endpoint, database=database_name, container=container_name)
+
+        try:
+            # Prefer Managed Identity, fall back to key
+            if source_config.get("account_key"):
+                client = CosmosClient(endpoint, credential=source_config["account_key"])
+            else:
+                client = CosmosClient(endpoint, credential=DefaultAzureCredential())
+
+            database = client.get_database_client(database_name)
+            container = database.get_container_client(container_name)
+
+            # Sample documents
+            query = f"SELECT TOP {sample_size} * FROM c"
+            documents = list(container.query_items(query=query, enable_cross_partition_query=True))
+        except Exception as exc:
+            raise SchemaDetectionError(f"Cosmos DB connection failed: {exc}") from exc
+
+        if not documents:
+            return SourceDetectionResult(
+                tables=[{"table_name": container_name, "columns": []}],
+                estimated_row_counts={container_name: 0},
+                primary_keys={container_name: ["id"]},
+                data_types={},
+                recommended_watermark_columns={},
+            )
+
+        # Merge schemas across sampled documents
+        all_fields: dict[str, set[str]] = {}
+        for doc in documents:
+            for key, value in doc.items():
+                if key.startswith("_"):  # Skip Cosmos system properties
+                    continue
+                col_type = type(value).__name__
+                if key not in all_fields:
+                    all_fields[key] = set()
+                all_fields[key].add(col_type)
+
+        type_map = {"str": "string", "int": "integer", "float": "float", "bool": "boolean",
+                     "NoneType": "string", "list": "array", "dict": "object"}
+
+        columns = []
+        cosmos_data_types: dict[str, str] = {}
+        watermark_candidates: list[str] = []
+
+        for field_name, types in all_fields.items():
+            # Pick the most common non-null type
+            dominant_type = next((t for t in types if t != "NoneType"), "string")
+            mapped_type = type_map.get(dominant_type, "string")
+            nullable = "NoneType" in types or len([d for d in documents if field_name not in d]) > 0
+
+            columns.append({
+                "name": field_name,
+                "type": mapped_type,
+                "nullable": nullable,
+            })
+            cosmos_data_types[field_name] = mapped_type
+
+            # Identify potential watermarks
+            if field_name.lower() in ("createdat", "created_at", "modifiedat", "modified_at",
+                                       "timestamp", "_ts", "updated_at"):
+                watermark_candidates.append(field_name)
+
         return SourceDetectionResult(
-            tables=[], estimated_row_counts={}, primary_keys={}, data_types={}, recommended_watermark_columns={}
+            tables=[{"table_name": container_name, "columns": columns}],
+            estimated_row_counts={container_name: len(documents)},  # Approximation from sample
+            primary_keys={container_name: ["id"]},
+            data_types={container_name: cosmos_data_types},
+            recommended_watermark_columns={container_name: watermark_candidates} if watermark_candidates else {},
         )
 
     def _detect_file_schema(self, source_config: dict[str, Any]) -> SourceDetectionResult:
-        """Detect schema for file-based sources."""
-        logger.info("Detecting file schema (mock implementation)")
-        # Would sample files to determine schema
+        """Detect schema by sampling files from blob storage or local filesystem."""
+        import io
+
+        file_path = source_config.get("file_path", "")
+        file_format = source_config.get("format", "").lower()
+        container = source_config.get("container", "")
+        storage_account = source_config.get("storage_account", "")
+
+        logger.info("Detecting file schema", path=file_path, format=file_format)
+
+        # Read sample data
+        if storage_account and container:
+            # Azure Blob Storage
+            from azure.identity import DefaultAzureCredential
+            from azure.storage.blob import BlobServiceClient
+
+            try:
+                blob_url = f"https://{storage_account}.blob.core.windows.net"
+                blob_client = BlobServiceClient(blob_url, credential=DefaultAzureCredential())
+                blob = blob_client.get_blob_client(container=container, blob=file_path)
+                # Download first 10MB for sampling
+                download = blob.download_blob(max_concurrency=1, length=10 * 1024 * 1024)
+                raw_data = download.readall()
+            except Exception as exc:
+                raise SchemaDetectionError(f"Failed to read blob: {exc}") from exc
+        elif file_path:
+            try:
+                with open(file_path, "rb") as f:
+                    raw_data = f.read(10 * 1024 * 1024)
+            except OSError as exc:
+                raise SchemaDetectionError(f"Failed to read file: {exc}") from exc
+        else:
+            raise SchemaDetectionError("Either file_path or storage_account+container is required")
+
+        # Auto-detect format from extension if not specified
+        if not file_format:
+            if file_path.endswith(".parquet"):
+                file_format = "parquet"
+            elif file_path.endswith(".csv"):
+                file_format = "csv"
+            elif file_path.endswith((".json", ".jsonl")):
+                file_format = "json"
+            else:
+                file_format = "csv"  # Default assumption
+
+        columns: list[dict[str, Any]] = []
+        row_count = 0
+
+        if file_format == "parquet":
+            try:
+                import pyarrow.parquet as pq
+
+                table = pq.read_table(io.BytesIO(raw_data))
+                schema = table.schema
+                columns = [
+                    {"name": pq_field.name, "type": str(pq_field.type), "nullable": pq_field.nullable}
+                    for pq_field in schema
+                ]
+                row_count = table.num_rows
+            except ImportError:
+                raise SchemaDetectionError("pyarrow is required for Parquet schema detection") from None
+            except Exception as exc:
+                raise SchemaDetectionError(f"Failed to parse Parquet: {exc}") from exc
+
+        elif file_format == "csv":
+            import csv as csv_module
+
+            reader = csv_module.reader(io.StringIO(raw_data.decode("utf-8", errors="replace")))
+            header = next(reader, None)
+            if not header:
+                raise SchemaDetectionError("CSV file is empty or has no header")
+
+            # Sample rows to infer types
+            sample_rows = []
+            for i, row in enumerate(reader):
+                sample_rows.append(row)
+                if i >= 999:
+                    break
+            row_count = len(sample_rows)
+
+            for col_idx, col_name in enumerate(header):
+                # Infer type from sample values
+                col_values = [r[col_idx] for r in sample_rows if col_idx < len(r) and r[col_idx].strip()]
+                inferred_type = _infer_column_type(col_values)
+                has_nulls = any(col_idx >= len(r) or not r[col_idx].strip() for r in sample_rows)
+                columns.append({"name": col_name.strip(), "type": inferred_type, "nullable": has_nulls})
+
+        elif file_format == "json":
+            import json as json_module
+
+            try:
+                text = raw_data.decode("utf-8")
+                # Try JSONL first
+                lines = text.strip().split("\n")
+                if len(lines) > 1:
+                    records = [json_module.loads(line) for line in lines[:1000] if line.strip()]
+                else:
+                    data = json_module.loads(text)
+                    records = data if isinstance(data, list) else [data]
+            except (ValueError, json_module.JSONDecodeError) as exc:
+                raise SchemaDetectionError(f"Failed to parse JSON: {exc}") from exc
+
+            if records and isinstance(records[0], dict):
+                all_keys: dict[str, set[str]] = {}
+                for rec in records:
+                    for k, v in rec.items():
+                        if k not in all_keys:
+                            all_keys[k] = set()
+                        all_keys[k].add(type(v).__name__)
+
+                file_type_map = {"str": "string", "int": "integer", "float": "float",
+                                 "bool": "boolean", "NoneType": "string"}
+                columns = [
+                    {
+                        "name": k,
+                        "type": file_type_map.get(next(iter(v - {"NoneType"}), "str"), "string"),
+                        "nullable": "NoneType" in v,
+                    }
+                    for k, v in all_keys.items()
+                ]
+                row_count = len(records)
+
+        table_name = source_config.get(
+            "entity_name", file_path.split("/")[-1].split(".")[0] if file_path else "file_data"
+        )
+
         return SourceDetectionResult(
-            tables=[], estimated_row_counts={}, primary_keys={}, data_types={}, recommended_watermark_columns={}
+            tables=[{"table_name": table_name, "columns": columns}],
+            estimated_row_counts={table_name: row_count},
+            primary_keys={},
+            data_types={table_name: {c["name"]: c["type"] for c in columns}},
+            recommended_watermark_columns={},
         )
 
     def _detect_stream_schema(self, source_config: dict[str, Any]) -> SourceDetectionResult:
-        """Detect schema for streaming sources."""
-        logger.info("Detecting stream schema (mock implementation)")
-        # Would sample stream messages
-        return SourceDetectionResult(
-            tables=[], estimated_row_counts={}, primary_keys={}, data_types={}, recommended_watermark_columns={}
-        )
+        """Detect schema by consuming sample events from Event Hub or Kafka."""
+
+        source_type = source_config.get("source_type", "event_hub")
+
+        if source_type == "event_hub":
+            from azure.eventhub import EventHubConsumerClient
+            from azure.identity import DefaultAzureCredential
+
+            namespace = source_config.get("event_hub_namespace", "")
+            hub_name = source_config.get("event_hub_name", "")
+            consumer_group = source_config.get("consumer_group", "$Default")
+            sample_count = source_config.get("sample_size", 50)
+
+            if not all([namespace, hub_name]):
+                raise SchemaDetectionError("event_hub_namespace and event_hub_name are required")
+
+            logger.info("Sampling Event Hub for schema detection",
+                        namespace=namespace, hub=hub_name)
+
+            samples: list[dict[str, Any]] = []
+
+            def on_event(_partition_context, event):
+                if event and len(samples) < sample_count:
+                    try:
+                        body = event.body_as_json()
+                        if isinstance(body, dict):
+                            samples.append(body)
+                    except (ValueError, TypeError):
+                        pass  # Skip non-JSON events
+                if len(samples) >= sample_count:
+                    raise StopIteration  # Signal to stop
+
+            try:
+                fqns = f"{namespace}.servicebus.windows.net"
+                client = EventHubConsumerClient(
+                    fully_qualified_namespace=fqns,
+                    eventhub_name=hub_name,
+                    consumer_group=consumer_group,
+                    credential=DefaultAzureCredential(),
+                )
+                with client, contextlib.suppress(StopIteration):
+                    client.receive(on_event=on_event, starting_position="-1", max_wait_time=10)
+            except Exception as exc:
+                raise SchemaDetectionError(f"Event Hub connection failed: {exc}") from exc
+
+            if not samples:
+                return SourceDetectionResult(
+                    tables=[{"table_name": hub_name, "columns": []}],
+                    estimated_row_counts={},
+                    primary_keys={},
+                    data_types={},
+                    recommended_watermark_columns={hub_name: ["enqueuedTime"]},
+                )
+
+            # Merge schemas from samples
+            all_fields: dict[str, set[str]] = {}
+            for sample in samples:
+                for key, value in sample.items():
+                    if key not in all_fields:
+                        all_fields[key] = set()
+                    all_fields[key].add(type(value).__name__)
+
+            type_map = {"str": "string", "int": "integer", "float": "float", "bool": "boolean",
+                         "NoneType": "string", "list": "array", "dict": "object"}
+
+            columns = [
+                {"name": k, "type": type_map.get(next(iter(v - {"NoneType"}), "str"), "string"),
+                 "nullable": "NoneType" in v or len([s for s in samples if k not in s]) > 0}
+                for k, v in all_fields.items()
+            ]
+
+            return SourceDetectionResult(
+                tables=[{"table_name": hub_name, "columns": columns}],
+                estimated_row_counts={hub_name: len(samples)},
+                primary_keys={},
+                data_types={hub_name: {c["name"]: c["type"] for c in columns}},
+                recommended_watermark_columns={hub_name: ["enqueuedTime", "timestamp"]},
+            )
+
+        raise SchemaDetectionError(f"Stream schema detection not yet implemented for {source_type}")
 
     def select_template(self, source_type: str, ingestion_mode: str) -> str:
         """Select appropriate pipeline template.

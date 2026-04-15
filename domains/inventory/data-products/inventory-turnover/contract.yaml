@@ -1,4 +1,4 @@
-# Data product contract — inventory.inventory_turnover
+# Data product contract -- inventory.inventory_turnover
 #
 # Gold-layer inventory turnover analysis with health metrics.
 
@@ -65,19 +65,19 @@ schema:
       type: decimal(18,2)
       nullable: true
       description: >
-        Average daily demand (currently NULL — requires product_id in
+        Average daily demand (currently NULL -- requires product_id in
         fact_orders to enable product-level demand attribution).
     - name: days_of_supply
       type: decimal(18,2)
       nullable: true
       description: >
-        Estimated days of supply remaining (currently NULL — requires
+        Estimated days of supply remaining (currently NULL -- requires
         daily_demand calculation).
     - name: supply_demand_status
       type: string
       nullable: true
       description: >
-        Supply vs demand classification (currently NULL — requires
+        Supply vs demand classification (currently NULL -- requires
         demand data).
 
 sla:

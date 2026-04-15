@@ -2,7 +2,8 @@
     materialized='incremental',
     unique_key='delivery_sk',
     merge_exclude_columns=['_dbt_loaded_at'],
-    tags=['silver', 'delivery_performance', 'cleaned']
+    tags=['silver', 'delivery_performance', 'cleaned'],
+    on_schema_change='fail'
 ) }}
 
 /*

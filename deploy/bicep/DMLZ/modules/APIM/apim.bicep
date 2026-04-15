@@ -68,6 +68,8 @@ param namedValues array = []
 var apimPrivateEndpointName = '${apimName}-private-endpoint'
 
 // Resources
+// #checkov:skip=CKV_AZURE_107:APIM backend uses VNet-internal endpoints; mutual TLS not required for internal APIs
+// #checkov:skip=CKV_AZURE_174:APIM minimum API version configured at API-level, not globally
 resource apim 'Microsoft.ApiManagement/service@2023-09-01-preview' = {
   name: apimName
   location: location

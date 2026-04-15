@@ -2,7 +2,8 @@
     materialized='incremental',
     unique_key='earthquake_sk',
     merge_exclude_columns=['_dbt_loaded_at'],
-    tags=['silver', 'earthquake', 'seismic', 'cleaned']
+    tags=['silver', 'earthquake', 'seismic', 'cleaned'],
+    on_schema_change='fail'
 ) }}
 
 {#

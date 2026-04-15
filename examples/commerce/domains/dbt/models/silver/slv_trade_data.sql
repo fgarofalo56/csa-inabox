@@ -2,7 +2,8 @@
     materialized='incremental',
     unique_key='trade_sk',
     merge_exclude_columns=['_dbt_loaded_at'],
-    tags=['silver', 'trade', 'cleaned']
+    tags=['silver', 'trade', 'cleaned'],
+    on_schema_change='fail'
 ) }}
 
 {#

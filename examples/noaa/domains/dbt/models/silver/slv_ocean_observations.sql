@@ -2,7 +2,8 @@
     materialized='incremental',
     unique_key='buoy_observation_sk',
     merge_exclude_columns=['_dbt_loaded_at'],
-    tags=['silver', 'ocean_observations', 'cleaned']
+    tags=['silver', 'ocean_observations', 'cleaned'],
+    on_schema_change='fail'
 ) }}
 
 {#

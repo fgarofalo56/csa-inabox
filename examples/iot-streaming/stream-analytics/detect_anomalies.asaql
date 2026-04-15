@@ -8,7 +8,20 @@
 -- Output: SpikeAlertOutput      (spike/dip anomalies → Event Hub / ADLS)
 --         ChangePointOutput     (level-shift detection → Event Hub / ADLS)
 --         TemperatureAlertOutput (threshold + anomaly combined → ADLS)
+--         DeadLetterOutput      (malformed rows for investigation)
 -- ═══════════════════════════════════════════════════════════════
+
+-- ─── Dead-letter: capture rows where CAST fails (malformed data) ──
+-- Routes rows where temperature_c cannot be cast to float, indicating
+-- malformed sensor payloads that would break anomaly detection.
+SELECT
+    *,
+    System.Timestamp()                AS error_time,
+    'CAST_FAILURE'                    AS error_reason
+INTO [DeadLetterOutput]
+FROM [TelemetryInput]
+WHERE (TRY_CAST(temperature_c AS float) IS NULL AND temperature_c IS NOT NULL)
+   OR (TRY_CAST(timestamp AS datetime) IS NULL AND timestamp IS NOT NULL);
 
 -- ─── Spike and Dip Detection (Temperature) ──────────────────
 -- Detects sudden spikes and dips in temperature readings.
@@ -45,6 +58,16 @@ HAVING anomaly_score > 0;
 
 -- ─── Spike and Dip Detection (AQI / PM2.5) ──────────────────
 -- Detects sudden AQI spikes that may indicate pollution events.
+-- Dead-letter: capture AQI rows where pm25_ugm3 cannot be cast to float
+SELECT
+    *,
+    System.Timestamp()                AS error_time,
+    'AQI_CAST_FAILURE'                AS error_reason
+INTO [DeadLetterOutput]
+FROM [AQIInput]
+WHERE TRY_CAST(pm25_ugm3 AS float) IS NULL
+  AND pm25_ugm3 IS NOT NULL;
+
 SELECT
     sensor_id,
     CAST(timestamp AS datetime)       AS event_time,

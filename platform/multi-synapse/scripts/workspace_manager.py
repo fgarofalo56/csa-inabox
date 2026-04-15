@@ -33,12 +33,14 @@ from __future__ import annotations
 
 import argparse
 import json
-import logging
 import sys
 from dataclasses import dataclass, field
 from typing import Any
 
-logger = logging.getLogger(__name__)
+from governance.common.logging import configure_structlog, get_logger
+
+configure_structlog(service="workspace-manager")
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -98,7 +100,7 @@ class SynapseWorkspaceManager:
     ) -> None:
         self.subscription_id = subscription_id
         self._credential = credential
-        self._client: Any = None
+        self._client: Any | None = None  # TODO: Replace with typed client when SDK stubs are available
 
     def _get_client(self) -> Any:
         """Lazily initialize the Synapse management client."""
@@ -183,7 +185,7 @@ class SynapseWorkspaceManager:
         )
 
         result = poller.result()
-        logger.info("Workspace '%s' created successfully", config.name)
+        logger.info("workspace.created", name=config.name)
 
         return {
             "name": result.name,
@@ -223,7 +225,7 @@ class SynapseWorkspaceManager:
                 )
             )
 
-        logger.info("Found %d workspaces in %s", len(results), resource_group)
+        logger.info("workspaces.listed", count=len(results), resource_group=resource_group)
         return results
 
     def configure_firewall(
@@ -518,7 +520,6 @@ def main(argv: list[str] | None = None) -> int:
     config_parser.set_defaults(func=_cli_configure)
 
     args = parser.parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     args.func(args)
     return 0
 

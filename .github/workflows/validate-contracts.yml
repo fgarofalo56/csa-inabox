@@ -117,3 +117,8 @@ jobs:
           else:
               print("All contracts have corresponding dbt models")
           SCRIPT
+
+      - name: Validate data contracts (Python)
+        run: |
+          pip install -e ".[governance]"
+          python -m governance.contracts.contract_validator --ci

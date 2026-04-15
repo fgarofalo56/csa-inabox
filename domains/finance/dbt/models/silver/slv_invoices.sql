@@ -4,7 +4,8 @@
     unique_key='invoice_sk',
     incremental_strategy='merge',
     file_format='delta',
-    tags=['silver', 'finance', 'invoices']
+    tags=['silver', 'finance', 'invoices'],
+    on_schema_change='fail'
   )
 }}
 

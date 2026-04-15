@@ -1,4 +1,4 @@
-# Data product contract — shared.orders
+# Data product contract -- shared.orders
 #
 # Authoritative interface for the shared domain's order data product.
 # Consumed by finance.gld_revenue_reconciliation and downstream analytics.

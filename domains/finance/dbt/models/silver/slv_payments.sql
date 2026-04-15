@@ -4,7 +4,8 @@
     unique_key='payment_sk',
     incremental_strategy='merge',
     file_format='delta',
-    tags=['silver', 'finance', 'payments']
+    tags=['silver', 'finance', 'payments'],
+    on_schema_change='fail'
   )
 }}
 

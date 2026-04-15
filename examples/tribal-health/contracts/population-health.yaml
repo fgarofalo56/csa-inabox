@@ -15,6 +15,115 @@ metadata:
     metrics for diabetes prevalence, behavioral health service utilization,
     and maternal/child health outcomes.
 
+schema:
+  primary_key: [service_unit, reporting_period]
+  columns:
+    - name: service_unit
+      type: string
+      nullable: false
+      description: IHS service unit name
+
+    - name: reporting_period
+      type: string
+      nullable: false
+      description: Quarterly reporting period (YYYY-QN)
+
+    - name: total_population
+      type: integer
+      nullable: false
+      description: Total enrolled population in service unit
+
+    - name: total_diabetic_patients
+      type: integer
+      nullable: true
+      description: Count of patients with diabetes diagnosis (NULL if suppressed)
+
+    - name: prevalence_rate_per_1000
+      type: decimal(6,1)
+      nullable: true
+      description: Diabetes prevalence per 1,000 adult population
+
+    - name: a1c_controlled_pct
+      type: decimal(5,1)
+      nullable: true
+      description: Percentage of diabetic patients with A1C < 7.0%
+
+    - name: a1c_poor_control_pct
+      type: decimal(5,1)
+      nullable: true
+      description: Percentage with A1C >= 9.0%
+
+    - name: sud_encounter_rate_per_1000
+      type: decimal(6,1)
+      nullable: true
+      description: SUD encounters per 1,000 population (42 CFR Part 2 — aggregate only)
+
+    - name: mh_encounter_rate_per_1000
+      type: decimal(6,1)
+      nullable: true
+      description: Mental health encounters per 1,000 population
+
+    - name: immunization_series_complete_pct
+      type: decimal(5,1)
+      nullable: true
+      description: Complete immunization series rate for children 0-4
+
+    - name: prenatal_first_trimester_pct
+      type: decimal(5,1)
+      nullable: true
+      description: First trimester prenatal care entry rate
+
+    - name: low_birth_weight_pct
+      type: decimal(5,1)
+      nullable: true
+      description: Percentage of births under 2500g
+
+    - name: report_date
+      type: date
+      nullable: false
+      description: Date when analytics were generated
+
+sla:
+  freshness_minutes: 129600  # 90 days (quarterly updates)
+  valid_row_ratio: 0.95
+  supported_until: "2027-12-31"
+  update_frequency: >
+    Quarterly for diabetes prevalence and maternal-child health.
+    Monthly for behavioral health utilization.
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: service_unit
+  - rule: expect_column_values_to_not_be_null
+    column: reporting_period
+  - rule: expect_column_values_to_not_be_null
+    column: total_population
+  - rule: expect_column_values_to_be_between
+    column: prevalence_rate_per_1000
+    min_value: 0
+    max_value: 1000
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: a1c_controlled_pct
+    min_value: 0
+    max_value: 100
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: a1c_poor_control_pct
+    min_value: 0
+    max_value: 100
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: immunization_series_complete_pct
+    min_value: 0
+    max_value: 100
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: low_birth_weight_pct
+    min_value: 0
+    max_value: 100
+    mostly: 0.99
+
 classification:
   level: CUI
   category: SP-HLTH

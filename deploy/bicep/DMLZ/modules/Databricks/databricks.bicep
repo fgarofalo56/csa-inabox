@@ -46,6 +46,7 @@ param logAnalyticsWorkspaceId string = ''
 var managedRgId = '${subscription().id}/resourceGroups/${managedResourceGroupName}'
 
 // Resources
+// #checkov:skip=CKV_AZURE_158:DMLZ governance Databricks CMK encryption not required for dev/lab
 resource databricksWorkspace 'Microsoft.Databricks/workspaces@2024-05-01' = {
   name: workspaceName
   location: location

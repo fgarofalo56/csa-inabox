@@ -1,3 +1,5 @@
+-- materialized='table': Full rebuild required — FULL OUTER JOIN reconciliation
+-- across domains has no reliable incremental key.
 {{
   config(
     materialized='table',

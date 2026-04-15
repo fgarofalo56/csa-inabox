@@ -20,12 +20,14 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import logging
 import sys
 from dataclasses import dataclass, field
 from typing import Any
 
-logger = logging.getLogger(__name__)
+from governance.common.logging import configure_structlog, get_logger
+
+configure_structlog(service="cross-workspace-query")
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -146,7 +148,7 @@ class CrossWorkspaceQueryRunner:
         conn = pyodbc.connect(conn_str, attrs_before={SQL_COPT_SS_ACCESS_TOKEN: token_bytes})
         self._connections[cache_key] = conn
 
-        logger.info("Connected to %s/%s", workspace_endpoint, database)
+        logger.info("connected", workspace_endpoint=workspace_endpoint, database=database)
         return conn
 
     def create_external_data_source(
@@ -196,7 +198,7 @@ class CrossWorkspaceQueryRunner:
             )
             return {"name": source.name, "status": "created"}
         except Exception as exc:
-            logger.error("Failed to create external data source: %s", exc)
+            logger.error("external_data_source.create_failed", error=str(exc))
             return {"name": source.name, "status": "error", "error": str(exc)}
 
     def run_federated_query(
@@ -254,7 +256,7 @@ class CrossWorkspaceQueryRunner:
 
         except Exception as exc:
             elapsed = (time.monotonic() - start) * 1000
-            logger.error("Query failed after %.1fms: %s", elapsed, exc)
+            logger.error("query.failed", elapsed_ms=elapsed, error=str(exc))
             return QueryResult(
                 workspace=workspace_endpoint,
                 database=database,
@@ -395,7 +397,6 @@ def main(argv: list[str] | None = None) -> int:
     list_parser.set_defaults(func=_cli_list_sources)
 
     args = parser.parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     args.func(args)
     return 0
 

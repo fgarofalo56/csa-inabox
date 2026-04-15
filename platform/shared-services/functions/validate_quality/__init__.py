@@ -38,13 +38,15 @@ Response::
 from __future__ import annotations
 
 import json
-import logging
 import re
 from typing import Any
 
 import azure.functions as func
 
-logger = logging.getLogger(__name__)
+from governance.common.logging import configure_structlog, get_logger
+
+configure_structlog(service="validate-quality")
+logger = get_logger(__name__)
 
 app = func.FunctionApp()
 
@@ -389,7 +391,7 @@ def validate_quality(req: func.HttpRequest) -> func.HttpResponse:
             else:
                 rules_failed += 1
         except Exception as exc:
-            logger.exception("Error evaluating rule %s", rule_type)
+            logger.exception("rule.evaluation_error", rule_type=rule_type)
             all_violations.append(
                 {
                     "rule": rule_type,
