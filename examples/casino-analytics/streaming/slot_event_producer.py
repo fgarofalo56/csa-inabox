@@ -31,7 +31,7 @@ import signal
 import sys
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 logging.basicConfig(
@@ -147,7 +147,7 @@ class SlotEventSimulator:
         machine = self.machines[machine_id]
         event_type = self._weighted_choice(EVENT_TYPES)
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         event = {
             "event_id": str(uuid.uuid4()),
             "machine_id": machine_id,
@@ -171,12 +171,12 @@ class SlotEventSimulator:
         # Event-type-specific payload
         denom = machine["denomination"]
         if event_type == "spin":
-            credits = self.rng.choice([1, 2, 3, 5, 10, 20, 50]) * denom
+            credits_bet = self.rng.choice([1, 2, 3, 5, 10, 20, 50]) * denom
             rtp = max(0, self.rng.gauss(machine["target_rtp"], 0.15))
-            won = round(credits * rtp, 2)
-            event["credits_wagered"] = credits
+            won = round(credits_bet * rtp, 2)
+            event["credits_wagered"] = credits_bet
             event["credits_won"] = won
-            event["rtp_contribution"] = round(won / credits, 4) if credits > 0 else 0
+            event["rtp_contribution"] = round(won / credits_bet, 4) if credits_bet > 0 else 0
 
         elif event_type == "bonus_trigger":
             event["credits_wagered"] = 0

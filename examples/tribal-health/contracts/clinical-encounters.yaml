@@ -1,0 +1,274 @@
+# Clinical Encounters Data Contract — Tribal Health Data Warehouse
+# Classification: CUI // SP-HLTH (Controlled Unclassified Information — Health)
+# Compliance: HIPAA, FedRAMP High, Tribal Data Sovereignty, 42 CFR Part 2 (SUD)
+
+apiVersion: v1
+kind: DataContract
+metadata:
+  name: clinical-encounters
+  version: "1.0.0"
+  domain: tribal-health
+  owner: tribal-health-data-team
+  description: >
+    Clinical encounter analytics from IHS and tribal health facility
+    electronic health records. Provides encounter-level detail including
+    visit type, diagnosis coding (ICD-10), provider type, and disposition.
+    All data is synthetic. Used for clinical operations analysis, utilization
+    management, and population health surveillance.
+
+classification:
+  level: CUI
+  category: SP-HLTH
+  handling_instructions: >
+    Controlled Unclassified Information — Health. Handle in accordance with
+    NIST SP 800-171 and 32 CFR Part 2002. Tribal data sovereignty restrictions
+    apply. Do not share without active data sharing agreement.
+  hipaa_protected: true
+  contains_phi: true  # Encounter-level data with patient identifiers
+  cfr42_part2_present: true  # SUD-related encounters may be present
+  tribal_sovereignty: true
+
+data_sharing:
+  default_sharing_level: authorized_only
+  requires_tribal_authorization: true
+  requires_data_sharing_agreement: true
+  consent_ledger_required: true
+  minimum_necessary_standard: enforced
+
+deployment:
+  cloud: AzureGovernment
+  regions:
+    primary: usgovvirginia
+    dr: usgovarizona
+  fedramp_baseline: HIGH
+
+data_products:
+  # ──────────────────────────────────────────────
+  # Clinical Encounter Records
+  # ──────────────────────────────────────────────
+  - name: encounter-records
+    description: >
+      Individual clinical encounter records with visit classification,
+      ICD-10 diagnosis codes, provider type, and disposition tracking.
+      Supports utilization analysis and clinical workflow optimization.
+    model: slv_encounters
+    schema:
+      format: delta
+      primary_key: [encounter_id]
+    columns:
+      - name: encounter_id
+        type: STRING
+        description: Unique encounter identifier (ENC-NNNNNNN)
+        pii: false
+
+      - name: patient_id
+        type: STRING
+        description: Patient tracking identifier (PTH-NNNNNN)
+        pii: true
+        pii_type: pseudonymous_id
+
+      - name: facility_id
+        type: STRING
+        description: IHS/tribal facility identifier (FAC-NNN)
+        pii: false
+
+      - name: encounter_date
+        type: DATE
+        description: Date of the clinical encounter
+        pii: false
+
+      - name: encounter_type
+        type: STRING
+        description: Type of clinical encounter
+        pii: false
+        constraints:
+          - accepted_values:
+              - OUTPATIENT
+              - ED
+              - INPATIENT
+              - TELEHEALTH
+              - DENTAL
+              - OPTOMETRY
+              - BEHAVIORAL_HEALTH
+              - PHARMACY
+
+      - name: primary_dx_icd10
+        type: STRING
+        description: Primary diagnosis ICD-10-CM code
+        pii: false
+
+      - name: secondary_dx_codes
+        type: STRING
+        description: Pipe-delimited secondary ICD-10-CM diagnosis codes
+        pii: false
+
+      - name: provider_type
+        type: STRING
+        description: Type of provider seen
+        pii: false
+        constraints:
+          - accepted_values:
+              - MD
+              - DO
+              - NP
+              - PA
+              - RN
+              - PHARMACIST
+              - DENTIST
+              - OPTOMETRIST
+              - PSYCHOLOGIST
+              - LCSW
+              - CHR
+
+      - name: disposition
+        type: STRING
+        description: Encounter disposition/outcome
+        pii: false
+        constraints:
+          - accepted_values:
+              - DISCHARGED
+              - ADMITTED
+              - TRANSFERRED
+              - LEFT_AMA
+              - DECEASED
+              - REFERRED
+
+    sla:
+      freshness: daily
+      freshness_hours: 24
+      availability: 99.5%
+      support_hours: business_hours
+    quality:
+      completeness: 95%
+      accuracy: 98%
+      icd10_validation: enforced
+    access:
+      roles:
+        - tribal_health_director
+        - clinical_operations_manager
+        - ihs_area_epidemiologist
+        - quality_improvement_coordinator
+      tribal_rls: enforced
+      hipaa_minimum_necessary: enforced
+      audit_logging: required
+
+  # ──────────────────────────────────────────────
+  # Encounter Utilization Analytics (Aggregated)
+  # ──────────────────────────────────────────────
+  - name: encounter-utilization
+    description: >
+      Aggregated encounter utilization metrics by facility, encounter type,
+      and time period. De-identified for population-level reporting.
+    model: gld_encounter_utilization
+    schema:
+      format: delta
+      primary_key: [facility_id, encounter_type, reporting_period]
+    columns:
+      - name: facility_id
+        type: STRING
+        description: IHS/tribal facility identifier
+        pii: false
+
+      - name: encounter_type
+        type: STRING
+        description: Type of clinical encounter
+        pii: false
+
+      - name: reporting_period
+        type: STRING
+        description: Monthly reporting period (YYYY-MM)
+        pii: false
+
+      - name: total_encounters
+        type: INT
+        description: Total encounter count (NULL if suppressed)
+        pii: false
+        suppression: "NULL when count < 5"
+
+      - name: unique_patients
+        type: INT
+        description: Unique patient count (NULL if suppressed)
+        pii: false
+        suppression: "NULL when count < 5"
+
+      - name: avg_encounters_per_patient
+        type: DECIMAL(5,2)
+        description: Average encounters per unique patient
+        pii: false
+
+      - name: top_dx_category
+        type: STRING
+        description: Most common ICD-10 chapter/category
+        pii: false
+
+      - name: ed_revisit_rate_pct
+        type: DECIMAL(5,1)
+        description: ED 72-hour revisit rate percentage
+        pii: false
+
+    sla:
+      freshness: monthly
+      freshness_hours: 720  # 30 days
+      availability: 99.5%
+    quality:
+      completeness: 95%
+      accuracy: 98%
+      small_cell_suppression: enforced
+    access:
+      roles:
+        - tribal_health_director
+        - ihs_area_epidemiologist
+        - tribal_epi_center
+      tribal_rls: enforced
+      audit_logging: required
+
+lineage:
+  sources:
+    - name: synthetic_rpms_extract
+      type: batch
+      format: csv
+      frequency: daily
+      description: Synthetic RPMS-compatible encounter data
+    - name: ihs_facility_reference
+      type: batch
+      format: csv
+      frequency: monthly
+      description: IHS facility reference data
+  transformations:
+    - name: bronze_ingestion
+      description: Raw encounter data landing with validation flags
+      models: [brz_encounters]
+    - name: silver_standardization
+      description: ICD-10 validation, encounter type normalization, provider standardization
+      models: [slv_encounters]
+    - name: gold_aggregation
+      description: Utilization analytics with small cell suppression
+      models: [gld_encounter_utilization]
+
+monitoring:
+  data_quality:
+    - test: small_cell_suppression
+      description: Verify no output cell has count < 5
+      frequency: every_run
+      severity: critical
+    - test: icd10_format_validation
+      description: Validate ICD-10-CM code format (letter + digits + optional decimal)
+      frequency: every_run
+      severity: high
+    - test: hipaa_compliance
+      description: Verify audit logging and access controls
+      frequency: daily
+      severity: critical
+    - test: tribal_rls_verification
+      description: Verify row-level security enforces tribal data isolation
+      frequency: weekly
+      severity: critical
+  freshness:
+    warn_after_hours: 48
+    error_after_hours: 168  # 7 days
+  alerting:
+    channels:
+      - type: email
+        recipients: tribal-health-data-team@example.gov
+      - type: teams
+        webhook: "${TEAMS_WEBHOOK_URL}"

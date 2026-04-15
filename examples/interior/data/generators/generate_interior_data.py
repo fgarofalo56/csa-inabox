@@ -24,7 +24,7 @@ from typing import Any
 # ---------------------------------------------------------------------------
 
 # Fault zone centers for geographic clustering of earthquakes
-# (lat, lon, name, base_rate, max_depth, typical_magnitude_range)
+# (lat, lon, name, base_rate, max_depth, typical_magnitude_range)  # noqa: ERA001
 FAULT_ZONES: list[dict[str, Any]] = [
     {"lat": 36.0, "lon": -120.0, "name": "San Andreas (Central CA)",
      "rate": 0.25, "max_depth": 20, "mag_range": (2.5, 7.5)},

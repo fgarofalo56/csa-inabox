@@ -667,7 +667,7 @@ Examples:
     print("=" * 60)
 
     # Weather observations
-    print(f"\n📡 Generating weather observations ({args.stations} stations × {args.days} days)...")
+    print(f"\n📡 Generating weather observations ({args.stations} stations x {args.days} days)...")
     weather = generate_weather_observations(
         num_stations=args.stations,
         num_days=args.days,
@@ -681,7 +681,7 @@ Examples:
     _write_csv(storms, os.path.join(args.output_dir, "storm_events.csv"))
 
     # Buoy observations
-    print(f"\n🌊 Generating buoy observations ({args.buoys} buoys × {args.buoy_days} days)...")
+    print(f"\n🌊 Generating buoy observations ({args.buoys} buoys x {args.buoy_days} days)...")
     buoys = generate_buoy_observations(
         num_buoys=args.buoys,
         num_days=args.buoy_days,

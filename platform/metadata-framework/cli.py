@@ -184,7 +184,7 @@ def cmd_generate_all(args: argparse.Namespace) -> int:
     return 1
 
 
-def cmd_list_templates(args: argparse.Namespace) -> int:
+def cmd_list_templates(_args: argparse.Namespace) -> int:
     """List available pipeline templates."""
     try:
         generator = PipelineGenerator()
@@ -202,7 +202,7 @@ def cmd_list_templates(args: argparse.Namespace) -> int:
         return 1
 
 
-def cmd_schema_info(args: argparse.Namespace) -> int:
+def cmd_schema_info(_args: argparse.Namespace) -> int:
     """Show information about the source registration schema."""
     try:
         generator = PipelineGenerator()

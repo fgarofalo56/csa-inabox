@@ -462,7 +462,365 @@ save_analysis_results()
 # COMMAND ----------
 
 print("=" * 65)
-print("COMMERCE ECONOMIC ANALYSIS - SUMMARY REPORT")
+print("COMMERCE ECONOMIC ANALYSIS - INITIAL RESULTS")
+print("=" * 65)
+
+print("\nDataset Overview:")
+print(f"  Census ACS records: {len(df_census):,}")
+print(f"  GDP records: {len(df_gdp):,}")
+print(f"  Trade records: {len(df_trade):,}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Sector Comparison Analysis
+
+# COMMAND ----------
+
+def analyze_sector_comparison(df_gdp):
+    """Deep comparison of GDP sectors across states and time."""
+    fig, axes = plt.subplots(2, 2, figsize=(18, 14))
+
+    # Industry growth rates
+    industry_yearly = df_gdp.groupby(['industry_name', 'year'])['gdp_current_dollars'].sum().reset_index()
+    industry_yearly = industry_yearly.sort_values(['industry_name', 'year'])
+    industry_yearly['growth'] = industry_yearly.groupby('industry_name')['gdp_current_dollars'].pct_change() * 100
+
+    latest_year = industry_yearly['year'].max()
+    latest_growth = industry_yearly[industry_yearly['year'] == latest_year].dropna()
+    latest_growth = latest_growth.sort_values('growth')
+
+    colors_growth = ['red' if g < 0 else 'green' for g in latest_growth['growth']]
+    axes[0, 0].barh(latest_growth['industry_name'], latest_growth['growth'], color=colors_growth)
+    axes[0, 0].axvline(x=0, color='black', linestyle='-')
+    axes[0, 0].set_title(f'Industry GDP Growth ({latest_year})', fontweight='bold')
+    axes[0, 0].set_xlabel('Growth Rate (%)')
+    axes[0, 0].grid(True, alpha=0.3)
+
+    # Industry concentration (Herfindahl index per state)
+    state_industry = df_gdp.groupby(['state_name', 'industry_name'])['gdp_current_dollars'].sum().reset_index()
+    state_total = df_gdp.groupby('state_name')['gdp_current_dollars'].sum().reset_index()
+    state_total.columns = ['state_name', 'total_gdp']
+    state_industry = state_industry.merge(state_total, on='state_name')
+    state_industry['share'] = (state_industry['gdp_current_dollars'] / state_industry['total_gdp']).clip(lower=0)
+    state_industry['share_sq'] = state_industry['share'] ** 2
+
+    hhi = state_industry.groupby('state_name')['share_sq'].sum().reset_index()
+    hhi.columns = ['state_name', 'hhi']
+    hhi = hhi.sort_values('hhi', ascending=False)
+
+    colors_hhi = ['red' if h > 0.25 else 'orange' if h > 0.15 else 'green' for h in hhi['hhi']]
+    axes[0, 1].barh(hhi['state_name'].head(15), hhi['hhi'].head(15), color=colors_hhi[:15])
+    axes[0, 1].set_title('Economic Concentration (HHI) by State', fontweight='bold')
+    axes[0, 1].set_xlabel('Herfindahl-Hirschman Index')
+    axes[0, 1].axvline(x=0.25, color='red', linestyle='--', alpha=0.5, label='Highly concentrated')
+    axes[0, 1].legend()
+    axes[0, 1].grid(True, alpha=0.3)
+
+    # Sector composition over time
+    industry_total = df_gdp.groupby(['year', 'industry_name'])['gdp_current_dollars'].sum().reset_index()
+    year_total = industry_total.groupby('year')['gdp_current_dollars'].sum().reset_index()
+    year_total.columns = ['year', 'yearly_total']
+    industry_total = industry_total.merge(year_total, on='year')
+    industry_total['share'] = industry_total['gdp_current_dollars'] / industry_total['yearly_total'] * 100
+
+    top_industries = df_gdp.groupby('industry_name')['gdp_current_dollars'].sum().nlargest(5).index
+    for ind in top_industries:
+        ind_data = industry_total[industry_total['industry_name'] == ind]
+        axes[1, 0].plot(ind_data['year'], ind_data['share'], marker='o', label=ind[:25], linewidth=2)
+    axes[1, 0].set_title('Top 5 Industry Share Over Time', fontweight='bold')
+    axes[1, 0].set_xlabel('Year')
+    axes[1, 0].set_ylabel('GDP Share (%)')
+    axes[1, 0].legend(fontsize=7)
+    axes[1, 0].grid(True, alpha=0.3)
+
+    # Real vs nominal GDP gap by industry
+    industry_gap = df_gdp.groupby('industry_name').agg(
+        nominal=('gdp_current_dollars', 'sum'),
+        real=('gdp_chained_dollars', 'sum')
+    ).reset_index()
+    industry_gap['inflation_gap_pct'] = ((industry_gap['nominal'] - industry_gap['real']) /
+                                          industry_gap['nominal'].clip(lower=1) * 100).round(1)
+    industry_gap = industry_gap.sort_values('inflation_gap_pct')
+
+    axes[1, 1].barh(industry_gap['industry_name'], industry_gap['inflation_gap_pct'],
+                   color='purple', alpha=0.7)
+    axes[1, 1].set_title('Nominal-Real GDP Gap by Industry (%)', fontweight='bold')
+    axes[1, 1].set_xlabel('Gap (%)')
+    axes[1, 1].grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig('/tmp/sector_comparison.png', dpi=300, bbox_inches='tight')
+    plt.show()
+
+    return hhi
+
+hhi_scores = analyze_sector_comparison(df_gdp)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Leading Indicator Correlations
+
+# COMMAND ----------
+
+from scipy.stats import spearmanr
+
+
+def analyze_leading_indicators(df_census, df_gdp, df_trade):
+    """Analyze correlations between demographic indicators and economic performance."""
+    # State-level economic summary
+    gdp_by_state = df_gdp.groupby('state_name').agg(
+        total_gdp=('gdp_current_dollars', 'sum'),
+        real_gdp=('gdp_chained_dollars', 'sum'),
+        n_industries=('industry_name', 'nunique')
+    ).reset_index()
+
+    # Census indicators by state
+    pop_by_state = df_census[df_census['variable_code'] == 'B01001_001E'].groupby('state_name')['estimate'].sum()
+    income_by_state = df_census[df_census['variable_code'] == 'B19013_001E'].groupby('state_name')['estimate'].mean()
+    poverty_by_state = df_census[df_census['variable_code'] == 'B17001_002E'].groupby('state_name')['estimate'].sum()
+
+    indicators = pd.DataFrame({
+        'population': pop_by_state,
+        'median_income': income_by_state,
+        'poverty_count': poverty_by_state
+    }).reset_index()
+
+    merged_ind = gdp_by_state.merge(indicators, on='state_name', how='inner').dropna()
+    if len(merged_ind) < 5:
+        print("Insufficient data for leading indicator analysis.")
+        return None
+
+    merged_ind['gdp_per_capita'] = merged_ind['total_gdp'] / merged_ind['population'].clip(lower=1)
+    merged_ind['poverty_rate'] = merged_ind['poverty_count'] / merged_ind['population'].clip(lower=1) * 100
+
+    fig, axes = plt.subplots(2, 2, figsize=(18, 14))
+
+    # GDP per capita vs median income
+    axes[0, 0].scatter(merged_ind['median_income'], merged_ind['gdp_per_capita'],
+                      alpha=0.7, s=80, c='steelblue')
+    for _, row in merged_ind.iterrows():
+        axes[0, 0].annotate(row['state_name'][:3],
+                           (row['median_income'], row['gdp_per_capita']), fontsize=7)
+    if len(merged_ind) > 3:
+        r, pval = pearsonr(merged_ind['median_income'], merged_ind['gdp_per_capita'])
+        z = np.polyfit(merged_ind['median_income'], merged_ind['gdp_per_capita'], 1)
+        p = np.poly1d(z)
+        x_line = np.linspace(merged_ind['median_income'].min(), merged_ind['median_income'].max(), 100)
+        axes[0, 0].plot(x_line, p(x_line), 'r--', alpha=0.7)
+        axes[0, 0].text(0.05, 0.95, f'r = {r:.3f}',
+                        transform=axes[0, 0].transAxes, va='top',
+                        bbox={'boxstyle': 'round', 'facecolor': 'white', 'alpha': 0.8})
+    axes[0, 0].set_title('GDP per Capita vs Median Income', fontweight='bold')
+    axes[0, 0].set_xlabel('Median Household Income ($)')
+    axes[0, 0].set_ylabel('GDP per Capita ($)')
+    axes[0, 0].grid(True, alpha=0.3)
+
+    # Poverty rate vs GDP per capita
+    axes[0, 1].scatter(merged_ind['poverty_rate'], merged_ind['gdp_per_capita'],
+                      alpha=0.7, s=80, c='coral')
+    for _, row in merged_ind.iterrows():
+        axes[0, 1].annotate(row['state_name'][:3],
+                           (row['poverty_rate'], row['gdp_per_capita']), fontsize=7)
+    axes[0, 1].set_title('Poverty Rate vs GDP per Capita', fontweight='bold')
+    axes[0, 1].set_xlabel('Poverty Rate (%)')
+    axes[0, 1].set_ylabel('GDP per Capita ($)')
+    axes[0, 1].grid(True, alpha=0.3)
+
+    # Correlation heatmap of all indicators
+    corr_cols = ['total_gdp', 'population', 'median_income', 'poverty_rate',
+                 'gdp_per_capita', 'n_industries']
+    available_corr = [c for c in corr_cols if c in merged_ind.columns]
+    corr = merged_ind[available_corr].corr()
+    mask = np.triu(np.ones_like(corr, dtype=bool))
+    sns.heatmap(corr, mask=mask, annot=True, fmt='.2f', cmap='RdBu_r',
+                center=0, ax=axes[1, 0])
+    axes[1, 0].set_title('Leading Indicator Correlations', fontweight='bold')
+
+    # Economic diversification vs GDP per capita
+    axes[1, 1].scatter(merged_ind['n_industries'], merged_ind['gdp_per_capita'],
+                      s=merged_ind['population'] / 50000, alpha=0.6, c='teal')
+    for _, row in merged_ind.iterrows():
+        axes[1, 1].annotate(row['state_name'][:3],
+                           (row['n_industries'], row['gdp_per_capita']), fontsize=7)
+    axes[1, 1].set_title('Industry Diversification vs GDP/capita (size=pop)', fontweight='bold')
+    axes[1, 1].set_xlabel('Number of Industries')
+    axes[1, 1].set_ylabel('GDP per Capita ($)')
+    axes[1, 1].grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig('/tmp/leading_indicators.png', dpi=300, bbox_inches='tight')
+    plt.show()
+
+    return merged_ind
+
+indicator_analysis = analyze_leading_indicators(df_census, df_gdp, df_trade)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Recession Indicator Modeling
+
+# COMMAND ----------
+
+import mlflow
+import mlflow.sklearn
+from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.metrics import f1_score, roc_auc_score, roc_curve
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+
+mlflow.set_experiment("/Commerce/economic_analysis")
+
+def build_recession_indicators(df_gdp):
+    """Build a model to identify recession-like conditions from GDP patterns."""
+    # Aggregate GDP by quarter
+    quarterly = df_gdp.groupby(['year', 'quarter']).agg(
+        total_gdp=('gdp_current_dollars', 'sum'),
+        real_gdp=('gdp_chained_dollars', 'sum'),
+        n_states=('state_name', 'nunique'),
+        n_industries=('industry_name', 'nunique')
+    ).reset_index().sort_values(['year', 'quarter'])
+
+    quarterly['gdp_growth'] = quarterly['total_gdp'].pct_change()
+    quarterly['real_gdp_growth'] = quarterly['real_gdp'].pct_change()
+
+    # Lag features
+    for lag in [1, 2, 4]:
+        quarterly[f'gdp_lag_{lag}'] = quarterly['total_gdp'].shift(lag)
+        quarterly[f'growth_lag_{lag}'] = quarterly['gdp_growth'].shift(lag)
+
+    quarterly['gdp_rolling_4q'] = quarterly['total_gdp'].rolling(window=4, min_periods=2).mean()
+    quarterly['growth_rolling_4q'] = quarterly['gdp_growth'].rolling(window=4, min_periods=2).mean()
+
+    # Define recession: 2 consecutive quarters of negative real growth
+    quarterly['negative_growth'] = (quarterly['real_gdp_growth'] < 0).astype(int)
+    quarterly['recession_flag'] = (
+        (quarterly['negative_growth'] == 1) &
+        (quarterly['negative_growth'].shift(1) == 1)
+    ).astype(int)
+
+    quarterly = quarterly.dropna()
+    print(f"Recession quarters: {quarterly['recession_flag'].sum()} / {len(quarterly)}")
+
+    features_rec = ['gdp_growth', 'real_gdp_growth', 'n_states', 'n_industries',
+                    'gdp_lag_1', 'gdp_lag_2', 'growth_lag_1', 'growth_lag_2',
+                    'growth_lag_4', 'gdp_rolling_4q', 'growth_rolling_4q']
+    available_rec = [f for f in features_rec if f in quarterly.columns]
+
+    X_rec = quarterly[available_rec].fillna(0)
+    y_rec = quarterly['recession_flag']
+
+    if y_rec.sum() < 2:
+        print("Insufficient recession events for robust modeling. Using indicator analysis only.")
+        fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+
+        axes[0].plot(quarterly['year'] + quarterly['quarter'] / 4,
+                    quarterly['real_gdp_growth'] * 100, 'b-o', linewidth=1.5)
+        axes[0].axhline(y=0, color='red', linestyle='--')
+        axes[0].fill_between(quarterly['year'] + quarterly['quarter'] / 4,
+                            quarterly['real_gdp_growth'] * 100,
+                            where=quarterly['real_gdp_growth'] < 0,
+                            color='red', alpha=0.3)
+        axes[0].set_title('Real GDP Growth Rate', fontweight='bold')
+        axes[0].set_xlabel('Year')
+        axes[0].set_ylabel('Growth Rate (%)')
+        axes[0].grid(True, alpha=0.3)
+
+        # Growth momentum
+        axes[1].plot(quarterly['year'] + quarterly['quarter'] / 4,
+                    quarterly['growth_rolling_4q'] * 100, 'g-o', linewidth=2,
+                    label='4Q Rolling Avg')
+        axes[1].plot(quarterly['year'] + quarterly['quarter'] / 4,
+                    quarterly['gdp_growth'] * 100, 'b.', alpha=0.5, label='Quarterly')
+        axes[1].axhline(y=0, color='red', linestyle='--')
+        axes[1].set_title('GDP Growth Momentum', fontweight='bold')
+        axes[1].set_xlabel('Year')
+        axes[1].set_ylabel('Growth Rate (%)')
+        axes[1].legend()
+        axes[1].grid(True, alpha=0.3)
+
+        plt.tight_layout()
+        plt.savefig('/tmp/recession_indicators.png', dpi=300, bbox_inches='tight')
+        plt.show()
+        return quarterly
+
+    X_tr, X_te, y_tr, y_te = train_test_split(X_rec, y_rec, test_size=0.3,
+                                                stratify=y_rec, random_state=42)
+    scaler_rec = StandardScaler()
+    X_tr_s = scaler_rec.fit_transform(X_tr)
+    X_te_s = scaler_rec.transform(X_te)
+
+    gb_rec = GradientBoostingClassifier(n_estimators=50, max_depth=3, random_state=42)
+
+    with mlflow.start_run(run_name="recession_indicator"):
+        gb_rec.fit(X_tr_s, y_tr)
+        y_pred_rec = gb_rec.predict(X_te_s)
+        y_prob_rec = gb_rec.predict_proba(X_te_s)[:, 1]
+
+        rec_f1 = f1_score(y_te, y_pred_rec, zero_division=0)
+        rec_auc = roc_auc_score(y_te, y_prob_rec)
+
+        mlflow.log_metric("f1", rec_f1)
+        mlflow.log_metric("auc", rec_auc)
+        mlflow.sklearn.log_model(gb_rec, "recession_model")
+        print(f"Recession Model - F1: {rec_f1:.3f}, AUC: {rec_auc:.3f}")
+
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+
+    fpr, tpr, _ = roc_curve(y_te, y_prob_rec)
+    axes[0].plot(fpr, tpr, linewidth=2, label=f'AUC={rec_auc:.3f}')
+    axes[0].plot([0, 1], [0, 1], 'k--', alpha=0.5)
+    axes[0].set_title('Recession Prediction ROC', fontweight='bold')
+    axes[0].set_xlabel('FPR')
+    axes[0].set_ylabel('TPR')
+    axes[0].legend()
+    axes[0].grid(True, alpha=0.3)
+
+    imp_rec = pd.DataFrame({
+        'feature': available_rec, 'importance': gb_rec.feature_importances_
+    }).sort_values('importance', ascending=True)
+    axes[1].barh(imp_rec['feature'], imp_rec['importance'], color='coral')
+    axes[1].set_title('Recession Feature Importance', fontweight='bold')
+    axes[1].set_xlabel('Importance')
+    axes[1].grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig('/tmp/recession_indicators.png', dpi=300, bbox_inches='tight')
+    plt.show()
+
+    return quarterly
+
+recession_data = build_recession_indicators(df_gdp)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Save Extended Results
+
+# COMMAND ----------
+
+# Save HHI scores
+hhi_spark = spark.createDataFrame(hhi_scores)
+hhi_spark = hhi_spark.withColumn("analysis_date", current_date())
+
+(hhi_spark.write
+ .mode("overwrite")
+ .option("mergeSchema", "true")
+ .saveAsTable("gold.gld_state_economic_concentration"))
+
+print("Saved to gold.gld_state_economic_concentration")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Summary Report
+
+# COMMAND ----------
+
+print("=" * 65)
+print("COMMERCE ECONOMIC ANALYSIS - COMPREHENSIVE SUMMARY")
 print("=" * 65)
 
 print("\nDataset Overview:")
@@ -473,6 +831,7 @@ print(f"  Trade records: {len(df_trade):,}")
 print("\nKey Findings:")
 print(f"  GDP data covers {df_gdp['state_name'].nunique()} states, {df_gdp['industry_name'].nunique()} industries")
 print(f"  Trade data covers {df_trade['partner_country_name'].nunique()} partner countries")
+print(f"  Highly concentrated states (HHI > 0.25): {(hhi_scores['hhi'] > 0.25).sum()}")
 
 if len(df_gdp) > 0:
     total_gdp = df_gdp['gdp_current_dollars'].sum()
@@ -489,6 +848,7 @@ if len(df_trade) > 0:
 print("\nOutputs Generated:")
 print("  gold.gld_economic_summary")
 print("  gold.gld_trade_balance_summary")
+print("  gold.gld_state_economic_concentration")
 print("  Visualizations: /tmp/*.png")
 
 print("=" * 65)

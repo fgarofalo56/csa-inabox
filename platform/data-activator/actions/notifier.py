@@ -27,6 +27,7 @@ import os
 import smtplib
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from email.message import EmailMessage
 from typing import Any
 
@@ -67,7 +68,7 @@ class AlertPayload:
     threshold: float | list[float] = 0.0
     timestamp: str = ""
     source: str = ""
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = dataclass_field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------

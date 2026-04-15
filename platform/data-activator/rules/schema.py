@@ -107,7 +107,7 @@ class Condition(BaseModel):
 
     @field_validator("threshold")
     @classmethod
-    def _validate_between_threshold(cls, v: float | list[float], info: Any) -> float | list[float]:
+    def _validate_between_threshold(cls, v: float | list[float], info: Any) -> float | list[float]:  # noqa: ARG003
         """Ensure ``between`` operator receives a two-element list."""
         # info.data may not have 'operator' yet during init, so we
         # validate only when we can.

@@ -27,7 +27,7 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import yaml
 
@@ -110,7 +110,7 @@ class SemanticModelGenerator:
     """
 
     # Databricks -> Power BI type mapping
-    _TYPE_MAP: dict[str, str] = {
+    _TYPE_MAP: ClassVar[dict[str, str]] = {
         "string": "String",
         "int": "Int64",
         "bigint": "Int64",
@@ -314,7 +314,7 @@ class SemanticModelGenerator:
                 col_type = col.type.lower()
 
                 # Numeric aggregation measures
-                if col_type in ("int", "bigint", "long", "float", "double", "decimal") or "decimal" in col_type:
+                if col_type in ("int", "bigint", "long", "float", "double", "decimal") or "decimal" in col_type:  # noqa: SIM102
                     if any(kw in col_lower for kw in ("amount", "total", "revenue", "cost", "price", "value", "qty", "quantity")):
                         measures.append(DAXMeasure(
                             name=f"Total {col.name}",

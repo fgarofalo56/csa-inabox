@@ -37,7 +37,7 @@ import random
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 logging.basicConfig(
     level=logging.INFO,
@@ -143,7 +143,7 @@ PAYMENT_TYPES = [
 class PlayerProfile:
     """Synthetic player behavioral model."""
 
-    SEGMENTS = {
+    SEGMENTS: ClassVar[dict[str, Any]] = {
         "VIP": {
             "weight": 0.05,
             "avg_sessions_month": 12,

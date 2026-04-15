@@ -1,0 +1,275 @@
+# Data product contract — noaa.storm_events
+#
+# This file is the authoritative interface for the NOAA storm events
+# data product. It declares the schema, SLAs, and quality rules
+# for severe weather event analytics and hazard assessment.
+
+apiVersion: csa.noaa.gov/v1
+kind: DataProductContract
+
+metadata:
+  name: noaa.storm_events
+  domain: noaa
+  owner: noaa-data-engineering@contoso.com
+  version: "1.0.0"
+  description: >
+    Severe weather event analytics from the NOAA Storm Events Database.
+    Provides event-level detail for tornadoes, thunderstorm winds, hail,
+    flooding, winter storms, and other significant weather events including
+    damage estimates, casualties, and geographic extent. Used for hazard
+    assessment, emergency preparedness, and climate impact analysis.
+
+schema:
+  primary_key: [event_id]
+  columns:
+    - name: event_id
+      type: integer
+      nullable: false
+      description: Unique storm event identifier
+    - name: episode_id
+      type: integer
+      nullable: false
+      description: Episode identifier grouping related events
+    - name: event_type
+      type: string
+      nullable: false
+      description: Storm event type classification
+      allowed_values:
+        - Tornado
+        - Thunderstorm Wind
+        - Hail
+        - Flash Flood
+        - Flood
+        - Winter Storm
+        - Heavy Snow
+        - Ice Storm
+        - Blizzard
+        - High Wind
+        - Hurricane
+        - Tropical Storm
+        - Wildfire
+        - Drought
+        - Excessive Heat
+        - Cold/Wind Chill
+        - Lightning
+        - Rip Current
+        - Storm Surge/Tide
+        - Dust Storm
+    - name: begin_date
+      type: date
+      nullable: false
+      description: Event start date
+    - name: end_date
+      type: date
+      nullable: false
+      description: Event end date
+    - name: begin_time
+      type: string
+      nullable: true
+      description: Event start time (HHMM local time)
+    - name: end_time
+      type: string
+      nullable: true
+      description: Event end time (HHMM local time)
+    - name: state
+      type: string
+      nullable: false
+      description: State where the event occurred
+    - name: state_fips
+      type: string
+      nullable: false
+      description: 2-digit state FIPS code
+    - name: cz_name
+      type: string
+      nullable: false
+      description: County/Zone name
+    - name: cz_type
+      type: string
+      nullable: true
+      description: County/Zone type indicator
+      allowed_values:
+        - C
+        - Z
+        - M
+    - name: cz_fips
+      type: string
+      nullable: true
+      description: County/Zone FIPS code
+    - name: begin_lat
+      type: decimal(8,4)
+      nullable: true
+      description: Event beginning latitude
+    - name: begin_lon
+      type: decimal(9,4)
+      nullable: true
+      description: Event beginning longitude
+    - name: end_lat
+      type: decimal(8,4)
+      nullable: true
+      description: Event ending latitude
+    - name: end_lon
+      type: decimal(9,4)
+      nullable: true
+      description: Event ending longitude
+    - name: magnitude
+      type: decimal(6,1)
+      nullable: true
+      description: Event magnitude (knots for wind, inches for hail)
+    - name: magnitude_type
+      type: string
+      nullable: true
+      description: Magnitude measurement type (EG, MG, ES, MS)
+    - name: injuries_direct
+      type: integer
+      nullable: true
+      description: Direct injuries caused by the event
+    - name: injuries_indirect
+      type: integer
+      nullable: true
+      description: Indirect injuries caused by the event
+    - name: deaths_direct
+      type: integer
+      nullable: true
+      description: Direct deaths caused by the event
+    - name: deaths_indirect
+      type: integer
+      nullable: true
+      description: Indirect deaths caused by the event
+    - name: damage_property
+      type: string
+      nullable: true
+      description: Estimated property damage (e.g., 250K, 1.5M, 0)
+    - name: damage_crops
+      type: string
+      nullable: true
+      description: Estimated crop damage (e.g., 50K, 0)
+    - name: source
+      type: string
+      nullable: true
+      description: Source of the event report (Trained Spotter, ASOS, Public)
+    - name: tor_f_scale
+      type: string
+      nullable: true
+      description: Enhanced Fujita scale rating for tornadoes (EF0-EF5)
+    - name: tor_length
+      type: decimal(6,2)
+      nullable: true
+      description: Tornado path length in miles
+    - name: tor_width
+      type: integer
+      nullable: true
+      description: Tornado path width in yards
+    - name: flood_cause
+      type: string
+      nullable: true
+      description: Cause of flooding event (Heavy Rain, Dam Break, etc.)
+    - name: event_narrative
+      type: string
+      nullable: true
+      description: Free-text narrative description of the event
+    - name: episode_narrative
+      type: string
+      nullable: true
+      description: Free-text narrative description of the overall episode
+    - name: load_time
+      type: timestamp
+      nullable: false
+      description: Timestamp when the record was loaded into the data warehouse
+
+sla:
+  freshness_minutes: 4320  # 72 hours for preliminary data
+  valid_row_ratio: 0.95
+  supported_until: "2027-12-31"
+  update_frequency: "Daily during active weather season, weekly otherwise"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: event_id
+  - rule: expect_column_values_to_not_be_null
+    column: episode_id
+  - rule: expect_column_values_to_not_be_null
+    column: event_type
+  - rule: expect_column_values_to_not_be_null
+    column: begin_date
+  - rule: expect_column_values_to_not_be_null
+    column: state
+  - rule: expect_column_values_to_be_in_set
+    column: event_type
+    value_set:
+      - Tornado
+      - Thunderstorm Wind
+      - Hail
+      - Flash Flood
+      - Flood
+      - Winter Storm
+      - Heavy Snow
+      - Ice Storm
+      - Blizzard
+      - High Wind
+      - Hurricane
+      - Tropical Storm
+      - Wildfire
+      - Drought
+      - Excessive Heat
+      - Cold/Wind Chill
+      - Lightning
+      - Rip Current
+      - Storm Surge/Tide
+      - Dust Storm
+  - rule: expect_column_values_to_be_in_set
+    column: cz_type
+    value_set: [C, Z, M]
+  - rule: expect_column_values_to_be_between
+    column: begin_lat
+    min_value: 17.0
+    max_value: 72.0
+    mostly: 0.95
+  - rule: expect_column_values_to_be_between
+    column: begin_lon
+    min_value: -180.0
+    max_value: -60.0
+    mostly: 0.95
+  - rule: expect_column_values_to_be_between
+    column: injuries_direct
+    min_value: 0
+    max_value: 10000
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: deaths_direct
+    min_value: 0
+    max_value: 1000
+    mostly: 0.99
+  - rule: expect_column_pair_values_a_to_be_greater_than_or_equal_to_b
+    column_a: end_date
+    column_b: begin_date
+    mostly: 0.99
+
+data_lineage:
+  upstream_sources:
+    - name: "NOAA Storm Events Database"
+      url: "https://www.ncdc.noaa.gov/stormevents/"
+      description: "NOAA National Centers for Environmental Information"
+      refresh_schedule: "Daily"
+    - name: "NWS Storm Reports"
+      url: "https://www.spc.noaa.gov/climo/reports/"
+      description: "National Weather Service local storm reports and surveys"
+
+  downstream_consumers:
+    - name: "Severe Weather Dashboard"
+      description: "Storm tracking and impact analysis dashboard"
+    - name: "Emergency Management APIs"
+      description: "FEMA and state emergency management data feeds"
+    - name: "Climate Research Models"
+      description: "Long-term climate trend and risk models"
+
+usage_notes: |
+  - Preliminary data available within 72 hours; final QA'd data lags 60-90 days
+  - Damage estimates use shorthand notation (K = thousands, M = millions)
+  - Tornado F-scale ratings available only for tornado event types
+  - Episode IDs group related events from the same weather system
+  - Minor events may be underreported in rural areas
+  - Lat/lon coordinates may be approximate for some events
+
+contact:
+  technical: noaa-data-team@contoso.com
+  business: noaa-analytics-lead@contoso.com

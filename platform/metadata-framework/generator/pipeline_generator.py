@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -636,7 +636,7 @@ class PipelineGenerator:
                 "resource_group": f"rg-data-platform-{deployment_environment}",
                 "data_factory": f"adf-csa-{deployment_environment}",
                 "environment": deployment_environment,
-                "generated_at": datetime.utcnow().isoformat(),
+                "generated_at": datetime.now(timezone.utc).isoformat(),
                 "source_id": source_config["source_id"],
                 "pipeline_type": template_name.replace(".json", "")
             }

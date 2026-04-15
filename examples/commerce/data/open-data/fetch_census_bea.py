@@ -215,7 +215,7 @@ class CensusBEADataFetcher:
 
                 logger.info("Census ACS: %s → %d variable-rows", label, len(records))
 
-        logger.info("Census ACS total: %d records across %d states × %d years", len(records), len(states), len(years))
+        logger.info("Census ACS total: %d records across %d states x %d years", len(records), len(states), len(years))
         return records
 
     # ===================================================================

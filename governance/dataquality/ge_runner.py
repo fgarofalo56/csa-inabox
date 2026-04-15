@@ -396,8 +396,8 @@ def run_ge_checkpoints(
             # Checkpoint definitions are now available in
             # great_expectations/checkpoints/ — the Databricks notebook
             # can load them via:
-            #   context = ge.get_context("great_expectations/")
-            #   result = context.run_checkpoint(checkpoint_name="...")
+            #   context = ge.get_context("great_expectations/")  # noqa: ERA001
+            #   result = context.run_checkpoint(checkpoint_name="...")  # noqa: ERA001
             #
             # From the CLI we mark the suite as skipped-with-context so
             # operators know the suite exists and is ready to run.

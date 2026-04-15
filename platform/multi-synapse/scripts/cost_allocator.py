@@ -219,7 +219,7 @@ class CostAllocator:
         columns = [col.name for col in (result.columns or [])]
 
         for row in (result.rows or []):
-            row_dict = dict(zip(columns, row))
+            row_dict = dict(zip(columns, row, strict=True))
             entries.append(CostEntry(
                 resource_name=row_dict.get("ResourceGroupName", ""),
                 resource_group=row_dict.get("ResourceGroupName", ""),

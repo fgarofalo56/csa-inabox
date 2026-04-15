@@ -168,7 +168,7 @@ class DatabricksSQLEndpointManager:
         max_num_clusters: int | None = None,
         auto_stop_mins: int | None = None,
         enable_serverless: bool | None = None,
-        tags: dict[str, str] | None = None,
+        tags: dict[str, str] | None = None,  # noqa: ARG002 (planned for tag update support)
     ) -> EndpointInfo:
         """Update configuration of an existing SQL warehouse.
 

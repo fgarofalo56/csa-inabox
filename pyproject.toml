@@ -46,6 +46,8 @@ packages = ["governance", "governance.common", "governance.contracts", "governan
 target-version = "py310"
 line-length = 120
 src = ["domains", "scripts", "governance", "agent-harness"]
+# Exclude empty/placeholder files that aren't valid Python/Notebook.
+extend-exclude = ["scripts/monitor/SynapseTroubleshooting.ipynb"]
 
 [tool.ruff.lint]
 select = [
@@ -109,6 +111,7 @@ ignore = [
     "DTZ001",  # call-datetime-without-tzinfo (notebook date ranges)
     "DTZ007",  # call-datetime-strptime-without-zone (notebook date parsing)
     "B905",    # zip-without-explicit-strict (notebook iteration)
+    "RUF005",  # collection-literal-concatenation (pandas column assignment)
 ]
 # Azure Functions use camelCase binding names (cosmosOutput, outputBlob)
 # enforced by the host, and `req` parameters required by the framework.
@@ -167,6 +170,9 @@ ignore = [
 "platform/**/tests/**/*.py" = [
     "ARG001",  # unused-function-argument (fixtures)
     "ARG002",  # unused-method-argument (test fixtures)
+    "E402",    # module-import-not-at-top-of-file (sys.path manipulation)
+    "F841",    # unused-variable (test assertion intermediaries)
+    "RUF043",  # regex-metachar-in-match (intentional regex in pytest.raises)
 ]
 "platform/**/generator/**/*.py" = [
     "ARG002",  # unused-method-argument (mock schema detectors)

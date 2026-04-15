@@ -342,7 +342,7 @@ class DocumentClassifier:
         results = self.classify(texts)
 
         enriched: list[dict[str, Any]] = []
-        for record, result in zip(records, results):
+        for record, result in zip(records, results, strict=True):
             enriched_record = {**record}
             enriched_record["classification"] = {
                 "category": result.category,

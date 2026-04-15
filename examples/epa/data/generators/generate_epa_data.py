@@ -246,7 +246,7 @@ def generate_aqi_readings(
             "datum": "NAD83",
             "is_urban": is_urban,
             "urban_factor": 1.5 if is_urban else 0.7,
-            # Assign 1–3 pollutants per monitor
+            # Assign 1-3 pollutants per monitor
             "pollutants": rng.sample(POLLUTANTS, k=rng.randint(1, min(3, len(POLLUTANTS)))),
         })
 
@@ -511,11 +511,11 @@ def generate_tri_reports(
         lon = state[3] + rng.uniform(-2.0, 2.0)
         employees = max(10, int(rng.lognormvariate(5, 1.2)))
 
-        # Each facility reports 1–5 chemicals across multiple years
+        # Each facility reports 1-5 chemicals across multiple years
         num_chemicals = rng.randint(1, 5)
         chemicals = rng.sample(TRI_CHEMICALS, k=min(num_chemicals, len(TRI_CHEMICALS)))
 
-        # Report for 3–7 years
+        # Report for 3-7 years
         start_year = rng.randint(2018, 2022)
         num_years = rng.randint(3, 7)
 

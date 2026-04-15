@@ -1,0 +1,223 @@
+# Data product contract — usps.mail_volume
+#
+# This file is the authoritative interface for the USPS mail volume
+# data product. It declares the schema, SLAs, and quality rules
+# for postal volume analytics and demand forecasting.
+
+apiVersion: csa.usps.gov/v1
+kind: DataProductContract
+
+metadata:
+  name: usps.mail_volume
+  domain: usps
+  owner: usps-data-engineering@contoso.com
+  version: "1.0.0"
+  description: >
+    Daily mail volume analytics by facility, product class, and mail shape.
+    Provides inbound/outbound volume splits, revenue per piece analysis,
+    and year-over-year volume trends. Used for demand forecasting, pricing
+    strategy, and network capacity planning.
+
+schema:
+  primary_key: [facility_id, product_class, mail_shape, volume_date]
+  columns:
+    - name: facility_id
+      type: string
+      nullable: false
+      description: Unique facility identifier (FAC-{STATE}-{NNN})
+    - name: facility_name
+      type: string
+      nullable: false
+      description: Official facility name
+    - name: facility_type
+      type: string
+      nullable: false
+      description: Facility classification
+      allowed_values:
+        - PROCESSING_DISTRIBUTION_CENTER
+        - POST_OFFICE
+        - STATION
+        - BRANCH
+        - ANNEX
+    - name: district
+      type: string
+      nullable: true
+      description: USPS postal district
+    - name: region
+      type: string
+      nullable: false
+      description: USPS geographic region
+      allowed_values:
+        - ATLANTIC
+        - GREAT_LAKES
+        - NORTHEAST
+        - PACIFIC
+        - SOUTHERN
+        - WESTERN
+    - name: state
+      type: string
+      nullable: false
+      description: 2-letter state abbreviation
+    - name: product_class
+      type: string
+      nullable: false
+      description: Mail product classification
+      allowed_values:
+        - FIRST_CLASS
+        - MARKETING_MAIL
+        - SHIPPING_SERVICES
+        - PERIODICALS
+        - PACKAGE_SERVICES
+    - name: mail_shape
+      type: string
+      nullable: false
+      description: Physical mail shape category
+      allowed_values:
+        - LETTER
+        - FLAT
+        - PARCEL
+    - name: volume_date
+      type: date
+      nullable: false
+      description: Date of the volume record
+    - name: volume_year
+      type: integer
+      nullable: false
+      description: Volume reporting year
+    - name: volume_month
+      type: integer
+      nullable: false
+      description: Volume reporting month (1-12)
+    - name: volume_day_of_week
+      type: integer
+      nullable: true
+      description: Day of week (1 = Monday, 7 = Sunday)
+    - name: inbound_pieces
+      type: bigint
+      nullable: true
+      description: Number of inbound mail pieces
+    - name: outbound_pieces
+      type: bigint
+      nullable: true
+      description: Number of outbound mail pieces
+    - name: total_pieces
+      type: bigint
+      nullable: false
+      description: Total mail pieces (inbound + outbound)
+    - name: revenue_pieces
+      type: bigint
+      nullable: true
+      description: Number of revenue-generating pieces
+    - name: total_weight_lbs
+      type: decimal(12,2)
+      nullable: true
+      description: Total weight in pounds
+    - name: avg_weight_per_piece_oz
+      type: decimal(8,4)
+      nullable: true
+      description: Average weight per piece in ounces
+    - name: postage_revenue
+      type: decimal(14,2)
+      nullable: true
+      description: Total postage revenue (USD)
+    - name: avg_revenue_per_piece
+      type: decimal(8,4)
+      nullable: true
+      description: Average revenue per piece (USD)
+    - name: volume_prior_year_same_day
+      type: bigint
+      nullable: true
+      description: Volume on the same day in the prior year (for YoY comparison)
+    - name: volume_prior_week
+      type: bigint
+      nullable: true
+      description: Volume on the same day in the prior week (for WoW comparison)
+    - name: is_holiday
+      type: boolean
+      nullable: false
+      description: Whether the date is a federal/postal holiday
+    - name: is_business_day
+      type: boolean
+      nullable: false
+      description: Whether the date is a standard business day
+    - name: load_time
+      type: timestamp
+      nullable: false
+      description: Timestamp when the record was loaded into the data warehouse
+
+sla:
+  freshness_minutes: 1440  # Daily updates
+  valid_row_ratio: 0.95
+  supported_until: "2027-12-31"
+  update_frequency: "Daily by 0600 ET"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: facility_id
+  - rule: expect_column_values_to_not_be_null
+    column: product_class
+  - rule: expect_column_values_to_not_be_null
+    column: mail_shape
+  - rule: expect_column_values_to_not_be_null
+    column: volume_date
+  - rule: expect_column_values_to_not_be_null
+    column: total_pieces
+  - rule: expect_column_values_to_be_in_set
+    column: product_class
+    value_set: [FIRST_CLASS, MARKETING_MAIL, SHIPPING_SERVICES, PERIODICALS, PACKAGE_SERVICES]
+  - rule: expect_column_values_to_be_in_set
+    column: mail_shape
+    value_set: [LETTER, FLAT, PARCEL]
+  - rule: expect_column_values_to_be_between
+    column: volume_month
+    min_value: 1
+    max_value: 12
+  - rule: expect_column_values_to_be_between
+    column: volume_day_of_week
+    min_value: 1
+    max_value: 7
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: total_pieces
+    min_value: 0
+    max_value: 50000000
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: postage_revenue
+    min_value: 0
+    max_value: 100000000
+    mostly: 0.99
+  - rule: expect_column_pair_values_a_to_be_greater_than_or_equal_to_b
+    column_a: total_pieces
+    column_b: revenue_pieces
+    mostly: 0.95
+
+data_lineage:
+  upstream_sources:
+    - name: "USPS Revenue & Volume System"
+      url: "https://about.usps.com/who/profile/"
+      description: "Synthetic mail volume data modeled on USPS reporting patterns"
+      refresh_schedule: "Daily"
+    - name: "USPS Product Classification"
+      url: "https://pe.usps.com/text/dmm300/dmm300_landing.htm"
+      description: "Mail product class and shape definitions"
+
+  downstream_consumers:
+    - name: "Mail Volume Dashboard"
+      description: "Executive dashboard for USPS leadership volume trends"
+    - name: "Demand Forecasting Models"
+      description: "ML models for mail volume and capacity planning"
+    - name: "Revenue Analytics API"
+      description: "APIs for postal revenue analysis and pricing"
+
+usage_notes: |
+  - Synthetic data — actual USPS volume data is not publicly available
+  - Volume values may vary significantly by product class and day of week
+  - Holiday and weekend volumes are significantly lower
+  - Revenue per piece varies by product class and weight
+  - Marketing Mail volume is highly seasonal (Q4 spike)
+  - Data lags 1 business day for final daily totals
+
+contact:
+  technical: usps-data-team@contoso.com
+  business: usps-analytics-lead@contoso.com

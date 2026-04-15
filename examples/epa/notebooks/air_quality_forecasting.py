@@ -593,3 +593,105 @@ print("  - Visualizations: /tmp/epa_*.png")
 print("  - MLflow: /EPA/air_quality_forecasting")
 
 print("=" * 60)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Section 11: Seasonal Decomposition & Trend Analysis
+
+# COMMAND ----------
+
+# -------------------------------------------------------------------
+# Seasonal decomposition of AQI time series
+# Uses STL (Seasonal and Trend decomposition using Loess)
+# -------------------------------------------------------------------
+
+print("Performing seasonal decomposition of AQI time series...")
+
+# Prepare daily AQI series for decomposition
+aqi_daily = (
+    df_featured
+    .groupBy("date")
+    .agg(F.avg("aqi_value").alias("daily_avg_aqi"))
+    .orderBy("date")
+    .toPandas()
+    .set_index("date")
+)
+
+# Fill gaps with forward-fill for continuous time series
+aqi_daily = aqi_daily.asfreq("D").ffill()
+
+if len(aqi_daily) >= 365:
+    from statsmodels.tsa.seasonal import STL
+
+    stl = STL(aqi_daily["daily_avg_aqi"], period=365, robust=True)
+    stl_result = stl.fit()
+
+    trend_component = stl_result.trend
+    seasonal_component = stl_result.seasonal
+    residual_component = stl_result.resid
+
+    # Store decomposition results
+    decomp_df = pd.DataFrame({
+        "date": aqi_daily.index,
+        "observed": aqi_daily["daily_avg_aqi"].values,
+        "trend": trend_component.values,
+        "seasonal": seasonal_component.values,
+        "residual": residual_component.values,
+    })
+
+    spark_decomp = spark.createDataFrame(decomp_df)
+    spark_decomp.write.mode("overwrite").saveAsTable(
+        "gold.gld_aqi_seasonal_decomposition"
+    )
+    print(f"  Decomposition saved: {len(decomp_df)} daily records")
+    print(f"  Trend range: [{trend_component.min():.1f}, {trend_component.max():.1f}]")
+    print(f"  Seasonal amplitude: {seasonal_component.max() - seasonal_component.min():.1f}")
+else:
+    print("  Insufficient data for annual decomposition (need >= 365 days)")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Section 12: Cleanup & Final Summary
+
+# COMMAND ----------
+
+# -------------------------------------------------------------------
+# Cleanup temporary tables and summarize pipeline outputs
+# -------------------------------------------------------------------
+print("=" * 60)
+print("AIR QUALITY FORECASTING PIPELINE — COMPLETE")
+print("=" * 60)
+
+# Uncache DataFrames to free cluster memory
+import contextlib
+
+with contextlib.suppress(Exception):
+    spark.catalog.uncacheTable("bronze.brz_air_quality")
+
+# Summarize all output artifacts
+output_tables = [
+    "gold.gld_aqi_regression_metrics",
+    "gold.gld_aqi_exceedance_metrics",
+    "gold.gld_aqi_feature_importance",
+    "gold.gld_aqi_seasonal_decomposition",
+]
+
+print("\nOutput Tables:")
+for table_name in output_tables:
+    try:
+        count = spark.table(table_name).count()
+        print(f"  - {table_name}: {count} rows")
+    except Exception:
+        print(f"  - {table_name}: not created (insufficient data)")
+
+print("\nVisualization Artifacts:")
+print("  - /tmp/epa_aqi_distribution.png")
+print("  - /tmp/epa_aqi_correlation.png")
+print("  - /tmp/epa_feature_importance.png")
+print("  - /tmp/epa_aqi_forecast.png")
+
+print("\nMLflow Experiment: /EPA/air_quality_forecasting")
+print("Pipeline completed successfully.")
+print("=" * 60)

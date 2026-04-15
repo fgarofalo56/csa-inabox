@@ -284,9 +284,7 @@ def is_business_day(d: date) -> bool:
     """Check if a date is a USPS business day."""
     if d.weekday() >= 6:  # Sunday
         return False
-    if d in FEDERAL_HOLIDAYS_2024:
-        return False
-    return True
+    return d not in FEDERAL_HOLIDAYS_2024
 
 
 # ---------------------------------------------------------------------------

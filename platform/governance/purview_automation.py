@@ -585,7 +585,7 @@ class PurviewAutomation:
     def register_dbt_lineage(
         self,
         manifest_path: Path | str,
-        run_results_path: Path | str | None = None,
+        run_results_path: Path | str | None = None,  # noqa: ARG002 (planned)
         *,
         dry_run: bool = False,
     ) -> dict[str, Any]:

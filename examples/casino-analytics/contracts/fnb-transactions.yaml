@@ -1,0 +1,200 @@
+# Data product contract — casino_analytics.fnb_transactions
+#
+# This file is the authoritative interface for the Casino Analytics
+# food & beverage transactions data product. It declares the schema,
+# SLAs, and quality rules for F&B revenue and comp analytics.
+
+apiVersion: csa.nigc.gov/v1
+kind: DataProductContract
+
+metadata:
+  name: casino_analytics.fnb_transactions
+  domain: casino-analytics
+  owner: casino-analytics-engineering@contoso.com
+  version: "1.0.0"
+  description: >
+    Food and beverage transaction analytics from casino restaurant and
+    bar point-of-sale systems. Provides transaction-level data including
+    venue, meal period, payment type, comp tracking, and guest satisfaction.
+    Used for F&B revenue optimization, comp efficiency analysis, and
+    hospitality operations planning. All data is entirely synthetic.
+
+schema:
+  primary_key: [transaction_id]
+  columns:
+    - name: transaction_id
+      type: string
+      nullable: false
+      description: Unique F&B transaction identifier
+    - name: player_id
+      type: string
+      nullable: true
+      description: Player tracking system identifier (null for non-player guests)
+    - name: venue
+      type: string
+      nullable: false
+      description: F&B venue name
+      allowed_values:
+        - Sports Grill
+        - The Steakhouse
+        - Pool Bar
+        - VIP Dining Room
+        - Buffet Palace
+        - Deli Express
+        - Asian Fusion
+        - Coffee Bar
+    - name: transaction_date
+      type: date
+      nullable: false
+      description: Date of the F&B transaction
+    - name: meal_period
+      type: string
+      nullable: false
+      description: Meal period classification
+      allowed_values:
+        - BREAKFAST
+        - BRUNCH
+        - LUNCH
+        - DINNER
+        - LATE_NIGHT
+    - name: items_count
+      type: integer
+      nullable: false
+      description: Number of items in the transaction
+    - name: subtotal
+      type: decimal(10,2)
+      nullable: false
+      description: Transaction subtotal before tax and tip (USD)
+    - name: tax
+      type: decimal(8,2)
+      nullable: false
+      description: Tax amount (USD)
+    - name: total
+      type: decimal(10,2)
+      nullable: false
+      description: Total transaction amount including tax (USD)
+    - name: payment_type
+      type: string
+      nullable: false
+      description: Method of payment
+      allowed_values:
+        - CASH
+        - CREDIT
+        - DEBIT
+        - COMP
+        - PLAYER_CARD
+        - SPLIT
+    - name: comp_value
+      type: decimal(10,2)
+      nullable: true
+      description: Complimentary value applied to the transaction (USD)
+    - name: tip_amount
+      type: decimal(8,2)
+      nullable: true
+      description: Tip/gratuity amount (USD)
+    - name: party_size
+      type: integer
+      nullable: true
+      description: Number of guests in the dining party
+    - name: satisfaction_score
+      type: decimal(3,1)
+      nullable: true
+      description: Guest satisfaction rating (1.0-5.0)
+
+sla:
+  freshness_minutes: 1440  # Daily batch from POS
+  valid_row_ratio: 0.98
+  supported_until: "2027-12-31"
+  update_frequency: "Daily by 0400 local time"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: transaction_id
+  - rule: expect_column_values_to_not_be_null
+    column: venue
+  - rule: expect_column_values_to_not_be_null
+    column: transaction_date
+  - rule: expect_column_values_to_not_be_null
+    column: meal_period
+  - rule: expect_column_values_to_not_be_null
+    column: total
+  - rule: expect_column_values_to_not_be_null
+    column: payment_type
+  - rule: expect_column_values_to_be_in_set
+    column: venue
+    value_set:
+      - Sports Grill
+      - The Steakhouse
+      - Pool Bar
+      - VIP Dining Room
+      - Buffet Palace
+      - Deli Express
+      - Asian Fusion
+      - Coffee Bar
+  - rule: expect_column_values_to_be_in_set
+    column: meal_period
+    value_set: [BREAKFAST, BRUNCH, LUNCH, DINNER, LATE_NIGHT]
+  - rule: expect_column_values_to_be_in_set
+    column: payment_type
+    value_set: [CASH, CREDIT, DEBIT, COMP, PLAYER_CARD, SPLIT]
+  - rule: expect_column_values_to_be_between
+    column: subtotal
+    min_value: 0
+    max_value: 10000
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: total
+    min_value: 0
+    max_value: 15000
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: items_count
+    min_value: 1
+    max_value: 100
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: party_size
+    min_value: 1
+    max_value: 50
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: satisfaction_score
+    min_value: 1.0
+    max_value: 5.0
+    mostly: 0.99
+  - rule: expect_column_pair_values_a_to_be_greater_than_or_equal_to_b
+    column_a: total
+    column_b: subtotal
+    mostly: 0.99
+
+data_lineage:
+  upstream_sources:
+    - name: "F&B Point of Sale System"
+      url: "https://www.oracle.com/industries/hospitality/"
+      description: "Synthetic POS transaction data from F&B operations"
+      refresh_schedule: "Daily"
+    - name: "Player Tracking System"
+      url: "https://www.igtonline.com/"
+      description: "Player identification for comp tracking and attribution"
+
+  downstream_consumers:
+    - name: "F&B Revenue Dashboard"
+      description: "Venue performance and per-cover analytics"
+    - name: "Comp Efficiency Analysis"
+      description: "Player comp utilization vs theoretical win reinvestment"
+    - name: "Hospitality Operations Planning"
+      description: "Staffing and inventory forecasting by venue and meal period"
+
+usage_notes: |
+  - All data is synthetic — no real F&B transaction data
+  - COMP transactions have payment_type = COMP and comp_value > 0
+  - SPLIT payments are recorded as a single transaction with SPLIT type
+  - Satisfaction scores are optional and may be null for most transactions
+  - VIP Dining Room has the highest average check; Deli Express the lowest
+  - LATE_NIGHT meal period aligns with casino peak gaming hours
+  - Player_id links F&B spend to gaming activity for comp efficiency
+  - Tip amounts may be null for comp'd meals and counter-service venues
+
+contact:
+  technical: casino-analytics-team@contoso.com
+  business: casino-operations-lead@contoso.com

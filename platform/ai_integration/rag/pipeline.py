@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import hashlib
 import json
 import logging
@@ -530,7 +531,7 @@ class VectorStore:
                 "metadata": json.dumps(chunk.metadata),
                 "content_vector": embedding,
             }
-            for chunk, embedding in zip(chunks, embeddings)
+            for chunk, embedding in zip(chunks, embeddings, strict=True)
         ]
 
         client = self._get_search_client()
@@ -603,10 +604,8 @@ class VectorStore:
                 continue
 
             metadata = {}
-            try:
+            with contextlib.suppress(json.JSONDecodeError, TypeError):
                 metadata = json.loads(doc.get("metadata", "{}"))
-            except (json.JSONDecodeError, TypeError):
-                pass
 
             results.append(
                 SearchResult(

@@ -98,7 +98,7 @@ class EnforcementResult:
 
     @property
     def clean_ratio(self) -> float:
-        """Fraction of rows that passed validation (0.0 – 1.0)."""
+        """Fraction of rows that passed validation (0.0 - 1.0)."""
         if self.total_rows == 0:
             return 1.0
         return self.clean_count / self.total_rows

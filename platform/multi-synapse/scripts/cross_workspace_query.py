@@ -19,6 +19,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import contextlib
 import logging
 import sys
 from dataclasses import dataclass, field
@@ -140,7 +141,7 @@ class CrossWorkspaceQueryRunner:
         )
 
         # Use access token authentication
-        SQL_COPT_SS_ACCESS_TOKEN = 1256
+        SQL_COPT_SS_ACCESS_TOKEN = 1256  # noqa: N806 (ODBC constant)
         conn = pyodbc.connect(conn_str, attrs_before={SQL_COPT_SS_ACCESS_TOKEN: token_bytes})
         self._connections[cache_key] = conn
 
@@ -322,10 +323,8 @@ class CrossWorkspaceQueryRunner:
     def close(self) -> None:
         """Close all open connections."""
         for _key, conn in self._connections.items():
-            try:
+            with contextlib.suppress(Exception):
                 conn.close()
-            except Exception:
-                pass
         self._connections.clear()
 
 

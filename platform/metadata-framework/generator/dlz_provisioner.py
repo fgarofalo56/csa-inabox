@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -400,7 +400,7 @@ class DLZProvisioner:
                         "DataClassification": source_config.get("classification", "internal"),
                         "Owner": source_config["owner"]["email"],
                         "CreatedBy": "MetadataFramework",
-                        "CreatedAt": datetime.utcnow().strftime("%Y-%m-%d")
+                        "CreatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%d")
                     }
                 }
             }
@@ -444,7 +444,7 @@ class DLZProvisioner:
             "deployment_mode": "Incremental",
             "template_file": f"dlz-{landing_zone_name}.bicep",
             "parameters_file": f"dlz-{landing_zone_name}.parameters.json",
-            "generated_at": datetime.utcnow().isoformat(),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
             "source_metadata": {
                 "source_id": source_config["source_id"],
                 "source_name": source_config["source_name"],

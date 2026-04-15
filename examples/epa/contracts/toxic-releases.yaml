@@ -1,0 +1,248 @@
+# Data product contract — epa.toxic_releases
+#
+# This file is the authoritative interface for the EPA Toxics Release
+# Inventory data product. It declares the schema, SLAs, and quality rules
+# for chemical release analytics and environmental compliance monitoring.
+
+apiVersion: csa.epa.gov/v1
+kind: DataProductContract
+
+metadata:
+  name: epa.toxic_releases
+  domain: epa
+  owner: epa-data-engineering@contoso.com
+  version: "1.0.0"
+  description: >
+    Toxics Release Inventory (TRI) analytics from EPA reporting facilities.
+    Provides facility-level chemical release quantities across environmental
+    media (air, water, land) with waste management activities. Used for
+    environmental compliance monitoring, community right-to-know reporting,
+    and pollution prevention analysis.
+
+schema:
+  primary_key: [trifid, chemical_id, reporting_year]
+  columns:
+    - name: trifid
+      type: string
+      nullable: false
+      description: TRI Facility Identifier
+    - name: facility_name
+      type: string
+      nullable: false
+      description: Name of the reporting facility
+    - name: street_address
+      type: string
+      nullable: true
+      description: Facility street address
+    - name: city
+      type: string
+      nullable: false
+      description: Facility city
+    - name: state
+      type: string
+      nullable: false
+      description: 2-letter state abbreviation
+    - name: zip_code
+      type: string
+      nullable: false
+      description: 5-digit ZIP code
+    - name: county_fips
+      type: string
+      nullable: true
+      description: County FIPS code
+    - name: county_name
+      type: string
+      nullable: true
+      description: County name
+    - name: latitude
+      type: decimal(9,6)
+      nullable: true
+      description: Facility latitude
+    - name: longitude
+      type: decimal(9,6)
+      nullable: true
+      description: Facility longitude
+    - name: primary_naics
+      type: string
+      nullable: true
+      description: Primary NAICS industry code
+    - name: industry_sector
+      type: string
+      nullable: true
+      description: Industry sector description
+    - name: number_of_employees
+      type: integer
+      nullable: true
+      description: Number of employees at the facility
+    - name: parent_company
+      type: string
+      nullable: true
+      description: Parent company name
+    - name: federal_facility
+      type: boolean
+      nullable: true
+      description: Whether the facility is a federal installation
+    - name: reporting_year
+      type: integer
+      nullable: false
+      description: TRI reporting year
+    - name: chemical_id
+      type: string
+      nullable: false
+      description: TRI chemical identifier
+    - name: chemical_name
+      type: string
+      nullable: false
+      description: Chemical name
+    - name: cas_number
+      type: string
+      nullable: true
+      description: Chemical Abstracts Service registry number
+    - name: chemical_classification
+      type: string
+      nullable: false
+      description: Chemical classification category
+      allowed_values:
+        - ORGANIC
+        - METAL
+        - DIOXIN
+    - name: carcinogen
+      type: boolean
+      nullable: true
+      description: Whether the chemical is classified as a carcinogen
+    - name: pfas_chemical
+      type: boolean
+      nullable: true
+      description: Whether the chemical is a PFAS compound
+    - name: metal_category
+      type: string
+      nullable: true
+      description: Metal category classification (if applicable)
+    - name: fugitive_air
+      type: decimal(14,2)
+      nullable: true
+      description: Fugitive air releases in pounds
+    - name: stack_air
+      type: decimal(14,2)
+      nullable: true
+      description: Stack/point air releases in pounds
+    - name: water_discharge
+      type: decimal(14,2)
+      nullable: true
+      description: Water discharge releases in pounds
+    - name: underground_injection
+      type: decimal(14,2)
+      nullable: true
+      description: Underground injection releases in pounds
+    - name: land_disposal
+      type: decimal(14,2)
+      nullable: true
+      description: Land disposal releases in pounds
+    - name: offsite_transfer
+      type: decimal(14,2)
+      nullable: true
+      description: Offsite transfer for disposal in pounds
+    - name: total_releases
+      type: decimal(14,2)
+      nullable: false
+      description: Total on-site and off-site releases in pounds
+    - name: onsite_recycled
+      type: decimal(14,2)
+      nullable: true
+      description: Quantity recycled on-site in pounds
+    - name: onsite_energy_recovery
+      type: decimal(14,2)
+      nullable: true
+      description: Quantity used for energy recovery on-site in pounds
+    - name: onsite_treated
+      type: decimal(14,2)
+      nullable: true
+      description: Quantity treated on-site in pounds
+    - name: source_reduction_activity
+      type: string
+      nullable: true
+      description: Pollution prevention activity code
+    - name: production_ratio
+      type: decimal(8,4)
+      nullable: true
+      description: Production ratio relative to prior year
+    - name: load_time
+      type: timestamp
+      nullable: false
+      description: Timestamp when the record was loaded into the data warehouse
+
+sla:
+  freshness_minutes: 43200  # Monthly updates (30 days)
+  valid_row_ratio: 0.97
+  supported_until: "2027-12-31"
+  update_frequency: "Annual with monthly incremental updates"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: trifid
+  - rule: expect_column_values_to_not_be_null
+    column: chemical_id
+  - rule: expect_column_values_to_not_be_null
+    column: reporting_year
+  - rule: expect_column_values_to_not_be_null
+    column: total_releases
+  - rule: expect_column_values_to_not_be_null
+    column: chemical_classification
+  - rule: expect_column_values_to_be_in_set
+    column: chemical_classification
+    value_set: [ORGANIC, METAL, DIOXIN]
+  - rule: expect_column_values_to_be_between
+    column: reporting_year
+    min_value: 2000
+    max_value: 2030
+  - rule: expect_column_values_to_be_between
+    column: total_releases
+    min_value: 0
+    max_value: 100000000
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: latitude
+    min_value: 17.0
+    max_value: 72.0
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: longitude
+    min_value: -180.0
+    max_value: -60.0
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: production_ratio
+    min_value: 0
+    max_value: 100
+    mostly: 0.95
+
+data_lineage:
+  upstream_sources:
+    - name: "EPA Toxics Release Inventory"
+      url: "https://www.epa.gov/toxics-release-inventory-tri-program"
+      description: "EPA TRI annual facility reporting data"
+      refresh_schedule: "Annual with monthly incremental"
+    - name: "EPA Facility Registry System"
+      url: "https://www.epa.gov/frs"
+      description: "EPA facility identification and location data"
+
+  downstream_consumers:
+    - name: "Environmental Compliance Dashboard"
+      description: "EPA regional compliance monitoring display"
+    - name: "Community Right-to-Know Portal"
+      description: "Public-facing TRI data explorer"
+    - name: "Pollution Prevention Analytics"
+      description: "Source reduction trend analysis and modeling"
+
+usage_notes: |
+  - TRI reporting thresholds vary by chemical (typically 10,000-25,000 lbs)
+  - Facilities below reporting thresholds are not included
+  - Dioxin quantities reported in grams; all others in pounds
+  - PFAS chemicals were added to TRI reporting starting in 2020
+  - Production ratio > 1.0 indicates increased production vs prior year
+  - Total releases should approximately equal sum of media-specific releases
+  - Federal facilities may have additional reporting requirements
+
+contact:
+  technical: epa-data-team@contoso.com
+  business: epa-analytics-lead@contoso.com

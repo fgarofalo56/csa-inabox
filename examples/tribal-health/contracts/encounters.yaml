@@ -1,0 +1,143 @@
+# Data product contract — tribal_health.encounters
+#
+# This file is the authoritative interface for the Tribal Health
+# encounters data product. It declares the schema, SLAs, and quality
+# rules for clinical encounter analytics and utilization monitoring.
+# Classification: CUI // SP-HLTH — HIPAA protected
+
+apiVersion: csa.ihs.gov/v1
+kind: DataProductContract
+
+metadata:
+  name: tribal_health.encounters
+  domain: tribal-health
+  owner: tribal-health-data-engineering@contoso.com
+  version: "1.0.0"
+  description: >
+    Clinical encounter analytics from IHS and tribal health facilities.
+    Provides encounter-level data for emergency, outpatient, inpatient,
+    and telehealth visits with diagnosis codes, provider types, and
+    disposition outcomes. Used for utilization analysis, referral
+    pattern monitoring, and population health reporting. All data is
+    synthetic — no real patient information.
+
+schema:
+  primary_key: [encounter_id]
+  columns:
+    - name: encounter_id
+      type: string
+      nullable: false
+      description: Unique encounter identifier
+    - name: patient_id
+      type: string
+      nullable: false
+      description: De-identified patient identifier
+    - name: facility_id
+      type: string
+      nullable: false
+      description: IHS/tribal facility identifier
+    - name: encounter_date
+      type: date
+      nullable: false
+      description: Date of the clinical encounter
+    - name: encounter_type
+      type: string
+      nullable: false
+      description: Type of clinical encounter
+      allowed_values:
+        - ED
+        - OUTPATIENT
+        - TELEHEALTH
+        - INPATIENT
+    - name: primary_dx_icd10
+      type: string
+      nullable: false
+      description: Primary diagnosis ICD-10-CM code
+    - name: secondary_dx_codes
+      type: string
+      nullable: true
+      description: Semicolon-separated secondary ICD-10-CM diagnosis codes
+    - name: provider_type
+      type: string
+      nullable: false
+      description: Type of clinical provider
+      allowed_values:
+        - DO
+        - NP
+        - PA
+        - PHYSICIAN
+        - DENTIST
+        - PHARMACIST
+        - BEHAVIORAL_HEALTH
+    - name: disposition
+      type: string
+      nullable: false
+      description: Encounter outcome disposition
+      allowed_values:
+        - DISCHARGED
+        - REFERRED
+        - TRANSFERRED
+        - ADMITTED
+        - LEFT_AMA
+
+sla:
+  freshness_minutes: 1440  # Daily updates
+  valid_row_ratio: 0.97
+  supported_until: "2027-12-31"
+  update_frequency: "Daily by 0600 CT"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: encounter_id
+  - rule: expect_column_values_to_not_be_null
+    column: patient_id
+  - rule: expect_column_values_to_not_be_null
+    column: facility_id
+  - rule: expect_column_values_to_not_be_null
+    column: encounter_date
+  - rule: expect_column_values_to_not_be_null
+    column: encounter_type
+  - rule: expect_column_values_to_not_be_null
+    column: primary_dx_icd10
+  - rule: expect_column_values_to_not_be_null
+    column: disposition
+  - rule: expect_column_values_to_be_in_set
+    column: encounter_type
+    value_set: [ED, OUTPATIENT, TELEHEALTH, INPATIENT]
+  - rule: expect_column_values_to_be_in_set
+    column: provider_type
+    value_set: [DO, NP, PA, PHYSICIAN, DENTIST, PHARMACIST, BEHAVIORAL_HEALTH]
+  - rule: expect_column_values_to_be_in_set
+    column: disposition
+    value_set: [DISCHARGED, REFERRED, TRANSFERRED, ADMITTED, LEFT_AMA]
+
+data_lineage:
+  upstream_sources:
+    - name: "IHS RPMS / EHR"
+      url: "https://www.ihs.gov/rpms/"
+      description: "Synthetic RPMS-compatible encounter data"
+      refresh_schedule: "Daily"
+    - name: "IHS Facility Registry"
+      url: "https://www.ihs.gov/locations/"
+      description: "IHS and tribal facility reference data"
+
+  downstream_consumers:
+    - name: "Population Health Dashboard"
+      description: "Clinical utilization and outcome monitoring"
+    - name: "Referral Pattern Analytics"
+      description: "Referral network optimization and specialist access"
+    - name: "GPRA/GPRAMA Reporting"
+      description: "Government Performance and Results Act measures"
+
+usage_notes: |
+  - All data is synthetic — no real patient information is included
+  - ICD-10-CM codes follow standard CMS coding conventions
+  - Secondary diagnosis codes are semicolon-delimited within a single field
+  - ED encounters may have same-day INPATIENT admission (check disposition)
+  - TELEHEALTH encounters increased significantly post-2020
+  - LEFT_AMA dispositions indicate patients who left against medical advice
+  - HIPAA and tribal data sovereignty protections apply in production
+
+contact:
+  technical: tribal-health-data-team@contoso.com
+  business: tribal-health-analytics-lead@contoso.com

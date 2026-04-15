@@ -130,7 +130,7 @@ class FARSDataFetcher:
             # FARS API wraps results differently
             if isinstance(data, dict):
                 records = data.get('Results', data.get('results', []))
-                if isinstance(records, list) and len(records) > 0:
+                if isinstance(records, list) and len(records) > 0:  # noqa: SIM102
                     # Sometimes nested one more level
                     if isinstance(records[0], dict) and 'CrashResultsCase' in records[0]:
                         records = records[0]['CrashResultsCase']

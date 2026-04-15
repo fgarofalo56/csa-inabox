@@ -1,0 +1,252 @@
+apiVersion: v1
+kind: DataContract
+metadata:
+  name: ocean-monitoring
+  version: "1.0.0"
+  domain: noaa-climate
+  owner: noaa-analytics-team
+  description: >
+    Ocean observation analytics from NDBC buoy and C-MAN station networks.
+    Provides sea surface temperature, wave conditions, ocean currents,
+    atmospheric pressure, and marine weather data for coastal and open-ocean
+    monitoring stations. Used for marine forecasting, climate research,
+    and coastal hazard assessment.
+
+spec:
+  # Schema definition
+  schema:
+    format: delta
+    primary_key:
+      - station_id
+      - observation_datetime
+    partition_by:
+      - observation_date
+    columns:
+      - name: station_id
+        type: STRING
+        description: NDBC station identifier (numeric for buoys, alphanumeric for C-MAN)
+        constraints:
+          - not_null
+
+      - name: station_name
+        type: STRING
+        description: Station name and location description
+        constraints:
+          - not_null
+
+      - name: station_type
+        type: STRING
+        description: Station type (Buoy, C-MAN, DART, etc.)
+        constraints:
+          - not_null
+          - accepted_values:
+              - Buoy
+              - C-MAN
+              - DART
+              - Ship
+              - Platform
+
+      - name: latitude
+        type: DECIMAL(8,3)
+        description: Station latitude (WGS84)
+        constraints:
+          - not_null
+          - range: { min: -90.0, max: 90.0 }
+
+      - name: longitude
+        type: DECIMAL(8,3)
+        description: Station longitude (WGS84)
+        constraints:
+          - not_null
+          - range: { min: -180.0, max: 180.0 }
+
+      - name: water_depth_m
+        type: DECIMAL(8,1)
+        description: Water depth at station location in meters
+
+      - name: observation_datetime
+        type: TIMESTAMP
+        description: UTC timestamp of the observation
+        constraints:
+          - not_null
+
+      - name: observation_date
+        type: DATE
+        description: Date portion of the observation timestamp
+        constraints:
+          - not_null
+
+      - name: wind_direction_deg
+        type: INT
+        description: Wind direction in degrees (0-360, from which wind blows)
+        constraints:
+          - range: { min: 0, max: 360 }
+
+      - name: wind_speed_ms
+        type: DECIMAL(6,2)
+        description: Wind speed in meters per second
+        constraints:
+          - range: { min: 0, max: 100 }
+
+      - name: wind_gust_ms
+        type: DECIMAL(6,2)
+        description: Wind gust speed in meters per second
+        constraints:
+          - range: { min: 0, max: 150 }
+
+      - name: wave_height_m
+        type: DECIMAL(5,2)
+        description: Significant wave height in meters
+        constraints:
+          - range: { min: 0, max: 30 }
+
+      - name: dominant_wave_period_s
+        type: DECIMAL(5,2)
+        description: Dominant wave period in seconds
+        constraints:
+          - range: { min: 0, max: 30 }
+
+      - name: average_wave_period_s
+        type: DECIMAL(5,2)
+        description: Average wave period in seconds
+        constraints:
+          - range: { min: 0, max: 30 }
+
+      - name: mean_wave_direction_deg
+        type: INT
+        description: Mean wave direction in degrees (from which waves come)
+        constraints:
+          - range: { min: 0, max: 360 }
+
+      - name: pressure_hpa
+        type: DECIMAL(7,2)
+        description: Sea level pressure in hectopascals (millibars)
+        constraints:
+          - range: { min: 870, max: 1084 }
+
+      - name: air_temperature_c
+        type: DECIMAL(5,2)
+        description: Air temperature in degrees Celsius
+        constraints:
+          - range: { min: -50.0, max: 60.0 }
+
+      - name: dewpoint_c
+        type: DECIMAL(5,2)
+        description: Dewpoint temperature in degrees Celsius
+
+      - name: visibility_nmi
+        type: DECIMAL(5,1)
+        description: Visibility in nautical miles
+
+      - name: sea_surface_temp_c
+        type: DECIMAL(5,2)
+        description: Sea surface temperature in degrees Celsius
+        constraints:
+          - range: { min: -5.0, max: 40.0 }
+
+      - name: salinity_psu
+        type: DECIMAL(5,2)
+        description: Sea surface salinity in practical salinity units (PSU)
+        constraints:
+          - range: { min: 0, max: 45 }
+
+      - name: ocean_current_speed_ms
+        type: DECIMAL(5,2)
+        description: Ocean current speed in meters per second
+
+      - name: ocean_current_direction_deg
+        type: INT
+        description: Ocean current direction in degrees
+        constraints:
+          - range: { min: 0, max: 360 }
+
+      - name: water_level_m
+        type: DECIMAL(6,2)
+        description: Water level relative to station datum in meters
+
+      - name: load_time
+        type: TIMESTAMP
+        description: Timestamp when the record was loaded into the data warehouse
+
+  # Service Level Agreements
+  sla:
+    freshness:
+      description: Real-time buoy observations updated hourly; historical data reconciled daily
+      max_staleness_hours: 2
+    availability:
+      target: 99.5%
+      measurement_window: monthly
+    latency:
+      query_p95_seconds: 3.0
+      description: 95th percentile query response time
+
+  # Data Quality Requirements
+  quality:
+    completeness:
+      target: 90%
+      description: >
+        At least 90% of active stations must report within each 6-hour window.
+        Offshore buoys may have communication gaps during severe weather.
+    accuracy:
+      target: 98%
+      description: >
+        Observations validated against NDBC quality control algorithms
+        including range checks, time continuity, and neighbor consistency.
+    station_coverage:
+      minimum_stations: 50
+      description: >
+        At least 50 active buoy and C-MAN stations must be reporting
+        in each major ocean basin (Atlantic, Pacific, Gulf of Mexico)
+    tests:
+      - name: wave_height_physical_limits
+        description: Wave height must be physically plausible
+        rule: "wave_height_m < 25.0"
+      - name: sst_consistency
+        description: SST should not deviate more than 5C from climatology
+        rule: "ABS(sea_surface_temp_c - regional_climatology) < 5.0"
+      - name: no_future_observations
+        description: Observation timestamps must not be in the future
+        rule: "observation_datetime <= CURRENT_TIMESTAMP"
+
+  # Access and Consumption
+  access:
+    classification: PUBLIC
+    description: >
+      All NDBC buoy data is public domain. No PII or restricted content.
+    consumers:
+      - name: marine-forecast-dashboard
+        type: power_bi
+        description: Marine weather forecasting dashboard
+      - name: ocean-api
+        type: rest_api
+        endpoint: /api/v1/ocean-monitoring
+        rate_limit: 200/minute
+      - name: climate-research
+        type: direct_query
+        description: Direct SQL access for ocean climate research
+
+  # Lineage
+  lineage:
+    sources:
+      - name: ndbc_realtime
+        description: NDBC real-time buoy and C-MAN observations
+        url: https://www.ndbc.noaa.gov/
+      - name: ndbc_historical
+        description: NDBC historical standard meteorological data
+        url: https://www.ndbc.noaa.gov/historical_data.shtml
+    transformations:
+      - bronze: brz_ocean_buoys (raw NDBC observations with quality flags)
+      - silver: slv_ocean_buoys (QC'd, unit-standardized, gap-filled observations)
+      - gold: gld_ocean_monitoring (station analytics, anomaly detection, trend analysis)
+
+  # Versioning
+  versioning:
+    strategy: semantic
+    current: "1.0.0"
+    changelog:
+      - version: "1.0.0"
+        date: "2024-06-01"
+        changes:
+          - Initial release with buoy and C-MAN station observations
+          - Wind, wave, temperature, and ocean current metrics
+          - Real-time and historical data integration

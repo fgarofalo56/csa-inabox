@@ -171,7 +171,7 @@ class EntityExtractor:
         self,
         records: Sequence[dict[str, Any]],
         text_field: str = "text",
-        id_field: str = "id",
+        id_field: str = "id",  # noqa: ARG002 (part of public API)
     ) -> list[dict[str, Any]]:
         """Extract entities from structured data records.
 
@@ -191,7 +191,7 @@ class EntityExtractor:
         extraction_results = self.extract_entities(texts)
 
         enriched: list[dict[str, Any]] = []
-        for record, result in zip(records, extraction_results):
+        for record, result in zip(records, extraction_results, strict=True):
             enriched_record = {**record}
             if result.is_error:
                 enriched_record["extracted_entities"] = []

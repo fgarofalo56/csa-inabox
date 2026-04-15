@@ -159,7 +159,7 @@ class TextSummarizer:
                 f"Focus on the key findings, decisions, and recommended actions. "
                 f"Use a professional, direct tone."
             )
-        # Default: paragraph
+        # Default: paragraph  # noqa: ERA001
         return (
             f"Summarize the text in one or two coherent paragraphs, "
             f"using no more than {max_length} words. "
