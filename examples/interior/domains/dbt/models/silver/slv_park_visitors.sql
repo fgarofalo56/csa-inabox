@@ -2,7 +2,8 @@
     materialized='incremental',
     unique_key='visitor_sk',
     merge_exclude_columns=['_dbt_loaded_at'],
-    tags=['silver', 'nps', 'visitors', 'parks', 'cleaned']
+    tags=['silver', 'nps', 'visitors', 'parks', 'cleaned'],
+    on_schema_change='fail'
 ) }}
 
 {#

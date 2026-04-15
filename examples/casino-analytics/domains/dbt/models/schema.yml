@@ -68,6 +68,13 @@ models:
           - not_null
       - name: machine_id
         description: Machine or table identifier
+        tests:
+          - relationships:
+              to: ref('brz_slot_events')
+              field: machine_id
+              config:
+                severity: warn
+                where: "machine_id IS NOT NULL"
       - name: session_date
         description: Date of session
         tests:
@@ -149,6 +156,13 @@ models:
           - unique
       - name: player_id
         description: Player ID (NULL for non-rated guests)
+        tests:
+          - relationships:
+              to: ref('brz_player_sessions')
+              field: player_id
+              config:
+                severity: warn
+                where: "player_id IS NOT NULL"
       - name: venue
         description: Restaurant/bar venue name
         tests:

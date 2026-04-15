@@ -2,7 +2,8 @@
     materialized='incremental',
     unique_key=['site_id', 'parameter_code', 'date_local'],
     merge_exclude_columns=['_dbt_loaded_at'],
-    tags=['bronze', 'aqs', 'air_quality']
+    tags=['bronze', 'aqs', 'air_quality'],
+    on_schema_change='fail'
 ) }}
 
 {#

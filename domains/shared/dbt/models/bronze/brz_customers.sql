@@ -4,7 +4,8 @@
         unique_key='_surrogate_key',
         incremental_strategy='merge',
         file_format='delta',
-        tags=['bronze', 'customers']
+        tags=['bronze', 'customers'],
+        on_schema_change='fail'
     )
 }}
 

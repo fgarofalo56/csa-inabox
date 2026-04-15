@@ -2,7 +2,8 @@
     materialized='incremental',
     unique_key=['trifid', 'reporting_year', 'chemical_id'],
     merge_exclude_columns=['_dbt_loaded_at'],
-    tags=['bronze', 'tri', 'toxic_releases']
+    tags=['bronze', 'tri', 'toxic_releases'],
+    on_schema_change='fail'
 ) }}
 
 {#

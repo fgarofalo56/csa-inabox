@@ -33,6 +33,8 @@ param pagerDutyIntegrationKey string = ''
 param alertEmailRecipients string = ''
 
 @description('Log Analytics workspace resource ID for diagnostics.')
+// NOTE: For production deployments, logAnalyticsWorkspaceId should be required
+// (remove the default empty value) to ensure all resources emit diagnostics.
 param logAnalyticsWorkspaceId string = ''
 
 @description('Application Insights connection string. Leave empty to create a new instance.')
@@ -43,6 +45,9 @@ param functionStorageAccountName string = ''
 
 @description('Attach a CanNotDelete resource lock. Default true for production.')
 param enableResourceLock bool = true
+
+@description('Enable public network access. Set to false for production deployments.')
+param publicNetworkAccessEnabled bool = false
 
 // ─── Variables ──────────────────────────────────────────────────────────────
 
@@ -91,8 +96,8 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = if (empty(appI
   properties: {
     Application_Type: 'web'
     WorkspaceResourceId: !empty(logAnalyticsWorkspaceId) ? logAnalyticsWorkspaceId : null
-    publicNetworkAccessForIngestion: 'Enabled'
-    publicNetworkAccessForQuery: 'Enabled'
+    publicNetworkAccessForIngestion: publicNetworkAccessEnabled ? 'Enabled' : 'Disabled'
+    publicNetworkAccessForQuery: publicNetworkAccessEnabled ? 'Enabled' : 'Disabled'
   }
 }
 
@@ -136,7 +141,7 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
       ftpsState: 'Disabled'
       minTlsVersion: '1.2'
       appSettings: [
-        { name: 'AzureWebJobsStorage', value: 'DefaultEndpointsProtocol=https;AccountName=${effectiveFuncStorageName};EndpointSuffix=${az.environment().suffixes.storage};AccountKey=${listKeys(resourceId('Microsoft.Storage/storageAccounts', effectiveFuncStorageName), '2023-05-01').keys[0].value}' }
+        { name: 'AzureWebJobsStorage__accountName', value: effectiveFuncStorageName }
         { name: 'FUNCTIONS_EXTENSION_VERSION', value: '~4' }
         { name: 'FUNCTIONS_WORKER_RUNTIME', value: 'python' }
         { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: effectiveAppInsightsConnStr }
@@ -146,6 +151,19 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
         { name: 'ENVIRONMENT', value: environment }
       ]
     }
+  }
+}
+
+// ─── RBAC: Function App → Storage (identity-based connection) ──────────────
+
+@description('Grant the Function App managed identity Storage Blob Data Owner on its storage account.')
+resource storageBlobDataOwner 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (empty(functionStorageAccountName)) {
+  name: guid(funcStorage.id, functionApp.id, 'StorageBlobDataOwner')
+  scope: funcStorage
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b')
+    principalId: functionApp.identity.principalId
+    principalType: 'ServicePrincipal'
   }
 }
 

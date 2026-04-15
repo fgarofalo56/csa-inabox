@@ -71,6 +71,13 @@ export function DataTable<T extends Record<string, unknown>>({
     setPage(0);
   };
 
+  /** Return the aria-sort value for a column header. */
+  const getAriaSortValue = (col: Column<T>): 'ascending' | 'descending' | 'none' | undefined => {
+    if (!col.sortable) return undefined;
+    if (sortKey !== col.key) return 'none';
+    return sortDir === 'asc' ? 'ascending' : 'descending';
+  };
+
   return (
     <div className="space-y-4">
       {filterFn && (
@@ -79,6 +86,7 @@ export function DataTable<T extends Record<string, unknown>>({
           value={search}
           onChange={(e) => { setSearch(e.target.value); setPage(0); }}
           placeholder={searchPlaceholder}
+          aria-label={searchPlaceholder}
           className="w-full max-w-sm rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
         />
       )}
@@ -90,6 +98,7 @@ export function DataTable<T extends Record<string, unknown>>({
               {columns.map((col) => (
                 <th
                   key={col.key}
+                  aria-sort={getAriaSortValue(col)}
                   className={clsx(
                     'px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500',
                     col.sortable && 'cursor-pointer select-none hover:text-gray-700'
@@ -114,8 +123,8 @@ export function DataTable<T extends Record<string, unknown>>({
                 </td>
               </tr>
             ) : (
-              pageData.map((row) => (
-                <tr key={String(row[rowKey] ?? Math.random())} className="hover:bg-gray-50">
+              pageData.map((row, index) => (
+                <tr key={String(row[rowKey] ?? index)} className="hover:bg-gray-50">
                   {columns.map((col) => (
                     <td key={col.key} className="whitespace-nowrap px-4 py-3 text-sm text-gray-700">
                       {col.render ? col.render(row) : String(row[col.key] ?? '')}
@@ -129,7 +138,7 @@ export function DataTable<T extends Record<string, unknown>>({
       </div>
 
       {totalPages > 1 && (
-        <div className="flex items-center justify-between text-sm text-gray-600">
+        <nav aria-label="Table pagination" className="flex items-center justify-between text-sm text-gray-600">
           <span>
             Showing {page * pageSize + 1}–{Math.min((page + 1) * pageSize, sorted.length)} of{' '}
             {sorted.length}
@@ -138,6 +147,7 @@ export function DataTable<T extends Record<string, unknown>>({
             <button
               onClick={() => setPage((p) => Math.max(0, p - 1))}
               disabled={page === 0}
+              aria-label="Go to previous page"
               className="rounded border border-gray-300 px-3 py-1 disabled:opacity-50"
             >
               Previous
@@ -145,12 +155,13 @@ export function DataTable<T extends Record<string, unknown>>({
             <button
               onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
               disabled={page >= totalPages - 1}
+              aria-label="Go to next page"
               className="rounded border border-gray-300 px-3 py-1 disabled:opacity-50"
             >
               Next
             </button>
           </div>
-        </div>
+        </nav>
       )}
     </div>
   );

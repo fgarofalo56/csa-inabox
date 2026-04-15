@@ -2,7 +2,8 @@
     materialized='incremental',
     unique_key='snap_enrollment_sk',
     merge_exclude_columns=['_dbt_loaded_at'],
-    tags=['silver', 'snap_enrollment', 'cleaned']
+    tags=['silver', 'snap_enrollment', 'cleaned'],
+    on_schema_change='fail'
 ) }}
 
 WITH base AS (

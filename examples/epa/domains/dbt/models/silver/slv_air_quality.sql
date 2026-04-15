@@ -2,7 +2,8 @@
     materialized='incremental',
     unique_key='aqi_observation_sk',
     merge_exclude_columns=['_dbt_loaded_at'],
-    tags=['silver', 'air_quality', 'cleaned']
+    tags=['silver', 'air_quality', 'cleaned'],
+    on_schema_change='fail'
 ) }}
 
 {#

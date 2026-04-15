@@ -31,19 +31,21 @@ Response::
 from __future__ import annotations
 
 import json
-import logging
 import os
 from typing import Any
 
 import azure.functions as func
 from jsonschema import Draft7Validator
 
+from governance.common.logging import configure_structlog, get_logger
+
 try:
     import yaml
 except ImportError:
     yaml = None  # type: ignore[assignment]
 
-logger = logging.getLogger(__name__)
+configure_structlog(service="validate-schema")
+logger = get_logger(__name__)
 
 app = func.FunctionApp()
 

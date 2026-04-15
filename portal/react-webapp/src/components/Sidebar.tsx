@@ -37,6 +37,7 @@ function NavLink({ href, label, icon }: NavItem) {
   return (
     <Link
       href={href}
+      aria-current={isActive ? 'page' : undefined}
       className={clsx(
         'flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors',
         isActive

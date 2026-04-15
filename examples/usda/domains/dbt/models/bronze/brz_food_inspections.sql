@@ -2,7 +2,8 @@
     materialized='incremental',
     unique_key=['establishment_number', 'inspection_date', 'inspection_type'],
     merge_exclude_columns=['_dbt_loaded_at'],
-    tags=['bronze', 'fsis', 'food_inspections']
+    tags=['bronze', 'fsis', 'food_inspections'],
+    on_schema_change='fail'
 ) }}
 
 WITH source_data AS (

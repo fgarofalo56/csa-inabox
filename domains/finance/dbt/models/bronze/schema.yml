@@ -11,8 +11,22 @@ models:
           - unique
       - name: order_id
         description: FK to sales orders. Null for manual invoices.
+        tests:
+          - relationships:
+              to: ref('brz_sales_orders')
+              field: order_id
+              config:
+                severity: warn
+                where: "order_id IS NOT NULL"
       - name: customer_id
         description: Customer identifier.
+        tests:
+          - relationships:
+              to: ref('brz_customers')
+              field: customer_id
+              config:
+                severity: warn
+                where: "customer_id IS NOT NULL"
       - name: _dbt_loaded_at
         description: dbt ingestion timestamp.
 
@@ -28,3 +42,6 @@ models:
         description: FK to invoices.
         tests:
           - not_null
+          - relationships:
+              to: ref('brz_invoices')
+              field: invoice_id

@@ -6,7 +6,8 @@
         partition_by=['country_code'],
         clustered_by=['customer_sk'],
         file_format='delta',
-        tags=['silver', 'customers']
+        tags=['silver', 'customers'],
+        on_schema_change='fail'
     )
 }}
 

@@ -2,7 +2,8 @@
     materialized='incremental',
     unique_key='inspection_sk',
     merge_exclude_columns=['_dbt_loaded_at'],
-    tags=['silver', 'food_inspections', 'cleaned']
+    tags=['silver', 'food_inspections', 'cleaned'],
+    on_schema_change='fail'
 ) }}
 
 WITH base AS (

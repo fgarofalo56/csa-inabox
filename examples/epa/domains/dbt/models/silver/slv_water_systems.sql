@@ -2,7 +2,8 @@
     materialized='incremental',
     unique_key='water_system_sk',
     merge_exclude_columns=['_dbt_loaded_at'],
-    tags=['silver', 'water_systems', 'cleaned']
+    tags=['silver', 'water_systems', 'cleaned'],
+    on_schema_change='fail'
 ) }}
 
 {#

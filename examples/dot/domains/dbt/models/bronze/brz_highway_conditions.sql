@@ -2,7 +2,8 @@
     materialized='incremental',
     unique_key=['route_id', 'bridge_id', 'state_code', 'inspection_year'],
     merge_exclude_columns=['_dbt_loaded_at'],
-    tags=['bronze', 'fhwa', 'highway_conditions']
+    tags=['bronze', 'fhwa', 'highway_conditions'],
+    on_schema_change='fail'
 ) }}
 
 /*

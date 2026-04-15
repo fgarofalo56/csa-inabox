@@ -11,6 +11,9 @@ models:
         tests:
           - not_null
           - unique
+          - relationships:
+              to: ref('slv_invoices')
+              field: invoice_id
       - name: aging_bucket
         description: Aging classification.
         tests:

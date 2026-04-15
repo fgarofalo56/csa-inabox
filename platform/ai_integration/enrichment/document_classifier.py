@@ -18,17 +18,23 @@ Usage::
 from __future__ import annotations
 
 import json
-import logging
 import os
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from openai import AzureOpenAI
 
 import yaml
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential_jitter
 
-logger = logging.getLogger(__name__)
+from governance.common.logging import configure_structlog, get_logger
+
+configure_structlog(service="document-classifier")
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -186,11 +192,11 @@ class DocumentClassifier:
         self.taxonomy = taxonomy or _DEFAULT_TAXONOMY
         self.max_retries = max_retries
         self.requests_per_minute = requests_per_minute
-        self._client: Any = None
+        self._client: AzureOpenAI | None = None
         self._min_interval = 60.0 / requests_per_minute
         self._last_request_time: float = 0.0
 
-    def _get_client(self) -> Any:
+    def _get_client(self) -> AzureOpenAI:
         """Lazily initialise the Azure OpenAI client."""
         if self._client is None:
             from openai import AzureOpenAI
@@ -250,6 +256,39 @@ class DocumentClassifier:
             time.sleep(self._min_interval - elapsed)
         self._last_request_time = time.monotonic()
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential_jitter(initial=2, max=30),
+        retry=retry_if_exception_type(Exception),
+    )
+    def _classify_api_call(self, text: str, system_prompt: str) -> dict[str, Any]:
+        """Make a single classification API call with tenacity retry.
+
+        Args:
+            text: The document text to classify.
+            system_prompt: The system prompt including taxonomy.
+
+        Returns:
+            Parsed JSON response dictionary.
+
+        Raises:
+            Exception: On API or JSON parse failure (triggers tenacity retry).
+        """
+        client = self._get_client()
+        self._rate_limit()
+        response = client.chat.completions.create(
+            model=self.deployment,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Classify this text:\n\n{text}"},
+            ],
+            max_tokens=256,
+            temperature=0.0,
+            response_format={"type": "json_object"},
+        )
+        raw_content = response.choices[0].message.content or "{}"
+        return json.loads(raw_content)
+
     def classify_single(self, text: str) -> ClassificationResult:
         """Classify a single text document.
 
@@ -259,56 +298,26 @@ class DocumentClassifier:
         Returns:
             A :class:`ClassificationResult` with category, confidence, and reasoning.
         """
-        client = self._get_client()
         system_prompt = self._build_system_prompt()
         preview = text[:200] + "..." if len(text) > 200 else text
 
-        for attempt in range(self.max_retries):
-            try:
-                self._rate_limit()
-                response = client.chat.completions.create(
-                    model=self.deployment,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": f"Classify this text:\n\n{text}"},
-                    ],
-                    max_tokens=256,
-                    temperature=0.0,
-                    response_format={"type": "json_object"},
-                )
-                raw_content = response.choices[0].message.content or "{}"
-                parsed = json.loads(raw_content)
-                return ClassificationResult(
-                    text_preview=preview,
-                    category=parsed.get("category", "other"),
-                    subcategory=parsed.get("subcategory"),
-                    confidence=float(parsed.get("confidence", 0.0)),
-                    reasoning=parsed.get("reasoning", ""),
-                )
-            except json.JSONDecodeError as exc:
-                logger.warning("Failed to parse classification JSON (attempt %d): %s", attempt + 1, exc)
-                if attempt == self.max_retries - 1:
-                    return ClassificationResult(
-                        text_preview=preview,
-                        category="other",
-                        is_error=True,
-                        error_message=f"JSON parse error: {exc}",
-                    )
-            except Exception as exc:
-                logger.warning("Classification API error (attempt %d): %s", attempt + 1, exc)
-                if attempt == self.max_retries - 1:
-                    return ClassificationResult(
-                        text_preview=preview,
-                        category="other",
-                        is_error=True,
-                        error_message=str(exc),
-                    )
-                time.sleep(2**attempt)
-
-        # Should not reach here, but satisfy type checker
-        return ClassificationResult(
-            text_preview=preview, category="other", is_error=True, error_message="Exhausted retries"
-        )
+        try:
+            parsed = self._classify_api_call(text, system_prompt)
+            return ClassificationResult(
+                text_preview=preview,
+                category=parsed.get("category", "other"),
+                subcategory=parsed.get("subcategory"),
+                confidence=float(parsed.get("confidence", 0.0)),
+                reasoning=parsed.get("reasoning", ""),
+            )
+        except Exception as exc:
+            logger.warning("classification.failed", error=str(exc))
+            return ClassificationResult(
+                text_preview=preview,
+                category="other",
+                is_error=True,
+                error_message=str(exc),
+            )
 
     def classify(self, texts: list[str]) -> list[ClassificationResult]:
         """Classify a batch of texts with rate limiting.
@@ -321,7 +330,7 @@ class DocumentClassifier:
         """
         results: list[ClassificationResult] = []
         for idx, text in enumerate(texts):
-            logger.info("Classifying document %d of %d", idx + 1, len(texts))
+            logger.info("classifying_document", index=idx + 1, total=len(texts))
             result = self.classify_single(text)
             results.append(result)
         return results
@@ -365,4 +374,4 @@ class DocumentClassifier:
             path: Path to the taxonomy YAML file.
         """
         self.taxonomy = load_taxonomy(path)
-        logger.info("Loaded taxonomy with %d categories from %s", len(self.taxonomy), path)
+        logger.info("taxonomy.loaded", category_count=len(self.taxonomy), path=str(path))

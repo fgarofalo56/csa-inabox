@@ -27,12 +27,14 @@ from __future__ import annotations
 
 import argparse
 import json
-import logging
 import sys
 from dataclasses import dataclass, field
 from typing import Any
 
-logger = logging.getLogger(__name__)
+from governance.common.logging import configure_structlog, get_logger
+
+configure_structlog(service="sql-endpoint-config")
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -102,7 +104,7 @@ class DatabricksSQLEndpointManager:
     ) -> None:
         self.workspace_url = workspace_url.rstrip("/")
         self._token = token
-        self._client: Any = None
+        self._client: Any | None = None  # TODO: Replace with typed client when SDK stubs are available
 
     def _get_client(self) -> Any:
         """Lazily initialize the Databricks workspace client."""
@@ -143,7 +145,7 @@ class DatabricksSQLEndpointManager:
             "RELIABILITY_OPTIMIZED": SpotInstancePolicy.RELIABILITY_OPTIMIZED,
         }
 
-        logger.info("Creating SQL warehouse: %s (size=%s)", config.name, config.cluster_size)
+        logger.info("sql_warehouse.creating", name=config.name, size=config.cluster_size)
 
         response = client.warehouses.create_and_wait(
             name=config.name,
@@ -158,7 +160,7 @@ class DatabricksSQLEndpointManager:
         )
 
         info = self._build_info(response)
-        logger.info("SQL warehouse created: %s (id=%s)", info.name, info.id)
+        logger.info("sql_warehouse.created", name=info.name, id=info.id)
         return info
 
     def configure_warehouse(
@@ -203,7 +205,7 @@ class DatabricksSQLEndpointManager:
         # Re-fetch updated info
         updated = client.warehouses.get(endpoint_id)
         info = self._build_info(updated)
-        logger.info("SQL warehouse updated: %s", info.name)
+        logger.info("sql_warehouse.updated", name=info.name)
         return info
 
     def set_permissions(
@@ -493,7 +495,6 @@ def main(argv: list[str] | None = None) -> int:
     status_parser.set_defaults(func=_cli_status)
 
     args = parser.parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     args.func(args)
     return 0
 

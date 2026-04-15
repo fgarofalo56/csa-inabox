@@ -164,70 +164,59 @@ async def _enrich_text(text: str) -> dict[str, Any]:
 
     docs = [{"id": "1", "text": text[:TEXT_CHUNK_SIZE]}]
 
-    try:
-        # Language detection
-        lang_result = await client.detect_language(documents=docs)
-        if lang_result and not lang_result[0].is_error:
-            detected = lang_result[0].primary_language
-            results["language"] = {
-                "name": detected.name,
-                "iso_code": detected.iso6391_name,
-                "confidence": detected.confidence_score,
+    # Language detection
+    lang_result = await client.detect_language(documents=docs)
+    if lang_result and not lang_result[0].is_error:
+        detected = lang_result[0].primary_language
+        results["language"] = {
+            "name": detected.name,
+            "iso_code": detected.iso6391_name,
+            "confidence": detected.confidence_score,
+        }
+
+    # Sentiment analysis
+    sentiment_result = await client.analyze_sentiment(documents=docs)
+    if sentiment_result and not sentiment_result[0].is_error:
+        doc = sentiment_result[0]
+        results["sentiment"] = {
+            "overall": doc.sentiment,
+            "scores": {
+                "positive": doc.confidence_scores.positive,
+                "neutral": doc.confidence_scores.neutral,
+                "negative": doc.confidence_scores.negative,
+            },
+        }
+
+    # Key phrases
+    phrases_result = await client.extract_key_phrases(documents=docs)
+    if phrases_result and not phrases_result[0].is_error:
+        results["key_phrases"] = list(phrases_result[0].key_phrases)
+
+    # Named entity recognition
+    entity_result = await client.recognize_entities(documents=docs)
+    if entity_result and not entity_result[0].is_error:
+        results["entities"] = [
+            {
+                "text": e.text,
+                "category": e.category,
+                "subcategory": e.subcategory,
+                "confidence": e.confidence_score,
             }
+            for e in entity_result[0].entities
+        ]
 
-        # Sentiment analysis
-        sentiment_result = await client.analyze_sentiment(documents=docs)
-        if sentiment_result and not sentiment_result[0].is_error:
-            doc = sentiment_result[0]
-            results["sentiment"] = {
-                "overall": doc.sentiment,
-                "scores": {
-                    "positive": doc.confidence_scores.positive,
-                    "neutral": doc.confidence_scores.neutral,
-                    "negative": doc.confidence_scores.negative,
-                },
+    # PII detection
+    pii_result = await client.recognize_pii_entities(documents=docs)
+    if pii_result and not pii_result[0].is_error:
+        results["pii_redacted_text"] = pii_result[0].redacted_text
+        results["pii_entities"] = [
+            {
+                "category": e.category,
+                "subcategory": e.subcategory,
+                "confidence": e.confidence_score,
             }
-
-        # Key phrases
-        phrases_result = await client.extract_key_phrases(documents=docs)
-        if phrases_result and not phrases_result[0].is_error:
-            results["key_phrases"] = list(phrases_result[0].key_phrases)
-
-        # Named entity recognition
-        entity_result = await client.recognize_entities(documents=docs)
-        if entity_result and not entity_result[0].is_error:
-            results["entities"] = [
-                {
-                    "text": e.text,
-                    "category": e.category,
-                    "subcategory": e.subcategory,
-                    "confidence": e.confidence_score,
-                }
-                for e in entity_result[0].entities
-            ]
-
-        # PII detection
-        pii_result = await client.recognize_pii_entities(documents=docs)
-        if pii_result and not pii_result[0].is_error:
-            results["pii_redacted_text"] = pii_result[0].redacted_text
-            results["pii_entities"] = [
-                {
-                    "category": e.category,
-                    "subcategory": e.subcategory,
-                    "confidence": e.confidence_score,
-                }
-                for e in pii_result[0].entities
-            ]
-
-    except (ServiceRequestError, HttpResponseError) as e:
-        logger.error("enrichment.azure_sdk_failed", error_type=type(e).__name__, error_message=str(e))
-        results["error"] = f"Azure SDK error: {e!s}"
-    except ImportError as e:
-        logger.warning("enrichment.import_failed", error=str(e))
-        results["error"] = "AI client not configured"
-    except Exception as e:
-        logger.exception("enrichment.text_failed", error_type=type(e).__name__)
-        results["error"] = "Text enrichment failed. Check service logs for details."
+            for e in pii_result[0].entities
+        ]
 
     return results
 
@@ -261,37 +250,26 @@ async def _analyze_document(blob_data: bytes, content_type: str) -> dict[str, An
         results["error"] = "Document Intelligence client not configured"
         return results
 
-    try:
-        poller = await client.begin_analyze_document(
-            model_id="prebuilt-document",
-            document=blob_data,
-            content_type=content_type,
-        )
-        result = await poller.result()
+    poller = await client.begin_analyze_document(
+        model_id="prebuilt-document",
+        document=blob_data,
+        content_type=content_type,
+    )
+    result = await poller.result()
 
-        results["pages"] = len(result.pages) if result.pages else 0
-        results["tables"] = len(result.tables) if result.tables else 0
-        results["content_preview"] = (result.content or "")[:500]
+    results["pages"] = len(result.pages) if result.pages else 0
+    results["tables"] = len(result.tables) if result.tables else 0
+    results["content_preview"] = (result.content or "")[:500]
 
-        if result.key_value_pairs:
-            results["key_value_pairs"] = [
-                {
-                    "key": kvp.key.content if kvp.key else None,
-                    "value": kvp.value.content if kvp.value else None,
-                    "confidence": kvp.confidence,
-                }
-                for kvp in result.key_value_pairs[:50]
-            ]
-
-    except (ServiceRequestError, HttpResponseError) as e:
-        logger.error("enrichment.document_azure_sdk_failed", error_type=type(e).__name__, error_message=str(e))
-        results["error"] = f"Azure SDK error: {e!s}"
-    except ImportError as e:
-        logger.warning("enrichment.document_import_failed", error=str(e))
-        results["error"] = "Document Intelligence client not configured"
-    except Exception as e:
-        logger.exception("enrichment.document_failed", error_type=type(e).__name__)
-        results["error"] = "Document analysis failed. Check service logs for details."
+    if result.key_value_pairs:
+        results["key_value_pairs"] = [
+            {
+                "key": kvp.key.content if kvp.key else None,
+                "value": kvp.value.content if kvp.value else None,
+                "confidence": kvp.confidence,
+            }
+            for kvp in result.key_value_pairs[:50]
+        ]
 
     return results
 

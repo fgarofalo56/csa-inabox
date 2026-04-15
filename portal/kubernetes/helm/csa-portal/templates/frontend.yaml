@@ -14,6 +14,10 @@ spec:
       labels:
         {{- include "csa-portal.frontend.labels" . | nindent 8 }}
     spec:
+      securityContext:
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: frontend
           image: "{{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag }}"
@@ -21,6 +25,14 @@ spec:
           ports:
             - containerPort: {{ .Values.frontend.service.port }}
               protocol: TCP
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
           env:
             - name: NEXT_PUBLIC_API_URL
               value: "http://{{ include "csa-portal.fullname" . }}-backend:{{ .Values.backend.service.port }}/api/v1"

@@ -33,7 +33,15 @@ param captureStorageAccountName string
 param captureContainerName string = 'bronze'
 
 @description('Log Analytics workspace resource ID for diagnostics')
+// NOTE: For production deployments, logAnalyticsWorkspaceId should be required
+// (remove the default empty value) to ensure all resources emit diagnostics.
 param logAnalyticsWorkspaceId string
+
+@description('Enable public network access. Set to false for production deployments.')
+param publicNetworkAccessEnabled bool = false
+
+@description('Key Vault name for storing connection strings and secrets.')
+param keyVaultName string = '${baseName}-kv'
 
 @description('Tags to apply to all resources')
 param tags object = {
@@ -75,7 +83,7 @@ resource eventHubNamespace 'Microsoft.EventHub/namespaces@2024-01-01' = {
     maximumThroughputUnits: eventHubSku == 'Standard' ? 10 : 0
     kafkaEnabled: eventHubSku != 'Basic'
     minimumTlsVersion: '1.2'
-    publicNetworkAccess: 'Enabled'
+    publicNetworkAccess: publicNetworkAccessEnabled ? 'Enabled' : 'Disabled'
     disableLocalAuth: false
     zoneRedundant: true
   }
@@ -176,6 +184,47 @@ resource manageRule 'Microsoft.EventHub/namespaces/authorizationRules@2024-01-01
   }
 }
 
+// ─── Key Vault (for storing connection strings securely) ─────
+resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
+  name: keyVaultName
+  location: location
+  tags: tags
+  properties: {
+    sku: {
+      family: 'A'
+      name: 'standard'
+    }
+    tenantId: subscription().tenantId
+    enableRbacAuthorization: true
+    enableSoftDelete: true
+    softDeleteRetentionInDays: 90
+  }
+}
+
+resource ehSendConnectionStringSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+  parent: keyVault
+  name: 'eh-telemetry-send-connection-string'
+  properties: {
+    value: sendRule.listKeys().primaryConnectionString
+  }
+}
+
+resource ehListenConnectionStringSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+  parent: keyVault
+  name: 'eh-telemetry-listen-connection-string'
+  properties: {
+    value: listenRule.listKeys().primaryConnectionString
+  }
+}
+
+resource iotHubOwnerKeySecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+  parent: keyVault
+  name: 'iothub-owner-primary-key'
+  properties: {
+    value: iotHub.listKeys().value[0].primaryKey
+  }
+}
+
 // ─── IoT Hub ─────────────────────────────────────────────────
 resource iotHub 'Microsoft.Devices/IotHubs@2023-06-30' = {
   name: iotHubName
@@ -256,6 +305,9 @@ resource dps 'Microsoft.Devices/provisioningServices@2022-12-12' = {
       {
         connectionString: 'HostName=${iotHub.properties.hostName};SharedAccessKeyName=iothubowner;SharedAccessKey=${iotHub.listKeys().value[0].primaryKey}'
         location: location
+        // NOTE: DPS requires inline connection string at deploy time.
+        // The key is also stored in Key Vault (secret: iothub-owner-primary-key)
+        // for runtime access by applications.
       }
     ]
     allocationPolicy: 'Hashed'
@@ -301,5 +353,8 @@ output telemetryHubName string = telemetryHub.name
 output alertsHubName string = alertsHub.name
 output processedHubName string = processedHub.name
 output eventHubNamespaceId string = eventHubNamespace.id
-output telemetryHubSendConnectionString string = sendRule.listKeys().primaryConnectionString
-output telemetryHubListenConnectionString string = listenRule.listKeys().primaryConnectionString
+// Connection strings are stored in Key Vault — never expose as Bicep outputs.
+// Use Key Vault secret references: 'eh-telemetry-send-connection-string'
+// and 'eh-telemetry-listen-connection-string' at runtime.
+output keyVaultName string = keyVault.name
+output keyVaultUri string = keyVault.properties.vaultUri

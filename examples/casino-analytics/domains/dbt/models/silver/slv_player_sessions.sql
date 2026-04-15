@@ -2,7 +2,8 @@
     materialized='incremental',
     unique_key='session_sk',
     merge_exclude_columns=['_dbt_loaded_at'],
-    tags=['silver', 'player', 'sessions', 'gaming']
+    tags=['silver', 'player', 'sessions', 'gaming'],
+    on_schema_change='fail'
 ) }}
 
 /*

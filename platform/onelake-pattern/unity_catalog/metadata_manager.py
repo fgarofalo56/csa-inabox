@@ -34,14 +34,16 @@ Usage::
 from __future__ import annotations
 
 import argparse
-import logging
 import sys
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-logger = logging.getLogger(__name__)
+from governance.common.logging import configure_structlog, get_logger
+
+configure_structlog(service="metadata-manager")
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -246,7 +248,7 @@ class MetadataManager:
             properties=properties or {},
         )
         self._store.upsert_catalog(entry)
-        logger.info("Registered catalog: %s (owner: %s)", name, owner)
+        logger.info("catalog.registered", name=name, owner=owner)
         return entry
 
     def get_catalog(self, name: str) -> CatalogEntry | None:
@@ -290,7 +292,7 @@ class MetadataManager:
             properties=properties or {},
         )
         self._store.upsert_schema(entry)
-        logger.info("Registered schema: %s.%s", catalog_name, schema_name)
+        logger.info("schema.registered", catalog=catalog_name, schema=schema_name)
         return entry
 
     def get_schema(self, catalog_name: str, schema_name: str) -> SchemaEntry | None:
@@ -363,7 +365,7 @@ class MetadataManager:
                 )
 
             self._store.upsert_table(existing)
-            logger.info("Updated table: %s (v%d)", full_name, existing.schema_version)
+            logger.info("table.updated", full_name=full_name, schema_version=existing.schema_version)
             return existing
 
         # Create new table
@@ -390,7 +392,7 @@ class MetadataManager:
             ],
         )
         self._store.upsert_table(entry)
-        logger.info("Registered table: %s", full_name)
+        logger.info("table.registered", full_name=full_name)
         return entry
 
     def list_tables(
@@ -463,7 +465,7 @@ class MetadataManager:
         full_name = f"{catalog}.{schema_name}.{table_name}"
         deleted = self._store.delete_table(full_name)
         if deleted:
-            logger.info("Deleted table: %s", full_name)
+            logger.info("table.deleted", full_name=full_name)
         return deleted
 
 
@@ -510,7 +512,6 @@ def main(argv: list[str] | None = None) -> int:
     search_parser.add_argument("--catalog", default=None)
 
     args = parser.parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
     manager = MetadataManager()
 

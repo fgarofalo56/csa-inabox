@@ -30,10 +30,8 @@ governance = [
     # Structured JSON logging with trace/correlation context — see
     # governance/common/logging.py and docs/LOG_SCHEMA.md.
     "structlog>=24.1.0,<25.0.0",
-    # great-expectations: The ge_runner.py checkpoint runner uses an in-memory
-    # fallback evaluator; no GE config/checkpoints exist yet. Re-add when a
-    # Spark-backed checkpoint pipeline is implemented.
-    # "great-expectations>=1.0.0",
+    "tenacity>=8.2.0,<10.0.0",
+    "great-expectations>=1.0.0,<2.0.0",
 ]
 functions = [
     # Azure Functions host SDK — required by all function_app.py modules.
@@ -49,6 +47,14 @@ functions = [
     "azure-mgmt-cosmosdb>=9.0.0,<10.0.0",
     "azure-mgmt-sql>=3.0.0,<4.0.0",
     "structlog>=24.1.0,<25.0.0",
+]
+platform = [
+    "structlog>=24.1.0,<25.0.0",
+    "tenacity>=8.2.0,<10.0.0",
+    "openai>=1.0.0,<2.0.0",
+    "azure-identity>=1.14.0,<2.0.0",
+    "azure-search-documents>=11.4.0,<12.0.0",
+    "requests>=2.31.0,<3.0.0",
 ]
 
 [tool.setuptools]
@@ -189,9 +195,6 @@ ignore = [
     "F841",    # unused-variable (test assertion intermediaries)
     "RUF043",  # regex-metachar-in-match (intentional regex in pytest.raises)
 ]
-"platform/**/generator/**/*.py" = [
-    "ARG002",  # unused-method-argument (mock schema detectors)
-]
 
 [tool.ruff.lint.isort]
 known-first-party = ["domains", "governance"]
@@ -220,6 +223,12 @@ source = [
     "domains/sharedServices/aiEnrichment/functions",
     "domains/sharedServices/eventProcessing/functions",
     "domains/sharedServices/secretRotation/functions",
+    "platform/ai_integration",
+    "platform/data-activator",
+    "platform/data_marketplace",
+    "platform/metadata-framework",
+    "platform/purview_governance",
+    "platform/shared-services",
 ]
 branch = true
 omit = [
@@ -272,6 +281,16 @@ warn_unused_configs = true
 warn_redundant_casts = true
 warn_unused_ignores = true
 no_implicit_reexport = true
+
+[[tool.mypy.overrides]]
+# Platform modules use lazy SDK imports and dynamic client initialization.
+# They are type-checked separately via ``make typecheck-platform`` to allow
+# progressive strictness adoption.
+module = [
+    "platform.*",
+]
+ignore_errors = false
+disallow_untyped_defs = false
 
 [[tool.mypy.overrides]]
 # Databricks notebooks rely on spark / dbutils / display globals that

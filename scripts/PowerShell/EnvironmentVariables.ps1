@@ -7,7 +7,7 @@ New-Item -Path Env: -Name "MY_VARIABLE" -Value "my_value"
 
 
 
-# Path: scripts/PowerShell/EnvironmentVariables.ps1
+# Path: scripts/powershell/EnvironmentVariables.ps1
 # Add directory to PATH environment variable
 $env:PATH += ";S:\Repos\GitHub\csa-inabox\scripts\PowerShell"
 

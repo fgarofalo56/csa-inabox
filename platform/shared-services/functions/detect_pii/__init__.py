@@ -40,14 +40,16 @@ Response::
 from __future__ import annotations
 
 import json
-import logging
 import re
 from dataclasses import asdict, dataclass
 from typing import Any
 
 import azure.functions as func
 
-logger = logging.getLogger(__name__)
+from governance.common.logging import configure_structlog, get_logger
+
+configure_structlog(service="detect-pii")
+logger = get_logger(__name__)
 
 app = func.FunctionApp()
 

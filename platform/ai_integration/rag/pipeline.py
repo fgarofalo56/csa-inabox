@@ -28,15 +28,22 @@ import asyncio
 import contextlib
 import hashlib
 import json
-import logging
 import re
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-logger = logging.getLogger(__name__)
+from governance.common.logging import configure_structlog, get_logger
+
+if TYPE_CHECKING:
+    from azure.search.documents import SearchClient
+    from azure.search.documents.indexes import SearchIndexClient
+    from openai import AzureOpenAI
+
+configure_structlog(service="rag-pipeline")
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -234,9 +241,9 @@ class EmbeddingGenerator:
         self.dimensions = dimensions
         self.batch_size = batch_size
         self.max_concurrent = max_concurrent
-        self._client: Any = None
+        self._client: AzureOpenAI | None = None
 
-    def _get_client(self) -> Any:
+    def _get_client(self) -> AzureOpenAI:
         """Lazily initialise the Azure OpenAI client."""
         if self._client is None:
             from openai import AzureOpenAI
@@ -277,7 +284,7 @@ class EmbeddingGenerator:
 
         for i in range(0, len(texts), self.batch_size):
             batch = texts[i : i + self.batch_size]
-            logger.info("Embedding batch %d-%d of %d", i, i + len(batch), len(texts))
+            logger.info("Embedding batch", batch_start=i, batch_end=i + len(batch), total=len(texts))
             response = client.embeddings.create(
                 input=batch,
                 model=self.deployment,
@@ -340,7 +347,7 @@ class EmbeddingGenerator:
 
         async def _embed_batch(start: int, batch: list[str]) -> None:
             async with semaphore:
-                logger.info("Async embedding batch %d-%d", start, start + len(batch))
+                logger.info("async_embedding_batch", batch_start=start, batch_end=start + len(batch))
                 response = await async_client.embeddings.create(
                     input=batch,
                     model=self.deployment,
@@ -399,10 +406,10 @@ class VectorStore:
         self.api_key = api_key
         self.index_name = index_name
         self.embedding_dimensions = embedding_dimensions
-        self._search_client: Any = None
-        self._index_client: Any = None
+        self._search_client: SearchClient | None = None
+        self._index_client: SearchIndexClient | None = None
 
-    def _get_index_client(self) -> Any:
+    def _get_index_client(self) -> SearchIndexClient:
         """Lazily initialise the search index client."""
         if self._index_client is None:
             from azure.search.documents.indexes import SearchIndexClient
@@ -414,7 +421,7 @@ class VectorStore:
             )
         return self._index_client
 
-    def _get_search_client(self) -> Any:
+    def _get_search_client(self) -> SearchClient:
         """Lazily initialise the search client."""
         if self._search_client is None:
             from azure.search.documents import SearchClient
@@ -503,7 +510,7 @@ class VectorStore:
 
         client = self._get_index_client()
         client.create_or_update_index(index)
-        logger.info("Created/updated search index: %s", self.index_name)
+        logger.info("search_index.created_or_updated", index_name=self.index_name)
 
     def upsert_documents(self, chunks: list[Chunk], embeddings: list[list[float]]) -> int:
         """Upsert chunks with their embeddings into the search index.
@@ -540,7 +547,7 @@ class VectorStore:
             batch = documents[i : i + batch_size]
             result = client.upload_documents(documents=batch)
             uploaded += sum(1 for r in result if r.succeeded)
-            logger.info("Upserted batch %d-%d (%d succeeded)", i, i + len(batch), uploaded)
+            logger.info("upsert_batch", batch_start=i, batch_end=i + len(batch), succeeded=uploaded)
 
         return uploaded
 
@@ -630,7 +637,7 @@ class VectorStore:
         docs_to_delete = [{"id": doc_id} for doc_id in document_ids]
         result = client.delete_documents(documents=docs_to_delete)
         deleted = sum(1 for r in result if r.succeeded)
-        logger.info("Deleted %d documents from index %s", deleted, self.index_name)
+        logger.info("documents.deleted", count=deleted, index_name=self.index_name)
         return deleted
 
 
@@ -684,16 +691,42 @@ class RAGPipeline:
         top_k: int = 5,
         score_threshold: float = 0.70,
         use_semantic_reranker: bool = True,
+        chat_client: AzureOpenAI | None = None,
     ) -> None:
         self.chunker = chunker
         self.embedder = embedder
         self.vector_store = vector_store
+        self.chat_client = chat_client
         self.chat_deployment = chat_deployment
         self.chat_max_tokens = chat_max_tokens
         self.chat_temperature = chat_temperature
         self.top_k = top_k
         self.score_threshold = score_threshold
         self.use_semantic_reranker = use_semantic_reranker
+
+    def _get_chat_client(self) -> AzureOpenAI:
+        """Get the chat client. Uses injected client or creates one from config."""
+        if self.chat_client is not None:
+            return self.chat_client
+        # Fallback: create client from same config as embedder
+        from openai import AzureOpenAI
+
+        if hasattr(self.embedder, "api_key") and self.embedder.api_key:
+            return AzureOpenAI(
+                azure_endpoint=self.embedder.endpoint,
+                api_key=self.embedder.api_key,
+                api_version=self.embedder.api_version,
+            )
+        else:
+            from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+
+            credential = DefaultAzureCredential()
+            token_provider = get_bearer_token_provider(credential, "https://cognitiveservices.azure.com/.default")
+            return AzureOpenAI(
+                azure_endpoint=self.embedder.endpoint,
+                azure_ad_token_provider=token_provider,
+                api_version=self.embedder.api_version,
+            )
 
     # -- Ingestion ----------------------------------------------------------
 
@@ -707,16 +740,16 @@ class RAGPipeline:
         Returns:
             Number of chunks stored.
         """
-        logger.info("Ingesting file: %s", path)
+        logger.info("file.ingesting", path=str(path))
         chunks = self.chunker.chunk_file(path, metadata=metadata)
         if not chunks:
-            logger.warning("No chunks produced from %s", path)
+            logger.warning("file.no_chunks", path=str(path))
             return 0
 
         texts = [c.text for c in chunks]
         embeddings = self.embedder.embed_texts(texts)
         stored = self.vector_store.upsert_documents(chunks, embeddings)
-        logger.info("Stored %d chunks from %s", stored, path)
+        logger.info("file.stored", chunks=stored, path=str(path))
         return stored
 
     def ingest_directory(
@@ -744,8 +777,8 @@ class RAGPipeline:
                 try:
                     total += self.ingest_file(file_path, metadata=metadata)
                 except Exception:
-                    logger.exception("Failed to ingest %s", file_path)
-        logger.info("Ingested %d total chunks from %s", total, directory)
+                    logger.exception("file.ingest_failed", path=str(file_path))
+        logger.info("directory.ingested", total_chunks=total, directory=str(directory))
         return total
 
     def ingest_text(
@@ -833,7 +866,7 @@ class RAGPipeline:
         )
 
         # 4. Generate answer via Azure OpenAI
-        client = self.embedder._get_client()
+        client = self._get_chat_client()
         response = client.chat.completions.create(
             model=self.chat_deployment,
             messages=[
@@ -994,7 +1027,6 @@ def main() -> None:
     query_parser.set_defaults(func=_cli_query)
 
     args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     args.func(args)
 
 

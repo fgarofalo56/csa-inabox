@@ -23,6 +23,13 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential_jitter,
+)
+
 SEED_DIR = Path(__file__).resolve().parent.parent.parent / "domains" / "shared" / "dbt" / "seeds"
 DBT_PROJECT_DIR = Path(__file__).resolve().parent.parent.parent / "domains" / "shared" / "dbt"
 
@@ -35,12 +42,27 @@ def upload_to_adls(
 ) -> None:
     """Upload all CSVs in SEED_DIR to ADLS Gen2 using azure-storage-blob."""
     try:
+        from azure.core.exceptions import HttpResponseError, ServiceRequestError
         from azure.identity import DefaultAzureCredential
         from azure.storage.blob import BlobServiceClient
     except ImportError:
         print("ERROR: azure-storage-blob and azure-identity are required.")
         print("  pip install azure-storage-blob azure-identity")
         sys.exit(1)
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential_jitter(initial=1, max=30),
+        retry=retry_if_exception_type((ServiceRequestError, HttpResponseError)),
+    )
+    def _upload_blob(client, blob_name, data, metadata):
+        """Upload a single blob with retry on transient Azure errors."""
+        client.upload_blob(
+            name=blob_name,
+            data=data,
+            overwrite=True,
+            metadata=metadata,
+        )
 
     account_url = f"https://{storage_account}.blob.core.windows.net"
     credential = DefaultAzureCredential()
@@ -67,11 +89,11 @@ def upload_to_adls(
 
         print(f"  Uploading {csv_path.name} -> {blob_name} ...", end=" ")
         with open(csv_path, "rb") as f:
-            container_client.upload_blob(
-                name=blob_name,
-                data=f,
-                overwrite=True,
-                metadata={
+            _upload_blob(
+                container_client,
+                blob_name,
+                f,
+                {
                     "uploaded_by": "csa-inabox-seed-loader",
                     "uploaded_at": now,
                     "domain": domain,

@@ -141,6 +141,11 @@ models:
         description: Facility reporting the volume
         tests:
           - not_null
+          - relationships:
+              to: ref('brz_facility_operations')
+              field: facility_id
+              config:
+                severity: warn
       - name: product_class
         description: Mail product class
         tests:
@@ -265,6 +270,11 @@ models:
         description: Facility identifier
         tests:
           - not_null
+          - relationships:
+              to: ref('slv_facility_operations')
+              field: facility_id
+              config:
+                severity: warn
       - name: product_class
         description: Standardized product class
         tests:

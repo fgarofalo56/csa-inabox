@@ -29,6 +29,13 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential_jitter,
+)
+
 # --- Event generation ---
 
 EVENT_TYPES = [
@@ -142,6 +149,16 @@ async def produce_to_eventhub(
     """Publish events to Azure Event Hub."""
     from azure.eventhub import EventData
     from azure.eventhub.aio import EventHubProducerClient
+    from azure.eventhub.exceptions import EventHubError
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential_jitter(initial=1, max=30),
+        retry=retry_if_exception_type((EventHubError, OSError)),
+    )
+    async def _send_batch_with_retry(producer_client, batch):
+        """Send an event batch with retry on transient Event Hub errors."""
+        await producer_client.send_batch(batch)
 
     if connection_string:
         producer = EventHubProducerClient.from_connection_string(
@@ -179,14 +196,16 @@ async def produce_to_eventhub(
                 except ValueError:
                     break
 
-            await producer.send_batch(batch)
+            await _send_batch_with_retry(producer, batch)
             total_sent += batch_count
 
             elapsed = time.monotonic() - start_time
             if int(elapsed) % 10 == 0 and elapsed > 0:
                 print(f"  {int(elapsed)}s: {total_sent} events sent ({total_sent / elapsed:.0f}/s)")
 
-            await asyncio.sleep(max(0, interval * rate - (time.monotonic() - start_time) % 1))
+            # Ensure sleep time is always >= 0 to avoid negative sleep durations
+            sleep_time = max(0, interval * rate - (time.monotonic() - start_time) % 1)
+            await asyncio.sleep(sleep_time)
 
     print(f"\nDone! Sent {total_sent} events in {duration}s")
 

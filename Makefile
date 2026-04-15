@@ -1,4 +1,4 @@
-.PHONY: help setup lint test validate deploy-dev deploy-prod deploy-adf prerequisites seed seed-azure clean security
+.PHONY: help setup lint test validate deploy-dev deploy-prod deploy-adf prerequisites seed seed-azure clean security typecheck-platform
 
 # Default target
 help: ## Show this help
@@ -38,6 +38,13 @@ typecheck: ## Run strict mypy on governance, tests, and all three Function apps
 	mypy domains/sharedServices/secretRotation/functions/function_app.py
 	@echo "mypy strict passed"
 
+typecheck-platform: ## Run mypy on platform modules (progressive strictness)
+	mypy platform/ai_integration/ --ignore-missing-imports
+	mypy platform/data_marketplace/ --ignore-missing-imports
+	mypy platform/metadata-framework/ --ignore-missing-imports
+	mypy platform/purview_governance/ --ignore-missing-imports
+	@echo "mypy platform passed"
+
 lint-bicep: ## Lint all Bicep files
 	@find deploy/bicep -name "*.bicep" -not -path "*/node_modules/*" -exec sh -c 'echo "Building: {}"; bicep build {} && rm -f "$${1%.bicep}.json"' _ {} \;
 
@@ -75,19 +82,6 @@ validate-python: ## Validate Python code only
 
 validate-dbt: ## Validate dbt models only
 	pwsh -File agent-harness/gates/validate-dbt.ps1
-
-# --- Terraform ---
-
-tf-init: ## Initialize Terraform (DLZ)
-	cd deploy/terraform/dlz && terraform init
-
-tf-plan: ## Plan Terraform changes (DLZ, dev)
-	cd deploy/terraform/dlz && terraform plan
-
-tf-validate: ## Validate all Terraform configurations
-	cd deploy/terraform/dlz && terraform validate
-	cd deploy/terraform/dmlz && terraform validate
-
 # --- Deployment ---
 
 deploy-dev: ## Deploy to dev environment (what-if)

@@ -2,7 +2,8 @@
     materialized='incremental',
     unique_key='storm_event_sk',
     merge_exclude_columns=['_dbt_loaded_at'],
-    tags=['silver', 'storm_events', 'cleaned']
+    tags=['silver', 'storm_events', 'cleaned'],
+    on_schema_change='fail'
 ) }}
 
 {#

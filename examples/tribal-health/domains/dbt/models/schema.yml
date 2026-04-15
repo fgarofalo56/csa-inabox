@@ -113,10 +113,16 @@ models:
         description: Patient identifier (FK to demographics)
         tests:
           - not_null
+          - relationships:
+              to: ref('brz_patient_demographics')
+              field: patient_id
       - name: facility_id
         description: Facility where encounter occurred
         tests:
           - not_null
+          - relationships:
+              to: ref('brz_facilities')
+              field: facility_id
       - name: encounter_date
         description: Date of clinical encounter
         tests:
@@ -268,6 +274,9 @@ models:
         description: Patient identifier
         tests:
           - not_null
+          - relationships:
+              to: ref('slv_patient_demographics')
+              field: patient_id
       - name: encounter_date
         description: Date of encounter
         tests:

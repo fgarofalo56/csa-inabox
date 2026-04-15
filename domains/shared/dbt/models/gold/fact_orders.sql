@@ -6,7 +6,8 @@
     partition_by=['order_date'],
     clustered_by=['customer_id'],
     file_format='delta',
-    tags=['gold', 'orders', 'fact']
+    tags=['gold', 'orders', 'fact'],
+    on_schema_change='fail'
   )
 }}
 

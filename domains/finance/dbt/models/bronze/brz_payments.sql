@@ -4,7 +4,8 @@
     file_format='delta',
     unique_key='payment_id',
     incremental_strategy='merge',
-    tags=['bronze', 'finance', 'payments']
+    tags=['bronze', 'finance', 'payments'],
+    on_schema_change='fail'
   )
 }}
 

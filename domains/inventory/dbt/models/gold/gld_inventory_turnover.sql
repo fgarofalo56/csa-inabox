@@ -1,6 +1,8 @@
 {{
   config(
     materialized='table',
+    -- materialized='table': Full rebuild required — this model aggregates across
+    -- the entire dataset without a reliable incremental key.
     file_format='delta',
     tags=['gold', 'inventory', 'analytics']
   )

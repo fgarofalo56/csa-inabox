@@ -4,7 +4,8 @@
         unique_key='order_id',
         incremental_strategy='merge',
         file_format='delta',
-        tags=['silver', 'sales']
+        tags=['silver', 'sales'],
+        on_schema_change='fail'
     )
 }}
 

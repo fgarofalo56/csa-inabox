@@ -2,7 +2,8 @@
     materialized='incremental',
     unique_key=['station_id', 'observation_date', 'element'],
     merge_exclude_columns=['_dbt_loaded_at'],
-    tags=['bronze', 'ghcn', 'weather_stations']
+    tags=['bronze', 'ghcn', 'weather_stations'],
+    on_schema_change='fail'
 ) }}
 
 {#

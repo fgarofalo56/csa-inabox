@@ -2,7 +2,8 @@
     materialized='incremental',
     unique_key=['patient_id'],
     merge_exclude_columns=['_dbt_loaded_at'],
-    tags=['bronze', 'patient', 'demographics', 'hipaa']
+    tags=['bronze', 'patient', 'demographics', 'hipaa'],
+    on_schema_change='fail'
 ) }}
 
 /*

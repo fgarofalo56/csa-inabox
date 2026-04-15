@@ -21,14 +21,19 @@ Usage::
 
 from __future__ import annotations
 
-import logging
 import os
 import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-logger = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from openai import AzureOpenAI
+
+from governance.common.logging import configure_structlog, get_logger
+
+configure_structlog(service="text-summarizer")
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -107,9 +112,9 @@ class TextSummarizer:
         self._max_input_chars = max_input_tokens * self._CHARS_PER_TOKEN
         self._min_interval = 60.0 / requests_per_minute
         self._last_request_time: float = 0.0
-        self._client: Any = None
+        self._client: AzureOpenAI | None = None
 
-    def _get_client(self) -> Any:
+    def _get_client(self) -> AzureOpenAI:
         """Lazily initialise the Azure OpenAI client."""
         if self._client is None:
             from openai import AzureOpenAI
@@ -291,7 +296,7 @@ class TextSummarizer:
 
         try:
             chunks = self._chunk_text(text)
-            logger.info("Summarizing document (%d chars) in %d chunk(s)", input_length, len(chunks))
+            logger.info("summarizing_document", input_chars=input_length, chunks=len(chunks))
 
             if len(chunks) == 1:
                 summary = self._summarize_single_chunk(chunks[0], mode_enum, style_enum, max_length)
@@ -299,7 +304,7 @@ class TextSummarizer:
                 # Hierarchical summarization: summarize each chunk, then combine
                 chunk_summaries: list[str] = []
                 for idx, chunk in enumerate(chunks):
-                    logger.info("Summarizing chunk %d of %d", idx + 1, len(chunks))
+                    logger.info("summarizing_chunk", index=idx + 1, total=len(chunks))
                     chunk_summary = self._summarize_single_chunk(
                         chunk, mode_enum, SummarizationStyle.PARAGRAPH, max_length
                     )
@@ -307,7 +312,7 @@ class TextSummarizer:
 
                 # Combine chunk summaries into a final summary
                 combined = "\n\n".join(chunk_summaries)
-                logger.info("Combining %d chunk summaries into final summary", len(chunk_summaries))
+                logger.info("combining_chunk_summaries", count=len(chunk_summaries))
                 summary = self._summarize_single_chunk(combined, mode_enum, style_enum, max_length)
 
             return SummarizationResult(
@@ -319,7 +324,7 @@ class TextSummarizer:
                 chunks_processed=len(chunks),
             )
         except Exception as exc:
-            logger.exception("Summarization failed")
+            logger.exception("summarization.failed")
             return SummarizationResult(
                 summary="",
                 mode=mode_enum.value,
@@ -350,7 +355,7 @@ class TextSummarizer:
         """
         results: list[SummarizationResult] = []
         for idx, text in enumerate(texts):
-            logger.info("Summarizing document %d of %d", idx + 1, len(texts))
+            logger.info("summarizing_document", index=idx + 1, total=len(texts))
             result = self.summarize(text, mode=mode, style=style, max_length=max_length)
             results.append(result)
         return results

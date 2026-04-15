@@ -28,13 +28,18 @@ Usage::
 from __future__ import annotations
 
 import json
-import logging
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-logger = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from azure.ai.ml import MLClient
+
+from governance.common.logging import configure_structlog, get_logger
+
+configure_structlog(service="model-serving-endpoint")
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -108,9 +113,9 @@ class ModelEndpoint:
         self.workspace_name = workspace_name or os.environ.get("AZURE_ML_WORKSPACE", "")
         self.resource_group = resource_group or os.environ.get("AZURE_ML_RESOURCE_GROUP", "")
         self.subscription_id = subscription_id or os.environ.get("AZURE_SUBSCRIPTION_ID", "")
-        self._ml_client: Any = None
+        self._ml_client: MLClient | None = None
 
-    def _get_ml_client(self) -> Any:
+    def _get_ml_client(self) -> MLClient:
         """Lazily initialise the Azure ML client."""
         if self._ml_client is None:
             from azure.ai.ml import MLClient
@@ -155,10 +160,10 @@ class ModelEndpoint:
             tags=tags or {"platform": "csa-inabox"},
         )
 
-        logger.info("Creating managed online endpoint: %s", endpoint_name)
+        logger.info("endpoint.creating", endpoint_name=endpoint_name)
         result = client.online_endpoints.begin_create_or_update(endpoint).result()
         scoring_uri = result.scoring_uri or ""
-        logger.info("Endpoint created: %s -> %s", endpoint_name, scoring_uri)
+        logger.info("endpoint.created", endpoint_name=endpoint_name, scoring_uri=scoring_uri)
         return scoring_uri
 
     def deploy(self, config: DeploymentConfig) -> None:
@@ -180,7 +185,7 @@ class ModelEndpoint:
         # Ensure endpoint exists
         try:
             client.online_endpoints.get(config.endpoint_name)
-            logger.info("Endpoint %s already exists", config.endpoint_name)
+            logger.info("endpoint.exists", endpoint_name=config.endpoint_name)
         except Exception:
             self.create_endpoint(config.endpoint_name, tags=config.tags)
 
@@ -211,14 +216,14 @@ class ModelEndpoint:
             )
 
         logger.info(
-            "Deploying %s (model %s:%s) to endpoint %s",
-            config.deployment_name,
-            config.model_name,
-            config.model_version,
-            config.endpoint_name,
+            "deployment.creating",
+            deployment_name=config.deployment_name,
+            model_name=config.model_name,
+            model_version=config.model_version,
+            endpoint_name=config.endpoint_name,
         )
         client.online_deployments.begin_create_or_update(deployment).result()
-        logger.info("Deployment %s created successfully", config.deployment_name)
+        logger.info("deployment.created", deployment_name=config.deployment_name)
 
         # Set traffic
         if config.traffic_percentage > 0:
@@ -250,7 +255,7 @@ class ModelEndpoint:
         endpoint = client.online_endpoints.get(endpoint_name)
         endpoint.traffic = traffic
         client.online_endpoints.begin_create_or_update(endpoint).result()
-        logger.info("Traffic updated for %s: %s", endpoint_name, traffic)
+        logger.info("traffic.updated", endpoint_name=endpoint_name, traffic=traffic)
 
     def delete_deployment(self, endpoint_name: str, deployment_name: str) -> None:
         """Delete a deployment from an endpoint.
@@ -260,12 +265,12 @@ class ModelEndpoint:
             deployment_name: Name of the deployment to remove.
         """
         client = self._get_ml_client()
-        logger.info("Deleting deployment %s from endpoint %s", deployment_name, endpoint_name)
+        logger.info("deployment.deleting", deployment_name=deployment_name, endpoint_name=endpoint_name)
         client.online_deployments.begin_delete(
             name=deployment_name,
             endpoint_name=endpoint_name,
         ).result()
-        logger.info("Deployment %s deleted", deployment_name)
+        logger.info("deployment.deleted", deployment_name=deployment_name)
 
     def delete_endpoint(self, endpoint_name: str) -> None:
         """Delete an entire managed online endpoint and all its deployments.
@@ -274,9 +279,9 @@ class ModelEndpoint:
             endpoint_name: Name of the endpoint to delete.
         """
         client = self._get_ml_client()
-        logger.info("Deleting endpoint %s and all deployments", endpoint_name)
+        logger.info("endpoint.deleting", endpoint_name=endpoint_name)
         client.online_endpoints.begin_delete(name=endpoint_name).result()
-        logger.info("Endpoint %s deleted", endpoint_name)
+        logger.info("endpoint.deleted", endpoint_name=endpoint_name)
 
     # -- Invocation ---------------------------------------------------------
 
@@ -322,7 +327,7 @@ class ModelEndpoint:
             )
         except Exception as exc:
             latency = (time.perf_counter() - start) * 1000
-            logger.exception("Invocation failed for %s", endpoint_name)
+            logger.exception("invocation.failed", endpoint_name=endpoint_name)
             return InvocationResult(
                 endpoint_name=endpoint_name,
                 latency_ms=round(latency, 2),
@@ -373,7 +378,7 @@ class ModelEndpoint:
                 is_healthy=is_healthy,
             )
         except Exception:
-            logger.exception("Health check failed for %s", endpoint_name)
+            logger.exception("health_check.failed", endpoint_name=endpoint_name)
             return EndpointHealth(
                 endpoint_name=endpoint_name,
                 provisioning_state="Unknown",

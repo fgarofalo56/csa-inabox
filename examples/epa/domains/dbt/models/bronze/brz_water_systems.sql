@@ -2,7 +2,8 @@
     materialized='incremental',
     unique_key=['pwsid', 'violation_id'],
     merge_exclude_columns=['_dbt_loaded_at'],
-    tags=['bronze', 'sdwis', 'water_systems']
+    tags=['bronze', 'sdwis', 'water_systems'],
+    on_schema_change='fail'
 ) }}
 
 {#

@@ -16,7 +16,6 @@ Endpoints:
 
 from __future__ import annotations
 
-import logging
 import os
 import uuid
 from collections.abc import AsyncIterator
@@ -39,7 +38,10 @@ from typing import Any
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 
-logger = logging.getLogger(__name__)
+from governance.common.logging import configure_structlog, get_logger
+
+configure_structlog(service="data-marketplace-api")
+logger = get_logger(__name__)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -209,7 +211,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Application lifecycle manager."""
     logger.info("Data Marketplace starting up")
     environment = os.environ.get("ENVIRONMENT", "dev")
-    logger.info("Environment: %s", environment)
+    logger.info("startup.environment", environment=environment)
     yield
     logger.info("Data Marketplace shutting down")
     # Clean up Cosmos DB client
@@ -238,7 +240,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Restrict in production via APIM
+    allow_origins=os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000").split(","),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

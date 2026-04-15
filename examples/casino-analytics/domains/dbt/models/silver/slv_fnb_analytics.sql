@@ -2,7 +2,8 @@
     materialized='incremental',
     unique_key='fnb_analytics_sk',
     merge_exclude_columns=['_dbt_loaded_at'],
-    tags=['silver', 'fnb', 'analytics', 'hospitality']
+    tags=['silver', 'fnb', 'analytics', 'hospitality'],
+    on_schema_change='fail'
 ) }}
 
 /*

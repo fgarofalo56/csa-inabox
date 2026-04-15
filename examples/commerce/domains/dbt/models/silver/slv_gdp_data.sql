@@ -2,7 +2,8 @@
     materialized='incremental',
     unique_key='gdp_sk',
     merge_exclude_columns=['_dbt_loaded_at'],
-    tags=['silver', 'bea', 'gdp', 'cleaned']
+    tags=['silver', 'bea', 'gdp', 'cleaned'],
+    on_schema_change='fail'
 ) }}
 
 {#

@@ -7,7 +7,20 @@
 -- Output: TumblingOutput  (5-minute aggregates → ADLS / Power BI)
 --         HoppingOutput   (1-minute sliding aggregates → ADX)
 --         SessionOutput   (per-session aggregates → ADLS)
+--         DeadLetterOutput (malformed rows for investigation)
 -- ═══════════════════════════════════════════════════════════════
+
+-- ─── Dead-letter: capture rows where CAST fails (malformed data) ──
+-- Routes rows with unparseable timestamps or non-numeric sensor values
+-- to a dead-letter sink for investigation and reprocessing.
+SELECT
+    *,
+    System.Timestamp()                AS error_time,
+    'CAST_FAILURE'                    AS error_reason
+INTO [DeadLetterOutput]
+FROM [TelemetryInput]
+WHERE TRY_CAST(timestamp AS datetime) IS NULL
+  AND timestamp IS NOT NULL;
 
 -- ─── 5-Minute Tumbling Window Aggregation ────────────────────
 -- Non-overlapping 5-minute windows. Best for dashboards and reporting.

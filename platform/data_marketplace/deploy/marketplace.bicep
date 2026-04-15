@@ -22,6 +22,8 @@ param environment string
 param baseName string = 'csa-marketplace'
 
 @description('Log Analytics workspace resource ID for diagnostics.')
+// NOTE: For production deployments, logAnalyticsWorkspaceId should be required
+// (remove the default empty value) to ensure all resources emit diagnostics.
 param logAnalyticsWorkspaceId string = ''
 
 @description('App Service Plan SKU. Use B1 for dev, S1+ for prod.')
@@ -50,6 +52,9 @@ param privateEndpointSubnets array = []
 
 @description('Attach a CanNotDelete resource lock. Default true for production.')
 param enableResourceLock bool = true
+
+@description('Enable public network access for APIM. Set to false for production with private endpoints.')
+param publicNetworkAccessEnabled bool = false
 
 // ─── Variables ──────────────────────────────────────────────────────────────
 
@@ -243,7 +248,7 @@ resource apim 'Microsoft.ApiManagement/service@2023-09-01-preview' = {
   properties: {
     publisherEmail: apimPublisherEmail
     publisherName: apimPublisherName
-    publicNetworkAccess: 'Enabled' // Set to Disabled for prod with private endpoints
+    publicNetworkAccess: publicNetworkAccessEnabled ? 'Enabled' : 'Disabled'
   }
 }
 

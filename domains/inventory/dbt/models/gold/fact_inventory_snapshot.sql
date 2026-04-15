@@ -1,6 +1,8 @@
 {{
   config(
     materialized='table',
+    -- materialized='table': Full rebuild required — point-in-time snapshot
+    -- recalculated each run; stock levels change continuously.
     file_format='delta',
     tags=['gold', 'inventory', 'fact']
   )

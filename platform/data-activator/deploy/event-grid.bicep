@@ -34,10 +34,15 @@ param pagerDutyIntegrationKey string = ''
 param sourceStorageAccountId string = ''
 
 @description('Log Analytics workspace resource ID for diagnostics.')
+// NOTE: For production deployments, logAnalyticsWorkspaceId should be required
+// (remove the default empty value) to ensure all resources emit diagnostics.
 param logAnalyticsWorkspaceId string = ''
 
 @description('Application Insights connection string.')
 param appInsightsConnectionString string = ''
+
+@description('Enable public network access. Set to false for production deployments.')
+param publicNetworkAccessEnabled bool = false
 
 // ─── Variables ──────────────────────────────────────────────────────────────
 
@@ -97,7 +102,7 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
       ftpsState: 'Disabled'
       minTlsVersion: '1.2'
       appSettings: [
-        { name: 'AzureWebJobsStorage', value: 'DefaultEndpointsProtocol=https;AccountName=${funcStorage.name};EndpointSuffix=${az.environment().suffixes.storage};AccountKey=${funcStorage.listKeys().keys[0].value}' }
+        { name: 'AzureWebJobsStorage__accountName', value: funcStorage.name }
         { name: 'FUNCTIONS_EXTENSION_VERSION', value: '~4' }
         { name: 'FUNCTIONS_WORKER_RUNTIME', value: 'python' }
         { name: 'TEAMS_WEBHOOK_URL', value: teamsWebhookUrl }
@@ -105,6 +110,19 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
         { name: 'ENVIRONMENT', value: environment }
       ]
     }
+  }
+}
+
+// ─── RBAC: Function App → Storage (identity-based connection) ──────────────
+
+@description('Grant the Function App managed identity Storage Blob Data Owner on its storage account.')
+resource storageBlobDataOwner 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(funcStorage.id, functionApp.id, 'StorageBlobDataOwner')
+  scope: funcStorage
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b')
+    principalId: functionApp.identity.principalId
+    principalType: 'ServicePrincipal'
   }
 }
 
@@ -120,7 +138,7 @@ resource eventGridTopic 'Microsoft.EventGrid/topics@2024-06-01-preview' = {
   }
   properties: {
     inputSchema: 'CloudEventSchemaV1_0'
-    publicNetworkAccess: 'Enabled'
+    publicNetworkAccess: publicNetworkAccessEnabled ? 'Enabled' : 'Disabled'
   }
 }
 

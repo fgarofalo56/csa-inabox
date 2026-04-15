@@ -2,7 +2,8 @@
     materialized='incremental',
     unique_key=['facility_id', 'report_date'],
     merge_exclude_columns=['_dbt_loaded_at'],
-    tags=['bronze', 'usps', 'facility_operations']
+    tags=['bronze', 'usps', 'facility_operations'],
+    on_schema_change='fail'
 ) }}
 
 /*

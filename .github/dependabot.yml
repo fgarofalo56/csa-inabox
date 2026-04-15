@@ -12,3 +12,15 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+
+  - package-ecosystem: "npm"
+    directory: "/portal/react-webapp"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: "npm"
+    directory: "/portal/static-webapp"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10

@@ -47,6 +47,7 @@
 				{@const active = isActive(item.href, typeof window !== 'undefined' ? window.location.pathname : '/')}
 				<a
 					href={item.href}
+					aria-current={active ? 'page' : undefined}
 					class="flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors {active
 						? 'bg-azure-50 text-azure-700'
 						: 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'}"
@@ -80,6 +81,8 @@
 			<button
 				type="button"
 				onclick={() => (sidebarOpen = !sidebarOpen)}
+				aria-label="Toggle navigation menu"
+				aria-expanded={sidebarOpen}
 				class="rounded-md p-2 text-gray-600 hover:bg-gray-100"
 			>
 				<svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">

@@ -15,8 +15,22 @@ models:
           - not_null
       - name: customer_id
         description: FK to shared customers.
+        tests:
+          - relationships:
+              to: ref('brz_customers')
+              field: customer_id
+              config:
+                severity: warn
+                where: "customer_id IS NOT NULL"
       - name: product_id
         description: FK to products.
+        tests:
+          - relationships:
+              to: ref('brz_products')
+              field: product_id
+              config:
+                severity: warn
+                where: "product_id IS NOT NULL"
       - name: quantity
         description: Units ordered.
       - name: unit_price

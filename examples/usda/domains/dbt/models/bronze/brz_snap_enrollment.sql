@@ -2,7 +2,8 @@
     materialized='incremental',
     unique_key=['state_code', 'month_year', 'program'],
     merge_exclude_columns=['_dbt_loaded_at'],
-    tags=['bronze', 'fns', 'snap_enrollment']
+    tags=['bronze', 'fns', 'snap_enrollment'],
+    on_schema_change='fail'
 ) }}
 
 WITH source_data AS (

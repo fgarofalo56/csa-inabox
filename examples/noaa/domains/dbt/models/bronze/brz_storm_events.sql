@@ -2,7 +2,8 @@
     materialized='incremental',
     unique_key=['event_id'],
     merge_exclude_columns=['_dbt_loaded_at'],
-    tags=['bronze', 'ncei', 'storm_events']
+    tags=['bronze', 'ncei', 'storm_events'],
+    on_schema_change='fail'
 ) }}
 
 {#

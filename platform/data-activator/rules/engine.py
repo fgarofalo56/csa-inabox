@@ -16,7 +16,6 @@ Usage::
 
 from __future__ import annotations
 
-import logging
 import statistics
 import time
 from collections import defaultdict
@@ -34,7 +33,10 @@ from .schema import (
     load_rules_from_yaml,
 )
 
-logger = logging.getLogger(__name__)
+from governance.common.logging import configure_structlog, get_logger
+
+configure_structlog(service="rules-engine")
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -115,7 +117,7 @@ class RuleEngine:
             A configured rule engine.
         """
         rules = load_rules_from_yaml(path)
-        logger.info("Loaded %d rules from %s", len(rules), path)
+        logger.info("rules.loaded", count=len(rules), path=str(path))
         return cls(rules=rules)
 
     # -- Rule management ----------------------------------------------------
@@ -392,11 +394,11 @@ class RuleEngine:
                 )
                 fired_alerts.append(alert)
                 logger.info(
-                    "Alert fired: %s (field=%s, value=%.2f, threshold=%s)",
-                    rule.name,
-                    rule.condition.field,
-                    actual_value,
-                    rule.condition.threshold,
+                    "alert.fired",
+                    rule_name=rule.name,
+                    field=rule.condition.field,
+                    value=actual_value,
+                    threshold=rule.condition.threshold,
                 )
 
         return fired_alerts

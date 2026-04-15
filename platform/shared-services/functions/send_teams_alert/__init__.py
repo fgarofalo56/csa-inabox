@@ -32,18 +32,20 @@ Response::
 from __future__ import annotations
 
 import json
-import logging
 import os
 from typing import Any
 
 import azure.functions as func
+
+from governance.common.logging import configure_structlog, get_logger
 
 try:
     import requests
 except ImportError:
     requests = None  # type: ignore[assignment]
 
-logger = logging.getLogger(__name__)
+configure_structlog(service="send-teams-alert")
+logger = get_logger(__name__)
 
 app = func.FunctionApp()
 
@@ -238,7 +240,7 @@ def send_teams_alert(req: func.HttpRequest) -> func.HttpResponse:
         }
 
         if delivered:
-            logger.info("Teams alert delivered: %s (severity=%s)", title, severity)
+            logger.info("teams_alert.delivered", title=title, severity=severity)
         else:
             logger.warning(
                 "Teams alert delivery failed: %s (status=%d)",

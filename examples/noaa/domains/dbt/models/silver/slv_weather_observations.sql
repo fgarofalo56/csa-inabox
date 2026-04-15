@@ -2,7 +2,8 @@
     materialized='incremental',
     unique_key='observation_sk',
     merge_exclude_columns=['_dbt_loaded_at'],
-    tags=['silver', 'weather_observations', 'cleaned']
+    tags=['silver', 'weather_observations', 'cleaned'],
+    on_schema_change='fail'
 ) }}
 
 {#

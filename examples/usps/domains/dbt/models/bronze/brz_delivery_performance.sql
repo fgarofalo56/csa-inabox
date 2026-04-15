@@ -2,7 +2,8 @@
     materialized='incremental',
     unique_key=['tracking_id'],
     merge_exclude_columns=['_dbt_loaded_at'],
-    tags=['bronze', 'usps', 'delivery_performance']
+    tags=['bronze', 'usps', 'delivery_performance'],
+    on_schema_change='fail'
 ) }}
 
 /*

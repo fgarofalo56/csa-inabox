@@ -5,7 +5,8 @@
     incremental_strategy='merge',
     partition_by=['revenue_year'],
     file_format='delta',
-    tags=['gold', 'revenue', 'metrics']
+    tags=['gold', 'revenue', 'metrics'],
+    on_schema_change='fail'
   )
 }}
 

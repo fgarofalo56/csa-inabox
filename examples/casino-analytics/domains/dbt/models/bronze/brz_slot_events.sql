@@ -2,7 +2,8 @@
     materialized='incremental',
     unique_key=['event_id'],
     merge_exclude_columns=['_dbt_loaded_at'],
-    tags=['bronze', 'slot', 'telemetry', 'streaming']
+    tags=['bronze', 'slot', 'telemetry', 'streaming'],
+    on_schema_change='fail'
 ) }}
 
 /*

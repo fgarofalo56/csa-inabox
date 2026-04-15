@@ -9,7 +9,7 @@ global:
 frontend:
   image:
     repository: csaregistry.azurecr.io/csa-portal-frontend
-    tag: latest
+    tag: "0.1.0"  # Pin to specific version; never use 'latest' in production
     pullPolicy: Always
   replicas: 2
   resources:
@@ -31,7 +31,7 @@ frontend:
 backend:
   image:
     repository: csaregistry.azurecr.io/csa-portal-backend
-    tag: latest
+    tag: "0.1.0"  # Pin to specific version; never use 'latest' in production
     pullPolicy: Always
   replicas: 2
   resources:
