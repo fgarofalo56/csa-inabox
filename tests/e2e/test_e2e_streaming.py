@@ -25,7 +25,12 @@ _ADX_SETUP_KQL = _STREAMING_DIR / "adx_setup.kql"
 # Columns declared by ``.create-merge table RawEvents (...)`` in adx_setup.kql.
 # Kept in sync manually — if the KQL changes, update this set.
 _EXPECTED_RAW_EVENTS_COLUMNS = {
-    "id", "source", "type", "timestamp", "data", "_ingested_at",
+    "id",
+    "source",
+    "type",
+    "timestamp",
+    "data",
+    "_ingested_at",
 }
 
 # Top-level fields produced by ``generate_event()`` in produce_events.py.
@@ -33,9 +38,16 @@ _EXPECTED_EVENT_FIELDS = {"id", "source", "type", "timestamp", "data"}
 
 # Event types from produce_events.py EVENT_TYPES list.
 _EXPECTED_EVENT_TYPES = {
-    "page_view", "button_click", "form_submit", "search_query",
-    "add_to_cart", "checkout_start", "purchase_complete",
-    "error", "sensor_reading", "heartbeat",
+    "page_view",
+    "button_click",
+    "form_submit",
+    "search_query",
+    "add_to_cart",
+    "checkout_start",
+    "purchase_complete",
+    "error",
+    "sensor_reading",
+    "heartbeat",
 }
 
 
@@ -53,12 +65,13 @@ def _generate_sample_event() -> dict[str, Any]:
     import importlib.util
 
     spec = importlib.util.spec_from_file_location(
-        "produce_events", _STREAMING_DIR / "produce_events.py",
+        "produce_events",
+        _STREAMING_DIR / "produce_events.py",
     )
     assert spec is not None
     assert spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    spec.loader.exec_module(mod)
     return mod.generate_event(0)  # type: ignore[no-any-return]
 
 
@@ -75,16 +88,12 @@ class TestEventSchemaAlignment:
         event = _generate_sample_event()
         actual_keys = set(event.keys())
         missing = _EXPECTED_EVENT_FIELDS - actual_keys
-        assert not missing, (
-            f"Event missing fields expected by ADX: {missing}"
-        )
+        assert not missing, f"Event missing fields expected by ADX: {missing}"
 
     def test_event_type_is_known(self) -> None:
         """The generated event type should be in the known set."""
         event = _generate_sample_event()
-        assert event["type"] in _EXPECTED_EVENT_TYPES, (
-            f"Unknown event type: {event['type']}"
-        )
+        assert event["type"] in _EXPECTED_EVENT_TYPES, f"Unknown event type: {event['type']}"
 
     def test_event_data_has_session_and_region(self) -> None:
         """The ``data`` payload should include at minimum the fields
@@ -119,9 +128,7 @@ class TestEventSchemaAlignment:
                 column_names.add(col_name)
 
         assert column_names == _EXPECTED_RAW_EVENTS_COLUMNS, (
-            f"ADX RawEvents columns mismatch.\n"
-            f"  Expected: {_EXPECTED_RAW_EVENTS_COLUMNS}\n"
-            f"  Got:      {column_names}"
+            f"ADX RawEvents columns mismatch.\n  Expected: {_EXPECTED_RAW_EVENTS_COLUMNS}\n  Got:      {column_names}"
         )
 
 
@@ -146,10 +153,9 @@ class TestAsaqlSyntax:
 
     @pytest.mark.parametrize(
         "asaql_path",
-        sorted(
-            (Path(__file__).resolve().parents[2] / "scripts" / "streaming" / "queries")
-            .glob("*.asaql")
-        ) if (Path(__file__).resolve().parents[2] / "scripts" / "streaming" / "queries").exists() else [],
+        sorted((Path(__file__).resolve().parents[2] / "scripts" / "streaming" / "queries").glob("*.asaql"))
+        if (Path(__file__).resolve().parents[2] / "scripts" / "streaming" / "queries").exists()
+        else [],
         ids=lambda p: p.name,
     )
     def test_asaql_has_select_and_from(self, asaql_path: Path) -> None:
@@ -159,35 +165,27 @@ class TestAsaqlSyntax:
         # Strip SQL comments for cleaner keyword checks
         content_no_comments = re.sub(r"--.*$", "", content, flags=re.MULTILINE)
 
-        assert "SELECT" in content_no_comments, (
-            f"{asaql_path.name}: missing SELECT keyword"
-        )
-        assert "FROM" in content_no_comments, (
-            f"{asaql_path.name}: missing FROM keyword"
-        )
+        assert "SELECT" in content_no_comments, f"{asaql_path.name}: missing SELECT keyword"
+        assert "FROM" in content_no_comments, f"{asaql_path.name}: missing FROM keyword"
 
     @pytest.mark.parametrize(
         "asaql_path",
-        sorted(
-            (Path(__file__).resolve().parents[2] / "scripts" / "streaming" / "queries")
-            .glob("*.asaql")
-        ) if (Path(__file__).resolve().parents[2] / "scripts" / "streaming" / "queries").exists() else [],
+        sorted((Path(__file__).resolve().parents[2] / "scripts" / "streaming" / "queries").glob("*.asaql"))
+        if (Path(__file__).resolve().parents[2] / "scripts" / "streaming" / "queries").exists()
+        else [],
         ids=lambda p: p.name,
     )
     def test_asaql_has_into_clause(self, asaql_path: Path) -> None:
         """Stream Analytics queries should specify an output with INTO."""
         content = _read_text(asaql_path).upper()
         content_no_comments = re.sub(r"--.*$", "", content, flags=re.MULTILINE)
-        assert "INTO" in content_no_comments, (
-            f"{asaql_path.name}: missing INTO clause (no output sink defined)"
-        )
+        assert "INTO" in content_no_comments, f"{asaql_path.name}: missing INTO clause (no output sink defined)"
 
     @pytest.mark.parametrize(
         "asaql_path",
-        sorted(
-            (Path(__file__).resolve().parents[2] / "scripts" / "streaming" / "queries")
-            .glob("*.asaql")
-        ) if (Path(__file__).resolve().parents[2] / "scripts" / "streaming" / "queries").exists() else [],
+        sorted((Path(__file__).resolve().parents[2] / "scripts" / "streaming" / "queries").glob("*.asaql"))
+        if (Path(__file__).resolve().parents[2] / "scripts" / "streaming" / "queries").exists()
+        else [],
         ids=lambda p: p.name,
     )
     def test_asaql_balanced_parentheses(self, asaql_path: Path) -> None:
@@ -196,16 +194,14 @@ class TestAsaqlSyntax:
         open_count = content.count("(")
         close_count = content.count(")")
         assert open_count == close_count, (
-            f"{asaql_path.name}: unbalanced parentheses "
-            f"({open_count} open, {close_count} close)"
+            f"{asaql_path.name}: unbalanced parentheses ({open_count} open, {close_count} close)"
         )
 
     @pytest.mark.parametrize(
         "asaql_path",
-        sorted(
-            (Path(__file__).resolve().parents[2] / "scripts" / "streaming" / "queries")
-            .glob("*.asaql")
-        ) if (Path(__file__).resolve().parents[2] / "scripts" / "streaming" / "queries").exists() else [],
+        sorted((Path(__file__).resolve().parents[2] / "scripts" / "streaming" / "queries").glob("*.asaql"))
+        if (Path(__file__).resolve().parents[2] / "scripts" / "streaming" / "queries").exists()
+        else [],
         ids=lambda p: p.name,
     )
     def test_asaql_not_empty(self, asaql_path: Path) -> None:
@@ -239,8 +235,7 @@ class TestAdxMaterializedViews:
 
         for view_name, source_table in matches:
             assert source_table == "RawEvents", (
-                f"Materialized view {view_name!r} references "
-                f"{source_table!r} instead of 'RawEvents'"
+                f"Materialized view {view_name!r} references {source_table!r} instead of 'RawEvents'"
             )
 
     def test_materialized_views_have_summarize(self) -> None:
@@ -257,9 +252,7 @@ class TestAdxMaterializedViews:
             re.DOTALL | re.IGNORECASE,
         )
         for block in mv_blocks:
-            assert "summarize" in block.lower(), (
-                "A materialized view is missing a 'summarize' clause"
-            )
+            assert "summarize" in block.lower(), "A materialized view is missing a 'summarize' clause"
 
 
 # ===================================================================
@@ -289,9 +282,7 @@ class TestBicepEventHubConfig:
             pytest.skip("adx_setup.kql not found")
 
         kql = _read_text(_ADX_SETUP_KQL)
-        assert "streamingingestion" in kql.lower(), (
-            "adx_setup.kql should enable streaming ingestion on RawEvents"
-        )
+        assert "streamingingestion" in kql.lower(), "adx_setup.kql should enable streaming ingestion on RawEvents"
 
     def test_adx_retention_policy_set(self) -> None:
         """The KQL setup should define a retention policy for RawEvents."""
@@ -299,9 +290,7 @@ class TestBicepEventHubConfig:
             pytest.skip("adx_setup.kql not found")
 
         kql = _read_text(_ADX_SETUP_KQL)
-        assert "retention" in kql.lower(), (
-            "adx_setup.kql should define a retention policy for RawEvents"
-        )
+        assert "retention" in kql.lower(), "adx_setup.kql should define a retention policy for RawEvents"
 
     def test_adx_ingestion_mapping_exists(self) -> None:
         """The KQL setup should define a JSON ingestion mapping."""

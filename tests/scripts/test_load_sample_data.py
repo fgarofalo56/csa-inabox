@@ -2,26 +2,20 @@
 
 from __future__ import annotations
 
-import importlib.util
-import subprocess
-import sys
 from pathlib import Path
-from typing import Any
-from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tests.conftest import load_script_module
+
 # Load module from scripts directory (not a package).
 _SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "seed" / "load_sample_data.py"
-_spec = importlib.util.spec_from_file_location("load_sample_data", _SCRIPT_PATH)
-assert _spec is not None and _spec.loader is not None
-_mod = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_mod)
+_mod = load_script_module("load_sample_data", _SCRIPT_PATH)
 
-upload_to_adls = _mod.upload_to_adls  # type: ignore[attr-defined]
-run_dbt_seed = _mod.run_dbt_seed  # type: ignore[attr-defined]
-SEED_DIR: Path = _mod.SEED_DIR  # type: ignore[attr-defined]
-DBT_PROJECT_DIR: Path = _mod.DBT_PROJECT_DIR  # type: ignore[attr-defined]
+upload_to_adls = _mod.upload_to_adls
+run_dbt_seed = _mod.run_dbt_seed
+SEED_DIR: Path = _mod.SEED_DIR
+DBT_PROJECT_DIR: Path = _mod.DBT_PROJECT_DIR
 
 
 class TestConstants:

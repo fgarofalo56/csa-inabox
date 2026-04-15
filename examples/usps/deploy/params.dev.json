@@ -1,0 +1,326 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "location": {
+            "value": "East US 2"
+        },
+        "environment": {
+            "value": "dev"
+        },
+        "prefix": {
+            "value": "usps"
+        },
+        "workloadName": {
+            "value": "postal-operations-analytics"
+        },
+        "deployModules": {
+            "value": {
+                "cosmosDB": true,
+                "storageZones": true,
+                "externalStorage": false,
+                "synapse": true,
+                "functions": true,
+                "streamAnalytics": false,
+                "appInsights": true,
+                "privateEndpoints": true,
+                "genericStorage": false,
+                "selfHostedIR": false,
+                "dataExplorer": true,
+                "mlWorkspace": true
+            }
+        },
+        "privateDNSZones": {
+            "value": {
+                "subscriptionId": "[subscription().subscriptionId]",
+                "resourceGroupName": "rg-dns-zones"
+            }
+        },
+        "tags": {
+            "value": {
+                "Domain": "USPS",
+                "Environment": "Development",
+                "WorkloadType": "Analytics",
+                "CostCenter": "USPS-IT",
+                "Owner": "USPS Data Engineering Team",
+                "Project": "Postal Operations Analytics Platform"
+            }
+        },
+        "databricksConfig": {
+            "value": {
+                "pricingTier": "premium",
+                "enableNoPublicIp": true,
+                "skuName": "premium",
+                "customVirtualNetworkId": "",
+                "customPublicSubnetName": "",
+                "customPrivateSubnetName": "",
+                "enableAutomaticClusterTermination": true
+            }
+        },
+        "synapseConfig": {
+            "value": {
+                "sqlAdministratorLogin": "sqladmin",
+                "sqlAdministratorLoginPassword": "[parameters('sqlAdministratorPassword')]",
+                "allowedIpAddresses": [
+                    {
+                        "name": "USPS-HQ",
+                        "startIpAddress": "192.168.3.0",
+                        "endIpAddress": "192.168.3.255"
+                    }
+                ],
+                "enableDataExfiltrationProtection": true,
+                "managedVirtualNetwork": "default",
+                "gitConfig": {
+                    "accountName": "USPS-Analytics",
+                    "repositoryName": "usps-postal-operations-analytics",
+                    "collaborationBranch": "main",
+                    "rootFolder": "/synapse"
+                }
+            }
+        },
+        "storageConfig": {
+            "value": {
+                "accountType": "Standard_LRS",
+                "accessTier": "Hot",
+                "supportsHttpsTrafficOnly": true,
+                "enableHierarchicalNamespace": true,
+                "containers": [
+                    {
+                        "name": "raw",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "bronze",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "silver",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "gold",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "exports",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "delivery-tracking",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "facility-ops",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "mail-volume",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "usps-api-cache",
+                        "publicAccess": "None"
+                    }
+                ]
+            }
+        },
+        "keyVaultConfig": {
+            "value": {
+                "enableRbacAuthorization": true,
+                "enableSoftDelete": true,
+                "softDeleteRetentionDays": 90,
+                "enablePurgeProtection": true,
+                "secrets": [
+                    {
+                        "name": "usps-webtools-user-id",
+                        "description": "USPS Web Tools API User ID"
+                    },
+                    {
+                        "name": "census-api-key",
+                        "description": "US Census Bureau API key for TIGER/Line data"
+                    },
+                    {
+                        "name": "sql-administrator-password",
+                        "description": "SQL administrator password for Synapse"
+                    }
+                ]
+            }
+        },
+        "dataFactoryConfig": {
+            "value": {
+                "publicNetworkAccess": "Enabled",
+                "gitConfig": {
+                    "accountName": "USPS-Analytics",
+                    "repositoryName": "usps-postal-operations-analytics",
+                    "collaborationBranch": "main",
+                    "rootFolder": "/datafactory"
+                },
+                "integrationRuntimes": [
+                    {
+                        "name": "AutoResolveIntegrationRuntime",
+                        "type": "Managed",
+                        "location": "AutoResolve"
+                    }
+                ],
+                "linkedServices": [
+                    {
+                        "name": "ls_keyvault",
+                        "type": "AzureKeyVault"
+                    },
+                    {
+                        "name": "ls_storage_raw",
+                        "type": "AzureDataLakeStorage"
+                    },
+                    {
+                        "name": "ls_synapse",
+                        "type": "AzureSqlDW"
+                    },
+                    {
+                        "name": "ls_usps_webtools",
+                        "type": "RestService",
+                        "baseUrl": "https://secure.shippingapis.com/ShippingAPI.dll"
+                    },
+                    {
+                        "name": "ls_census_tiger",
+                        "type": "RestService",
+                        "baseUrl": "https://tigerweb.geo.census.gov/arcgis/rest/services/"
+                    }
+                ]
+            }
+        },
+        "dataExplorerConfig": {
+            "value": {
+                "skuName": "Dev(No SLA)_Standard_D11_v2",
+                "skuTier": "Basic",
+                "capacity": 1,
+                "enableDiskEncryption": false,
+                "enableStreamingIngest": true,
+                "enablePurge": true,
+                "databases": [
+                    {
+                        "name": "uspsanalytics",
+                        "hotCachePeriod": "P7D",
+                        "softDeletePeriod": "P365D"
+                    }
+                ],
+                "enableAutoStop": true,
+                "enableAutoScale": false
+            }
+        },
+        "mlWorkspaceConfig": {
+            "value": {
+                "friendlyName": "USPS Postal Operations ML",
+                "description": "Machine learning workspace for mail volume forecasting and delivery optimization",
+                "enablePublicNetworkAccess": "Enabled",
+                "computeInstances": [
+                    {
+                        "name": "volume-forecasting-vm",
+                        "vmSize": "Standard_DS3_v2",
+                        "enableNodePublicIp": false
+                    }
+                ],
+                "datastores": [
+                    {
+                        "name": "postal_data",
+                        "type": "AzureDataLakeGen2",
+                        "description": "Primary postal operations datasets"
+                    }
+                ]
+            }
+        },
+        "monitoringConfig": {
+            "value": {
+                "enableApplicationInsights": true,
+                "enableLogAnalytics": true,
+                "retentionInDays": 90,
+                "alertRules": [
+                    {
+                        "name": "Delivery Data Pipeline Failure",
+                        "severity": 2,
+                        "evaluationFrequency": "PT5M",
+                        "windowSize": "PT15M",
+                        "actionGroupName": "usps-alerts"
+                    },
+                    {
+                        "name": "Service Standard Compliance Drop",
+                        "severity": 1,
+                        "evaluationFrequency": "PT1H",
+                        "windowSize": "PT1H",
+                        "actionGroupName": "usps-alerts"
+                    }
+                ],
+                "actionGroups": [
+                    {
+                        "name": "usps-alerts",
+                        "emailReceivers": [
+                            {
+                                "name": "USPS Data Team",
+                                "emailAddress": "usps-data-team@contoso.com"
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        "networkingConfig": {
+            "value": {
+                "enablePrivateEndpoints": true,
+                "subnetName": "snet-usps-analytics",
+                "vnetName": "vnet-usps-analytics",
+                "vnetAddressPrefix": "10.4.0.0/16",
+                "subnetAddressPrefix": "10.4.1.0/24",
+                "enableNetworkSecurityGroup": true,
+                "allowedSourceIpRanges": [
+                    "192.168.3.0/24",
+                    "10.0.0.0/8"
+                ]
+            }
+        },
+        "securityConfig": {
+            "value": {
+                "enableDefender": true,
+                "enableKeyVaultFirewall": true,
+                "enableStorageFirewall": true,
+                "requireHttpsTrafficOnly": true,
+                "enableAuditLogs": true,
+                "dataClassification": {
+                    "enabled": true,
+                    "level": "Sensitive"
+                },
+                "encryptionAtRest": true,
+                "enablePrivateLink": true
+            }
+        },
+        "automationConfig": {
+            "value": {
+                "enableAutoShutdown": true,
+                "autoShutdownTime": "19:00",
+                "autoShutdownTimeZone": "Eastern Standard Time",
+                "enableCostOptimization": true,
+                "enableResourceTagging": true,
+                "backupRetentionDays": 30
+            }
+        },
+        "dataGovernanceConfig": {
+            "value": {
+                "enablePurview": false,
+                "dataRetentionPolicies": [
+                    {
+                        "dataType": "Raw Delivery Tracking Data",
+                        "retentionDays": 2555
+                    },
+                    {
+                        "dataType": "Processed Operations Analytics",
+                        "retentionDays": 1825
+                    },
+                    {
+                        "dataType": "Audit Logs",
+                        "retentionDays": 2190
+                    }
+                ],
+                "enableDataLineage": true,
+                "enableDataQualityMonitoring": true
+            }
+        }
+    }
+}

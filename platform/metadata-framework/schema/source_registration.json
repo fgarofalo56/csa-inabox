@@ -1,0 +1,886 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Data Source Registration Schema",
+  "description": "JSON Schema for registering a new data source in the CSA-in-a-Box metadata-driven pipeline framework",
+  "type": "object",
+  "required": [
+    "source_id",
+    "source_name",
+    "source_type",
+    "connection",
+    "schema",
+    "ingestion",
+    "classification",
+    "owner",
+    "target"
+  ],
+  "properties": {
+    "source_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for the data source (UUID v4)"
+    },
+    "source_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "description": "Human-readable name for the data source"
+    },
+    "source_type": {
+      "type": "string",
+      "enum": [
+        "sql_server",
+        "azure_sql",
+        "cosmos_db",
+        "rest_api",
+        "file_drop",
+        "blob_storage",
+        "event_hub",
+        "kafka",
+        "s3",
+        "oracle",
+        "mysql",
+        "postgres",
+        "sharepoint",
+        "dynamics365"
+      ],
+      "description": "Type of data source"
+    },
+    "connection": {
+      "type": "object",
+      "description": "Connection configuration specific to the source type",
+      "oneOf": [
+        {
+          "if": {
+            "properties": {
+              "source_type": {
+                "enum": ["sql_server", "azure_sql", "oracle", "mysql", "postgres"]
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/definitions/database_connection"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "source_type": {
+                "const": "rest_api"
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/definitions/api_connection"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "source_type": {
+                "const": "cosmos_db"
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/definitions/cosmos_connection"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "source_type": {
+                "enum": ["file_drop", "blob_storage", "s3"]
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/definitions/storage_connection"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "source_type": {
+                "enum": ["event_hub", "kafka"]
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/definitions/streaming_connection"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "source_type": {
+                "const": "sharepoint"
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/definitions/sharepoint_connection"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "source_type": {
+                "const": "dynamics365"
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/definitions/dynamics_connection"
+          }
+        }
+      ]
+    },
+    "schema": {
+      "type": "object",
+      "description": "Schema definition for the source data",
+      "oneOf": [
+        {
+          "$ref": "#/definitions/table_schema"
+        },
+        {
+          "$ref": "#/definitions/api_schema"
+        },
+        {
+          "$ref": "#/definitions/file_schema"
+        },
+        {
+          "$ref": "#/definitions/stream_schema"
+        }
+      ]
+    },
+    "ingestion": {
+      "type": "object",
+      "required": ["mode"],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["full", "incremental", "cdc", "streaming"],
+          "description": "Ingestion mode"
+        },
+        "schedule": {
+          "type": "string",
+          "pattern": "^([0-9]{1,2}|\\*) ([0-9]{1,2}|\\*) (\\*|[0-9]{1,2}) (\\*|[0-9]{1,2}) (\\*|[0-9])$",
+          "description": "Cron expression for batch ingestion schedule (not used for streaming)"
+        },
+        "watermark_column": {
+          "type": "string",
+          "description": "Column name for incremental loading watermark (required for incremental mode)"
+        },
+        "batch_size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000,
+          "default": 10000,
+          "description": "Number of records to process in each batch"
+        },
+        "parallelization": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32,
+          "default": 4,
+          "description": "Number of parallel copy activities"
+        },
+        "retry_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10,
+          "default": 3,
+          "description": "Number of retry attempts on failure"
+        }
+      },
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "incremental"
+          }
+        }
+      },
+      "then": {
+        "required": ["watermark_column"]
+      }
+    },
+    "classification": {
+      "type": "string",
+      "enum": ["public", "internal", "confidential", "restricted"],
+      "description": "Data classification level"
+    },
+    "owner": {
+      "type": "object",
+      "required": ["name", "email", "domain"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Name of the data owner (person or team)"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Email address of the data owner"
+        },
+        "domain": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 50,
+          "description": "Business domain (e.g., sales, marketing, finance)"
+        },
+        "cost_center": {
+          "type": "string",
+          "description": "Cost center for billing allocation"
+        }
+      }
+    },
+    "data_product": {
+      "type": "object",
+      "required": ["name", "domain"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Name of the data product"
+        },
+        "domain": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 50,
+          "description": "Data domain"
+        },
+        "sla_freshness_minutes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 525600,
+          "description": "SLA for data freshness in minutes (max 1 year)"
+        },
+        "quality_rules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["rule_type", "parameters"],
+            "properties": {
+              "rule_type": {
+                "type": "string",
+                "enum": ["not_null", "unique", "range", "pattern", "custom"],
+                "description": "Type of quality rule"
+              },
+              "column": {
+                "type": "string",
+                "description": "Column name (for column-level rules)"
+              },
+              "parameters": {
+                "type": "object",
+                "description": "Rule-specific parameters"
+              },
+              "severity": {
+                "type": "string",
+                "enum": ["warning", "error", "critical"],
+                "default": "error"
+              }
+            }
+          }
+        }
+      }
+    },
+    "target": {
+      "type": "object",
+      "required": ["landing_zone", "container", "format"],
+      "properties": {
+        "landing_zone": {
+          "type": "string",
+          "pattern": "^lz-[a-z0-9-]+$",
+          "description": "Landing zone identifier (must start with 'lz-')"
+        },
+        "container": {
+          "type": "string",
+          "enum": ["bronze", "silver", "gold", "sandbox"],
+          "description": "Target container in medallion architecture"
+        },
+        "path_pattern": {
+          "type": "string",
+          "default": "{source_name}/{table_name}/year={yyyy}/month={MM}/day={dd}",
+          "description": "Path pattern for organizing files (supports date partitioning tokens)"
+        },
+        "format": {
+          "type": "string",
+          "enum": ["delta", "parquet", "csv", "json", "avro"],
+          "description": "Target file format"
+        },
+        "compression": {
+          "type": "string",
+          "enum": ["none", "gzip", "snappy", "lz4", "zstd"],
+          "default": "snappy",
+          "description": "Compression algorithm"
+        },
+        "partition_columns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Columns to use for partitioning"
+        }
+      }
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9-]+$",
+        "minLength": 1,
+        "maxLength": 50
+      },
+      "uniqueItems": true,
+      "maxItems": 20,
+      "description": "Tags for organizing and searching sources"
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": "string",
+          "maxLength": 1000,
+          "description": "Detailed description of the data source"
+        },
+        "documentation_url": {
+          "type": "string",
+          "format": "uri",
+          "description": "URL to additional documentation"
+        },
+        "business_glossary_terms": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Business glossary terms associated with this source"
+        },
+        "compliance_requirements": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["GDPR", "CCPA", "HIPAA", "SOX", "PCI-DSS", "FERPA"]
+          },
+          "description": "Compliance requirements that apply to this data"
+        }
+      }
+    }
+  },
+  "definitions": {
+    "database_connection": {
+      "type": "object",
+      "required": ["server", "database", "authentication"],
+      "properties": {
+        "server": {
+          "type": "string",
+          "description": "Database server hostname or IP address"
+        },
+        "database": {
+          "type": "string",
+          "description": "Database name"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Database port number"
+        },
+        "authentication": {
+          "type": "string",
+          "enum": ["sql_auth", "windows_auth", "managed_identity", "service_principal"],
+          "description": "Authentication method"
+        },
+        "username_key_vault_secret": {
+          "type": "string",
+          "description": "Key Vault secret name for username (required for sql_auth)"
+        },
+        "password_key_vault_secret": {
+          "type": "string",
+          "description": "Key Vault secret name for password (required for sql_auth)"
+        },
+        "connection_string_key_vault_secret": {
+          "type": "string",
+          "description": "Key Vault secret name for full connection string (alternative to individual components)"
+        },
+        "ssl_mode": {
+          "type": "string",
+          "enum": ["disabled", "preferred", "required", "verify-ca", "verify-full"],
+          "default": "required",
+          "description": "SSL connection mode"
+        }
+      }
+    },
+    "api_connection": {
+      "type": "object",
+      "required": ["base_url"],
+      "properties": {
+        "base_url": {
+          "type": "string",
+          "format": "uri",
+          "description": "Base URL for the API"
+        },
+        "authentication": {
+          "type": "object",
+          "oneOf": [
+            {
+              "properties": {
+                "type": {
+                  "const": "bearer_token"
+                },
+                "token_key_vault_secret": {
+                  "type": "string"
+                }
+              },
+              "required": ["type", "token_key_vault_secret"]
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "basic_auth"
+                },
+                "username_key_vault_secret": {
+                  "type": "string"
+                },
+                "password_key_vault_secret": {
+                  "type": "string"
+                }
+              },
+              "required": ["type", "username_key_vault_secret", "password_key_vault_secret"]
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "oauth2"
+                },
+                "client_id": {
+                  "type": "string"
+                },
+                "client_secret_key_vault_secret": {
+                  "type": "string"
+                },
+                "scope": {
+                  "type": "string"
+                },
+                "token_url": {
+                  "type": "string",
+                  "format": "uri"
+                }
+              },
+              "required": ["type", "client_id", "client_secret_key_vault_secret", "token_url"]
+            }
+          ]
+        },
+        "rate_limit": {
+          "type": "object",
+          "properties": {
+            "requests_per_second": {
+              "type": "number",
+              "minimum": 0.1,
+              "maximum": 1000
+            },
+            "requests_per_minute": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 60000
+            }
+          }
+        },
+        "pagination": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["offset", "cursor", "page", "none"]
+            },
+            "page_size": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000
+            },
+            "total_pages_header": {
+              "type": "string"
+            },
+            "next_page_header": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "cosmos_connection": {
+      "type": "object",
+      "required": ["account_name", "database_name"],
+      "properties": {
+        "account_name": {
+          "type": "string",
+          "description": "Cosmos DB account name"
+        },
+        "database_name": {
+          "type": "string",
+          "description": "Cosmos DB database name"
+        },
+        "access_key_key_vault_secret": {
+          "type": "string",
+          "description": "Key Vault secret name for Cosmos DB access key"
+        },
+        "use_managed_identity": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use managed identity for authentication"
+        },
+        "consistency_level": {
+          "type": "string",
+          "enum": ["Strong", "BoundedStaleness", "Session", "ConsistentPrefix", "Eventual"],
+          "default": "Session"
+        }
+      }
+    },
+    "storage_connection": {
+      "type": "object",
+      "required": ["account_name"],
+      "properties": {
+        "account_name": {
+          "type": "string",
+          "description": "Storage account name"
+        },
+        "container_name": {
+          "type": "string",
+          "description": "Container or bucket name"
+        },
+        "path_prefix": {
+          "type": "string",
+          "description": "Path prefix for files"
+        },
+        "access_key_key_vault_secret": {
+          "type": "string",
+          "description": "Key Vault secret name for access key"
+        },
+        "use_managed_identity": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use managed identity for authentication"
+        },
+        "file_pattern": {
+          "type": "string",
+          "default": "*",
+          "description": "File pattern to match"
+        },
+        "recursive": {
+          "type": "boolean",
+          "default": true,
+          "description": "Process files recursively"
+        }
+      }
+    },
+    "streaming_connection": {
+      "type": "object",
+      "required": ["namespace", "name"],
+      "properties": {
+        "namespace": {
+          "type": "string",
+          "description": "Event Hub namespace or Kafka cluster"
+        },
+        "name": {
+          "type": "string",
+          "description": "Event Hub or Kafka topic name"
+        },
+        "connection_string_key_vault_secret": {
+          "type": "string",
+          "description": "Key Vault secret name for connection string"
+        },
+        "consumer_group": {
+          "type": "string",
+          "default": "$Default",
+          "description": "Consumer group for Event Hub"
+        },
+        "partition_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1024,
+          "description": "Number of partitions"
+        },
+        "retention_hours": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 168,
+          "description": "Message retention in hours"
+        }
+      }
+    },
+    "sharepoint_connection": {
+      "type": "object",
+      "required": ["site_url", "library_name"],
+      "properties": {
+        "site_url": {
+          "type": "string",
+          "format": "uri",
+          "description": "SharePoint site URL"
+        },
+        "library_name": {
+          "type": "string",
+          "description": "Document library or list name"
+        },
+        "authentication": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["service_principal", "managed_identity"]
+            },
+            "tenant_id": {
+              "type": "string"
+            },
+            "client_id": {
+              "type": "string"
+            },
+            "client_secret_key_vault_secret": {
+              "type": "string"
+            }
+          },
+          "required": ["type"]
+        }
+      }
+    },
+    "dynamics_connection": {
+      "type": "object",
+      "required": ["instance_url", "entity_name"],
+      "properties": {
+        "instance_url": {
+          "type": "string",
+          "format": "uri",
+          "description": "Dynamics 365 instance URL"
+        },
+        "entity_name": {
+          "type": "string",
+          "description": "Dynamics 365 entity name"
+        },
+        "authentication": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["service_principal", "oauth2"]
+            },
+            "tenant_id": {
+              "type": "string"
+            },
+            "client_id": {
+              "type": "string"
+            },
+            "client_secret_key_vault_secret": {
+              "type": "string"
+            }
+          },
+          "required": ["type", "tenant_id", "client_id"]
+        }
+      }
+    },
+    "table_schema": {
+      "type": "object",
+      "required": ["tables"],
+      "properties": {
+        "tables": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["table_name", "columns"],
+            "properties": {
+              "table_name": {
+                "type": "string",
+                "description": "Table name (can include schema prefix)"
+              },
+              "columns": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "required": ["name", "type"],
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "description": "Column name"
+                    },
+                    "type": {
+                      "type": "string",
+                      "description": "Data type"
+                    },
+                    "nullable": {
+                      "type": "boolean",
+                      "default": true
+                    },
+                    "is_primary_key": {
+                      "type": "boolean",
+                      "default": false
+                    },
+                    "description": {
+                      "type": "string",
+                      "maxLength": 500
+                    },
+                    "business_name": {
+                      "type": "string",
+                      "description": "Business-friendly name for the column"
+                    }
+                  }
+                }
+              },
+              "primary_keys": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "List of primary key columns"
+              },
+              "indexes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "columns": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "unique": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              },
+              "estimated_row_count": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Estimated number of rows in the table"
+              }
+            }
+          }
+        }
+      }
+    },
+    "api_schema": {
+      "type": "object",
+      "required": ["endpoints"],
+      "properties": {
+        "endpoints": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["path", "method", "response_schema"],
+            "properties": {
+              "path": {
+                "type": "string",
+                "description": "API endpoint path"
+              },
+              "method": {
+                "type": "string",
+                "enum": ["GET", "POST", "PUT", "PATCH"],
+                "default": "GET"
+              },
+              "parameters": {
+                "type": "object",
+                "description": "Request parameters"
+              },
+              "response_schema": {
+                "type": "object",
+                "description": "JSON schema for the API response"
+              },
+              "pagination": {
+                "type": "object",
+                "properties": {
+                  "supported": {
+                    "type": "boolean"
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": ["offset", "cursor", "page"]
+                  },
+                  "page_size_param": {
+                    "type": "string"
+                  },
+                  "page_param": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "file_schema": {
+      "type": "object",
+      "required": ["file_type"],
+      "properties": {
+        "file_type": {
+          "type": "string",
+          "enum": ["csv", "json", "xml", "parquet", "excel", "txt"]
+        },
+        "delimiter": {
+          "type": "string",
+          "description": "Field delimiter for CSV files"
+        },
+        "header_row": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether first row contains column headers"
+        },
+        "encoding": {
+          "type": "string",
+          "enum": ["UTF-8", "UTF-16", "ASCII", "ISO-8859-1"],
+          "default": "UTF-8"
+        },
+        "columns": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "type"],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              },
+              "position": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        }
+      }
+    },
+    "stream_schema": {
+      "type": "object",
+      "required": ["message_format"],
+      "properties": {
+        "message_format": {
+          "type": "string",
+          "enum": ["json", "avro", "xml", "csv"]
+        },
+        "schema_registry_url": {
+          "type": "string",
+          "format": "uri",
+          "description": "URL of schema registry (for Avro)"
+        },
+        "message_schema": {
+          "type": "object",
+          "description": "JSON schema for stream messages"
+        },
+        "partition_key": {
+          "type": "string",
+          "description": "Field to use for partitioning"
+        }
+      }
+    }
+  }
+}

@@ -28,7 +28,7 @@ import json
 import os
 import uuid
 from datetime import datetime, timezone
-from typing import Any, List
+from typing import Any
 
 import azure.functions as func
 
@@ -153,7 +153,7 @@ def _process_event(event_data: dict[str, Any]) -> dict[str, Any]:
     partition_key="/partition_key",
 )
 async def process_events(
-    events: List[func.EventHubEvent],
+    events: list[func.EventHubEvent],
     cosmosOutput: func.Out[str],
 ) -> None:
     """Process batch of events from Event Hub.
@@ -207,7 +207,9 @@ async def process_events(
                 logger.error("event.encoding_failed", error=str(e), sequence_number=event.sequence_number)
                 errors += 1
             except Exception as e:
-                logger.exception("event.processing_failed", sequence_number=event.sequence_number, error_type=type(e).__name__)
+                logger.exception(
+                    "event.processing_failed", sequence_number=event.sequence_number, error_type=type(e).__name__
+                )
                 errors += 1
 
         # Write batch to Cosmos DB
@@ -314,11 +316,13 @@ async def replay_events(
 
         logger.info("replay.completed", replayed=len(processed), errors=validation_errors)
         return func.HttpResponse(
-            json.dumps({
-                "replayed": len(processed),
-                "errors": validation_errors,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            }),
+            json.dumps(
+                {
+                    "replayed": len(processed),
+                    "errors": validation_errors,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+            ),
             status_code=200,
             mimetype="application/json",
         )
@@ -331,11 +335,13 @@ async def replay_events(
 async def health(req: func.HttpRequest) -> func.HttpResponse:
     """Health check for event processing service."""
     return func.HttpResponse(
-        json.dumps({
-            "status": "healthy",
-            "service": "event-processing",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }),
+        json.dumps(
+            {
+                "status": "healthy",
+                "service": "event-processing",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        ),
         status_code=200,
         mimetype="application/json",
     )

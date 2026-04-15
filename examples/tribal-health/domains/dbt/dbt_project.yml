@@ -1,0 +1,104 @@
+name: 'csa_tribal_health'
+version: '1.0.0'
+config-version: 2
+require-dbt-version: [">=1.7.0", "<2.0.0"]
+
+profile: 'tribal_health_analytics'
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+macro-paths: ["../../../domains/shared/dbt/macros"]
+
+vars:
+  bronze_database: "bronze"
+  silver_database: "silver"
+  gold_database: "gold"
+  file_format: "delta"
+  incremental_strategy: "merge"
+  freshness_warn_hours: 24
+  freshness_error_hours: 48
+
+  # Tribal health-specific variables
+  small_cell_threshold: 5           # Minimum cell size for de-identified reporting
+  reporting_period_months: 3        # Quarterly GPRA reporting period
+  lookback_years: 2                 # Default analysis window (730 days)
+
+  # Clinical thresholds (based on ADA/IHS clinical guidelines)
+  a1c_controlled_threshold: 7.0     # A1C < 7.0% = controlled diabetes
+  a1c_poor_control_threshold: 9.0   # A1C >= 9.0% = poor control
+  low_birth_weight_grams: 2500      # < 2500g = low birth weight
+  preterm_weeks: 37                 # < 37 weeks = preterm
+
+  # IHS service units for analysis
+  service_units:
+    - "Aberdeen"
+    - "Albuquerque"
+    - "Bemidji"
+    - "Billings"
+    - "California"
+    - "Great Plains"
+    - "Nashville"
+    - "Navajo"
+    - "Oklahoma"
+    - "Phoenix"
+    - "Portland"
+    - "Tucson"
+
+  # Diagnosis category ICD-10 prefixes
+  diabetes_icd10_prefixes: ['E11', 'E13']
+  behavioral_health_icd10_prefixes: ['F10', 'F11', 'F12', 'F13', 'F14', 'F15', 'F16', 'F17', 'F18', 'F19', 'F20', 'F21', 'F22', 'F23', 'F24', 'F25', 'F28', 'F29', 'F30', 'F31', 'F32', 'F33', 'F34', 'F39', 'F40', 'F41', 'F42', 'F43', 'F44', 'F45', 'F48']
+  maternal_icd10_prefixes: ['O00', 'O01', 'O02', 'O03', 'O04', 'O05', 'O06', 'O07', 'O08', 'O09', 'O10', 'O11', 'O12', 'O13', 'O14', 'O15', 'O16', 'Z34', 'Z36', 'Z3A']
+  sud_icd10_prefixes: ['F10', 'F11', 'F12', 'F13', 'F14', 'F15', 'F16', 'F17', 'F18', 'F19']
+
+models:
+  csa_tribal_health:
+    bronze:
+      +materialized: incremental
+      +file_format: delta
+      +schema: bronze
+      +tags: ['bronze', 'tribal_health', 'raw', 'hipaa']
+      +unique_key: ['source_system', 'ingestion_timestamp', 'record_hash']
+    silver:
+      +materialized: incremental
+      +file_format: delta
+      +schema: silver
+      +tags: ['silver', 'tribal_health', 'cleaned', 'hipaa']
+      +incremental_strategy: merge
+      +on_schema_change: "sync_all_columns"
+    gold:
+      +materialized: table
+      +file_format: delta
+      +schema: gold
+      +tags: ['gold', 'tribal_health', 'analytics', 'hipaa']
+      +post-hook: "OPTIMIZE {{ this }} ZORDER BY (reporting_period)"
+
+seeds:
+  csa_tribal_health:
+    +schema: seeds
+    +tags: ['seed', 'tribal_health', 'synthetic']
+
+sources:
+  - name: tribal_health
+    description: Tribal health data sources (synthetic for development)
+    tables:
+      - name: patient_demographics
+        description: Synthetic patient demographic data
+        freshness:
+          warn_after: {count: 7, period: day}
+          error_after: {count: 14, period: day}
+      - name: encounters
+        description: Synthetic clinical encounter records
+        freshness:
+          warn_after: {count: 1, period: day}
+          error_after: {count: 3, period: day}
+      - name: facilities
+        description: IHS and tribal facility reference data
+        freshness:
+          warn_after: {count: 30, period: day}
+          error_after: {count: 60, period: day}
+
+snapshots:
+  csa_tribal_health:
+    +target_schema: snapshots
+    +strategy: timestamp
+    +updated_at: processed_timestamp

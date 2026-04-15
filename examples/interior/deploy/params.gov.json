@@ -1,0 +1,416 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "location": {
+            "value": "USGov Virginia"
+        },
+        "environment": {
+            "value": "gov"
+        },
+        "prefix": {
+            "value": "interior"
+        },
+        "workloadName": {
+            "value": "geospatial-analytics"
+        },
+        "deployModules": {
+            "value": {
+                "cosmosDB": true,
+                "storageZones": true,
+                "externalStorage": false,
+                "synapse": true,
+                "functions": true,
+                "streamAnalytics": true,
+                "appInsights": true,
+                "privateEndpoints": true,
+                "genericStorage": false,
+                "selfHostedIR": false,
+                "dataExplorer": true,
+                "mlWorkspace": true
+            }
+        },
+        "privateDNSZones": {
+            "value": {
+                "subscriptionId": "[subscription().subscriptionId]",
+                "resourceGroupName": "rg-dns-zones-gov"
+            }
+        },
+        "tags": {
+            "value": {
+                "Domain": "Interior",
+                "Environment": "Government",
+                "WorkloadType": "Analytics",
+                "CostCenter": "DOI-IT-GOV",
+                "Owner": "Interior Data Engineering Team",
+                "Project": "Geospatial Analytics Platform",
+                "Compliance": "FISMA-High",
+                "DataClassification": "CUI",
+                "AuthorityToOperate": "INT-ATO-2024"
+            }
+        },
+        "databricksConfig": {
+            "value": {
+                "pricingTier": "premium",
+                "enableNoPublicIp": true,
+                "skuName": "premium",
+                "customVirtualNetworkId": "",
+                "customPublicSubnetName": "",
+                "customPrivateSubnetName": "",
+                "enableAutomaticClusterTermination": true,
+                "enableEncryption": true
+            }
+        },
+        "synapseConfig": {
+            "value": {
+                "sqlAdministratorLogin": "sqladmin",
+                "sqlAdministratorLoginPassword": "[parameters('sqlAdministratorPassword')]",
+                "allowedIpAddresses": [
+                    {
+                        "name": "Interior-GOV-HQ",
+                        "startIpAddress": "192.168.110.0",
+                        "endIpAddress": "192.168.110.255"
+                    },
+                    {
+                        "name": "Interior-GOV-FIELD",
+                        "startIpAddress": "192.168.111.0",
+                        "endIpAddress": "192.168.111.255"
+                    }
+                ],
+                "enableDataExfiltrationProtection": true,
+                "managedVirtualNetwork": "default",
+                "enableDoubleEncryption": true,
+                "gitConfig": {
+                    "accountName": "Interior-Analytics-Gov",
+                    "repositoryName": "interior-geospatial-analytics-gov",
+                    "collaborationBranch": "main",
+                    "rootFolder": "/synapse"
+                }
+            }
+        },
+        "storageConfig": {
+            "value": {
+                "accountType": "Standard_GRS",
+                "accessTier": "Hot",
+                "supportsHttpsTrafficOnly": true,
+                "enableHierarchicalNamespace": true,
+                "minimumTlsVersion": "TLS1_2",
+                "allowBlobPublicAccess": false,
+                "enableCrossTenantReplication": false,
+                "containers": [
+                    {
+                        "name": "raw",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "bronze",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "silver",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "gold",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "exports",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "usgs-earthquake-data",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "nps-visitor-data",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "usgs-water-data",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "audit-logs",
+                        "publicAccess": "None"
+                    }
+                ],
+                "enableVersioning": true,
+                "enableDeleteRetention": true,
+                "deleteRetentionDays": 365
+            }
+        },
+        "keyVaultConfig": {
+            "value": {
+                "enableRbacAuthorization": true,
+                "enableSoftDelete": true,
+                "softDeleteRetentionDays": 90,
+                "enablePurgeProtection": true,
+                "enabledForDiskEncryption": true,
+                "enabledForDeployment": false,
+                "enabledForTemplateDeployment": false,
+                "networkAccessPolicy": "deny",
+                "secrets": [
+                    {
+                        "name": "nps-api-key",
+                        "description": "NPS Developer API key"
+                    },
+                    {
+                        "name": "sql-administrator-password",
+                        "description": "SQL administrator password for Synapse"
+                    },
+                    {
+                        "name": "encryption-key",
+                        "description": "Customer-managed encryption key"
+                    }
+                ]
+            }
+        },
+        "dataFactoryConfig": {
+            "value": {
+                "publicNetworkAccess": "Disabled",
+                "managedVirtualNetworkSettings": {
+                    "allowedPrivateEndpointConnections": [],
+                    "preventDataExfiltration": true
+                },
+                "gitConfig": {
+                    "accountName": "Interior-Analytics-Gov",
+                    "repositoryName": "interior-geospatial-analytics-gov",
+                    "collaborationBranch": "main",
+                    "rootFolder": "/datafactory"
+                },
+                "integrationRuntimes": [
+                    {
+                        "name": "AutoResolveIntegrationRuntime",
+                        "type": "Managed",
+                        "location": "USGov Virginia"
+                    }
+                ],
+                "linkedServices": [
+                    {
+                        "name": "ls_keyvault",
+                        "type": "AzureKeyVault"
+                    },
+                    {
+                        "name": "ls_storage_raw",
+                        "type": "AzureDataLakeStorage"
+                    },
+                    {
+                        "name": "ls_synapse",
+                        "type": "AzureSqlDW"
+                    },
+                    {
+                        "name": "ls_usgs_earthquake_api",
+                        "type": "RestService",
+                        "baseUrl": "https://earthquake.usgs.gov/fdsnws/event/1/"
+                    },
+                    {
+                        "name": "ls_usgs_water_api",
+                        "type": "RestService",
+                        "baseUrl": "https://waterservices.usgs.gov/nwis/"
+                    },
+                    {
+                        "name": "ls_nps_stats_api",
+                        "type": "RestService",
+                        "baseUrl": "https://irmaservices.nps.gov/stats/"
+                    }
+                ]
+            }
+        },
+        "dataExplorerConfig": {
+            "value": {
+                "skuName": "Standard_D11_v2",
+                "skuTier": "Standard",
+                "capacity": 2,
+                "enableDiskEncryption": true,
+                "enableStreamingIngest": true,
+                "enablePurge": true,
+                "enableDoubleEncryption": true,
+                "databases": [
+                    {
+                        "name": "interioranalytics",
+                        "hotCachePeriod": "P30D",
+                        "softDeletePeriod": "P2555D"
+                    }
+                ],
+                "enableAutoStop": false,
+                "enableAutoScale": true,
+                "minimumInstances": 2,
+                "maximumInstances": 10
+            }
+        },
+        "mlWorkspaceConfig": {
+            "value": {
+                "friendlyName": "Interior Geospatial Analytics ML (Gov)",
+                "description": "ML workspace for hazard prediction and resource management - Government Cloud",
+                "enablePublicNetworkAccess": "Disabled",
+                "enableHbiWorkspace": true,
+                "computeInstances": [
+                    {
+                        "name": "hazard-forecasting-vm",
+                        "vmSize": "Standard_DS3_v2",
+                        "enableNodePublicIp": false
+                    }
+                ],
+                "datastores": [
+                    {
+                        "name": "geospatial_data",
+                        "type": "AzureDataLakeGen2",
+                        "description": "Primary geospatial datasets"
+                    }
+                ]
+            }
+        },
+        "monitoringConfig": {
+            "value": {
+                "enableApplicationInsights": true,
+                "enableLogAnalytics": true,
+                "retentionInDays": 2555,
+                "enableSecurityCenter": true,
+                "alertRules": [
+                    {
+                        "name": "Data Pipeline Failure",
+                        "severity": 1,
+                        "evaluationFrequency": "PT5M",
+                        "windowSize": "PT15M",
+                        "actionGroupName": "interior-gov-alerts"
+                    },
+                    {
+                        "name": "Significant Earthquake Detected",
+                        "severity": 0,
+                        "evaluationFrequency": "PT1M",
+                        "windowSize": "PT5M",
+                        "actionGroupName": "interior-gov-alerts"
+                    },
+                    {
+                        "name": "Unauthorized Access Attempt",
+                        "severity": 0,
+                        "evaluationFrequency": "PT1M",
+                        "windowSize": "PT5M",
+                        "actionGroupName": "interior-security-alerts"
+                    },
+                    {
+                        "name": "Data Exfiltration Alert",
+                        "severity": 0,
+                        "evaluationFrequency": "PT5M",
+                        "windowSize": "PT15M",
+                        "actionGroupName": "interior-security-alerts"
+                    }
+                ],
+                "actionGroups": [
+                    {
+                        "name": "interior-gov-alerts",
+                        "emailReceivers": [
+                            {
+                                "name": "Interior Gov Data Team",
+                                "emailAddress": "interior-gov-data-team@doi.gov"
+                            }
+                        ]
+                    },
+                    {
+                        "name": "interior-security-alerts",
+                        "emailReceivers": [
+                            {
+                                "name": "Interior Security Operations",
+                                "emailAddress": "interior-security-ops@doi.gov"
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        "networkingConfig": {
+            "value": {
+                "enablePrivateEndpoints": true,
+                "subnetName": "snet-interior-analytics-gov",
+                "vnetName": "vnet-interior-analytics-gov",
+                "vnetAddressPrefix": "10.104.0.0/16",
+                "subnetAddressPrefix": "10.104.1.0/24",
+                "enableNetworkSecurityGroup": true,
+                "allowedSourceIpRanges": [
+                    "192.168.110.0/24"
+                ],
+                "enableDdosProtection": true,
+                "enableBastionHost": true
+            }
+        },
+        "securityConfig": {
+            "value": {
+                "enableDefender": true,
+                "enableSentinel": true,
+                "enableKeyVaultFirewall": true,
+                "enableStorageFirewall": true,
+                "requireHttpsTrafficOnly": true,
+                "enableAuditLogs": true,
+                "enableAdvancedThreatProtection": true,
+                "dataClassification": {
+                    "enabled": true,
+                    "level": "CUI"
+                },
+                "encryptionAtRest": true,
+                "enablePrivateLink": true,
+                "enableCustomerManagedKeys": true,
+                "complianceStandards": [
+                    "FISMA",
+                    "NIST-800-53",
+                    "FedRAMP"
+                ],
+                "enableIdentityGovernance": true
+            }
+        },
+        "automationConfig": {
+            "value": {
+                "enableAutoShutdown": false,
+                "enableCostOptimization": true,
+                "enableResourceTagging": true,
+                "backupRetentionDays": 2555,
+                "enableDisasterRecovery": true,
+                "drRegion": "USGov Texas"
+            }
+        },
+        "dataGovernanceConfig": {
+            "value": {
+                "enablePurview": true,
+                "dataRetentionPolicies": [
+                    {
+                        "dataType": "USGS Earthquake Data",
+                        "retentionDays": 2555,
+                        "complianceReason": "Federal Records Act"
+                    },
+                    {
+                        "dataType": "NPS Visitor Data",
+                        "retentionDays": 2555,
+                        "complianceReason": "Federal Records Act"
+                    },
+                    {
+                        "dataType": "USGS Water Data",
+                        "retentionDays": 2555,
+                        "complianceReason": "Federal Records Act"
+                    },
+                    {
+                        "dataType": "Audit Logs",
+                        "retentionDays": 2555,
+                        "complianceReason": "Security Compliance"
+                    }
+                ],
+                "enableDataLineage": true,
+                "enableDataQualityMonitoring": true,
+                "enableDataLossPrevention": true,
+                "piiDetection": true,
+                "enableDataEncryption": true
+            }
+        },
+        "complianceConfig": {
+            "value": {
+                "fismaLevel": "High",
+                "enableFedRAMP": true,
+                "enableSOC2": false,
+                "enableNIST": true,
+                "auditRetentionYears": 7,
+                "enableContinuousMonitoring": true,
+                "securityContactEmail": "interior-security-ops@doi.gov",
+                "privacyContactEmail": "interior-privacy-office@doi.gov"
+            }
+        }
+    }
+}

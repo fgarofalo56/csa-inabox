@@ -1,5 +1,16 @@
 # GitHub Environment Protection Rules
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Security / Compliance
+
+## Table of Contents
+
+- [Environments to Create](#1-environments-to-create)
+- [Per-environment Configuration](#2-per-environment-configuration)
+- [Repository-level Branch Protection on main](#3-repository-level-branch-protection-on-main)
+- [Verification Checklist](#4-verification-checklist)
+- [Why This Lives in Docs, Not Bicep / YAML](#5-why-this-lives-in-docs-not-bicep--yaml)
+- [Related](#6-related)
+
 The CSA-in-a-Box deployment workflows already reference GitHub
 Environments in their job definitions
 (`.github/workflows/deploy.yml` and `.github/workflows/rollback.yml`
@@ -140,3 +151,10 @@ a new reviewer team is added), update this document in the same PR.
 - `docs/ROLLBACK.md` — deploy-failure runbook.
 - Archon task `2bce6682` — secret rotation Function app, handles the
   credential side of environment secrets.
+
+---
+
+## Related Documentation
+
+- [Gov Service Matrix](GOV_SERVICE_MATRIX.md) - Azure Government service availability
+- [Production Checklist](PRODUCTION_CHECKLIST.md) - Production readiness checklist

@@ -1,5 +1,7 @@
 # Azure Functions: HTTP Trigger in Python
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Data Engineers
+
 ## HTTP Trigger
 
 The HTTP trigger lets you invoke a function with an HTTP request. You can use an HTTP trigger to build serverless APIs and respond to webhooks.
@@ -54,3 +56,10 @@ The improved programming model requires fewer files than the default model, and 
 To learn more about using the new Python programming model for Azure Functions, see the [Azure Functions Python developer guide](https://aka.ms/pythondeveloperguide). Note that in addition to the documentation, [hints](https://aka.ms/functions-python-hints) are available in code editors that support type checking with PYI files.
 
 To learn more about the new programming model for Azure Functions in Python, see [Programming Models in Azure Functions](https://aka.ms/functions-programming-models).
+
+---
+
+## Related Documentation
+
+- [Architecture Overview](../../../../docs/ARCHITECTURE.md) - Platform architecture reference
+- [Examples](../../../../examples/README.md) - Sample data pipelines and use cases

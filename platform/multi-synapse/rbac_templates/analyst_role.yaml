@@ -1,0 +1,92 @@
+# RBAC Template: Analyst Role
+# Read-only access for business analysts in a multi-Synapse environment.
+#
+# Grants SQL read access and storage read access. No write, no Spark,
+# no workspace management.
+
+apiVersion: csa.microsoft.com/v1
+kind: RbacTemplate
+
+metadata:
+  name: analyst-role
+  version: "1.0.0"
+  description: >
+    Read-only role for business analysts. Provides SQL query access to
+    the dedicated and serverless SQL pools and read access to the gold
+    layer storage containers. No write, Spark, or admin capabilities.
+  applicableTo: [synapse, storage]
+  tags: [rbac, analyst, read-only]
+
+# Azure RBAC role assignments at the resource level.
+azureRoles:
+  - role: Reader
+    scope: resourceGroup
+    description: View resources in the organization's resource group
+
+  - role: Storage Blob Data Reader
+    scope: storageAccount
+    containerFilter: [gold]  # Analysts only see the gold (curated) layer
+    description: Read gold-layer data products
+
+# Synapse workspace-level permissions.
+synapseRoles:
+  - role: Synapse SQL User
+    scope: workspace
+    description: Execute SQL queries against dedicated and serverless pools
+
+  - role: Synapse Monitoring Operator
+    scope: workspace
+    description: View pipeline runs and Spark job status (no modification)
+
+# SQL-level permissions within the Synapse SQL pools.
+sqlPermissions:
+  dedicatedPool:
+    - grant: SELECT
+      on: "SCHEMA::gold"
+      description: Read access to all gold-layer tables and views
+
+    - grant: VIEW DEFINITION
+      on: "SCHEMA::gold"
+      description: View table schemas and metadata
+
+    - deny: INSERT
+      on: "SCHEMA::*"
+      description: No write access
+
+    - deny: UPDATE
+      on: "SCHEMA::*"
+      description: No update access
+
+    - deny: DELETE
+      on: "SCHEMA::*"
+      description: No delete access
+
+  serverlessPool:
+    - grant: SELECT
+      on: "ALL EXTERNAL TABLES"
+      description: Query external tables pointing to gold layer
+
+# Restrictions — what this role explicitly cannot do.
+restrictions:
+  - action: Microsoft.Synapse/workspaces/sqlPools/write
+    effect: deny
+    description: Cannot create or modify SQL pools
+
+  - action: Microsoft.Synapse/workspaces/bigDataPools/*
+    effect: deny
+    description: No Spark pool access
+
+  - action: Microsoft.Synapse/workspaces/integrationRuntimes/*
+    effect: deny
+    description: No pipeline or integration runtime access
+
+  - action: Microsoft.Storage/storageAccounts/blobServices/containers/write
+    effect: deny
+    description: Cannot modify storage containers
+
+# Conditions for role assignment.
+conditions:
+  requireMFA: true
+  requireCompliantDevice: false
+  sessionTimeout: 8h
+  ipRestrictions: []  # Empty = no IP restrictions (VNet controls access)

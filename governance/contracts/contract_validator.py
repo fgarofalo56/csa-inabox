@@ -23,9 +23,10 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 import yaml
 
@@ -43,13 +44,11 @@ _TYPE_VALIDATORS: dict[str, Any] = {
     "string": lambda v: isinstance(v, str),
     "long": lambda v: isinstance(v, int) and not isinstance(v, bool),
     "int": lambda v: isinstance(v, int) and not isinstance(v, bool),
-    "double": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
-    "float": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
+    "double": lambda v: isinstance(v, int | float) and not isinstance(v, bool),
+    "float": lambda v: isinstance(v, int | float) and not isinstance(v, bool),
     "boolean": lambda v: isinstance(v, bool),
-    "date": lambda v: isinstance(v, str)
-        and bool(re.match(r"^\d{4}-\d{2}-\d{2}$", v)),
-    "timestamp": lambda v: isinstance(v, str)
-        and bool(re.match(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}", v)),
+    "date": lambda v: isinstance(v, str) and bool(re.match(r"^\d{4}-\d{2}-\d{2}$", v)),
+    "timestamp": lambda v: isinstance(v, str) and bool(re.match(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}", v)),
 }
 
 
@@ -213,18 +212,14 @@ def validate_contract_structure(contract: Contract) -> list[str]:
     for rule in contract.quality_rules:
         if rule.column and rule.column not in column_names:
             errors.append(
-                f"{contract.name}: quality_rule {rule.rule!r} references "
-                f"unknown column {rule.column!r}",
+                f"{contract.name}: quality_rule {rule.rule!r} references unknown column {rule.column!r}",
             )
         if rule.mostly is not None and not (0.0 <= rule.mostly <= 1.0):
             errors.append(
-                f"{contract.name}: quality_rule {rule.rule!r} has mostly={rule.mostly!r} "
-                "outside [0, 1]",
+                f"{contract.name}: quality_rule {rule.rule!r} has mostly={rule.mostly!r} outside [0, 1]",
             )
 
-    if contract.sla.valid_row_ratio is not None and not (
-        0.0 <= contract.sla.valid_row_ratio <= 1.0
-    ):
+    if contract.sla.valid_row_ratio is not None and not (0.0 <= contract.sla.valid_row_ratio <= 1.0):
         errors.append(
             f"{contract.name}: sla.valid_row_ratio={contract.sla.valid_row_ratio!r} outside [0, 1]",
         )
@@ -241,22 +236,17 @@ def _validate_value(value: Any, col: Column) -> str | None:
 
     base_type = col.type.split("(")[0]
     if base_type == "decimal":
-        if not isinstance(value, (int, float)) or isinstance(value, bool):
+        if not isinstance(value, int | float) or isinstance(value, bool):
             return f"column {col.name!r} expects decimal, got {type(value).__name__}"
     else:
         validator = _TYPE_VALIDATORS.get(base_type)
         if validator is None:
             return f"column {col.name!r} has unsupported type {col.type!r}"
         if not validator(value):
-            return (
-                f"column {col.name!r} expects {col.type}, got {type(value).__name__}"
-            )
+            return f"column {col.name!r} expects {col.type}, got {type(value).__name__}"
 
     if col.allowed_values and value not in col.allowed_values:
-        return (
-            f"column {col.name!r} value {value!r} not in allowed_values "
-            f"{col.allowed_values}"
-        )
+        return f"column {col.name!r} value {value!r} not in allowed_values {col.allowed_values}"
 
     return None
 
@@ -280,9 +270,7 @@ def validate_rows_against_contract(
         # Missing required columns
         for col in contract.columns:
             if col.name not in row and not col.nullable:
-                violations.append(
-                    f"row {idx}: missing required column {col.name!r}"
-                )
+                violations.append(f"row {idx}: missing required column {col.name!r}")
                 if fail_fast:
                     return violations
 

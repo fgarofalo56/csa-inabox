@@ -1,6 +1,28 @@
 # CSA-in-a-Box: Cloud-Scale Analytics Platform
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** All Users
+
 > An open-source, Azure-native data platform that delivers Data Mesh, Data Fabric, and Data Lakehouse capabilities as a deployable "in-a-box" solution -- a fully featured alternative to Microsoft Fabric built on Azure services and open-source technologies.
+
+## Table of Contents
+
+- [What Is This?](#what-is-this)
+- [Architecture](#architecture)
+- [Subscription Layout (4 Subscriptions)](#subscription-layout-4-subscriptions)
+- [Repository Structure](#repository-structure)
+- [Prerequisites](#prerequisites)
+- [Quick Start](#quick-start)
+- [Configuration](#configuration)
+- [Data Platform Components](#data-platform-components)
+  - [Data Lakehouse (Delta Lake)](#data-lakehouse-delta-lake)
+  - [Data Mesh Domains](#data-mesh-domains)
+  - [Data Integration](#data-integration)
+  - [Data Governance](#data-governance)
+  - [Observability](#observability)
+- [Security](#security)
+- [Contributing](#contributing)
+- [License](#license)
+- [Related Resources](#related-resources)
 
 ## What Is This?
 
@@ -19,7 +41,7 @@ CSA-in-a-Box deploys a complete enterprise data platform across Azure subscripti
 
 ## Architecture
 
-```
+```text
                     Management Subscription
                     +--------------------+
                     | Azure Landing Zone |
@@ -64,9 +86,8 @@ CSA-in-a-Box deploys a complete enterprise data platform across Azure subscripti
 
 ## Repository Structure
 
-```
-csa-inabox/
-+-- deploy/                    # Infrastructure-as-Code
+```text
+csa-inabox/                    # Infrastructure-as-Code
 |   +-- bicep/
 |   |   +-- DLZ/              # Data Landing Zone modules
 |   |   +-- DMLZ/             # Data Management Landing Zone
@@ -104,13 +125,12 @@ csa-inabox/
 +-- tools/                    # Development tools
 |   +-- dbt/                  # dbt for data transformations
 +-- .github/                  # CI/CD workflows
-+-- synapse/                  # Synapse-specific templates
 ```
 
 ## Prerequisites
 
 - **Azure CLI** >= 2.50.0
-- **Bicep CLI** >= 0.22.0
+- **Bicep CLI** >= 0.25
 - **PowerShell** >= 7.3 with Az module >= 11.0
 - **Python** >= 3.10 (for scripts and dbt)
 - **Git** >= 2.40
@@ -191,3 +211,13 @@ This project is licensed under the MIT License -- see the [LICENSE](LICENSE) fil
 - [Azure Landing Zones](https://learn.microsoft.com/azure/cloud-adoption-framework/ready/landing-zone/)
 - [Data Mesh Architecture](https://learn.microsoft.com/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/architectures/data-mesh-pattern)
 - [Azure Well-Architected Framework](https://learn.microsoft.com/azure/well-architected/)
+
+---
+
+## Related Documentation
+
+- [Getting Started](docs/GETTING_STARTED.md) - Prerequisites and deployment walkthrough
+- [Quick Start](docs/QUICKSTART.md) - 60-minute hands-on tutorial
+- [Architecture](docs/ARCHITECTURE.md) - Comprehensive architecture reference
+- [Contributing](CONTRIBUTING.md) - Development guidelines and PR process
+- [Changelog](CHANGELOG.md) - All notable changes to the project

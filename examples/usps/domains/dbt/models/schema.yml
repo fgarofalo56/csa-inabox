@@ -1,0 +1,442 @@
+version: 2
+
+sources:
+  - name: usps
+    description: USPS postal operations data sources
+    tables:
+      - name: delivery_performance
+        description: Delivery tracking and service performance records
+        columns:
+          - name: tracking_id
+            description: Unique tracking identifier for the mail piece
+            tests:
+              - not_null
+          - name: origin_zip
+            description: Origin ZIP code (5-digit)
+            tests:
+              - not_null
+          - name: destination_zip
+            description: Destination ZIP code (5-digit)
+            tests:
+              - not_null
+          - name: acceptance_date
+            description: Date the piece was accepted into the mail stream
+            tests:
+              - not_null
+
+      - name: facility_operations
+        description: Processing facility daily operational metrics
+        columns:
+          - name: facility_id
+            description: Unique facility identifier
+            tests:
+              - not_null
+          - name: report_date
+            description: Date of the operational report
+            tests:
+              - not_null
+          - name: facility_type
+            description: Type of facility (P&DC, Post Office, etc.)
+            tests:
+              - not_null
+
+      - name: mail_volume
+        description: Daily mail and parcel volume by product class
+        columns:
+          - name: facility_id
+            description: Facility reporting the volume
+            tests:
+              - not_null
+          - name: product_class
+            description: Mail product class (First Class, Priority, etc.)
+            tests:
+              - not_null
+          - name: volume_date
+            description: Date of the volume measurement
+            tests:
+              - not_null
+
+models:
+  # ── Bronze Models ──────────────────────────────────────────────────────
+  - name: brz_delivery_performance
+    description: >
+      Bronze layer — Raw delivery tracking records with basic validation.
+      Each row represents a single mail piece or parcel delivery event.
+    columns:
+      - name: tracking_id
+        description: Unique tracking identifier
+        tests:
+          - not_null
+          - unique
+      - name: origin_zip
+        description: Origin ZIP code
+        tests:
+          - not_null
+      - name: destination_zip
+        description: Destination ZIP code
+        tests:
+          - not_null
+      - name: product_class
+        description: Mail product classification
+        tests:
+          - not_null
+      - name: acceptance_date
+        description: Date accepted into mail stream
+        tests:
+          - not_null
+      - name: is_valid_record
+        description: Basic validation flag
+        tests:
+          - not_null
+          - accepted_values:
+              values: [true, false]
+      - name: record_hash
+        description: MD5 hash for deduplication
+        tests:
+          - not_null
+          - unique
+
+  - name: brz_facility_operations
+    description: >
+      Bronze layer — Raw facility operational metrics.
+      Each row represents a facility's daily performance report.
+    columns:
+      - name: facility_id
+        description: Unique facility identifier
+        tests:
+          - not_null
+      - name: report_date
+        description: Operational report date
+        tests:
+          - not_null
+      - name: facility_type
+        description: Type of postal facility
+        tests:
+          - not_null
+      - name: actual_throughput_daily
+        description: Pieces processed that day
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: max_throughput_daily
+        description: Maximum daily processing capacity
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: is_valid_record
+        description: Basic validation flag
+        tests:
+          - not_null
+      - name: record_hash
+        description: MD5 hash for deduplication
+        tests:
+          - not_null
+          - unique
+
+  - name: brz_mail_volume
+    description: >
+      Bronze layer — Raw daily mail volume by facility and product class.
+    columns:
+      - name: facility_id
+        description: Facility reporting the volume
+        tests:
+          - not_null
+      - name: product_class
+        description: Mail product class
+        tests:
+          - not_null
+      - name: volume_date
+        description: Date of volume measurement
+        tests:
+          - not_null
+      - name: total_pieces
+        description: Total mail pieces for the day
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: is_valid_record
+        description: Basic validation flag
+        tests:
+          - not_null
+      - name: record_hash
+        description: MD5 hash for deduplication
+        tests:
+          - not_null
+          - unique
+
+  # ── Silver Models ──────────────────────────────────────────────────────
+  - name: slv_delivery_performance
+    description: >
+      Silver layer — Cleaned delivery data with standardized product classes,
+      on-time delivery flags, and route-level enrichment.
+    columns:
+      - name: delivery_sk
+        description: Surrogate key for delivery record
+        tests:
+          - not_null
+          - unique
+      - name: tracking_id
+        description: Original tracking identifier
+        tests:
+          - not_null
+      - name: origin_zip
+        description: Standardized 5-digit origin ZIP
+        tests:
+          - not_null
+      - name: destination_zip
+        description: Standardized 5-digit destination ZIP
+        tests:
+          - not_null
+      - name: product_class
+        description: Standardized product class name
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['FIRST_CLASS', 'PRIORITY', 'PRIORITY_EXPRESS', 'PARCEL_SELECT',
+                       'MEDIA_MAIL', 'MARKETING_MAIL', 'PERIODICALS']
+      - name: is_on_time
+        description: Whether delivery met service standard
+      - name: calculated_delivery_days
+        description: Actual delivery time in calendar days
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 60
+      - name: service_standard_days
+        description: Expected delivery time per product class
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 1
+              max_value: 14
+
+  - name: slv_facility_operations
+    description: >
+      Silver layer — Cleansed facility data with utilization rates,
+      equipment efficiency, and cost metrics.
+    columns:
+      - name: facility_sk
+        description: Surrogate key for facility record
+        tests:
+          - not_null
+          - unique
+      - name: facility_id
+        description: Unique facility identifier
+        tests:
+          - not_null
+      - name: facility_type
+        description: Standardized facility type
+        tests:
+          - not_null
+      - name: utilization_pct
+        description: Throughput utilization percentage
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 200
+      - name: utilization_category
+        description: Utilization classification
+        tests:
+          - accepted_values:
+              values: ['OVER_CAPACITY', 'OPTIMAL', 'MODERATE', 'UNDERUTILIZED', 'UNKNOWN']
+      - name: cost_per_piece
+        description: Operating cost per piece processed
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 10.0
+      - name: pieces_per_employee
+        description: Labor efficiency metric
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+
+  - name: slv_mail_volume
+    description: >
+      Silver layer — Cleansed volume data with YoY comparisons,
+      moving averages, and seasonal period tagging.
+    columns:
+      - name: volume_sk
+        description: Surrogate key for volume record
+        tests:
+          - not_null
+          - unique
+      - name: facility_id
+        description: Facility identifier
+        tests:
+          - not_null
+      - name: product_class
+        description: Standardized product class
+        tests:
+          - not_null
+      - name: volume_date
+        description: Date of volume measurement
+        tests:
+          - not_null
+      - name: total_pieces
+        description: Total mail pieces
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: seasonal_period
+        description: Seasonal period classification
+        tests:
+          - accepted_values:
+              values: ['HOLIDAY_PEAK', 'POST_HOLIDAY', 'VALENTINES', 'TAX_SEASON',
+                       'MOTHERS_DAY', 'SUMMER', 'ELECTION_SEASON', 'REGULAR']
+      - name: is_volume_anomaly
+        description: Whether volume exceeds 3 std from 30-day average
+        tests:
+          - not_null
+
+  # ── Gold Models ────────────────────────────────────────────────────────
+  - name: gld_route_optimization
+    description: >
+      Gold layer — Delivery route efficiency analysis with optimization
+      scoring and improvement recommendations.
+    columns:
+      - name: route_id
+        description: Carrier route identifier
+        tests:
+          - not_null
+      - name: optimization_score
+        description: Route efficiency score (0-100)
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+      - name: optimization_category
+        description: Efficiency classification
+        tests:
+          - accepted_values:
+              values: ['WELL_OPTIMIZED', 'ADEQUATE', 'NEEDS_IMPROVEMENT', 'HIGH_OPTIMIZATION_POTENTIAL']
+      - name: primary_recommendation
+        description: Specific optimization recommendation
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['REDUCE_REDELIVERY_RATE', 'CONSIDER_ROUTE_CONSOLIDATION',
+                       'IMPROVE_ON_TIME_PERFORMANCE', 'SEPARATE_PARCEL_ROUTE',
+                       'MAINTAIN_CURRENT_OPERATIONS']
+      - name: on_time_rate_pct
+        description: Route-level on-time delivery rate
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+      - name: estimated_savings_minutes
+        description: Estimated daily time savings from optimization
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+
+  - name: gld_volume_forecast
+    description: >
+      Gold layer — Volume forecasting by product class and region with
+      seasonal decomposition and staffing recommendations.
+    columns:
+      - name: region
+        description: USPS region identifier
+        tests:
+          - not_null
+      - name: product_class
+        description: Mail product class
+        tests:
+          - not_null
+      - name: total_volume
+        description: Actual monthly volume
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: predicted_volume
+        description: Forecasted volume for next quarter
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: volume_trend
+        description: Volume trend classification
+        tests:
+          - accepted_values:
+              values: ['GROWING', 'STABLE', 'DECLINING', 'INSUFFICIENT_DATA']
+      - name: recommended_staffing_action
+        description: Staffing recommendation based on forecast
+        tests:
+          - accepted_values:
+              values: ['INCREASE_STAFFING', 'REDUCE_STAFFING', 'SEASONAL_SURGE_STAFFING', 'MAINTAIN_STAFFING']
+      - name: is_forecast_reliable
+        description: Whether forecast has sufficient data quality
+        tests:
+          - not_null
+
+  - name: gld_facility_analysis
+    description: >
+      Gold layer — Facility consolidation analysis with utilization metrics,
+      geographic overlap scoring, and consolidation recommendations.
+    columns:
+      - name: facility_id
+        description: Unique facility identifier
+        tests:
+          - not_null
+          - unique
+      - name: current_utilization_pct
+        description: Current throughput utilization percentage
+      - name: utilization_status
+        description: Utilization classification
+        tests:
+          - accepted_values:
+              values: ['OVER_CAPACITY', 'OPTIMAL', 'MODERATE', 'UNDERUTILIZED', 'UNKNOWN']
+      - name: consolidation_score
+        description: Consolidation candidate score (0-100, higher = stronger candidate)
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+      - name: consolidation_recommendation
+        description: Consolidation action recommendation
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['STRONG_CONSOLIDATION_CANDIDATE', 'REVIEW_FOR_CONSOLIDATION',
+                       'MONITOR', 'RETAIN']
+      - name: nearest_facility_miles
+        description: Distance to nearest same-type facility (miles)
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+
+# ── Custom Tests ───────────────────────────────────────────────────────
+tests:
+  - name: test_delivery_date_logic
+    description: Verify actual delivery date is not before acceptance date
+    sql: |
+      SELECT *
+      FROM {{ ref('slv_delivery_performance') }}
+      WHERE actual_delivery_date < acceptance_date
+        AND actual_delivery_date IS NOT NULL
+
+  - name: test_facility_utilization_bounds
+    description: Verify utilization does not exceed 200%
+    sql: |
+      SELECT *
+      FROM {{ ref('slv_facility_operations') }}
+      WHERE utilization_pct > 200
+
+  - name: test_volume_non_negative
+    description: Verify all volume counts are non-negative
+    sql: |
+      SELECT *
+      FROM {{ ref('slv_mail_volume') }}
+      WHERE total_pieces < 0
+         OR inbound_pieces < 0
+         OR outbound_pieces < 0
+
+  - name: test_route_optimization_score_range
+    description: Verify optimization scores are within bounds
+    sql: |
+      SELECT *
+      FROM {{ ref('gld_route_optimization') }}
+      WHERE optimization_score < 0
+         OR optimization_score > 100

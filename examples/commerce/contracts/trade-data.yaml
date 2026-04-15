@@ -1,0 +1,221 @@
+# Data product contract — commerce.trade_data
+#
+# This file is the authoritative interface for the Commerce Department
+# international trade data product. It declares the schema, SLAs, and
+# quality rules for import/export trade flow analytics.
+
+apiVersion: csa.commerce.gov/v1
+kind: DataProductContract
+
+metadata:
+  name: commerce.trade_data
+  domain: commerce
+  owner: commerce-data-engineering@contoso.com
+  version: "1.0.0"
+  description: >
+    International trade analytics from Census Bureau and International Trade
+    Administration (ITA) data. Provides transaction-level import/export flows
+    by HS commodity code, partner country, customs district, and transport
+    mode. Used for trade policy analysis, tariff impact assessment, and
+    supply chain monitoring.
+
+schema:
+  primary_key: [trade_id]
+  columns:
+    - name: trade_id
+      type: string
+      nullable: false
+      description: Unique trade transaction identifier
+
+    - name: flow_type
+      type: string
+      nullable: false
+      description: Trade flow direction
+      allowed_values:
+        - EXPORT
+        - IMPORT
+        - RE_EXPORT
+
+    - name: partner_country_code
+      type: string
+      nullable: false
+      description: ISO 3166-1 alpha-3 partner country code
+
+    - name: partner_country_name
+      type: string
+      nullable: false
+      description: Full partner country name
+
+    - name: partner_region
+      type: string
+      nullable: true
+      description: World Bank regional classification
+
+    - name: partner_income_group
+      type: string
+      nullable: true
+      description: World Bank income group classification
+      allowed_values:
+        - High income
+        - Upper middle income
+        - Lower middle income
+        - Low income
+
+    - name: hs_code
+      type: string
+      nullable: false
+      description: Harmonized System commodity code (4-digit)
+
+    - name: commodity_description
+      type: string
+      nullable: false
+      description: HS commodity description
+
+    - name: commodity_section
+      type: string
+      nullable: true
+      description: HS section classification (Roman numeral I-XXI)
+
+    - name: year
+      type: integer
+      nullable: false
+      description: Trade year
+
+    - name: month
+      type: integer
+      nullable: false
+      description: Trade month (1-12)
+
+    - name: trade_value_usd
+      type: decimal(18,2)
+      nullable: false
+      description: Trade value in US dollars
+
+    - name: quantity
+      type: decimal(18,4)
+      nullable: true
+      description: Quantity in the specified unit
+
+    - name: quantity_unit
+      type: string
+      nullable: true
+      description: Unit of quantity (KG, NO, L, M2, etc.)
+
+    - name: district_code
+      type: string
+      nullable: true
+      description: US customs district code
+
+    - name: district_name
+      type: string
+      nullable: true
+      description: US customs district name
+
+    - name: transport_method
+      type: string
+      nullable: true
+      description: Mode of transportation
+      allowed_values:
+        - AIR
+        - VESSEL
+        - TRUCK
+        - RAIL
+        - PIPELINE
+        - MAIL
+        - OTHER
+
+    - name: customs_value_usd
+      type: decimal(18,2)
+      nullable: true
+      description: Customs value in US dollars (imports only)
+
+    - name: duty_collected_usd
+      type: decimal(18,2)
+      nullable: true
+      description: Duties collected in US dollars (imports only)
+
+    - name: shipping_weight_kg
+      type: decimal(14,4)
+      nullable: true
+      description: Total shipping weight in kilograms
+
+    - name: load_time
+      type: timestamp
+      nullable: false
+      description: Timestamp when the record was loaded into the data warehouse
+
+sla:
+  freshness_minutes: 50400  # 35 days (monthly release with 35-day lag)
+  valid_row_ratio: 0.98
+  supported_until: "2027-12-31"
+  update_frequency: "Monthly, 35-day lag from reference month"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: trade_id
+  - rule: expect_column_values_to_be_unique
+    column: trade_id
+  - rule: expect_column_values_to_not_be_null
+    column: flow_type
+  - rule: expect_column_values_to_not_be_null
+    column: trade_value_usd
+  - rule: expect_column_values_to_be_in_set
+    column: flow_type
+    value_set: [EXPORT, IMPORT, RE_EXPORT]
+  - rule: expect_column_values_to_be_in_set
+    column: transport_method
+    value_set: [AIR, VESSEL, TRUCK, RAIL, PIPELINE, MAIL, OTHER]
+  - rule: expect_column_values_to_be_between
+    column: trade_value_usd
+    min_value: 0
+    max_value: 100000000000  # $100B per transaction cap
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: year
+    min_value: 2010
+    max_value: 2030
+  - rule: expect_column_values_to_be_between
+    column: month
+    min_value: 1
+    max_value: 12
+  - rule: expect_column_values_to_be_between
+    column: duty_collected_usd
+    min_value: 0
+    max_value: 10000000000
+    mostly: 0.99
+
+data_lineage:
+  upstream_sources:
+    - name: "USA Trade Online"
+      url: "https://usatrade.census.gov"
+      description: "Census Bureau international trade statistics"
+      refresh_schedule: "Monthly (35-day lag)"
+    - name: "ITA Trade Data"
+      url: "https://www.trade.gov/data-visualization"
+      description: "International Trade Administration trade data"
+      refresh_schedule: "Monthly"
+    - name: "HS Code Reference"
+      url: "https://hts.usitc.gov/"
+      description: "Harmonized Tariff Schedule of the United States"
+
+  downstream_consumers:
+    - name: "Trade Balance Dashboard"
+      description: "Executive trade balance and deficit monitoring"
+    - name: "Trade Policy Analysis APIs"
+      description: "APIs supporting trade agreement negotiations"
+    - name: "Tariff Impact Modeling"
+      description: "Tariff scenario analysis and impact forecasting"
+    - name: "Supply Chain Monitoring"
+      description: "Import concentration and supply chain risk assessment"
+
+usage_notes: |
+  - Trade values are in nominal US dollars; adjust for CPI for real comparisons
+  - HS codes are revised every 5 years; use concordance tables for cross-year analysis
+  - Exports are reported FAS (Free Alongside Ship); imports are CIF or customs value
+  - Low-value shipments (< $2,500 exports, < $2,000 imports) are estimated
+  - Country-level data may be suppressed for national security commodities
+  - Re-exports are goods of foreign origin exported from the US without transformation
+
+contact:
+  technical: commerce-data-team@contoso.com
+  business: commerce-trade-analytics@contoso.com

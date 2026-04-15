@@ -289,7 +289,4 @@ def _load_csv_to_table(
     csv_path: Path,
 ) -> None:
     """Load a CSV file into a DuckDB table using ``read_csv_auto``."""
-    conn.execute(
-        f"CREATE TABLE {schema}.{table} AS "
-        f"SELECT * FROM read_csv_auto('{csv_path.as_posix()}')"
-    )
+    conn.execute(f"CREATE TABLE {schema}.{table} AS SELECT * FROM read_csv_auto('{csv_path.as_posix()}')")

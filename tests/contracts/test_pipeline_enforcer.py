@@ -8,22 +8,17 @@ from typing import Any
 import pytest
 
 from governance.contracts.contract_validator import (
+    SLA,
     Column,
     Contract,
-    SLA,
     load_contract,
 )
 from governance.contracts.pipeline_enforcer import (
     ContractEnforcer,
-    EnforcementResult,
-    QuarantineRecord,
 )
-
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SALES_ORDERS_CONTRACT = (
-    REPO_ROOT / "domains" / "sales" / "data-products" / "orders" / "contract.yaml"
-)
+SALES_ORDERS_CONTRACT = REPO_ROOT / "domains" / "sales" / "data-products" / "orders" / "contract.yaml"
 
 
 def _make_contract(**kwargs: Any) -> Contract:
@@ -72,11 +67,11 @@ def test_enforce_returns_all_clean_for_valid_batch(simple_contract: Contract) ->
 def test_enforce_quarantines_invalid_rows(simple_contract: Contract) -> None:
     enforcer = ContractEnforcer(simple_contract)
     rows = [
-        {"id": "a", "value": 1},         # valid
-        {"value": 2},                      # missing required 'id'
-        {"id": "c", "value": "oops"},      # wrong type for 'value'
+        {"id": "a", "value": 1},  # valid
+        {"value": 2},  # missing required 'id'
+        {"id": "c", "value": "oops"},  # wrong type for 'value'
     ]
-    result = enforcer.enforce(rows)
+    result = enforcer.enforce(rows)  # type: ignore[arg-type]
     assert result.clean_count == 1
     assert result.quarantine_count == 2
     assert len(result.quarantined) == 2
@@ -112,9 +107,7 @@ def test_enforce_detects_sla_breach(simple_contract: Contract) -> None:
     """When more rows fail than the SLA allows, the result reflects it."""
     enforcer = ContractEnforcer(simple_contract)
     # SLA is 0.9; send 10 rows where 2 fail (80% clean < 90% SLA)
-    rows = [
-        {"id": str(i), "value": i} for i in range(8)
-    ] + [
+    rows = [{"id": str(i), "value": i} for i in range(8)] + [
         {"value": 100},  # missing id
         {"value": 200},  # missing id
     ]
@@ -141,6 +134,7 @@ def test_enforce_writes_quarantine_file(simple_contract: Contract, tmp_path: Pat
     assert len(files) == 1
 
     import json
+
     lines = files[0].read_text().strip().split("\n")
     assert len(lines) == 1
     record = json.loads(lines[0])
@@ -176,11 +170,13 @@ def test_enforce_decorator_passes_only_clean_rows(simple_contract: Contract) -> 
         received.append(rows)
         return "done"
 
-    result = process([
-        {"id": "a", "value": 1},
-        {"value": 2},  # missing id
-        {"id": "c", "value": 3},
-    ])
+    result = process(
+        [
+            {"id": "a", "value": 1},
+            {"value": 2},  # missing id
+            {"id": "c", "value": 3},
+        ]
+    )
     assert result == "done"
     assert len(received) == 1
     assert len(received[0]) == 2  # only the 2 valid rows

@@ -1,0 +1,228 @@
+# Data product contract — interior.earthquake_events
+#
+# This file is the authoritative interface for the Interior Department
+# earthquake events data product. It declares the schema, SLAs, and
+# quality rules for USGS seismic event analytics and hazard assessment.
+
+apiVersion: csa.interior.gov/v1
+kind: DataProductContract
+
+metadata:
+  name: interior.earthquake_events
+  domain: interior
+  owner: interior-data-engineering@contoso.com
+  version: "1.0.0"
+  description: >
+    Earthquake event analytics from the USGS Earthquake Hazards Program.
+    Provides event-level seismic data including magnitude, depth, location,
+    and impact assessments. Covers global events with enhanced detail for
+    domestic earthquakes. Used for seismic hazard assessment, building code
+    analysis, and emergency response planning.
+
+schema:
+  primary_key: [event_id]
+  columns:
+    - name: event_id
+      type: string
+      nullable: false
+      description: Unique earthquake event identifier
+    - name: event_time
+      type: timestamp
+      nullable: false
+      description: Origin time of the earthquake (UTC)
+    - name: updated_time
+      type: timestamp
+      nullable: true
+      description: Time the event record was last updated
+    - name: latitude
+      type: decimal(8,4)
+      nullable: false
+      description: Earthquake epicenter latitude
+    - name: longitude
+      type: decimal(9,4)
+      nullable: false
+      description: Earthquake epicenter longitude
+    - name: depth_km
+      type: decimal(7,2)
+      nullable: false
+      description: Earthquake depth in kilometers
+    - name: magnitude
+      type: decimal(4,1)
+      nullable: false
+      description: Earthquake magnitude
+    - name: magnitude_type
+      type: string
+      nullable: true
+      description: Magnitude scale type
+      allowed_values:
+        - ml
+        - mw
+        - mb
+        - md
+    - name: place_description
+      type: string
+      nullable: true
+      description: Textual description of the event location
+    - name: event_type
+      type: string
+      nullable: true
+      description: Type of seismic event (earthquake, quarry blast, etc.)
+    - name: status
+      type: string
+      nullable: true
+      description: Event review status (automatic, reviewed, deleted)
+    - name: tsunami_flag
+      type: boolean
+      nullable: true
+      description: Whether a tsunami advisory was issued
+    - name: felt_reports
+      type: integer
+      nullable: true
+      description: Number of felt reports submitted via DYFI
+    - name: cdi
+      type: decimal(4,1)
+      nullable: true
+      description: Maximum Community Decimal Intensity (DYFI)
+    - name: mmi
+      type: decimal(4,1)
+      nullable: true
+      description: Maximum Modified Mercalli Intensity (ShakeMap)
+    - name: alert_level
+      type: string
+      nullable: true
+      description: PAGER alert level
+      allowed_values:
+        - green
+        - yellow
+        - orange
+        - red
+    - name: num_stations
+      type: integer
+      nullable: true
+      description: Number of seismic stations used in location
+    - name: azimuthal_gap
+      type: decimal(5,1)
+      nullable: true
+      description: Azimuthal gap in degrees
+    - name: distance_to_nearest_station
+      type: decimal(8,4)
+      nullable: true
+      description: Distance to nearest seismic station in degrees
+    - name: rms
+      type: decimal(6,3)
+      nullable: true
+      description: Root mean square travel-time residual in seconds
+    - name: horizontal_error
+      type: decimal(8,3)
+      nullable: true
+      description: Horizontal location error in kilometers
+    - name: depth_error
+      type: decimal(8,3)
+      nullable: true
+      description: Depth determination error in kilometers
+    - name: magnitude_error
+      type: decimal(4,2)
+      nullable: true
+      description: Magnitude determination error
+    - name: network
+      type: string
+      nullable: true
+      description: Preferred network contributor ID
+    - name: sources
+      type: string
+      nullable: true
+      description: Comma-separated list of contributing network sources
+    - name: types
+      type: string
+      nullable: true
+      description: Comma-separated list of associated product types
+    - name: sig
+      type: integer
+      nullable: true
+      description: Significance value (0-1000+) combining magnitude, felt, damage
+    - name: _source
+      type: string
+      nullable: true
+      description: Data source identifier
+    - name: load_time
+      type: timestamp
+      nullable: false
+      description: Timestamp when the record was loaded into the data warehouse
+
+sla:
+  freshness_minutes: 5  # Near real-time for significant events
+  valid_row_ratio: 0.95
+  supported_until: "2027-12-31"
+  update_frequency: "Near real-time; events updated as analysis is refined"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: event_id
+  - rule: expect_column_values_to_not_be_null
+    column: event_time
+  - rule: expect_column_values_to_not_be_null
+    column: latitude
+  - rule: expect_column_values_to_not_be_null
+    column: longitude
+  - rule: expect_column_values_to_not_be_null
+    column: magnitude
+  - rule: expect_column_values_to_be_in_set
+    column: magnitude_type
+    value_set: [ml, mw, mb, md]
+  - rule: expect_column_values_to_be_in_set
+    column: alert_level
+    value_set: [green, yellow, orange, red]
+  - rule: expect_column_values_to_be_between
+    column: latitude
+    min_value: -90.0
+    max_value: 90.0
+  - rule: expect_column_values_to_be_between
+    column: longitude
+    min_value: -180.0
+    max_value: 180.0
+  - rule: expect_column_values_to_be_between
+    column: depth_km
+    min_value: 0
+    max_value: 800
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: magnitude
+    min_value: -2.0
+    max_value: 10.0
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: sig
+    min_value: 0
+    max_value: 3000
+    mostly: 0.99
+
+data_lineage:
+  upstream_sources:
+    - name: "USGS Earthquake Hazards Program"
+      url: "https://earthquake.usgs.gov/fdsnws/event/1/"
+      description: "USGS real-time earthquake catalog and ComCat API"
+      refresh_schedule: "Real-time"
+    - name: "USGS ShakeMap"
+      url: "https://earthquake.usgs.gov/data/shakemap/"
+      description: "Ground motion and shaking intensity maps"
+
+  downstream_consumers:
+    - name: "Seismic Monitoring Dashboard"
+      description: "Real-time earthquake tracking and alert display"
+    - name: "Hazard Assessment Models"
+      description: "Probabilistic seismic hazard analysis models"
+    - name: "Emergency Response APIs"
+      description: "APIs for FEMA and state emergency management integration"
+
+usage_notes: |
+  - Magnitude types: ml (local), mw (moment), mb (body-wave), md (duration)
+  - Events are initially located automatically, then reviewed by analysts
+  - Depth_km of 0 may indicate a fixed shallow depth (not measured)
+  - PAGER alert levels estimate economic loss and casualty impact
+  - Significance value combines magnitude, felt reports, and damage
+  - Global coverage for M2.5+; US coverage extends to M1.0+
+  - Event parameters may be revised for days/weeks after occurrence
+
+contact:
+  technical: interior-data-team@contoso.com
+  business: interior-analytics-lead@contoso.com

@@ -1,0 +1,422 @@
+// ============================================================================
+// Casino Analytics - KQL Queries for Real-Time Dashboards
+//
+// Azure Data Explorer (Kusto) queries for real-time slot machine telemetry,
+// player analytics, compliance monitoring, and floor operations dashboards.
+//
+// Target database: casinoanalytics
+// Source: Event Hub ingestion → slot_events_raw table
+// ============================================================================
+
+// ============================================================================
+// 1. TABLE DEFINITIONS & INGESTION MAPPING
+// ============================================================================
+
+// Raw slot events table (Event Hub ingestion target)
+.create-merge table slot_events_raw (
+    event_id: string,
+    machine_id: string,
+    event_timestamp: datetime,
+    event_type: string,
+    denomination: real,
+    credits_wagered: real,
+    credits_won: real,
+    rtp_contribution: real,
+    floor_zone: string,
+    player_id: string,
+    session_id: string,
+    jackpot_amount: real,
+    progressive_pool: string,
+    hand_pay_amount: real,
+    tilt_code: string,
+    currency_inserted: real,
+    ticket_value: real,
+    ctr_trigger: bool,
+    ingestion_time: datetime
+)
+
+// JSON ingestion mapping from Event Hub
+.create-or-alter table slot_events_raw ingestion json mapping 'SlotEventsMapping'
+    '[{"column":"event_id","path":"$.event_id","datatype":"string"},'
+    ' {"column":"machine_id","path":"$.machine_id","datatype":"string"},'
+    ' {"column":"event_timestamp","path":"$.event_timestamp","datatype":"datetime"},'
+    ' {"column":"event_type","path":"$.event_type","datatype":"string"},'
+    ' {"column":"denomination","path":"$.denomination","datatype":"real"},'
+    ' {"column":"credits_wagered","path":"$.credits_wagered","datatype":"real"},'
+    ' {"column":"credits_won","path":"$.credits_won","datatype":"real"},'
+    ' {"column":"rtp_contribution","path":"$.rtp_contribution","datatype":"real"},'
+    ' {"column":"floor_zone","path":"$.floor_zone","datatype":"string"},'
+    ' {"column":"player_id","path":"$.player_id","datatype":"string"},'
+    ' {"column":"session_id","path":"$.session_id","datatype":"string"},'
+    ' {"column":"jackpot_amount","path":"$.jackpot_amount","datatype":"real"},'
+    ' {"column":"progressive_pool","path":"$.progressive_pool","datatype":"string"},'
+    ' {"column":"hand_pay_amount","path":"$.hand_pay_amount","datatype":"real"},'
+    ' {"column":"tilt_code","path":"$.tilt_code","datatype":"string"},'
+    ' {"column":"currency_inserted","path":"$.currency_inserted","datatype":"real"},'
+    ' {"column":"ticket_value","path":"$.ticket_value","datatype":"real"},'
+    ' {"column":"ctr_trigger","path":"$.ctr_trigger","datatype":"bool"},'
+    ' {"column":"ingestion_time","path":"$IngestionTime","datatype":"datetime"}]'
+
+// Retention policy: 30 days hot cache, 365 days total
+.alter-merge table slot_events_raw policy retention softdelete = 365d
+
+.alter-merge table slot_events_raw policy caching hot = 30d
+
+// ============================================================================
+// 2. REAL-TIME FLOOR OPERATIONS DASHBOARD
+// ============================================================================
+
+// Active machines by floor zone (last 5 minutes)
+// Use: Main floor map visualization
+slot_events_raw
+| where event_timestamp > ago(5m)
+| where event_type == "spin"
+| summarize
+    active_machines = dcount(machine_id),
+    total_coin_in = sum(credits_wagered),
+    total_coin_out = sum(credits_won),
+    spin_count = count(),
+    avg_denomination = avg(denomination)
+    by floor_zone
+| extend
+    hold_pct = round((total_coin_in - total_coin_out) / total_coin_in * 100, 2),
+    revenue = round(total_coin_in - total_coin_out, 2)
+| order by revenue desc
+
+// Machine utilization heatmap (15-minute windows, last 4 hours)
+slot_events_raw
+| where event_timestamp > ago(4h)
+| where event_type == "spin"
+| summarize spin_count = count() by machine_id, floor_zone, bin(event_timestamp, 15m)
+| summarize
+    avg_spins_per_window = avg(spin_count),
+    max_spins_per_window = max(spin_count),
+    active_windows = count()
+    by machine_id, floor_zone
+| extend utilization_pct = round(todouble(active_windows) / 16.0 * 100, 1) // 16 = 4h / 15m
+| order by utilization_pct desc
+| take 50
+
+// Revenue per hour by zone (real-time trend)
+slot_events_raw
+| where event_timestamp > ago(24h)
+| where event_type == "spin"
+| summarize
+    coin_in = sum(credits_wagered),
+    coin_out = sum(credits_won)
+    by floor_zone, hour = bin(event_timestamp, 1h)
+| extend revenue = round(coin_in - coin_out, 2)
+| order by hour asc, floor_zone asc
+
+// ============================================================================
+// 3. SLOT MACHINE PERFORMANCE ANALYTICS
+// ============================================================================
+
+// RTP monitoring by machine (last 24 hours)
+// Alert if actual RTP deviates > 3% from theoretical
+slot_events_raw
+| where event_timestamp > ago(24h)
+| where event_type == "spin"
+| where credits_wagered > 0
+| summarize
+    total_wagered = sum(credits_wagered),
+    total_won = sum(credits_won),
+    spin_count = count()
+    by machine_id, floor_zone, denomination
+| where spin_count >= 100 // Statistical significance threshold
+| extend
+    actual_rtp = round(total_won / total_wagered * 100, 2),
+    hold_pct = round((total_wagered - total_won) / total_wagered * 100, 2),
+    revenue = round(total_wagered - total_won, 2)
+| extend rtp_alert = iff(actual_rtp > 100 or actual_rtp < 80, "ALERT", "OK")
+| order by revenue desc
+
+// Denomination mix analysis (last 7 days)
+slot_events_raw
+| where event_timestamp > ago(7d)
+| where event_type == "spin"
+| summarize
+    total_coin_in = sum(credits_wagered),
+    total_coin_out = sum(credits_won),
+    spin_count = count(),
+    unique_players = dcount(player_id)
+    by denomination
+| extend
+    hold_pct = round((total_coin_in - total_coin_out) / total_coin_in * 100, 2),
+    revenue = round(total_coin_in - total_coin_out, 2),
+    avg_bet = round(total_coin_in / spin_count, 2),
+    revenue_per_player = round((total_coin_in - total_coin_out) / unique_players, 2)
+| order by denomination asc
+
+// Progressive jackpot tracking
+slot_events_raw
+| where event_timestamp > ago(30d)
+| where event_type in ("progressive_hit", "jackpot_contribution")
+| summarize
+    contributions = sumif(credits_wagered, event_type == "jackpot_contribution"),
+    hits = countif(event_type == "progressive_hit"),
+    total_paid = sumif(jackpot_amount, event_type == "progressive_hit"),
+    largest_jackpot = maxif(jackpot_amount, event_type == "progressive_hit")
+    by progressive_pool
+| extend
+    avg_jackpot = iff(hits > 0, round(total_paid / hits, 2), 0.0),
+    net_pool = round(contributions - total_paid, 2)
+| order by total_paid desc
+
+// ============================================================================
+// 4. PLAYER ANALYTICS (REAL-TIME)
+// ============================================================================
+
+// Top players by coin-in (last 24 hours)
+slot_events_raw
+| where event_timestamp > ago(24h)
+| where event_type == "spin"
+| where isnotempty(player_id)
+| summarize
+    total_coin_in = sum(credits_wagered),
+    total_coin_out = sum(credits_won),
+    sessions = dcount(session_id),
+    machines_played = dcount(machine_id),
+    zones_visited = dcount(floor_zone),
+    spin_count = count(),
+    first_seen = min(event_timestamp),
+    last_seen = max(event_timestamp)
+    by player_id
+| extend
+    net_win_loss = round(total_coin_out - total_coin_in, 2),
+    play_duration_hours = round(datetime_diff('minute', last_seen, first_seen) / 60.0, 1),
+    avg_bet = round(total_coin_in / spin_count, 2)
+| order by total_coin_in desc
+| take 25
+
+// Player session duration distribution (last 7 days)
+slot_events_raw
+| where event_timestamp > ago(7d)
+| where isnotempty(session_id)
+| summarize
+    session_start = min(event_timestamp),
+    session_end = max(event_timestamp),
+    spin_count = countif(event_type == "spin"),
+    total_wagered = sumif(credits_wagered, event_type == "spin")
+    by session_id, player_id
+| extend duration_minutes = datetime_diff('minute', session_end, session_start)
+| summarize
+    sessions = count(),
+    avg_duration = round(avg(duration_minutes), 1),
+    median_duration = percentile(duration_minutes, 50),
+    p90_duration = percentile(duration_minutes, 90),
+    avg_spins = round(avg(spin_count), 0),
+    avg_wagered = round(avg(total_wagered), 2)
+    by duration_bucket = case(
+        duration_minutes < 15, "0-15 min",
+        duration_minutes < 30, "15-30 min",
+        duration_minutes < 60, "30-60 min",
+        duration_minutes < 120, "1-2 hours",
+        duration_minutes < 240, "2-4 hours",
+        "4+ hours"
+    )
+| order by avg_duration asc
+
+// ============================================================================
+// 5. COMPLIANCE & REGULATORY MONITORING (Title 31 / BSA)
+// ============================================================================
+
+// CTR threshold monitoring - transactions >= $10,000
+// NIGC regulation: Currency Transaction Reports required at $10,000
+slot_events_raw
+| where event_timestamp > ago(24h)
+| where event_type in ("hand_pay", "bill_insert", "ticket_print")
+| where isnotempty(player_id)
+| summarize
+    total_hand_pays = sumif(hand_pay_amount, event_type == "hand_pay"),
+    total_currency_in = sumif(currency_inserted, event_type == "bill_insert"),
+    total_ticket_out = sumif(ticket_value, event_type == "ticket_print"),
+    hand_pay_count = countif(event_type == "hand_pay"),
+    transaction_count = count()
+    by player_id
+| extend total_activity = total_hand_pays + total_currency_in + total_ticket_out
+| where total_activity >= 8000 // Pre-alert threshold (approaching $10K CTR)
+| extend
+    ctr_required = iff(total_activity >= 10000, true, false),
+    alert_level = case(
+        total_activity >= 10000, "CTR_REQUIRED",
+        total_activity >= 9000, "HIGH_ALERT",
+        "APPROACHING"
+    )
+| order by total_activity desc
+
+// Structuring detection - multiple transactions just below CTR threshold
+// Suspicious pattern: multiple cash-ins between $2,000-$9,999 within 24 hours
+slot_events_raw
+| where event_timestamp > ago(24h)
+| where event_type == "bill_insert"
+| where isnotempty(player_id)
+| where currency_inserted >= 2000
+| summarize
+    transaction_count = count(),
+    total_amount = sum(currency_inserted),
+    avg_amount = avg(currency_inserted),
+    max_single = max(currency_inserted),
+    time_span_hours = datetime_diff('hour', max(event_timestamp), min(event_timestamp))
+    by player_id
+| where transaction_count >= 3 and total_amount >= 8000 and max_single < 10000
+| extend structuring_score = round(
+    (todouble(transaction_count) / 3.0) *
+    (total_amount / 10000.0) *
+    iff(time_span_hours <= 4, 2.0, 1.0),
+    2)
+| where structuring_score >= 1.5
+| order by structuring_score desc
+
+// Hand pay audit trail (regulatory requirement)
+slot_events_raw
+| where event_timestamp > ago(7d)
+| where event_type == "hand_pay"
+| project
+    event_timestamp,
+    machine_id,
+    floor_zone,
+    player_id,
+    hand_pay_amount,
+    ctr_trigger,
+    event_id
+| extend
+    w2g_required = iff(hand_pay_amount >= 1200, true, false),
+    ctr_required = iff(hand_pay_amount >= 10000, true, false)
+| order by event_timestamp desc
+
+// ============================================================================
+// 6. MACHINE HEALTH & MAINTENANCE
+// ============================================================================
+
+// Tilt events summary (last 24 hours)
+slot_events_raw
+| where event_timestamp > ago(24h)
+| where event_type == "tilt"
+| summarize
+    tilt_count = count(),
+    first_tilt = min(event_timestamp),
+    last_tilt = max(event_timestamp)
+    by machine_id, floor_zone, tilt_code
+| order by tilt_count desc
+| take 50
+
+// Machines with frequent tilts (maintenance candidates)
+slot_events_raw
+| where event_timestamp > ago(7d)
+| where event_type == "tilt"
+| summarize
+    total_tilts = count(),
+    unique_tilt_codes = dcount(tilt_code),
+    tilt_codes = make_set(tilt_code),
+    days_with_tilts = dcount(bin(event_timestamp, 1d))
+    by machine_id, floor_zone
+| where total_tilts >= 5
+| extend daily_tilt_rate = round(todouble(total_tilts) / 7.0, 1)
+| order by total_tilts desc
+
+// Door open events (security monitoring)
+slot_events_raw
+| where event_timestamp > ago(24h)
+| where event_type == "door_open"
+| project event_timestamp, machine_id, floor_zone, event_id
+| order by event_timestamp desc
+
+// ============================================================================
+// 7. RESPONSIBLE GAMING INDICATORS
+// ============================================================================
+
+// Extended play sessions (>4 hours continuous)
+slot_events_raw
+| where event_timestamp > ago(24h)
+| where isnotempty(session_id)
+| summarize
+    session_start = min(event_timestamp),
+    session_end = max(event_timestamp),
+    total_wagered = sumif(credits_wagered, event_type == "spin"),
+    total_won = sumif(credits_won, event_type == "spin")
+    by session_id, player_id
+| extend duration_hours = round(datetime_diff('minute', session_end, session_start) / 60.0, 1)
+| where duration_hours >= 4
+| extend
+    net_loss = round(total_wagered - total_won, 2),
+    loss_rate_per_hour = round((total_wagered - total_won) / duration_hours, 2)
+| order by duration_hours desc
+
+// Chasing losses pattern detection
+// Players who increase bet size after significant losses
+slot_events_raw
+| where event_timestamp > ago(24h)
+| where event_type == "spin"
+| where isnotempty(player_id)
+| order by player_id asc, event_timestamp asc
+| serialize
+| extend
+    prev_wagered = prev(credits_wagered, 1),
+    prev_won = prev(credits_won, 1),
+    prev_player = prev(player_id, 1)
+| where player_id == prev_player
+| where prev_won == 0 and credits_wagered > prev_wagered * 1.5 // 50% bet increase after loss
+| summarize
+    chase_events = count(),
+    avg_increase_pct = round(avg((credits_wagered - prev_wagered) / prev_wagered * 100), 1)
+    by player_id
+| where chase_events >= 5
+| order by chase_events desc
+
+// ============================================================================
+// 8. MATERIALIZED VIEWS (for dashboard performance)
+// ============================================================================
+
+// Hourly floor summary (materialized)
+.create-or-alter materialized-view HourlyFloorSummary on table slot_events_raw
+{
+    slot_events_raw
+    | where event_type == "spin"
+    | summarize
+        total_coin_in = sum(credits_wagered),
+        total_coin_out = sum(credits_won),
+        spin_count = count(),
+        unique_machines = dcount(machine_id),
+        unique_players = dcount(player_id)
+        by floor_zone, hour = bin(event_timestamp, 1h)
+}
+
+// Daily machine performance (materialized)
+.create-or-alter materialized-view DailyMachinePerformance on table slot_events_raw
+{
+    slot_events_raw
+    | where event_type == "spin"
+    | summarize
+        total_coin_in = sum(credits_wagered),
+        total_coin_out = sum(credits_won),
+        spin_count = count(),
+        unique_players = dcount(player_id)
+        by machine_id, floor_zone, denomination, day = bin(event_timestamp, 1d)
+}
+
+// ============================================================================
+// 9. ALERT RULES
+// ============================================================================
+
+// Alert: Machine RTP anomaly (actual RTP > 105% or < 80% over 1000+ spins)
+// Schedule: Every 15 minutes
+slot_events_raw
+| where event_timestamp > ago(1h)
+| where event_type == "spin" and credits_wagered > 0
+| summarize total_in = sum(credits_wagered), total_out = sum(credits_won), spins = count()
+    by machine_id
+| where spins >= 200
+| extend actual_rtp = round(total_out / total_in * 100, 2)
+| where actual_rtp > 105 or actual_rtp < 80
+| extend alert_message = strcat("Machine ", machine_id, " RTP anomaly: ", tostring(actual_rtp), "% over ", tostring(spins), " spins")
+
+// Alert: High-value hand pay requiring CTR
+// Schedule: Real-time
+slot_events_raw
+| where event_timestamp > ago(5m)
+| where event_type == "hand_pay" and hand_pay_amount >= 10000
+| extend alert_message = strcat(
+    "CTR Required: Player ", player_id,
+    " hand pay of $", tostring(round(hand_pay_amount, 2)),
+    " on machine ", machine_id, " in ", floor_zone)

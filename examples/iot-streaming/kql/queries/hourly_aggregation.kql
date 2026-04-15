@@ -1,0 +1,79 @@
+// ═══════════════════════════════════════════════════════════════
+// Hourly Aggregation
+// Aggregate sensor readings by hour and device for trend analysis
+// ═══════════════════════════════════════════════════════════════
+
+// ─── Hourly temperature/humidity aggregation by sensor ───────
+SensorTelemetry
+| where timestamp > ago(7d)
+| summarize
+    avg_temperature = round(avg(temperature_c), 2),
+    min_temperature = round(min(temperature_c), 2),
+    max_temperature = round(max(temperature_c), 2),
+    stddev_temperature = round(stdev(temperature_c), 2),
+    avg_humidity = round(avg(humidity_pct), 1),
+    min_humidity = round(min(humidity_pct), 1),
+    max_humidity = round(max(humidity_pct), 1),
+    avg_pressure = round(avg(pressure_hpa), 1),
+    reading_count = count(),
+    min_battery = round(min(battery_pct), 1)
+    by sensor_id, hour = bin(timestamp, 1h)
+| order by hour desc, sensor_id asc;
+
+// ─── Hourly weather station aggregation ──────────────────────
+WeatherObservations
+| where timestamp > ago(7d)
+| summarize
+    avg_temp = round(avg(temperature_c), 2),
+    max_temp = round(max(temperature_c), 2),
+    min_temp = round(min(temperature_c), 2),
+    total_precipitation = round(sum(precipitation_mm), 2),
+    avg_wind_speed = round(avg(wind_speed_ms), 1),
+    max_wind_gust = round(max(wind_gust_ms), 1),
+    avg_visibility = round(avg(visibility_km), 1),
+    avg_cloud_cover = round(avg(cloud_cover_pct), 0),
+    observation_count = count()
+    by station_id, hour = bin(timestamp, 1h)
+| order by hour desc, station_id asc;
+
+// ─── Hourly AQI aggregation by sensor ────────────────────────
+AQIReadings
+| where timestamp > ago(7d)
+| summarize
+    avg_pm25 = round(avg(pm25_ugm3), 1),
+    max_pm25 = round(max(pm25_ugm3), 1),
+    avg_pm10 = round(avg(pm10_ugm3), 1),
+    avg_ozone = round(avg(ozone_ppb), 1),
+    avg_no2 = round(avg(no2_ppb), 1),
+    avg_aqi = round(avg(aqi), 0),
+    max_aqi = max(aqi),
+    reading_count = count(),
+    unhealthy_count = countif(aqi > 100)
+    by sensor_id, hour = bin(timestamp, 1h)
+| order by hour desc, sensor_id asc;
+
+// ─── Hourly slot machine aggregation by zone ─────────────────
+SlotEvents
+| where timestamp > ago(7d)
+| summarize
+    total_spins = count(),
+    total_coin_in = round(sum(coin_in), 2),
+    total_coin_out = round(sum(coin_out), 2),
+    hold_amount = round(sum(coin_in) - sum(coin_out), 2),
+    hold_pct = round((sum(coin_in) - sum(coin_out)) / sum(coin_in) * 100, 2),
+    jackpot_count = countif(event_type == "jackpot"),
+    bonus_count = countif(event_type == "bonus"),
+    unique_machines = dcount(machine_id)
+    by floor_zone, hour = bin(timestamp, 1h)
+| order by hour desc, floor_zone asc;
+
+// ─── Daily rollup across all sensor types ────────────────────
+SensorTelemetry
+| where timestamp > ago(30d)
+| summarize
+    total_readings = count(),
+    unique_sensors = dcount(sensor_id),
+    avg_temperature = round(avg(temperature_c), 2),
+    sensors_low_battery = dcountif(sensor_id, battery_pct < 20)
+    by day = bin(timestamp, 1d)
+| order by day desc;

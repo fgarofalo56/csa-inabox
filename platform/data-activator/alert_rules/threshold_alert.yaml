@@ -1,0 +1,129 @@
+# Threshold Alert Rule
+# Triggers when a data metric crosses a defined upper or lower boundary.
+#
+# The simplest alert type — compares a numeric metric against fixed or
+# percentage-based thresholds. Useful for row counts, error rates, and
+# business KPIs.
+
+apiVersion: csa.microsoft.com/v1
+kind: AlertRule
+
+metadata:
+  name: threshold-alert
+  version: "1.0.0"
+  description: >
+    Monitors numeric metrics against defined thresholds. Fires when a
+    value exceeds the upper bound or drops below the lower bound. Supports
+    absolute values and percentage-of-baseline comparisons.
+  owner: platform-team@contoso.com
+  tags: [threshold, metrics, monitoring]
+
+trigger:
+  eventTypes:
+    - csa.data.quality.check
+    - csa.pipeline.completed
+    - csa.data.metrics.updated
+  schedule: "0 0 * * * *"  # Every hour
+
+evaluation:
+  type: threshold
+  # Threshold definitions per metric. Each data product can match
+  # zero or more of these; the first matching rule fires.
+  thresholds:
+    - metric: row_count
+      description: Minimum expected row count for the data product
+      lowerBound: 1000
+      upperBound: null  # No upper limit
+      # Percentage-based bounds relative to the previous value.
+      percentageDropThreshold: 50  # Alert if row count drops by >50%
+
+    - metric: null_rate
+      description: Maximum acceptable null rate across critical columns
+      lowerBound: null
+      upperBound: 0.10  # 10% max null rate
+      percentageDropThreshold: null
+
+    - metric: error_rate
+      description: Maximum acceptable ingestion error rate
+      lowerBound: null
+      upperBound: 0.05  # 5% max error rate
+      percentageDropThreshold: null
+
+    - metric: valid_row_ratio
+      description: Minimum acceptable quality validation pass rate
+      lowerBound: 0.90  # 90% minimum
+      upperBound: null
+      percentageDropThreshold: null
+
+    - metric: file_count
+      description: Expected minimum number of files in the data product
+      lowerBound: 1
+      upperBound: 10000  # Prevent runaway small-file problems
+      percentageDropThreshold: null
+
+    - metric: data_size_gb
+      description: Data product size monitoring
+      lowerBound: null
+      upperBound: 500  # Alert if a single product exceeds 500 GB
+      percentageDropThreshold: null
+
+conditions:
+  - field: data.threshold_breached
+    operator: equals
+    value: true
+  - field: data.environment
+    operator: in
+    value: [prod, stg]
+
+severity:
+  rules:
+    # Critical: row count dropped to zero (data loss) or error rate > 25%
+    - condition: "value == 0 && metric == 'row_count'"
+      level: critical
+    - condition: "metric == 'error_rate' && value > 0.25"
+      level: critical
+    # Warning: threshold breached but not critically
+    - condition: "threshold_breached"
+      level: warning
+  default: warning
+
+actions:
+  - type: teams_webhook
+    enabled: true
+    config:
+      title: "Metric Threshold Breach"
+      messageTemplate: |
+        **Threshold Alert**: {{data.domain}}/{{data.dataProduct}}
+        **Metric**: {{data.metric}}
+        **Current Value**: {{data.value}}
+        **Threshold**: {{data.threshold_type}} bound = {{data.threshold_value}}
+        **Previous Value**: {{data.previous_value}}
+        **Change**: {{data.change_percent}}%
+        **Environment**: {{data.environment}}
+      themeColor: "FF0000"
+
+  - type: email
+    enabled: true
+    config:
+      subject: "[CSA Alert] {{data.metric}} threshold breach in {{data.domain}}/{{data.dataProduct}}"
+      recipients:
+        - "{{data.owner}}"
+        - platform-oncall@contoso.com
+
+  - type: pagerduty
+    enabled: true
+    severityFilter: [critical]
+    config:
+      routingKey: "${PAGERDUTY_INTEGRATION_KEY}"
+      severity: critical
+      summary: "{{data.metric}} = {{data.value}} (threshold: {{data.threshold_value}}) for {{data.domain}}/{{data.dataProduct}}"
+
+suppression:
+  cooldownMinutes: 30
+  groupBy: [data.domain, data.dataProduct, data.metric]
+
+logging:
+  logAllEvaluations: true
+  customDimensions:
+    alert_type: threshold
+    component: data-activator

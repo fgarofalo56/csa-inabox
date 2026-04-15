@@ -1,0 +1,102 @@
+{
+  "containers": {
+    "bronze": {
+      "name": "bronze",
+      "public_access": "None",
+      "metadata": {
+        "purpose": "Bronze layer data",
+        "source": "Sales Database",
+        "landing_zone": "lz-sales-transactions"
+      }
+    },
+    "silver": {
+      "name": "silver",
+      "public_access": "None",
+      "metadata": {
+        "purpose": "Silver layer data",
+        "source": "Sales Database",
+        "landing_zone": "lz-sales-transactions"
+      }
+    },
+    "gold": {
+      "name": "gold",
+      "public_access": "None",
+      "metadata": {
+        "purpose": "Gold layer data",
+        "source": "Sales Database",
+        "landing_zone": "lz-sales-transactions"
+      }
+    },
+    "sandbox": {
+      "name": "sandbox",
+      "public_access": "None",
+      "metadata": {
+        "purpose": "Sandbox layer data",
+        "source": "Sales Database",
+        "landing_zone": "lz-sales-transactions"
+      }
+    }
+  },
+  "folder_structure": {
+    "bronze": {
+      "base_path": "sales_database/raw/{year}/{month}/{day}",
+      "partitioning": "date"
+    },
+    "silver": {
+      "base_path": "sales_database/standardized/{year}/{month}/{day}",
+      "partitioning": "date"
+    },
+    "gold": {
+      "base_path": "sales_database/aggregated/{year}/{month}/{day}",
+      "partitioning": "date"
+    },
+    "sandbox": {
+      "base_path": "sales_database/sandbox/{user}/{experiment}",
+      "partitioning": "user_experiment"
+    }
+  },
+  "retention_policies": {
+    "bronze": {
+      "retention_days": 2555,
+      "delete_after_retention": false,
+      "archive_after_days": 365
+    },
+    "silver": {
+      "retention_days": 2555,
+      "delete_after_retention": false,
+      "archive_after_days": 90
+    },
+    "gold": {
+      "retention_days": 2555,
+      "delete_after_retention": false,
+      "archive_after_days": 90
+    },
+    "sandbox": {
+      "retention_days": 2555,
+      "delete_after_retention": false,
+      "archive_after_days": 90
+    }
+  },
+  "access_policies": {
+    "bronze": {
+      "owner_access": "rwx",
+      "reader_access": "rx",
+      "service_principal_access": "rwx"
+    },
+    "silver": {
+      "owner_access": "rwx",
+      "reader_access": "rx",
+      "service_principal_access": "rwx"
+    },
+    "gold": {
+      "owner_access": "rwx",
+      "reader_access": "rx",
+      "service_principal_access": "rwx"
+    },
+    "sandbox": {
+      "owner_access": "rwx",
+      "reader_access": "rx",
+      "service_principal_access": "rwx"
+    }
+  }
+}

@@ -1,0 +1,464 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "location": {
+            "value": "USGov Virginia"
+        },
+        "environment": {
+            "value": "gov"
+        },
+        "prefix": {
+            "value": "casino"
+        },
+        "workloadName": {
+            "value": "gaming-analytics"
+        },
+        "deployModules": {
+            "value": {
+                "cosmosDB": true,
+                "storageZones": true,
+                "externalStorage": false,
+                "synapse": true,
+                "functions": true,
+                "streamAnalytics": true,
+                "appInsights": true,
+                "privateEndpoints": true,
+                "genericStorage": false,
+                "selfHostedIR": false,
+                "dataExplorer": true,
+                "mlWorkspace": true
+            }
+        },
+        "privateDNSZones": {
+            "value": {
+                "subscriptionId": "[subscription().subscriptionId]",
+                "resourceGroupName": "rg-dns-zones-gov"
+            }
+        },
+        "tags": {
+            "value": {
+                "Domain": "Casino",
+                "Environment": "Government",
+                "WorkloadType": "Analytics",
+                "CostCenter": "NIGC-IT-GOV",
+                "Owner": "Casino Analytics Engineering Team",
+                "Project": "Gaming Analytics Platform",
+                "Compliance": "FISMA-High",
+                "DataClassification": "CUI",
+                "AuthorityToOperate": "CAS-ATO-2024"
+            }
+        },
+        "databricksConfig": {
+            "value": {
+                "pricingTier": "premium",
+                "enableNoPublicIp": true,
+                "skuName": "premium",
+                "customVirtualNetworkId": "",
+                "customPublicSubnetName": "",
+                "customPrivateSubnetName": "",
+                "enableAutomaticClusterTermination": true,
+                "enableEncryption": true
+            }
+        },
+        "synapseConfig": {
+            "value": {
+                "sqlAdministratorLogin": "sqladmin",
+                "sqlAdministratorLoginPassword": "[parameters('sqlAdministratorPassword')]",
+                "allowedIpAddresses": [
+                    {
+                        "name": "Casino-GOV-HQ",
+                        "startIpAddress": "192.168.140.0",
+                        "endIpAddress": "192.168.140.255"
+                    },
+                    {
+                        "name": "Casino-GOV-FIELD",
+                        "startIpAddress": "192.168.141.0",
+                        "endIpAddress": "192.168.141.255"
+                    }
+                ],
+                "enableDataExfiltrationProtection": true,
+                "managedVirtualNetwork": "default",
+                "enableDoubleEncryption": true,
+                "gitConfig": {
+                    "accountName": "Casino-Analytics-Gov",
+                    "repositoryName": "casino-gaming-analytics-gov",
+                    "collaborationBranch": "main",
+                    "rootFolder": "/synapse"
+                }
+            }
+        },
+        "storageConfig": {
+            "value": {
+                "accountType": "Standard_GRS",
+                "accessTier": "Hot",
+                "supportsHttpsTrafficOnly": true,
+                "enableHierarchicalNamespace": true,
+                "minimumTlsVersion": "TLS1_2",
+                "allowBlobPublicAccess": false,
+                "enableCrossTenantReplication": false,
+                "containers": [
+                    {
+                        "name": "raw",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "bronze",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "silver",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "gold",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "exports",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "player-tracking-data",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "slot-telemetry",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "fnb-transactions",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "streaming-events",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "audit-logs",
+                        "publicAccess": "None"
+                    }
+                ],
+                "enableVersioning": true,
+                "enableDeleteRetention": true,
+                "deleteRetentionDays": 365
+            }
+        },
+        "keyVaultConfig": {
+            "value": {
+                "enableRbacAuthorization": true,
+                "enableSoftDelete": true,
+                "softDeleteRetentionDays": 90,
+                "enablePurgeProtection": true,
+                "enabledForDiskEncryption": true,
+                "enabledForDeployment": false,
+                "enabledForTemplateDeployment": false,
+                "networkAccessPolicy": "deny",
+                "secrets": [
+                    {
+                        "name": "sql-administrator-password",
+                        "description": "SQL administrator password for Synapse"
+                    },
+                    {
+                        "name": "eventhub-connection-string",
+                        "description": "Event Hub connection string for slot telemetry"
+                    },
+                    {
+                        "name": "custom-vision-api-key",
+                        "description": "Azure Custom Vision API key"
+                    },
+                    {
+                        "name": "encryption-key",
+                        "description": "Customer-managed encryption key"
+                    }
+                ]
+            }
+        },
+        "dataFactoryConfig": {
+            "value": {
+                "publicNetworkAccess": "Disabled",
+                "managedVirtualNetworkSettings": {
+                    "allowedPrivateEndpointConnections": [],
+                    "preventDataExfiltration": true
+                },
+                "gitConfig": {
+                    "accountName": "Casino-Analytics-Gov",
+                    "repositoryName": "casino-gaming-analytics-gov",
+                    "collaborationBranch": "main",
+                    "rootFolder": "/datafactory"
+                },
+                "integrationRuntimes": [
+                    {
+                        "name": "AutoResolveIntegrationRuntime",
+                        "type": "Managed",
+                        "location": "USGov Virginia"
+                    }
+                ],
+                "linkedServices": [
+                    {
+                        "name": "ls_keyvault",
+                        "type": "AzureKeyVault"
+                    },
+                    {
+                        "name": "ls_storage_raw",
+                        "type": "AzureDataLakeStorage"
+                    },
+                    {
+                        "name": "ls_synapse",
+                        "type": "AzureSqlDW"
+                    },
+                    {
+                        "name": "ls_eventhub",
+                        "type": "AzureEventHub"
+                    }
+                ]
+            }
+        },
+        "dataExplorerConfig": {
+            "value": {
+                "skuName": "Standard_D11_v2",
+                "skuTier": "Standard",
+                "capacity": 2,
+                "enableDiskEncryption": true,
+                "enableStreamingIngest": true,
+                "enablePurge": true,
+                "enableDoubleEncryption": true,
+                "databases": [
+                    {
+                        "name": "casinoanalytics",
+                        "hotCachePeriod": "P30D",
+                        "softDeletePeriod": "P2555D"
+                    }
+                ],
+                "enableAutoStop": false,
+                "enableAutoScale": true,
+                "minimumInstances": 2,
+                "maximumInstances": 10
+            }
+        },
+        "mlWorkspaceConfig": {
+            "value": {
+                "friendlyName": "Casino Gaming Analytics ML (Gov)",
+                "description": "ML workspace for player analytics and floor optimization - Government Cloud",
+                "enablePublicNetworkAccess": "Disabled",
+                "enableHbiWorkspace": true,
+                "computeInstances": [
+                    {
+                        "name": "player-analytics-vm",
+                        "vmSize": "Standard_DS3_v2",
+                        "enableNodePublicIp": false
+                    }
+                ],
+                "datastores": [
+                    {
+                        "name": "gaming_data",
+                        "type": "AzureDataLakeGen2",
+                        "description": "Primary gaming datasets"
+                    }
+                ]
+            }
+        },
+        "monitoringConfig": {
+            "value": {
+                "enableApplicationInsights": true,
+                "enableLogAnalytics": true,
+                "retentionInDays": 2555,
+                "enableSecurityCenter": true,
+                "alertRules": [
+                    {
+                        "name": "Data Pipeline Failure",
+                        "severity": 1,
+                        "evaluationFrequency": "PT5M",
+                        "windowSize": "PT15M",
+                        "actionGroupName": "casino-gov-alerts"
+                    },
+                    {
+                        "name": "Jackpot Threshold Exceeded",
+                        "severity": 0,
+                        "evaluationFrequency": "PT1M",
+                        "windowSize": "PT5M",
+                        "actionGroupName": "casino-gov-alerts"
+                    },
+                    {
+                        "name": "Title 31 CTR Threshold",
+                        "severity": 0,
+                        "evaluationFrequency": "PT5M",
+                        "windowSize": "PT15M",
+                        "actionGroupName": "casino-gov-alerts"
+                    },
+                    {
+                        "name": "Unauthorized Access Attempt",
+                        "severity": 0,
+                        "evaluationFrequency": "PT1M",
+                        "windowSize": "PT5M",
+                        "actionGroupName": "casino-security-alerts"
+                    },
+                    {
+                        "name": "Data Exfiltration Alert",
+                        "severity": 0,
+                        "evaluationFrequency": "PT5M",
+                        "windowSize": "PT15M",
+                        "actionGroupName": "casino-security-alerts"
+                    }
+                ],
+                "actionGroups": [
+                    {
+                        "name": "casino-gov-alerts",
+                        "emailReceivers": [
+                            {
+                                "name": "Casino Gov Data Team",
+                                "emailAddress": "casino-gov-data-team@nigc.gov"
+                            }
+                        ]
+                    },
+                    {
+                        "name": "casino-security-alerts",
+                        "emailReceivers": [
+                            {
+                                "name": "Casino Security Operations",
+                                "emailAddress": "casino-security-ops@nigc.gov"
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        "networkingConfig": {
+            "value": {
+                "enablePrivateEndpoints": true,
+                "subnetName": "snet-casino-analytics-gov",
+                "vnetName": "vnet-casino-analytics-gov",
+                "vnetAddressPrefix": "10.106.0.0/16",
+                "subnetAddressPrefix": "10.106.1.0/24",
+                "enableNetworkSecurityGroup": true,
+                "allowedSourceIpRanges": [
+                    "192.168.140.0/24"
+                ],
+                "enableDdosProtection": true,
+                "enableBastionHost": true
+            }
+        },
+        "securityConfig": {
+            "value": {
+                "enableDefender": true,
+                "enableSentinel": true,
+                "enableKeyVaultFirewall": true,
+                "enableStorageFirewall": true,
+                "requireHttpsTrafficOnly": true,
+                "enableAuditLogs": true,
+                "enableAdvancedThreatProtection": true,
+                "dataClassification": {
+                    "enabled": true,
+                    "level": "CUI"
+                },
+                "encryptionAtRest": true,
+                "enablePrivateLink": true,
+                "enableCustomerManagedKeys": true,
+                "complianceStandards": [
+                    "FISMA",
+                    "NIST-800-53",
+                    "FedRAMP"
+                ],
+                "enableIdentityGovernance": true
+            }
+        },
+        "automationConfig": {
+            "value": {
+                "enableAutoShutdown": false,
+                "enableCostOptimization": true,
+                "enableResourceTagging": true,
+                "backupRetentionDays": 2555,
+                "enableDisasterRecovery": true,
+                "drRegion": "USGov Texas"
+            }
+        },
+        "dataGovernanceConfig": {
+            "value": {
+                "enablePurview": true,
+                "dataRetentionPolicies": [
+                    {
+                        "dataType": "Player Tracking Data",
+                        "retentionDays": 2555,
+                        "complianceReason": "NIGC MICS"
+                    },
+                    {
+                        "dataType": "Slot Telemetry",
+                        "retentionDays": 2555,
+                        "complianceReason": "NIGC Audit Requirements"
+                    },
+                    {
+                        "dataType": "F&B Transactions",
+                        "retentionDays": 2555,
+                        "complianceReason": "Title 31 BSA"
+                    },
+                    {
+                        "dataType": "Audit Logs",
+                        "retentionDays": 2555,
+                        "complianceReason": "Security Compliance"
+                    }
+                ],
+                "enableDataLineage": true,
+                "enableDataQualityMonitoring": true,
+                "enableDataLossPrevention": true,
+                "piiDetection": true,
+                "enableDataEncryption": true
+            }
+        },
+        "complianceConfig": {
+            "value": {
+                "fismaLevel": "High",
+                "enableFedRAMP": true,
+                "enableSOC2": false,
+                "enableNIST": true,
+                "auditRetentionYears": 7,
+                "enableContinuousMonitoring": true,
+                "securityContactEmail": "casino-security-ops@nigc.gov",
+                "privacyContactEmail": "casino-privacy-office@nigc.gov"
+            }
+        },
+        "regulatoryConfig": {
+            "value": {
+                "nigcCompliance": {
+                    "enabled": true,
+                    "reportingFrequency": "monthly",
+                    "minimumInternalControlStandards": true,
+                    "auditTrailRetentionYears": 7,
+                    "machineAuditEnabled": true,
+                    "revenueReportingEnabled": true,
+                    "classIIGamingCompliance": true,
+                    "classIIIGamingCompliance": true,
+                    "tribalGamingCompact": true
+                },
+                "title31Compliance": {
+                    "enabled": true,
+                    "ctrThresholdUSD": 10000,
+                    "sarFilingEnabled": true,
+                    "multipleTxnAggregationWindow": "24h",
+                    "ctrFilingDeadlineDays": 15,
+                    "customerIdentificationProgram": true,
+                    "recordRetentionYears": 5,
+                    "enhancedDueDiligence": true,
+                    "suspiciousActivityMonitoring": true,
+                    "structuringDetection": true
+                },
+                "responsibleGaming": {
+                    "selfExclusionEnabled": true,
+                    "coolOffPeriods": [
+                        24,
+                        72,
+                        168,
+                        720
+                    ],
+                    "spendingLimitsEnabled": true,
+                    "sessionTimeAlerts": [
+                        60,
+                        120,
+                        240,
+                        480
+                    ],
+                    "problemGamblingReferral": true
+                }
+            }
+        }
+    }
+}

@@ -1,5 +1,7 @@
 # Data Product Template
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Developers
+
 Use this template to create a new data product domain in the CSA-in-a-Box Data Mesh platform.
 
 ## Quick Start
@@ -26,7 +28,7 @@ cp -r templates/data-product/scaffold domains/<your-domain>
 
 ## Template Contents
 
-```
+```text
 templates/data-product/
 ├── contract-template.json     # Data product contract schema
 ├── scaffold/                  # Copy this for new domains
@@ -55,3 +57,10 @@ templates/data-product/
 2. **Data as a Product**: Gold layer tables are published products with contracts
 3. **Self-Serve Platform**: Use shared infrastructure (Databricks, ADF, ADLS)
 4. **Federated Governance**: Purview provides global catalog; domains own quality
+
+---
+
+## Related Documentation
+
+- [Getting Started Guide](../../docs/GETTING_STARTED.md) - Platform setup and onboarding
+- [USDA Example](../../examples/usda/README.md) - Reference domain implementation

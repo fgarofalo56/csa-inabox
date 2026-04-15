@@ -1,0 +1,416 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "location": {
+            "value": "USGov Virginia"
+        },
+        "environment": {
+            "value": "gov"
+        },
+        "prefix": {
+            "value": "noaa"
+        },
+        "workloadName": {
+            "value": "climate-weather-analytics"
+        },
+        "deployModules": {
+            "value": {
+                "cosmosDB": true,
+                "storageZones": true,
+                "externalStorage": false,
+                "synapse": true,
+                "functions": true,
+                "streamAnalytics": false,
+                "appInsights": true,
+                "privateEndpoints": true,
+                "genericStorage": false,
+                "selfHostedIR": false,
+                "dataExplorer": true,
+                "mlWorkspace": true
+            }
+        },
+        "privateDNSZones": {
+            "value": {
+                "subscriptionId": "[subscription().subscriptionId]",
+                "resourceGroupName": "rg-dns-zones-gov"
+            }
+        },
+        "tags": {
+            "value": {
+                "Domain": "NOAA",
+                "Environment": "Government",
+                "WorkloadType": "Analytics",
+                "CostCenter": "NOAA-IT-GOV",
+                "Owner": "NOAA Data Engineering Team",
+                "Project": "Climate and Weather Analytics Platform",
+                "Compliance": "FISMA-High",
+                "DataClassification": "CUI",
+                "AuthorityToOperate": "NOAA-ATO-2024"
+            }
+        },
+        "databricksConfig": {
+            "value": {
+                "pricingTier": "premium",
+                "enableNoPublicIp": true,
+                "skuName": "premium",
+                "customVirtualNetworkId": "",
+                "customPublicSubnetName": "",
+                "customPrivateSubnetName": "",
+                "enableAutomaticClusterTermination": true,
+                "enableEncryption": true
+            }
+        },
+        "synapseConfig": {
+            "value": {
+                "sqlAdministratorLogin": "sqladmin",
+                "sqlAdministratorLoginPassword": "[parameters('sqlAdministratorPassword')]",
+                "allowedIpAddresses": [
+                    {
+                        "name": "NOAA-GOV-HQ",
+                        "startIpAddress": "192.168.106.0",
+                        "endIpAddress": "192.168.106.255"
+                    },
+                    {
+                        "name": "NOAA-GOV-FIELD",
+                        "startIpAddress": "192.168.107.0",
+                        "endIpAddress": "192.168.107.255"
+                    }
+                ],
+                "enableDataExfiltrationProtection": true,
+                "managedVirtualNetwork": "default",
+                "enableDoubleEncryption": true,
+                "gitConfig": {
+                    "accountName": "NOAA-Analytics-Gov",
+                    "repositoryName": "noaa-climate-weather-analytics-gov",
+                    "collaborationBranch": "main",
+                    "rootFolder": "/synapse"
+                }
+            }
+        },
+        "storageConfig": {
+            "value": {
+                "accountType": "Standard_GRS",
+                "accessTier": "Hot",
+                "supportsHttpsTrafficOnly": true,
+                "enableHierarchicalNamespace": true,
+                "minimumTlsVersion": "TLS1_2",
+                "allowBlobPublicAccess": false,
+                "enableCrossTenantReplication": false,
+                "containers": [
+                    {
+                        "name": "raw",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "bronze",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "silver",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "gold",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "exports",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "ghcnd-observations",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "storm-events",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "buoy-data",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "climate-normals",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "audit-logs",
+                        "publicAccess": "None"
+                    }
+                ],
+                "enableVersioning": true,
+                "enableDeleteRetention": true,
+                "deleteRetentionDays": 365
+            }
+        },
+        "keyVaultConfig": {
+            "value": {
+                "enableRbacAuthorization": true,
+                "enableSoftDelete": true,
+                "softDeleteRetentionDays": 90,
+                "enablePurgeProtection": true,
+                "enabledForDiskEncryption": true,
+                "enabledForDeployment": false,
+                "enabledForTemplateDeployment": false,
+                "networkAccessPolicy": "deny",
+                "secrets": [
+                    {
+                        "name": "ncei-cdo-token",
+                        "description": "NOAA NCEI Climate Data Online API token"
+                    },
+                    {
+                        "name": "coops-app-key",
+                        "description": "NOAA CO-OPS Tides and Currents application key"
+                    },
+                    {
+                        "name": "sql-administrator-password",
+                        "description": "SQL administrator password for Synapse"
+                    },
+                    {
+                        "name": "encryption-key",
+                        "description": "Customer-managed encryption key"
+                    }
+                ]
+            }
+        },
+        "dataFactoryConfig": {
+            "value": {
+                "publicNetworkAccess": "Disabled",
+                "managedVirtualNetworkSettings": {
+                    "allowedPrivateEndpointConnections": [],
+                    "preventDataExfiltration": true
+                },
+                "gitConfig": {
+                    "accountName": "NOAA-Analytics-Gov",
+                    "repositoryName": "noaa-climate-weather-analytics-gov",
+                    "collaborationBranch": "main",
+                    "rootFolder": "/datafactory"
+                },
+                "integrationRuntimes": [
+                    {
+                        "name": "AutoResolveIntegrationRuntime",
+                        "type": "Managed",
+                        "location": "USGov Virginia"
+                    }
+                ],
+                "linkedServices": [
+                    {
+                        "name": "ls_keyvault",
+                        "type": "AzureKeyVault"
+                    },
+                    {
+                        "name": "ls_storage_raw",
+                        "type": "AzureDataLakeStorage"
+                    },
+                    {
+                        "name": "ls_synapse",
+                        "type": "AzureSqlDW"
+                    },
+                    {
+                        "name": "ls_ncei_cdo",
+                        "type": "RestService",
+                        "baseUrl": "https://www.ncei.noaa.gov/cdo-web/api/v2/"
+                    },
+                    {
+                        "name": "ls_coops_api",
+                        "type": "RestService",
+                        "baseUrl": "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter"
+                    }
+                ]
+            }
+        },
+        "dataExplorerConfig": {
+            "value": {
+                "skuName": "Standard_D11_v2",
+                "skuTier": "Standard",
+                "capacity": 2,
+                "enableDiskEncryption": true,
+                "enableStreamingIngest": true,
+                "enablePurge": true,
+                "enableDoubleEncryption": true,
+                "databases": [
+                    {
+                        "name": "noaaanalytics",
+                        "hotCachePeriod": "P30D",
+                        "softDeletePeriod": "P2555D"
+                    }
+                ],
+                "enableAutoStop": false,
+                "enableAutoScale": true,
+                "minimumInstances": 2,
+                "maximumInstances": 10
+            }
+        },
+        "mlWorkspaceConfig": {
+            "value": {
+                "friendlyName": "NOAA Climate and Weather ML (Gov)",
+                "description": "Machine learning workspace for severe weather prediction and climate trend analytics - Government Cloud",
+                "enablePublicNetworkAccess": "Disabled",
+                "enableHbiWorkspace": true,
+                "computeInstances": [
+                    {
+                        "name": "weather-prediction-vm",
+                        "vmSize": "Standard_DS3_v2",
+                        "enableNodePublicIp": false
+                    }
+                ],
+                "datastores": [
+                    {
+                        "name": "climate_data",
+                        "type": "AzureDataLakeGen2",
+                        "description": "Primary climate and weather datasets"
+                    }
+                ]
+            }
+        },
+        "monitoringConfig": {
+            "value": {
+                "enableApplicationInsights": true,
+                "enableLogAnalytics": true,
+                "retentionInDays": 2555,
+                "enableSecurityCenter": true,
+                "alertRules": [
+                    {
+                        "name": "Weather Data Pipeline Failure",
+                        "severity": 1,
+                        "evaluationFrequency": "PT5M",
+                        "windowSize": "PT15M",
+                        "actionGroupName": "noaa-gov-alerts"
+                    },
+                    {
+                        "name": "Severe Weather Event Alert",
+                        "severity": 0,
+                        "evaluationFrequency": "PT30M",
+                        "windowSize": "PT1H",
+                        "actionGroupName": "noaa-gov-alerts"
+                    },
+                    {
+                        "name": "Unauthorized Access Attempt",
+                        "severity": 0,
+                        "evaluationFrequency": "PT1M",
+                        "windowSize": "PT5M",
+                        "actionGroupName": "noaa-security-alerts"
+                    },
+                    {
+                        "name": "Data Exfiltration Alert",
+                        "severity": 0,
+                        "evaluationFrequency": "PT5M",
+                        "windowSize": "PT15M",
+                        "actionGroupName": "noaa-security-alerts"
+                    }
+                ],
+                "actionGroups": [
+                    {
+                        "name": "noaa-gov-alerts",
+                        "emailReceivers": [
+                            {
+                                "name": "NOAA Gov Data Team",
+                                "emailAddress": "noaa-ops@noaa.gov"
+                            }
+                        ]
+                    },
+                    {
+                        "name": "noaa-security-alerts",
+                        "emailReceivers": [
+                            {
+                                "name": "NOAA Security Operations",
+                                "emailAddress": "noaa-security-ops@noaa.gov"
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        "networkingConfig": {
+            "value": {
+                "enablePrivateEndpoints": true,
+                "subnetName": "snet-noaa-analytics-gov",
+                "vnetName": "vnet-noaa-analytics-gov",
+                "vnetAddressPrefix": "10.105.0.0/16",
+                "subnetAddressPrefix": "10.105.1.0/24",
+                "enableNetworkSecurityGroup": true,
+                "allowedSourceIpRanges": [
+                    "192.168.106.0/24",
+                    "192.168.107.0/24"
+                ],
+                "enableDdosProtection": true,
+                "enableBastionHost": true
+            }
+        },
+        "securityConfig": {
+            "value": {
+                "enableDefender": true,
+                "enableSentinel": true,
+                "enableKeyVaultFirewall": true,
+                "enableStorageFirewall": true,
+                "requireHttpsTrafficOnly": true,
+                "enableAuditLogs": true,
+                "enableAdvancedThreatProtection": true,
+                "dataClassification": {
+                    "enabled": true,
+                    "level": "CUI"
+                },
+                "encryptionAtRest": true,
+                "enablePrivateLink": true,
+                "enableCustomerManagedKeys": true,
+                "complianceStandards": ["FISMA", "NIST-800-53", "FedRAMP"],
+                "enableIdentityGovernance": true
+            }
+        },
+        "automationConfig": {
+            "value": {
+                "enableAutoShutdown": false,
+                "enableCostOptimization": true,
+                "enableResourceTagging": true,
+                "backupRetentionDays": 2555,
+                "enableDisasterRecovery": true,
+                "drRegion": "USGov Texas"
+            }
+        },
+        "dataGovernanceConfig": {
+            "value": {
+                "enablePurview": true,
+                "dataRetentionPolicies": [
+                    {
+                        "dataType": "Raw GHCND Observations",
+                        "retentionDays": 2555,
+                        "complianceReason": "Federal Records Act"
+                    },
+                    {
+                        "dataType": "Processed Climate Analytics",
+                        "retentionDays": 2555,
+                        "complianceReason": "Federal Records Act"
+                    },
+                    {
+                        "dataType": "Audit Logs",
+                        "retentionDays": 2555,
+                        "complianceReason": "Security Compliance"
+                    },
+                    {
+                        "dataType": "Personal Data",
+                        "retentionDays": 1825,
+                        "complianceReason": "Privacy Act"
+                    }
+                ],
+                "enableDataLineage": true,
+                "enableDataQualityMonitoring": true,
+                "enableDataLossPrevention": true,
+                "piiDetection": true,
+                "enableDataEncryption": true
+            }
+        },
+        "complianceConfig": {
+            "value": {
+                "fismaLevel": "High",
+                "enableFedRAMP": true,
+                "enableSOC2": false,
+                "enableNIST": true,
+                "auditRetentionYears": 7,
+                "enableContinuousMonitoring": true,
+                "securityContactEmail": "noaa-security-ops@noaa.gov",
+                "privacyContactEmail": "noaa-privacy-office@noaa.gov"
+            }
+        }
+    }
+}

@@ -159,6 +159,12 @@ variable "cmk_key_vault_id" {
   default     = ""
 }
 
+variable "key_vault_id" {
+  description = "Resource ID of the Key Vault for ML workspace integration. Defaults to cmk_key_vault_id if not set."
+  type        = string
+  default     = ""
+}
+
 variable "cmk_key_name" {
   description = "Name of the CMK key in Key Vault."
   type        = string
@@ -282,10 +288,10 @@ variable "cosmosdb_consistency_level" {
 # --- Synapse Config ---
 
 variable "synapse_sql_admin_password" {
-  description = "Synapse SQL admin password."
+  description = "Synapse SQL admin password. Required when deploy_synapse is true."
   type        = string
   sensitive   = true
-  default     = ""
+  default     = null
 }
 
 # --- Databricks Config ---

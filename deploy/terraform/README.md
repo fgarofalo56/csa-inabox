@@ -1,5 +1,20 @@
 # CSA-in-a-Box — Terraform / OpenTofu IaC
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** DevOps Engineers
+
+## Table of Contents
+
+- [Prerequisites](#prerequisites)
+- [Quick Start](#quick-start)
+- [Architecture](#architecture)
+- [Module Patterns](#module-patterns)
+- [Environment Configuration](#environment-configuration)
+- [State Management](#state-management)
+- [CI/CD Integration](#cicd-integration)
+- [Comparison with Bicep Path](#comparison-with-bicep-path)
+- [Migration Guide (Bicep → Terraform)](#migration-guide-bicep--terraform)
+- [OpenTofu Compatibility](#opentofu-compatibility)
+
 Terraform alternative to the Bicep IaC at `deploy/bicep/`. Deploys the **Data Landing Zone (DLZ)** and **Data Management Landing Zone (DMLZ)** for the Cloud Scale Analytics platform.
 
 ## Prerequisites
@@ -69,7 +84,7 @@ terraform apply dlz.tfplan
 
 ## Architecture
 
-```
+```text
 deploy/terraform/
 ├── versions.tf            # Root provider version constraints
 ├── modules/               # Reusable modules (one per Azure service)
@@ -98,7 +113,7 @@ deploy/terraform/
 
 ### Module Dependency Flow
 
-```
+```text
 DMLZ (deploy first)
 ├── networking    → VNets, subnets, private DNS zones
 ├── monitoring    → Log Analytics workspace
@@ -300,3 +315,11 @@ tofu init
 tofu plan -var-file="../environments/dev.tfvars"
 tofu apply
 ```
+
+---
+
+## Related Documentation
+
+- [IaC & CI/CD Best Practices](../../docs/IaC-CICD-Best-Practices.md) - Deployment pipeline guidance
+- [Government Deployment Templates](../bicep/gov/README.md) - Azure Government deployment path
+- [Architecture Overview](../../docs/ARCHITECTURE.md) - Platform architecture reference

@@ -1,0 +1,368 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "location": {
+            "value": "East US 2"
+        },
+        "environment": {
+            "value": "dev"
+        },
+        "prefix": {
+            "value": "casino"
+        },
+        "workloadName": {
+            "value": "gaming-analytics"
+        },
+        "deployModules": {
+            "value": {
+                "cosmosDB": true,
+                "storageZones": true,
+                "externalStorage": false,
+                "synapse": true,
+                "functions": true,
+                "streamAnalytics": true,
+                "appInsights": true,
+                "privateEndpoints": true,
+                "genericStorage": false,
+                "selfHostedIR": false,
+                "dataExplorer": true,
+                "mlWorkspace": true
+            }
+        },
+        "privateDNSZones": {
+            "value": {
+                "subscriptionId": "[subscription().subscriptionId]",
+                "resourceGroupName": "rg-dns-zones"
+            }
+        },
+        "tags": {
+            "value": {
+                "Domain": "Casino",
+                "Environment": "Development",
+                "WorkloadType": "Analytics",
+                "CostCenter": "NIGC-IT",
+                "Owner": "Casino Analytics Engineering Team",
+                "Project": "Gaming Analytics Platform"
+            }
+        },
+        "databricksConfig": {
+            "value": {
+                "pricingTier": "premium",
+                "enableNoPublicIp": true,
+                "skuName": "premium",
+                "customVirtualNetworkId": "",
+                "customPublicSubnetName": "",
+                "customPrivateSubnetName": "",
+                "enableAutomaticClusterTermination": true
+            }
+        },
+        "synapseConfig": {
+            "value": {
+                "sqlAdministratorLogin": "sqladmin",
+                "sqlAdministratorLoginPassword": "[parameters('sqlAdministratorPassword')]",
+                "allowedIpAddresses": [
+                    {
+                        "name": "Casino-HQ",
+                        "startIpAddress": "192.168.40.0",
+                        "endIpAddress": "192.168.40.255"
+                    }
+                ],
+                "enableDataExfiltrationProtection": true,
+                "managedVirtualNetwork": "default",
+                "gitConfig": {
+                    "accountName": "Casino-Analytics",
+                    "repositoryName": "casino-gaming-analytics",
+                    "collaborationBranch": "main",
+                    "rootFolder": "/synapse"
+                }
+            }
+        },
+        "storageConfig": {
+            "value": {
+                "accountType": "Standard_LRS",
+                "accessTier": "Hot",
+                "supportsHttpsTrafficOnly": true,
+                "enableHierarchicalNamespace": true,
+                "containers": [
+                    {
+                        "name": "raw",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "bronze",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "silver",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "gold",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "exports",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "player-tracking-data",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "slot-telemetry",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "fnb-transactions",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "streaming-events",
+                        "publicAccess": "None"
+                    }
+                ]
+            }
+        },
+        "keyVaultConfig": {
+            "value": {
+                "enableRbacAuthorization": true,
+                "enableSoftDelete": true,
+                "softDeleteRetentionDays": 90,
+                "enablePurgeProtection": true,
+                "secrets": [
+                    {
+                        "name": "sql-administrator-password",
+                        "description": "SQL administrator password for Synapse"
+                    },
+                    {
+                        "name": "eventhub-connection-string",
+                        "description": "Event Hub connection string for slot telemetry"
+                    },
+                    {
+                        "name": "custom-vision-api-key",
+                        "description": "Azure Custom Vision API key"
+                    }
+                ]
+            }
+        },
+        "dataFactoryConfig": {
+            "value": {
+                "publicNetworkAccess": "Enabled",
+                "gitConfig": {
+                    "accountName": "Casino-Analytics",
+                    "repositoryName": "casino-gaming-analytics",
+                    "collaborationBranch": "main",
+                    "rootFolder": "/datafactory"
+                },
+                "integrationRuntimes": [
+                    {
+                        "name": "AutoResolveIntegrationRuntime",
+                        "type": "Managed",
+                        "location": "AutoResolve"
+                    }
+                ],
+                "linkedServices": [
+                    {
+                        "name": "ls_keyvault",
+                        "type": "AzureKeyVault"
+                    },
+                    {
+                        "name": "ls_storage_raw",
+                        "type": "AzureDataLakeStorage"
+                    },
+                    {
+                        "name": "ls_synapse",
+                        "type": "AzureSqlDW"
+                    },
+                    {
+                        "name": "ls_eventhub",
+                        "type": "AzureEventHub"
+                    }
+                ]
+            }
+        },
+        "dataExplorerConfig": {
+            "value": {
+                "skuName": "Dev(No SLA)_Standard_D11_v2",
+                "skuTier": "Basic",
+                "capacity": 1,
+                "enableDiskEncryption": false,
+                "enableStreamingIngest": true,
+                "enablePurge": true,
+                "databases": [
+                    {
+                        "name": "casinoanalytics",
+                        "hotCachePeriod": "P7D",
+                        "softDeletePeriod": "P365D"
+                    }
+                ],
+                "enableAutoStop": true,
+                "enableAutoScale": false
+            }
+        },
+        "mlWorkspaceConfig": {
+            "value": {
+                "friendlyName": "Casino Gaming Analytics ML",
+                "description": "Machine learning workspace for player analytics and floor optimization",
+                "enablePublicNetworkAccess": "Enabled",
+                "computeInstances": [
+                    {
+                        "name": "player-analytics-vm",
+                        "vmSize": "Standard_DS3_v2",
+                        "enableNodePublicIp": false
+                    }
+                ],
+                "datastores": [
+                    {
+                        "name": "gaming_data",
+                        "type": "AzureDataLakeGen2",
+                        "description": "Primary gaming datasets"
+                    }
+                ]
+            }
+        },
+        "monitoringConfig": {
+            "value": {
+                "enableApplicationInsights": true,
+                "enableLogAnalytics": true,
+                "retentionInDays": 90,
+                "alertRules": [
+                    {
+                        "name": "Data Pipeline Failure",
+                        "severity": 2,
+                        "evaluationFrequency": "PT5M",
+                        "windowSize": "PT15M",
+                        "actionGroupName": "casino-alerts"
+                    },
+                    {
+                        "name": "Jackpot Threshold Exceeded",
+                        "severity": 1,
+                        "evaluationFrequency": "PT1M",
+                        "windowSize": "PT5M",
+                        "actionGroupName": "casino-alerts"
+                    },
+                    {
+                        "name": "Title 31 CTR Threshold",
+                        "severity": 0,
+                        "evaluationFrequency": "PT5M",
+                        "windowSize": "PT15M",
+                        "actionGroupName": "casino-alerts"
+                    }
+                ],
+                "actionGroups": [
+                    {
+                        "name": "casino-alerts",
+                        "emailReceivers": [
+                            {
+                                "name": "Casino Data Team",
+                                "emailAddress": "casino-data-team@contoso.com"
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        "networkingConfig": {
+            "value": {
+                "enablePrivateEndpoints": true,
+                "subnetName": "snet-casino-analytics",
+                "vnetName": "vnet-casino-analytics",
+                "vnetAddressPrefix": "10.6.0.0/16",
+                "subnetAddressPrefix": "10.6.1.0/24",
+                "enableNetworkSecurityGroup": true,
+                "allowedSourceIpRanges": [
+                    "192.168.40.0/24",
+                    "10.0.0.0/8"
+                ]
+            }
+        },
+        "securityConfig": {
+            "value": {
+                "enableDefender": true,
+                "enableKeyVaultFirewall": true,
+                "enableStorageFirewall": true,
+                "requireHttpsTrafficOnly": true,
+                "enableAuditLogs": true,
+                "dataClassification": {
+                    "enabled": true,
+                    "level": "Sensitive"
+                },
+                "encryptionAtRest": true,
+                "enablePrivateLink": true
+            }
+        },
+        "automationConfig": {
+            "value": {
+                "enableAutoShutdown": true,
+                "autoShutdownTime": "19:00",
+                "autoShutdownTimeZone": "Eastern Standard Time",
+                "enableCostOptimization": true,
+                "enableResourceTagging": true,
+                "backupRetentionDays": 30
+            }
+        },
+        "dataGovernanceConfig": {
+            "value": {
+                "enablePurview": false,
+                "dataRetentionPolicies": [
+                    {
+                        "dataType": "Player Tracking Data",
+                        "retentionDays": 2555
+                    },
+                    {
+                        "dataType": "Slot Telemetry",
+                        "retentionDays": 1825
+                    },
+                    {
+                        "dataType": "F&B Transactions",
+                        "retentionDays": 1095
+                    },
+                    {
+                        "dataType": "Audit Logs",
+                        "retentionDays": 2190
+                    }
+                ],
+                "enableDataLineage": true,
+                "enableDataQualityMonitoring": true
+            }
+        },
+        "regulatoryConfig": {
+            "value": {
+                "nigcCompliance": {
+                    "enabled": true,
+                    "reportingFrequency": "monthly",
+                    "minimumInternalControlStandards": true,
+                    "auditTrailRetentionYears": 5,
+                    "machineAuditEnabled": true,
+                    "revenueReportingEnabled": true
+                },
+                "title31Compliance": {
+                    "enabled": true,
+                    "ctrThresholdUSD": 10000,
+                    "sarFilingEnabled": true,
+                    "multipleTxnAggregationWindow": "24h",
+                    "ctrFilingDeadlineDays": 15,
+                    "customerIdentificationProgram": true,
+                    "recordRetentionYears": 5
+                },
+                "responsibleGaming": {
+                    "selfExclusionEnabled": true,
+                    "coolOffPeriods": [
+                        24,
+                        72,
+                        168,
+                        720
+                    ],
+                    "spendingLimitsEnabled": true,
+                    "sessionTimeAlerts": [
+                        60,
+                        120,
+                        240,
+                        480
+                    ]
+                }
+            }
+        }
+    }
+}

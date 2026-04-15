@@ -1,0 +1,129 @@
+-- ═══════════════════════════════════════════════════════════════
+-- Aggregate Metrics
+-- Azure Stream Analytics windowed aggregation queries for IoT telemetry.
+-- Uses tumbling and hopping windows to produce time-bucketed summaries.
+--
+-- Input:  TelemetryInput (Event Hub — JSON)
+-- Output: TumblingOutput  (5-minute aggregates → ADLS / Power BI)
+--         HoppingOutput   (1-minute sliding aggregates → ADX)
+--         SessionOutput   (per-session aggregates → ADLS)
+-- ═══════════════════════════════════════════════════════════════
+
+-- ─── 5-Minute Tumbling Window Aggregation ────────────────────
+-- Non-overlapping 5-minute windows. Best for dashboards and reporting.
+SELECT
+    sensor_id,
+    sensor_type,
+    System.Timestamp()                AS window_end,
+    COUNT(*)                          AS reading_count,
+
+    -- Temperature stats
+    AVG(temperature_c)                AS avg_temperature,
+    MIN(temperature_c)                AS min_temperature,
+    MAX(temperature_c)                AS max_temperature,
+    STDEV(temperature_c)              AS stddev_temperature,
+
+    -- Humidity stats
+    AVG(humidity_pct)                 AS avg_humidity,
+    MIN(humidity_pct)                 AS min_humidity,
+    MAX(humidity_pct)                 AS max_humidity,
+
+    -- Pressure stats
+    AVG(pressure_hpa)                 AS avg_pressure,
+    MIN(pressure_hpa)                 AS min_pressure,
+    MAX(pressure_hpa)                 AS max_pressure,
+
+    -- Battery monitoring
+    MIN(battery_pct)                  AS min_battery,
+    AVG(battery_pct)                  AS avg_battery,
+
+    -- Location (centroid for grouped sensors)
+    AVG(latitude)                     AS centroid_latitude,
+    AVG(longitude)                    AS centroid_longitude
+
+INTO [TumblingOutput]
+FROM [TelemetryInput]
+TIMESTAMP BY CAST(timestamp AS datetime)
+GROUP BY
+    sensor_id,
+    sensor_type,
+    TumblingWindow(minute, 5);
+
+-- ─── 1-Minute Hopping Window (5-Minute Span) ────────────────
+-- Overlapping windows: 5-minute span, sliding every 1 minute.
+-- Produces smoother trends for real-time dashboards.
+SELECT
+    sensor_id,
+    sensor_type,
+    System.Timestamp()                AS window_end,
+    COUNT(*)                          AS reading_count,
+
+    AVG(temperature_c)                AS avg_temperature,
+    MAX(temperature_c)                AS max_temperature,
+    MIN(temperature_c)                AS min_temperature,
+
+    AVG(humidity_pct)                 AS avg_humidity,
+    AVG(pressure_hpa)                 AS avg_pressure,
+    MIN(battery_pct)                  AS min_battery
+
+INTO [HoppingOutput]
+FROM [TelemetryInput]
+TIMESTAMP BY CAST(timestamp AS datetime)
+GROUP BY
+    sensor_id,
+    sensor_type,
+    HoppingWindow(minute, 5, 1);
+
+-- ─── Cross-Sensor Regional Aggregation ───────────────────────
+-- 15-minute aggregation across all sensors in a geographic region.
+-- Uses geo-hashing by rounding lat/lon to 1 decimal (~11 km grid).
+SELECT
+    sensor_type,
+    System.Timestamp()                AS window_end,
+
+    ROUND(latitude, 1)                AS region_lat,
+    ROUND(longitude, 1)               AS region_lon,
+
+    COUNT(DISTINCT sensor_id)         AS sensor_count,
+    COUNT(*)                          AS total_readings,
+
+    AVG(temperature_c)                AS regional_avg_temp,
+    MAX(temperature_c)                AS regional_max_temp,
+    MIN(temperature_c)                AS regional_min_temp,
+
+    AVG(humidity_pct)                 AS regional_avg_humidity,
+    AVG(pressure_hpa)                 AS regional_avg_pressure
+
+INTO [RegionalOutput]
+FROM [TelemetryInput]
+TIMESTAMP BY CAST(timestamp AS datetime)
+GROUP BY
+    sensor_type,
+    ROUND(latitude, 1),
+    ROUND(longitude, 1),
+    TumblingWindow(minute, 15);
+
+-- ─── Session Window (per-device activity sessions) ──────────
+-- Groups readings into sessions with a 10-minute idle timeout.
+-- Useful for detecting device activity patterns.
+SELECT
+    sensor_id,
+    sensor_type,
+    System.Timestamp()                AS session_end,
+    COUNT(*)                          AS readings_in_session,
+    DATEDIFF(minute,
+        MIN(CAST(timestamp AS datetime)),
+        MAX(CAST(timestamp AS datetime)))
+                                      AS session_duration_minutes,
+    AVG(temperature_c)                AS avg_temperature,
+    AVG(humidity_pct)                 AS avg_humidity,
+    MIN(battery_pct)                  AS min_battery,
+    MAX(battery_pct)                  AS max_battery
+
+INTO [SessionOutput]
+FROM [TelemetryInput]
+TIMESTAMP BY CAST(timestamp AS datetime)
+GROUP BY
+    sensor_id,
+    sensor_type,
+    SessionWindow(minute, 10);

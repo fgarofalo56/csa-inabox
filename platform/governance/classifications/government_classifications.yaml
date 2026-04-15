@@ -1,0 +1,173 @@
+# Government Classification Rules for Azure Purview
+# Defines detection patterns for government-specific markings and data.
+
+apiVersion: csa.microsoft.com/v1
+kind: ClassificationRuleSet
+
+metadata:
+  name: government-classifications
+  version: "1.0.0"
+  description: >
+    Government-specific classification rules for Azure Purview. Covers
+    Controlled Unclassified Information (CUI), For Official Use Only (FOUO),
+    classification markings, and federal-specific identifiers. Essential
+    for Azure Government cloud deployments.
+  owner: governance-team@contoso.com
+  tags: [government, classification, purview, cui, fouo, compliance]
+  regulations: [NIST-800-171, CMMC, EO-13556, FISMA, FedRAMP]
+
+defaultSensitivity: Restricted
+minimumPercentageMatch: 60.0
+
+classifications:
+  - name: CSA_GOV_CUI_MARKING
+    description: Controlled Unclassified Information (CUI) markings
+    category: Government
+    subcategory: Information Marking
+    sensitivity: Restricted
+    dataPatterns:
+      - pattern: '\b(CUI|CONTROLLED UNCLASSIFIED|CUI//SP-|CUI//NOFORN)\b'
+        description: CUI banner markings
+      - pattern: '\bControlled\s+by:\s+.+'
+        description: CUI control line
+      - pattern: '\bCUI\s+Category:\s+.+'
+        description: CUI category line
+    columnPatterns:
+      - pattern: '(?i)(classification|marking|cui_category|handling_caveat|dissemination|control_marking)'
+        description: Column names indicating classification markings
+    minimumPercentageMatch: 50.0
+    remediationAction: restrict_access
+    handlingRequirements:
+      encryption: required
+      accessLogging: required
+      dataAtRest: encrypted
+      dataInTransit: tls_1_2_minimum
+
+  - name: CSA_GOV_FOUO
+    description: For Official Use Only (FOUO) markings (legacy, now CUI)
+    category: Government
+    subcategory: Information Marking
+    sensitivity: Restricted
+    dataPatterns:
+      - pattern: '\b(FOUO|FOR OFFICIAL USE ONLY|OFFICIAL USE ONLY)\b'
+        description: FOUO banner markings
+      - pattern: '\bSENSITIVE BUT UNCLASSIFIED\b'
+        description: SBU marking (predecessor to CUI)
+    columnPatterns:
+      - pattern: '(?i)(fouo|official_use|handling_instruction)'
+        description: Column names indicating FOUO markings
+    minimumPercentageMatch: 50.0
+    remediationAction: restrict_access
+
+  - name: CSA_GOV_CLASSIFICATION_LEVEL
+    description: Security classification level markings
+    category: Government
+    subcategory: Security Classification
+    sensitivity: Restricted
+    dataPatterns:
+      - pattern: '\b(UNCLASSIFIED|CONFIDENTIAL|SECRET|TOP SECRET|TS//SCI)\b'
+        description: Standard classification levels
+      - pattern: '\b(CLASSIFIED|NOFORN|REL TO|ORCON|PROPIN)\b'
+        description: Classification caveats and dissemination controls
+    columnPatterns:
+      - pattern: '(?i)(classification_level|security_level|clearance_level|class_marking|security_marking)'
+        description: Column names indicating classification level
+    minimumPercentageMatch: 70.0
+    remediationAction: alert_and_quarantine
+    alertSeverity: critical
+
+  - name: CSA_GOV_FEDERAL_EMPLOYEE_ID
+    description: Federal employee identifier / PIV credential number
+    category: Government
+    subcategory: Federal Identity
+    sensitivity: Restricted
+    dataPatterns:
+      - pattern: '\b\d{8,10}\b'
+        description: Federal employee ID (8-10 digits)
+        requireColumnMatch: true
+    columnPatterns:
+      - pattern: '(?i)(employee_id|fed_id|federal_id|piv_id|badge_number|cac_number|edipi|dod_id)'
+        description: Column names indicating federal employee ID
+    minimumPercentageMatch: 80.0
+    remediationAction: mask
+
+  - name: CSA_GOV_CASE_NUMBER
+    description: Government case or investigation number
+    category: Government
+    subcategory: Legal/Investigation
+    sensitivity: Restricted
+    dataPatterns:
+      - pattern: '\b[A-Z]{2,4}-\d{4}-\d{4,8}\b'
+        description: Case number format (XX-YYYY-ZZZZZZZZ)
+    columnPatterns:
+      - pattern: '(?i)(case_number|case_id|investigation_id|docket_number|file_number|incident_number)'
+        description: Column names indicating case numbers
+    minimumPercentageMatch: 60.0
+    remediationAction: restrict_access
+
+  - name: CSA_GOV_FIPS_CODE
+    description: FIPS codes (state, county, place)
+    category: Government
+    subcategory: Geographic Code
+    sensitivity: Internal
+    dataPatterns:
+      - pattern: '\b\d{2}\b'
+        description: FIPS state code (2 digits)
+        requireColumnMatch: true
+      - pattern: '\b\d{5}\b'
+        description: FIPS county code (5 digits)
+        requireColumnMatch: true
+    columnPatterns:
+      - pattern: '(?i)(fips|fips_code|state_fips|county_fips|fips_state|fips_county|geo_code)'
+        description: Column names indicating FIPS codes
+    minimumPercentageMatch: 60.0
+    remediationAction: none  # FIPS codes are generally not sensitive
+
+  - name: CSA_GOV_GRANT_NUMBER
+    description: Federal grant award number
+    category: Government
+    subcategory: Financial
+    sensitivity: Confidential
+    dataPatterns:
+      - pattern: '\b[A-Z]\d{2}[A-Z]{2}\d{6}\b'
+        description: NIH-style grant number
+      - pattern: '\bGrant\s*#?\s*\d{5,12}\b'
+        description: Generic grant number
+    columnPatterns:
+      - pattern: '(?i)(grant_number|award_number|grant_id|award_id|cfda_number|assistance_listing|sam_number)'
+        description: Column names indicating grant identifiers
+    minimumPercentageMatch: 60.0
+    remediationAction: audit_only
+
+  - name: CSA_GOV_LAW_ENFORCEMENT_SENSITIVE
+    description: Law Enforcement Sensitive (LES) data
+    category: Government
+    subcategory: Law Enforcement
+    sensitivity: Restricted
+    dataPatterns:
+      - pattern: '\b(LAW ENFORCEMENT SENSITIVE|LES|OFFICIAL USE ONLY - LAW ENFORCEMENT)\b'
+        description: LES marking
+    columnPatterns:
+      - pattern: '(?i)(les_data|law_enforcement|arrest_record|criminal_history|rap_sheet|ncic)'
+        description: Column names indicating law enforcement data
+    minimumPercentageMatch: 50.0
+    remediationAction: restrict_access
+    alertSeverity: critical
+
+autoLabelingPolicies:
+  - name: Government_Restricted_Auto_Label
+    description: Auto-label CUI, FOUO, and classified markings as Restricted
+    classificationNames:
+      - CSA_GOV_CUI_MARKING
+      - CSA_GOV_FOUO
+      - CSA_GOV_CLASSIFICATION_LEVEL
+      - CSA_GOV_FEDERAL_EMPLOYEE_ID
+      - CSA_GOV_CASE_NUMBER
+      - CSA_GOV_LAW_ENFORCEMENT_SENSITIVE
+    targetLabel: Restricted
+
+  - name: Government_Confidential_Auto_Label
+    description: Auto-label grant numbers as Confidential
+    classificationNames:
+      - CSA_GOV_GRANT_NUMBER
+    targetLabel: Confidential

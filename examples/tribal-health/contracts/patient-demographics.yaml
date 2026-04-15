@@ -1,0 +1,131 @@
+# Data product contract — tribal_health.patient_demographics
+#
+# This file is the authoritative interface for the Tribal Health
+# patient demographics data product. It declares the schema, SLAs, and
+# quality rules for patient enrollment and eligibility analytics.
+# Classification: CUI // SP-HLTH — HIPAA protected
+
+apiVersion: csa.ihs.gov/v1
+kind: DataProductContract
+
+metadata:
+  name: tribal_health.patient_demographics
+  domain: tribal-health
+  owner: tribal-health-data-engineering@contoso.com
+  version: "1.0.0"
+  description: >
+    Patient demographic and eligibility analytics for IHS service units
+    and tribal health organizations. Provides de-identified enrollment
+    data including tribal affiliation, age cohort, eligibility status,
+    and service unit assignment. Used for population health planning,
+    resource allocation, and eligibility verification. All data is
+    synthetic — no real patient information.
+
+schema:
+  primary_key: [patient_id]
+  columns:
+    - name: patient_id
+      type: string
+      nullable: false
+      description: De-identified patient identifier
+    - name: tribal_affiliation
+      type: string
+      nullable: false
+      description: Tribal nation affiliation
+    - name: service_unit
+      type: string
+      nullable: false
+      description: IHS service unit name
+    - name: age_group
+      type: string
+      nullable: false
+      description: Age cohort grouping
+      allowed_values:
+        - "0-4"
+        - "5-14"
+        - "15-24"
+        - "25-34"
+        - "35-44"
+        - "45-54"
+        - "55-64"
+        - "65-74"
+        - "75+"
+    - name: gender
+      type: string
+      nullable: false
+      description: Patient gender
+    - name: zip_code
+      type: string
+      nullable: true
+      description: Patient ZIP code (first 3 digits only for privacy)
+    - name: enrollment_date
+      type: date
+      nullable: false
+      description: Date of enrollment in the health system
+    - name: eligibility_status
+      type: string
+      nullable: false
+      description: Current eligibility status
+      allowed_values:
+        - ACTIVE
+        - INACTIVE
+        - PENDING
+        - DECEASED
+
+sla:
+  freshness_minutes: 1440  # Daily updates
+  valid_row_ratio: 0.98
+  supported_until: "2027-12-31"
+  update_frequency: "Daily by 0600 CT"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: patient_id
+  - rule: expect_column_values_to_not_be_null
+    column: tribal_affiliation
+  - rule: expect_column_values_to_not_be_null
+    column: service_unit
+  - rule: expect_column_values_to_not_be_null
+    column: age_group
+  - rule: expect_column_values_to_not_be_null
+    column: eligibility_status
+  - rule: expect_column_values_to_not_be_null
+    column: enrollment_date
+  - rule: expect_column_values_to_be_in_set
+    column: age_group
+    value_set: ["0-4", "5-14", "15-24", "25-34", "35-44", "45-54", "55-64", "65-74", "75+"]
+  - rule: expect_column_values_to_be_in_set
+    column: eligibility_status
+    value_set: [ACTIVE, INACTIVE, PENDING, DECEASED]
+
+data_lineage:
+  upstream_sources:
+    - name: "IHS RPMS Patient Registration"
+      url: "https://www.ihs.gov/rpms/"
+      description: "Synthetic RPMS-compatible patient registration data"
+      refresh_schedule: "Daily"
+    - name: "Tribal Enrollment Registry"
+      url: "https://www.bia.gov/tribal-enrollment"
+      description: "Bureau of Indian Affairs tribal enrollment reference"
+
+  downstream_consumers:
+    - name: "Population Health Dashboard"
+      description: "Demographic analysis for population health planning"
+    - name: "Eligibility Verification System"
+      description: "Real-time patient eligibility status checks"
+    - name: "Resource Allocation Models"
+      description: "Staffing and funding models based on enrolled population"
+
+usage_notes: |
+  - All data is synthetic — no real patient information is included
+  - Age groups are pre-binned for privacy; exact ages are not available
+  - ZIP codes are truncated to 3 digits for HIPAA safe harbor compliance
+  - Tribal affiliation is self-reported during enrollment
+  - DECEASED status is updated upon notification; may lag actual events
+  - PENDING status indicates enrollment is in progress
+  - Service unit assignment may change if patient relocates
+  - HIPAA and tribal data sovereignty protections apply in production
+
+contact:
+  technical: tribal-health-data-team@contoso.com
+  business: tribal-health-analytics-lead@contoso.com

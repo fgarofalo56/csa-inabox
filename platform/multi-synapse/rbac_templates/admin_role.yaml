@@ -1,0 +1,74 @@
+# RBAC Template: Admin Role
+# Full control including RBAC management for workspace administrators.
+
+apiVersion: csa.microsoft.com/v1
+kind: RbacTemplate
+
+metadata:
+  name: admin-role
+  version: "1.0.0"
+  description: >
+    Full administrative role for Synapse workspace owners. Includes all
+    engineer permissions plus RBAC management, workspace configuration,
+    and the ability to manage security settings. Reserved for org leads.
+  applicableTo: [synapse, storage, databricks]
+  tags: [rbac, admin, full-control]
+
+azureRoles:
+  - role: Owner
+    scope: resourceGroup
+    description: Full control of the organization's resource group including RBAC
+
+  - role: Storage Blob Data Owner
+    scope: storageAccount
+    description: Full control of storage including ACL management
+
+  - role: User Access Administrator
+    scope: resourceGroup
+    description: Manage role assignments for the organization
+
+synapseRoles:
+  - role: Synapse Administrator
+    scope: workspace
+    description: Full workspace administration including security
+
+sqlPermissions:
+  dedicatedPool:
+    - grant: CONTROL
+      on: DATABASE
+      description: Full database control
+
+  serverlessPool:
+    - grant: CONTROL
+      on: DATABASE
+      description: Full serverless database control
+
+# Admins have no restrictions except subscription-level safeguards.
+restrictions:
+  - action: Microsoft.Resources/subscriptions/*
+    effect: deny
+    description: Cannot modify subscription-level settings
+
+  - action: Microsoft.Authorization/locks/delete
+    effect: deny
+    description: Cannot remove resource locks (requires elevated approval)
+
+conditions:
+  requireMFA: true
+  requireCompliantDevice: true
+  sessionTimeout: 4h  # Shorter session for privileged access
+  requireJustification: true  # Must provide reason for admin access
+  pimEnabled: true  # Privileged Identity Management — just-in-time activation
+  maxActivationDuration: 8h
+  approvalRequired: true
+  approvers:
+    - platform-admins@contoso.com
+
+auditSettings:
+  logAllActions: true
+  alertOnSensitiveOperations:
+    - roleAssignment.create
+    - roleAssignment.delete
+    - resourceLock.delete
+    - networkAcl.modify
+    - encryption.modify

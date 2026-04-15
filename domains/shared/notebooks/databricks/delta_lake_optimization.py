@@ -17,9 +17,8 @@
 
 # COMMAND ----------
 
-from pyspark.sql import SparkSession
-from datetime import datetime
 import json
+from datetime import datetime
 
 # Configuration
 CATALOG = spark.conf.get("spark.databricks.unityCatalog.catalog", "csa_analytics")
@@ -64,10 +63,12 @@ print(f"Run started: {datetime.utcnow().isoformat()}")
 
 # COMMAND ----------
 
+
 def _validate_identifier(name: str) -> str:
     """Validate a SQL identifier to prevent injection."""
     import re
-    if not re.match(r'^[a-zA-Z0-9_]{1,256}$', name):
+
+    if not re.match(r"^[a-zA-Z0-9_]{1,256}$", name):
         raise ValueError(f"Invalid SQL identifier: {name!r}")
     return name
 
@@ -77,11 +78,7 @@ def get_delta_tables(catalog: str, schema: str) -> list[str]:
     cat = _validate_identifier(catalog)
     sch = _validate_identifier(schema)
     tables = spark.sql(f"SHOW TABLES IN `{cat}`.`{sch}`").collect()
-    return [
-        f"{catalog}.{schema}.{row.tableName}"
-        for row in tables
-        if not row.isTemporary
-    ]
+    return [f"{catalog}.{schema}.{row.tableName}" for row in tables if not row.isTemporary]
 
 
 def optimize_table(table_name: str, zorder_cols: list[str] | None = None) -> dict[str, object]:
@@ -100,10 +97,12 @@ def optimize_table(table_name: str, zorder_cols: list[str] | None = None) -> dic
             result = spark.sql(f"OPTIMIZE {safe_name}")
 
         metrics = result.collect()[0]
-        print(f"  OPTIMIZE {table_name}: "
-              f"files added={metrics.numFilesAdded}, "
-              f"files removed={metrics.numFilesRemoved}, "
-              f"bytes added={metrics.numBytesAdded}")
+        print(
+            f"  OPTIMIZE {table_name}: "
+            f"files added={metrics.numFilesAdded}, "
+            f"files removed={metrics.numFilesRemoved}, "
+            f"bytes added={metrics.numBytesAdded}"
+        )
         return {"status": "success", "metrics": metrics.asDict()}
     except Exception as e:
         print(f"  OPTIMIZE {table_name}: FAILED - {e}")
@@ -143,6 +142,7 @@ def get_table_detail(table_name: str) -> dict[str, object]:
     except Exception as e:
         return {"name": table_name, "error": str(e)}
 
+
 # COMMAND ----------
 
 # MAGIC %md
@@ -156,9 +156,9 @@ for layer, config in LAYER_CONFIG.items():
     schemas = {"bronze": BRONZE_SCHEMAS, "silver": SILVER_SCHEMAS, "gold": GOLD_SCHEMAS}[layer]
 
     for schema in schemas:
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"Processing {layer} layer: {CATALOG}.{schema}")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
 
         tables = get_delta_tables(CATALOG, schema)
         print(f"Found {len(tables)} tables")
@@ -191,15 +191,13 @@ for layer, config in LAYER_CONFIG.items():
 
 # COMMAND ----------
 
-print(f"\n{'='*60}")
+print(f"\n{'=' * 60}")
 print("OPTIMIZATION SUMMARY")
-print(f"{'='*60}")
+print(f"{'=' * 60}")
 print(f"Total tables processed: {len(results['tables'])}")
 
-successes = sum(1 for t in results["tables"]
-                if t.get("optimize", {}).get("status") == "success")
-failures = sum(1 for t in results["tables"]
-               if t.get("optimize", {}).get("status") == "error")
+successes = sum(1 for t in results["tables"] if t.get("optimize", {}).get("status") == "success")
+failures = sum(1 for t in results["tables"] if t.get("optimize", {}).get("status") == "error")
 
 print(f"Successful: {successes}")
 print(f"Failed: {failures}")

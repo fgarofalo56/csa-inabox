@@ -1,15 +1,11 @@
 """Tests for the data quality runner."""
 
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-# Add parent to path so we can import the module
-import sys
-sys.path.insert(0, str(Path(__file__).parent.parent / "governance" / "dataquality"))
-
-from run_quality_checks import DataQualityRunner, QualityCheckResult  # noqa: E402
+from governance.dataquality.run_quality_checks import DataQualityRunner, QualityCheckResult
 
 
 class TestQualityCheckResult:
@@ -68,6 +64,7 @@ class TestDataQualityRunner:
         }
         config_file = tmp_path / "quality-rules.yaml"
         import yaml
+
         config_file.write_text(yaml.dump(config))
         return str(config_file)
 
@@ -156,7 +153,8 @@ class TestInputValidation:
         # Import the validator from delta_lake_optimization
         # Since it's a notebook, we test the pattern directly
         import re
-        pattern = r'^[a-zA-Z0-9_]{1,256}$'
+
+        pattern = r"^[a-zA-Z0-9_]{1,256}$"
         assert re.match(pattern, "csa_analytics")
         assert re.match(pattern, "bronze")
         assert re.match(pattern, "my_table_123")

@@ -59,7 +59,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
 
       - name: Azure Login (OIDC)
         uses: azure/login@d19a4f1b3c068b799dff7574ac265b0144f415fe # v2
@@ -86,7 +86,7 @@ jobs:
     timeout-minutes: 60
     environment: ${{ inputs.environment }}
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
 
       - name: Azure Login
         uses: azure/login@d19a4f1b3c068b799dff7574ac265b0144f415fe # v2
@@ -115,7 +115,7 @@ jobs:
     timeout-minutes: 60
     environment: ${{ inputs.environment }}
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
 
       - name: Azure Login
         uses: azure/login@d19a4f1b3c068b799dff7574ac265b0144f415fe # v2
@@ -144,7 +144,7 @@ jobs:
     timeout-minutes: 60
     environment: ${{ inputs.environment }}
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
 
       - name: Azure Login
         uses: azure/login@d19a4f1b3c068b799dff7574ac265b0144f415fe # v2
@@ -172,7 +172,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
 
       - name: Azure Login
         uses: azure/login@d19a4f1b3c068b799dff7574ac265b0144f415fe # v2
@@ -207,7 +207,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
 
       - name: Set up Python
         uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5
@@ -221,7 +221,7 @@ jobs:
         run: |
           python -m governance.contracts.contract_validator --ci --repo-root .
 
-      - name: Check Gold layer row counts
+      - name: Check Gold layer tables
         if: ${{ secrets.DBT_DATABRICKS_HOST != '' }}
         run: |
           echo "=== Gold Layer Smoke Test ==="
@@ -234,17 +234,14 @@ jobs:
             "gold.fact_inventory_snapshot"
             "gold.dim_warehouses"
           )
-          FAILED=0
           for table in "${TABLES[@]}"; do
-            echo -n "Checking $table... "
-            # This would use Databricks SQL or a lightweight query tool
-            # For now, validate that contracts and models are consistent
-            echo "OK (contract validated)"
+            echo -n "  $table ... "
+            # TODO: Implement real Databricks SQL query when SQL endpoint is available.
+            #   Example: ROW_COUNT=$(databricks sql query "SELECT COUNT(*) AS cnt FROM $table" --output json | jq '.[0].cnt')
+            echo "SKIPPED (no live SQL endpoint configured in CI)"
           done
-          if [ $FAILED -gt 0 ]; then
-            echo "::error::$FAILED table(s) failed smoke test"
-            exit 1
-          fi
+          echo ""
+          echo "::notice::Gold layer row-count validation requires a live Databricks SQL endpoint. Contract validation passed in the previous step."
 
   # -------------------------------------------------------------------------
   # Tag a successful, non-dry-run deployment so the Rollback workflow can
@@ -260,7 +257,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
         with:
           fetch-depth: 0
 

@@ -1,0 +1,219 @@
+# Data product contract — interior.park_visitors
+#
+# This file is the authoritative interface for the Interior Department
+# park visitor data product. It declares the schema, SLAs, and
+# quality rules for National Park Service visitor statistics.
+
+apiVersion: csa.interior.gov/v1
+kind: DataProductContract
+
+metadata:
+  name: interior.park_visitors
+  domain: interior
+  owner: interior-data-engineering@contoso.com
+  version: "1.0.0"
+  description: >
+    National Park Service visitor statistics from the NPS IRMA portal.
+    Provides monthly visitation counts, camping utilization, recreational
+    hours, and park capacity metrics across all NPS units. Used for park
+    operations planning, staffing optimization, infrastructure investment,
+    and visitor experience management.
+
+schema:
+  primary_key: [park_code, year, month]
+  columns:
+    - name: park_code
+      type: string
+      nullable: false
+      description: NPS park unit code (e.g., YOSE, GRCA, YELL)
+
+    - name: park_name
+      type: string
+      nullable: false
+      description: Full park name
+
+    - name: park_type
+      type: string
+      nullable: false
+      description: NPS unit type classification
+      allowed_values:
+        - National Park
+        - National Monument
+        - National Recreation Area
+        - National Seashore
+        - National Historic Site
+        - National Memorial
+        - National Battlefield
+        - National Preserve
+        - National Lakeshore
+        - Other
+
+    - name: state
+      type: string
+      nullable: false
+      description: 2-letter state abbreviation (primary state if multi-state)
+
+    - name: region
+      type: string
+      nullable: false
+      description: NPS administrative region
+      allowed_values:
+        - Pacific West
+        - Intermountain
+        - Midwest
+        - Southeast
+        - Northeast
+        - Alaska
+        - National Capital
+
+    - name: year
+      type: integer
+      nullable: false
+      description: Reporting year
+
+    - name: month
+      type: integer
+      nullable: false
+      description: Reporting month (1-12)
+
+    - name: recreation_visits
+      type: bigint
+      nullable: false
+      description: Number of recreation visits (primary visitation metric)
+
+    - name: non_recreation_visits
+      type: bigint
+      nullable: true
+      description: Number of non-recreation visits (through-traffic, etc.)
+
+    - name: recreation_hours
+      type: decimal(12,2)
+      nullable: true
+      description: Total recreation visitor-hours
+
+    - name: concessioner_lodging
+      type: integer
+      nullable: true
+      description: Concessioner lodging overnight stays
+
+    - name: concessioner_camping
+      type: integer
+      nullable: true
+      description: Concessioner camping overnight stays
+
+    - name: tent_campers
+      type: integer
+      nullable: true
+      description: NPS tent camping overnight stays
+
+    - name: rv_campers
+      type: integer
+      nullable: true
+      description: NPS RV camping overnight stays
+
+    - name: backcountry_campers
+      type: integer
+      nullable: true
+      description: Backcountry/wilderness camping overnight stays
+
+    - name: park_acres
+      type: integer
+      nullable: true
+      description: Total park area in acres
+
+    - name: trail_miles
+      type: integer
+      nullable: true
+      description: Total maintained trail miles
+
+    - name: campground_capacity
+      type: integer
+      nullable: true
+      description: Total campground capacity (sites)
+
+    - name: parking_spaces
+      type: integer
+      nullable: true
+      description: Total designated parking spaces
+
+    - name: load_time
+      type: timestamp
+      nullable: false
+      description: Timestamp when the record was loaded into the data warehouse
+
+sla:
+  freshness_minutes: 43200  # 30 days (monthly NPS reporting)
+  valid_row_ratio: 0.98
+  supported_until: "2027-12-31"
+  update_frequency: >
+    Monthly (NPS reporting schedule, 60-90 day lag for final data).
+    Preliminary counts available within 30 days.
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: park_code
+  - rule: expect_column_values_to_not_be_null
+    column: year
+  - rule: expect_column_values_to_not_be_null
+    column: month
+  - rule: expect_column_values_to_not_be_null
+    column: recreation_visits
+  - rule: expect_column_values_to_be_between
+    column: recreation_visits
+    min_value: 0
+    max_value: 5000000  # Monthly cap for busiest parks
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: year
+    min_value: 1979
+    max_value: 2030
+  - rule: expect_column_values_to_be_between
+    column: month
+    min_value: 1
+    max_value: 12
+  - rule: expect_column_values_to_be_in_set
+    column: region
+    value_set: [Pacific West, Intermountain, Midwest, Southeast, Northeast, Alaska, National Capital]
+  - rule: expect_column_values_to_be_between
+    column: recreation_hours
+    min_value: 0
+    max_value: 50000000
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: campground_capacity
+    min_value: 0
+    max_value: 10000
+    mostly: 0.99
+
+data_lineage:
+  upstream_sources:
+    - name: "NPS IRMA Visitor Statistics"
+      url: "https://irma.nps.gov/Stats/"
+      description: "NPS Integrated Resource Management Applications visitor stats"
+      refresh_schedule: "Monthly (60-90 day lag)"
+    - name: "NPS Unit Reference"
+      url: "https://www.nps.gov/aboutus/national-park-system.htm"
+      description: "NPS park unit reference data"
+
+  downstream_consumers:
+    - name: "Park Operations Dashboard"
+      description: "Park capacity management and visitor forecasting"
+    - name: "Infrastructure Investment Planning"
+      description: "Trail, facility, and parking investment prioritization"
+    - name: "Congressional Reporting"
+      description: "Annual NPS visitation reports to Congress"
+    - name: "Concession Management"
+      description: "Concession contract performance monitoring"
+
+usage_notes: |
+  - Recreation visits are the primary NPS visitation metric
+  - Visitor counting methods vary by park (automated counters, manual, estimation)
+  - COVID-19 significantly impacted 2020-2021 data (closures and reduced capacity)
+  - Seasonal patterns are strong — most parks peak in summer months
+  - Multi-state parks report under a single primary state
+  - Park acreage and trail miles are updated infrequently (infrastructure changes)
+  - Camping data may be incomplete for parks without reservation systems
+
+contact:
+  technical: interior-data-team@contoso.com
+  business: interior-analytics-lead@contoso.com

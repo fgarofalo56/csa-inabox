@@ -1,0 +1,90 @@
+// ADX Table Definitions for CSA-in-a-Box Real-Time Analytics
+// Deploy these tables to the 'realtime' database in your ADX cluster
+
+// ─── IoT Sensor Telemetry ─────────────────────────────────────────────
+
+.create table SensorTelemetry (
+    sensor_id: string,
+    sensor_type: string,
+    timestamp: datetime,
+    temperature_c: real,
+    humidity_pct: real,
+    pressure_hpa: real,
+    battery_pct: real,
+    latitude: real,
+    longitude: real
+) with (folder = "iot")
+
+.create table SensorTelemetry ingestion json mapping 'SensorTelemetryMapping'
+    '[{"column":"sensor_id","path":"$.sensor_id"},{"column":"sensor_type","path":"$.sensor_type"},{"column":"timestamp","path":"$.timestamp"},{"column":"temperature_c","path":"$.temperature_c"},{"column":"humidity_pct","path":"$.humidity_pct"},{"column":"pressure_hpa","path":"$.pressure_hpa"},{"column":"battery_pct","path":"$.battery_pct"},{"column":"latitude","path":"$.latitude"},{"column":"longitude","path":"$.longitude"}]'
+
+// ─── Weather Station Data ─────────────────────────────────────────────
+
+.create table WeatherObservations (
+    station_id: string,
+    timestamp: datetime,
+    temperature_c: real,
+    humidity_pct: real,
+    pressure_hpa: real,
+    wind_speed_ms: real,
+    wind_direction_deg: real,
+    wind_gust_ms: real,
+    precipitation_mm: real,
+    visibility_km: real,
+    cloud_cover_pct: real,
+    latitude: real,
+    longitude: real,
+    elevation_m: real
+) with (folder = "weather")
+
+.create table WeatherObservations ingestion json mapping 'WeatherMapping'
+    '[{"column":"station_id","path":"$.station_id"},{"column":"timestamp","path":"$.timestamp"},{"column":"temperature_c","path":"$.temperature_c"},{"column":"humidity_pct","path":"$.humidity_pct"},{"column":"pressure_hpa","path":"$.pressure_hpa"},{"column":"wind_speed_ms","path":"$.wind_speed_ms"},{"column":"wind_direction_deg","path":"$.wind_direction_deg"},{"column":"wind_gust_ms","path":"$.wind_gust_ms"},{"column":"precipitation_mm","path":"$.precipitation_mm"},{"column":"visibility_km","path":"$.visibility_km"},{"column":"cloud_cover_pct","path":"$.cloud_cover_pct"},{"column":"latitude","path":"$.latitude"},{"column":"longitude","path":"$.longitude"},{"column":"elevation_m","path":"$.elevation_m"}]'
+
+// ─── AQI Monitor Data ─────────────────────────────────────────────────
+
+.create table AQIReadings (
+    sensor_id: string,
+    timestamp: datetime,
+    pm25_ugm3: real,
+    pm10_ugm3: real,
+    ozone_ppb: real,
+    no2_ppb: real,
+    aqi: int,
+    aqi_category: string,
+    latitude: real,
+    longitude: real
+) with (folder = "epa")
+
+.create table AQIReadings ingestion json mapping 'AQIMapping'
+    '[{"column":"sensor_id","path":"$.sensor_id"},{"column":"timestamp","path":"$.timestamp"},{"column":"pm25_ugm3","path":"$.pm25_ugm3"},{"column":"pm10_ugm3","path":"$.pm10_ugm3"},{"column":"ozone_ppb","path":"$.ozone_ppb"},{"column":"no2_ppb","path":"$.no2_ppb"},{"column":"aqi","path":"$.aqi"},{"column":"aqi_category","path":"$.aqi_category"},{"column":"latitude","path":"$.latitude"},{"column":"longitude","path":"$.longitude"}]'
+
+// ─── Casino Slot Machine Events ───────────────────────────────────────
+
+.create table SlotEvents (
+    machine_id: string,
+    timestamp: datetime,
+    event_type: string,
+    denomination: real,
+    credits_wagered: int,
+    credits_won: int,
+    coin_in: real,
+    coin_out: real,
+    floor_zone: string,
+    game_theme: string
+) with (folder = "casino")
+
+.create table SlotEvents ingestion json mapping 'SlotEventMapping'
+    '[{"column":"machine_id","path":"$.machine_id"},{"column":"timestamp","path":"$.timestamp"},{"column":"event_type","path":"$.event_type"},{"column":"denomination","path":"$.denomination"},{"column":"credits_wagered","path":"$.credits_wagered"},{"column":"credits_won","path":"$.credits_won"},{"column":"coin_in","path":"$.coin_in"},{"column":"coin_out","path":"$.coin_out"},{"column":"floor_zone","path":"$.floor_zone"},{"column":"game_theme","path":"$.game_theme"}]'
+
+// ─── Retention Policies ───────────────────────────────────────────────
+
+.alter-merge table SensorTelemetry policy retention softdelete = 90d
+.alter-merge table WeatherObservations policy retention softdelete = 365d
+.alter-merge table AQIReadings policy retention softdelete = 365d
+.alter-merge table SlotEvents policy retention softdelete = 90d
+
+// Hot cache policies (keep recent data in SSD cache)
+.alter-merge table SensorTelemetry policy caching hot = 7d
+.alter-merge table WeatherObservations policy caching hot = 30d
+.alter-merge table AQIReadings policy caching hot = 30d
+.alter-merge table SlotEvents policy caching hot = 7d

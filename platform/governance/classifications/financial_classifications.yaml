@@ -1,0 +1,145 @@
+# Financial Classification Rules for Azure Purview
+# Defines detection patterns for sensitive financial data.
+
+apiVersion: csa.microsoft.com/v1
+kind: ClassificationRuleSet
+
+metadata:
+  name: financial-classifications
+  version: "1.0.0"
+  description: >
+    Financial data detection rules for Azure Purview. Covers bank account
+    numbers, routing numbers, credit card numbers, tax identifiers, and
+    financial metrics that require audit controls.
+  owner: governance-team@contoso.com
+  tags: [financial, classification, purview, compliance]
+  regulations: [SOX, PCI-DSS, GLBA]
+
+defaultSensitivity: Confidential
+minimumPercentageMatch: 70.0
+
+classifications:
+  - name: CSA_FIN_BANK_ACCOUNT
+    description: Bank account number
+    category: Financial
+    subcategory: Banking
+    sensitivity: Restricted
+    dataPatterns:
+      - pattern: '\b\d{8,17}\b'
+        description: US bank account number (8-17 digits)
+        requireColumnMatch: true
+    columnPatterns:
+      - pattern: '(?i)(bank_account|account_number|acct_num|acct_number|bank_acct|checking_account|savings_account|deposit_account)'
+        description: Column names indicating bank account
+    minimumPercentageMatch: 80.0
+    remediationAction: mask
+    maskPattern: "****{last4}"
+
+  - name: CSA_FIN_ROUTING_NUMBER
+    description: ABA bank routing/transit number
+    category: Financial
+    subcategory: Banking
+    sensitivity: Restricted
+    dataPatterns:
+      - pattern: '\b\d{9}\b'
+        description: 9-digit ABA routing number
+        requireColumnMatch: true
+    columnPatterns:
+      - pattern: '(?i)(routing|routing_number|aba|transit|routing_transit|aba_number|wire_routing)'
+        description: Column names indicating routing number
+    minimumPercentageMatch: 80.0
+    builtInClassifier: MICROSOFT.FINANCIAL.ABA_ROUTING_NUMBER
+    remediationAction: mask
+
+  - name: CSA_FIN_CREDIT_CARD
+    description: Credit/debit card number (PCI-DSS scope)
+    category: Financial
+    subcategory: Payment Card
+    sensitivity: Restricted
+    dataPatterns:
+      - pattern: '\b(?:4\d{12}(?:\d{3})?|5[1-5]\d{14}|3[47]\d{13}|6(?:011|5\d{2})\d{12})\b'
+        description: Visa, Mastercard, Amex, Discover card numbers
+      - pattern: '\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b'
+        description: Card number with separators
+    columnPatterns:
+      - pattern: '(?i)(credit_card|card_number|cc_number|pan|payment_card|debit_card|card_num|cc_num)'
+        description: Column names indicating card number
+    minimumPercentageMatch: 90.0
+    builtInClassifier: MICROSOFT.FINANCIAL.CREDIT_CARD_NUMBER
+    remediationAction: mask
+    maskPattern: "****-****-****-{last4}"
+
+  - name: CSA_FIN_TAX_ID
+    description: Employer Identification Number (EIN) / Tax ID
+    category: Financial
+    subcategory: Tax
+    sensitivity: Restricted
+    dataPatterns:
+      - pattern: '\b\d{2}-\d{7}\b'
+        description: EIN format (12-3456789)
+    columnPatterns:
+      - pattern: '(?i)(ein|tax_id|tax_number|employer_id|federal_tax|tin|taxpayer_id)'
+        description: Column names indicating tax ID
+    minimumPercentageMatch: 70.0
+    remediationAction: mask
+
+  - name: CSA_FIN_AMOUNT
+    description: Financial amount columns requiring audit tracking
+    category: Financial
+    subcategory: Monetary Values
+    sensitivity: Confidential
+    columnPatterns:
+      - pattern: '(?i)(revenue|amount|price|cost|total|fee|charge|balance|payment|salary|wage|income|profit|loss|expense|budget|forecast|invoice_amount|net_amount|gross_amount)'
+        description: Column names indicating financial values
+    minimumPercentageMatch: 80.0
+    remediationAction: audit_only
+    auditRequirements:
+      logAccess: true
+      retentionDays: 2555  # 7 years for SOX compliance
+
+  - name: CSA_FIN_SWIFT_CODE
+    description: SWIFT/BIC bank identifier code
+    category: Financial
+    subcategory: Banking
+    sensitivity: Confidential
+    dataPatterns:
+      - pattern: '\b[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?\b'
+        description: SWIFT/BIC code (8 or 11 characters)
+        requireColumnMatch: true
+    columnPatterns:
+      - pattern: '(?i)(swift|bic|swift_code|bic_code|bank_swift|bank_identifier)'
+        description: Column names indicating SWIFT code
+    minimumPercentageMatch: 70.0
+    remediationAction: mask
+
+  - name: CSA_FIN_IBAN
+    description: International Bank Account Number
+    category: Financial
+    subcategory: Banking
+    sensitivity: Restricted
+    dataPatterns:
+      - pattern: '\b[A-Z]{2}\d{2}[A-Z0-9]{4}\d{7}([A-Z0-9]?){0,16}\b'
+        description: IBAN format
+    columnPatterns:
+      - pattern: '(?i)(iban|international_bank|iban_number)'
+        description: Column names indicating IBAN
+    minimumPercentageMatch: 70.0
+    remediationAction: mask
+
+autoLabelingPolicies:
+  - name: Financial_Restricted_Auto_Label
+    description: Auto-label payment card and banking data as Restricted
+    classificationNames:
+      - CSA_FIN_BANK_ACCOUNT
+      - CSA_FIN_ROUTING_NUMBER
+      - CSA_FIN_CREDIT_CARD
+      - CSA_FIN_TAX_ID
+      - CSA_FIN_IBAN
+    targetLabel: Restricted
+
+  - name: Financial_Confidential_Auto_Label
+    description: Auto-label financial amounts and codes as Confidential
+    classificationNames:
+      - CSA_FIN_AMOUNT
+      - CSA_FIN_SWIFT_CODE
+    targetLabel: Confidential

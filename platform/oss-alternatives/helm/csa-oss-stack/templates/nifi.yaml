@@ -1,0 +1,290 @@
+{{- if .Values.nifi.enabled }}
+# ──────────────────────────────────────────────────────────────────────
+# Apache NiFi — Data Integration & Flow Management
+# Provides visual data flow design and execution as an alternative to
+# Azure Data Factory in Gov regions where ADF features are limited.
+# Uses StatefulSet for stable hostnames required by NiFi clustering.
+# ──────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "csa-oss.fullname" . }}-nifi
+  labels:
+    {{- include "csa-oss.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nifi
+spec:
+  serviceName: {{ include "csa-oss.fullname" . }}-nifi-headless
+  replicas: {{ .Values.nifi.replicas }}
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      {{- include "csa-oss.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: nifi
+  template:
+    metadata:
+      labels:
+        {{- include "csa-oss.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: nifi
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/nifi.yaml") . | sha256sum | trunc 16 }}
+    spec:
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: nifi
+          image: "{{ .Values.nifi.image.repository }}:{{ .Values.nifi.image.tag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - name: https
+              containerPort: 8443
+              protocol: TCP
+            - name: cluster
+              containerPort: 11443
+              protocol: TCP
+            - name: load-balance
+              containerPort: 6342
+              protocol: TCP
+          env:
+            - name: NIFI_WEB_HTTPS_PORT
+              value: "8443"
+            - name: NIFI_CLUSTER_IS_NODE
+              value: "true"
+            - name: NIFI_CLUSTER_NODE_PROTOCOL_PORT
+              value: "11443"
+            - name: NIFI_ZK_CONNECT_STRING
+              value: "{{ include "csa-oss.fullname" . }}-zookeeper:2181"
+            - name: NIFI_ELECTION_MAX_WAIT
+              value: "1 min"
+            - name: NIFI_SENSITIVE_PROPS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "csa-oss.fullname" . }}-nifi-secrets
+                  key: sensitive-props-key
+            - name: JAVA_OPTS
+              value: "-Xmx2g -Xms512m"
+            - name: NIFI_JVM_HEAP_INIT
+              value: "512m"
+            - name: NIFI_JVM_HEAP_MAX
+              value: "2g"
+          resources:
+            {{- toYaml .Values.nifi.resources | nindent 12 }}
+          volumeMounts:
+            - name: nifi-config
+              mountPath: /opt/nifi/nifi-current/conf/nifi.properties
+              subPath: nifi.properties
+            - name: nifi-config
+              mountPath: /opt/nifi/nifi-current/conf/authorizers.xml
+              subPath: authorizers.xml
+            - name: flowfile-repository
+              mountPath: /opt/nifi/nifi-current/flowfile_repository
+            - name: content-repository
+              mountPath: /opt/nifi/nifi-current/content_repository
+            - name: provenance-repository
+              mountPath: /opt/nifi/nifi-current/provenance_repository
+            - name: database-repository
+              mountPath: /opt/nifi/nifi-current/database_repository
+            - name: state
+              mountPath: /opt/nifi/nifi-current/state
+          readinessProbe:
+            httpGet:
+              path: /nifi-api/system-diagnostics
+              port: 8443
+              scheme: HTTPS
+            initialDelaySeconds: 90
+            periodSeconds: 20
+            timeoutSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /nifi-api/system-diagnostics
+              port: 8443
+              scheme: HTTPS
+            initialDelaySeconds: 180
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 5
+      volumes:
+        - name: nifi-config
+          configMap:
+            name: {{ include "csa-oss.fullname" . }}-nifi-config
+  volumeClaimTemplates:
+    - metadata:
+        name: flowfile-repository
+        labels:
+          {{- include "csa-oss.labels" . | nindent 10 }}
+          app.kubernetes.io/component: nifi
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        storageClassName: managed-csi
+        resources:
+          requests:
+            storage: {{ .Values.nifi.persistence.size | default "10Gi" }}
+    - metadata:
+        name: content-repository
+        labels:
+          {{- include "csa-oss.labels" . | nindent 10 }}
+          app.kubernetes.io/component: nifi
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        storageClassName: managed-csi
+        resources:
+          requests:
+            storage: {{ .Values.nifi.persistence.size | default "10Gi" }}
+    - metadata:
+        name: provenance-repository
+        labels:
+          {{- include "csa-oss.labels" . | nindent 10 }}
+          app.kubernetes.io/component: nifi
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        storageClassName: managed-csi
+        resources:
+          requests:
+            storage: 5Gi
+    - metadata:
+        name: database-repository
+        labels:
+          {{- include "csa-oss.labels" . | nindent 10 }}
+          app.kubernetes.io/component: nifi
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        storageClassName: managed-csi
+        resources:
+          requests:
+            storage: 2Gi
+    - metadata:
+        name: state
+        labels:
+          {{- include "csa-oss.labels" . | nindent 10 }}
+          app.kubernetes.io/component: nifi
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        storageClassName: managed-csi
+        resources:
+          requests:
+            storage: 1Gi
+---
+# Headless service for StatefulSet pod DNS resolution
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "csa-oss.fullname" . }}-nifi-headless
+  labels:
+    {{- include "csa-oss.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nifi
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+    - port: 8443
+      targetPort: 8443
+      protocol: TCP
+      name: https
+    - port: 11443
+      targetPort: 11443
+      protocol: TCP
+      name: cluster
+  selector:
+    {{- include "csa-oss.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: nifi
+---
+# Client-facing service for UI/API access
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "csa-oss.fullname" . }}-nifi
+  labels:
+    {{- include "csa-oss.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nifi
+spec:
+  type: {{ .Values.nifi.service.type }}
+  ports:
+    - port: {{ .Values.nifi.service.port }}
+      targetPort: 8443
+      protocol: TCP
+      name: https
+  selector:
+    {{- include "csa-oss.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: nifi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "csa-oss.fullname" . }}-nifi-config
+  labels:
+    {{- include "csa-oss.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nifi
+data:
+  nifi.properties: |
+    # Core Properties
+    nifi.flow.configuration.file=./conf/flow.json.gz
+    nifi.flow.configuration.archive.enabled=true
+    nifi.flow.configuration.archive.max.count=10
+
+    # Web Properties (HTTPS)
+    nifi.web.https.host=0.0.0.0
+    nifi.web.https.port=8443
+    nifi.web.http.host=
+    nifi.web.http.port=
+    nifi.web.proxy.host=
+
+    # Security — TLS
+    nifi.security.keystore=./conf/keystore.jks
+    nifi.security.keystoreType=JKS
+    nifi.security.keystorePasswd=
+    nifi.security.keyPasswd=
+    nifi.security.truststore=./conf/truststore.jks
+    nifi.security.truststoreType=JKS
+    nifi.security.truststorePasswd=
+
+    # Cluster Configuration
+    nifi.cluster.is.node=true
+    nifi.cluster.protocol.is.secure=true
+    nifi.cluster.node.protocol.port=11443
+    nifi.cluster.flow.election.max.wait.time=1 min
+
+    # ZooKeeper for cluster coordination
+    nifi.zookeeper.connect.string={{ include "csa-oss.fullname" . }}-zookeeper:2181
+    nifi.zookeeper.root.node=/nifi
+
+    # LDAP Authentication
+    nifi.security.user.login.identity.provider=ldap-provider
+
+    # Repository Configuration
+    nifi.flowfile.repository.directory=./flowfile_repository
+    nifi.content.repository.directory.default=./content_repository
+    nifi.provenance.repository.directory.default=./provenance_repository
+    nifi.database.directory=./database_repository
+
+    # State Management
+    nifi.state.management.configuration.file=./conf/state-management.xml
+    nifi.state.management.embedded.zookeeper.start=false
+
+    # Performance Tuning
+    nifi.queue.swap.threshold=20000
+    nifi.bored.yield.duration=10 millis
+
+  authorizers.xml: |
+    <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    <authorizers>
+      <userGroupProvider>
+        <identifier>file-user-group-provider</identifier>
+        <class>org.apache.nifi.authorization.FileUserGroupProvider</class>
+        <property name="Users File">./conf/users.xml</property>
+        <property name="Initial User Identity 1">CN=admin</property>
+      </userGroupProvider>
+      <accessPolicyProvider>
+        <identifier>file-access-policy-provider</identifier>
+        <class>org.apache.nifi.authorization.FileAccessPolicyProvider</class>
+        <property name="User Group Provider">file-user-group-provider</property>
+        <property name="Authorizations File">./conf/authorizations.xml</property>
+        <property name="Initial Admin Identity">CN=admin</property>
+      </accessPolicyProvider>
+      <authorizer>
+        <identifier>managed-authorizer</identifier>
+        <class>org.apache.nifi.authorization.StandardManagedAuthorizer</class>
+        <property name="Access Policy Provider">file-access-policy-provider</property>
+      </authorizer>
+    </authorizers>
+{{- end }}

@@ -1,0 +1,119 @@
+# Validate all data contracts across verticals
+# Ensures contract YAML is valid and consistent with dbt models
+name: Validate Data Contracts
+
+on:
+  pull_request:
+    paths:
+      - 'examples/*/contracts/**'
+      - 'examples/*/domains/dbt/models/**'
+  push:
+    branches: [main]
+    paths:
+      - 'examples/*/contracts/**'
+
+jobs:
+  validate-contracts:
+    name: Validate Contracts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install pyyaml jsonschema
+
+      - name: Validate contract YAML syntax
+        run: |
+          echo "=== Validating contract YAML files ==="
+          errors=0
+          for contract in examples/*/contracts/*.yaml; do
+            if python -c "import yaml; yaml.safe_load(open('$contract'))" 2>&1; then
+              echo "  OK: $contract"
+            else
+              echo "  FAIL: $contract"
+              errors=$((errors + 1))
+            fi
+          done
+          echo ""
+          echo "Validated $(find examples/*/contracts -name '*.yaml' | wc -l) contracts"
+          if [ $errors -gt 0 ]; then
+            echo "FAILED: $errors contracts have syntax errors"
+            exit 1
+          fi
+
+      - name: Check required contract fields
+        run: |
+          python << 'SCRIPT'
+          import yaml
+          import sys
+          import glob
+
+          REQUIRED_FIELDS = ['apiVersion', 'kind', 'metadata', 'schema', 'sla', 'quality_rules']
+          REQUIRED_METADATA = ['name', 'domain', 'owner', 'version', 'description']
+
+          errors = []
+          contracts = glob.glob('examples/*/contracts/*.yaml')
+
+          for path in contracts:
+              with open(path) as f:
+                  doc = yaml.safe_load(f)
+
+              for field in REQUIRED_FIELDS:
+                  if field not in doc:
+                      errors.append(f"{path}: missing required field '{field}'")
+
+              if 'metadata' in doc:
+                  for field in REQUIRED_METADATA:
+                      if field not in doc['metadata']:
+                          errors.append(f"{path}: metadata missing '{field}'")
+
+              if 'schema' in doc and 'columns' in doc['schema']:
+                  for col in doc['schema']['columns']:
+                      if 'name' not in col or 'type' not in col:
+                          errors.append(f"{path}: column missing name or type")
+
+          print(f"Checked {len(contracts)} contracts")
+          if errors:
+              print(f"\nFOUND {len(errors)} ERRORS:")
+              for e in errors:
+                  print(f"  - {e}")
+              sys.exit(1)
+          else:
+              print("All contracts valid!")
+          SCRIPT
+
+      - name: Cross-reference contracts with dbt models
+        run: |
+          python << 'SCRIPT'
+          import yaml
+          import glob
+          import os
+
+          warnings = []
+          contracts = glob.glob('examples/*/contracts/*.yaml')
+
+          for path in contracts:
+              vertical = path.split(os.sep)[1]
+              with open(path) as f:
+                  doc = yaml.safe_load(f)
+
+              # Check that gold models exist for this vertical
+              gold_dir = f'examples/{vertical}/domains/dbt/models/gold'
+              if os.path.isdir(gold_dir):
+                  gold_models = os.listdir(gold_dir)
+                  if not gold_models:
+                      warnings.append(f"{vertical}: contract exists but no gold models found")
+              else:
+                  warnings.append(f"{vertical}: contract exists but no gold model directory")
+
+          if warnings:
+              print("WARNINGS (non-blocking):")
+              for w in warnings:
+                  print(f"  - {w}")
+          else:
+              print("All contracts have corresponding dbt models")
+          SCRIPT

@@ -1,0 +1,83 @@
+-- ═══════════════════════════════════════════════════════════════
+-- Transform Telemetry
+-- Azure Stream Analytics query to parse and transform raw telemetry
+-- from IoT devices via Event Hub.
+--
+-- Input:  TelemetryInput (Event Hub — JSON)
+-- Output: RawStorageOutput (ADLS Gen2 — Parquet, Bronze layer)
+--         EnrichedOutput   (ADLS Gen2 — Parquet, Silver layer)
+-- ═══════════════════════════════════════════════════════════════
+
+-- ─── Raw passthrough to Bronze storage ───────────────────────
+-- Preserves all original fields plus processing metadata.
+SELECT
+    sensor_id,
+    sensor_type,
+    CAST(timestamp AS datetime)       AS event_time,
+    temperature_c,
+    humidity_pct,
+    pressure_hpa,
+    battery_pct,
+    latitude,
+    longitude,
+    System.Timestamp()                AS processing_time,
+    EventProcessedUtcTime             AS ingestion_time,
+    PartitionId                       AS partition_id
+INTO [RawStorageOutput]
+FROM [TelemetryInput]
+TIMESTAMP BY CAST(timestamp AS datetime);
+
+-- ─── Enriched and validated telemetry to Silver ──────────────
+-- Adds computed fields and basic data quality flags.
+SELECT
+    sensor_id,
+    sensor_type,
+    CAST(timestamp AS datetime)       AS event_time,
+    temperature_c,
+    humidity_pct,
+    pressure_hpa,
+    battery_pct,
+    latitude,
+    longitude,
+
+    -- Computed: heat index approximation (Steadman formula, simplified)
+    CASE
+        WHEN temperature_c >= 27 AND humidity_pct >= 40 THEN
+            ROUND(
+                -8.784 + 1.611 * temperature_c + 2.338 * humidity_pct
+                - 0.1461 * temperature_c * humidity_pct,
+                2
+            )
+        ELSE temperature_c
+    END                                AS heat_index_c,
+
+    -- Computed: dew point approximation (Magnus formula)
+    ROUND(
+        (237.3 * (LN(humidity_pct / 100.0) + (17.27 * temperature_c) / (237.3 + temperature_c)))
+        / (17.27 - LN(humidity_pct / 100.0) - (17.27 * temperature_c) / (237.3 + temperature_c)),
+        2
+    )                                  AS dew_point_c,
+
+    -- Data quality flags
+    CASE
+        WHEN temperature_c IS NULL THEN 'missing_temperature'
+        WHEN temperature_c < -60 OR temperature_c > 60 THEN 'out_of_range_temperature'
+        WHEN humidity_pct < 0 OR humidity_pct > 100 THEN 'out_of_range_humidity'
+        WHEN pressure_hpa < 870 OR pressure_hpa > 1084 THEN 'out_of_range_pressure'
+        WHEN battery_pct < 0 OR battery_pct > 100 THEN 'out_of_range_battery'
+        ELSE 'valid'
+    END                                AS quality_flag,
+
+    -- Battery status classification
+    CASE
+        WHEN battery_pct < 10 THEN 'critical'
+        WHEN battery_pct < 20 THEN 'low'
+        WHEN battery_pct < 50 THEN 'moderate'
+        ELSE 'good'
+    END                                AS battery_status,
+
+    System.Timestamp()                 AS processing_time
+
+INTO [EnrichedOutput]
+FROM [TelemetryInput]
+TIMESTAMP BY CAST(timestamp AS datetime);

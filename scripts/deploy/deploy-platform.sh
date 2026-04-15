@@ -136,6 +136,14 @@ echo -e "${BLUE}╚════════════════════�
 
 TOTAL_START=$(date +%s)
 
+# Step 0: Validate prerequisites
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+log_step "Validating prerequisites..."
+bash "${SCRIPT_DIR}/validate-prerequisites.sh" || {
+    log_err "Prerequisites validation failed. Run 'make prerequisites' to check details."
+    exit 1
+}
+
 # Step 1: Management / ALZ (landing zone policies, logging, monitoring)
 deploy_zone "ALZ" "${BICEP_DIR}/LandingZone - ALZ"
 

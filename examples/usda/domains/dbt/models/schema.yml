@@ -1,0 +1,505 @@
+version: 2
+
+sources:
+  - name: usda
+    description: USDA agricultural data sources from various agencies
+    tables:
+      - name: nass_crop_yields
+        description: NASS QuickStats API crop yield and production data
+        columns:
+          - name: state_fips_code
+            description: 2-digit FIPS code for state
+            tests:
+              - not_null
+          - name: commodity_desc
+            description: Commodity description from NASS
+            tests:
+              - not_null
+          - name: year
+            description: Crop year
+            tests:
+              - not_null
+
+      - name: snap_enrollment
+        description: FNS SNAP enrollment and benefits data
+        columns:
+          - name: state
+            description: State abbreviation
+            tests:
+              - not_null
+          - name: fiscal_year
+            description: Federal fiscal year
+            tests:
+              - not_null
+
+      - name: fsis_inspections
+        description: FSIS food safety inspection records
+        columns:
+          - name: establishment_number
+            description: FSIS establishment identifier
+            tests:
+              - not_null
+          - name: inspection_date
+            description: Date of inspection
+            tests:
+              - not_null
+
+models:
+  # Bronze Models
+  - name: brz_crop_yields
+    description: Bronze layer - Raw NASS crop yield data with basic validation
+    columns:
+      - name: state_fips_code
+        description: Standardized 2-digit FIPS state code
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 1
+              max_value: 99
+      - name: county_code
+        description: 3-digit county code (999 for state-level)
+        tests:
+          - not_null
+      - name: commodity_desc
+        description: Original commodity description from NASS
+        tests:
+          - not_null
+      - name: year
+        description: Crop year
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 1900
+              max_value: 2030
+      - name: value
+        description: Raw value as string from API
+      - name: is_valid_record
+        description: Flag indicating if record passes basic validation
+        tests:
+          - not_null
+          - accepted_values:
+              values: [true, false]
+      - name: record_hash
+        description: MD5 hash for deduplication
+        tests:
+          - not_null
+          - unique
+
+  - name: brz_snap_enrollment
+    description: Bronze layer - Raw SNAP enrollment data with basic validation
+    columns:
+      - name: state_code
+        description: 2-letter state abbreviation
+        tests:
+          - not_null
+      - name: fiscal_year
+        description: Federal fiscal year
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 2000
+              max_value: 2030
+      - name: month_number
+        description: Month number (1-12)
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 1
+              max_value: 12
+      - name: program
+        description: Program name (typically SNAP)
+        tests:
+          - not_null
+      - name: is_valid_record
+        description: Flag indicating if record passes basic validation
+        tests:
+          - not_null
+
+  - name: brz_food_inspections
+    description: Bronze layer - Raw FSIS inspection data with basic validation
+    columns:
+      - name: establishment_number
+        description: FSIS establishment identifier
+        tests:
+          - not_null
+      - name: inspection_date
+        description: Date of inspection
+        tests:
+          - not_null
+      - name: inspection_type
+        description: Type of inspection performed
+        tests:
+          - not_null
+      - name: state_code
+        description: 2-letter state abbreviation
+        tests:
+          - not_null
+      - name: is_valid_record
+        description: Flag indicating if record passes basic validation
+        tests:
+          - not_null
+
+  # Silver Models
+  - name: slv_crop_yields
+    description: Silver layer - Cleaned and standardized crop yield data
+    columns:
+      - name: crop_yield_sk
+        description: Surrogate key for crop yield record
+        tests:
+          - not_null
+          - unique
+      - name: state_code
+        description: Standardized 2-letter state code
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 1
+              max_value: 56  # US states + territories
+      - name: commodity
+        description: Standardized commodity name
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['CORN', 'SOYBEANS', 'WHEAT', 'COTTON', 'RICE', 'BARLEY', 'OATS', 'HAY']
+              quote: false
+      - name: year
+        description: Crop year
+        tests:
+          - not_null
+      - name: yield_per_acre
+        description: Crop yield per acre (bushels, tons, etc.)
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 1000
+      - name: production_amount
+        description: Total production (bushels, tons, etc.)
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: planted_acres
+        description: Acres planted
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: harvested_acres
+        description: Acres harvested
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: is_valid
+        description: Data quality validation flag
+        tests:
+          - not_null
+
+  - name: slv_snap_enrollment
+    description: Silver layer - Cleaned and standardized SNAP enrollment data
+    columns:
+      - name: snap_enrollment_sk
+        description: Surrogate key for SNAP enrollment record
+        tests:
+          - not_null
+          - unique
+      - name: state_code
+        description: 2-letter state abbreviation
+        tests:
+          - not_null
+      - name: enrollment_date
+        description: Date constructed from fiscal year and month
+        tests:
+          - not_null
+      - name: persons
+        description: Number of persons enrolled
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: households
+        description: Number of households enrolled
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: benefits_dollars
+        description: Total benefits in dollars
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: benefits_per_person
+        description: Average benefit per person
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 1000
+      - name: is_valid
+        description: Data quality validation flag
+        tests:
+          - not_null
+
+  - name: slv_food_inspections
+    description: Silver layer - Cleaned and standardized food inspection data
+    columns:
+      - name: inspection_sk
+        description: Surrogate key for inspection record
+        tests:
+          - not_null
+          - unique
+      - name: establishment_number
+        description: FSIS establishment identifier
+        tests:
+          - not_null
+      - name: inspection_date
+        description: Date of inspection
+        tests:
+          - not_null
+      - name: inspection_type_category
+        description: Standardized inspection type
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['ROUTINE', 'FOLLOW_UP', 'COMPLAINT', 'VERIFICATION', 'HACCP', 'SPECIAL']
+      - name: inspection_result
+        description: Standardized inspection result
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['COMPLIANT', 'NON_COMPLIANT', 'PENDING', 'NO_ACTION_INDICATED']
+      - name: violation_severity_score
+        description: Numeric severity score (0-3)
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 3
+      - name: establishment_category
+        description: Type of establishment
+        tests:
+          - accepted_values:
+              values: ['SLAUGHTER', 'PROCESSING', 'WHOLESALE', 'RETAIL']
+      - name: is_valid
+        description: Data quality validation flag
+        tests:
+          - not_null
+
+  # Gold Models
+  - name: gld_crop_yield_forecast
+    description: Gold layer - Crop yield analytics with forecasting and trends
+    columns:
+      - name: state_code
+        description: 2-letter state abbreviation
+        tests:
+          - not_null
+      - name: commodity
+        description: Standardized commodity name
+        tests:
+          - not_null
+      - name: year
+        description: Crop year
+        tests:
+          - not_null
+      - name: yield_per_acre
+        description: Crop yield per acre
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: yield_3yr_avg
+        description: 3-year moving average yield
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: yield_trend_5yr
+        description: 5-year yield trend classification
+        tests:
+          - accepted_values:
+              values: ['INCREASING', 'STABLE', 'DECREASING']
+      - name: yield_forecast_next_year
+        description: Forecast yield for next year
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: is_forecast_reliable
+        description: Flag indicating forecast reliability
+        tests:
+          - not_null
+
+  - name: gld_snap_trends
+    description: Gold layer - SNAP enrollment trends and analysis
+    columns:
+      - name: state_code
+        description: 2-letter state abbreviation
+        tests:
+          - not_null
+      - name: enrollment_date
+        description: Enrollment month
+        tests:
+          - not_null
+      - name: current_enrollment
+        description: Current enrollment count
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: enrollment_change_1yr
+        description: Year-over-year enrollment change percentage
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: -100
+              max_value: 1000
+      - name: enrollment_trend
+        description: Enrollment trend classification
+        tests:
+          - accepted_values:
+              values: ['INCREASING', 'DECREASING', 'STABLE', 'INSUFFICIENT_DATA']
+      - name: is_current_data
+        description: Flag indicating recent data (within 90 days)
+        tests:
+          - not_null
+
+  - name: gld_food_safety_risk_score
+    description: Gold layer - Food establishment risk scoring and assessment
+    columns:
+      - name: establishment_number
+        description: FSIS establishment identifier
+        tests:
+          - not_null
+          - unique
+      - name: adjusted_risk_score
+        description: Final risk score (0-100)
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+      - name: adjusted_risk_category
+        description: Risk category based on score
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['MINIMAL', 'LOW', 'MODERATE', 'HIGH', 'CRITICAL']
+      - name: violation_rate_12_months
+        description: Violation rate over last 12 months
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+      - name: compliance_rate
+        description: Overall compliance rate percentage
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+      - name: recommended_action
+        description: Recommended regulatory action
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['IMMEDIATE_INSPECTION_REQUIRED', 'PRIORITY_INSPECTION', 'OVERDUE_INSPECTION', 'ROUTINE_INSPECTION', 'STANDARD_MONITORING']
+      - name: is_risk_score_reliable
+        description: Flag indicating sufficient data for reliable scoring
+        tests:
+          - not_null
+
+  - name: gld_agricultural_dashboard
+    description: Gold layer - Executive dashboard summary with key agricultural metrics
+    columns:
+      - name: report_date
+        description: Dashboard report date
+        tests:
+          - not_null
+          - unique
+      - name: agricultural_production_value
+        description: Total agricultural production value
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: snap_enrollment_total
+        description: Total SNAP enrollment nationally
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: snap_benefits_millions
+        description: Total SNAP benefits in millions of dollars
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: food_establishments_total
+        description: Total number of food establishments
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: food_safety_compliance_rate
+        description: Average food safety compliance rate
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+      - name: agricultural_productivity_trend
+        description: Overall agricultural productivity trend
+        tests:
+          - accepted_values:
+              values: ['POSITIVE', 'STABLE', 'CONCERNING']
+      - name: snap_enrollment_trend
+        description: Overall SNAP enrollment trend
+        tests:
+          - accepted_values:
+              values: ['INCREASING', 'DECREASING', 'STABLE']
+      - name: food_safety_status
+        description: Overall food safety status assessment
+        tests:
+          - accepted_values:
+              values: ['EXCELLENT', 'GOOD', 'ADEQUATE', 'NEEDS_IMPROVEMENT']
+      - name: is_complete_data
+        description: Flag indicating complete data availability
+        tests:
+          - not_null
+
+# Custom tests
+tests:
+  - name: test_crop_yield_logical_constraints
+    description: Test logical constraints between planted and harvested acres
+    sql: |
+      SELECT *
+      FROM {{ ref('slv_crop_yields') }}
+      WHERE harvested_acres > planted_acres * 1.1
+      AND planted_acres > 0
+      AND harvested_acres > 0
+
+  - name: test_snap_household_person_logic
+    description: Test that households never exceed persons
+    sql: |
+      SELECT *
+      FROM {{ ref('slv_snap_enrollment') }}
+      WHERE households > persons
+      AND persons > 0
+      AND households > 0
+
+  - name: test_food_safety_date_logic
+    description: Test that inspection dates are not in the future
+    sql: |
+      SELECT *
+      FROM {{ ref('slv_food_inspections') }}
+      WHERE inspection_date > CURRENT_DATE()
+
+  - name: test_risk_score_components
+    description: Test that risk score components sum correctly
+    sql: |
+      SELECT *
+      FROM {{ ref('gld_food_safety_risk_score') }}
+      WHERE ABS(
+        (violation_history_score + inspection_frequency_score + violation_recency_score) - base_risk_score
+      ) > 0.1
+
+# Macros for data quality
+macros:
+  - name: get_crop_year_bounds
+    description: Returns valid crop year range for validation
+
+  - name: standardize_state_code
+    description: Standardizes state codes to 2-letter format
+
+  - name: calculate_yoy_change
+    description: Calculates year-over-year percentage change safely

@@ -1,0 +1,272 @@
+# Data product contract — usps.facility_operations
+#
+# This file is the authoritative interface for the USPS facility operations
+# data product. It declares the schema, SLAs, and quality rules
+# for postal facility performance analytics and capacity planning.
+
+apiVersion: csa.usps.gov/v1
+kind: DataProductContract
+
+metadata:
+  name: usps.facility_operations
+  domain: usps
+  owner: usps-data-engineering@contoso.com
+  version: "1.0.0"
+  description: >
+    Daily facility operations metrics for USPS processing and distribution
+    centers. Tracks throughput, staffing, equipment utilization, and
+    operating costs. Used for network optimization, capacity planning,
+    and operational efficiency analysis.
+
+schema:
+  primary_key: [facility_id, report_date]
+  columns:
+    - name: facility_id
+      type: string
+      nullable: false
+      description: Unique facility identifier (FAC-{STATE}-{NNN})
+    - name: facility_name
+      type: string
+      nullable: false
+      description: Official facility name
+    - name: facility_type
+      type: string
+      nullable: false
+      description: Facility classification
+      allowed_values:
+        - PROCESSING_DISTRIBUTION_CENTER
+        - POST_OFFICE
+        - STATION
+        - BRANCH
+        - ANNEX
+    - name: facility_subtype
+      type: string
+      nullable: true
+      description: Facility sub-classification
+    - name: address
+      type: string
+      nullable: true
+      description: Street address of the facility
+    - name: city
+      type: string
+      nullable: false
+      description: City where the facility is located
+    - name: state
+      type: string
+      nullable: false
+      description: 2-letter state abbreviation
+    - name: zip_code
+      type: string
+      nullable: false
+      description: 5-digit ZIP code
+    - name: district
+      type: string
+      nullable: true
+      description: USPS postal district
+    - name: area
+      type: string
+      nullable: true
+      description: USPS operational area
+    - name: region
+      type: string
+      nullable: false
+      description: USPS geographic region
+    - name: latitude
+      type: decimal(9,6)
+      nullable: true
+      description: Facility latitude
+    - name: longitude
+      type: decimal(9,6)
+      nullable: true
+      description: Facility longitude
+    - name: report_date
+      type: date
+      nullable: false
+      description: Date of the operations report
+    - name: report_year
+      type: integer
+      nullable: false
+      description: Report year
+    - name: report_month
+      type: integer
+      nullable: false
+      description: Report month (1-12)
+    - name: max_throughput_daily
+      type: bigint
+      nullable: true
+      description: Maximum daily throughput capacity (pieces)
+    - name: actual_throughput_daily
+      type: bigint
+      nullable: true
+      description: Actual daily throughput (pieces)
+    - name: letters_processed
+      type: bigint
+      nullable: true
+      description: Number of letters processed
+    - name: flats_processed
+      type: bigint
+      nullable: true
+      description: Number of flats processed
+    - name: parcels_processed
+      type: bigint
+      nullable: true
+      description: Number of parcels processed
+    - name: total_pieces_processed
+      type: bigint
+      nullable: false
+      description: Total mail pieces processed
+    - name: sorting_machines
+      type: integer
+      nullable: true
+      description: Total sorting machines at facility
+    - name: sorting_machines_active
+      type: integer
+      nullable: true
+      description: Sorting machines currently active
+    - name: delivery_vehicles
+      type: integer
+      nullable: true
+      description: Total delivery vehicles at facility
+    - name: delivery_vehicles_active
+      type: integer
+      nullable: true
+      description: Delivery vehicles currently active
+    - name: total_employees
+      type: integer
+      nullable: true
+      description: Total employees at facility
+    - name: carriers
+      type: integer
+      nullable: true
+      description: Number of mail carriers
+    - name: clerks
+      type: integer
+      nullable: true
+      description: Number of clerks
+    - name: supervisors
+      type: integer
+      nullable: true
+      description: Number of supervisors
+    - name: operating_hours
+      type: decimal(5,2)
+      nullable: true
+      description: Daily operating hours
+    - name: overtime_hours
+      type: decimal(8,2)
+      nullable: true
+      description: Total overtime hours worked
+    - name: operating_cost_daily
+      type: decimal(14,2)
+      nullable: true
+      description: Daily operating cost (USD)
+    - name: revenue_daily
+      type: decimal(14,2)
+      nullable: true
+      description: Daily revenue (USD)
+    - name: square_footage
+      type: integer
+      nullable: true
+      description: Facility square footage
+    - name: year_built
+      type: integer
+      nullable: true
+      description: Year the facility was built
+    - name: last_renovation_year
+      type: integer
+      nullable: true
+      description: Year of last major renovation
+    - name: po_boxes
+      type: integer
+      nullable: true
+      description: Number of PO boxes at the facility
+    - name: delivery_routes
+      type: integer
+      nullable: true
+      description: Number of delivery routes served
+    - name: load_time
+      type: timestamp
+      nullable: false
+      description: Timestamp when the record was loaded into the data warehouse
+
+sla:
+  freshness_minutes: 1440  # Daily updates
+  valid_row_ratio: 0.95
+  supported_until: "2027-12-31"
+  update_frequency: "Daily by 0800 ET"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: facility_id
+  - rule: expect_column_values_to_not_be_null
+    column: report_date
+  - rule: expect_column_values_to_not_be_null
+    column: total_pieces_processed
+  - rule: expect_column_values_to_be_in_set
+    column: facility_type
+    value_set: [PROCESSING_DISTRIBUTION_CENTER, POST_OFFICE, STATION, BRANCH, ANNEX]
+  - rule: expect_column_values_to_be_between
+    column: report_month
+    min_value: 1
+    max_value: 12
+  - rule: expect_column_values_to_be_between
+    column: total_pieces_processed
+    min_value: 0
+    max_value: 100000000
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: operating_hours
+    min_value: 0
+    max_value: 24
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: latitude
+    min_value: 17.0
+    max_value: 72.0
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: longitude
+    min_value: -180.0
+    max_value: -60.0
+    mostly: 0.99
+  - rule: expect_column_pair_values_a_to_be_greater_than_or_equal_to_b
+    column_a: max_throughput_daily
+    column_b: actual_throughput_daily
+    mostly: 0.90
+  - rule: expect_column_pair_values_a_to_be_greater_than_or_equal_to_b
+    column_a: sorting_machines
+    column_b: sorting_machines_active
+    mostly: 0.99
+  - rule: expect_column_pair_values_a_to_be_greater_than_or_equal_to_b
+    column_a: delivery_vehicles
+    column_b: delivery_vehicles_active
+    mostly: 0.99
+
+data_lineage:
+  upstream_sources:
+    - name: "USPS Facility Management System"
+      url: "https://about.usps.com/who/profile/"
+      description: "Synthetic facility operations data modeled on USPS patterns"
+      refresh_schedule: "Daily"
+    - name: "USPS Real Estate Database"
+      url: "https://about.usps.com/strategic-planning/cs09/"
+      description: "Facility location, size, and infrastructure data"
+
+  downstream_consumers:
+    - name: "Facility Operations Dashboard"
+      description: "Executive dashboard for USPS facility performance"
+    - name: "Network Optimization Models"
+      description: "ML models for route and capacity optimization"
+    - name: "Capital Planning Reports"
+      description: "Facility renovation and investment planning"
+
+usage_notes: |
+  - Synthetic data — actual USPS facility data is not publicly available
+  - Throughput capacity varies significantly by facility type and size
+  - Operating costs include labor, equipment, and utilities
+  - Vehicle and machine utilization rates indicate maintenance cycles
+  - Overtime hours spike during peak holiday season (Nov-Dec)
+  - Year built/renovation data may be incomplete for older facilities
+
+contact:
+  technical: usps-data-team@contoso.com
+  business: usps-analytics-lead@contoso.com

@@ -31,8 +31,9 @@ import os
 import re
 import threading
 import uuid
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
-from typing import Any, Iterator, Mapping
+from typing import Any
 
 import structlog
 from structlog.contextvars import (
@@ -44,9 +45,7 @@ from structlog.contextvars import (
 
 # W3C traceparent header format: `00-<trace-id>-<parent-id>-<trace-flags>`.
 # See https://www.w3.org/TR/trace-context/#traceparent-header
-_TRACEPARENT_RE = re.compile(
-    r"^[0-9a-f]{2}-(?P<trace_id>[0-9a-f]{32})-(?P<parent_id>[0-9a-f]{16})-[0-9a-f]{2}$"
-)
+_TRACEPARENT_RE = re.compile(r"^[0-9a-f]{2}-(?P<trace_id>[0-9a-f]{32})-(?P<parent_id>[0-9a-f]{16})-[0-9a-f]{2}$")
 
 _CONFIGURED = False
 _CONFIGURE_LOCK = threading.Lock()
@@ -109,11 +108,7 @@ def configure_structlog(
             structlog.processors.UnicodeDecoder(),
         ]
 
-        renderer = (
-            structlog.processors.JSONRenderer()
-            if json_output
-            else structlog.dev.ConsoleRenderer(colors=False)
-        )
+        renderer = structlog.processors.JSONRenderer() if json_output else structlog.dev.ConsoleRenderer(colors=False)
 
         structlog.configure(
             processors=[*shared_processors, renderer],
@@ -134,9 +129,7 @@ def get_logger(name: str | None = None) -> structlog.stdlib.BoundLogger:
         name: Optional logger name — typically ``__name__`` at the call
             site.  When set, it is added as ``logger`` to each log entry.
     """
-    logger: structlog.stdlib.BoundLogger = (
-        structlog.get_logger(name) if name else structlog.get_logger()
-    )
+    logger: structlog.stdlib.BoundLogger = structlog.get_logger(name) if name else structlog.get_logger()
     return logger
 
 

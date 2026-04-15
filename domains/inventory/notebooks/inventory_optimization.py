@@ -21,6 +21,7 @@
 # COMMAND ----------
 
 import math
+
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
 
@@ -49,40 +50,30 @@ print(f"Service level Z-score: {z_score}")
 turnover_df = spark.table(TURNOVER_TABLE)
 
 # Calculate inventory value per product
-abc_df = (
-    turnover_df
-    .withColumn(
-        "inventory_value",
-        F.col("total_on_hand") * F.col("unit_price"),
-    )
-    .orderBy(F.desc("inventory_value"))
-)
+abc_df = turnover_df.withColumn(
+    "inventory_value",
+    F.col("total_on_hand") * F.col("unit_price"),
+).orderBy(F.desc("inventory_value"))
 
 # Running cumulative percentage for ABC classification
-window_cum = Window.orderBy(F.desc("inventory_value")).rowsBetween(
-    Window.unboundedPreceding, Window.currentRow
-)
+window_cum = Window.orderBy(F.desc("inventory_value")).rowsBetween(Window.unboundedPreceding, Window.currentRow)
 total_value = abc_df.agg(F.sum("inventory_value")).collect()[0][0] or 1
 
 abc_df = (
-    abc_df
-    .withColumn("cumulative_value", F.sum("inventory_value").over(window_cum))
+    abc_df.withColumn("cumulative_value", F.sum("inventory_value").over(window_cum))
     .withColumn(
         "cumulative_pct",
         F.round(F.col("cumulative_value") / F.lit(total_value) * 100, 2),
     )
     .withColumn(
         "abc_class",
-        F.when(F.col("cumulative_pct") <= 80, "A")
-        .when(F.col("cumulative_pct") <= 95, "B")
-        .otherwise("C"),
+        F.when(F.col("cumulative_pct") <= 80, "A").when(F.col("cumulative_pct") <= 95, "B").otherwise("C"),
     )
 )
 
 # Summary by ABC class
 abc_summary = (
-    abc_df
-    .groupBy("abc_class")
+    abc_df.groupBy("abc_class")
     .agg(
         F.count("*").alias("product_count"),
         F.sum("inventory_value").alias("total_value"),
@@ -126,8 +117,7 @@ display(abc_df.where(F.col("abc_class") == "A").limit(20))
 snapshot_df = spark.table(SNAPSHOT_TABLE)
 
 demand_proxy = (
-    snapshot_df
-    .groupBy("product_id")
+    snapshot_df.groupBy("product_id")
     .agg(
         F.avg("qty_on_hand").alias("avg_qty"),
         F.stddev("qty_on_hand").alias("stddev_qty"),
@@ -137,17 +127,14 @@ demand_proxy = (
         F.sum(F.col("qty_on_hand") - F.col("qty_reserved")).alias("total_available"),
         F.max("days_since_restock").alias("max_days_since_restock"),
     )
-    .withColumn(
-        "stddev_qty", F.coalesce("stddev_qty", F.lit(0.0))
-    )
+    .withColumn("stddev_qty", F.coalesce("stddev_qty", F.lit(0.0)))
 )
 
 # Assume average lead time of 7 days (configurable)
 LEAD_TIME_DAYS = 7
 
 safety_stock_df = (
-    demand_proxy
-    .withColumn(
+    demand_proxy.withColumn(
         "safety_stock",
         F.round(F.lit(z_score) * F.col("stddev_qty") * F.lit(math.sqrt(LEAD_TIME_DAYS)), 0),
     )
@@ -183,18 +170,13 @@ reorder_df = spark.table(REORDER_TABLE)
 
 # Alert severity breakdown
 alert_summary = (
-    reorder_df
-    .groupBy("alert_severity")
+    reorder_df.groupBy("alert_severity")
     .agg(
         F.count("*").alias("alert_count"),
         F.countDistinct("product_id").alias("unique_products"),
         F.sum("qty_deficit").alias("total_deficit"),
     )
-    .orderBy(
-        F.when(F.col("alert_severity") == "CRITICAL", 1)
-        .when(F.col("alert_severity") == "URGENT", 2)
-        .otherwise(3)
-    )
+    .orderBy(F.when(F.col("alert_severity") == "CRITICAL", 1).when(F.col("alert_severity") == "URGENT", 2).otherwise(3))
 )
 
 print("REORDER ALERT SUMMARY")
@@ -204,11 +186,19 @@ display(alert_summary)
 critical = reorder_df.where(F.col("alert_severity") == "CRITICAL")
 if critical.count() > 0:
     print(f"\nCRITICAL ALERTS ({critical.count()} items at zero stock):")
-    display(critical.select(
-        "product_id", "product_name", "product_category",
-        "warehouse_name", "qty_on_hand", "qty_available",
-        "reorder_point", "qty_deficit", "days_since_restock",
-    ))
+    display(
+        critical.select(
+            "product_id",
+            "product_name",
+            "product_category",
+            "warehouse_name",
+            "qty_on_hand",
+            "qty_available",
+            "reorder_point",
+            "qty_deficit",
+            "days_since_restock",
+        )
+    )
 else:
     print("\nNo CRITICAL alerts -- all products have stock.")
 
@@ -222,8 +212,7 @@ else:
 # Analyze restocking patterns as a proxy for demand seasonality
 # (Uses days_since_restock and snapshot_date from fact_inventory_snapshot)
 seasonal_df = (
-    snapshot_df
-    .withColumn("restock_month", F.month("last_restocked_at"))
+    snapshot_df.withColumn("restock_month", F.month("last_restocked_at"))
     .where(F.col("last_restocked_at").isNotNull())
     .groupBy("restock_month")
     .agg(
@@ -236,14 +225,22 @@ seasonal_df = (
 
 # Add month names for readability
 month_names = {
-    1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
-    7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec",
+    1: "Jan",
+    2: "Feb",
+    3: "Mar",
+    4: "Apr",
+    5: "May",
+    6: "Jun",
+    7: "Jul",
+    8: "Aug",
+    9: "Sep",
+    10: "Oct",
+    11: "Nov",
+    12: "Dec",
 }
 month_map = F.create_map([F.lit(x) for kv in month_names.items() for x in kv])
 
-seasonal_df = seasonal_df.withColumn(
-    "month_name", month_map[F.col("restock_month")]
-)
+seasonal_df = seasonal_df.withColumn("month_name", month_map[F.col("restock_month")])
 
 print("RESTOCKING SEASONALITY (Proxy for Demand Patterns)")
 display(seasonal_df)
@@ -259,21 +256,17 @@ display(seasonal_df)
 # for an extended period and status indicating overstock
 DEAD_STOCK_THRESHOLD_DAYS = 90
 
-dead_stock = (
-    snapshot_df
-    .where(
-        (F.col("days_since_restock") >= DEAD_STOCK_THRESHOLD_DAYS)
-        & (F.col("stock_status") == "WELL_STOCKED")
-        & (F.col("qty_on_hand") > 0)
-    )
+dead_stock = snapshot_df.where(
+    (F.col("days_since_restock") >= DEAD_STOCK_THRESHOLD_DAYS)
+    & (F.col("stock_status") == "WELL_STOCKED")
+    & (F.col("qty_on_hand") > 0)
 )
 
 # Enrich with product details
 products_df = spark.table(PRODUCTS_TABLE)
 
 dead_stock_detail = (
-    dead_stock
-    .join(products_df, "product_id", "left")
+    dead_stock.join(products_df, "product_id", "left")
     .select(
         "product_id",
         "product_name",
@@ -293,9 +286,7 @@ dead_stock_detail = (
     .orderBy(F.desc("dead_stock_value"))
 )
 
-total_dead_value = dead_stock_detail.agg(
-    F.sum("dead_stock_value")
-).collect()[0][0] or 0
+total_dead_value = dead_stock_detail.agg(F.sum("dead_stock_value")).collect()[0][0] or 0
 
 print(f"DEAD STOCK ANALYSIS (>{DEAD_STOCK_THRESHOLD_DAYS} days, well-stocked)")
 print(f"Total dead stock value: ${total_dead_value:,.2f}")

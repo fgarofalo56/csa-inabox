@@ -1,19 +1,62 @@
 # Infrastructure-as-Code & CI/CD Best Practices for CSA-in-a-Box
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** DevOps Engineers
+
 > **Research Report** | April 2026
 > Comprehensive guide for deploying a Cloud-Scale Analytics platform across 4 Azure subscriptions using Bicep and GitHub Actions.
+
+> **Note:** This document describes the target-state architecture and recommended improvements. For current CI/CD workflows, see `.github/workflows/`. For current deployment instructions, see [QUICKSTART.md](QUICKSTART.md) or [GETTING_STARTED.md](GETTING_STARTED.md).
 
 ---
 
 ## Table of Contents
 
-1. [Bicep Best Practices for Large-Scale Azure Deployments](#1-bicep-best-practices-for-large-scale-azure-deployments)
-2. [GitHub Actions CI/CD for Azure IaC](#2-github-actions-cicd-for-azure-iac)
-3. [Testing Infrastructure-as-Code](#3-testing-infrastructure-as-code)
-4. [Azure Landing Zone Accelerators](#4-azure-landing-zone-accelerators)
-5. [Multi-Environment Deployment Patterns](#5-multi-environment-deployment-patterns)
-6. [Secret Scanning and Security in CI/CD](#6-secret-scanning-and-security-in-cicd)
-7. [Recommended Implementation Plan for CSA-in-a-Box](#7-recommended-implementation-plan-for-csa-in-a-box)
+- [1. Bicep Best Practices for Large-Scale Azure Deployments](#1-bicep-best-practices-for-large-scale-azure-deployments)
+  - [1.1 Module Organization and Naming Conventions](#11-module-organization-and-naming-conventions)
+  - [1.2 Parameter Files per Environment](#12-parameter-files-per-environment)
+  - [1.3 Bicep Module Registry (Azure Container Registry)](#13-bicep-module-registry-azure-container-registry)
+  - [1.4 Deployment Stacks vs Standard Deployments](#14-deployment-stacks-vs-standard-deployments)
+  - [1.5 What-If Deployments and Validation](#15-what-if-deployments-and-validation)
+  - [1.6 Cross-Subscription and Cross-Resource-Group Deployments](#16-cross-subscription-and-cross-resource-group-deployments)
+  - [1.7 Conditional Deployment Patterns](#17-conditional-deployment-patterns)
+  - [1.8 User-Defined Types and Compile-Time Imports](#18-user-defined-types-and-compile-time-imports)
+- [2. GitHub Actions CI/CD for Azure IaC](#2-github-actions-cicd-for-azure-iac)
+  - [2.1 Workflow Organization for Multi-Subscription Deploys](#21-workflow-organization-for-multi-subscription-deploys)
+  - [2.2 OIDC Authentication (Federated Credentials)](#22-oidc-authentication-federated-credentials)
+  - [2.3 Environment Protection Rules and Approvals](#23-environment-protection-rules-and-approvals)
+  - [2.4 Reusable Workflows and Composite Actions](#24-reusable-workflows-and-composite-actions)
+  - [2.5 Secret Management with GitHub Environments](#25-secret-management-with-github-environments)
+  - [2.6 Bicep Lint, Validate, What-If in PR Checks](#26-bicep-lint-validate-what-if-in-pr-checks)
+  - [2.7 Deployment Gates and Rollback Strategies](#27-deployment-gates-and-rollback-strategies)
+  - [2.8 Matrix Deployments for Multiple Subscriptions](#28-matrix-deployments-for-multiple-subscriptions)
+- [3. Testing Infrastructure-as-Code](#3-testing-infrastructure-as-code)
+  - [3.1 Bicep Linting with Linter Rules](#31-bicep-linting-with-linter-rules)
+  - [3.2 PSRule for Azure (Policy Compliance Testing)](#32-psrule-for-azure-policy-compliance-testing)
+  - [3.3 Checkov (IaC Security Scanning)](#33-checkov-iac-security-scanning)
+  - [3.4 Additional Security Scanning Tools](#34-additional-security-scanning-tools)
+  - [3.5 Cost Estimation in CI Pipelines](#35-cost-estimation-in-ci-pipelines)
+- [4. Azure Landing Zone Accelerators](#4-azure-landing-zone-accelerators)
+  - [4.1 ALZ-Bicep vs Azure Verified Modules (AVM)](#41-alz-bicep-vs-azure-verified-modules-avm)
+  - [4.2 Extending ALZ for Data Platforms](#42-extending-alz-for-data-platforms)
+  - [4.3 Custom Policy Definitions for Data Governance](#43-custom-policy-definitions-for-data-governance)
+- [5. Multi-Environment Deployment Patterns](#5-multi-environment-deployment-patterns)
+  - [5.1 Recommended: Progressive Deployment (Ring-Based)](#51-recommended-progressive-deployment-ring-based)
+  - [5.2 Feature Flags for Infrastructure](#52-feature-flags-for-infrastructure)
+  - [5.3 Blue-Green for Infrastructure](#53-blue-green-for-infrastructure)
+  - [5.4 Canary Deployments for Data Pipelines](#54-canary-deployments-for-data-pipelines)
+- [6. Secret Scanning and Security in CI/CD](#6-secret-scanning-and-security-in-cicd)
+  - [6.1 Gitleaks Integration](#61-gitleaks-integration)
+  - [6.2 GitHub Advanced Security](#62-github-advanced-security)
+  - [6.3 Pre-Commit Hooks for Secret Detection](#63-pre-commit-hooks-for-secret-detection)
+  - [6.4 Policy-as-Code with Azure Policy](#64-policy-as-code-with-azure-policy)
+- [7. Recommended Implementation Plan for CSA-in-a-Box](#7-recommended-implementation-plan-for-csa-in-a-box)
+  - [7.1 Current State Assessment](#71-current-state-assessment)
+  - [7.2 Recommended Improvements (Priority Order)](#72-recommended-improvements-priority-order)
+  - [7.3 Tool Matrix Summary](#73-tool-matrix-summary)
+  - [7.4 CI/CD Pipeline Architecture (Target State)](#74-cicd-pipeline-architecture-target-state)
+- [Appendix A: Complete bicepconfig.json](#appendix-a-complete-bicepconfinjson)
+- [Appendix B: GitHub Secrets Required](#appendix-b-github-secrets-required)
+- [Appendix C: Key Microsoft Documentation References](#appendix-c-key-microsoft-documentation-references)
 
 ---
 
@@ -23,7 +66,7 @@
 
 For a 4-subscription deployment (Management, Connectivity, DMLZ, DLZ), structure Bicep modules by **domain** and **layer**:
 
-```
+```text
 deploy/bicep/
   _shared/                          # Shared types, functions, variables
     types.bicep                     # User-defined types (exported)
@@ -376,7 +419,7 @@ type accountKind = resourceInput<'Microsoft.Storage/storageAccounts@2024-01-01'>
 
 Recommended structure using reusable workflows:
 
-```
+```text
 .github/
   workflows/
     # Trigger workflows
@@ -648,7 +691,7 @@ runs:
 
 ### 2.5 Secret Management with GitHub Environments
 
-```
+```text
 GitHub Environments Configuration:
   
   dev:
@@ -1136,7 +1179,7 @@ module keyVault 'br/public:avm/res/key-vault/vault:0.8.0' = {
 
 The Cloud-Scale Analytics architecture maps to these landing zones:
 
-```
+```text
 Management Group Hierarchy:
   
   Tenant Root
@@ -1228,7 +1271,7 @@ resource dataGovernanceInitiative 'Microsoft.Authorization/policySetDefinitions@
 
 For data platforms, use a ring-based deployment pattern:
 
-```
+```text
 Ring 0: Dev          -> Automatic on merge to main
 Ring 1: Test/Staging -> Automatic after Ring 0 success + 5-min wait timer
 Ring 2: Production   -> Manual approval by 2+ reviewers + what-if review
@@ -1301,7 +1344,7 @@ module synapse 'modules/compute/synapse.bicep' = if (features.enableSynapse) {
 
 True blue-green is complex for stateful infrastructure. For data platforms, use a **slot-based approach** for stateless components and **in-place updates** for stateful ones:
 
-```
+```text
 Stateless (blue-green capable):
   - Compute: Synapse SQL pools, Spark pools, ADF integration runtimes
   - Networking: Load balancers, Application Gateways
@@ -1337,7 +1380,7 @@ module activePool 'modules/synapseSqlPool.bicep' = {
 
 For data pipelines, canary means routing a percentage of data through the new pipeline:
 
-```
+```text
 Canary Strategy for Data Pipelines:
   1. Deploy new pipeline version alongside existing (v1 + v2)
   2. Route 10% of incoming data to v2 pipeline
@@ -1557,7 +1600,7 @@ Based on the existing repository structure, the project already has:
 
 ### 7.4 CI/CD Pipeline Architecture (Target State)
 
-```
+```text
 PR Created/Updated
   |
   +-> Bicep Lint (all files)
@@ -1640,7 +1683,7 @@ PR Approved & Merged to main
 
 ## Appendix B: GitHub Secrets Required
 
-```
+```text
 Repository-level secrets:
   GITLEAKS_LICENSE           # For gitleaks-action
 
@@ -1674,3 +1717,12 @@ Environment: prod
 - [Cloud-Scale Analytics Architectures](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/architectures/overview-architectures)
 - [PSRule for Azure](https://azure.github.io/PSRule.Rules.Azure/)
 - [GitHub Reusable Workflows](https://docs.github.com/en/actions/sharing-automations/reusing-workflows)
+
+---
+
+## Related Documentation
+
+- [Terraform Deployment](../deploy/terraform/README.md) - Terraform deployment path for CSA-in-a-Box
+- [Bicep Gov Deployment](../deploy/bicep/gov/README.md) - Government cloud Bicep deployment
+- [ARCHITECTURE.md](ARCHITECTURE.md) - Platform architecture overview
+- [SELF_HOSTED_IR.md](SELF_HOSTED_IR.md) - Self-Hosted Integration Runtime setup and operations

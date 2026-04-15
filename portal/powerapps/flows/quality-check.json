@@ -1,0 +1,128 @@
+{
+  "properties": {
+    "displayName": "CSA Portal - Data Quality Check",
+    "description": "Runs scheduled data quality checks against data products. Retrieves quality metrics from the shared backend and sends alerts when quality thresholds are breached.",
+    "definition": {
+      "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+      "contentVersion": "1.0.0.0",
+      "triggers": {
+        "Recurrence": {
+          "type": "Recurrence",
+          "recurrence": {
+            "frequency": "Hour",
+            "interval": 6
+          }
+        }
+      },
+      "actions": {
+        "Initialize_Alerts": {
+          "type": "InitializeVariable",
+          "runAfter": {},
+          "inputs": {
+            "variables": [
+              {
+                "name": "qualityAlerts",
+                "type": "array",
+                "value": []
+              }
+            ]
+          }
+        },
+        "Get_All_Products": {
+          "type": "Http",
+          "runAfter": { "Initialize_Alerts": ["Succeeded"] },
+          "inputs": {
+            "method": "GET",
+            "uri": "@{parameters('backendApiUrl')}/api/v1/marketplace/products"
+          }
+        },
+        "Parse_Products": {
+          "type": "ParseJson",
+          "runAfter": { "Get_All_Products": ["Succeeded"] },
+          "inputs": {
+            "content": "@body('Get_All_Products')",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": { "type": "string" },
+                  "name": { "type": "string" },
+                  "quality_score": { "type": "number" },
+                  "completeness": { "type": "number" },
+                  "freshness_hours": { "type": "number" },
+                  "owner": {
+                    "type": "object",
+                    "properties": {
+                      "email": { "type": "string" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "For_Each_Product": {
+          "type": "Foreach",
+          "runAfter": { "Parse_Products": ["Succeeded"] },
+          "foreach": "@body('Parse_Products')",
+          "actions": {
+            "Check_Quality_Threshold": {
+              "type": "If",
+              "expression": {
+                "or": [
+                  { "less": ["@items('For_Each_Product')?['quality_score']", 85] },
+                  { "less": ["@items('For_Each_Product')?['completeness']", 0.9] },
+                  { "greater": ["@items('For_Each_Product')?['freshness_hours']", 48] }
+                ]
+              },
+              "actions": {
+                "Append_Alert": {
+                  "type": "AppendToArrayVariable",
+                  "inputs": {
+                    "name": "qualityAlerts",
+                    "value": {
+                      "productId": "@items('For_Each_Product')?['id']",
+                      "productName": "@items('For_Each_Product')?['name']",
+                      "qualityScore": "@items('For_Each_Product')?['quality_score']",
+                      "completeness": "@items('For_Each_Product')?['completeness']",
+                      "freshnessHours": "@items('For_Each_Product')?['freshness_hours']",
+                      "ownerEmail": "@items('For_Each_Product')?['owner']?['email']"
+                    }
+                  }
+                }
+              },
+              "else": { "actions": {} }
+            }
+          }
+        },
+        "Condition_Has_Alerts": {
+          "type": "If",
+          "runAfter": { "For_Each_Product": ["Succeeded"] },
+          "expression": {
+            "greater": ["@length(variables('qualityAlerts'))", 0]
+          },
+          "actions": {
+            "Send_Alert_Email": {
+              "type": "OpenApiConnection",
+              "inputs": {
+                "host": { "apiId": "shared_office365", "operationId": "SendEmailV2" },
+                "parameters": {
+                  "emailMessage/To": "@parameters('alertEmail')",
+                  "emailMessage/Subject": "CSA-in-a-Box: @{length(variables('qualityAlerts'))} Data Quality Alert(s)",
+                  "emailMessage/Body": "Data quality thresholds breached for @{length(variables('qualityAlerts'))} product(s). Check the portal for details."
+                }
+              }
+            }
+          },
+          "else": { "actions": {} }
+        }
+      },
+      "parameters": {
+        "backendApiUrl": { "defaultValue": "http://localhost:8000", "type": "String" },
+        "alertEmail": { "defaultValue": "datateam@contoso.com", "type": "String" }
+      }
+    },
+    "state": "Started"
+  }
+}

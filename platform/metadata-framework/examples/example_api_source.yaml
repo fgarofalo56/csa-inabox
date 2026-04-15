@@ -1,0 +1,202 @@
+# REST API Source Registration Example
+
+source_id: "660e8400-e29b-41d4-a716-446655440001"
+source_name: "Customer API"
+source_type: "rest_api"
+
+# API connection configuration
+connection:
+  base_url: "https://api.contoso.com/v2"
+  authentication:
+    type: "oauth2"
+    client_id: "customer-api-client"
+    client_secret_key_vault_secret: "customer-api-client-secret"
+    scope: "read:customers read:orders"
+    token_url: "https://auth.contoso.com/oauth/token"
+  rate_limit:
+    requests_per_second: 10
+    requests_per_minute: 500
+  pagination:
+    type: "offset"
+    page_size: 1000
+    total_pages_header: "X-Total-Pages"
+    next_page_header: "X-Next-Page"
+
+# API schema definition
+schema:
+  endpoints:
+    - path: "/customers"
+      method: "GET"
+      parameters:
+        limit:
+          type: "integer"
+          default: 1000
+        offset:
+          type: "integer"
+          default: 0
+        modified_since:
+          type: "string"
+          format: "date-time"
+          description: "Filter customers modified since this timestamp"
+      response_schema:
+        type: "object"
+        properties:
+          data:
+            type: "array"
+            items:
+              type: "object"
+              properties:
+                customer_id:
+                  type: "integer"
+                name:
+                  type: "string"
+                email:
+                  type: "string"
+                  format: "email"
+                phone:
+                  type: "string"
+                address:
+                  type: "object"
+                  properties:
+                    street:
+                      type: "string"
+                    city:
+                      type: "string"
+                    state:
+                      type: "string"
+                    postal_code:
+                      type: "string"
+                    country:
+                      type: "string"
+                registration_date:
+                  type: "string"
+                  format: "date-time"
+                last_login:
+                  type: "string"
+                  format: "date-time"
+                status:
+                  type: "string"
+                  enum: ["active", "inactive", "suspended"]
+                modified_at:
+                  type: "string"
+                  format: "date-time"
+          pagination:
+            type: "object"
+            properties:
+              total_records:
+                type: "integer"
+              current_page:
+                type: "integer"
+              total_pages:
+                type: "integer"
+              has_next:
+                type: "boolean"
+
+    - path: "/customer-segments"
+      method: "GET"
+      parameters:
+        limit:
+          type: "integer"
+          default: 100
+      response_schema:
+        type: "object"
+        properties:
+          data:
+            type: "array"
+            items:
+              type: "object"
+              properties:
+                segment_id:
+                  type: "integer"
+                segment_name:
+                  type: "string"
+                description:
+                  type: "string"
+                criteria:
+                  type: "object"
+                customer_count:
+                  type: "integer"
+                created_at:
+                  type: "string"
+                  format: "date-time"
+                updated_at:
+                  type: "string"
+                  format: "date-time"
+
+# Ingestion configuration
+ingestion:
+  mode: "incremental"
+  schedule: "0 */6 * * *"  # Every 6 hours
+  watermark_column: "modified_at"  # For incremental API calls
+  batch_size: 1000
+  parallelization: 4
+  retry_count: 5
+
+# Data classification and governance
+classification: "confidential"  # Contains PII
+
+# Data owner information
+owner:
+  name: "Customer Experience Team"
+  email: "customer-experience@contoso.com"
+  domain: "marketing"
+  cost_center: "MKT-002"
+
+# Data product definition
+data_product:
+  name: "Customer Profile Data"
+  domain: "marketing"
+  sla_freshness_minutes: 360  # 6 hours max latency
+  quality_rules:
+    - rule_type: "not_null"
+      column: "customer_id"
+      severity: "critical"
+    - rule_type: "not_null"
+      column: "email"
+      severity: "error"
+    - rule_type: "pattern"
+      column: "email"
+      parameters:
+        regex: "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$"
+      severity: "error"
+    - rule_type: "not_null"
+      column: "registration_date"
+      severity: "error"
+    - rule_type: "custom"
+      parameters:
+        expression: "status IN ('active', 'inactive', 'suspended')"
+      severity: "warning"
+
+# Target storage configuration
+target:
+  landing_zone: "lz-marketing-customers"
+  container: "bronze"
+  path_pattern: "customers/{endpoint}/year={yyyy}/month={MM}/day={dd}/hour={HH}"
+  format: "json"
+  compression: "gzip"
+
+# Tags for organization and discovery
+tags:
+  - "customers"
+  - "api"
+  - "marketing"
+  - "pii"
+  - "real-time"
+  - "segmentation"
+
+# Additional metadata
+metadata:
+  description: |
+    Customer profile and segmentation data from the customer management API.
+    Contains personally identifiable information (PII) including names, emails,
+    and addresses. Used for customer analytics, segmentation, and personalization.
+  documentation_url: "https://docs.contoso.com/customer-api"
+  business_glossary_terms:
+    - "Customer Profile"
+    - "Customer Segmentation"
+    - "Personally Identifiable Information"
+    - "Customer Journey"
+  compliance_requirements:
+    - "GDPR"   # EU customer data
+    - "CCPA"   # California customer data
+    - "PCI-DSS" # Payment-related customer data

@@ -1,0 +1,226 @@
+# Data product contract — commerce.economic_indicators
+#
+# This file is the authoritative interface for the Commerce Department
+# economic indicators data product. It declares the schema, SLAs, and
+# quality rules for economic resilience, trade, and business analytics.
+
+apiVersion: csa.commerce.gov/v1
+kind: DataProductContract
+
+metadata:
+  name: commerce.economic_indicators
+  domain: commerce
+  owner: commerce-data-engineering@contoso.com
+  version: "1.0.0"
+  description: >
+    Economic analytics from Census Bureau, BEA, and ITA data sources.
+    Provides regional economic resilience scoring, international trade
+    pattern analysis, and small business growth prediction. Used for
+    economic policy analysis, trade negotiations, and business climate
+    assessment.
+
+schema:
+  primary_key: [state_code, year]
+  columns:
+    - name: state_code
+      type: string
+      nullable: false
+      description: 2-digit state FIPS code
+
+    - name: state_name
+      type: string
+      nullable: false
+      description: Full state name
+
+    - name: region_name
+      type: string
+      nullable: false
+      description: Census Bureau region (Northeast, Midwest, South, West)
+      allowed_values:
+        - Northeast
+        - Midwest
+        - South
+        - West
+        - Other
+
+    - name: year
+      type: integer
+      nullable: false
+      description: Analysis year
+
+    - name: resilience_score
+      type: decimal(5,2)
+      nullable: false
+      description: Composite economic resilience score (0-100)
+
+    - name: resilience_category
+      type: string
+      nullable: false
+      description: Resilience classification based on score thresholds
+      allowed_values:
+        - HIGHLY_RESILIENT
+        - RESILIENT
+        - MODERATE
+        - VULNERABLE
+        - AT_RISK
+
+    - name: employment_diversity_index
+      type: decimal(5,4)
+      nullable: true
+      description: Shannon entropy of employment across industries (0-1)
+
+    - name: hhi_score
+      type: decimal(8,2)
+      nullable: true
+      description: Herfindahl-Hirschman Index for industry concentration (0-10000)
+
+    - name: gdp_stability_score
+      type: decimal(5,2)
+      nullable: true
+      description: GDP stability score (0-100, higher = more stable)
+
+    - name: total_gdp_millions
+      type: decimal(18,2)
+      nullable: true
+      description: Total state GDP in millions of real (chained 2017) dollars
+
+    - name: gdp_per_capita
+      type: decimal(12,2)
+      nullable: true
+      description: GDP per capita in real dollars
+
+    - name: population
+      type: bigint
+      nullable: true
+      description: State total population from Census estimates
+
+    - name: unemployment_rate
+      type: decimal(5,2)
+      nullable: true
+      description: State unemployment rate (%)
+
+    - name: median_household_income
+      type: decimal(12,2)
+      nullable: true
+      description: Median household income in current dollars
+
+    - name: dominant_industry
+      type: string
+      nullable: true
+      description: Largest industry sector by GDP share
+
+    - name: dominant_industry_share_pct
+      type: decimal(5,2)
+      nullable: true
+      description: GDP share of the dominant industry (%)
+
+    - name: national_resilience_rank
+      type: integer
+      nullable: false
+      description: National ranking by resilience score (1 = most resilient)
+
+    - name: growth_score
+      type: decimal(5,2)
+      nullable: true
+      description: Composite business growth score (0-100)
+
+    - name: growth_prediction_category
+      type: string
+      nullable: true
+      description: Business growth prediction classification
+      allowed_values:
+        - HIGH_GROWTH
+        - MODERATE_GROWTH
+        - STABLE
+        - SLOW_GROWTH
+        - DECLINING
+
+    - name: net_business_formation_rate
+      type: decimal(8,2)
+      nullable: true
+      description: Net new business formations per 1000 population
+
+    - name: business_survival_rate_5yr
+      type: decimal(5,1)
+      nullable: true
+      description: Estimated 5-year business survival rate (%)
+
+    - name: report_date
+      type: date
+      nullable: false
+      description: Date when analytics were generated
+
+sla:
+  freshness_minutes: 129600  # 90 days (quarterly updates)
+  valid_row_ratio: 0.98
+  supported_until: "2027-12-31"
+  update_frequency: "Quarterly, aligned with BEA GDP releases"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: state_code
+  - rule: expect_column_values_to_not_be_null
+    column: year
+  - rule: expect_column_values_to_not_be_null
+    column: resilience_score
+  - rule: expect_column_values_to_be_between
+    column: resilience_score
+    min_value: 0
+    max_value: 100
+  - rule: expect_column_values_to_be_in_set
+    column: resilience_category
+    value_set: [HIGHLY_RESILIENT, RESILIENT, MODERATE, VULNERABLE, AT_RISK]
+  - rule: expect_column_values_to_be_between
+    column: employment_diversity_index
+    min_value: 0
+    max_value: 1
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: hhi_score
+    min_value: 0
+    max_value: 10000
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: unemployment_rate
+    min_value: 0
+    max_value: 50
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: year
+    min_value: 2010
+    max_value: 2030
+
+data_lineage:
+  upstream_sources:
+    - name: "Census Bureau API"
+      url: "https://api.census.gov/data"
+      description: "American Community Survey demographic and economic data"
+      refresh_schedule: "Annual (September/December)"
+    - name: "BEA API"
+      url: "https://apps.bea.gov/api"
+      description: "GDP, personal income, and trade data"
+      refresh_schedule: "Quarterly"
+    - name: "ITA Trade Data"
+      url: "https://usatrade.census.gov"
+      description: "International trade statistics"
+      refresh_schedule: "Monthly"
+
+  downstream_consumers:
+    - name: "Economic Resilience Dashboard"
+      description: "Executive dashboard for Commerce Department leadership"
+    - name: "Trade Policy Analysis APIs"
+      description: "APIs for trade negotiation support"
+    - name: "Small Business Administration"
+      description: "Business development program targeting"
+
+usage_notes: |
+  - GDP data uses chained 2017 dollars for real comparisons across years
+  - Census ACS 5-year estimates have smaller margins of error than 1-year
+  - Trade data has a 35-day lag from the reference month
+  - HS codes are revised every 5 years; cross-year comparisons use concordance tables
+  - Resilience scores are relative rankings and may shift as methodology evolves
+  - Business formation rates are modeled proxies, not direct counts
+
+contact:
+  technical: commerce-data-team@contoso.com
+  business: commerce-analytics-lead@contoso.com

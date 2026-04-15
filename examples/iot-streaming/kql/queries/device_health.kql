@@ -1,0 +1,134 @@
+// ═══════════════════════════════════════════════════════════════
+// Device Health Monitoring
+// Monitor device connectivity, battery levels, and data freshness
+// ═══════════════════════════════════════════════════════════════
+
+// ─── Device last-seen and connectivity status ────────────────
+// Flags devices that have not reported in the expected interval.
+let expected_interval = 5m;
+let warning_threshold = 3; // Missed intervals before warning
+let critical_threshold = 10; // Missed intervals before critical
+SensorTelemetry
+| summarize
+    last_seen = max(timestamp),
+    first_seen = min(timestamp),
+    total_readings = count(),
+    avg_battery = round(avg(battery_pct), 1),
+    min_battery = round(min(battery_pct), 1)
+    by sensor_id, sensor_type
+| extend
+    minutes_since_last = datetime_diff('minute', now(), last_seen),
+    expected_interval_min = expected_interval / 1m,
+    missed_intervals = datetime_diff('minute', now(), last_seen) / (expected_interval / 1m)
+| extend health_status = case(
+    missed_intervals < warning_threshold, "healthy",
+    missed_intervals < critical_threshold, "warning",
+    "critical"
+  )
+| project
+    sensor_id,
+    sensor_type,
+    health_status,
+    last_seen,
+    minutes_since_last,
+    missed_intervals = round(missed_intervals, 0),
+    total_readings,
+    avg_battery,
+    min_battery,
+    first_seen
+| order by
+    case(health_status, "critical", 1, "warning", 2, 3),
+    minutes_since_last desc;
+
+// ─── Battery level monitoring ────────────────────────────────
+// Identify sensors with low or rapidly draining batteries.
+SensorTelemetry
+| where timestamp > ago(24h)
+| summarize
+    latest_battery = arg_max(timestamp, battery_pct),
+    earliest_battery = arg_min(timestamp, battery_pct),
+    readings = count()
+    by sensor_id
+| extend
+    current_battery = latest_battery_battery_pct,
+    drain_rate_per_hour = round(
+        (earliest_battery_battery_pct - latest_battery_battery_pct)
+        / datetime_diff('hour', latest_battery_timestamp, earliest_battery_timestamp),
+        2
+    ),
+    estimated_hours_remaining = iff(
+        latest_battery_battery_pct > earliest_battery_battery_pct,
+        real(null), // Charging or stable
+        round(
+            latest_battery_battery_pct
+            / ((earliest_battery_battery_pct - latest_battery_battery_pct)
+               / datetime_diff('hour', latest_battery_timestamp, earliest_battery_timestamp)),
+            1
+        )
+    )
+| extend battery_status = case(
+    current_battery < 10, "critical",
+    current_battery < 20, "low",
+    current_battery < 50, "moderate",
+    "good"
+  )
+| project
+    sensor_id,
+    battery_status,
+    current_battery,
+    drain_rate_per_hour,
+    estimated_hours_remaining,
+    readings
+| order by current_battery asc;
+
+// ─── Data freshness by sensor type ───────────────────────────
+// Show how fresh the data is for each sensor type.
+SensorTelemetry
+| summarize
+    last_reading = max(timestamp),
+    sensor_count = dcount(sensor_id),
+    total_readings_24h = countif(timestamp > ago(24h)),
+    total_readings_1h = countif(timestamp > ago(1h))
+    by sensor_type
+| extend
+    freshness_minutes = datetime_diff('minute', now(), last_reading),
+    avg_readings_per_sensor_per_hour = round(
+        todouble(total_readings_1h) / sensor_count, 1
+    )
+| order by freshness_minutes asc;
+
+// ─── Sensor data quality check ───────────────────────────────
+// Detect sensors sending null, zero, or out-of-range values.
+SensorTelemetry
+| where timestamp > ago(24h)
+| extend has_quality_issue = (
+    isnull(temperature_c) or
+    isnull(humidity_pct) or
+    temperature_c < -60 or temperature_c > 60 or
+    humidity_pct < 0 or humidity_pct > 100 or
+    pressure_hpa < 870 or pressure_hpa > 1084
+  )
+| summarize
+    total_readings = count(),
+    quality_issues = countif(has_quality_issue),
+    null_temp = countif(isnull(temperature_c)),
+    null_humidity = countif(isnull(humidity_pct)),
+    out_of_range_temp = countif(temperature_c < -60 or temperature_c > 60),
+    out_of_range_humidity = countif(humidity_pct < 0 or humidity_pct > 100),
+    out_of_range_pressure = countif(pressure_hpa < 870 or pressure_hpa > 1084)
+    by sensor_id
+| extend quality_score = round((1.0 - todouble(quality_issues) / total_readings) * 100, 1)
+| where quality_issues > 0
+| order by quality_score asc;
+
+// ─── Weather station connectivity report ─────────────────────
+WeatherObservations
+| summarize
+    last_observation = max(timestamp),
+    observation_count_24h = countif(timestamp > ago(24h)),
+    avg_temp = round(avg(temperature_c), 1)
+    by station_id, latitude, longitude
+| extend
+    minutes_since_last = datetime_diff('minute', now(), last_observation),
+    status = iff(datetime_diff('minute', now(), last_observation) > 30, "offline", "online")
+| order by status asc, minutes_since_last desc;

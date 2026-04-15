@@ -1,0 +1,312 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "location": {
+            "value": "East US 2"
+        },
+        "environment": {
+            "value": "dev"
+        },
+        "prefix": {
+            "value": "tribal"
+        },
+        "workloadName": {
+            "value": "population-health"
+        },
+        "deployModules": {
+            "value": {
+                "cosmosDB": true,
+                "storageZones": true,
+                "externalStorage": false,
+                "synapse": true,
+                "functions": true,
+                "streamAnalytics": false,
+                "appInsights": true,
+                "privateEndpoints": true,
+                "genericStorage": false,
+                "selfHostedIR": false,
+                "dataExplorer": true,
+                "mlWorkspace": true
+            }
+        },
+        "privateDNSZones": {
+            "value": {
+                "subscriptionId": "[subscription().subscriptionId]",
+                "resourceGroupName": "rg-dns-zones"
+            }
+        },
+        "tags": {
+            "value": {
+                "Domain": "TribalHealth",
+                "Environment": "Development",
+                "WorkloadType": "Analytics",
+                "CostCenter": "IHS-IT",
+                "Owner": "Tribal Health Data Engineering Team",
+                "Project": "Population Health Analytics Platform"
+            }
+        },
+        "databricksConfig": {
+            "value": {
+                "pricingTier": "premium",
+                "enableNoPublicIp": true,
+                "skuName": "premium",
+                "customVirtualNetworkId": "",
+                "customPublicSubnetName": "",
+                "customPrivateSubnetName": "",
+                "enableAutomaticClusterTermination": true
+            }
+        },
+        "synapseConfig": {
+            "value": {
+                "sqlAdministratorLogin": "sqladmin",
+                "sqlAdministratorLoginPassword": "[parameters('sqlAdministratorPassword')]",
+                "allowedIpAddresses": [
+                    {
+                        "name": "TribalHealth-HQ",
+                        "startIpAddress": "192.168.30.0",
+                        "endIpAddress": "192.168.30.255"
+                    }
+                ],
+                "enableDataExfiltrationProtection": true,
+                "managedVirtualNetwork": "default",
+                "gitConfig": {
+                    "accountName": "TribalHealth-Analytics",
+                    "repositoryName": "tribal-population-health",
+                    "collaborationBranch": "main",
+                    "rootFolder": "/synapse"
+                }
+            }
+        },
+        "storageConfig": {
+            "value": {
+                "accountType": "Standard_LRS",
+                "accessTier": "Hot",
+                "supportsHttpsTrafficOnly": true,
+                "enableHierarchicalNamespace": true,
+                "containers": [
+                    {
+                        "name": "raw",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "bronze",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "silver",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "gold",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "exports",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "synthetic-clinical-data",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "patient-analytics",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "facility-metrics",
+                        "publicAccess": "None"
+                    }
+                ]
+            }
+        },
+        "keyVaultConfig": {
+            "value": {
+                "enableRbacAuthorization": true,
+                "enableSoftDelete": true,
+                "softDeleteRetentionDays": 90,
+                "enablePurgeProtection": true,
+                "secrets": [
+                    {
+                        "name": "sql-administrator-password",
+                        "description": "SQL administrator password for Synapse"
+                    },
+                    {
+                        "name": "fhir-server-auth-token",
+                        "description": "FHIR server authentication token"
+                    }
+                ]
+            }
+        },
+        "dataFactoryConfig": {
+            "value": {
+                "publicNetworkAccess": "Enabled",
+                "gitConfig": {
+                    "accountName": "TribalHealth-Analytics",
+                    "repositoryName": "tribal-population-health",
+                    "collaborationBranch": "main",
+                    "rootFolder": "/datafactory"
+                },
+                "integrationRuntimes": [
+                    {
+                        "name": "AutoResolveIntegrationRuntime",
+                        "type": "Managed",
+                        "location": "AutoResolve"
+                    }
+                ],
+                "linkedServices": [
+                    {
+                        "name": "ls_keyvault",
+                        "type": "AzureKeyVault"
+                    },
+                    {
+                        "name": "ls_storage_raw",
+                        "type": "AzureDataLakeStorage"
+                    },
+                    {
+                        "name": "ls_synapse",
+                        "type": "AzureSqlDW"
+                    }
+                ]
+            }
+        },
+        "dataExplorerConfig": {
+            "value": {
+                "skuName": "Dev(No SLA)_Standard_D11_v2",
+                "skuTier": "Basic",
+                "capacity": 1,
+                "enableDiskEncryption": false,
+                "enableStreamingIngest": true,
+                "enablePurge": true,
+                "databases": [
+                    {
+                        "name": "tribalhealthanalytics",
+                        "hotCachePeriod": "P7D",
+                        "softDeletePeriod": "P365D"
+                    }
+                ],
+                "enableAutoStop": true,
+                "enableAutoScale": false
+            }
+        },
+        "mlWorkspaceConfig": {
+            "value": {
+                "friendlyName": "Tribal Health Population Analytics ML",
+                "description": "Machine learning workspace for population health analytics and chronic disease prediction",
+                "enablePublicNetworkAccess": "Enabled",
+                "computeInstances": [
+                    {
+                        "name": "chronic-disease-vm",
+                        "vmSize": "Standard_DS3_v2",
+                        "enableNodePublicIp": false
+                    }
+                ],
+                "datastores": [
+                    {
+                        "name": "clinical_data",
+                        "type": "AzureDataLakeGen2",
+                        "description": "Synthetic clinical datasets"
+                    }
+                ]
+            }
+        },
+        "monitoringConfig": {
+            "value": {
+                "enableApplicationInsights": true,
+                "enableLogAnalytics": true,
+                "retentionInDays": 90,
+                "alertRules": [
+                    {
+                        "name": "Data Pipeline Failure",
+                        "severity": 2,
+                        "evaluationFrequency": "PT5M",
+                        "windowSize": "PT15M",
+                        "actionGroupName": "tribal-health-alerts"
+                    },
+                    {
+                        "name": "PHI Access Anomaly",
+                        "severity": 0,
+                        "evaluationFrequency": "PT5M",
+                        "windowSize": "PT15M",
+                        "actionGroupName": "tribal-health-alerts"
+                    }
+                ],
+                "actionGroups": [
+                    {
+                        "name": "tribal-health-alerts",
+                        "emailReceivers": [
+                            {
+                                "name": "TribalHealth Data Team",
+                                "emailAddress": "tribal-health-data-team@contoso.com"
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        "networkingConfig": {
+            "value": {
+                "enablePrivateEndpoints": true,
+                "subnetName": "snet-tribal-analytics",
+                "vnetName": "vnet-tribal-analytics",
+                "vnetAddressPrefix": "10.5.0.0/16",
+                "subnetAddressPrefix": "10.5.1.0/24",
+                "enableNetworkSecurityGroup": true,
+                "allowedSourceIpRanges": [
+                    "192.168.30.0/24",
+                    "10.0.0.0/8"
+                ]
+            }
+        },
+        "securityConfig": {
+            "value": {
+                "enableDefender": true,
+                "enableKeyVaultFirewall": true,
+                "enableStorageFirewall": true,
+                "requireHttpsTrafficOnly": true,
+                "enableAuditLogs": true,
+                "dataClassification": {
+                    "enabled": true,
+                    "level": "Sensitive"
+                },
+                "encryptionAtRest": true,
+                "enablePrivateLink": true
+            }
+        },
+        "automationConfig": {
+            "value": {
+                "enableAutoShutdown": true,
+                "autoShutdownTime": "19:00",
+                "autoShutdownTimeZone": "Eastern Standard Time",
+                "enableCostOptimization": true,
+                "enableResourceTagging": true,
+                "backupRetentionDays": 30
+            }
+        },
+        "dataGovernanceConfig": {
+            "value": {
+                "enablePurview": false,
+                "dataRetentionPolicies": [
+                    {
+                        "dataType": "Synthetic Clinical Data",
+                        "retentionDays": 2555
+                    },
+                    {
+                        "dataType": "Patient Analytics",
+                        "retentionDays": 2555
+                    },
+                    {
+                        "dataType": "Facility Metrics",
+                        "retentionDays": 1825
+                    },
+                    {
+                        "dataType": "Audit Logs",
+                        "retentionDays": 2190
+                    }
+                ],
+                "enableDataLineage": true,
+                "enableDataQualityMonitoring": true
+            }
+        }
+    }
+}

@@ -1,0 +1,51 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "location": {
+            "value": "usgovvirginia"
+        },
+        "environment": {
+            "value": "prod"
+        },
+        "prefix": {
+            "value": "csa"
+        },
+        "enableFedRAMPHigh": {
+            "value": true
+        },
+        "dataClassification": {
+            "value": "CUI"
+        },
+        "impactLevel": {
+            "value": "IL5"
+        },
+        "deployDLZ": {
+            "value": true
+        },
+        "deployDMLZ": {
+            "value": true
+        },
+        "deployOSSAlternatives": {
+            "value": true
+        },
+        "deployAIServices": {
+            "value": true
+        },
+        "deployStreaming": {
+            "value": true
+        },
+        "enableHIPAA": {
+            "value": true
+        },
+        "tags": {
+            "value": {
+                "Project": "CSA-in-a-Box",
+                "Environment": "Production",
+                "CostCenter": "IT-DataPlatform",
+                "ManagedBy": "Bicep",
+                "DataSovereignty": "US-Only"
+            }
+        }
+    }
+}

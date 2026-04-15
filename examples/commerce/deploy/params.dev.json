@@ -1,0 +1,330 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "location": {
+            "value": "East US 2"
+        },
+        "environment": {
+            "value": "dev"
+        },
+        "prefix": {
+            "value": "commerce"
+        },
+        "workloadName": {
+            "value": "economic-analytics"
+        },
+        "deployModules": {
+            "value": {
+                "cosmosDB": true,
+                "storageZones": true,
+                "externalStorage": false,
+                "synapse": true,
+                "functions": true,
+                "streamAnalytics": false,
+                "appInsights": true,
+                "privateEndpoints": true,
+                "genericStorage": false,
+                "selfHostedIR": false,
+                "dataExplorer": true,
+                "mlWorkspace": true
+            }
+        },
+        "privateDNSZones": {
+            "value": {
+                "subscriptionId": "[subscription().subscriptionId]",
+                "resourceGroupName": "rg-dns-zones"
+            }
+        },
+        "tags": {
+            "value": {
+                "Domain": "Commerce",
+                "Environment": "Development",
+                "WorkloadType": "Analytics",
+                "CostCenter": "DOC-IT",
+                "Owner": "Commerce Data Engineering Team",
+                "Project": "Economic Analytics Platform"
+            }
+        },
+        "databricksConfig": {
+            "value": {
+                "pricingTier": "premium",
+                "enableNoPublicIp": true,
+                "skuName": "premium",
+                "customVirtualNetworkId": "",
+                "customPublicSubnetName": "",
+                "customPrivateSubnetName": "",
+                "enableAutomaticClusterTermination": true
+            }
+        },
+        "synapseConfig": {
+            "value": {
+                "sqlAdministratorLogin": "sqladmin",
+                "sqlAdministratorLoginPassword": "[parameters('sqlAdministratorPassword')]",
+                "allowedIpAddresses": [
+                    {
+                        "name": "Commerce-HQ",
+                        "startIpAddress": "192.168.10.0",
+                        "endIpAddress": "192.168.10.255"
+                    }
+                ],
+                "enableDataExfiltrationProtection": true,
+                "managedVirtualNetwork": "default",
+                "gitConfig": {
+                    "accountName": "Commerce-Analytics",
+                    "repositoryName": "commerce-economic-analytics",
+                    "collaborationBranch": "main",
+                    "rootFolder": "/synapse"
+                }
+            }
+        },
+        "storageConfig": {
+            "value": {
+                "accountType": "Standard_LRS",
+                "accessTier": "Hot",
+                "supportsHttpsTrafficOnly": true,
+                "enableHierarchicalNamespace": true,
+                "containers": [
+                    {
+                        "name": "raw",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "bronze",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "silver",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "gold",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "exports",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "census-api-cache",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "bea-gdp-data",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "trade-flows",
+                        "publicAccess": "None"
+                    }
+                ]
+            }
+        },
+        "keyVaultConfig": {
+            "value": {
+                "enableRbacAuthorization": true,
+                "enableSoftDelete": true,
+                "softDeleteRetentionDays": 90,
+                "enablePurgeProtection": true,
+                "secrets": [
+                    {
+                        "name": "census-api-key",
+                        "description": "Census Bureau API key for ACS data"
+                    },
+                    {
+                        "name": "bea-api-key",
+                        "description": "Bureau of Economic Analysis API key"
+                    },
+                    {
+                        "name": "sql-administrator-password",
+                        "description": "SQL administrator password for Synapse"
+                    }
+                ]
+            }
+        },
+        "dataFactoryConfig": {
+            "value": {
+                "publicNetworkAccess": "Enabled",
+                "gitConfig": {
+                    "accountName": "Commerce-Analytics",
+                    "repositoryName": "commerce-economic-analytics",
+                    "collaborationBranch": "main",
+                    "rootFolder": "/datafactory"
+                },
+                "integrationRuntimes": [
+                    {
+                        "name": "AutoResolveIntegrationRuntime",
+                        "type": "Managed",
+                        "location": "AutoResolve"
+                    }
+                ],
+                "linkedServices": [
+                    {
+                        "name": "ls_keyvault",
+                        "type": "AzureKeyVault"
+                    },
+                    {
+                        "name": "ls_storage_raw",
+                        "type": "AzureDataLakeStorage"
+                    },
+                    {
+                        "name": "ls_synapse",
+                        "type": "AzureSqlDW"
+                    },
+                    {
+                        "name": "ls_census_api",
+                        "type": "RestService",
+                        "baseUrl": "https://api.census.gov/data/"
+                    },
+                    {
+                        "name": "ls_bea_api",
+                        "type": "RestService",
+                        "baseUrl": "https://apps.bea.gov/api/data/"
+                    }
+                ]
+            }
+        },
+        "dataExplorerConfig": {
+            "value": {
+                "skuName": "Dev(No SLA)_Standard_D11_v2",
+                "skuTier": "Basic",
+                "capacity": 1,
+                "enableDiskEncryption": false,
+                "enableStreamingIngest": true,
+                "enablePurge": true,
+                "databases": [
+                    {
+                        "name": "commerceanalytics",
+                        "hotCachePeriod": "P7D",
+                        "softDeletePeriod": "P365D"
+                    }
+                ],
+                "enableAutoStop": true,
+                "enableAutoScale": false
+            }
+        },
+        "mlWorkspaceConfig": {
+            "value": {
+                "friendlyName": "Commerce Economic Analytics ML",
+                "description": "Machine learning workspace for economic forecasting and trade analytics",
+                "enablePublicNetworkAccess": "Enabled",
+                "computeInstances": [
+                    {
+                        "name": "trade-forecasting-vm",
+                        "vmSize": "Standard_DS3_v2",
+                        "enableNodePublicIp": false
+                    }
+                ],
+                "datastores": [
+                    {
+                        "name": "economic_data",
+                        "type": "AzureDataLakeGen2",
+                        "description": "Primary economic datasets"
+                    }
+                ]
+            }
+        },
+        "monitoringConfig": {
+            "value": {
+                "enableApplicationInsights": true,
+                "enableLogAnalytics": true,
+                "retentionInDays": 90,
+                "alertRules": [
+                    {
+                        "name": "Data Pipeline Failure",
+                        "severity": 2,
+                        "evaluationFrequency": "PT5M",
+                        "windowSize": "PT15M",
+                        "actionGroupName": "commerce-alerts"
+                    },
+                    {
+                        "name": "Trade Data Anomaly Detected",
+                        "severity": 1,
+                        "evaluationFrequency": "PT1H",
+                        "windowSize": "PT1H",
+                        "actionGroupName": "commerce-alerts"
+                    }
+                ],
+                "actionGroups": [
+                    {
+                        "name": "commerce-alerts",
+                        "emailReceivers": [
+                            {
+                                "name": "Commerce Data Team",
+                                "emailAddress": "commerce-data-team@contoso.com"
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        "networkingConfig": {
+            "value": {
+                "enablePrivateEndpoints": true,
+                "subnetName": "snet-commerce-analytics",
+                "vnetName": "vnet-commerce-analytics",
+                "vnetAddressPrefix": "10.3.0.0/16",
+                "subnetAddressPrefix": "10.3.1.0/24",
+                "enableNetworkSecurityGroup": true,
+                "allowedSourceIpRanges": [
+                    "192.168.10.0/24",
+                    "10.0.0.0/8"
+                ]
+            }
+        },
+        "securityConfig": {
+            "value": {
+                "enableDefender": true,
+                "enableKeyVaultFirewall": true,
+                "enableStorageFirewall": true,
+                "requireHttpsTrafficOnly": true,
+                "enableAuditLogs": true,
+                "dataClassification": {
+                    "enabled": true,
+                    "level": "Sensitive"
+                },
+                "encryptionAtRest": true,
+                "enablePrivateLink": true
+            }
+        },
+        "automationConfig": {
+            "value": {
+                "enableAutoShutdown": true,
+                "autoShutdownTime": "19:00",
+                "autoShutdownTimeZone": "Eastern Standard Time",
+                "enableCostOptimization": true,
+                "enableResourceTagging": true,
+                "backupRetentionDays": 30
+            }
+        },
+        "dataGovernanceConfig": {
+            "value": {
+                "enablePurview": false,
+                "dataRetentionPolicies": [
+                    {
+                        "dataType": "Raw Census Data",
+                        "retentionDays": 2555
+                    },
+                    {
+                        "dataType": "BEA GDP Data",
+                        "retentionDays": 2555
+                    },
+                    {
+                        "dataType": "Trade Flow Records",
+                        "retentionDays": 2555
+                    },
+                    {
+                        "dataType": "Processed Analytics",
+                        "retentionDays": 1825
+                    },
+                    {
+                        "dataType": "Audit Logs",
+                        "retentionDays": 2190
+                    }
+                ],
+                "enableDataLineage": true,
+                "enableDataQualityMonitoring": true
+            }
+        }
+    }
+}

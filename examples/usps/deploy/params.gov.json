@@ -1,0 +1,416 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "location": {
+            "value": "USGov Virginia"
+        },
+        "environment": {
+            "value": "gov"
+        },
+        "prefix": {
+            "value": "usps"
+        },
+        "workloadName": {
+            "value": "postal-operations-analytics"
+        },
+        "deployModules": {
+            "value": {
+                "cosmosDB": true,
+                "storageZones": true,
+                "externalStorage": false,
+                "synapse": true,
+                "functions": true,
+                "streamAnalytics": false,
+                "appInsights": true,
+                "privateEndpoints": true,
+                "genericStorage": false,
+                "selfHostedIR": false,
+                "dataExplorer": true,
+                "mlWorkspace": true
+            }
+        },
+        "privateDNSZones": {
+            "value": {
+                "subscriptionId": "[subscription().subscriptionId]",
+                "resourceGroupName": "rg-dns-zones-gov"
+            }
+        },
+        "tags": {
+            "value": {
+                "Domain": "USPS",
+                "Environment": "Government",
+                "WorkloadType": "Analytics",
+                "CostCenter": "USPS-IT-GOV",
+                "Owner": "USPS Data Engineering Team",
+                "Project": "Postal Operations Analytics Platform",
+                "Compliance": "FISMA-High",
+                "DataClassification": "CUI",
+                "AuthorityToOperate": "USPS-ATO-2024"
+            }
+        },
+        "databricksConfig": {
+            "value": {
+                "pricingTier": "premium",
+                "enableNoPublicIp": true,
+                "skuName": "premium",
+                "customVirtualNetworkId": "",
+                "customPublicSubnetName": "",
+                "customPrivateSubnetName": "",
+                "enableAutomaticClusterTermination": true,
+                "enableEncryption": true
+            }
+        },
+        "synapseConfig": {
+            "value": {
+                "sqlAdministratorLogin": "sqladmin",
+                "sqlAdministratorLoginPassword": "[parameters('sqlAdministratorPassword')]",
+                "allowedIpAddresses": [
+                    {
+                        "name": "USPS-GOV-HQ",
+                        "startIpAddress": "192.168.104.0",
+                        "endIpAddress": "192.168.104.255"
+                    },
+                    {
+                        "name": "USPS-GOV-FIELD",
+                        "startIpAddress": "192.168.105.0",
+                        "endIpAddress": "192.168.105.255"
+                    }
+                ],
+                "enableDataExfiltrationProtection": true,
+                "managedVirtualNetwork": "default",
+                "enableDoubleEncryption": true,
+                "gitConfig": {
+                    "accountName": "USPS-Analytics-Gov",
+                    "repositoryName": "usps-postal-operations-analytics-gov",
+                    "collaborationBranch": "main",
+                    "rootFolder": "/synapse"
+                }
+            }
+        },
+        "storageConfig": {
+            "value": {
+                "accountType": "Standard_GRS",
+                "accessTier": "Hot",
+                "supportsHttpsTrafficOnly": true,
+                "enableHierarchicalNamespace": true,
+                "minimumTlsVersion": "TLS1_2",
+                "allowBlobPublicAccess": false,
+                "enableCrossTenantReplication": false,
+                "containers": [
+                    {
+                        "name": "raw",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "bronze",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "silver",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "gold",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "exports",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "delivery-tracking",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "facility-ops",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "mail-volume",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "usps-api-cache",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "audit-logs",
+                        "publicAccess": "None"
+                    }
+                ],
+                "enableVersioning": true,
+                "enableDeleteRetention": true,
+                "deleteRetentionDays": 365
+            }
+        },
+        "keyVaultConfig": {
+            "value": {
+                "enableRbacAuthorization": true,
+                "enableSoftDelete": true,
+                "softDeleteRetentionDays": 90,
+                "enablePurgeProtection": true,
+                "enabledForDiskEncryption": true,
+                "enabledForDeployment": false,
+                "enabledForTemplateDeployment": false,
+                "networkAccessPolicy": "deny",
+                "secrets": [
+                    {
+                        "name": "usps-webtools-user-id",
+                        "description": "USPS Web Tools API User ID"
+                    },
+                    {
+                        "name": "census-api-key",
+                        "description": "US Census Bureau API key for TIGER/Line data"
+                    },
+                    {
+                        "name": "sql-administrator-password",
+                        "description": "SQL administrator password for Synapse"
+                    },
+                    {
+                        "name": "encryption-key",
+                        "description": "Customer-managed encryption key"
+                    }
+                ]
+            }
+        },
+        "dataFactoryConfig": {
+            "value": {
+                "publicNetworkAccess": "Disabled",
+                "managedVirtualNetworkSettings": {
+                    "allowedPrivateEndpointConnections": [],
+                    "preventDataExfiltration": true
+                },
+                "gitConfig": {
+                    "accountName": "USPS-Analytics-Gov",
+                    "repositoryName": "usps-postal-operations-analytics-gov",
+                    "collaborationBranch": "main",
+                    "rootFolder": "/datafactory"
+                },
+                "integrationRuntimes": [
+                    {
+                        "name": "AutoResolveIntegrationRuntime",
+                        "type": "Managed",
+                        "location": "USGov Virginia"
+                    }
+                ],
+                "linkedServices": [
+                    {
+                        "name": "ls_keyvault",
+                        "type": "AzureKeyVault"
+                    },
+                    {
+                        "name": "ls_storage_raw",
+                        "type": "AzureDataLakeStorage"
+                    },
+                    {
+                        "name": "ls_synapse",
+                        "type": "AzureSqlDW"
+                    },
+                    {
+                        "name": "ls_usps_webtools",
+                        "type": "RestService",
+                        "baseUrl": "https://secure.shippingapis.com/ShippingAPI.dll"
+                    },
+                    {
+                        "name": "ls_census_tiger",
+                        "type": "RestService",
+                        "baseUrl": "https://tigerweb.geo.census.gov/arcgis/rest/services/"
+                    }
+                ]
+            }
+        },
+        "dataExplorerConfig": {
+            "value": {
+                "skuName": "Standard_D11_v2",
+                "skuTier": "Standard",
+                "capacity": 2,
+                "enableDiskEncryption": true,
+                "enableStreamingIngest": true,
+                "enablePurge": true,
+                "enableDoubleEncryption": true,
+                "databases": [
+                    {
+                        "name": "uspsanalytics",
+                        "hotCachePeriod": "P30D",
+                        "softDeletePeriod": "P2555D"
+                    }
+                ],
+                "enableAutoStop": false,
+                "enableAutoScale": true,
+                "minimumInstances": 2,
+                "maximumInstances": 10
+            }
+        },
+        "mlWorkspaceConfig": {
+            "value": {
+                "friendlyName": "USPS Postal Operations ML (Gov)",
+                "description": "Machine learning workspace for mail volume forecasting and delivery optimization - Government Cloud",
+                "enablePublicNetworkAccess": "Disabled",
+                "enableHbiWorkspace": true,
+                "computeInstances": [
+                    {
+                        "name": "volume-forecasting-vm",
+                        "vmSize": "Standard_DS3_v2",
+                        "enableNodePublicIp": false
+                    }
+                ],
+                "datastores": [
+                    {
+                        "name": "postal_data",
+                        "type": "AzureDataLakeGen2",
+                        "description": "Primary postal operations datasets"
+                    }
+                ]
+            }
+        },
+        "monitoringConfig": {
+            "value": {
+                "enableApplicationInsights": true,
+                "enableLogAnalytics": true,
+                "retentionInDays": 2555,
+                "enableSecurityCenter": true,
+                "alertRules": [
+                    {
+                        "name": "Delivery Data Pipeline Failure",
+                        "severity": 1,
+                        "evaluationFrequency": "PT5M",
+                        "windowSize": "PT15M",
+                        "actionGroupName": "usps-gov-alerts"
+                    },
+                    {
+                        "name": "Service Standard Compliance Drop",
+                        "severity": 0,
+                        "evaluationFrequency": "PT30M",
+                        "windowSize": "PT1H",
+                        "actionGroupName": "usps-gov-alerts"
+                    },
+                    {
+                        "name": "Unauthorized Access Attempt",
+                        "severity": 0,
+                        "evaluationFrequency": "PT1M",
+                        "windowSize": "PT5M",
+                        "actionGroupName": "usps-security-alerts"
+                    },
+                    {
+                        "name": "Data Exfiltration Alert",
+                        "severity": 0,
+                        "evaluationFrequency": "PT5M",
+                        "windowSize": "PT15M",
+                        "actionGroupName": "usps-security-alerts"
+                    }
+                ],
+                "actionGroups": [
+                    {
+                        "name": "usps-gov-alerts",
+                        "emailReceivers": [
+                            {
+                                "name": "USPS Gov Operations Team",
+                                "emailAddress": "usps-ops@usps.gov"
+                            }
+                        ]
+                    },
+                    {
+                        "name": "usps-security-alerts",
+                        "emailReceivers": [
+                            {
+                                "name": "USPS Security Operations",
+                                "emailAddress": "usps-security-ops@usps.gov"
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        "networkingConfig": {
+            "value": {
+                "enablePrivateEndpoints": true,
+                "subnetName": "snet-usps-analytics-gov",
+                "vnetName": "vnet-usps-analytics-gov",
+                "vnetAddressPrefix": "10.104.0.0/16",
+                "subnetAddressPrefix": "10.104.1.0/24",
+                "enableNetworkSecurityGroup": true,
+                "allowedSourceIpRanges": [
+                    "192.168.104.0/24",
+                    "192.168.105.0/24"
+                ],
+                "enableDdosProtection": true,
+                "enableBastionHost": true
+            }
+        },
+        "securityConfig": {
+            "value": {
+                "enableDefender": true,
+                "enableSentinel": true,
+                "enableKeyVaultFirewall": true,
+                "enableStorageFirewall": true,
+                "requireHttpsTrafficOnly": true,
+                "enableAuditLogs": true,
+                "enableAdvancedThreatProtection": true,
+                "dataClassification": {
+                    "enabled": true,
+                    "level": "CUI"
+                },
+                "encryptionAtRest": true,
+                "enablePrivateLink": true,
+                "enableCustomerManagedKeys": true,
+                "complianceStandards": ["FISMA", "NIST-800-53", "FedRAMP"],
+                "enableIdentityGovernance": true
+            }
+        },
+        "automationConfig": {
+            "value": {
+                "enableAutoShutdown": false,
+                "enableCostOptimization": true,
+                "enableResourceTagging": true,
+                "backupRetentionDays": 2555,
+                "enableDisasterRecovery": true,
+                "drRegion": "USGov Texas"
+            }
+        },
+        "dataGovernanceConfig": {
+            "value": {
+                "enablePurview": true,
+                "dataRetentionPolicies": [
+                    {
+                        "dataType": "Raw Delivery Tracking Data",
+                        "retentionDays": 2555,
+                        "complianceReason": "Federal Records Act"
+                    },
+                    {
+                        "dataType": "Processed Operations Analytics",
+                        "retentionDays": 2555,
+                        "complianceReason": "Federal Records Act"
+                    },
+                    {
+                        "dataType": "Audit Logs",
+                        "retentionDays": 2555,
+                        "complianceReason": "Security Compliance"
+                    },
+                    {
+                        "dataType": "Personal Data",
+                        "retentionDays": 1825,
+                        "complianceReason": "Privacy Act"
+                    }
+                ],
+                "enableDataLineage": true,
+                "enableDataQualityMonitoring": true,
+                "enableDataLossPrevention": true,
+                "piiDetection": true,
+                "enableDataEncryption": true
+            }
+        },
+        "complianceConfig": {
+            "value": {
+                "fismaLevel": "High",
+                "enableFedRAMP": true,
+                "enableSOC2": false,
+                "enableNIST": true,
+                "auditRetentionYears": 7,
+                "enableContinuousMonitoring": true,
+                "securityContactEmail": "usps-security-ops@usps.gov",
+                "privacyContactEmail": "usps-privacy-office@usps.gov"
+            }
+        }
+    }
+}

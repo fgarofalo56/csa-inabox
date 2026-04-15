@@ -1,0 +1,532 @@
+version: 2
+
+sources:
+  - name: tribal_health
+    description: Tribal health data sources — ALL DATA IS SYNTHETIC
+    tables:
+      - name: patient_demographics
+        description: Synthetic RPMS-compatible patient demographic data
+        columns:
+          - name: patient_id
+            description: Synthetic patient identifier (not a real MRN)
+            tests:
+              - not_null
+          - name: tribal_affiliation
+            description: Tribal affiliation code
+            tests:
+              - not_null
+          - name: service_unit
+            description: IHS service unit assignment
+            tests:
+              - not_null
+
+      - name: encounters
+        description: Synthetic clinical encounter records
+        columns:
+          - name: encounter_id
+            description: Unique encounter identifier
+            tests:
+              - not_null
+          - name: patient_id
+            description: Patient identifier (FK to demographics)
+            tests:
+              - not_null
+          - name: encounter_date
+            description: Date of encounter
+            tests:
+              - not_null
+
+      - name: facilities
+        description: IHS and tribal facility reference data
+        columns:
+          - name: facility_id
+            description: Unique facility identifier
+            tests:
+              - not_null
+          - name: facility_name
+            description: Facility name
+            tests:
+              - not_null
+
+models:
+  # ──────────────────────────────────────────────
+  # Bronze Models
+  # ──────────────────────────────────────────────
+  - name: brz_patient_demographics
+    description: >
+      Bronze layer — Raw synthetic patient demographics with validation flags.
+      FHIR mapping: Patient resource. All data is entirely synthetic.
+    columns:
+      - name: patient_id
+        description: Synthetic patient identifier
+        tests:
+          - not_null
+          - unique
+      - name: tribal_affiliation
+        description: Tribal affiliation code (e.g., NAV, CHE, LAK)
+        tests:
+          - not_null
+      - name: service_unit
+        description: IHS service unit (e.g., Navajo, Aberdeen, Phoenix)
+        tests:
+          - not_null
+      - name: age_group
+        description: Age band (e.g., 0-4, 5-9, ..., 80+) — used instead of DOB for de-identification
+        tests:
+          - not_null
+      - name: gender
+        description: Gender code (M, F, NB, U)
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['M', 'F', 'NB', 'U', 'MALE', 'FEMALE']
+      - name: zip_code
+        description: 5-digit ZIP code (synthetic)
+        tests:
+          - not_null
+      - name: enrollment_date
+        description: Date of enrollment in health program
+      - name: eligibility_status
+        description: Current eligibility status
+        tests:
+          - not_null
+      - name: is_valid_record
+        description: Data quality validation flag
+        tests:
+          - not_null
+      - name: record_hash
+        description: MD5 hash for deduplication
+        tests:
+          - not_null
+
+  - name: brz_encounters
+    description: >
+      Bronze layer — Raw synthetic clinical encounter records.
+      FHIR mapping: Encounter resource. Includes ICD-10 diagnoses.
+    columns:
+      - name: encounter_id
+        description: Unique encounter identifier
+        tests:
+          - not_null
+          - unique
+      - name: patient_id
+        description: Patient identifier (FK to demographics)
+        tests:
+          - not_null
+      - name: facility_id
+        description: Facility where encounter occurred
+        tests:
+          - not_null
+      - name: encounter_date
+        description: Date of clinical encounter
+        tests:
+          - not_null
+      - name: encounter_type
+        description: Encounter type classification
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['INPATIENT', 'OUTPATIENT', 'ED', 'TELEHEALTH']
+      - name: primary_dx_icd10
+        description: Primary diagnosis ICD-10-CM code
+        tests:
+          - not_null
+      - name: provider_type
+        description: Type of provider (MD, NP, PA, etc.)
+      - name: disposition
+        description: Encounter outcome/disposition
+      - name: is_valid_record
+        description: Data quality validation flag
+        tests:
+          - not_null
+      - name: record_hash
+        description: MD5 hash for deduplication
+        tests:
+          - not_null
+
+  - name: brz_facilities
+    description: >
+      Bronze layer — IHS and tribal facility reference data.
+      FHIR mapping: Organization resource.
+    columns:
+      - name: facility_id
+        description: Unique facility identifier
+        tests:
+          - not_null
+          - unique
+      - name: facility_name
+        description: Facility name
+        tests:
+          - not_null
+      - name: facility_type
+        description: Facility type classification
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['HOSPITAL', 'HEALTH_CENTER', 'SATELLITE']
+      - name: service_unit
+        description: IHS service unit
+        tests:
+          - not_null
+      - name: state
+        description: 2-letter state code
+        tests:
+          - not_null
+      - name: bed_count
+        description: Number of inpatient beds (NULL for clinics)
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 500
+              where: "bed_count IS NOT NULL"
+      - name: provider_count
+        description: Number of clinical providers
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 200
+              where: "provider_count IS NOT NULL"
+      - name: is_valid_record
+        description: Data quality validation flag
+        tests:
+          - not_null
+
+  # ──────────────────────────────────────────────
+  # Silver Models
+  # ──────────────────────────────────────────────
+  - name: slv_patient_demographics
+    description: >
+      Silver layer — Cleaned, validated patient demographics with age banding,
+      enrollment validation, and de-identification flags. RLS-enforced by tribal_affiliation.
+    columns:
+      - name: patient_sk
+        description: Surrogate key for patient record
+        tests:
+          - not_null
+          - unique
+      - name: patient_id
+        description: Synthetic patient identifier
+        tests:
+          - not_null
+          - unique
+      - name: tribal_affiliation
+        description: Standardized tribal affiliation code
+        tests:
+          - not_null
+      - name: service_unit
+        description: IHS service unit
+        tests:
+          - not_null
+      - name: age_group
+        description: Original age group band
+        tests:
+          - not_null
+      - name: age_band
+        description: Aggregated age band (PEDIATRIC, ADOLESCENT, ADULT, MIDDLE_AGED, ELDER)
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['PEDIATRIC', 'ADOLESCENT', 'ADULT', 'MIDDLE_AGED', 'ELDER', 'UNKNOWN']
+      - name: gender
+        description: Standardized gender code
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['M', 'F', 'NB', 'U']
+      - name: eligibility_status
+        description: Standardized eligibility status
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['ACTIVE', 'INACTIVE', 'PENDING', 'UNKNOWN']
+      - name: is_deidentified
+        description: Flag indicating data has been de-identified per HIPAA Safe Harbor
+        tests:
+          - not_null
+          - accepted_values:
+              values: [true]
+      - name: is_valid
+        description: Data quality validation flag
+        tests:
+          - not_null
+
+  - name: slv_encounters
+    description: >
+      Silver layer — Cleaned encounters with ICD-10 validation, diagnosis categorization,
+      cost estimation, and 42 CFR Part 2 SUD flags.
+    columns:
+      - name: encounter_sk
+        description: Surrogate key for encounter record
+        tests:
+          - not_null
+          - unique
+      - name: encounter_id
+        description: Original encounter identifier
+        tests:
+          - not_null
+      - name: patient_id
+        description: Patient identifier
+        tests:
+          - not_null
+      - name: encounter_date
+        description: Date of encounter
+        tests:
+          - not_null
+      - name: encounter_type
+        description: Encounter type
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['INPATIENT', 'OUTPATIENT', 'ED', 'TELEHEALTH']
+      - name: primary_dx_icd10
+        description: Primary ICD-10-CM diagnosis code
+        tests:
+          - not_null
+      - name: diagnosis_category
+        description: Clinical domain category
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['DIABETES', 'SUBSTANCE_USE', 'MENTAL_HEALTH', 'BEHAVIORAL_HEALTH', 'MATERNAL', 'PREVENTIVE', 'RESPIRATORY', 'CARDIOVASCULAR', 'INJURY', 'OTHER']
+      - name: is_behavioral_health
+        description: Flag for behavioral health encounters
+        tests:
+          - not_null
+      - name: is_sud_protected
+        description: Flag for 42 CFR Part 2 protected SUD records
+        tests:
+          - not_null
+      - name: is_maternal_child
+        description: Flag for MCH encounters
+        tests:
+          - not_null
+      - name: estimated_cost
+        description: Estimated encounter cost based on type
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: tribal_affiliation
+        description: Patient tribal affiliation (from demographics join)
+      - name: service_unit
+        description: Patient service unit (from demographics join)
+      - name: is_valid
+        description: Data quality validation flag
+        tests:
+          - not_null
+
+  - name: slv_facilities
+    description: >
+      Silver layer — Standardized facility data with capacity utilization,
+      provider-to-population ratios, and service availability flags.
+    columns:
+      - name: facility_sk
+        description: Surrogate key
+        tests:
+          - not_null
+          - unique
+      - name: facility_id
+        description: Facility identifier
+        tests:
+          - not_null
+      - name: facility_type
+        description: Facility type
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['HOSPITAL', 'HEALTH_CENTER', 'SATELLITE']
+      - name: service_unit
+        description: IHS service unit
+        tests:
+          - not_null
+      - name: provider_ratio_per_10000
+        description: Providers per 10,000 enrolled population
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 500
+              where: "provider_ratio_per_10000 IS NOT NULL"
+      - name: telehealth_adoption_pct
+        description: Percentage of encounters via telehealth
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+
+  # ──────────────────────────────────────────────
+  # Gold Models
+  # ──────────────────────────────────────────────
+  - name: gld_diabetes_prevalence
+    description: >
+      Gold layer — Diabetes prevalence tracking by service unit with A1C control rates,
+      complication rates, and year-over-year trends. Small cell suppression applied.
+    columns:
+      - name: service_unit
+        description: IHS service unit
+        tests:
+          - not_null
+      - name: reporting_period
+        description: Quarterly reporting period (e.g., 2024-Q4)
+        tests:
+          - not_null
+      - name: prevalence_rate_per_1000
+        description: Diabetes prevalence per 1,000 adult population (NULL if suppressed)
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 500
+              where: "prevalence_rate_per_1000 IS NOT NULL"
+      - name: a1c_controlled_pct
+        description: Percentage with A1C < 7.0 (NULL if suppressed)
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+              where: "a1c_controlled_pct IS NOT NULL"
+      - name: complication_rate_pct
+        description: Percentage with diabetes complications (NULL if suppressed)
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+              where: "complication_rate_pct IS NOT NULL"
+      - name: prevalence_trend
+        description: Year-over-year trend classification
+        tests:
+          - accepted_values:
+              values: ['INCREASING', 'DECREASING', 'STABLE', 'INSUFFICIENT_DATA']
+
+  - name: gld_behavioral_health
+    description: >
+      Gold layer — Behavioral health service utilization, provider ratios, waitlist metrics,
+      and crisis intervention tracking. SUD data is 42 CFR Part 2 aggregate only.
+    columns:
+      - name: service_unit
+        description: IHS service unit
+        tests:
+          - not_null
+      - name: reporting_period
+        description: Quarterly reporting period
+        tests:
+          - not_null
+      - name: sud_encounter_rate_per_1000
+        description: SUD encounters per 1,000 population (NULL if suppressed)
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              where: "sud_encounter_rate_per_1000 IS NOT NULL"
+      - name: mh_encounter_rate_per_1000
+        description: Mental health encounters per 1,000 population (NULL if suppressed)
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              where: "mh_encounter_rate_per_1000 IS NOT NULL"
+      - name: provider_ratio_per_10000
+        description: BH providers per 10,000 population
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              where: "provider_ratio_per_10000 IS NOT NULL"
+      - name: telehealth_utilization_pct
+        description: Percentage of BH encounters via telehealth
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+
+  - name: gld_maternal_child_health
+    description: >
+      Gold layer — MCH outcomes including prenatal visit completion, birth outcomes,
+      immunization coverage, and well-child visit adherence. Small cell suppression applied.
+    columns:
+      - name: service_unit
+        description: IHS service unit
+        tests:
+          - not_null
+      - name: reporting_period
+        description: Quarterly reporting period
+        tests:
+          - not_null
+      - name: prenatal_first_trimester_pct
+        description: Percentage entering prenatal care in first trimester (NULL if suppressed)
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+              where: "prenatal_first_trimester_pct IS NOT NULL"
+      - name: low_birth_weight_pct
+        description: Percentage of births with low birth weight (NULL if suppressed)
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+              where: "low_birth_weight_pct IS NOT NULL"
+      - name: immunization_series_complete_pct
+        description: Immunization series completion rate (NULL if suppressed)
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+              where: "immunization_series_complete_pct IS NOT NULL"
+      - name: teen_pregnancy_rate_per_1000
+        description: Teen pregnancy rate per 1,000 teen females (NULL if suppressed)
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              where: "teen_pregnancy_rate_per_1000 IS NOT NULL"
+
+# ──────────────────────────────────────────────
+# Custom Data Quality Tests
+# ──────────────────────────────────────────────
+tests:
+  - name: test_small_cell_suppression_diabetes
+    description: Verify no diabetes prevalence output has unsuppressed cell < 5
+    sql: |
+      SELECT *
+      FROM {{ ref('gld_diabetes_prevalence') }}
+      WHERE total_diabetic_patients IS NOT NULL
+        AND total_diabetic_patients < {{ var('small_cell_threshold') }}
+    tags: ['hipaa_compliance', 'data_sovereignty']
+
+  - name: test_small_cell_suppression_behavioral_health
+    description: Verify no BH output has unsuppressed cell < 5
+    sql: |
+      SELECT *
+      FROM {{ ref('gld_behavioral_health') }}
+      WHERE (total_bh_encounters IS NOT NULL AND total_bh_encounters < {{ var('small_cell_threshold') }})
+         OR (sud_encounters IS NOT NULL AND sud_encounters < {{ var('small_cell_threshold') }})
+    tags: ['hipaa_compliance', '42cfr_part2']
+
+  - name: test_small_cell_suppression_mch
+    description: Verify no MCH output has unsuppressed cell < 5
+    sql: |
+      SELECT *
+      FROM {{ ref('gld_maternal_child_health') }}
+      WHERE total_pregnancies IS NOT NULL
+        AND total_pregnancies < {{ var('small_cell_threshold') }}
+    tags: ['hipaa_compliance']
+
+  - name: test_encounter_date_not_future
+    description: No encounters should have future dates
+    sql: |
+      SELECT *
+      FROM {{ ref('slv_encounters') }}
+      WHERE encounter_date > CURRENT_DATE()
+    tags: ['clinical_validity']
+
+  - name: test_icd10_format_valid
+    description: ICD-10 codes should be 3-7 characters starting with a letter
+    sql: |
+      SELECT *
+      FROM {{ ref('slv_encounters') }}
+      WHERE primary_dx_icd10 IS NOT NULL
+        AND NOT primary_dx_icd10 RLIKE '^[A-Z][0-9]{2}\.?[0-9A-Z]{0,4}$'
+    tags: ['clinical_validity']
+
+  - name: test_patient_enrollment_date_reasonable
+    description: Enrollment dates should not be in the future
+    sql: |
+      SELECT *
+      FROM {{ ref('slv_patient_demographics') }}
+      WHERE enrollment_date > CURRENT_DATE()
+    tags: ['data_quality']

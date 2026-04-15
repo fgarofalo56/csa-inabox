@@ -29,8 +29,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 import azure.functions as func
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-from azure.core.exceptions import ServiceRequestError, HttpResponseError
+from azure.core.exceptions import HttpResponseError, ServiceRequestError
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from governance.common.logging import (
     bind_trace_context,
@@ -48,13 +48,14 @@ app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
 # Configuration and Constants
 # ---------------------------------------------------------------------------
 AI_ENDPOINT = os.environ.get("AZURE_AI_ENDPOINT", "")
-STORAGE_CONNECTION = os.environ.get("AzureWebJobsStorage", "")
+STORAGE_CONNECTION = os.environ.get("AzureWebJobsStorage", "")  # noqa: SIM112 (Azure-defined name)
 ENRICHED_CONTAINER = os.environ.get("ENRICHED_CONTAINER", "enriched")
 INBOX_CONTAINER = os.environ.get("INBOX_CONTAINER", "inbox")
 
-# Text processing limits - Azure AI Services constraints
-TEXT_CHUNK_SIZE = 5120  # Maximum text length for single API call to Azure Text Analytics
-MAX_TEXT_LENGTH = 125000  # Maximum total text length for HTTP endpoint processing
+# Text processing limits - Azure AI Services constraints.
+# Override via environment variables for different Azure AI tier limits.
+TEXT_CHUNK_SIZE = int(os.environ.get("AI_TEXT_CHUNK_SIZE", "5120"))
+MAX_TEXT_LENGTH = int(os.environ.get("AI_MAX_TEXT_LENGTH", "125000"))
 
 # ---------------------------------------------------------------------------
 # Module-level client setup for connection pooling
@@ -63,20 +64,24 @@ _text_analytics_client = None
 _document_analysis_client = None
 _credential = None
 
-def _get_credential():
+
+def _get_credential() -> Any:
     """Get shared Azure credential for connection pooling."""
     global _credential
     if _credential is None:
         from azure.identity.aio import DefaultAzureCredential
+
         _credential = DefaultAzureCredential()
     return _credential
 
-def _get_text_analytics_client():
+
+def _get_text_analytics_client() -> Any:
     """Get shared Text Analytics client for connection pooling."""
     global _text_analytics_client
     if _text_analytics_client is None and AI_ENDPOINT:
         try:
             from azure.ai.textanalytics.aio import TextAnalyticsClient
+
             _text_analytics_client = TextAnalyticsClient(
                 endpoint=AI_ENDPOINT,
                 credential=_get_credential(),
@@ -85,12 +90,14 @@ def _get_text_analytics_client():
             pass
     return _text_analytics_client
 
-def _get_document_analysis_client():
+
+def _get_document_analysis_client() -> Any:
     """Get shared Document Analysis client for connection pooling."""
     global _document_analysis_client
     if _document_analysis_client is None and AI_ENDPOINT:
         try:
             from azure.ai.formrecognizer.aio import DocumentAnalysisClient
+
             _document_analysis_client = DocumentAnalysisClient(
                 endpoint=AI_ENDPOINT,
                 credential=_get_credential(),
@@ -109,6 +116,7 @@ def _text_analytics_available() -> bool:
         return False
     try:
         import azure.ai.textanalytics.aio  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -120,6 +128,7 @@ def _form_recognizer_available() -> bool:
         return False
     try:
         import azure.ai.formrecognizer.aio  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -131,7 +140,7 @@ def _form_recognizer_available() -> bool:
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=30),
-    retry=retry_if_exception_type((ServiceRequestError, HttpResponseError))
+    retry=retry_if_exception_type((ServiceRequestError, HttpResponseError)),
 )
 async def _enrich_text(text: str) -> dict[str, Any]:
     """Run text enrichment pipeline: language detection, sentiment, entities, PII.
@@ -212,7 +221,7 @@ async def _enrich_text(text: str) -> dict[str, Any]:
 
     except (ServiceRequestError, HttpResponseError) as e:
         logger.error("enrichment.azure_sdk_failed", error_type=type(e).__name__, error_message=str(e))
-        results["error"] = f"Azure SDK error: {str(e)}"
+        results["error"] = f"Azure SDK error: {e!s}"
     except ImportError as e:
         logger.warning("enrichment.import_failed", error=str(e))
         results["error"] = "AI client not configured"
@@ -226,7 +235,7 @@ async def _enrich_text(text: str) -> dict[str, Any]:
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=30),
-    retry=retry_if_exception_type((ServiceRequestError, HttpResponseError))
+    retry=retry_if_exception_type((ServiceRequestError, HttpResponseError)),
 )
 async def _analyze_document(blob_data: bytes, content_type: str) -> dict[str, Any]:
     """Analyze document using the shared Azure AI Document Intelligence client.
@@ -276,7 +285,7 @@ async def _analyze_document(blob_data: bytes, content_type: str) -> dict[str, An
 
     except (ServiceRequestError, HttpResponseError) as e:
         logger.error("enrichment.document_azure_sdk_failed", error_type=type(e).__name__, error_message=str(e))
-        results["error"] = f"Azure SDK error: {str(e)}"
+        results["error"] = f"Azure SDK error: {e!s}"
     except ImportError as e:
         logger.warning("enrichment.document_import_failed", error=str(e))
         results["error"] = "Document Intelligence client not configured"
@@ -381,14 +390,14 @@ async def process_inbox_document(
         # Check blob size before reading into memory
         MAX_BLOB_SIZE = 50 * 1024 * 1024  # 50 MB
         if blob.length and blob.length > MAX_BLOB_SIZE:
-            enrichment: dict[str, Any] = {
+            skip_result: dict[str, Any] = {
                 "source_blob": blob.name,
                 "source_size": blob.length,
                 "processed_at": datetime.now(timezone.utc).isoformat(),
                 "skipped": True,
                 "reason": f"Blob too large: {blob.length} bytes (max: {MAX_BLOB_SIZE})",
             }
-            output_json = json.dumps(enrichment, default=str, indent=2)
+            output_json = json.dumps(skip_result, default=str, indent=2)
             outputBlob.set(output_json)
             logger.warning("blob.too_large", blob_size=blob.length, max_size=MAX_BLOB_SIZE)
             return

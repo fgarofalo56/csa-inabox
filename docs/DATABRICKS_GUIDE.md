@@ -1,8 +1,30 @@
 # Databricks Guide
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Data Engineers
+
 This guide covers setting up and operating Databricks within the
 CSA-in-a-Box platform, including workspace configuration, notebook
 orchestration, dbt integration, and Unity Catalog.
+
+## Table of Contents
+
+- [Workspace Setup](#workspace-setup)
+  - [Prerequisites](#prerequisites)
+  - [Cluster Configuration](#cluster-configuration)
+  - [Required Spark configuration](#required-spark-configuration)
+- [Notebook Inventory](#notebook-inventory)
+  - [Naming conventions](#naming-conventions)
+- [Notebook Orchestration](#notebook-orchestration)
+  - [Pattern 1: dbutils.notebook.run() (simple)](#pattern-1-dbutilsnotebookrun-simple)
+  - [Pattern 2: ADF orchestration (production)](#pattern-2-adf-orchestration-production)
+  - [Pattern 3: Databricks Workflows (native)](#pattern-3-databricks-workflows-native)
+- [dbt on Databricks](#dbt-on-databricks)
+  - [Profile configuration](#profile-configuration)
+  - [Environment variables](#environment-variables)
+  - [Running dbt from a notebook](#running-dbt-from-a-notebook)
+  - [Running dbt locally](#running-dbt-locally)
+- [Unity Catalog Setup](#unity-catalog-setup)
+- [Troubleshooting](#troubleshooting)
 
 ## Workspace Setup
 
@@ -40,7 +62,7 @@ orchestration, dbt integration, and Unity Catalog.
 
 Add these to your cluster's Spark Config:
 
-```
+```text
 # ADLS Gen2 access via managed identity
 spark.hadoop.fs.azure.account.auth.type.<STORAGE>.dfs.core.windows.net OAuth
 spark.hadoop.fs.azure.account.oauth.provider.type.<STORAGE>.dfs.core.windows.net org.apache.hadoop.fs.azurebfs.oauth2.MsiTokenProvider
@@ -127,7 +149,7 @@ print(results)
 The `pl_medallion_orchestration` ADF pipeline calls notebooks via the
 Databricks linked service:
 
-```
+```text
 ADF Trigger (daily 06:00 UTC)
   -> pl_medallion_orchestration
      -> Databricks Activity: bronze_to_silver_spark
@@ -282,3 +304,11 @@ dbutils.notebook.run("heavy_job", timeout_seconds=3600)  # 1 hour max
 ```
 
 See the general [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for more issues.
+
+---
+
+## Related Documentation
+
+- [ADF_SETUP.md](ADF_SETUP.md) - Azure Data Factory pipeline setup and orchestration
+- [GETTING_STARTED.md](GETTING_STARTED.md) - Platform deployment quickstart
+- [ARCHITECTURE.md](ARCHITECTURE.md) - Platform architecture overview

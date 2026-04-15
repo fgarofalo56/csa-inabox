@@ -1,9 +1,28 @@
 # Troubleshooting Guide
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Operations
+
+## Table of Contents
+
+- [Bicep Deployment Issues](#bicep-deployment-issues)
+- [dbt Issues](#dbt-issues)
+- [Data Quality Issues](#data-quality-issues)
+- [Azure Functions Issues](#azure-functions-issues)
+- [Deployment Rollback](#deployment-rollback)
+- [Regional Outage / Disaster Recovery](#regional-outage--disaster-recovery)
+- [ADF Pipeline Issues](#adf-pipeline-issues)
+- [Stream Analytics Issues](#stream-analytics-issues)
+- [Databricks Issues](#databricks-issues)
+- [Purview Issues](#purview-issues)
+- [Great Expectations Issues](#great-expectations-issues)
+- [Key Vault Issues](#key-vault-issues)
+- [Cosmos DB Issues](#cosmos-db-issues)
+- [CI/CD Workflow Issues](#cicd-workflow-issues)
+
 ## Bicep Deployment Issues
 
 ### "Resource provider not registered"
-```
+```text
 Error: Resource provider 'Microsoft.Purview' is not registered
 ```
 **Fix**: Register the provider:
@@ -14,7 +33,7 @@ az provider register --namespace Microsoft.Synapse
 ```
 
 ### "Template validation failed"
-```
+```text
 Error: Template validation failed
 ```
 **Fix**: Run `bicep build` locally first:
@@ -48,7 +67,7 @@ csa_analytics:
 
 ### "Catalog not found"
 Run Unity Catalog setup first:
-```
+```text
 domains/shared/notebooks/databricks/unity_catalog_setup.py
 ```
 
@@ -170,12 +189,12 @@ events = dbutils.cluster.events(cluster_id, limit=20)
 ### "Delta table version conflict"
 
 Concurrent writes to the same Delta table from multiple jobs:
-```
+```text
 ConcurrentAppendException: Files were added by a concurrent update
 ```
 
 **Fix**: Enable Delta auto-retry:
-```
+```text
 spark.databricks.delta.retryWriteConflict.enabled true
 ```
 
@@ -296,3 +315,12 @@ Check which files are below threshold and add tests.
 1. The `bicep-whatif.yml` workflow requires Azure OIDC credentials
 2. It only runs on PRs that modify `deploy/bicep/**` files
 3. The bot needs write permissions on the PR — check `permissions: pull-requests: write`
+
+---
+
+## Related Documentation
+
+- [Getting Started](GETTING_STARTED.md) - Prerequisites and deployment walkthrough
+- [Rollback](ROLLBACK.md) - Deployment rollback runbook
+- [Disaster Recovery](DR.md) - Multi-region failover runbook
+- [Log Schema](LOG_SCHEMA.md) - Structured logging schema reference

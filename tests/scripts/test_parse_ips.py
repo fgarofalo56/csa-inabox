@@ -2,24 +2,21 @@
 
 from __future__ import annotations
 
-import importlib.util
 import json
-import tempfile
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from tests.conftest import load_script_module
+
 # Load parseIPs as a module since it's in a directory with spaces (not a package).
 _SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "Azure IPs" / "parseIPs.py"
-_spec = importlib.util.spec_from_file_location("parseIPs", _SCRIPT_PATH)
-assert _spec is not None and _spec.loader is not None
-_mod = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_mod)
+_mod = load_script_module("parseIPs", _SCRIPT_PATH)
 
-extract_address_prefixes = _mod.extract_address_prefixes  # type: ignore[attr-defined]
-merge_prefixes = _mod.merge_prefixes  # type: ignore[attr-defined]
-write_to_file = _mod.write_to_file  # type: ignore[attr-defined]
+extract_address_prefixes = _mod.extract_address_prefixes
+merge_prefixes = _mod.merge_prefixes
+write_to_file = _mod.write_to_file
 
 
 # ── Fixtures ────────────────────────────────────────────────────────
@@ -80,7 +77,7 @@ class TestExtractAddressPrefixes:
             ],
         }
         (tmp_path / "bad.json").write_text(json.dumps(data), encoding="utf-8")
-        v4, v6 = extract_address_prefixes(str(tmp_path))
+        v4, _v6 = extract_address_prefixes(str(tmp_path))
         assert "10.0.0.0/8" in v4
         assert len(v4) == 1
 

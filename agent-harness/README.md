@@ -1,12 +1,14 @@
 # CSA-in-a-Box Agent Harness — Ralph Loop
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Developers
+
 ## Overview
 
 The Ralph loop is an autonomous agent harness for iterative implementation, testing, and validation of the CSA-in-a-Box platform. It follows a task-driven development cycle where agents pick up Archon tasks, implement changes, validate them through automated gates, and iterate until validation passes.
 
 ## How It Works
 
-```
+```text
 ┌─────────────────────────────────────────────────┐
 │                  Ralph Loop                      │
 │                                                  │
@@ -73,3 +75,11 @@ See `agent-harness/config.yaml` for loop settings:
 Project ID: `1bd59749-db0a-4009-82c7-f1a56d24a820`
 
 Query tasks: `find_tasks(filter_by="project", filter_value="1bd59749-db0a-4009-82c7-f1a56d24a820")`
+
+---
+
+## Related Documentation
+
+- [Architecture Overview](../docs/ARCHITECTURE.md) - Platform architecture reference
+- [Getting Started](../docs/GETTING_STARTED.md) - Platform setup and onboarding
+- [Contributing](../CONTRIBUTING.md) - Development guidelines and PR process

@@ -1,0 +1,157 @@
+-- ═══════════════════════════════════════════════════════════════
+-- Detect Anomalies
+-- Azure Stream Analytics query for anomaly detection using the
+-- built-in AnomalyDetection_SpikeAndDip and AnomalyDetection_ChangePoint
+-- operators.
+--
+-- Input:  TelemetryInput (Event Hub — JSON)
+-- Output: SpikeAlertOutput      (spike/dip anomalies → Event Hub / ADLS)
+--         ChangePointOutput     (level-shift detection → Event Hub / ADLS)
+--         TemperatureAlertOutput (threshold + anomaly combined → ADLS)
+-- ═══════════════════════════════════════════════════════════════
+
+-- ─── Spike and Dip Detection (Temperature) ──────────────────
+-- Detects sudden spikes and dips in temperature readings.
+-- Parameters:
+--   confidence: 95% — higher = fewer false positives
+--   history:    120 data points (~10 min at 5s interval)
+--   mode:       'spikesanddips' — detect both directions
+SELECT
+    sensor_id,
+    sensor_type,
+    CAST(timestamp AS datetime)       AS event_time,
+    temperature_c,
+    humidity_pct,
+    pressure_hpa,
+    latitude,
+    longitude,
+
+    AnomalyDetection_SpikeAndDip(
+        CAST(temperature_c AS float),
+        95,          -- confidence level (%)
+        120,         -- history size (data points)
+        'spikesanddips'
+    ) OVER (
+        PARTITION BY sensor_id
+        LIMIT DURATION(minute, 120)
+    )                                  AS anomaly_score,
+
+    System.Timestamp()                 AS detection_time
+
+INTO [SpikeAlertOutput]
+FROM [TelemetryInput]
+TIMESTAMP BY CAST(timestamp AS datetime)
+HAVING anomaly_score > 0;
+
+-- ─── Spike and Dip Detection (AQI / PM2.5) ──────────────────
+-- Detects sudden AQI spikes that may indicate pollution events.
+SELECT
+    sensor_id,
+    CAST(timestamp AS datetime)       AS event_time,
+    pm25_ugm3,
+    aqi,
+    aqi_category,
+
+    AnomalyDetection_SpikeAndDip(
+        CAST(pm25_ugm3 AS float),
+        90,          -- slightly lower confidence for air quality
+        60,          -- shorter history for faster detection
+        'spikes'     -- only detect upward spikes (pollution events)
+    ) OVER (
+        PARTITION BY sensor_id
+        LIMIT DURATION(minute, 60)
+    )                                  AS pm25_anomaly_score,
+
+    latitude,
+    longitude,
+    System.Timestamp()                 AS detection_time
+
+INTO [AQISpikeOutput]
+FROM [AQIInput]
+TIMESTAMP BY CAST(timestamp AS datetime)
+HAVING pm25_anomaly_score > 0;
+
+-- ─── Change Point Detection (Temperature) ───────────────────
+-- Detects sustained level shifts in temperature (e.g., sensor
+-- malfunction, HVAC failure, weather front arrival).
+-- Unlike spike detection, this looks for persistent changes.
+SELECT
+    sensor_id,
+    sensor_type,
+    CAST(timestamp AS datetime)       AS event_time,
+    temperature_c,
+
+    AnomalyDetection_ChangePoint(
+        CAST(temperature_c AS float),
+        80,          -- confidence level (%)
+        120          -- history size
+    ) OVER (
+        PARTITION BY sensor_id
+        LIMIT DURATION(minute, 120)
+    )                                  AS change_score,
+
+    System.Timestamp()                 AS detection_time
+
+INTO [ChangePointOutput]
+FROM [TelemetryInput]
+TIMESTAMP BY CAST(timestamp AS datetime)
+HAVING change_score > 0;
+
+-- ─── Combined Threshold + Anomaly Alerts ─────────────────────
+-- Fires when BOTH a threshold is exceeded AND the reading is
+-- anomalous — reducing false positives from gradual legitimate changes.
+WITH AnomalyScored AS (
+    SELECT
+        sensor_id,
+        sensor_type,
+        CAST(timestamp AS datetime)   AS event_time,
+        temperature_c,
+        humidity_pct,
+        battery_pct,
+        latitude,
+        longitude,
+
+        AnomalyDetection_SpikeAndDip(
+            CAST(temperature_c AS float), 90, 120, 'spikesanddips'
+        ) OVER (
+            PARTITION BY sensor_id
+            LIMIT DURATION(minute, 120)
+        )                              AS temp_anomaly_score
+
+    FROM [TelemetryInput]
+    TIMESTAMP BY CAST(timestamp AS datetime)
+)
+
+SELECT
+    sensor_id,
+    sensor_type,
+    event_time,
+    temperature_c,
+    humidity_pct,
+    battery_pct,
+    latitude,
+    longitude,
+    temp_anomaly_score,
+    System.Timestamp()                 AS alert_time,
+
+    CASE
+        WHEN temperature_c > 45 AND temp_anomaly_score > 0 THEN 'critical_spike'
+        WHEN temperature_c < -20 AND temp_anomaly_score > 0 THEN 'critical_dip'
+        WHEN temperature_c > 40 THEN 'threshold_warning'
+        WHEN temperature_c < -15 THEN 'threshold_warning'
+        WHEN temp_anomaly_score > 0 THEN 'anomaly_detected'
+        ELSE 'normal'
+    END                                AS alert_type,
+
+    CASE
+        WHEN temperature_c > 45 OR temperature_c < -20 THEN 'critical'
+        WHEN temperature_c > 40 OR temperature_c < -15 THEN 'warning'
+        WHEN temp_anomaly_score > 0 THEN 'info'
+        ELSE 'none'
+    END                                AS severity
+
+INTO [TemperatureAlertOutput]
+FROM AnomalyScored
+WHERE
+    temperature_c > 40 OR temperature_c < -15
+    OR temp_anomaly_score > 0;

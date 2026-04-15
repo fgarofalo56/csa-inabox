@@ -1,5 +1,17 @@
 # Load & Performance Tests
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** QA Engineers / Developers
+
+## Table of Contents
+
+- [Azure Function HTTP Triggers](#azure-function-http-triggers)
+  - [Locust](#locust)
+  - [k6](#k6)
+- [dbt Model Performance Benchmarks](#dbt-model-performance-benchmarks)
+- [Databricks Notebook Baselines](#databricks-notebook-baselines)
+- [ADF Pipeline Throughput](#adf-pipeline-throughput)
+- [Storing Results](#storing-results)
+
 Regression-detection harnesses for the four moving parts of the CSA-in-a-Box
 platform that are sensitive to load:
 
@@ -141,3 +153,9 @@ All reports land under a top-level `reports/` directory (gitignored —
 see `.gitignore`). To preserve a run for regression tracking, copy the
 file into `tests/load/baselines/<date>/` and commit it alongside the
 deploy tag that produced it.
+
+---
+
+## Related Documentation
+
+- [Production Checklist](../../docs/PRODUCTION_CHECKLIST.md) - Pre-deployment verification steps

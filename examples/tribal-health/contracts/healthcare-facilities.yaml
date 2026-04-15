@@ -1,0 +1,239 @@
+# Healthcare Facilities Data Contract — Tribal Health Data Warehouse
+# Classification: CUI // SP-HLTH (Controlled Unclassified Information — Health)
+# Compliance: HIPAA, FedRAMP High, Tribal Data Sovereignty
+
+apiVersion: v1
+kind: DataContract
+metadata:
+  name: healthcare-facilities
+  version: "1.0.0"
+  domain: tribal-health
+  owner: tribal-health-data-team
+  description: >
+    IHS and tribal healthcare facility reference data. Provides facility
+    profiles including type, service unit, bed count, provider staffing,
+    and services offered. Used for network adequacy assessment, resource
+    allocation, and healthcare access analysis across Indian Country.
+
+classification:
+  level: CUI
+  category: SP-HLTH
+  handling_instructions: >
+    Controlled Unclassified Information — Health. Handle in accordance with
+    NIST SP 800-171 and 32 CFR Part 2002. Tribal data sovereignty restrictions
+    apply. Do not share without active data sharing agreement.
+  hipaa_protected: false  # Facility data, not patient data
+  contains_phi: false
+  tribal_sovereignty: true
+
+data_sharing:
+  default_sharing_level: aggregate_only
+  requires_tribal_authorization: true
+  requires_data_sharing_agreement: true
+
+deployment:
+  cloud: AzureGovernment
+  regions:
+    primary: usgovvirginia
+    dr: usgovarizona
+  fedramp_baseline: HIGH
+
+data_products:
+  # ──────────────────────────────────────────────
+  # Facility Profiles
+  # ──────────────────────────────────────────────
+  - name: facility-profiles
+    description: >
+      IHS and tribal health facility profiles with capacity, staffing,
+      and service offerings. Supports network adequacy and resource
+      allocation analysis.
+    model: slv_facilities
+    schema:
+      format: delta
+      primary_key: [facility_id]
+    columns:
+      - name: facility_id
+        type: STRING
+        description: Unique facility identifier (FAC-NNN)
+        pii: false
+
+      - name: facility_name
+        type: STRING
+        description: Official facility name
+        pii: false
+
+      - name: facility_type
+        type: STRING
+        description: Facility type classification
+        pii: false
+        constraints:
+          - accepted_values:
+              - HOSPITAL
+              - HEALTH_CENTER
+              - HEALTH_STATION
+              - URBAN_PROGRAM
+              - YOUTH_CENTER
+
+      - name: service_unit
+        type: STRING
+        description: IHS service unit name
+        pii: false
+
+      - name: tribal_affiliation
+        type: STRING
+        description: Primary tribal nation affiliation
+        pii: false
+
+      - name: state
+        type: STRING
+        description: 2-letter state abbreviation
+        pii: false
+
+      - name: bed_count
+        type: INT
+        description: Number of inpatient beds (0 for outpatient-only facilities)
+        pii: false
+
+      - name: provider_count
+        type: INT
+        description: Total clinical provider count (physicians, NPs, PAs)
+        pii: false
+
+      - name: services_offered
+        type: STRING
+        description: >
+          Pipe-delimited list of services offered (e.g.,
+          SUBSTANCE_ABUSE|PHARMACY|RADIOLOGY|SURGERY|BEHAVIORAL_HEALTH|
+          OPTOMETRY|TELEHEALTH|PEDIATRICS|DENTAL|LAB)
+        pii: false
+
+    sla:
+      freshness: monthly
+      freshness_hours: 720  # 30 days
+      availability: 99.5%
+      support_hours: business_hours
+    quality:
+      completeness: 98%
+      accuracy: 99%
+    access:
+      roles:
+        - tribal_health_director
+        - ihs_area_director
+        - facility_administrator
+        - network_adequacy_analyst
+      tribal_rls: enforced
+      audit_logging: required
+
+  # ──────────────────────────────────────────────
+  # Facility Capacity Analytics (Aggregated)
+  # ──────────────────────────────────────────────
+  - name: facility-capacity
+    description: >
+      Aggregated facility capacity and staffing analytics by service unit
+      and region. Supports workforce planning and access gap identification.
+    model: gld_facility_capacity
+    schema:
+      format: delta
+      primary_key: [service_unit, facility_type]
+    columns:
+      - name: service_unit
+        type: STRING
+        description: IHS service unit name
+        pii: false
+
+      - name: facility_type
+        type: STRING
+        description: Facility type classification
+        pii: false
+
+      - name: total_facilities
+        type: INT
+        description: Total facilities in the service unit
+        pii: false
+
+      - name: total_beds
+        type: INT
+        description: Total inpatient beds
+        pii: false
+
+      - name: total_providers
+        type: INT
+        description: Total clinical providers
+        pii: false
+
+      - name: provider_to_population_ratio
+        type: DECIMAL(8,2)
+        description: Providers per 10,000 enrolled population
+        pii: false
+
+      - name: services_gap_count
+        type: INT
+        description: Number of essential services not available locally
+        pii: false
+
+      - name: telehealth_capable_pct
+        type: DECIMAL(5,1)
+        description: Percentage of facilities offering telehealth
+        pii: false
+
+    sla:
+      freshness: quarterly
+      freshness_hours: 2160  # 90 days
+      availability: 99.5%
+    quality:
+      completeness: 95%
+      accuracy: 98%
+    access:
+      roles:
+        - tribal_health_director
+        - ihs_area_director
+        - workforce_planning_analyst
+      tribal_rls: enforced
+      audit_logging: required
+
+lineage:
+  sources:
+    - name: ihs_facility_reference
+      type: batch
+      format: csv
+      frequency: monthly
+      description: IHS facility reference data with service capabilities
+    - name: tribal_health_directory
+      type: batch
+      format: csv
+      frequency: quarterly
+      description: Tribal health organization directory
+  transformations:
+    - name: bronze_ingestion
+      description: Raw facility data landing with validation flags
+      models: [brz_facilities]
+    - name: silver_standardization
+      description: Facility type normalization, service parsing, geocoding
+      models: [slv_facilities]
+    - name: gold_aggregation
+      description: Capacity analytics, access analysis, gap identification
+      models: [gld_facility_capacity]
+
+monitoring:
+  data_quality:
+    - test: facility_type_valid
+      description: Verify all facilities have valid type classification
+      frequency: every_run
+      severity: high
+    - test: bed_count_non_negative
+      description: Bed count must be non-negative
+      frequency: every_run
+      severity: high
+    - test: tribal_rls_verification
+      description: Verify row-level security enforces tribal data isolation
+      frequency: weekly
+      severity: critical
+  freshness:
+    warn_after_hours: 720   # 30 days
+    error_after_hours: 2160  # 90 days
+  alerting:
+    channels:
+      - type: email
+        recipients: tribal-health-data-team@example.gov
+      - type: teams
+        webhook: "${TEAMS_WEBHOOK_URL}"

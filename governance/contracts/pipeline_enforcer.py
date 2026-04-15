@@ -49,11 +49,12 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping, TypeVar
+from typing import Any, TypeVar
 
 from governance.common.logging import get_logger
 from governance.contracts.contract_validator import (
@@ -97,7 +98,7 @@ class EnforcementResult:
 
     @property
     def clean_ratio(self) -> float:
-        """Fraction of rows that passed validation (0.0 – 1.0)."""
+        """Fraction of rows that passed validation (0.0 - 1.0)."""
         if self.total_rows == 0:
             return 1.0
         return self.clean_count / self.total_rows

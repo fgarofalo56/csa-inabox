@@ -1,0 +1,21 @@
+{
+  "description": "API endpoint response time baselines (p50/p95/p99 in milliseconds)",
+  "created": "2026-04-14",
+  "baselines": {
+    "GET /api/health": {
+      "p50_ms": 50,
+      "p95_ms": 200,
+      "p99_ms": 500
+    },
+    "POST /api/enrich": {
+      "p50_ms": 800,
+      "p95_ms": 2000,
+      "p99_ms": 5000
+    },
+    "POST /api/rotate-secret": {
+      "p50_ms": 1500,
+      "p95_ms": 4000,
+      "p99_ms": 8000
+    }
+  }
+}

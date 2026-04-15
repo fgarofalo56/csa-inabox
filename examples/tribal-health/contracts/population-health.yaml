@@ -1,0 +1,291 @@
+# Population Health Data Contract — Tribal Health Data Warehouse
+# Classification: CUI // SP-HLTH (Controlled Unclassified Information — Health)
+# Compliance: HIPAA, FedRAMP High, Tribal Data Sovereignty, 42 CFR Part 2 (SUD)
+
+apiVersion: v1
+kind: DataContract
+metadata:
+  name: population-health
+  version: "1.0.0"
+  domain: tribal-health
+  owner: tribal-health-data-team
+  description: >
+    Population health analytics data products for IHS service units and
+    tribal health organizations. Provides aggregated, de-identified health
+    metrics for diabetes prevalence, behavioral health service utilization,
+    and maternal/child health outcomes.
+
+classification:
+  level: CUI
+  category: SP-HLTH
+  handling_instructions: >
+    Controlled Unclassified Information — Health. Handle in accordance with
+    NIST SP 800-171 and 32 CFR Part 2002. Tribal data sovereignty restrictions
+    apply. Do not share without active data sharing agreement.
+  hipaa_protected: true
+  contains_phi: false  # Gold layer is de-identified and aggregated
+  cfr42_part2_present: true  # SUD aggregate data present in behavioral_health product
+  tribal_sovereignty: true
+
+data_sharing:
+  default_sharing_level: aggregate_only
+  requires_tribal_authorization: true
+  requires_data_sharing_agreement: true
+  consent_ledger_required: true
+  small_cell_suppression_threshold: 5
+  secondary_suppression_required: true
+
+deployment:
+  cloud: AzureGovernment
+  regions:
+    primary: usgovvirginia
+    dr: usgovarizona
+  fedramp_baseline: HIGH
+
+data_products:
+  # ──────────────────────────────────────────────
+  # Diabetes Prevalence Tracking
+  # ──────────────────────────────────────────────
+  - name: diabetes-prevalence
+    description: >
+      Type 2 diabetes prevalence, A1C control rates, complication tracking,
+      and intervention effectiveness metrics by IHS service unit.
+    model: gld_diabetes_prevalence
+    schema:
+      format: delta
+      primary_key: [service_unit, reporting_period]
+    columns:
+      - name: service_unit
+        type: STRING
+        description: IHS service unit name
+        pii: false
+      - name: reporting_period
+        type: STRING
+        description: Quarterly reporting period (YYYY-QN)
+        pii: false
+      - name: total_population
+        type: INT
+        description: Total enrolled population in service unit
+        pii: false
+      - name: total_diabetic_patients
+        type: INT
+        description: Count of patients with diabetes diagnosis (NULL if suppressed)
+        pii: false
+        suppression: "NULL when count < 5"
+      - name: prevalence_rate_per_1000
+        type: DECIMAL(6,1)
+        description: Diabetes prevalence per 1,000 adult population
+        pii: false
+      - name: a1c_controlled_pct
+        type: DECIMAL(5,1)
+        description: Percentage of diabetic patients with A1C < 7.0%
+        pii: false
+      - name: a1c_poor_control_pct
+        type: DECIMAL(5,1)
+        description: Percentage with A1C >= 9.0%
+        pii: false
+      - name: complication_rate_pct
+        type: DECIMAL(5,1)
+        description: Percentage with any diabetes complication
+        pii: false
+      - name: prevalence_trend
+        type: STRING
+        description: Year-over-year trend (INCREASING/DECREASING/STABLE/INSUFFICIENT_DATA)
+        pii: false
+    sla:
+      freshness: quarterly
+      freshness_hours: 2160  # 90 days
+      availability: 99.5%
+      support_hours: business_hours
+    quality:
+      completeness: 95%
+      accuracy: 98%
+      small_cell_suppression: enforced
+    access:
+      roles:
+        - tribal_health_director
+        - ihs_area_epidemiologist
+        - tribal_epi_center
+      tribal_rls: enforced
+      audit_logging: required
+
+  # ──────────────────────────────────────────────
+  # Behavioral Health Service Utilization
+  # ──────────────────────────────────────────────
+  - name: behavioral-health
+    description: >
+      Behavioral health service utilization, provider capacity, waitlist metrics,
+      and crisis intervention tracking. SUD data is 42 CFR Part 2 aggregate only.
+    model: gld_behavioral_health
+    schema:
+      format: delta
+      primary_key: [service_unit, reporting_period]
+    columns:
+      - name: service_unit
+        type: STRING
+        description: IHS service unit name
+        pii: false
+      - name: reporting_period
+        type: STRING
+        description: Quarterly reporting period
+        pii: false
+      - name: sud_encounter_rate_per_1000
+        type: DECIMAL(6,1)
+        description: SUD encounters per 1,000 population (42 CFR Part 2 — aggregate only)
+        pii: false
+        cfr42_protected: true
+        suppression: "NULL when count < 5"
+      - name: mh_encounter_rate_per_1000
+        type: DECIMAL(6,1)
+        description: Mental health encounters per 1,000 population
+        pii: false
+      - name: provider_ratio_per_10000
+        type: DECIMAL(6,2)
+        description: BH providers per 10,000 enrolled population
+        pii: false
+      - name: avg_waitlist_days
+        type: INT
+        description: Average waitlist duration in days
+        pii: false
+      - name: crisis_intervention_count
+        type: INT
+        description: Count of BH-related ED encounters (NULL if suppressed)
+        pii: false
+        suppression: "NULL when count < 5"
+      - name: telehealth_utilization_pct
+        type: DECIMAL(5,1)
+        description: Percentage of BH encounters via telehealth
+        pii: false
+    sla:
+      freshness: monthly
+      freshness_hours: 720  # 30 days
+      availability: 99.5%
+    quality:
+      completeness: 90%
+      accuracy: 95%
+      small_cell_suppression: enforced
+    access:
+      roles:
+        - tribal_health_director
+        - bh_program_director
+        - ihs_area_bh_consultant
+      tribal_rls: enforced
+      cfr42_consent: required_for_sud
+      audit_logging: required
+
+  # ──────────────────────────────────────────────
+  # Maternal & Child Health Outcomes
+  # ──────────────────────────────────────────────
+  - name: maternal-child-health
+    description: >
+      Prenatal care, birth outcomes, immunization coverage, and well-child
+      visit adherence metrics by service unit and age cohort.
+    model: gld_maternal_child_health
+    schema:
+      format: delta
+      primary_key: [service_unit, reporting_period]
+    columns:
+      - name: service_unit
+        type: STRING
+        description: IHS service unit name
+        pii: false
+      - name: reporting_period
+        type: STRING
+        description: Quarterly reporting period
+        pii: false
+      - name: total_pregnancies
+        type: INT
+        description: Count of pregnancies (NULL if suppressed)
+        pii: false
+        suppression: "NULL when count < 5"
+      - name: prenatal_first_trimester_pct
+        type: DECIMAL(5,1)
+        description: First trimester prenatal care entry rate
+        pii: false
+      - name: low_birth_weight_pct
+        type: DECIMAL(5,1)
+        description: Percentage of births < 2500g
+        pii: false
+      - name: preterm_birth_pct
+        type: DECIMAL(5,1)
+        description: Percentage of births < 37 weeks
+        pii: false
+      - name: immunization_series_complete_pct
+        type: DECIMAL(5,1)
+        description: Complete immunization series rate for children 0-4
+        pii: false
+      - name: well_child_0to4_adherence_pct
+        type: DECIMAL(5,1)
+        description: Well-child visit adherence for ages 0-4
+        pii: false
+      - name: teen_pregnancy_rate_per_1000
+        type: DECIMAL(6,1)
+        description: Teen pregnancy rate per 1,000 teen females (NULL if suppressed)
+        pii: false
+        suppression: "NULL when count < 5"
+    sla:
+      freshness: quarterly
+      freshness_hours: 2160  # 90 days
+      availability: 99.5%
+    quality:
+      completeness: 90%
+      accuracy: 95%
+      small_cell_suppression: enforced
+    access:
+      roles:
+        - tribal_health_director
+        - mch_program_coordinator
+        - ihs_area_mch_consultant
+      tribal_rls: enforced
+      audit_logging: required
+
+lineage:
+  sources:
+    - name: synthetic_rpms_extract
+      type: batch
+      format: csv
+      frequency: daily
+      description: Synthetic RPMS-compatible patient and encounter data
+    - name: ihs_facility_reference
+      type: batch
+      format: csv
+      frequency: monthly
+      description: IHS facility reference data
+  transformations:
+    - name: bronze_ingestion
+      description: Raw data landing with validation flags
+      models: [brz_patient_demographics, brz_encounters, brz_facilities]
+    - name: silver_standardization
+      description: Clinical standardization, ICD-10 validation, de-identification
+      models: [slv_patient_demographics, slv_encounters, slv_facilities]
+    - name: gold_aggregation
+      description: Population health analytics with small cell suppression
+      models: [gld_diabetes_prevalence, gld_behavioral_health, gld_maternal_child_health]
+
+monitoring:
+  data_quality:
+    - test: small_cell_suppression
+      description: Verify no output cell has count < 5
+      frequency: every_run
+      severity: critical
+    - test: icd10_validation
+      description: Validate ICD-10 code format and clinical plausibility
+      frequency: every_run
+      severity: high
+    - test: hipaa_compliance
+      description: Verify de-identification and audit logging
+      frequency: daily
+      severity: critical
+    - test: tribal_rls_verification
+      description: Verify row-level security enforces tribal data isolation
+      frequency: weekly
+      severity: critical
+  freshness:
+    warn_after_hours: 720   # 30 days
+    error_after_hours: 2160  # 90 days
+  alerting:
+    channels:
+      - type: email
+        recipients: tribal-health-data-team@example.gov
+      - type: teams
+        webhook: "${TEAMS_WEBHOOK_URL}"

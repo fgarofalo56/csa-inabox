@@ -1,0 +1,162 @@
+# Data product contract — casino_analytics.slot_events
+#
+# This file is the authoritative interface for the Casino Analytics
+# slot events data product. It declares the schema, SLAs, and quality
+# rules for slot machine telemetry and gaming floor analytics.
+
+apiVersion: csa.nigc.gov/v1
+kind: DataProductContract
+
+metadata:
+  name: casino_analytics.slot_events
+  domain: casino-analytics
+  owner: casino-analytics-engineering@contoso.com
+  version: "1.0.0"
+  description: >
+    Slot machine event telemetry from the casino gaming floor. Provides
+    spin-level transaction data including wagers, payouts, RTP contribution,
+    and session tracking. Used for floor optimization, hold analysis,
+    regulatory compliance (NIGC MICS), and player analytics. All data
+    is entirely synthetic — no real gaming data.
+
+schema:
+  primary_key: [event_id]
+  columns:
+    - name: event_id
+      type: string
+      nullable: false
+      description: Unique slot event identifier
+    - name: machine_id
+      type: string
+      nullable: false
+      description: Slot machine asset identifier
+    - name: event_timestamp
+      type: timestamp
+      nullable: false
+      description: Timestamp of the slot event (UTC)
+    - name: event_type
+      type: string
+      nullable: false
+      description: Type of slot machine event
+      allowed_values:
+        - SPIN
+        - BONUS
+        - JACKPOT
+        - CASH_IN
+        - CASH_OUT
+        - TILT
+        - ERROR
+    - name: denomination
+      type: decimal(5,2)
+      nullable: false
+      description: Machine denomination in dollars
+    - name: credits_wagered
+      type: integer
+      nullable: true
+      description: Number of credits wagered on this event
+    - name: credits_won
+      type: integer
+      nullable: true
+      description: Number of credits won on this event
+    - name: rtp_contribution
+      type: decimal(8,4)
+      nullable: true
+      description: Return-to-player contribution for this event
+    - name: floor_zone
+      type: string
+      nullable: false
+      description: Gaming floor zone where machine is located
+      allowed_values:
+        - MAIN_FLOOR_A
+        - MAIN_FLOOR_B
+        - MAIN_FLOOR_C
+        - HIGH_LIMIT
+        - VIP_LOUNGE
+        - SPORTS_BAR
+    - name: player_id
+      type: string
+      nullable: true
+      description: Player tracking system identifier (null for unrated play)
+    - name: session_id
+      type: string
+      nullable: true
+      description: Gaming session identifier
+
+sla:
+  freshness_minutes: 1  # Near real-time streaming
+  valid_row_ratio: 0.99
+  supported_until: "2027-12-31"
+  update_frequency: "Real-time via Event Hub; batch reconciliation daily"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: event_id
+  - rule: expect_column_values_to_not_be_null
+    column: machine_id
+  - rule: expect_column_values_to_not_be_null
+    column: event_timestamp
+  - rule: expect_column_values_to_not_be_null
+    column: event_type
+  - rule: expect_column_values_to_not_be_null
+    column: denomination
+  - rule: expect_column_values_to_not_be_null
+    column: floor_zone
+  - rule: expect_column_values_to_be_in_set
+    column: event_type
+    value_set: [SPIN, BONUS, JACKPOT, CASH_IN, CASH_OUT, TILT, ERROR]
+  - rule: expect_column_values_to_be_in_set
+    column: floor_zone
+    value_set: [MAIN_FLOOR_A, MAIN_FLOOR_B, MAIN_FLOOR_C, HIGH_LIMIT, VIP_LOUNGE, SPORTS_BAR]
+  - rule: expect_column_values_to_be_between
+    column: denomination
+    min_value: 0.01
+    max_value: 25.00
+  - rule: expect_column_values_to_be_between
+    column: credits_wagered
+    min_value: 0
+    max_value: 10000
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: credits_won
+    min_value: 0
+    max_value: 1000000
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: rtp_contribution
+    min_value: 0
+    max_value: 10000
+    mostly: 0.99
+
+data_lineage:
+  upstream_sources:
+    - name: "Slot Management System (SAS Protocol)"
+      url: "https://www.igtonline.com/"
+      description: "Synthetic slot machine telemetry via SAS protocol"
+      refresh_schedule: "Real-time"
+    - name: "Player Tracking System"
+      url: "https://www.igtonline.com/"
+      description: "Player card insertion and session tracking"
+
+  downstream_consumers:
+    - name: "Floor Optimization Dashboard"
+      description: "Real-time gaming floor performance and machine analytics"
+    - name: "Hold Analysis Reports"
+      description: "Machine-level and zone-level hold percentage reports"
+    - name: "Title 31 Compliance System"
+      description: "BSA/AML transaction monitoring for CTR thresholds"
+    - name: "Player Value Models"
+      description: "Player lifetime value and ADT calculation"
+
+usage_notes: |
+  - All data is synthetic — no real gaming operations data
+  - SPIN events are the primary revenue-generating transaction
+  - TILT and ERROR events indicate machine malfunctions
+  - CASH_IN/CASH_OUT events track money movement for compliance
+  - Unrated play (player_id is null) cannot be attributed to a player
+  - RTP contribution is calculated per-spin: credits_won / credits_wagered
+  - Denomination determines dollar value of each credit
+  - NIGC MICS require 7-year data retention for slot accounting
+
+contact:
+  technical: casino-analytics-team@contoso.com
+  business: casino-operations-lead@contoso.com

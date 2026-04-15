@@ -8,11 +8,10 @@ Usage:
 Prerequisites:
     pip install azure-identity azure-purview-catalog azure-purview-scanning
 """
+
 from __future__ import annotations
 
 import argparse
-import json
-import sys
 from typing import Any
 
 try:
@@ -250,7 +249,7 @@ def register_scan_sources(client: PurviewScanningClient, storage_account: str, d
 
 def create_scans(
     client: PurviewScanningClient,
-    storage_account: str,
+    storage_account: str,  # noqa: ARG001 (reserved for future use)
     *,
     dry_run: bool = False,
 ) -> None:

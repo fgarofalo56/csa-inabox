@@ -1,5 +1,7 @@
 # Deployment Rollback Runbook
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Operations
+
 This runbook covers how to recover from a failed or bad deployment. It pairs
 with the `Rollback Deployment` GitHub Actions workflow
 (`.github/workflows/rollback.yml`) and the point-in-time restore features
@@ -11,12 +13,24 @@ wired into the Bicep modules.
 
 ---
 
+## Table of Contents
+
+- [1. Rollback targets](#1-rollback-targets)
+- [2. Landing zone (Bicep) rollback](#2-landing-zone-bicep-rollback)
+  - [When a rollback is the wrong tool](#when-a-rollback-is-the-wrong-tool)
+- [3. ADF pipeline rollback](#3-adf-pipeline-rollback)
+- [4. dbt model rollback](#4-dbt-model-rollback)
+- [5. Cosmos DB point-in-time restore](#5-cosmos-db-point-in-time-restore)
+- [6. Storage account data recovery](#6-storage-account-data-recovery)
+- [7. Post-rollback checklist](#7-post-rollback-checklist)
+- [8. Testing cadence](#8-testing-cadence)
+
 ## 1. Rollback targets
 
 Every successful, non-dry-run run of the `Deploy Infrastructure` workflow
 pushes a tag of the form:
 
-```
+```text
 deploy/<environment>-<short-sha>-<run-number>
 ```
 
@@ -207,3 +221,11 @@ Rollback procedures are only useful if they work. Run a rollback drill in
 `dev` once per quarter, pointing to a known-good previous `deploy/dev-*`
 tag. Capture the run URL in the development log and update this runbook if
 anything drifts.
+
+---
+
+## Related Documentation
+
+- [Troubleshooting](TROUBLESHOOTING.md) - Common issues and fixes
+- [Disaster Recovery](DR.md) - Multi-region failover runbook
+- [Production Checklist](PRODUCTION_CHECKLIST.md) - Production readiness checklist

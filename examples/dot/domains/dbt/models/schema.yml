@@ -1,0 +1,515 @@
+version: 2
+
+sources:
+  - name: dot
+    description: DOT transportation data sources from NHTSA, FHWA, and FTA
+    tables:
+      - name: fars_crash_data
+        description: NHTSA FARS fatal crash records
+        columns:
+          - name: st_case
+            description: Unique crash case identifier within state and year
+            tests:
+              - not_null
+          - name: state
+            description: FARS state code (1-56)
+            tests:
+              - not_null
+          - name: year
+            description: Crash year
+            tests:
+              - not_null
+
+      - name: highway_conditions
+        description: FHWA NBI bridge conditions and HPMS pavement data
+        columns:
+          - name: structure_number
+            description: Unique bridge structure identifier
+          - name: state_code
+            description: FIPS state code
+            tests:
+              - not_null
+          - name: year
+            description: Inspection year
+            tests:
+              - not_null
+
+      - name: ntd_transit_performance
+        description: FTA NTD transit agency performance metrics
+        columns:
+          - name: ntd_id
+            description: NTD agency identifier
+            tests:
+              - not_null
+          - name: mode
+            description: Transit mode code (MB, HR, LR, etc.)
+            tests:
+              - not_null
+          - name: report_year
+            description: NTD report year
+            tests:
+              - not_null
+
+models:
+  # ── Bronze Models ──────────────────────────────────────────────────────
+  - name: brz_crash_data
+    description: >
+      Bronze layer — Raw NHTSA FARS crash data with basic validation.
+      Each row represents a single fatal motor vehicle crash event.
+    columns:
+      - name: case_id
+        description: Unique crash case identifier (FARS ST_CASE)
+        tests:
+          - not_null
+      - name: state_code
+        description: FARS numeric state code
+        tests:
+          - not_null
+      - name: crash_year
+        description: Year of the crash
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 1975
+              max_value: 2030
+      - name: fatality_count
+        description: Number of fatalities in the crash
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: latitude
+        description: Crash location latitude (WGS84)
+      - name: longitude
+        description: Crash location longitude (WGS84)
+      - name: is_valid_record
+        description: Flag indicating record passes basic validation
+        tests:
+          - not_null
+          - accepted_values:
+              values: [true, false]
+      - name: record_hash
+        description: MD5 hash for deduplication
+        tests:
+          - not_null
+          - unique
+
+  - name: brz_highway_conditions
+    description: >
+      Bronze layer — Raw bridge and highway condition data from FHWA NBI and HPMS.
+      Each row represents a bridge or route segment inspection record.
+    columns:
+      - name: bridge_id
+        description: NBI structure number (unique bridge identifier)
+      - name: route_id
+        description: Highway route number
+      - name: state_code
+        description: 2-digit FIPS state code
+        tests:
+          - not_null
+      - name: inspection_year
+        description: Year of the inspection
+        tests:
+          - not_null
+      - name: deck_condition_rating
+        description: NBI deck condition rating (0-9)
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 9
+      - name: superstructure_condition_rating
+        description: NBI superstructure condition rating (0-9)
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 9
+      - name: substructure_condition_rating
+        description: NBI substructure condition rating (0-9)
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 9
+      - name: average_daily_traffic
+        description: Average daily traffic count
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: is_valid_record
+        description: Flag indicating record passes basic validation
+        tests:
+          - not_null
+      - name: record_hash
+        description: MD5 hash for deduplication
+        tests:
+          - not_null
+          - unique
+
+  - name: brz_transit_performance
+    description: >
+      Bronze layer — Raw NTD transit agency performance data.
+      Each row represents agency + mode + route + period metrics.
+    columns:
+      - name: agency_id
+        description: NTD agency identifier
+        tests:
+          - not_null
+      - name: agency_name
+        description: Transit agency name
+        tests:
+          - not_null
+      - name: mode_code
+        description: NTD transit mode code (MB, HR, LR, etc.)
+        tests:
+          - not_null
+      - name: report_year
+        description: NTD report year
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 1990
+              max_value: 2030
+      - name: ridership
+        description: Unlinked passenger trips
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: is_valid_record
+        description: Flag indicating record passes basic validation
+        tests:
+          - not_null
+      - name: record_hash
+        description: MD5 hash for deduplication
+        tests:
+          - not_null
+          - unique
+
+  # ── Silver Models ──────────────────────────────────────────────────────
+  - name: slv_crash_data
+    description: >
+      Silver layer — Cleaned FARS crash data with decoded enums,
+      validated coordinates, and derived severity scores.
+    columns:
+      - name: crash_sk
+        description: Surrogate key for the crash record
+        tests:
+          - not_null
+          - unique
+      - name: case_id
+        description: Original FARS case identifier
+        tests:
+          - not_null
+      - name: state_code
+        description: FARS numeric state code
+        tests:
+          - not_null
+      - name: crash_year
+        description: Year of the crash
+        tests:
+          - not_null
+      - name: weather_category
+        description: Decoded weather condition at time of crash
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['CLEAR', 'RAIN', 'SLEET_HAIL', 'SNOW', 'FOG_SMOKE',
+                       'CROSSWINDS', 'BLOWING_SAND', 'CLOUDY', 'BLOWING_SNOW',
+                       'FREEZING_RAIN', 'OTHER', 'NOT_REPORTED', 'UNKNOWN']
+      - name: light_category
+        description: Decoded light condition at time of crash
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['DAYLIGHT', 'DARK_NOT_LIGHTED', 'DARK_LIGHTED', 'DAWN',
+                       'DUSK', 'DARK_UNKNOWN_LIGHTING', 'OTHER', 'NOT_REPORTED', 'UNKNOWN']
+      - name: severity_score
+        description: Composite crash severity score (weighted by fatalities, DUI, pedestrians)
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: time_of_day_bucket
+        description: Time-of-day classification for pattern analysis
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['MORNING_RUSH', 'MIDDAY', 'EVENING_RUSH', 'EVENING', 'OVERNIGHT', 'UNKNOWN']
+      - name: grid_cell_id
+        description: Geographic grid cell identifier for hotspot clustering
+      - name: has_valid_coordinates
+        description: Whether lat/lon passed geographic validation
+        tests:
+          - not_null
+
+  - name: slv_highway_conditions
+    description: >
+      Silver layer — Cleansed highway and bridge data with condition
+      categorization, age calculation, and maintenance urgency scoring.
+    columns:
+      - name: infrastructure_sk
+        description: Surrogate key for the infrastructure record
+        tests:
+          - not_null
+          - unique
+      - name: bridge_id
+        description: NBI structure number
+      - name: state_code
+        description: 2-digit FIPS state code
+        tests:
+          - not_null
+      - name: condition_category
+        description: Condition classification based on minimum NBI rating
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['GOOD', 'FAIR', 'POOR', 'CRITICAL']
+      - name: min_condition_rating
+        description: Lowest condition rating across deck, superstructure, substructure
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 9
+      - name: maintenance_urgency_score
+        description: Composite urgency score (0-100)
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+      - name: maintenance_urgency
+        description: Urgency classification
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['LOW', 'MODERATE', 'HIGH', 'CRITICAL']
+      - name: traffic_category
+        description: Traffic volume classification
+        tests:
+          - accepted_values:
+              values: ['VERY_LOW', 'LOW', 'MODERATE', 'HIGH', 'VERY_HIGH', 'UNKNOWN']
+
+  - name: slv_transit_performance
+    description: >
+      Silver layer — Cleansed NTD transit data with calculated on-time rate,
+      ridership efficiency, and service reliability index.
+    columns:
+      - name: transit_sk
+        description: Surrogate key for transit performance record
+        tests:
+          - not_null
+          - unique
+      - name: agency_id
+        description: NTD agency identifier
+        tests:
+          - not_null
+      - name: mode_name_standard
+        description: Standardized transit mode name
+        tests:
+          - not_null
+      - name: on_time_rate_pct
+        description: On-time performance rate (percentage)
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+      - name: service_delivery_rate_pct
+        description: Actual vs scheduled trip delivery rate (percentage)
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 150
+      - name: ridership_per_vehicle_hour
+        description: Passenger trips per vehicle revenue hour
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: service_reliability_index
+        description: Composite service reliability score (0-100)
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+      - name: reliability_category
+        description: Reliability classification
+        tests:
+          - accepted_values:
+              values: ['EXCELLENT', 'GOOD', 'FAIR', 'POOR']
+
+  # ── Gold Models ────────────────────────────────────────────────────────
+  - name: gld_safety_hotspots
+    description: >
+      Gold layer — Aggregated crash hotspot analysis by grid cell with
+      severity scoring, YoY trends, and contributing factor breakdown.
+    columns:
+      - name: grid_cell_id
+        description: Geographic grid cell identifier (0.1-degree resolution)
+        tests:
+          - not_null
+      - name: state_code
+        description: State code for the grid cell
+        tests:
+          - not_null
+      - name: analysis_year
+        description: Year of analysis
+        tests:
+          - not_null
+      - name: total_crashes
+        description: Total crash count in the grid cell
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 1
+      - name: severity_weighted_score
+        description: Sum of individual crash severity scores
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: top_contributing_factor
+        description: Most prevalent contributing factor
+        tests:
+          - accepted_values:
+              values: ['ALCOHOL', 'ADVERSE_WEATHER', 'NIGHTTIME', 'PEDESTRIAN']
+      - name: crash_trend
+        description: Year-over-year trend classification
+        tests:
+          - accepted_values:
+              values: ['WORSENING', 'STABLE', 'IMPROVING', 'INSUFFICIENT_DATA']
+      - name: hotspot_tier
+        description: Hotspot severity tier (percentile-based)
+        tests:
+          - accepted_values:
+              values: ['TIER_1_CRITICAL', 'TIER_2_HIGH', 'TIER_3_ELEVATED', 'TIER_4_STANDARD']
+
+  - name: gld_infrastructure_priority
+    description: >
+      Gold layer — Bridge maintenance prioritization with composite scoring,
+      deterioration prediction, and cost estimation.
+    columns:
+      - name: bridge_id
+        description: NBI structure number
+        tests:
+          - not_null
+          - unique
+      - name: state_code
+        description: FIPS state code
+        tests:
+          - not_null
+      - name: composite_priority_score
+        description: Overall priority score (0-100)
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+      - name: condition_category
+        description: Current condition classification
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['GOOD', 'FAIR', 'POOR', 'CRITICAL']
+      - name: predicted_years_to_poor
+        description: Estimated years until condition degrades to POOR
+      - name: estimated_repair_cost_millions
+        description: Estimated repair cost in millions of dollars
+      - name: funding_tier
+        description: Recommended funding tier
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['EMERGENCY_FUNDING', 'HIGH_PRIORITY_CAPITAL', 'PLANNED_CAPITAL',
+                       'PREVENTIVE_MAINTENANCE', 'ROUTINE_MAINTENANCE']
+      - name: maintenance_urgency
+        description: Urgency classification
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['LOW', 'MODERATE', 'HIGH', 'CRITICAL']
+
+  - name: gld_transit_dashboard
+    description: >
+      Gold layer — Transit performance dashboard with agency-level KPIs,
+      ridership trends, service reliability, and peer benchmarking.
+    columns:
+      - name: agency_id
+        description: NTD agency identifier
+        tests:
+          - not_null
+      - name: mode
+        description: Standardized transit mode name
+        tests:
+          - not_null
+      - name: report_year
+        description: Report year
+        tests:
+          - not_null
+      - name: report_month
+        description: Report month (1-12)
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 1
+              max_value: 12
+      - name: avg_on_time_rate
+        description: Average on-time performance rate (percentage)
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+      - name: total_ridership
+        description: Total unlinked passenger trips
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: ridership_trend
+        description: Ridership trend classification (rolling 12-month)
+        tests:
+          - accepted_values:
+              values: ['GROWING', 'STABLE', 'DECLINING', 'INSUFFICIENT_DATA']
+      - name: on_time_trend
+        description: On-time performance trend classification
+        tests:
+          - accepted_values:
+              values: ['IMPROVING', 'STABLE', 'DECLINING', 'INSUFFICIENT_DATA']
+      - name: performance_grade
+        description: Overall agency performance grade
+        tests:
+          - accepted_values:
+              values: ['A', 'B', 'C', 'D', 'F']
+      - name: on_time_target_status
+        description: Whether the agency meets the on-time performance target
+        tests:
+          - accepted_values:
+              values: ['MEETING_TARGET', 'NEAR_TARGET', 'BELOW_TARGET']
+
+# ── Custom Tests ───────────────────────────────────────────────────────
+tests:
+  - name: test_crash_severity_non_negative
+    description: Verify severity scores are non-negative
+    sql: |
+      SELECT *
+      FROM {{ ref('slv_crash_data') }}
+      WHERE severity_score < 0
+
+  - name: test_bridge_condition_rating_range
+    description: Verify bridge condition ratings are within NBI 0-9 scale
+    sql: |
+      SELECT *
+      FROM {{ ref('slv_highway_conditions') }}
+      WHERE min_condition_rating < 0
+         OR min_condition_rating > 9
+
+  - name: test_transit_on_time_not_exceed_actual
+    description: Verify on-time trips do not exceed actual trips
+    sql: |
+      SELECT *
+      FROM {{ ref('slv_transit_performance') }}
+      WHERE on_time_trips > actual_trips
+        AND actual_trips > 0
+
+  - name: test_infrastructure_score_bounds
+    description: Verify composite priority scores are within 0-100
+    sql: |
+      SELECT *
+      FROM {{ ref('gld_infrastructure_priority') }}
+      WHERE composite_priority_score < 0
+         OR composite_priority_score > 100

@@ -25,10 +25,12 @@ Adding a new expectation type is a small addition to
 
 from __future__ import annotations
 
+import os
 import re
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 import yaml
 
@@ -72,6 +74,7 @@ def _great_expectations_available() -> bool:
     """Return True if the ``great_expectations`` package is importable."""
     try:
         import great_expectations  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -182,9 +185,7 @@ def _evaluate_expectation(
             value = row.get(column)
             if value is None:
                 continue
-            if min_value is not None and value < min_value:
-                out_of_range += 1
-            elif max_value is not None and value > max_value:
+            if (min_value is not None and value < min_value) or (max_value is not None and value > max_value):
                 out_of_range += 1
         return ExpectationResult(
             expectation_type=exp_type,
@@ -258,7 +259,12 @@ def run_suite_in_memory(
 # ── Checkpoint discovery ─────────────────────────────────────────────
 
 
-_CHECKPOINT_DIR = Path(__file__).resolve().parents[2] / "great_expectations" / "checkpoints"
+_CHECKPOINT_DIR = Path(
+    os.environ.get(
+        "GE_CHECKPOINT_DIR",
+        str(Path(__file__).resolve().parents[2] / "great_expectations" / "checkpoints"),
+    ),
+)
 
 
 def _load_checkpoint_configs(
@@ -278,7 +284,7 @@ def _load_checkpoint_configs(
     for path in sorted(directory.glob("*.yml")):
         try:
             raw: dict[str, Any] = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.warning("ge.checkpoint_load_failed", path=str(path))
             continue
 
@@ -391,8 +397,8 @@ def run_ge_checkpoints(
             # Checkpoint definitions are now available in
             # great_expectations/checkpoints/ — the Databricks notebook
             # can load them via:
-            #   context = ge.get_context("great_expectations/")
-            #   result = context.run_checkpoint(checkpoint_name="...")
+            #   context = ge.get_context("great_expectations/")  # noqa: ERA001
+            #   result = context.run_checkpoint(checkpoint_name="...")  # noqa: ERA001
             #
             # From the CLI we mark the suite as skipped-with-context so
             # operators know the suite exists and is ready to run.
@@ -418,7 +424,7 @@ def run_ge_checkpoints(
                 status="skipped",
                 message=(
                     "great_expectations not installed. "
-                    "Install `pip install -e \".[governance]\"` to enable, "
+                    'Install `pip install -e ".[governance]"` to enable, '
                     "or pass sample_data= to run in-memory."
                 ),
             )

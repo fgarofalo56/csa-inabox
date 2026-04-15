@@ -1,0 +1,104 @@
+apiVersion: datacontract/v1
+kind: DataProduct
+metadata:
+  name: delivery-analytics
+  domain: postal-operations
+  owner: USPS Analytics Team
+  version: "1.0.0"
+  classification: public
+  tags:
+    - delivery
+    - performance
+    - logistics
+    - optimization
+spec:
+  description: >
+    USPS delivery performance analytics with route optimization scoring,
+    on-time delivery tracking, and last-mile efficiency analysis.
+    Derived from delivery tracking data, this product provides route-level
+    and ZIP-level performance metrics for operational optimization.
+  schema:
+    - name: tracking_id
+      type: string
+      description: Unique tracking identifier for the mail piece or parcel
+      required: true
+    - name: origin_zip
+      type: string
+      description: Standardized 5-digit origin ZIP code
+      required: true
+    - name: destination_zip
+      type: string
+      description: Standardized 5-digit destination ZIP code
+      required: true
+    - name: product_class
+      type: string
+      description: >
+        Standardized mail product class (FIRST_CLASS, PRIORITY,
+        PRIORITY_EXPRESS, PARCEL_SELECT, MEDIA_MAIL, MARKETING_MAIL,
+        PERIODICALS)
+      required: true
+    - name: acceptance_date
+      type: date
+      description: Date the piece was accepted into the mail stream
+      required: true
+    - name: actual_delivery_date
+      type: date
+      description: Date the piece was delivered (null if not yet delivered)
+    - name: is_on_time
+      type: boolean
+      description: Whether delivery met the product class service standard
+    - name: calculated_delivery_days
+      type: decimal
+      description: Calendar days from acceptance to delivery
+    - name: service_standard_days
+      type: integer
+      description: Expected delivery days per product class service standard
+      required: true
+    - name: carrier_route
+      type: string
+      description: Carrier route identifier for last-mile analysis
+    - name: district
+      type: string
+      description: USPS postal district
+    - name: region
+      type: string
+      description: USPS region (Eastern, Western, etc.)
+    - name: is_intra_scf
+      type: boolean
+      description: Whether origin and destination share the same Sectional Center Facility
+    - name: delivery_attempt_count
+      type: integer
+      description: Number of delivery attempts before successful delivery
+    - name: days_from_expected
+      type: integer
+      description: Days early (negative) or late (positive) vs. expected delivery
+  sla:
+    freshness: daily
+    completeness: 0.95
+    availability: 99.5
+  quality:
+    completeness_target: 0.95
+    accuracy_target: 0.98
+    geographic_coverage: "All 50 US states, DC, and territories"
+    temporal_coverage: "Rolling 5-year window"
+    known_limitations:
+      - "Synthetic data — actual USPS tracking data is not publicly available"
+      - "Service standards may vary by origin-destination pair"
+      - "Marketing Mail and Periodicals do not have guaranteed delivery dates"
+  access:
+    api_endpoint: /api/v1/delivery-analytics
+    format: parquet
+    authentication: Azure AD OAuth 2.0
+    rate_limit: 1000 requests/hour
+  lineage:
+    sources:
+      - name: USPS Delivery Tracking
+        type: synthetic
+        description: Synthetic delivery records modeled on USPS operational patterns
+      - name: Census ZCTA
+        url: https://www.census.gov/cgi-bin/geo/shapefiles/
+        type: government_download
+    transformations:
+      - bronze: Raw delivery records with basic validation
+      - silver: Product class standardization, on-time flagging, ZIP validation
+      - gold: Route optimization scoring, efficiency analysis, recommendations

@@ -1,0 +1,18 @@
+{
+  "name": "csa-portal-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Azure Functions API for CSA Portal Static Web App",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "start": "func start"
+  },
+  "dependencies": {
+    "node-fetch": "^3.3.0"
+  },
+  "devDependencies": {
+    "@azure/functions": "^4.5.0",
+    "typescript": "^5.3.3"
+  }
+}

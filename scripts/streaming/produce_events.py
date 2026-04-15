@@ -17,14 +17,13 @@ Usage:
 Prerequisites:
     pip install azure-eventhub azure-identity
 """
+
 from __future__ import annotations
 
 import argparse
 import asyncio
 import json
 import random
-import signal
-import sys
 import time
 import uuid
 from datetime import datetime, timezone
@@ -46,8 +45,16 @@ EVENT_TYPES = [
 ]
 
 PAGES = [
-    "/", "/products", "/products/detail", "/cart", "/checkout",
-    "/search", "/account", "/orders", "/help", "/about",
+    "/",
+    "/products",
+    "/products/detail",
+    "/cart",
+    "/checkout",
+    "/search",
+    "/account",
+    "/orders",
+    "/help",
+    "/about",
 ]
 
 DEVICES = ["desktop", "mobile", "tablet", "iot_sensor", "api_client"]
@@ -87,10 +94,18 @@ def generate_event(event_num: int) -> dict[str, Any]:
         base_event["data"]["load_time_ms"] = random.randint(50, 3000)
 
     elif event_type == "search_query":
-        base_event["data"]["query"] = random.choice([
-            "laptop", "headphones", "running shoes", "data book",
-            "yoga mat", "water bottle", "keyboard", "monitor",
-        ])
+        base_event["data"]["query"] = random.choice(
+            [
+                "laptop",
+                "headphones",
+                "running shoes",
+                "data book",
+                "yoga mat",
+                "water bottle",
+                "keyboard",
+                "monitor",
+            ]
+        )
         base_event["data"]["results_count"] = random.randint(0, 500)
 
     elif event_type in ("add_to_cart", "purchase_complete"):
@@ -104,10 +119,15 @@ def generate_event(event_num: int) -> dict[str, Any]:
 
     elif event_type == "error":
         base_event["data"]["error_code"] = random.choice([400, 401, 403, 404, 500, 502, 503])
-        base_event["data"]["error_message"] = random.choice([
-            "Resource not found", "Unauthorized", "Internal server error",
-            "Gateway timeout", "Rate limit exceeded",
-        ])
+        base_event["data"]["error_message"] = random.choice(
+            [
+                "Resource not found",
+                "Unauthorized",
+                "Internal server error",
+                "Gateway timeout",
+                "Rate limit exceeded",
+            ]
+        )
 
     return base_event
 
@@ -120,8 +140,8 @@ async def produce_to_eventhub(
     duration: int,
 ) -> None:
     """Publish events to Azure Event Hub."""
-    from azure.eventhub.aio import EventHubProducerClient
     from azure.eventhub import EventData
+    from azure.eventhub.aio import EventHubProducerClient
 
     if connection_string:
         producer = EventHubProducerClient.from_connection_string(
@@ -130,6 +150,7 @@ async def produce_to_eventhub(
         )
     else:
         from azure.identity.aio import DefaultAzureCredential
+
         credential = DefaultAzureCredential()
         fqns = f"{namespace}.servicebus.windows.net"
         producer = EventHubProducerClient(
@@ -201,13 +222,15 @@ def main() -> None:
     else:
         if not args.event_hub_namespace and not args.connection_string:
             parser.error("Either --event-hub-namespace or --connection-string is required")
-        asyncio.run(produce_to_eventhub(
-            namespace=args.event_hub_namespace,
-            connection_string=args.connection_string,
-            event_hub_name=args.event_hub_name,
-            rate=args.rate,
-            duration=args.duration,
-        ))
+        asyncio.run(
+            produce_to_eventhub(
+                namespace=args.event_hub_namespace,
+                connection_string=args.connection_string,
+                event_hub_name=args.event_hub_name,
+                rate=args.rate,
+                duration=args.duration,
+            )
+        )
 
 
 if __name__ == "__main__":

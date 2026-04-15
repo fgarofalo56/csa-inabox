@@ -83,8 +83,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 import azure.functions as func
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-from azure.core.exceptions import ServiceRequestError, HttpResponseError
+from azure.core.exceptions import HttpResponseError, ServiceRequestError
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from governance.common.logging import (
     bind_trace_context,
@@ -126,9 +126,7 @@ def _generate_password(length: int = 32, *, include_special: bool = True) -> str
         has_upper = any(c.isupper() for c in password)
         has_lower = any(c.islower() for c in password)
         has_digit = any(c.isdigit() for c in password)
-        has_special = not include_special or any(
-            c in "!@#$%^&*()-_=+" for c in password
-        )
+        has_special = not include_special or any(c in "!@#$%^&*()-_=+" for c in password)
         if has_upper and has_lower and has_digit and has_special:
             return password
 
@@ -182,7 +180,7 @@ def _parse_secret_name(secret_name: str) -> dict[str, str]:
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=30),
-    retry=retry_if_exception_type((ServiceRequestError, HttpResponseError))
+    retry=retry_if_exception_type((ServiceRequestError, HttpResponseError)),
 )
 async def _rotate_storage_key(
     secret_name: str,
@@ -205,7 +203,10 @@ async def _rotate_storage_key(
     account_name = params.get("account_name", "")
 
     if not all([subscription_id, resource_group, account_name]):
-        return {"success": False, "error": "Missing storage account parameters (subscription_id, resource_group, account_name)"}
+        return {
+            "success": False,
+            "error": "Missing storage account parameters (subscription_id, resource_group, account_name)",
+        }
 
     result: dict[str, Any] = {"service": "storage", "account": account_name}
 
@@ -213,17 +214,21 @@ async def _rotate_storage_key(
         # Step 1: Regenerate key
         async with StorageManagementClient(credential, subscription_id) as storage_client:
             from azure.mgmt.storage.models import StorageAccountRegenerateKeyParameters
+
             key_result = await storage_client.storage_accounts.regenerate_key(
                 resource_group,
                 account_name,
                 StorageAccountRegenerateKeyParameters(key_name="key1"),
             )
-            new_key = key_result.keys[0].value
+            if key_result.keys is None or not key_result.keys:
+                return {"success": False, "error": "Key regeneration returned no keys"}
+            new_key = key_result.keys[0].value or ""
             logger.info("rotation.key_regenerated", service="storage", account=account_name)
 
         # Step 2: Store in Key Vault
         async with SecretClient(vault_url=KEY_VAULT_URL, credential=credential) as kv_client:
             from datetime import timedelta
+
             expires_on = datetime.now(timezone.utc) + timedelta(days=DEFAULT_VALIDITY_DAYS)
             await kv_client.set_secret(
                 secret_name,
@@ -244,7 +249,7 @@ async def _rotate_storage_key(
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=30),
-    retry=retry_if_exception_type((ServiceRequestError, HttpResponseError))
+    retry=retry_if_exception_type((ServiceRequestError, HttpResponseError)),
 )
 async def _rotate_cosmos_key(
     secret_name: str,
@@ -267,7 +272,10 @@ async def _rotate_cosmos_key(
     account_name = params.get("account_name", "")
 
     if not all([subscription_id, resource_group, account_name]):
-        return {"success": False, "error": "Missing Cosmos DB parameters (subscription_id, resource_group, account_name)"}
+        return {
+            "success": False,
+            "error": "Missing Cosmos DB parameters (subscription_id, resource_group, account_name)",
+        }
 
     result: dict[str, Any] = {"service": "cosmosdb", "account": account_name}
 
@@ -275,6 +283,7 @@ async def _rotate_cosmos_key(
         # Step 1: Regenerate primary key (long-running operation)
         async with CosmosDBManagementClient(credential, subscription_id) as cosmos_client:
             from azure.mgmt.cosmosdb.models import DatabaseAccountRegenerateKeyParameters
+
             poller = await cosmos_client.database_accounts.begin_regenerate_key(
                 resource_group,
                 account_name,
@@ -286,13 +295,15 @@ async def _rotate_cosmos_key(
 
             # Step 2: Read back the new key (safe now that regeneration is complete)
             keys = await cosmos_client.database_accounts.list_keys(
-                resource_group, account_name,
+                resource_group,
+                account_name,
             )
-            new_key = keys.primary_master_key
+            new_key = keys.primary_master_key or ""
 
         # Step 3: Store in Key Vault
         async with SecretClient(vault_url=KEY_VAULT_URL, credential=credential) as kv_client:
             from datetime import timedelta
+
             expires_on = datetime.now(timezone.utc) + timedelta(days=DEFAULT_VALIDITY_DAYS)
             await kv_client.set_secret(
                 secret_name,
@@ -313,7 +324,7 @@ async def _rotate_cosmos_key(
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=30),
-    retry=retry_if_exception_type((ServiceRequestError, HttpResponseError))
+    retry=retry_if_exception_type((ServiceRequestError, HttpResponseError)),
 )
 async def _rotate_sql_password(
     secret_name: str,
@@ -339,9 +350,10 @@ async def _rotate_sql_password(
 
     new_password = _generate_password(length, include_special=include_special)
 
-    async with DefaultAzureCredential() as credential:
+    async with DefaultAzureCredential() as credential:  # noqa: SIM117 (SecretClient depends on credential)
         async with SecretClient(vault_url=KEY_VAULT_URL, credential=credential) as kv_client:
             from datetime import timedelta
+
             expires_on = datetime.now(timezone.utc) + timedelta(days=DEFAULT_VALIDITY_DAYS)
             await kv_client.set_secret(
                 secret_name,
@@ -511,10 +523,12 @@ async def rotate(req: func.HttpRequest) -> func.HttpResponse:
         if not handler:
             logger.warning("rotation.unsupported_service", service=service)
             return func.HttpResponse(
-                json.dumps({
-                    "error": f"Unsupported service type: {service}",
-                    "supported": list(_ROTATION_HANDLERS.keys()),
-                }),
+                json.dumps(
+                    {
+                        "error": f"Unsupported service type: {service}",
+                        "supported": list(_ROTATION_HANDLERS.keys()),
+                    }
+                ),
                 status_code=400,
                 mimetype="application/json",
             )
@@ -527,12 +541,15 @@ async def rotate(req: func.HttpRequest) -> func.HttpResponse:
                 success=result.get("success", False),
             )
             return func.HttpResponse(
-                json.dumps({
-                    "secret_name": secret_name,
-                    "service": service,
-                    "result": result,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                }, default=str),
+                json.dumps(
+                    {
+                        "secret_name": secret_name,
+                        "service": service,
+                        "result": result,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    },
+                    default=str,
+                ),
                 status_code=200,
                 mimetype="application/json",
             )
@@ -544,34 +561,40 @@ async def rotate(req: func.HttpRequest) -> func.HttpResponse:
                 error_message=str(e),
             )
             return func.HttpResponse(
-                json.dumps({
-                    "error": f"Azure SDK error: {str(e)}",
-                    "secret_name": secret_name,
-                    "service": service,
-                }),
+                json.dumps(
+                    {
+                        "error": f"Azure SDK error: {e!s}",
+                        "secret_name": secret_name,
+                        "service": service,
+                    }
+                ),
                 status_code=503,  # Service Unavailable for retriable errors
                 mimetype="application/json",
             )
         except ValueError as e:
             logger.error("rotation.validation_failed", secret_name=secret_name, error=str(e))
             return func.HttpResponse(
-                json.dumps({
-                    "error": f"Invalid parameters: {str(e)}",
-                    "secret_name": secret_name,
-                    "service": service,
-                }),
+                json.dumps(
+                    {
+                        "error": f"Invalid parameters: {e!s}",
+                        "secret_name": secret_name,
+                        "service": service,
+                    }
+                ),
                 status_code=400,
                 mimetype="application/json",
             )
         except Exception as e:
             logger.exception("rotation.manual_failed", secret_name=secret_name)
             return func.HttpResponse(
-                json.dumps({
-                    "error": "Rotation failed. Check service logs for details.",
-                    "secret_name": secret_name,
-                    "service": service,
-                    "error_type": type(e).__name__,
-                }),
+                json.dumps(
+                    {
+                        "error": "Rotation failed. Check service logs for details.",
+                        "secret_name": secret_name,
+                        "service": service,
+                        "error_type": type(e).__name__,
+                    }
+                ),
                 status_code=500,
                 mimetype="application/json",
             )
@@ -589,11 +612,13 @@ async def health(req: func.HttpRequest) -> func.HttpResponse:
     """
     kv_configured = bool(KEY_VAULT_URL)
     return func.HttpResponse(
-        json.dumps({
-            "status": "healthy" if kv_configured else "degraded",
-            "service": "secret-rotation",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }),
+        json.dumps(
+            {
+                "status": "healthy" if kv_configured else "degraded",
+                "service": "secret-rotation",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        ),
         status_code=200,
         mimetype="application/json",
     )

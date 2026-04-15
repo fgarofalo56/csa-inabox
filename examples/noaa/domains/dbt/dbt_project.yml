@@ -1,0 +1,118 @@
+name: 'csa_noaa'
+version: '1.0.0'
+config-version: 2
+require-dbt-version: [">=1.7.0", "<2.0.0"]
+
+profile: 'csa_analytics'
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+macro-paths: ["../../../domains/shared/dbt/macros"]
+
+vars:
+  bronze_database: "bronze"
+  silver_database: "silver"
+  gold_database: "gold"
+  file_format: "delta"
+  incremental_strategy: "merge"
+  freshness_warn_hours: 24
+  freshness_error_hours: 48
+
+  # NOAA-specific variables
+  baseline_period_start: 1901
+  baseline_period_end: 2000
+  analysis_start_year: 1950
+  historical_years_analysis: 30
+  current_data_year: 2024
+
+  # Quality control thresholds
+  temp_min_valid_celsius: -90.0
+  temp_max_valid_celsius: 60.0
+  precip_max_valid_mm: 1000.0
+  wind_max_valid_ms: 120.0
+  wave_max_valid_m: 30.0
+
+  # Storm event analysis
+  damage_cpi_base_year: 2024
+  significant_damage_threshold_usd: 50000
+  storm_seasons: ['WINTER', 'SPRING', 'SUMMER', 'FALL']
+
+  # Marine ecosystem thresholds
+  coral_bleaching_sst_threshold: 1.0  # Degrees above MMM (Maximum Monthly Mean)
+  degree_heating_weeks_alert: 4.0
+  degree_heating_weeks_critical: 8.0
+
+  # Climate regions (NOAA 9-region classification)
+  noaa_climate_regions:
+    - 'NORTHEAST'
+    - 'SOUTHEAST'
+    - 'UPPER_MIDWEST'
+    - 'OHIO_VALLEY'
+    - 'SOUTH'
+    - 'NORTHERN_ROCKIES_PLAINS'
+    - 'SOUTHWEST'
+    - 'NORTHWEST'
+    - 'WEST'
+
+  # Major buoy stations for marine health
+  primary_buoy_stations:
+    - '41001'  # Hatteras
+    - '41002'  # South Hatteras
+    - '44013'  # Boston
+    - '46001'  # Gulf of Alaska
+    - '46025'  # Santa Monica Basin
+    - '51001'  # Hawaii
+    - '42001'  # Mid Gulf
+
+models:
+  csa_noaa:
+    bronze:
+      +materialized: incremental
+      +file_format: delta
+      +schema: bronze
+      +tags: ['bronze', 'noaa', 'raw']
+      +unique_key: ['source_system', 'ingestion_timestamp', 'record_hash']
+    silver:
+      +materialized: incremental
+      +file_format: delta
+      +schema: silver
+      +tags: ['silver', 'noaa', 'cleaned']
+      +incremental_strategy: merge
+      +on_schema_change: "sync_all_columns"
+    gold:
+      +materialized: table
+      +file_format: delta
+      +schema: gold
+      +tags: ['gold', 'noaa', 'analytics']
+      +post-hook: "OPTIMIZE {{ this }} ZORDER BY (report_date)"
+
+seeds:
+  csa_noaa:
+    +schema: seeds
+    +tags: ['seed', 'noaa']
+
+sources:
+  - name: noaa
+    description: NOAA environmental observation data sources
+    tables:
+      - name: ghcn_daily
+        description: GHCN-Daily weather station observations
+        freshness:
+          warn_after: {count: 2, period: day}
+          error_after: {count: 4, period: day}
+      - name: storm_events
+        description: NCEI Storm Events Database
+        freshness:
+          warn_after: {count: 30, period: day}
+          error_after: {count: 60, period: day}
+      - name: ndbc_buoy
+        description: NDBC buoy meteorological and oceanographic observations
+        freshness:
+          warn_after: {count: 1, period: day}
+          error_after: {count: 3, period: day}
+
+snapshots:
+  csa_noaa:
+    +target_schema: snapshots
+    +strategy: timestamp
+    +updated_at: processed_timestamp

@@ -84,3 +84,9 @@ New-AzManagementGroupDeployment @inputObject
 ## Bicep Visualizer
 
 ![Bicep Visualizer](media/bicepVisualizer.png "Bicep Visualizer")
+
+---
+
+## Related Documentation
+
+- [IaC & CI/CD Best Practices](../../../../../../../docs/IaC-CICD-Best-Practices.md) - Deployment pipeline guidance

@@ -1,16 +1,41 @@
 # Cost Management Guide
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** FinOps / Administrators
+
 This document covers cost estimation, budget guardrails, and FinOps practices for the CSA-in-a-Box platform.
 
 ## Table of Contents
 
-1. [Cost Estimation Approach](#cost-estimation-approach)
-2. [Running Cost Estimates Locally](#running-cost-estimates-locally)
-3. [CI/CD Integration](#cicd-integration)
-4. [Budget Thresholds and Alerts](#budget-thresholds-and-alerts)
-5. [Tagging Strategy](#tagging-strategy)
-6. [Cost Optimization Tips](#cost-optimization-tips)
-7. [FinOps Maturity Model](#finops-maturity-model)
+- [Cost Estimation Approach](#cost-estimation-approach)
+  - [Bicep Path (Primary)](#bicep-path-primary)
+  - [Terraform Path (Future)](#terraform-path-future)
+- [Running Cost Estimates Locally](#running-cost-estimates-locally)
+  - [Prerequisites](#prerequisites)
+  - [Basic Usage](#basic-usage)
+  - [Understanding the Output](#understanding-the-output)
+  - [Exit Codes](#exit-codes)
+- [CI/CD Integration](#cicd-integration)
+  - [GitHub Actions — Cost Estimate Job](#github-actions--cost-estimate-job)
+  - [Adding Cost Estimates to Other Workflows](#adding-cost-estimates-to-other-workflows)
+  - [Infracost (Terraform Path)](#infracost-terraform-path)
+- [Budget Thresholds and Alerts](#budget-thresholds-and-alerts)
+  - [Policy Rules](#policy-rules)
+  - [Azure Cost Management Alerts](#azure-cost-management-alerts)
+- [Tagging Strategy](#tagging-strategy)
+  - [Required Tags](#required-tags)
+  - [Enforcement](#enforcement)
+- [Cost Optimization Tips](#cost-optimization-tips)
+  - [Reserved Instances & Savings Plans](#reserved-instances--savings-plans)
+  - [Auto-Pause and Auto-Stop](#auto-pause-and-auto-stop)
+  - [Spot VMs and Low-Priority Compute](#spot-vms-and-low-priority-compute)
+  - [Storage Tiering](#storage-tiering)
+  - [Right-Sizing](#right-sizing)
+- [FinOps Maturity Model](#finops-maturity-model)
+  - [Stage 1: Crawl (Current)](#stage-1-crawl-current)
+  - [Stage 2: Walk](#stage-2-walk)
+  - [Stage 3: Run](#stage-3-run)
+- [Resource-Specific Pricing Reference](#resource-specific-pricing-reference)
+- [Further Reading](#further-reading)
 
 ---
 
@@ -268,6 +293,7 @@ autopauseDelayInMinutes: 60
 enableAutoStop: true
 ```
 
+
 In dev/staging, always enable auto-pause for:
 - Synapse dedicated SQL pools
 - Databricks clusters (via cluster policies)
@@ -375,3 +401,11 @@ Quick reference for the CSA services tracked by `estimate-costs.sh`:
 - [Infracost Documentation](https://www.infracost.io/docs/)
 - [FinOps Foundation](https://www.finops.org/)
 - [Azure Cost Management Best Practices](https://learn.microsoft.com/en-us/azure/cost-management-billing/costs/cost-mgt-best-practices)
+
+---
+
+## Related Documentation
+
+- [PRODUCTION_CHECKLIST.md](PRODUCTION_CHECKLIST.md) - Pre-production readiness checklist
+- [PLATFORM_SERVICES.md](PLATFORM_SERVICES.md) - Platform services reference and SKU details
+- [MULTI_TENANT.md](MULTI_TENANT.md) - Multi-tenant deployment with per-tenant cost attribution

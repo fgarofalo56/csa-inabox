@@ -1,0 +1,209 @@
+# Deploy portal application (shared backend + chosen frontend)
+# Supports App Service, Container Apps, Static Web Apps, and AKS
+name: Deploy Portal
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'portal/**'
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Deployment target'
+        required: true
+        type: choice
+        options:
+          - container-apps
+          - app-service
+          - static-web-app
+          - aks
+      environment:
+        description: 'Environment'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      frontend:
+        description: 'Frontend to deploy'
+        required: true
+        default: 'react'
+        type: choice
+        options:
+          - react
+          - sveltekit
+
+permissions:
+  id-token: write
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository }}
+
+jobs:
+  build-backend:
+    name: Build Backend Image
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.meta.outputs.tags }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push backend
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        id: build
+        with:
+          context: portal/shared
+          file: portal/shared/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/portal-backend:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/portal-backend:latest
+
+      - id: meta
+        run: echo "tags=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/portal-backend:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+
+  build-frontend:
+    name: Build Frontend Image
+    runs-on: ubuntu-latest
+    if: github.event.inputs.target != 'static-web-app'
+    outputs:
+      image: ${{ steps.meta.outputs.tags }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Determine frontend path
+        id: frontend
+        run: |
+          case "${{ github.event.inputs.frontend || 'react' }}" in
+            react)    echo "path=portal/react-webapp" >> "$GITHUB_OUTPUT" ;;
+            sveltekit) echo "path=portal/static-webapp" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Build and push frontend
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ${{ steps.frontend.outputs.path }}
+          file: portal/kubernetes/docker/frontend/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/portal-frontend:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/portal-frontend:latest
+          build-args: |
+            FRONTEND_PATH=${{ steps.frontend.outputs.path }}
+
+      - id: meta
+        run: echo "tags=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/portal-frontend:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+
+  deploy-container-apps:
+    name: Deploy to Container Apps
+    runs-on: ubuntu-latest
+    needs: [build-backend, build-frontend]
+    if: github.event.inputs.target == 'container-apps'
+    environment: ${{ github.event.inputs.environment }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+
+      - name: Azure Login
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy Backend
+        run: |
+          az containerapp update \
+            --name csa-portal-backend \
+            --resource-group rg-csa-portal-${{ github.event.inputs.environment }} \
+            --image ${{ needs.build-backend.outputs.image }}
+
+      - name: Deploy Frontend
+        run: |
+          az containerapp update \
+            --name csa-portal-frontend \
+            --resource-group rg-csa-portal-${{ github.event.inputs.environment }} \
+            --image ${{ needs.build-frontend.outputs.image }}
+
+  deploy-static-web-app:
+    name: Deploy to Static Web App
+    runs-on: ubuntu-latest
+    needs: [build-backend]
+    if: github.event.inputs.target == 'static-web-app'
+    environment: ${{ github.event.inputs.environment }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20
+
+      - name: Install and build SvelteKit
+        working-directory: portal/static-webapp
+        run: |
+          npm ci
+          npm run build
+
+      - name: Deploy to Azure Static Web Apps
+        uses: Azure/static-web-apps-deploy@1a947af9992250f3bc2e68ad0754c0b0c11566c9 # v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          action: upload
+          app_location: portal/static-webapp/build
+          api_location: portal/static-webapp/api
+          output_location: ""
+
+  deploy-aks:
+    name: Deploy to AKS
+    runs-on: ubuntu-latest
+    needs: [build-backend, build-frontend]
+    if: github.event.inputs.target == 'aks'
+    environment: ${{ github.event.inputs.environment }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+
+      - name: Azure Login
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Get AKS credentials
+        run: |
+          az aks get-credentials \
+            --resource-group rg-csa-aks-${{ github.event.inputs.environment }} \
+            --name csa-aks-${{ github.event.inputs.environment }}
+
+      - name: Deploy with Helm
+        run: |
+          helm upgrade --install csa-portal \
+            portal/kubernetes/helm/csa-portal \
+            --namespace csa-portal \
+            --create-namespace \
+            --set frontend.image.repository=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/portal-frontend \
+            --set frontend.image.tag=${{ github.sha }} \
+            --set backend.image.repository=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/portal-backend \
+            --set backend.image.tag=${{ github.sha }} \
+            --set ingress.hosts[0].host=portal-${{ github.event.inputs.environment }}.csa-platform.example.com \
+            --wait --timeout 5m

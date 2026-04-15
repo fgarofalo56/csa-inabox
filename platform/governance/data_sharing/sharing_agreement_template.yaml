@@ -1,0 +1,147 @@
+# Data Sharing Agreement Template
+# Governs inter-domain data sharing between provider and consumer domains.
+#
+# This template is instantiated for each cross-domain data access grant.
+# The sharing enforcer (sharing_enforcer.py) validates all sharing requests
+# against active agreements before allowing RBAC assignments.
+
+apiVersion: csa.microsoft.com/v1
+kind: DataSharingAgreement
+
+metadata:
+  name: "{provider_domain}-to-{consumer_domain}-sharing"
+  version: "1.0.0"
+  description: >
+    Template for inter-domain data sharing agreements. Fill in the provider,
+    consumer, and terms sections for each sharing relationship.
+  owner: governance-team@contoso.com
+  tags: [data-sharing, governance, rbac]
+
+# The domain that owns and provides the data.
+provider:
+  domain: "{provider_domain}"
+  owner: "{provider_owner_email}"
+  # Data products available for sharing.
+  dataProducts:
+    - name: "{data_product_name}"
+      description: "{data_product_description}"
+      # Columns explicitly shared. Empty = all columns.
+      columns: []
+      # Columns explicitly excluded from sharing.
+      excludedColumns: []
+      # Classification levels allowed in the share.
+      maxSensitivity: Confidential  # Public | Internal | Confidential | Restricted
+
+# The domain that consumes (reads) the shared data.
+consumer:
+  domain: "{consumer_domain}"
+  owner: "{consumer_owner_email}"
+  # Purpose of the sharing — required for audit trail.
+  purpose: "{business_justification}"
+  # Use cases for the shared data.
+  useCases:
+    - "{use_case_1}"
+    - "{use_case_2}"
+
+# Terms and conditions of the sharing agreement.
+terms:
+  # Access level granted.
+  accessLevel: read  # read | read_write | admin
+  # How the data may be accessed.
+  accessMethod: managed_identity  # managed_identity | sas_token | linked_service
+  # Whether the consumer may copy data to their own storage.
+  copyAllowed: false
+  # Whether the consumer may derive new datasets from the shared data.
+  derivationAllowed: true
+  # Whether PII data may be included in the share.
+  piiAllowed: false
+  # Whether PHI data may be included in the share.
+  phiAllowed: false
+  # Maximum data retention in the consumer's environment (days).
+  retentionDays: 90
+  # Whether access must be audited.
+  auditRequired: true
+  # Audit log retention (days).
+  auditRetentionDays: 365
+  # Agreement expiration date (ISO 8601).
+  expiresAt: "{expiration_date}"
+  # Whether the agreement auto-renews.
+  autoRenew: false
+  autoRenewPeriodDays: 365
+
+# Approval workflow for the sharing agreement.
+approval:
+  # Who must approve the agreement.
+  approvers:
+    - role: provider_data_owner
+      email: "{provider_owner_email}"
+    - role: governance_team
+      email: governance-team@contoso.com
+    - role: security_team
+      email: security-team@contoso.com
+      # Security review only required for Restricted data.
+      condition: "maxSensitivity == 'Restricted'"
+  # Minimum number of approvals required.
+  minApprovals: 2
+  # Maximum time to wait for approval (days).
+  approvalTimeoutDays: 14
+
+# Technical implementation details.
+implementation:
+  # RBAC role to assign on the provider's storage.
+  rbacRole: Storage Blob Data Reader
+  # Scope of the RBAC assignment.
+  scope: container  # container | path | storageAccount
+  # Specific container(s) to grant access to.
+  containers: [gold]
+  # Path prefix filter (if scope is "path").
+  pathPrefix: "{domain}/{data_product}/"
+  # Managed identity of the consumer domain.
+  consumerIdentity: "mi-{env}-{consumer_domain}"
+
+# Compliance and monitoring requirements.
+compliance:
+  # Data residency requirements.
+  dataResidency: us  # us | eu | global
+  # Regulatory frameworks that apply.
+  regulations: []
+  # Whether a Data Protection Impact Assessment is required.
+  dpiaRequired: false
+  # Review frequency for the agreement.
+  reviewFrequency: quarterly  # monthly | quarterly | annually
+  # Contact for compliance questions.
+  complianceContact: compliance@contoso.com
+
+# Example: fully populated agreement
+# ---
+# provider:
+#   domain: finance
+#   owner: finance-data@contoso.com
+#   dataProducts:
+#     - name: invoices
+#       description: Customer invoices for revenue reconciliation
+#       columns: [invoice_id, order_id, amount, status, invoice_date]
+#       excludedColumns: [internal_notes, approval_chain]
+#       maxSensitivity: Confidential
+#
+# consumer:
+#   domain: sales
+#   owner: sales-data@contoso.com
+#   purpose: Revenue reconciliation and sales commission calculation
+#   useCases:
+#     - Match sales orders to invoices for revenue reporting
+#     - Calculate sales team commissions based on collected revenue
+#
+# terms:
+#   accessLevel: read
+#   accessMethod: managed_identity
+#   copyAllowed: false
+#   derivationAllowed: true
+#   piiAllowed: false
+#   phiAllowed: false
+#   retentionDays: 90
+#   auditRequired: true
+#   auditRetentionDays: 365
+#   expiresAt: "2025-12-31"
+#   autoRenew: true
+#   autoRenewPeriodDays: 365

@@ -1,0 +1,213 @@
+# Data product contract — epa.water_systems
+#
+# This file is the authoritative interface for the EPA Safe Drinking Water
+# data product. It declares the schema, SLAs, and quality rules
+# for public water system compliance and violation analytics.
+
+apiVersion: csa.epa.gov/v1
+kind: DataProductContract
+
+metadata:
+  name: epa.water_systems
+  domain: epa
+  owner: epa-data-engineering@contoso.com
+  version: "1.0.0"
+  description: >
+    Safe Drinking Water Information System (SDWIS) analytics for public water
+    systems. Tracks violations, enforcement actions, and compliance status
+    for community and non-community water systems. Used for drinking water
+    safety monitoring, regulatory compliance, and public health analysis.
+
+schema:
+  primary_key: [pwsid, violation_id]
+  columns:
+    - name: pwsid
+      type: string
+      nullable: false
+      description: Public Water System Identifier
+    - name: pws_name
+      type: string
+      nullable: false
+      description: Public water system name
+    - name: pws_type_code
+      type: string
+      nullable: false
+      description: Water system type classification
+      allowed_values:
+        - CWS
+        - TNCWS
+        - NTNCWS
+    - name: primary_source_code
+      type: string
+      nullable: true
+      description: Primary water source type (GW, SW, GU, SWP)
+    - name: population_served_count
+      type: integer
+      nullable: true
+      description: Population served by the water system
+    - name: service_connections_count
+      type: integer
+      nullable: true
+      description: Number of service connections
+    - name: state_code
+      type: string
+      nullable: false
+      description: 2-letter state abbreviation
+    - name: county_name
+      type: string
+      nullable: true
+      description: County name
+    - name: county_fips
+      type: string
+      nullable: true
+      description: County FIPS code
+    - name: city_name
+      type: string
+      nullable: true
+      description: City name
+    - name: zip_code
+      type: string
+      nullable: true
+      description: ZIP code
+    - name: latitude
+      type: decimal(9,6)
+      nullable: true
+      description: Water system latitude
+    - name: longitude
+      type: decimal(9,6)
+      nullable: true
+      description: Water system longitude
+    - name: violation_id
+      type: string
+      nullable: false
+      description: Unique violation identifier
+    - name: contaminant_code
+      type: string
+      nullable: false
+      description: EPA contaminant code
+    - name: contaminant_name
+      type: string
+      nullable: false
+      description: Contaminant name
+    - name: violation_type_code
+      type: string
+      nullable: false
+      description: Violation type code (MCL, TT, MR, MON, RPT)
+    - name: violation_type_name
+      type: string
+      nullable: false
+      description: Violation type description
+    - name: compliance_begin_date
+      type: date
+      nullable: false
+      description: Compliance period begin date
+    - name: compliance_end_date
+      type: date
+      nullable: true
+      description: Compliance period end date
+    - name: violation_status
+      type: string
+      nullable: false
+      description: Current violation status
+      allowed_values:
+        - OPEN
+        - CLOSED
+        - ADDRESSED
+    - name: severity_ind
+      type: string
+      nullable: true
+      description: Severity indicator
+    - name: enforcement_id
+      type: string
+      nullable: true
+      description: Enforcement action identifier
+    - name: enforcement_action_type
+      type: string
+      nullable: true
+      description: Type of enforcement action taken
+    - name: enforcement_date
+      type: date
+      nullable: true
+      description: Date of enforcement action
+    - name: load_time
+      type: timestamp
+      nullable: false
+      description: Timestamp when the record was loaded into the data warehouse
+
+sla:
+  freshness_minutes: 10080  # Weekly updates (7 days)
+  valid_row_ratio: 0.97
+  supported_until: "2027-12-31"
+  update_frequency: "Weekly on Mondays"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: pwsid
+  - rule: expect_column_values_to_not_be_null
+    column: violation_id
+  - rule: expect_column_values_to_not_be_null
+    column: contaminant_code
+  - rule: expect_column_values_to_not_be_null
+    column: violation_status
+  - rule: expect_column_values_to_be_in_set
+    column: pws_type_code
+    value_set: [CWS, TNCWS, NTNCWS]
+  - rule: expect_column_values_to_be_in_set
+    column: violation_status
+    value_set: [OPEN, CLOSED, ADDRESSED]
+  - rule: expect_column_values_to_be_between
+    column: population_served_count
+    min_value: 0
+    max_value: 50000000
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: service_connections_count
+    min_value: 0
+    max_value: 10000000
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: latitude
+    min_value: 17.0
+    max_value: 72.0
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: longitude
+    min_value: -180.0
+    max_value: -60.0
+    mostly: 0.99
+  - rule: expect_column_pair_values_a_to_be_greater_than_or_equal_to_b
+    column_a: compliance_end_date
+    column_b: compliance_begin_date
+    mostly: 0.99
+
+data_lineage:
+  upstream_sources:
+    - name: "EPA SDWIS/FED"
+      url: "https://www.epa.gov/ground-water-and-drinking-water/safe-drinking-water-information-system-sdwisfed-reporting"
+      description: "Safe Drinking Water Information System federal database"
+      refresh_schedule: "Weekly"
+    - name: "EPA Enforcement and Compliance History"
+      url: "https://echo.epa.gov/"
+      description: "Enforcement and compliance history online"
+
+  downstream_consumers:
+    - name: "Water Quality Dashboard"
+      description: "Drinking water compliance monitoring dashboard"
+    - name: "Public Health Alert System"
+      description: "Automated alerts for critical water violations"
+    - name: "Regulatory Compliance APIs"
+      description: "APIs for state and regional compliance reporting"
+
+usage_notes: |
+  - CWS = Community Water System (year-round residential)
+  - TNCWS = Transient Non-Community (restaurants, gas stations)
+  - NTNCWS = Non-Transient Non-Community (schools, offices)
+  - MCL violations are the most health-significant
+  - Monitoring/reporting violations may not indicate water quality issues
+  - Small systems (<500 population) have different compliance schedules
+  - Enforcement actions may lag violation discovery by weeks/months
+  - Population served counts may be estimates for smaller systems
+
+contact:
+  technical: epa-data-team@contoso.com
+  business: epa-analytics-lead@contoso.com

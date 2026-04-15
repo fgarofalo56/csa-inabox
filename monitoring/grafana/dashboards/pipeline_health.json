@@ -1,0 +1,403 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_AZURE_MONITOR",
+      "label": "Azure Monitor",
+      "description": "Azure Monitor data source for pipeline metrics",
+      "type": "datasource",
+      "pluginId": "grafana-azure-monitor-datasource"
+    }
+  ],
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Data pipeline health monitoring for CSA-in-a-Box ADF, dbt, and streaming pipelines",
+  "editable": true,
+  "gnetId": null,
+  "graphTooltip": 1,
+  "id": null,
+  "iteration": 1713100800000,
+  "links": [],
+  "panels": [
+    {
+      "id": 1,
+      "title": "Pipeline Run Status (Last 24h)",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "datasource": "${DS_AZURE_MONITOR}",
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 5 }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "azureMonitor": {
+            "metricName": "PipelineFailedRuns",
+            "metricNamespace": "Microsoft.DataFactory/factories",
+            "aggregation": "Total",
+            "timeGrain": "auto"
+          },
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Pipeline Runs Over Time",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "datasource": "${DS_AZURE_MONITOR}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisLabel": "Runs",
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "stacking": { "mode": "normal", "group": "A" }
+          },
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Succeeded" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Failed" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Cancelled" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }]
+          }
+        ]
+      },
+      "options": {
+        "legend": { "calcs": ["sum"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "azureMonitor": {
+            "metricName": "PipelineSucceededRuns",
+            "metricNamespace": "Microsoft.DataFactory/factories",
+            "aggregation": "Total",
+            "timeGrain": "PT1H"
+          },
+          "refId": "Succeeded"
+        },
+        {
+          "azureMonitor": {
+            "metricName": "PipelineFailedRuns",
+            "metricNamespace": "Microsoft.DataFactory/factories",
+            "aggregation": "Total",
+            "timeGrain": "PT1H"
+          },
+          "refId": "Failed"
+        },
+        {
+          "azureMonitor": {
+            "metricName": "PipelineCancelledRuns",
+            "metricNamespace": "Microsoft.DataFactory/factories",
+            "aggregation": "Total",
+            "timeGrain": "PT1H"
+          },
+          "refId": "Cancelled"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Pipeline Duration Trends",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "datasource": "${DS_AZURE_MONITOR}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisLabel": "Duration",
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto"
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "azureMonitor": {
+            "metricName": "PipelineElapsedTimeRuns",
+            "metricNamespace": "Microsoft.DataFactory/factories",
+            "aggregation": "Average",
+            "timeGrain": "PT1H"
+          },
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Failure Rate (%)",
+      "type": "gauge",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "datasource": "${DS_AZURE_MONITOR}",
+      "fieldConfig": {
+        "defaults": {
+          "max": 100,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 5 },
+              { "color": "orange", "value": 10 },
+              { "color": "red", "value": 25 }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "targets": [
+        {
+          "azureMonitor": {
+            "metricName": "PipelineFailedRuns",
+            "metricNamespace": "Microsoft.DataFactory/factories",
+            "aggregation": "Total",
+            "timeGrain": "auto"
+          },
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Active Pipeline Runs",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "datasource": "${DS_AZURE_MONITOR}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "blue", "value": null }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "azureMonitor": {
+            "metricName": "PipelineSucceededRuns",
+            "metricNamespace": "Microsoft.DataFactory/factories",
+            "aggregation": "Total",
+            "timeGrain": "PT5M"
+          },
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Data Volume Ingested (GB)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "datasource": "${DS_AZURE_MONITOR}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisLabel": "Volume",
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "lineWidth": 1
+          },
+          "unit": "decgbytes"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "calcs": ["sum"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "azureMonitor": {
+            "metricName": "ActivitySucceededRuns",
+            "metricNamespace": "Microsoft.DataFactory/factories",
+            "aggregation": "Total",
+            "timeGrain": "PT1H",
+            "dimensionFilters": [
+              { "dimension": "ActivityType", "operator": "eq", "filters": ["Copy"] }
+            ]
+          },
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Streaming Throughput (Events/sec)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "datasource": "${DS_AZURE_MONITOR}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisLabel": "Events/sec",
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "lineWidth": 2
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "azureMonitor": {
+            "metricName": "IncomingMessages",
+            "metricNamespace": "Microsoft.EventHub/namespaces",
+            "aggregation": "Total",
+            "timeGrain": "PT1M"
+          },
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Activity Failures by Type",
+      "type": "piechart",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 0 },
+      "datasource": "${DS_AZURE_MONITOR}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right" },
+        "pieType": "donut",
+        "reduceOptions": { "calcs": ["sum"], "fields": "", "values": false },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "azureMonitor": {
+            "metricName": "ActivityFailedRuns",
+            "metricNamespace": "Microsoft.DataFactory/factories",
+            "aggregation": "Total",
+            "timeGrain": "auto",
+            "dimensionFilters": [
+              { "dimension": "ActivityType", "operator": "eq", "filters": [] }
+            ]
+          },
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "refresh": "1m",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["csa-inabox", "pipeline", "adf", "streaming"],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "hide": 0,
+        "includeAll": true,
+        "label": "Factory",
+        "multi": true,
+        "name": "factory",
+        "query": "Azure Monitor",
+        "type": "query"
+      },
+      {
+        "current": {},
+        "hide": 0,
+        "includeAll": true,
+        "label": "Domain",
+        "multi": true,
+        "name": "domain",
+        "options": [
+          { "text": "shared", "value": "shared" },
+          { "text": "finance", "value": "finance" },
+          { "text": "inventory", "value": "inventory" },
+          { "text": "sales", "value": "sales" }
+        ],
+        "type": "custom"
+      }
+    ]
+  },
+  "time": { "from": "now-24h", "to": "now" },
+  "timepicker": {},
+  "timezone": "utc",
+  "title": "CSA-in-a-Box: Pipeline Health",
+  "uid": "csa-pipeline-health",
+  "version": 1
+}

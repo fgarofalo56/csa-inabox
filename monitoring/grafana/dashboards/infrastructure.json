@@ -1,0 +1,508 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_AZURE_MONITOR",
+      "label": "Azure Monitor",
+      "description": "Azure Monitor data source for infrastructure metrics",
+      "type": "datasource",
+      "pluginId": "grafana-azure-monitor-datasource"
+    }
+  ],
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Infrastructure monitoring for CSA-in-a-Box — resource utilization, cost trends, service health, and ADX query performance",
+  "editable": true,
+  "gnetId": null,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "id": 1,
+      "title": "Storage Account Usage (TB)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": "${DS_AZURE_MONITOR}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisLabel": "Storage (TB)",
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "lineWidth": 2,
+            "pointSize": 4,
+            "showPoints": "auto",
+            "spanNulls": true
+          },
+          "unit": "deckbytes"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "azureMonitor": {
+            "metricName": "UsedCapacity",
+            "metricNamespace": "Microsoft.Storage/storageAccounts",
+            "aggregation": "Average",
+            "timeGrain": "PT1H"
+          },
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Databricks Cluster Utilization",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": "${DS_AZURE_MONITOR}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisLabel": "DBU",
+            "drawStyle": "line",
+            "fillOpacity": 15,
+            "lineWidth": 2
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "azureMonitor": {
+            "metricName": "jobs_active",
+            "metricNamespace": "Microsoft.Databricks/workspaces",
+            "aggregation": "Average",
+            "timeGrain": "PT5M"
+          },
+          "refId": "ActiveJobs"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Event Hub Throughput",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": "${DS_AZURE_MONITOR}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisLabel": "Messages",
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "lineWidth": 2
+          },
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Incoming" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "blue", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Outgoing" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Throttled" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }]
+          }
+        ]
+      },
+      "options": {
+        "legend": { "calcs": ["mean", "max", "sum"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "azureMonitor": {
+            "metricName": "IncomingMessages",
+            "metricNamespace": "Microsoft.EventHub/namespaces",
+            "aggregation": "Total",
+            "timeGrain": "PT5M"
+          },
+          "refId": "Incoming"
+        },
+        {
+          "azureMonitor": {
+            "metricName": "OutgoingMessages",
+            "metricNamespace": "Microsoft.EventHub/namespaces",
+            "aggregation": "Total",
+            "timeGrain": "PT5M"
+          },
+          "refId": "Outgoing"
+        },
+        {
+          "azureMonitor": {
+            "metricName": "ThrottledRequests",
+            "metricNamespace": "Microsoft.EventHub/namespaces",
+            "aggregation": "Total",
+            "timeGrain": "PT5M"
+          },
+          "refId": "Throttled"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "ADX Query Performance",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": "${DS_AZURE_MONITOR}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisLabel": "Duration (s)",
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto"
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "calcs": ["mean", "max", "p95"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "azureMonitor": {
+            "metricName": "QueryDuration",
+            "metricNamespace": "Microsoft.Kusto/clusters",
+            "aggregation": "Average",
+            "timeGrain": "PT5M"
+          },
+          "refId": "AvgDuration"
+        },
+        {
+          "azureMonitor": {
+            "metricName": "QueryDuration",
+            "metricNamespace": "Microsoft.Kusto/clusters",
+            "aggregation": "Maximum",
+            "timeGrain": "PT5M"
+          },
+          "refId": "MaxDuration"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "ADX Ingestion Volume",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "datasource": "${DS_AZURE_MONITOR}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisLabel": "Volume",
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "stacking": { "mode": "normal", "group": "A" }
+          },
+          "unit": "decmbytes"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Succeeded" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Failed" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }]
+          }
+        ]
+      },
+      "options": {
+        "legend": { "calcs": ["sum"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "azureMonitor": {
+            "metricName": "IngestionVolumeInMB",
+            "metricNamespace": "Microsoft.Kusto/clusters",
+            "aggregation": "Total",
+            "timeGrain": "PT1H"
+          },
+          "refId": "Succeeded"
+        },
+        {
+          "azureMonitor": {
+            "metricName": "FailedIngestion",
+            "metricNamespace": "Microsoft.Kusto/clusters",
+            "aggregation": "Total",
+            "timeGrain": "PT1H"
+          },
+          "refId": "Failed"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "ADX Cache Utilization (%)",
+      "type": "gauge",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 16 },
+      "datasource": "${DS_AZURE_MONITOR}",
+      "fieldConfig": {
+        "defaults": {
+          "max": 100,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 70 },
+              { "color": "orange", "value": 85 },
+              { "color": "red", "value": 95 }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "targets": [
+        {
+          "azureMonitor": {
+            "metricName": "CacheUtilization",
+            "metricNamespace": "Microsoft.Kusto/clusters",
+            "aggregation": "Average",
+            "timeGrain": "PT5M"
+          },
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "ADX CPU Utilization (%)",
+      "type": "gauge",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 16 },
+      "datasource": "${DS_AZURE_MONITOR}",
+      "fieldConfig": {
+        "defaults": {
+          "max": 100,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 60 },
+              { "color": "orange", "value": 80 },
+              { "color": "red", "value": 90 }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "targets": [
+        {
+          "azureMonitor": {
+            "metricName": "CPU",
+            "metricNamespace": "Microsoft.Kusto/clusters",
+            "aggregation": "Average",
+            "timeGrain": "PT5M"
+          },
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Service Health Overview",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "datasource": "${DS_AZURE_MONITOR}",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "displayMode": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "status" },
+            "properties": [
+              {
+                "id": "custom.displayMode",
+                "value": "color-background"
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  { "type": "value", "options": { "healthy": { "color": "green", "text": "Healthy" } } },
+                  { "type": "value", "options": { "degraded": { "color": "yellow", "text": "Degraded" } } },
+                  { "type": "value", "options": { "unhealthy": { "color": "red", "text": "Unhealthy" } } }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "desc": false, "displayName": "status" }]
+      },
+      "targets": [
+        {
+          "azureMonitor": {
+            "metricName": "Availability",
+            "metricNamespace": "Microsoft.Storage/storageAccounts",
+            "aggregation": "Average",
+            "timeGrain": "PT1H"
+          },
+          "refId": "StorageHealth"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Estimated Monthly Cost Trend",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "datasource": "${DS_AZURE_MONITOR}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisLabel": "Cost (USD)",
+            "drawStyle": "bars",
+            "fillOpacity": 50,
+            "lineWidth": 1,
+            "stacking": { "mode": "normal", "group": "A" }
+          },
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "calcs": ["sum"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "azureMonitor": {
+            "metricName": "ActualCost",
+            "metricNamespace": "Microsoft.CostManagement/budgets",
+            "aggregation": "Total",
+            "timeGrain": "P1D"
+          },
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "ADF Integration Runtime CPU",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
+      "datasource": "${DS_AZURE_MONITOR}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisLabel": "CPU %",
+            "drawStyle": "line",
+            "fillOpacity": 15,
+            "lineWidth": 2
+          },
+          "max": 100,
+          "min": 0,
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "azureMonitor": {
+            "metricName": "IntegrationRuntimeCpuPercentage",
+            "metricNamespace": "Microsoft.DataFactory/factories",
+            "aggregation": "Average",
+            "timeGrain": "PT5M"
+          },
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "refresh": "5m",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["csa-inabox", "infrastructure", "cost", "adx"],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "hide": 0,
+        "includeAll": true,
+        "label": "Resource Group",
+        "multi": true,
+        "name": "resource_group",
+        "query": "Azure Monitor",
+        "type": "query"
+      },
+      {
+        "current": {},
+        "hide": 0,
+        "includeAll": true,
+        "label": "Subscription",
+        "multi": false,
+        "name": "subscription",
+        "query": "Azure Monitor",
+        "type": "query"
+      }
+    ]
+  },
+  "time": { "from": "now-7d", "to": "now" },
+  "timepicker": {},
+  "timezone": "utc",
+  "title": "CSA-in-a-Box: Infrastructure",
+  "uid": "csa-infrastructure",
+  "version": 1
+}

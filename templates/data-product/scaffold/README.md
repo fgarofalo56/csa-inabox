@@ -25,7 +25,7 @@ curated tables (Silver) to business-ready datasets (Gold).
 | Data Steward | *(steward responsible for quality & governance)* |
 
 ## Directory Structure
-```
+```text
 DOMAIN_NAME/
 ├── data-products/
 │   └── TABLE_NAME/
@@ -39,3 +39,10 @@ DOMAIN_NAME/
 ├── notebooks/                # Databricks / exploratory notebooks
 └── README.md                 # This file
 ```
+
+---
+
+## Related Documentation
+
+- [Getting Started Guide](../../../docs/GETTING_STARTED.md) - Platform setup and onboarding
+- [USDA Example](../../../examples/usda/README.md) - Reference domain implementation

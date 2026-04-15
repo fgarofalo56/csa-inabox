@@ -14,7 +14,6 @@ import pytest
 
 from governance.common.validation import EMAIL_REGEX_PATTERN
 from governance.dataquality.ge_runner import (
-    ExpectationResult,
     SuiteResult,
     _evaluate_expectation,
     _infer_table_from_suite_name,
@@ -22,14 +21,13 @@ from governance.dataquality.ge_runner import (
     run_suite_in_memory,
 )
 
-
 # ---------------------------------------------------------------------------
 # _infer_table_from_suite_name
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
-    "suite_name,expected",
+    ("suite_name", "expected"),
     [
         ("bronze_customers_suite", "bronze.customers"),
         ("silver_sales_orders_suite", "silver.sales_orders"),
@@ -101,21 +99,25 @@ def test_expect_column_values_to_match_regex_honours_mostly_threshold() -> None:
     ]
     # 2/3 ≈ 0.667 — fails mostly=0.95, passes mostly=0.5
     result_strict = _evaluate_expectation(
-        {"expect_column_values_to_match_regex": {
-            "column": "email",
-            "regex": EMAIL_REGEX_PATTERN,
-            "mostly": 0.95,
-        }},
+        {
+            "expect_column_values_to_match_regex": {
+                "column": "email",
+                "regex": EMAIL_REGEX_PATTERN,
+                "mostly": 0.95,
+            }
+        },
         rows,
     )
     assert result_strict.success is False
 
     result_lenient = _evaluate_expectation(
-        {"expect_column_values_to_match_regex": {
-            "column": "email",
-            "regex": EMAIL_REGEX_PATTERN,
-            "mostly": 0.5,
-        }},
+        {
+            "expect_column_values_to_match_regex": {
+                "column": "email",
+                "regex": EMAIL_REGEX_PATTERN,
+                "mostly": 0.5,
+            }
+        },
         rows,
     )
     assert result_lenient.success is True
@@ -124,10 +126,12 @@ def test_expect_column_values_to_match_regex_honours_mostly_threshold() -> None:
 def test_expect_column_values_to_be_between_catches_negative_values() -> None:
     rows = [{"total_amount": 10}, {"total_amount": -5}]
     result = _evaluate_expectation(
-        {"expect_column_values_to_be_between": {
-            "column": "total_amount",
-            "min_value": 0,
-        }},
+        {
+            "expect_column_values_to_be_between": {
+                "column": "total_amount",
+                "min_value": 0,
+            }
+        },
         rows,
     )
     assert result.success is False
@@ -141,10 +145,12 @@ def test_expect_column_values_to_be_in_set_passes_when_all_valid() -> None:
         {"status": "at_risk"},
     ]
     result = _evaluate_expectation(
-        {"expect_column_values_to_be_in_set": {
-            "column": "status",
-            "value_set": ["active", "at_risk", "churned", "never_purchased"],
-        }},
+        {
+            "expect_column_values_to_be_in_set": {
+                "column": "status",
+                "value_set": ["active", "at_risk", "churned", "never_purchased"],
+            }
+        },
         rows,
     )
     assert result.success is True

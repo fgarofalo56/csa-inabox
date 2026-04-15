@@ -1,5 +1,7 @@
 # Contributing to CSA-in-a-Box
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Contributors
+
 Thank you for your interest in contributing to Cloud-Scale Analytics in-a-Box.
 
 ## Development Setup
@@ -8,14 +10,14 @@ Thank you for your interest in contributing to Cloud-Scale Analytics in-a-Box.
 
 1. Install required tools:
    - Azure CLI >= 2.50.0
-   - Bicep CLI >= 0.22.0
+   - Bicep CLI >= 0.25
    - PowerShell 7.3+ with Az module
    - Python 3.10+
    - Git 2.40+
 
 2. Clone the repository:
    ```bash
-   git clone https://github.com/YOUR-ORG/csa-inabox.git
+   git clone https://github.com/fgarofalo56/csa-inabox.git
    cd csa-inabox
    ```
 
@@ -30,6 +32,12 @@ Thank you for your interest in contributing to Cloud-Scale Analytics in-a-Box.
    source .venv/bin/activate  # Linux/Mac
    .venv\Scripts\activate     # Windows
    ```
+
+4. Install pre-commit hooks:
+   ```bash
+   pre-commit install
+   ```
+   This enables automatic linting, formatting, and secret detection on every commit.
 
 ## Repository Rules
 
@@ -97,3 +105,10 @@ Use GitHub Issues with the appropriate template. Include:
 - Steps to reproduce
 - Expected vs actual behavior
 - Relevant logs or error messages
+
+---
+
+## Related Documentation
+
+- [README](README.md) - Project overview and quick start
+- [Changelog](CHANGELOG.md) - All notable changes to the project

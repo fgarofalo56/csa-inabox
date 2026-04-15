@@ -1,0 +1,231 @@
+apiVersion: v1
+kind: DataContract
+metadata:
+  name: climate-trends
+  version: "1.0.0"
+  domain: noaa-climate
+  owner: noaa-analytics-team
+  description: >
+    Multi-decadal temperature and precipitation trends by NOAA climate region,
+    derived from GHCN-Daily observations. Provides anomalies relative to the
+    1901–2000 baseline, linear trend slopes with statistical significance,
+    extreme event frequency, and growing season length metrics.
+
+spec:
+  # Schema definition
+  schema:
+    format: delta
+    primary_key:
+      - climate_region
+      - year
+    partition_by:
+      - climate_region
+      - decade
+    columns:
+      - name: climate_region
+        type: STRING
+        description: NOAA climate region name (e.g., NORTHEAST, SOUTHEAST)
+        constraints:
+          - not_null
+          - accepted_values:
+              - NORTHEAST
+              - SOUTHEAST
+              - UPPER_MIDWEST
+              - OHIO_VALLEY
+              - SOUTH
+              - NORTHERN_ROCKIES_PLAINS
+              - SOUTHWEST
+              - NORTHWEST
+              - WEST
+
+      - name: state_code
+        type: STRING
+        description: Representative 2-letter state code within the climate region
+        constraints:
+          - not_null
+
+      - name: decade
+        type: STRING
+        description: Decade label (e.g., "1970s", "2020s")
+        constraints:
+          - not_null
+
+      - name: year
+        type: INT
+        description: Calendar year of observation
+        constraints:
+          - not_null
+          - range: { min: 1895, max: 2030 }
+
+      - name: avg_annual_temp_celsius
+        type: DECIMAL(5,2)
+        description: Average annual temperature in degrees Celsius
+        constraints:
+          - range: { min: -30.0, max: 40.0 }
+
+      - name: temp_anomaly_vs_baseline
+        type: DECIMAL(5,2)
+        description: >
+          Temperature anomaly relative to 1901–2000 baseline period
+          (positive = warmer than normal)
+        constraints:
+          - range: { min: -10.0, max: 10.0 }
+
+      - name: total_annual_precip_mm
+        type: DECIMAL(8,2)
+        description: Total annual precipitation in millimeters
+        constraints:
+          - range: { min: 0, max: 5000 }
+
+      - name: precip_anomaly_vs_baseline
+        type: DECIMAL(8,2)
+        description: >
+          Precipitation anomaly relative to 1901–2000 baseline
+          (positive = wetter than normal)
+
+      - name: days_above_35c
+        type: INT
+        description: Number of days with maximum temperature above 35°C (95°F)
+        constraints:
+          - range: { min: 0, max: 366 }
+
+      - name: days_below_0c
+        type: INT
+        description: Number of days with minimum temperature below 0°C (32°F)
+        constraints:
+          - range: { min: 0, max: 366 }
+
+      - name: growing_season_days
+        type: INT
+        description: Length of frost-free growing season in days
+        constraints:
+          - range: { min: 0, max: 366 }
+
+      - name: max_daily_precip_mm
+        type: DECIMAL(8,2)
+        description: Maximum single-day precipitation total in millimeters
+
+      - name: consecutive_dry_days
+        type: INT
+        description: Longest streak of days with <1mm precipitation
+
+      - name: trend_slope_per_decade
+        type: DECIMAL(6,4)
+        description: >
+          Linear regression slope of temperature trend per decade (°C/decade).
+          Positive values indicate warming.
+
+      - name: trend_p_value
+        type: DECIMAL(6,4)
+        description: >
+          Statistical significance (p-value) of the temperature trend.
+          Values < 0.05 are considered statistically significant.
+        constraints:
+          - range: { min: 0.0, max: 1.0 }
+
+      - name: trend_classification
+        type: STRING
+        description: Human-readable trend classification
+        constraints:
+          - accepted_values:
+              - SIGNIFICANT_WARMING
+              - MODERATE_WARMING
+              - STABLE
+              - MODERATE_COOLING
+              - SIGNIFICANT_COOLING
+              - INSUFFICIENT_DATA
+
+      - name: station_count
+        type: INT
+        description: Number of stations contributing to the regional average
+        constraints:
+          - range: { min: 1, max: 10000 }
+
+      - name: report_date
+        type: DATE
+        description: Date when this record was last computed
+
+  # Service Level Agreements
+  sla:
+    freshness:
+      description: Updated monthly with annual recalibration of baselines
+      max_staleness_hours: 744  # ~31 days
+    availability:
+      target: 99.5%
+      measurement_window: monthly
+    latency:
+      query_p95_seconds: 5.0
+      description: 95th percentile query response time
+
+  # Data Quality Requirements
+  quality:
+    completeness:
+      target: 95%
+      description: >
+        At least 95% of climate-region/year combinations must have
+        non-null temperature and precipitation values
+    accuracy:
+      target: 99%
+      description: >
+        Temperature and precipitation values validated against NOAA
+        published regional averages with <1% deviation
+    station_coverage:
+      minimum_stations: 10
+      description: >
+        Each climate region must have at least 10 stations with
+        30+ years of continuous records for trend calculation
+    tests:
+      - name: trend_slope_range
+        description: Trend slopes should be physically plausible
+        rule: "ABS(trend_slope_per_decade) < 2.0"
+      - name: anomaly_baseline_consistency
+        description: Anomalies should average near zero over baseline period
+        rule: "AVG(temp_anomaly_vs_baseline) WHERE year BETWEEN 1901 AND 2000 ~ 0.0"
+      - name: no_future_years
+        description: No records should have future year values
+        rule: "year <= YEAR(CURRENT_DATE)"
+
+  # Access and Consumption
+  access:
+    classification: PUBLIC
+    description: >
+      All data is derived from public-domain NOAA observations.
+      No PII or restricted data.
+    consumers:
+      - name: climate-dashboard
+        type: power_bi
+        description: Executive climate trend dashboard
+      - name: research-api
+        type: rest_api
+        endpoint: /api/v1/climate-trends
+        rate_limit: 100/minute
+      - name: data-science-team
+        type: direct_query
+        description: Direct SQL access for ML model training
+
+  # Lineage
+  lineage:
+    sources:
+      - name: ghcn_daily
+        description: NOAA GHCN-Daily weather station observations
+        url: https://www.ncei.noaa.gov/products/land-based-station/global-historical-climatology-network-daily
+      - name: climate_normals
+        description: NOAA 1901-2000 Climate Normals
+        url: https://www.ncei.noaa.gov/products/land-based-station/us-climate-normals
+    transformations:
+      - bronze: brz_weather_stations (raw GHCN observations)
+      - silver: slv_weather_observations (cleaned, gap-filled, standardized units)
+      - gold: gld_climate_trends (regional aggregation, trend analysis, anomaly calculation)
+
+  # Versioning and Change Management
+  versioning:
+    strategy: semantic
+    current: "1.0.0"
+    changelog:
+      - version: "1.0.0"
+        date: "2024-06-01"
+        changes:
+          - Initial release with 9 NOAA climate regions
+          - Temperature and precipitation trends
+          - Statistical significance testing
+          - Growing season length analysis

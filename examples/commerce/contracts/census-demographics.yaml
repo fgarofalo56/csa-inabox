@@ -1,0 +1,141 @@
+# Data product contract — commerce.census_demographics
+#
+# This file is the authoritative interface for the Commerce Department
+# census demographics data product. It declares the schema, SLAs, and
+# quality rules for American Community Survey analytics.
+
+apiVersion: csa.commerce.gov/v1
+kind: DataProductContract
+
+metadata:
+  name: commerce.census_demographics
+  domain: commerce
+  owner: commerce-data-engineering@contoso.com
+  version: "1.0.0"
+  description: >
+    Census demographic analytics from American Community Survey (ACS) data.
+    Provides county-level population, income, education, and housing
+    estimates with margins of error. Derived from 5-year ACS estimates
+    for reliable small-area analysis. Used for federal program targeting,
+    economic development, and resource allocation.
+
+schema:
+  primary_key: [geo_id, year, variable_code]
+  columns:
+    - name: geo_id
+      type: string
+      nullable: false
+      description: Census GEOID (state + county FIPS code)
+
+    - name: state_name
+      type: string
+      nullable: false
+      description: Full state name
+
+    - name: county_name
+      type: string
+      nullable: false
+      description: County name
+
+    - name: year
+      type: integer
+      nullable: false
+      description: ACS survey year (end year of 5-year estimate)
+
+    - name: dataset
+      type: string
+      nullable: false
+      description: Census dataset identifier (acs5, acs1, decennial, etc.)
+      allowed_values:
+        - acs5
+        - acs1
+        - sf1
+        - pep
+
+    - name: variable_code
+      type: string
+      nullable: false
+      description: Census API variable code (e.g., B01001_001E, B19013_001E)
+
+    - name: variable_name
+      type: string
+      nullable: false
+      description: Human-readable variable name (e.g., Total Population)
+
+    - name: variable_concept
+      type: string
+      nullable: true
+      description: ACS concept grouping (e.g., SEX BY AGE, MEDIAN HOUSEHOLD INCOME)
+
+    - name: estimate
+      type: decimal(18,2)
+      nullable: false
+      description: ACS estimate value (population count, dollar amount, etc.)
+
+    - name: margin_of_error
+      type: decimal(18,2)
+      nullable: true
+      description: 90% confidence interval margin of error
+
+    - name: load_time
+      type: timestamp
+      nullable: false
+      description: Timestamp when the record was loaded into the data warehouse
+
+sla:
+  freshness_minutes: 525600  # Annual updates (ACS release schedule)
+  valid_row_ratio: 0.98
+  supported_until: "2027-12-31"
+  update_frequency: "Annual, aligned with Census Bureau ACS release (September/December)"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: geo_id
+  - rule: expect_column_values_to_not_be_null
+    column: year
+  - rule: expect_column_values_to_not_be_null
+    column: variable_code
+  - rule: expect_column_values_to_not_be_null
+    column: estimate
+  - rule: expect_column_values_to_be_in_set
+    column: dataset
+    value_set: [acs5, acs1, sf1, pep]
+  - rule: expect_column_values_to_be_between
+    column: year
+    min_value: 2009
+    max_value: 2030
+  - rule: expect_column_values_to_be_between
+    column: margin_of_error
+    min_value: 0
+    max_value: 1000000
+    mostly: 0.95
+
+data_lineage:
+  upstream_sources:
+    - name: "Census Bureau API"
+      url: "https://api.census.gov/data"
+      description: "American Community Survey 5-year and 1-year estimates"
+      refresh_schedule: "Annual (September for 1-year, December for 5-year)"
+    - name: "Census FIPS Reference"
+      url: "https://www.census.gov/geographies/reference-files.html"
+      description: "FIPS code reference files for states and counties"
+
+  downstream_consumers:
+    - name: "Economic Resilience Dashboard"
+      description: "Demographic context for economic resilience scoring"
+    - name: "Federal Program Targeting"
+      description: "Identify communities eligible for federal programs"
+    - name: "Congressional Redistricting"
+      description: "Population data for redistricting analysis"
+
+usage_notes: |
+  - ACS 5-year estimates have smaller margins of error than 1-year
+  - Small counties may have very large margins of error for income variables
+  - Variable codes follow Census Bureau naming conventions (B-table codes)
+  - Population estimates may differ from decennial census counts
+  - Data is organized in long format: one row per variable per geography per year
+  - Dollar amounts are in current (nominal) dollars — adjust for inflation
+
+contact:
+  technical: commerce-data-team@contoso.com
+  business: commerce-analytics-lead@contoso.com

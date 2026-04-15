@@ -1,0 +1,286 @@
+# Direct Lake Semantic Model Template
+# Power BI semantic model definition for Direct Lake access pattern.
+#
+# This template defines the tables, relationships, measures, and row-level
+# security roles for a Power BI model connected to Delta Lake tables via
+# a Databricks SQL Warehouse endpoint.
+
+apiVersion: csa.microsoft.com/v1
+kind: SemanticModelTemplate
+
+metadata:
+  name: csa-analytics-model
+  version: "1.0.0"
+  description: >
+    Power BI semantic model template for the CSA-in-a-Box Direct Lake
+    pattern. Connects to Delta Lake gold-layer tables via Databricks SQL
+    Warehouse, providing DirectQuery access with in-memory-like performance.
+  owner: analytics-team@contoso.com
+  tags: [power-bi, direct-lake, semantic-model]
+
+connection:
+  type: databricks_sql
+  # Databricks workspace and SQL warehouse details.
+  workspace:
+    hostname: "adb-{workspace_id}.azuredatabricks.net"
+    # For Azure Government: "adb-{workspace_id}.databricks.azure.us"
+  sqlWarehouse:
+    httpPath: "/sql/1.0/warehouses/{warehouse_id}"
+    name: csa-bi-warehouse
+  authentication:
+    type: azure_ad  # Service principal or managed identity
+    tenantId: "${AZURE_TENANT_ID}"
+    clientId: "${AZURE_CLIENT_ID}"
+  catalog: sales_catalog
+
+tables:
+  - name: orders
+    schema: gold
+    source: sales_catalog.gold.orders
+    description: Customer order transactions
+    mode: DirectQuery
+    columns:
+      - name: order_id
+        dataType: string
+        isKey: true
+        description: Unique order identifier
+      - name: customer_id
+        dataType: string
+        description: Foreign key to customers dimension
+      - name: order_date
+        dataType: dateTime
+        description: Date the order was placed
+        formatString: "yyyy-MM-dd"
+      - name: ship_date
+        dataType: dateTime
+        description: Date the order was shipped
+      - name: status
+        dataType: string
+        description: Order status (pending, shipped, delivered, cancelled)
+      - name: total_amount
+        dataType: decimal
+        description: Total order value
+        formatString: "$#,##0.00"
+      - name: quantity
+        dataType: int64
+        description: Number of items in the order
+      - name: region
+        dataType: string
+        description: Geographic region of the order
+      - name: product_id
+        dataType: string
+        description: Foreign key to products dimension
+
+  - name: customers
+    schema: gold
+    source: shared_catalog.gold.customers
+    description: Customer master data
+    mode: DirectQuery
+    columns:
+      - name: customer_id
+        dataType: string
+        isKey: true
+      - name: customer_name
+        dataType: string
+      - name: email
+        dataType: string
+        piiClassification: direct_identifier
+      - name: region
+        dataType: string
+      - name: segment
+        dataType: string
+        description: Customer segment (Enterprise, SMB, Consumer)
+      - name: created_date
+        dataType: dateTime
+
+  - name: products
+    schema: gold
+    source: shared_catalog.gold.products
+    description: Product catalog
+    mode: DirectQuery
+    columns:
+      - name: product_id
+        dataType: string
+        isKey: true
+      - name: product_name
+        dataType: string
+      - name: category
+        dataType: string
+      - name: subcategory
+        dataType: string
+      - name: unit_price
+        dataType: decimal
+        formatString: "$#,##0.00"
+
+  - name: invoices
+    schema: gold
+    source: finance_catalog.gold.invoices
+    description: Financial invoices linked to orders
+    mode: DirectQuery
+    columns:
+      - name: invoice_id
+        dataType: string
+        isKey: true
+      - name: order_id
+        dataType: string
+      - name: invoice_date
+        dataType: dateTime
+      - name: amount
+        dataType: decimal
+        formatString: "$#,##0.00"
+      - name: status
+        dataType: string
+        description: Invoice status (draft, sent, paid, overdue)
+      - name: payment_date
+        dataType: dateTime
+
+  - name: calendar
+    description: Date dimension for time intelligence
+    mode: Calculated  # Computed in-model, not from source
+    generationRule:
+      startDate: "2020-01-01"
+      endDate: "2030-12-31"
+    columns:
+      - name: date
+        dataType: dateTime
+        isKey: true
+      - name: year
+        dataType: int64
+      - name: quarter
+        dataType: string
+      - name: month
+        dataType: int64
+      - name: month_name
+        dataType: string
+      - name: day_of_week
+        dataType: string
+      - name: is_weekend
+        dataType: boolean
+      - name: fiscal_year
+        dataType: int64
+        description: Fiscal year (Oct-Sep for US Gov)
+      - name: fiscal_quarter
+        dataType: string
+
+relationships:
+  - name: orders_to_customers
+    fromTable: orders
+    fromColumn: customer_id
+    toTable: customers
+    toColumn: customer_id
+    cardinality: many_to_one
+    crossFilterDirection: both
+
+  - name: orders_to_products
+    fromTable: orders
+    fromColumn: product_id
+    toTable: products
+    toColumn: product_id
+    cardinality: many_to_one
+    crossFilterDirection: single
+
+  - name: orders_to_calendar
+    fromTable: orders
+    fromColumn: order_date
+    toTable: calendar
+    toColumn: date
+    cardinality: many_to_one
+    crossFilterDirection: single
+
+  - name: invoices_to_orders
+    fromTable: invoices
+    fromColumn: order_id
+    toTable: orders
+    toColumn: order_id
+    cardinality: many_to_one
+    crossFilterDirection: single
+
+measures:
+  - name: Total Revenue
+    table: orders
+    expression: "SUM(orders[total_amount])"
+    formatString: "$#,##0.00"
+    description: Sum of all order amounts
+
+  - name: Order Count
+    table: orders
+    expression: "COUNTROWS(orders)"
+    formatString: "#,##0"
+    description: Total number of orders
+
+  - name: Average Order Value
+    table: orders
+    expression: "DIVIDE([Total Revenue], [Order Count], 0)"
+    formatString: "$#,##0.00"
+    description: Average revenue per order
+
+  - name: YTD Revenue
+    table: orders
+    expression: "TOTALYTD([Total Revenue], calendar[date])"
+    formatString: "$#,##0.00"
+    description: Year-to-date revenue
+
+  - name: Revenue MoM Growth
+    table: orders
+    expression: |
+      VAR CurrentMonth = [Total Revenue]
+      VAR PreviousMonth = CALCULATE([Total Revenue], DATEADD(calendar[date], -1, MONTH))
+      RETURN DIVIDE(CurrentMonth - PreviousMonth, PreviousMonth, 0)
+    formatString: "0.0%"
+    description: Month-over-month revenue growth rate
+
+  - name: Customer Count
+    table: customers
+    expression: "DISTINCTCOUNT(orders[customer_id])"
+    formatString: "#,##0"
+    description: Count of unique customers with orders
+
+  - name: Invoice Collection Rate
+    table: invoices
+    expression: |
+      DIVIDE(
+        CALCULATE(COUNTROWS(invoices), invoices[status] = "paid"),
+        COUNTROWS(invoices),
+        0
+      )
+    formatString: "0.0%"
+    description: Percentage of invoices that have been collected
+
+  - name: Days to Ship
+    table: orders
+    expression: "AVERAGEX(orders, DATEDIFF(orders[order_date], orders[ship_date], DAY))"
+    formatString: "#,##0.0"
+    description: Average days between order and shipment
+
+rowLevelSecurity:
+  roles:
+    - name: RegionFilter
+      description: Restricts data visibility to the user's assigned region
+      tableFilters:
+        - table: orders
+          daxFilter: "[region] = USERPRINCIPALNAME()"
+        - table: customers
+          daxFilter: "[region] = USERPRINCIPALNAME()"
+
+    - name: SegmentFilter
+      description: Restricts visibility by customer segment
+      tableFilters:
+        - table: customers
+          daxFilter: "[segment] IN VALUES(SecurityTable[allowed_segment])"
+
+    - name: FinanceReadOnly
+      description: Finance team can see invoices and aggregates only
+      tableFilters:
+        - table: orders
+          daxFilter: "FALSE()"  # No direct order access
+        - table: invoices
+          daxFilter: "TRUE()"   # Full invoice access
+
+performanceHints:
+  # Recommendations for Delta table optimization.
+  zOrderColumns:
+    orders: [order_date, customer_id, region]
+    invoices: [invoice_date, order_id]
+  targetFileSize: "64mb"
+  autoOptimize: true
+  resultCaching: true

@@ -1,0 +1,170 @@
+apiVersion: datacontract/v1
+kind: DataProduct
+metadata:
+  name: transit-performance
+  domain: transportation
+  owner: DOT Analytics Team
+  version: "1.0.0"
+  classification: public
+  tags:
+    - transit
+    - ntd
+    - fta
+    - ridership
+spec:
+  description: >
+    Public transit performance analytics from National Transit Database (NTD)
+    data. Provides route-level on-time performance, ridership metrics,
+    vehicle utilization, financial efficiency, and safety incident tracking
+    across transit agencies. Used for FTA grant oversight, service planning,
+    and transit investment decisions.
+  schema:
+    - name: ntd_id
+      type: string
+      description: National Transit Database agency identifier
+      required: true
+    - name: agency_name
+      type: string
+      description: Transit agency name
+      required: true
+    - name: city
+      type: string
+      description: City where the agency is headquartered
+      required: true
+    - name: state
+      type: string
+      description: 2-letter state abbreviation
+      required: true
+    - name: uza_name
+      type: string
+      description: Urbanized Area name from Census
+    - name: uza_population
+      type: integer
+      description: Urbanized Area population
+    - name: agency_type
+      type: string
+      description: Agency size classification (Large Urban, Small Urban, Rural)
+    - name: reporter_type
+      type: string
+      description: NTD reporter type (Full Reporter, Reduced Reporter, etc.)
+    - name: mode
+      type: string
+      description: Transit mode code (HR, LR, MB, CR, etc.)
+      required: true
+    - name: mode_name
+      type: string
+      description: Full transit mode name (Heavy Rail, Light Rail, Bus, etc.)
+      required: true
+    - name: tos
+      type: string
+      description: Type of service (DO = Directly Operated, PT = Purchased Transportation)
+    - name: route_id
+      type: string
+      description: Route identifier within the agency
+    - name: route_name
+      type: string
+      description: Route name or number
+    - name: service_date
+      type: date
+      description: Date of service reporting
+      required: true
+    - name: report_year
+      type: integer
+      description: Reporting year
+      required: true
+    - name: report_month
+      type: integer
+      description: Reporting month (1-12)
+      required: true
+    - name: scheduled_trips
+      type: integer
+      description: Number of scheduled revenue trips
+    - name: actual_trips
+      type: integer
+      description: Number of actual revenue trips operated
+    - name: on_time_trips
+      type: integer
+      description: Number of trips arriving within on-time threshold
+    - name: missed_trips
+      type: integer
+      description: Number of missed or cancelled trips
+    - name: unlinked_passenger_trips
+      type: integer
+      description: Total unlinked passenger trips (boardings)
+    - name: passenger_miles
+      type: integer
+      description: Total passenger miles traveled
+    - name: avg_trip_length
+      type: decimal
+      description: Average passenger trip length in miles
+    - name: vehicle_revenue_hours
+      type: decimal
+      description: Total vehicle revenue hours of service
+    - name: vehicle_revenue_miles
+      type: decimal
+      description: Total vehicle revenue miles of service
+    - name: vehicles_operated
+      type: integer
+      description: Maximum vehicles operated in peak service
+    - name: vehicles_available
+      type: integer
+      description: Total vehicles available for service
+    - name: total_vehicles
+      type: integer
+      description: Total fleet size (including spares)
+    - name: avg_vehicle_age
+      type: decimal
+      description: Average vehicle age in years
+    - name: incidents
+      type: integer
+      description: Total safety incidents reported
+    - name: fatalities
+      type: integer
+      description: Number of fatalities
+    - name: injuries
+      type: integer
+      description: Number of injuries
+    - name: operating_expense
+      type: decimal
+      description: Total operating expenses (USD)
+    - name: fare_revenue
+      type: decimal
+      description: Total fare revenue (USD)
+    - name: federal_funding
+      type: decimal
+      description: Total federal funding received (USD)
+    - name: load_time
+      type: timestamp
+      description: Timestamp when the record was loaded into the data warehouse
+  sla:
+    freshness: monthly
+    completeness: 0.95
+    availability: 99.5
+  quality:
+    completeness_target: 0.95
+    accuracy_target: 0.98
+    geographic_coverage: "All US transit agencies reporting to NTD"
+    temporal_coverage: "2015-present"
+    known_limitations:
+      - "NTD annual data has ~18-month lag from reporting year"
+      - "Monthly data is from selected large agencies only"
+      - "Small and rural agencies use reduced reporting"
+      - "On-time performance definitions vary by agency"
+      - "Passenger counts may use sampling/estimation methods"
+  access:
+    api_endpoint: /api/v1/transit-performance
+    format: parquet
+    authentication: Azure AD OAuth 2.0
+    rate_limit: 1000 requests/hour
+  lineage:
+    sources:
+      - name: National Transit Database (NTD)
+        url: https://www.transit.dot.gov/ntd
+        type: government_api
+      - name: FTA Grant Data
+        url: https://www.transit.dot.gov/funding/grants
+        type: government_download
+    transformations:
+      - bronze: Raw NTD reports with basic validation
+      - silver: Mode standardization, on-time calculation, financial normalization
+      - gold: Transit dashboard metrics, efficiency scoring, trend analysis

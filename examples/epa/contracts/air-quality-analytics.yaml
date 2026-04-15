@@ -1,0 +1,223 @@
+apiVersion: v1
+kind: DataContract
+metadata:
+  name: air-quality-analytics
+  version: "1.0.0"
+  domain: epa-air-quality
+  owner: epa-analytics-team
+  description: >
+    Air quality analytics data product combining historical AQI observations
+    with prediction features for ML-based forecasting. Includes site-level
+    daily AQI values, health advisory levels, pollutant breakdowns, and
+    meteorological context for 500+ metropolitan areas.
+
+spec:
+  # Schema definition
+  schema:
+    format: delta
+    primary_key:
+      - site_id
+      - pollutant
+      - observation_date
+    partition_by:
+      - observation_date
+      - state_code
+    columns:
+      - name: site_id
+        type: STRING
+        description: AQS site identifier (format SS-CCC-NNNN)
+        constraints:
+          - not_null
+          - pattern: "^\\d{2}-\\d{3}-\\d{4}$"
+
+      - name: state_code
+        type: STRING
+        description: 2-digit FIPS state code
+        constraints:
+          - not_null
+
+      - name: county_code
+        type: STRING
+        description: 3-digit FIPS county code
+        constraints:
+          - not_null
+
+      - name: cbsa_name
+        type: STRING
+        description: Core Based Statistical Area (metro area) name
+
+      - name: latitude
+        type: DECIMAL(9,6)
+        description: Monitor latitude
+        constraints:
+          - not_null
+          - range: { min: 17.0, max: 72.0 }
+
+      - name: longitude
+        type: DECIMAL(9,6)
+        description: Monitor longitude
+        constraints:
+          - not_null
+          - range: { min: -180.0, max: -60.0 }
+
+      - name: observation_date
+        type: DATE
+        description: Date of observation
+        constraints:
+          - not_null
+
+      - name: pollutant
+        type: STRING
+        description: Criteria pollutant name
+        constraints:
+          - not_null
+          - accepted_values:
+              - PM2.5
+              - PM10
+              - O3
+              - NO2
+              - SO2
+              - CO
+              - Pb
+
+      - name: concentration
+        type: DECIMAL(12,6)
+        description: Pollutant concentration in standard units
+        constraints:
+          - range: { min: 0 }
+
+      - name: units
+        type: STRING
+        description: Unit of measurement (ug/m3, ppm, ppb)
+
+      - name: aqi_value
+        type: INT
+        description: Air Quality Index value (0–500)
+        constraints:
+          - not_null
+          - range: { min: 0, max: 500 }
+
+      - name: aqi_category
+        type: STRING
+        description: EPA AQI health category
+        constraints:
+          - not_null
+          - accepted_values:
+              - GOOD
+              - MODERATE
+              - UNHEALTHY_SENSITIVE
+              - UNHEALTHY
+              - VERY_UNHEALTHY
+              - HAZARDOUS
+
+      - name: health_advisory_level
+        type: STRING
+        description: Health advisory for general and sensitive populations
+
+      - name: observation_completeness_pct
+        type: DECIMAL(5,2)
+        description: >
+          Percentage of expected readings received for this day.
+          Values below 75% indicate incomplete data.
+        constraints:
+          - range: { min: 0, max: 100 }
+
+      - name: is_preliminary
+        type: BOOLEAN
+        description: >
+          TRUE for AirNow real-time data; FALSE for QA'd AQS data.
+          Preliminary data may change during final QA review.
+
+      - name: is_valid
+        type: BOOLEAN
+        description: Overall data quality validation flag
+
+  # Service Level Agreements
+  sla:
+    freshness:
+      description: >
+        Real-time data via streaming (< 5 min). Historical QA'd data
+        updated daily for the most recent available period.
+      max_staleness_hours: 24
+    availability:
+      target: 99.5%
+      measurement_window: monthly
+    latency:
+      query_p95_seconds: 3.0
+      streaming_p95_seconds: 30.0
+
+  # Data Quality Requirements
+  quality:
+    completeness:
+      target: 95%
+      description: >
+        At least 95% of active monitor-days must have AQI values.
+        Missing data flagged but included for completeness tracking.
+    accuracy:
+      target: 98%
+      description: >
+        AQI calculations validated against EPA standard breakpoint
+        tables with <2% deviation from reference method.
+    timeliness:
+      preliminary: "< 5 minutes from measurement"
+      quality_assured: "6-12 months after measurement"
+    tests:
+      - name: aqi_breakpoint_consistency
+        description: AQI category must match the AQI value breakpoints
+        rule: >
+          (aqi_value <= 50 AND aqi_category = 'GOOD')
+          OR (aqi_value BETWEEN 51 AND 100 AND aqi_category = 'MODERATE')
+          OR ...
+      - name: concentration_non_negative
+        description: Pollutant concentrations must be non-negative
+        rule: "concentration >= 0"
+      - name: no_future_dates
+        description: Observation dates must not be in the future
+        rule: "observation_date <= CURRENT_DATE"
+
+  # Access and Consumption
+  access:
+    classification: PUBLIC
+    description: >
+      AQI data is public information. No PII or restricted content.
+    consumers:
+      - name: aqi-dashboard
+        type: power_bi
+        description: Real-time AQI monitoring dashboard
+      - name: prediction-api
+        type: rest_api
+        endpoint: /api/v1/aqi-prediction
+        rate_limit: 200/minute
+      - name: health-department
+        type: direct_query
+        description: State and local health department access
+      - name: ml-pipeline
+        type: batch_export
+        description: Daily feature export for AQI prediction model training
+
+  # Lineage
+  lineage:
+    sources:
+      - name: airnow_api
+        description: AirNow real-time AQI data
+        url: https://docs.airnowapi.org/
+      - name: aqs_api
+        description: EPA AQS quality-assured historical data
+        url: https://aqs.epa.gov/aqsweb/documents/data_api.html
+    transformations:
+      - bronze: brz_air_quality (raw AQI observations)
+      - silver: slv_air_quality (cleaned, AQI calculated, health categories assigned)
+      - gold: gld_aqi_forecast (prediction features, pattern analysis, forecast evaluation)
+
+  # Versioning
+  versioning:
+    strategy: semantic
+    current: "1.0.0"
+    changelog:
+      - version: "1.0.0"
+        date: "2024-06-01"
+        changes:
+          - Initial release with 6 criteria pollutants
+          - Real-time AirNow and historical AQS integration
+          - Health advisory level mapping
+          - ML feature engineering for prediction models

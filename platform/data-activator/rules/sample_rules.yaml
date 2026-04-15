@@ -1,0 +1,194 @@
+# Data Activator — Sample Alert Rules
+# CSA-in-a-Box example rules covering common federal data platform scenarios.
+#
+# Load with:
+#   from rules.engine import RuleEngine
+#   engine = RuleEngine.from_yaml("rules/sample_rules.yaml")
+
+rules:
+  # ─────────────────────────────────────────────────────────────────────
+  # 1. Seismic Alert — earthquake magnitude > 4.0
+  # ─────────────────────────────────────────────────────────────────────
+  - name: seismic-magnitude-alert
+    description: >
+      Triggers when an earthquake event exceeds magnitude 4.0.
+      Routes critical alerts (>= 6.0) to both Teams and email.
+    source: seismic-event-topic
+    enabled: true
+    condition:
+      field: magnitude
+      operator: gt
+      threshold: 4.0
+      window_minutes: 0
+    actions:
+      - type: teams
+        config:
+          webhook_url: ${TEAMS_WEBHOOK_URL}
+          channel: "#seismic-alerts"
+      - type: email
+        config:
+          recipients:
+            - seismic-oncall@contoso.gov
+            - emergency-ops@contoso.gov
+    schedule:
+      cron: "* * * * *"
+      timezone: UTC
+    tags:
+      domain: usgs
+      data_product: earthquakes
+      priority: high
+
+  # ─────────────────────────────────────────────────────────────────────
+  # 2. Air Quality Alert — AQI > 150 (Unhealthy)
+  # ─────────────────────────────────────────────────────────────────────
+  - name: air-quality-unhealthy
+    description: >
+      Fires when Air Quality Index exceeds 150 (EPA "Unhealthy"
+      threshold). Creates an incident for sustained violations.
+    source: aqi-monitor-topic
+    enabled: true
+    condition:
+      field: data.aqi
+      operator: gt
+      threshold: 150.0
+      window_minutes: 60
+      aggregation: avg
+    actions:
+      - type: email
+        config:
+          recipients:
+            - air-quality-team@contoso.gov
+            - public-health@contoso.gov
+      - type: incident
+        config:
+          service: servicenow
+          severity: high
+    schedule:
+      cron: "*/15 * * * *"
+      timezone: US/Eastern
+    tags:
+      domain: epa
+      data_product: air_quality
+      priority: high
+
+  # ─────────────────────────────────────────────────────────────────────
+  # 3. Park Capacity — utilization > 95%
+  # ─────────────────────────────────────────────────────────────────────
+  - name: park-capacity-critical
+    description: >
+      Alerts when park utilization exceeds 95% capacity.
+      Enables rangers to implement crowd control measures.
+    source: park-telemetry-topic
+    enabled: true
+    condition:
+      field: utilization_pct
+      operator: gt
+      threshold: 95.0
+      window_minutes: 15
+      aggregation: max
+    actions:
+      - type: teams
+        config:
+          webhook_url: ${TEAMS_WEBHOOK_URL}
+          channel: "#park-operations"
+    schedule:
+      cron: "*/5 * * * *"
+      timezone: US/Mountain
+      active_hours_start: 6
+      active_hours_end: 22
+    tags:
+      domain: nps
+      data_product: park_capacity
+      priority: medium
+
+  # ─────────────────────────────────────────────────────────────────────
+  # 4. Pipeline Failure — status == 'failed'
+  # ─────────────────────────────────────────────────────────────────────
+  - name: pipeline-failure-alert
+    description: >
+      Triggers immediately when a data pipeline reports a failed status.
+      Notifies the platform team and creates a PagerDuty incident.
+    source: pipeline-event-topic
+    enabled: true
+    condition:
+      field: status
+      operator: eq
+      threshold: 0  # String comparison handled by engine
+      window_minutes: 0
+    actions:
+      - type: teams
+        config:
+          webhook_url: ${TEAMS_WEBHOOK_URL}
+          channel: "#data-platform-alerts"
+      - type: webhook
+        config:
+          url: ${PAGERDUTY_WEBHOOK_URL}
+    schedule:
+      cron: "* * * * *"
+      timezone: UTC
+    tags:
+      domain: platform
+      data_product: pipelines
+      priority: critical
+
+  # ─────────────────────────────────────────────────────────────────────
+  # 5. Data Freshness — minutes_since_update > 120
+  # ─────────────────────────────────────────────────────────────────────
+  - name: data-freshness-sla
+    description: >
+      Monitors data product freshness. Fires when a product has
+      not been updated within its 2-hour SLA window.
+    source: freshness-check-topic
+    enabled: true
+    condition:
+      field: minutes_since_update
+      operator: gt
+      threshold: 120.0
+      window_minutes: 0
+    actions:
+      - type: email
+        config:
+          recipients:
+            - data-stewards@contoso.gov
+            - platform-oncall@contoso.gov
+    schedule:
+      cron: "*/30 * * * *"
+      timezone: UTC
+    tags:
+      domain: platform
+      data_product: freshness
+      priority: medium
+
+  # ─────────────────────────────────────────────────────────────────────
+  # 6. Slot Machine Anomaly — win_rate z-score > 3
+  # ─────────────────────────────────────────────────────────────────────
+  - name: slot-machine-anomaly
+    description: >
+      Detects statistical anomalies in slot machine win rates using
+      z-score analysis. A z-score > 3 may indicate tampering or
+      malfunction. Triggers a security investigation.
+    source: gaming-telemetry-topic
+    enabled: true
+    condition:
+      field: win_rate
+      operator: anomaly
+      threshold: 3.0
+      window_minutes: 60
+      aggregation: avg
+      z_score_threshold: 3.0
+    actions:
+      - type: teams
+        config:
+          webhook_url: ${TEAMS_WEBHOOK_URL}
+          channel: "#gaming-security"
+      - type: incident
+        config:
+          service: pagerduty
+          severity: critical
+    schedule:
+      cron: "*/10 * * * *"
+      timezone: US/Pacific
+    tags:
+      domain: tribal_gaming
+      data_product: slot_machines
+      priority: critical

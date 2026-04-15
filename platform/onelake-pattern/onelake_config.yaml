@@ -1,0 +1,243 @@
+# OneLake-Equivalent Configuration
+# Maps Microsoft Fabric OneLake concepts to ADLS Gen2 + Unity Catalog
+#
+# Fabric Concept         → CSA-in-a-Box Equivalent
+# ─────────────────────────────────────────────────
+# Tenant                 → Azure Subscription
+# Workspace              → Resource Group + Storage Account
+# Lakehouse              → Storage Container (bronze/silver/gold)
+# Table                  → Delta Lake path
+# Shortcut               → Linked Service / Managed Identity RBAC
+
+apiVersion: csa.microsoft.com/v1
+kind: OneLakeConfiguration
+
+metadata:
+  name: csa-onelake-config
+  version: "1.0.0"
+  description: >
+    Defines the OneLake-equivalent storage topology for CSA-in-a-Box.
+    Each workspace maps to an ADLS Gen2 account with medallion containers.
+
+# Global settings applied to all workspaces unless overridden.
+defaults:
+  storage:
+    sku: Standard_ZRS
+    kind: StorageV2
+    accessTier: Hot
+    hnsEnabled: true  # hierarchical namespace — required for OneLake parity
+    minimumTlsVersion: TLS1_2
+    allowBlobPublicAccess: false
+    allowSharedKeyAccess: false  # force Azure AD auth
+    networkAcls:
+      defaultAction: Deny
+      bypass: Metrics,AzureServices,Logging
+  containers:
+    - name: bronze
+      description: Raw ingestion layer — immutable landing zone
+      publicAccess: None
+    - name: silver
+      description: Cleansed, conformed, and deduplicated data
+      publicAccess: None
+    - name: gold
+      description: Business-ready aggregates and curated data products
+      publicAccess: None
+    - name: quarantine
+      description: Rows/files that failed quality validation
+      publicAccess: None
+  lifecyclePolicies:
+    - name: tier-to-cool
+      enabled: true
+      filters:
+        blobTypes: [blockBlob]
+        prefixMatch: ["bronze/"]
+      actions:
+        baseBlob:
+          tierToCool:
+            daysAfterModificationGreaterThan: 90
+          tierToArchive:
+            daysAfterModificationGreaterThan: 365
+    - name: quarantine-cleanup
+      enabled: true
+      filters:
+        blobTypes: [blockBlob]
+        prefixMatch: ["quarantine/"]
+      actions:
+        baseBlob:
+          delete:
+            daysAfterModificationGreaterThan: 90
+  encryption:
+    keySource: Microsoft.Storage  # Switch to Microsoft.Keyvault for CMK
+    requireInfrastructureEncryption: true
+  privateEndpoints:
+    enabled: true
+    subResources: [blob, dfs]
+  diagnostics:
+    enabled: true
+    retentionDays: 30
+
+# Workspace definitions — one per data domain.
+# Each workspace maps to: Resource Group + ADLS Gen2 Account.
+workspaces:
+  - name: sales
+    displayName: Sales Domain
+    description: Customer orders, sales metrics, and revenue data
+    resourceGroup: rg-{env}-sales-{region}
+    storageAccount: st{env}sales{region}
+    managedIdentity: mi-{env}-sales
+    containers: []  # inherits defaults
+    unityCatalog:
+      catalogName: sales_catalog
+      schemas:
+        - name: bronze
+          managedLocation: "abfss://bronze@st{env}sales{region}.dfs.core.windows.net/sales/"
+        - name: silver
+          managedLocation: "abfss://silver@st{env}sales{region}.dfs.core.windows.net/sales/"
+        - name: gold
+          managedLocation: "abfss://gold@st{env}sales{region}.dfs.core.windows.net/sales/"
+    dataProducts:
+      - name: orders
+        layer: gold
+        path: sales/orders/
+        format: delta
+        partitionBy: [year, month]
+      - name: sales-metrics
+        layer: gold
+        path: sales/sales-metrics/
+        format: delta
+        partitionBy: [year, month]
+
+  - name: finance
+    displayName: Finance Domain
+    description: Invoices, revenue reconciliation, aging reports
+    resourceGroup: rg-{env}-finance-{region}
+    storageAccount: st{env}finance{region}
+    managedIdentity: mi-{env}-finance
+    containers: []
+    unityCatalog:
+      catalogName: finance_catalog
+      schemas:
+        - name: bronze
+          managedLocation: "abfss://bronze@st{env}finance{region}.dfs.core.windows.net/finance/"
+        - name: silver
+          managedLocation: "abfss://silver@st{env}finance{region}.dfs.core.windows.net/finance/"
+        - name: gold
+          managedLocation: "abfss://gold@st{env}finance{region}.dfs.core.windows.net/finance/"
+    dataProducts:
+      - name: invoices
+        layer: gold
+        path: finance/invoices/
+        format: delta
+        partitionBy: [year, month]
+      - name: aging-report
+        layer: gold
+        path: finance/aging-report/
+        format: delta
+        partitionBy: [snapshot_date]
+
+  - name: inventory
+    displayName: Inventory Domain
+    description: Warehouses, stock levels, reorder alerts
+    resourceGroup: rg-{env}-inventory-{region}
+    storageAccount: st{env}inventory{region}
+    managedIdentity: mi-{env}-inventory
+    containers: []
+    unityCatalog:
+      catalogName: inventory_catalog
+      schemas:
+        - name: bronze
+          managedLocation: "abfss://bronze@st{env}inventory{region}.dfs.core.windows.net/inventory/"
+        - name: silver
+          managedLocation: "abfss://silver@st{env}inventory{region}.dfs.core.windows.net/inventory/"
+        - name: gold
+          managedLocation: "abfss://gold@st{env}inventory{region}.dfs.core.windows.net/inventory/"
+    dataProducts:
+      - name: inventory-snapshot
+        layer: gold
+        path: inventory/inventory-snapshot/
+        format: delta
+        partitionBy: [snapshot_date]
+
+  - name: shared
+    displayName: Shared Services
+    description: Cross-domain reference data and shared data products
+    resourceGroup: rg-{env}-shared-{region}
+    storageAccount: st{env}shared{region}
+    managedIdentity: mi-{env}-shared
+    containers: []
+    unityCatalog:
+      catalogName: shared_catalog
+      schemas:
+        - name: reference
+          managedLocation: "abfss://gold@st{env}shared{region}.dfs.core.windows.net/reference/"
+    dataProducts:
+      - name: customers
+        layer: gold
+        path: reference/customers/
+        format: delta
+      - name: products
+        layer: gold
+        path: reference/products/
+        format: delta
+
+# Shortcuts — cross-domain data references (OneLake shortcut equivalent).
+# Each shortcut grants one domain read access to another domain's data
+# via managed identity RBAC assignment.
+shortcuts:
+  - name: sales-reads-finance-invoices
+    description: Sales domain reads finance invoices for revenue reconciliation
+    source:
+      workspace: finance
+      container: gold
+      path: finance/invoices/
+    target:
+      workspace: sales
+      mountPath: shortcuts/finance_invoices/
+    accessMethod: managed_identity
+    rbacRole: Storage Blob Data Reader
+    scope: container  # container-level or path-level
+
+  - name: finance-reads-sales-orders
+    description: Finance domain reads sales orders for revenue matching
+    source:
+      workspace: sales
+      container: gold
+      path: sales/orders/
+    target:
+      workspace: finance
+      mountPath: shortcuts/sales_orders/
+    accessMethod: managed_identity
+    rbacRole: Storage Blob Data Reader
+    scope: container
+
+  - name: shared-reads-all-gold
+    description: Shared services reads all domain gold layers for cross-domain products
+    source:
+      workspace: "*"
+      container: gold
+      path: "*"
+    target:
+      workspace: shared
+      mountPath: shortcuts/
+    accessMethod: managed_identity
+    rbacRole: Storage Blob Data Reader
+    scope: container
+
+# Environment-specific overrides.
+environments:
+  dev:
+    storage:
+      sku: Standard_LRS
+    privateEndpoints:
+      enabled: false  # simplify dev networking
+    lifecyclePolicies: []  # no tiering in dev
+  stg:
+    storage:
+      sku: Standard_ZRS
+  prod:
+    storage:
+      sku: Standard_ZRS
+    encryption:
+      keySource: Microsoft.Keyvault
+      keyVaultUri: "https://kv-{env}-data-{region}.vault.azure.net"
+      keyName: cmk-storage

@@ -1,0 +1,212 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2016-03-01/Microsoft.StreamAnalytics.json",
+    "contentVersion": "1.0.0.0",
+    "metadata": {
+        "description": "Stream Analytics job for real-time casino slot machine event processing",
+        "vertical": "casino-analytics",
+        "compliance": ["NIGC", "Title-31-BSA"]
+    },
+    "resources": [
+        {
+            "type": "Microsoft.StreamAnalytics/streamingjobs",
+            "apiVersion": "2021-10-01-preview",
+            "name": "sa-casino-slot-analytics",
+            "location": "[parameters('location')]",
+            "tags": {
+                "Domain": "Casino Analytics",
+                "WorkloadType": "Real-Time Streaming",
+                "Compliance": "NIGC-Title31",
+                "DataClassification": "Proprietary"
+            },
+            "properties": {
+                "sku": {
+                    "name": "Standard"
+                },
+                "eventsOutOfOrderPolicy": "Adjust",
+                "eventsOutOfOrderMaxDelayInSeconds": 5,
+                "eventsLateArrivalMaxDelayInSeconds": 16,
+                "outputErrorPolicy": "Stop",
+                "dataLocale": "en-US",
+                "compatibilityLevel": "1.2",
+                "contentStoragePolicy": "SystemAccount",
+                "jobType": "Cloud",
+                "inputs": [
+                    {
+                        "name": "SlotEventsInput",
+                        "properties": {
+                            "type": "Stream",
+                            "datasource": {
+                                "type": "Microsoft.EventHub/EventHub",
+                                "properties": {
+                                    "serviceBusNamespace": "[parameters('eventHubNamespace')]",
+                                    "eventHubName": "slot-events",
+                                    "sharedAccessPolicyName": "slot-events-listen",
+                                    "sharedAccessPolicyKey": "[parameters('eventHubListenKey')]",
+                                    "consumerGroupName": "stream-analytics-cg",
+                                    "authenticationMode": "ConnectionString"
+                                }
+                            },
+                            "serialization": {
+                                "type": "Json",
+                                "properties": {
+                                    "encoding": "UTF8"
+                                }
+                            },
+                            "compression": {
+                                "type": "None"
+                            }
+                        }
+                    },
+                    {
+                        "name": "MachineReferenceInput",
+                        "properties": {
+                            "type": "Reference",
+                            "datasource": {
+                                "type": "Microsoft.Storage/Blob",
+                                "properties": {
+                                    "storageAccounts": [
+                                        {
+                                            "accountName": "[parameters('storageAccountName')]",
+                                            "accountKey": "[parameters('storageAccountKey')]"
+                                        }
+                                    ],
+                                    "container": "reference-data",
+                                    "pathPattern": "machines/machine_config.json",
+                                    "dateFormat": "yyyy-MM-dd",
+                                    "timeFormat": "HH-mm"
+                                }
+                            },
+                            "serialization": {
+                                "type": "Json",
+                                "properties": {
+                                    "encoding": "UTF8"
+                                }
+                            }
+                        }
+                    }
+                ],
+                "outputs": [
+                    {
+                        "name": "FloorMetricsOutput",
+                        "properties": {
+                            "datasource": {
+                                "type": "Microsoft.Kusto/clusters/databases",
+                                "properties": {
+                                    "cluster": "[parameters('adxClusterUri')]",
+                                    "database": "casinoanalytics",
+                                    "table": "floor_metrics_realtime",
+                                    "authenticationMode": "Msi"
+                                }
+                            }
+                        }
+                    },
+                    {
+                        "name": "ComplianceAlertsOutput",
+                        "properties": {
+                            "datasource": {
+                                "type": "Microsoft.ServiceBus/Topic",
+                                "properties": {
+                                    "serviceBusNamespace": "[parameters('serviceBusNamespace')]",
+                                    "topicName": "compliance-alerts",
+                                    "sharedAccessPolicyName": "compliance-send",
+                                    "sharedAccessPolicyKey": "[parameters('serviceBusSendKey')]",
+                                    "authenticationMode": "ConnectionString"
+                                }
+                            },
+                            "serialization": {
+                                "type": "Json",
+                                "properties": {
+                                    "encoding": "UTF8",
+                                    "format": "LineSeparated"
+                                }
+                            }
+                        }
+                    },
+                    {
+                        "name": "MachineHealthOutput",
+                        "properties": {
+                            "datasource": {
+                                "type": "Microsoft.Storage/Blob",
+                                "properties": {
+                                    "storageAccounts": [
+                                        {
+                                            "accountName": "[parameters('storageAccountName')]",
+                                            "accountKey": "[parameters('storageAccountKey')]"
+                                        }
+                                    ],
+                                    "container": "streaming-output",
+                                    "pathPattern": "machine-health/{date}/{time}",
+                                    "dateFormat": "yyyy-MM-dd",
+                                    "timeFormat": "HH-mm"
+                                }
+                            },
+                            "serialization": {
+                                "type": "Json",
+                                "properties": {
+                                    "encoding": "UTF8",
+                                    "format": "LineSeparated"
+                                }
+                            }
+                        }
+                    },
+                    {
+                        "name": "PlayerActivityOutput",
+                        "properties": {
+                            "datasource": {
+                                "type": "Microsoft.Storage/DocumentDB",
+                                "properties": {
+                                    "accountId": "[parameters('cosmosDbAccountName')]",
+                                    "accountKey": "[parameters('cosmosDbAccountKey')]",
+                                    "database": "casino-realtime",
+                                    "collectionNamePattern": "player-activity",
+                                    "documentId": "player_id",
+                                    "partitionKey": "floor_zone"
+                                }
+                            }
+                        }
+                    }
+                ],
+                "transformation": {
+                    "name": "SlotEventProcessing",
+                    "properties": {
+                        "streamingUnits": 6,
+                        "query": "-- Floor metrics aggregation (1-minute tumbling window)\nSELECT\n    System.Timestamp() AS window_end,\n    floor_zone,\n    COUNT(DISTINCT machine_id) AS active_machines,\n    COUNT(*) AS spin_count,\n    SUM(credits_wagered) AS total_coin_in,\n    SUM(credits_won) AS total_coin_out,\n    SUM(credits_wagered) - SUM(credits_won) AS revenue,\n    CASE\n        WHEN SUM(credits_wagered) > 0\n        THEN ROUND((SUM(credits_wagered) - SUM(credits_won)) / SUM(credits_wagered) * 100, 2)\n        ELSE 0\n    END AS hold_pct,\n    COUNT(DISTINCT player_id) AS unique_players,\n    AVG(denomination) AS avg_denomination\nINTO FloorMetricsOutput\nFROM SlotEventsInput TIMESTAMP BY event_timestamp\nWHERE event_type = 'spin'\nGROUP BY\n    floor_zone,\n    TumblingWindow(minute, 1)\n\n-- Title 31 CTR compliance alerts (sliding 24-hour window)\n-- Alert when player cumulative activity approaches $10,000 threshold\nSELECT\n    System.Timestamp() AS alert_time,\n    'CTR_THRESHOLD' AS alert_type,\n    player_id,\n    SUM(CASE WHEN event_type = 'hand_pay' THEN hand_pay_amount ELSE 0 END) AS total_hand_pays,\n    SUM(CASE WHEN event_type = 'bill_insert' THEN currency_inserted ELSE 0 END) AS total_currency_in,\n    SUM(CASE WHEN event_type = 'hand_pay' THEN hand_pay_amount ELSE 0 END) +\n    SUM(CASE WHEN event_type = 'bill_insert' THEN currency_inserted ELSE 0 END) AS total_activity,\n    COUNT(*) AS transaction_count,\n    CASE\n        WHEN SUM(CASE WHEN event_type = 'hand_pay' THEN hand_pay_amount ELSE 0 END) +\n             SUM(CASE WHEN event_type = 'bill_insert' THEN currency_inserted ELSE 0 END) >= 10000\n        THEN 'CTR_REQUIRED'\n        WHEN SUM(CASE WHEN event_type = 'hand_pay' THEN hand_pay_amount ELSE 0 END) +\n             SUM(CASE WHEN event_type = 'bill_insert' THEN currency_inserted ELSE 0 END) >= 8000\n        THEN 'APPROACHING_THRESHOLD'\n        ELSE 'MONITOR'\n    END AS severity\nINTO ComplianceAlertsOutput\nFROM SlotEventsInput TIMESTAMP BY event_timestamp\nWHERE event_type IN ('hand_pay', 'bill_insert', 'ticket_print')\n    AND player_id IS NOT NULL\n    AND player_id != ''\nGROUP BY\n    player_id,\n    SlidingWindow(hour, 24)\nHAVING\n    SUM(CASE WHEN event_type = 'hand_pay' THEN hand_pay_amount ELSE 0 END) +\n    SUM(CASE WHEN event_type = 'bill_insert' THEN currency_inserted ELSE 0 END) >= 8000\n\n-- Machine health monitoring (5-minute hopping window)\nSELECT\n    System.Timestamp() AS window_end,\n    machine_id,\n    floor_zone,\n    COUNT(*) AS tilt_count,\n    COLLECT(tilt_code) AS tilt_codes,\n    MIN(event_timestamp) AS first_tilt,\n    MAX(event_timestamp) AS last_tilt\nINTO MachineHealthOutput\nFROM SlotEventsInput TIMESTAMP BY event_timestamp\nWHERE event_type = 'tilt'\nGROUP BY\n    machine_id,\n    floor_zone,\n    HoppingWindow(minute, 30, 5)\nHAVING COUNT(*) >= 3\n\n-- Player activity tracking (15-minute tumbling window)\nSELECT\n    System.Timestamp() AS window_end,\n    player_id,\n    floor_zone,\n    COUNT(DISTINCT machine_id) AS machines_played,\n    COUNT(DISTINCT session_id) AS sessions,\n    SUM(CASE WHEN event_type = 'spin' THEN credits_wagered ELSE 0 END) AS total_wagered,\n    SUM(CASE WHEN event_type = 'spin' THEN credits_won ELSE 0 END) AS total_won,\n    SUM(CASE WHEN event_type = 'spin' THEN 1 ELSE 0 END) AS spin_count,\n    MAX(denomination) AS max_denomination\nINTO PlayerActivityOutput\nFROM SlotEventsInput TIMESTAMP BY event_timestamp\nWHERE player_id IS NOT NULL AND player_id != ''\nGROUP BY\n    player_id,\n    floor_zone,\n    TumblingWindow(minute, 15)"
+                    }
+                }
+            }
+        }
+    ],
+    "parameters": {
+        "location": {
+            "type": "string",
+            "defaultValue": "East US 2"
+        },
+        "eventHubNamespace": {
+            "type": "string"
+        },
+        "eventHubListenKey": {
+            "type": "securestring"
+        },
+        "serviceBusNamespace": {
+            "type": "string"
+        },
+        "serviceBusSendKey": {
+            "type": "securestring"
+        },
+        "storageAccountName": {
+            "type": "string"
+        },
+        "storageAccountKey": {
+            "type": "securestring"
+        },
+        "adxClusterUri": {
+            "type": "string"
+        },
+        "cosmosDbAccountName": {
+            "type": "string"
+        },
+        "cosmosDbAccountKey": {
+            "type": "securestring"
+        }
+    }
+}

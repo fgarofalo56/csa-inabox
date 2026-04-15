@@ -1,0 +1,41 @@
+{
+  "deployment_id": "92c8d7d1-816d-40e3-a455-53639e06f15a",
+  "landing_zone_name": "lz-sales-transactions",
+  "environment": "development",
+  "resource_group": "rg-data-landing-zones-development",
+  "subscription_id": "$(AZURE_SUBSCRIPTION_ID)",
+  "deployment_mode": "Incremental",
+  "template_file": "dlz-lz-sales-transactions.bicep",
+  "parameters_file": "dlz-lz-sales-transactions.parameters.json",
+  "generated_at": "2026-04-14T18:48:33.278412",
+  "source_metadata": {
+    "source_id": "550e8400-e29b-41d4-a716-446655440000",
+    "source_name": "Sales Database",
+    "owner": "sales-analytics@contoso.com",
+    "domain": "sales"
+  },
+  "post_deployment_tasks": [
+    {
+      "name": "register_purview_data_source",
+      "type": "purview_api",
+      "config": {
+        "account_name": "purview-csa-prod",
+        "collection_name": "data-landing-zones"
+      }
+    },
+    {
+      "name": "create_purview_scans",
+      "type": "purview_api",
+      "depends_on": [
+        "register_purview_data_source"
+      ]
+    },
+    {
+      "name": "validate_rbac_assignments",
+      "type": "azure_cli",
+      "config": {
+        "command": "az role assignment list --scope /subscriptions/$(AZURE_SUBSCRIPTION_ID)/resourceGroups/$(RESOURCE_GROUP)/providers/Microsoft.Storage/storageAccounts/$(STORAGE_ACCOUNT_NAME)"
+      }
+    }
+  ]
+}

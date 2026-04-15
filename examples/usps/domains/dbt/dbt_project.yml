@@ -1,0 +1,100 @@
+name: 'usps_analytics'
+version: '1.0.0'
+config-version: 2
+require-dbt-version: [">=1.7.0", "<2.0.0"]
+
+profile: 'usps_analytics'
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+macro-paths: ["../../../domains/shared/dbt/macros"]
+clean-targets: ["target", "dbt_packages"]
+
+vars:
+  bronze_database: "bronze"
+  silver_database: "silver"
+  gold_database: "gold"
+  file_format: "delta"
+  incremental_strategy: "merge"
+  freshness_warn_hours: 24
+  freshness_error_hours: 72
+
+  # USPS-specific variables
+  current_analysis_year: 2024
+  historical_years: 5
+  forecast_horizon_months: 6
+
+  # Service standard thresholds (days)
+  first_class_standard_days: 3
+  priority_standard_days: 2
+  parcel_standard_days: 8
+  media_standard_days: 8
+
+  # On-time delivery target
+  on_time_target_pct: 90.0
+
+  # Route optimization thresholds
+  min_stops_per_route: 50
+  max_delivery_time_hours: 8
+  efficiency_score_threshold: 70
+
+  # Facility analysis
+  underutilized_threshold_pct: 40.0
+  overcapacity_threshold_pct: 90.0
+  consolidation_distance_miles: 50
+
+  # Product classes
+  product_classes: ['FIRST_CLASS', 'PRIORITY', 'PRIORITY_EXPRESS', 'PARCEL_SELECT',
+                    'MEDIA_MAIL', 'MARKETING_MAIL', 'PERIODICALS']
+
+  # Volume forecast
+  seasonal_decomposition_period: 365
+  forecast_confidence_level: 0.95
+
+models:
+  usps_analytics:
+    bronze:
+      +materialized: incremental
+      +file_format: delta
+      +schema: bronze
+      +tags: ['bronze', 'usps', 'raw']
+      +unique_key: ['source_system', 'ingestion_timestamp', 'record_hash']
+    silver:
+      +materialized: incremental
+      +file_format: delta
+      +schema: silver
+      +tags: ['silver', 'usps', 'cleaned']
+      +incremental_strategy: merge
+      +on_schema_change: "sync_all_columns"
+    gold:
+      +materialized: table
+      +file_format: delta
+      +schema: gold
+      +tags: ['gold', 'usps', 'analytics']
+      +post-hook: "OPTIMIZE {{ this }}"
+
+seeds:
+  usps_analytics:
+    +schema: seeds
+    +tags: ['seed', 'usps']
+
+sources:
+  - name: usps
+    description: USPS postal operations data sources
+    tables:
+      - name: delivery_performance
+        description: Delivery tracking and performance records
+        freshness:
+          warn_after: {count: 1, period: day}
+          error_after: {count: 3, period: day}
+      - name: facility_operations
+        description: Processing facility operational metrics
+        freshness:
+          warn_after: {count: 1, period: day}
+          error_after: {count: 7, period: day}
+      - name: mail_volume
+        description: Daily mail and parcel volume by product class
+        freshness:
+          warn_after: {count: 1, period: day}
+          error_after: {count: 3, period: day}

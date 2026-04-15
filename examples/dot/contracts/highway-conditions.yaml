@@ -1,0 +1,195 @@
+apiVersion: datacontract/v1
+kind: DataProduct
+metadata:
+  name: highway-conditions
+  domain: transportation
+  owner: DOT Analytics Team
+  version: "1.0.0"
+  classification: public
+  tags:
+    - infrastructure
+    - bridges
+    - nbi
+    - pavement
+spec:
+  description: >
+    Highway infrastructure condition analytics from the National Bridge
+    Inventory (NBI) and pavement condition data. Provides bridge condition
+    ratings, sufficiency scoring, pavement roughness (IRI), and structural
+    assessment for federal-aid highways. Used for infrastructure planning,
+    maintenance prioritization, and federal funding allocation.
+  schema:
+    - name: structure_number
+      type: string
+      description: NBI structure identifier (unique per bridge)
+      required: true
+    - name: route_number
+      type: string
+      description: Route designator (e.g., I-95, US-1)
+      required: true
+    - name: route_prefix
+      type: string
+      description: Route classification prefix (I, US, SR)
+      required: true
+    - name: facility_carried
+      type: string
+      description: Description of the facility carried by the structure
+      required: true
+    - name: features_intersected
+      type: string
+      description: Features crossed or intersected by the structure
+    - name: state_code
+      type: integer
+      description: FIPS state code
+      required: true
+    - name: state_name
+      type: string
+      description: Full state name
+      required: true
+    - name: county_code
+      type: string
+      description: 3-digit FIPS county code
+      required: true
+    - name: county_name
+      type: string
+      description: County name
+      required: true
+    - name: place_code
+      type: string
+      description: Census place code
+    - name: latitude
+      type: decimal
+      description: Structure latitude (WGS84)
+    - name: longitude
+      type: decimal
+      description: Structure longitude (WGS84)
+    - name: detour_length
+      type: decimal
+      description: Detour length in miles if the structure is closed
+    - name: year
+      type: integer
+      description: Inspection/reporting year
+      required: true
+    - name: year_built
+      type: integer
+      description: Year the structure was originally built
+    - name: year_reconstructed
+      type: integer
+      description: Year of most recent major reconstruction
+    - name: inspection_date
+      type: date
+      description: Date of the most recent inspection
+    - name: deck_cond
+      type: integer
+      description: NBI deck condition rating (0-9, 9 = excellent)
+    - name: superstructure_cond
+      type: integer
+      description: NBI superstructure condition rating (0-9)
+    - name: substructure_cond
+      type: integer
+      description: NBI substructure condition rating (0-9)
+    - name: channel_cond
+      type: integer
+      description: NBI channel and channel protection rating (0-9)
+    - name: culvert_cond
+      type: string
+      description: NBI culvert condition rating (0-9 or N for not applicable)
+    - name: structure_type
+      type: string
+      description: Main structure material type (STEEL, CONCRETE, etc.)
+    - name: structure_kind
+      type: string
+      description: Structure type code
+    - name: structure_len
+      type: decimal
+      description: Total structure length in feet
+    - name: deck_width
+      type: decimal
+      description: Deck width in feet
+    - name: max_span
+      type: decimal
+      description: Maximum span length in feet
+    - name: num_spans_main
+      type: integer
+      description: Number of main spans
+    - name: num_spans_approach
+      type: integer
+      description: Number of approach spans
+    - name: adt
+      type: integer
+      description: Average Daily Traffic count
+    - name: adt_year
+      type: integer
+      description: Year of the ADT count
+    - name: truck_pct
+      type: decimal
+      description: Percentage of ADT that is truck traffic
+    - name: design_load
+      type: integer
+      description: Design load classification code
+    - name: iri
+      type: decimal
+      description: International Roughness Index (inches/mile)
+    - name: psr
+      type: decimal
+      description: Present Serviceability Rating (0-5 scale)
+    - name: rutting
+      type: decimal
+      description: Pavement rutting depth (inches)
+    - name: cracking_pct
+      type: decimal
+      description: Percentage of pavement surface with cracking
+    - name: faulting
+      type: decimal
+      description: Pavement faulting measurement (inches)
+    - name: lanes
+      type: integer
+      description: Number of traffic lanes on the structure
+    - name: sufficiency_rating
+      type: decimal
+      description: >
+        NBI sufficiency rating (0-100). Bridges below 50 are eligible
+        for federal replacement; below 80 for rehabilitation.
+    - name: status
+      type: string
+      description: Structure operational status (A = Active, etc.)
+    - name: owner
+      type: string
+      description: Owner code (1 = State, 2 = County, 3 = City, etc.)
+    - name: maintenance_resp
+      type: string
+      description: Maintenance responsibility code
+    - name: load_time
+      type: timestamp
+      description: Timestamp when the record was loaded into the data warehouse
+  sla:
+    freshness: annual
+    completeness: 0.95
+    availability: 99.5
+  quality:
+    completeness_target: 0.95
+    accuracy_target: 0.99
+    geographic_coverage: "All 50 US states plus DC and territories"
+    temporal_coverage: "2015-present"
+    known_limitations:
+      - "NBI data updates annually; condition ratings may lag 1-2 years"
+      - "Pavement metrics (IRI, rutting) not available for all structures"
+      - "Culvert condition uses N for non-applicable structures"
+      - "Sufficiency rating formula was updated in 2022"
+  access:
+    api_endpoint: /api/v1/highway-conditions
+    format: parquet
+    authentication: Azure AD OAuth 2.0
+    rate_limit: 1000 requests/hour
+  lineage:
+    sources:
+      - name: National Bridge Inventory (NBI)
+        url: https://www.fhwa.dot.gov/bridge/nbi.cfm
+        type: government_download
+      - name: HPMS Pavement Data
+        url: https://www.fhwa.dot.gov/policyinformation/hpms.cfm
+        type: government_download
+    transformations:
+      - bronze: Raw NBI and pavement records with basic validation
+      - silver: Condition rating normalization, geographic validation, IRI standardization
+      - gold: Infrastructure priority scoring, trend analysis, maintenance planning

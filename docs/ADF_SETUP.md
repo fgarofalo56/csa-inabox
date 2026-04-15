@@ -1,13 +1,36 @@
 # Azure Data Factory Setup Guide
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Data Engineers
+
 This guide covers deploying and managing ADF pipeline artifacts for the
 CSA-in-a-Box platform.
+
+## Table of Contents
+
+- [Architecture](#architecture)
+- [Prerequisites](#prerequisites)
+- [Pipeline Artifacts](#pipeline-artifacts)
+- [Deployment](#deployment)
+  - [Automated deployment (recommended)](#automated-deployment-recommended)
+  - [Manual deployment (Azure Portal)](#manual-deployment-azure-portal)
+- [Linked Service Configuration](#linked-service-configuration)
+  - [ls_adls_gen2 — Azure Data Lake Storage](#ls_adls_gen2--azure-data-lake-storage)
+  - [ls_databricks — Databricks Workspace](#ls_databricks--databricks-workspace)
+- [Trigger Configuration](#trigger-configuration)
+  - [Managing triggers](#managing-triggers)
+- [Pipeline Parameters](#pipeline-parameters)
+  - [pl_ingest_to_bronze](#pl_ingest_to_bronze)
+  - [pl_medallion_orchestration](#pl_medallion_orchestration)
+  - [pl_run_dbt_models](#pl_run_dbt_models)
+- [CI/CD Integration](#cicd-integration)
+- [Purview Lineage](#purview-lineage)
+- [Troubleshooting](#troubleshooting)
 
 ## Architecture
 
 ADF orchestrates the batch data pipeline:
 
-```
+```text
 Landing Container (CSV/Parquet)
     |
     v
@@ -41,7 +64,7 @@ az extension add --name datafactory
 
 All ADF definitions live under `domains/*/pipelines/adf/`:
 
-```
+```text
 domains/shared/pipelines/adf/
   linkedServices/
     ls_adls_gen2.json          # ADLS Gen2 via managed identity
@@ -194,3 +217,11 @@ automatically. See [Purview integration](#) in the architecture docs.
 ## Troubleshooting
 
 See the ADF section in [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+
+---
+
+## Related Documentation
+
+- [DATABRICKS_GUIDE.md](DATABRICKS_GUIDE.md) - Databricks workspace setup and dbt integration
+- [SELF_HOSTED_IR.md](SELF_HOSTED_IR.md) - Self-Hosted Integration Runtime for on-premises connectivity
+- [GETTING_STARTED.md](GETTING_STARTED.md) - Platform deployment quickstart

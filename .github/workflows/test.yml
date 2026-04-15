@@ -26,7 +26,7 @@ jobs:
       matrix:
         python-version: ['3.10', '3.11', '3.12']
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
 
       - name: Set up Python
         uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5
@@ -37,9 +37,10 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          # Install the project with dev extras so ruff / pytest /
-          # pytest-cov / mypy all come from pyproject.toml.
-          pip install -e ".[dev]"
+          # Install the project with dev + governance + functions extras so
+          # ruff / pytest / pytest-cov / mypy and all Azure SDK deps come
+          # from pyproject.toml.
+          pip install -e ".[dev,governance,functions]"
           # Install any additional per-domain requirements.
           for req in $(find . -name "requirements.txt" -not -path "*/dbt-env/*" -not -path "*/.venv/*"); do
             pip install -r "$req" || true
@@ -55,13 +56,14 @@ jobs:
 
       - name: Typecheck with mypy (strict)
         run: |
-          # The default mypy config covers governance + tests. The two
-          # Function apps both ship a flat function_app.py file, so they
+          # The default mypy config covers governance + tests. The three
+          # Function apps each ship a flat function_app.py file, so they
           # are checked with explicit invocations (one per app) to avoid
           # module-path collisions.
           mypy
           mypy domains/sharedServices/aiEnrichment/functions/function_app.py
           mypy domains/sharedServices/eventProcessing/functions/function_app.py
+          mypy domains/sharedServices/secretRotation/functions/function_app.py
 
       - name: Validate data product contracts
         run: |
@@ -110,7 +112,7 @@ jobs:
       run:
         working-directory: domains/${{ matrix.domain }}/dbt
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
 
       - name: Set up Python
         uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5
@@ -127,7 +129,7 @@ jobs:
 
       - name: Compile dbt models
         run: |
-          dbt compile --project-dir ${{ matrix.domain_path }} --profiles-dir ${{ matrix.domain_path }} 2>&1 || {
+          dbt compile --project-dir . --profiles-dir . 2>&1 || {
             exit_code=$?
             if [ $exit_code -eq 2 ]; then
               echo "::warning::dbt compile failed - may need database connection"
@@ -153,7 +155,7 @@ jobs:
       run:
         working-directory: domains/${{ matrix.domain }}/dbt
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
 
       - name: Set up Python
         uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5

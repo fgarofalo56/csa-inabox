@@ -1,0 +1,416 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "location": {
+            "value": "USGov Virginia"
+        },
+        "environment": {
+            "value": "gov"
+        },
+        "prefix": {
+            "value": "epa"
+        },
+        "workloadName": {
+            "value": "environmental-monitoring-analytics"
+        },
+        "deployModules": {
+            "value": {
+                "cosmosDB": true,
+                "storageZones": true,
+                "externalStorage": false,
+                "synapse": true,
+                "functions": true,
+                "streamAnalytics": false,
+                "appInsights": true,
+                "privateEndpoints": true,
+                "genericStorage": false,
+                "selfHostedIR": false,
+                "dataExplorer": true,
+                "mlWorkspace": true
+            }
+        },
+        "privateDNSZones": {
+            "value": {
+                "subscriptionId": "[subscription().subscriptionId]",
+                "resourceGroupName": "rg-dns-zones-gov"
+            }
+        },
+        "tags": {
+            "value": {
+                "Domain": "EPA",
+                "Environment": "Government",
+                "WorkloadType": "Analytics",
+                "CostCenter": "EPA-IT-GOV",
+                "Owner": "EPA Data Engineering Team",
+                "Project": "Environmental Monitoring Analytics Platform",
+                "Compliance": "FISMA-High",
+                "DataClassification": "CUI",
+                "AuthorityToOperate": "EPA-ATO-2024"
+            }
+        },
+        "databricksConfig": {
+            "value": {
+                "pricingTier": "premium",
+                "enableNoPublicIp": true,
+                "skuName": "premium",
+                "customVirtualNetworkId": "",
+                "customPublicSubnetName": "",
+                "customPrivateSubnetName": "",
+                "enableAutomaticClusterTermination": true,
+                "enableEncryption": true
+            }
+        },
+        "synapseConfig": {
+            "value": {
+                "sqlAdministratorLogin": "sqladmin",
+                "sqlAdministratorLoginPassword": "[parameters('sqlAdministratorPassword')]",
+                "allowedIpAddresses": [
+                    {
+                        "name": "EPA-GOV-HQ",
+                        "startIpAddress": "192.168.108.0",
+                        "endIpAddress": "192.168.108.255"
+                    },
+                    {
+                        "name": "EPA-GOV-FIELD",
+                        "startIpAddress": "192.168.109.0",
+                        "endIpAddress": "192.168.109.255"
+                    }
+                ],
+                "enableDataExfiltrationProtection": true,
+                "managedVirtualNetwork": "default",
+                "enableDoubleEncryption": true,
+                "gitConfig": {
+                    "accountName": "EPA-Analytics-Gov",
+                    "repositoryName": "epa-environmental-monitoring-analytics-gov",
+                    "collaborationBranch": "main",
+                    "rootFolder": "/synapse"
+                }
+            }
+        },
+        "storageConfig": {
+            "value": {
+                "accountType": "Standard_GRS",
+                "accessTier": "Hot",
+                "supportsHttpsTrafficOnly": true,
+                "enableHierarchicalNamespace": true,
+                "minimumTlsVersion": "TLS1_2",
+                "allowBlobPublicAccess": false,
+                "enableCrossTenantReplication": false,
+                "containers": [
+                    {
+                        "name": "raw",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "bronze",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "silver",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "gold",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "exports",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "aqs-air-quality",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "sdwis-water",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "tri-releases",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "echo-compliance",
+                        "publicAccess": "None"
+                    },
+                    {
+                        "name": "audit-logs",
+                        "publicAccess": "None"
+                    }
+                ],
+                "enableVersioning": true,
+                "enableDeleteRetention": true,
+                "deleteRetentionDays": 365
+            }
+        },
+        "keyVaultConfig": {
+            "value": {
+                "enableRbacAuthorization": true,
+                "enableSoftDelete": true,
+                "softDeleteRetentionDays": 90,
+                "enablePurgeProtection": true,
+                "enabledForDiskEncryption": true,
+                "enabledForDeployment": false,
+                "enabledForTemplateDeployment": false,
+                "networkAccessPolicy": "deny",
+                "secrets": [
+                    {
+                        "name": "airnow-api-key",
+                        "description": "EPA AirNow API key for air quality data"
+                    },
+                    {
+                        "name": "echo-api-token",
+                        "description": "EPA ECHO API token for compliance data"
+                    },
+                    {
+                        "name": "sql-administrator-password",
+                        "description": "SQL administrator password for Synapse"
+                    },
+                    {
+                        "name": "encryption-key",
+                        "description": "Customer-managed encryption key"
+                    }
+                ]
+            }
+        },
+        "dataFactoryConfig": {
+            "value": {
+                "publicNetworkAccess": "Disabled",
+                "managedVirtualNetworkSettings": {
+                    "allowedPrivateEndpointConnections": [],
+                    "preventDataExfiltration": true
+                },
+                "gitConfig": {
+                    "accountName": "EPA-Analytics-Gov",
+                    "repositoryName": "epa-environmental-monitoring-analytics-gov",
+                    "collaborationBranch": "main",
+                    "rootFolder": "/datafactory"
+                },
+                "integrationRuntimes": [
+                    {
+                        "name": "AutoResolveIntegrationRuntime",
+                        "type": "Managed",
+                        "location": "USGov Virginia"
+                    }
+                ],
+                "linkedServices": [
+                    {
+                        "name": "ls_keyvault",
+                        "type": "AzureKeyVault"
+                    },
+                    {
+                        "name": "ls_storage_raw",
+                        "type": "AzureDataLakeStorage"
+                    },
+                    {
+                        "name": "ls_synapse",
+                        "type": "AzureSqlDW"
+                    },
+                    {
+                        "name": "ls_airnow_api",
+                        "type": "RestService",
+                        "baseUrl": "https://www.airnowapi.org/aq/"
+                    },
+                    {
+                        "name": "ls_echo_api",
+                        "type": "RestService",
+                        "baseUrl": "https://echodata.epa.gov/echo/"
+                    }
+                ]
+            }
+        },
+        "dataExplorerConfig": {
+            "value": {
+                "skuName": "Standard_D11_v2",
+                "skuTier": "Standard",
+                "capacity": 2,
+                "enableDiskEncryption": true,
+                "enableStreamingIngest": true,
+                "enablePurge": true,
+                "enableDoubleEncryption": true,
+                "databases": [
+                    {
+                        "name": "epaanalytics",
+                        "hotCachePeriod": "P30D",
+                        "softDeletePeriod": "P2555D"
+                    }
+                ],
+                "enableAutoStop": false,
+                "enableAutoScale": true,
+                "minimumInstances": 2,
+                "maximumInstances": 10
+            }
+        },
+        "mlWorkspaceConfig": {
+            "value": {
+                "friendlyName": "EPA Environmental Monitoring ML (Gov)",
+                "description": "Machine learning workspace for air quality forecasting and environmental justice analytics - Government Cloud",
+                "enablePublicNetworkAccess": "Disabled",
+                "enableHbiWorkspace": true,
+                "computeInstances": [
+                    {
+                        "name": "aqi-forecasting-vm",
+                        "vmSize": "Standard_DS3_v2",
+                        "enableNodePublicIp": false
+                    }
+                ],
+                "datastores": [
+                    {
+                        "name": "environmental_data",
+                        "type": "AzureDataLakeGen2",
+                        "description": "Primary environmental monitoring datasets"
+                    }
+                ]
+            }
+        },
+        "monitoringConfig": {
+            "value": {
+                "enableApplicationInsights": true,
+                "enableLogAnalytics": true,
+                "retentionInDays": 2555,
+                "enableSecurityCenter": true,
+                "alertRules": [
+                    {
+                        "name": "Air Quality Data Pipeline Failure",
+                        "severity": 1,
+                        "evaluationFrequency": "PT5M",
+                        "windowSize": "PT15M",
+                        "actionGroupName": "epa-gov-alerts"
+                    },
+                    {
+                        "name": "AQI Exceedance Alert",
+                        "severity": 0,
+                        "evaluationFrequency": "PT30M",
+                        "windowSize": "PT1H",
+                        "actionGroupName": "epa-gov-alerts"
+                    },
+                    {
+                        "name": "Unauthorized Access Attempt",
+                        "severity": 0,
+                        "evaluationFrequency": "PT1M",
+                        "windowSize": "PT5M",
+                        "actionGroupName": "epa-security-alerts"
+                    },
+                    {
+                        "name": "Data Exfiltration Alert",
+                        "severity": 0,
+                        "evaluationFrequency": "PT5M",
+                        "windowSize": "PT15M",
+                        "actionGroupName": "epa-security-alerts"
+                    }
+                ],
+                "actionGroups": [
+                    {
+                        "name": "epa-gov-alerts",
+                        "emailReceivers": [
+                            {
+                                "name": "EPA Gov Data Team",
+                                "emailAddress": "epa-ops@epa.gov"
+                            }
+                        ]
+                    },
+                    {
+                        "name": "epa-security-alerts",
+                        "emailReceivers": [
+                            {
+                                "name": "EPA Security Operations",
+                                "emailAddress": "epa-security-ops@epa.gov"
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        "networkingConfig": {
+            "value": {
+                "enablePrivateEndpoints": true,
+                "subnetName": "snet-epa-analytics-gov",
+                "vnetName": "vnet-epa-analytics-gov",
+                "vnetAddressPrefix": "10.106.0.0/16",
+                "subnetAddressPrefix": "10.106.1.0/24",
+                "enableNetworkSecurityGroup": true,
+                "allowedSourceIpRanges": [
+                    "192.168.108.0/24",
+                    "192.168.109.0/24"
+                ],
+                "enableDdosProtection": true,
+                "enableBastionHost": true
+            }
+        },
+        "securityConfig": {
+            "value": {
+                "enableDefender": true,
+                "enableSentinel": true,
+                "enableKeyVaultFirewall": true,
+                "enableStorageFirewall": true,
+                "requireHttpsTrafficOnly": true,
+                "enableAuditLogs": true,
+                "enableAdvancedThreatProtection": true,
+                "dataClassification": {
+                    "enabled": true,
+                    "level": "CUI"
+                },
+                "encryptionAtRest": true,
+                "enablePrivateLink": true,
+                "enableCustomerManagedKeys": true,
+                "complianceStandards": ["FISMA", "NIST-800-53", "FedRAMP"],
+                "enableIdentityGovernance": true
+            }
+        },
+        "automationConfig": {
+            "value": {
+                "enableAutoShutdown": false,
+                "enableCostOptimization": true,
+                "enableResourceTagging": true,
+                "backupRetentionDays": 2555,
+                "enableDisasterRecovery": true,
+                "drRegion": "USGov Texas"
+            }
+        },
+        "dataGovernanceConfig": {
+            "value": {
+                "enablePurview": true,
+                "dataRetentionPolicies": [
+                    {
+                        "dataType": "Raw AQS Air Quality Data",
+                        "retentionDays": 2555,
+                        "complianceReason": "Federal Records Act"
+                    },
+                    {
+                        "dataType": "Processed Environmental Analytics",
+                        "retentionDays": 2555,
+                        "complianceReason": "Federal Records Act"
+                    },
+                    {
+                        "dataType": "Audit Logs",
+                        "retentionDays": 2555,
+                        "complianceReason": "Security Compliance"
+                    },
+                    {
+                        "dataType": "Personal Data",
+                        "retentionDays": 1825,
+                        "complianceReason": "Privacy Act"
+                    }
+                ],
+                "enableDataLineage": true,
+                "enableDataQualityMonitoring": true,
+                "enableDataLossPrevention": true,
+                "piiDetection": true,
+                "enableDataEncryption": true
+            }
+        },
+        "complianceConfig": {
+            "value": {
+                "fismaLevel": "High",
+                "enableFedRAMP": true,
+                "enableSOC2": false,
+                "enableNIST": true,
+                "auditRetentionYears": 7,
+                "enableContinuousMonitoring": true,
+                "securityContactEmail": "epa-security-ops@epa.gov",
+                "privacyContactEmail": "epa-privacy-office@epa.gov"
+            }
+        }
+    }
+}

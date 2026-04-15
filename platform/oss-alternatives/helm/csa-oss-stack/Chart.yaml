@@ -1,0 +1,33 @@
+apiVersion: v2
+name: csa-oss-stack
+description: >
+  Open-source data platform alternatives for Azure Government deployments.
+  Deploys Apache Atlas, Ranger, Superset, Trino, and Hive Metastore on AKS.
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+keywords:
+  - data-platform
+  - azure-government
+  - open-source
+  - atlas
+  - ranger
+  - superset
+  - trino
+maintainers:
+  - name: CSA-in-a-Box Team
+    email: csa-team@contoso.com
+
+dependencies:
+  - name: postgresql
+    version: "~15.5"
+    repository: "oci://registry-1.docker.io/bitnamicharts"
+    condition: postgresql.enabled
+    tags:
+      - database
+  - name: redis
+    version: "~19.0"
+    repository: "oci://registry-1.docker.io/bitnamicharts"
+    condition: redis.enabled
+    tags:
+      - cache

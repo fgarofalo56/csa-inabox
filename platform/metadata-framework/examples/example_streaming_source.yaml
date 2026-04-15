@@ -1,0 +1,182 @@
+# Event Hub Streaming Source Registration Example
+
+source_id: "770e8400-e29b-41d4-a716-446655440002"
+source_name: "IoT Telemetry Stream"
+source_type: "event_hub"
+
+# Event Hub connection configuration
+connection:
+  namespace: "contoso-iot-prod"
+  name: "telemetry-events"
+  connection_string_key_vault_secret: "eventhub-telemetry-connection-string"
+  consumer_group: "analytics-consumer"
+  partition_count: 32
+  retention_hours: 168  # 7 days
+
+# Stream schema definition
+schema:
+  message_format: "json"
+  message_schema:
+    type: "object"
+    required: ["device_id", "timestamp", "sensor_data"]
+    properties:
+      device_id:
+        type: "string"
+        description: "Unique device identifier"
+      device_type:
+        type: "string"
+        enum: ["temperature_sensor", "humidity_sensor", "pressure_sensor", "motion_detector"]
+      timestamp:
+        type: "string"
+        format: "date-time"
+        description: "Event timestamp in ISO 8601 format"
+      location:
+        type: "object"
+        properties:
+          latitude:
+            type: "number"
+            minimum: -90
+            maximum: 90
+          longitude:
+            type: "number"
+            minimum: -180
+            maximum: 180
+          facility_id:
+            type: "string"
+          zone:
+            type: "string"
+      sensor_data:
+        type: "object"
+        properties:
+          temperature:
+            type: "number"
+            minimum: -50
+            maximum: 150
+            description: "Temperature in Celsius"
+          humidity:
+            type: "number"
+            minimum: 0
+            maximum: 100
+            description: "Humidity percentage"
+          pressure:
+            type: "number"
+            minimum: 0
+            maximum: 2000
+            description: "Pressure in hPa"
+          motion_detected:
+            type: "boolean"
+            description: "Motion detection flag"
+          battery_level:
+            type: "number"
+            minimum: 0
+            maximum: 100
+            description: "Battery level percentage"
+          signal_strength:
+            type: "integer"
+            minimum: -120
+            maximum: 0
+            description: "Signal strength in dBm"
+      metadata:
+        type: "object"
+        properties:
+          firmware_version:
+            type: "string"
+          protocol_version:
+            type: "string"
+          message_id:
+            type: "string"
+          correlation_id:
+            type: "string"
+  partition_key: "device_id"
+
+# Streaming ingestion configuration
+ingestion:
+  mode: "streaming"
+  # No schedule for streaming - continuous processing
+  batch_size: 10000  # Records per micro-batch
+  parallelization: 16  # Streaming units
+  retry_count: 3
+
+# Data classification and governance
+classification: "internal"
+
+# Data owner information
+owner:
+  name: "IoT Platform Team"
+  email: "iot-platform@contoso.com"
+  domain: "operations"
+  cost_center: "OPS-004"
+
+# Data product definition
+data_product:
+  name: "IoT Telemetry Data"
+  domain: "operations"
+  sla_freshness_minutes: 5  # Near real-time requirement
+  quality_rules:
+    - rule_type: "not_null"
+      column: "device_id"
+      severity: "critical"
+    - rule_type: "not_null"
+      column: "timestamp"
+      severity: "critical"
+    - rule_type: "range"
+      column: "temperature"
+      parameters:
+        min_value: -50
+        max_value: 150
+      severity: "warning"
+    - rule_type: "range"
+      column: "humidity"
+      parameters:
+        min_value: 0
+        max_value: 100
+      severity: "warning"
+    - rule_type: "range"
+      column: "battery_level"
+      parameters:
+        min_value: 0
+        max_value: 100
+      severity: "error"
+    - rule_type: "custom"
+      parameters:
+        expression: "timestamp >= current_timestamp - interval '1 hour'"
+      severity: "warning"
+      description: "Events should not be more than 1 hour old"
+
+# Target storage configuration
+target:
+  landing_zone: "lz-operations-iot"
+  container: "bronze"
+  path_pattern: "iot-telemetry/year={yyyy}/month={MM}/day={dd}/hour={HH}/minute={mm}"
+  format: "parquet"
+  compression: "snappy"
+  partition_columns:
+    - "device_type"
+    - "facility_id"
+
+# Tags for organization and discovery
+tags:
+  - "iot"
+  - "telemetry"
+  - "real-time"
+  - "sensors"
+  - "operations"
+  - "time-series"
+  - "high-frequency"
+
+# Additional metadata
+metadata:
+  description: |
+    Real-time IoT telemetry data from sensors deployed across manufacturing
+    facilities. Includes temperature, humidity, pressure, and motion detection
+    data. Critical for operational monitoring, predictive maintenance, and
+    facility management.
+  documentation_url: "https://wiki.contoso.com/iot-telemetry-schema"
+  business_glossary_terms:
+    - "Internet of Things"
+    - "Telemetry"
+    - "Sensor Data"
+    - "Predictive Maintenance"
+    - "Facility Management"
+    - "Real-Time Monitoring"
+  compliance_requirements: []  # No special compliance requirements for IoT data

@@ -1,0 +1,8 @@
+{
+  "resource_group": "rg-data-platform-development",
+  "data_factory": "adf-csa-development",
+  "environment": "development",
+  "generated_at": "2026-04-14T18:48:20.760203",
+  "source_id": "550e8400-e29b-41d4-a716-446655440000",
+  "pipeline_type": "adf_incremental"
+}

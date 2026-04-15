@@ -1,0 +1,422 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_AZURE_MONITOR",
+      "label": "Azure Monitor",
+      "description": "Azure Monitor data source",
+      "type": "datasource",
+      "pluginId": "grafana-azure-monitor-datasource"
+    },
+    {
+      "name": "DS_AZURE_LOG_ANALYTICS",
+      "label": "Azure Log Analytics",
+      "description": "Log Analytics workspace for custom quality metrics",
+      "type": "datasource",
+      "pluginId": "grafana-azure-monitor-datasource"
+    }
+  ],
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Data quality monitoring for CSA-in-a-Box — quality scores, rule violations, PII detections, and freshness tracking",
+  "editable": true,
+  "gnetId": null,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "id": 1,
+      "title": "Overall Quality Score",
+      "type": "gauge",
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 },
+      "datasource": "${DS_AZURE_LOG_ANALYTICS}",
+      "fieldConfig": {
+        "defaults": {
+          "max": 100,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 70 },
+              { "color": "yellow", "value": 85 },
+              { "color": "green", "value": 95 }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "showThresholdLabels": true,
+        "showThresholdMarkers": true
+      },
+      "targets": [
+        {
+          "azureLogAnalytics": {
+            "query": "customMetrics\n| where name == 'data_quality_score'\n| summarize avg(value) by bin(timestamp, 1h)\n| order by timestamp desc\n| take 1\n| project score = round(avg_value, 1)",
+            "resultFormat": "table"
+          },
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Quality Score Trend",
+      "type": "timeseries",
+      "gridPos": { "h": 6, "w": 12, "x": 6, "y": 0 },
+      "datasource": "${DS_AZURE_LOG_ANALYTICS}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisLabel": "Quality %",
+            "drawStyle": "line",
+            "fillOpacity": 15,
+            "lineWidth": 2,
+            "pointSize": 4,
+            "showPoints": "auto",
+            "spanNulls": true
+          },
+          "max": 100,
+          "min": 0,
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "calcs": ["mean", "min", "max"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "azureLogAnalytics": {
+            "query": "customMetrics\n| where name == 'data_quality_score'\n| summarize score = avg(value) by domain = tostring(customDimensions.domain), bin(timestamp, 1h)\n| project timestamp, domain, score = round(score, 1)",
+            "resultFormat": "time_series"
+          },
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "PII Detections (24h)",
+      "type": "stat",
+      "gridPos": { "h": 3, "w": 6, "x": 18, "y": 0 },
+      "datasource": "${DS_AZURE_LOG_ANALYTICS}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 10 },
+              { "color": "red", "value": 50 }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "azureLogAnalytics": {
+            "query": "customEvents\n| where name == 'pii_detection'\n| where timestamp > ago(24h)\n| summarize detections = count()",
+            "resultFormat": "table"
+          },
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Active Quality Violations",
+      "type": "stat",
+      "gridPos": { "h": 3, "w": 6, "x": 18, "y": 3 },
+      "datasource": "${DS_AZURE_LOG_ANALYTICS}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 5 },
+              { "color": "red", "value": 20 }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "azureLogAnalytics": {
+            "query": "customEvents\n| where name == 'quality_rule_violation'\n| where timestamp > ago(24h)\n| summarize violations = count()",
+            "resultFormat": "table"
+          },
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Quality Rule Violations Over Time",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "datasource": "${DS_AZURE_LOG_ANALYTICS}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisLabel": "Violations",
+            "drawStyle": "bars",
+            "fillOpacity": 70,
+            "stacking": { "mode": "normal", "group": "A" }
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "calcs": ["sum"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "azureLogAnalytics": {
+            "query": "customEvents\n| where name == 'quality_rule_violation'\n| where timestamp > ago(7d)\n| summarize count() by rule_type = tostring(customDimensions.rule_type), bin(timestamp, 6h)\n| project timestamp, rule_type, violations = count_",
+            "resultFormat": "time_series"
+          },
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Data Freshness by Domain",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "datasource": "${DS_AZURE_LOG_ANALYTICS}",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "displayMode": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "freshness_status" },
+            "properties": [
+              {
+                "id": "custom.displayMode",
+                "value": "color-background"
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  { "type": "value", "options": { "fresh": { "color": "green", "text": "Fresh" } } },
+                  { "type": "value", "options": { "stale": { "color": "yellow", "text": "Stale" } } },
+                  { "type": "value", "options": { "expired": { "color": "red", "text": "Expired" } } }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "minutes_since_update" },
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "color": "green", "value": null },
+                    { "color": "yellow", "value": 60 },
+                    { "color": "red", "value": 240 }
+                  ]
+                }
+              },
+              { "id": "custom.displayMode", "value": "color-background" }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "desc": true, "displayName": "minutes_since_update" }]
+      },
+      "targets": [
+        {
+          "azureLogAnalytics": {
+            "query": "customMetrics\n| where name == 'data_freshness'\n| summarize last_update = max(timestamp), avg_freshness_min = avg(value) by domain = tostring(customDimensions.domain), table_name = tostring(customDimensions.table_name)\n| extend minutes_since_update = datetime_diff('minute', now(), last_update)\n| extend freshness_status = case(\n    minutes_since_update < 60, 'fresh',\n    minutes_since_update < 240, 'stale',\n    'expired'\n  )\n| project domain, table_name, last_update, minutes_since_update, freshness_status\n| order by minutes_since_update desc",
+            "resultFormat": "table"
+          },
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Violation Types Breakdown",
+      "type": "piechart",
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 14 },
+      "datasource": "${DS_AZURE_LOG_ANALYTICS}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "values": ["value", "percent"] },
+        "pieType": "donut",
+        "reduceOptions": { "calcs": ["sum"], "fields": "", "values": false },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "azureLogAnalytics": {
+            "query": "customEvents\n| where name == 'quality_rule_violation'\n| where timestamp > ago(7d)\n| summarize count() by rule_type = tostring(customDimensions.rule_type)\n| project rule_type, violations = count_\n| order by violations desc",
+            "resultFormat": "table"
+          },
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "PII Detection by Category",
+      "type": "barchart",
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 14 },
+      "datasource": "${DS_AZURE_LOG_ANALYTICS}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "barWidth": 0.7,
+        "groupWidth": 0.7,
+        "legend": { "calcs": [], "displayMode": "list", "placement": "bottom" },
+        "orientation": "horizontal",
+        "showValue": "always",
+        "stacking": "none",
+        "tooltip": { "mode": "multi" },
+        "xTickLabelRotation": 0
+      },
+      "targets": [
+        {
+          "azureLogAnalytics": {
+            "query": "customEvents\n| where name == 'pii_detection'\n| where timestamp > ago(7d)\n| summarize count() by pii_type = tostring(customDimensions.pii_type)\n| project pii_type, detections = count_\n| order by detections desc",
+            "resultFormat": "table"
+          },
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Quality Score by Domain",
+      "type": "bargauge",
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 14 },
+      "datasource": "${DS_AZURE_LOG_ANALYTICS}",
+      "fieldConfig": {
+        "defaults": {
+          "max": 100,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 70 },
+              { "color": "yellow", "value": 85 },
+              { "color": "green", "value": 95 }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "showUnfilled": true
+      },
+      "targets": [
+        {
+          "azureLogAnalytics": {
+            "query": "customMetrics\n| where name == 'data_quality_score'\n| where timestamp > ago(24h)\n| summarize score = avg(value) by domain = tostring(customDimensions.domain)\n| project domain, score = round(score, 1)\n| order by score asc",
+            "resultFormat": "table"
+          },
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "refresh": "5m",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["csa-inabox", "data-quality", "governance"],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "hide": 0,
+        "includeAll": true,
+        "label": "Domain",
+        "multi": true,
+        "name": "domain",
+        "options": [
+          { "text": "shared", "value": "shared" },
+          { "text": "finance", "value": "finance" },
+          { "text": "inventory", "value": "inventory" },
+          { "text": "sales", "value": "sales" },
+          { "text": "usda", "value": "usda" },
+          { "text": "epa", "value": "epa" },
+          { "text": "noaa", "value": "noaa" }
+        ],
+        "type": "custom"
+      }
+    ]
+  },
+  "time": { "from": "now-7d", "to": "now" },
+  "timepicker": {},
+  "timezone": "utc",
+  "title": "CSA-in-a-Box: Data Quality",
+  "uid": "csa-data-quality",
+  "version": 1
+}

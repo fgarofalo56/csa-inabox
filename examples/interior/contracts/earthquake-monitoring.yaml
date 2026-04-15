@@ -1,0 +1,276 @@
+# Data product contract — interior.earthquake_monitoring
+#
+# This file is the authoritative interface for the Interior Department
+# earthquake monitoring data product. It declares the schema, SLAs, and
+# quality rules for USGS earthquake event analytics.
+
+apiVersion: csa.interior.gov/v1
+kind: DataProductContract
+
+metadata:
+  name: interior.earthquake_monitoring
+  domain: interior
+  owner: interior-data-engineering@contoso.com
+  version: "1.0.0"
+  description: >
+    Earthquake event analytics from the USGS Earthquake Hazards Program
+    (ComCat). Provides event-level seismic data including magnitude,
+    depth, location, alert levels, and community impact reports. Used for
+    real-time seismic monitoring, hazard assessment, and emergency response
+    coordination.
+
+schema:
+  primary_key: [event_id]
+  columns:
+    - name: event_id
+      type: string
+      nullable: false
+      description: USGS event identifier (network code + numeric ID)
+
+    - name: event_time
+      type: timestamp
+      nullable: false
+      description: UTC timestamp of the earthquake origin
+
+    - name: updated_time
+      type: timestamp
+      nullable: false
+      description: UTC timestamp of the last event update
+
+    - name: latitude
+      type: decimal(9,6)
+      nullable: false
+      description: Earthquake epicenter latitude (WGS84)
+
+    - name: longitude
+      type: decimal(9,6)
+      nullable: false
+      description: Earthquake epicenter longitude (WGS84)
+
+    - name: depth_km
+      type: decimal(7,2)
+      nullable: false
+      description: Earthquake focal depth in kilometers
+
+    - name: magnitude
+      type: decimal(4,2)
+      nullable: false
+      description: Earthquake magnitude (preferred scale)
+
+    - name: magnitude_type
+      type: string
+      nullable: true
+      description: Magnitude scale type (ml, mb, mw, ms, etc.)
+      allowed_values:
+        - ml
+        - mb
+        - mw
+        - mww
+        - mwb
+        - mwc
+        - mwr
+        - ms
+        - md
+
+    - name: place_description
+      type: string
+      nullable: true
+      description: Textual description of earthquake location
+
+    - name: event_type
+      type: string
+      nullable: false
+      description: Event type classification
+      allowed_values:
+        - EARTHQUAKE
+        - QUARRY_BLAST
+        - EXPLOSION
+        - ICE_QUAKE
+        - OTHER
+
+    - name: status
+      type: string
+      nullable: false
+      description: Review status of the event
+      allowed_values:
+        - automatic
+        - reviewed
+        - deleted
+
+    - name: tsunami_flag
+      type: integer
+      nullable: false
+      description: Tsunami flag (0 = no tsunami, 1 = tsunami potential)
+
+    - name: felt_reports
+      type: integer
+      nullable: true
+      description: Number of Did You Feel It (DYFI) reports received
+
+    - name: cdi
+      type: decimal(4,2)
+      nullable: true
+      description: Community Determined Intensity (max DYFI intensity)
+
+    - name: mmi
+      type: decimal(4,2)
+      nullable: true
+      description: Modified Mercalli Intensity (ShakeMap estimate)
+
+    - name: alert_level
+      type: string
+      nullable: true
+      description: PAGER alert level
+      allowed_values:
+        - green
+        - yellow
+        - orange
+        - red
+
+    - name: num_stations
+      type: integer
+      nullable: true
+      description: Number of seismic stations used in location calculation
+
+    - name: azimuthal_gap
+      type: decimal(6,2)
+      nullable: true
+      description: Azimuthal gap in degrees (smaller = better constrained)
+
+    - name: distance_to_nearest_station
+      type: decimal(8,4)
+      nullable: true
+      description: Distance to nearest seismic station in degrees
+
+    - name: rms
+      type: decimal(6,4)
+      nullable: true
+      description: Root mean square travel time residual (seconds)
+
+    - name: horizontal_error
+      type: decimal(8,4)
+      nullable: true
+      description: Horizontal location error in kilometers
+
+    - name: depth_error
+      type: decimal(8,4)
+      nullable: true
+      description: Depth error in kilometers
+
+    - name: magnitude_error
+      type: decimal(5,2)
+      nullable: true
+      description: Magnitude uncertainty
+
+    - name: network
+      type: string
+      nullable: true
+      description: Authoritative seismic network code (us, ci, nc, etc.)
+
+    - name: sources
+      type: string
+      nullable: true
+      description: Comma-separated list of contributing network codes
+
+    - name: types
+      type: string
+      nullable: true
+      description: Comma-separated list of associated data types
+
+    - name: sig
+      type: integer
+      nullable: true
+      description: Significance score (0-1000+, higher = more significant)
+
+    - name: _source
+      type: string
+      nullable: true
+      description: Data source identifier (BATCH, REALTIME)
+
+    - name: load_time
+      type: timestamp
+      nullable: false
+      description: Timestamp when the record was loaded into the data warehouse
+
+sla:
+  freshness_minutes: 5  # Near real-time for significant events
+  valid_row_ratio: 0.98
+  supported_until: "2027-12-31"
+  update_frequency: >
+    Real-time (streaming) for events M2.5+.
+    Daily batch reconciliation for all events.
+    Reviewed solutions replace automatic within 24-72 hours.
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: event_id
+  - rule: expect_column_values_to_be_unique
+    column: event_id
+  - rule: expect_column_values_to_not_be_null
+    column: magnitude
+  - rule: expect_column_values_to_not_be_null
+    column: event_time
+  - rule: expect_column_values_to_be_between
+    column: magnitude
+    min_value: -2
+    max_value: 10
+  - rule: expect_column_values_to_be_between
+    column: depth_km
+    min_value: -5
+    max_value: 800
+    mostly: 0.99
+  - rule: expect_column_values_to_be_between
+    column: latitude
+    min_value: -90
+    max_value: 90
+  - rule: expect_column_values_to_be_between
+    column: longitude
+    min_value: -180
+    max_value: 180
+  - rule: expect_column_values_to_be_in_set
+    column: alert_level
+    value_set: [green, yellow, orange, red]
+  - rule: expect_column_values_to_be_in_set
+    column: status
+    value_set: [automatic, reviewed, deleted]
+  - rule: expect_column_values_to_be_between
+    column: azimuthal_gap
+    min_value: 0
+    max_value: 360
+    mostly: 0.99
+
+data_lineage:
+  upstream_sources:
+    - name: "USGS ComCat API"
+      url: "https://earthquake.usgs.gov/fdsnws/event/1/"
+      description: "Comprehensive earthquake catalog with real-time updates"
+      refresh_schedule: "Real-time (streaming) + Daily (batch)"
+    - name: "USGS ShakeMap"
+      url: "https://earthquake.usgs.gov/data/shakemap/"
+      description: "Ground shaking intensity maps"
+    - name: "USGS PAGER"
+      url: "https://earthquake.usgs.gov/data/pager/"
+      description: "Prompt Assessment of Global Earthquakes for Response"
+
+  downstream_consumers:
+    - name: "Emergency Management Dashboard"
+      description: "Real-time seismic monitoring for emergency managers"
+    - name: "Seismic Risk Assessment"
+      description: "Long-term seismic hazard and risk modeling"
+    - name: "Public Alert System"
+      description: "Automated public alerts for significant earthquakes"
+    - name: "FEMA Coordination"
+      description: "Federal disaster response coordination"
+
+usage_notes: |
+  - Magnitude values may be revised as more data becomes available
+  - Automatic solutions are preliminary; reviewed solutions are authoritative
+  - Small events (M < 2.0) may not be detected in sparse network areas
+  - Depth is poorly constrained for shallow events and those at large distances
+  - DYFI felt reports and CDI are crowdsourced and may have geographic bias
+  - PAGER alert levels are estimates; actual impacts may differ
+  - Network codes: us = NEIC, ci = Southern California, nc = Northern California
+
+contact:
+  technical: interior-data-team@contoso.com
+  business: interior-analytics-lead@contoso.com

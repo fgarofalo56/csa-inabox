@@ -1,0 +1,119 @@
+name: 'csa_epa'
+version: '1.0.0'
+config-version: 2
+require-dbt-version: [">=1.7.0", "<2.0.0"]
+
+profile: 'csa_analytics'
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+macro-paths: ["../../../domains/shared/dbt/macros"]
+
+vars:
+  bronze_database: "bronze"
+  silver_database: "silver"
+  gold_database: "gold"
+  file_format: "delta"
+  incremental_strategy: "merge"
+  freshness_warn_hours: 24
+  freshness_error_hours: 48
+
+  # EPA-specific variables
+  current_data_year: 2024
+  historical_years_analysis: 10
+  aqi_baseline_period_start: 2000
+  aqi_baseline_period_end: 2019
+
+  # AQI breakpoints (PM2.5 24-hour average, µg/m³)
+  aqi_breakpoints_pm25:
+    good: 12.0
+    moderate: 35.4
+    usg: 55.4         # Unhealthy for Sensitive Groups
+    unhealthy: 150.4
+    very_unhealthy: 250.4
+    hazardous: 500.4
+
+  # Criteria pollutants monitored
+  criteria_pollutants:
+    - 'PM2.5'
+    - 'PM10'
+    - 'O3'
+    - 'NO2'
+    - 'SO2'
+    - 'CO'
+    - 'Pb'
+
+  # Environmental justice thresholds
+  ej_minority_threshold_pct: 50
+  ej_low_income_threshold_pct: 50
+  ej_percentile_threshold: 80
+
+  # TRI chemical classification
+  tri_high_concern_chemicals:
+    - 'LEAD'
+    - 'MERCURY'
+    - 'BENZENE'
+    - 'FORMALDEHYDE'
+    - 'TOLUENE'
+    - 'CHROMIUM'
+
+  # Compliance scoring weights
+  compliance_violation_weight: 0.40
+  compliance_inspection_weight: 0.30
+  compliance_penalty_weight: 0.30
+
+  # Water system thresholds
+  mcl_violation_critical: ['Lead', 'Copper', 'Arsenic', 'Nitrate', 'Total Coliform']
+
+models:
+  csa_epa:
+    bronze:
+      +materialized: incremental
+      +file_format: delta
+      +schema: bronze
+      +tags: ['bronze', 'epa', 'raw']
+      +unique_key: ['source_system', 'ingestion_timestamp', 'record_hash']
+    silver:
+      +materialized: incremental
+      +file_format: delta
+      +schema: silver
+      +tags: ['silver', 'epa', 'cleaned']
+      +incremental_strategy: merge
+      +on_schema_change: "sync_all_columns"
+    gold:
+      +materialized: table
+      +file_format: delta
+      +schema: gold
+      +tags: ['gold', 'epa', 'analytics']
+      +post-hook: "OPTIMIZE {{ this }} ZORDER BY (report_date)"
+
+seeds:
+  csa_epa:
+    +schema: seeds
+    +tags: ['seed', 'epa']
+
+sources:
+  - name: epa
+    description: EPA environmental monitoring data sources
+    tables:
+      - name: aqs_air_quality
+        description: AQS air quality monitoring observations
+        freshness:
+          warn_after: {count: 1, period: day}
+          error_after: {count: 3, period: day}
+      - name: sdwis_water_systems
+        description: SDWIS safe drinking water system data
+        freshness:
+          warn_after: {count: 7, period: day}
+          error_after: {count: 14, period: day}
+      - name: tri_releases
+        description: TRI toxic release inventory reports
+        freshness:
+          warn_after: {count: 30, period: day}
+          error_after: {count: 90, period: day}
+
+snapshots:
+  csa_epa:
+    +target_schema: snapshots
+    +strategy: timestamp
+    +updated_at: processed_timestamp

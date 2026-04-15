@@ -234,18 +234,13 @@ for group_name, cfg in ROLES.items():
 
     # Catalog-level privileges
     for priv in cfg["catalog_privileges"]:
-        run_grant(
-            f"GRANT {priv} ON CATALOG {catalog_name} TO `{group_name}`"
-        )
+        run_grant(f"GRANT {priv} ON CATALOG {catalog_name} TO `{group_name}`")
 
     # Schema-level privileges (per-domain schemas too)
     for schema, privs in cfg["schema_privileges"].items():
         for target_schema in [schema] + [f"{schema}_{d}" for d in domains]:
             for priv in privs:
-                run_grant(
-                    f"GRANT {priv} ON SCHEMA {catalog_name}.{target_schema} "
-                    f"TO `{group_name}`"
-                )
+                run_grant(f"GRANT {priv} ON SCHEMA {catalog_name}.{target_schema} TO `{group_name}`")
 
 # Table-level row security example: sales analysts can only see rows
 # where customer_segment matches their allowed segments.  Databricks
@@ -300,14 +295,14 @@ else:
 # COMMAND ----------
 
 print(f"""
-{'='*60}
+{"=" * 60}
 Unity Catalog Setup Complete
-{'='*60}
+{"=" * 60}
 
 Catalog:     {catalog_name}
 Environment: {environment}
 Schemas:     {len(SCHEMAS) + len(domains) * 3} total
-Domains:     {', '.join(domains)}
+Domains:     {", ".join(domains)}
 
 Next Steps:
 1. Create storage credential for ADLS access

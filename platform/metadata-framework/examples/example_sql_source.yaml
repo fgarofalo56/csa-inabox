@@ -1,0 +1,178 @@
+# SQL Server Source Registration Example
+
+source_id: "550e8400-e29b-41d4-a716-446655440000"
+source_name: "Sales Database"
+source_type: "sql_server"
+
+# Connection configuration
+connection:
+  server: "sql-sales-prod.contoso.com"
+  database: "SalesDB"
+  port: 1433
+  authentication: "sql_auth"
+  username_key_vault_secret: "sql-sales-username"
+  password_key_vault_secret: "sql-sales-password"
+  ssl_mode: "required"
+
+# Schema definition
+schema:
+  tables:
+    - table_name: "Sales.Orders"
+      columns:
+        - name: "OrderID"
+          type: "int"
+          nullable: false
+          is_primary_key: true
+          description: "Unique order identifier"
+        - name: "CustomerID"
+          type: "int"
+          nullable: false
+          description: "Customer identifier"
+        - name: "OrderDate"
+          type: "datetime"
+          nullable: false
+          business_name: "Order Placement Date"
+        - name: "Amount"
+          type: "decimal(10,2)"
+          nullable: false
+          description: "Total order amount"
+        - name: "Status"
+          type: "varchar(20)"
+          nullable: false
+          description: "Order status"
+        - name: "ModifiedDate"
+          type: "datetime"
+          nullable: false
+          description: "Last modification timestamp"
+      primary_keys:
+        - "OrderID"
+      estimated_row_count: 5000000
+
+    - table_name: "Sales.OrderItems"
+      columns:
+        - name: "OrderItemID"
+          type: "int"
+          nullable: false
+          is_primary_key: true
+        - name: "OrderID"
+          type: "int"
+          nullable: false
+        - name: "ProductID"
+          type: "int"
+          nullable: false
+        - name: "Quantity"
+          type: "int"
+          nullable: false
+        - name: "UnitPrice"
+          type: "decimal(10,2)"
+          nullable: false
+        - name: "CreatedDate"
+          type: "datetime"
+          nullable: false
+      primary_keys:
+        - "OrderItemID"
+      estimated_row_count: 15000000
+
+    - table_name: "Sales.Customers"
+      columns:
+        - name: "CustomerID"
+          type: "int"
+          nullable: false
+          is_primary_key: true
+        - name: "CustomerName"
+          type: "varchar(100)"
+          nullable: false
+        - name: "Email"
+          type: "varchar(255)"
+          nullable: true
+        - name: "Region"
+          type: "varchar(50)"
+          nullable: false
+        - name: "CreatedDate"
+          type: "datetime"
+          nullable: false
+        - name: "LastUpdated"
+          type: "datetime"
+          nullable: false
+      primary_keys:
+        - "CustomerID"
+      estimated_row_count: 250000
+
+# Ingestion configuration
+ingestion:
+  mode: "incremental"
+  schedule: "0 2 * * *"  # Daily at 2 AM UTC
+  watermark_column: "ModifiedDate"  # For Orders table
+  batch_size: 50000
+  parallelization: 8
+  retry_count: 3
+
+# Data classification and governance
+classification: "internal"
+
+# Data owner information
+owner:
+  name: "Sales Analytics Team"
+  email: "sales-analytics@contoso.com"
+  domain: "sales"
+  cost_center: "SALES-001"
+
+# Data product definition
+data_product:
+  name: "Sales Transaction Data"
+  domain: "sales"
+  sla_freshness_minutes: 120  # 2 hours max latency
+  quality_rules:
+    - rule_type: "not_null"
+      column: "OrderID"
+      parameters: {}
+      severity: "critical"
+    - rule_type: "not_null"
+      column: "CustomerID"
+      parameters: {}
+      severity: "critical"
+    - rule_type: "range"
+      column: "Amount"
+      parameters:
+        min_value: 0
+        max_value: 1000000
+      severity: "error"
+    - rule_type: "pattern"
+      column: "Email"
+      parameters:
+        regex: "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$"
+      severity: "warning"
+
+# Target storage configuration
+target:
+  landing_zone: "lz-sales-transactions"
+  container: "bronze"
+  path_pattern: "sales/{table_name}/year={yyyy}/month={MM}/day={dd}"
+  format: "delta"
+  compression: "snappy"
+  partition_columns:
+    - "OrderDate"
+
+# Tags for organization and discovery
+tags:
+  - "sales"
+  - "transactions"
+  - "financial"
+  - "customer-data"
+  - "high-volume"
+
+# Additional metadata
+metadata:
+  description: |
+    Sales transaction data from the primary OLTP system. Includes orders,
+    order items, and customer information. Critical for revenue reporting,
+    customer analytics, and business intelligence.
+  documentation_url: "https://wiki.contoso.com/sales-database-schema"
+  business_glossary_terms:
+    - "Revenue"
+    - "Customer"
+    - "Transaction"
+    - "Order Fulfillment"
+  compliance_requirements:
+    - "GDPR"  # Customer email addresses
+    - "SOX"   # Financial data

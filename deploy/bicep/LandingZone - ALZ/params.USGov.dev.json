@@ -12,7 +12,7 @@
             "value": "alz"
         },
         "parALZ_SubscriptionId": {
-            "value": "c36bc643-b071-42f8-8197-4c787fcf5549"
+            "value": "<ALZ_SUBSCRIPTION_ID>"
         },
         "deployModules": {
             "value": {
@@ -29,7 +29,7 @@
             "value": {
                 "parWorkspaceSufix": "dataObservability-logAnalyticsWorkspace",
                 "parLogAnalyticsWorkspaceSkuName": "PerGB2018",
-                "parLogAnalyticsWorkspaceLogRetentionInDays": 30,
+                "parLogAnalyticsWorkspaceLogRetentionInDays": 365,
                 "parLocation": "usgovvirginia",
                 "parDataCollectionRuleVMInsightsName": "alz-ama-vmi-dcr",
                 "parDataCollectionRuleChangeTrackingName": "alz-ama-ct-dcr",
@@ -371,7 +371,7 @@
         },
         "hubNetwork": {
             "value": {
-                "parHubSubscriptionId": "c36bc643-b071-42f8-8197-4c787fcf5549",
+                "parHubSubscriptionId": "<ALZ_SUBSCRIPTION_ID>",
                 "parLocation": "usgovvirginia",
                 "parHubNetworkName": "hubVnet",
                 "parHubNetworkAddressPrefix": {

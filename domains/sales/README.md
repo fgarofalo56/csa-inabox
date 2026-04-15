@@ -1,10 +1,12 @@
 # Sales Domain — Data Mesh Domain Template
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Data Engineers / Domain Owners
+
 This is a sample business domain showing the **Data Mesh** pattern for CSA-in-a-Box. Copy this structure to onboard new domains.
 
 ## Structure
 
-```
+```text
 domains/sales/
 ├── dbt/                    # Domain-specific dbt models
 │   ├── models/
@@ -44,3 +46,10 @@ domains/sales/
 4. Create bronze → silver → gold models
 5. Register data products in `contracts/`
 6. Set up ADF pipeline for ingestion
+
+---
+
+## Related Documentation
+
+- [Architecture Overview](../../docs/ARCHITECTURE.md) - Platform architecture reference
+- [Examples](../../examples/README.md) - Sample data pipelines and use cases

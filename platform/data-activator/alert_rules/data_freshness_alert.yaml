@@ -1,0 +1,107 @@
+# Data Freshness Alert Rule
+# Triggers when a data product has not been updated within its SLA window.
+#
+# This is the CSA-in-a-Box equivalent of a Fabric Data Activator "freshness"
+# trigger — it monitors the last-modified timestamp of a data product and
+# fires an alert when the product goes stale.
+
+apiVersion: csa.microsoft.com/v1
+kind: AlertRule
+
+metadata:
+  name: data-freshness-alert
+  version: "1.0.0"
+  description: >
+    Monitors data product freshness by comparing the last update timestamp
+    against the declared SLA freshness window. Fires when a product has not
+    been refreshed within the expected interval.
+  owner: platform-team@contoso.com
+  tags: [freshness, sla, data-quality]
+
+trigger:
+  # Event types that activate this rule.
+  eventTypes:
+    - csa.data.freshness.check
+    - csa.pipeline.completed
+  # Schedule for proactive checks (cron expression).
+  schedule: "0 */30 * * * *"  # Every 30 minutes
+
+evaluation:
+  type: freshness
+  # The metric to evaluate — expects a timestamp field in the event data.
+  metric: last_updated_at
+  # Compare against the data product's declared SLA.
+  slaSource: contract  # Read freshness_minutes from the data contract
+  # Fallback SLA if no contract is found (in minutes).
+  defaultFreshnessMinutes: 120
+  # Grace period before alerting (minutes). Allows for pipeline delays.
+  gracePeriodMinutes: 15
+
+conditions:
+  # Alert fires when ALL conditions are true.
+  - field: data.staleness_minutes
+    operator: greaterThan
+    # Dynamic: uses the product's SLA freshness_minutes + grace period.
+    value: "${sla.freshness_minutes + evaluation.gracePeriodMinutes}"
+  - field: data.environment
+    operator: in
+    value: [prod, stg]  # Only alert on non-dev environments
+
+severity:
+  # Severity escalates based on how stale the data is.
+  rules:
+    - condition: "staleness_minutes > sla.freshness_minutes * 3"
+      level: critical
+    - condition: "staleness_minutes > sla.freshness_minutes * 2"
+      level: warning
+    - condition: "staleness_minutes > sla.freshness_minutes"
+      level: info
+  default: warning
+
+actions:
+  - type: teams_webhook
+    enabled: true
+    config:
+      title: "Data Freshness SLA Breach"
+      messageTemplate: |
+        **Data Product Stale**: {{data.domain}}/{{data.dataProduct}}
+        **Last Updated**: {{data.last_updated_at}}
+        **SLA**: {{sla.freshness_minutes}} minutes
+        **Current Staleness**: {{data.staleness_minutes}} minutes
+        **Environment**: {{data.environment}}
+      themeColor: "FF6600"
+
+  - type: email
+    enabled: true
+    config:
+      subject: "[CSA Alert] Data freshness SLA breach: {{data.domain}}/{{data.dataProduct}}"
+      recipients:
+        - "{{data.owner}}"
+        - platform-oncall@contoso.com
+
+  - type: pagerduty
+    enabled: true
+    # Only page for critical severity.
+    severityFilter: [critical]
+    config:
+      routingKey: "${PAGERDUTY_INTEGRATION_KEY}"
+      severity: critical
+      summary: "Data product {{data.domain}}/{{data.dataProduct}} stale for {{data.staleness_minutes}} minutes"
+
+  - type: logic_app
+    enabled: true
+    config:
+      triggerUrl: "${LOGIC_APP_TRIGGER_URL}"
+
+suppression:
+  # Cooldown: do not re-alert for the same product within this window.
+  cooldownMinutes: 60
+  # Group alerts by domain + product to avoid duplicate notifications.
+  groupBy: [data.domain, data.dataProduct]
+
+logging:
+  # Log all evaluations (not just fires) for audit trail.
+  logAllEvaluations: true
+  customDimensions:
+    alert_type: data_freshness
+    component: data-activator

@@ -1,0 +1,287 @@
+# Data product contract — usda.food_safety_risk
+#
+# This file is the authoritative interface for the USDA food safety risk
+# data product. It declares the schema, SLAs, and quality rules
+# for FSIS inspection analytics and establishment risk scoring.
+
+apiVersion: csa.usda.gov/v1
+kind: DataProductContract
+
+metadata:
+  name: usda.food_safety_risk
+  domain: usda
+  owner: fsis-data-engineering@contoso.com
+  version: "1.0.0"
+  description: >
+    Food safety risk analytics from FSIS inspection data. Provides
+    establishment risk scoring, inspection history analysis, and
+    compliance monitoring. Used for regulatory oversight, inspection
+    planning, and public health protection.
+
+schema:
+  primary_key: [establishment_number]
+  columns:
+    - name: establishment_number
+      type: string
+      nullable: false
+      description: FSIS establishment identifier
+    - name: establishment_name
+      type: string
+      nullable: false
+      description: Official establishment name
+    - name: company_name
+      type: string
+      nullable: false
+      description: Operating company name
+    - name: state_code
+      type: string
+      nullable: false
+      description: 2-letter state abbreviation
+    - name: city
+      type: string
+      nullable: false
+      description: City location
+    - name: establishment_category
+      type: string
+      nullable: false
+      description: Type of food establishment
+      allowed_values:
+        - SLAUGHTER
+        - PROCESSING
+        - WHOLESALE
+        - RETAIL
+    - name: species_category
+      type: string
+      nullable: true
+      description: Primary species processed
+      allowed_values:
+        - CATTLE
+        - SWINE
+        - POULTRY
+        - SHEEP
+        - GOAT
+        - MULTI_SPECIES
+    - name: establishment_size_category
+      type: string
+      nullable: false
+      description: Establishment size classification
+      allowed_values:
+        - VERY_SMALL
+        - SMALL
+        - MEDIUM
+        - LARGE
+        - VERY_LARGE
+        - UNKNOWN
+    - name: employee_count
+      type: integer
+      nullable: true
+      description: Number of employees
+    - name: adjusted_risk_score
+      type: decimal(5,1)
+      nullable: false
+      description: Final risk score (0-100, higher = more risk)
+    - name: adjusted_risk_category
+      type: string
+      nullable: false
+      description: Risk category based on adjusted score
+      allowed_values:
+        - MINIMAL
+        - LOW
+        - MODERATE
+        - HIGH
+        - CRITICAL
+    - name: base_risk_score
+      type: decimal(5,1)
+      nullable: false
+      description: Base risk score before industry adjustments
+    - name: violation_history_score
+      type: decimal(5,1)
+      nullable: false
+      description: Risk component from violation history (0-40)
+    - name: inspection_frequency_score
+      type: decimal(5,1)
+      nullable: false
+      description: Risk component from inspection gaps (0-30)
+    - name: violation_recency_score
+      type: decimal(5,1)
+      nullable: false
+      description: Risk component from recent violations (0-30)
+    - name: total_inspections
+      type: integer
+      nullable: false
+      description: Total number of inspections in scoring period
+    - name: total_violations
+      type: integer
+      nullable: false
+      description: Total violations found
+    - name: violations_last_12_months
+      type: integer
+      nullable: false
+      description: Violations in the last 12 months
+    - name: inspections_last_12_months
+      type: integer
+      nullable: false
+      description: Inspections in the last 12 months
+    - name: violation_rate_12_months
+      type: decimal(5,2)
+      nullable: false
+      description: Percentage of inspections with violations (last 12 months)
+    - name: compliance_rate
+      type: decimal(5,2)
+      nullable: true
+      description: Overall compliance rate percentage
+    - name: avg_violation_severity
+      type: decimal(4,2)
+      nullable: true
+      description: Average violation severity (0-3 scale)
+    - name: critical_violations
+      type: integer
+      nullable: false
+      description: Count of critical violations (severity = 3)
+    - name: moderate_violations
+      type: integer
+      nullable: false
+      description: Count of moderate violations (severity = 2)
+    - name: minor_violations
+      type: integer
+      nullable: false
+      description: Count of minor violations (severity = 1)
+    - name: last_inspection_date
+      type: date
+      nullable: false
+      description: Date of most recent inspection
+    - name: days_since_last_inspection
+      type: integer
+      nullable: false
+      description: Days since last inspection
+    - name: avg_days_between_inspections
+      type: decimal(6,1)
+      nullable: true
+      description: Average days between inspections
+    - name: recommended_action
+      type: string
+      nullable: false
+      description: Recommended regulatory action
+      allowed_values:
+        - IMMEDIATE_INSPECTION_REQUIRED
+        - PRIORITY_INSPECTION
+        - OVERDUE_INSPECTION
+        - ROUTINE_INSPECTION
+        - STANDARD_MONITORING
+    - name: recommended_inspection_frequency_days
+      type: integer
+      nullable: false
+      description: Recommended days between inspections
+    - name: is_risk_score_reliable
+      type: boolean
+      nullable: false
+      description: True when sufficient inspection history exists
+    - name: assessment_date
+      type: date
+      nullable: false
+      description: Date when risk assessment was performed
+
+sla:
+  freshness_minutes: 10080  # Weekly updates
+  valid_row_ratio: 0.99
+  supported_until: "2027-12-31"
+  update_frequency: "Weekly"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: establishment_number
+  - rule: expect_column_values_to_be_unique
+    column: establishment_number
+  - rule: expect_column_values_to_not_be_null
+    column: adjusted_risk_score
+  - rule: expect_column_values_to_not_be_null
+    column: adjusted_risk_category
+  - rule: expect_column_values_to_be_in_set
+    column: establishment_category
+    value_set: [SLAUGHTER, PROCESSING, WHOLESALE, RETAIL]
+  - rule: expect_column_values_to_be_in_set
+    column: species_category
+    value_set: [CATTLE, SWINE, POULTRY, SHEEP, GOAT, MULTI_SPECIES]
+  - rule: expect_column_values_to_be_in_set
+    column: adjusted_risk_category
+    value_set: [MINIMAL, LOW, MODERATE, HIGH, CRITICAL]
+  - rule: expect_column_values_to_be_in_set
+    column: recommended_action
+    value_set: [IMMEDIATE_INSPECTION_REQUIRED, PRIORITY_INSPECTION, OVERDUE_INSPECTION, ROUTINE_INSPECTION, STANDARD_MONITORING]
+  - rule: expect_column_values_to_be_between
+    column: adjusted_risk_score
+    min_value: 0
+    max_value: 100
+  - rule: expect_column_values_to_be_between
+    column: violation_rate_12_months
+    min_value: 0
+    max_value: 100
+  - rule: expect_column_values_to_be_between
+    column: compliance_rate
+    min_value: 0
+    max_value: 100
+  - rule: expect_column_values_to_be_between
+    column: avg_violation_severity
+    min_value: 0
+    max_value: 3
+  - rule: expect_column_values_to_be_between
+    column: total_inspections
+    min_value: 1
+    max_value: 10000  # Reasonable upper bound
+  - rule: expect_column_values_to_be_between
+    column: days_since_last_inspection
+    min_value: 0
+    max_value: 3650  # 10 years max
+  - rule: expect_column_values_to_be_between
+    column: recommended_inspection_frequency_days
+    min_value: 1
+    max_value: 365
+  - rule: expect_column_pair_values_a_to_be_greater_than_or_equal_to_b
+    column_a: total_violations
+    column_b: violations_last_12_months
+  - rule: expect_column_pair_values_a_to_be_greater_than_or_equal_to_b
+    column_a: total_inspections
+    column_b: inspections_last_12_months
+  - rule: expect_column_values_to_be_dateutil_parseable
+    column: last_inspection_date
+  - rule: expect_column_values_to_be_dateutil_parseable
+    column: assessment_date
+
+data_lineage:
+  upstream_sources:
+    - name: "FSIS Inspection Database"
+      url: "https://www.fsis.usda.gov/inspection"
+      description: "Food Safety and Inspection Service operational data"
+      refresh_schedule: "Daily"
+    - name: "FSIS Public Data"
+      url: "https://www.fsis.usda.gov/regulations/data-sets-reports"
+      description: "Public inspection and enforcement data"
+
+  downstream_consumers:
+    - name: "FSIS Inspection Dashboard"
+      description: "Inspector planning and management dashboard"
+    - name: "Public Health Alerts"
+      description: "Automated alerts for high-risk establishments"
+    - name: "Regulatory Enforcement"
+      description: "Enforcement action prioritization system"
+    - name: "Industry Oversight Reports"
+      description: "Congressional and industry reporting"
+
+security_notes: |
+  - Establishment identifiers are anonymized in public datasets
+  - Internal risk scores may contain confidential regulatory information
+  - Access restricted to authorized FSIS personnel and contractors
+  - Follows FSIS information security guidelines
+
+usage_notes: |
+  - Risk scores update weekly with new inspection data
+  - Seasonal variations in food production affect inspection scheduling
+  - Establishment size and type significantly influence risk profiles
+  - Critical violations trigger immediate follow-up requirements
+  - Risk scoring model validated annually and updated as needed
+  - New establishments require 3+ inspections for reliable scoring
+
+contact:
+  technical: fsis-data-team@contoso.com
+  business: fsis-analytics-lead@contoso.com
+  regulatory: fsis-compliance-officer@contoso.com

@@ -2,24 +2,19 @@
 
 from __future__ import annotations
 
-import importlib.util
-import sys
 from pathlib import Path
 from typing import Any
 
-import pytest
+from tests.conftest import load_script_module
 
 # Load register_lineage as a module from the scripts directory since it's
 # not an installable package.
 _SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "purview" / "register_lineage.py"
-_spec = importlib.util.spec_from_file_location("register_lineage", _SCRIPT_PATH)
-assert _spec is not None and _spec.loader is not None
-register_lineage_mod = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(register_lineage_mod)
+register_lineage_mod = load_script_module("register_lineage", _SCRIPT_PATH)
 
-LINEAGE_ENTRIES: list[dict[str, Any]] = register_lineage_mod.LINEAGE_ENTRIES  # type: ignore[attr-defined]
-_build_atlas_entity = register_lineage_mod._build_atlas_entity  # type: ignore[attr-defined]
-register_lineage_fn = register_lineage_mod.register_lineage  # type: ignore[attr-defined]
+LINEAGE_ENTRIES: list[dict[str, Any]] = register_lineage_mod.LINEAGE_ENTRIES
+_build_atlas_entity = register_lineage_mod._build_atlas_entity
+register_lineage_fn = register_lineage_mod.register_lineage
 
 
 class TestBuildAtlasEntity:
