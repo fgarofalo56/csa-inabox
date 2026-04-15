@@ -1,5 +1,44 @@
 # NOAA Climate & Environmental Analytics Platform
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Data Engineers
+
+## Table of Contents
+- [Overview](#overview)
+  - [Key Features](#key-features)
+  - [Data Sources](#data-sources)
+- [Architecture Overview](#architecture-overview)
+- [Real-Time Streaming Architecture](#real-time-streaming-architecture)
+  - [Streaming Quick Start](#streaming-quick-start)
+  - [Sample KQL — Real-Time Weather](#sample-kql--real-time-weather)
+- [Prerequisites](#prerequisites)
+  - [Azure Resources](#azure-resources)
+  - [Tools Required](#tools-required)
+  - [API Access](#api-access)
+- [Quick Start](#quick-start)
+  - [1. Environment Setup](#1-environment-setup)
+  - [2. Configure API Keys](#2-configure-api-keys)
+  - [3. Generate Sample Data](#3-generate-sample-data)
+  - [4. Deploy Infrastructure](#4-deploy-infrastructure)
+  - [5. Run dbt Models](#5-run-dbt-models)
+- [Sample Analytics Scenarios](#sample-analytics-scenarios)
+  - [1. Severe Weather Early Warning](#1-severe-weather-early-warning)
+  - [2. Climate Trend Dashboard](#2-climate-trend-dashboard)
+  - [3. Marine Ecosystem Health Index](#3-marine-ecosystem-health-index)
+- [Data Products](#data-products)
+  - [Climate Trends](#climate-trends-climate-trends)
+  - [Severe Weather Risk](#severe-weather-risk-severe-weather-risk)
+  - [Marine Ecosystem Health](#marine-ecosystem-health-marine-health)
+- [Configuration](#configuration)
+  - [dbt Profiles](#dbt-profiles)
+  - [Environment Variables](#environment-variables)
+- [Azure Government Notes](#azure-government-notes)
+- [Monitoring & Alerts](#monitoring--alerts)
+- [Troubleshooting](#troubleshooting)
+  - [Common Issues](#common-issues)
+- [Contributing](#contributing)
+- [License](#license)
+- [Acknowledgments](#acknowledgments)
+
 A comprehensive climate and environmental analytics platform built on Azure Cloud Scale Analytics (CSA), providing insights into weather patterns, climate trends, marine ecosystems, and natural hazards using official NOAA data sources — including real-time streaming from weather stations and ocean buoys.
 
 ## Overview
@@ -465,3 +504,14 @@ This project is licensed under the MIT License. See `LICENSE` file for details.
 - NCEI, NWS, NDBC, and CO-OPS for open data access and APIs
 - Azure Cloud Scale Analytics team for the foundational platform
 - Contributors and the open-source community
+
+---
+
+## Related Documentation
+
+- [NOAA Architecture](ARCHITECTURE.md) - Detailed platform architecture and design decisions
+- [Examples Index](../README.md) - Overview of all CSA-in-a-Box example verticals
+- [Platform Architecture](../../docs/ARCHITECTURE.md) - Core CSA platform architecture
+- [Getting Started Guide](../../docs/GETTING_STARTED.md) - Platform setup and onboarding
+- [EPA Environmental Analytics](../epa/README.md) - Related environmental/climate vertical
+- [USDA Agricultural Analytics](../usda/README.md) - Related agriculture/environment vertical

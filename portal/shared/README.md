@@ -1,5 +1,18 @@
 # CSA-in-a-Box — Shared Backend API
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Frontend Developers
+
+## Table of Contents
+
+- [Architecture](#architecture)
+- [Quick Start](#quick-start)
+- [API Endpoints](#api-endpoints)
+- [Authentication](#authentication)
+- [Configuration](#configuration)
+- [Docker](#docker)
+- [Demo Mode](#demo-mode)
+- [Related Documentation](#related-documentation)
+
 The **shared backend** is a FastAPI application that provides the common API surface for all four portal front-end implementations:
 
 | Frontend | Technology | Notes |
@@ -11,7 +24,7 @@ The **shared backend** is a FastAPI application that provides the common API sur
 
 ## Architecture
 
-```
+```text
 portal/shared/
 ├── api/
 │   ├── main.py              # FastAPI app, CORS, lifespan, routers
@@ -149,3 +162,11 @@ When no `AZURE_TENANT_ID` is configured, the API runs in demo mode:
 - All mutations use in-memory storage (reset on restart)
 
 This is ideal for local development and CI testing.
+
+---
+
+## Related Documentation
+
+- [Portal Implementations](../README.md) - Portal implementation index
+- [Shared Backend](../shared/README.md) - Shared backend API
+- [Architecture](../../docs/ARCHITECTURE.md) - Overall system architecture

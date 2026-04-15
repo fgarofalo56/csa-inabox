@@ -1,5 +1,41 @@
 # USPS Postal Operations Analytics Platform
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Data Engineers
+
+## Table of Contents
+- [Overview](#overview)
+  - [Key Features](#key-features)
+  - [Data Sources](#data-sources)
+- [Architecture Overview](#architecture-overview)
+- [Prerequisites](#prerequisites)
+  - [Azure Resources](#azure-resources)
+  - [Tools Required](#tools-required)
+  - [API Access](#api-access)
+- [Quick Start](#quick-start)
+  - [1. Environment Setup](#1-environment-setup)
+  - [2. Configure API Keys](#2-configure-api-keys)
+  - [3. Generate Sample Data](#3-generate-sample-data)
+  - [4. Deploy Infrastructure](#4-deploy-infrastructure)
+  - [5. Run dbt Models](#5-run-dbt-models)
+- [Sample Analytics Scenarios](#sample-analytics-scenarios)
+  - [1. Last-Mile Delivery Optimization](#1-last-mile-delivery-optimization)
+  - [2. Seasonal Volume Prediction](#2-seasonal-volume-prediction)
+  - [3. Facility Consolidation Analysis](#3-facility-consolidation-analysis)
+- [Data Products](#data-products)
+  - [Route Optimization](#route-optimization-route-optimization)
+  - [Volume Forecast](#volume-forecast-volume-forecast)
+  - [Facility Utilization](#facility-utilization-facility-utilization)
+- [Configuration](#configuration)
+  - [dbt Profiles](#dbt-profiles)
+  - [Environment Variables](#environment-variables)
+- [Azure Government Notes](#azure-government-notes)
+- [Monitoring & Alerts](#monitoring--alerts)
+- [Troubleshooting](#troubleshooting)
+  - [Common Issues](#common-issues)
+- [Contributing](#contributing)
+- [License](#license)
+- [Acknowledgments](#acknowledgments)
+
 A comprehensive postal operations analytics platform built on Azure Cloud Scale Analytics (CSA), providing insights into delivery performance, facility utilization, geographic coverage, and volume forecasting using USPS public data and APIs.
 
 ## Overview
@@ -382,3 +418,14 @@ This project is licensed under the MIT License. See `LICENSE` file for details.
 - U.S. Census Bureau for ZCTA boundary and demographic data
 - Azure Cloud Scale Analytics team for the foundational platform
 - Contributors and the open-source community
+
+---
+
+## Related Documentation
+
+- [USPS Architecture](ARCHITECTURE.md) - Detailed platform architecture and design decisions
+- [Examples Index](../README.md) - Overview of all CSA-in-a-Box example verticals
+- [Platform Architecture](../../docs/ARCHITECTURE.md) - Core CSA platform architecture
+- [Getting Started Guide](../../docs/GETTING_STARTED.md) - Platform setup and onboarding
+- [Commerce Economic Analytics](../commerce/README.md) - Related logistics/trade vertical
+- [DOT Transportation Analytics](../dot/README.md) - Related federal logistics vertical

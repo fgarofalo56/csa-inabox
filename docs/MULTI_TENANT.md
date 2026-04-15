@@ -1,5 +1,7 @@
 # Multi-Tenant Deployment Guide
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Platform Engineers
+
 This guide covers deploying CSA-in-a-Box in a multi-tenant configuration
 where each tenant (customer, business unit, or organizational boundary)
 receives an isolated set of data platform resources. It pairs with the
@@ -12,6 +14,44 @@ and the disaster recovery runbook in [DR.md](DR.md).
 
 ---
 
+## Table of Contents
+
+- [1. Architecture Overview](#1-architecture-overview)
+- [2. Resource Naming Convention](#2-resource-naming-convention)
+  - [Examples](#examples)
+  - [Naming constraints](#naming-constraints)
+- [3. Data Isolation Strategies](#3-data-isolation-strategies)
+  - [3.1 Physical Isolation (Recommended for regulated workloads)](#31-physical-isolation-recommended-for-regulated-workloads)
+  - [3.2 Logical Isolation (Shared infrastructure, row-level filtering)](#32-logical-isolation-shared-infrastructure-row-level-filtering)
+  - [3.3 Hybrid (Separate storage, shared compute)](#33-hybrid-separate-storage-shared-compute)
+- [4. Deployment Process](#4-deployment-process)
+  - [4.1 Prerequisites](#41-prerequisites)
+  - [4.2 Creating the Parameter File](#42-creating-the-parameter-file)
+  - [4.3 Deploying the Tenant Stamp](#43-deploying-the-tenant-stamp)
+  - [4.4 Post-Deployment RBAC](#44-post-deployment-rbac)
+  - [4.5 Tenant Onboarding Checklist](#45-tenant-onboarding-checklist)
+- [5. Cost Attribution via Tags](#5-cost-attribution-via-tags)
+  - [Cost Management queries](#cost-management-queries)
+  - [Chargeback report](#chargeback-report)
+- [6. Identity & Access Management per Tenant](#6-identity--access-management-per-tenant)
+  - [6.1 Azure AD Group Structure](#61-azure-ad-group-structure)
+  - [6.2 Cross-Tenant Access Controls](#62-cross-tenant-access-controls)
+  - [6.3 Managed Identity Isolation](#63-managed-identity-isolation)
+- [7. Monitoring & Alerting per Tenant](#7-monitoring--alerting-per-tenant)
+  - [7.1 Log Analytics Strategy](#71-log-analytics-strategy)
+  - [7.2 Tenant-Specific Alerts](#72-tenant-specific-alerts)
+  - [7.3 Cross-Tenant Dashboard](#73-cross-tenant-dashboard)
+- [8. dbt Multi-Tenant Configuration](#8-dbt-multi-tenant-configuration)
+  - [8.1 Per-Tenant dbt Profiles](#81-per-tenant-dbt-profiles)
+  - [8.2 Running dbt for a Specific Tenant](#82-running-dbt-for-a-specific-tenant)
+  - [8.3 Tenant Filter Macro](#83-tenant-filter-macro)
+- [9. Offboarding / Tenant Decommission](#9-offboarding--tenant-decommission)
+  - [9.1 Pre-Decommission Checklist](#91-pre-decommission-checklist)
+  - [9.2 Decommission Procedure](#92-decommission-procedure)
+  - [9.3 Data Retention](#93-data-retention)
+  - [9.4 Post-Decommission](#94-post-decommission)
+- [10. Quick Reference](#10-quick-reference)
+
 ## 1. Architecture Overview
 
 CSA-in-a-Box uses a **stamped deployment model** for multi-tenancy. Each
@@ -19,7 +59,7 @@ tenant receives a complete, independent deployment ("stamp") of the DLZ
 Bicep templates. Stamps are identical in structure but isolated in
 resources, networking, and identity.
 
-```
+```text
 ┌──────────────────────────────────────────────────────────────┐
 │                    Shared Infrastructure                      │
 │  Management Sub │ Connectivity Sub │ DMLZ Sub                │
@@ -53,7 +93,7 @@ any scenario where a shared-nothing architecture is required.
 All tenant resources follow a consistent naming pattern that embeds the
 tenant prefix, environment, service name, and region:
 
-```
+```text
 {tenant_prefix}-{standard_prefix}-{environment}-{service}-{region}
 ```
 
@@ -153,7 +193,7 @@ dbt run --vars '{"tenant_id": "contoso"}'
 ```
 
 **Storage layout for logical isolation:**
-```
+```text
 raw/
 ├── tenant_id=contoso/
 │   ├── orders/
@@ -535,3 +575,11 @@ account before decommissioning the tenant stamp.
 | Offboard a tenant | §9 |
 | Disaster recovery | [DR.md](DR.md) |
 | Multi-region + multi-tenant | [MULTI_REGION.md](MULTI_REGION.md) — deploy a stamp per tenant per region |
+
+---
+
+## Related Documentation
+
+- [MULTI_REGION.md](MULTI_REGION.md) - Multi-region deployment for high availability
+- [COST_MANAGEMENT.md](COST_MANAGEMENT.md) - Cost estimation, budgets, and FinOps practices
+- [ARCHITECTURE.md](ARCHITECTURE.md) - Platform architecture overview

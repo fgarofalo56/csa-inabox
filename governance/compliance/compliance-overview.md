@@ -1,5 +1,7 @@
 # Data Platform Compliance Documentation
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Security / Compliance
+
 ## Overview
 
 CSA-in-a-Box is designed to meet enterprise compliance requirements for data platforms
@@ -115,3 +117,10 @@ See `docs/runbooks/security-incident.md` for detailed procedures.
 *Last Updated: 2026-04-09*
 *Version: 1.0.0*
 *Owner: Platform Team*
+
+---
+
+## Related Documentation
+
+- [Government Service Matrix](../../docs/GOV_SERVICE_MATRIX.md) - Azure Government service availability
+- [Environment Protection](../../docs/ENVIRONMENT_PROTECTION.md) - Environment security controls

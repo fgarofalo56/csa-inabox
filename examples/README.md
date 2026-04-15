@@ -1,5 +1,7 @@
 # Examples — Industry Vertical Implementations
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Data Engineers
+
 This directory contains **complete, working implementations** of Cloud Scale Analytics
 for specific federal agencies, tribal organizations, and commercial sectors.
 
@@ -43,7 +45,7 @@ Each vertical is a self-contained example that:
 
 Every vertical follows this standard layout:
 
-```
+```text
 examples/{vertical}/
 ├── README.md              # Complete deployment guide
 ├── ARCHITECTURE.md        # Domain-specific architecture
@@ -86,3 +88,11 @@ Verticals that are specifically designed for government deployment:
 - **epa/** — Supports Gov deployment for environmental monitoring
 
 All other verticals include `params.gov.json` for Government deployment.
+
+---
+
+## Related Documentation
+
+- [Architecture](../docs/ARCHITECTURE.md) - Comprehensive architecture reference
+- [Getting Started](../docs/GETTING_STARTED.md) - Prerequisites and deployment walkthrough
+- [Quick Start](../docs/QUICKSTART.md) - 60-minute hands-on tutorial

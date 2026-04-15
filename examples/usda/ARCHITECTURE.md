@@ -1,5 +1,50 @@
 # USDA Agricultural Analytics Architecture
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Architects / Data Engineers
+
+## Table of Contents
+- [Overview](#overview)
+- [Domain Context](#domain-context)
+  - [Agricultural Data Landscape](#agricultural-data-landscape)
+  - [Data Characteristics](#data-characteristics)
+- [Architecture Layers](#architecture-layers)
+  - [Data Ingestion Layer](#data-ingestion-layer)
+  - [Bronze Layer (Raw Data)](#bronze-layer-raw-data)
+  - [Silver Layer (Cleaned & Conformed)](#silver-layer-cleaned--conformed)
+  - [Gold Layer (Business Analytics)](#gold-layer-business-analytics)
+- [Data Flow Architecture](#data-flow-architecture)
+  - [Batch Processing Pipeline](#batch-processing-pipeline)
+  - [Real-time Processing (Future)](#real-time-processing-future)
+- [Integration Patterns](#integration-patterns)
+  - [API Gateway Architecture](#api-gateway-architecture)
+  - [Data Contracts](#data-contracts)
+- [Security Architecture](#security-architecture)
+  - [Data Protection](#data-protection)
+  - [Compliance](#compliance)
+  - [API Security](#api-security)
+- [Performance Optimization](#performance-optimization)
+  - [Data Partitioning Strategy](#data-partitioning-strategy)
+  - [Caching Strategy](#caching-strategy)
+  - [Indexing Strategy](#indexing-strategy)
+- [Monitoring & Observability](#monitoring--observability)
+  - [Data Quality Monitoring](#data-quality-monitoring)
+  - [Pipeline Monitoring](#pipeline-monitoring)
+  - [Alerting Strategy](#alerting-strategy)
+- [Disaster Recovery](#disaster-recovery)
+  - [Backup Strategy](#backup-strategy)
+  - [Business Continuity](#business-continuity)
+- [Cost Optimization](#cost-optimization)
+  - [Resource Management](#resource-management)
+  - [Query Optimization](#query-optimization)
+- [Future Architecture](#future-architecture)
+  - [Machine Learning Integration](#machine-learning-integration)
+  - [Advanced Analytics](#advanced-analytics)
+  - [Edge Computing](#edge-computing)
+- [Technology Stack](#technology-stack)
+  - [Core Platform](#core-platform)
+  - [Development Tools](#development-tools)
+  - [Programming Languages](#programming-languages)
+
 ## Overview
 
 The USDA Agricultural Analytics platform is built on Azure Cloud Scale Analytics (CSA) and follows a domain-driven design approach. It ingests data from multiple USDA agencies, transforms it through a medallion architecture, and provides analytical insights for agricultural decision-making.
@@ -439,3 +484,13 @@ graph TD
 - **Web APIs**: Python (FastAPI), Node.js
 - **Infrastructure**: Bicep, Terraform
 - **Analytics**: Python (pandas, scikit-learn), R
+
+---
+
+## Related Documentation
+
+- [USDA README](README.md) - Deployment guide, quick start, and analytics scenarios
+- [Platform Architecture](../../docs/ARCHITECTURE.md) - Core CSA platform architecture
+- [Platform Services](../../docs/PLATFORM_SERVICES.md) - Shared Azure service configurations
+- [EPA Architecture](../epa/ARCHITECTURE.md) - Related agriculture/environment architecture
+- [NOAA Architecture](../noaa/ARCHITECTURE.md) - Related environmental data architecture

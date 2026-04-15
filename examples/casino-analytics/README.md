@@ -1,5 +1,49 @@
 # Tribal Casino Player Analytics Platform
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Data Engineers
+
+## Table of Contents
+- [Overview](#overview)
+  - [Key Features](#key-features)
+  - [Data Sources (All Synthetic)](#data-sources-all-synthetic)
+- [Architecture Overview](#architecture-overview)
+- [Real-Time Streaming Architecture](#real-time-streaming-architecture)
+  - [Video Analytics Pipeline](#video-analytics-pipeline)
+  - [Streaming Quick Start](#streaming-quick-start)
+  - [Sample KQL — Real-Time Floor Monitoring](#sample-kql--real-time-floor-monitoring)
+- [Prerequisites](#prerequisites)
+  - [Azure Resources](#azure-resources)
+  - [Tools Required](#tools-required)
+  - [Compliance Requirements](#compliance-requirements)
+- [Quick Start](#quick-start)
+  - [1. Environment Setup](#1-environment-setup)
+  - [2. Generate Synthetic Data](#2-generate-synthetic-data)
+  - [3. Deploy Infrastructure](#3-deploy-infrastructure)
+  - [4. Run dbt Models](#4-run-dbt-models)
+- [Sample Analytics Scenarios](#sample-analytics-scenarios)
+  - [1. Real-Time Player Engagement Scoring](#1-real-time-player-engagement-scoring)
+  - [2. Floor Layout Optimization](#2-floor-layout-optimization)
+  - [3. F&B Preference Analysis](#3-fb-preference-analysis)
+  - [4. Suspicious Activity Detection](#4-suspicious-activity-detection)
+- [Regulatory Compliance](#regulatory-compliance)
+  - [NIGC Minimum Internal Control Standards (MICS)](#nigc-minimum-internal-control-standards-mics)
+  - [Title 31 — Bank Secrecy Act / AML](#title-31--bank-secrecy-act--aml)
+  - [Data Retention](#data-retention)
+- [Data Products](#data-products)
+  - [Player Engagement](#player-engagement-player-engagement)
+  - [Floor Optimization](#floor-optimization-floor-optimization)
+  - [Suspicious Activity](#suspicious-activity-suspicious-activity)
+- [Configuration](#configuration)
+  - [dbt Profiles](#dbt-profiles)
+  - [Environment Variables](#environment-variables)
+- [Azure Government Notes](#azure-government-notes)
+- [Monitoring & Alerts](#monitoring--alerts)
+- [Troubleshooting](#troubleshooting)
+  - [Common Issues](#common-issues)
+- [Contributing](#contributing)
+- [License](#license)
+- [Acknowledgments](#acknowledgments)
+
 A comprehensive casino operations analytics platform built on Azure Cloud Scale Analytics (CSA), providing real-time player engagement scoring, floor optimization, food & beverage analytics, and regulatory compliance reporting. **All data in this example is fully synthetic** — no real player data is included.
 
 ## Overview
@@ -635,3 +679,14 @@ This project is licensed under the MIT License. See `LICENSE` file for details.
 - Azure Cloud Scale Analytics team for the foundational platform
 - Azure Data Explorer team for high-velocity streaming capabilities
 - Contributors and the open-source community
+
+---
+
+## Related Documentation
+
+- [Casino Analytics Architecture](ARCHITECTURE.md) - Detailed platform architecture and design decisions
+- [Examples Index](../README.md) - Overview of all CSA-in-a-Box example verticals
+- [Platform Architecture](../../docs/ARCHITECTURE.md) - Core CSA platform architecture
+- [Getting Started Guide](../../docs/GETTING_STARTED.md) - Platform setup and onboarding
+- [Commerce Economic Analytics](../commerce/README.md) - Related economic analytics vertical
+- [IoT & Streaming Analytics](../iot-streaming/README.md) - Shared streaming patterns

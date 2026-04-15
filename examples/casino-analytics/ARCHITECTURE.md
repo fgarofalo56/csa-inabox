@@ -1,5 +1,42 @@
 # Casino Analytics Platform — Architecture
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Architects / Data Engineers
+
+## Table of Contents
+- [Overview](#overview)
+- [System Architecture](#system-architecture)
+- [Real-Time Data Flow](#real-time-data-flow)
+  - [Slot Machine Telemetry](#slot-machine-telemetry)
+  - [Event Schema](#event-schema)
+  - [Throughput Requirements](#throughput-requirements)
+- [Event Hub Streaming Architecture](#event-hub-streaming-architecture)
+  - [Namespace Configuration](#namespace-configuration)
+  - [Partitioning Strategy](#partitioning-strategy)
+- [Azure Data Explorer (ADX) Architecture](#azure-data-explorer-adx-architecture)
+  - [Database Schema](#database-schema)
+  - [Key KQL Queries](#key-kql-queries)
+- [Video Analytics Pipeline](#video-analytics-pipeline)
+  - [Floor Density Monitoring](#floor-density-monitoring)
+  - [Privacy Considerations](#privacy-considerations)
+- [Player Data Privacy & NIGC Compliance](#player-data-privacy--nigc-compliance)
+  - [Data Classification](#data-classification)
+  - [Title 31 Compliance Architecture](#title-31-compliance-architecture)
+  - [Gaming Day Boundary](#gaming-day-boundary)
+- [Integration Architecture](#integration-architecture)
+  - [Loyalty & PMS Integration](#loyalty--pms-integration)
+- [Network Architecture](#network-architecture)
+  - [On-Premise to Cloud Connectivity](#on-premise-to-cloud-connectivity)
+  - [Security Controls](#security-controls)
+- [Deployment Options](#deployment-options)
+  - [Azure Commercial vs. Azure Government](#azure-commercial-vs-azure-government)
+- [Performance & Scalability](#performance--scalability)
+  - [Data Volume Estimates](#data-volume-estimates)
+  - [Storage Strategy](#storage-strategy)
+- [Technology Stack](#technology-stack)
+  - [Core Platform](#core-platform)
+  - [Video Analytics](#video-analytics)
+  - [Development Tools](#development-tools)
+
 ## Overview
 
 The Casino Analytics Platform is built on Azure Cloud Scale Analytics (CSA) and combines high-velocity streaming ingestion (slot telemetry at thousands of events per second) with batch analytics for player lifetime value, floor optimization, and regulatory compliance. The architecture supports both Azure Commercial and Azure Government deployments, since tribal casinos on sovereign land may choose either cloud boundary based on their data residency requirements.
@@ -105,7 +142,7 @@ graph TD
 
 Slot machines communicate via the SAS (Slot Accounting System) protocol, generating events for every spin, bonus trigger, jackpot, error, and cash transaction. The platform captures these at the edge and streams them through Event Hub to Azure Data Explorer for sub-second analytics.
 
-```
+```text
 Slot Machine (SAS Protocol)
     └── Edge Gateway (Protocol Translation)
         └── Azure Event Hub (casino-slot-events, 32 partitions)
@@ -151,7 +188,7 @@ Slot Machine (SAS Protocol)
 
 ### Namespace Configuration
 
-```
+```text
 Event Hub Namespace: eh-casino-analytics
 ├── casino-slot-events      (32 partitions, 7-day retention)
 │   ├── Consumer Group: adx-ingestion
@@ -343,7 +380,7 @@ The "gaming day" for Title 31 purposes is defined by the tribal gaming commissio
 
 ### Loyalty & PMS Integration
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────┐
 │                  Integration Points                          │
 ├─────────────────────────────────────────────────────────────┤
@@ -482,3 +519,13 @@ Tribal casinos operate on sovereign land, which creates flexibility in cloud dep
 - **CI/CD**: GitHub Actions or Azure Pipelines
 - **IaC**: Bicep
 - **Monitoring**: Azure Monitor, Log Analytics
+
+---
+
+## Related Documentation
+
+- [Casino Analytics README](README.md) - Deployment guide, quick start, and analytics scenarios
+- [Platform Architecture](../../docs/ARCHITECTURE.md) - Core CSA platform architecture
+- [Platform Services](../../docs/PLATFORM_SERVICES.md) - Shared Azure service configurations
+- [Commerce Architecture](../commerce/ARCHITECTURE.md) - Related economic analytics architecture
+- [IoT & Streaming Analytics](../iot-streaming/README.md) - Shared streaming infrastructure patterns

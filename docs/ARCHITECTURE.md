@@ -1,8 +1,29 @@
 # CSA-in-a-Box Architecture
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Architects
+
 A comprehensive architecture reference for Cloud-Scale Analytics in a Box — an
 open-source "build-your-own Microsoft Fabric" using Azure PaaS services and
 open-source tooling.
+
+## Table of Contents
+
+- [High-Level Architecture](#high-level-architecture)
+- [Architecture Layers](#architecture-layers)
+  - [1. Data Management Landing Zone (DMLZ)](#1-data-management-landing-zone-dmlz)
+  - [2. Data Landing Zone (DLZ)](#2-data-landing-zone-dlz)
+  - [3. Platform Services](#3-platform-services)
+  - [4. Consumer Layer](#4-consumer-layer)
+  - [5. Azure Government Parallel](#5-azure-government-parallel)
+- [Data Flow](#data-flow)
+  - [Batch Data Flow](#batch-data-flow)
+  - [Streaming Data Flow](#streaming-data-flow)
+  - [Data Governance Flow](#data-governance-flow)
+- [Vertical Examples](#vertical-examples)
+- [Repository Structure](#repository-structure)
+- [Technology Decision Matrix](#technology-decision-matrix)
+- [Security Architecture](#security-architecture)
+- [Next Steps](#next-steps)
 
 ## High-Level Architecture
 
@@ -273,7 +294,7 @@ availability matrix.
 
 ### Batch Data Flow
 
-```
+```text
 Source → ADF Copy Activity → Bronze (raw Parquet/JSON)
     → dbt Bronze model (typed, partitioned)
     → dbt Silver model (validated, deduplicated, flagged)
@@ -283,7 +304,7 @@ Source → ADF Copy Activity → Bronze (raw Parquet/JSON)
 
 ### Streaming Data Flow
 
-```
+```text
 IoT Device → IoT Hub → Event Hub
     ├── Hot Path:  Event Hub → ADX (sub-second KQL)
     ├── Warm Path: Event Hub → Stream Analytics → Power BI / ADX
@@ -292,7 +313,7 @@ IoT Device → IoT Hub → Event Hub
 
 ### Data Governance Flow
 
-```
+```text
 Source Registration → Purview Scan → Auto-Classification
     → Sensitivity Labels → Access Policies
     → Lineage Captured (ADF + dbt + Databricks)
@@ -322,7 +343,7 @@ and domain-specific documentation.
 
 ## Repository Structure
 
-```
+```text
 csa-inabox/
 ├── deploy/                     # Infrastructure as Code
 │   ├── bicep/
@@ -412,3 +433,12 @@ All deployments enforce:
 - [QUICKSTART.md](QUICKSTART.md) — 60-minute hands-on tutorial
 - [PLATFORM_SERVICES.md](PLATFORM_SERVICES.md) — Platform component deep-dive
 - [GOV_SERVICE_MATRIX.md](GOV_SERVICE_MATRIX.md) — Azure Government compatibility
+
+---
+
+## Related Documentation
+
+- [Platform Services](PLATFORM_SERVICES.md) - Platform component deep-dive
+- [Getting Started](GETTING_STARTED.md) - Prerequisites and deployment walkthrough
+- [Multi-Region DR](DR.md) - Multi-region disaster recovery runbook
+- [Quick Start](QUICKSTART.md) - 60-minute hands-on tutorial

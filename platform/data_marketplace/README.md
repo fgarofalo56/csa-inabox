@@ -1,7 +1,22 @@
 # Data Marketplace — Product Discovery, Access, and Quality
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Platform Engineers
+
 > **CSA-in-a-Box data product marketplace**
->
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [API Endpoints](#api-endpoints)
+- [Data Product Schema](#data-product-schema)
+- [Access Request Workflow](#access-request-workflow)
+- [Quality Scoring](#quality-scoring)
+- [Deployment](#deployment)
+- [Configuration](#configuration)
+- [Purview Integration](#purview-integration)
+- [Related Documentation](#related-documentation)
+
 > A self-service data marketplace where domain teams register their data
 > products and consumers can discover, request access to, and monitor the
 > quality of available datasets.
@@ -24,7 +39,7 @@ provides:
 
 ## Architecture
 
-```
+```text
 ┌─────────────────┐     ┌──────────────────┐     ┌──────────────┐
 │   Portal UI     │     │   API Gateway    │     │   Cosmos DB  │
 │   (React SPA)   │────▶│   (APIM)         │────▶│              │
@@ -102,7 +117,7 @@ lineage:
 
 ## Access Request Workflow
 
-```
+```text
 Consumer                  Marketplace API              Domain Owner
    │                           │                           │
    │  POST /access-requests    │                           │
@@ -179,3 +194,13 @@ Registered data products are automatically synced to Azure Purview:
 4. Classification labels from Purview are reflected in the marketplace
 
 See `platform/governance/purview_automation.py` for the sync implementation.
+
+---
+
+## Related Documentation
+
+- [Platform Components](../README.md) - Platform component index
+- [Platform Services](../../docs/PLATFORM_SERVICES.md) - Detailed platform service descriptions
+- [Architecture](../../docs/ARCHITECTURE.md) - Overall system architecture
+- [AI Integration](../ai_integration/README.md) - AI enrichment patterns
+- [Governance](../governance/README.md) - Purview automation and classification

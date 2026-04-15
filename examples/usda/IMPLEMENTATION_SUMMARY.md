@@ -1,12 +1,54 @@
 # USDA Agricultural Analytics Platform - Implementation Summary
 
+> **Last Updated:** 2026-04-14 | **Status:** Complete | **Audience:** Data Engineers
+
+## Table of Contents
+- [Overview](#overview)
+- [File Structure](#file-structure)
+- [Key Features](#key-features)
+  - [1. Complete Data Pipeline (Bronze → Silver → Gold)](#1-complete-data-pipeline-bronze--silver--gold)
+  - [2. Real Data Sources](#2-real-data-sources)
+  - [3. Advanced Analytics](#3-advanced-analytics)
+  - [4. Production-Ready Features](#4-production-ready-features)
+- [Data Products](#data-products)
+  - [Crop Yields](#crop-yields-crop-yields)
+  - [SNAP Enrollment](#snap-enrollment-snap-enrollment)
+  - [Food Safety Risk](#food-safety-risk-food-safety-risk)
+- [Technology Stack](#technology-stack)
+- [Deployment Options](#deployment-options)
+  - [Development Environment](#development-environment)
+  - [Azure Government](#azure-government)
+- [Data Generation](#data-generation)
+  - [Generate Synthetic Data](#generate-synthetic-data)
+  - [Fetch Real NASS Data](#fetch-real-nass-data)
+- [dbt Development](#dbt-development)
+  - [Run Models](#run-models)
+  - [Generate Documentation](#generate-documentation)
+- [Analytics Notebooks](#analytics-notebooks)
+  - [Crop Yield Forecasting](#crop-yield-forecasting)
+  - [SNAP Demographics Analysis](#snap-demographics-analysis)
+- [Monitoring & Alerting](#monitoring--alerting)
+  - [KQL Queries (Azure Data Explorer)](#kql-queries-azure-data-explorer)
+  - [Data Quality](#data-quality)
+- [Security & Compliance](#security--compliance)
+  - [Government Cloud Features](#government-cloud-features)
+  - [Data Governance](#data-governance)
+- [Extensibility](#extensibility)
+  - [Adding New Data Sources](#adding-new-data-sources)
+  - [Adding New Verticals](#adding-new-verticals)
+- [Cost Optimization](#cost-optimization)
+  - [Resource Management](#resource-management)
+  - [Estimated Monthly Costs (Development)](#estimated-monthly-costs-development)
+- [Next Steps](#next-steps)
+- [Support](#support)
+
 ## Overview
 
 This implementation provides a complete USDA agricultural analytics vertical for the Azure Cloud Scale Analytics platform. It follows the established "golden path" template and serves as the foundation for other government verticals (DOT, NOAA, EPA, etc.).
 
 ## File Structure
 
-```
+```text
 examples/usda/
 ├── README.md                              # Comprehensive deployment guide
 ├── ARCHITECTURE.md                        # Domain-specific architecture
@@ -248,4 +290,11 @@ This USDA vertical serves as the template for:
 
 ---
 
-*This implementation demonstrates the full capabilities of the Azure Cloud Scale Analytics platform applied to agricultural data. It provides a complete, production-ready foundation for USDA analytics while serving as the template for other government verticals.*
+## Related Documentation
+
+- [USDA README](README.md) - Comprehensive deployment and quick start guide
+- [USDA Architecture](ARCHITECTURE.md) - Detailed platform architecture and design decisions
+- [Examples Index](../README.md) - Overview of all CSA-in-a-Box example verticals
+- [Platform Architecture](../../docs/ARCHITECTURE.md) - Core CSA platform architecture
+- [Getting Started Guide](../../docs/GETTING_STARTED.md) - Platform setup and onboarding
+- [EPA Environmental Analytics](../epa/README.md) - Related agriculture/environment vertical

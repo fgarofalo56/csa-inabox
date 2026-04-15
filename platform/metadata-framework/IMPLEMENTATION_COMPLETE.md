@@ -1,5 +1,23 @@
 # CSA-in-a-Box Metadata Framework - Implementation Complete
 
+> **Last Updated:** 2026-04-14 | **Status:** Complete | **Audience:** Platform Engineers
+
+## Table of Contents
+
+- [Framework Implementation Summary](#-framework-implementation-summary)
+- [Created Files](#-created-files)
+- [Key Features Implemented](#-key-features-implemented)
+- [Supported Source Types and Ingestion Modes](#-supported-source-types--ingestion-modes)
+- [Framework Testing](#-framework-testing)
+- [Usage Examples](#-usage-examples)
+- [Generated Artifacts](#-generated-artifacts)
+- [Framework Architecture](#-framework-architecture)
+- [Security and Governance](#-security--governance)
+- [Next Steps](#-next-steps)
+- [Documentation](#-documentation)
+- [Success Metrics](#-success-metrics)
+- [Related Documentation](#related-documentation)
+
 ## ✅ Framework Implementation Summary
 
 The complete metadata-driven pipeline framework for CSA-in-a-Box has been successfully implemented. This framework enables declarative, schema-driven data ingestion that automatically generates Azure Data Factory pipelines and provisions data landing zones.
@@ -7,7 +25,7 @@ The complete metadata-driven pipeline framework for CSA-in-a-Box has been succes
 ## 📁 Created Files
 
 ### Core Framework
-```
+```text
 platform/metadata-framework/
 ├── README.md                          # Comprehensive documentation
 ├── __init__.py                        # Package initialization
@@ -285,3 +303,13 @@ The framework is ready for immediate use and provides a solid foundation for sca
 **Framework Version**: 1.0.0
 **Generated**: 2026-04-14
 **Status**: ✅ Complete and Tested
+
+---
+
+## Related Documentation
+
+- [Platform Components](../README.md) - Platform component index
+- [Platform Services](../../docs/PLATFORM_SERVICES.md) - Detailed platform service descriptions
+- [Architecture](../../docs/ARCHITECTURE.md) - Overall system architecture
+- [OneLake Pattern](../onelake-pattern/README.md) - ADLS Gen2 unified data lake
+- [Direct Lake](../direct-lake/README.md) - Power BI direct access to Delta Lake

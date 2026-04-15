@@ -1,5 +1,7 @@
 # Azure Government Deployment Templates
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** DevOps Engineers
+
 This directory contains **parallel deployment templates** for Azure Government (MAG).
 Every template in the main `deploy/bicep/` and `deploy/terraform/` directories has a
 corresponding Government-compatible version here.
@@ -41,7 +43,7 @@ services that ARE available in Azure Government today.
 
 ### Endpoint Differences
 
-```
+```text
 # Commercial Azure
 *.blob.core.windows.net
 *.dfs.core.windows.net
@@ -96,3 +98,11 @@ bash scripts/deploy/deploy-platform.sh \
 For services with limited Gov availability, see
 [platform/oss-alternatives/](../../platform/oss-alternatives/) for open-source
 replacements deployable on AKS in Azure Government.
+
+---
+
+## Related Documentation
+
+- [Government Service Matrix](../../../docs/GOV_SERVICE_MATRIX.md) - Full Gov service availability details
+- [Terraform IaC](../../terraform/README.md) - Terraform alternative deployment path
+- [IaC & CI/CD Best Practices](../../../docs/IaC-CICD-Best-Practices.md) - Deployment pipeline guidance

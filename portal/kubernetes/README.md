@@ -1,12 +1,26 @@
 # Kubernetes Portal Deployment
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Frontend Developers
+
+## Table of Contents
+
+- [Architecture](#architecture)
+- [Quick Start](#quick-start)
+- [Helm Chart](#helm-chart)
+- [Helm Values](#helm-values)
+- [Docker Images](#docker-images)
+- [GitOps with ArgoCD](#gitops-with-argocd)
+- [Azure Government](#azure-government)
+- [Scaling Characteristics](#scaling-characteristics)
+- [Related Documentation](#related-documentation)
+
 A production-grade, highly scalable deployment of the data onboarding portal
 on Azure Kubernetes Service (AKS). This option provides maximum control over
 infrastructure, auto-scaling, and multi-region deployment.
 
 ## Architecture
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────┐
 │                    AKS Cluster                               │
 │                                                              │
@@ -56,7 +70,7 @@ helm install csa-portal ./helm/csa-portal \
 
 ## Helm Chart
 
-```
+```text
 portal/kubernetes/
 ├── README.md
 ├── helm/
@@ -299,3 +313,11 @@ FIPS 140-2 compliant nodes are enabled by default in the Gov deployment.
 
 This is the most scalable portal option, suitable for enterprise and
 multi-region deployments.
+
+---
+
+## Related Documentation
+
+- [Portal Implementations](../README.md) - Portal implementation index
+- [Shared Backend](../shared/README.md) - Shared backend API
+- [Architecture](../../docs/ARCHITECTURE.md) - Overall system architecture

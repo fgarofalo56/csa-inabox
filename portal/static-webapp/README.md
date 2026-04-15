@@ -1,12 +1,26 @@
 # Azure Static Web Apps + Functions Portal
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Frontend Developers
+
+## Table of Contents
+
+- [Architecture](#architecture)
+- [Why Static Web Apps?](#why-static-web-apps)
+- [Quick Start](#quick-start)
+- [Project Structure](#project-structure)
+- [SWA Configuration](#swa-configuration)
+- [Deployment](#deployment)
+- [Azure Government](#azure-government)
+- [Cost Comparison](#cost-comparison)
+- [Related Documentation](#related-documentation)
+
 A lightweight, cost-effective data onboarding portal using Azure Static Web Apps
 for the frontend and Azure Functions for the API. This is the simplest
 deployment option with built-in CI/CD from GitHub.
 
 ## Architecture
 
-```
+```text
 ┌───────────────────────────────────────────────────────────┐
 │          Azure Static Web Apps                             │
 │  ┌─────────────────────────────────────────────────────┐  │
@@ -55,7 +69,7 @@ npm run dev
 
 ## Project Structure
 
-```
+```text
 portal/static-webapp/
 ├── README.md
 ├── package.json
@@ -208,3 +222,11 @@ az staticwebapp create \
 | Standard | ~$9/month | 100 GB, custom auth, SLA 99.95% |
 
 This is the most cost-effective portal option for small to medium deployments.
+
+---
+
+## Related Documentation
+
+- [Portal Implementations](../README.md) - Portal implementation index
+- [Shared Backend](../shared/README.md) - Shared backend API
+- [Architecture](../../docs/ARCHITECTURE.md) - Overall system architecture

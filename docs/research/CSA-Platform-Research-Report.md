@@ -1,5 +1,7 @@
 # CSA-in-a-Box: Comprehensive Platform Research Report
 
+> **Last Updated:** 2026-04-14 | **Status:** Reference | **Audience:** Architects / Leadership
+
 **Date:** 2026-04-09
 **Purpose:** Deep research for building a complete Cloud-Scale Analytics / Data Mesh / Data Fabric platform in Azure as an open-source alternative to Microsoft Fabric.
 
@@ -7,15 +9,52 @@
 
 ## Table of Contents
 
-1. [Azure Cloud-Scale Analytics Architecture](#1-azure-cloud-scale-analytics-architecture)
-2. [Data Mesh Architecture in Azure](#2-data-mesh-architecture-in-azure)
-3. [Data Fabric Architecture](#3-data-fabric-architecture)
-4. [Microsoft Fabric Alternative Components](#4-microsoft-fabric-alternative-components)
-5. [Required Azure Services](#5-required-azure-services-for-a-complete-platform)
-6. [Deployment Strategy for 4 Azure Subscriptions](#6-deployment-strategy-for-4-azure-subscriptions)
-7. [Best Practices and Standards](#7-best-practices-and-standards)
-8. [Reference Templates and IaC](#8-reference-templates-and-iac)
-9. [Sources and References](#9-sources-and-references)
+- [1. Azure Cloud-Scale Analytics Architecture](#1-azure-cloud-scale-analytics-architecture)
+  - [1.1 Overview and Current Status](#11-overview-and-current-status)
+  - [1.2 Core Architectural Concepts](#12-core-architectural-concepts)
+  - [1.3 Data Lake Architecture (Medallion Pattern)](#13-data-lake-architecture-medallion-pattern)
+  - [1.4 Hub-Spoke Network Topology](#14-hub-spoke-network-topology)
+  - [1.5 Integration with Azure Landing Zones (ALZ)](#15-integration-with-azure-landing-zones-alz)
+- [2. Data Mesh Architecture in Azure](#2-data-mesh-architecture-in-azure)
+  - [2.1 Core Principles](#21-core-principles)
+  - [2.2 Mapping Data Mesh to Azure / CSA](#22-mapping-data-mesh-to-azure--csa)
+  - [2.3 Data Domains](#23-data-domains)
+  - [2.4 Data Products](#24-data-products)
+  - [2.5 Self-Serve Data Infrastructure](#25-self-serve-data-infrastructure)
+  - [2.6 Federated Governance](#26-federated-governance)
+  - [2.7 Unity Catalog vs Purview for Governance](#27-unity-catalog-vs-purview-for-governance)
+- [3. Data Fabric Architecture](#3-data-fabric-architecture)
+  - [3.1 How Data Fabric Differs from Data Mesh](#31-how-data-fabric-differs-from-data-mesh)
+  - [3.2 Data Fabric Core Components](#32-data-fabric-core-components)
+  - [3.3 Azure Services for Data Fabric Patterns](#33-azure-services-for-data-fabric-patterns)
+  - [3.4 Hybrid Approach for csa-inabox](#34-hybrid-approach-for-csa-inabox)
+- [4. Microsoft Fabric Alternative Components](#4-microsoft-fabric-alternative-components)
+  - [4.1 Complete Component Mapping](#41-complete-component-mapping)
+  - [4.2 Detailed Component Analysis](#42-detailed-component-analysis)
+- [5. Required Azure Services for a Complete Platform](#5-required-azure-services-for-a-complete-platform)
+  - [5.1 Complete Service Catalog](#51-complete-service-catalog)
+  - [5.2 Service Dependencies Map](#52-service-dependencies-map)
+- [6. Deployment Strategy for 4 Azure Subscriptions](#6-deployment-strategy-for-4-azure-subscriptions)
+  - [6.1 Recommended Subscription Layout](#61-recommended-subscription-layout)
+  - [6.2 Alternative: Scale-Out Layout](#62-alternative-scale-out-layout)
+  - [6.3 Cross-Subscription Networking](#63-cross-subscription-networking)
+  - [6.4 Policy Inheritance and Management Group Hierarchy](#64-policy-inheritance-and-management-group-hierarchy)
+  - [6.5 RBAC Strategy](#65-rbac-strategy)
+- [7. Best Practices and Standards](#7-best-practices-and-standards)
+  - [7.1 Azure Well-Architected Framework for Data Platforms](#71-azure-well-architected-framework-for-data-platforms)
+  - [7.2 Zero-Trust Network Architecture](#72-zero-trust-network-architecture)
+  - [7.3 Data Classification and Sensitivity Labeling](#73-data-classification-and-sensitivity-labeling)
+  - [7.4 Cost Management and FinOps](#74-cost-management-and-finops)
+  - [7.5 Disaster Recovery and Business Continuity](#75-disaster-recovery-and-business-continuity)
+- [8. Reference Templates and IaC](#8-reference-templates-and-iac)
+  - [8.1 Microsoft Official Templates](#81-microsoft-official-templates)
+  - [8.2 Template Architecture](#82-template-architecture)
+  - [8.3 csa-inabox Deployment Approach](#83-csa-inabox-deployment-approach)
+  - [8.4 Existing csa-inabox Assets](#84-existing-csa-inabox-assets)
+- [9. Sources and References](#9-sources-and-references)
+- [Appendix A: Service SKU Recommendations](#appendix-a-service-sku-recommendations)
+- [Appendix B: Naming Convention](#appendix-b-naming-convention)
+- [Appendix C: Deployment Order](#appendix-c-deployment-order)
 
 ---
 
@@ -75,7 +114,7 @@ Each DLZ provisions **three ADLS Gen2 storage accounts** forming a logical data 
 | 3 | Development | N/A | `analytics-sandbox`, `synapse-primary-*` | Exploratory sandboxes, workspace storage |
 
 **Container Folder Structure (Raw/Landing):**
-```
+```text
 Landing/
   Log/{Application Name}/
   Master and Reference/{Source System}/
@@ -86,7 +125,7 @@ Landing/
 ```
 
 **Container Folder Structure (Raw/Conformance):**
-```
+```text
 Conformance/
   Transactional/{Source System}/{Entity}/{Version}/
     Delta/
@@ -100,7 +139,7 @@ Conformance/
 ```
 
 **Container Folder Structure (Enriched/Standardized):**
-```
+```text
 Standardized/
   Transactional/{Source System}/{Entity}/{Version}/
     General/{rundate=YYYY-MM-DD}/
@@ -108,7 +147,7 @@ Standardized/
 ```
 
 **Container Folder Structure (Curated/Data Products):**
-```
+```text
 {Data Product}/
   {Entity}/{Version}/
     General/{rundate=YYYY-MM-DD}/
@@ -125,7 +164,7 @@ Standardized/
 
 The networking architecture follows a hub-spoke model integrated with Azure Landing Zones:
 
-```
+```text
                     ┌─────────────────────┐
                     │   Connectivity Sub   │
                     │   (Hub VNet)         │
@@ -179,7 +218,7 @@ The networking architecture follows a hub-spoke model integrated with Azure Land
 CSA builds on top of Azure Landing Zones. The ALZ reference architecture provides:
 
 **Management Group Hierarchy:**
-```
+```text
 Tenant Root Group
 ├── Platform
 │   ├── Management        (Log Analytics, Automation, Sentinel)
@@ -464,7 +503,7 @@ This section maps each Microsoft Fabric capability to equivalent Azure services 
 - Kafka protocol support (Schema Registry)
 
 **Real-Time Architecture:**
-```
+```text
 Sources → Event Hubs → Databricks Structured Streaming → Delta Lake
                     └→ Azure Data Explorer (for operational analytics)
                     └→ Event Hubs Capture → ADLS Gen2 (archival)
@@ -600,7 +639,7 @@ Power BI standalone works identically to Fabric Power BI for reporting:
 
 ### 5.2 Service Dependencies Map
 
-```
+```text
                     ┌─────────────────────────────────┐
                     │        Microsoft Entra ID         │
                     │    (Tenant-wide identity)         │
@@ -644,7 +683,7 @@ Power BI standalone works identically to Fabric Power BI for reporting:
 
 For the csa-inabox initial deployment with 4 subscriptions:
 
-```
+```text
 Tenant Root Group
 └── csa-inabox (Management Group)
     ├── Platform (Management Group)
@@ -683,7 +722,7 @@ Tenant Root Group
 
 For larger deployments, expand to domain-based DLZs:
 
-```
+```text
 Landing Zones (Management Group)
 ├── Sub: csa-dlz-finance     (Finance domain DLZ)
 ├── Sub: csa-dlz-sales       (Sales domain DLZ)
@@ -694,7 +733,7 @@ Landing Zones (Management Group)
 ### 6.3 Cross-Subscription Networking
 
 **VNet Address Space Allocation:**
-```
+```text
 Hub VNet (csa-platform):     10.0.0.0/16
   - GatewaySubnet:           10.0.0.0/24
   - AzureFirewallSubnet:     10.0.1.0/24
@@ -933,7 +972,7 @@ Microsoft provides official Bicep/ARM templates in GitHub:
 
 ### 8.2 Template Architecture
 
-```
+```text
 data-management-zone/
 ├── infra/
 │   ├── main.json          (ARM template entry point)
@@ -1054,7 +1093,7 @@ Based on the current repo structure:
 
 ## Appendix B: Naming Convention
 
-```
+```text
 {resourceType}-{project}-{environment}-{region}-{instance}
 
 Examples:
@@ -1074,7 +1113,7 @@ Examples:
 
 ## Appendix C: Deployment Order
 
-```
+```text
 Phase 1: Foundation
   1. Management Groups and Policy Definitions
   2. Platform Subscription (Management + Connectivity)
@@ -1125,3 +1164,11 @@ Phase 5: Data Products
 ---
 
 *This report was compiled from Microsoft's official Cloud Adoption Framework documentation, GitHub reference templates, and Azure architecture guidance. The information is current as of April 2026.*
+
+---
+
+## Related Documentation
+
+- [ARCHITECTURE.md](../ARCHITECTURE.md) - Platform architecture overview
+- [PLATFORM_SERVICES.md](../PLATFORM_SERVICES.md) - Platform services reference and SKU details
+- [MULTI_REGION.md](../MULTI_REGION.md) - Multi-region deployment for high availability

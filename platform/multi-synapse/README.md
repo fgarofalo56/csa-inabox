@@ -1,7 +1,21 @@
 # Multi-Synapse — Shared Analytics Environment
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Platform Engineers
+
 > **Multi-organization Synapse workspace architecture**
->
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [Cross-Workspace Query Federation](#cross-workspace-query-federation)
+- [RBAC Templates](#rbac-templates)
+- [Cost Allocation](#cost-allocation)
+- [Deployment](#deployment)
+- [Network Isolation](#network-isolation)
+- [Governance Integration](#governance-integration)
+- [Related Documentation](#related-documentation)
+
 > Deploys multiple Synapse Analytics workspaces with shared infrastructure
 > for multi-tenant or multi-organization data analytics scenarios.
 
@@ -22,7 +36,7 @@ This pattern deploys:
 
 ## Architecture
 
-```
+```text
 ┌──────────────────────────────────────────────────────────┐
 │                  Shared Infrastructure                    │
 │  ┌────────────┐  ┌────────────┐  ┌───────────────────┐  │
@@ -156,3 +170,12 @@ All workspaces share a managed VNet with:
 - **Purview** — each workspace registers its lineage with a shared Purview account
 - **Diagnostic Settings** — all workspaces send logs to a shared Log Analytics workspace
 - **Azure Policy** — shared policies enforce tagging, encryption, and network rules
+
+---
+
+## Related Documentation
+
+- [Platform Components](../README.md) - Platform component index
+- [Platform Services](../../docs/PLATFORM_SERVICES.md) - Detailed platform service descriptions
+- [Architecture](../../docs/ARCHITECTURE.md) - Overall system architecture
+- [Direct Lake](../direct-lake/README.md) - Power BI direct access to Delta Lake

@@ -1,5 +1,7 @@
 # Azure Government Service Availability Matrix
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Security / Compliance
+
 This document tracks the availability of every Azure service used by CSA-in-a-Box
 across Azure Commercial and Azure Government regions, including FedRAMP
 authorization levels and impact level (IL) support.
@@ -7,6 +9,21 @@ authorization levels and impact level (IL) support.
 > **Last verified:** April 2026. Check
 > [Azure Government Services by Region](https://azure.microsoft.com/en-us/explore/global-infrastructure/government/by-region/)
 > for the latest status.
+
+## Table of Contents
+
+- [Core Services](#core-services)
+- [Compute & Hosting](#compute--hosting)
+- [AI & ML](#ai--ml)
+- [Databases](#databases)
+- [Identity & Security](#identity--security)
+- [Monitoring & Management](#monitoring--management)
+- [Endpoint URL Differences](#endpoint-url-differences)
+- [API Version Differences](#api-version-differences)
+- [Bicep Configuration for Government](#bicep-configuration-for-government)
+- [Compliance Requirements by Vertical](#compliance-requirements-by-vertical)
+- [Open-Source Alternatives for Government Gaps](#open-source-alternatives-for-government-gaps)
+- [References](#references)
 
 ## Core Services
 
@@ -160,3 +177,11 @@ deployable on AKS:
 - [Azure Government Services by Region](https://azure.microsoft.com/en-us/explore/global-infrastructure/government/by-region/)
 - [FedRAMP Authorized Services](https://marketplace.fedramp.gov/)
 - [DoD IL Guidance](https://learn.microsoft.com/en-us/azure/compliance/offerings/offering-dod-il4)
+
+---
+
+## Related Documentation
+
+- [Environment Protection](ENVIRONMENT_PROTECTION.md) - GitHub Environment protection rules
+- [Production Checklist](PRODUCTION_CHECKLIST.md) - Production readiness checklist
+- [Gov Bicep Templates](../deploy/bicep/gov/README.md) - Azure Government deployment templates

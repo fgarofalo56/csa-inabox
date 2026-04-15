@@ -1,5 +1,50 @@
 # Department of Commerce Economic Analytics Platform
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Data Engineers
+
+## Table of Contents
+- [Overview](#overview)
+  - [Key Features](#key-features)
+  - [Data Sources](#data-sources)
+  - [Open Data APIs](#open-data-apis)
+- [Architecture Overview](#architecture-overview)
+- [Prerequisites](#prerequisites)
+  - [Azure Resources](#azure-resources)
+  - [Tools Required](#tools-required)
+  - [API Access](#api-access)
+- [Quick Start](#quick-start)
+  - [1. Environment Setup](#1-environment-setup)
+  - [2. Configure API Keys](#2-configure-api-keys)
+  - [3. Generate Sample Data](#3-generate-sample-data)
+  - [4. Deploy Infrastructure](#4-deploy-infrastructure)
+  - [5. Run dbt Models](#5-run-dbt-models)
+- [Sample Analytics Scenarios](#sample-analytics-scenarios)
+  - [1. Regional Economic Resilience Scoring](#1-regional-economic-resilience-scoring)
+  - [2. International Trade Pattern Analysis](#2-international-trade-pattern-analysis)
+  - [3. Small Business Growth Prediction](#3-small-business-growth-prediction)
+- [Data Products](#data-products)
+  - [Economic Resilience Index](#economic-resilience-index-economic-resilience)
+  - [International Trade Patterns](#international-trade-patterns-trade-patterns)
+  - [Business Growth Analytics](#business-growth-analytics-business-growth)
+- [Configuration](#configuration)
+  - [dbt Profiles](#dbt-profiles)
+  - [Environment Variables](#environment-variables)
+- [Government Cloud Deployment Notes](#government-cloud-deployment-notes)
+  - [Azure Government (GovCloud)](#azure-government-govcloud)
+  - [FISMA Compliance](#fisma-compliance)
+  - [Data Sensitivity](#data-sensitivity)
+- [Monitoring & Alerts](#monitoring--alerts)
+- [Troubleshooting](#troubleshooting)
+  - [Common Issues](#common-issues)
+  - [Logs](#logs)
+- [Development](#development)
+  - [Adding New Data Sources](#adding-new-data-sources)
+  - [Testing](#testing)
+- [Contributing](#contributing)
+- [License](#license)
+- [Support](#support)
+- [Acknowledgments](#acknowledgments)
+
 A comprehensive economic analytics platform built on Azure Cloud Scale Analytics (CSA), providing insights into regional economic resilience, international trade patterns, and small business growth using official Commerce Department data sources.
 
 ## Overview
@@ -434,3 +479,14 @@ This project is licensed under the MIT License. See `LICENSE` file for details.
 - International Trade Administration for trade data
 - Azure Cloud Scale Analytics team for the foundational platform
 - Contributors and the open-source community
+
+---
+
+## Related Documentation
+
+- [Commerce Architecture](ARCHITECTURE.md) - Detailed platform architecture and design decisions
+- [Examples Index](../README.md) - Overview of all CSA-in-a-Box example verticals
+- [Platform Architecture](../../docs/ARCHITECTURE.md) - Core CSA platform architecture
+- [Getting Started Guide](../../docs/GETTING_STARTED.md) - Platform setup and onboarding
+- [Casino Analytics](../casino-analytics/README.md) - Related economic analytics vertical
+- [USPS Postal Operations](../usps/README.md) - Related logistics and trade vertical

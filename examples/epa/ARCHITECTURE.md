@@ -1,5 +1,40 @@
 # EPA Environmental Monitoring Analytics Architecture
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Architects / Data Engineers
+
+## Table of Contents
+- [Overview](#overview)
+- [Domain Context](#domain-context)
+  - [Environmental Monitoring Landscape](#environmental-monitoring-landscape)
+  - [Data Characteristics](#data-characteristics)
+- [Architecture Layers](#architecture-layers)
+  - [Data Ingestion Layer](#data-ingestion-layer)
+  - [Bronze Layer (Raw Data)](#bronze-layer-raw-data)
+  - [Silver Layer (Cleaned & Conformed)](#silver-layer-cleaned--conformed)
+  - [Gold Layer (Business Analytics)](#gold-layer-business-analytics)
+- [Streaming Architecture](#streaming-architecture)
+  - [Real-Time AQI Monitoring Pipeline](#real-time-aqi-monitoring-pipeline)
+  - [Event Schema](#event-schema)
+  - [ADX Table Design](#adx-table-design)
+- [Data Flow Architecture](#data-flow-architecture)
+  - [Batch Processing Pipeline](#batch-processing-pipeline)
+- [Integration Patterns](#integration-patterns)
+  - [API Gateway Architecture](#api-gateway-architecture)
+  - [Data Contracts](#data-contracts)
+- [Security Architecture](#security-architecture)
+  - [Data Protection](#data-protection)
+  - [Federal Compliance](#federal-compliance)
+  - [Data Classification](#data-classification)
+- [Performance Optimization](#performance-optimization)
+  - [Partitioning Strategy](#partitioning-strategy)
+  - [Caching Strategy](#caching-strategy)
+- [Monitoring & Observability](#monitoring--observability)
+  - [Data Quality Monitoring](#data-quality-monitoring)
+  - [Streaming Pipeline Health](#streaming-pipeline-health)
+- [Technology Stack](#technology-stack)
+  - [Core Platform](#core-platform)
+  - [Development Tools](#development-tools)
+
 ## Overview
 
 The EPA Environmental Monitoring Analytics platform is built on Azure Cloud Scale Analytics (CSA) and follows a domain-driven design approach. It ingests data from multiple EPA programs — including real-time AQI sensor streaming — transforms it through a medallion architecture (Bronze → Silver → Gold), and provides analytical insights for air quality prediction, environmental justice analysis, and emissions compliance monitoring.
@@ -518,3 +553,13 @@ spec:
 - **Version Control**: Git, Azure DevOps / GitHub
 - **CI/CD**: Azure Pipelines, GitHub Actions
 - **Monitoring**: Azure Monitor, Application Insights, Grafana
+
+---
+
+## Related Documentation
+
+- [EPA README](README.md) - Deployment guide, quick start, and analytics scenarios
+- [Platform Architecture](../../docs/ARCHITECTURE.md) - Core CSA platform architecture
+- [Platform Services](../../docs/PLATFORM_SERVICES.md) - Shared Azure service configurations
+- [NOAA Architecture](../noaa/ARCHITECTURE.md) - Related environmental/climate architecture
+- [USDA Architecture](../usda/ARCHITECTURE.md) - Related agriculture/environment architecture

@@ -1,5 +1,44 @@
 # DOT Transportation Analytics Architecture
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Architects / Data Engineers
+
+## Table of Contents
+- [Overview](#overview)
+- [Domain Context](#domain-context)
+  - [Transportation Data Landscape](#transportation-data-landscape)
+  - [Data Characteristics](#data-characteristics)
+- [System Context](#system-context)
+- [Architecture Layers](#architecture-layers)
+  - [Data Ingestion Layer](#data-ingestion-layer)
+  - [Bronze Layer (Raw Data)](#bronze-layer-raw-data)
+  - [Silver Layer (Cleaned & Conformed)](#silver-layer-cleaned--conformed)
+  - [Gold Layer (Business Analytics)](#gold-layer-business-analytics)
+- [Data Flow Architecture](#data-flow-architecture)
+  - [Batch Processing Pipeline](#batch-processing-pipeline)
+  - [Real-time Processing Pipeline](#real-time-processing-pipeline)
+- [Integration Points](#integration-points)
+  - [Event Hub Configuration](#event-hub-configuration)
+  - [Azure Data Explorer (ADX) Integration](#azure-data-explorer-adx-integration)
+  - [Power BI Dashboards](#power-bi-dashboards)
+- [Security Architecture](#security-architecture)
+  - [Data Protection](#data-protection)
+  - [Compliance](#compliance)
+  - [API Security](#api-security)
+- [Performance Optimization](#performance-optimization)
+  - [Data Partitioning Strategy](#data-partitioning-strategy)
+  - [Caching Strategy](#caching-strategy)
+- [Monitoring & Observability](#monitoring--observability)
+  - [Data Quality Monitoring](#data-quality-monitoring)
+  - [Pipeline Monitoring](#pipeline-monitoring)
+  - [Alerting](#alerting)
+- [Disaster Recovery](#disaster-recovery)
+  - [Backup Strategy](#backup-strategy)
+  - [Business Continuity](#business-continuity)
+- [Technology Stack](#technology-stack)
+  - [Core Platform](#core-platform)
+  - [Development Tools](#development-tools)
+  - [Programming Languages](#programming-languages)
+
 ## Overview
 
 The DOT Transportation Analytics platform is built on Azure Cloud Scale Analytics (CSA) and follows a domain-driven design approach. It ingests data from multiple DOT agencies — NHTSA, FHWA, FTA, and FAA — transforms it through a medallion architecture, and provides analytical insights for transportation safety, infrastructure planning, and transit operations.
@@ -452,3 +491,13 @@ alerts:
 - **Web APIs**: Python (FastAPI)
 - **Infrastructure**: Bicep, Terraform
 - **Analytics**: Python (pandas, geopandas, scikit-learn), R
+
+---
+
+## Related Documentation
+
+- [DOT README](README.md) - Deployment guide, quick start, and analytics scenarios
+- [Platform Architecture](../../docs/ARCHITECTURE.md) - Core CSA platform architecture
+- [Platform Services](../../docs/PLATFORM_SERVICES.md) - Shared Azure service configurations
+- [Interior Architecture](../interior/ARCHITECTURE.md) - Related federal infrastructure architecture
+- [USPS Architecture](../usps/ARCHITECTURE.md) - Related federal logistics architecture

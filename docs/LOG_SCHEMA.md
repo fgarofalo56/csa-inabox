@@ -1,5 +1,7 @@
 # Log Schema
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Data Engineers
+
 All Python services in CSA-in-a-Box emit structured JSON log lines via
 `governance.common.logging` (which wraps [structlog](https://www.structlog.org)).
 Each line is a single-line JSON object so that Azure Log Analytics can
@@ -7,6 +9,22 @@ parse it with a single KQL expression regardless of which service emitted
 it.
 
 ---
+
+## Table of Contents
+
+- [1. Baseline fields](#1-baseline-fields)
+- [2. Services and their canonical events](#2-services-and-their-canonical-events)
+- [3. Trigger bindings](#3-trigger-bindings)
+  - [HTTP triggers](#http-triggers)
+  - [Blob triggers](#blob-triggers)
+  - [Event Hub (batch) triggers](#event-hub-batch-triggers)
+  - [Timer triggers](#timer-triggers)
+  - [CLI entry points](#cli-entry-points)
+- [4. Log Analytics parsing](#4-log-analytics-parsing)
+  - [Follow a single request end-to-end](#follow-a-single-request-end-to-end)
+  - [Top error events per service in the last hour](#top-error-events-per-service-in-the-last-hour)
+  - [Batch throughput for the event processor](#batch-throughput-for-the-event-processor)
+- [5. Local and console output](#5-local-and-console-output)
 
 ## 1. Baseline fields
 
@@ -167,3 +185,11 @@ python governance/dataquality/run_quality_checks.py --suite bronze
 
 All other behaviour (trace context binding, service tags) is identical;
 only the serialisation changes.
+
+---
+
+## Related Documentation
+
+- [Troubleshooting](TROUBLESHOOTING.md) - Common issues and fixes
+- [Production Checklist](PRODUCTION_CHECKLIST.md) - Production readiness checklist
+- [Platform Services](PLATFORM_SERVICES.md) - Platform component deep-dive

@@ -1,5 +1,44 @@
 # EPA Environmental Monitoring Analytics Platform
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Data Engineers
+
+## Table of Contents
+- [Overview](#overview)
+  - [Key Features](#key-features)
+  - [Data Sources](#data-sources)
+- [Architecture Overview](#architecture-overview)
+- [Real-Time AQI Streaming Architecture](#real-time-aqi-streaming-architecture)
+  - [Streaming Quick Start](#streaming-quick-start)
+  - [Sample KQL — Real-Time AQI Alerts](#sample-kql--real-time-aqi-alerts)
+- [Prerequisites](#prerequisites)
+  - [Azure Resources](#azure-resources)
+  - [Tools Required](#tools-required)
+  - [API Access](#api-access)
+- [Quick Start](#quick-start)
+  - [1. Environment Setup](#1-environment-setup)
+  - [2. Configure API Keys](#2-configure-api-keys)
+  - [3. Generate Sample Data](#3-generate-sample-data)
+  - [4. Deploy Infrastructure](#4-deploy-infrastructure)
+  - [5. Run dbt Models](#5-run-dbt-models)
+- [Sample Analytics Scenarios](#sample-analytics-scenarios)
+  - [1. Air Quality Prediction with ML](#1-air-quality-prediction-with-ml)
+  - [2. Environmental Justice Analysis](#2-environmental-justice-analysis)
+  - [3. Emissions Compliance Monitoring](#3-emissions-compliance-monitoring)
+- [Data Products](#data-products)
+  - [AQI Prediction](#aqi-prediction-aqi-prediction)
+  - [Environmental Justice](#environmental-justice-ej-analysis)
+  - [Emissions Compliance](#emissions-compliance-emissions-compliance)
+- [Configuration](#configuration)
+  - [dbt Profiles](#dbt-profiles)
+  - [Environment Variables](#environment-variables)
+- [Azure Government Notes](#azure-government-notes)
+- [Monitoring & Alerts](#monitoring--alerts)
+- [Troubleshooting](#troubleshooting)
+  - [Common Issues](#common-issues)
+- [Contributing](#contributing)
+- [License](#license)
+- [Acknowledgments](#acknowledgments)
+
 A comprehensive environmental monitoring analytics platform built on Azure Cloud Scale Analytics (CSA), providing insights into air quality, water safety, toxic releases, and environmental justice using official EPA data sources — including real-time AQI sensor streaming for near-real-time air quality dashboards.
 
 ## Overview
@@ -494,3 +533,14 @@ This project is licensed under the MIT License. See `LICENSE` file for details.
 - AirNow for real-time air quality data infrastructure
 - Azure Cloud Scale Analytics team for the foundational platform
 - Contributors and the open-source community
+
+---
+
+## Related Documentation
+
+- [EPA Architecture](ARCHITECTURE.md) - Detailed platform architecture and design decisions
+- [Examples Index](../README.md) - Overview of all CSA-in-a-Box example verticals
+- [Platform Architecture](../../docs/ARCHITECTURE.md) - Core CSA platform architecture
+- [Getting Started Guide](../../docs/GETTING_STARTED.md) - Platform setup and onboarding
+- [NOAA Climate Analytics](../noaa/README.md) - Related environmental/climate vertical
+- [USDA Agricultural Analytics](../usda/README.md) - Related agriculture/environment vertical

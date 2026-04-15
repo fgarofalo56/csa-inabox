@@ -1,5 +1,7 @@
 # Data Activator — Event-Driven Alerting Engine
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Platform Engineers
+
 > **CSA-in-a-Box equivalent of Microsoft Fabric Data Activator**
 >
 > Data Activator is not available in Azure Government. This pattern
@@ -9,7 +11,7 @@
 
 ## Architecture
 
-```
+```text
 ┌──────────────────┐     ┌──────────────────┐     ┌────────────────┐
 │  Event Sources   │     │   Event Grid     │     │ Rule Engine    │
 │                  │────▶│   Topics         │────▶│ (Azure Func)   │
@@ -122,3 +124,13 @@ All services used are GA in Azure Government:
 | Azure Functions | GA | Python 3.11, v4 runtime |
 | Logic Apps | GA | Standard and Consumption |
 | SendGrid | GA | Email delivery |
+
+---
+
+## Related Documentation
+
+- [Platform Components](../README.md) - Platform component index
+- [Platform Services](../../docs/PLATFORM_SERVICES.md) - Detailed platform service descriptions
+- [Architecture](../../docs/ARCHITECTURE.md) - Overall system architecture
+- [AI Integration](../ai_integration/README.md) - AI enrichment patterns
+- [Shared Services](../shared-services/README.md) - Reusable function library

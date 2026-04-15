@@ -1,5 +1,7 @@
 # Multi-Region Deployment Guide
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Platform Engineers
+
 This guide covers deploying CSA-in-a-Box in an active-active
 multi-region configuration for high availability and disaster recovery.
 It extends the standard deployment in
@@ -13,6 +15,44 @@ in [DR.md](DR.md) which documents the operational failover procedures.
 
 ---
 
+## Table of Contents
+
+- [1. Architecture Overview](#1-architecture-overview)
+- [2. Service Capability Matrix](#2-service-capability-matrix)
+  - [Legend](#legend)
+- [3. Data Replication Patterns](#3-data-replication-patterns)
+  - [3.1 Storage: RA-GZRS Automatic Replication](#31-storage-ra-gzrs-automatic-replication)
+  - [3.2 Cosmos DB: Multi-Master Writes](#32-cosmos-db-multi-master-writes)
+  - [3.3 dbt Models: Idempotent, Deploy to Both Regions](#33-dbt-models-idempotent-deploy-to-both-regions)
+  - [3.4 Event Hubs: Geo-DR Namespace Pairing](#34-event-hubs-geo-dr-namespace-pairing)
+- [4. Failover Procedures](#4-failover-procedures)
+  - [4.1 Automatic Failover (No operator action required)](#41-automatic-failover-no-operator-action-required)
+  - [4.2 Manual Failover (Operator action required)](#42-manual-failover-operator-action-required)
+  - [4.3 DNS / Traffic Manager Configuration](#43-dns--traffic-manager-configuration)
+- [5. RPO / RTO Targets by Service Tier](#5-rpo--rto-targets-by-service-tier)
+- [6. Deployment Process](#6-deployment-process)
+  - [6.1 Prerequisites](#61-prerequisites)
+  - [6.2 Step 1 — Deploy the Primary Region](#62-step-1--deploy-the-primary-region)
+  - [6.3 Step 2 — Deploy Stamp-Based Services in the Secondary Region](#63-step-2--deploy-stamp-based-services-in-the-secondary-region)
+  - [6.4 Step 3 — Configure Geo-DR Pairing](#64-step-3--configure-geo-dr-pairing)
+  - [6.5 Step 4 — Configure ADX Follower Databases](#65-step-4--configure-adx-follower-databases)
+  - [6.6 Step 5 — Configure Traffic Manager](#66-step-5--configure-traffic-manager)
+  - [6.7 Step 6 — Verify](#67-step-6--verify)
+- [7. Chaos Testing](#7-chaos-testing)
+  - [7.1 Experiment: Storage Failover](#71-experiment-storage-failover)
+  - [7.2 Experiment: Cosmos DB Region Outage](#72-experiment-cosmos-db-region-outage)
+  - [7.3 Quarterly Drill Schedule](#73-quarterly-drill-schedule)
+- [8. Monitoring Multi-Region Health](#8-monitoring-multi-region-health)
+  - [8.1 Cross-Region Dashboard](#81-cross-region-dashboard)
+  - [8.2 Alerts](#82-alerts)
+  - [8.3 Azure Resource Graph: Multi-Region Inventory](#83-azure-resource-graph-multi-region-inventory)
+- [9. Cost Implications of Multi-Region](#9-cost-implications-of-multi-region)
+  - [9.1 Cost Multipliers by Service](#91-cost-multipliers-by-service)
+  - [9.2 Cost Optimization Strategies](#92-cost-optimization-strategies)
+  - [9.3 Estimated Monthly Cost Overhead](#93-estimated-monthly-cost-overhead)
+- [10. Combining Multi-Region with Multi-Tenant](#10-combining-multi-region-with-multi-tenant)
+- [11. Quick Reference](#11-quick-reference)
+
 ## 1. Architecture Overview
 
 CSA-in-a-Box multi-region uses an **active-active** topology where both
@@ -22,7 +62,7 @@ automatic data synchronization. Services without built-in multi-region
 support (Databricks, Data Factory, Synapse) are deployed as independent
 stamps in each region.
 
-```
+```text
                     ┌────────────────────────┐
                     │  Azure Traffic Manager  │
                     │  / Azure Front Door     │
@@ -100,7 +140,7 @@ synchronously across three availability zones in the primary region and
 asynchronously to the paired secondary region. The secondary region
 provides read-only access at all times.
 
-```
+```text
 Primary (eastus2)                Secondary (westus2)
 ┌─────────────────────┐          ┌─────────────────────┐
 │  Zone 1 │ Zone 2 │ Zone 3 │──async──►│  Zone 1 │ Zone 2 │ Zone 3 │
@@ -133,7 +173,7 @@ Cosmos DB accepts writes in both regions simultaneously. Conflict
 resolution uses Last-Writer-Wins (LWW) by default, based on the `_ts`
 (timestamp) property.
 
-```
+```text
 Primary (eastus2)                Secondary (westus2)
 ┌─────────────────────┐          ┌─────────────────────┐
 │  Writes + Reads     │◄──sync──►│  Writes + Reads     │
@@ -614,7 +654,7 @@ overhead versus single-region is approximately:
 For deployments that require both multi-tenant isolation and
 multi-region availability, deploy each tenant stamp in both regions:
 
-```
+```text
 Tenant A: params.tenant-contoso-eastus2.json → eastus2
            params.tenant-contoso-westus2.json → westus2
 
@@ -647,3 +687,12 @@ and naming conventions.
 | Understand cost impact | §9 |
 | Multi-region + multi-tenant | §10 |
 | Quarterly DR drill | §7.3 / [DR.md](DR.md) §4 |
+
+---
+
+## Related Documentation
+
+- [MULTI_TENANT.md](MULTI_TENANT.md) - Multi-tenant stamped deployment model
+- [DR.md](DR.md) - Disaster recovery runbook and failover procedures
+- [ARCHITECTURE.md](ARCHITECTURE.md) - Platform architecture overview
+- [PLATFORM_SERVICES.md](PLATFORM_SERVICES.md) - Platform services reference and SKU details

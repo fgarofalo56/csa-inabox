@@ -1,5 +1,31 @@
 # Incident Response Runbook — Security Events
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Operations
+
+## Table of Contents
+
+- [Scope](#scope)
+- [Severity Classification](#severity-classification)
+- [Initial Response (All Severities)](#initial-response-all-severities)
+  - [Step 1: Assess](#step-1-assess)
+  - [Step 2: Contain](#step-2-contain)
+  - [Step 3: Investigate](#step-3-investigate)
+  - [Step 4: Eradicate](#step-4-eradicate)
+  - [Step 5: Recover](#step-5-recover)
+  - [Step 6: Post-Incident](#step-6-post-incident)
+- [Common Scenarios](#common-scenarios)
+  - [Scenario A: Exposed Storage Account Key](#scenario-a-exposed-storage-account-key)
+  - [Scenario B: Databricks Token Leaked](#scenario-b-databricks-token-leaked)
+  - [Scenario C: Azure Policy Non-Compliance](#scenario-c-azure-policy-non-compliance)
+  - [Scenario D: Cosmos DB Unauthorized Access](#scenario-d-cosmos-db-unauthorized-access)
+  - [Scenario E: ADF Pipeline Tampering](#scenario-e-adf-pipeline-tampering)
+  - [Scenario F: Key Vault Secret Expiry or Compromise](#scenario-f-key-vault-secret-expiry-or-compromise)
+- [Evidence Preservation Checklist](#evidence-preservation-checklist)
+- [Communication Templates](#communication-templates)
+  - [Internal notification (P1/P2)](#internal-notification-p1p2)
+  - [Stakeholder update](#stakeholder-update)
+- [Contact Information](#contact-information)
+
 ## Scope
 This runbook covers security incidents detected on the CSA-in-a-Box data platform,
 including unauthorized access, data exfiltration, and configuration tampering.
@@ -175,3 +201,11 @@ Before any remediation, preserve evidence:
 ---
 
 *Last Updated: 2026-04-13*
+
+---
+
+## Related Documentation
+
+- [Troubleshooting](../TROUBLESHOOTING.md) - Common issues and fixes
+- [Log Schema](../LOG_SCHEMA.md) - Structured logging schema reference
+- [Gov Service Matrix](../GOV_SERVICE_MATRIX.md) - Azure Government service availability

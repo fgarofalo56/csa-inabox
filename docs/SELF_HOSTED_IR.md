@@ -1,5 +1,7 @@
 # Self-Hosted Integration Runtime (SHIR)
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** DevOps Engineers
+
 The Self-Hosted Integration Runtime (SHIR) module enables CSA-in-a-Box to securely connect to on-premises and private network data sources from Azure Data Factory. This module deploys a highly available, auto-scaling Windows Server infrastructure that bridges your private networks with Azure's cloud analytics services.
 
 > **Module Location:** `deploy/bicep/DLZ/modules/vms/selfHostedIntegrationRuntime.bicep`  
@@ -8,10 +10,56 @@ The Self-Hosted Integration Runtime (SHIR) module enables CSA-in-a-Box to secure
 
 ---
 
+## Table of Contents
+
+- [1. Architecture Overview](#1-architecture-overview)
+  - [System Diagram](#system-diagram)
+  - [Component Breakdown](#component-breakdown)
+  - [Data Flow Architecture](#data-flow-architecture)
+- [2. Prerequisites](#2-prerequisites)
+  - [Network Connectivity Requirements](#network-connectivity-requirements)
+  - [DNS Resolution Requirements](#dns-resolution-requirements)
+  - [Azure Data Factory Prerequisites](#azure-data-factory-prerequisites)
+  - [Required Files](#required-files)
+- [3. Installation & Registration](#3-installation--registration)
+  - [Step 1: Prepare Installation Script](#step-1-prepare-installation-script)
+  - [Step 2: Configure Deployment Parameters](#step-2-configure-deployment-parameters)
+  - [Step 3: Deploy the Platform](#step-3-deploy-the-platform)
+  - [Step 4: Verify Deployment](#step-4-verify-deployment)
+- [4. High Availability & Scaling](#4-high-availability--scaling)
+  - [Recommended HA Configuration](#recommended-ha-configuration)
+  - [Auto-Scaling Configuration](#auto-scaling-configuration)
+  - [Load Balancer Distribution](#load-balancer-distribution)
+  - [Fault Domain Considerations](#fault-domain-considerations)
+- [5. Monitoring & Troubleshooting](#5-monitoring--troubleshooting)
+  - [ADF Integration Runtime Monitoring](#adf-integration-runtime-monitoring)
+  - [VMSS Instance Diagnostics](#vmss-instance-diagnostics)
+  - [Key Log Locations](#key-log-locations)
+  - [Common Issues & Solutions](#common-issues--solutions)
+  - [Log Analytics Integration](#log-analytics-integration)
+- [6. Security Considerations](#6-security-considerations)
+  - [Network Isolation](#network-isolation)
+  - [Identity & Access Management](#identity--access-management)
+  - [Credential Management](#credential-management)
+  - [Disk Encryption & Patching](#disk-encryption--patching)
+  - [Compliance Considerations](#compliance-considerations)
+- [7. Performance Tuning](#7-performance-tuning)
+  - [VM Size Selection Guide](#vm-size-selection-guide)
+  - [Concurrent Job Configuration](#concurrent-job-configuration)
+  - [Data Transfer Optimization](#data-transfer-optimization)
+  - [Network Bandwidth Optimization](#network-bandwidth-optimization)
+  - [Memory Management](#memory-management)
+- [8. Operations Runbook](#8-operations-runbook)
+  - [Authentication Key Rotation](#authentication-key-rotation)
+  - [Adding/Removing SHIR Nodes](#addingremoving-shir-nodes)
+  - [SHIR Gateway Version Updates](#shir-gateway-version-updates)
+  - [Disaster Recovery Procedures](#disaster-recovery-procedures)
+  - [Emergency Procedures](#emergency-procedures)
+
 ## 1. Architecture Overview
 
 ### System Diagram
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  Azure Data Factory                                                         │
 │  ┌─────────────────────────┐                                               │
@@ -1005,3 +1053,11 @@ SELECT MAX(LastModified) FROM SyncMetadata WHERE Status = 'Success'
 ---
 
 This comprehensive documentation provides the foundation for deploying, operating, and troubleshooting the Self-Hosted Integration Runtime module in CSA-in-a-Box. Refer to the Azure Data Factory documentation and Microsoft Learn resources for additional details on specific integration scenarios and advanced configurations.
+
+---
+
+## Related Documentation
+
+- [ADF_SETUP.md](ADF_SETUP.md) - Azure Data Factory pipeline setup and orchestration
+- [IaC-CICD-Best-Practices.md](IaC-CICD-Best-Practices.md) - Infrastructure-as-Code and CI/CD patterns
+- [ARCHITECTURE.md](ARCHITECTURE.md) - Platform architecture overview

@@ -1,5 +1,7 @@
 # Shared Services — Reusable Function Library
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Platform Engineers
+
 Reusable Azure Functions, Container Apps, and API patterns that can be
 shared across all data landing zones in the CSA-in-a-Box platform.
 
@@ -49,7 +51,7 @@ Reusable validation logic deployed as Azure Functions:
 
 All shared functions are discoverable through Azure API Management:
 
-```
+```text
 https://csa-apim.azure-api.net/
 ├── /validation/
 │   ├── POST /schema     → validate-schema
@@ -81,7 +83,7 @@ az deployment group create \
 
 ## Directory Structure
 
-```
+```text
 platform/shared-services/
 ├── README.md
 ├── functions/
@@ -105,3 +107,13 @@ platform/shared-services/
     ├── apim.bicep
     └── params.json
 ```
+
+---
+
+## Related Documentation
+
+- [Platform Components](../README.md) - Platform component index
+- [Platform Services](../../docs/PLATFORM_SERVICES.md) - Detailed platform service descriptions
+- [Architecture](../../docs/ARCHITECTURE.md) - Overall system architecture
+- [Governance](../governance/README.md) - Purview automation and classification
+- [Data Activator](../data-activator/README.md) - Event-driven alerting engine

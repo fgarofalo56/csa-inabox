@@ -1,7 +1,42 @@
 # CSA-in-a-Box: Quick Start Guide
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** New Users
+
 Get a working Cloud-Scale Analytics platform deployed and flowing data in
 about 60--90 minutes (assuming all prerequisites are met).
+
+## Table of Contents
+
+- [Prerequisites](#prerequisites)
+- [Step 1: Deploy Infrastructure](#step-1-deploy-infrastructure)
+- [Step 2: Load Sample Data](#step-2-load-sample-data)
+- [Step 3: Run the dbt Pipeline](#step-3-run-the-dbt-pipeline)
+  - [Expected Row Counts](#expected-row-counts)
+- [Step 4: Run ADF Orchestration (Optional)](#step-4-run-adf-orchestration-optional)
+- [Step 5: Explore the Data](#step-5-explore-the-data)
+  - [Query Silver (validation results)](#query-silver-validation-results)
+  - [Query Gold (business metrics)](#query-gold-business-metrics)
+- [Step 6: Start Streaming (Optional)](#step-6-start-streaming-optional)
+- [Step 7: Bootstrap Purview Catalog (Optional)](#step-7-bootstrap-purview-catalog-optional)
+- [Project Structure](#project-structure)
+- [Quick Start: Run a Vertical Example (USDA)](#quick-start-run-a-vertical-example-usda)
+  - [Step A: Generate Seed Data](#step-a-generate-seed-data)
+  - [Step B: Load Seeds and Run dbt](#step-b-load-seeds-and-run-dbt)
+  - [Step C: Explore Results](#step-c-explore-results)
+- [Quick Start: Deploy the Portal](#quick-start-deploy-the-portal)
+  - [Step A: Start the Shared Backend](#step-a-start-the-shared-backend)
+  - [Step B: Start a Frontend](#step-b-start-a-frontend)
+  - [Step C: Register a Data Source](#step-c-register-a-data-source)
+- [Quick Start: Platform Services](#quick-start-platform-services)
+  - [Step A: Deploy Shared Services (Azure Functions)](#step-a-deploy-shared-services-azure-functions)
+  - [Step B: Deploy the Data Marketplace](#step-b-deploy-the-data-marketplace)
+  - [Step C: Configure AI Integration](#step-c-configure-ai-integration)
+- [Quick Start: Azure Government](#quick-start-azure-government)
+  - [Step A: Switch to Government Cloud](#step-a-switch-to-government-cloud)
+  - [Step B: Deploy with Gov Parameters](#step-b-deploy-with-gov-parameters)
+  - [Step C: Verify Compliance Tags](#step-c-verify-compliance-tags)
+  - [Government-Specific Notes](#government-specific-notes)
+- [Next Steps](#next-steps)
 
 ## Prerequisites
 
@@ -247,7 +282,7 @@ This creates:
 
 ## Project Structure
 
-```
+```text
 csa-inabox/
   deploy/bicep/           # Infrastructure as Code (4 landing zones)
   domains/
@@ -499,3 +534,12 @@ az storage account show \
 - **Architecture deep-dive**: See [`docs/ARCHITECTURE.md`](ARCHITECTURE.md)
 - **Platform services**: See [`docs/PLATFORM_SERVICES.md`](PLATFORM_SERVICES.md)
 - **Azure Government**: See [`docs/GOV_SERVICE_MATRIX.md`](GOV_SERVICE_MATRIX.md)
+
+---
+
+## Related Documentation
+
+- [Getting Started](GETTING_STARTED.md) - Prerequisites and deployment walkthrough
+- [Architecture](ARCHITECTURE.md) - Comprehensive architecture reference
+- [Troubleshooting](TROUBLESHOOTING.md) - Common issues and fixes
+- [ADF Setup](../scripts/deploy/deploy-adf.sh) - ADF deployment helper script

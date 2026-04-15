@@ -1,5 +1,45 @@
 # NOAA Climate & Environmental Analytics Architecture
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Architects / Data Engineers
+
+## Table of Contents
+- [Overview](#overview)
+- [Domain Context](#domain-context)
+  - [Environmental Data Landscape](#environmental-data-landscape)
+  - [Data Characteristics](#data-characteristics)
+- [Architecture Layers](#architecture-layers)
+  - [Data Ingestion Layer](#data-ingestion-layer)
+  - [Bronze Layer (Raw Data)](#bronze-layer-raw-data)
+  - [Silver Layer (Cleaned & Conformed)](#silver-layer-cleaned--conformed)
+  - [Gold Layer (Business Analytics)](#gold-layer-business-analytics)
+- [Streaming Architecture](#streaming-architecture)
+  - [Real-Time Weather & Ocean Data Pipeline](#real-time-weather--ocean-data-pipeline)
+  - [Event Schema](#event-schema)
+  - [ADX Table Design](#adx-table-design)
+- [Data Flow Architecture](#data-flow-architecture)
+  - [Batch Processing Pipeline](#batch-processing-pipeline)
+  - [Real-Time + Batch Convergence](#real-time--batch-convergence)
+- [Integration Patterns](#integration-patterns)
+  - [API Gateway Architecture](#api-gateway-architecture)
+  - [Data Contracts](#data-contracts)
+- [Security Architecture](#security-architecture)
+  - [Data Protection](#data-protection)
+  - [Federal Compliance](#federal-compliance)
+- [Performance Optimization](#performance-optimization)
+  - [Partitioning Strategy](#partitioning-strategy)
+  - [Caching Strategy](#caching-strategy)
+- [Monitoring & Observability](#monitoring--observability)
+  - [Data Quality Monitoring](#data-quality-monitoring)
+  - [Streaming Pipeline Health](#streaming-pipeline-health)
+  - [Alerting Strategy](#alerting-strategy)
+- [Disaster Recovery](#disaster-recovery)
+  - [Backup Strategy](#backup-strategy)
+  - [Business Continuity](#business-continuity)
+- [Technology Stack](#technology-stack)
+  - [Core Platform](#core-platform)
+  - [Development Tools](#development-tools)
+  - [Programming Languages](#programming-languages)
+
 ## Overview
 
 The NOAA Climate & Environmental Analytics platform is built on Azure Cloud Scale Analytics (CSA) and follows a domain-driven design approach. It ingests data from multiple NOAA observation networks — including real-time streaming from weather stations and ocean buoys — transforms it through a medallion architecture (Bronze → Silver → Gold), and provides analytical insights for severe weather prediction, climate trend analysis, and marine ecosystem health monitoring.
@@ -549,3 +589,13 @@ alerts:
 - **Web APIs**: Python (FastAPI)
 - **Infrastructure**: Bicep, Terraform
 - **Analytics**: Python (pandas, scipy, xarray), R
+
+---
+
+## Related Documentation
+
+- [NOAA README](README.md) - Deployment guide, quick start, and analytics scenarios
+- [Platform Architecture](../../docs/ARCHITECTURE.md) - Core CSA platform architecture
+- [Platform Services](../../docs/PLATFORM_SERVICES.md) - Shared Azure service configurations
+- [EPA Architecture](../epa/ARCHITECTURE.md) - Related environmental/climate architecture
+- [USDA Architecture](../usda/ARCHITECTURE.md) - Related agriculture/environment architecture

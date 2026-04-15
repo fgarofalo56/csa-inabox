@@ -1,7 +1,20 @@
 # Direct Lake Pattern — Power BI + Delta Lake via Databricks SQL
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Platform Engineers
+
 > **CSA-in-a-Box equivalent of Microsoft Fabric Direct Lake mode**
->
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [Setup Guide](#setup-guide)
+- [Performance Tuning](#performance-tuning)
+- [Row-Level Security](#row-level-security)
+- [Comparison: Fabric Direct Lake vs CSA-in-a-Box](#comparison-fabric-direct-lake-vs-csa-in-a-box)
+- [Semantic Model Template](#semantic-model-template)
+- [Related Documentation](#related-documentation)
+
 > Direct Lake in Fabric allows Power BI to read directly from Delta Lake
 > tables without importing data. CSA-in-a-Box achieves the same pattern
 > using Databricks SQL endpoints connected to Delta tables in ADLS Gen2.
@@ -21,7 +34,7 @@ CSA-in-a-Box replicates this via:
 
 ## Architecture
 
-```
+```text
 ┌──────────────┐     ┌───────────────────┐     ┌──────────────────┐
 │  ADLS Gen2   │     │  Databricks SQL   │     │    Power BI      │
 │  Gold Layer  │────▶│  Warehouse        │────▶│    Desktop /     │
@@ -92,7 +105,7 @@ For Azure Government where the native connector may not be available:
 
 1. Install the [Simba Spark ODBC Driver](https://www.databricks.com/spark/odbc-drivers-download)
 2. Configure DSN:
-   ```
+   ```text
    Host=adb-<workspace-id>.databricks.azure.us
    Port=443
    HTTPPath=/sql/1.0/warehouses/<warehouse-id>
@@ -181,3 +194,13 @@ In Power BI, define RLS roles that match:
 
 See `semantic_model_template.yaml` for a ready-to-use model definition
 that maps to the CSA-in-a-Box gold layer tables.
+
+---
+
+## Related Documentation
+
+- [Platform Components](../README.md) - Platform component index
+- [Platform Services](../../docs/PLATFORM_SERVICES.md) - Detailed platform service descriptions
+- [Architecture](../../docs/ARCHITECTURE.md) - Overall system architecture
+- [OneLake Pattern](../onelake-pattern/README.md) - ADLS Gen2 unified data lake
+- [Multi-Synapse](../multi-synapse/README.md) - Shared analytics environment

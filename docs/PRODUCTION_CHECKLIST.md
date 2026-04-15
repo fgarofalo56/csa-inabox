@@ -1,8 +1,24 @@
 # CSA-in-a-Box: Production Checklist
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Release Engineers
+
 Use this checklist when promoting CSA-in-a-Box from development to production.
 Each section includes actionable items with cross-references to detailed guides
 where available.
+
+## Table of Contents
+
+- [1. Environment Promotion](#1-environment-promotion)
+- [2. Infrastructure Hardening](#2-infrastructure-hardening)
+- [3. Security](#3-security)
+- [4. Data Platform](#4-data-platform)
+- [5. Observability](#5-observability)
+- [6. Disaster Recovery](#6-disaster-recovery)
+- [7. Governance](#7-governance)
+- [8. Operational Readiness](#8-operational-readiness)
+- [9. Cost Management](#9-cost-management)
+- [10. Compliance](#10-compliance)
+- [Sign-Off](#sign-off)
 
 ---
 
@@ -168,3 +184,12 @@ where available.
 
 > This checklist complements the [Quick Start Guide](QUICKSTART.md) for development
 > and the [DR](DR.md) / [Rollback](ROLLBACK.md) guides for incident response.
+
+---
+
+## Related Documentation
+
+- [Environment Protection](ENVIRONMENT_PROTECTION.md) - GitHub Environment protection rules
+- [Disaster Recovery](DR.md) - Multi-region failover runbook
+- [Cost Management](../governance/finops/) - FinOps budget alerts
+- [Gov Service Matrix](GOV_SERVICE_MATRIX.md) - Azure Government service availability

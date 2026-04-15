@@ -1,5 +1,7 @@
 # Platform Components — Fabric-in-a-Box
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Platform Engineers
+
 This directory contains the **core platform capabilities** that replicate Microsoft Fabric
 functionality using Azure PaaS services and open-source tooling.
 
@@ -85,3 +87,10 @@ graph TB
 All platform components are designed to work in both Azure Commercial and Azure Government.
 See [deploy/bicep/gov/](../deploy/bicep/gov/) for Government-specific templates and
 [oss-alternatives/](oss-alternatives/) for open-source replacements where needed.
+
+---
+
+## Related Documentation
+
+- [Platform Services](../docs/PLATFORM_SERVICES.md) - Detailed platform service descriptions
+- [Architecture](../docs/ARCHITECTURE.md) - Overall system architecture

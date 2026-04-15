@@ -1,5 +1,41 @@
 # Department of Interior Natural Resources Analytics Platform
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Data Engineers
+
+## Table of Contents
+- [Overview](#overview)
+  - [Key Features](#key-features)
+  - [Data Sources](#data-sources)
+- [Architecture Overview](#architecture-overview)
+- [Prerequisites](#prerequisites)
+  - [Azure Resources](#azure-resources)
+  - [Tools Required](#tools-required)
+  - [API Access](#api-access)
+- [Quick Start](#quick-start)
+  - [1. Environment Setup](#1-environment-setup)
+  - [2. Configure API Keys](#2-configure-api-keys)
+  - [3. Generate Sample Data](#3-generate-sample-data)
+  - [4. Deploy Infrastructure](#4-deploy-infrastructure)
+  - [5. Run dbt Models](#5-run-dbt-models)
+- [Sample Analytics Scenarios](#sample-analytics-scenarios)
+  - [1. Earthquake Probability Assessment](#1-earthquake-probability-assessment)
+  - [2. National Park Capacity Management](#2-national-park-capacity-management)
+  - [3. Wildfire Risk Prediction](#3-wildfire-risk-prediction)
+- [Data Products](#data-products)
+  - [Earthquake Probability](#earthquake-probability-earthquake-probability)
+  - [Park Capacity](#park-capacity-park-capacity)
+  - [Wildfire Risk](#wildfire-risk-wildfire-risk)
+- [Configuration](#configuration)
+  - [dbt Profiles](#dbt-profiles)
+  - [Environment Variables](#environment-variables)
+- [Azure Government Notes](#azure-government-notes)
+- [Monitoring & Alerts](#monitoring--alerts)
+- [Troubleshooting](#troubleshooting)
+  - [Common Issues](#common-issues)
+- [Contributing](#contributing)
+- [License](#license)
+- [Acknowledgments](#acknowledgments)
+
 A comprehensive natural resources analytics platform built on Azure Cloud Scale Analytics (CSA), providing insights into seismic activity, water resources, national park management, wildfire risk, and wildlife conservation using official USGS, NPS, BLM, and FWS data sources.
 
 ## Overview
@@ -403,3 +439,14 @@ This project is licensed under the MIT License. See `LICENSE` file for details.
 - NIFC for open wildfire data and the Wildland Fire Decision Support System
 - Azure Cloud Scale Analytics team for the foundational platform
 - Contributors and the open-source community
+
+---
+
+## Related Documentation
+
+- [Interior Architecture](ARCHITECTURE.md) - Detailed platform architecture and design decisions
+- [Examples Index](../README.md) - Overview of all CSA-in-a-Box example verticals
+- [Platform Architecture](../../docs/ARCHITECTURE.md) - Core CSA platform architecture
+- [Getting Started Guide](../../docs/GETTING_STARTED.md) - Platform setup and onboarding
+- [DOT Transportation Analytics](../dot/README.md) - Related federal infrastructure vertical
+- [Tribal Health Analytics](../tribal-health/README.md) - Related federal/tribal vertical

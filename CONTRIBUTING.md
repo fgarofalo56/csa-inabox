@@ -1,5 +1,7 @@
 # Contributing to CSA-in-a-Box
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Contributors
+
 Thank you for your interest in contributing to Cloud-Scale Analytics in-a-Box.
 
 ## Development Setup
@@ -103,3 +105,10 @@ Use GitHub Issues with the appropriate template. Include:
 - Steps to reproduce
 - Expected vs actual behavior
 - Relevant logs or error messages
+
+---
+
+## Related Documentation
+
+- [README](README.md) - Project overview and quick start
+- [Changelog](CHANGELOG.md) - All notable changes to the project

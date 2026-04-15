@@ -1,5 +1,50 @@
 # Tribal Health Data Warehouse — IHS & Tribal Health Analytics
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Data Engineers
+
+## Table of Contents
+- [Overview](#overview)
+  - [Key Features](#key-features)
+  - [Data Sources](#data-sources)
+  - [Compliance Framework](#compliance-framework)
+- [Architecture Overview](#architecture-overview)
+- [Prerequisites](#prerequisites)
+  - [Azure Government Resources](#azure-government-resources)
+  - [Tools Required](#tools-required)
+  - [Compliance Prerequisites](#compliance-prerequisites)
+- [Quick Start](#quick-start)
+  - [1. Configure Azure Government Environment](#1-configure-azure-government-environment)
+  - [2. Generate Synthetic Data](#2-generate-synthetic-data)
+  - [3. Deploy Infrastructure](#3-deploy-infrastructure)
+  - [4. Run dbt Models](#4-run-dbt-models)
+- [Analytics Scenarios](#analytics-scenarios)
+  - [1. Diabetes Prevalence Tracking](#1-diabetes-prevalence-tracking)
+  - [2. Behavioral Health Resource Allocation](#2-behavioral-health-resource-allocation)
+  - [3. Maternal & Child Health Outcomes](#3-maternal--child-health-outcomes)
+- [Data Sovereignty](#data-sovereignty)
+  - [Tribal Control Over Health Data](#tribal-control-over-health-data)
+- [Data Products](#data-products)
+  - [Population Health Summary](#population-health-summary-population-health)
+  - [Diabetes Registry](#diabetes-registry-diabetes-registry)
+  - [Behavioral Health Dashboard](#behavioral-health-dashboard-behavioral-health)
+- [Configuration](#configuration)
+  - [dbt Profiles](#dbt-profiles)
+  - [Environment Variables](#environment-variables)
+- [Monitoring & Compliance](#monitoring--compliance)
+  - [HIPAA-Compliant Logging](#hipaa-compliant-logging)
+  - [Data Quality Monitoring](#data-quality-monitoring)
+- [Development](#development)
+  - [Adding New Health Domains](#adding-new-health-domains)
+  - [Testing](#testing)
+- [Troubleshooting](#troubleshooting)
+  - [Common Issues](#common-issues)
+  - [Logs](#logs)
+- [Ethical Considerations](#ethical-considerations)
+- [Contributing](#contributing)
+- [License](#license)
+- [Acknowledgments](#acknowledgments)
+- [Disclaimer](#disclaimer)
+
 A population health analytics platform built on Azure Cloud Scale Analytics (CSA) for Indian Health Service (IHS) area offices, tribal health organizations, and urban Indian health programs. Deployed exclusively in Azure Government with HIPAA, FedRAMP High, and tribal data sovereignty compliance.
 
 ## Overview
@@ -530,3 +575,14 @@ This project is licensed under the MIT License. See `LICENSE` file for details.
 ## Disclaimer
 
 This example uses **entirely synthetic data** generated to reflect publicly available aggregate health statistics from IHS annual reports. No real patient data, tribal member data, or Protected Health Information (PHI) is included. The synthetic data generator produces statistically plausible distributions for development and demonstration purposes only. Any resemblance to real individuals is coincidental.
+
+---
+
+## Related Documentation
+
+- [Tribal Health Architecture](ARCHITECTURE.md) - Detailed platform architecture and design decisions
+- [Examples Index](../README.md) - Overview of all CSA-in-a-Box example verticals
+- [Platform Architecture](../../docs/ARCHITECTURE.md) - Core CSA platform architecture
+- [Getting Started Guide](../../docs/GETTING_STARTED.md) - Platform setup and onboarding
+- [Interior Natural Resources](../interior/README.md) - Related federal/tribal vertical
+- [Casino Analytics](../casino-analytics/README.md) - Related tribal operations vertical

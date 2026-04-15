@@ -1,12 +1,27 @@
 # React Web App — Data Onboarding Portal
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Frontend Developers
+
+## Table of Contents
+
+- [Architecture](#architecture)
+- [Tech Stack](#tech-stack)
+- [Quick Start](#quick-start)
+- [Environment Variables](#environment-variables)
+- [Pages](#pages)
+- [Components](#components)
+- [Deployment](#deployment)
+- [Azure Government](#azure-government)
+- [Development](#development)
+- [Related Documentation](#related-documentation)
+
 A full-featured React/Next.js web application for data source registration,
 pipeline management, and data marketplace discovery. This is the most
 customizable portal implementation in CSA-in-a-Box.
 
 ## Architecture
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────┐
 │                    React Frontend (Next.js)                  │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────┐   │
@@ -179,3 +194,11 @@ npm run type-check
 # Storybook (component development)
 npm run storybook
 ```
+
+---
+
+## Related Documentation
+
+- [Portal Implementations](../README.md) - Portal implementation index
+- [Shared Backend](../shared/README.md) - Shared backend API
+- [Architecture](../../docs/ARCHITECTURE.md) - Overall system architecture

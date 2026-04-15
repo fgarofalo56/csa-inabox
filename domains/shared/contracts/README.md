@@ -7,7 +7,7 @@
 
 Data contracts live at the data product level within each domain:
 
-```
+```text
 domains/<domain>/data-products/<product>/contract.yaml
 ```
 
@@ -42,3 +42,10 @@ Tooling for validating contracts against the schema lives in:
 - `governance/contracts/contract_validator.py` -- validates contract YAML against the JSON Schema template
 - `governance/contracts/dbt_test_generator.py` -- generates dbt tests from contract quality rules
 - `governance/contracts/pipeline_enforcer.py` -- enforces contract SLAs in pipeline runs
+
+---
+
+## Related Documentation
+
+- [Architecture Overview](../../../docs/ARCHITECTURE.md) - Platform architecture reference
+- [Examples](../../../examples/README.md) - Sample data pipelines and use cases

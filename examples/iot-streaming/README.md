@@ -1,5 +1,28 @@
 # IoT & Streaming Analytics Examples
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Data Engineers
+
+## Table of Contents
+- [Architecture](#architecture)
+- [Streaming Patterns](#streaming-patterns)
+  - [Pattern 1: Hot Path (Real-Time)](#pattern-1-hot-path-real-time)
+  - [Pattern 2: Warm Path (Near Real-Time)](#pattern-2-warm-path-near-real-time)
+  - [Pattern 3: Cold Path (Batch)](#pattern-3-cold-path-batch)
+  - [Pattern 4: Anomaly Detection](#pattern-4-anomaly-detection)
+- [Directory Structure](#directory-structure)
+- [Deployment](#deployment)
+  - [Prerequisites](#prerequisites)
+  - [Step 1: Deploy IoT Hub and Event Hubs](#step-1-deploy-iot-hub-and-event-hubs)
+  - [Step 2: Deploy Stream Analytics](#step-2-deploy-stream-analytics)
+  - [Step 3: Create ADX Tables](#step-3-create-adx-tables)
+  - [Step 4: Start the Simulator](#step-4-start-the-simulator)
+  - [Step 5: Start Stream Analytics Job](#step-5-start-stream-analytics-job)
+  - [Step 6: Query Real-Time Data in ADX](#step-6-query-real-time-data-in-adx)
+- [KQL Queries Reference](#kql-queries-reference)
+- [Stream Analytics Queries Reference](#stream-analytics-queries-reference)
+- [Integration with Other Verticals](#integration-with-other-verticals)
+- [Azure Government](#azure-government)
+
 Real-time data ingestion and analytics patterns for IoT sensors, telemetry,
 and event streaming. These patterns are used across multiple verticals
 (NOAA weather stations, EPA air quality sensors, casino slot machines).
@@ -140,7 +163,7 @@ WHERE anomaly_score > 0.8
 
 ## Directory Structure
 
-```
+```text
 examples/iot-streaming/
 ├── README.md                          # This file
 ├── producers/
@@ -331,3 +354,14 @@ All streaming services are available in Azure Government:
 
 Use the Government parameter files in `deploy/bicep/gov/` and set your
 Azure CLI cloud to `AzureUSGovernment`.
+
+---
+
+## Related Documentation
+
+- [Examples Index](../README.md) - Overview of all CSA-in-a-Box example verticals
+- [Platform Architecture](../../docs/ARCHITECTURE.md) - Core CSA platform architecture
+- [Getting Started Guide](../../docs/GETTING_STARTED.md) - Platform setup and onboarding
+- [Casino Analytics](../casino-analytics/README.md) - Streaming patterns for slot machine telemetry
+- [EPA Environmental Analytics](../epa/README.md) - Streaming patterns for AQI sensor data
+- [NOAA Climate Analytics](../noaa/README.md) - Streaming patterns for weather station data

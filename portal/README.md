@@ -1,5 +1,7 @@
 # Data Onboarding Portal — Multiple Implementations
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Frontend Developers
+
 This directory contains **four different implementations** of the autonomous data
 onboarding portal, each using a different technology stack. All implementations share
 the same backend API and provide the same functionality.
@@ -71,7 +73,7 @@ sequenceDiagram
 
 All portal implementations connect to the same **shared backend API**:
 
-```
+```text
 portal/shared/
 ├── api/
 │   ├── app.py              # FastAPI application
@@ -106,3 +108,10 @@ portal/shared/
 | Gov Cloud | ✅ | ✅ | ✅ | ✅ |
 | Offline/PWA | ❌ | ✅ | ✅ | ✅ |
 | GitOps | ❌ | ✅ | ✅ | ✅ |
+
+---
+
+## Related Documentation
+
+- [Architecture](../docs/ARCHITECTURE.md) - Overall system architecture
+- [Platform Components](../platform/README.md) - Platform component index

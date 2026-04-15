@@ -1,5 +1,7 @@
 # AI Integration — Data Landing Zone AI Enrichment
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Platform Engineers
+
 This directory provides patterns for integrating Azure AI services with the
 CSA-in-a-Box data platform. Every data landing zone can leverage AI for
 enrichment, classification, and analysis.
@@ -10,7 +12,7 @@ enrichment, classification, and analysis.
 
 Retrieve-Augment-Generate over your data lake:
 
-```
+```text
 Documents (ADLS)  →  Azure AI Document Intelligence  →  Chunks
                           ↓
                     Text Embedding (Azure OpenAI)
@@ -57,7 +59,7 @@ Inject AI capabilities into your ADF/Databricks pipelines:
 
 Deploy ML models as Azure ML endpoints per data domain:
 
-```
+```text
 ┌─────────────────────────────────────────────────────┐
 │                Azure ML Workspace                    │
 │                                                      │
@@ -79,7 +81,7 @@ Deploy ML models as Azure ML endpoints per data domain:
 
 ## Directory Structure
 
-```
+```text
 platform/ai_integration/
 ├── README.md                    # This file
 ├── rag/
@@ -145,3 +147,12 @@ python embeddings/embedding_pipeline.py \
 python rag/query_engine.py \
   --query "What are the USDA crop yield trends for corn in Iowa?"
 ```
+
+---
+
+## Related Documentation
+
+- [Platform Components](../README.md) - Platform component index
+- [Platform Services](../../docs/PLATFORM_SERVICES.md) - Detailed platform service descriptions
+- [Architecture](../../docs/ARCHITECTURE.md) - Overall system architecture
+- [Data Marketplace](../data_marketplace/README.md) - Data product discovery and access

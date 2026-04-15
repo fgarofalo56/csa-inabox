@@ -1,5 +1,7 @@
 # Open-Source Alternatives for Azure Government
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Platform Engineers
+
 When deploying Cloud Scale Analytics in Azure Government, some services may have
 limited availability or missing features. This directory provides open-source
 alternatives that can be deployed on AKS (Azure Kubernetes Service) in Gov regions.
@@ -77,3 +79,13 @@ All open-source alternatives integrate with the core CSA platform via:
 3. **Managed Identity** — Authentication to Azure resources
 4. **Private Endpoints** — Network isolation
 5. **Log Analytics** — Centralized monitoring via Fluentd/OpenTelemetry
+
+---
+
+## Related Documentation
+
+- [Platform Components](../README.md) - Platform component index
+- [Platform Services](../../docs/PLATFORM_SERVICES.md) - Detailed platform service descriptions
+- [Architecture](../../docs/ARCHITECTURE.md) - Overall system architecture
+- [Governance](../governance/README.md) - Purview automation and classification
+- [Shared Services](../shared-services/README.md) - Reusable function library

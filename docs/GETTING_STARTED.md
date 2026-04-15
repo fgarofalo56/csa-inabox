@@ -1,5 +1,33 @@
 # Getting Started with CSA-in-a-Box
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** New Users
+
+## Table of Contents
+
+- [Prerequisites](#prerequisites)
+  - [Azure Requirements](#azure-requirements)
+  - [Local Tools](#local-tools)
+  - [Azure RBAC Permissions](#azure-rbac-permissions)
+- [Quick Start (30 minutes)](#quick-start-30-minutes)
+  - [Step 1: Clone and Setup](#step-1-clone-and-setup)
+  - [Step 2: Configure Parameters](#step-2-configure-parameters)
+  - [Step 3: Deploy Azure Landing Zone (Foundation)](#step-3-deploy-azure-landing-zone-foundation)
+  - [Step 4: Deploy Data Management Landing Zone](#step-4-deploy-data-management-landing-zone)
+  - [Step 5: Deploy Data Landing Zone](#step-5-deploy-data-landing-zone)
+  - [Step 6: Verify Deployment](#step-6-verify-deployment)
+- [Deployment Order](#deployment-order)
+- [Common Issues](#common-issues)
+- [Platform Services](#platform-services)
+- [Data Onboarding Portal](#data-onboarding-portal)
+  - [Choosing a Frontend](#choosing-a-frontend)
+- [Vertical Examples](#vertical-examples)
+  - [Available Verticals](#available-verticals)
+  - [Running a Vertical Example](#running-a-vertical-example)
+- [Azure Government Deployment](#azure-government-deployment)
+  - [Quick Start (Gov)](#quick-start-gov)
+- [Quick Links](#quick-links)
+- [Next Steps](#next-steps)
+
 ## Prerequisites
 
 ### Azure Requirements
@@ -95,7 +123,7 @@ az storage account list --query "[?tags.Project]" -o table
 
 ## Deployment Order
 
-```
+```text
 1. Landing Zone (ALZ)     → Management + Connectivity subscriptions
        ↓
 2. DMLZ                   → Data Management subscription (Purview, Key Vault)
@@ -262,3 +290,13 @@ availability matrix.
 6. **Try a Vertical**: Pick any vertical from `examples/` and run its pipeline end-to-end
 7. **Deploy the Portal**: Choose a frontend from `portal/` and connect it to the shared backend
 8. **Azure Government**: Use `deploy/bicep/gov/` for FedRAMP-compliant deployments
+
+---
+
+## Related Documentation
+
+- [Quick Start](QUICKSTART.md) - 60-minute hands-on tutorial
+- [Architecture](ARCHITECTURE.md) - Comprehensive architecture reference
+- [Troubleshooting](TROUBLESHOOTING.md) - Common issues and fixes
+- [ADF Setup](../scripts/deploy/deploy-adf.sh) - ADF deployment helper script
+- [Databricks Guide](DATABRICKS_GUIDE.md) - Databricks setup and troubleshooting

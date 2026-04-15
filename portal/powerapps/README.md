@@ -1,11 +1,24 @@
 # PowerApps + Logic Apps Portal
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Frontend Developers
+
+## Table of Contents
+
+- [Architecture](#architecture)
+- [Components](#components)
+- [Setup Instructions](#setup-instructions)
+- [Solution Structure](#solution-structure)
+- [Deployment](#deployment)
+- [Azure Government](#azure-government)
+- [Pros and Cons](#pros-and-cons)
+- [Related Documentation](#related-documentation)
+
 A low-code/no-code data onboarding portal built with Microsoft Power Platform.
 Best suited for organizations already invested in the Microsoft 365 ecosystem.
 
 ## Architecture
 
-```
+```text
 ┌────────────────────────────────────────────────────────────┐
 │              Power Platform                                 │
 │  ┌──────────────┐  ┌──────────────────────────────────┐    │
@@ -110,7 +123,7 @@ pac solution import --path ./solution/CSAPortal_managed.zip
 
 Tables are auto-created by the solution import. Verify:
 
-```
+```text
 Data Sources     → csa_datasource
 Pipelines        → csa_pipeline
 Data Products    → csa_dataproduct
@@ -121,7 +134,7 @@ Domains          → csa_domain
 
 ## Solution Structure
 
-```
+```text
 portal/powerapps/
 ├── README.md                    # This file
 ├── solution/
@@ -210,3 +223,11 @@ Update all connection URLs and authentication endpoints accordingly.
 | Integration | Excellent — native M365, Dataverse, Azure connectors |
 | Scalability | Good — Dataverse handles millions of records |
 | Offline | Limited — requires connectivity |
+
+---
+
+## Related Documentation
+
+- [Portal Implementations](../README.md) - Portal implementation index
+- [Shared Backend](../shared/README.md) - Shared backend API
+- [Architecture](../../docs/ARCHITECTURE.md) - Overall system architecture

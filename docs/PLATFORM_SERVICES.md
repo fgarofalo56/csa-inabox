@@ -1,8 +1,26 @@
 # Platform Services Guide
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Architects
+
 Platform services are the Fabric-equivalent capabilities that extend the base
 landing zones. Each service is independently deployable and has its own README
 with detailed usage instructions.
+
+## Table of Contents
+
+- [Services Overview](#services-overview)
+- [1. OneLake Pattern](#1-onelake-pattern)
+- [2. Data Activator](#2-data-activator)
+- [3. Direct Lake](#3-direct-lake)
+- [4. Data Marketplace](#4-data-marketplace)
+- [5. Governance Framework](#5-governance-framework)
+- [6. Multi-Synapse](#6-multi-synapse)
+- [7. Metadata Framework](#7-metadata-framework)
+- [8. AI Integration](#8-ai-integration)
+- [9. Shared Services](#9-shared-services)
+- [10. OSS Alternatives](#10-oss-alternatives)
+- [Service Dependency Map](#service-dependency-map)
+- [Configuration](#configuration)
 
 ## Services Overview
 
@@ -338,7 +356,7 @@ helm install keycloak platform/oss-alternatives/keycloak/chart \
 
 Deploy platform services in this recommended order:
 
-```
+```text
 1. OneLake Pattern         (foundation — storage + metadata)
 2. Shared Services         (reusable functions)
 3. Governance Framework    (classification + lineage)
@@ -360,3 +378,11 @@ All platform services read shared configuration from:
 - **Environment Variables** — Local development overrides
 
 See the root [`.env.example`](../.env.example) for all required environment variables.
+
+---
+
+## Related Documentation
+
+- [Architecture](ARCHITECTURE.md) - Comprehensive architecture reference
+- [Multi-Region DR](DR.md) - Multi-region disaster recovery runbook
+- [Cost Management](../governance/finops/) - FinOps budget alerts

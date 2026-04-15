@@ -1,7 +1,20 @@
 # Platform Governance — Purview Automation, Classification, and Data Sharing
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Platform Engineers
+
 > **Enhanced governance layer for CSA-in-a-Box**
->
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Components](#components)
+- [Purview Automation](#purview-automation)
+- [Classification Rules](#classification-rules)
+- [Data Sharing Agreements](#data-sharing-agreements)
+- [Deployment](#deployment)
+- [Relationship to Core Governance](#relationship-to-core-governance)
+- [Related Documentation](#related-documentation)
+
 > Extends the core `governance/` package with Purview API automation,
 > classification rule management, lineage registration, and inter-domain
 > data sharing agreements.
@@ -24,7 +37,7 @@ portal. It covers:
 
 ## Components
 
-```
+```text
 platform/governance/
 ├── README.md                       # This file
 ├── purview_automation.py           # Purview API automation module
@@ -190,3 +203,13 @@ This module extends the core `governance/` package:
 | Pipeline enforcement | Scan scheduling |
 | Great Expectations runner | Sensitivity labeling |
 | | Data sharing agreements |
+
+---
+
+## Related Documentation
+
+- [Platform Components](../README.md) - Platform component index
+- [Platform Services](../../docs/PLATFORM_SERVICES.md) - Detailed platform service descriptions
+- [Architecture](../../docs/ARCHITECTURE.md) - Overall system architecture
+- [Data Marketplace](../data_marketplace/README.md) - Data product discovery and access
+- [Shared Services](../shared-services/README.md) - Reusable function library

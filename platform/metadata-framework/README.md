@@ -1,5 +1,28 @@
 # Metadata-Driven Pipeline Framework
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Platform Engineers
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [Pipeline Generation Flow](#pipeline-generation-flow)
+- [Core Components](#core-components)
+- [Supported Source Types](#supported-source-types)
+- [Ingestion Modes](#ingestion-modes)
+- [Quick Start](#quick-start)
+- [Schema Detection](#schema-detection)
+- [Governance Integration](#governance-integration)
+- [Configuration](#configuration)
+- [Examples](#examples)
+- [Development](#development)
+- [Monitoring and Troubleshooting](#monitoring-and-troubleshooting)
+- [Security Considerations](#security-considerations)
+- [Performance Guidelines](#performance-guidelines)
+- [Roadmap](#roadmap)
+- [Contributing](#contributing)
+- [Related Documentation](#related-documentation)
+
 The metadata-driven pipeline framework is the core engine of the CSA-in-a-Box platform that automatically generates Azure Data Factory (ADF) pipelines from metadata definitions. This framework enables a declarative, schema-driven approach to data ingestion that scales across diverse data sources and ingestion patterns.
 
 ## Overview
@@ -430,3 +453,13 @@ MIT License - see `LICENSE` file in repository root.
 - **Issues**: Create GitHub issues for bugs and feature requests
 - **Discussion**: Use GitHub Discussions for questions and ideas
 - **Enterprise Support**: Contact the CSA-in-a-Box team for enterprise support options
+
+---
+
+## Related Documentation
+
+- [Platform Components](../README.md) - Platform component index
+- [Platform Services](../../docs/PLATFORM_SERVICES.md) - Detailed platform service descriptions
+- [Architecture](../../docs/ARCHITECTURE.md) - Overall system architecture
+- [OneLake Pattern](../onelake-pattern/README.md) - ADLS Gen2 unified data lake
+- [Direct Lake](../direct-lake/README.md) - Power BI direct access to Delta Lake

@@ -1,5 +1,41 @@
 # DOT Transportation Analytics Platform
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Data Engineers
+
+## Table of Contents
+- [Overview](#overview)
+  - [Key Features](#key-features)
+  - [Data Sources](#data-sources)
+- [Architecture Overview](#architecture-overview)
+- [Prerequisites](#prerequisites)
+  - [Azure Resources](#azure-resources)
+  - [Tools Required](#tools-required)
+  - [API Access](#api-access)
+- [Quick Start](#quick-start)
+  - [1. Environment Setup](#1-environment-setup)
+  - [2. Configure API Keys](#2-configure-api-keys)
+  - [3. Generate Sample Data](#3-generate-sample-data)
+  - [4. Deploy Infrastructure](#4-deploy-infrastructure)
+  - [5. Run dbt Models](#5-run-dbt-models)
+- [Sample Analytics Scenarios](#sample-analytics-scenarios)
+  - [1. Highway Safety Hotspot Analysis](#1-highway-safety-hotspot-analysis)
+  - [2. Infrastructure Maintenance Prioritization](#2-infrastructure-maintenance-prioritization)
+  - [3. Transit Ridership Trend Analysis](#3-transit-ridership-trend-analysis)
+- [Data Products](#data-products)
+  - [Crash Hotspots](#crash-hotspots-crash-hotspots)
+  - [Bridge Priority Index](#bridge-priority-index-bridge-priority)
+  - [Transit Ridership Trends](#transit-ridership-trends-transit-ridership)
+- [Configuration](#configuration)
+  - [dbt Profiles](#dbt-profiles)
+  - [Environment Variables](#environment-variables)
+- [Azure Government Notes](#azure-government-notes)
+- [Monitoring & Alerts](#monitoring--alerts)
+- [Troubleshooting](#troubleshooting)
+  - [Common Issues](#common-issues)
+- [Contributing](#contributing)
+- [License](#license)
+- [Acknowledgments](#acknowledgments)
+
 A comprehensive transportation analytics platform built on Azure Cloud Scale Analytics (CSA), providing insights into highway safety, infrastructure conditions, transit performance, and aviation operations using official Department of Transportation data sources.
 
 ## Overview
@@ -383,3 +419,14 @@ This project is licensed under the MIT License. See `LICENSE` file for details.
 - NHTSA, FHWA, FTA, and FAA for maintaining comprehensive public transportation data
 - Azure Cloud Scale Analytics team for the foundational platform
 - Contributors and the open-source community
+
+---
+
+## Related Documentation
+
+- [DOT Architecture](ARCHITECTURE.md) - Detailed platform architecture and design decisions
+- [Examples Index](../README.md) - Overview of all CSA-in-a-Box example verticals
+- [Platform Architecture](../../docs/ARCHITECTURE.md) - Core CSA platform architecture
+- [Getting Started Guide](../../docs/GETTING_STARTED.md) - Platform setup and onboarding
+- [Interior Natural Resources](../interior/README.md) - Related federal infrastructure vertical
+- [USPS Postal Operations](../usps/README.md) - Related federal logistics vertical

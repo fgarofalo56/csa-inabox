@@ -1,5 +1,7 @@
 # End-to-End Integration Tests
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** QA Engineers / Developers
+
 This directory contains end-to-end integration tests for the CSA-in-a-Box
 platform. The tests validate the full data pipeline from Bronze ingestion
 through Gold business tables, data contracts, and the streaming pipeline.
@@ -86,7 +88,7 @@ Sample data in `seed_data/` is loaded into DuckDB for testing:
 
 ## Architecture
 
-```
+```text
 tests/e2e/
 ├── __init__.py
 ├── conftest.py              # DuckDB fixtures, contract loaders
@@ -110,3 +112,10 @@ Databricks or any external services.
 - Tests marked `@pytest.mark.live` require Azure CLI / live connection
 - Use `make test-e2e` to skip live tests (`-m "not live"`)
 - Use `make test-e2e-live` to run everything
+
+---
+
+## Related Documentation
+
+- [Production Checklist](../../docs/PRODUCTION_CHECKLIST.md) - Pre-deployment verification steps
+- [Troubleshooting Guide](../../docs/TROUBLESHOOTING.md) - Common issues and solutions

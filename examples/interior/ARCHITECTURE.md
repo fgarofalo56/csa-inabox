@@ -1,5 +1,39 @@
 # Department of Interior Natural Resources Architecture
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Architects / Data Engineers
+
+## Table of Contents
+- [Overview](#overview)
+- [Domain Context](#domain-context)
+  - [Natural Resource Data Landscape](#natural-resource-data-landscape)
+  - [Data Characteristics](#data-characteristics)
+- [Architecture Layers](#architecture-layers)
+  - [Streaming Ingestion Layer](#streaming-ingestion-layer)
+  - [Batch Ingestion Layer](#batch-ingestion-layer)
+  - [Bronze Layer (Raw Data)](#bronze-layer-raw-data)
+  - [Silver Layer (Cleaned & Conformed)](#silver-layer-cleaned--conformed)
+  - [Gold Layer (Business Analytics)](#gold-layer-business-analytics)
+- [Data Flow Architecture](#data-flow-architecture)
+  - [Hybrid Batch + Streaming Pipeline](#hybrid-batch--streaming-pipeline)
+- [Security Architecture](#security-architecture)
+  - [Data Protection](#data-protection)
+  - [Compliance](#compliance)
+  - [Sensitive Data Handling](#sensitive-data-handling)
+- [Performance Optimization](#performance-optimization)
+  - [Data Partitioning Strategy](#data-partitioning-strategy)
+  - [Streaming Optimization](#streaming-optimization)
+  - [Caching Strategy](#caching-strategy)
+- [Monitoring & Observability](#monitoring--observability)
+  - [Data Quality Monitoring](#data-quality-monitoring)
+  - [Alerting Strategy](#alerting-strategy)
+- [Disaster Recovery](#disaster-recovery)
+  - [Backup Strategy](#backup-strategy)
+  - [Business Continuity](#business-continuity)
+- [Technology Stack](#technology-stack)
+  - [Core Platform](#core-platform)
+  - [Development Tools](#development-tools)
+  - [Programming Languages](#programming-languages)
+
 ## Overview
 
 The Interior Natural Resources Analytics platform is built on Azure Cloud Scale Analytics (CSA) and follows a domain-driven design approach with an added real-time streaming component. It ingests data from multiple Interior Department bureaus, transforms it through a medallion architecture, and provides analytical insights for resource management, public safety, and environmental monitoring.
@@ -320,3 +354,13 @@ alert:
 - **Web APIs**: Python (FastAPI)
 - **Infrastructure**: Bicep, Terraform
 - **Analytics**: Python (pandas, scikit-learn, obspy), R
+
+---
+
+## Related Documentation
+
+- [Interior README](README.md) - Deployment guide, quick start, and analytics scenarios
+- [Platform Architecture](../../docs/ARCHITECTURE.md) - Core CSA platform architecture
+- [Platform Services](../../docs/PLATFORM_SERVICES.md) - Shared Azure service configurations
+- [DOT Architecture](../dot/ARCHITECTURE.md) - Related federal infrastructure architecture
+- [Tribal Health Architecture](../tribal-health/ARCHITECTURE.md) - Related federal/tribal architecture

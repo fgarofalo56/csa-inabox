@@ -1,7 +1,22 @@
 # OneLake Pattern — ADLS Gen2 + Unity Catalog
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Platform Engineers
+
 > **CSA-in-a-Box equivalent of Microsoft Fabric OneLake**
->
+
+## Table of Contents
+
+- [How OneLake Maps to CSA-in-a-Box](#how-onelake-maps-to-csa-in-a-box)
+- [Architecture](#architecture)
+- [Naming Conventions](#naming-conventions)
+- [Shortcut Pattern](#shortcut-pattern)
+- [Cross-Domain Access via Managed Identity](#cross-domain-access-via-managed-identity)
+- [Deployment](#deployment)
+- [Configuration](#configuration)
+- [Security Model](#security-model)
+- [Migration from Fabric](#migration-from-fabric)
+- [Related Documentation](#related-documentation)
+
 > OneLake is not available in Azure Government ("Forecasted" status). This
 > pattern delivers the same logical data-lake abstraction using ADLS Gen2
 > with hierarchical namespace, Delta Lake, and Databricks Unity Catalog.
@@ -33,7 +48,7 @@ and metadata.
 
 ## Architecture
 
-```
+```text
 ┌─────────────────────────────────────────────────────┐
 │                   Azure Subscription                │
 │  ┌──────────────┐  ┌──────────────┐  ┌───────────┐ │
@@ -66,7 +81,7 @@ familiar with Fabric can navigate the storage hierarchy intuitively.
 
 ### Storage Account Naming
 
-```
+```text
 st{env}{domain}{region}     # e.g. stprodsaleseus2
 ```
 
@@ -76,7 +91,7 @@ st{env}{domain}{region}     # e.g. stprodsaleseus2
 
 ### Container (Lakehouse) Naming
 
-```
+```text
 bronze      # Raw ingestion layer
 silver      # Cleansed and conformed
 gold        # Business-ready aggregates
@@ -85,12 +100,12 @@ quarantine  # Failed quality checks
 
 ### Path Convention (Table Equivalent)
 
-```
+```text
 /{container}/{domain}/{data-product}/{partition}/
 ```
 
 Example:
-```
+```text
 /gold/sales/orders/year=2024/month=06/part-00001.parquet
 /silver/finance/invoices/_delta_log/
 ```
@@ -203,3 +218,13 @@ See also:
 - `platform/direct-lake/` — Power BI Direct Lake equivalent
 - `platform/data-activator/` — Data Activator equivalent
 - `platform/data_marketplace/` — Data marketplace / product discovery
+
+---
+
+## Related Documentation
+
+- [Platform Components](../README.md) - Platform component index
+- [Platform Services](../../docs/PLATFORM_SERVICES.md) - Detailed platform service descriptions
+- [Architecture](../../docs/ARCHITECTURE.md) - Overall system architecture
+- [Metadata Framework](../metadata-framework/README.md) - Metadata-driven pipeline generation
+- [Direct Lake](../direct-lake/README.md) - Power BI direct access to Delta Lake

@@ -1,5 +1,7 @@
 # Data Lifecycle Scripts
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Developers
+
 Shell scripts for managing Delta Lake table data on ADLS Gen2 across the CSA-in-a-Box medallion architecture.
 
 ## Scripts
@@ -144,3 +146,10 @@ All scripts write logs to `./temp/` (gitignored):
 - `temp/seed-logs/seed_<timestamp>.log`
 
 Metadata JSON files are written alongside logs for audit purposes.
+
+---
+
+## Related Documentation
+
+- [Getting Started Guide](../../docs/GETTING_STARTED.md) - Platform setup and onboarding
+- [Examples](../../examples/README.md) - Sample data pipelines and use cases

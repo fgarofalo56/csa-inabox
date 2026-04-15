@@ -1,5 +1,46 @@
 # USDA Agricultural Analytics Platform
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Data Engineers
+
+## Table of Contents
+- [Overview](#overview)
+  - [Key Features](#key-features)
+  - [Data Sources](#data-sources)
+- [Architecture Overview](#architecture-overview)
+- [Prerequisites](#prerequisites)
+  - [Azure Resources](#azure-resources)
+  - [Tools Required](#tools-required)
+  - [API Access](#api-access)
+- [Quick Start](#quick-start)
+  - [1. Environment Setup](#1-environment-setup)
+  - [2. Configure API Keys](#2-configure-api-keys)
+  - [3. Generate Sample Data](#3-generate-sample-data)
+  - [4. Deploy Infrastructure](#4-deploy-infrastructure)
+  - [5. Run dbt Models](#5-run-dbt-models)
+- [Sample Analytics Scenarios](#sample-analytics-scenarios)
+  - [1. Crop Yield Forecasting](#1-crop-yield-forecasting)
+  - [2. SNAP Enrollment Analysis](#2-snap-enrollment-analysis)
+  - [3. Food Safety Risk Assessment](#3-food-safety-risk-assessment)
+  - [4. Agricultural Dashboard Summary](#4-agricultural-dashboard-summary)
+- [Data Products](#data-products)
+  - [Crop Yields](#crop-yields-crop-yields)
+  - [SNAP Enrollment](#snap-enrollment-snap-enrollment)
+  - [Food Safety Risk](#food-safety-risk-food-safety-risk)
+- [Configuration](#configuration)
+  - [dbt Profiles](#dbt-profiles)
+  - [Environment Variables](#environment-variables)
+- [Monitoring & Alerts](#monitoring--alerts)
+- [Development](#development)
+  - [Adding New Data Sources](#adding-new-data-sources)
+  - [Testing](#testing)
+- [Troubleshooting](#troubleshooting)
+  - [Common Issues](#common-issues)
+  - [Logs](#logs)
+- [Contributing](#contributing)
+- [License](#license)
+- [Support](#support)
+- [Acknowledgments](#acknowledgments)
+
 A comprehensive agricultural analytics platform built on Azure Cloud Scale Analytics (CSA), providing insights into crop yields, food safety, nutrition assistance programs, and agricultural economic indicators using official USDA data sources.
 
 ## Overview
@@ -388,3 +429,15 @@ This project is licensed under the MIT License. See `LICENSE` file for details.
 - USDA for providing comprehensive public agricultural data APIs
 - Azure Cloud Scale Analytics team for the foundational platform
 - Contributors and the open-source community
+
+---
+
+## Related Documentation
+
+- [USDA Architecture](ARCHITECTURE.md) - Detailed platform architecture and design decisions
+- [USDA Implementation Summary](IMPLEMENTATION_SUMMARY.md) - Implementation details and file structure
+- [Examples Index](../README.md) - Overview of all CSA-in-a-Box example verticals
+- [Platform Architecture](../../docs/ARCHITECTURE.md) - Core CSA platform architecture
+- [Getting Started Guide](../../docs/GETTING_STARTED.md) - Platform setup and onboarding
+- [EPA Environmental Analytics](../epa/README.md) - Related agriculture/environment vertical
+- [NOAA Climate Analytics](../noaa/README.md) - Related environmental data vertical

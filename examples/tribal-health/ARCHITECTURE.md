@@ -1,5 +1,34 @@
 # Tribal Health Data Warehouse — Architecture
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Architects / Data Engineers
+
+## Table of Contents
+- [Overview](#overview)
+- [Azure Government Topology](#azure-government-topology)
+  - [Region Selection](#region-selection)
+- [HIPAA Compliance Architecture](#hipaa-compliance-architecture)
+  - [Encryption](#encryption)
+  - [Access Controls](#access-controls)
+  - [Audit Logging](#audit-logging)
+- [Tribal Data Sovereignty Zones](#tribal-data-sovereignty-zones)
+  - [Per-Tribe Data Isolation Model](#per-tribe-data-isolation-model)
+  - [Consent-Based Data Sharing](#consent-based-data-sharing)
+- [HL7 FHIR Resource Mappings](#hl7-fhir-resource-mappings)
+  - [FHIR Extension: Tribal Affiliation](#fhir-extension-tribal-affiliation)
+- [Network Architecture](#network-architecture)
+  - [Private Endpoints](#private-endpoints)
+  - [Network Security Groups](#network-security-groups)
+- [Managed Identity Architecture](#managed-identity-architecture)
+- [Medallion Architecture Detail](#medallion-architecture-detail)
+  - [Bronze Layer](#bronze-layer)
+  - [Silver Layer](#silver-layer)
+  - [Gold Layer](#gold-layer)
+- [Disaster Recovery](#disaster-recovery)
+- [Technology Stack](#technology-stack)
+  - [Core Platform (Azure Government)](#core-platform-azure-government)
+  - [Security & Compliance](#security--compliance)
+  - [Development Tools](#development-tools)
+
 ## Overview
 
 The Tribal Health Data Warehouse is built on Azure Cloud Scale Analytics (CSA) and deployed exclusively within Azure Government regions. The architecture enforces HIPAA compliance, FedRAMP High controls, and tribal data sovereignty at every layer — from network topology to row-level security in analytical models.
@@ -80,7 +109,7 @@ graph TD
 
 ### Encryption
 
-```
+```text
 ┌─────────────────────────────────────────────────────────┐
 │                    Encryption Model                      │
 ├─────────────────────────────────────────────────────────┤
@@ -152,7 +181,7 @@ Audit fields captured:
 
 Each tribal affiliation maps to an isolated data zone enforced through multiple layers:
 
-```
+```text
 ┌───────────────────────────────────────────────────────────────┐
 │                    Data Sovereignty Layers                     │
 ├───────────────────────────────────────────────────────────────┤
@@ -249,7 +278,7 @@ All data-path communication uses Azure Private Link — no data traverses the pu
 
 ### Network Security Groups
 
-```
+```text
 Ingestion Subnet NSG:
   ├── Allow: VPN Gateway → ADF (443)
   ├── Allow: ADF → ADLS PE (443)
@@ -355,3 +384,13 @@ graph TD
 - **Version Control**: Azure DevOps (Gov) or GitHub Enterprise
 - **CI/CD**: Azure Pipelines with Gov agent pools
 - **IaC**: Bicep (Azure-native)
+
+---
+
+## Related Documentation
+
+- [Tribal Health README](README.md) - Deployment guide, quick start, and analytics scenarios
+- [Platform Architecture](../../docs/ARCHITECTURE.md) - Core CSA platform architecture
+- [Platform Services](../../docs/PLATFORM_SERVICES.md) - Shared Azure service configurations
+- [Interior Architecture](../interior/ARCHITECTURE.md) - Related federal/tribal architecture
+- [Casino Analytics Architecture](../casino-analytics/ARCHITECTURE.md) - Related tribal operations architecture

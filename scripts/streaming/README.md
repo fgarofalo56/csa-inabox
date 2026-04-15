@@ -1,10 +1,24 @@
 # Streaming Analytics Pipeline
 
+> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Developers
+
+## Table of Contents
+
+- [Architecture Overview](#architecture-overview)
+- [Event Schema](#event-schema)
+- [Sample Queries](#sample-queries)
+- [Deploying Queries](#deploying-queries)
+- [Input/Output Configuration](#inputoutput-configuration)
+- [Testing with VS Code](#testing-with-vs-code)
+- [Monitoring](#monitoring)
+- [Reference Data Setup](#reference-data-setup)
+- [File Index](#file-index)
+
 Real-time event processing for the CSA-in-a-Box platform using Azure Event Hub, Azure Stream Analytics, and Azure Data Explorer (ADX).
 
 ## Architecture Overview
 
-```
+```text
 produce_events.py                Stream Analytics Jobs               Sinks
  (Event Producer)                (ASAQL Queries)
                            +---------------------------------+
@@ -359,7 +373,7 @@ Reference data in Stream Analytics can be refreshed by:
 
 ## File Index
 
-```
+```text
 scripts/streaming/
   produce_events.py                         # Event producer (Event Hub publisher)
   adx_setup.kql                             # ADX table/mapping/view definitions
@@ -370,3 +384,10 @@ scripts/streaming/
     session_window_user_activity.asaql       # Session window user tracking
     reference_join_enrichment.asaql          # Reference data JOIN enrichment
 ```
+
+---
+
+## Related Documentation
+
+- [IoT Streaming Example](../../examples/iot-streaming/README.md) - End-to-end streaming example
+- [Architecture Overview](../../docs/ARCHITECTURE.md) - Platform architecture reference

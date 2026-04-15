@@ -45,3 +45,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Added encryption at host for SHIR VM
 - Added CMK parameter pass-through in lake zone storage
 - Added outbound NSG deny-all rules with service tag exceptions
+
+---
+
+## Related Documentation
+
+- [README](README.md) - Project overview and quick start
+- [Contributing](CONTRIBUTING.md) - Development guidelines and PR process
