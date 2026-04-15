@@ -7,6 +7,424 @@
 
 version: 2
 models:
+- name: slv_aging_report
+  description: 'Auto-generated dbt tests from data contract ''finance.aging_report'' v1.0.0. DO NOT EDIT — regenerate with:
+    python -m governance.contracts.dbt_test_generator --write'
+  columns:
+  - name: invoice_id
+    description: Unique invoice identifier from the billing system.
+    tests:
+    - not_null
+  - name: customer_id
+    description: Customer identifier, consistent with shared.customers.
+    tests:
+    - not_null
+  - name: invoice_date
+    description: Date the invoice was issued.
+    tests:
+    - not_null
+  - name: due_date
+    description: Payment due date.
+    tests:
+    - not_null
+  - name: invoice_total
+    description: Invoice total including tax (USD).
+    tests:
+    - not_null
+  - name: total_paid
+    description: Sum of payments received against this invoice (USD).
+    tests:
+    - not_null
+  - name: outstanding_balance
+    description: Remaining balance (invoice_total - total_paid).
+    tests:
+    - not_null
+    - dbt_utils.expression_is_true:
+        expression: outstanding_balance >= 0
+  - name: days_past_due
+    description: Number of days past the due date (negative means not yet due).
+    tests:
+    - not_null
+  - name: aging_bucket
+    description: Aging classification bucket.
+    tests:
+    - not_null
+    - accepted_values:
+        values:
+        - CURRENT
+        - 1-30
+        - 31-60
+        - 61-90
+        - 90+
+        - PAID
+  - name: estimated_loss_rate
+    description: Estimated loss rate based on aging bucket (0.00 to 0.25).
+    tests:
+    - not_null
+    - dbt_utils.expression_is_true:
+        expression: estimated_loss_rate >= 0 AND estimated_loss_rate <= 1
+- name: slv_invoices
+  description: 'Auto-generated dbt tests from data contract ''finance.invoices'' v1.0.0. DO NOT EDIT — regenerate with: python
+    -m governance.contracts.dbt_test_generator --write'
+  columns:
+  - name: invoice_sk
+    description: Surrogate key (md5 of invoice_id). Generated in Silver.
+    tests:
+    - not_null
+    - unique
+  - name: invoice_id
+    description: Unique invoice identifier from the billing system.
+    tests:
+    - not_null
+  - name: order_id
+    description: FK to sales.orders.order_id. Null for manual invoices.
+  - name: customer_id
+    description: Customer identifier, consistent with shared.customers.
+    tests:
+    - not_null
+  - name: invoice_date
+    description: Date the invoice was issued.
+    tests:
+    - not_null
+  - name: due_date
+    description: Payment due date.
+    tests:
+    - not_null
+  - name: total_amount
+    description: Invoice total before tax (USD).
+    tests:
+    - not_null
+    - dbt_utils.expression_is_true:
+        expression: total_amount >= 0
+        config:
+          severity: warn
+  - name: tax_amount
+    description: Tax amount (USD).
+    tests:
+    - not_null
+  - name: status
+    description: Invoice lifecycle state.
+    tests:
+    - not_null
+    - accepted_values:
+        values:
+        - DRAFT
+        - SENT
+        - PAID
+        - OVERDUE
+        - CANCELLED
+        - PARTIAL
+  - name: is_valid
+    description: True when every quality flag is clean. Gold filters on this.
+    tests:
+    - not_null
+  - name: validation_errors
+    description: Human-readable '; '-joined list of validation failures.
+- name: slv_revenue_reconciliation
+  description: 'Auto-generated dbt tests from data contract ''finance.revenue_reconciliation'' v1.0.0. DO NOT EDIT — regenerate
+    with: python -m governance.contracts.dbt_test_generator --write'
+  columns:
+  - name: reconciliation_key
+    description: 'Surrogate key for reconciliation records. Derived from coalesce(order_id, invoice_id) to ensure uniqueness
+      across MATCHED, ORDER_ONLY, and INVOICE_ONLY rows.
+
+      '
+    tests:
+    - not_null
+  - name: order_id
+    description: Order identifier. Null for INVOICE_ONLY records.
+  - name: customer_id
+    description: Customer identifier from whichever side is present.
+  - name: order_date
+    description: Date the order was placed. Null for INVOICE_ONLY.
+  - name: order_amount
+    description: Order total from sales domain (USD). Null for INVOICE_ONLY.
+  - name: order_status
+    description: Order lifecycle state. Null for INVOICE_ONLY.
+  - name: invoice_id
+    description: Invoice identifier. Null for ORDER_ONLY records.
+  - name: invoice_date
+    description: Date the invoice was issued. Null for ORDER_ONLY.
+  - name: invoice_amount
+    description: Invoice total from finance domain (USD). Null for ORDER_ONLY.
+  - name: reconciliation_status
+    description: Match outcome of the reconciliation.
+    tests:
+    - not_null
+    - accepted_values:
+        values:
+        - MATCHED
+        - AMOUNT_MISMATCH
+        - ORDER_ONLY
+        - INVOICE_ONLY
+  - name: amount_difference
+    description: order_amount minus invoice_amount. Zero for matched records.
+    tests:
+    - not_null
+- name: slv_inventory
+  description: 'Auto-generated dbt tests from data contract ''inventory.inventory'' v1.0.0. DO NOT EDIT — regenerate with:
+    python -m governance.contracts.dbt_test_generator --write'
+  columns:
+  - name: inventory_sk
+    description: Surrogate key (md5 of inventory_id). Generated in Silver.
+    tests:
+    - not_null
+    - unique
+  - name: inventory_id
+    description: Unique inventory record identifier from the WMS.
+    tests:
+    - not_null
+  - name: product_id
+    description: FK to shared.products.product_id. Null for unlinked records.
+  - name: warehouse_id
+    description: FK to inventory.warehouses.warehouse_id.
+    tests:
+    - not_null
+  - name: qty_on_hand
+    description: Current quantity physically in warehouse.
+    tests:
+    - not_null
+    - dbt_utils.expression_is_true:
+        expression: qty_on_hand >= 0
+        config:
+          severity: warn
+  - name: qty_reserved
+    description: Quantity reserved for pending orders.
+    tests:
+    - not_null
+    - dbt_utils.expression_is_true:
+        expression: qty_reserved >= 0
+        config:
+          severity: warn
+  - name: reorder_point
+    description: Threshold below which a reorder alert is triggered.
+    tests:
+    - not_null
+  - name: last_restocked_at
+    description: Timestamp of the most recent restocking event.
+  - name: is_valid
+    description: True when every quality flag is clean. Gold filters on this.
+    tests:
+    - not_null
+  - name: validation_errors
+    description: Human-readable '; '-joined list of validation failures.
+- name: slv_inventory_snapshot
+  description: 'Auto-generated dbt tests from data contract ''inventory.inventory_snapshot'' v1.0.0. DO NOT EDIT — regenerate
+    with: python -m governance.contracts.dbt_test_generator --write'
+  columns:
+  - name: inventory_sk
+    description: Surrogate key from Silver inventory.
+    tests:
+    - not_null
+    - unique
+  - name: inventory_id
+    description: Unique inventory record identifier from the WMS.
+    tests:
+    - not_null
+  - name: product_id
+    description: FK to shared.products.product_id.
+  - name: warehouse_id
+    description: FK to inventory.warehouses.warehouse_id.
+    tests:
+    - not_null
+  - name: warehouse_sk
+    description: FK to dim_warehouses surrogate key.
+  - name: warehouse_name
+    description: Warehouse display name (denormalized from dim_warehouses).
+  - name: warehouse_region
+    description: Warehouse region (denormalized from dim_warehouses).
+  - name: qty_on_hand
+    description: Current quantity physically in warehouse.
+    tests:
+    - not_null
+    - dbt_utils.expression_is_true:
+        expression: qty_on_hand >= 0
+  - name: qty_reserved
+    description: Quantity reserved for pending orders.
+    tests:
+    - not_null
+    - dbt_utils.expression_is_true:
+        expression: qty_reserved >= 0
+  - name: qty_available
+    description: Available quantity (qty_on_hand - qty_reserved).
+    tests:
+    - not_null
+  - name: reorder_point
+    description: Threshold below which a reorder alert is triggered.
+    tests:
+    - not_null
+  - name: stock_status
+    description: Stock level classification based on quantity vs. reorder point.
+    tests:
+    - not_null
+    - accepted_values:
+        values:
+        - OUT_OF_STOCK
+        - LOW_STOCK
+        - ADEQUATE
+        - WELL_STOCKED
+  - name: needs_reorder
+    description: TRUE when available stock is at or below reorder point.
+    tests:
+    - not_null
+  - name: last_restocked_at
+    description: Timestamp of the most recent restocking event.
+  - name: days_since_restock
+    description: Number of days since the last restocking event.
+  - name: snapshot_date
+    description: Date of the snapshot.
+    tests:
+    - not_null
+- name: slv_inventory_turnover
+  description: 'Auto-generated dbt tests from data contract ''inventory.inventory_turnover'' v1.0.0. DO NOT EDIT — regenerate
+    with: python -m governance.contracts.dbt_test_generator --write'
+  columns:
+  - name: product_id
+    description: Product identifier (FK to shared.products).
+    tests:
+    - not_null
+  - name: product_name
+    description: Product display name (from shared.dim_products).
+  - name: product_category
+    description: Product category (from shared.dim_products).
+  - name: unit_price
+    description: Unit price in USD (from shared.dim_products).
+  - name: total_on_hand
+    description: Sum of qty_on_hand across all warehouses.
+    tests:
+    - not_null
+    - dbt_utils.expression_is_true:
+        expression: total_on_hand >= 0
+  - name: total_reserved
+    description: Sum of qty_reserved across all warehouses.
+    tests:
+    - not_null
+    - dbt_utils.expression_is_true:
+        expression: total_reserved >= 0
+  - name: total_available
+    description: Sum of available stock across all warehouses.
+    tests:
+    - not_null
+  - name: warehouse_count
+    description: Number of warehouses stocking this product.
+    tests:
+    - not_null
+    - dbt_utils.expression_is_true:
+        expression: warehouse_count >= 1
+  - name: inventory_status
+    description: Inventory level classification based on reorder points.
+    tests:
+    - not_null
+    - accepted_values:
+        values:
+        - STOCKOUT
+        - LOW_STOCK
+        - ADEQUATE
+        - WELL_STOCKED
+  - name: daily_demand
+    description: 'Average daily demand (currently NULL â€” requires product_id in fact_orders to enable product-level demand
+      attribution).
+
+      '
+  - name: days_of_supply
+    description: 'Estimated days of supply remaining (currently NULL â€” requires daily_demand calculation).
+
+      '
+  - name: supply_demand_status
+    description: 'Supply vs demand classification (currently NULL â€” requires demand data).
+
+      '
+- name: slv_reorder_alerts
+  description: 'Auto-generated dbt tests from data contract ''inventory.reorder_alerts'' v1.0.0. DO NOT EDIT — regenerate
+    with: python -m governance.contracts.dbt_test_generator --write'
+  columns:
+  - name: inventory_sk
+    description: Surrogate key from fact_inventory_snapshot.
+    tests:
+    - not_null
+  - name: inventory_id
+    description: Unique inventory record identifier.
+    tests:
+    - not_null
+  - name: product_id
+    description: FK to shared.products.product_id.
+  - name: product_name
+    description: Product display name (from shared.dim_products).
+  - name: product_category
+    description: Product category (from shared.dim_products).
+  - name: unit_price
+    description: Unit price in USD (from shared.dim_products).
+  - name: warehouse_id
+    description: Warehouse identifier.
+    tests:
+    - not_null
+  - name: warehouse_name
+    description: Warehouse display name.
+  - name: warehouse_region
+    description: Warehouse geographic region.
+  - name: qty_on_hand
+    description: Current quantity in warehouse.
+    tests:
+    - not_null
+  - name: qty_reserved
+    description: Quantity reserved for pending orders.
+    tests:
+    - not_null
+  - name: qty_available
+    description: Available quantity (on_hand - reserved).
+    tests:
+    - not_null
+  - name: reorder_point
+    description: Reorder threshold.
+    tests:
+    - not_null
+  - name: qty_deficit
+    description: How far below reorder point (reorder_point - qty_available).
+    tests:
+    - not_null
+    - dbt_utils.expression_is_true:
+        expression: qty_deficit >= 0
+  - name: alert_severity
+    description: Alert urgency level based on stock position.
+    tests:
+    - not_null
+    - accepted_values:
+        values:
+        - CRITICAL
+        - URGENT
+        - WARNING
+  - name: stock_status
+    description: Stock level classification.
+    tests:
+    - not_null
+    - accepted_values:
+        values:
+        - OUT_OF_STOCK
+        - LOW_STOCK
+        - ADEQUATE
+        - WELL_STOCKED
+- name: slv_warehouses
+  description: 'Auto-generated dbt tests from data contract ''inventory.warehouses'' v1.0.0. DO NOT EDIT — regenerate with:
+    python -m governance.contracts.dbt_test_generator --write'
+  columns:
+  - name: warehouse_sk
+    description: Surrogate key (md5 of warehouse_id). Generated in Silver.
+    tests:
+    - not_null
+    - unique
+  - name: warehouse_id
+    description: Original warehouse identifier from the WMS.
+    tests:
+    - not_null
+    - unique
+  - name: warehouse_name
+    description: Warehouse display name.
+    tests:
+    - not_null
+  - name: region
+    description: Geographic region of the warehouse.
+  - name: capacity
+    description: Maximum storage capacity of the warehouse.
 - name: slv_orders
   description: 'Auto-generated dbt tests from data contract ''sales.orders'' v1.0.0. DO NOT EDIT — regenerate with: python
     -m governance.contracts.dbt_test_generator --write'
@@ -49,3 +467,311 @@ models:
     - not_null
   - name: validation_errors
     description: Human-readable '; '-joined list of validation failures, empty for valid rows.
+- name: slv_sales_metrics
+  description: 'Auto-generated dbt tests from data contract ''sales.sales_metrics'' v1.0.0. DO NOT EDIT — regenerate with:
+    python -m governance.contracts.dbt_test_generator --write'
+  columns:
+  - name: order_date
+    description: Aggregation date.
+    tests:
+    - not_null
+  - name: sales_region
+    description: Geographic sales region.
+    tests:
+    - not_null
+  - name: sales_channel
+    description: Sales channel (e.g., online, retail).
+    tests:
+    - not_null
+  - name: total_orders
+    description: Count of distinct orders.
+    tests:
+    - not_null
+    - dbt_utils.expression_is_true:
+        expression: total_orders >= 0
+  - name: unique_customers
+    description: Count of distinct customers.
+    tests:
+    - not_null
+  - name: total_revenue
+    description: Sum of line totals (USD).
+    tests:
+    - not_null
+    - dbt_utils.expression_is_true:
+        expression: total_revenue >= 0
+        config:
+          severity: warn
+  - name: avg_line_value
+    description: Average line item value (USD).
+  - name: total_units_sold
+    description: Sum of quantities across all line items.
+    tests:
+    - not_null
+  - name: avg_unit_price
+    description: Average unit price across line items (USD).
+  - name: unique_products_sold
+    description: Count of distinct products sold.
+    tests:
+    - not_null
+  - name: revenue_per_order
+    description: Total revenue divided by total orders.
+  - name: units_per_order
+    description: Total units divided by total orders.
+- name: slv_customer_lifetime_value
+  description: 'Auto-generated dbt tests from data contract ''shared.customer_lifetime_value'' v1.0.0. DO NOT EDIT — regenerate
+    with: python -m governance.contracts.dbt_test_generator --write'
+  columns:
+  - name: customer_id
+    description: Unique customer identifier from the CRM.
+    tests:
+    - not_null
+    - unique
+  - name: first_name
+    description: Customer first name.
+  - name: last_name
+    description: Customer last name.
+  - name: email
+    description: Customer email address.
+  - name: total_orders
+    description: Total number of orders placed.
+    tests:
+    - not_null
+  - name: lifetime_revenue
+    description: Total revenue from all completed orders (USD).
+    tests:
+    - not_null
+    - dbt_utils.expression_is_true:
+        expression: lifetime_revenue >= 0
+  - name: avg_order_value
+    description: Average order value (USD).
+    tests:
+    - not_null
+  - name: customer_segment
+    description: 'Activity-based segment: active, at_risk, churned, never_purchased.'
+    tests:
+    - not_null
+    - accepted_values:
+        values:
+        - active
+        - at_risk
+        - churned
+        - never_purchased
+  - name: value_tier
+    description: 'Revenue-based tier: platinum (>=10k), gold (>=5k), silver (>=1k), bronze.'
+    tests:
+    - not_null
+    - accepted_values:
+        values:
+        - platinum
+        - gold
+        - silver
+        - bronze
+  - name: monthly_revenue_rate
+    description: Average monthly revenue since customer creation.
+- name: slv_customers
+  description: 'Auto-generated dbt tests from data contract ''shared.customers'' v1.0.0. DO NOT EDIT — regenerate with: python
+    -m governance.contracts.dbt_test_generator --write'
+  columns:
+  - name: customer_sk
+    description: Surrogate key (md5 of customer_id). Generated in Silver.
+    tests:
+    - not_null
+    - unique
+  - name: customer_id
+    description: Unique customer identifier from the CRM.
+    tests:
+    - not_null
+  - name: first_name
+    description: Customer first name (uppercase, trimmed).
+  - name: last_name
+    description: Customer last name (uppercase, trimmed).
+  - name: email
+    description: Customer email address (lowercase, trimmed).
+  - name: country_code
+    description: ISO country code (uppercase).
+  - name: is_valid
+    description: True when every quality flag is clean. Gold filters on this.
+    tests:
+    - not_null
+  - name: validation_errors
+    description: Human-readable '; '-joined list of validation failures.
+- name: slv_daily_order_metrics
+  description: 'Auto-generated dbt tests from data contract ''shared.daily_order_metrics'' v1.0.0. DO NOT EDIT — regenerate
+    with: python -m governance.contracts.dbt_test_generator --write'
+  columns:
+  - name: order_date
+    description: Calendar date of the aggregation.
+    tests:
+    - not_null
+    - unique
+  - name: total_orders
+    description: Count of distinct orders for the day.
+    tests:
+    - not_null
+    - dbt_utils.expression_is_true:
+        expression: total_orders >= 0
+  - name: unique_customers
+    description: Count of distinct customers who placed orders.
+    tests:
+    - not_null
+  - name: total_revenue
+    description: Sum of order totals for the day (USD).
+    tests:
+    - not_null
+  - name: avg_order_value
+    description: Average order value for the day (USD).
+  - name: min_order_value
+    description: Minimum order value for the day (USD).
+  - name: max_order_value
+    description: Maximum order value for the day (USD).
+  - name: delivered_orders
+    description: Count of orders with status DELIVERED.
+    tests:
+    - not_null
+  - name: cancelled_orders
+    description: Count of orders with status CANCELLED.
+    tests:
+    - not_null
+  - name: pending_orders
+    description: Count of orders with status PENDING.
+    tests:
+    - not_null
+  - name: cancellation_rate_pct
+    description: Percentage of cancelled orders (0-100).
+    tests:
+    - dbt_utils.expression_is_true:
+        expression: cancellation_rate_pct >= 0 AND cancellation_rate_pct <= 100
+- name: slv_monthly_revenue
+  description: 'Auto-generated dbt tests from data contract ''shared.monthly_revenue'' v1.0.0. DO NOT EDIT — regenerate with:
+    python -m governance.contracts.dbt_test_generator --write'
+  columns:
+  - name: month_key
+    description: Composite key (YYYY-MM-country-state) for merge.
+    tests:
+    - not_null
+    - unique
+  - name: revenue_year
+    description: Calendar year.
+    tests:
+    - not_null
+  - name: revenue_month
+    description: Calendar month (1-12).
+    tests:
+    - not_null
+    - dbt_utils.expression_is_true:
+        expression: revenue_month >= 1 AND revenue_month <= 12
+  - name: revenue_period
+    description: First day of the month.
+    tests:
+    - not_null
+  - name: country
+    description: Customer country code (or UNKNOWN).
+    tests:
+    - not_null
+  - name: state
+    description: Customer state code (or UNKNOWN).
+    tests:
+    - not_null
+  - name: total_orders
+    description: Count of distinct orders.
+    tests:
+    - not_null
+  - name: unique_customers
+    description: Count of distinct customers.
+    tests:
+    - not_null
+  - name: gross_revenue
+    description: Total revenue including cancellations and returns (USD).
+    tests:
+    - not_null
+  - name: net_revenue
+    description: Revenue excluding cancelled and returned orders (USD).
+    tests:
+    - not_null
+  - name: cancellation_rate_pct
+    description: Percentage of cancelled orders (0-100).
+    tests:
+    - dbt_utils.expression_is_true:
+        expression: cancellation_rate_pct >= 0 AND cancellation_rate_pct <= 100
+  - name: return_rate_pct
+    description: Percentage of returned orders (0-100).
+    tests:
+    - dbt_utils.expression_is_true:
+        expression: return_rate_pct >= 0 AND return_rate_pct <= 100
+- name: slv_orders
+  description: 'Auto-generated dbt tests from data contract ''shared.orders'' v1.0.0. DO NOT EDIT — regenerate with: python
+    -m governance.contracts.dbt_test_generator --write'
+  columns:
+  - name: order_sk
+    description: Surrogate key (md5 of order_id). Generated in Silver.
+    tests:
+    - not_null
+    - unique
+  - name: order_id
+    description: Unique order identifier from the commerce system.
+    tests:
+    - not_null
+  - name: customer_id
+    description: FK to shared.customers.customer_id. Null for ~5% of test rows.
+  - name: order_date
+    description: Date the order was placed.
+    tests:
+    - not_null
+  - name: total_amount
+    description: Order total (USD).
+    tests:
+    - not_null
+    - dbt_utils.expression_is_true:
+        expression: total_amount >= 0
+        config:
+          severity: warn
+  - name: status
+    description: Order lifecycle state.
+    tests:
+    - not_null
+    - accepted_values:
+        values:
+        - PENDING
+        - CONFIRMED
+        - SHIPPED
+        - DELIVERED
+        - CANCELLED
+        - RETURNED
+  - name: is_valid
+    description: True when every quality flag is clean. Gold filters on this.
+    tests:
+    - not_null
+  - name: validation_errors
+    description: Human-readable '; '-joined list of validation failures.
+- name: slv_products
+  description: 'Auto-generated dbt tests from data contract ''shared.products'' v1.0.0. DO NOT EDIT — regenerate with: python
+    -m governance.contracts.dbt_test_generator --write'
+  columns:
+  - name: product_sk
+    description: Surrogate key (md5 of product_id). Generated in Silver.
+    tests:
+    - not_null
+    - unique
+  - name: product_id
+    description: Unique product identifier from the catalog.
+    tests:
+    - not_null
+  - name: product_name
+    description: Product display name (trimmed).
+    tests:
+    - not_null
+  - name: category
+    description: Product category (uppercase, trimmed).
+  - name: unit_price
+    description: Standard unit price (USD).
+    tests:
+    - dbt_utils.expression_is_true:
+        expression: unit_price >= 0
+        config:
+          severity: warn
+  - name: is_valid
+    description: True when every quality flag is clean. Gold filters on this.
+    tests:
+    - not_null
+  - name: validation_errors
+    description: Human-readable '; '-joined list of validation failures.
