@@ -27,20 +27,20 @@ from ..models.source import (
     SourceStatus,
     SourceType,
 )
+from ..persistence import JsonStore
 from ..services.auth import get_current_user, require_role
 from ..services.provisioning import provisioning_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# ── In-memory store (demo) ───────────────────────────────────────────────────
-# TODO: Replace with Cosmos DB / PostgreSQL repository class.
-_sources: dict[str, SourceRecord] = {}
+# ── JSON-based persistence ──────────────────────────────────────────────────
+_sources_store = JsonStore("sources.json")
 
 
 def _seed_demo_sources() -> None:
     """Populate a handful of realistic demo sources on first access."""
-    if _sources:
+    if _sources_store.count() > 0:
         return
 
     demos = [
@@ -54,9 +54,20 @@ def _seed_demo_sources() -> None:
             connection={"host": "hr-sql.database.windows.net", "database": "HRData"},
             ingestion={"mode": "incremental", "schedule_cron": "0 2 * * *"},
             quality_rules=[
-                {"rule_name": "email_not_null", "rule_type": "not_null", "column": "email", "parameters": {}, "severity": "error"},
+                {
+                    "rule_name": "email_not_null",
+                    "rule_type": "not_null",
+                    "column": "email",
+                    "parameters": {},
+                    "severity": "error",
+                },
             ],
-            target={"landing_zone": "dlz-hr", "container": "bronze", "path_pattern": "hr/employees/{year}/{month}/{day}", "format": "delta"},
+            target={
+                "landing_zone": "dlz-hr",
+                "container": "bronze",
+                "path_pattern": "hr/employees/{year}/{month}/{day}",
+                "format": "delta",
+            },
             owner={"name": "Jane Smith", "email": "jane.smith@contoso.com", "team": "People Analytics"},
             tags={"env": "prod", "pii": "true"},
             status=SourceStatus.ACTIVE,
@@ -75,7 +86,12 @@ def _seed_demo_sources() -> None:
             connection={"host": "eh-mfg.servicebus.windows.net"},
             ingestion={"mode": "streaming"},
             quality_rules=[],
-            target={"landing_zone": "dlz-mfg", "container": "bronze", "path_pattern": "mfg/telemetry/{year}/{month}/{day}/{hour}", "format": "delta"},
+            target={
+                "landing_zone": "dlz-mfg",
+                "container": "bronze",
+                "path_pattern": "mfg/telemetry/{year}/{month}/{day}/{hour}",
+                "format": "delta",
+            },
             owner={"name": "Bob Chen", "email": "bob.chen@contoso.com", "team": "Manufacturing IT"},
             tags={"env": "prod", "real-time": "true"},
             status=SourceStatus.ACTIVE,
@@ -94,9 +110,20 @@ def _seed_demo_sources() -> None:
             connection={"api_url": "https://sap-gateway.contoso.com/odata/v4/gl"},
             ingestion={"mode": "full", "schedule_cron": "0 4 * * 1"},
             quality_rules=[
-                {"rule_name": "amount_range", "rule_type": "range", "column": "amount", "parameters": {"min": -1e9, "max": 1e9}, "severity": "warning"},
+                {
+                    "rule_name": "amount_range",
+                    "rule_type": "range",
+                    "column": "amount",
+                    "parameters": {"min": -1e9, "max": 1e9},
+                    "severity": "warning",
+                },
             ],
-            target={"landing_zone": "dlz-finance", "container": "bronze", "path_pattern": "finance/gl/{year}/{month}", "format": "parquet"},
+            target={
+                "landing_zone": "dlz-finance",
+                "container": "bronze",
+                "path_pattern": "finance/gl/{year}/{month}",
+                "format": "parquet",
+            },
             owner={"name": "Alice Park", "email": "alice.park@contoso.com", "team": "Financial Reporting"},
             tags={"env": "prod", "compliance": "sox"},
             status=SourceStatus.APPROVED,
@@ -113,7 +140,12 @@ def _seed_demo_sources() -> None:
             connection={"host": "cosmos-cust360.documents.azure.com", "database": "customers", "container": "profiles"},
             ingestion={"mode": "cdc"},
             quality_rules=[],
-            target={"landing_zone": "dlz-marketing", "container": "bronze", "path_pattern": "marketing/customers/{year}/{month}/{day}", "format": "delta"},
+            target={
+                "landing_zone": "dlz-marketing",
+                "container": "bronze",
+                "path_pattern": "marketing/customers/{year}/{month}/{day}",
+                "format": "delta",
+            },
             owner={"name": "Carlos Diaz", "email": "carlos.diaz@contoso.com", "team": "Customer Insights"},
             tags={"env": "prod"},
             status=SourceStatus.DRAFT,
@@ -122,7 +154,7 @@ def _seed_demo_sources() -> None:
         ),
     ]
     for s in demos:
-        _sources[s.id] = s
+        _sources_store.add(s.model_dump())
 
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
@@ -144,7 +176,7 @@ async def list_sources(
 ) -> list[SourceRecord]:
     """Return all registered data sources, with optional filters."""
     _seed_demo_sources()
-    results = list(_sources.values())
+    results = [SourceRecord.model_validate(item) for item in _sources_store.load()]
 
     if domain:
         results = [s for s in results if s.domain == domain]
@@ -154,12 +186,9 @@ async def list_sources(
         results = [s for s in results if s.source_type == source_type]
     if search:
         q = search.lower()
-        results = [
-            s for s in results
-            if q in s.name.lower() or q in s.description.lower()
-        ]
+        results = [s for s in results if q in s.name.lower() or q in s.description.lower()]
 
-    return results[offset: offset + limit]
+    return results[offset : offset + limit]
 
 
 @router.get(
@@ -173,12 +202,13 @@ async def get_source(
 ) -> SourceRecord:
     """Return a single data source by its unique identifier."""
     _seed_demo_sources()
-    if source_id not in _sources:
+    stored_source = _sources_store.get(source_id)
+    if not stored_source:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Source '{source_id}' not found.",
         )
-    return _sources[source_id]
+    return SourceRecord.model_validate(stored_source)
 
 
 @router.post(
@@ -201,8 +231,8 @@ async def register_source(
         id=source_id,
         **registration.model_dump(by_alias=True),
     )
-    # TODO: Persist to database
-    _sources[source_id] = record
+    # Persist to JSON store
+    _sources_store.add(record.model_dump())
     logger.info(
         "Registered data source",
         extra={
@@ -227,19 +257,20 @@ async def update_source(
 ) -> SourceRecord:
     """Apply a partial update to an existing source registration."""
     _seed_demo_sources()
-    if source_id not in _sources:
+    stored_source = _sources_store.get(source_id)
+    if not stored_source:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Source '{source_id}' not found.",
         )
 
-    existing = _sources[source_id]
+    existing = SourceRecord.model_validate(stored_source)
     existing_data = existing.model_dump(by_alias=True)
     existing_data.update(updates)
     existing_data["updated_at"] = datetime.now(timezone.utc)
 
     updated = SourceRecord(**existing_data)
-    _sources[source_id] = updated
+    _sources_store.update(source_id, updated.model_dump())
     return updated
 
 
@@ -254,15 +285,17 @@ async def decommission_source(
 ) -> SourceRecord:
     """Soft-delete a data source by setting its status to *decommissioned*."""
     _seed_demo_sources()
-    if source_id not in _sources:
+    stored = _sources_store.get(source_id)
+    if not stored:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Source '{source_id}' not found.",
         )
 
-    source = _sources[source_id]
+    source = SourceRecord.model_validate(stored)
     source.status = SourceStatus.DECOMMISSIONED
     source.updated_at = datetime.now(timezone.utc)
+    _sources_store.update(source_id, source.model_dump())
     logger.info("Decommissioned source %s", source_id)
     return source
 
@@ -280,13 +313,14 @@ async def provision_source(
     Deploys infrastructure, creates ADF pipeline, and triggers Purview scan.
     """
     _seed_demo_sources()
-    if source_id not in _sources:
+    stored = _sources_store.get(source_id)
+    if not stored:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Source '{source_id}' not found.",
         )
 
-    source = _sources[source_id]
+    source = SourceRecord.model_validate(stored)
     result = await provisioning_service.provision(source)
 
     if not result.success:
@@ -312,15 +346,17 @@ async def scan_source(
 ) -> dict:
     """Trigger a Microsoft Purview metadata scan for this source."""
     _seed_demo_sources()
-    if source_id not in _sources:
+    stored = _sources_store.get(source_id)
+    if not stored:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Source '{source_id}' not found.",
         )
 
-    source = _sources[source_id]
+    source = SourceRecord.model_validate(stored)
     scan_id = await provisioning_service.trigger_purview_scan(source)
     source.purview_scan_id = scan_id
     source.updated_at = datetime.now(timezone.utc)
+    _sources_store.update(source_id, source.model_dump())
 
     return {"status": "scanning", "scan_id": scan_id}

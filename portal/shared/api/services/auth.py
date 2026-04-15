@@ -67,7 +67,7 @@ async def _get_jwks() -> dict[str, Any]:
     if _JWKS_CACHE is not None:
         return _JWKS_CACHE
 
-    # TODO: Add TTL-based cache refresh in production
+    # In production: Add TTL-based cache refresh (using cache expiry or periodic background task)
     async with httpx.AsyncClient() as client:
         oidc_resp = await client.get(_openid_config_url())
         oidc_resp.raise_for_status()

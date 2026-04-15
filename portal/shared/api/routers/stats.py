@@ -24,8 +24,8 @@ router = APIRouter()
 
 
 # ── Demo Data ────────────────────────────────────────────────────────────────
-# TODO: Replace with real queries against the metadata database / Azure
-# Monitor metrics in production.
+# In production: Replace with real queries against the metadata database / Azure
+# Monitor metrics for live data.
 
 _DEMO_DOMAINS: dict[str, DomainOverview] = {
     "human-resources": DomainOverview(

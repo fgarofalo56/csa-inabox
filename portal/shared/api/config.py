@@ -20,8 +20,8 @@ class Settings(BaseSettings):
     IS_GOVERNMENT_CLOUD: bool = False
 
     # ── Database ─────────────────────────────────────────────────────────
-    # TODO: Swap to Cosmos DB or PostgreSQL connection string in production
-    DATABASE_URL: str = "sqlite:///./csainabox.db"
+    # JSON-based persistence for demo/development - swap to Cosmos DB or PostgreSQL in production
+    DATA_DIR: str = "./data"
 
     # ── Azure Storage ────────────────────────────────────────────────────
     STORAGE_ACCOUNT_NAME: str = ""

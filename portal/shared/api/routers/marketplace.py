@@ -20,20 +20,20 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ..models.marketplace import DataProduct, QualityMetric
 from ..models.source import ClassificationLevel
+from ..persistence import JsonStore
 from ..services.auth import get_current_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# ── In-memory store (demo) ───────────────────────────────────────────────────
-# TODO: Replace with Cosmos DB / PostgreSQL repository class.
-_products: dict[str, DataProduct] = {}
-_quality_history: dict[str, list[QualityMetric]] = {}
+# ── JSON-based persistence ──────────────────────────────────────────────────
+_products_store = JsonStore("marketplace_products.json")
+_quality_store = JsonStore("marketplace_quality.json")
 
 
 def _seed_demo_products() -> None:
     """Populate realistic demo data products on first access."""
-    if _products:
+    if _products_store.count() > 0:
         return
 
     now = datetime.now(timezone.utc)
@@ -78,8 +78,7 @@ def _seed_demo_products() -> None:
         DataProduct(
             id="dp-003",
             name="Financial General Ledger",
-            description="Weekly GL snapshot for financial reporting. "
-            "SOX-compliant with full audit trail.",
+            description="Weekly GL snapshot for financial reporting. SOX-compliant with full audit trail.",
             domain="finance",
             owner={"name": "Alice Park", "email": "alice.park@contoso.com", "team": "Financial Reporting"},
             classification=ClassificationLevel.RESTRICTED,
@@ -94,8 +93,7 @@ def _seed_demo_products() -> None:
         DataProduct(
             id="dp-004",
             name="Customer 360 Profile",
-            description="Unified customer view combining CRM, web analytics, "
-            "and transaction data. Updated via CDC.",
+            description="Unified customer view combining CRM, web analytics, and transaction data. Updated via CDC.",
             domain="marketing",
             owner={"name": "Carlos Diaz", "email": "carlos.diaz@contoso.com", "team": "Customer Insights"},
             classification=ClassificationLevel.CONFIDENTIAL,
@@ -110,8 +108,7 @@ def _seed_demo_products() -> None:
         DataProduct(
             id="dp-005",
             name="Supply Chain Inventory",
-            description="Real-time inventory levels across all warehouses "
-            "and distribution centers.",
+            description="Real-time inventory levels across all warehouses and distribution centers.",
             domain="supply-chain",
             owner={"name": "Diana Torres", "email": "diana.torres@contoso.com", "team": "Supply Chain Ops"},
             classification=ClassificationLevel.INTERNAL,
@@ -125,11 +122,11 @@ def _seed_demo_products() -> None:
         ),
     ]
     for dp in demos:
-        _products[dp.id] = dp
+        _products_store.add(dp.model_dump())
 
     # Seed quality history for each product (last 30 days)
     for dp in demos:
-        history: list[QualityMetric] = []
+        history: list[dict] = []
         for days_ago in range(30):
             date = (now - timedelta(days=days_ago)).strftime("%Y-%m-%d")
             history.append(
@@ -139,9 +136,9 @@ def _seed_demo_products() -> None:
                     completeness=dp.completeness + random.uniform(-0.03, 0.01),
                     freshness_hours=dp.freshness_hours + random.uniform(-1, 2),
                     row_count=random.randint(100_000, 5_000_000),
-                )
+                ).model_dump()
             )
-        _quality_history[dp.id] = history
+        _quality_store.add({"product_id": dp.id, "history": history})
 
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
@@ -162,7 +159,7 @@ async def list_products(
 ) -> list[DataProduct]:
     """Browse the data marketplace with optional filters."""
     _seed_demo_products()
-    results = list(_products.values())
+    results = [DataProduct.model_validate(item) for item in _products_store.load()]
 
     if domain:
         results = [p for p in results if p.domain == domain]
@@ -170,13 +167,10 @@ async def list_products(
         results = [p for p in results if p.quality_score >= min_quality]
     if search:
         q = search.lower()
-        results = [
-            p for p in results
-            if q in p.name.lower() or q in p.description.lower()
-        ]
+        results = [p for p in results if q in p.name.lower() or q in p.description.lower()]
 
     results.sort(key=lambda p: p.quality_score, reverse=True)
-    return results[offset: offset + limit]
+    return results[offset : offset + limit]
 
 
 @router.get(
@@ -190,9 +184,10 @@ async def get_product(
 ) -> DataProduct:
     """Return detailed data product information."""
     _seed_demo_products()
-    if product_id not in _products:
+    stored_product = _products_store.get(product_id)
+    if not stored_product:
         raise HTTPException(status_code=404, detail=f"Product '{product_id}' not found.")
-    return _products[product_id]
+    return DataProduct.model_validate(stored_product)
 
 
 @router.get(
@@ -207,9 +202,18 @@ async def get_quality_history(
 ) -> list[QualityMetric]:
     """Return quality metric history for a data product."""
     _seed_demo_products()
-    if product_id not in _products:
+    # Check if product exists
+    if not _products_store.get(product_id):
         raise HTTPException(status_code=404, detail=f"Product '{product_id}' not found.")
-    return _quality_history.get(product_id, [])[:days]
+
+    # Find quality history for this product
+    all_quality_data = _quality_store.load()
+    for item in all_quality_data:
+        if item.get("product_id") == product_id:
+            history = item.get("history", [])
+            return [QualityMetric.model_validate(h) for h in history[:days]]
+
+    return []
 
 
 @router.get(
@@ -222,13 +226,11 @@ async def list_domains(
     """Return all data domains with their product counts."""
     _seed_demo_products()
     domains: dict[str, int] = {}
-    for product in _products.values():
+    products = [DataProduct.model_validate(item) for item in _products_store.load()]
+    for product in products:
         domains[product.domain] = domains.get(product.domain, 0) + 1
 
-    return [
-        {"name": domain, "product_count": count}
-        for domain, count in sorted(domains.items())
-    ]
+    return [{"name": domain, "product_count": count} for domain, count in sorted(domains.items())]
 
 
 @router.get(
@@ -240,7 +242,7 @@ async def marketplace_stats(
 ) -> dict:
     """Return aggregate marketplace statistics."""
     _seed_demo_products()
-    products = list(_products.values())
+    products = [DataProduct.model_validate(item) for item in _products_store.load()]
     return {
         "total_products": len(products),
         "total_domains": len({p.domain for p in products}),
@@ -248,9 +250,7 @@ async def marketplace_stats(
             sum(p.quality_score for p in products) / len(products) if products else 0,
             1,
         ),
-        "products_by_domain": dict(sorted(
-                _count_by_key(products, lambda p: p.domain).items()
-            )),
+        "products_by_domain": dict(sorted(_count_by_key(products, lambda p: p.domain).items())),
     }
 
 

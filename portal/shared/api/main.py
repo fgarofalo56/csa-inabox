@@ -52,11 +52,14 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
         settings.IS_GOVERNMENT_CLOUD,
         settings.DEBUG,
     )
-    # TODO: Initialize database connection pool here
-    # TODO: Warm up Azure credential cache
+    # Initialize data directory for JSON persistence
+    from pathlib import Path
+    data_dir = Path(settings.DATA_DIR)
+    data_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(f"JSON persistence data directory: {data_dir}")
     yield
     logger.info("Shutting down CSA-in-a-Box API")
-    # TODO: Close database connections, flush metrics
+    # JSON files are persisted automatically, no cleanup needed
 
 
 # ── Application ──────────────────────────────────────────────────────────────
@@ -112,9 +115,9 @@ async def health_check() -> dict:
         "version": settings.APP_VERSION,
         "services": {
             "api": "up",
-            "database": "up",  # TODO: real DB ping
-            "data_factory": "connected",  # TODO: real ADF health
-            "purview": "connected",  # TODO: real Purview health
+            "database": "up",  # JSON persistence - always available
+            "data_factory": "connected",  # Stubbed - would need ADF SDK in production
+            "purview": "connected",  # Stubbed - would need Purview REST API in production
         },
     }
 

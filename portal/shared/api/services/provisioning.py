@@ -81,8 +81,7 @@ class ProvisioningService:
             SourceStatus.ERROR,
         ):
             errors.append(
-                f"Source status '{source.status}' is not eligible for provisioning. "
-                "Must be draft, approved, or error."
+                f"Source status '{source.status}' is not eligible for provisioning. Must be draft, approved, or error."
             )
         return errors
 
@@ -94,7 +93,7 @@ class ProvisioningService:
         Returns:
             Deployment ID.
 
-        TODO: Replace with real Azure Resource Manager deployment call::
+        In production, would use Azure Resource Manager deployment:
 
             from azure.mgmt.resource import ResourceManagementClient
             from azure.identity import DefaultAzureCredential
@@ -122,7 +121,7 @@ class ProvisioningService:
         Returns:
             The ADF pipeline resource name.
 
-        TODO: Replace with real ADF SDK call::
+        In production, would use ADF SDK:
 
             from azure.mgmt.datafactory import DataFactoryManagementClient
             client = DataFactoryManagementClient(credential, subscription_id)
@@ -149,7 +148,7 @@ class ProvisioningService:
         Returns:
             The scan run ID.
 
-        TODO: Replace with real Purview REST API call::
+        In production, would use Purview REST API:
 
             async with httpx.AsyncClient() as client:
                 resp = await client.put(

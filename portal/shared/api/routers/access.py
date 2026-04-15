@@ -22,19 +22,19 @@ from ..models.marketplace import (
     AccessRequestCreate,
     AccessRequestStatus,
 )
+from ..persistence import JsonStore
 from ..services.auth import get_current_user, require_role
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# ── In-memory store (demo) ───────────────────────────────────────────────────
-# TODO: Replace with Cosmos DB / PostgreSQL repository class.
-_requests: dict[str, AccessRequest] = {}
+# ── JSON-based persistence ──────────────────────────────────────────────────
+_access_store = JsonStore("access_requests.json")
 
 
 def _seed_demo_requests() -> None:
     """Populate realistic demo access requests on first access."""
-    if _requests:
+    if _access_store.count() > 0:
         return
 
     now = datetime.now(timezone.utc)
@@ -88,7 +88,7 @@ def _seed_demo_requests() -> None:
         ),
     ]
     for ar in demos:
-        _requests[ar.id] = ar
+        _access_store.add(ar.model_dump())
 
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
@@ -107,7 +107,7 @@ async def list_access_requests(
 ) -> list[AccessRequest]:
     """Return access requests with optional filters."""
     _seed_demo_requests()
-    results = list(_requests.values())
+    results = [AccessRequest.model_validate(item) for item in _access_store.load()]
 
     if status_filter:
         results = [r for r in results if r.status == status_filter]
@@ -145,10 +145,10 @@ async def create_access_request(
         requested_at=datetime.now(timezone.utc),
     )
 
-    # TODO: Persist to database
-    _requests[request_id] = access_request
+    # Persist to JSON store
+    _access_store.add(access_request.model_dump())
 
-    # TODO: Send notification to the data product owner for approval
+    # In production: Send notification to the data product owner for approval
     logger.info(
         "Access request created",
         extra={
@@ -172,16 +172,17 @@ async def approve_access_request(
 ) -> AccessRequest:
     """Approve a pending access request and grant RBAC permissions.
 
-    TODO: In production, apply Azure RBAC role assignment::
+    In production, would apply Azure RBAC role assignment using:
 
         from azure.mgmt.authorization import AuthorizationManagementClient
         client.role_assignments.create(scope, assignment_name, parameters)
     """
     _seed_demo_requests()
-    if request_id not in _requests:
+    stored_req = _access_store.get(request_id)
+    if not stored_req:
         raise HTTPException(status_code=404, detail=f"Request '{request_id}' not found.")
 
-    req = _requests[request_id]
+    req = AccessRequest.model_validate(stored_req)
     if req.status != AccessRequestStatus.PENDING:
         raise HTTPException(
             status_code=400,
@@ -194,6 +195,9 @@ async def approve_access_request(
     req.reviewed_by = user.get("email", user.get("preferred_username", "admin"))
     req.review_notes = (body or {}).get("notes")
     req.expires_at = now + timedelta(days=req.duration_days)
+
+    # Update in store
+    _access_store.update(request_id, req.model_dump())
 
     logger.info("Access request approved", extra={"request_id": request_id})
     return req
@@ -211,10 +215,11 @@ async def deny_access_request(
 ) -> AccessRequest:
     """Deny a pending access request."""
     _seed_demo_requests()
-    if request_id not in _requests:
+    stored_req = _access_store.get(request_id)
+    if not stored_req:
         raise HTTPException(status_code=404, detail=f"Request '{request_id}' not found.")
 
-    req = _requests[request_id]
+    req = AccessRequest.model_validate(stored_req)
     if req.status != AccessRequestStatus.PENDING:
         raise HTTPException(
             status_code=400,
@@ -225,6 +230,9 @@ async def deny_access_request(
     req.reviewed_at = datetime.now(timezone.utc)
     req.reviewed_by = user.get("email", user.get("preferred_username", "admin"))
     req.review_notes = (body or {}).get("notes")
+
+    # Update in store
+    _access_store.update(request_id, req.model_dump())
 
     logger.info("Access request denied", extra={"request_id": request_id})
     return req

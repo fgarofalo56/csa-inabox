@@ -1,0 +1,125 @@
+{
+  "expectation_suite_name": "gold_clv_suite",
+  "ge_cloud_id": null,
+  "data_asset_type": null,
+  "meta": {
+    "great_expectations_version": "0.18.0",
+    "citations": [
+      {
+        "citation_date": "2026-04-14",
+        "comment": "Suite for validating the Gold customer lifetime value model after dbt Gold model materialisation."
+      }
+    ]
+  },
+  "expectations": [
+    {
+      "expectation_type": "expect_column_to_exist",
+      "kwargs": {
+        "column": "customer_id"
+      },
+      "meta": {}
+    },
+    {
+      "expectation_type": "expect_column_values_to_not_be_null",
+      "kwargs": {
+        "column": "customer_id"
+      },
+      "meta": {
+        "notes": "Primary key — must never be null."
+      }
+    },
+    {
+      "expectation_type": "expect_column_values_to_be_unique",
+      "kwargs": {
+        "column": "customer_id"
+      },
+      "meta": {
+        "notes": "One row per customer in the CLV model."
+      }
+    },
+    {
+      "expectation_type": "expect_column_values_to_be_in_set",
+      "kwargs": {
+        "column": "customer_segment",
+        "value_set": ["active", "at_risk", "churned", "never_purchased"]
+      },
+      "meta": {
+        "notes": "Segment must be one of the four defined categories."
+      }
+    },
+    {
+      "expectation_type": "expect_column_values_to_not_be_null",
+      "kwargs": {
+        "column": "customer_segment"
+      },
+      "meta": {}
+    },
+    {
+      "expectation_type": "expect_column_values_to_be_in_set",
+      "kwargs": {
+        "column": "value_tier",
+        "value_set": ["platinum", "gold", "silver", "bronze"]
+      },
+      "meta": {
+        "notes": "Value tier must be one of the four defined tiers."
+      }
+    },
+    {
+      "expectation_type": "expect_column_values_to_not_be_null",
+      "kwargs": {
+        "column": "value_tier"
+      },
+      "meta": {}
+    },
+    {
+      "expectation_type": "expect_column_values_to_be_between",
+      "kwargs": {
+        "column": "lifetime_revenue",
+        "min_value": 0.0
+      },
+      "meta": {
+        "notes": "Revenue must be non-negative."
+      }
+    },
+    {
+      "expectation_type": "expect_column_values_to_be_between",
+      "kwargs": {
+        "column": "total_orders",
+        "min_value": 0
+      },
+      "meta": {
+        "notes": "Order count must be non-negative."
+      }
+    },
+    {
+      "expectation_type": "expect_column_values_to_be_between",
+      "kwargs": {
+        "column": "monthly_revenue_rate",
+        "min_value": 0.0,
+        "mostly": 0.95
+      },
+      "meta": {
+        "notes": "Monthly rate should be non-negative for the vast majority of customers."
+      }
+    },
+    {
+      "expectation_type": "expect_table_row_count_to_be_between",
+      "kwargs": {
+        "min_value": 1
+      },
+      "meta": {
+        "notes": "Gold CLV table must not be empty."
+      }
+    },
+    {
+      "expectation_type": "expect_column_proportion_of_unique_values_to_be_between",
+      "kwargs": {
+        "column": "customer_id",
+        "min_value": 0.99
+      },
+      "meta": {
+        "notes": "Near-100% uniqueness confirms proper aggregation."
+      }
+    }
+  ]
+}

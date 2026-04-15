@@ -19,20 +19,20 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ..models.pipeline import PipelineRecord, PipelineRun, PipelineStatus, PipelineType
+from ..persistence import JsonStore
 from ..services.auth import get_current_user, require_role
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# ── In-memory store (demo) ───────────────────────────────────────────────────
-# TODO: Replace with Cosmos DB / PostgreSQL repository class.
-_pipelines: dict[str, PipelineRecord] = {}
-_runs: dict[str, list[PipelineRun]] = {}
+# ── JSON-based persistence ──────────────────────────────────────────────────
+_pipelines_store = JsonStore("pipelines.json")
+_runs_store = JsonStore("pipeline_runs.json")
 
 
 def _seed_demo_pipelines() -> None:
     """Populate realistic demo pipelines on first access."""
-    if _pipelines:
+    if _pipelines_store.count() > 0:
         return
 
     now = datetime.now(timezone.utc)
@@ -78,7 +78,7 @@ def _seed_demo_pipelines() -> None:
         ),
     ]
     for p in demos:
-        _pipelines[p.id] = p
+        _pipelines_store.add(p.model_dump())
 
     # Seed some runs for the first pipeline
     for i in range(5):
@@ -95,7 +95,7 @@ def _seed_demo_pipelines() -> None:
             error_message="Connection timeout after 600s" if i == 2 else None,
             duration_seconds=int((run_end - run_start).total_seconds()),
         )
-        _runs.setdefault("pl-001", []).append(run)
+        _runs_store.add(run.model_dump())
 
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
@@ -114,7 +114,7 @@ async def list_pipelines(
 ) -> list[PipelineRecord]:
     """Return all pipelines, optionally filtered by source or status."""
     _seed_demo_pipelines()
-    results = list(_pipelines.values())
+    results = [PipelineRecord.model_validate(item) for item in _pipelines_store.load()]
 
     if source_id:
         results = [p for p in results if p.source_id == source_id]
@@ -135,9 +135,10 @@ async def get_pipeline(
 ) -> PipelineRecord:
     """Return a single pipeline by ID."""
     _seed_demo_pipelines()
-    if pipeline_id not in _pipelines:
+    stored_pipeline = _pipelines_store.get(pipeline_id)
+    if not stored_pipeline:
         raise HTTPException(status_code=404, detail=f"Pipeline '{pipeline_id}' not found.")
-    return _pipelines[pipeline_id]
+    return PipelineRecord.model_validate(stored_pipeline)
 
 
 @router.get(
@@ -152,9 +153,18 @@ async def get_pipeline_runs(
 ) -> list[PipelineRun]:
     """Return recent execution runs for a pipeline."""
     _seed_demo_pipelines()
-    if pipeline_id not in _pipelines:
+    # Check if pipeline exists
+    if not _pipelines_store.get(pipeline_id):
         raise HTTPException(status_code=404, detail=f"Pipeline '{pipeline_id}' not found.")
-    return _runs.get(pipeline_id, [])[:limit]
+
+    # Get runs for this pipeline
+    all_runs = _runs_store.load()
+    pipeline_runs = [PipelineRun.model_validate(run) for run in all_runs if run.get("pipeline_id") == pipeline_id]
+
+    # Sort by started_at descending (most recent first)
+    pipeline_runs.sort(key=lambda r: r.started_at, reverse=True)
+
+    return pipeline_runs[:limit]
 
 
 @router.post(
@@ -168,14 +178,15 @@ async def trigger_pipeline(
 ) -> PipelineRun:
     """Manually trigger a pipeline execution.
 
-    TODO: In production, call the ADF REST API to start a pipeline run::
+    In production, would call the ADF REST API to start a pipeline run:
 
         POST https://management.azure.com/subscriptions/{sub}/resourceGroups/{rg}/
              providers/Microsoft.DataFactory/factories/{factory}/
              pipelines/{pipeline}/createRun?api-version=2018-06-01
     """
     _seed_demo_pipelines()
-    if pipeline_id not in _pipelines:
+    stored_pipeline = _pipelines_store.get(pipeline_id)
+    if not stored_pipeline:
         raise HTTPException(status_code=404, detail=f"Pipeline '{pipeline_id}' not found.")
 
     now = datetime.now(timezone.utc)
@@ -185,11 +196,14 @@ async def trigger_pipeline(
         status=PipelineStatus.RUNNING,
         started_at=now,
     )
-    _runs.setdefault(pipeline_id, []).insert(0, run)
+    _runs_store.add(run.model_dump())
 
-    pipeline = _pipelines[pipeline_id]
-    pipeline.status = PipelineStatus.RUNNING
-    pipeline.last_run_at = now
+    # Update pipeline status and last_run_at
+    pipeline_updates = {
+        "status": PipelineStatus.RUNNING.value,
+        "last_run_at": now.isoformat(),
+    }
+    _pipelines_store.update(pipeline_id, pipeline_updates)
 
     logger.info("Triggered pipeline run", extra={"pipeline_id": pipeline_id, "run_id": run.id})
     return run
