@@ -33,7 +33,7 @@ pytest tests/ -v --ignore=tests/e2e --ignore=tests/load
 pytest tests/contracts/ tests/dataquality/ tests/common/ -v
 
 # Run platform tests only
-pytest tests/platform/ -v
+pytest tests/csa_platform/ -v
 
 # Run e2e tests (requires deployed environment)
 pytest tests/e2e/ -v

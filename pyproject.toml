@@ -402,7 +402,7 @@ ignore_errors = true
 # files also mock Azure SDK types extensively, which produces false
 # positive type errors.  They are functionally tested via pytest.
 module = [
-    "tests.platform.*",
+    "tests.csa_platform.*",
 ]
 ignore_errors = true
 

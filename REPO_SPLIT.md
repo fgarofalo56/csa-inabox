@@ -63,7 +63,7 @@ This monorepo contains 5 logically independent subsystems that should eventually
 **Extraction steps:**
 
 1. Copy `csa_platform/` as repo root
-2. Copy `tests/platform/`, `tests/functions/`, `tests/purview/`
+2. Copy `tests/csa_platform/`, `tests/functions/`, `tests/purview/`
 3. Create standalone `pyproject.toml` with platform-specific deps
 4. Each sub-component (`data_marketplace/`, `metadata_framework/`, etc.) gets own test and deploy config
 

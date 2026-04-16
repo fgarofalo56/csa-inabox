@@ -1,0 +1,7 @@
+# Auto-strip Jupyter notebook outputs on commit so large cell outputs
+# (images, dataframes, log dumps) never enter the repository.  Developers
+# see full outputs locally; only the code cells are persisted.
+#
+# Requires nbstripout: pip install nbstripout
+*.ipynb filter=nbstripout
+*.ipynb diff=ipynb
