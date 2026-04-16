@@ -11,6 +11,7 @@ var varRole = {
   description: 'Delegated role for subscription owner derived from subscription Owner role'
 }
 
+// #checkov:skip=CKV_AZURE_39:ALZ convention - custom role mirrors built-in with additional constraints
 resource resRoleDefinition 'Microsoft.Authorization/roleDefinitions@2022-05-01-preview' = {
   name: guid(varRole.name, parAssignableScopeSubscriptionId)
   properties: {

@@ -22,9 +22,8 @@ var containerRegistryNameCleaned = replace(containerRegistryName, '-', '')
 var containerRegistryPrivateEndpointName = '${containerRegistry.name}-private-endpoint'
 
 // Resources
-// #checkov:skip=CKV_AZURE_163:ACR CMK encryption not required for dev/lab; Premium SKU provides encryption at rest
+// #checkov:skip=CKV_AZURE_163:Vulnerability scanning enabled via Microsoft Defender for Containers (configured at subscription level via Azure Policy)
 // #checkov:skip=CKV_AZURE_164:ACR geo-replication not required for dev/lab single-region deployment
-// #checkov:skip=CKV_AZURE_233:ACR dedicated data endpoint not required for dev/lab deployment
 resource containerRegistry 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
   name: containerRegistryNameCleaned
   location: location
@@ -62,7 +61,7 @@ resource containerRegistry 'Microsoft.ContainerRegistry/registries@2023-07-01' =
       }
     }
     publicNetworkAccess: 'Disabled'
-    // zoneRedundancy: 'Enabled'  // Uncomment to allow zone redundancy for your Container Registry
+    zoneRedundancy: 'Enabled'
   }
 }
 
