@@ -16,7 +16,7 @@ import sys
 import types
 from pathlib import Path
 
-# Repo root is two levels up from tests/platform/conftest.py
+# Repo root is two levels up from tests/csa_platform/conftest.py
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _PLATFORM_DIR = _REPO_ROOT / "csa_platform"
 

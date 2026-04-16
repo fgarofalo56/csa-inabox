@@ -192,25 +192,15 @@ jobs:
 
       - name: Check for large files
         run: |
-          # Exclusions:
-          #  - .git/**            : git metadata
-          #  - scripts/monitor/** : pre-existing Synapse/Storage logging
-          #                         notebooks (committed Aug 2024, tracked
-          #                         for cleanup in a separate PR: strip
-          #                         output + move to git-lfs / downloadable
-          #                         artifact).  Adding them to the large-
-          #                         file exclusion keeps the guard useful
-          #                         for new commits without retroactively
-          #                         failing unrelated work.
+          # Notebook outputs are stripped via .gitattributes + nbstripout
+          # so monitor notebooks no longer need a size exclusion.
           echo "=== Files larger than 5MB ==="
           FOUND_LARGE=0
           while read -r file; do
             SIZE=$(du -sh "$file" | cut -f1)
             echo "::warning::Large file: $file ($SIZE)"
             FOUND_LARGE=1
-          done < <(find . -type f -size +5M \
-                     -not -path "./.git/*" \
-                     -not -path "./scripts/monitor/*")
+          done < <(find . -type f -size +5M -not -path "./.git/*")
           if [ "$FOUND_LARGE" -eq 1 ]; then
             echo "::error::Found files larger than 5MB"
             exit 1
