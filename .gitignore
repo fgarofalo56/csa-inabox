@@ -256,3 +256,4 @@ instance/
 deploy/bicep/**/package.json
 deploy/bicep/**/package-lock.json
 deploy/bicep/**/node_modules/
+.claude/worktrees/

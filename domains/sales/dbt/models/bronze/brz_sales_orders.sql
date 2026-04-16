@@ -33,7 +33,7 @@ staged as (
         sales_region,
         sales_channel,
         _ingested_at,
-        current_timestamp() as _dbt_loaded_at,
+        now() as _dbt_loaded_at,
         '{{ invocation_id }}' as _dbt_run_id
     from source
 )

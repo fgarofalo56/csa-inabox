@@ -39,10 +39,14 @@ typecheck: ## Run strict mypy on governance, tests, and all three Function apps
 	@echo "mypy strict passed"
 
 typecheck-platform: ## Run mypy on platform modules (progressive strictness)
-	mypy csa_platform/ai_integration/ --ignore-missing-imports
-	mypy csa_platform/data_marketplace/ --ignore-missing-imports
-	mypy csa_platform/metadata_framework/ --ignore-missing-imports
-	mypy csa_platform/purview_governance/ --ignore-missing-imports
+	# Use -p (package mode) instead of a directory path so mypy resolves
+	# each module through the csa_platform package root and does not see
+	# the same file under two module names ("ai_integration.*" AND
+	# "csa_platform.ai_integration.*").  Requires csa_platform/__init__.py.
+	mypy -p csa_platform.ai_integration --ignore-missing-imports
+	mypy -p csa_platform.data_marketplace --ignore-missing-imports
+	mypy -p csa_platform.metadata_framework --ignore-missing-imports
+	mypy -p csa_platform.purview_governance --ignore-missing-imports
 	@echo "mypy platform passed"
 
 lint-bicep: ## Lint all Bicep files

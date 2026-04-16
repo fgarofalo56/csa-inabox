@@ -48,7 +48,7 @@ daily_metrics AS (
             2
         ) AS cancellation_rate_pct,
 
-        current_timestamp() AS _dbt_loaded_at
+        now() AS _dbt_loaded_at
 
     FROM orders
     GROUP BY order_date

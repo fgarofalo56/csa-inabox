@@ -172,7 +172,7 @@ def load_alert_rules(rules_dir: Path | str) -> list[AlertRule]:
             rule = _parse_rule_file(yaml_path)
             rules.append(rule)
             logger.info("alert_rule.loaded", rule_name=rule.name, file=yaml_path.name)
-        except Exception:
+        except (yaml.YAMLError, KeyError, ValueError, OSError):
             logger.exception("alert_rule.load_failed", file=str(yaml_path))
             raise
     return rules
@@ -707,7 +707,7 @@ def _dispatch_pagerduty(evaluation: AlertEvaluation, action: ActionConfig) -> bo
         resp.raise_for_status()
         logger.info("pagerduty.event_sent", rule_name=evaluation.rule_name)
         return True
-    except Exception:
+    except requests.RequestException:
         logger.exception("pagerduty.event_failed", rule_name=evaluation.rule_name)
         return False
 

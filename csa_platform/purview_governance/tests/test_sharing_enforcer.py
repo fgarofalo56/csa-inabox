@@ -21,7 +21,7 @@ if _data_sharing not in sys.path:
 # ---------------------------------------------------------------------------
 
 import pytest
-from sharing_enforcer import (
+from sharing_enforcer import (  # type: ignore[import-not-found]
     SharingEnforcer,
     load_agreement,
 )
@@ -38,7 +38,7 @@ def _write_agreement_yaml(path: Path, content: str) -> Path:
 
 
 @pytest.fixture
-def agreements_dir(tmp_path) -> Path:
+def agreements_dir(tmp_path: Path) -> Path:
     """Create a temp directory with sample sharing agreement YAML files."""
     d = tmp_path / "agreements"
     d.mkdir()
@@ -100,7 +100,7 @@ def agreements_dir(tmp_path) -> Path:
 
 
 @pytest.fixture
-def enforcer(agreements_dir) -> SharingEnforcer:
+def enforcer(agreements_dir: Path) -> SharingEnforcer:
     """Return a SharingEnforcer loaded from the test agreements."""
     return SharingEnforcer(agreements_dir=agreements_dir)
 

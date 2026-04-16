@@ -41,7 +41,7 @@ cleaned AS (
         UPPER(TRIM(currency)) AS currency,
         UPPER(TRIM(status)) AS status,
         _ingested_at,
-        current_timestamp() AS _dbt_loaded_at
+        now() AS _dbt_loaded_at
     FROM deduplicated
     WHERE _row_num = 1
 ),

@@ -36,7 +36,7 @@ final AS (
             ELSE 'economy'
         END AS price_tier,
 
-        current_timestamp() AS _dbt_refreshed_at
+        now() AS _dbt_refreshed_at
     FROM products
 )
 

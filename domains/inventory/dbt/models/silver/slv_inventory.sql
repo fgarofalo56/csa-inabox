@@ -41,7 +41,7 @@ cleaned AS (
         CAST(reorder_point AS INT) AS reorder_point,
         CAST(last_restocked_at AS TIMESTAMP) AS last_restocked_at,
         _ingested_at,
-        current_timestamp() AS _dbt_loaded_at
+        now() AS _dbt_loaded_at
     FROM deduplicated
     WHERE _row_num = 1
 ),

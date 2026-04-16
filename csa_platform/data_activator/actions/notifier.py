@@ -155,7 +155,7 @@ class TeamsNotifier(BaseNotifier):
             resp.raise_for_status()
             logger.info("teams.notification_sent", rule_name=payload.rule_name)
             return True
-        except Exception:
+        except requests.RequestException:
             logger.exception("teams.notification_failed", rule_name=payload.rule_name)
             return False
 
@@ -261,7 +261,7 @@ class EmailNotifier(BaseNotifier):
             resp.raise_for_status()
             logger.info("sendgrid.email_sent", recipients=self.recipients)
             return True
-        except Exception:
+        except requests.RequestException:
             logger.exception("SendGrid email failed")
             return False
 
@@ -284,7 +284,7 @@ class EmailNotifier(BaseNotifier):
 
             logger.info("smtp.email_sent", recipients=self.recipients)
             return True
-        except Exception:
+        except (smtplib.SMTPException, OSError):
             logger.exception("SMTP email failed")
             return False
 
@@ -353,7 +353,7 @@ class WebhookNotifier(BaseNotifier):
             resp.raise_for_status()
             logger.info("webhook.notification_sent", url=self.url)
             return True
-        except Exception:
+        except requests.RequestException:
             logger.exception("webhook.notification_failed", url=self.url)
             return False
 
@@ -446,7 +446,7 @@ class IncidentCreator(BaseNotifier):
             resp.raise_for_status()
             logger.info("pagerduty.incident_created", rule_name=payload.rule_name)
             return True
-        except Exception:
+        except requests.RequestException:
             logger.exception("PagerDuty incident creation failed")
             return False
 
@@ -488,7 +488,7 @@ class IncidentCreator(BaseNotifier):
             resp.raise_for_status()
             logger.info("servicenow.incident_created", rule_name=payload.rule_name)
             return True
-        except Exception:
+        except requests.RequestException:
             logger.exception("ServiceNow incident creation failed")
             return False
 

@@ -23,6 +23,13 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
 
+from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi.middleware.cors import CORSMiddleware
+
+from csa_platform.common.auth import (
+    enforce_auth_safety_gate,
+    require_role,
+)
 from csa_platform.data_marketplace.models.data_product import (
     AccessRequest,
     AccessRequestApproval,
@@ -35,13 +42,26 @@ from csa_platform.data_marketplace.models.data_product import (
     QualityHistoryResponse,
     QualityMetric,
 )
-from fastapi import Depends, FastAPI, HTTPException, Query, status
-from fastapi.middleware.cors import CORSMiddleware
-
 from governance.common.logging import configure_structlog, get_logger
 
 configure_structlog(service="data-marketplace-api")
 logger = get_logger(__name__)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Role aliases for readability
+# ──────────────────────────────────────────────────────────────────────
+#
+# Role model matches portal.shared.api (Reader / Contributor / Admin)
+# configured in the Entra ID app registration.
+#
+#   Reader      — browse marketplace, view product details and quality
+#   Contributor — register data products, submit access requests
+#   Admin       — approve / deny access requests
+
+_ANY_AUTHENTICATED_USER = require_role("Reader", "Contributor", "Admin")
+_CONTRIBUTOR_OR_ADMIN = require_role("Contributor", "Admin")
+_ADMIN_ONLY = require_role("Admin")
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -208,7 +228,13 @@ async def get_store() -> InMemoryStore:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    """Application lifecycle manager."""
+    """Application lifecycle manager.
+
+    Enforces the authentication safety gate on startup — the app refuses
+    to serve requests when ``AUTH_DISABLED=true`` in a non-local
+    environment.  Also closes the async Cosmos DB client cleanly.
+    """
+    enforce_auth_safety_gate()
     logger.info("Data Marketplace starting up")
     environment = os.environ.get("ENVIRONMENT", "dev")
     logger.info("startup.environment", environment=environment)
@@ -225,6 +251,16 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 # FastAPI application
 # ──────────────────────────────────────────────────────────────────────
 
+# OpenAPI docs are opt-out in non-production environments and off by
+# default in production.  Set MARKETPLACE_EXPOSE_DOCS=true to re-enable
+# in staging / production deployments where they are explicitly wanted.
+_environment = os.environ.get("ENVIRONMENT", "dev").strip().lower()
+_expose_docs = os.environ.get("MARKETPLACE_EXPOSE_DOCS", "").strip().lower() in {
+    "true",
+    "1",
+    "yes",
+}
+_docs_enabled = _environment != "production" or _expose_docs
 
 app = FastAPI(
     title="CSA-in-a-Box Data Marketplace",
@@ -233,17 +269,46 @@ app = FastAPI(
         "management, and quality monitoring across data domains."
     ),
     version="1.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc",
+    docs_url="/docs" if _docs_enabled else None,
+    redoc_url="/redoc" if _docs_enabled else None,
+    openapi_url="/openapi.json" if _docs_enabled else None,
     lifespan=lifespan,
 )
 
+# CORS — require an explicit, non-empty allowlist.  No wildcards, no
+# silent localhost default in production.
+_cors_raw = os.getenv("CORS_ALLOWED_ORIGINS", "").strip()
+if not _cors_raw:
+    if _environment in {"local", "dev"}:
+        _cors_origins = ["http://localhost:3000"]
+        logger.warning(
+            "CORS_ALLOWED_ORIGINS not set — defaulting to localhost:3000 "
+            "for %s environment only.",
+            _environment,
+        )
+    else:
+        msg = (
+            "CORS_ALLOWED_ORIGINS must be set to an explicit origin list "
+            f"(no wildcards) in {_environment!r} environment."
+        )
+        raise RuntimeError(msg)
+else:
+    _cors_origins = [o.strip() for o in _cors_raw.split(",") if o.strip()]
+    if any("*" in origin for origin in _cors_origins):
+        msg = (
+            f"CORS_ALLOWED_ORIGINS contains a wildcard pattern: "
+            f"{_cors_origins!r}.  Wildcards with allow_credentials=True "
+            "let any Azure-hosted app make credentialed cross-origin "
+            "requests.  Enumerate explicit hostnames instead."
+        )
+        raise RuntimeError(msg)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000").split(","),
+    allow_origins=_cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 
@@ -276,6 +341,7 @@ async def list_products(
     page: int = Query(default=1, ge=1, description="Page number"),
     per_page: int = Query(default=20, ge=1, le=100, description="Items per page"),
     store: InMemoryStore = Depends(get_store),
+    _user: dict[str, Any] = Depends(_ANY_AUTHENTICATED_USER),
 ) -> PaginatedResponse[DataProductSummary]:
     """List all registered data products with optional filtering.
 
@@ -311,6 +377,7 @@ async def list_products(
 async def get_product(
     product_id: str,
     store: InMemoryStore = Depends(get_store),
+    _user: dict[str, Any] = Depends(_ANY_AUTHENTICATED_USER),
 ) -> DataProduct:
     """Get detailed information about a specific data product.
 
@@ -336,6 +403,7 @@ async def get_product(
 async def create_product(
     body: DataProductBase,
     store: InMemoryStore = Depends(get_store),
+    user: dict[str, Any] = Depends(_CONTRIBUTOR_OR_ADMIN),
 ) -> DataProduct:
     """Register a new data product in the marketplace.
 
@@ -349,10 +417,11 @@ async def create_product(
     )
     created = await store.create_product(product)
     logger.info(
-        "Data product registered: %s/%s (id=%s)",
+        "Data product registered: %s/%s (id=%s) by %s",
         created.domain,
         created.name,
         created.id,
+        user.get("preferred_username", user.get("sub", "unknown")),
     )
     return created
 
@@ -372,6 +441,7 @@ async def create_product(
 async def create_access_request(
     body: AccessRequestCreate,
     store: InMemoryStore = Depends(get_store),
+    _user: dict[str, Any] = Depends(_ANY_AUTHENTICATED_USER),
 ) -> AccessRequest:
     """Submit a new access request for a data product.
 
@@ -415,6 +485,7 @@ async def create_access_request(
 async def get_access_request(
     request_id: str,
     store: InMemoryStore = Depends(get_store),
+    _user: dict[str, Any] = Depends(_ANY_AUTHENTICATED_USER),
 ) -> AccessRequest:
     """Get the current status of an access request."""
     request = await store.get_access_request(request_id)
@@ -436,6 +507,7 @@ async def approve_access_request(
     request_id: str,
     body: AccessRequestApproval,
     store: InMemoryStore = Depends(get_store),
+    _user: dict[str, Any] = Depends(_ADMIN_ONLY),
 ) -> AccessRequest:
     """Approve or deny a pending access request.
 
@@ -506,6 +578,7 @@ async def get_quality_history(
     product_id: str,
     limit: int = Query(default=30, ge=1, le=365, description="Number of data points"),
     store: InMemoryStore = Depends(get_store),
+    _user: dict[str, Any] = Depends(_ANY_AUTHENTICATED_USER),
 ) -> QualityHistoryResponse:
     """Get the quality metrics history for a data product.
 

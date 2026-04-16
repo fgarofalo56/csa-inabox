@@ -10,8 +10,12 @@ This script validates the framework by:
 Run this after setting up the framework to ensure everything works correctly.
 """
 
+import logging
 import sys
+from collections.abc import Callable
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # Add the platform modules to Python path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
@@ -25,7 +29,7 @@ except ImportError as e:
     sys.exit(1)
 
 
-def test_schema_validation():
+def test_schema_validation() -> bool:
     """Test JSON schema validation."""
     print("🔍 Testing schema validation...")
 
@@ -46,11 +50,12 @@ def test_schema_validation():
         return True
 
     except Exception as e:
+        logger.exception("Schema validation failed")
         print(f"❌ Schema validation failed: {e}")
         return False
 
 
-def test_pipeline_generation():
+def test_pipeline_generation() -> bool:
     """Test pipeline generation for different source types."""
     print("\n🏗️ Testing pipeline generation...")
 
@@ -93,6 +98,7 @@ def test_pipeline_generation():
         return True
 
     except Exception as e:
+        logger.exception("Pipeline generation failed")
         print(f"❌ Pipeline generation failed: {e}")
         import traceback
 
@@ -100,7 +106,7 @@ def test_pipeline_generation():
         return False
 
 
-def test_dlz_provisioning():
+def test_dlz_provisioning() -> bool:
     """Test data landing zone provisioning."""
     print("\n🏢 Testing DLZ provisioning...")
 
@@ -148,6 +154,7 @@ def test_dlz_provisioning():
         return True
 
     except Exception as e:
+        logger.exception("DLZ provisioning failed")
         print(f"❌ DLZ provisioning failed: {e}")
         import traceback
 
@@ -155,7 +162,7 @@ def test_dlz_provisioning():
         return False
 
 
-def test_template_selection():
+def test_template_selection() -> bool:
     """Test template selection logic."""
     print("\n📋 Testing template selection...")
 
@@ -180,11 +187,12 @@ def test_template_selection():
         return True
 
     except Exception as e:
+        logger.exception("Template selection failed")
         print(f"❌ Template selection failed: {e}")
         return False
 
 
-def test_artifact_generation():
+def test_artifact_generation() -> bool:
     """Test artifact file generation."""
     print("\n📄 Testing artifact generation...")
 
@@ -222,6 +230,7 @@ def test_artifact_generation():
         return True
 
     except Exception as e:
+        logger.exception("Artifact generation failed")
         print(f"❌ Artifact generation failed: {e}")
         import traceback
 
@@ -229,12 +238,12 @@ def test_artifact_generation():
         return False
 
 
-def main():
+def main() -> int:
     """Run all tests."""
     print("🚀 CSA-in-a-Box Metadata Framework Test Suite")
     print("=" * 60)
 
-    tests = [
+    tests: list[Callable[[], bool]] = [
         test_schema_validation,
         test_pipeline_generation,
         test_dlz_provisioning,
@@ -252,6 +261,7 @@ def main():
             else:
                 failed += 1
         except Exception as e:
+            logger.exception("Test %s failed", test.__name__)
             print(f"❌ Test {test.__name__} failed with exception: {e}")
             failed += 1
 

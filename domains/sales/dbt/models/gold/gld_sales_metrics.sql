@@ -46,5 +46,5 @@ select
     *,
     total_revenue / nullif(total_orders, 0) as revenue_per_order,
     total_units_sold / nullif(total_orders, 0) as units_per_order,
-    current_timestamp() as _dbt_refreshed_at
+    now() as _dbt_refreshed_at
 from daily_metrics

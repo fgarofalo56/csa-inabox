@@ -43,9 +43,9 @@ functions = [
     "tenacity>=8.2.0,<10.0.0",
     # Azure SDK packages used by the shared_services functions.
     "azure-core>=1.28.0,<2.0.0",
-    "azure-identity>=1.14.0,<2.0.0",
+    "azure-identity>=1.17.0,<2.0.0",
     "azure-keyvault-secrets>=4.7.0,<5.0.0",
-    "azure-storage-blob>=12.19.0,<13.0.0",
+    "azure-storage-blob>=12.20.0,<13.0.0",
     "azure-mgmt-storage>=21.0.0,<25.0.0",
     "azure-mgmt-cosmosdb>=9.0.0,<10.0.0",
     "azure-mgmt-sql>=3.0.0,<4.0.0",
@@ -61,7 +61,7 @@ platform = [
     "structlog>=24.1.0,<26.0.0",
     "tenacity>=8.2.0,<10.0.0",
     "openai>=1.0.0,<3.0.0",
-    "azure-identity>=1.14.0,<2.0.0",
+    "azure-identity>=1.17.0,<2.0.0",
     "azure-search-documents>=11.4.0,<12.0.0",
     "requests>=2.31.0,<3.0.0",
     # AI integration extras
@@ -75,11 +75,11 @@ platform = [
     "databricks-sdk>=0.20.0,<1.0.0",
     # Multi-Synapse management
     "azure-mgmt-synapse>=2.0.0,<3.0.0",
-    "azure-mgmt-costmanagement>=3.0.0,<4.0.0",
+    "azure-mgmt-costmanagement>=3.0.0,<5.0.0",
     "azure-mgmt-authorization>=4.0.0,<5.0.0",
     "pyodbc>=5.0.0,<6.0.0",
     # OneLake pattern
-    "azure-storage-blob>=12.19.0,<13.0.0",
+    "azure-storage-blob>=12.20.0,<13.0.0",
     "azure-cosmos>=4.5.0,<5.0.0",
 ]
 portal = [
@@ -91,23 +91,33 @@ portal = [
     # Authentication (Azure AD / Entra ID JWT)
     "python-jose[cryptography]>=3.3.0,<4.0.0",
     "PyJWT>=2.8.0,<3.0.0",
-    "cryptography>=41.0.0,<44.0.0",
+    "cryptography>=41.0.0,<47.0.0",
     # Caching (JWKS TTL cache)
-    "cachetools>=5.3.0,<6.0.0",
+    "cachetools>=5.3.0,<8.0.0",
     # HTTP client
     "httpx>=0.27.0,<1.0.0",
     # Azure SDKs used by portal backend
     "azure-identity>=1.17.0,<2.0.0",
-    "azure-mgmt-resource>=23.1.0,<24.0.0",
-    "azure-mgmt-datafactory>=7.0.0,<8.0.0",
+    "azure-mgmt-resource>=23.1.0,<26.0.0",
+    "azure-mgmt-datafactory>=7.0.0,<10.0.0",
     "azure-storage-blob>=12.20.0,<13.0.0",
 ]
 
 [tool.setuptools]
-# Only the governance package is a real installable Python package.
-# Everything else (deploy/, domains/, templates/, scripts/) is non-Python
-# or uses its own import mechanics (Azure Functions, dbt, Databricks).
-packages = ["governance", "governance.common", "governance.contracts", "governance.dataquality"]
+# Installable Python packages.  The governance package ships the data-
+# quality / contracts toolchain; csa_platform ships the reusable platform
+# service modules (AI integration, data marketplace, metadata framework,
+# etc.).  Everything else (deploy/, domains/, templates/, scripts/) is
+# non-Python or uses its own import mechanics (Azure Functions, dbt,
+# Databricks).
+#
+# ``find_packages`` is used for csa_platform so that new sub-packages
+# under csa_platform/ are auto-discovered; governance is pinned because
+# its layout is stable and explicit listing documents the public surface.
+
+[tool.setuptools.packages.find]
+include = ["governance*", "csa_platform*"]
+exclude = ["*.tests", "*.tests.*", "tests*"]
 
 [tool.ruff]
 target-version = "py310"
@@ -187,8 +197,13 @@ ignore = [
     "ARG001",  # unused-function-argument (req in health checks)
     "N806",    # non-lowercase-variable-in-function (MAX_BLOB_SIZE constants)
 ]
-# FastAPI routers use Depends(), Query(), Header() in default args (idiomatic).
+# FastAPI routers and auth helpers use Depends(), Query(), Header() in
+# default args (idiomatic).  Covers both service-local routers under
+# ``api/`` and the shared csa_platform.common.auth module.
 "**/api/**/*.py" = [
+    "B008",    # function-call-in-default-argument (FastAPI DI)
+]
+"csa_platform/common/auth.py" = [
     "B008",    # function-call-in-default-argument (FastAPI DI)
 ]
 # Data generators and ETL scripts use datetime freely for synthetic data.
@@ -348,7 +363,7 @@ no_implicit_reexport = true
 module = [
     "csa_platform.*",
 ]
-ignore_errors = true
+ignore_errors = false
 disallow_untyped_defs = false
 
 [[tool.mypy.overrides]]
@@ -387,7 +402,7 @@ ignore_errors = true
 # files also mock Azure SDK types extensively, which produces false
 # positive type errors.  They are functionally tested via pytest.
 module = [
-    "tests.platform.*",
+    "tests.csa_platform.*",
 ]
 ignore_errors = true
 
