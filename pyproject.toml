@@ -91,7 +91,7 @@ portal = [
     # Authentication (Azure AD / Entra ID JWT)
     "python-jose[cryptography]>=3.3.0,<4.0.0",
     "PyJWT>=2.8.0,<3.0.0",
-    "cryptography>=41.0.0,<44.0.0",
+    "cryptography>=41.0.0,<47.0.0",
     # Caching (JWKS TTL cache)
     "cachetools>=5.3.0,<8.0.0",
     # HTTP client
