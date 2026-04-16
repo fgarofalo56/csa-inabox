@@ -38,14 +38,15 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
 
     # ── CORS ─────────────────────────────────────────────────────────────
-    # TODO: Replace wildcards with specific SWA/App Service hostnames for production
+    # Wildcards like *.azurestaticapps.net match ANY Azure-hosted app
+    # (including attacker-controlled ones) and should never be used with
+    # allow_credentials=True.  In production set CORS_ORIGINS env var to
+    # explicit hostnames: "https://myapp.azurestaticapps.net,https://portal.example.com"
     CORS_ORIGINS: list[str] = [
         "http://localhost:3000",
         "http://localhost:4280",  # Static Web Apps emulator
         "http://localhost:5173",
         "http://localhost:8080",
-        "https://*.azurestaticapps.net",
-        "https://*.azurewebsites.net",
     ]
 
     # ── Application ──────────────────────────────────────────────────────
