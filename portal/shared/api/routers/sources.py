@@ -42,6 +42,50 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+# ── Domain-scoping helpers ─────────────────────────────────────────────────
+#
+# Non-Admin users are scoped to sources whose ``domain`` matches the
+# ``domain`` / ``team`` claim on their JWT.  Read paths filter; write
+# paths must explicitly assert that the target source (and, for POST, the
+# requested domain) belongs to the user's scope.
+
+
+def _assert_user_can_access_domain(user: dict, domain: str) -> None:
+    """Raise 403 unless the user is an Admin or owns the given domain."""
+    user_roles = user.get("roles", [])
+    user_domain = user.get("domain") or user.get("team")
+    if "Admin" in user_roles:
+        return
+    if user_domain is None:
+        # User has no domain claim — only Admins can act cross-domain.
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Your identity does not carry a domain claim; request an "
+                "Admin role or a domain assignment to register / modify "
+                "sources."
+            ),
+        )
+    if user_domain != domain:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have access to sources outside your domain.",
+        )
+
+
+def _load_source_with_domain_check(source_id: str, user: dict) -> SourceRecord:
+    """Fetch a source by id, enforcing domain scoping against ``user``."""
+    stored = _sources_store.get(source_id)
+    if not stored:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Source '{source_id}' not found.",
+        )
+    source = SourceRecord.model_validate(stored)
+    _assert_user_can_access_domain(user, source.domain)
+    return source
+
+
 # ── Request Models ─────────────────────────────────────────────────────────
 
 
@@ -265,13 +309,17 @@ async def get_source(
 )
 async def register_source(
     registration: SourceRegistration,
-    _user: dict = Depends(get_current_user),
+    user: dict = Depends(require_role("Contributor", "Admin")),
 ) -> SourceRecord:
     """Register a new data source in the platform.
 
     The source is created in *draft* status.  Use ``/provision`` to trigger
     infrastructure deployment once the registration is approved.
+
+    Non-admin users may only register sources within their own domain.
     """
+    _assert_user_can_access_domain(user, registration.domain)
+
     source_id = str(uuid.uuid4())
     record = SourceRecord(
         id=source_id,
@@ -286,6 +334,7 @@ async def register_source(
             "name": registration.name,
             "type": registration.source_type.value,
             "domain": registration.domain,
+            "user": user.get("preferred_username", user.get("sub", "unknown")),
         },
     )
     return record
@@ -299,23 +348,26 @@ async def register_source(
 async def update_source(
     source_id: str,
     updates: SourceUpdate,
-    _user: dict = Depends(get_current_user),
+    user: dict = Depends(require_role("Contributor", "Admin")),
 ) -> SourceRecord:
-    """Apply a partial update to an existing source registration."""
-    stored_source = _sources_store.get(source_id)
-    if not stored_source:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Source '{source_id}' not found.",
-        )
+    """Apply a partial update to an existing source registration.
 
-    existing = SourceRecord.model_validate(stored_source)
+    Non-admin users may only update sources within their own domain.
+    """
+    existing = _load_source_with_domain_check(source_id, user)
     existing_data = existing.model_dump(by_alias=True)
     existing_data.update(updates.model_dump(exclude_unset=True))
     existing_data["updated_at"] = datetime.now(timezone.utc)
 
     updated = SourceRecord(**existing_data)
     _sources_store.update(source_id, updated.model_dump())
+    logger.info(
+        "Updated data source",
+        extra={
+            "source_id": source_id,
+            "user": user.get("preferred_username", user.get("sub", "unknown")),
+        },
+    )
     return updated
 
 
@@ -326,21 +378,23 @@ async def update_source(
 )
 async def decommission_source(
     source_id: str,
-    _user: dict = Depends(require_role("Contributor", "Admin")),
+    user: dict = Depends(require_role("Contributor", "Admin")),
 ) -> SourceRecord:
-    """Soft-delete a data source by setting its status to *decommissioned*."""
-    stored = _sources_store.get(source_id)
-    if not stored:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Source '{source_id}' not found.",
-        )
+    """Soft-delete a data source by setting its status to *decommissioned*.
 
-    source = SourceRecord.model_validate(stored)
+    Non-admin users may only decommission sources within their own domain.
+    """
+    source = _load_source_with_domain_check(source_id, user)
     source.status = SourceStatus.DECOMMISSIONED
     source.updated_at = datetime.now(timezone.utc)
     _sources_store.update(source_id, source.model_dump())
-    logger.info("Decommissioned source %s", source_id)
+    logger.info(
+        "Decommissioned source",
+        extra={
+            "source_id": source_id,
+            "user": user.get("preferred_username", user.get("sub", "unknown")),
+        },
+    )
     return source
 
 
@@ -350,20 +404,15 @@ async def decommission_source(
 )
 async def provision_source(
     source_id: str,
-    _user: dict = Depends(require_role("Contributor", "Admin")),
+    user: dict = Depends(require_role("Contributor", "Admin")),
 ) -> dict:
     """Trigger the full Data Landing Zone provisioning workflow.
 
-    Deploys infrastructure, creates ADF pipeline, and triggers Purview scan.
+    Deploys infrastructure, creates ADF pipeline, and triggers Purview
+    scan.  Non-admin users may only provision sources within their own
+    domain.
     """
-    stored = _sources_store.get(source_id)
-    if not stored:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Source '{source_id}' not found.",
-        )
-
-    source = SourceRecord.model_validate(stored)
+    source = _load_source_with_domain_check(source_id, user)
     result = await provisioning_service.provision(source)
 
     if not result.success:
@@ -399,17 +448,13 @@ async def provision_source(
 )
 async def scan_source(
     source_id: str,
-    _user: dict = Depends(require_role("Contributor", "Admin")),
+    user: dict = Depends(require_role("Contributor", "Admin")),
 ) -> dict:
-    """Trigger a Microsoft Purview metadata scan for this source."""
-    stored = _sources_store.get(source_id)
-    if not stored:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Source '{source_id}' not found.",
-        )
+    """Trigger a Microsoft Purview metadata scan for this source.
 
-    source = SourceRecord.model_validate(stored)
+    Non-admin users may only scan sources within their own domain.
+    """
+    source = _load_source_with_domain_check(source_id, user)
     scan_id = await provisioning_service.trigger_purview_scan(source)
     source.purview_scan_id = scan_id
     source.updated_at = datetime.now(timezone.utc)
