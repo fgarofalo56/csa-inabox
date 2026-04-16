@@ -25,11 +25,16 @@ from typing import Any
 
 import yaml
 
-# Resolve the repo root so ``governance.common`` imports work whether the
-# script is invoked from the repo root or from ``governance/dataquality/``.
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
+
+def _ensure_repo_root_on_path() -> None:
+    """Add the repo root to sys.path so governance.common imports work."""
+    repo_root = str(Path(__file__).resolve().parents[2])
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+
+
+if __name__ == "__main__":
+    _ensure_repo_root_on_path()
 
 from governance.common.logging import (  # noqa: E402
     configure_structlog,

@@ -202,7 +202,7 @@ resource cosmosDbAccount 'Microsoft.DocumentDB/databaseAccounts@2024-12-01-previ
   }
 }
 
-resource defaultDatabase 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2021-04-15' = if (!empty(defaultDatabaseName)) {
+resource defaultDatabase 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-12-01-preview' = if (!empty(defaultDatabaseName)) {
   name: '${cosmosDbAccountName}/${defaultDatabaseName}'
   properties: {
     resource: {

@@ -19,13 +19,20 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
 
 from ..models.source import (
     ClassificationLevel,
+    ConnectionConfig,
+    IngestionConfig,
+    OwnerInfo,
+    QualityRule,
+    SchemaDefinition,
     SourceRecord,
     SourceRegistration,
     SourceStatus,
     SourceType,
+    TargetConfig,
 )
 from ..persistence import JsonStore
 from ..services.auth import get_current_user, require_role
@@ -34,12 +41,36 @@ from ..services.provisioning import provisioning_service
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+
+# ── Request Models ─────────────────────────────────────────────────────────
+
+
+class SourceUpdate(BaseModel):
+    """Allowed fields for a partial source update (PATCH)."""
+
+    name: str | None = None
+    description: str | None = None
+    domain: str | None = None
+    classification: ClassificationLevel | None = None
+    connection: ConnectionConfig | None = None
+    schema_def: SchemaDefinition | None = Field(None, alias="schema")
+    ingestion: IngestionConfig | None = None
+    quality_rules: list[QualityRule] | None = None
+    target: TargetConfig | None = None
+    owner: OwnerInfo | None = None
+    tags: dict[str, str] | None = None
+
+    model_config = {"populate_by_name": True}
+
 # ── JSON-based persistence ──────────────────────────────────────────────────
 _sources_store = JsonStore("sources.json")
 
 
-def _seed_demo_sources() -> None:
-    """Populate a handful of realistic demo sources on first access."""
+def seed_demo_sources() -> None:
+    """Populate a handful of realistic demo sources on first access.
+
+    Called once at application startup from the lifespan handler.
+    """
     if _sources_store.count() > 0:
         return
 
@@ -175,8 +206,13 @@ async def list_sources(
     _user: dict = Depends(get_current_user),
 ) -> list[SourceRecord]:
     """Return all registered data sources, with optional filters."""
-    _seed_demo_sources()
     results = [SourceRecord.model_validate(item) for item in _sources_store.load()]
+
+    # Domain scoping: non-admin users only see their domain's sources
+    user_roles = _user.get("roles", [])
+    user_domain = _user.get("domain") or _user.get("team")
+    if "Admin" not in user_roles and user_domain:
+        results = [s for s in results if s.domain == user_domain]
 
     if domain:
         results = [s for s in results if s.domain == domain]
@@ -201,14 +237,24 @@ async def get_source(
     _user: dict = Depends(get_current_user),
 ) -> SourceRecord:
     """Return a single data source by its unique identifier."""
-    _seed_demo_sources()
     stored_source = _sources_store.get(source_id)
     if not stored_source:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Source '{source_id}' not found.",
         )
-    return SourceRecord.model_validate(stored_source)
+    source = SourceRecord.model_validate(stored_source)
+
+    # Domain scoping: non-admin users can only access their domain's sources
+    user_roles = _user.get("roles", [])
+    user_domain = _user.get("domain") or _user.get("team")
+    if "Admin" not in user_roles and user_domain and source.domain != user_domain:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have access to this source.",
+        )
+
+    return source
 
 
 @router.post(
@@ -252,11 +298,10 @@ async def register_source(
 )
 async def update_source(
     source_id: str,
-    updates: dict,
+    updates: SourceUpdate,
     _user: dict = Depends(get_current_user),
 ) -> SourceRecord:
     """Apply a partial update to an existing source registration."""
-    _seed_demo_sources()
     stored_source = _sources_store.get(source_id)
     if not stored_source:
         raise HTTPException(
@@ -266,7 +311,7 @@ async def update_source(
 
     existing = SourceRecord.model_validate(stored_source)
     existing_data = existing.model_dump(by_alias=True)
-    existing_data.update(updates)
+    existing_data.update(updates.model_dump(exclude_unset=True))
     existing_data["updated_at"] = datetime.now(timezone.utc)
 
     updated = SourceRecord(**existing_data)
@@ -284,7 +329,6 @@ async def decommission_source(
     _user: dict = Depends(require_role("Contributor", "Admin")),
 ) -> SourceRecord:
     """Soft-delete a data source by setting its status to *decommissioned*."""
-    _seed_demo_sources()
     stored = _sources_store.get(source_id)
     if not stored:
         raise HTTPException(
@@ -312,7 +356,6 @@ async def provision_source(
 
     Deploys infrastructure, creates ADF pipeline, and triggers Purview scan.
     """
-    _seed_demo_sources()
     stored = _sources_store.get(source_id)
     if not stored:
         raise HTTPException(
@@ -324,10 +367,24 @@ async def provision_source(
     result = await provisioning_service.provision(source)
 
     if not result.success:
+        # Persist error status if provisioning set it
+        if source.status == SourceStatus.ERROR:
+            _sources_store.update(source_id, {
+                "status": source.status.value,
+                "updated_at": source.updated_at.isoformat(),
+            })
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=result.message,
         )
+
+    # Persist the provisioning results back to the store
+    _sources_store.update(source_id, {
+        "status": source.status.value,
+        "pipeline_id": source.pipeline_id,
+        "purview_scan_id": source.purview_scan_id,
+        "updated_at": source.updated_at.isoformat(),
+    })
 
     return {
         "status": "provisioning",
@@ -345,7 +402,6 @@ async def scan_source(
     _user: dict = Depends(require_role("Contributor", "Admin")),
 ) -> dict:
     """Trigger a Microsoft Purview metadata scan for this source."""
-    _seed_demo_sources()
     stored = _sources_store.get(source_id)
     if not stored:
         raise HTTPException(

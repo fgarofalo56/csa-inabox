@@ -71,7 +71,7 @@ jobs:
       - name: Validate Bicep Templates
         run: |
           echo "Validating Bicep templates for ${{ inputs.environment }}..."
-          bicep build "deploy/bicep/LandingZone - ALZ/main.bicep"
+          bicep build "deploy/bicep/landing-zone-alz/main.bicep"
           bicep build deploy/bicep/DMLZ/main.bicep
           bicep build deploy/bicep/DLZ/main.bicep
 
@@ -100,8 +100,8 @@ jobs:
           MODE=${{ inputs.dry_run && '--what-if' || '' }}
           az deployment sub create \
             --location ${{ env.AZURE_REGION }} \
-            --template-file "deploy/bicep/LandingZone - ALZ/main.bicep" \
-            --parameters "deploy/bicep/LandingZone - ALZ/params.${{ inputs.environment }}.json" \
+            --template-file "deploy/bicep/landing-zone-alz/main.bicep" \
+            --parameters "deploy/bicep/landing-zone-alz/params.${{ inputs.environment }}.json" \
             "$MODE"
 
   # -------------------------------------------------------------------------

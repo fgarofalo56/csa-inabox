@@ -21,6 +21,22 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
+# ── Retry wrapper for transient failures ────────────────────────────
+retry_cmd() {
+  local max_retries=3
+  local delay=10
+  local attempt=1
+  while [ $attempt -le $max_retries ]; do
+    if "$@"; then return 0; fi
+    echo "Attempt $attempt/$max_retries failed. Retrying in ${delay}s..."
+    sleep $delay
+    delay=$((delay * 2))
+    attempt=$((attempt + 1))
+  done
+  echo "Command failed after $max_retries attempts: $*"
+  return 1
+}
+
 # ── Defaults ─────────────────────────────────────────────────────────
 FACTORY_NAME=""
 RESOURCE_GROUP=""
@@ -60,7 +76,7 @@ deploy_artifact() {
     echo "Deploying $kind: $name ..."
     case "$kind" in
         linked-service)
-            az datafactory linked-service create \
+            retry_cmd az datafactory linked-service create \
                 --factory-name "$FACTORY_NAME" \
                 --resource-group "$RESOURCE_GROUP" \
                 --linked-service-name "$name" \
@@ -68,7 +84,7 @@ deploy_artifact() {
                 --only-show-errors
             ;;
         dataset)
-            az datafactory dataset create \
+            retry_cmd az datafactory dataset create \
                 --factory-name "$FACTORY_NAME" \
                 --resource-group "$RESOURCE_GROUP" \
                 --dataset-name "$name" \
@@ -76,7 +92,7 @@ deploy_artifact() {
                 --only-show-errors
             ;;
         pipeline)
-            az datafactory pipeline create \
+            retry_cmd az datafactory pipeline create \
                 --factory-name "$FACTORY_NAME" \
                 --resource-group "$RESOURCE_GROUP" \
                 --pipeline-name "$name" \
@@ -84,7 +100,7 @@ deploy_artifact() {
                 --only-show-errors
             ;;
         trigger)
-            az datafactory trigger create \
+            retry_cmd az datafactory trigger create \
                 --factory-name "$FACTORY_NAME" \
                 --resource-group "$RESOURCE_GROUP" \
                 --trigger-name "$name" \

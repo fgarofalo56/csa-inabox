@@ -4,23 +4,30 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    labels: ["dependencies", "python"]
+    open-pull-requests-limit: 10
     groups:
       azure-sdk:
         patterns:
           - "azure-*"
+
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    labels: ["dependencies", "ci"]
+    open-pull-requests-limit: 5
 
   - package-ecosystem: "npm"
     directory: "/portal/react-webapp"
     schedule:
       interval: "weekly"
+    labels: ["dependencies", "javascript"]
     open-pull-requests-limit: 10
 
   - package-ecosystem: "npm"
     directory: "/portal/static-webapp"
     schedule:
       interval: "weekly"
+    labels: ["dependencies", "javascript"]
     open-pull-requests-limit: 10

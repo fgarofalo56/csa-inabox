@@ -1,0 +1,7 @@
+# Dependencies managed in pyproject.toml [project.optional-dependencies.platform]
+# This file is kept for standalone module deployment.
+azure-mgmt-synapse>=2.0.0
+azure-mgmt-costmanagement>=3.0.0
+azure-identity>=1.15.0
+azure-mgmt-authorization>=4.0.0
+pyodbc>=5.0.0

@@ -16,6 +16,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel
 
 from ..models.marketplace import (
     AccessRequest,
@@ -28,12 +29,24 @@ from ..services.auth import get_current_user, require_role
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+
+# ── Request Models ─────────────────────────────────────────────────────────
+
+
+class ReviewBody(BaseModel):
+    """Optional body for approve / deny review actions."""
+
+    notes: str | None = None
+
 # ── JSON-based persistence ──────────────────────────────────────────────────
 _access_store = JsonStore("access_requests.json")
 
 
-def _seed_demo_requests() -> None:
-    """Populate realistic demo access requests on first access."""
+def seed_demo_requests() -> None:
+    """Populate realistic demo access requests on first access.
+
+    Called once at application startup from the lifespan handler.
+    """
     if _access_store.count() > 0:
         return
 
@@ -106,8 +119,14 @@ async def list_access_requests(
     _user: dict = Depends(get_current_user),
 ) -> list[AccessRequest]:
     """Return access requests with optional filters."""
-    _seed_demo_requests()
     results = [AccessRequest.model_validate(item) for item in _access_store.load()]
+
+    # Domain scoping: non-admin users only see their own requests
+    user_roles = _user.get("roles", [])
+    if "Admin" not in user_roles:
+        user_email = _user.get("email") or _user.get("preferred_username", "")
+        if user_email:
+            results = [r for r in results if r.requester_email == user_email]
 
     if status_filter:
         results = [r for r in results if r.status == status_filter]
@@ -167,7 +186,7 @@ async def create_access_request(
 )
 async def approve_access_request(
     request_id: str,
-    body: dict | None = None,
+    body: ReviewBody | None = None,
     user: dict = Depends(require_role("Contributor", "Admin")),
 ) -> AccessRequest:
     """Approve a pending access request and grant RBAC permissions.
@@ -177,7 +196,6 @@ async def approve_access_request(
         from azure.mgmt.authorization import AuthorizationManagementClient
         client.role_assignments.create(scope, assignment_name, parameters)
     """
-    _seed_demo_requests()
     stored_req = _access_store.get(request_id)
     if not stored_req:
         raise HTTPException(status_code=404, detail=f"Request '{request_id}' not found.")
@@ -193,7 +211,7 @@ async def approve_access_request(
     req.status = AccessRequestStatus.APPROVED
     req.reviewed_at = now
     req.reviewed_by = user.get("email", user.get("preferred_username", "admin"))
-    req.review_notes = (body or {}).get("notes")
+    req.review_notes = body.notes if body else None
     req.expires_at = now + timedelta(days=req.duration_days)
 
     # Update in store
@@ -210,11 +228,10 @@ async def approve_access_request(
 )
 async def deny_access_request(
     request_id: str,
-    body: dict | None = None,
+    body: ReviewBody | None = None,
     user: dict = Depends(require_role("Contributor", "Admin")),
 ) -> AccessRequest:
     """Deny a pending access request."""
-    _seed_demo_requests()
     stored_req = _access_store.get(request_id)
     if not stored_req:
         raise HTTPException(status_code=404, detail=f"Request '{request_id}' not found.")
@@ -229,7 +246,7 @@ async def deny_access_request(
     req.status = AccessRequestStatus.DENIED
     req.reviewed_at = datetime.now(timezone.utc)
     req.reviewed_by = user.get("email", user.get("preferred_username", "admin"))
-    req.review_notes = (body or {}).get("notes")
+    req.review_notes = body.notes if body else None
 
     # Update in store
     _access_store.update(request_id, req.model_dump())

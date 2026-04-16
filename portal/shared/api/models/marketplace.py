@@ -7,7 +7,7 @@ types from ``portal/react-webapp/src/types/index.ts``.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from enum import Enum
 
 from pydantic import BaseModel, Field
@@ -41,7 +41,7 @@ class DataProduct(BaseModel):
 class QualityMetric(BaseModel):
     """Point-in-time quality measurement for a data product."""
 
-    date: str  # ISO date string (YYYY-MM-DD)
+    date: date
     quality_score: float
     completeness: float
     freshness_hours: float

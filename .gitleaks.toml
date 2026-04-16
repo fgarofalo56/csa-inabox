@@ -1,0 +1,28 @@
+# Gitleaks configuration
+# =======================
+# Use the default gitleaks v8 rules, then narrow down false positives that
+# arise from public-reference identifiers and non-secret hash fingerprints
+# this repo commits for deployment and diagnostic reference.
+#
+# Anything added here has been reviewed and is explicitly NOT a secret.
+# Real leaks must still be rotated and removed from history.
+
+[extend]
+# Start from the built-in ruleset.
+useDefault = true
+
+[allowlist]
+description = "False-positive allowlist for public reference identifiers."
+
+paths = [
+    # Azure built-in role GUIDs — published by Microsoft, safe to commit.
+    # https://learn.microsoft.com/azure/role-based-access-control/built-in-roles
+    '''governance/rbac/rbac-matrix\.json''',
+
+    # Synapse / Storage diagnostic logging notebooks contain Azure log
+    # output with an "AuthenticationHash" field.  That field is a SHA-256
+    # fingerprint of the auth token used for a request — it is one-way
+    # and cannot be reversed back into a credential.  Published by Azure
+    # Storage diagnostics, not a secret.
+    '''scripts/monitor/.*\.ipynb''',
+]

@@ -31,6 +31,23 @@ Thank you for your interest in contributing to Cloud-Scale Analytics in-a-Box.
 - [ ] Python 3.10+
 - [ ] Git 2.40+
 
+### Development Commands
+
+```bash
+make test              # Run unit tests with pytest (80% coverage gate)
+make test-e2e          # Run end-to-end tests (offline, DuckDB)
+make lint              # Run ruff linter
+make lint-fix          # Auto-fix lint issues
+make typecheck         # Run mypy type checking
+make security          # Run bandit security scan
+make validate          # Validate Bicep templates
+make clean             # Clean build artifacts
+```
+
+Coverage is enforced at 80% via `pytest --cov` with `fail_under=80`. Run `make test` locally before submitting PRs.
+
+The project uses ruff with a line length of 120 characters (not PEP 8's default 79).
+
 ### 📦 Installation
 
 1. Clone the repository:
@@ -105,7 +122,7 @@ Thank you for your interest in contributing to Cloud-Scale Analytics in-a-Box.
 - Use approved verbs (Get-, Set-, New-, Remove-)
 
 ### Python
-- Follow PEP 8
+- Follow PEP 8 with a line length of 120 characters (enforced by ruff)
 - Use type hints
 - Use `pathlib.Path` for file operations
 - Add docstrings to all public functions

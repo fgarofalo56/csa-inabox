@@ -25,7 +25,7 @@ var loadbalancerName = '${vmssName}-lb'
 // #checkov:skip=CKV_AZURE_50:VMSS requires CustomScriptExtension for SHIR gateway installation
 // #checkov:skip=CKV_AZURE_151:VMSS managed disk CMK encryption configured out-of-band via Azure Policy
 // #checkov:skip=CKV_AZURE_149:VMSS disk encryption not required for dev/lab SHIR
-resource loadbalancer001 'Microsoft.Network/loadBalancers@2021-03-01' = {
+resource loadbalancer001 'Microsoft.Network/loadBalancers@2023-11-01' = {
   name: loadbalancerName
   location: location
   tags: tags
@@ -85,7 +85,7 @@ resource loadbalancer001 'Microsoft.Network/loadBalancers@2021-03-01' = {
   }
 }
 
-resource vmss001 'Microsoft.Compute/virtualMachineScaleSets@2021-07-01' = {
+resource vmss001 'Microsoft.Compute/virtualMachineScaleSets@2024-03-01' = {
   name: vmssName
   location: location
   tags: tags
@@ -159,7 +159,7 @@ resource vmss001 'Microsoft.Compute/virtualMachineScaleSets@2021-07-01' = {
           offer: 'WindowsServer'
           publisher: 'MicrosoftWindowsServer'
           sku: '2022-datacenter-azure-edition'
-          version: 'latest'
+          version: '20348.2340.240207'
         }
         osDisk: {
           caching: 'ReadWrite'

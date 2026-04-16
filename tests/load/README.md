@@ -5,7 +5,7 @@
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** QA Engineers / Developers
 
 > [!TIP]
-> **TL;DR** — Regression-detection harnesses for four platform targets: Azure Function HTTP triggers (Locust + k6), dbt model execution (pytest benchmark), Databricks notebooks (Jobs API), and ADF pipelines (REST API). These are on-demand tests requiring live environments, not part of the default CI run.
+> **TL;DR** — Regression-detection harnesses for four platform targets: Azure Function HTTP triggers (k6), dbt model execution (pytest benchmark), Databricks notebooks (Jobs API), and ADF pipelines (REST API). These are on-demand tests requiring live environments, not part of the default CI run.
 
 ## Table of Contents
 
@@ -21,7 +21,6 @@ platform that are sensitive to load:
 
 | Target | Harness | Location |
 |---|---|---|
-| Azure Function HTTP triggers | [Locust](https://locust.io/) | `locustfile_ai_enrichment.py` |
 | Azure Function HTTP triggers | [k6](https://k6.io/) | `k6_ai_enrichment.js` |
 | dbt model execution | pytest + subprocess timing | `benchmark_dbt_models.py` |
 | Databricks notebooks & ADF | procedure + metrics contract | `README.md` section below |
@@ -32,34 +31,6 @@ platform that are sensitive to load:
 ---
 
 ## ⚡ Azure Function HTTP Triggers
-
-### ⚡ Locust
-
-```bash
-pip install locust
-locust -f tests/load/locustfile_ai_enrichment.py \
-  --host=https://<your-function-app>.azurewebsites.net \
-  --users=50 \
-  --spawn-rate=5 \
-  --run-time=2m \
-  --headless \
-  --csv=reports/locust-ai-enrichment
-```
-
-Acceptance targets (`/api/enrich` on EP1, single region):
-
-| Metric | Target |
-|---|---|
-| p50 latency | < 500 ms |
-| p95 latency | < 1500 ms |
-| p99 latency | < 3000 ms |
-| Error rate | < 1% |
-| Throughput | ≥ 50 RPS at 50 users |
-
-Raise the `--users` and `--spawn-rate` values to measure saturation.
-Capture the generated `reports/locust-ai-enrichment_stats.csv` alongside
-the deploy tag (see `docs/ROLLBACK.md`) so regressions can be traced to a
-specific deployment.
 
 ### ⚡ k6
 

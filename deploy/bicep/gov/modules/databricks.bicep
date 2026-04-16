@@ -79,3 +79,4 @@ resource diagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' 
 output workspaceId string = databricks.id
 output workspaceName string = databricks.name
 output workspaceUrl string = databricks.properties.workspaceUrl
+output principalId string = databricks.identity.principalId

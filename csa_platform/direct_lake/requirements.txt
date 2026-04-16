@@ -1,0 +1,4 @@
+# Dependencies managed in pyproject.toml [project.optional-dependencies.platform]
+# This file is kept for standalone module deployment.
+databricks-sdk>=0.20.0
+pyyaml>=6.0.1

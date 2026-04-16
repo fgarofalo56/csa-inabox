@@ -79,9 +79,27 @@ function DomainCard({ domain }: { domain: DomainOverview }) {
   );
 }
 
+function ErrorBanner({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <div className="bg-red-50 border border-red-200 rounded-lg p-6 text-center">
+      <svg className="mx-auto h-10 w-10 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+      </svg>
+      <h3 className="mt-2 text-sm font-medium text-red-800">Failed to load dashboard data</h3>
+      <p className="mt-1 text-sm text-red-600">{message}</p>
+      <button
+        onClick={onRetry}
+        className="mt-4 inline-flex items-center px-4 py-2 text-sm font-medium text-red-700 bg-red-100 border border-red-300 rounded-md hover:bg-red-200"
+      >
+        Retry
+      </button>
+    </div>
+  );
+}
+
 export default function DashboardPage() {
-  const { data: stats, isLoading: statsLoading } = useStats();
-  const { data: domains, isLoading: domainsLoading } = useDomainOverview();
+  const { data: stats, isLoading: statsLoading, error: statsError, refetch: refetchStats } = useStats();
+  const { data: domains, isLoading: domainsLoading, error: domainsError, refetch: refetchDomains } = useDomainOverview();
   const { data: pipelines } = usePipelines({ status: 'running' });
 
   if (statsLoading) {
@@ -90,6 +108,23 @@ export default function DashboardPage() {
         <div role="status" aria-label="Loading">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-600" />
         </div>
+      </div>
+    );
+  }
+
+  if (statsError) {
+    return (
+      <div className="space-y-8">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Platform Dashboard</h1>
+          <p className="mt-1 text-sm text-gray-500">
+            CSA-in-a-Box Data Platform Overview
+          </p>
+        </div>
+        <ErrorBanner
+          message={statsError instanceof Error ? statsError.message : 'An unexpected error occurred.'}
+          onRetry={() => { refetchStats(); refetchDomains(); }}
+        />
       </div>
     );
   }
@@ -173,7 +208,17 @@ export default function DashboardPage() {
         <h2 className="text-lg font-semibold text-gray-900 mb-4">
           Data Domains
         </h2>
-        {domainsLoading ? (
+        {domainsError ? (
+          <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-center">
+            <p className="text-sm text-red-600">Failed to load domain data.</p>
+            <button
+              onClick={() => refetchDomains()}
+              className="mt-2 text-sm text-red-700 underline hover:text-red-800"
+            >
+              Retry
+            </button>
+          </div>
+        ) : domainsLoading ? (
           <p className="text-gray-500">Loading domains...</p>
         ) : domains && domains.length > 0 ? (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">

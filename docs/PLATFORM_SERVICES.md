@@ -14,16 +14,16 @@ with detailed usage instructions.
 ## 📑 Table of Contents
 
 - [🏗️ Services Overview](#️-services-overview)
-- [1. 🗄️ OneLake Pattern](#1-️-onelake-pattern)
-- [2. ⚡ Data Activator](#2--data-activator)
-- [3. 📊 Direct Lake](#3--direct-lake)
+- [1. 🗄️ OneLake Pattern](#1-️-onelake_pattern)
+- [2. ⚡ Data Activator](#2--data_activator)
+- [3. 📊 Direct Lake](#3--direct_lake)
 - [4. 🛒 Data Marketplace](#4--data-marketplace)
 - [5. 📋 Governance Framework](#5--governance-framework)
-- [6. 🔄 Multi-Synapse](#6--multi-synapse)
-- [7. ⚙️ Metadata Framework](#7-️-metadata-framework)
+- [6. 🔄 Multi-Synapse](#6--multi_synapse)
+- [7. ⚙️ Metadata Framework](#7-️-metadata_framework)
 - [8. 🤖 AI Integration](#8--ai-integration)
-- [9. 🔧 Shared Services](#9--shared-services)
-- [10. 🔓 OSS Alternatives](#10--oss-alternatives)
+- [9. 🔧 Shared Services](#9--shared_services)
+- [10. 🔓 OSS Alternatives](#10--oss_alternatives)
 - [📦 Service Dependency Map](#-service-dependency-map)
 - [⚙️ Configuration](#️-configuration)
 
@@ -68,7 +68,7 @@ graph LR
 
 ## 1. 🗄️ OneLake Pattern
 
-**Location:** `platform/onelake-pattern/`
+**Location:** `csa_platform/onelake_pattern/`
 **Fabric Equivalent:** OneLake
 
 Implements a unified data lake using ADLS Gen2 with Unity Catalog providing the
@@ -85,8 +85,8 @@ physical separation via containers and folders.
 ```bash
 az deployment group create \
   --resource-group rg-datalake \
-  --template-file platform/onelake-pattern/deploy/onelake.bicep \
-  --parameters platform/onelake-pattern/deploy/params.json
+  --template-file csa_platform/onelake_pattern/deploy/onelake.bicep \
+  --parameters csa_platform/onelake_pattern/deploy/params.json
 ```
 
 **Dependencies:** ADLS Gen2 (from DLZ deployment), Databricks workspace
@@ -95,7 +95,7 @@ az deployment group create \
 
 ## 2. ⚡ Data Activator
 
-**Location:** `platform/data-activator/`
+**Location:** `csa_platform/data_activator/`
 **Fabric Equivalent:** Data Activator
 
 Event-driven alerting and automation triggered by data conditions. Replaces
@@ -111,8 +111,8 @@ Fabric Data Activator using Event Grid, Logic Apps, and Azure Functions.
 ```bash
 az deployment group create \
   --resource-group rg-platform \
-  --template-file platform/data-activator/deploy/activator.bicep \
-  --parameters platform/data-activator/deploy/params.json
+  --template-file csa_platform/data_activator/deploy/activator.bicep \
+  --parameters csa_platform/data_activator/deploy/params.json
 ```
 
 **Dependencies:** Event Grid (from DLZ), Logic Apps, Azure Functions, Key Vault
@@ -121,7 +121,7 @@ az deployment group create \
 
 ## 3. 📊 Direct Lake
 
-**Location:** `platform/direct-lake/`
+**Location:** `csa_platform/direct_lake/`
 **Fabric Equivalent:** Direct Lake mode in Power BI
 
 Enables Power BI to query Delta Lake files directly from ADLS Gen2 via
@@ -149,7 +149,7 @@ databricks sql-endpoints create \
 
 ## 4. 🛒 Data Marketplace
 
-**Location:** `platform/data_marketplace/`
+**Location:** `csa_platform/data_marketplace/`
 **Fabric Equivalent:** Data Sharing / OneLake Data Hub
 
 A self-service portal for discovering, requesting access to, and consuming data
@@ -167,11 +167,11 @@ products published across the organization.
 # Deploy the marketplace API
 az deployment group create \
   --resource-group rg-platform \
-  --template-file platform/data_marketplace/deploy/marketplace.bicep \
-  --parameters platform/data_marketplace/deploy/params.json
+  --template-file csa_platform/data_marketplace/deploy/marketplace.bicep \
+  --parameters csa_platform/data_marketplace/deploy/params.json
 
 # Initialize the catalog
-python platform/data_marketplace/api/marketplace_api.py --init
+python csa_platform/data_marketplace/api/marketplace_api.py --init
 ```
 
 **Dependencies:** Purview, API Management, Azure SQL or Cosmos DB for catalog state
@@ -180,7 +180,7 @@ python platform/data_marketplace/api/marketplace_api.py --init
 
 ## 5. 📋 Governance Framework
 
-**Location:** `platform/governance/`
+**Location:** `csa_platform/governance/`
 **Fabric Equivalent:** Purview-integrated governance
 
 Extends Microsoft Purview with automated data governance workflows including
@@ -207,7 +207,7 @@ python scripts/purview/bootstrap_catalog.py \
 
 ## 6. 🔄 Multi-Synapse
 
-**Location:** `platform/multi-synapse/`
+**Location:** `csa_platform/multi_synapse/`
 **Fabric Equivalent:** Multi-workspace Synapse
 
 Provides a shared Synapse Analytics environment with per-organization or
@@ -223,8 +223,8 @@ per-domain isolation using workspace-level RBAC and network segmentation.
 ```bash
 az deployment group create \
   --resource-group rg-synapse \
-  --template-file platform/multi-synapse/deploy/synapse.bicep \
-  --parameters @platform/multi-synapse/deploy/params.json
+  --template-file csa_platform/multi_synapse/deploy/synapse.bicep \
+  --parameters @csa_platform/multi_synapse/deploy/params.json
 ```
 
 **Dependencies:** DLZ VNet, ADLS Gen2, Key Vault
@@ -233,7 +233,7 @@ az deployment group create \
 
 ## 7. ⚙️ Metadata Framework
 
-**Location:** `platform/metadata-framework/`
+**Location:** `csa_platform/metadata_framework/`
 **Fabric Equivalent:** Metadata-driven Data Factory pipelines
 
 Auto-generates ADF pipelines from YAML-based source registration metadata.
@@ -271,7 +271,7 @@ source:
 
 ## 8. 🤖 AI Integration
 
-**Location:** `platform/ai_integration/`
+**Location:** `csa_platform/ai_integration/`
 **Fabric Equivalent:** Copilot / AI features
 
 Provides domain-aware AI capabilities including document enrichment, entity
@@ -286,7 +286,7 @@ extraction, text summarization, and RAG-based question answering.
 
 **Deploy:**
 ```bash
-pip install -r platform/ai_integration/requirements.txt
+pip install -r csa_platform/ai_integration/requirements.txt
 
 # Configure Azure OpenAI connection
 export AZURE_OPENAI_ENDPOINT=https://<resource>.openai.azure.com/
@@ -300,7 +300,7 @@ export AZURE_OPENAI_DEPLOYMENT=gpt-4
 
 ## 9. 🔧 Shared Services
 
-**Location:** `platform/shared-services/`
+**Location:** `csa_platform/shared_services/`
 **Fabric Equivalent:** Shared utility functions
 
 A library of reusable Azure Functions for common data operations used across
@@ -317,7 +317,7 @@ pipelines and platform services.
 
 **Deploy:**
 ```bash
-cd platform/shared-services/functions
+cd csa_platform/shared_services/functions
 
 # Deploy to Azure Functions
 func azure functionapp publish <function-app-name> --python
@@ -325,7 +325,7 @@ func azure functionapp publish <function-app-name> --python
 # Or deploy via Bicep
 az deployment group create \
   --resource-group rg-platform \
-  --template-file platform/shared-services/deploy/functions.bicep
+  --template-file csa_platform/shared_services/deploy/functions.bicep
 ```
 
 **Dependencies:** Azure Functions runtime, Key Vault, Teams webhook URL
@@ -334,7 +334,7 @@ az deployment group create \
 
 ## 10. 🔓 OSS Alternatives
 
-**Location:** `platform/oss-alternatives/`
+**Location:** `csa_platform/oss_alternatives/`
 **Fabric Equivalent:** N/A (fills Azure Government gaps)
 
 Containerized open-source alternatives for services that are unavailable or
@@ -352,9 +352,9 @@ restricted in Azure Government at certain impact levels.
 **Deploy:**
 ```bash
 # Example: deploy Keycloak on AKS
-helm install keycloak platform/oss-alternatives/keycloak/chart \
+helm install keycloak csa_platform/oss_alternatives/keycloak/chart \
   --namespace identity \
-  --values platform/oss-alternatives/keycloak/values-gov.yaml
+  --values csa_platform/oss_alternatives/keycloak/values-gov.yaml
 ```
 
 **Dependencies:** AKS cluster, Azure Container Registry

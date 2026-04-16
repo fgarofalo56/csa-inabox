@@ -40,7 +40,7 @@ jobs:
         with:
           filters: |
             alz:
-              - 'deploy/bicep/LandingZone - ALZ/**'
+              - 'deploy/bicep/landing-zone-alz/**'
               - 'deploy/bicep/shared/**'
             dmlz:
               - 'deploy/bicep/DMLZ/**'
@@ -58,7 +58,7 @@ jobs:
       matrix:
         include:
           - zone: ALZ
-            path: 'deploy/bicep/LandingZone - ALZ'
+            path: 'deploy/bicep/landing-zone-alz'
             main: main.bicep
             changed: ${{ needs.detect-changes.outputs.alz_changed }}
           - zone: DMLZ

@@ -1,4 +1,4 @@
-"""Tests for the platform/ai_integration module.
+"""Tests for the csa_platform/ai_integration module.
 
 Covers:
 - DocumentChunker (pure logic: chunking strategies, overlap, min length, IDs)
@@ -54,7 +54,7 @@ class TestDocumentChunker:
     """Tests for the DocumentChunker class."""
 
     def _make_chunker(self, **kwargs: Any) -> Any:
-        from platform.ai_integration.rag.pipeline import DocumentChunker
+        from csa_platform.ai_integration.rag.pipeline import DocumentChunker
 
         defaults = {
             "chunk_size": 512,
@@ -112,14 +112,14 @@ class TestDocumentChunker:
 
     def test_chunk_overlap_validation(self) -> None:
         """Overlap >= chunk_size raises ValueError."""
-        from platform.ai_integration.rag.pipeline import DocumentChunker
+        from csa_platform.ai_integration.rag.pipeline import DocumentChunker
 
         with pytest.raises(ValueError, match="chunk_overlap must be less than chunk_size"):
             DocumentChunker(chunk_size=100, chunk_overlap=100)
 
     def test_make_id_deterministic(self) -> None:
         """The same source and index always produce the same ID."""
-        from platform.ai_integration.rag.pipeline import DocumentChunker
+        from csa_platform.ai_integration.rag.pipeline import DocumentChunker
 
         id1 = DocumentChunker._make_id("test.txt", 0)
         id2 = DocumentChunker._make_id("test.txt", 0)
@@ -129,7 +129,7 @@ class TestDocumentChunker:
 
     def test_make_id_different_for_different_inputs(self) -> None:
         """Different inputs produce different IDs."""
-        from platform.ai_integration.rag.pipeline import DocumentChunker
+        from csa_platform.ai_integration.rag.pipeline import DocumentChunker
 
         id1 = DocumentChunker._make_id("a.txt", 0)
         id2 = DocumentChunker._make_id("b.txt", 0)
@@ -158,7 +158,7 @@ class TestChunkDataclass:
     """Tests for the Chunk dataclass."""
 
     def test_chunk_fields(self) -> None:
-        from platform.ai_integration.rag.pipeline import Chunk
+        from csa_platform.ai_integration.rag.pipeline import Chunk
 
         chunk = Chunk(id="abc", text="hello", source="s.txt", metadata={"k": "v"}, chunk_index=3)
         assert chunk.id == "abc"
@@ -168,7 +168,7 @@ class TestChunkDataclass:
         assert chunk.chunk_index == 3
 
     def test_chunk_defaults(self) -> None:
-        from platform.ai_integration.rag.pipeline import Chunk
+        from csa_platform.ai_integration.rag.pipeline import Chunk
 
         chunk = Chunk(id="a", text="b", source="c")
         assert chunk.metadata == {}
@@ -184,7 +184,7 @@ class TestEmbeddingGenerator:
     """Tests for the EmbeddingGenerator class."""
 
     def _make_generator(self, **kwargs: Any) -> Any:
-        from platform.ai_integration.rag.pipeline import EmbeddingGenerator
+        from csa_platform.ai_integration.rag.pipeline import EmbeddingGenerator
 
         defaults = {"endpoint": "https://test.openai.azure.com", "api_key": "test-key", "batch_size": 2}
         defaults.update(kwargs)
@@ -251,7 +251,7 @@ class TestEmbeddingGenerator:
         mock_azure_openai = MagicMock()
 
         with patch.dict("sys.modules", {"openai": MagicMock(AzureOpenAI=mock_azure_openai)}):
-            from platform.ai_integration.rag import pipeline
+            from csa_platform.ai_integration.rag import pipeline
 
             original = pipeline.__dict__.get("AzureOpenAI")
             try:
@@ -274,7 +274,7 @@ class TestVectorStore:
     """Tests for the VectorStore class."""
 
     def _make_store(self, **kwargs: Any) -> Any:
-        from platform.ai_integration.rag.pipeline import VectorStore
+        from csa_platform.ai_integration.rag.pipeline import VectorStore
 
         defaults = {"endpoint": "https://test.search.windows.net", "api_key": "test-key"}
         defaults.update(kwargs)
@@ -282,7 +282,7 @@ class TestVectorStore:
 
     def test_upsert_documents(self) -> None:
         """upsert_documents uploads chunks with embeddings."""
-        from platform.ai_integration.rag.pipeline import Chunk
+        from csa_platform.ai_integration.rag.pipeline import Chunk
 
         store = self._make_store()
         mock_search_client = MagicMock()
@@ -304,7 +304,7 @@ class TestVectorStore:
 
     def test_upsert_documents_mismatched_lengths(self) -> None:
         """upsert_documents raises ValueError when lengths don't match."""
-        from platform.ai_integration.rag.pipeline import Chunk
+        from csa_platform.ai_integration.rag.pipeline import Chunk
 
         store = self._make_store()
         chunks = [Chunk(id="c1", text="hello", source="s.txt")]
@@ -425,7 +425,7 @@ class TestRAGPipeline:
     """Tests for the RAGPipeline orchestrator."""
 
     def _make_pipeline(self) -> Any:
-        from platform.ai_integration.rag.pipeline import (
+        from csa_platform.ai_integration.rag.pipeline import (
             Chunk,
             DocumentChunker,
             EmbeddingGenerator,
@@ -533,7 +533,7 @@ class TestDocumentClassifier:
     """Tests for the DocumentClassifier class."""
 
     def _make_classifier(self, **kwargs: Any) -> Any:
-        from platform.ai_integration.enrichment.document_classifier import DocumentClassifier
+        from csa_platform.ai_integration.enrichment.document_classifier import DocumentClassifier
 
         defaults = {"endpoint": "https://test.openai.azure.com", "api_key": "test-key"}
         defaults.update(kwargs)
@@ -638,7 +638,7 @@ class TestTaxonomyLoading:
 
     def test_load_taxonomy_success(self, tmp_path: Path) -> None:
         """load_taxonomy parses a valid YAML file."""
-        from platform.ai_integration.enrichment.document_classifier import load_taxonomy
+        from csa_platform.ai_integration.enrichment.document_classifier import load_taxonomy
 
         yaml_content = """
 categories:
@@ -659,14 +659,14 @@ categories:
 
     def test_load_taxonomy_missing_file(self) -> None:
         """load_taxonomy raises FileNotFoundError for missing files."""
-        from platform.ai_integration.enrichment.document_classifier import load_taxonomy
+        from csa_platform.ai_integration.enrichment.document_classifier import load_taxonomy
 
         with pytest.raises(FileNotFoundError):
             load_taxonomy("/nonexistent/taxonomy.yaml")
 
     def test_load_taxonomy_invalid_format(self, tmp_path: Path) -> None:
         """load_taxonomy raises ValueError for invalid YAML structure."""
-        from platform.ai_integration.enrichment.document_classifier import load_taxonomy
+        from csa_platform.ai_integration.enrichment.document_classifier import load_taxonomy
 
         yaml_file = tmp_path / "bad.yaml"
         yaml_file.write_text("not_categories: []", encoding="utf-8")
@@ -684,7 +684,7 @@ class TestEntityExtractor:
     """Tests for the EntityExtractor class."""
 
     def _make_extractor(self, **kwargs: Any) -> Any:
-        from platform.ai_integration.enrichment.entity_extractor import EntityExtractor
+        from csa_platform.ai_integration.enrichment.entity_extractor import EntityExtractor
 
         defaults = {"endpoint": "https://test.cognitiveservices.azure.com", "api_key": "test-key", "batch_size": 5}
         defaults.update(kwargs)
@@ -811,7 +811,7 @@ class TestTextSummarizer:
     """Tests for the TextSummarizer class."""
 
     def _make_summarizer(self, **kwargs: Any) -> Any:
-        from platform.ai_integration.enrichment.text_summarizer import TextSummarizer
+        from csa_platform.ai_integration.enrichment.text_summarizer import TextSummarizer
 
         defaults = {"endpoint": "https://test.openai.azure.com", "api_key": "test-key", "max_input_tokens": 100}
         defaults.update(kwargs)
@@ -883,14 +883,14 @@ class TestTextSummarizer:
 
     def test_summarization_modes(self) -> None:
         """SummarizationMode enum has expected values."""
-        from platform.ai_integration.enrichment.text_summarizer import SummarizationMode
+        from csa_platform.ai_integration.enrichment.text_summarizer import SummarizationMode
 
         assert SummarizationMode.EXTRACTIVE == "extractive"
         assert SummarizationMode.ABSTRACTIVE == "abstractive"
 
     def test_summarization_styles(self) -> None:
         """SummarizationStyle enum has expected values."""
-        from platform.ai_integration.enrichment.text_summarizer import SummarizationStyle
+        from csa_platform.ai_integration.enrichment.text_summarizer import SummarizationStyle
 
         assert SummarizationStyle.BULLET_POINTS == "bullet_points"
         assert SummarizationStyle.PARAGRAPH == "paragraph"
@@ -898,14 +898,14 @@ class TestTextSummarizer:
 
     def test_style_instruction_bullet_points(self) -> None:
         """_style_instruction generates bullet point instruction."""
-        from platform.ai_integration.enrichment.text_summarizer import SummarizationStyle, TextSummarizer
+        from csa_platform.ai_integration.enrichment.text_summarizer import SummarizationStyle, TextSummarizer
 
         instruction = TextSummarizer._style_instruction(SummarizationStyle.BULLET_POINTS, 200)
         assert "bulleted" in instruction.lower()
 
     def test_style_instruction_executive(self) -> None:
         """_style_instruction generates executive summary instruction."""
-        from platform.ai_integration.enrichment.text_summarizer import SummarizationStyle, TextSummarizer
+        from csa_platform.ai_integration.enrichment.text_summarizer import SummarizationStyle, TextSummarizer
 
         instruction = TextSummarizer._style_instruction(SummarizationStyle.EXECUTIVE_SUMMARY, 200)
         assert "executive" in instruction.lower()
@@ -920,7 +920,7 @@ class TestModelEndpoint:
     """Tests for the ModelEndpoint class."""
 
     def _make_endpoint(self) -> Any:
-        from platform.ai_integration.model_serving.endpoint import ModelEndpoint
+        from csa_platform.ai_integration.model_serving.endpoint import ModelEndpoint
 
         return ModelEndpoint(
             workspace_name="test-workspace",
@@ -1057,7 +1057,7 @@ class TestRAGConfig:
 
     def test_rag_settings_defaults(self) -> None:
         """RAGSettings has sensible defaults."""
-        from platform.ai_integration.rag.config import RAGSettings
+        from csa_platform.ai_integration.rag.config import RAGSettings
 
         settings = RAGSettings()
         assert settings.chunk.chunk_size == 512
@@ -1067,7 +1067,7 @@ class TestRAGConfig:
 
     def test_chunk_settings_defaults(self) -> None:
         """ChunkSettings has expected defaults."""
-        from platform.ai_integration.rag.config import ChunkSettings
+        from csa_platform.ai_integration.rag.config import ChunkSettings
 
         settings = ChunkSettings()
         assert settings.split_strategy == "sentence"
@@ -1075,7 +1075,7 @@ class TestRAGConfig:
 
     def test_search_settings_defaults(self) -> None:
         """SearchSettings has expected defaults."""
-        from platform.ai_integration.rag.config import SearchSettings
+        from csa_platform.ai_integration.rag.config import SearchSettings
 
         settings = SearchSettings()
         assert settings.score_threshold == 0.70

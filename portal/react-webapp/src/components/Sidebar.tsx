@@ -1,6 +1,6 @@
 /**
  * Navigation Sidebar with route links and active state indicators.
- * Extracted from _app.tsx for reusability and component isolation.
+ * Responsive: hidden on mobile with hamburger toggle, always visible on lg+.
  */
 
 import React from 'react';
@@ -27,9 +27,13 @@ export interface SidebarProps {
   items?: NavItem[];
   /** Application title displayed at the top. */
   title?: string;
+  /** Whether the sidebar is open on mobile. */
+  isOpen?: boolean;
+  /** Callback to close the sidebar on mobile. */
+  onClose?: () => void;
 }
 
-function NavLink({ href, label, icon }: NavItem) {
+function NavLink({ href, label, icon, onClick }: NavItem & { onClick?: () => void }) {
   const router = useRouter();
   const isActive =
     href === '/' ? router.pathname === '/' : router.pathname.startsWith(href);
@@ -37,6 +41,7 @@ function NavLink({ href, label, icon }: NavItem) {
   return (
     <Link
       href={href}
+      onClick={onClick}
       aria-current={isActive ? 'page' : undefined}
       className={clsx(
         'flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors',
@@ -59,24 +64,57 @@ function NavLink({ href, label, icon }: NavItem) {
   );
 }
 
-export function Sidebar({ items = DEFAULT_NAV_ITEMS, title = 'CSA-in-a-Box' }: SidebarProps) {
+export function Sidebar({
+  items = DEFAULT_NAV_ITEMS,
+  title = 'CSA-in-a-Box',
+  isOpen = false,
+  onClose,
+}: SidebarProps) {
   return (
-    <aside className="w-64 bg-white border-r border-gray-200 flex flex-col">
-      <div className="h-16 flex items-center px-6 border-b border-gray-200">
-        <h1 className="text-lg font-bold text-brand-700">{title}</h1>
-      </div>
+    <>
+      {/* Mobile overlay */}
+      {isOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/50 lg:hidden"
+          onClick={onClose}
+          aria-hidden="true"
+        />
+      )}
 
-      <nav className="flex-1 px-3 py-4 space-y-1">
-        {items.map((item) => (
-          <NavLink key={item.href} {...item} />
-        ))}
-      </nav>
+      {/* Sidebar panel */}
+      <aside
+        className={clsx(
+          'fixed inset-y-0 left-0 z-50 w-64 bg-white border-r border-gray-200 flex flex-col transform transition-transform duration-200 ease-in-out lg:translate-x-0 lg:static lg:z-auto',
+          isOpen ? 'translate-x-0' : '-translate-x-full'
+        )}
+      >
+        <div className="h-16 flex items-center justify-between px-6 border-b border-gray-200">
+          <h1 className="text-lg font-bold text-brand-700">{title}</h1>
+          {/* Mobile close button */}
+          <button
+            type="button"
+            onClick={onClose}
+            className="lg:hidden p-1 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+            aria-label="Close sidebar"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
 
-      <div className="px-6 py-4 border-t border-gray-200">
-        <p className="text-xs text-gray-400">Fabric-in-a-Box Data Platform</p>
-        <p className="text-xs text-gray-400">v1.0.0</p>
-      </div>
-    </aside>
+        <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
+          {items.map((item) => (
+            <NavLink key={item.href} {...item} onClick={onClose} />
+          ))}
+        </nav>
+
+        <div className="px-6 py-4 border-t border-gray-200">
+          <p className="text-xs text-gray-400">Fabric-in-a-Box Data Platform</p>
+          <p className="text-xs text-gray-400">v1.0.0</p>
+        </div>
+      </aside>
+    </>
   );
 }
 

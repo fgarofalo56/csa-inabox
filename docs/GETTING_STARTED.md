@@ -94,8 +94,8 @@ az account set --subscription YOUR_MGMT_SUBSCRIPTION_ID
 
 az deployment sub create \
   --location eastus \
-  --template-file "deploy/bicep/LandingZone - ALZ/main.bicep" \
-  --parameters "deploy/bicep/LandingZone - ALZ/params.YOUR_ENV.json"
+  --template-file "deploy/bicep/landing-zone-alz/main.bicep" \
+  --parameters "deploy/bicep/landing-zone-alz/params.YOUR_ENV.json"
 ```
 
 ### Step 4: Deploy Data Management Landing Zone
@@ -161,19 +161,19 @@ graph TD
 
 After deploying the landing zones, you can layer on platform services that
 replicate Microsoft Fabric capabilities using Azure PaaS. These live in
-`platform/` and are independently deployable.
+`csa_platform/` and are independently deployable.
 
 | Service | What It Does | Quick Start |
 |---------|-------------|-------------|
-| [OneLake Pattern](../platform/onelake-pattern/) | Unified data lake with Unity Catalog metadata | Deploy after DLZ |
-| [Data Marketplace](../platform/data_marketplace/) | Self-service data product discovery + access requests | `python platform/data_marketplace/api/marketplace_api.py` |
-| [Data Activator](../platform/data-activator/) | Event-driven alerts (Teams, email, PagerDuty) | Deploy Event Grid + Functions |
-| [Direct Lake](../platform/direct-lake/) | Power BI over Delta Lake via Databricks SQL | Configure SQL endpoint |
-| [Metadata Framework](../platform/metadata-framework/) | Auto-generate ADF pipelines from YAML | Register sources in YAML |
-| [AI Integration](../platform/ai_integration/) | RAG, entity extraction, document classification | Configure Azure OpenAI |
-| [Shared Services](../platform/shared-services/) | Reusable Functions (PII detection, schema validation) | `func azure functionapp publish` |
-| [Governance](../platform/governance/) | Purview classification, lineage, sensitivity labels | Bootstrap Purview catalog |
-| [OSS Alternatives](../platform/oss-alternatives/) | Open-source replacements for Gov gaps | Helm charts on AKS |
+| [OneLake Pattern](../csa_platform/onelake_pattern/) | Unified data lake with Unity Catalog metadata | Deploy after DLZ |
+| [Data Marketplace](../csa_platform/data_marketplace/) | Self-service data product discovery + access requests | `python csa_platform/data_marketplace/api/marketplace_api.py` |
+| [Data Activator](../csa_platform/data_activator/) | Event-driven alerts (Teams, email, PagerDuty) | Deploy Event Grid + Functions |
+| [Direct Lake](../csa_platform/direct_lake/) | Power BI over Delta Lake via Databricks SQL | Configure SQL endpoint |
+| [Metadata Framework](../csa_platform/metadata_framework/) | Auto-generate ADF pipelines from YAML | Register sources in YAML |
+| [AI Integration](../csa_platform/ai_integration/) | RAG, entity extraction, document classification | Configure Azure OpenAI |
+| [Shared Services](../csa_platform/shared_services/) | Reusable Functions (PII detection, schema validation) | `func azure functionapp publish` |
+| [Governance](../csa_platform/governance/) | Purview classification, lineage, sensitivity labels | Bootstrap Purview catalog |
+| [OSS Alternatives](../csa_platform/oss_alternatives/) | Open-source replacements for Gov gaps | Helm charts on AKS |
 
 See [PLATFORM_SERVICES.md](PLATFORM_SERVICES.md) for detailed deployment instructions.
 
@@ -181,7 +181,7 @@ See [PLATFORM_SERVICES.md](PLATFORM_SERVICES.md) for detailed deployment instruc
 
 ## 🌐 Data Onboarding Portal
 
-The `portal/` directory contains four implementations of an autonomous data
+The `portal/` directory contains three implementations of an autonomous data
 onboarding portal — each with a different frontend but sharing the same FastAPI
 backend API.
 
@@ -191,7 +191,6 @@ backend API.
 |---------------|----------|-------------|
 | [PowerApps](../portal/powerapps/) | M365-native orgs, low-code teams | ~30 min |
 | [React/Next.js](../portal/react-webapp/) | Custom enterprise portals, maximum flexibility | ~45 min |
-| [Static Web Apps](../portal/static-webapp/) | Low-cost serverless, JAMstack | ~20 min |
 | [Kubernetes](../portal/kubernetes/) | Enterprise-scale, multi-tenant, HA | ~60 min |
 
 All frontends connect to the shared backend at `portal/shared/api/`. To get
@@ -201,7 +200,7 @@ started:
 # Start the shared backend
 cd portal/shared
 pip install -r requirements.txt
-uvicorn api.app:app --reload --port 8000
+uvicorn api.main:app --reload --port 8000
 
 # Then start your chosen frontend (e.g., React)
 cd ../react-webapp
@@ -297,7 +296,7 @@ availability matrix.
 | 60-Minute Quick Start | [QUICKSTART.md](QUICKSTART.md) |
 | Platform Services Guide | [PLATFORM_SERVICES.md](PLATFORM_SERVICES.md) |
 | Gov Service Matrix | [GOV_SERVICE_MATRIX.md](GOV_SERVICE_MATRIX.md) |
-| Platform README | [platform/README.md](../platform/README.md) |
+| Platform README | [csa_platform/README.md](../csa_platform/README.md) |
 | Portal README | [portal/README.md](../portal/README.md) |
 | Gov Templates | [deploy/bicep/gov/README.md](../deploy/bicep/gov/README.md) |
 | Contributing Guide | [CONTRIBUTING.md](../CONTRIBUTING.md) |

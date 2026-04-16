@@ -1,0 +1,5 @@
+# Dependencies managed in pyproject.toml [project.optional-dependencies.platform]
+# This file is kept for standalone module deployment.
+azure-storage-blob>=12.19.0
+azure-cosmos>=4.5.0
+azure-identity>=1.15.0

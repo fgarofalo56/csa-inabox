@@ -1,24 +1,38 @@
 # CSA-in-a-Box Code Owners
 # These owners are automatically requested for review on pull requests.
 
+# Default
+* @platform-team
+
 # Platform Infrastructure
-/deploy/bicep/                      @platform-team
-/deploy/scripts/                    @platform-team
+/deploy/                             @platform-team @infra-team
+/deploy/bicep/                       @platform-team
+/deploy/scripts/                     @platform-team
 
 # Shared Modules
-/deploy/bicep/shared/               @platform-team @security-team
+/deploy/bicep/shared/                @platform-team @security-team
 
 # Landing Zones
-/deploy/bicep/DLZ/                  @platform-team
-/deploy/bicep/DMLZ/                 @platform-team @governance-team
-/deploy/bicep/LandingZone\ -\ ALZ/  @platform-team @network-team
+/deploy/bicep/DLZ/                   @platform-team
+/deploy/bicep/DMLZ/                  @platform-team @governance-team
+/deploy/bicep/LandingZone\ -\ ALZ/   @platform-team @network-team
 
 # Governance
-/governance/                         @governance-team
-/governance/purview/                 @governance-team @data-stewards
+/governance/                         @data-governance-team
+/governance/purview/                 @data-governance-team @data-stewards
 /governance/rbac/                    @security-team
 /governance/network/                 @network-team @security-team
-/governance/compliance/              @security-team @governance-team
+/governance/compliance/              @security-team @data-governance-team
+/governance/keyvault/                @security-team @platform-team
+
+# Portal
+/portal/                             @portal-team
+/portal/shared/                      @portal-team
+/portal/react-webapp/                @portal-team
+/portal/kubernetes/                  @portal-team @infra-team
+
+# Platform Services
+/csa_platform/                       @platform-team
 
 # Data Pipelines (Shared)
 /domains/shared/                     @data-engineering
@@ -34,6 +48,16 @@
 /domains/sharedServices/aiEnrichment/ @ai-team @platform-team
 /domains/sharedServices/eventProcessing/ @data-engineering @platform-team
 
+# Examples
+/examples/                           @solutions-team
+/domains/                            @solutions-team
+
+# Monitoring
+/monitoring/                         @platform-team @infra-team
+
+# Scripts
+/scripts/deploy/                     @infra-team
+
 # CI/CD
 /.github/                            @platform-team
 /.github/workflows/                  @platform-team @devops-team
@@ -45,7 +69,11 @@
 /docs/                               @platform-team
 /templates/                          @platform-team @data-engineering
 
+# Tests
+/tests/                              @platform-team
+
 # Security-sensitive files
 *.env                                @security-team
 **/secrets/                          @security-team
 **/credentials*                      @security-team
+**/auth.py                           @security-team

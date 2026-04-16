@@ -56,21 +56,20 @@ Bicep modules: `deploy/bicep/DLZ/` (Data Landing Zone), `deploy/bicep/DMLZ/` (Da
 
 ```bash
 cd portal/react-webapp && npm install && npm run dev    # React portal
-cd portal/static-webapp && npm install && npm run dev   # Svelte portal
 ```
 
 Shared types: `portal/shared/contracts/types.ts`. Components: `portal/react-webapp/src/components/`. Auth: `portal/react-webapp/src/services/authConfig.ts`. K8s deployment: `portal/kubernetes/`.
 
 ### Working on AI/ML?
 
-**Code:** `platform/ai_integration/`, `platform/metadata-framework/`, `platform/data_marketplace/`
+**Code:** `csa_platform/ai_integration/`, `csa_platform/metadata_framework/`, `csa_platform/data_marketplace/`
 
 ```bash
 pip install -e ".[platform]"     # Install platform dependencies
 make typecheck-platform          # Type check platform code
 ```
 
-RAG pipeline: `platform/ai_integration/rag/`. Pipeline auto-generation: `platform/metadata-framework/generator/`. Data marketplace: `platform/data_marketplace/`.
+RAG pipeline: `csa_platform/ai_integration/rag/`. Pipeline auto-generation: `csa_platform/metadata_framework/generator/`. Data marketplace: `csa_platform/data_marketplace/`.
 
 ### Working on monitoring & alerting?
 
@@ -115,12 +114,12 @@ Three function apps: `aiEnrichment/`, `eventProcessing/`, `secretRotation/`. Eac
 - [ ] Run `make typecheck` for strict mypy validation
 
 ### Platform / AI Engineer
-**Focus areas:** `platform/ai_integration/`, `platform/metadata-framework/`, `platform/data_marketplace/`
+**Focus areas:** `csa_platform/ai_integration/`, `csa_platform/metadata_framework/`, `csa_platform/data_marketplace/`
 **Technologies needed:** Python, Azure OpenAI, Azure AI Search, FastAPI
 **Getting started:**
 - [ ] Run `pip install -e ".[platform]"` for platform dependencies
-- [ ] Explore `platform/ai_integration/rag/` for the RAG pipeline
-- [ ] See `platform/metadata-framework/generator/` for pipeline auto-generation
+- [ ] Explore `csa_platform/ai_integration/rag/` for the RAG pipeline
+- [ ] See `csa_platform/metadata_framework/generator/` for pipeline auto-generation
 - [ ] Run `make typecheck-platform` for type checking
 
 ### Infrastructure / DevOps Engineer
@@ -133,8 +132,8 @@ Three function apps: `aiEnrichment/`, `eventProcessing/`, `secretRotation/`. Eac
 - [ ] See `.github/workflows/deploy.yml` for CI/CD pipeline
 
 ### Frontend Developer
-**Focus areas:** `portal/react-webapp/`, `portal/static-webapp/`, `portal/shared/`
-**Technologies needed:** TypeScript, React/Next.js or Svelte/SvelteKit, Tailwind CSS
+**Focus areas:** `portal/react-webapp/`, `portal/shared/`
+**Technologies needed:** TypeScript, React/Next.js, Tailwind CSS
 **Getting started:**
 - [ ] `cd portal/react-webapp && npm install && npm run dev`
 - [ ] Shared type definitions: `portal/shared/contracts/types.ts`
@@ -161,8 +160,8 @@ Three function apps: `aiEnrichment/`, `eventProcessing/`, `secretRotation/`. Eac
 | `examples/` | Reference implementations for gov agencies | Data Engineer |
 | `governance/` | Data governance framework (contracts, quality, RBAC) | Governance Dev |
 | `monitoring/` | Alerting and dashboards (Bicep + Grafana) | DevOps |
-| `platform/` | Platform services (AI, metadata, marketplace) | Platform Engineer |
-| `portal/` | Web portal (React, Svelte, K8s deployment) | Frontend Dev |
+| `csa_platform/` | Platform services (AI, metadata, marketplace) | Platform Engineer |
+| `portal/` | Web portal (React, K8s deployment) | Frontend Dev |
 | `scripts/` | Operational scripts (deploy, seed, monitor) | DevOps |
 | `templates/` | Data product templates | Data Engineer |
 | `tests/` | Test suite (unit, e2e, contracts, load) | All |
@@ -197,8 +196,7 @@ The naming styles present in the codebase are:
 
 | Style | Examples | Where |
 |-------|----------|-------|
-| `snake_case` | `ai_integration`, `data_marketplace`, `dataquality` | Python packages under `governance/`, `platform/` |
-| `kebab-case` | `data-activator`, `direct-lake`, `metadata-framework` | Platform modules, Bicep/infra directories |
+| `snake_case` | `ai_integration`, `data_marketplace`, `data_activator`, `metadata_framework` | Python packages under `governance/`, `csa_platform/` |
 | `camelCase` | `sharedServices` | Legacy domain directory |
 | `lowercase` | `finops`, `rbac`, `purview` | Short single-word names |
 

@@ -4,6 +4,14 @@
 # ==============================================================================
 
 # ---------------------------
+# Archived code — preserved for reference, excluded from CI/builds
+# ---------------------------
+_archived/**/node_modules/
+_archived/**/__pycache__/
+_archived/**/build/
+_archived/**/.svelte-kit/
+
+# ---------------------------
 # Infracost (cost estimation cache)
 # ---------------------------
 .infracost/

@@ -57,7 +57,7 @@ param prefix string = 'admlz'
 
 // Parameter to build base name for resources to include prefix and environment
 @sys.description('Parameter to build base name for resources to include prefix and environment')
-param parBaseName string = toLower('${prefix}-${environment}')
+param basename string = toLower('${prefix}-${environment}')
 
 // Private DNS Zone Information
 @description('Private DNS Zone Information')
@@ -75,8 +75,8 @@ param parDatabricks object = {}
 @description('Resource ID of the Log Analytics workspace for diagnostics')
 param logAnalyticsWorkspaceId string = ''
 
-@description('Primary technical contact for deployed resources.')
-param primaryContact string = 'platform-team@contoso.com'
+@description('Primary technical contact for deployed resources. Must be set to a valid address before deployment.')
+param primaryContact string = ''
 
 @description('Cost center or billing code for deployed resources.')
 param costCenter string = 'CSA-Platform'
@@ -106,7 +106,7 @@ Resource Modules and Deployments
 
 // Governance resources
 resource governanceResourceGroup 'Microsoft.Resources/resourceGroups@2024-03-01' = if (bool(deployModules.governance)) {
-  name: 'rg-${parBaseName}-governance-${parLocationShort}'
+  name: 'rg-${basename}-governance-${parLocationShort}'
   location: location
   tags: varRGGovernanceTags
   properties: {}
@@ -114,10 +114,10 @@ resource governanceResourceGroup 'Microsoft.Resources/resourceGroups@2024-03-01'
 
 module governanceResources 'modules/governance/governance.bicep' = if (bool(deployModules.governance)) {
   name: 'governanceResources'
-  scope: resourceGroup('rg-${parBaseName}-governance-${parLocationShort}')
+  scope: resourceGroup('rg-${basename}-governance-${parLocationShort}')
   params: {
     location: location
-    governanceResourceGroup: 'rg-${parBaseName}-governance-${parLocationShort}'
+    governanceResourceGroup: 'rg-${basename}-governance-${parLocationShort}'
     prefix: prefix
     environment: environment
     parGovernance: parGovernance
@@ -131,7 +131,7 @@ module governanceResources 'modules/governance/governance.bicep' = if (bool(depl
 
 // Deploy Governance Databricks Workspace (Unity Catalog)
 resource databricksResourceGroup 'Microsoft.Resources/resourceGroups@2024-03-01' = if (contains(deployModules, 'databricks') && bool(deployModules.databricks)) {
-  name: 'rg-${parBaseName}-databricks-gov-${parLocationShort}'
+  name: 'rg-${basename}-databricks-gov-${parLocationShort}'
   location: location
   tags: tagsJoined
   properties: {}
@@ -139,9 +139,9 @@ resource databricksResourceGroup 'Microsoft.Resources/resourceGroups@2024-03-01'
 
 module databricksGovernance 'modules/Databricks/databricks.bicep' = if (contains(deployModules, 'databricks') && bool(deployModules.databricks)) {
   name: 'databricksGovernance'
-  scope: resourceGroup('rg-${parBaseName}-databricks-gov-${parLocationShort}')
+  scope: resourceGroup('rg-${basename}-databricks-gov-${parLocationShort}')
   params: {
-    workspaceName: contains(parDatabricks, 'workspaceName') ? parDatabricks.workspaceName : '${parBaseName}-dbw-gov'
+    workspaceName: contains(parDatabricks, 'workspaceName') ? parDatabricks.workspaceName : '${basename}-dbw-gov'
     location: location
     tags: tagsJoined
     vnetId: contains(parDatabricks, 'vnetId') ? parDatabricks.vnetId : ''

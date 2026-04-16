@@ -1,14 +1,20 @@
 /**
  * App Layout — Shell with navigation sidebar and main content area.
  * MSAL authentication wraps the entire application.
+ * Auth gating is conditional: skipped in development/demo mode.
  */
 
 import React from 'react';
 import type { AppProps } from 'next/app';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { PublicClientApplication, EventType } from '@azure/msal-browser';
-import { MsalProvider } from '@azure/msal-react';
-import { msalConfig } from '@/services/authConfig';
+import {
+  MsalProvider,
+  AuthenticatedTemplate,
+  UnauthenticatedTemplate,
+  useMsal,
+} from '@azure/msal-react';
+import { msalConfig, loginRequest } from '@/services/authConfig';
 import { Layout } from '@/components/Layout';
 import '@/styles/globals.css';
 
@@ -41,15 +47,60 @@ const queryClient = new QueryClient({
   },
 });
 
+// ─── Auth Gating ──────────────────────────────────────────────────────────
+
+/** Skip auth gating in development or when explicitly disabled via env var. */
+const isAuthEnabled =
+  process.env.NEXT_PUBLIC_AUTH_ENABLED !== 'false' &&
+  process.env.NODE_ENV === 'production';
+
+function LoginPage() {
+  const { instance } = useMsal();
+
+  return (
+    <div className="flex items-center justify-center min-h-screen bg-gray-50">
+      <div className="max-w-md w-full bg-white rounded-lg shadow-sm border border-gray-200 p-8 text-center">
+        <h1 className="text-2xl font-bold text-gray-900">CSA-in-a-Box</h1>
+        <p className="mt-2 text-sm text-gray-500">
+          Sign in to access the Data Onboarding Portal
+        </p>
+        <button
+          onClick={() => instance.loginRedirect(loginRequest)}
+          className="mt-6 w-full inline-flex justify-center items-center px-4 py-2 text-sm font-medium text-white bg-brand-600 rounded-md hover:bg-brand-700"
+        >
+          Sign in with Microsoft
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function AuthGatedContent({ children }: { children: React.ReactNode }) {
+  if (!isAuthEnabled) {
+    return <>{children}</>;
+  }
+
+  return (
+    <>
+      <AuthenticatedTemplate>{children}</AuthenticatedTemplate>
+      <UnauthenticatedTemplate>
+        <LoginPage />
+      </UnauthenticatedTemplate>
+    </>
+  );
+}
+
 // ─── App Component ────────────────────────────────────────────────────────
 
 export default function App({ Component, pageProps }: AppProps) {
   return (
     <MsalProvider instance={msalInstance}>
       <QueryClientProvider client={queryClient}>
-        <Layout>
-          <Component {...pageProps} />
-        </Layout>
+        <AuthGatedContent>
+          <Layout>
+            <Component {...pageProps} />
+          </Layout>
+        </AuthGatedContent>
       </QueryClientProvider>
     </MsalProvider>
   );

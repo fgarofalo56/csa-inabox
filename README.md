@@ -119,7 +119,7 @@ graph TB
 ├── 📁 bicep/                      # Infrastructure-as-Code
 │   ├── 📁 DLZ/                    # Data Landing Zone modules
 │   ├── 📁 DMLZ/                   # Data Management Landing Zone
-│   └── 📁 LandingZone-ALZ/        # Azure Landing Zone foundation
+│   └── 📁 landing-zone-alz/       # Azure Landing Zone foundation
 ├── 📁 arm/                        # Legacy ARM templates (deprecated)
 ├── 📁 scripts/                    # Deployment helper scripts
 ├── 📁 notebooks/                  # Setup & config notebooks
@@ -141,6 +141,14 @@ graph TB
 │   ├── 📁 streaming/              # Event Hub producer & Stream Analytics
 │   ├── 📁 PowerShell/             # Management automation
 │   └── 📁 sql/                    # SQL & KQL references
+├── 📁 csa_platform/               # Platform modules
+│   ├── 📁 ai_integration/        # AI/ML integration services
+│   ├── 📁 data_activator/        # Data activator triggers & actions
+│   ├── 📁 data_marketplace/      # Data product marketplace
+│   ├── 📁 metadata_framework/    # Metadata management framework
+│   ├── 📁 purview_governance/    # Purview automation & governance
+│   └── 📁 shared_services/       # Shared platform services
+├── 📁 portal/                     # Web portal (FastAPI backend + frontend)
 ├── 📁 governance/                 # Data governance framework
 │   ├── 📁 common/                 # Shared logging, validation utilities
 │   ├── 📁 contracts/              # Data contracts & enforcement

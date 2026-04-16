@@ -1,11 +1,11 @@
-# Data Onboarding Portal — Multiple Implementations
+# Data Onboarding Portal
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Frontend Developers
 
 > [!NOTE]
-> **TL;DR:** Four portal implementations (PowerApps, React/Next.js, Static Web Apps, Kubernetes) all sharing the same FastAPI backend for self-service data source registration, pipeline monitoring, marketplace discovery, and access request workflows.
+> **TL;DR:** Three portal implementations (PowerApps, React/Next.js, Kubernetes) all sharing the same FastAPI backend for self-service data source registration, pipeline monitoring, marketplace discovery, and access request workflows.
 
-This directory contains **four different implementations** of the autonomous data
+This directory contains **three different implementations** of the autonomous data
 onboarding portal, each using a different technology stack. All implementations share
 the same backend API and provide the same functionality.
 
@@ -70,14 +70,7 @@ sequenceDiagram
 - **Cons:** More development effort, requires frontend skills
 - **Deploy time:** ~45 minutes
 
-### 3. Azure Static Web Apps + Functions (`static-webapp/`)
-- **Best for:** Low-cost, lightweight deployments
-- **Stack:** React/SvelteKit + Azure Functions + Static Web Apps
-- **Pros:** Cheapest option, serverless, auto-scaling, GitHub integration
-- **Cons:** Cold starts, limited backend complexity
-- **Deploy time:** ~20 minutes
-
-### 4. Kubernetes / AKS (`kubernetes/`)
+### 3. Kubernetes / AKS (`kubernetes/`)
 - **Best for:** Enterprise-scale, multi-tenant, high availability
 - **Stack:** Helm + AKS + Ingress + ArgoCD
 - **Pros:** Maximum scalability, GitOps, HA, multi-cloud portable
@@ -118,19 +111,19 @@ portal/shared/
 
 ## 📋 Quick Comparison
 
-| Feature | PowerApps | React | Static Web App | Kubernetes |
-|---|---|---|---|---|
-| Cost | $$ (Power Platform) | $ (App Service) | ¢ (consumption) | $$$ (AKS cluster) |
-| Customization | Low | High | Medium | High |
-| Scalability | Medium | Medium | Auto | High |
-| Auth | M365 built-in | MSAL | Built-in | Custom |
-| Gov Cloud | ✅ | ✅ | ✅ | ✅ |
-| Offline/PWA | ❌ | ✅ | ✅ | ✅ |
-| GitOps | ❌ | ✅ | ✅ | ✅ |
+| Feature | PowerApps | React | Kubernetes |
+|---|---|---|---|
+| Cost | $$ (Power Platform) | $ (App Service) | $$$ (AKS cluster) |
+| Customization | Low | High | High |
+| Scalability | Medium | Medium | High |
+| Auth | M365 built-in | MSAL | Custom |
+| Gov Cloud | ✅ | ✅ | ✅ |
+| Offline/PWA | ❌ | ✅ | ✅ |
+| GitOps | ❌ | ✅ | ✅ |
 
 ---
 
 ## 🔗 Related Documentation
 
 - [Architecture](../docs/ARCHITECTURE.md) — Overall system architecture
-- [Platform Components](../platform/README.md) — Platform component index
+- [Platform Components](../csa_platform/README.md) — Platform component index

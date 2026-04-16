@@ -148,6 +148,8 @@ def _evaluate_expectation(
         dupes = 0
         for row in rows:
             value = row.get(column)
+            if value is None:
+                continue  # NULL is never a duplicate (SQL semantics: NULL != NULL)
             if value in seen:
                 dupes += 1
             else:

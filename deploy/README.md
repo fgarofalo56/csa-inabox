@@ -25,7 +25,7 @@ landing zone model across four subscriptions.
 |-----------|---------|
 | [bicep/DLZ/](bicep/DLZ/) | **Data Landing Zone** — ADLS Gen2, Synapse, Databricks, ADF, Key Vault, Spoke VNet |
 | [bicep/DMLZ/](bicep/DMLZ/) | **Data Management Landing Zone** — Purview, Container Registry, Shared Key Vault |
-| [bicep/LandingZone - ALZ/](bicep/LandingZone%20-%20ALZ/) | **Azure Landing Zone** — Policy, RBAC, networking hub, security baselines |
+| [bicep/landing-zone-alz/](bicep/landing-zone-alz/) | **Azure Landing Zone** — Policy, RBAC, networking hub, security baselines |
 | [bicep/gov/](bicep/gov/) | **Azure Government** — Gov-specific endpoint and API version overrides |
 | [bicep/shared/](bicep/shared/) | Shared Bicep modules reused across landing zones |
 | [bicep/code/](bicep/code/) | Utility scripts for Bicep deployment |

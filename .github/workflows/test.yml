@@ -40,7 +40,7 @@ jobs:
           # Install the project with dev + governance + functions extras so
           # ruff / pytest / pytest-cov / mypy and all Azure SDK deps come
           # from pyproject.toml.
-          pip install -e ".[dev,governance,functions]"
+          pip install -e ".[dev,governance,functions,portal]"
           # Install any additional per-domain requirements.
           for req in $(find . -name "requirements.txt" -not -path "*/dbt-env/*" -not -path "*/.venv/*"); do
             pip install -r "$req" || true
@@ -74,8 +74,10 @@ jobs:
           python -m governance.contracts.dbt_test_generator --repo-root . --check
 
       - name: Run pytest with coverage
+        env:
+          ENVIRONMENT: local
         run: |
-          pytest tests/ \
+          pytest \
             --cov \
             --cov-report=xml \
             --cov-report=term-missing \

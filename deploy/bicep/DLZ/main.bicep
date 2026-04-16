@@ -65,6 +65,7 @@ param privateDNSZones object
 param parCosmosDB object
 
 // Storage parameters
+// TODO: Convert parStorage to a typed object (like databricksConfig) to eliminate contains() boilerplate
 @description('Storage parameters')
 param parStorage object
 
@@ -73,12 +74,39 @@ param parStorage object
 param parExternalStorage object
 
 // Synapse parameters
+// TODO: Convert parSynapse to a typed object (like databricksConfig) to eliminate contains() boilerplate
 @description('Synapse parameters')
 param parSynapse object
 
 // Databricks parameters
 @description('Databricks workspace parameters')
-param parDatabricks object = {}
+type databricksConfig = {
+  @description('Workspace name override')
+  workspaceName: string?
+  @description('Pricing tier (standard or premium)')
+  pricingTier: ('standard' | 'premium')?
+  @description('Disable public IP for clusters')
+  enableNoPublicIp: bool?
+  @description('VNet resource ID for VNet injection')
+  vnetId: string?
+  @description('Public subnet name for Databricks')
+  publicSubnetName: string?
+  @description('Private subnet name for Databricks')
+  privateSubnetName: string?
+  @description('Private endpoint subnet configurations')
+  privateEndpointSubnets: array?
+  @description('Private DNS zone resource ID')
+  privateDnsZoneId: string?
+  @description('Enable Customer-Managed Key encryption')
+  enableCmk: bool?
+  @description('Key Vault URI for CMK')
+  cmkKeyVaultUri: string?
+  @description('Key name for CMK')
+  cmkKeyName: string?
+  @description('Key version for CMK')
+  cmkKeyVersion: string?
+}
+param parDatabricks databricksConfig = {}
 
 // Data Factory parameters
 @description('Azure Data Factory parameters')
@@ -136,8 +164,11 @@ param parPrivateEndpoints object = {}
 @description('Resource ID of the Log Analytics workspace for diagnostics across all services')
 param logAnalyticsWorkspaceId string = ''
 
-@description('Primary technical contact for deployed resources.')
-param primaryContact string = 'platform-team@contoso.com'
+@description('Action group resource ID for monitoring alert notifications. Required when deployModules.monitoringAlerts is true.')
+param actionGroupId string = ''
+
+@description('Primary technical contact for deployed resources. Must be set to a valid address before deployment.')
+param primaryContact string = ''
 
 @description('Cost center or billing code for deployed resources.')
 param costCenter string = 'CSA-Platform'
@@ -325,20 +356,20 @@ module databricksWorkspace 'modules/databricks/databricks.bicep' = if (contains(
   name: 'databricksWorkspace'
   scope: resourceGroup('rg-${basename}-databricks-${parLocationShort}')
   params: {
-    workspaceName: contains(parDatabricks, 'workspaceName') ? parDatabricks.workspaceName : '${basename}-dbw'
+    workspaceName: parDatabricks.?workspaceName ?? '${basename}-dbw'
     location: location
     tags: tagsDefault
-    pricingTier: contains(parDatabricks, 'pricingTier') ? parDatabricks.pricingTier : 'premium'
-    enableNoPublicIp: contains(parDatabricks, 'enableNoPublicIp') ? parDatabricks.enableNoPublicIp : true
-    vnetId: contains(parDatabricks, 'vnetId') ? parDatabricks.vnetId : ''
-    publicSubnetName: contains(parDatabricks, 'publicSubnetName') ? parDatabricks.publicSubnetName : 'databricks-public'
-    privateSubnetName: contains(parDatabricks, 'privateSubnetName') ? parDatabricks.privateSubnetName : 'databricks-private'
-    privateEndpointSubnets: contains(parDatabricks, 'privateEndpointSubnets') ? parDatabricks.privateEndpointSubnets : []
-    privateDnsZoneId: contains(parDatabricks, 'privateDnsZoneId') ? parDatabricks.privateDnsZoneId : ''
-    parEnableCmk: contains(parDatabricks, 'enableCmk') ? parDatabricks.enableCmk : false
-    parCmkKeyVaultUri: contains(parDatabricks, 'cmkKeyVaultUri') ? parDatabricks.cmkKeyVaultUri : ''
-    parCmkKeyName: contains(parDatabricks, 'cmkKeyName') ? parDatabricks.cmkKeyName : ''
-    parCmkKeyVersion: contains(parDatabricks, 'cmkKeyVersion') ? parDatabricks.cmkKeyVersion : ''
+    pricingTier: parDatabricks.?pricingTier ?? 'premium'
+    enableNoPublicIp: parDatabricks.?enableNoPublicIp ?? true
+    vnetId: parDatabricks.?vnetId ?? ''
+    publicSubnetName: parDatabricks.?publicSubnetName ?? 'databricks-public'
+    privateSubnetName: parDatabricks.?privateSubnetName ?? 'databricks-private'
+    privateEndpointSubnets: parDatabricks.?privateEndpointSubnets ?? []
+    privateDnsZoneId: parDatabricks.?privateDnsZoneId ?? ''
+    parEnableCmk: parDatabricks.?enableCmk ?? false
+    parCmkKeyVaultUri: parDatabricks.?cmkKeyVaultUri ?? ''
+    parCmkKeyName: parDatabricks.?cmkKeyName ?? ''
+    parCmkKeyVersion: parDatabricks.?cmkKeyVersion ?? ''
     logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
   }
   dependsOn: [
@@ -656,6 +687,37 @@ module selfHostedIR 'modules/vms/selfHostedIntegrationRuntime.bicep' = if (conta
   }
   dependsOn: [
     shirResourceGroup
+  ]
+}
+
+// Deploy Monitoring Alerts
+module monitoringAlertsResourceGroup 'modules/resourceGroup/resourceGroup.bicep' = if (contains(deployModules, 'monitoringAlerts') && bool(deployModules.monitoringAlerts)) {
+  name: 'rg-${basename}-alerts-${parLocationShort}'
+  scope: subscription()
+  params: {
+    parLocation: location
+    parResourceGroupName: 'rg-${basename}-alerts-${parLocationShort}'
+    parTags: tagsDefault
+  }
+}
+
+// Map DLZ's broader environment set ('dev'|'tst'|'uat'|'stg'|'prod') onto
+// the monitoring-alerts module's 'dev'|'test'|'prod' vocabulary.
+var monitoringEnvironment = environment == 'prod' ? 'prod' : environment == 'dev' ? 'dev' : 'test'
+
+module monitoringAlerts '../../../monitoring/alerts/main.bicep' = if (contains(deployModules, 'monitoringAlerts') && bool(deployModules.monitoringAlerts) && !empty(logAnalyticsWorkspaceId) && !empty(actionGroupId)) {
+  name: 'monitoringAlerts'
+  scope: resourceGroup('rg-${basename}-alerts-${parLocationShort}')
+  params: {
+    logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
+    actionGroupId: actionGroupId
+    environment: monitoringEnvironment
+    location: location
+    storageAccountIds: contains(deployModules, 'storageZones') && bool(deployModules.storageZones) ? [storageServices.outputs.storageRawId] : []
+    tags: tagsDefault
+  }
+  dependsOn: [
+    monitoringAlertsResourceGroup
   ]
 }
 

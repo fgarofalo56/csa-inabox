@@ -24,7 +24,7 @@ const STATUS_BADGES: Record<
 export default function SourcesPage() {
   const [domainFilter, setDomainFilter] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<string>('');
-  const { data: sources, isLoading } = useSources({
+  const { data: sources, isLoading, error, refetch } = useSources({
     domain: domainFilter || undefined,
     status: statusFilter || undefined,
   });
@@ -69,14 +69,32 @@ export default function SourcesPage() {
         </select>
       </div>
 
-      {/* Sources Table */}
-      {isLoading ? (
+      {/* Error State */}
+      {error ? (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-6 text-center">
+          <svg className="mx-auto h-10 w-10 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+          </svg>
+          <h3 className="mt-2 text-sm font-medium text-red-800">Failed to load sources</h3>
+          <p className="mt-1 text-sm text-red-600">
+            {error instanceof Error ? error.message : 'An unexpected error occurred.'}
+          </p>
+          <button
+            onClick={() => refetch()}
+            className="mt-4 inline-flex items-center px-4 py-2 text-sm font-medium text-red-700 bg-red-100 border border-red-300 rounded-md hover:bg-red-200"
+          >
+            Retry
+          </button>
+        </div>
+      ) : isLoading ? (
+        /* Loading State */
         <div className="flex items-center justify-center h-64">
           <div role="status" aria-label="Loading">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-600" />
           </div>
         </div>
       ) : (
+        /* Sources Table */
         <div className="bg-white shadow-sm rounded-lg border border-gray-200 overflow-hidden">
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">

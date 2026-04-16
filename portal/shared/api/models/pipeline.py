@@ -47,6 +47,7 @@ class PipelineRecord(BaseModel):
     last_run_at: datetime | None = None
     schedule_cron: str | None = None
     adf_pipeline_id: str | None = None
+    domain: str | None = None
 
 
 class PipelineRun(BaseModel):

@@ -1,10 +1,4 @@
 {
-  "github.copilot.enable": {
-    "*": true,
-    "plaintext": true,
-    "markdown": true,
-    "scminput": true
-  },
   "terminal.integrated.profiles.windows": {
     "PowerShell": {
       "source": "PowerShell",
@@ -44,7 +38,6 @@
     "strings": "on",
     "comments": "on"
   },
-  "window.autoDetectColorScheme": true,
   "azure.cloud": "AzureCloud",
   "azureResourceManagerTools.autoDetectJsonTemplates": true,
   "azureResourceManagerTools.checkForLatestSchema": true,
@@ -72,7 +65,6 @@
   "[markdown]": {
     "editor.defaultFormatter": "DavidAnson.vscode-markdownlint"
   },
-  "python.globalModuleInstallation": true,
   "python.createEnvironment.contentButton": "show",
   "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
   "python.terminal.shellIntegration.enabled": true,
@@ -83,7 +75,6 @@
   "python.analysis.autoFormatStrings": true,
   "python.analysis.autoImportCompletions": true,
   "python.testing.pytestEnabled": true,
-  "python.testing.unittestEnabled": true,
   "python.analysis.logLevel": "Warning",
   "python.languageServer": "Pylance",
   "notebook.formatOnCellExecution": true,
@@ -124,11 +115,5 @@
       "packageManager": "ms-python.python:pip"
     }
   ],
-  "terminal.integrated.smoothScrolling": true,
-  "chat.mcp.discovery.enabled": {
-    "claude-desktop": false,
-    "windsurf": false,
-    "cursor-global": false,
-    "cursor-workspace": false
-  }
+  "terminal.integrated.smoothScrolling": true
 }

@@ -220,13 +220,13 @@ class ProvisioningService:
                 },
             )
 
-        except Exception as exc:
+        except Exception:
             logger.exception("Provisioning failed for source %s", source.id)
             source.status = SourceStatus.ERROR
             source.updated_at = datetime.now(timezone.utc)
             return ProvisioningResult(
                 success=False,
-                message=f"Provisioning failed: {exc}",
+                message="Provisioning failed. Check server logs for details.",
             )
 
 
