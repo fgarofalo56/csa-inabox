@@ -76,7 +76,7 @@ jobs:
 
       - name: Bicep Build
         if: matrix.changed == 'true'
-        uses: azure/CLI@d4515bc8e518874d3c814bf5c307a1cb08ec9b35 # v2
+        uses: azure/CLI@9f7ce6f37c31b777ec6c6b6d1dfe7db79f497956 # v2
         with:
           inlineScript: |
             az bicep build --file "${{ matrix.path }}/${{ matrix.main }}" --stdout > /dev/null 2>&1
@@ -121,7 +121,7 @@ jobs:
       - name: Run What-If
         if: matrix.changed == 'true'
         id: whatif
-        uses: azure/CLI@d4515bc8e518874d3c814bf5c307a1cb08ec9b35 # v2
+        uses: azure/CLI@9f7ce6f37c31b777ec6c6b6d1dfe7db79f497956 # v2
         with:
           inlineScript: |
             set +e
