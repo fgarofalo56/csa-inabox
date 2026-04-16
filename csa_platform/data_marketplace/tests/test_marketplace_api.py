@@ -6,6 +6,9 @@ the in-memory store (no external dependencies required).
 
 from __future__ import annotations
 
+from collections.abc import Generator
+from typing import Any
+
 import pytest
 from csa_platform.data_marketplace.api.marketplace_api import InMemoryStore, app, get_store
 from httpx import ASGITransport, AsyncClient
@@ -22,7 +25,7 @@ def fresh_store() -> InMemoryStore:
 
 
 @pytest.fixture
-def test_client(fresh_store: InMemoryStore):
+def test_client(fresh_store: InMemoryStore) -> Generator[None, None, None]:
     """Create a test client with a fresh store injected."""
 
     async def _override_store() -> InMemoryStore:
@@ -33,9 +36,9 @@ def test_client(fresh_store: InMemoryStore):
     app.dependency_overrides.clear()
 
 
-def _product_payload(**overrides) -> dict:
+def _product_payload(**overrides: Any) -> dict[str, Any]:
     """Build a minimal valid data product creation payload."""
-    base = {
+    base: dict[str, Any] = {
         "name": "test-product",
         "domain": "finance",
         "owner": "test-team@contoso.com",
@@ -63,7 +66,7 @@ class TestCreateProduct:
     """Test POST /products endpoint."""
 
     @pytest.mark.anyio
-    async def test_create_product_success(self, test_client):
+    async def test_create_product_success(self, test_client: None) -> None:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             payload = _product_payload()
             resp = await client.post("/products", json=payload)
@@ -76,7 +79,7 @@ class TestCreateProduct:
             assert data["status"] == "active"
 
     @pytest.mark.anyio
-    async def test_create_product_invalid_name(self, test_client):
+    async def test_create_product_invalid_name(self, test_client: None) -> None:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             payload = _product_payload(name="Invalid Name!")
             resp = await client.post("/products", json=payload)
@@ -84,7 +87,7 @@ class TestCreateProduct:
             assert resp.status_code == 422
 
     @pytest.mark.anyio
-    async def test_create_product_missing_required_fields(self, test_client):
+    async def test_create_product_missing_required_fields(self, test_client: None) -> None:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post("/products", json={"name": "test"})
             assert resp.status_code == 422
@@ -94,7 +97,7 @@ class TestGetProduct:
     """Test GET /products/{id} endpoint."""
 
     @pytest.mark.anyio
-    async def test_get_product_success(self, test_client):
+    async def test_get_product_success(self, test_client: None) -> None:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             create_resp = await client.post("/products", json=_product_payload())
             product_id = create_resp.json()["id"]
@@ -104,7 +107,7 @@ class TestGetProduct:
             assert resp.json()["id"] == product_id
 
     @pytest.mark.anyio
-    async def test_get_product_not_found(self, test_client):
+    async def test_get_product_not_found(self, test_client: None) -> None:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get("/products/nonexistent-id")
             assert resp.status_code == 404
@@ -114,7 +117,7 @@ class TestListProducts:
     """Test GET /products endpoint."""
 
     @pytest.mark.anyio
-    async def test_list_empty(self, test_client):
+    async def test_list_empty(self, test_client: None) -> None:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get("/products")
             assert resp.status_code == 200
@@ -123,7 +126,7 @@ class TestListProducts:
             assert data["items"] == []
 
     @pytest.mark.anyio
-    async def test_list_with_products(self, test_client):
+    async def test_list_with_products(self, test_client: None) -> None:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             await client.post("/products", json=_product_payload(name="prod-a"))
             await client.post("/products", json=_product_payload(name="prod-b"))
@@ -134,7 +137,7 @@ class TestListProducts:
             assert data["total"] == 2
 
     @pytest.mark.anyio
-    async def test_list_filter_by_domain(self, test_client):
+    async def test_list_filter_by_domain(self, test_client: None) -> None:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             await client.post("/products", json=_product_payload(name="prod-a", domain="finance"))
             await client.post("/products", json=_product_payload(name="prod-b", domain="health"))
@@ -145,7 +148,7 @@ class TestListProducts:
             assert data["total"] == 1
 
     @pytest.mark.anyio
-    async def test_list_search(self, test_client):
+    async def test_list_search(self, test_client: None) -> None:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             await client.post(
                 "/products",
@@ -171,7 +174,7 @@ class TestAccessRequestWorkflow:
     """Test the access request create -> check -> approve/deny workflow."""
 
     @pytest.mark.anyio
-    async def test_create_access_request(self, test_client):
+    async def test_create_access_request(self, test_client: None) -> None:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             create_resp = await client.post("/products", json=_product_payload())
             product_id = create_resp.json()["id"]
@@ -191,7 +194,7 @@ class TestAccessRequestWorkflow:
             assert req_data["requester"] == "analyst@contoso.com"
 
     @pytest.mark.anyio
-    async def test_access_request_product_not_found(self, test_client):
+    async def test_access_request_product_not_found(self, test_client: None) -> None:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post(
                 "/access-requests",
@@ -205,7 +208,7 @@ class TestAccessRequestWorkflow:
             assert resp.status_code == 404
 
     @pytest.mark.anyio
-    async def test_approve_access_request(self, test_client):
+    async def test_approve_access_request(self, test_client: None) -> None:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             # Create product
             product_resp = await client.post("/products", json=_product_payload())
@@ -237,7 +240,7 @@ class TestAccessRequestWorkflow:
             assert approve_resp.json()["reviewer"] == "admin@contoso.com"
 
     @pytest.mark.anyio
-    async def test_deny_access_request(self, test_client):
+    async def test_deny_access_request(self, test_client: None) -> None:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             product_resp = await client.post("/products", json=_product_payload())
             product_id = product_resp.json()["id"]
@@ -265,7 +268,7 @@ class TestAccessRequestWorkflow:
             assert deny_resp.json()["status"] == "denied"
 
     @pytest.mark.anyio
-    async def test_cannot_approve_already_approved(self, test_client):
+    async def test_cannot_approve_already_approved(self, test_client: None) -> None:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             product_resp = await client.post("/products", json=_product_payload())
             product_id = product_resp.json()["id"]
@@ -305,7 +308,7 @@ class TestHealthCheck:
     """Test the health check endpoint."""
 
     @pytest.mark.anyio
-    async def test_health(self, test_client):
+    async def test_health(self, test_client: None) -> None:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get("/health")
             assert resp.status_code == 200

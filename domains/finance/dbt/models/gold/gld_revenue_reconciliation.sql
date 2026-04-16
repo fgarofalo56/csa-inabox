@@ -71,7 +71,7 @@ reconciled AS (
 
         COALESCE(o.order_amount, 0) - COALESCE(i.invoice_amount, 0) AS amount_difference,
 
-        current_timestamp() AS _dbt_refreshed_at
+        now() AS _dbt_refreshed_at
     FROM orders o
     FULL OUTER JOIN invoices i ON o.order_id = i.order_id
 )

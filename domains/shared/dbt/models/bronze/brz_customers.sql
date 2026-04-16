@@ -12,7 +12,7 @@
 with source as (
     select * from {{ source('raw_data', 'sample_customers') }}
     {% if is_incremental() %}
-    where _metadata.file_modification_time > (select max(_dbt_loaded_at) from {{ this }})
+    {{ incremental_file_filter(this) }}
     {% endif %}
 ),
 
@@ -20,9 +20,9 @@ staged as (
     select
         {{ dbt_utils.generate_surrogate_key(['customer_id']) }} as _surrogate_key,
         *,
-        current_timestamp() as _dbt_loaded_at,
-        _metadata.file_path as _source_file,
-        _metadata.file_modification_time as _source_modified_at,
+        now() as _dbt_loaded_at,
+        {{ source_file_path_from_metadata() }} as _source_file,
+        {{ source_file_modification_time() }} as _source_modified_at,
         '{{ invocation_id }}' as _dbt_run_id
     from source
 )

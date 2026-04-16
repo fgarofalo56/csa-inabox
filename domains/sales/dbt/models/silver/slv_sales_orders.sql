@@ -48,7 +48,7 @@ cleaned as (
         {{ flag_future_date('order_date') }} as _is_future_date,
         case when quantity <= 0 then true else false end as _is_invalid_quantity,
 
-        current_timestamp() as _dbt_loaded_at,
+        now() as _dbt_loaded_at,
         _dbt_run_id
     from deduped
     where _row_num = 1

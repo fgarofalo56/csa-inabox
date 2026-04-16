@@ -188,13 +188,17 @@ jobs:
       - name: Create DuckDB profile
         run: |
           mkdir -p ~/.dbt
+          # Use a persistent DuckDB file (not :memory:) so seed data
+          # survives across the separate dbt seed / dbt run / dbt test
+          # steps.  The file is ephemeral — cleaned up when the runner
+          # exits.
           cat > ~/.dbt/profiles.yml << 'PROFILE'
           csa_analytics:
             target: ci
             outputs:
               ci:
                 type: duckdb
-                path: ":memory:"
+                path: "ci_test.duckdb"
                 schema: main
           PROFILE
 

@@ -37,7 +37,7 @@ cleaned AS (
         LOWER(TRIM(payment_method)) AS payment_method,
         TRIM(reference_number) AS reference_number,
         _ingested_at,
-        current_timestamp() AS _dbt_loaded_at
+        now() AS _dbt_loaded_at
     FROM deduplicated
     WHERE _row_num = 1
 ),

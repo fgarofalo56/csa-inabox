@@ -87,7 +87,7 @@ final as (
             ), 0
         ) as monthly_revenue_rate,
 
-        current_timestamp() as _dbt_refreshed_at
+        now() as _dbt_refreshed_at
     from customer_orders
 )
 

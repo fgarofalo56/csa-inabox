@@ -71,7 +71,7 @@ cleaned as (
         cast(updated_at as timestamp) as updated_at,
 
         -- Metadata
-        current_timestamp() as _dbt_loaded_at,
+        now() as _dbt_loaded_at,
         _source_file,
         _dbt_run_id
     from deduped

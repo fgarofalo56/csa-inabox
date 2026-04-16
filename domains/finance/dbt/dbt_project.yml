@@ -46,4 +46,4 @@ models:
 
 seeds:
   csa_finance:
-    +schema: seeds
+    +schema: raw
