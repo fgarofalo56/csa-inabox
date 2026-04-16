@@ -701,13 +701,17 @@ module monitoringAlertsResourceGroup 'modules/resourceGroup/resourceGroup.bicep'
   }
 }
 
+// Map DLZ's broader environment set ('dev'|'tst'|'uat'|'stg'|'prod') onto
+// the monitoring-alerts module's 'dev'|'test'|'prod' vocabulary.
+var monitoringEnvironment = environment == 'prod' ? 'prod' : environment == 'dev' ? 'dev' : 'test'
+
 module monitoringAlerts '../../../monitoring/alerts/main.bicep' = if (contains(deployModules, 'monitoringAlerts') && bool(deployModules.monitoringAlerts) && !empty(logAnalyticsWorkspaceId) && !empty(actionGroupId)) {
   name: 'monitoringAlerts'
   scope: resourceGroup('rg-${basename}-alerts-${parLocationShort}')
   params: {
     logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
     actionGroupId: actionGroupId
-    environment: environment
+    environment: monitoringEnvironment
     location: location
     storageAccountIds: contains(deployModules, 'storageZones') && bool(deployModules.storageZones) ? [storageServices.outputs.storageRawId] : []
     tags: tagsDefault

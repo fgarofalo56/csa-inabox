@@ -390,6 +390,7 @@ module = [
     "structlog.*",
     "openai.*",
     "cachetools.*",
+    "duckdb.*",
 ]
 ignore_missing_imports = true
 
