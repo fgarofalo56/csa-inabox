@@ -246,7 +246,7 @@ class PipelineGenerator:
             raise SchemaDetectionError(f"Schema detection not implemented for {source_type}")
 
         except Exception as e:
-            logger.error("Schema detection failed", source_type=source_type, error=str(e))
+            logger.exception("Schema detection failed", source_type=source_type)
             raise SchemaDetectionError(f"Schema detection failed: {e}") from e
 
     def _detect_database_schema(self, source_config: dict[str, Any]) -> SourceDetectionResult:
@@ -351,6 +351,7 @@ class PipelineGenerator:
                         row = cursor.fetchone()
                         estimated_row_counts[table_name] = int(row.row_count) if row and row.row_count else 0
                     except Exception:
+                        logger.warning("row_count.estimation_failed", table=table_name)
                         estimated_row_counts[table_name] = -1  # Unknown
 
                     tables.append({"table_name": table_name, "schema": schema_name, "columns": columns})
@@ -1074,7 +1075,7 @@ class PipelineGenerator:
             )
 
         except Exception as e:
-            logger.error("Pipeline generation failed", error=str(e))
+            logger.exception("Pipeline generation failed")
             raise PipelineGenerationError(f"Failed to generate pipeline: {e}") from e
 
     def generate_from_file(

@@ -332,7 +332,7 @@ class DocumentClassifier:
                 reasoning=parsed.get("reasoning", ""),
             )
         except Exception as exc:
-            logger.warning("classification.failed", error=str(exc))
+            logger.exception("classification.failed", error=str(exc))
             return ClassificationResult(
                 text_preview=preview,
                 category="other",

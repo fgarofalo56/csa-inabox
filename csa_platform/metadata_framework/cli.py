@@ -260,7 +260,7 @@ def cmd_example(args: argparse.Namespace) -> int:
                 print(f"   Type: {source_type}")
                 print(f"   Name: {source_name}")
 
-        except Exception:
+        except (OSError, ValueError):
             print("   (Unable to read file details)")
 
         if args.show_content:

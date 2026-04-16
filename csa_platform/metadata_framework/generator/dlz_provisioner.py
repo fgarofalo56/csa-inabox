@@ -498,7 +498,7 @@ class DLZProvisioner:
             )
 
         except Exception as e:
-            logger.error("DLZ provisioning failed", error=str(e))
+            logger.exception("DLZ provisioning failed")
             raise DLZProvisioningError(f"Failed to provision DLZ: {e}") from e
 
     def provision_dlz_from_file(

@@ -10,9 +10,12 @@ This script validates the framework by:
 Run this after setting up the framework to ensure everything works correctly.
 """
 
+import logging
 import sys
 from collections.abc import Callable
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # Add the platform modules to Python path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
@@ -47,6 +50,7 @@ def test_schema_validation() -> bool:
         return True
 
     except Exception as e:
+        logger.exception("Schema validation failed")
         print(f"❌ Schema validation failed: {e}")
         return False
 
@@ -94,6 +98,7 @@ def test_pipeline_generation() -> bool:
         return True
 
     except Exception as e:
+        logger.exception("Pipeline generation failed")
         print(f"❌ Pipeline generation failed: {e}")
         import traceback
 
@@ -149,6 +154,7 @@ def test_dlz_provisioning() -> bool:
         return True
 
     except Exception as e:
+        logger.exception("DLZ provisioning failed")
         print(f"❌ DLZ provisioning failed: {e}")
         import traceback
 
@@ -181,6 +187,7 @@ def test_template_selection() -> bool:
         return True
 
     except Exception as e:
+        logger.exception("Template selection failed")
         print(f"❌ Template selection failed: {e}")
         return False
 
@@ -223,6 +230,7 @@ def test_artifact_generation() -> bool:
         return True
 
     except Exception as e:
+        logger.exception("Artifact generation failed")
         print(f"❌ Artifact generation failed: {e}")
         import traceback
 
@@ -253,6 +261,7 @@ def main() -> int:
             else:
                 failed += 1
         except Exception as e:
+            logger.exception("Test %s failed", test.__name__)
             print(f"❌ Test {test.__name__} failed with exception: {e}")
             failed += 1
 

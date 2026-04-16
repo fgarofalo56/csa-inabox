@@ -287,6 +287,11 @@ class DatabricksSQLEndpointManager:
                     endpoint_id,
                 )
             except Exception as exc:
+                logger.exception(
+                    "Permission grant failed for %s on warehouse %s",
+                    grant.principal,
+                    endpoint_id,
+                )
                 results.append(
                     {
                         "principal": grant.principal,

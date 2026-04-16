@@ -29,6 +29,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
+from azure.core.exceptions import AzureError
 
 from governance.common.logging import reset_logging_state
 
@@ -721,7 +722,7 @@ class TestEntityExtractor:
         """extract_entities handles API errors gracefully."""
         extractor = self._make_extractor()
         mock_client = MagicMock()
-        mock_client.recognize_entities.side_effect = Exception("Service unavailable")
+        mock_client.recognize_entities.side_effect = AzureError("Service unavailable")
         extractor._client = mock_client
 
         results = extractor.extract_entities(["test text"])
@@ -944,7 +945,7 @@ class TestModelEndpoint:
         """invoke handles exceptions gracefully."""
         endpoint = self._make_endpoint()
         mock_ml_client = MagicMock()
-        mock_ml_client.online_endpoints.invoke.side_effect = Exception("Endpoint not found")
+        mock_ml_client.online_endpoints.invoke.side_effect = AzureError("Endpoint not found")
         endpoint._ml_client = mock_ml_client
 
         result = endpoint.invoke("nonexistent", {"data": []})
@@ -994,7 +995,7 @@ class TestModelEndpoint:
         """health_check returns unhealthy on exception."""
         endpoint = self._make_endpoint()
         mock_ml_client = MagicMock()
-        mock_ml_client.online_endpoints.get.side_effect = Exception("Not found")
+        mock_ml_client.online_endpoints.get.side_effect = AzureError("Not found")
         endpoint._ml_client = mock_ml_client
 
         health = endpoint.health_check("nonexistent")

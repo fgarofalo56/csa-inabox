@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from azure.ai.ml import MLClient
 
-from azure.core.exceptions import ResourceNotFoundError
+from azure.core.exceptions import AzureError, ResourceNotFoundError
 
 from governance.common.logging import configure_structlog, get_logger
 
@@ -327,7 +327,7 @@ class ModelEndpoint:
                 response=parsed,
                 latency_ms=round(latency, 2),
             )
-        except Exception as exc:
+        except (AzureError, json.JSONDecodeError, OSError) as exc:
             latency = (time.perf_counter() - start) * 1000
             logger.exception("invocation.failed", endpoint_name=endpoint_name)
             return InvocationResult(
@@ -379,7 +379,7 @@ class ModelEndpoint:
                 scoring_uri=endpoint.scoring_uri or "",
                 is_healthy=is_healthy,
             )
-        except Exception:
+        except (AzureError, OSError):
             logger.exception("health_check.failed", endpoint_name=endpoint_name)
             return EndpointHealth(
                 endpoint_name=endpoint_name,
