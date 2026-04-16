@@ -1,4 +1,4 @@
-"""Tests for the platform/data_marketplace module.
+"""Tests for the csa_platform/data_marketplace module.
 
 Covers:
 - Data product Pydantic models (enums, validation, QualityScore.compute)

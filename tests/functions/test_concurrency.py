@@ -1,10 +1,9 @@
 """Async concurrency stress tests for Azure Functions."""
 import asyncio
-import os
 import tempfile
+from typing import Any
 
 import pytest
-
 from portal.shared.api.persistence import SqliteStore
 
 
@@ -12,7 +11,7 @@ from portal.shared.api.persistence import SqliteStore
 class TestAIConcurrency:
     """Test AI enrichment function under concurrent load."""
 
-    async def test_concurrent_enrichment_requests(self):
+    async def test_concurrent_enrichment_requests(self) -> None:
         """Multiple simultaneous enrichment requests should not interfere."""
         results: list[dict[str, object]] = []
         errors: list[dict[str, object]] = []
@@ -32,11 +31,10 @@ class TestAIConcurrency:
         ids = {r["id"] for r in results}
         assert len(ids) == 50
 
-    async def test_concurrent_store_operations(self):
+    async def test_concurrent_store_operations(self) -> None:
         """SQLite store should handle concurrent reads/writes safely."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = os.path.join(tmpdir, "test.db")
-            store = SqliteStore("test_concurrent", db_path=db_path)
+            store = SqliteStore("test_concurrent", data_dir=tmpdir)
 
             errors: list[str] = []
 
@@ -46,9 +44,9 @@ class TestAIConcurrency:
                 except Exception as e:
                     errors.append(str(e))
 
-            async def read_items() -> list[dict[str, object]]:
+            async def read_items() -> list[dict[str, Any]]:
                 try:
-                    return store.list()  # type: ignore[return-value]
+                    return store.list()
                 except Exception as e:
                     errors.append(str(e))
                     return []
@@ -77,7 +75,7 @@ class TestAIConcurrency:
 class TestEventProcessingConcurrency:
     """Test event processing under concurrent load."""
 
-    async def test_concurrent_event_batches(self):
+    async def test_concurrent_event_batches(self) -> None:
         """Multiple event batches processed concurrently should not lose events."""
         processed: list[dict[str, object]] = []
 

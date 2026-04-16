@@ -165,7 +165,7 @@ AzureDiagnostics
 # Deploy multi-Synapse environment
 az deployment sub create \
   --location eastus2 \
-  --template-file platform/multi_synapse/deploy/multi-synapse.bicep \
+  --template-file csa_platform/multi_synapse/deploy/multi-synapse.bicep \
   --parameters \
     organizations='["agency-a","agency-b","agency-c"]' \
     environment=prod \

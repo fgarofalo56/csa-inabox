@@ -126,4 +126,4 @@ portal/shared/
 ## 🔗 Related Documentation
 
 - [Architecture](../docs/ARCHITECTURE.md) — Overall system architecture
-- [Platform Components](../platform/README.md) — Platform component index
+- [Platform Components](../csa_platform/README.md) — Platform component index

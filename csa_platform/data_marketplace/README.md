@@ -148,7 +148,7 @@ Quality scores are calculated from the data contract's quality rules
 # Deploy marketplace infrastructure
 az deployment group create \
   --resource-group rg-shared-prod \
-  --template-file platform/data_marketplace/deploy/marketplace.bicep \
+  --template-file csa_platform/data_marketplace/deploy/marketplace.bicep \
   --parameters \
     environment=prod \
     location=eastus2
@@ -185,7 +185,7 @@ Registered data products are automatically synced to Azure Purview:
 3. Lineage relationships are created between upstream/downstream products
 4. Classification labels from Purview are reflected in the marketplace
 
-See `platform/governance/purview_automation.py` for the sync implementation.
+See `csa_platform/purview_governance/purview_automation.py` for the sync implementation.
 
 ---
 

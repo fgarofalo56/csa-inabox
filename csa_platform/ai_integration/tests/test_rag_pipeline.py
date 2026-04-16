@@ -7,6 +7,9 @@ OpenAI and AI Search clients.
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
+import pytest
 from csa_platform.ai_integration.rag.pipeline import (
     Chunk,
     DocumentChunker,
@@ -15,9 +18,6 @@ from csa_platform.ai_integration.rag.pipeline import (
     SearchResult,
     VectorStore,
 )
-from unittest.mock import MagicMock
-
-import pytest
 
 # ---------------------------------------------------------------------------
 # DocumentChunker Tests

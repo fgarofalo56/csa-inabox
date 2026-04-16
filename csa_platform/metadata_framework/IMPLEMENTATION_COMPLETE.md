@@ -35,7 +35,7 @@ The complete metadata-driven pipeline framework for CSA-in-a-Box has been succes
 
 ### Core Framework
 ```text
-platform/metadata_framework/
+csa_platform/metadata_framework/
 ├── README.md                          # Comprehensive documentation
 ├── __init__.py                        # Package initialization
 ├── cli.py                             # Command-line interface
@@ -144,7 +144,7 @@ The framework includes comprehensive testing:
 
 ### Validation Tests
 ```bash
-cd platform/metadata-framework
+cd csa_platform/metadata_framework
 python cli.py validate examples/example_sql_source.yaml
 # OK: examples/example_sql_source.yaml is valid
 # Pipeline: pl_sales_database_incremental

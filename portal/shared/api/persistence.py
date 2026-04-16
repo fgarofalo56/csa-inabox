@@ -296,7 +296,8 @@ class _LegacyJsonStore:
     def _read(self) -> list[dict[str, Any]]:
         try:
             with self.file_path.open("r", encoding="utf-8") as f:
-                return json.load(f)
+                data: list[dict[str, Any]] = json.load(f)
+                return data
         except (json.JSONDecodeError, FileNotFoundError):
             return []
 

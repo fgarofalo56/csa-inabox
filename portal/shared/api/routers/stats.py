@@ -109,10 +109,9 @@ def _domain_status_from_quality(avg_score: float) -> DomainStatus:
     """Derive a domain health status from its average quality score."""
     if avg_score >= 90:
         return DomainStatus.HEALTHY
-    elif avg_score >= 75:
+    if avg_score >= 75:
         return DomainStatus.WARNING
-    else:
-        return DomainStatus.CRITICAL
+    return DomainStatus.CRITICAL
 
 
 def _build_domain_overviews(

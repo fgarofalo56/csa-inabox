@@ -119,7 +119,7 @@ graph TB
 ├── 📁 bicep/                      # Infrastructure-as-Code
 │   ├── 📁 DLZ/                    # Data Landing Zone modules
 │   ├── 📁 DMLZ/                   # Data Management Landing Zone
-│   └── 📁 LandingZone-ALZ/        # Azure Landing Zone foundation
+│   └── 📁 landing-zone-alz/       # Azure Landing Zone foundation
 ├── 📁 arm/                        # Legacy ARM templates (deprecated)
 ├── 📁 scripts/                    # Deployment helper scripts
 ├── 📁 notebooks/                  # Setup & config notebooks

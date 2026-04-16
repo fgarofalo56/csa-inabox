@@ -1,4 +1,4 @@
-"""Tests for the platform/purview_governance module.
+"""Tests for the csa_platform/purview_governance module.
 
 Covers:
 - PurviewAutomation dataclasses (ClassificationRule, GlossaryTerm, ScanSchedule, LineageRelationship)
@@ -163,7 +163,9 @@ class TestDataclasses:
     """Tests for Purview governance dataclasses."""
 
     def test_classification_rule_defaults(self) -> None:
-        from csa_platform.purview_governance.purview_automation import ClassificationRule  # type: ignore[import-untyped]
+        from csa_platform.purview_governance.purview_automation import (
+            ClassificationRule,  # type: ignore[import-untyped]
+        )
 
         rule = ClassificationRule(name="ssn", description="SSN detection", category="PII")
         assert rule.name == "ssn"
@@ -193,7 +195,9 @@ class TestDataclasses:
         assert schedule.credential_name == ""
 
     def test_lineage_relationship(self) -> None:
-        from csa_platform.purview_governance.purview_automation import LineageRelationship  # type: ignore[import-untyped]
+        from csa_platform.purview_governance.purview_automation import (
+            LineageRelationship,  # type: ignore[import-untyped]
+        )
 
         rel = LineageRelationship(
             source_type="azure_datalake_gen2_resource_set",
@@ -317,7 +321,9 @@ class TestBuildClassificationPayload:
     """Tests for _build_classification_payload."""
 
     def test_basic_payload(self, purview: Any) -> None:
-        from csa_platform.purview_governance.purview_automation import ClassificationRule  # type: ignore[import-untyped]
+        from csa_platform.purview_governance.purview_automation import (
+            ClassificationRule,  # type: ignore[import-untyped]
+        )
 
         rule = ClassificationRule(name="SSN", description="Social Security Number", category="PII")
         payload = purview._build_classification_payload(rule)
@@ -329,7 +335,9 @@ class TestBuildClassificationPayload:
         assert payload["properties"]["minimumPercentageMatch"] == 60.0
 
     def test_payload_with_data_patterns(self, purview: Any) -> None:
-        from csa_platform.purview_governance.purview_automation import ClassificationRule  # type: ignore[import-untyped]
+        from csa_platform.purview_governance.purview_automation import (
+            ClassificationRule,  # type: ignore[import-untyped]
+        )
 
         rule = ClassificationRule(
             name="SSN",
@@ -342,7 +350,9 @@ class TestBuildClassificationPayload:
         assert payload["properties"]["dataPatterns"][0]["pattern"] == r"\d{3}-\d{2}-\d{4}"
 
     def test_payload_with_column_patterns(self, purview: Any) -> None:
-        from csa_platform.purview_governance.purview_automation import ClassificationRule  # type: ignore[import-untyped]
+        from csa_platform.purview_governance.purview_automation import (
+            ClassificationRule,  # type: ignore[import-untyped]
+        )
 
         rule = ClassificationRule(
             name="SSN",
@@ -354,7 +364,9 @@ class TestBuildClassificationPayload:
         assert "columnPatterns" in payload["properties"]
 
     def test_payload_without_patterns(self, purview: Any) -> None:
-        from csa_platform.purview_governance.purview_automation import ClassificationRule  # type: ignore[import-untyped]
+        from csa_platform.purview_governance.purview_automation import (
+            ClassificationRule,  # type: ignore[import-untyped]
+        )
 
         rule = ClassificationRule(name="SIMPLE", description="Simple", category="Test")
         payload = purview._build_classification_payload(rule)

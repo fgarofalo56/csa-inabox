@@ -48,8 +48,8 @@ and metadata.
 | **Table** | Delta Lake path (`/domain/product/`) | Delta format with Unity Catalog registration |
 | **Shortcut** | Linked Service / SAS URI / Managed Identity | Cross-domain or cross-account references |
 | **OneSecurity** | Unity Catalog + Azure RBAC + Purview | Layered access control |
-| **Data Activator** | Logic Apps + Event Grid + Functions | See `platform/data_activator/` |
-| **Direct Lake** | Databricks SQL Endpoint → Power BI | See `platform/direct_lake/` |
+| **Data Activator** | Logic Apps + Event Grid + Functions | See `csa_platform/data_activator/` |
+| **Direct Lake** | Databricks SQL Endpoint → Power BI | See `csa_platform/direct_lake/` |
 | **Dataflow Gen2** | ADF Mapping Data Flows | Spark-based ETL |
 | **Notebook** | Databricks Notebooks | Interactive compute |
 
@@ -189,7 +189,7 @@ OneLake-equivalent storage account. Configuration is driven by
 # Deploy for a specific domain
 az deployment group create \
   --resource-group rg-sales-prod \
-  --template-file platform/onelake_pattern/deploy/onelake-storage.bicep \
+  --template-file csa_platform/onelake_pattern/deploy/onelake-storage.bicep \
   --parameters \
     domainName=sales \
     environment=prod \
@@ -232,9 +232,9 @@ to move to Azure Government:
 
 > [!TIP]
 > See also:
-> - `platform/direct_lake/` — Power BI Direct Lake equivalent
-> - `platform/data_activator/` — Data Activator equivalent
-> - `platform/data_marketplace/` — Data marketplace / product discovery
+> - `csa_platform/direct_lake/` — Power BI Direct Lake equivalent
+> - `csa_platform/data_activator/` — Data Activator equivalent
+> - `csa_platform/data_marketplace/` — Data marketplace / product discovery
 
 ---
 

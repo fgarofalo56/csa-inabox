@@ -472,7 +472,7 @@ export AZURE_OPENAI_DEPLOYMENT=gpt-4
 
 # Test document classification
 python -c "
-from platform.ai_integration.enrichment.document_classifier import classify
+from csa_platform.ai_integration.enrichment.document_classifier import classify
 result = classify('This invoice contains patient health records...')
 print(result)
 "

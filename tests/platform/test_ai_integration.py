@@ -1,4 +1,4 @@
-"""Tests for the platform/ai_integration module.
+"""Tests for the csa_platform/ai_integration module.
 
 Covers:
 - DocumentChunker (pure logic: chunking strategies, overlap, min length, IDs)

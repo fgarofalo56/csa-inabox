@@ -74,7 +74,10 @@ class TestAlertRuleSchema:
 
     def test_condition_model(self) -> None:
         """Condition model validates basic fields."""
-        from csa_platform.data_activator.rules.schema import Condition, ConditionOperator  # type: ignore[import-untyped]
+        from csa_platform.data_activator.rules.schema import (  # type: ignore[import-untyped]
+            Condition,
+            ConditionOperator,
+        )
 
         cond = Condition(field="data.temperature", operator=ConditionOperator.GT, threshold=100.0)
         assert cond.field == "data.temperature"
@@ -84,7 +87,10 @@ class TestAlertRuleSchema:
 
     def test_condition_between_threshold(self) -> None:
         """Condition with 'between' operator accepts a two-element list."""
-        from csa_platform.data_activator.rules.schema import Condition, ConditionOperator  # type: ignore[import-untyped]
+        from csa_platform.data_activator.rules.schema import (  # type: ignore[import-untyped]
+            Condition,
+            ConditionOperator,
+        )
 
         cond = Condition(field="data.value", operator=ConditionOperator.BETWEEN, threshold=[10.0, 50.0])
         assert cond.threshold == [10.0, 50.0]
@@ -431,14 +437,20 @@ class TestEmailNotifier:
 
     def test_send_no_recipients(self) -> None:
         """send returns False without recipients."""
-        from csa_platform.data_activator.actions.notifier import AlertPayload, EmailNotifier  # type: ignore[import-untyped]
+        from csa_platform.data_activator.actions.notifier import (  # type: ignore[import-untyped]
+            AlertPayload,
+            EmailNotifier,
+        )
 
         notifier = EmailNotifier(recipients=[])
         assert notifier.send(AlertPayload(rule_name="test")) is False
 
     def test_send_sendgrid(self) -> None:
         """send via SendGrid posts to SendGrid API."""
-        from csa_platform.data_activator.actions.notifier import AlertPayload, EmailNotifier  # type: ignore[import-untyped]
+        from csa_platform.data_activator.actions.notifier import (  # type: ignore[import-untyped]
+            AlertPayload,
+            EmailNotifier,
+        )
 
         notifier = EmailNotifier(recipients=["user@test.com"], sendgrid_api_key="sg-key")
         payload = AlertPayload(rule_name="test", severity="critical")
@@ -604,7 +616,9 @@ class TestTeamsCardBuilder:
     )
     def test_recommended_actions_by_rule_type(self, rule_name: str, expected_keyword: str) -> None:
         """_get_recommended_actions returns domain-specific recommendations."""
-        from csa_platform.data_activator.actions.teams_card import _get_recommended_actions  # type: ignore[import-untyped]
+        from csa_platform.data_activator.actions.teams_card import (
+            _get_recommended_actions,  # type: ignore[import-untyped]
+        )
 
         payload = self._make_payload(rule_name=rule_name)
         actions = _get_recommended_actions(payload)

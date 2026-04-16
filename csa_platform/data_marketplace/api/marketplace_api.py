@@ -21,6 +21,8 @@ import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from typing import Any
+
 from csa_platform.data_marketplace.models.data_product import (
     AccessRequest,
     AccessRequestApproval,
@@ -33,8 +35,6 @@ from csa_platform.data_marketplace.models.data_product import (
     QualityHistoryResponse,
     QualityMetric,
 )
-from typing import Any
-
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 

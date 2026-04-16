@@ -6,9 +6,8 @@ the in-memory store (no external dependencies required).
 
 from __future__ import annotations
 
-from csa_platform.data_marketplace.api.marketplace_api import InMemoryStore, app, get_store
-
 import pytest
+from csa_platform.data_marketplace.api.marketplace_api import InMemoryStore, app, get_store
 from httpx import ASGITransport, AsyncClient
 
 # ---------------------------------------------------------------------------

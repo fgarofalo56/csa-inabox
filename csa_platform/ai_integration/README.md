@@ -98,7 +98,7 @@ Deploy ML models as Azure ML endpoints per data domain:
 ## 📁 Directory Structure
 
 ```text
-platform/ai_integration/
+csa_platform/ai_integration/
 ├── README.md                    # This file
 ├── rag/
 │   ├── rag_pipeline.py          # RAG ingestion pipeline

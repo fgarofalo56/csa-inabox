@@ -105,7 +105,7 @@ az deployment group create \
 ## 📁 Directory Structure
 
 ```text
-platform/shared_services/
+csa_platform/shared_services/
 ├── README.md
 ├── functions/
 │   ├── host.json

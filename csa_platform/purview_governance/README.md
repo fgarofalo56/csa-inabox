@@ -47,7 +47,7 @@ portal. It covers:
 ## 📁 Components
 
 ```text
-platform/governance/
+csa_platform/purview_governance/
 ├── README.md                       # This file
 ├── purview_automation.py           # Purview API automation module
 ├── classifications/
@@ -70,7 +70,7 @@ common governance tasks:
 ### Classification Rules
 
 ```python
-from platform.governance.purview_automation import PurviewAutomation
+from csa_platform.purview_governance.purview_automation import PurviewAutomation
 
 purview = PurviewAutomation(
     account_name="purview-prod",
@@ -166,7 +166,7 @@ agreement:
 ### Enforcement
 
 ```python
-from platform.governance.data_sharing.sharing_enforcer import SharingEnforcer
+from csa_platform.purview_governance.data_sharing.sharing_enforcer import SharingEnforcer
 
 enforcer = SharingEnforcer(agreements_path="data_sharing/")
 
@@ -213,7 +213,7 @@ python -m platform.governance.purview_automation \
 
 ## 🏗️ Relationship to Core Governance
 
-| Core (`governance/`) | Platform (`platform/governance/`) |
+| Core (`governance/`) | Platform (`csa_platform/purview_governance/`) |
 |---|---|
 | Contract validation | Purview classification rules |
 | dbt test generation | Lineage registration |

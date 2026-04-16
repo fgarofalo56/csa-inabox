@@ -62,15 +62,13 @@ if _da_name not in sys.modules and _da_dir.exists():
     _sub.__path__ = [str(_da_dir)]  # type: ignore[attr-defined]
     _sub.__package__ = _da_name
     sys.modules[_da_name] = _sub
-    setattr(_csa, "data_activator", _sub)
+    _csa.data_activator = _sub
 
 from csa_platform.data_activator.actions.notifier import (  # noqa: E402
     AlertPayload,
-    NotifierFactory,
     TeamsNotifier,
     WebhookNotifier,
 )
-
 
 # ──────────────────────────────────────────────────────────────────────
 # Domain models  (Azure-Function-specific; the canonical schema.py
@@ -658,8 +656,12 @@ def _evaluation_to_payload(evaluation: AlertEvaluation) -> AlertPayload:
     )
 
 
-def _dispatch_teams(evaluation: AlertEvaluation, action: ActionConfig) -> bool:
-    """Send Teams notification via canonical TeamsNotifier."""
+def _dispatch_teams(evaluation: AlertEvaluation, _action: ActionConfig) -> bool:
+    """Send Teams notification via canonical TeamsNotifier.
+
+    The ``_action`` arg is intentionally unused — kept for the uniform
+    dispatch-map signature shared with the other ``_dispatch_*`` handlers.
+    """
     webhook_url = os.environ.get("TEAMS_WEBHOOK_URL", "")
     if not webhook_url:
         logger.warning("TEAMS_WEBHOOK_URL not configured, skipping Teams notification")
