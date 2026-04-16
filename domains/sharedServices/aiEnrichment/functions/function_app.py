@@ -25,6 +25,8 @@ cross-service correlation works out of the box.
 
 import json
 import os
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
 
@@ -58,53 +60,68 @@ TEXT_CHUNK_SIZE = int(os.environ.get("AI_TEXT_CHUNK_SIZE", "5120"))
 MAX_TEXT_LENGTH = int(os.environ.get("AI_MAX_TEXT_LENGTH", "125000"))
 
 # ---------------------------------------------------------------------------
-# Module-level client setup for connection pooling
+# Async Azure SDK clients
 # ---------------------------------------------------------------------------
-_text_analytics_client = None
-_document_analysis_client = None
-_credential = None
+#
+# Earlier versions cached TextAnalyticsClient / DocumentAnalysisClient and
+# the DefaultAzureCredential in module-level globals.  The aiohttp session
+# underneath never got closed, so every scale-in or process restart leaked
+# connections.  Azure Functions' process model does not reliably run
+# ``atexit`` handlers for async resources either.
+#
+# Current approach: instantiate each client per-invocation inside an
+# ``async with`` block so its transport is torn down deterministically.
+# The per-request overhead is ~10ms (dwarfed by 50-500ms of actual AI
+# work) and Azure AI services tolerate it - see the ``@retry`` decorators
+# for transient-failure handling.
+#
+# The credential is cheap to construct but also owns a session that must
+# be closed.  Construct it inside the same ``async with`` scope as the
+# client, not as a shared global.
 
 
-def _get_credential() -> Any:
-    """Get shared Azure credential for connection pooling."""
-    global _credential
-    if _credential is None:
+@asynccontextmanager
+async def _text_analytics_client() -> AsyncIterator[Any]:
+    """Yield an async TextAnalyticsClient, closing it on scope exit.
+
+    Yields ``None`` when the SDK is not installed or ``AI_ENDPOINT`` is
+    unset, so callers can short-circuit without special-casing both.
+    """
+    if not AI_ENDPOINT:
+        yield None
+        return
+    try:
+        from azure.ai.textanalytics.aio import TextAnalyticsClient
         from azure.identity.aio import DefaultAzureCredential
+    except ImportError:
+        yield None
+        return
 
-        _credential = DefaultAzureCredential()
-    return _credential
-
-
-def _get_text_analytics_client() -> Any:
-    """Get shared Text Analytics client for connection pooling."""
-    global _text_analytics_client
-    if _text_analytics_client is None and AI_ENDPOINT:
-        try:
-            from azure.ai.textanalytics.aio import TextAnalyticsClient
-
-            _text_analytics_client = TextAnalyticsClient(
-                endpoint=AI_ENDPOINT,
-                credential=_get_credential(),
-            )
-        except ImportError:
-            pass
-    return _text_analytics_client
+    async with DefaultAzureCredential() as credential, TextAnalyticsClient(
+        endpoint=AI_ENDPOINT,
+        credential=credential,
+    ) as client:
+        yield client
 
 
-def _get_document_analysis_client() -> Any:
-    """Get shared Document Analysis client for connection pooling."""
-    global _document_analysis_client
-    if _document_analysis_client is None and AI_ENDPOINT:
-        try:
-            from azure.ai.formrecognizer.aio import DocumentAnalysisClient
+@asynccontextmanager
+async def _document_analysis_client() -> AsyncIterator[Any]:
+    """Yield an async DocumentAnalysisClient, closing it on scope exit."""
+    if not AI_ENDPOINT:
+        yield None
+        return
+    try:
+        from azure.ai.formrecognizer.aio import DocumentAnalysisClient
+        from azure.identity.aio import DefaultAzureCredential
+    except ImportError:
+        yield None
+        return
 
-            _document_analysis_client = DocumentAnalysisClient(
-                endpoint=AI_ENDPOINT,
-                credential=_get_credential(),
-            )
-        except ImportError:
-            pass
-    return _document_analysis_client
+    async with DefaultAzureCredential() as credential, DocumentAnalysisClient(
+        endpoint=AI_ENDPOINT,
+        credential=credential,
+    ) as client:
+        yield client
 
 
 # ---------------------------------------------------------------------------
@@ -145,8 +162,10 @@ def _form_recognizer_available() -> bool:
 async def _enrich_text(text: str) -> dict[str, Any]:
     """Run text enrichment pipeline: language detection, sentiment, entities, PII.
 
-    Uses the shared module-level client for connection pooling and retries
-    Azure SDK calls automatically via the retry decorator.
+    Instantiates a fresh async TextAnalyticsClient inside an
+    ``async with`` block so its aiohttp transport is closed when the
+    function returns; the tenacity ``@retry`` decorator handles transient
+    Azure SDK errors.
     """
     results: dict[str, Any] = {
         "enriched_at": datetime.now(timezone.utc).isoformat(),
@@ -157,66 +176,66 @@ async def _enrich_text(text: str) -> dict[str, Any]:
         "pii_entities": [],
     }
 
-    client = _get_text_analytics_client()
-    if not client:
-        results["error"] = "AI client not configured"
-        return results
+    async with _text_analytics_client() as client:
+        if client is None:
+            results["error"] = "AI client not configured"
+            return results
 
-    docs = [{"id": "1", "text": text[:TEXT_CHUNK_SIZE]}]
+        docs = [{"id": "1", "text": text[:TEXT_CHUNK_SIZE]}]
 
-    # Language detection
-    lang_result = await client.detect_language(documents=docs)
-    if lang_result and not lang_result[0].is_error:
-        detected = lang_result[0].primary_language
-        results["language"] = {
-            "name": detected.name,
-            "iso_code": detected.iso6391_name,
-            "confidence": detected.confidence_score,
-        }
-
-    # Sentiment analysis
-    sentiment_result = await client.analyze_sentiment(documents=docs)
-    if sentiment_result and not sentiment_result[0].is_error:
-        doc = sentiment_result[0]
-        results["sentiment"] = {
-            "overall": doc.sentiment,
-            "scores": {
-                "positive": doc.confidence_scores.positive,
-                "neutral": doc.confidence_scores.neutral,
-                "negative": doc.confidence_scores.negative,
-            },
-        }
-
-    # Key phrases
-    phrases_result = await client.extract_key_phrases(documents=docs)
-    if phrases_result and not phrases_result[0].is_error:
-        results["key_phrases"] = list(phrases_result[0].key_phrases)
-
-    # Named entity recognition
-    entity_result = await client.recognize_entities(documents=docs)
-    if entity_result and not entity_result[0].is_error:
-        results["entities"] = [
-            {
-                "text": e.text,
-                "category": e.category,
-                "subcategory": e.subcategory,
-                "confidence": e.confidence_score,
+        # Language detection
+        lang_result = await client.detect_language(documents=docs)
+        if lang_result and not lang_result[0].is_error:
+            detected = lang_result[0].primary_language
+            results["language"] = {
+                "name": detected.name,
+                "iso_code": detected.iso6391_name,
+                "confidence": detected.confidence_score,
             }
-            for e in entity_result[0].entities
-        ]
 
-    # PII detection
-    pii_result = await client.recognize_pii_entities(documents=docs)
-    if pii_result and not pii_result[0].is_error:
-        results["pii_redacted_text"] = pii_result[0].redacted_text
-        results["pii_entities"] = [
-            {
-                "category": e.category,
-                "subcategory": e.subcategory,
-                "confidence": e.confidence_score,
+        # Sentiment analysis
+        sentiment_result = await client.analyze_sentiment(documents=docs)
+        if sentiment_result and not sentiment_result[0].is_error:
+            doc = sentiment_result[0]
+            results["sentiment"] = {
+                "overall": doc.sentiment,
+                "scores": {
+                    "positive": doc.confidence_scores.positive,
+                    "neutral": doc.confidence_scores.neutral,
+                    "negative": doc.confidence_scores.negative,
+                },
             }
-            for e in pii_result[0].entities
-        ]
+
+        # Key phrases
+        phrases_result = await client.extract_key_phrases(documents=docs)
+        if phrases_result and not phrases_result[0].is_error:
+            results["key_phrases"] = list(phrases_result[0].key_phrases)
+
+        # Named entity recognition
+        entity_result = await client.recognize_entities(documents=docs)
+        if entity_result and not entity_result[0].is_error:
+            results["entities"] = [
+                {
+                    "text": e.text,
+                    "category": e.category,
+                    "subcategory": e.subcategory,
+                    "confidence": e.confidence_score,
+                }
+                for e in entity_result[0].entities
+            ]
+
+        # PII detection
+        pii_result = await client.recognize_pii_entities(documents=docs)
+        if pii_result and not pii_result[0].is_error:
+            results["pii_redacted_text"] = pii_result[0].redacted_text
+            results["pii_entities"] = [
+                {
+                    "category": e.category,
+                    "subcategory": e.subcategory,
+                    "confidence": e.confidence_score,
+                }
+                for e in pii_result[0].entities
+            ]
 
     return results
 
@@ -227,9 +246,12 @@ async def _enrich_text(text: str) -> dict[str, Any]:
     retry=retry_if_exception_type((ServiceRequestError, HttpResponseError)),
 )
 async def _analyze_document(blob_data: bytes, content_type: str) -> dict[str, Any]:
-    """Analyze document using the shared Azure AI Document Intelligence client.
+    """Analyze a document with Azure AI Document Intelligence.
 
-    Includes size check to prevent reading excessive blob data into memory.
+    Instantiates a fresh async DocumentAnalysisClient inside an
+    ``async with`` block so its aiohttp transport is closed when the
+    function returns; includes a size check to prevent reading excessive
+    blob data into memory.
     """
     results: dict[str, Any] = {
         "analyzed_at": datetime.now(timezone.utc).isoformat(),
@@ -245,31 +267,31 @@ async def _analyze_document(blob_data: bytes, content_type: str) -> dict[str, An
         results["error"] = f"Document too large: {len(blob_data)} bytes (max: {MAX_BLOB_SIZE})"
         return results
 
-    client = _get_document_analysis_client()
-    if not client:
-        results["error"] = "Document Intelligence client not configured"
-        return results
+    async with _document_analysis_client() as client:
+        if client is None:
+            results["error"] = "Document Intelligence client not configured"
+            return results
 
-    poller = await client.begin_analyze_document(
-        model_id="prebuilt-document",
-        document=blob_data,
-        content_type=content_type,
-    )
-    result = await poller.result()
+        poller = await client.begin_analyze_document(
+            model_id="prebuilt-document",
+            document=blob_data,
+            content_type=content_type,
+        )
+        result = await poller.result()
 
-    results["pages"] = len(result.pages) if result.pages else 0
-    results["tables"] = len(result.tables) if result.tables else 0
-    results["content_preview"] = (result.content or "")[:500]
+        results["pages"] = len(result.pages) if result.pages else 0
+        results["tables"] = len(result.tables) if result.tables else 0
+        results["content_preview"] = (result.content or "")[:500]
 
-    if result.key_value_pairs:
-        results["key_value_pairs"] = [
-            {
-                "key": kvp.key.content if kvp.key else None,
-                "value": kvp.value.content if kvp.value else None,
-                "confidence": kvp.confidence,
-            }
-            for kvp in result.key_value_pairs[:50]
-        ]
+        if result.key_value_pairs:
+            results["key_value_pairs"] = [
+                {
+                    "key": kvp.key.content if kvp.key else None,
+                    "value": kvp.value.content if kvp.value else None,
+                    "confidence": kvp.confidence,
+                }
+                for kvp in result.key_value_pairs[:50]
+            ]
 
     return results
 

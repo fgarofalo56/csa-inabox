@@ -20,14 +20,75 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import re
 import sys
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlparse
 
 from governance.common.logging import configure_structlog, get_logger
 
 configure_structlog(service="cross-workspace-query")
 logger = get_logger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Input validation
+# ---------------------------------------------------------------------------
+#
+# T-SQL ``CREATE EXTERNAL DATA SOURCE`` has no parameterized-identifier
+# syntax — the identifier, location URL, and credential name must be
+# interpolated into the statement text directly.  To prevent injection via
+# operator-supplied config (YAML files, CLI args) we validate every field
+# against a strict allowlist before building the DDL.
+
+# T-SQL regular identifier: letter/underscore/@/# start, then letters,
+# digits, ``_``, ``@``, ``#``, ``$``.  Max 128 chars.  Delimited
+# identifiers (``[name]``) accept more, but we refuse them — the opening
+# ``]`` inside a value is how identifier-injection works.
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z_@#][A-Za-z0-9_@#$]{0,127}$")
+
+# Allowed types for ExternalDataSource.type — explicit allowlist rather
+# than interpolation.  T-SQL doesn't quote these.
+_ALLOWED_DATASOURCE_TYPES = frozenset({"SYNAPSE", "HADOOP", "RDBMS", "SHARD_MAP_MANAGER", "BLOB_STORAGE"})
+
+# LOCATION must be an https Synapse endpoint URL.  Enforce https + a
+# small allowlist of host suffixes to defang an operator pointing at an
+# attacker-controlled hostname.
+_ALLOWED_LOCATION_SUFFIXES = (
+    ".sql.azuresynapse.net",
+    ".sql.azuresynapse.usgovcloudapi.net",
+    ".database.windows.net",
+    ".database.usgovcloudapi.net",
+)
+
+
+def _validate_identifier(value: str, field_name: str) -> None:
+    """Reject values that would break out of a T-SQL identifier."""
+    if not _IDENTIFIER_RE.fullmatch(value):
+        msg = (
+            f"{field_name}={value!r} is not a valid T-SQL identifier "
+            "(letters/digits/underscore/@/#/$ only, max 128 chars, must "
+            "not start with a digit)."
+        )
+        raise ValueError(msg)
+
+
+def _validate_location(value: str) -> None:
+    """Reject LOCATION URLs that are not Azure Synapse / SQL endpoints."""
+    parsed = urlparse(value)
+    if parsed.scheme != "https":
+        msg = f"endpoint must be an https:// URL, got {value!r}"
+        raise ValueError(msg)
+    if not parsed.hostname or not any(
+        parsed.hostname.endswith(suf) for suf in _ALLOWED_LOCATION_SUFFIXES
+    ):
+        msg = (
+            f"endpoint hostname {parsed.hostname!r} is not an allowed "
+            f"Azure Synapse/SQL endpoint; expected one of "
+            f"{_ALLOWED_LOCATION_SUFFIXES}"
+        )
+        raise ValueError(msg)
 
 
 # ---------------------------------------------------------------------------
@@ -47,8 +108,27 @@ class ExternalDataSource:
     location: str = ""
     type: str = "SYNAPSE"
 
+    def __post_init__(self) -> None:
+        """Validate every field that flows into a T-SQL DDL statement."""
+        _validate_identifier(self.name, "name")
+        _validate_identifier(self.database, "database")
+        if self.credential_name:
+            _validate_identifier(self.credential_name, "credential_name")
+        if self.type not in _ALLOWED_DATASOURCE_TYPES:
+            msg = (
+                f"type={self.type!r} is not in the allowed set "
+                f"{sorted(_ALLOWED_DATASOURCE_TYPES)}"
+            )
+            raise ValueError(msg)
+        _validate_location(self.endpoint)
+
     def to_sql(self) -> str:
-        """Generate the CREATE EXTERNAL DATA SOURCE T-SQL statement."""
+        """Generate the CREATE EXTERNAL DATA SOURCE T-SQL statement.
+
+        Inputs were validated in ``__post_init__`` against strict allow-
+        lists (identifier regex, LOCATION host suffix, type membership)
+        so interpolating them here is safe.  See module docstring above.
+        """
         return (
             f"CREATE EXTERNAL DATA SOURCE [{self.name}]\n"
             f"WITH (\n"

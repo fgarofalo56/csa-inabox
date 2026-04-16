@@ -197,8 +197,13 @@ ignore = [
     "ARG001",  # unused-function-argument (req in health checks)
     "N806",    # non-lowercase-variable-in-function (MAX_BLOB_SIZE constants)
 ]
-# FastAPI routers use Depends(), Query(), Header() in default args (idiomatic).
+# FastAPI routers and auth helpers use Depends(), Query(), Header() in
+# default args (idiomatic).  Covers both service-local routers under
+# ``api/`` and the shared csa_platform.common.auth module.
 "**/api/**/*.py" = [
+    "B008",    # function-call-in-default-argument (FastAPI DI)
+]
+"csa_platform/common/auth.py" = [
     "B008",    # function-call-in-default-argument (FastAPI DI)
 ]
 # Data generators and ETL scripts use datetime freely for synthetic data.
