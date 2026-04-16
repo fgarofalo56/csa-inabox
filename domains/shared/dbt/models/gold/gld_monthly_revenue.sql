@@ -68,7 +68,7 @@ monthly AS (
             SUM(f.is_returned) * 100.0 / NULLIF(COUNT(DISTINCT f.order_id), 0), 2
         ) AS return_rate_pct,
 
-        current_timestamp() AS _dbt_refreshed_at
+        now() AS _dbt_refreshed_at
 
     FROM fact f
     GROUP BY 1, 2, 3, 4, 5, 6

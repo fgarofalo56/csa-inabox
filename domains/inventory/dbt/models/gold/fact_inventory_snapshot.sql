@@ -63,7 +63,7 @@ final AS (
         DATEDIFF(DAY, i.last_restocked_at, current_date()) AS days_since_restock,
 
         current_date() AS snapshot_date,
-        current_timestamp() AS _dbt_refreshed_at
+        now() AS _dbt_refreshed_at
 
     FROM inventory i
     LEFT JOIN warehouses w ON i.warehouse_id = w.warehouse_id

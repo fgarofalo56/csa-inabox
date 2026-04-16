@@ -71,7 +71,7 @@ final AS (
         NULL AS days_of_supply,   -- Requires product_id in fact_orders
         NULL AS supply_demand_status,  -- Requires product_id in fact_orders
 
-        current_timestamp() AS _dbt_refreshed_at
+        now() AS _dbt_refreshed_at
 
     FROM inventory i
     LEFT JOIN products p ON i.product_id = p.product_id

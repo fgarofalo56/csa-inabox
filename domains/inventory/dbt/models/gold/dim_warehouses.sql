@@ -19,6 +19,6 @@ SELECT
     warehouse_name,
     region,
     capacity,
-    current_timestamp() AS _dbt_refreshed_at
+    now() AS _dbt_refreshed_at
 FROM {{ ref('slv_warehouses') }}
 WHERE is_valid = TRUE

@@ -44,7 +44,7 @@ cleaned AS (
         TRIM(UPPER(category)) AS category,
         CAST(unit_price AS DECIMAL(18, 2)) AS unit_price,
         _ingested_at,
-        current_timestamp() AS _dbt_loaded_at
+        now() AS _dbt_loaded_at
     FROM deduplicated
     WHERE _row_num = 1
 ),

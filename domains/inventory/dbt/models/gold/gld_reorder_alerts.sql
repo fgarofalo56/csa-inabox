@@ -60,7 +60,7 @@ final AS (
 
         i.stock_status,
         i.snapshot_date,
-        current_timestamp() AS _dbt_refreshed_at
+        now() AS _dbt_refreshed_at
 
     FROM inventory i
     LEFT JOIN products p ON i.product_id = p.product_id

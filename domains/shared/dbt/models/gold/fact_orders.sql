@@ -62,7 +62,7 @@ final AS (
         DAYOFWEEK(o.order_date) AS order_day_of_week,
 
         o._dbt_loaded_at,
-        current_timestamp() AS _dbt_refreshed_at
+        now() AS _dbt_refreshed_at
 
     FROM orders o
     LEFT JOIN customers c ON o.customer_id = c.customer_id

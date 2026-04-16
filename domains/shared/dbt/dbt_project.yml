@@ -68,7 +68,11 @@ models:
 
 seeds:
   csa_analytics:
-    +schema: seeds
+    # Seeds must land in the ``raw`` schema so the bronze models' source
+    # references (``{{ source('raw_data', 'sample_products') }}``) resolve
+    # correctly.  The ``raw_data`` source in sources.yml declares
+    # ``schema: raw``.
+    +schema: raw
     sample_customers:
       +column_types:
         customer_id: bigint

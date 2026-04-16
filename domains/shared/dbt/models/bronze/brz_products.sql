@@ -22,9 +22,9 @@ SELECT
     category,
     unit_price,
     _ingested_at,
-    current_timestamp() AS _dbt_loaded_at,
+    now() AS _dbt_loaded_at,
     '{{ invocation_id }}' AS _dbt_run_id,
-    input_file_name() AS _source_file
+    {{ source_file_path() }} AS _source_file
 
 FROM {{ source('raw_data', 'sample_products') }}
 

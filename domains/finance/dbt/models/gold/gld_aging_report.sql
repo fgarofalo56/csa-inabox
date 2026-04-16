@@ -66,7 +66,7 @@ final AS (
             ELSE {{ var('loss_rate_over_90', 0.25) }}
         END AS estimated_loss_rate,
 
-        current_timestamp() AS _dbt_refreshed_at
+        now() AS _dbt_refreshed_at
     FROM invoice_balances
     WHERE outstanding_balance > 0  -- Only outstanding invoices
 )

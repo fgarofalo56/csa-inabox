@@ -51,7 +51,7 @@ final AS (
 
         created_at AS customer_since,
         updated_at AS last_updated,
-        current_timestamp() AS _dbt_refreshed_at
+        now() AS _dbt_refreshed_at
     FROM customers
 )
 
