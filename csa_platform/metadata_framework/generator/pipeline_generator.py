@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from jsonschema import ValidationError, validate
+from jsonschema import ValidationError, validate  # type: ignore[import-untyped]
 
 from governance.common.logging import configure_structlog, get_logger
 
@@ -251,7 +251,7 @@ class PipelineGenerator:
 
     def _detect_database_schema(self, source_config: dict[str, Any]) -> SourceDetectionResult:
         """Detect schema by querying INFORMATION_SCHEMA from a relational database."""
-        import pyodbc
+        import pyodbc  # type: ignore[import-not-found]
 
         conn_str = source_config.get("connection_string", "")
         schema_name = source_config.get("schema", "dbo")
@@ -406,7 +406,7 @@ class PipelineGenerator:
             raise SchemaDetectionError(f"Response is not valid JSON: {exc}") from exc
 
         # Infer schema from response
-        def infer_columns(sample: dict) -> list[dict[str, Any]]:
+        def infer_columns(sample: dict[str, Any]) -> list[dict[str, Any]]:
             columns = []
             for key, value in sample.items():
                 col_type = type(value).__name__
@@ -439,7 +439,8 @@ class PipelineGenerator:
                 if key in data and isinstance(data[key], list) and len(data[key]) > 0:
                     sample = data[key][0] if isinstance(data[key][0], dict) else {"value": data[key][0]}
                     columns = infer_columns(sample)
-                    estimated_count = data.get("total", data.get("count", len(data[key])))
+                    _raw_count = data.get("total", data.get("count", len(data[key])))
+                    estimated_count = int(_raw_count) if _raw_count is not None else len(data[key])
                     break
             if columns is None:
                 columns = infer_columns(data)
@@ -452,7 +453,7 @@ class PipelineGenerator:
             tables=[{"table_name": table_name, "columns": columns}],
             estimated_row_counts={table_name: estimated_count},
             primary_keys={},
-            data_types={table_name: {c["name"]: c["type"] for c in columns}},
+            data_types={table_name: {c["name"]: c["type"] for c in (columns or [])}},
             recommended_watermark_columns={},
         )
 
@@ -592,7 +593,7 @@ class PipelineGenerator:
 
         if file_format == "parquet":
             try:
-                import pyarrow.parquet as pq
+                import pyarrow.parquet as pq  # type: ignore[import-untyped]
 
                 table = pq.read_table(io.BytesIO(raw_data))
                 schema = table.schema
@@ -742,7 +743,7 @@ class PipelineGenerator:
             type_map = {"str": "string", "int": "integer", "float": "float", "bool": "boolean",
                          "NoneType": "string", "list": "array", "dict": "object"}
 
-            columns = [
+            columns: list[dict[str, Any]] = [
                 {"name": k, "type": type_map.get(next(iter(v - {"NoneType"}), "str"), "string"),
                  "nullable": "NoneType" in v or len([s for s in samples if k not in s]) > 0}
                 for k, v in all_fields.items()
@@ -825,7 +826,7 @@ class PipelineGenerator:
 
         try:
             with open(template_path, encoding="utf-8") as f:
-                template = json.load(f)
+                template: dict[str, Any] = json.load(f)
 
             logger.info("Template loaded", template=template_name)
             return template
@@ -846,7 +847,7 @@ class PipelineGenerator:
             Customized ARM template
         """
         # Clone template to avoid modifying original
-        customized = json.loads(json.dumps(template))
+        customized: dict[str, Any] = json.loads(json.dumps(template))
 
         # Update parameters with source-specific values
         pipeline_name = self.generate_pipeline_name(source_config)
@@ -930,7 +931,7 @@ class PipelineGenerator:
         Returns:
             Parameters file content
         """
-        parameters = {
+        parameters: dict[str, Any] = {
             "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
             "contentVersion": "1.0.0.0",
             "parameters": {

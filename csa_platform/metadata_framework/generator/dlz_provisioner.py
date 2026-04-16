@@ -70,7 +70,7 @@ class DLZProvisioner:
         self.output_directory.mkdir(parents=True, exist_ok=True)
 
         # Default configuration
-        self.default_config = {
+        self.default_config: dict[str, Any] = {
             "location": "eastus2",
             "storage_account_suffix": "dlz",
             "retention_days": 2555,  # 7 years
@@ -101,7 +101,7 @@ class DLZProvisioner:
         """
         # Use target landing zone if specified, otherwise generate from source
         if "target" in source_config and "landing_zone" in source_config["target"]:
-            return source_config["target"]["landing_zone"]
+            return str(source_config["target"]["landing_zone"])
 
         # Generate from source metadata
         owner_domain = source_config["owner"]["domain"]
@@ -146,7 +146,7 @@ class DLZProvisioner:
         source_name = source_config["source_name"]
         clean_source = source_name.replace(" ", "_").replace("-", "_").lower()
 
-        structure = {"containers": {}, "folder_structure": {}, "retention_policies": {}, "access_policies": {}}
+        structure: dict[str, Any] = {"containers": {}, "folder_structure": {}, "retention_policies": {}, "access_policies": {}}
 
         for container in self.default_config["medallion_containers"]:
             structure["containers"][container] = {
@@ -338,7 +338,7 @@ class DLZProvisioner:
         Returns:
             Bicep parameters file content
         """
-        parameters = {
+        parameters: dict[str, Any] = {
             "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
             "contentVersion": "1.0.0.0",
             "parameters": {

@@ -11,6 +11,7 @@ Run this after setting up the framework to ensure everything works correctly.
 """
 
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 # Add the platform modules to Python path
@@ -25,7 +26,7 @@ except ImportError as e:
     sys.exit(1)
 
 
-def test_schema_validation():
+def test_schema_validation() -> bool:
     """Test JSON schema validation."""
     print("🔍 Testing schema validation...")
 
@@ -50,7 +51,7 @@ def test_schema_validation():
         return False
 
 
-def test_pipeline_generation():
+def test_pipeline_generation() -> bool:
     """Test pipeline generation for different source types."""
     print("\n🏗️ Testing pipeline generation...")
 
@@ -100,7 +101,7 @@ def test_pipeline_generation():
         return False
 
 
-def test_dlz_provisioning():
+def test_dlz_provisioning() -> bool:
     """Test data landing zone provisioning."""
     print("\n🏢 Testing DLZ provisioning...")
 
@@ -155,7 +156,7 @@ def test_dlz_provisioning():
         return False
 
 
-def test_template_selection():
+def test_template_selection() -> bool:
     """Test template selection logic."""
     print("\n📋 Testing template selection...")
 
@@ -184,7 +185,7 @@ def test_template_selection():
         return False
 
 
-def test_artifact_generation():
+def test_artifact_generation() -> bool:
     """Test artifact file generation."""
     print("\n📄 Testing artifact generation...")
 
@@ -229,12 +230,12 @@ def test_artifact_generation():
         return False
 
 
-def main():
+def main() -> int:
     """Run all tests."""
     print("🚀 CSA-in-a-Box Metadata Framework Test Suite")
     print("=" * 60)
 
-    tests = [
+    tests: list[Callable[[], bool]] = [
         test_schema_validation,
         test_pipeline_generation,
         test_dlz_provisioning,

@@ -17,8 +17,11 @@ framework_root = Path(__file__).parent
 sys.path.insert(0, str(framework_root))
 
 try:
-    from generator.dlz_provisioner import DLZProvisioner, DLZProvisioningError
-    from generator.pipeline_generator import PipelineGenerationError, PipelineGenerator
+    from generator.dlz_provisioner import DLZProvisioner, DLZProvisioningError  # type: ignore[import-not-found]
+    from generator.pipeline_generator import (  # type: ignore[import-not-found]
+        PipelineGenerationError,
+        PipelineGenerator,
+    )
 except ImportError as e:
     print(f"ERROR: Failed to import framework modules: {e}")
     print("Make sure you're running from the correct directory and dependencies are installed")
@@ -274,7 +277,7 @@ def cmd_example(args: argparse.Namespace) -> int:
     return 0
 
 
-def main():
+def main() -> int:
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
         description="CSA-in-a-Box Metadata Framework CLI",

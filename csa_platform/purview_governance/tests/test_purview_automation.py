@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
+
 from csa_platform.purview_governance.purview_automation import (
     PurviewAutomation,
     ScanSchedule,

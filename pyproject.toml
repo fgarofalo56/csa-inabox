@@ -363,7 +363,7 @@ no_implicit_reexport = true
 module = [
     "csa_platform.*",
 ]
-ignore_errors = true
+ignore_errors = false
 disallow_untyped_defs = false
 
 [[tool.mypy.overrides]]

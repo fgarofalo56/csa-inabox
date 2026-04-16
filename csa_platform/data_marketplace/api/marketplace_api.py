@@ -23,6 +23,9 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
 
+from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi.middleware.cors import CORSMiddleware
+
 from csa_platform.common.auth import (
     enforce_auth_safety_gate,
     require_role,
@@ -39,9 +42,6 @@ from csa_platform.data_marketplace.models.data_product import (
     QualityHistoryResponse,
     QualityMetric,
 )
-from fastapi import Depends, FastAPI, HTTPException, Query, status
-from fastapi.middleware.cors import CORSMiddleware
-
 from governance.common.logging import configure_structlog, get_logger
 
 configure_structlog(service="data-marketplace-api")
