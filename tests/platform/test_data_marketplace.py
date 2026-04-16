@@ -48,7 +48,7 @@ class TestEnums:
     """Tests for marketplace enum types."""
 
     def test_data_format_values(self) -> None:
-        from platform.data_marketplace.models.data_product import DataFormat
+        from csa_platform.data_marketplace.models.data_product import DataFormat
 
         assert DataFormat.DELTA == "delta"
         assert DataFormat.PARQUET == "parquet"
@@ -57,21 +57,21 @@ class TestEnums:
         assert DataFormat.AVRO == "avro"
 
     def test_access_level_values(self) -> None:
-        from platform.data_marketplace.models.data_product import AccessLevel
+        from csa_platform.data_marketplace.models.data_product import AccessLevel
 
         assert AccessLevel.READ == "read"
         assert AccessLevel.READ_WRITE == "read_write"
         assert AccessLevel.ADMIN == "admin"
 
     def test_access_request_status_values(self) -> None:
-        from platform.data_marketplace.models.data_product import AccessRequestStatus
+        from csa_platform.data_marketplace.models.data_product import AccessRequestStatus
 
         assert AccessRequestStatus.PENDING == "pending"
         assert AccessRequestStatus.APPROVED == "approved"
         assert AccessRequestStatus.DENIED == "denied"
 
     def test_sensitivity_level_values(self) -> None:
-        from platform.data_marketplace.models.data_product import SensitivityLevel
+        from csa_platform.data_marketplace.models.data_product import SensitivityLevel
 
         assert SensitivityLevel.PUBLIC == "public"
         assert SensitivityLevel.INTERNAL == "internal"
@@ -89,7 +89,7 @@ class TestQualityScore:
 
     def test_compute_weighted_score(self) -> None:
         """compute returns weighted overall score."""
-        from platform.data_marketplace.models.data_product import QualityScore
+        from csa_platform.data_marketplace.models.data_product import QualityScore
 
         score = QualityScore.compute(
             completeness=1.0,
@@ -102,14 +102,14 @@ class TestQualityScore:
 
     def test_compute_zeros(self) -> None:
         """compute with all zeros returns 0.0."""
-        from platform.data_marketplace.models.data_product import QualityScore
+        from csa_platform.data_marketplace.models.data_product import QualityScore
 
         score = QualityScore.compute()
         assert score.overall_score == 0.0
 
     def test_compute_partial_scores(self) -> None:
         """compute with partial scores returns correct weighted sum."""
-        from platform.data_marketplace.models.data_product import QualityScore
+        from csa_platform.data_marketplace.models.data_product import QualityScore
 
         score = QualityScore.compute(completeness=0.8, freshness=0.6)
         # 0.8 * 0.25 + 0.6 * 0.25 + 0 + 0 + 0 = 0.35
@@ -125,20 +125,20 @@ class TestSchemaModels:
     """Tests for schema-related models."""
 
     def test_column_schema(self) -> None:
-        from platform.data_marketplace.models.data_product import ColumnSchema
+        from csa_platform.data_marketplace.models.data_product import ColumnSchema
 
         col = ColumnSchema(name="id", type="string", description="Primary key", nullable=False)
         assert col.name == "id"
         assert col.nullable is False
 
     def test_column_schema_pii(self) -> None:
-        from platform.data_marketplace.models.data_product import ColumnSchema
+        from csa_platform.data_marketplace.models.data_product import ColumnSchema
 
         col = ColumnSchema(name="ssn", type="string", pii_classification="direct_identifier")
         assert col.pii_classification == "direct_identifier"
 
     def test_data_product_schema(self) -> None:
-        from platform.data_marketplace.models.data_product import ColumnSchema, DataFormat, DataProductSchema
+        from csa_platform.data_marketplace.models.data_product import ColumnSchema, DataFormat, DataProductSchema
 
         schema = DataProductSchema(
             format=DataFormat.DELTA,
@@ -175,7 +175,7 @@ class TestDataProductModels:
 
     def test_data_product_base_valid(self) -> None:
         """DataProductBase accepts valid inputs."""
-        from platform.data_marketplace.models.data_product import DataProductBase
+        from csa_platform.data_marketplace.models.data_product import DataProductBase
 
         product = DataProductBase(**self._make_product_data())
         assert product.name == "orders-raw"
@@ -183,21 +183,21 @@ class TestDataProductModels:
 
     def test_data_product_name_validation_valid(self) -> None:
         """DataProductBase accepts lowercase-hyphenated names."""
-        from platform.data_marketplace.models.data_product import DataProductBase
+        from csa_platform.data_marketplace.models.data_product import DataProductBase
 
         product = DataProductBase(**self._make_product_data(name="sales-metrics"))
         assert product.name == "sales-metrics"
 
     def test_data_product_name_validation_invalid(self) -> None:
         """DataProductBase rejects names with uppercase or spaces."""
-        from platform.data_marketplace.models.data_product import DataProductBase
+        from csa_platform.data_marketplace.models.data_product import DataProductBase
 
         with pytest.raises(ValueError, match="name"):
             DataProductBase(**self._make_product_data(name="Invalid Name"))
 
     def test_data_product_full(self) -> None:
         """DataProduct includes server-assigned fields."""
-        from platform.data_marketplace.models.data_product import DataProduct
+        from csa_platform.data_marketplace.models.data_product import DataProduct
 
         product = DataProduct(
             **self._make_product_data(),
@@ -209,7 +209,7 @@ class TestDataProductModels:
 
     def test_data_product_summary_from_product(self) -> None:
         """DataProductSummary.from_product creates a lightweight summary."""
-        from platform.data_marketplace.models.data_product import DataProduct, DataProductSummary
+        from csa_platform.data_marketplace.models.data_product import DataProduct, DataProductSummary
 
         product = DataProduct(**self._make_product_data(), id="prod-1")
         summary = DataProductSummary.from_product(product)
@@ -227,7 +227,7 @@ class TestSupportingModels:
     """Tests for SLA, lineage, and access request models."""
 
     def test_sla_defaults(self) -> None:
-        from platform.data_marketplace.models.data_product import SLADefinition
+        from csa_platform.data_marketplace.models.data_product import SLADefinition
 
         sla = SLADefinition()
         assert sla.freshness_minutes == 120
@@ -235,13 +235,13 @@ class TestSupportingModels:
         assert sla.valid_row_ratio == 0.95
 
     def test_lineage_info(self) -> None:
-        from platform.data_marketplace.models.data_product import LineageInfo
+        from csa_platform.data_marketplace.models.data_product import LineageInfo
 
         lineage = LineageInfo(upstream=["source-a"], downstream=["target-b"], transformations=["dbt: orders_clean"])
         assert len(lineage.upstream) == 1
 
     def test_access_request_create(self) -> None:
-        from platform.data_marketplace.models.data_product import AccessRequestCreate
+        from csa_platform.data_marketplace.models.data_product import AccessRequestCreate
 
         req = AccessRequestCreate(
             productId="prod-1",
@@ -251,7 +251,7 @@ class TestSupportingModels:
         assert req.product_id == "prod-1"
 
     def test_access_request_approval(self) -> None:
-        from platform.data_marketplace.models.data_product import AccessRequestApproval
+        from csa_platform.data_marketplace.models.data_product import AccessRequestApproval
 
         approval = AccessRequestApproval(
             reviewer="admin@test.com",
@@ -261,14 +261,14 @@ class TestSupportingModels:
         assert approval.approved is True
 
     def test_quality_metric(self) -> None:
-        from platform.data_marketplace.models.data_product import QualityMetric
+        from csa_platform.data_marketplace.models.data_product import QualityMetric
 
         metric = QualityMetric(productId="prod-1", metric_name="completeness", value=0.95)
         assert metric.product_id == "prod-1"
         assert metric.value == 0.95
 
     def test_paginated_response(self) -> None:
-        from platform.data_marketplace.models.data_product import PaginatedResponse
+        from csa_platform.data_marketplace.models.data_product import PaginatedResponse
 
         resp = PaginatedResponse(items=["a", "b"], total=10, page=1, per_page=2, has_next=True)
         assert resp.has_next is True
@@ -284,12 +284,12 @@ class TestInMemoryStore:
     """Tests for the InMemoryStore data access layer."""
 
     def _make_store(self) -> Any:
-        from platform.data_marketplace.api.marketplace_api import InMemoryStore
+        from csa_platform.data_marketplace.api.marketplace_api import InMemoryStore
 
         return InMemoryStore()
 
     def _make_product(self, **overrides: Any) -> Any:
-        from platform.data_marketplace.models.data_product import DataProduct
+        from csa_platform.data_marketplace.models.data_product import DataProduct
 
         data: dict[str, Any] = {
             "name": "test-product",
@@ -379,7 +379,7 @@ class TestInMemoryStore:
     @pytest.mark.asyncio
     async def test_access_request_crud(self) -> None:
         """Store creates, retrieves, and updates access requests."""
-        from platform.data_marketplace.models.data_product import AccessRequest, AccessRequestStatus
+        from csa_platform.data_marketplace.models.data_product import AccessRequest, AccessRequestStatus
 
         store = self._make_store()
         req = AccessRequest(
@@ -405,7 +405,7 @@ class TestInMemoryStore:
     @pytest.mark.asyncio
     async def test_quality_metrics(self) -> None:
         """Store adds and retrieves quality metrics."""
-        from platform.data_marketplace.models.data_product import QualityMetric
+        from csa_platform.data_marketplace.models.data_product import QualityMetric
 
         store = self._make_store()
         metric = QualityMetric(productId="prod-1", metric_name="completeness", value=0.95)
@@ -418,7 +418,7 @@ class TestInMemoryStore:
     @pytest.mark.asyncio
     async def test_quality_history_limit(self) -> None:
         """get_quality_history respects the limit parameter."""
-        from platform.data_marketplace.models.data_product import QualityMetric
+        from csa_platform.data_marketplace.models.data_product import QualityMetric
 
         store = self._make_store()
         for i in range(10):

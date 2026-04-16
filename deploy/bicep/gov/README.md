@@ -120,7 +120,7 @@ bash scripts/deploy/deploy-platform.sh \
 ## 📦 Open-Source Alternatives
 
 For services with limited Gov availability, see
-[platform/oss-alternatives/](../../platform/oss-alternatives/) for open-source
+[platform/oss_alternatives/](../../platform/oss_alternatives/) for open-source
 replacements deployable on AKS in Azure Government.
 
 ---

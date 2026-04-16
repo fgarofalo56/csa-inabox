@@ -1,0 +1,43 @@
+name: Bug Report
+description: Report a bug
+labels: ["bug", "triage"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What happened?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: How can we reproduce this?
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Portal (Frontend)
+        - Portal (Backend API)
+        - Infrastructure (Bicep/IaC)
+        - Governance
+        - Platform Services
+        - CI/CD
+        - Documentation
+    validations:
+      required: true
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - Critical (system down)
+        - High (major feature broken)
+        - Medium (workaround available)
+        - Low (cosmetic/minor)
+    validations:
+      required: true

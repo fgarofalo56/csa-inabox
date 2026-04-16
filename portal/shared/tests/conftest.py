@@ -48,16 +48,39 @@ def mock_require_role(*_allowed_roles: str):
 
 
 @pytest.fixture(scope="session")
-def app():
-    """Create the FastAPI app with mocked auth dependencies."""
+def _test_db_dir(tmp_path_factory):
+    """Provide a session-scoped temporary directory for the test database."""
+    return tmp_path_factory.mktemp("portal_test_data")
+
+
+@pytest.fixture(scope="session")
+def app(_test_db_dir):
+    """Create the FastAPI app with mocked auth dependencies.
+
+    All SqliteStore instances in the routers are pointed at a temporary
+    database so tests never touch production data.
+    """
+    from portal.shared.api.routers import access, marketplace, pipelines, sources
+
+    # Re-point every store to the temp directory (shared DB file inside it)
+    for store in (
+        sources._sources_store,
+        pipelines._pipelines_store,
+        pipelines._runs_store,
+        access._access_store,
+        marketplace._products_store,
+        marketplace._quality_store,
+    ):
+        store.data_dir = _test_db_dir
+        store.db_path = _test_db_dir / "test_portal.db"
+        store._legacy_json_path = _test_db_dir / "nonexistent.json"
+        store._ensure_table()
+
     from portal.shared.api.main import app as fastapi_app
 
     # Override auth dependencies
     fastapi_app.dependency_overrides[get_current_user] = mock_get_current_user
 
-    # We need to override require_role, but it's a factory function.
-    # The actual dependency returned by require_role is different each time,
-    # so we monkey-patch the module-level function instead.
     import portal.shared.api.services.auth as auth_module
 
     original_require_role = auth_module.require_role
@@ -79,23 +102,22 @@ def client(app) -> Generator[TestClient, None, None]:
 
 @pytest.fixture(autouse=True)
 def _reset_stores():
-    """Reset in-memory stores between tests to ensure isolation."""
+    """Clear all SQLite-backed stores between tests to ensure isolation."""
     from portal.shared.api.routers import access, marketplace, pipelines, sources
 
-    # Clear in-memory stores
-    sources._sources.clear()
-    pipelines._pipelines.clear()
-    pipelines._runs.clear()
-    access._requests.clear()
-    marketplace._products.clear()
-    marketplace._quality_history.clear()
+    stores = [
+        sources._sources_store,
+        pipelines._pipelines_store,
+        pipelines._runs_store,
+        access._access_store,
+        marketplace._products_store,
+        marketplace._quality_store,
+    ]
+
+    for store in stores:
+        store.clear()
 
     yield
 
-    # Clean up after test
-    sources._sources.clear()
-    pipelines._pipelines.clear()
-    pipelines._runs.clear()
-    access._requests.clear()
-    marketplace._products.clear()
-    marketplace._quality_history.clear()
+    for store in stores:
+        store.clear()

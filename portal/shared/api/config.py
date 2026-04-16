@@ -38,16 +38,29 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
 
     # ── CORS ─────────────────────────────────────────────────────────────
+    # TODO: Replace wildcards with specific SWA/App Service hostnames for production
     CORS_ORIGINS: list[str] = [
         "http://localhost:3000",
+        "http://localhost:4280",  # Static Web Apps emulator
         "http://localhost:5173",
         "http://localhost:8080",
+        "https://*.azurestaticapps.net",
+        "https://*.azurewebsites.net",
     ]
 
     # ── Application ──────────────────────────────────────────────────────
     APP_TITLE: str = "CSA-in-a-Box API"
     APP_VERSION: str = "0.1.0"
     DEBUG: bool = False
+
+    # ── Auth / Environment Safety ────────────────────────────────────────
+    # ENVIRONMENT controls deploy-target awareness. AUTH_DISABLED=true is
+    # only honoured when ENVIRONMENT=local or DEMO_MODE=true — any other
+    # combination causes a hard startup failure to prevent accidental
+    # production exposure without authentication.
+    ENVIRONMENT: str = "production"
+    DEMO_MODE: bool = False
+    AUTH_DISABLED: bool = False
 
     model_config = {
         "env_file": ".env",

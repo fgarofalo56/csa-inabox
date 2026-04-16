@@ -1,4 +1,4 @@
-"""Tests for the platform/data-activator module.
+"""Tests for the csa_platform/data_activator module.
 
 Covers:
 - Alert rule schema (Pydantic models, YAML loading/saving)
@@ -47,7 +47,7 @@ class TestAlertRuleSchema:
 
     def test_condition_operator_values(self) -> None:
         """ConditionOperator enum has all expected operators."""
-        from platform.data_activator.rules.schema import ConditionOperator  # type: ignore[import-untyped]
+        from csa_platform.data_activator.rules.schema import ConditionOperator  # type: ignore[import-untyped]
 
         assert ConditionOperator.GT == "gt"
         assert ConditionOperator.LT == "lt"
@@ -57,7 +57,7 @@ class TestAlertRuleSchema:
 
     def test_action_type_values(self) -> None:
         """ActionType enum has all expected types."""
-        from platform.data_activator.rules.schema import ActionType  # type: ignore[import-untyped]
+        from csa_platform.data_activator.rules.schema import ActionType  # type: ignore[import-untyped]
 
         assert ActionType.TEAMS == "teams"
         assert ActionType.EMAIL == "email"
@@ -66,7 +66,7 @@ class TestAlertRuleSchema:
 
     def test_aggregation_type_values(self) -> None:
         """AggregationType enum has all expected types."""
-        from platform.data_activator.rules.schema import AggregationType  # type: ignore[import-untyped]
+        from csa_platform.data_activator.rules.schema import AggregationType  # type: ignore[import-untyped]
 
         assert AggregationType.COUNT == "count"
         assert AggregationType.AVG == "avg"
@@ -74,7 +74,7 @@ class TestAlertRuleSchema:
 
     def test_condition_model(self) -> None:
         """Condition model validates basic fields."""
-        from platform.data_activator.rules.schema import Condition, ConditionOperator  # type: ignore[import-untyped]
+        from csa_platform.data_activator.rules.schema import Condition, ConditionOperator  # type: ignore[import-untyped]
 
         cond = Condition(field="data.temperature", operator=ConditionOperator.GT, threshold=100.0)
         assert cond.field == "data.temperature"
@@ -84,14 +84,14 @@ class TestAlertRuleSchema:
 
     def test_condition_between_threshold(self) -> None:
         """Condition with 'between' operator accepts a two-element list."""
-        from platform.data_activator.rules.schema import Condition, ConditionOperator  # type: ignore[import-untyped]
+        from csa_platform.data_activator.rules.schema import Condition, ConditionOperator  # type: ignore[import-untyped]
 
         cond = Condition(field="data.value", operator=ConditionOperator.BETWEEN, threshold=[10.0, 50.0])
         assert cond.threshold == [10.0, 50.0]
 
     def test_alert_rule_model(self) -> None:
         """AlertRule model validates a complete rule definition."""
-        from platform.data_activator.rules.schema import (  # type: ignore[import-untyped]
+        from csa_platform.data_activator.rules.schema import (  # type: ignore[import-untyped]
             Action,
             ActionConfig,
             ActionType,
@@ -112,7 +112,7 @@ class TestAlertRuleSchema:
 
     def test_alert_rule_name_validation(self) -> None:
         """AlertRule requires non-empty name."""
-        from platform.data_activator.rules.schema import (  # type: ignore[import-untyped]
+        from csa_platform.data_activator.rules.schema import (  # type: ignore[import-untyped]
             AlertRule,
             Condition,
             ConditionOperator,
@@ -126,7 +126,7 @@ class TestAlertRuleSchema:
 
     def test_load_rules_from_yaml(self, tmp_path: Path) -> None:
         """load_rules_from_yaml parses valid YAML into AlertRule objects."""
-        from platform.data_activator.rules.schema import load_rules_from_yaml  # type: ignore[import-untyped]
+        from csa_platform.data_activator.rules.schema import load_rules_from_yaml  # type: ignore[import-untyped]
 
         yaml_content = """
 rules:
@@ -151,14 +151,14 @@ rules:
 
     def test_load_rules_file_not_found(self) -> None:
         """load_rules_from_yaml raises FileNotFoundError for missing files."""
-        from platform.data_activator.rules.schema import load_rules_from_yaml  # type: ignore[import-untyped]
+        from csa_platform.data_activator.rules.schema import load_rules_from_yaml  # type: ignore[import-untyped]
 
         with pytest.raises(FileNotFoundError):
             load_rules_from_yaml("/nonexistent/rules.yaml")
 
     def test_rules_to_yaml(self, tmp_path: Path) -> None:
         """rules_to_yaml serializes rules and can be loaded back."""
-        from platform.data_activator.rules.schema import (  # type: ignore[import-untyped]
+        from csa_platform.data_activator.rules.schema import (  # type: ignore[import-untyped]
             AlertRule,
             Condition,
             ConditionOperator,
@@ -188,12 +188,12 @@ class TestRuleEngine:
     """Tests for the RuleEngine class."""
 
     def _make_engine(self, rules: list[Any] | None = None) -> Any:
-        from platform.data_activator.rules.engine import RuleEngine  # type: ignore[import-untyped]
+        from csa_platform.data_activator.rules.engine import RuleEngine  # type: ignore[import-untyped]
 
         return RuleEngine(rules=rules)
 
     def _make_rule(self, name: str = "test", field: str = "value", operator: str = "gt", threshold: float = 50.0, **kwargs: Any) -> Any:
-        from platform.data_activator.rules.schema import (  # type: ignore[import-untyped]
+        from csa_platform.data_activator.rules.schema import (  # type: ignore[import-untyped]
             AlertRule,
             Condition,
             ConditionOperator,
@@ -280,7 +280,7 @@ class TestRuleEngine:
 
     def test_disabled_rule_skipped(self) -> None:
         """Disabled rules are not evaluated."""
-        from platform.data_activator.rules.schema import (  # type: ignore[import-untyped]
+        from csa_platform.data_activator.rules.schema import (  # type: ignore[import-untyped]
             AlertRule,
             Condition,
             ConditionOperator,
@@ -336,7 +336,7 @@ class TestTeamsNotifier:
     """Tests for TeamsNotifier."""
 
     def _make_payload(self) -> Any:
-        from platform.data_activator.actions.notifier import AlertPayload  # type: ignore[import-untyped]
+        from csa_platform.data_activator.actions.notifier import AlertPayload  # type: ignore[import-untyped]
 
         return AlertPayload(
             rule_name="test-alert",
@@ -349,7 +349,7 @@ class TestTeamsNotifier:
 
     def test_send_success(self) -> None:
         """TeamsNotifier.send succeeds on 200 response."""
-        from platform.data_activator.actions.notifier import TeamsNotifier  # type: ignore[import-untyped]
+        from csa_platform.data_activator.actions.notifier import TeamsNotifier  # type: ignore[import-untyped]
 
         notifier = TeamsNotifier(webhook_url="https://webhook.example.com")
         payload = self._make_payload()
@@ -358,7 +358,7 @@ class TestTeamsNotifier:
         mock_response.status_code = 200
         mock_response.raise_for_status = MagicMock()
 
-        with patch("platform.data_activator.actions.notifier.requests") as mock_requests:
+        with patch("csa_platform.data_activator.actions.notifier.requests") as mock_requests:
             mock_requests.post.return_value = mock_response
             result = notifier.send(payload)
 
@@ -366,14 +366,14 @@ class TestTeamsNotifier:
 
     def test_send_no_url(self) -> None:
         """TeamsNotifier.send returns False without webhook URL."""
-        from platform.data_activator.actions.notifier import TeamsNotifier  # type: ignore[import-untyped]
+        from csa_platform.data_activator.actions.notifier import TeamsNotifier  # type: ignore[import-untyped]
 
         notifier = TeamsNotifier(webhook_url="")
         assert notifier.send(self._make_payload()) is False
 
     def test_validate_config(self) -> None:
         """validate_config returns True when URL is set."""
-        from platform.data_activator.actions.notifier import TeamsNotifier  # type: ignore[import-untyped]
+        from csa_platform.data_activator.actions.notifier import TeamsNotifier  # type: ignore[import-untyped]
 
         assert TeamsNotifier(webhook_url="https://hook").validate_config() is True
         assert TeamsNotifier(webhook_url="").validate_config() is False
@@ -384,7 +384,7 @@ class TestWebhookNotifier:
 
     def test_send_success(self) -> None:
         """WebhookNotifier.send POSTs payload to URL."""
-        from platform.data_activator.actions.notifier import (  # type: ignore[import-untyped]
+        from csa_platform.data_activator.actions.notifier import (  # type: ignore[import-untyped]
             AlertPayload,
             WebhookNotifier,
         )
@@ -395,7 +395,7 @@ class TestWebhookNotifier:
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
 
-        with patch("platform.data_activator.actions.notifier.requests") as mock_requests:
+        with patch("csa_platform.data_activator.actions.notifier.requests") as mock_requests:
             mock_requests.post.return_value = mock_response
             result = notifier.send(payload)
 
@@ -403,7 +403,7 @@ class TestWebhookNotifier:
 
     def test_send_no_url(self) -> None:
         """WebhookNotifier.send returns False without URL."""
-        from platform.data_activator.actions.notifier import (  # type: ignore[import-untyped]
+        from csa_platform.data_activator.actions.notifier import (  # type: ignore[import-untyped]
             AlertPayload,
             WebhookNotifier,
         )
@@ -417,28 +417,28 @@ class TestEmailNotifier:
 
     def test_validate_config_no_recipients(self) -> None:
         """validate_config returns False without recipients."""
-        from platform.data_activator.actions.notifier import EmailNotifier  # type: ignore[import-untyped]
+        from csa_platform.data_activator.actions.notifier import EmailNotifier  # type: ignore[import-untyped]
 
         notifier = EmailNotifier(recipients=[])
         assert notifier.validate_config() is False
 
     def test_validate_config_with_sendgrid(self) -> None:
         """validate_config returns True with SendGrid key and recipients."""
-        from platform.data_activator.actions.notifier import EmailNotifier  # type: ignore[import-untyped]
+        from csa_platform.data_activator.actions.notifier import EmailNotifier  # type: ignore[import-untyped]
 
         notifier = EmailNotifier(recipients=["user@test.com"], sendgrid_api_key="key123")
         assert notifier.validate_config() is True
 
     def test_send_no_recipients(self) -> None:
         """send returns False without recipients."""
-        from platform.data_activator.actions.notifier import AlertPayload, EmailNotifier  # type: ignore[import-untyped]
+        from csa_platform.data_activator.actions.notifier import AlertPayload, EmailNotifier  # type: ignore[import-untyped]
 
         notifier = EmailNotifier(recipients=[])
         assert notifier.send(AlertPayload(rule_name="test")) is False
 
     def test_send_sendgrid(self) -> None:
         """send via SendGrid posts to SendGrid API."""
-        from platform.data_activator.actions.notifier import AlertPayload, EmailNotifier  # type: ignore[import-untyped]
+        from csa_platform.data_activator.actions.notifier import AlertPayload, EmailNotifier  # type: ignore[import-untyped]
 
         notifier = EmailNotifier(recipients=["user@test.com"], sendgrid_api_key="sg-key")
         payload = AlertPayload(rule_name="test", severity="critical")
@@ -446,7 +446,7 @@ class TestEmailNotifier:
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
 
-        with patch("platform.data_activator.actions.notifier.requests") as mock_requests:
+        with patch("csa_platform.data_activator.actions.notifier.requests") as mock_requests:
             mock_requests.post.return_value = mock_response
             result = notifier.send(payload)
 
@@ -458,14 +458,14 @@ class TestIncidentCreator:
 
     def test_validate_config(self) -> None:
         """validate_config checks for API key."""
-        from platform.data_activator.actions.notifier import IncidentCreator  # type: ignore[import-untyped]
+        from csa_platform.data_activator.actions.notifier import IncidentCreator  # type: ignore[import-untyped]
 
         assert IncidentCreator(api_key="key123").validate_config() is True
         assert IncidentCreator(api_key="").validate_config() is False
 
     def test_send_pagerduty(self) -> None:
         """send creates PagerDuty incident."""
-        from platform.data_activator.actions.notifier import (  # type: ignore[import-untyped]
+        from csa_platform.data_activator.actions.notifier import (  # type: ignore[import-untyped]
             AlertPayload,
             IncidentCreator,
         )
@@ -476,7 +476,7 @@ class TestIncidentCreator:
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
 
-        with patch("platform.data_activator.actions.notifier.requests") as mock_requests:
+        with patch("csa_platform.data_activator.actions.notifier.requests") as mock_requests:
             mock_requests.post.return_value = mock_response
             result = creator.send(payload)
 
@@ -484,7 +484,7 @@ class TestIncidentCreator:
 
     def test_unsupported_service(self) -> None:
         """send returns False for unsupported service."""
-        from platform.data_activator.actions.notifier import (  # type: ignore[import-untyped]
+        from csa_platform.data_activator.actions.notifier import (  # type: ignore[import-untyped]
             AlertPayload,
             IncidentCreator,
         )
@@ -498,11 +498,11 @@ class TestNotifierFactory:
 
     def test_create_teams(self) -> None:
         """Factory creates TeamsNotifier for TEAMS action type."""
-        from platform.data_activator.actions.notifier import (  # type: ignore[import-untyped]
+        from csa_platform.data_activator.actions.notifier import (  # type: ignore[import-untyped]
             NotifierFactory,
             TeamsNotifier,
         )
-        from platform.data_activator.rules.schema import (  # type: ignore[import-untyped]
+        from csa_platform.data_activator.rules.schema import (  # type: ignore[import-untyped]
             Action,
             ActionConfig,
             ActionType,
@@ -514,11 +514,11 @@ class TestNotifierFactory:
 
     def test_create_webhook(self) -> None:
         """Factory creates WebhookNotifier for WEBHOOK action type."""
-        from platform.data_activator.actions.notifier import (  # type: ignore[import-untyped]
+        from csa_platform.data_activator.actions.notifier import (  # type: ignore[import-untyped]
             NotifierFactory,
             WebhookNotifier,
         )
-        from platform.data_activator.rules.schema import (  # type: ignore[import-untyped]
+        from csa_platform.data_activator.rules.schema import (  # type: ignore[import-untyped]
             Action,
             ActionConfig,
             ActionType,
@@ -530,8 +530,8 @@ class TestNotifierFactory:
 
     def test_create_all(self) -> None:
         """create_all returns notifiers for all actions."""
-        from platform.data_activator.actions.notifier import NotifierFactory  # type: ignore[import-untyped]
-        from platform.data_activator.rules.schema import (  # type: ignore[import-untyped]
+        from csa_platform.data_activator.actions.notifier import NotifierFactory  # type: ignore[import-untyped]
+        from csa_platform.data_activator.rules.schema import (  # type: ignore[import-untyped]
             Action,
             ActionConfig,
             ActionType,
@@ -554,7 +554,7 @@ class TestTeamsCardBuilder:
     """Tests for teams_card module."""
 
     def _make_payload(self, **kwargs: Any) -> Any:
-        from platform.data_activator.actions.notifier import AlertPayload  # type: ignore[import-untyped]
+        from csa_platform.data_activator.actions.notifier import AlertPayload  # type: ignore[import-untyped]
 
         defaults: dict[str, Any] = {
             "rule_name": "test-rule",
@@ -571,7 +571,7 @@ class TestTeamsCardBuilder:
 
     def test_build_alert_card_structure(self) -> None:
         """build_alert_card returns valid Adaptive Card structure."""
-        from platform.data_activator.actions.teams_card import build_alert_card  # type: ignore[import-untyped]
+        from csa_platform.data_activator.actions.teams_card import build_alert_card  # type: ignore[import-untyped]
 
         card = build_alert_card(self._make_payload())
         assert card["type"] == "message"
@@ -583,7 +583,7 @@ class TestTeamsCardBuilder:
 
     def test_build_simple_card(self) -> None:
         """build_simple_card returns MessageCard format."""
-        from platform.data_activator.actions.teams_card import build_simple_card  # type: ignore[import-untyped]
+        from csa_platform.data_activator.actions.teams_card import build_simple_card  # type: ignore[import-untyped]
 
         card = build_simple_card("Alert Title", "Alert message", severity="critical", facts={"key": "value"})
         assert card["@type"] == "MessageCard"
@@ -604,7 +604,7 @@ class TestTeamsCardBuilder:
     )
     def test_recommended_actions_by_rule_type(self, rule_name: str, expected_keyword: str) -> None:
         """_get_recommended_actions returns domain-specific recommendations."""
-        from platform.data_activator.actions.teams_card import _get_recommended_actions  # type: ignore[import-untyped]
+        from csa_platform.data_activator.actions.teams_card import _get_recommended_actions  # type: ignore[import-untyped]
 
         payload = self._make_payload(rule_name=rule_name)
         actions = _get_recommended_actions(payload)

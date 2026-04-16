@@ -103,7 +103,7 @@ graph TB
     subgraph Consumers["Consumer Layer"]
         direction LR
         PowerBI["Power BI<br/>Dashboards &amp; Reports"]
-        Portal["Data Onboarding Portal<br/>4 Implementations"]
+        Portal["Data Onboarding Portal<br/>3 Implementations"]
         APIs["REST APIs<br/>Data Products"]
         Teams["Teams Alerts<br/>Webhooks"]
     end
@@ -218,7 +218,7 @@ metadata layer across all storage accounts.
 #### ⚙️ Ingestion Layer
 
 - **Azure Data Factory** — Batch orchestration with parameterized, metadata-driven
-  pipelines. The metadata framework (`platform/metadata-framework/`) auto-generates
+  pipelines. The metadata framework (`csa_platform/metadata_framework/`) auto-generates
   ADF pipelines from source registration YAML.
 - **Event Hubs** — Kafka-compatible streaming ingestion for IoT, telemetry, and
   real-time events. Supports Capture to ADLS for cold-path archival.
@@ -260,16 +260,16 @@ capabilities. Each component is independently deployable.
 
 | Service | Fabric Equivalent | Location |
 |---------|-------------------|----------|
-| OneLake Pattern | OneLake | `platform/onelake-pattern/` |
-| Data Activator | Data Activator | `platform/data-activator/` |
-| Direct Lake | Direct Lake mode | `platform/direct-lake/` |
-| Data Marketplace | Data Sharing | `platform/data_marketplace/` |
-| Metadata Framework | Metadata-driven ADF | `platform/metadata-framework/` |
-| AI Integration | Copilot / AI | `platform/ai_integration/` |
-| Shared Services | Shared Functions | `platform/shared-services/` |
-| OSS Alternatives | N/A (Gov gaps) | `platform/oss-alternatives/` |
-| Multi-Synapse | Multi-workspace | `platform/multi-synapse/` |
-| Governance | Purview Integration | `platform/governance/` |
+| OneLake Pattern | OneLake | `csa_platform/onelake_pattern/` |
+| Data Activator | Data Activator | `csa_platform/data_activator/` |
+| Direct Lake | Direct Lake mode | `csa_platform/direct_lake/` |
+| Data Marketplace | Data Sharing | `csa_platform/data_marketplace/` |
+| Metadata Framework | Metadata-driven ADF | `csa_platform/metadata_framework/` |
+| AI Integration | Copilot / AI | `csa_platform/ai_integration/` |
+| Shared Services | Shared Functions | `csa_platform/shared_services/` |
+| OSS Alternatives | N/A (Gov gaps) | `csa_platform/oss_alternatives/` |
+| Multi-Synapse | Multi-workspace | `csa_platform/multi_synapse/` |
+| Governance | Purview Integration | `csa_platform/governance/` |
 
 See [PLATFORM_SERVICES.md](PLATFORM_SERVICES.md) for detailed deployment guides.
 
@@ -279,8 +279,8 @@ The consumer layer exposes processed data to end users and downstream systems.
 
 - **Power BI** — Direct Lake mode connects Power BI directly to Delta Lake files
   in ADLS Gen2 via Databricks SQL endpoints, eliminating data import overhead.
-- **Data Onboarding Portal** — Four implementations (PowerApps, React/Next.js,
-  Static Web Apps, Kubernetes) sharing a common FastAPI backend.
+- **Data Onboarding Portal** — Three implementations (PowerApps, React/Next.js,
+  Kubernetes) sharing a common FastAPI backend.
 - **REST APIs** — Data product APIs exposed through API Management with OAuth2
   authentication and rate limiting.
 - **Teams Alerts** — Webhook-based notifications for pipeline failures, data
@@ -372,7 +372,7 @@ and domain-specific documentation.
 csa-inabox/
 ├── deploy/                     # Infrastructure as Code
 │   ├── bicep/
-│   │   ├── LandingZone - ALZ/  # Azure Landing Zone (Management + Connectivity)
+│   │   ├── landing-zone-alz/  # Azure Landing Zone (Management + Connectivity)
 │   │   ├── DMLZ/               # Data Management Landing Zone
 │   │   ├── DLZ/                # Data Landing Zone
 │   │   ├── gov/                # Azure Government templates
@@ -394,20 +394,19 @@ csa-inabox/
 │   ├── iot-streaming/          # Generic IoT & streaming patterns
 │   └── ...                     # 5 more verticals
 │
-├── platform/                   # Fabric-equivalent platform services
-│   ├── onelake-pattern/        # Unified data lake
-│   ├── data-activator/         # Event-driven alerting
-│   ├── direct-lake/            # Power BI Direct Lake
+├── csa_platform/                # Fabric-equivalent platform services
+│   ├── onelake_pattern/        # Unified data lake
+│   ├── data_activator/         # Event-driven alerting
+│   ├── direct_lake/            # Power BI Direct Lake
 │   ├── data_marketplace/       # Data product marketplace
-│   ├── metadata-framework/     # Auto-pipeline generation
+│   ├── metadata_framework/     # Auto-pipeline generation
 │   ├── ai_integration/         # RAG, enrichment, model serving
-│   ├── shared-services/        # Reusable Azure Functions
-│   └── oss-alternatives/       # OSS for Gov gaps
+│   ├── shared_services/        # Reusable Azure Functions
+│   └── oss_alternatives/       # OSS for Gov gaps
 │
-├── portal/                     # Data onboarding portal (4 frontends)
+├── portal/                     # Data onboarding portal (3 frontends)
 │   ├── shared/                 # Shared FastAPI backend
 │   ├── react-webapp/           # React/Next.js frontend
-│   ├── static-webapp/          # Azure Static Web Apps frontend
 │   ├── powerapps/              # Power Apps frontend
 │   └── kubernetes/             # AKS-deployed frontend
 │

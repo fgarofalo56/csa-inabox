@@ -399,27 +399,19 @@ cd portal/shared
 pip install -r requirements.txt
 
 # Start the FastAPI backend
-uvicorn api.app:app --reload --port 8000
+uvicorn api.main:app --reload --port 8000
 
 # Verify: http://localhost:8000/docs (Swagger UI)
 ```
 
 ### Step B: Start a Frontend
 
-**React/Next.js (recommended):**
+**React/Next.js:**
 ```bash
 cd portal/react-webapp
 npm install
 npm run dev
 # Open http://localhost:3000
-```
-
-**Static Web App (lightweight):**
-```bash
-cd portal/static-webapp
-npm install
-npm run dev
-# Open http://localhost:4280
 ```
 
 **Docker Compose (both at once):**
@@ -446,7 +438,7 @@ Deploy shared platform services that provide Fabric-equivalent capabilities.
 ### Step A: Deploy Shared Services (Azure Functions)
 
 ```bash
-cd platform/shared-services/functions
+cd csa_platform/shared_services/functions
 
 # Install dependencies
 pip install -r requirements.txt
@@ -464,10 +456,10 @@ func azure functionapp publish <your-function-app-name> --python
 # Deploy infrastructure
 az deployment group create \
   --resource-group rg-platform \
-  --template-file platform/data_marketplace/deploy/marketplace.bicep
+  --template-file csa_platform/data_marketplace/deploy/marketplace.bicep
 
 # Initialize the catalog
-python platform/data_marketplace/api/marketplace_api.py --init
+python csa_platform/data_marketplace/api/marketplace_api.py --init
 ```
 
 ### Step C: Configure AI Integration

@@ -110,14 +110,14 @@ deploy_zone() {
         az deployment sub what-if \
             --location "$LOCATION" \
             --template-file "$main_bicep" \
-            $params_arg \
+            "${params_arg}" \
             --name "csa-${zone_name,,}-${ENVIRONMENT}-$(date +%Y%m%d%H%M)" \
             2>&1 | sed 's/^/    /'
     else
         az deployment sub create \
             --location "$LOCATION" \
             --template-file "$main_bicep" \
-            $params_arg \
+            "${params_arg}" \
             --name "csa-${zone_name,,}-${ENVIRONMENT}-$(date +%Y%m%d%H%M)" \
             2>&1 | sed 's/^/    /'
     fi
@@ -145,7 +145,7 @@ bash "${SCRIPT_DIR}/validate-prerequisites.sh" || {
 }
 
 # Step 1: Management / ALZ (landing zone policies, logging, monitoring)
-deploy_zone "ALZ" "${BICEP_DIR}/LandingZone - ALZ"
+deploy_zone "ALZ" "${BICEP_DIR}/landing-zone-alz"
 
 # Step 2: DMLZ (Data Management Landing Zone — Purview, Key Vault, shared services)
 deploy_zone "DMLZ" "${BICEP_DIR}/DMLZ"

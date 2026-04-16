@@ -62,7 +62,7 @@ def mock_credential() -> MagicMock:
 @pytest.fixture
 def purview(mock_credential: MagicMock) -> Any:
     """Create a PurviewAutomation instance with a mock credential."""
-    from platform.purview_governance.purview_automation import (  # type: ignore[import-untyped]
+    from csa_platform.purview_governance.purview_automation import (  # type: ignore[import-untyped]
         PurviewAutomation,
     )
 
@@ -163,7 +163,7 @@ class TestDataclasses:
     """Tests for Purview governance dataclasses."""
 
     def test_classification_rule_defaults(self) -> None:
-        from platform.purview_governance.purview_automation import ClassificationRule  # type: ignore[import-untyped]
+        from csa_platform.purview_governance.purview_automation import ClassificationRule  # type: ignore[import-untyped]
 
         rule = ClassificationRule(name="ssn", description="SSN detection", category="PII")
         assert rule.name == "ssn"
@@ -175,7 +175,7 @@ class TestDataclasses:
         assert rule.column_patterns == []
 
     def test_glossary_term_defaults(self) -> None:
-        from platform.purview_governance.purview_automation import GlossaryTerm  # type: ignore[import-untyped]
+        from csa_platform.purview_governance.purview_automation import GlossaryTerm  # type: ignore[import-untyped]
 
         term = GlossaryTerm(name="Revenue", definition="Total income")
         assert term.status == "Approved"
@@ -184,7 +184,7 @@ class TestDataclasses:
         assert term.classifications == []
 
     def test_scan_schedule_defaults(self) -> None:
-        from platform.purview_governance.purview_automation import ScanSchedule  # type: ignore[import-untyped]
+        from csa_platform.purview_governance.purview_automation import ScanSchedule  # type: ignore[import-untyped]
 
         schedule = ScanSchedule(source_name="adls-raw", scan_name="weekly-scan")
         assert schedule.trigger_type == "Recurring"
@@ -193,7 +193,7 @@ class TestDataclasses:
         assert schedule.credential_name == ""
 
     def test_lineage_relationship(self) -> None:
-        from platform.purview_governance.purview_automation import LineageRelationship  # type: ignore[import-untyped]
+        from csa_platform.purview_governance.purview_automation import LineageRelationship  # type: ignore[import-untyped]
 
         rel = LineageRelationship(
             source_type="azure_datalake_gen2_resource_set",
@@ -207,7 +207,7 @@ class TestDataclasses:
         assert rel.source_qualified_name == "adls://raw/orders"
 
     def test_sharing_agreement_fields(self) -> None:
-        from platform.purview_governance.data_sharing.sharing_enforcer import (
+        from csa_platform.purview_governance.data_sharing.sharing_enforcer import (
             SharingAgreement,  # type: ignore[import-untyped]
         )
 
@@ -232,7 +232,7 @@ class TestDataclasses:
         assert agreement.source_path is None
 
     def test_validation_result_defaults(self) -> None:
-        from platform.purview_governance.data_sharing.sharing_enforcer import (
+        from csa_platform.purview_governance.data_sharing.sharing_enforcer import (
             ValidationResult,  # type: ignore[import-untyped]
         )
 
@@ -317,7 +317,7 @@ class TestBuildClassificationPayload:
     """Tests for _build_classification_payload."""
 
     def test_basic_payload(self, purview: Any) -> None:
-        from platform.purview_governance.purview_automation import ClassificationRule  # type: ignore[import-untyped]
+        from csa_platform.purview_governance.purview_automation import ClassificationRule  # type: ignore[import-untyped]
 
         rule = ClassificationRule(name="SSN", description="Social Security Number", category="PII")
         payload = purview._build_classification_payload(rule)
@@ -329,7 +329,7 @@ class TestBuildClassificationPayload:
         assert payload["properties"]["minimumPercentageMatch"] == 60.0
 
     def test_payload_with_data_patterns(self, purview: Any) -> None:
-        from platform.purview_governance.purview_automation import ClassificationRule  # type: ignore[import-untyped]
+        from csa_platform.purview_governance.purview_automation import ClassificationRule  # type: ignore[import-untyped]
 
         rule = ClassificationRule(
             name="SSN",
@@ -342,7 +342,7 @@ class TestBuildClassificationPayload:
         assert payload["properties"]["dataPatterns"][0]["pattern"] == r"\d{3}-\d{2}-\d{4}"
 
     def test_payload_with_column_patterns(self, purview: Any) -> None:
-        from platform.purview_governance.purview_automation import ClassificationRule  # type: ignore[import-untyped]
+        from csa_platform.purview_governance.purview_automation import ClassificationRule  # type: ignore[import-untyped]
 
         rule = ClassificationRule(
             name="SSN",
@@ -354,7 +354,7 @@ class TestBuildClassificationPayload:
         assert "columnPatterns" in payload["properties"]
 
     def test_payload_without_patterns(self, purview: Any) -> None:
-        from platform.purview_governance.purview_automation import ClassificationRule  # type: ignore[import-untyped]
+        from csa_platform.purview_governance.purview_automation import ClassificationRule  # type: ignore[import-untyped]
 
         rule = ClassificationRule(name="SIMPLE", description="Simple", category="Test")
         payload = purview._build_classification_payload(rule)
@@ -528,7 +528,7 @@ class TestScheduleScan:
     """Tests for schedule_scan."""
 
     def test_dry_run(self, purview: Any) -> None:
-        from platform.purview_governance.purview_automation import ScanSchedule  # type: ignore[import-untyped]
+        from csa_platform.purview_governance.purview_automation import ScanSchedule  # type: ignore[import-untyped]
 
         schedule = ScanSchedule(source_name="adls-raw", scan_name="weekly-full")
         result = purview.schedule_scan(schedule, dry_run=True)
@@ -540,7 +540,7 @@ class TestScheduleScan:
         assert payload["properties"]["scanLevel"] == "Full"
 
     def test_schedule_calls_make_request(self, purview: Any) -> None:
-        from platform.purview_governance.purview_automation import ScanSchedule  # type: ignore[import-untyped]
+        from csa_platform.purview_governance.purview_automation import ScanSchedule  # type: ignore[import-untyped]
 
         schedule = ScanSchedule(source_name="adls-raw", scan_name="weekly-full")
 
@@ -555,7 +555,7 @@ class TestScheduleScan:
         assert "weekly-full" in call_args[0][1]
 
     def test_schedule_handles_api_error(self, purview: Any) -> None:
-        from platform.purview_governance.purview_automation import ScanSchedule  # type: ignore[import-untyped]
+        from csa_platform.purview_governance.purview_automation import ScanSchedule  # type: ignore[import-untyped]
 
         schedule = ScanSchedule(source_name="fail-source", scan_name="fail-scan")
 
@@ -806,9 +806,47 @@ class TestApplySensitivityLabels:
             ],
         )
 
-        results = purview.apply_sensitivity_labels(yaml_file, dry_run=False)
+        with patch.object(purview, "_make_request", return_value={"id": "rule-1"}) as mock_req:
+            results = purview.apply_sensitivity_labels(yaml_file, dry_run=False)
+
         assert len(results) == 1
         assert results[0]["status"] == "applied"
+        assert results[0]["label"] == "Restricted"
+        assert results[0]["classifications"] == ["SSN"]
+        assert results[0]["response"] == {"id": "rule-1"}
+
+        mock_req.assert_called_once_with(
+            "PUT",
+            "/scan/autolabelingrules/pii-policy",
+            body={
+                "name": "pii-policy",
+                "properties": {
+                    "policyName": "pii-policy",
+                    "sensitivityLabel": "Restricted",
+                    "classificationNames": ["SSN"],
+                    "enabled": True,
+                },
+            },
+        )
+
+    def test_apply_api_failure(self, purview: Any, tmp_path: Path) -> None:
+        yaml_file = _write_label_policy_yaml(
+            tmp_path,
+            [
+                {
+                    "name": "pii-policy",
+                    "targetLabel": "Restricted",
+                    "classificationNames": ["SSN"],
+                }
+            ],
+        )
+
+        with patch.object(purview, "_make_request", side_effect=Exception("API error")):
+            results = purview.apply_sensitivity_labels(yaml_file, dry_run=False)
+
+        assert len(results) == 1
+        assert results[0]["status"] == "error"
+        assert "API error" in results[0]["error"]
 
     def test_empty_policies(self, purview: Any, tmp_path: Path) -> None:
         yaml_file = _write_label_policy_yaml(tmp_path, [])
@@ -895,7 +933,7 @@ class TestLoadAgreement:
     """Tests for load_agreement from YAML."""
 
     def test_load_valid_agreement(self, tmp_path: Path) -> None:
-        from platform.purview_governance.data_sharing.sharing_enforcer import (
+        from csa_platform.purview_governance.data_sharing.sharing_enforcer import (
             load_agreement,  # type: ignore[import-untyped]
         )
 
@@ -912,7 +950,7 @@ class TestLoadAgreement:
         assert agreement.source_path == yaml_file
 
     def test_load_agreement_without_expiry(self, tmp_path: Path) -> None:
-        from platform.purview_governance.data_sharing.sharing_enforcer import (
+        from csa_platform.purview_governance.data_sharing.sharing_enforcer import (
             load_agreement,  # type: ignore[import-untyped]
         )
 
@@ -923,7 +961,7 @@ class TestLoadAgreement:
         assert agreement.expires_at is None
 
     def test_load_agreement_invalid_yaml(self, tmp_path: Path) -> None:
-        from platform.purview_governance.data_sharing.sharing_enforcer import (
+        from csa_platform.purview_governance.data_sharing.sharing_enforcer import (
             load_agreement,  # type: ignore[import-untyped]
         )
 
@@ -935,7 +973,7 @@ class TestLoadAgreement:
 
     def test_load_agreement_name_from_stem(self, tmp_path: Path) -> None:
         """When metadata.name is missing, use the file stem."""
-        from platform.purview_governance.data_sharing.sharing_enforcer import (
+        from csa_platform.purview_governance.data_sharing.sharing_enforcer import (
             load_agreement,  # type: ignore[import-untyped]
         )
 
@@ -956,7 +994,7 @@ class TestLoadAgreements:
     """Tests for load_agreements from directory."""
 
     def test_load_from_directory(self, tmp_path: Path) -> None:
-        from platform.purview_governance.data_sharing.sharing_enforcer import (
+        from csa_platform.purview_governance.data_sharing.sharing_enforcer import (
             load_agreements,  # type: ignore[import-untyped]
         )
 
@@ -978,7 +1016,7 @@ class TestLoadAgreements:
         assert len(agreements) == 2
 
     def test_skips_template_files(self, tmp_path: Path) -> None:
-        from platform.purview_governance.data_sharing.sharing_enforcer import (
+        from csa_platform.purview_governance.data_sharing.sharing_enforcer import (
             load_agreements,  # type: ignore[import-untyped]
         )
 
@@ -1001,7 +1039,7 @@ class TestLoadAgreements:
         assert agreements[0].name == "real"
 
     def test_skips_placeholder_domains(self, tmp_path: Path) -> None:
-        from platform.purview_governance.data_sharing.sharing_enforcer import (
+        from csa_platform.purview_governance.data_sharing.sharing_enforcer import (
             load_agreements,  # type: ignore[import-untyped]
         )
 
@@ -1023,7 +1061,7 @@ class TestLoadAgreements:
         assert len(agreements) == 1
 
     def test_missing_directory_raises(self) -> None:
-        from platform.purview_governance.data_sharing.sharing_enforcer import (
+        from csa_platform.purview_governance.data_sharing.sharing_enforcer import (
             load_agreements,  # type: ignore[import-untyped]
         )
 
@@ -1031,7 +1069,7 @@ class TestLoadAgreements:
             load_agreements("/nonexistent/agreements")
 
     def test_empty_directory(self, tmp_path: Path) -> None:
-        from platform.purview_governance.data_sharing.sharing_enforcer import (
+        from csa_platform.purview_governance.data_sharing.sharing_enforcer import (
             load_agreements,  # type: ignore[import-untyped]
         )
 
@@ -1052,7 +1090,7 @@ class TestValidateRequest:
 
     def _make_enforcer(self, tmp_path: Path, agreements: list[dict[str, Any]]) -> Any:
         """Create a SharingEnforcer with pre-written agreement files."""
-        from platform.purview_governance.data_sharing.sharing_enforcer import (
+        from csa_platform.purview_governance.data_sharing.sharing_enforcer import (
             SharingEnforcer,  # type: ignore[import-untyped]
         )
 
@@ -1236,7 +1274,7 @@ class TestSharingEnforcerUtilities:
     """Tests for list_agreements_for_domain, get_expired_agreements, get_expiring_soon."""
 
     def _make_enforcer(self, tmp_path: Path, agreements: list[dict[str, Any]]) -> Any:
-        from platform.purview_governance.data_sharing.sharing_enforcer import (
+        from csa_platform.purview_governance.data_sharing.sharing_enforcer import (
             SharingEnforcer,  # type: ignore[import-untyped]
         )
 
@@ -1373,7 +1411,7 @@ class TestCLIMain:
     """Tests for the CLI entry point."""
 
     def test_apply_classifications_dry_run(self, tmp_path: Path) -> None:
-        from platform.purview_governance.purview_automation import main  # type: ignore[import-untyped]
+        from csa_platform.purview_governance.purview_automation import main  # type: ignore[import-untyped]
 
         rules_yaml = _write_classification_yaml(
             tmp_path,
@@ -1392,7 +1430,7 @@ class TestCLIMain:
         assert exit_code == 0
 
     def test_missing_rules_dir_returns_error(self) -> None:
-        from platform.purview_governance.purview_automation import main  # type: ignore[import-untyped]
+        from csa_platform.purview_governance.purview_automation import main  # type: ignore[import-untyped]
 
         with patch("azure.identity.DefaultAzureCredential") as mock_cred_cls:
             mock_cred_cls.return_value = MagicMock()
@@ -1404,7 +1442,7 @@ class TestCLIMain:
         assert exit_code == 1
 
     def test_import_glossary_missing_file_returns_error(self) -> None:
-        from platform.purview_governance.purview_automation import main  # type: ignore[import-untyped]
+        from csa_platform.purview_governance.purview_automation import main  # type: ignore[import-untyped]
 
         with patch("azure.identity.DefaultAzureCredential") as mock_cred_cls:
             mock_cred_cls.return_value = MagicMock()
@@ -1416,7 +1454,7 @@ class TestCLIMain:
         assert exit_code == 1
 
     def test_register_dbt_lineage_dry_run(self, tmp_path: Path) -> None:
-        from platform.purview_governance.purview_automation import main  # type: ignore[import-untyped]
+        from csa_platform.purview_governance.purview_automation import main  # type: ignore[import-untyped]
 
         manifest = {"nodes": {}, "sources": {}}
         manifest_file = tmp_path / "manifest.json"

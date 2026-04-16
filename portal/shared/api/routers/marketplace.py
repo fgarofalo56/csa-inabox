@@ -31,8 +31,11 @@ _products_store = JsonStore("marketplace_products.json")
 _quality_store = JsonStore("marketplace_quality.json")
 
 
-def _seed_demo_products() -> None:
-    """Populate realistic demo data products on first access."""
+def seed_demo_products() -> None:
+    """Populate realistic demo data products on first access.
+
+    Called once at application startup from the lifespan handler.
+    """
     if _products_store.count() > 0:
         return
 
@@ -158,8 +161,13 @@ async def list_products(
     _user: dict = Depends(get_current_user),
 ) -> list[DataProduct]:
     """Browse the data marketplace with optional filters."""
-    _seed_demo_products()
     results = [DataProduct.model_validate(item) for item in _products_store.load()]
+
+    # Domain scoping: non-admin users only see their domain's products
+    user_roles = _user.get("roles", [])
+    user_domain = _user.get("domain") or _user.get("team")
+    if "Admin" not in user_roles and user_domain:
+        results = [p for p in results if p.domain == user_domain]
 
     if domain:
         results = [p for p in results if p.domain == domain]
@@ -183,11 +191,18 @@ async def get_product(
     _user: dict = Depends(get_current_user),
 ) -> DataProduct:
     """Return detailed data product information."""
-    _seed_demo_products()
     stored_product = _products_store.get(product_id)
     if not stored_product:
         raise HTTPException(status_code=404, detail=f"Product '{product_id}' not found.")
-    return DataProduct.model_validate(stored_product)
+    product = DataProduct.model_validate(stored_product)
+
+    # Domain scoping: non-admin users can only access their domain's products
+    user_roles = _user.get("roles", [])
+    user_domain = _user.get("domain") or _user.get("team")
+    if "Admin" not in user_roles and user_domain and product.domain != user_domain:
+        raise HTTPException(status_code=403, detail="You do not have access to this product.")
+
+    return product
 
 
 @router.get(
@@ -201,7 +216,6 @@ async def get_quality_history(
     _user: dict = Depends(get_current_user),
 ) -> list[QualityMetric]:
     """Return quality metric history for a data product."""
-    _seed_demo_products()
     # Check if product exists
     if not _products_store.get(product_id):
         raise HTTPException(status_code=404, detail=f"Product '{product_id}' not found.")
@@ -224,7 +238,6 @@ async def list_domains(
     _user: dict = Depends(get_current_user),
 ) -> list[dict]:
     """Return all data domains with their product counts."""
-    _seed_demo_products()
     domains: dict[str, int] = {}
     products = [DataProduct.model_validate(item) for item in _products_store.load()]
     for product in products:
@@ -241,7 +254,6 @@ async def marketplace_stats(
     _user: dict = Depends(get_current_user),
 ) -> dict:
     """Return aggregate marketplace statistics."""
-    _seed_demo_products()
     products = [DataProduct.model_validate(item) for item in _products_store.load()]
     return {
         "total_products": len(products),

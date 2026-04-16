@@ -55,15 +55,7 @@ resource synapse 'Microsoft.Synapse/workspaces@2021-06-01' = {
   }
 }
 
-// Firewall rules - deny all by default
-resource firewallRule 'Microsoft.Synapse/workspaces/firewallRules@2021-06-01' = {
-  parent: synapse
-  name: 'AllowAllWindowsAzureIps'
-  properties: {
-    startIpAddress: '0.0.0.0'
-    endIpAddress: '0.0.0.0'
-  }
-}
+// Azure service access should be configured via managed private endpoints, not firewall rules
 
 // Managed Identity SQL control settings
 resource managedIdentitySql 'Microsoft.Synapse/workspaces/managedIdentitySqlControlSettings@2021-06-01' = {

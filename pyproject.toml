@@ -41,7 +41,7 @@ functions = [
     "azure-functions>=1.18.0,<2.0.0",
     # Retry logic for transient Azure SDK failures.
     "tenacity>=8.2.0,<10.0.0",
-    # Azure SDK packages used by the shared-services functions.
+    # Azure SDK packages used by the shared_services functions.
     "azure-core>=1.28.0,<2.0.0",
     "azure-identity>=1.14.0,<2.0.0",
     "azure-keyvault-secrets>=4.7.0,<5.0.0",
@@ -50,6 +50,12 @@ functions = [
     "azure-mgmt-cosmosdb>=9.0.0,<10.0.0",
     "azure-mgmt-sql>=3.0.0,<4.0.0",
     "structlog>=24.1.0,<26.0.0",
+    # AI Enrichment function deps
+    "azure-ai-textanalytics>=5.3.0,<6.0.0",
+    "azure-ai-formrecognizer>=3.3.0,<4.0.0",
+    # Event Processing function deps
+    "azure-eventhub>=5.11.0,<6.0.0",
+    "azure-cosmos>=4.5.0,<5.0.0",
 ]
 platform = [
     "structlog>=24.1.0,<26.0.0",
@@ -58,6 +64,43 @@ platform = [
     "azure-identity>=1.14.0,<2.0.0",
     "azure-search-documents>=11.4.0,<12.0.0",
     "requests>=2.31.0,<3.0.0",
+    # AI integration extras
+    "azure-ai-textanalytics>=5.3.0,<6.0.0",
+    "azure-ai-ml>=1.16.0,<2.0.0",
+    "tiktoken>=0.7.0,<1.0.0",
+    "pydantic>=2.7.0,<3.0.0",
+    "pydantic-settings>=2.3.0,<3.0.0",
+    "pyyaml>=6.0,<7.0",
+    # Direct Lake / Databricks
+    "databricks-sdk>=0.20.0,<1.0.0",
+    # Multi-Synapse management
+    "azure-mgmt-synapse>=2.0.0,<3.0.0",
+    "azure-mgmt-costmanagement>=3.0.0,<4.0.0",
+    "azure-mgmt-authorization>=4.0.0,<5.0.0",
+    "pyodbc>=5.0.0,<6.0.0",
+    # OneLake pattern
+    "azure-storage-blob>=12.19.0,<13.0.0",
+    "azure-cosmos>=4.5.0,<5.0.0",
+]
+portal = [
+    # Web framework
+    "fastapi>=0.115.0,<1.0.0",
+    "uvicorn[standard]>=0.30.0,<1.0.0",
+    "pydantic>=2.7.0,<3.0.0",
+    "pydantic-settings>=2.3.0,<3.0.0",
+    # Authentication (Azure AD / Entra ID JWT)
+    "python-jose[cryptography]>=3.3.0,<4.0.0",
+    "PyJWT>=2.8.0,<3.0.0",
+    "cryptography>=41.0.0,<44.0.0",
+    # Caching (JWKS TTL cache)
+    "cachetools>=5.3.0,<6.0.0",
+    # HTTP client
+    "httpx>=0.27.0,<1.0.0",
+    # Azure SDKs used by portal backend
+    "azure-identity>=1.17.0,<2.0.0",
+    "azure-mgmt-resource>=23.1.0,<24.0.0",
+    "azure-mgmt-datafactory>=7.0.0,<8.0.0",
+    "azure-storage-blob>=12.20.0,<13.0.0",
 ]
 
 [tool.setuptools]
@@ -168,10 +211,8 @@ ignore = [
     "DTZ011",  # call-date-today
     "B905",    # zip-without-explicit-strict
 ]
-# The metadata-framework directory uses hyphens (valid package structure choice).
-"platform/metadata-framework/**/*.py" = [
-    "N999",    # invalid-module-name (hyphenated directory name)
-]
+# Metadata framework module.
+"csa_platform/metadata_framework/**/*.py" = []
 # Test files may use mock objects with unused arguments and datetime freely.
 "tests/**/*.py" = [
     "ARG001",  # unused-function-argument (mock/fixture params)
@@ -191,7 +232,7 @@ ignore = [
     "ARG001",  # unused-function-argument (stub params)
 ]
 # Platform code has many stub/mock method implementations.
-"platform/**/tests/**/*.py" = [
+"csa_platform/**/tests/**/*.py" = [
     "ARG001",  # unused-function-argument (fixtures)
     "ARG002",  # unused-method-argument (test fixtures)
     "E402",    # module-import-not-at-top-of-file (sys.path manipulation)
@@ -207,7 +248,7 @@ quote-style = "double"
 indent-style = "space"
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "portal/shared/tests"]
 python_files = ["test_*.py", "*_test.py"]
 python_functions = ["test_*"]
 addopts = "--tb=short -q --strict-markers"
@@ -226,15 +267,13 @@ source = [
     "domains/sharedServices/aiEnrichment/functions",
     "domains/sharedServices/eventProcessing/functions",
     "domains/sharedServices/secretRotation/functions",
-    # Platform modules below are tracked but excluded from the threshold
-    # until their test suites reach parity. Add them back as coverage
-    # grows — see `make test` and the coverage report.
-    # "platform/ai_integration",
-    # "platform/data-activator",
-    # "platform/data_marketplace",
-    # "platform/metadata-framework",
-    # "platform/purview_governance",
-    # "platform/shared-services",
+    "csa_platform/ai_integration",
+    "csa_platform/data_activator",
+    "csa_platform/data_marketplace",
+    "csa_platform/metadata_framework",
+    "csa_platform/purview_governance",
+    "csa_platform/shared_services",
+    "portal/shared/api",
 ]
 branch = true
 omit = [
@@ -281,7 +320,7 @@ files = [
 ]
 # Third-party Azure SDK libraries still ship partial type info — stay
 # lenient there, but keep strict checks on our own code.
-ignore_missing_imports = true
+ignore_missing_imports = false
 warn_return_any = true
 warn_unused_configs = true
 warn_redundant_casts = true
@@ -293,7 +332,7 @@ no_implicit_reexport = true
 # They are type-checked separately via ``make typecheck-platform`` to allow
 # progressive strictness adoption.
 module = [
-    "platform.*",
+    "csa_platform.*",
 ]
 ignore_errors = false
 disallow_untyped_defs = false
@@ -308,25 +347,37 @@ module = [
 ignore_errors = true
 
 [[tool.mypy.overrides]]
-# Load-test harnesses intentionally subclass dynamically-typed
-# third-party base classes (Locust's HttpUser).  They are also not
-# part of the deployable toolchain — they run manually via the
-# ``load-tests.yml`` workflow_dispatch.  Ignore them so strict mode
-# stays useful for the rest of the tree.
+# Load-test harnesses are not part of the deployable toolchain — they run
+# manually via the ``load-tests.yml`` workflow_dispatch.  Ignore them so
+# strict mode stays useful for the rest of the tree.
 module = [
     "tests.load.*",
 ]
 ignore_errors = true
 
 [[tool.mypy.overrides]]
-# Platform tests use dynamic imports via conftest.py namespace hacking
-# (the ``platform`` directory shadows the stdlib module).  The test
+# Platform tests use dynamic imports via conftest.py namespace registration
+# (hyphenated sub-directories require manual sys.modules setup).  The test
 # files also mock Azure SDK types extensively, which produces false
 # positive type errors.  They are functionally tested via pytest.
 module = [
     "tests.platform.*",
 ]
 ignore_errors = true
+
+[[tool.mypy.overrides]]
+# Third-party packages that do not ship inline type stubs.  Rather than
+# blanket-ignoring all missing imports globally, we list them explicitly
+# so our own code and typed dependencies are still checked.
+module = [
+    "azure.*",
+    "great_expectations.*",
+    "tenacity.*",
+    "structlog.*",
+    "openai.*",
+    "cachetools.*",
+]
+ignore_missing_imports = true
 
 [tool.bandit]
 # Exclude tests (assertions) and known-safe subprocess / random patterns:

@@ -21,6 +21,7 @@ from enum import Enum
 from typing import Any
 
 import httpx
+from cachetools import TTLCache
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
@@ -28,13 +29,39 @@ from ..config import settings
 
 logger = logging.getLogger(__name__)
 
+# ── Environment Safety Gate ─────────────────────────────────────────────────
+# Fail-fast: if AUTH_DISABLED is true in a non-local / non-demo environment
+# the application must refuse to start.  This prevents accidental production
+# deployments without authentication.
+
+_auth_disabled = settings.AUTH_DISABLED or not settings.AZURE_TENANT_ID
+_is_local_or_demo = settings.ENVIRONMENT.lower() == "local" or settings.DEMO_MODE
+
+if _auth_disabled and not _is_local_or_demo:
+    raise RuntimeError(
+        "SECURITY: AUTH_DISABLED=true (or AZURE_TENANT_ID is empty) but "
+        f"ENVIRONMENT={settings.ENVIRONMENT!r} is not 'local' and DEMO_MODE "
+        "is not enabled.  Refusing to start without authentication in a "
+        "non-local environment.  Set ENVIRONMENT=local or DEMO_MODE=true for "
+        "local development, or configure AZURE_TENANT_ID for production."
+    )
+
+if _auth_disabled and _is_local_or_demo:
+    logger.warning(
+        "⚠ AUTH DISABLED — running in demo/local mode.  All requests will "
+        "receive a synthetic 'Reader' identity.  Do NOT use this in production."
+    )
+
 # ── Constants ────────────────────────────────────────────────────────────────
 
 # Azure AD v2.0 OIDC endpoints
 _COMMERCIAL_AUTHORITY = "https://login.microsoftonline.com"
 _GOVERNMENT_AUTHORITY = "https://login.microsoftonline.us"
 
-_JWKS_CACHE: dict[str, Any] | None = None
+# TTL-based JWKS cache: keys are refreshed every 24 hours (Azure AD rotates
+# signing keys periodically).  maxsize=10 is generous — typically there is
+# only one JWKS document per tenant.
+_JWKS_CACHE: TTLCache[str, dict[str, Any]] = TTLCache(maxsize=10, ttl=86400)
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -62,12 +89,13 @@ def _openid_config_url() -> str:
 
 
 async def _get_jwks() -> dict[str, Any]:
-    """Fetch (and cache) the JSON Web Key Set from Azure AD."""
-    global _JWKS_CACHE
-    if _JWKS_CACHE is not None:
-        return _JWKS_CACHE
+    """Fetch (and cache with 24h TTL) the JSON Web Key Set from Azure AD."""
+    cache_key = f"{settings.AZURE_TENANT_ID}:{settings.IS_GOVERNMENT_CLOUD}"
 
-    # In production: Add TTL-based cache refresh (using cache expiry or periodic background task)
+    cached = _JWKS_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
     async with httpx.AsyncClient() as client:
         oidc_resp = await client.get(_openid_config_url())
         oidc_resp.raise_for_status()
@@ -75,9 +103,10 @@ async def _get_jwks() -> dict[str, Any]:
 
         jwks_resp = await client.get(jwks_uri)
         jwks_resp.raise_for_status()
-        _JWKS_CACHE = jwks_resp.json()
+        jwks_data: dict[str, Any] = jwks_resp.json()
+        _JWKS_CACHE[cache_key] = jwks_data
 
-    return _JWKS_CACHE
+    return jwks_data
 
 
 async def _validate_token(token: str) -> dict[str, Any]:
@@ -85,18 +114,19 @@ async def _validate_token(token: str) -> dict[str, Any]:
 
     Returns the decoded token claims on success.
 
-    In development / demo mode (no AZURE_TENANT_ID configured) this returns
-    a synthetic claims dict so the API can run without Azure AD.
+    In local/demo mode (AUTH_DISABLED + ENVIRONMENT=local or DEMO_MODE=true)
+    returns a synthetic claims dict with Reader-only access so the API can
+    run without Azure AD for development purposes.
     """
-    # ── Dev / Demo mode — skip real validation ───────────────────────────
-    if not settings.AZURE_TENANT_ID:
-        logger.debug("Auth disabled (no AZURE_TENANT_ID) — returning demo claims")
+    # ── Local / Demo mode — skip real validation ────────────────────────
+    if _auth_disabled and _is_local_or_demo:
+        logger.debug("Auth disabled (local/demo mode) — returning demo claims with Reader role")
         return {
             "sub": "demo-user-id",
             "name": "Demo User",
             "preferred_username": "demo@csainabox.local",
             "email": "demo@csainabox.local",
-            "roles": ["Admin"],
+            "roles": ["Reader"],
             "oid": "00000000-0000-0000-0000-000000000000",
             "tid": "demo-tenant",
         }
@@ -158,7 +188,7 @@ async def get_current_user(
     returns synthetic claims so endpoints work without Azure AD.
     """
     if credentials is None:
-        if not settings.AZURE_TENANT_ID:
+        if _auth_disabled and _is_local_or_demo:
             # Demo mode — no auth required
             return await _validate_token("")
         raise HTTPException(
@@ -168,6 +198,11 @@ async def get_current_user(
         )
 
     return await _validate_token(credentials.credentials)
+
+
+def get_user_domain(user: dict[str, Any] = Depends(get_current_user)) -> str | None:
+    """Extract the user's domain from their token claims."""
+    return user.get("domain") or user.get("team")
 
 
 def require_role(*allowed_roles: str):

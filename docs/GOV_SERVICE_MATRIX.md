@@ -194,10 +194,10 @@ deployable on AKS:
 | Gap | OSS Alternative | Deployment |
 |-----|----------------|-----------|
 | Fabric | This entire repo | N/A — you're looking at it |
-| Entra ID B2C | Keycloak on AKS | `platform/oss-alternatives/keycloak/` |
-| AI Search (IL5) | OpenSearch on AKS | `platform/oss-alternatives/opensearch/` |
-| Azure ML (IL5) | MLflow + Kubeflow on AKS | `platform/oss-alternatives/mlflow/` |
-| Cognitive Services (select) | Hugging Face Inference on AKS | `platform/oss-alternatives/huggingface/` |
+| Entra ID B2C | Keycloak on AKS | `csa_platform/oss_alternatives/keycloak/` |
+| AI Search (IL5) | OpenSearch on AKS | `csa_platform/oss_alternatives/opensearch/` |
+| Azure ML (IL5) | MLflow + Kubeflow on AKS | `csa_platform/oss_alternatives/mlflow/` |
+| Cognitive Services (select) | Hugging Face Inference on AKS | `csa_platform/oss_alternatives/huggingface/` |
 
 ---
 

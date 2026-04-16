@@ -35,6 +35,12 @@ param parCmkKeyVaultUrl string = ''
 @description('Attach a CanNotDelete resource lock to the Synapse workspace. Default true for production safety.')
 param enableResourceLock bool = true
 
+@description('Deploy a dedicated SQL pool (formerly SQL DW). Set to false to skip and save cost in dev/test.')
+param enableSqlPool bool = false
+
+@description('SKU name for the dedicated SQL pool (e.g. DW100c, DW200c). Only used when enableSqlPool is true.')
+param sqlPoolSkuName string = 'DW100c'
+
 // Variables
 var synapseDefaultStorageAccountFileSystemName = length(split(synapseDefaultStorageAccountFileSystemId, '/')) >= 13
   ? last(split(synapseDefaultStorageAccountFileSystemId, '/'))
@@ -49,7 +55,7 @@ var synapsePrivateEndpointNameDev = '${synapse.name}-dev-private-endpoint'
 // Resources
 // #checkov:skip=CKV_AZURE_72:Synapse workspace CMK encryption is optional for dev/lab — enable via parEnableCmk for prod
 // #checkov:skip=CKV2_AZURE_19:Synapse audit logging configured via workspace-level diagnostic settings below
-resource synapse 'Microsoft.Synapse/workspaces@2021-06-01' = {
+resource synapse 'Microsoft.Synapse/workspaces@2021-06-01-preview' = {
   name: synapseName
   location: location
   tags: tags
@@ -88,14 +94,13 @@ resource synapse 'Microsoft.Synapse/workspaces@2021-06-01' = {
   }
 }
 
-resource synapseSqlPool001 'Microsoft.Synapse/workspaces/sqlPools@2021-06-01' = {
-  // Uncomment if you want to deploy a Synapse Spark Pool as part of your Data Landing Zone inside the shared product resource group
+resource synapseSqlPool001 'Microsoft.Synapse/workspaces/sqlPools@2021-06-01-preview' = if (enableSqlPool) {
   parent: synapse
   name: 'sqlPool001'
   location: location
   tags: tags
   sku: {
-    name: 'DW100c'
+    name: sqlPoolSkuName
   }
   properties: {
     collation: 'SQL_Latin1_General_CP1_CI_AS'
@@ -104,7 +109,7 @@ resource synapseSqlPool001 'Microsoft.Synapse/workspaces/sqlPools@2021-06-01' = 
   }
 }
 
-resource synapseManagedIdentitySqlControlSettings 'Microsoft.Synapse/workspaces/managedIdentitySqlControlSettings@2021-06-01' = {
+resource synapseManagedIdentitySqlControlSettings 'Microsoft.Synapse/workspaces/managedIdentitySqlControlSettings@2021-06-01-preview' = {
   parent: synapse
   name: 'default'
   properties: {
@@ -114,7 +119,7 @@ resource synapseManagedIdentitySqlControlSettings 'Microsoft.Synapse/workspaces/
   }
 }
 
-resource synapseAadAdministrators 'Microsoft.Synapse/workspaces/administrators@2021-06-01' = if (!empty(synapseSqlAdminGroupName) && !empty(synapseSqlAdminGroupObjectID)) {
+resource synapseAadAdministrators 'Microsoft.Synapse/workspaces/administrators@2021-06-01-preview' = if (!empty(synapseSqlAdminGroupName) && !empty(synapseSqlAdminGroupObjectID)) {
   parent: synapse
   name: 'activeDirectory'
   properties: {

@@ -109,6 +109,7 @@ def _seed_demo_pipelines() -> None:
 async def list_pipelines(
     source_id: str | None = None,
     status_filter: PipelineStatus | None = Query(None, alias="status"),
+    skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     _user: dict = Depends(get_current_user),
 ) -> list[PipelineRecord]:
@@ -116,12 +117,18 @@ async def list_pipelines(
     _seed_demo_pipelines()
     results = [PipelineRecord.model_validate(item) for item in _pipelines_store.load()]
 
+    # Domain scoping: non-admin users can only see their domain's pipelines
+    user_roles = _user.get("roles", [])
+    user_domain = _user.get("domain") or _user.get("team")
+    if "Admin" not in user_roles and user_domain:
+        results = [p for p in results if p.domain == user_domain]
+
     if source_id:
         results = [p for p in results if p.source_id == source_id]
     if status_filter:
         results = [p for p in results if p.status == status_filter]
 
-    return results[:limit]
+    return results[skip : skip + limit]
 
 
 @router.get(

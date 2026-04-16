@@ -52,8 +52,8 @@ param parCmkKeyVersion string = ''
 param parCmkIdentityId string = ''
 
 // Variables
-var storageNameCleaned = length(storageName) > 24
-  ? concat(substring(toLower(replace(storageName, '-', '')), 0, 20), uniqueString(resourceGroup().id))
+var storageNameCleaned = length(toLower(replace(storageName, '-', ''))) > 24
+  ? '${substring(toLower(replace(storageName, '-', '')), 0, min(11, length(toLower(replace(storageName, '-', '')))))}${uniqueString(resourceGroup().id)}'
   : toLower(replace(storageName, '-', ''))
 
 var storageZrsRegions = [

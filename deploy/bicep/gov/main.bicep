@@ -53,6 +53,9 @@ param deployAIServices bool = true
 @description('Deploy streaming infrastructure (Event Hubs, ADX).')
 param deployStreaming bool = true
 
+@description('Enable Customer-Managed Key (CMK) encryption across all supported services. Defaults to true for FedRAMP compliance.')
+param enableCmk bool = true
+
 @description('Enable HIPAA compliance controls (for health workloads).')
 param enableHIPAA bool = false
 
@@ -176,7 +179,7 @@ module storage 'modules/storage.bicep' = if (deployDLZ) {
       'sandbox'
       'staging'
     ]
-    enableCustomerManagedKey: enableFedRAMPHigh
+    enableCustomerManagedKey: enableCmk
     keyVaultId: keyVault.outputs.keyVaultId
     logAnalyticsId: logAnalytics.outputs.workspaceId
   }
@@ -191,7 +194,7 @@ module databricks 'modules/databricks.bicep' = if (deployDLZ) {
     tags: complianceTags
     pricingTier: 'premium'  // Required for Unity Catalog
     enableNoPublicIp: true
-    requireInfrastructureEncryption: enableFedRAMPHigh
+    requireInfrastructureEncryption: enableCmk
     logAnalyticsId: logAnalytics.outputs.workspaceId
   }
 }
@@ -326,7 +329,7 @@ module aks 'modules/aks.bicep' = if (deployOSSAlternatives) {
     name: '${baseName}-aks'
     location: location
     tags: complianceTags
-    kubernetesVersion: '1.29'
+    kubernetesVersion: '1.31'
     enableAzurePolicy: true
     enableDefender: true
     networkPlugin: 'azure'
@@ -335,6 +338,45 @@ module aks 'modules/aks.bicep' = if (deployOSSAlternatives) {
     systemNodePoolVmSize: 'Standard_D4s_v5'
     systemNodePoolCount: 3
     logAnalyticsId: logAnalytics.outputs.workspaceId
+  }
+}
+
+// ─── RBAC — Service-to-Service Identity Wiring ─────────────────────────────
+// Storage Blob Data Contributor: ba92f5b4-2d11-453d-a403-e96b0029c9fe
+
+// ADF managed identity → Storage Blob Data Contributor on storage
+resource roleAdfToStorage 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (deployDLZ) {
+  name: guid(rgData.id, dataFactory.outputs.principalId, 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
+  scope: rgData
+  properties: {
+    principalId: dataFactory.outputs.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
+    description: 'ADF managed identity → Storage Blob Data Contributor on gov storage'
+  }
+}
+
+// Databricks managed identity → Storage Blob Data Contributor on storage
+resource roleDatabricksToStorage 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (deployDLZ) {
+  name: guid(rgData.id, databricks.outputs.principalId, 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
+  scope: rgData
+  properties: {
+    principalId: databricks.outputs.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
+    description: 'Databricks managed identity → Storage Blob Data Contributor on gov storage'
+  }
+}
+
+// Synapse managed identity → Storage Blob Data Contributor on storage
+resource roleSynapseToStorage 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (deployDLZ) {
+  name: guid(rgData.id, synapse.outputs.principalId, 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
+  scope: rgData
+  properties: {
+    principalId: synapse.outputs.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
+    description: 'Synapse managed identity → Storage Blob Data Contributor on gov storage'
   }
 }
 

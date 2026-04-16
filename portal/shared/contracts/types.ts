@@ -1,16 +1,19 @@
 /**
  * Canonical TypeScript type definitions for the CSA-in-a-Box Data Onboarding Portal.
  *
- * This is the SINGLE SOURCE OF TRUTH shared between React and Svelte portals.
- * Generated from / kept in sync with source-api.schema.json.
+ * This is the SINGLE SOURCE OF TRUTH for the React portal.
+ * All types are derived from the Python backend Pydantic models
+ * (portal/shared/api/models/).
  *
- * Both portal/react-webapp/src/types/index.ts and
- * portal/static-webapp/src/lib/types.ts re-export from this file.
+ * portal/react-webapp/src/types/index.ts re-exports from this file.
  */
 
 // ─── Enums / Union Types ──────────────────────────────────────────────────
 
-/** Union of ALL supported data source types across both portals. */
+/**
+ * Supported data source types.
+ * Must match Python `SourceType` enum in models/source.py.
+ */
 export type SourceType =
   | 'azure_sql'
   | 'synapse'
@@ -19,21 +22,15 @@ export type SourceType =
   | 'blob_storage'
   | 'databricks'
   | 'postgresql'
-  | 'postgres'
   | 'mysql'
   | 'oracle'
-  | 'sql_server'
   | 'rest_api'
   | 'odata'
   | 'sftp'
   | 'sharepoint'
   | 'event_hub'
   | 'iot_hub'
-  | 'kafka'
-  | 'file_drop'
-  | 's3'
-  | 'snowflake'
-  | 'dynamics365';
+  | 'kafka';
 
 export type IngestionMode = 'full' | 'incremental' | 'cdc' | 'streaming';
 
@@ -45,26 +42,32 @@ export type ClassificationLevel =
   | 'cui'
   | 'fouo';
 
-/** Superset of target formats from both implementations. */
-export type TargetFormat = 'delta' | 'parquet' | 'csv' | 'json' | 'avro';
+/**
+ * Target storage format.
+ * Must match Python `TargetFormat` enum in models/source.py.
+ */
+export type TargetFormat = 'delta' | 'parquet' | 'csv' | 'json';
 
-/** Superset of source statuses from both implementations. */
+/**
+ * Source lifecycle status.
+ * Must match Python `SourceStatus` enum in models/source.py.
+ */
 export type SourceStatus =
   | 'draft'
-  | 'pending'
   | 'pending_approval'
   | 'approved'
   | 'provisioning'
   | 'active'
-  | 'inactive'
   | 'paused'
   | 'decommissioned'
-  | 'error'
-  | 'archived';
+  | 'error';
 
 // ─── Source Registration Types ─────────────────────────────────────────────
 
-/** Merged connection config — all fields from React + Svelte implementations. */
+/**
+ * Connection configuration — fields vary by source type.
+ * Matches Python `ConnectionConfig` in models/source.py.
+ */
 export interface ConnectionConfig {
   host?: string;
   port?: number;
@@ -72,16 +75,9 @@ export interface ConnectionConfig {
   schema_name?: string;
   container?: string;
   path?: string;
-  url?: string;
   api_url?: string;
-  auth_type?: string;
   authentication_method?: string;
-  username?: string;
-  password_secret?: string;
-  connection_string_secret?: string;
   key_vault_secret_name?: string;
-  event_hub_namespace?: string;
-  consumer_group?: string;
 }
 
 export interface ColumnDefinition {
@@ -90,16 +86,15 @@ export interface ColumnDefinition {
   nullable: boolean;
   description?: string;
   is_pii?: boolean;
-  is_primary_key?: boolean;
   classification?: string;
 }
 
-/** Supports both column-based and table-based schemas, plus API endpoints. */
+/**
+ * Schema definition for a data source.
+ * Matches Python `SchemaDefinition` in models/source.py.
+ */
 export interface SchemaDefinition {
   columns?: ColumnDefinition[];
-  tables?: Record<string, ColumnDefinition[]>;
-  endpoints?: string[];
-  auto_detect?: boolean;
   primary_key?: string[];
   partition_columns?: string[];
   watermark_column?: string;
@@ -112,34 +107,29 @@ export interface IngestionConfig {
   parallelism?: number;
   max_retry_count?: number;
   timeout_minutes?: number;
-  watermark_column?: string;
 }
 
+/**
+ * Data quality rule definition.
+ * Matches Python `QualityRule` in models/source.py.
+ * Note: Python uses `str` (not a union) for rule_type and severity,
+ * but the conventional values are listed here for documentation.
+ */
 export interface DataQualityRule {
   rule_name: string;
-  rule_type:
-    | 'not_null'
-    | 'unique'
-    | 'range'
-    | 'regex'
-    | 'custom_sql'
-    | 'freshness'
-    | 'completeness';
+  rule_type: string;
   column?: string;
   parameters: Record<string, unknown>;
-  severity: 'warning' | 'error' | 'critical';
+  severity: string;
 }
 
 export interface DataProductConfig {
   name: string;
-  description?: string;
+  description: string;
   domain: string;
   sla_freshness_hours?: number;
-  sla_freshness_minutes?: number;
   sla_completeness?: number;
   sla_availability?: number;
-  valid_row_ratio?: number;
-  quality_rules?: DataQualityRule[];
 }
 
 export interface TargetConfig {
@@ -153,22 +143,24 @@ export interface TargetConfig {
 export interface OwnerInfo {
   name: string;
   email: string;
-  team?: string;
-  domain?: string;
+  team: string;
   cost_center?: string;
 }
 
 /**
- * Source registration payload — uses snake_case consistently.
- * This is what gets POSTed to the API.
+ * Source registration payload — the create request body.
+ * Matches Python `SourceRegistration` in models/source.py.
+ *
+ * Python field `name` (not `source_name`).
+ * Python field `tags` is `dict[str, str]` (not `string[]`).
+ * Python field `schema_def` has alias `schema`.
  */
 export interface SourceRegistration {
-  source_name: string;
+  name: string;
   source_type: SourceType;
   description?: string;
-  domain?: string;
+  domain: string;
   classification: ClassificationLevel;
-  environment?: string;
   connection: ConnectionConfig;
   schema_definition?: SchemaDefinition;
   ingestion: IngestionConfig;
@@ -176,123 +168,133 @@ export interface SourceRegistration {
   data_product?: DataProductConfig;
   target: TargetConfig;
   owner: OwnerInfo;
-  tags: string[];
+  tags: Record<string, string>;
 }
 
-/** Persisted source record returned by the API. */
+/**
+ * Persisted source record returned by the API.
+ * Matches Python `SourceRecord` in models/source.py.
+ *
+ * Python field `id` (not `source_id`).
+ */
 export interface SourceRecord extends SourceRegistration {
-  source_id: string;
+  id: string;
   status: SourceStatus;
   created_at: string;
   updated_at: string;
   provisioned_at?: string;
   pipeline_id?: string;
-  provisioning_details?: Record<string, unknown>;
+  purview_scan_id?: string;
 }
 
 // ─── Pipeline Types ────────────────────────────────────────────────────────
 
+/**
+ * Pipeline execution status.
+ * Must match Python `PipelineStatus` enum in models/pipeline.py.
+ */
 export type PipelineStatus =
-  | 'draft'
   | 'created'
-  | 'deploying'
   | 'running'
-  | 'active'
   | 'succeeded'
   | 'failed'
-  | 'paused'
   | 'cancelled'
   | 'waiting';
 
+/**
+ * Pipeline template type.
+ * Must match Python `PipelineType` enum in models/pipeline.py.
+ */
 export type PipelineType =
   | 'batch_copy'
   | 'incremental'
   | 'cdc'
   | 'streaming'
   | 'api_ingestion'
-  | 'quality_check'
-  | 'custom';
+  | 'quality_check';
 
+/**
+ * Pipeline record stored in the registry.
+ * Matches Python `PipelineRecord` in models/pipeline.py.
+ */
 export interface PipelineRecord {
-  pipeline_id: string;
+  id: string;
+  name: string;
   source_id: string;
   pipeline_type: PipelineType;
-  name: string;
   status: PipelineStatus;
-  adf_pipeline_name?: string;
-  adf_pipeline_id?: string;
-  adf_resource_group?: string;
-  adf_factory_name?: string;
-  last_run_at?: string;
-  last_run_status?: string;
-  last_run_duration_seconds?: number;
-  rows_processed?: number;
-  schedule_cron?: string;
   created_at: string;
-  updated_at?: string;
+  last_run_at?: string;
+  schedule_cron?: string;
+  adf_pipeline_id?: string;
 }
 
+/**
+ * A single pipeline run / execution record.
+ * Matches Python `PipelineRun` in models/pipeline.py.
+ */
 export interface PipelineRun {
   id: string;
   pipeline_id: string;
   status: PipelineStatus;
   started_at: string;
   ended_at?: string;
-  completed_at?: string;
-  duration_seconds?: number;
   rows_read?: number;
   rows_written?: number;
   error_message?: string;
-  errors?: string[];
+  duration_seconds?: number;
 }
 
 // ─── Marketplace Types ─────────────────────────────────────────────────────
 
+/**
+ * A published data product in the marketplace.
+ * Matches Python `DataProduct` in models/marketplace.py.
+ */
 export interface DataProduct {
   id: string;
-  product_id?: string;
   name: string;
   description: string;
   domain: string;
-  owner: string | OwnerInfo;
-  owner_email?: string;
-  classification: string;
+  owner: OwnerInfo;
+  classification: ClassificationLevel;
   quality_score: number;
-  freshness_hours?: number;
-  sla_freshness_minutes?: number;
-  completeness?: number;
-  availability?: number;
-  schema_summary?: Record<string, unknown>;
-  tags: string[] | Record<string, string>;
-  row_count?: number;
-  access_count?: number;
+  freshness_hours: number;
+  completeness: number;
+  availability: number;
+  tags: Record<string, string>;
   created_at: string;
-  updated_at?: string;
-  last_updated?: string;
-  schema?: SchemaDefinition;
+  updated_at: string;
+  schema_definition?: SchemaDefinition;
   sample_queries?: string[];
   documentation_url?: string;
 }
 
+/**
+ * Point-in-time quality measurement for a data product.
+ * Matches Python `QualityMetric` in models/marketplace.py.
+ * All fields are required (Python model has no Optional fields).
+ */
 export interface QualityMetric {
-  metric_id?: string;
-  product_id?: string;
-  date?: string;
-  timestamp?: string;
-  quality_score?: number;
-  overall_score?: number;
-  completeness?: number;
-  freshness_hours?: number;
-  freshness_minutes?: number;
-  valid_row_ratio?: number;
-  null_rate?: number;
-  duplicate_rate?: number;
-  schema_drift_detected?: boolean;
-  row_count?: number;
+  date: string;
+  quality_score: number;
+  completeness: number;
+  freshness_hours: number;
+  row_count: number;
 }
 
 // ─── Access Request Types ──────────────────────────────────────────────────
 
+/**
+ * Access level for data product requests.
+ * Must match Python `AccessLevel` enum in models/marketplace.py.
+ */
+export type AccessLevel = 'read' | 'read_write' | 'admin';
+
+/**
+ * Lifecycle status of an access request.
+ * Must match Python `AccessRequestStatus` enum in models/marketplace.py.
+ */
 export type AccessRequestStatus =
   | 'pending'
   | 'approved'
@@ -300,48 +302,74 @@ export type AccessRequestStatus =
   | 'revoked'
   | 'expired';
 
-export interface AccessRequest {
-  id?: string;
-  request_id?: string;
-  product_id?: string;
-  data_product_id?: string;
-  requester_name?: string;
-  requester_email: string;
-  requester_domain?: string;
+/**
+ * Payload to create a new access request.
+ * Matches Python `AccessRequestCreate` in models/marketplace.py.
+ */
+export interface AccessRequestCreate {
+  data_product_id: string;
   justification: string;
-  access_level: 'read' | 'read_write' | 'admin';
+  access_level?: AccessLevel;
+  duration_days?: number;
+}
+
+/**
+ * Full access request record.
+ * Matches Python `AccessRequest` in models/marketplace.py.
+ */
+export interface AccessRequest {
+  id: string;
+  requester_email: string;
+  data_product_id: string;
+  justification: string;
+  access_level: AccessLevel;
   duration_days: number;
   status: AccessRequestStatus;
-  reviewer?: string;
+  requested_at: string;
+  reviewed_at?: string;
   reviewed_by?: string;
   review_notes?: string;
-  requested_at?: string;
-  reviewed_at?: string;
   expires_at?: string;
-  created_at?: string;
 }
 
 // ─── Dashboard Types ───────────────────────────────────────────────────────
 
+/**
+ * Platform-wide statistics shown on the dashboard.
+ * Matches Python `PlatformStats` in models/marketplace.py.
+ */
 export interface PlatformStats {
   registered_sources: number;
   active_pipelines: number;
   data_products: number;
   pending_access_requests: number;
-  total_data_volume_gb?: number;
-  last_24h_pipeline_runs?: number;
-  avg_quality_score?: number;
+  total_data_volume_gb: number;
+  last_24h_pipeline_runs: number;
+  avg_quality_score: number;
 }
 
+/**
+ * Health status of a data domain.
+ * Must match Python `DomainStatus` enum in models/marketplace.py.
+ */
+export type DomainStatus = 'healthy' | 'warning' | 'critical';
+
+/**
+ * Per-domain summary for the domain overview dashboard.
+ * Matches Python `DomainOverview` in models/marketplace.py.
+ */
 export interface DomainOverview {
   name: string;
   source_count: number;
   pipeline_count: number;
   data_product_count: number;
   avg_quality_score: number;
-  status: 'healthy' | 'warning' | 'critical';
+  status: DomainStatus;
 }
 
+/**
+ * Recent activity feed item (frontend-only type, not directly from a Python model).
+ */
 export interface RecentActivity {
   id: string;
   type:

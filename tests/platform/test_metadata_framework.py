@@ -1,4 +1,4 @@
-"""Tests for the platform/metadata-framework module.
+"""Tests for the csa_platform/metadata_framework module.
 
 Covers:
 - PipelineGenerator (template selection, name generation, customization, validation)
@@ -107,7 +107,7 @@ def output_dir(tmp_path: Path) -> Path:
 @pytest.fixture
 def generator(schema_dir: Path, template_dir: Path, output_dir: Path) -> Any:
     """Create a PipelineGenerator with temp directories."""
-    from platform.metadata_framework.generator.pipeline_generator import (
+    from csa_platform.metadata_framework.generator.pipeline_generator import (
         PipelineGenerator,  # type: ignore[import-untyped]
     )
 
@@ -141,49 +141,49 @@ class TestInferColumnType:
     """Tests for the _infer_column_type utility function."""
 
     def test_empty_values(self) -> None:
-        from platform.metadata_framework.generator.pipeline_generator import (
+        from csa_platform.metadata_framework.generator.pipeline_generator import (
             _infer_column_type,  # type: ignore[import-untyped]
         )
 
         assert _infer_column_type([]) == "string"
 
     def test_integer_values(self) -> None:
-        from platform.metadata_framework.generator.pipeline_generator import (
+        from csa_platform.metadata_framework.generator.pipeline_generator import (
             _infer_column_type,  # type: ignore[import-untyped]
         )
 
         assert _infer_column_type(["1", "2", "3", "42"]) == "integer"
 
     def test_float_values(self) -> None:
-        from platform.metadata_framework.generator.pipeline_generator import (
+        from csa_platform.metadata_framework.generator.pipeline_generator import (
             _infer_column_type,  # type: ignore[import-untyped]
         )
 
         assert _infer_column_type(["1.5", "2.7", "3.14"]) == "float"
 
     def test_boolean_values(self) -> None:
-        from platform.metadata_framework.generator.pipeline_generator import (
+        from csa_platform.metadata_framework.generator.pipeline_generator import (
             _infer_column_type,  # type: ignore[import-untyped]
         )
 
         assert _infer_column_type(["true", "false", "yes", "no"]) == "boolean"
 
     def test_datetime_values(self) -> None:
-        from platform.metadata_framework.generator.pipeline_generator import (
+        from csa_platform.metadata_framework.generator.pipeline_generator import (
             _infer_column_type,  # type: ignore[import-untyped]
         )
 
         assert _infer_column_type(["2024-01-15", "2024-06-30"]) == "datetime"
 
     def test_string_values(self) -> None:
-        from platform.metadata_framework.generator.pipeline_generator import (
+        from csa_platform.metadata_framework.generator.pipeline_generator import (
             _infer_column_type,  # type: ignore[import-untyped]
         )
 
         assert _infer_column_type(["hello", "world", "foo"]) == "string"
 
     def test_mixed_numeric_defaults_to_float(self) -> None:
-        from platform.metadata_framework.generator.pipeline_generator import (
+        from csa_platform.metadata_framework.generator.pipeline_generator import (
             _infer_column_type,  # type: ignore[import-untyped]
         )
 
@@ -218,7 +218,7 @@ class TestSelectTemplate:
         assert generator.select_template("cosmos_db", "full") == "adf_batch_copy.json"
 
     def test_unsupported_combination(self, generator: Any) -> None:
-        from platform.metadata_framework.generator.pipeline_generator import (
+        from csa_platform.metadata_framework.generator.pipeline_generator import (
             PipelineGenerationError,  # type: ignore[import-untyped]
         )
 
@@ -280,7 +280,7 @@ class TestValidateSourceRegistration:
 
     def test_missing_required_field(self, generator: Any) -> None:
         """Missing required fields fail validation."""
-        from platform.metadata_framework.generator.pipeline_generator import (
+        from csa_platform.metadata_framework.generator.pipeline_generator import (
             PipelineGenerationError,  # type: ignore[import-untyped]
         )
 
@@ -354,7 +354,7 @@ class TestLoadTemplate:
         assert "resources" in template
 
     def test_load_missing_template(self, generator: Any) -> None:
-        from platform.metadata_framework.generator.pipeline_generator import (
+        from csa_platform.metadata_framework.generator.pipeline_generator import (
             PipelineGenerationError,  # type: ignore[import-untyped]
         )
 
@@ -407,7 +407,7 @@ class TestGenerateFromConfig:
         assert result.pipeline_name == "pl_orders_database_full"
 
     def test_generate_from_missing_file(self, generator: Any) -> None:
-        from platform.metadata_framework.generator.pipeline_generator import (
+        from csa_platform.metadata_framework.generator.pipeline_generator import (
             PipelineGenerationError,  # type: ignore[import-untyped]
         )
 
@@ -457,7 +457,7 @@ class TestValidateGeneratedPipeline:
         assert len(warnings) == 0
 
     def test_missing_resources(self, generator: Any) -> None:
-        from platform.metadata_framework.generator.pipeline_generator import (
+        from csa_platform.metadata_framework.generator.pipeline_generator import (
             PipelineGenerationResult,  # type: ignore[import-untyped]
         )
 
@@ -471,7 +471,7 @@ class TestValidateGeneratedPipeline:
         assert any("resources" in w for w in warnings)
 
     def test_missing_parameters(self, generator: Any) -> None:
-        from platform.metadata_framework.generator.pipeline_generator import (
+        from csa_platform.metadata_framework.generator.pipeline_generator import (
             PipelineGenerationResult,  # type: ignore[import-untyped]
         )
 
@@ -494,7 +494,7 @@ class TestDataclasses:
     """Tests for pipeline generator dataclasses."""
 
     def test_pipeline_generation_result(self) -> None:
-        from platform.metadata_framework.generator.pipeline_generator import (
+        from csa_platform.metadata_framework.generator.pipeline_generator import (
             PipelineGenerationResult,  # type: ignore[import-untyped]
         )
 
@@ -508,7 +508,7 @@ class TestDataclasses:
         assert result.bicep_template is None
 
     def test_source_detection_result(self) -> None:
-        from platform.metadata_framework.generator.pipeline_generator import (
+        from csa_platform.metadata_framework.generator.pipeline_generator import (
             SourceDetectionResult,  # type: ignore[import-untyped]
         )
 
@@ -522,7 +522,7 @@ class TestDataclasses:
         assert len(result.tables) == 1
 
     def test_custom_exceptions(self) -> None:
-        from platform.metadata_framework.generator.pipeline_generator import (  # type: ignore[import-untyped]
+        from csa_platform.metadata_framework.generator.pipeline_generator import (  # type: ignore[import-untyped]
             PipelineGenerationError,
             SchemaDetectionError,
         )

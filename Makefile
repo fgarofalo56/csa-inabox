@@ -24,12 +24,12 @@ setup-win: ## Set up development environment (Windows)
 # --- Linting ---
 
 lint: ## Run all linters (uses pyproject.toml rule config)
-	ruff check domains/ scripts/ governance/ tools/ platform/ portal/ examples/
+	ruff check domains/ scripts/ governance/ tools/ csa_platform/ portal/ examples/
 	@echo "Python lint passed"
 
 lint-fix: ## Auto-fix lint issues
-	ruff check domains/ scripts/ governance/ tools/ platform/ portal/ examples/ --fix
-	ruff format domains/ scripts/ governance/ tools/ platform/ portal/ examples/
+	ruff check domains/ scripts/ governance/ tools/ csa_platform/ portal/ examples/ --fix
+	ruff format domains/ scripts/ governance/ tools/ csa_platform/ portal/ examples/
 
 typecheck: ## Run strict mypy on governance, tests, and all three Function apps
 	mypy
@@ -39,10 +39,10 @@ typecheck: ## Run strict mypy on governance, tests, and all three Function apps
 	@echo "mypy strict passed"
 
 typecheck-platform: ## Run mypy on platform modules (progressive strictness)
-	mypy platform/ai_integration/ --ignore-missing-imports
-	mypy platform/data_marketplace/ --ignore-missing-imports
-	mypy platform/metadata-framework/ --ignore-missing-imports
-	mypy platform/purview_governance/ --ignore-missing-imports
+	mypy csa_platform/ai_integration/ --ignore-missing-imports
+	mypy csa_platform/data_marketplace/ --ignore-missing-imports
+	mypy csa_platform/metadata_framework/ --ignore-missing-imports
+	mypy csa_platform/purview_governance/ --ignore-missing-imports
 	@echo "mypy platform passed"
 
 lint-bicep: ## Lint all Bicep files
@@ -89,7 +89,8 @@ deploy-dev: ## Deploy to dev environment (what-if)
 	bash scripts/deploy/deploy-platform.sh --environment dev --dry-run
 
 deploy-prod: ## Deploy to production (requires confirmation)
-	@echo "Deploying to PRODUCTION..."
+	@echo "⚠️  WARNING: You are about to deploy to PRODUCTION"
+	@read -p "Type 'DEPLOY' to confirm: " confirm && [ "$$confirm" = "DEPLOY" ] || (echo "Aborted." && exit 1)
 	bash scripts/deploy/deploy-platform.sh --environment prod
 
 deploy-adf: ## Deploy ADF pipelines to a Data Factory instance

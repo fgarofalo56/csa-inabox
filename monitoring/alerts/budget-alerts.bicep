@@ -52,40 +52,9 @@ param budgets array = [
   }
 ]
 
-@description('Alert threshold percentages (each creates a notification)')
-param thresholds array = [
-  {
-    operator: 'GreaterThan'
-    percentage: 50
-    contactType: 'email'
-  }
-  {
-    operator: 'GreaterThan'
-    percentage: 75
-    contactType: 'email'
-  }
-  {
-    operator: 'GreaterThan'
-    percentage: 90
-    contactType: 'both'
-  }
-  {
-    operator: 'GreaterThan'
-    percentage: 100
-    contactType: 'both'
-  }
-  {
-    operator: 'GreaterThanOrEqualTo'
-    percentage: 120
-    contactType: 'both'
-  }
-]
-
-@description('Email addresses for budget alerts')
-param notificationEmails array = [
-  'platform-team@example.com'
-  'finance-team@example.com'
-]
+// TODO: Set notificationEmails to your organization's actual distribution lists before deploying.
+@description('Email addresses for budget alerts. Must be set to valid addresses before deployment.')
+param notificationEmails array
 
 @description('Teams webhook URL for budget alerts')
 param teamsWebhookUrl string

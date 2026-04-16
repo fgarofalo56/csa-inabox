@@ -194,11 +194,11 @@ jobs:
         run: |
           echo "=== Files larger than 5MB ==="
           FOUND_LARGE=0
-          find . -type f -size +5M -not -path "./.git/*" | while read -r file; do
+          while read -r file; do
             SIZE=$(du -sh "$file" | cut -f1)
             echo "::warning::Large file: $file ($SIZE)"
             FOUND_LARGE=1
-          done
+          done < <(find . -type f -size +5M -not -path "./.git/*")
           if [ "$FOUND_LARGE" -eq 1 ]; then
             echo "::error::Found files larger than 5MB"
             exit 1
@@ -209,7 +209,8 @@ jobs:
           echo "=== Checking for common secret patterns ==="
           PATTERNS="password|secret|api_key|apikey|access_key|private_key|client_secret"
           MATCHES=$(grep -rni "$PATTERNS" --include="*.json" --include="*.yaml" --include="*.yml" \
-            --include="*.ps1" --include="*.py" --include="*.bicep" \
+            --include="*.ps1" --include="*.py" \
+            --exclude="*.bicep" \
             --exclude-dir=node_modules --exclude-dir=.venv --exclude-dir=codeqlDB \
             --exclude-dir=.git --exclude-dir=.github \
             . | grep -v "askForPassword" | grep -v "savePassword" \

@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - '**.py'
+      - 'portal/**'
   schedule:
     - cron: '37 3 * * 1'
 
@@ -15,9 +16,14 @@ permissions:
 
 jobs:
   analyze:
-    name: Analyze Python
+    name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python, javascript-typescript]
 
     steps:
       - name: Checkout repository
@@ -26,7 +32,7 @@ jobs:
       - name: Initialize CodeQL
         uses: github/codeql-action/init@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v3
         with:
-          languages: python
+          languages: ${{ matrix.language }}
           queries: security-extended
 
       - name: Autobuild
@@ -35,4 +41,4 @@ jobs:
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v3
         with:
-          category: "/language:python"
+          category: "/language:${{ matrix.language }}"

@@ -1,0 +1,29 @@
+# Dependencies managed in pyproject.toml [project.optional-dependencies.functions]
+# This file is kept for Azure Functions deployment (host.json + requirements.txt).
+#
+# Shared Services — Azure Functions
+# Python dependencies for the reusable function library.
+
+# Azure Functions SDK
+azure-functions>=1.17.0,<2.0.0
+
+# Azure Identity (DefaultAzureCredential)
+azure-identity>=1.17.0,<2.0.0
+
+# Azure Storage (blob operations)
+azure-storage-blob>=12.20.0,<13.0.0
+
+# JSON Schema validation
+jsonschema>=4.22.0,<5.0.0
+
+# Data quality expectations
+great-expectations>=0.18.0,<1.0.0
+
+# Data validation models
+pydantic>=2.7.0,<3.0.0
+
+# YAML support for data contracts
+pyyaml>=6.0,<7.0
+
+# HTTP requests for webhook notifications
+requests>=2.31.0,<3.0.0
