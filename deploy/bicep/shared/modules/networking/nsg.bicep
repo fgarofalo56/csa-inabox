@@ -26,6 +26,9 @@ resource nsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
   location: parLocation
   tags: parTags
   properties: {
+    // CKV_AZURE_9/10/160: sourceAddressPrefix must be explicitly provided per
+    // rule — no wildcard default — so that RDP (3389), SSH (22), and HTTP (80)
+    // are never accidentally opened to the internet.
     securityRules: [
       for rule in parSecurityRules: {
         name: rule.name
@@ -34,7 +37,7 @@ resource nsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
           direction: rule.direction
           access: rule.access
           protocol: rule.protocol
-          sourceAddressPrefix: rule.?sourceAddressPrefix ?? '*'
+          sourceAddressPrefix: rule.sourceAddressPrefix
           sourcePortRange: rule.?sourcePortRange ?? '*'
           destinationAddressPrefix: rule.?destinationAddressPrefix ?? '*'
           destinationPortRange: rule.?destinationPortRange ?? '*'
