@@ -14,7 +14,10 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import threading
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +26,19 @@ logger = logging.getLogger(__name__)
 # Default database path — all stores share one file for simplicity.
 _DEFAULT_DB_DIR = Path("./data")
 _DEFAULT_DB_NAME = "portal.db"
+
+# Global process-wide lock serializing read-modify-write sequences
+# (e.g. ``update()``, ``save()``).  SQLite WAL mode permits concurrent
+# readers + one writer at the OS level; this lock prevents two Python
+# threads from interleaving a SELECT-merge-UPDATE pair and producing a
+# lost-update, which WAL alone does not protect against (each connection
+# gets its own snapshot).
+#
+# Single-statement operations (``add``, ``get``, ``delete``, ``list``)
+# do not take this lock — SQLite atomicity on a single statement is
+# sufficient.  The lock is intentionally process-global rather than
+# per-``SqliteStore`` so that cross-table transactions (future) compose.
+_WRITE_LOCK = threading.RLock()
 
 
 def _table_name_from_filename(filename: str) -> str:
@@ -89,6 +105,31 @@ class SqliteStore:
         conn.execute("PRAGMA busy_timeout=5000")
         conn.execute("PRAGMA synchronous=NORMAL")
         return conn
+
+    @contextmanager
+    def _transact_immediate(self) -> Iterator[sqlite3.Connection]:
+        """Yield a connection running a single ``BEGIN IMMEDIATE`` txn.
+
+        ``BEGIN IMMEDIATE`` acquires SQLite's RESERVED lock up-front, so
+        any concurrent writer is either queued (up to ``busy_timeout``)
+        or fails with ``SQLITE_BUSY`` — preventing the
+        SELECT-modify-UPDATE race that a plain transaction (which
+        deferred the lock until the first write) allows.
+
+        Combined with the process-wide :data:`_WRITE_LOCK`, this gives us
+        strong serializable semantics for read-modify-write cycles even
+        under concurrent FastAPI worker threads.  Reads outside of such
+        cycles continue to use plain :meth:`_connect` for throughput —
+        SQLite WAL lets them proceed without taking the write lock.
+        """
+        with _WRITE_LOCK, self._connect() as conn:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                yield conn
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
 
     # ── schema bootstrap ────────────────────────────────────────────────
 
@@ -180,9 +221,66 @@ class SqliteStore:
             return None
         return json.loads(row[0])
 
+    def update_atomic(
+        self,
+        item_id: str,
+        mutator: Any,
+    ) -> dict[str, Any] | None:
+        """Apply a *function* to an existing item inside a single txn.
+
+        Use this whenever the new value depends on the current value
+        (counters, lists, conditional toggles).  ``mutator`` is called
+        with the current item dict and must return the new item dict —
+        it runs under the :data:`_WRITE_LOCK` inside the same
+        ``BEGIN IMMEDIATE`` transaction as the SELECT and UPDATE, so
+        two concurrent callers cannot clobber each other's reads.
+
+        Returns the updated item, or ``None`` if ``item_id`` is missing.
+
+        Example::
+
+            store.update_atomic(
+                "counter",
+                lambda x: {**x, "n": x["n"] + 1},
+            )
+        """
+        with self._transact_immediate() as conn:
+            row = conn.execute(
+                f"SELECT data FROM [{self.table}] WHERE id = ?",
+                (item_id,),
+            ).fetchone()
+            if row is None:
+                return None
+
+            current = json.loads(row[0])
+            updated = mutator(current)
+            if not isinstance(updated, dict):
+                msg = (
+                    f"update_atomic mutator returned {type(updated).__name__}, "
+                    "expected dict."
+                )
+                raise TypeError(msg)
+
+            conn.execute(
+                f"UPDATE [{self.table}] SET data = ? WHERE id = ?",
+                (json.dumps(updated, default=str), item_id),
+            )
+
+        logger.debug("Atomically updated item %s in [%s]", item_id, self.table)
+        return updated
+
     def update(self, item_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
-        """Merge *updates* into an existing item.  Returns the merged item or ``None``."""
-        with self._connect() as conn:
+        """Merge *updates* into an existing item.  Returns the merged item or ``None``.
+
+        The SELECT + UPDATE pair runs inside a single ``BEGIN IMMEDIATE``
+        transaction under :data:`_WRITE_LOCK`, so two concurrent
+        ``update()`` calls on the same row serialize (no lost updates).
+
+        For updates that depend on the current value (counters, list
+        appends), use :meth:`update_atomic` instead — ``updates`` is a
+        plain merge and cannot express 'increment by one' safely.
+        """
+        with self._transact_immediate() as conn:
             row = conn.execute(
                 f"SELECT data FROM [{self.table}] WHERE id = ?",
                 (item_id,),
@@ -197,7 +295,6 @@ class SqliteStore:
                 f"UPDATE [{self.table}] SET data = ? WHERE id = ?",
                 (json.dumps(item, default=str), item_id),
             )
-            conn.commit()
 
         logger.debug("Updated item %s in [%s]", item_id, self.table)
         return item
@@ -228,8 +325,13 @@ class SqliteStore:
         return [json.loads(r[0]) for r in rows]
 
     def save(self, data: list[dict[str, Any]]) -> None:
-        """Bulk-replace every item (legacy compatibility)."""
-        with self._connect() as conn:
+        """Bulk-replace every item (legacy compatibility).
+
+        Runs the ``DELETE`` + ``INSERT``s as a single atomic transaction
+        under :data:`_WRITE_LOCK` so a crash mid-save cannot leave the
+        table half-deleted.
+        """
+        with self._transact_immediate() as conn:
             conn.execute(f"DELETE FROM [{self.table}]")
             for item in data:
                 item_id = str(item.get("id", uuid.uuid4()))
@@ -237,7 +339,6 @@ class SqliteStore:
                     f"INSERT INTO [{self.table}] (id, data) VALUES (?, ?)",
                     (item_id, json.dumps(item, default=str)),
                 )
-            conn.commit()
 
     def query(self, **filters: Any) -> list[dict[str, Any]]:
         """Filter items by top-level field values.
