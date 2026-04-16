@@ -248,7 +248,15 @@ quote-style = "double"
 indent-style = "space"
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "portal/shared/tests"]
+# Portal tests live in ``portal/shared/tests`` and are deliberately NOT
+# included here: both that directory and the root ``tests/`` directory
+# are Python packages (``__init__.py`` present) named ``tests``, which
+# causes pytest's import mode to resolve them to the same module path
+# ``tests.conftest`` and raise ``ImportPathMismatchError``.  The portal
+# package is tested by its own ``pytest portal/shared/tests`` invocation
+# (see Makefile / portal CI lane).  Refactoring to a single rootdir is
+# tracked as a follow-up.
+testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
 python_functions = ["test_*"]
 addopts = "--tb=short -q --strict-markers"
