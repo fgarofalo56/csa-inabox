@@ -242,6 +242,7 @@ class EmbeddingGenerator:
         self.batch_size = batch_size
         self.max_concurrent = max_concurrent
         self._client: AzureOpenAI | None = None
+        self._cached_async_client: Any = None
 
     def _get_client(self) -> AzureOpenAI:
         """Lazily initialise the Azure OpenAI client."""

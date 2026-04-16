@@ -141,7 +141,7 @@ def _openid_config_url() -> str:
 async def _get_jwks() -> dict[str, Any]:
     """Fetch (and cache with 24h TTL) the JSON Web Key Set from Azure AD."""
     cache_key = f"{_tenant_id()}:{_is_government_cloud()}"
-    cached = _JWKS_CACHE.get(cache_key)
+    cached: dict[str, Any] | None = _JWKS_CACHE.get(cache_key)
     if cached is not None:
         return cached
 

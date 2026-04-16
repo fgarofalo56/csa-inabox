@@ -142,12 +142,23 @@ app.add_middleware(SecurityHeadersMiddleware)
 
 # ── CORS ─────────────────────────────────────────────────────────────────────
 
+# Reject wildcard patterns at startup — they match any Azure-hosted app
+# and allow credentialed cross-origin requests from attacker-controlled
+# origins.  Set CORS_ORIGINS to explicit hostnames in production.
+_rejected = [o for o in settings.CORS_ORIGINS if "*" in o]
+if _rejected and settings.ENVIRONMENT.lower() not in {"local", "dev"}:
+    raise RuntimeError(
+        f"CORS_ORIGINS contains wildcard patterns: {_rejected!r}.  "
+        "Wildcards with allow_credentials=True let any Azure-hosted app "
+        "make credentialed requests.  Use explicit hostnames."
+    )
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 # ── Routers ──────────────────────────────────────────────────────────────────

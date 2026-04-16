@@ -10,8 +10,9 @@ from collections.abc import Generator
 from typing import Any
 
 import pytest
-from csa_platform.data_marketplace.api.marketplace_api import InMemoryStore, app, get_store
 from httpx import ASGITransport, AsyncClient
+
+from csa_platform.data_marketplace.api.marketplace_api import InMemoryStore, app, get_store
 
 # ---------------------------------------------------------------------------
 # Fixtures

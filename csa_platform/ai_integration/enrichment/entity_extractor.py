@@ -23,6 +23,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from azure.core.exceptions import AzureError
+
 if TYPE_CHECKING:
     from azure.ai.textanalytics import TextAnalyticsClient
     from azure.core.credentials import AzureKeyCredential
@@ -143,7 +145,7 @@ class EntityExtractor:
                     documents=batch,
                     language=self.language,
                 )
-            except Exception:
+            except AzureError:
                 logger.exception("ner_batch.failed", batch_start=i)
                 all_results.extend(
                     ExtractionResult(text=t, is_error=True, error_message="API call failed") for t in batch
