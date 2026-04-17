@@ -75,27 +75,10 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 
 # ── Auth Safety Gate ────────────────────────────────────────────────────────
-# Defence-in-depth: this mirrors the check in auth.py at the application
-# entry-point so it fires even if the auth module is not directly imported.
-
-_auth_off = settings.AUTH_DISABLED or not settings.AZURE_TENANT_ID
-_safe_env = settings.ENVIRONMENT.lower() == "local" or settings.DEMO_MODE
-
-if _auth_off and not _safe_env:
-    logger.critical(
-        "FATAL: Authentication is disabled (AUTH_DISABLED=%s, "
-        "AZURE_TENANT_ID=%s) but ENVIRONMENT=%r is not 'local' and "
-        "DEMO_MODE is False.  Refusing to start — configure authentication "
-        "or set ENVIRONMENT=local for development.",
-        settings.AUTH_DISABLED,
-        bool(settings.AZURE_TENANT_ID),
-        settings.ENVIRONMENT,
-    )
-    raise RuntimeError(
-        "AUTH_DISABLED or missing AZURE_TENANT_ID in non-local environment. "
-        "Set ENVIRONMENT=local or DEMO_MODE=true for development, or "
-        "configure AZURE_TENANT_ID for production."
-    )
+# The import of `get_current_user` above triggers the safety gate in
+# portal.shared.api.services.auth (which delegates to
+# csa_platform.common.auth.enforce_auth_safety_gate).  No duplicate
+# check is needed here.
 
 
 # ── Lifespan ─────────────────────────────────────────────────────────────────

@@ -79,6 +79,9 @@ redis:
   auth:
     enabled: true
 
+networkPolicy:
+  enabled: false
+
 monitoring:
   serviceMonitor:
     enabled: true

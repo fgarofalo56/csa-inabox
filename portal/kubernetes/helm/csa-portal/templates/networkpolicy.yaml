@@ -1,0 +1,127 @@
+{{- if .Values.networkPolicy.enabled }}
+# ──────────────────────────────────────────────
+# Frontend NetworkPolicy
+# ──────────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "csa-portal.fullname" . }}-frontend
+  labels:
+    {{- include "csa-portal.frontend.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "csa-portal.name" . }}-frontend
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow ingress from any source (served via ingress controller)
+    - ports:
+        - port: {{ .Values.frontend.service.port }}
+          protocol: TCP
+  egress:
+    # Allow egress to backend service on port 8000
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "csa-portal.name" . }}-backend
+      ports:
+        - port: {{ .Values.backend.service.port }}
+          protocol: TCP
+    # Allow DNS resolution
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+---
+# ──────────────────────────────────────────────
+# Backend NetworkPolicy
+# ──────────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "csa-portal.fullname" . }}-backend
+  labels:
+    {{- include "csa-portal.backend.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "csa-portal.name" . }}-backend
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow ingress only from frontend pods on the backend port
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "csa-portal.name" . }}-frontend
+      ports:
+        - port: {{ .Values.backend.service.port }}
+          protocol: TCP
+    # Allow ingress from the ingress controller for /api routes
+    - from:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ingress-nginx
+      ports:
+        - port: {{ .Values.backend.service.port }}
+          protocol: TCP
+  egress:
+    # Allow egress to Redis on port 6379
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis
+      ports:
+        - port: 6379
+          protocol: TCP
+    # Allow DNS resolution
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # Allow HTTPS egress to external Azure services
+    - ports:
+        - port: 443
+          protocol: TCP
+---
+# ──────────────────────────────────────────────
+# Redis NetworkPolicy
+# ──────────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "csa-portal.fullname" . }}-redis
+  labels:
+    {{- include "csa-portal.labels" . | nindent 4 }}
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/component: redis
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow ingress only from backend pods on port 6379
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "csa-portal.name" . }}-backend
+      ports:
+        - port: 6379
+          protocol: TCP
+  egress:
+    # Allow DNS resolution only
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+{{- end }}

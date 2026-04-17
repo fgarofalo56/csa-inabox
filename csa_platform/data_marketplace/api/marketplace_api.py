@@ -1,8 +1,26 @@
 """FastAPI application for the CSA-in-a-Box Data Marketplace.
 
-Provides REST endpoints for data product registration, discovery, access
-request workflows, and quality monitoring. Backed by Azure Cosmos DB and
-integrated with Azure Purview for governance.
+.. deprecated::
+    This module is the **platform-layer** marketplace implementation with
+    richer domain models (``QualityScore``, ``SLADefinition``,
+    ``LineageInfo``, ``DataProductSchema``) and Cosmos DB persistence.
+
+    The **actively-served** marketplace is in
+    ``portal.shared.api.routers.marketplace`` (backed by SQLite, consumed
+    by the React frontend).  The two share the same *concept* but have
+    divergent schemas and persistence strategies.
+
+    **Consolidation plan** (ARCH-0001):
+    1. Adopt the richer models from this module into the portal models.
+    2. Add a response DTO adapter so the React frontend type contract is
+       preserved.
+    3. Migrate the portal's flat ``quality_score: float`` to the
+       dimensioned ``QualityScore`` object.
+    4. Once the portal consumes these models, delete this standalone API.
+
+    Until then, this module serves as a **reference design** for the
+    target-state marketplace and is exercised by
+    ``csa_platform/data_marketplace/tests/``.
 
 Endpoints:
     GET  /products                      — List all data products
@@ -30,6 +48,7 @@ from csa_platform.common.auth import (
     enforce_auth_safety_gate,
     require_role,
 )
+from csa_platform.common.logging import configure_structlog, get_logger
 from csa_platform.data_marketplace.models.data_product import (
     AccessRequest,
     AccessRequestApproval,
@@ -42,7 +61,6 @@ from csa_platform.data_marketplace.models.data_product import (
     QualityHistoryResponse,
     QualityMetric,
 )
-from csa_platform.common.logging import configure_structlog, get_logger
 
 configure_structlog(service="data-marketplace-api")
 logger = get_logger(__name__)

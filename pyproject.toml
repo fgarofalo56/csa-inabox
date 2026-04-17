@@ -89,7 +89,6 @@ portal = [
     "pydantic>=2.7.0,<3.0.0",
     "pydantic-settings>=2.3.0,<3.0.0",
     # Authentication (Azure AD / Entra ID JWT)
-    "python-jose[cryptography]>=3.3.0,<4.0.0",
     "PyJWT>=2.8.0,<3.0.0",
     "cryptography>=41.0.0,<47.0.0",
     # Caching (JWKS TTL cache)

@@ -45,10 +45,10 @@ import os
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-import httpx
-from cachetools import TTLCache
+import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jwt import PyJWKClient
 
 logger = logging.getLogger(__name__)
 
@@ -123,8 +123,10 @@ def enforce_auth_safety_gate() -> None:
 _COMMERCIAL_AUTHORITY = "https://login.microsoftonline.com"
 _GOVERNMENT_AUTHORITY = "https://login.microsoftonline.us"
 
-# 24h TTL JWKS cache — Azure AD rotates signing keys periodically.
-_JWKS_CACHE: TTLCache[str, dict[str, Any]] = TTLCache(maxsize=10, ttl=86400)
+# PyJWKClient fetches the JWKS URI and caches signing keys internally.
+# lifespan=86400 keeps keys for 24 hours, matching Azure AD's rotation period.
+# One client per (tenant, cloud) pair is created lazily and reused.
+_jwks_clients: dict[str, PyJWKClient] = {}
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -134,28 +136,25 @@ def _authority_url() -> str:
     return f"{base}/{_tenant_id()}"
 
 
-def _openid_config_url() -> str:
-    return f"{_authority_url()}/v2.0/.well-known/openid-configuration"
+def _jwks_uri() -> str:
+    """Return the JWKS URI for the current tenant and cloud."""
+    return f"{_authority_url()}/discovery/v2.0/keys"
 
 
-async def _get_jwks() -> dict[str, Any]:
-    """Fetch (and cache with 24h TTL) the JSON Web Key Set from Azure AD."""
+def _get_jwks_client() -> PyJWKClient:
+    """Return a cached PyJWKClient for the current tenant.
+
+    Config functions are called at validation time (not import time) so tests
+    can override environment variables after module import.
+    """
     cache_key = f"{_tenant_id()}:{_is_government_cloud()}"
-    cached: dict[str, Any] | None = _JWKS_CACHE.get(cache_key)
-    if cached is not None:
-        return cached
-
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        oidc_resp = await client.get(_openid_config_url())
-        oidc_resp.raise_for_status()
-        jwks_uri = oidc_resp.json()["jwks_uri"]
-
-        jwks_resp = await client.get(jwks_uri)
-        jwks_resp.raise_for_status()
-        jwks_data: dict[str, Any] = jwks_resp.json()
-        _JWKS_CACHE[cache_key] = jwks_data
-
-    return jwks_data
+    if cache_key not in _jwks_clients:
+        _jwks_clients[cache_key] = PyJWKClient(
+            uri=_jwks_uri(),
+            lifespan=86400,  # 24h — matches Azure AD key rotation cadence
+            cache_jwk_set=True,
+        )
+    return _jwks_clients[cache_key]
 
 
 async def _validate_token(token: str) -> dict[str, Any]:
@@ -177,41 +176,19 @@ async def _validate_token(token: str) -> dict[str, Any]:
         }
 
     try:
-        from jose import JWTError  # type: ignore[import-untyped]
-        from jose import jwt as jose_jwt
+        jwks_client = _get_jwks_client()
+        signing_key = jwks_client.get_signing_key_from_jwt(token)
 
-        jwks = await _get_jwks()
-        unverified_header = jose_jwt.get_unverified_header(token)
-        kid = unverified_header.get("kid")
-
-        rsa_key: dict[str, str] = {}
-        for key in jwks.get("keys", []):
-            if key["kid"] == kid:
-                rsa_key = {
-                    "kty": key["kty"],
-                    "kid": key["kid"],
-                    "use": key["use"],
-                    "n": key["n"],
-                    "e": key["e"],
-                }
-                break
-
-        if not rsa_key:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Unable to find appropriate signing key.",
-            )
-
-        claims: dict[str, Any] = jose_jwt.decode(
+        claims: dict[str, Any] = jwt.decode(
             token,
-            rsa_key,
+            signing_key,
             algorithms=["RS256"],
             audience=_client_id(),
             issuer=f"{_authority_url()}/v2.0",
         )
         return claims
 
-    except JWTError as exc:
+    except jwt.exceptions.InvalidTokenError as exc:
         logger.warning("JWT validation failed: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
