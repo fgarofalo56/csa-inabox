@@ -1,5 +1,6 @@
 """Async concurrency stress tests for Azure Functions."""
 import asyncio
+import sys
 import tempfile
 from typing import Any
 
@@ -31,6 +32,11 @@ class TestAIConcurrency:
         ids = {r["id"] for r in results}
         assert len(ids) == 50
 
+    @pytest.mark.xfail(
+        sys.platform == "win32",
+        reason="SQLite file locking on Windows prevents temp dir cleanup",
+        strict=False,
+    )
     async def test_concurrent_store_operations(self) -> None:
         """SQLite store should handle concurrent reads/writes safely."""
         with tempfile.TemporaryDirectory() as tmpdir:

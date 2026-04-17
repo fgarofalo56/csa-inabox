@@ -7,6 +7,7 @@
  */
 
 import React, { useState } from 'react';
+import { useRouter } from 'next/router';
 import { useForm } from 'react-hook-form';
 import { useRegisterSource } from '@/hooks/useApi';
 import type { SourceRegistration, DataQualityRule } from '@/types';
@@ -71,6 +72,7 @@ function StepIndicator({ currentStep }: { currentStep: number }) {
 }
 
 export default function RegisterSourcePage() {
+  const router = useRouter();
   const [step, setStep] = useState(0);
   const [qualityRules, setQualityRules] = useState<DataQualityRule[]>([]);
   const {
@@ -131,13 +133,9 @@ export default function RegisterSourcePage() {
   };
 
   const onSubmit = async (data: SourceRegistration) => {
-    try {
-      data.quality_rules = qualityRules;
-      await mutation.mutateAsync(data);
-      window.location.href = '/sources';
-    } catch (error) {
-      console.error('Registration failed:', error);
-    }
+    data.quality_rules = qualityRules;
+    await mutation.mutateAsync(data);
+    router.push('/sources');
   };
 
   return (
@@ -181,6 +179,15 @@ export default function RegisterSourcePage() {
             <StepReview watch={watch} qualityRules={qualityRules} />
           )}
         </div>
+
+        {mutation.isError && (
+          <div className="rounded-md bg-red-50 border border-red-200 p-4">
+            <p className="text-sm text-red-700">
+              Registration failed:{' '}
+              {(mutation.error as Error)?.message || 'An unexpected error occurred. Please try again.'}
+            </p>
+          </div>
+        )}
 
         {/* Navigation buttons */}
         <div className="flex justify-between">

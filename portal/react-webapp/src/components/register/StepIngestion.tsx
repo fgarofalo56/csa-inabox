@@ -109,7 +109,6 @@ export default function StepIngestion({ register, watch, errors }: StepIngestion
             <option value="parquet">Parquet</option>
             <option value="csv">CSV</option>
             <option value="json">JSON</option>
-            <option value="avro">Avro</option>
           </select>
         </div>
         <div>

@@ -25,13 +25,13 @@ from ..services.auth import get_current_user, require_role
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# ── JSON-based persistence ──────────────────────────────────────────────────
+# ── SQLite persistence ──────────────────────────────────────────────────
 _pipelines_store = JsonStore("pipelines.json")
 _runs_store = JsonStore("pipeline_runs.json")
 
 
-def _seed_demo_pipelines() -> None:
-    """Populate realistic demo pipelines on first access."""
+def seed_demo_pipelines() -> None:
+    """Populate realistic demo pipelines once at startup."""
     if _pipelines_store.count() > 0:
         return
 
@@ -114,7 +114,6 @@ async def list_pipelines(
     _user: dict = Depends(get_current_user),
 ) -> list[PipelineRecord]:
     """Return all pipelines, optionally filtered by source or status."""
-    _seed_demo_pipelines()
     results = [PipelineRecord.model_validate(item) for item in _pipelines_store.load()]
 
     # Domain scoping: non-admin users can only see their domain's pipelines
@@ -141,7 +140,6 @@ async def get_pipeline(
     _user: dict = Depends(get_current_user),
 ) -> PipelineRecord:
     """Return a single pipeline by ID."""
-    _seed_demo_pipelines()
     stored_pipeline = _pipelines_store.get(pipeline_id)
     if not stored_pipeline:
         raise HTTPException(status_code=404, detail=f"Pipeline '{pipeline_id}' not found.")
@@ -159,7 +157,6 @@ async def get_pipeline_runs(
     _user: dict = Depends(get_current_user),
 ) -> list[PipelineRun]:
     """Return recent execution runs for a pipeline."""
-    _seed_demo_pipelines()
     # Check if pipeline exists
     if not _pipelines_store.get(pipeline_id):
         raise HTTPException(status_code=404, detail=f"Pipeline '{pipeline_id}' not found.")
@@ -191,7 +188,6 @@ async def trigger_pipeline(
              providers/Microsoft.DataFactory/factories/{factory}/
              pipelines/{pipeline}/createRun?api-version=2018-06-01
     """
-    _seed_demo_pipelines()
     stored_pipeline = _pipelines_store.get(pipeline_id)
     if not stored_pipeline:
         raise HTTPException(status_code=404, detail=f"Pipeline '{pipeline_id}' not found.")

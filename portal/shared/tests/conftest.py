@@ -102,7 +102,12 @@ def client(app) -> Generator[TestClient, None, None]:
 
 @pytest.fixture(autouse=True)
 def _reset_stores():
-    """Clear all SQLite-backed stores between tests to ensure isolation."""
+    """Clear all SQLite-backed stores and re-seed demo data between tests.
+
+    The application seeds demo data once during lifespan startup, but the
+    test client triggers lifespan only once per session.  We clear and
+    re-seed before every test so each test starts with a known state.
+    """
     from portal.shared.api.routers import access, marketplace, pipelines, sources
 
     stores = [
@@ -116,6 +121,12 @@ def _reset_stores():
 
     for store in stores:
         store.clear()
+
+    # Re-seed demo data so tests that depend on it start with known state
+    sources.seed_demo_sources()
+    pipelines.seed_demo_pipelines()
+    access.seed_demo_requests()
+    marketplace.seed_demo_products()
 
     yield
 

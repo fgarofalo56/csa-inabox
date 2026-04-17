@@ -79,12 +79,12 @@ class TestHealthEndpoint:
         assert "version" in data
 
     def test_health_check_services(self, client: TestClient):
-        """Should return service statuses."""
+        """Should return dependency check statuses."""
         response = client.get("/api/v1/health")
         data = response.json()
-        assert "services" in data
-        services = data["services"]
-        assert services["api"] == "up"
+        assert "checks" in data
+        checks = data["checks"]
+        assert checks["data_store"] == "healthy"
 
 
 class TestDomainsEndpoint:

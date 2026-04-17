@@ -38,7 +38,7 @@ class ReviewBody(BaseModel):
 
     notes: str | None = None
 
-# ── JSON-based persistence ──────────────────────────────────────────────────
+# ── SQLite persistence ──────────────────────────────────────────────────────
 _access_store = JsonStore("access_requests.json")
 
 

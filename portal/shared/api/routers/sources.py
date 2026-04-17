@@ -106,7 +106,7 @@ class SourceUpdate(BaseModel):
 
     model_config = {"populate_by_name": True}
 
-# ── JSON-based persistence ──────────────────────────────────────────────────
+# ── SQLite persistence ──────────────────────────────────────────────────────
 _sources_store = JsonStore("sources.json")
 
 

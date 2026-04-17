@@ -299,7 +299,7 @@ async def _analyze_document(blob_data: bytes, content_type: str) -> dict[str, An
 # ---------------------------------------------------------------------------
 # HTTP Trigger: On-demand text enrichment
 # ---------------------------------------------------------------------------
-@app.route(route="enrich", methods=["POST"])
+@app.route(route="enrich", methods=["POST"], auth_level=func.AuthLevel.FUNCTION)
 async def enrich_text(req: func.HttpRequest) -> func.HttpResponse:
     """Enrich text with AI analysis (language, sentiment, entities, PII).
 

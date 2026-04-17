@@ -1,8 +1,8 @@
 """
 CSA-in-a-Box: Data Onboarding Portal — Shared Backend (main entry point).
 
-This is the FastAPI application that powers **all four** portal front-end
-implementations (React, PowerApps, Static Web App, Kubernetes).  It provides
+This is the FastAPI application that powers **all three** portal front-end
+implementations (React, PowerApps, Kubernetes).  It provides
 a unified ``/api/v1/`` surface for:
 
 * **Sources**      — data source registration & lifecycle management
@@ -25,7 +25,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -33,6 +33,7 @@ from starlette.responses import Response
 
 from .config import settings
 from .routers import access, marketplace, pipelines, sources, stats
+from .services.auth import get_current_user
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 
@@ -57,6 +58,14 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Permissions-Policy"] = (
             "camera=(), microphone=(), geolocation=()"
+        )
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: https:; "
+            "connect-src 'self' https://login.microsoftonline.com https://login.microsoftonline.us; "
+            "frame-ancestors 'none'"
         )
         if request.url.scheme == "https":
             response.headers["Strict-Transport-Security"] = (
@@ -100,22 +109,22 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
         settings.IS_GOVERNMENT_CLOUD,
         settings.DEBUG,
     )
-    # Initialize data directory for JSON persistence
+    # Initialize data directory for SQLite persistence
     from pathlib import Path
 
     data_dir = Path(settings.DATA_DIR)
     data_dir.mkdir(parents=True, exist_ok=True)
-    logger.info(f"JSON persistence data directory: {data_dir}")
+    logger.info(f"SQLite persistence data directory: {data_dir}")
 
     # Seed demo data once at startup (instead of per-request)
     sources.seed_demo_sources()
+    pipelines.seed_demo_pipelines()
     access.seed_demo_requests()
     marketplace.seed_demo_products()
     logger.info("Demo data seeding complete")
 
     yield
     logger.info("Shutting down CSA-in-a-Box API")
-    # JSON files are persisted automatically, no cleanup needed
 
 
 # ── Application ──────────────────────────────────────────────────────────────
@@ -217,7 +226,9 @@ async def health_ready() -> dict:
 
 
 @app.get("/api/v1/domains", response_model=list, tags=["Statistics"])
-async def list_all_domains() -> list[dict]:
+async def list_all_domains(
+    _user: dict = Depends(get_current_user),
+) -> list[dict]:
     """Return all domain overviews — convenience alias used by the React frontend."""
     from .routers.stats import _build_domain_overviews, _get_pipelines, _get_products, _get_sources
 

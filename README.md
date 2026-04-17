@@ -116,13 +116,10 @@ graph TB
 
 ```text
 📁 csa-inabox/
-├── 📁 bicep/                      # Infrastructure-as-Code
+├── 📁 deploy/bicep/               # Infrastructure-as-Code
 │   ├── 📁 DLZ/                    # Data Landing Zone modules
 │   ├── 📁 DMLZ/                   # Data Management Landing Zone
 │   └── 📁 landing-zone-alz/       # Azure Landing Zone foundation
-├── 📁 arm/                        # Legacy ARM templates (deprecated)
-├── 📁 scripts/                    # Deployment helper scripts
-├── 📁 notebooks/                  # Setup & config notebooks
 ├── 📁 domains/                    # Domain-oriented data mesh
 │   ├── 📁 finance/                # Finance domain (aging reports, revenue reconciliation)
 │   ├── 📁 inventory/              # Inventory domain (turnover, reorder alerts, warehouses)
@@ -132,15 +129,6 @@ graph TB
 │   ├── 📁 dlz/                    # Data Landing Zone examples
 │   └── 📁 spark/                  # Spark configurations & libraries
 ├── 📁 scripts/                    # Operations & management scripts
-│   ├── 📁 Azure IPs/              # Azure IP range management
-│   ├── 📁 Diagnostic Settings/    # Policy-based diagnostic settings
-│   ├── 📁 deploy/                 # Deployment automation (ADF, cost estimation)
-│   ├── 📁 monitor/                # KQL queries & monitoring
-│   ├── 📁 purview/                # Purview catalog bootstrap & lineage
-│   ├── 📁 seed/                   # Sample data loading
-│   ├── 📁 streaming/              # Event Hub producer & Stream Analytics
-│   ├── 📁 PowerShell/             # Management automation
-│   └── 📁 sql/                    # SQL & KQL references
 ├── 📁 csa_platform/               # Platform modules
 │   ├── 📁 ai_integration/        # AI/ML integration services
 │   ├── 📁 data_activator/        # Data activator triggers & actions

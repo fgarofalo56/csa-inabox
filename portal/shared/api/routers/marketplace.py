@@ -26,7 +26,7 @@ from ..services.auth import get_current_user
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# ── JSON-based persistence ──────────────────────────────────────────────────
+# ── SQLite persistence ──────────────────────────────────────────────────────
 _products_store = JsonStore("marketplace_products.json")
 _quality_store = JsonStore("marketplace_quality.json")
 

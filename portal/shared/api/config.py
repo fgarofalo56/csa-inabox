@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     IS_GOVERNMENT_CLOUD: bool = False
 
     # ── Database ─────────────────────────────────────────────────────────
-    # JSON-based persistence for demo/development - swap to Cosmos DB or PostgreSQL in production
+    # SQLite-based persistence for demo/development — swap to Cosmos DB or PostgreSQL in production
     DATA_DIR: str = "./data"
 
     # ── Azure Storage ────────────────────────────────────────────────────

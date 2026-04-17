@@ -45,7 +45,7 @@ services:
         condition: service_healthy
     environment:
       - ENVIRONMENT=development
-      - REDIS_URL=redis://:csa-dev-password@redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-changeme-in-dotenv}@redis:6379/0
       - LOG_LEVEL=debug
       # Azure AD (set in .env file or override)
       - AZURE_AD_TENANT_ID=${AZURE_AD_TENANT_ID:-}
@@ -66,11 +66,11 @@ services:
     container_name: csa-portal-redis
     ports:
       - "6379:6379"
-    command: redis-server --requirepass csa-dev-password --maxmemory 128mb --maxmemory-policy allkeys-lru
+    command: redis-server --requirepass ${REDIS_PASSWORD:-changeme-in-dotenv} --maxmemory 128mb --maxmemory-policy allkeys-lru
     volumes:
       - redis-data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "csa-dev-password", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-changeme-in-dotenv}", "ping"]
       interval: 10s
       timeout: 3s
       retries: 5

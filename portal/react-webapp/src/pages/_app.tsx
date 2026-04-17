@@ -4,7 +4,7 @@
  * Auth gating is conditional: skipped in development/demo mode.
  */
 
-import React from 'react';
+import React, { useState } from 'react';
 import type { AppProps } from 'next/app';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { PublicClientApplication, EventType } from '@azure/msal-browser';
@@ -16,6 +16,7 @@ import {
 } from '@azure/msal-react';
 import { msalConfig, loginRequest } from '@/services/authConfig';
 import { Layout } from '@/components/Layout';
+import api from '@/services/api';
 import '@/styles/globals.css';
 
 // ─── MSAL Instance (created once, outside component) ──────────────────────
@@ -36,16 +37,8 @@ msalInstance.addEventCallback((event) => {
   }
 });
 
-// ─── React Query Client ───────────────────────────────────────────────────
-
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      retry: 1,
-      refetchOnWindowFocus: false,
-    },
-  },
-});
+// Bind the MSAL instance to the API client so it can acquire tokens
+api.setMsalInstance(msalInstance);
 
 // ─── Auth Gating ──────────────────────────────────────────────────────────
 
@@ -93,6 +86,19 @@ function AuthGatedContent({ children }: { children: React.ReactNode }) {
 // ─── App Component ────────────────────────────────────────────────────────
 
 export default function App({ Component, pageProps }: AppProps) {
+  // QueryClient inside the component so it's per-React-tree (safe for SSR)
+  const [queryClient] = useState(
+    () =>
+      new QueryClient({
+        defaultOptions: {
+          queries: {
+            retry: 1,
+            refetchOnWindowFocus: false,
+          },
+        },
+      })
+  );
+
   return (
     <MsalProvider instance={msalInstance}>
       <QueryClientProvider client={queryClient}>

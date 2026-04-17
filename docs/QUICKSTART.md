@@ -35,7 +35,7 @@ about 60-90 minutes (assuming all prerequisites are met).
 | Tool | Minimum Version | Check |
 |------|----------------|-------|
 | Azure CLI | 2.50+ | `az version` |
-| Bicep CLI | 0.22+ | `az bicep version` |
+| Bicep CLI | 0.25+ | `az bicep version` |
 | Python | 3.10+ | `python --version` |
 | dbt | 1.7+ | `dbt --version` |
 | git | 2.x | `git --version` |
