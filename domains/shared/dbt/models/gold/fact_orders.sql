@@ -3,9 +3,9 @@
     materialized='incremental',
     unique_key='order_sk',
     incremental_strategy='merge',
-    partition_by=['order_date'],
-    clustered_by=['customer_id'],
-    file_format='delta',
+    partition_by=['order_date'] if target.type != 'duckdb' else none,
+    clustered_by=['customer_id'] if target.type != 'duckdb' else none,
+    file_format='delta' if target.type != 'duckdb' else none,
     tags=['gold', 'orders', 'fact'],
     on_schema_change='fail'
   )
@@ -56,10 +56,10 @@ final AS (
         CASE WHEN o.status IN ('PENDING', 'CONFIRMED', 'SHIPPED') THEN 1 ELSE 0 END AS is_in_progress,
 
         -- Time dimensions
-        YEAR(o.order_date) AS order_year,
-        MONTH(o.order_date) AS order_month,
-        QUARTER(o.order_date) AS order_quarter,
-        DAYOFWEEK(o.order_date) AS order_day_of_week,
+        {{ year_of('o.order_date') }} AS order_year,
+        {{ month_of('o.order_date') }} AS order_month,
+        {{ quarter_of('o.order_date') }} AS order_quarter,
+        {{ day_of_week('o.order_date') }} AS order_day_of_week,
 
         o._dbt_loaded_at,
         now() AS _dbt_refreshed_at

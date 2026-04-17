@@ -16,6 +16,7 @@ import {
 } from '@azure/msal-react';
 import { msalConfig, loginRequest } from '@/services/authConfig';
 import { Layout } from '@/components/Layout';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 import api from '@/services/api';
 import '@/styles/globals.css';
 
@@ -100,14 +101,16 @@ export default function App({ Component, pageProps }: AppProps) {
   );
 
   return (
-    <MsalProvider instance={msalInstance}>
-      <QueryClientProvider client={queryClient}>
-        <AuthGatedContent>
-          <Layout>
-            <Component {...pageProps} />
-          </Layout>
-        </AuthGatedContent>
-      </QueryClientProvider>
-    </MsalProvider>
+    <ErrorBoundary>
+      <MsalProvider instance={msalInstance}>
+        <QueryClientProvider client={queryClient}>
+          <AuthGatedContent>
+            <Layout>
+              <Component {...pageProps} />
+            </Layout>
+          </AuthGatedContent>
+        </QueryClientProvider>
+      </MsalProvider>
+    </ErrorBoundary>
   );
 }

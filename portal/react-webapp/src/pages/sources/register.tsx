@@ -10,7 +10,10 @@ import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import { useForm } from 'react-hook-form';
 import { useMsal } from '@azure/msal-react';
+import { z } from 'zod';
 import { useRegisterSource } from '@/hooks/useApi';
+import { useToast } from '@/hooks/useToast';
+import { Toast } from '@/components/Toast';
 import type { SourceRegistration, DataQualityRule } from '@/types';
 import {
   StepSourceType,
@@ -20,6 +23,84 @@ import {
   StepQuality,
   StepReview,
 } from '@/components/register';
+
+// ─── Zod validation schema for source registration ───────────────────────
+
+const SOURCE_TYPES = [
+  'azure_sql', 'synapse', 'cosmos_db', 'adls_gen2', 'blob_storage',
+  'databricks', 'postgresql', 'mysql', 'oracle', 'rest_api',
+  'odata', 'sftp', 'sharepoint', 'event_hub', 'iot_hub', 'kafka',
+] as const;
+
+const sourceRegistrationSchema = z.object({
+  name: z
+    .string()
+    .min(3, 'Source name must be at least 3 characters')
+    .max(128, 'Source name must be at most 128 characters')
+    .regex(/^[a-zA-Z0-9_\-\s]+$/, 'Name may only contain letters, numbers, spaces, hyphens, and underscores'),
+  source_type: z.enum(SOURCE_TYPES, { message: 'Please select a source type' }),
+  description: z.string().max(1000, 'Description must be at most 1000 characters').optional(),
+  domain: z.string().min(1, 'Domain is required').optional(),
+  classification: z.enum(['public', 'internal', 'confidential', 'restricted', 'cui', 'fouo']),
+  connection: z.object({
+    host: z.string().min(1, 'Host is required').optional(),
+    port: z.coerce.number().int().min(1).max(65535).optional(),
+    database: z.string().optional(),
+    schema_name: z.string().optional(),
+    container: z.string().optional(),
+    path: z.string().optional(),
+    api_url: z.string().url('Must be a valid URL').optional(),
+    authentication_method: z.string().optional(),
+    key_vault_secret_name: z.string().optional(),
+  }).optional(),
+  schema_definition: z.object({
+    auto_detect: z.boolean().optional(),
+    table_name: z.string().optional(),
+  }).optional(),
+  ingestion: z.object({
+    mode: z.enum(['full', 'incremental', 'cdc', 'streaming']),
+    schedule_cron: z.string().optional(),
+    batch_size: z.coerce.number().int().min(1).max(1_000_000).optional(),
+    parallelism: z.coerce.number().int().min(1).max(64).optional(),
+    max_retry_count: z.coerce.number().int().min(0).max(10).optional(),
+    timeout_minutes: z.coerce.number().int().min(1).max(1440).optional(),
+  }),
+  target: z.object({
+    landing_zone: z.string(),
+    container: z.string(),
+    path_pattern: z.string(),
+    format: z.enum(['delta', 'parquet', 'csv', 'json']),
+  }),
+  owner: z.object({
+    name: z.string().min(1, 'Owner name is required'),
+    email: z.string().email('Must be a valid email address'),
+    team: z.string().optional(),
+    cost_center: z.string().optional(),
+  }).optional(),
+  quality_rules: z.array(z.any()).optional(),
+  tags: z.record(z.string(), z.string()).optional(),
+});
+
+/**
+ * Inline Zod resolver for react-hook-form (avoids @hookform/resolvers dependency).
+ * Parses form data against the schema and maps Zod errors to react-hook-form format.
+ */
+function zodResolver(schema: z.ZodType) {
+  return async (values: Record<string, unknown>) => {
+    const result = schema.safeParse(values);
+    if (result.success) {
+      return { values: result.data, errors: {} };
+    }
+    const fieldErrors: Record<string, { type: string; message: string }> = {};
+    for (const issue of result.error.issues) {
+      const path = issue.path.join('.');
+      if (!fieldErrors[path]) {
+        fieldErrors[path] = { type: issue.code, message: issue.message };
+      }
+    }
+    return { values: {}, errors: fieldErrors };
+  };
+}
 
 const STEPS = [
   { id: 'type', title: 'Source Type', description: 'Select your data source' },
@@ -76,12 +157,14 @@ export default function RegisterSourcePage() {
   const router = useRouter();
   const [step, setStep] = useState(0);
   const [qualityRules, setQualityRules] = useState<DataQualityRule[]>([]);
+  const { toast, showToast, setOpen: setToastOpen } = useToast();
   const {
     register,
     handleSubmit,
     watch,
     setValue,
     trigger,
+    setError,
     formState: { errors },
   } = useForm<SourceRegistration>({
     defaultValues: {
@@ -145,8 +228,29 @@ export default function RegisterSourcePage() {
 
   const onSubmit = async (data: SourceRegistration) => {
     data.quality_rules = qualityRules;
-    await mutation.mutateAsync(data);
-    router.push('/sources');
+
+    // Run Zod validation before submission
+    const result = sourceRegistrationSchema.safeParse(data);
+    if (!result.success) {
+      for (const issue of result.error.issues) {
+        const path = issue.path.join('.') as keyof SourceRegistration;
+        if (path) {
+          setError(path, { type: issue.code, message: issue.message });
+        }
+      }
+      showToast('Please fix validation errors before submitting.', 'error');
+      return;
+    }
+
+    try {
+      await mutation.mutateAsync(data);
+      showToast('Source registered successfully', 'success');
+      // Allow toast to be visible briefly before navigating
+      setTimeout(() => router.push('/sources'), 1200);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'An unexpected error occurred. Please try again.';
+      showToast(`Registration failed: ${message}`, 'error');
+    }
   };
 
   return (
@@ -191,14 +295,12 @@ export default function RegisterSourcePage() {
           )}
         </div>
 
-        {mutation.isError && (
-          <div className="rounded-md bg-red-50 border border-red-200 p-4">
-            <p className="text-sm text-red-700">
-              Registration failed:{' '}
-              {(mutation.error as Error)?.message || 'An unexpected error occurred. Please try again.'}
-            </p>
-          </div>
-        )}
+        <Toast
+          open={toast.open}
+          onOpenChange={setToastOpen}
+          message={toast.message}
+          variant={toast.variant}
+        />
 
         {/* Navigation buttons */}
         <div className="flex justify-between">

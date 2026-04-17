@@ -21,10 +21,10 @@
             'email',
             'phone',
             'country_code',
-            'state',
+            'state_code',
             'city',
         ],
-        file_format     = 'delta',
+        file_format     = 'delta' if target.type != 'duckdb' else none,
         tags            = ['snapshot', 'scd2', 'customers'],
     )
 }}
@@ -37,7 +37,7 @@
         email,
         phone,
         country_code,
-        state,
+        state_code,
         city,
         _dbt_loaded_at
     FROM {{ ref('slv_customers') }}

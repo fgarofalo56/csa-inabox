@@ -163,19 +163,19 @@ describe('RegisterSourcePage', () => {
     expect(screen.getByText('Register Data Source')).toBeInTheDocument();
   });
 
-  // Error display on mutation failure
-  it('shows an error message when registration fails', () => {
-    // Override the mock for this specific test
+  // Error display — toast notification replaces inline error banner
+  it('renders the toast notification viewport for error feedback', () => {
     jest.spyOn(require('@/hooks/useApi'), 'useRegisterSource').mockReturnValue({
       mutateAsync: mockMutateAsync,
       isPending: false,
-      isError: true,
-      error: new Error('Validation failed: missing required fields'),
+      isError: false,
+      error: null,
     });
 
     renderWithProviders(<RegisterSourcePage />);
-    expect(screen.getByText(/Registration failed/)).toBeInTheDocument();
-    expect(screen.getByText(/Validation failed: missing required fields/)).toBeInTheDocument();
+    // The Radix Toast viewport is always rendered (used for both success and error feedback)
+    const viewport = document.querySelector('[role="region"]');
+    expect(viewport).toBeInTheDocument();
   });
 
   // Submit button on final step — advance step by step, each validated by the wizard

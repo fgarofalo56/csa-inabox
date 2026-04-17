@@ -15,7 +15,7 @@
             'category',
             'unit_price',
         ],
-        file_format     = 'delta',
+        file_format     = 'delta' if target.type != 'duckdb' else none,
         tags            = ['snapshot', 'scd2', 'products'],
     )
 }}

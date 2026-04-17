@@ -7,21 +7,8 @@ import Link from 'next/link';
 import { useSources } from '@/hooks/useApi';
 import { useDebounce } from '@/hooks/useDebounce';
 import ErrorBanner from '@/components/ErrorBanner';
-import type { SourceRecord, SourceStatus } from '@/types';
-
-const STATUS_BADGES: Record<
-  SourceStatus,
-  { color: string; label: string }
-> = {
-  draft: { color: 'bg-gray-100 text-gray-800', label: 'Draft' },
-  pending_approval: { color: 'bg-yellow-100 text-yellow-800', label: 'Pending' },
-  approved: { color: 'bg-blue-100 text-blue-800', label: 'Approved' },
-  provisioning: { color: 'bg-purple-100 text-purple-800', label: 'Provisioning' },
-  active: { color: 'bg-green-100 text-green-800', label: 'Active' },
-  paused: { color: 'bg-orange-100 text-orange-800', label: 'Paused' },
-  decommissioned: { color: 'bg-red-100 text-red-800', label: 'Decommissioned' },
-  error: { color: 'bg-red-100 text-red-800', label: 'Error' },
-};
+import { StatusBadge } from '@/components/StatusBadge';
+import type { SourceRecord } from '@/types';
 
 export default function SourcesPage() {
   const [domainFilter, setDomainFilter] = useState<string>('');
@@ -116,9 +103,7 @@ export default function SourcesPage() {
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
               {sources && sources.length > 0 ? (
-                sources.map((source: SourceRecord) => {
-                  const badge = STATUS_BADGES[source.status];
-                  return (
+                sources.map((source: SourceRecord) => (
                     <tr
                       key={source.id}
                       className="hover:bg-gray-50"
@@ -141,11 +126,7 @@ export default function SourcesPage() {
                         {source.domain}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <span
-                          className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${badge.color}`}
-                        >
-                          {badge.label}
-                        </span>
+                        <StatusBadge status={source.status} />
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 uppercase">
                         {source.classification}
@@ -154,8 +135,7 @@ export default function SourcesPage() {
                         {new Date(source.updated_at).toLocaleDateString()}
                       </td>
                     </tr>
-                  );
-                })
+                  ))
               ) : (
                 <tr>
                   <td

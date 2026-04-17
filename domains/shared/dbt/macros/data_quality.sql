@@ -4,7 +4,7 @@
 
 {# Check if a date column has future dates #}
 {% macro flag_future_date(column_name) %}
-    case when {{ column_name }} > current_date() then true else false end
+    case when {{ column_name }} > {{ current_date_expr() }} then true else false end
 {% endmacro %}
 
 {# Check if a numeric column has negative values #}

@@ -144,10 +144,10 @@ describe('SourcesPage', () => {
   it('renders the correct status badges', () => {
     mockUseSources.mockReturnValue({ data: SAMPLE_SOURCES, isLoading: false, error: null, refetch: jest.fn() });
     renderWithProviders(<SourcesPage />);
-    // "Active" appears both in the status filter <option> and the badge <span>
-    const activeElements = screen.getAllByText('Active');
-    expect(activeElements.length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByText('Pending')).toBeInTheDocument();
+    // "Active" appears in the status filter <option>; the StatusBadge renders lowercase "active" (CSS capitalizes it)
+    expect(screen.getByText('Active')).toBeInTheDocument(); // <option>
+    expect(screen.getByText('active')).toBeInTheDocument(); // StatusBadge
+    expect(screen.getByText('pending approval')).toBeInTheDocument(); // StatusBadge for pending_approval
   });
 
   it('displays domains for each source', () => {
