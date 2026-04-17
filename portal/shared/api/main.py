@@ -19,8 +19,6 @@ Run locally::
 
 from __future__ import annotations
 
-import logging
-import sys
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -31,18 +29,16 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
+from governance.common.logging import configure_structlog, get_logger
+
 from .config import settings
 from .routers import access, marketplace, pipelines, sources, stats
 from .services.auth import get_current_user
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 
-logging.basicConfig(
-    level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO),
-    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-    stream=sys.stdout,
-)
-logger = logging.getLogger("csainabox.api")
+configure_structlog(service="csa-portal-api", level=settings.LOG_LEVEL)
+logger = get_logger("csainabox.api")
 
 # ── Security Headers Middleware ──────────────────────────────────────────────
 

@@ -23,7 +23,7 @@ from ..models.marketplace import (
     AccessRequestCreate,
     AccessRequestStatus,
 )
-from ..persistence import JsonStore
+from ..persistence import SqliteStore
 from ..services.auth import get_current_user, require_role
 
 logger = logging.getLogger(__name__)
@@ -39,7 +39,7 @@ class ReviewBody(BaseModel):
     notes: str | None = None
 
 # ── SQLite persistence ──────────────────────────────────────────────────────
-_access_store = JsonStore("access_requests.json")
+_access_store = SqliteStore("access_requests.json")
 
 
 def seed_demo_requests() -> None:

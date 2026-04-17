@@ -197,10 +197,10 @@ All frontends connect to the shared backend at `portal/shared/api/`. To get
 started:
 
 ```bash
-# Start the shared backend
+# Start the shared backend (ENVIRONMENT=local enables demo mode)
 cd portal/shared
 pip install -r requirements.txt
-uvicorn api.main:app --reload --port 8000
+ENVIRONMENT=local uvicorn api.main:app --reload --port 8000
 
 # Then start your chosen frontend (e.g., React)
 cd ../react-webapp

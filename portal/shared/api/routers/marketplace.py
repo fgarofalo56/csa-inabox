@@ -13,22 +13,22 @@ GET    /api/v1/marketplace/stats                            — marketplace stat
 from __future__ import annotations
 
 import logging
-import random
+import random as _rng
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ..models.marketplace import DataProduct, QualityMetric
 from ..models.source import ClassificationLevel
-from ..persistence import JsonStore
+from ..persistence import SqliteStore
 from ..services.auth import get_current_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # ── SQLite persistence ──────────────────────────────────────────────────────
-_products_store = JsonStore("marketplace_products.json")
-_quality_store = JsonStore("marketplace_quality.json")
+_products_store = SqliteStore("marketplace_products.json")
+_quality_store = SqliteStore("marketplace_quality.json")
 
 
 def seed_demo_products() -> None:
@@ -38,6 +38,8 @@ def seed_demo_products() -> None:
     """
     if _products_store.count() > 0:
         return
+
+    _rng.seed(42)
 
     now = datetime.now(timezone.utc)
     demos = [
@@ -135,10 +137,10 @@ def seed_demo_products() -> None:
             history.append(
                 QualityMetric(
                     date=date,
-                    quality_score=dp.quality_score + random.uniform(-3, 2),
-                    completeness=dp.completeness + random.uniform(-0.03, 0.01),
-                    freshness_hours=dp.freshness_hours + random.uniform(-1, 2),
-                    row_count=random.randint(100_000, 5_000_000),
+                    quality_score=dp.quality_score + _rng.uniform(-3, 2),
+                    completeness=dp.completeness + _rng.uniform(-0.03, 0.01),
+                    freshness_hours=dp.freshness_hours + _rng.uniform(-1, 2),
+                    row_count=_rng.randint(100_000, 5_000_000),
                 ).model_dump()
             )
         _quality_store.add({"product_id": dp.id, "history": history})

@@ -12,28 +12,30 @@ POST   /api/v1/pipelines/{pipeline_id}/trigger    — trigger a pipeline run
 from __future__ import annotations
 
 import logging
-import random
+import random as _rng
 import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ..models.pipeline import PipelineRecord, PipelineRun, PipelineStatus, PipelineType
-from ..persistence import JsonStore
+from ..persistence import SqliteStore
 from ..services.auth import get_current_user, require_role
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # ── SQLite persistence ──────────────────────────────────────────────────
-_pipelines_store = JsonStore("pipelines.json")
-_runs_store = JsonStore("pipeline_runs.json")
+_pipelines_store = SqliteStore("pipelines.json")
+_runs_store = SqliteStore("pipeline_runs.json")
 
 
 def seed_demo_pipelines() -> None:
     """Populate realistic demo pipelines once at startup."""
     if _pipelines_store.count() > 0:
         return
+
+    _rng.seed(42)
 
     now = datetime.now(timezone.utc)
 
@@ -83,15 +85,15 @@ def seed_demo_pipelines() -> None:
     # Seed some runs for the first pipeline
     for i in range(5):
         run_start = now - timedelta(days=i, hours=2)
-        run_end = run_start + timedelta(minutes=random.randint(3, 25))
+        run_end = run_start + timedelta(minutes=_rng.randint(3, 25))
         run = PipelineRun(
             id=f"run-{uuid.uuid4().hex[:8]}",
             pipeline_id="pl-001",
             status=PipelineStatus.SUCCEEDED if i != 2 else PipelineStatus.FAILED,
             started_at=run_start,
             ended_at=run_end,
-            rows_read=random.randint(50_000, 200_000),
-            rows_written=random.randint(49_000, 199_000),
+            rows_read=_rng.randint(50_000, 200_000),
+            rows_written=_rng.randint(49_000, 199_000),
             error_message="Connection timeout after 600s" if i == 2 else None,
             duration_seconds=int((run_end - run_start).total_seconds()),
         )

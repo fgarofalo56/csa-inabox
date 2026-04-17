@@ -14,6 +14,6 @@ maintainers:
   - name: CSA Team
 dependencies:
   - name: redis
-    version: "18.x.x"
+    version: "~18"
     repository: https://charts.bitnami.com/bitnami
     condition: redis.enabled

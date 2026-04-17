@@ -34,7 +34,7 @@ from ..models.source import (
     SourceType,
     TargetConfig,
 )
-from ..persistence import JsonStore
+from ..persistence import SqliteStore
 from ..services.auth import get_current_user, require_role
 from ..services.provisioning import provisioning_service
 
@@ -107,7 +107,7 @@ class SourceUpdate(BaseModel):
     model_config = {"populate_by_name": True}
 
 # ── SQLite persistence ──────────────────────────────────────────────────────
-_sources_store = JsonStore("sources.json")
+_sources_store = SqliteStore("sources.json")
 
 
 def seed_demo_sources() -> None:

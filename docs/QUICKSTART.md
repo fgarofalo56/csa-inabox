@@ -398,10 +398,10 @@ cd portal/shared
 # Install Python dependencies
 pip install -r requirements.txt
 
-# Start the FastAPI backend
-uvicorn api.main:app --reload --port 8000
+# Start the FastAPI backend (ENVIRONMENT=local enables demo mode)
+ENVIRONMENT=local uvicorn api.main:app --reload --port 8000
 
-# Verify: http://localhost:8000/docs (Swagger UI)
+# Verify: http://localhost:8000/api/docs (Swagger UI)
 ```
 
 ### Step B: Start a Frontend
@@ -416,8 +416,8 @@ npm run dev
 
 **Docker Compose (both at once):**
 ```bash
-cd portal
-docker-compose up
+# From the repository root:
+docker compose -f portal/kubernetes/docker/docker-compose.yml up --build
 # Backend: http://localhost:8000
 # Frontend: http://localhost:3000
 ```

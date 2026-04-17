@@ -373,6 +373,6 @@ class SqliteStore:
 
 
 # ── backward-compatible alias ───────────────────────────────────────────────
-# Routers still import ``JsonStore`` — keep the alias working but prefer
-# ``SqliteStore`` in new code.
+# ``SqliteStore`` is the canonical name.  ``JsonStore`` is kept only for
+# external callers that have not yet been updated; do not use it in new code.
 JsonStore = SqliteStore
