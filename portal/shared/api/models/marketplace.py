@@ -3,12 +3,19 @@ Pydantic models for the data marketplace.
 
 Mirrors the TypeScript ``DataProduct``, ``QualityMetric``, and dashboard
 types from ``portal/react-webapp/src/types/index.ts``.
+
+Phase 1 of ARCH-0001 adds optional enrichment fields (sla, lineage,
+schema_info, version, status) that mirror the richer platform model in
+``csa_platform.data_marketplace.models.data_product``.  All new fields
+default to ``None`` / sensible literals so existing data and the
+React-frontend API contract are fully backward-compatible.
 """
 
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
 from enum import Enum
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -16,7 +23,13 @@ from .source import ClassificationLevel, OwnerInfo, SchemaDefinition
 
 
 class DataProduct(BaseModel):
-    """A published data product in the marketplace."""
+    """A published data product in the marketplace.
+
+    Core fields (id … documentation_url) are unchanged from the original
+    contract.  The optional enrichment fields added in ARCH-0001 Phase 1
+    (sla, lineage, schema_info, version, status) are surfaced by the API
+    when present; consumers that do not yet read them are unaffected.
+    """
 
     id: str
     name: str
@@ -34,6 +47,38 @@ class DataProduct(BaseModel):
     schema_def: SchemaDefinition | None = Field(None, alias="schema")
     sample_queries: list[str] | None = None
     documentation_url: str | None = None
+
+    # ── ARCH-0001 Phase 1: enrichment fields ────────────────────────────
+    # Mirrors csa_platform.data_marketplace.models.data_product but kept
+    # as plain dicts so we avoid a hard dependency on the platform package
+    # until Phase 2 introduces the shared model library.
+
+    version: str = "1.0.0"
+    status: str = "active"
+    sla: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Service Level Agreement snapshot. "
+            "Expected keys: freshness_minutes (int), "
+            "availability_percent (float), valid_row_ratio (float)."
+        ),
+    )
+    lineage: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Lineage metadata snapshot. "
+            "Expected keys: upstream (list[str]), downstream (list[str]), "
+            "transformations (list[str])."
+        ),
+    )
+    schema_info: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Schema metadata snapshot. "
+            "Expected keys: format (str), location (str), "
+            "columns (list[dict]), partition_by (list[str])."
+        ),
+    )
 
     model_config = {"populate_by_name": True}
 

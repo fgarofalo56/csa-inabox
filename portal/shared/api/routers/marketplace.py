@@ -68,6 +68,21 @@ def seed_demo_products() -> None:
                 "SELECT location, COUNT(*) FROM hr.employee_master GROUP BY location",
             ],
             documentation_url="https://wiki.contoso.com/data/hr-employee-master",
+            version="2.1.0",
+            status="active",
+            sla={
+                "freshness_minutes": 360,
+                "availability_percent": 99.8,
+                "valid_row_ratio": 0.97,
+            },
+            lineage={
+                "upstream": ["workday-hris-raw", "org-hierarchy-raw"],
+                "downstream": ["workforce-analytics", "headcount-reporting"],
+                "transformations": [
+                    "dbt model: hr_employee_cleansed",
+                    "dbt model: hr_employee_master",
+                ],
+            },
         ),
         DataProduct(
             id="dp-002",
@@ -84,6 +99,21 @@ def seed_demo_products() -> None:
             tags={"real-time": "true", "iot": "true"},
             created_at=datetime(2025, 10, 1, tzinfo=timezone.utc),
             updated_at=now - timedelta(minutes=5),
+            version="1.3.0",
+            status="active",
+            sla={
+                "freshness_minutes": 10,
+                "availability_percent": 99.5,
+                "valid_row_ratio": 0.99,
+            },
+            lineage={
+                "upstream": ["iot-hub-raw-telemetry"],
+                "downstream": ["predictive-maintenance-model", "oee-dashboard"],
+                "transformations": [
+                    "ADF pipeline: sensor_5min_aggregation",
+                    "dbt model: sensor_analytics_gold",
+                ],
+            },
         ),
         DataProduct(
             id="dp-003",
@@ -99,6 +129,22 @@ def seed_demo_products() -> None:
             tags={"compliance": "sox", "audit": "true"},
             created_at=datetime(2025, 4, 15, tzinfo=timezone.utc),
             updated_at=now - timedelta(days=3),
+            version="3.0.0",
+            status="active",
+            sla={
+                "freshness_minutes": 10080,
+                "availability_percent": 99.9,
+                "valid_row_ratio": 1.0,
+            },
+            lineage={
+                "upstream": ["sap-erp-gl-extract", "manual-journal-entries"],
+                "downstream": ["external-financial-reporting", "management-accounts"],
+                "transformations": [
+                    "dbt model: gl_staging",
+                    "dbt model: gl_validated",
+                    "dbt model: gl_snapshot_weekly",
+                ],
+            },
         ),
         DataProduct(
             id="dp-004",

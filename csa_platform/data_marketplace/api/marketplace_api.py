@@ -10,15 +10,29 @@
     by the React frontend).  The two share the same *concept* but have
     divergent schemas and persistence strategies.
 
-    **Consolidation plan** (ARCH-0001):
-    1. Adopt the richer models from this module into the portal models.
-    2. Add a response DTO adapter so the React frontend type contract is
-       preserved.
-    3. Migrate the portal's flat ``quality_score: float`` to the
-       dimensioned ``QualityScore`` object.
-    4. Once the portal consumes these models, delete this standalone API.
+    **Consolidation plan** (ARCH-0001):**
 
-    Until then, this module serves as a **reference design** for the
+    - **Phase 1 — COMPLETE (2026-04-16):** Optional enrichment fields
+      (``sla``, ``lineage``, ``schema_info``, ``version``, ``status``) have
+      been added to ``portal.shared.api.models.marketplace.DataProduct``
+      and the corresponding TypeScript interfaces
+      (``SLADefinition``, ``LineageInfo``, ``SchemaInfo``) have been added
+      to ``portal/shared/contracts/types.ts``.  The API contract is fully
+      backward-compatible — all new fields are optional with ``None``
+      defaults.  Three demo products in the seed data now carry SLA and
+      lineage payloads to showcase the new fields end-to-end.
+
+    - **Phase 2 (pending):** Add a response DTO adapter so the React
+      frontend type contract is preserved as the platform models evolve.
+
+    - **Phase 3 (pending):** Migrate the portal's flat
+      ``quality_score: float`` to the dimensioned ``QualityScore`` object
+      from this module.
+
+    - **Phase 4 (pending):** Once the portal fully consumes these models,
+      delete this standalone API.
+
+    Until Phase 4 this module serves as the **reference design** for the
     target-state marketplace and is exercised by
     ``csa_platform/data_marketplace/tests/``.
 
