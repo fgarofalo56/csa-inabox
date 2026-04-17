@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from typing import Any
 
-from governance.common.logging import configure_structlog, get_logger
+from csa_platform.common.logging import configure_structlog, get_logger
 
 configure_structlog(service="cost-allocator")
 logger = get_logger(__name__)

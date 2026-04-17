@@ -23,15 +23,13 @@ models:
   - name: customer_id
     description: FK to shared.customers.customer_id. Null for ~5% of test rows.
   - name: order_date
-    description: Date the order was placed.
-    tests:
-    - not_null
+    description: Date the order was placed. Null rows are flagged via is_valid.
   - name: total_amount
     description: Order total (USD).
     tests:
     - not_null
     - dbt_utils.expression_is_true:
-        expression: total_amount >= 0
+        expression: '>= 0'
         config:
           severity: warn
   - name: status

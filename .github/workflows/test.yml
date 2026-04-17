@@ -3,8 +3,24 @@ name: Test Suite
 on:
   pull_request:
     branches: [main]
+    paths:
+      - 'governance/**'
+      - 'csa_platform/**'
+      - 'domains/**'
+      - 'scripts/**'
+      - 'tests/**'
+      - 'pyproject.toml'
+      - '.github/workflows/test.yml'
   push:
     branches: [main]
+    paths:
+      - 'governance/**'
+      - 'csa_platform/**'
+      - 'domains/**'
+      - 'scripts/**'
+      - 'tests/**'
+      - 'pyproject.toml'
+      - '.github/workflows/test.yml'
   schedule:
     - cron: '37 3 * * 1'
 
@@ -210,25 +226,16 @@ jobs:
 
       - name: dbt run
         run: |
-          # Exclude gold models with cross-domain refs that can't resolve
-          # in single-project DuckDB CI (e.g. inventory refs shared.dim_products).
-          EXCLUDE_FLAG=""
-          if [ "${{ matrix.domain }}" = "inventory" ]; then
-            EXCLUDE_FLAG="--exclude gld_reorder_alerts gld_inventory_turnover"
-          fi
           dbt run --target ci --profiles-dir ~/.dbt \
-            --vars '{"bronze_database":"","silver_database":"","gold_database":""}' \
-            $EXCLUDE_FLAG
+            --vars '{"bronze_database":"","silver_database":"","gold_database":""}'
 
       - name: dbt test
         run: |
-          EXCLUDE_FLAG=""
-          if [ "${{ matrix.domain }}" = "inventory" ]; then
-            EXCLUDE_FLAG="--exclude gld_reorder_alerts gld_inventory_turnover"
-          fi
+          # Exclude snapshot tests — dbt snapshot is not run in DuckDB CI
+          # so snapshot tables don't exist and their tests would fail.
           dbt test --target ci --profiles-dir ~/.dbt \
             --vars '{"bronze_database":"","silver_database":"","gold_database":""}' \
-            $EXCLUDE_FLAG
+            --exclude "snp_customers_history" "snp_products_history"
 
   pr-summary:
     name: PR Summary

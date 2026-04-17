@@ -20,6 +20,11 @@
     `_is_invalid_email` quality flag column.
 #}
 {% macro flag_invalid_email(column_name) %}
+    {% if target.type == 'duckdb' %}
+    case when regexp_matches({{ column_name }}, '{{ var("email_regex") }}')
+         then false else true end
+    {% else %}
     case when {{ column_name }} rlike '{{ var("email_regex") }}'
          then false else true end
+    {% endif %}
 {% endmacro %}

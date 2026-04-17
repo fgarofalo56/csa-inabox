@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from governance.common.logging import configure_structlog, get_logger
+from csa_platform.common.logging import configure_structlog, get_logger
 
 if TYPE_CHECKING:
     from azure.search.documents import SearchClient

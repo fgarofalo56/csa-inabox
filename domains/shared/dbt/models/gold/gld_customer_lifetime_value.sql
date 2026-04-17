@@ -69,8 +69,8 @@ final as (
         -- Derived metrics
         case
             when total_orders = 0 then 'never_purchased'
-            when datediff(current_date(), last_order_date) <= {{ var('clv_new_days', 90) }} then 'active'
-            when datediff(current_date(), last_order_date) <= {{ var('clv_active_days', 365) }} then 'at_risk'
+            when datediff('day', last_order_date, current_date()) <= {{ var('clv_new_days', 90) }} then 'active'
+            when datediff('day', last_order_date, current_date()) <= {{ var('clv_active_days', 365) }} then 'at_risk'
             else 'churned'
         end as customer_segment,
 
@@ -83,7 +83,7 @@ final as (
 
         coalesce(
             lifetime_revenue / nullif(
-                months_between(current_date(), customer_since), 0
+                datediff('month', customer_since, current_date()), 0
             ), 0
         ) as monthly_revenue_rate,
 

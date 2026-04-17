@@ -31,7 +31,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any
 
-from governance.common.logging import configure_structlog, get_logger
+from csa_platform.common.logging import configure_structlog, get_logger
 
 configure_structlog(service="sql-endpoint-config")
 logger = get_logger(__name__)

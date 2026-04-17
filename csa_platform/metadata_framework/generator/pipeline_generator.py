@@ -18,7 +18,7 @@ from typing import Any
 import yaml
 from jsonschema import ValidationError, validate  # type: ignore[import-untyped]
 
-from governance.common.logging import configure_structlog, get_logger
+from csa_platform.common.logging import configure_structlog, get_logger
 
 # Configure structured logging
 configure_structlog(service="metadata-framework-pipeline-generator")
@@ -594,7 +594,7 @@ class PipelineGenerator:
 
         if file_format == "parquet":
             try:
-                import pyarrow.parquet as pq  # type: ignore[import-untyped]
+                import pyarrow.parquet as pq  # type: ignore[import-not-found]
 
                 table = pq.read_table(io.BytesIO(raw_data))
                 schema = table.schema

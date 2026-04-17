@@ -429,7 +429,7 @@ Enable debug logging:
 import logging
 logging.basicConfig(level=logging.DEBUG)
 
-from governance.common.logging import configure_structlog
+from csa_platform.common.logging import configure_structlog
 configure_structlog(service="metadata-framework", level="DEBUG")
 ```
 

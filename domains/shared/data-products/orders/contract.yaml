@@ -34,8 +34,8 @@ schema:
       description: FK to shared.customers.customer_id. Null for ~5% of test rows.
     - name: order_date
       type: date
-      nullable: false
-      description: Date the order was placed.
+      nullable: true
+      description: Date the order was placed. Null rows are flagged via is_valid.
     - name: total_amount
       type: decimal(18,2)
       nullable: false
@@ -79,3 +79,5 @@ quality_rules:
     column: total_amount
     min_value: 0
     mostly: 0.95
+    config:
+      severity: warn

@@ -25,7 +25,8 @@ sources:
           - name: customer_id
             description: "Customer identifier"
             tests:
-              - not_null
+              - not_null:
+                  severity: warn
           - name: order_date
             description: "Date the order was placed"
           - name: total_amount

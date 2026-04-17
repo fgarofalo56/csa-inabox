@@ -32,7 +32,7 @@ from pathlib import Path
 
 import yaml
 
-from governance.common.logging import configure_structlog, get_logger
+from csa_platform.common.logging import configure_structlog, get_logger
 
 configure_structlog(service="sharing-enforcer")
 logger = get_logger(__name__)

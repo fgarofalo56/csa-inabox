@@ -69,7 +69,8 @@ describe('DashboardPage', () => {
   it('shows stat values from API data', () => {
     renderWithProviders(<DashboardPage />);
     expect(screen.getByText('26')).toBeInTheDocument();
-    expect(screen.getByText('35')).toBeInTheDocument();
+    // '35' appears twice: Active Pipelines and Pipeline Runs (24h)
+    expect(screen.getAllByText('35')).toHaveLength(2);
     expect(screen.getByText('16')).toBeInTheDocument();
   });
 

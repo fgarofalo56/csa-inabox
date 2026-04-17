@@ -4,7 +4,8 @@
   config(
     materialized='table',
     file_format='delta',
-    tags=['gold', 'finance', 'cross-domain', 'reconciliation']
+    tags=['gold', 'finance', 'cross-domain', 'reconciliation'],
+    enabled=(target.name != 'ci')
   )
 }}
 

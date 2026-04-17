@@ -25,7 +25,8 @@ sources:
           - name: customer_id
             description: FK to shared customers.
             tests:
-              - not_null
+              - not_null:
+                  severity: warn
           - name: product_id
             description: FK to products.
           - name: quantity

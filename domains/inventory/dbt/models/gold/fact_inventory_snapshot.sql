@@ -60,7 +60,7 @@ final AS (
         END AS needs_reorder,
 
         i.last_restocked_at,
-        DATEDIFF(DAY, i.last_restocked_at, current_date()) AS days_since_restock,
+        DATEDIFF('day', i.last_restocked_at, current_date()) AS days_since_restock,
 
         current_date() AS snapshot_date,
         now() AS _dbt_refreshed_at

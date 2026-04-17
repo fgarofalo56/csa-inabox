@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 import yaml
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential_jitter
 
-from governance.common.logging import configure_structlog, get_logger
+from csa_platform.common.logging import configure_structlog, get_logger
 
 configure_structlog(service="document-classifier")
 logger = get_logger(__name__)
