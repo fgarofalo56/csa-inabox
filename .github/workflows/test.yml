@@ -222,7 +222,17 @@ jobs:
         run: dbt deps || echo "dbt deps skipped (no packages)"
 
       - name: dbt seed
-        run: dbt seed --target ci --profiles-dir ~/.dbt --vars '{"bronze_database":"","silver_database":"","gold_database":""}'
+        run: |
+          # Exclude cross-domain models before seed so compilation succeeds.
+          EXCLUDE_FLAG=""
+          if [ "${{ matrix.domain }}" = "inventory" ]; then
+            EXCLUDE_FLAG="--exclude gld_reorder_alerts gld_inventory_turnover"
+          elif [ "${{ matrix.domain }}" = "finance" ]; then
+            EXCLUDE_FLAG="--exclude gld_revenue_reconciliation"
+          fi
+          dbt seed --target ci --profiles-dir ~/.dbt \
+            --vars '{"bronze_database":"","silver_database":"","gold_database":""}' \
+            $EXCLUDE_FLAG
 
       - name: dbt run
         run: |
@@ -231,6 +241,8 @@ jobs:
           EXCLUDE_FLAG=""
           if [ "${{ matrix.domain }}" = "inventory" ]; then
             EXCLUDE_FLAG="--exclude gld_reorder_alerts gld_inventory_turnover"
+          elif [ "${{ matrix.domain }}" = "finance" ]; then
+            EXCLUDE_FLAG="--exclude gld_revenue_reconciliation"
           fi
           dbt run --target ci --profiles-dir ~/.dbt \
             --vars '{"bronze_database":"","silver_database":"","gold_database":""}' \
@@ -241,6 +253,8 @@ jobs:
           EXCLUDE_FLAG=""
           if [ "${{ matrix.domain }}" = "inventory" ]; then
             EXCLUDE_FLAG="--exclude gld_reorder_alerts gld_inventory_turnover"
+          elif [ "${{ matrix.domain }}" = "finance" ]; then
+            EXCLUDE_FLAG="--exclude gld_revenue_reconciliation"
           fi
           dbt test --target ci --profiles-dir ~/.dbt \
             --vars '{"bronze_database":"","silver_database":"","gold_database":""}' \

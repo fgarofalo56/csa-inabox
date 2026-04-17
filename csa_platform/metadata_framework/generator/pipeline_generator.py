@@ -594,7 +594,7 @@ class PipelineGenerator:
 
         if file_format == "parquet":
             try:
-                import pyarrow.parquet as pq  # type: ignore[import-untyped]
+                import pyarrow.parquet as pq  # type: ignore[import-not-found]
 
                 table = pq.read_table(io.BytesIO(raw_data))
                 schema = table.schema
