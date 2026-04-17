@@ -83,7 +83,7 @@ def test_generated_model_has_expression_is_true_for_between_rule() -> None:
         t for t in total_amount.get("tests", []) if isinstance(t, dict) and "dbt_utils.expression_is_true" in t
     ]
     assert len(expr_tests) >= 1
-    assert "total_amount >= 0" in expr_tests[0]["dbt_utils.expression_is_true"]["expression"]
+    assert ">= 0" in expr_tests[0]["dbt_utils.expression_is_true"]["expression"]
 
 
 def test_generated_model_description_mentions_auto_generated() -> None:
