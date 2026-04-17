@@ -35,7 +35,7 @@ from ..models.source import (
     TargetConfig,
 )
 from ..persistence import SqliteStore
-from ..services.auth import get_current_user, require_role
+from ..services.auth import DomainScope, get_domain_scope, require_role
 from ..services.provisioning import provisioning_service
 
 logger = logging.getLogger(__name__)
@@ -247,16 +247,18 @@ async def list_sources(
     search: str | None = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    _user: dict = Depends(get_current_user),
+    scope: DomainScope = Depends(get_domain_scope),
 ) -> list[SourceRecord]:
     """Return all registered data sources, with optional filters."""
     results = [SourceRecord.model_validate(item) for item in _sources_store.load()]
 
-    # Domain scoping: non-admin users only see their domain's sources
-    user_roles = _user.get("roles", [])
-    user_domain = _user.get("domain") or _user.get("team")
-    if "Admin" not in user_roles and user_domain:
-        results = [s for s in results if s.domain == user_domain]
+    # Domain scoping: non-admin users only see their domain's sources.
+    # When a non-admin has no domain claim (e.g. demo mode), return empty
+    # rather than leaking data across all domains (SEC-0005).
+    if not scope.is_admin:
+        if not scope.user_domain:
+            return []
+        results = [s for s in results if s.domain == scope.user_domain]
 
     if domain:
         results = [s for s in results if s.domain == domain]
@@ -278,7 +280,7 @@ async def list_sources(
 )
 async def get_source(
     source_id: str,
-    _user: dict = Depends(get_current_user),
+    scope: DomainScope = Depends(get_domain_scope),
 ) -> SourceRecord:
     """Return a single data source by its unique identifier."""
     stored_source = _sources_store.get(source_id)
@@ -289,10 +291,9 @@ async def get_source(
         )
     source = SourceRecord.model_validate(stored_source)
 
-    # Domain scoping: non-admin users can only access their domain's sources
-    user_roles = _user.get("roles", [])
-    user_domain = _user.get("domain") or _user.get("team")
-    if "Admin" not in user_roles and user_domain and source.domain != user_domain:
+    # Domain scoping: non-admin users can only access their domain's sources.
+    # A non-admin with no domain claim is denied regardless of the source domain.
+    if not scope.is_admin and (not scope.user_domain or source.domain != scope.user_domain):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You do not have access to this source.",

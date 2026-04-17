@@ -1,5 +1,6 @@
 # ── Build stage ──────────────────────────────────────────────────────────────
-FROM python:3.12-slim AS builder
+# python:3.12-slim (pinned 2026-04-17)
+FROM python:3.12-slim@sha256:ac212230555ffb7ec17c214fb4cf036ced11b30b5b460994376b0725c7f6c151 AS builder
 
 WORKDIR /build
 
@@ -7,7 +8,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
 # ── Runtime stage ────────────────────────────────────────────────────────────
-FROM python:3.12-slim
+# python:3.12-slim (pinned 2026-04-17)
+FROM python:3.12-slim@sha256:ac212230555ffb7ec17c214fb4cf036ced11b30b5b460994376b0725c7f6c151
 
 LABEL maintainer="CSA-in-a-Box Team"
 LABEL description="Shared FastAPI backend for the CSA-in-a-Box Data Onboarding Portal"

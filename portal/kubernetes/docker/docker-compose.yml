@@ -62,7 +62,8 @@ services:
 
   # ─── Redis ─────────────────────────────────────────────────────────────
   redis:
-    image: redis:7-alpine
+    # redis:7-alpine (pinned 2026-04-17)
+    image: redis:7-alpine@sha256:cfb3c5629ec846b1665d348f8c82ed160c911cab5a2cc88053f4219ab4b5835c
     container_name: csa-portal-redis
     ports:
       - "6379:6379"

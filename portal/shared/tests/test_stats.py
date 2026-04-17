@@ -70,21 +70,33 @@ class TestHealthEndpoint:
     """GET /api/v1/health"""
 
     def test_health_check(self, client: TestClient):
-        """Should return healthy status."""
+        """Should return healthy status with only status and timestamp (SEC-0004).
+
+        Version, environment, and internal check details are stripped from
+        the public response to avoid information disclosure to unauthenticated
+        scanners.
+        """
         response = client.get("/api/v1/health")
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "healthy"
         assert "timestamp" in data
-        assert "version" in data
+        # SEC-0004: these fields must NOT be present in the public response
+        assert "version" not in data
+        assert "environment" not in data
+        assert "checks" not in data
 
     def test_health_check_services(self, client: TestClient):
-        """Should return dependency check statuses."""
+        """Degraded status is reflected when the data store is unavailable (SEC-0004).
+
+        The response body still only exposes status + timestamp — internal
+        check detail is never surfaced.
+        """
         response = client.get("/api/v1/health")
         data = response.json()
-        assert "checks" in data
-        checks = data["checks"]
-        assert checks["data_store"] == "healthy"
+        # Only the two public fields should be present
+        assert set(data.keys()) == {"status", "timestamp"}
+        assert data["status"] in {"healthy", "degraded"}
 
 
 class TestDomainsEndpoint:

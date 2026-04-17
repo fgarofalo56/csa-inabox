@@ -21,7 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from ..models.marketplace import DataProduct, QualityMetric
 from ..models.source import ClassificationLevel
 from ..persistence import SqliteStore
-from ..services.auth import get_current_user
+from ..services.auth import DomainScope, get_current_user, get_domain_scope
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -160,16 +160,18 @@ async def list_products(
     min_quality: float | None = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    _user: dict = Depends(get_current_user),
+    scope: DomainScope = Depends(get_domain_scope),
 ) -> list[DataProduct]:
     """Browse the data marketplace with optional filters."""
     results = [DataProduct.model_validate(item) for item in _products_store.load()]
 
-    # Domain scoping: non-admin users only see their domain's products
-    user_roles = _user.get("roles", [])
-    user_domain = _user.get("domain") or _user.get("team")
-    if "Admin" not in user_roles and user_domain:
-        results = [p for p in results if p.domain == user_domain]
+    # Domain scoping: non-admin users only see their domain's products.
+    # When a non-admin has no domain claim (e.g. demo mode), return empty
+    # rather than leaking data across all domains (SEC-0005).
+    if not scope.is_admin:
+        if not scope.user_domain:
+            return []
+        results = [p for p in results if p.domain == scope.user_domain]
 
     if domain:
         results = [p for p in results if p.domain == domain]
@@ -190,7 +192,7 @@ async def list_products(
 )
 async def get_product(
     product_id: str,
-    _user: dict = Depends(get_current_user),
+    scope: DomainScope = Depends(get_domain_scope),
 ) -> DataProduct:
     """Return detailed data product information."""
     stored_product = _products_store.get(product_id)
@@ -198,10 +200,9 @@ async def get_product(
         raise HTTPException(status_code=404, detail=f"Product '{product_id}' not found.")
     product = DataProduct.model_validate(stored_product)
 
-    # Domain scoping: non-admin users can only access their domain's products
-    user_roles = _user.get("roles", [])
-    user_domain = _user.get("domain") or _user.get("team")
-    if "Admin" not in user_roles and user_domain and product.domain != user_domain:
+    # Domain scoping: non-admin users can only access their domain's products.
+    # A non-admin with no domain claim is denied regardless of the product domain.
+    if not scope.is_admin and (not scope.user_domain or product.domain != scope.user_domain):
         raise HTTPException(status_code=403, detail="You do not have access to this product.")
 
     return product

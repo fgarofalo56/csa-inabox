@@ -1,5 +1,6 @@
 # ─── Stage 1: Build ──────────────────────────────────────────────────────────
-FROM node:20-alpine AS builder
+# node:20-alpine (pinned 2026-04-17)
+FROM node:20-alpine@sha256:f4c96a28c0b2d8981664e03f461c2677152cd9a756012ffa8e2c6727427c2bda AS builder
 
 WORKDIR /app
 
@@ -16,7 +17,8 @@ COPY portal/react-webapp/ ./
 RUN npm run build:static || npm run build
 
 # ─── Stage 2: Serve ─────────────────────────────────────────────────────────
-FROM nginx:1.27-alpine AS production
+# nginx:1.27-alpine (pinned 2026-04-17)
+FROM nginx:1.27-alpine@sha256:0608b4ccda75be0ba50f3cf28998b60d31fe0ad147cd834acb1451ba0da84c8b AS production
 
 # Remove default nginx config
 RUN rm /etc/nginx/conf.d/default.conf

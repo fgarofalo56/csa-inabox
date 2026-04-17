@@ -95,12 +95,54 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     data_dir.mkdir(parents=True, exist_ok=True)
     logger.info(f"SQLite persistence data directory: {data_dir}")
 
+    # OPS-0012: Validate critical configuration before accepting traffic.
+    # In production/staging environments, missing Azure settings cause a hard
+    # failure at startup rather than silent misbehaviour at request time.
+    env = settings.ENVIRONMENT.lower()
+    if env in ("production", "staging"):
+        missing = []
+        if not settings.AZURE_TENANT_ID:
+            missing.append("AZURE_TENANT_ID")
+        if not settings.STORAGE_ACCOUNT_NAME:
+            missing.append("STORAGE_ACCOUNT_NAME")
+        if missing:
+            raise RuntimeError(
+                f"Missing required config for {settings.ENVIRONMENT}: {', '.join(missing)}"
+            )
+    else:
+        # Warn in local/dev so engineers notice un-configured Azure settings
+        # without blocking the startup.
+        if not settings.AZURE_TENANT_ID:
+            logger.warning("AZURE_TENANT_ID is not set (env=%s)", settings.ENVIRONMENT)
+        if not settings.STORAGE_ACCOUNT_NAME:
+            logger.warning("STORAGE_ACCOUNT_NAME is not set (env=%s)", settings.ENVIRONMENT)
+
     # Seed demo data once at startup (instead of per-request)
     sources.seed_demo_sources()
     pipelines.seed_demo_pipelines()
     access.seed_demo_requests()
     marketplace.seed_demo_products()
     logger.info("Demo data seeding complete")
+
+    # Audit routes for missing auth dependencies (SEC-0010)
+    for route in _app.routes:
+        if hasattr(route, "dependant") and hasattr(route, "path"):
+            deps = [
+                d.dependency
+                for d in route.dependant.dependencies
+                if hasattr(d, "dependency")
+            ]
+            has_auth = any(
+                d in (get_current_user,)
+                or (hasattr(d, "__wrapped__") and d.__wrapped__ in (get_current_user,))
+                for d in deps
+            )
+            if not has_auth and route.path.startswith("/api/v1/"):
+                logger.warning(
+                    "Route %s %s has no auth dependency",
+                    route.methods,
+                    route.path,
+                )
 
     yield
     logger.info("Shutting down CSA-in-a-Box API")
@@ -178,29 +220,26 @@ async def health_ready() -> dict:
     Checks local dependencies (SQLite data store, configuration) and
     reports an honest ``healthy`` / ``degraded`` status.  Does **not**
     attempt to reach remote Azure services that may not be deployed.
+
+    SEC-0004: Only ``status`` and ``timestamp`` are returned to
+    unauthenticated callers.  Version, environment, and auth_configured
+    details are stripped from the public response to avoid information
+    disclosure to unauthenticated scanners.
     """
-    checks: dict[str, object] = {}
     overall_healthy = True
 
-    # Check data store (SQLite)
+    # Check data store (SQLite) — result drives healthy/degraded status
+    # but is intentionally not surfaced in the response body.
     try:
         from .routers.sources import _sources_store
 
         _sources_store.count()  # simple query to verify DB is accessible
-        checks["data_store"] = "healthy"
-    except Exception as e:
-        checks["data_store"] = f"unhealthy: {type(e).__name__}"
+    except Exception:
         overall_healthy = False
-
-    # Check that authentication is configured (or intentionally skipped)
-    checks["auth_configured"] = bool(settings.AZURE_TENANT_ID) or settings.DEMO_MODE
 
     return {
         "status": "healthy" if overall_healthy else "degraded",
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "version": settings.APP_VERSION,
-        "environment": settings.ENVIRONMENT,
-        "checks": checks,
     }
 
 
