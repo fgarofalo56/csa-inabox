@@ -121,14 +121,13 @@ class TestRAGPipeline:
         embedder.embed_single.return_value = [0.1] * 1536
         embedder.embed_texts.return_value = [[0.1] * 1536]
 
-        # Mock OpenAI client for chat
-        mock_client = MagicMock()
+        # Mock OpenAI client for chat completions
+        mock_chat_client = MagicMock()
         mock_choice = MagicMock()
         mock_choice.message.content = "Based on the context, crop yields increased 15% in 2023."
         mock_response = MagicMock()
         mock_response.choices = [mock_choice]
-        mock_client.chat.completions.create.return_value = mock_response
-        embedder._get_client.return_value = mock_client
+        mock_chat_client.chat.completions.create.return_value = mock_response
 
         pipeline = RAGPipeline(
             chunker=chunker,
@@ -137,6 +136,8 @@ class TestRAGPipeline:
             top_k=3,
             score_threshold=0.7,
         )
+        # Patch the pipeline's chat client getter to return our mock
+        pipeline._get_chat_client = MagicMock(return_value=mock_chat_client)
         return pipeline, embedder, vector_store
 
     def test_query_returns_answer(self, mock_pipeline):
@@ -232,12 +233,14 @@ class TestEntityExtractor:
         assert results[0].entities[0].category == "Organization"
 
     def test_extract_entities_error_handling(self):
+        from azure.core.exceptions import HttpResponseError
+
         from csa_platform.ai_integration.enrichment.entity_extractor import EntityExtractor
 
         extractor = EntityExtractor(endpoint="https://test.cognitiveservices.azure.com", api_key="test-key")
 
         mock_client = MagicMock()
-        mock_client.recognize_entities.side_effect = Exception("API error")
+        mock_client.recognize_entities.side_effect = HttpResponseError("API error")
         extractor._client = mock_client
 
         results = extractor.extract_entities(["Test text"])
