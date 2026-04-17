@@ -29,7 +29,7 @@ models:
     tests:
     - not_null
     - dbt_utils.expression_is_true:
-        expression: total_amount >= 0
+        expression: '>= 0'
         config:
           severity: warn
   - name: status

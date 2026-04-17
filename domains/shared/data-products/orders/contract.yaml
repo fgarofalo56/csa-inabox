@@ -79,3 +79,5 @@ quality_rules:
     column: total_amount
     min_value: 0
     mostly: 0.95
+    config:
+      severity: warn

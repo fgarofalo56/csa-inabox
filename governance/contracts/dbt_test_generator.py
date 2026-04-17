@@ -126,9 +126,9 @@ def _apply_quality_rule(
         # dbt_utils.expression_is_true as the closest equivalent.
         expr_parts: list[str] = []
         if rule.min_value is not None:
-            expr_parts.append(f"{rule.column} >= {rule.min_value}")
+            expr_parts.append(f">= {rule.min_value}")
         if rule.max_value is not None:
-            expr_parts.append(f"{rule.column} <= {rule.max_value}")
+            expr_parts.append(f"<= {rule.max_value}")
         if expr_parts:
             test_entry: dict[str, Any] = {
                 "dbt_utils.expression_is_true": {
