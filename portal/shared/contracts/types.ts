@@ -92,10 +92,18 @@ export interface ColumnDefinition {
 /**
  * Schema definition for a data source.
  * Matches Python `SchemaDefinition` in models/source.py.
+ *
+ * `auto_detect` and `table_name` are portal-only fields used during
+ * registration; the backend resolves them before persisting.
+ * `primary_key_csv` is a convenience field for the form; it is split
+ * into `primary_key` before submission.
  */
 export interface SchemaDefinition {
+  auto_detect?: boolean;
+  table_name?: string;
   columns?: ColumnDefinition[];
   primary_key?: string[];
+  primary_key_csv?: string;
   partition_columns?: string[];
   watermark_column?: string;
 }

@@ -1,6 +1,6 @@
 # End-to-End Integration Tests
 
-[tests](../../tests/) / **e2e**
+[tests](../../tests/) / **integration**
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** QA Engineers / Developers
 
@@ -33,9 +33,9 @@ make test-e2e
 make test-e2e-live
 
 # Run a specific test file
-pytest tests/e2e/test_e2e_platform.py -v
-pytest tests/e2e/test_e2e_contracts.py -v
-pytest tests/e2e/test_e2e_streaming.py -v
+pytest tests/integration/test_e2e_platform.py -v
+pytest tests/integration/test_e2e_contracts.py -v
+pytest tests/integration/test_e2e_streaming.py -v
 ```
 
 ---
@@ -114,7 +114,7 @@ Sample data in `seed_data/` is loaded into DuckDB for testing:
 ## 🏗️ Architecture
 
 ```text
-tests/e2e/
+tests/integration/
 ├── __init__.py
 ├── conftest.py              # DuckDB fixtures, contract loaders
 ├── test_e2e_platform.py     # 10-step platform integration

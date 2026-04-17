@@ -91,9 +91,35 @@ class TestEventSchemaAlignment:
         assert not missing, f"Event missing fields expected by ADX: {missing}"
 
     def test_event_type_is_known(self) -> None:
-        """The generated event type should be in the known set."""
-        event = _generate_sample_event()
-        assert event["type"] in _EXPECTED_EVENT_TYPES, f"Unknown event type: {event['type']}"
+        """Every event type declared in produce_events.py must be in the known set.
+
+        Iterates the full EVENT_TYPES list from the producer module rather than
+        sampling a single random event, so that a new or renamed type is always
+        caught regardless of random selection.
+        """
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "produce_events",
+            _STREAMING_DIR / "produce_events.py",
+        )
+        assert spec is not None
+        assert spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        producer_event_types: list[str] = mod.EVENT_TYPES  # type: ignore[attr-defined]
+        assert len(producer_event_types) > 0, "produce_events.py EVENT_TYPES list is empty"
+
+        unknown = set(producer_event_types) - _EXPECTED_EVENT_TYPES
+        assert not unknown, (
+            f"produce_events.py declares event types not in _EXPECTED_EVENT_TYPES: {unknown}"
+        )
+
+        missing = _EXPECTED_EVENT_TYPES - set(producer_event_types)
+        assert not missing, (
+            f"_EXPECTED_EVENT_TYPES contains types not found in produce_events.py: {missing}"
+        )
 
     def test_event_data_has_session_and_region(self) -> None:
         """The ``data`` payload should include at minimum the fields
@@ -218,6 +244,17 @@ class TestAsaqlSyntax:
 class TestAdxMaterializedViews:
     """Verify ADX materialized views in adx_setup.kql reference
     the RawEvents source table."""
+
+    def test_adx_setup_kql_exists(self) -> None:
+        """adx_setup.kql must be present in scripts/streaming/.
+
+        This test fails (rather than skipping) if the file is deleted, so
+        accidental removal is caught immediately in CI.
+        """
+        assert _ADX_SETUP_KQL.exists(), (
+            f"adx_setup.kql not found at expected path: {_ADX_SETUP_KQL}\n"
+            "If you moved or renamed the file, update _ADX_SETUP_KQL in this test module."
+        )
 
     def test_materialized_views_reference_raw_events(self) -> None:
         if not _ADX_SETUP_KQL.exists():

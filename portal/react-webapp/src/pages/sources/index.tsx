@@ -5,6 +5,8 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { useSources } from '@/hooks/useApi';
+import { useDebounce } from '@/hooks/useDebounce';
+import ErrorBanner from '@/components/ErrorBanner';
 import type { SourceRecord, SourceStatus } from '@/types';
 
 const STATUS_BADGES: Record<
@@ -24,8 +26,9 @@ const STATUS_BADGES: Record<
 export default function SourcesPage() {
   const [domainFilter, setDomainFilter] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<string>('');
+  const debouncedDomain = useDebounce(domainFilter);
   const { data: sources, isLoading, error, refetch } = useSources({
-    domain: domainFilter || undefined,
+    domain: debouncedDomain || undefined,
     status: statusFilter || undefined,
   });
 
@@ -53,11 +56,13 @@ export default function SourcesPage() {
           value={domainFilter}
           onChange={(e) => setDomainFilter(e.target.value)}
           placeholder="Filter by domain..."
+          aria-label="Filter sources by domain"
           className="px-3 py-2 border border-gray-300 rounded-md text-sm"
         />
         <select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
+          aria-label="Filter sources by status"
           className="px-3 py-2 border border-gray-300 rounded-md text-sm"
         >
           <option value="">All statuses</option>
@@ -71,21 +76,11 @@ export default function SourcesPage() {
 
       {/* Error State */}
       {error ? (
-        <div className="bg-red-50 border border-red-200 rounded-lg p-6 text-center">
-          <svg className="mx-auto h-10 w-10 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
-          </svg>
-          <h3 className="mt-2 text-sm font-medium text-red-800">Failed to load sources</h3>
-          <p className="mt-1 text-sm text-red-600">
-            {error instanceof Error ? error.message : 'An unexpected error occurred.'}
-          </p>
-          <button
-            onClick={() => refetch()}
-            className="mt-4 inline-flex items-center px-4 py-2 text-sm font-medium text-red-700 bg-red-100 border border-red-300 rounded-md hover:bg-red-200"
-          >
-            Retry
-          </button>
-        </div>
+        <ErrorBanner
+          title="Failed to load sources"
+          message={error instanceof Error ? error.message : 'An unexpected error occurred.'}
+          onRetry={() => refetch()}
+        />
       ) : isLoading ? (
         /* Loading State */
         <div className="flex items-center justify-center h-64">
@@ -126,7 +121,7 @@ export default function SourcesPage() {
                   return (
                     <tr
                       key={source.id}
-                      className="hover:bg-gray-50 cursor-pointer"
+                      className="hover:bg-gray-50"
                     >
                       <td className="px-6 py-4 whitespace-nowrap">
                         <Link

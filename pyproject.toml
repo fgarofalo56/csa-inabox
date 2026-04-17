@@ -289,17 +289,13 @@ source = [
     "domains/sharedServices/aiEnrichment/functions",
     "domains/sharedServices/eventProcessing/functions",
     "domains/sharedServices/secretRotation/functions",
-    # Platform modules and the portal API are tracked but excluded from
-    # the 80% threshold until their test suites reach parity.  Re-add
-    # each entry below alongside its tests, in a separate PR per module.
+    # Platform and portal sources are measured here so coverage reports show
+    # the true coverage gap.  They are excluded from the fail_under threshold
+    # (currently 80%) until their test suites reach parity — do NOT raise
+    # fail_under to account for these until tests are in place.
     # See `make test` and the coverage report.
-    # "csa_platform/ai_integration",
-    # "csa_platform/data_activator",
-    # "csa_platform/data_marketplace",
-    # "csa_platform/metadata_framework",
-    # "csa_platform/purview_governance",
-    # "csa_platform/shared_services",
-    # "portal/shared/api",
+    "csa_platform",
+    "portal/shared/api",
 ]
 branch = true
 omit = [

@@ -63,11 +63,11 @@ security: ## Run Bandit security linter
 test: ## Run all tests
 	pytest tests/ --tb=short -q
 
-test-e2e: ## Run end-to-end integration tests (offline, DuckDB only)
-	pytest tests/e2e/ -v --tb=short -m "not live"
+test-e2e: ## Run integration tests (offline, DuckDB only)
+	pytest tests/integration/ -v --tb=short -m "not live"
 
-test-e2e-live: ## Run all end-to-end tests (requires Azure connection)
-	pytest tests/e2e/ -v --tb=short
+test-e2e-live: ## Run all integration tests (requires Azure connection)
+	pytest tests/integration/ -v --tb=short
 
 test-dbt: ## Compile and test dbt models
 	cd domains/shared/dbt && dbt compile --profiles-dir .

@@ -12,8 +12,8 @@ from portal.shared.api.persistence import SqliteStore
 class TestAIConcurrency:
     """Test AI enrichment function under concurrent load."""
 
-    async def test_concurrent_enrichment_requests(self) -> None:
-        """Multiple simultaneous enrichment requests should not interfere."""
+    async def test_async_gather_collects_all_results(self) -> None:
+        """asyncio.gather collects all results from concurrent coroutines without interference."""
         results: list[dict[str, object]] = []
         errors: list[dict[str, object]] = []
 
@@ -81,8 +81,8 @@ class TestAIConcurrency:
 class TestEventProcessingConcurrency:
     """Test event processing under concurrent load."""
 
-    async def test_concurrent_event_batches(self) -> None:
-        """Multiple event batches processed concurrently should not lose events."""
+    async def test_async_batch_processing_collects_all_events(self) -> None:
+        """asyncio.gather over multiple batch coroutines collects all events without loss."""
         processed: list[dict[str, object]] = []
 
         async def process_batch(batch_id: int, events: list[str]) -> None:

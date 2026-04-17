@@ -77,7 +77,8 @@ export function Sidebar({
         <div
           className="fixed inset-0 z-40 bg-black/50 lg:hidden"
           onClick={onClose}
-          aria-hidden="true"
+          onKeyDown={(e) => { if (e.key === 'Escape') onClose?.(); }}
+          role="presentation"
         />
       )}
 

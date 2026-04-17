@@ -6,9 +6,10 @@
  * form state, and submission.
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import { useForm } from 'react-hook-form';
+import { useMsal } from '@azure/msal-react';
 import { useRegisterSource } from '@/hooks/useApi';
 import type { SourceRegistration, DataQualityRule } from '@/types';
 import {
@@ -88,12 +89,22 @@ export default function RegisterSourcePage() {
       target: { format: 'delta', container: 'bronze', path_pattern: '', landing_zone: '' },
       classification: 'internal',
       quality_rules: [],
-      tags: [],
+      tags: {},
       schema_definition: { auto_detect: true },
     },
   });
   const mutation = useRegisterSource();
   const selectedType = watch('source_type');
+  const { accounts } = useMsal();
+
+  // Auto-populate owner from the active MSAL account
+  useEffect(() => {
+    const account = accounts[0];
+    if (account) {
+      setValue('owner.name', account.name ?? '');
+      setValue('owner.email', account.username ?? '');
+    }
+  }, [accounts, setValue]);
 
   /** Validate the current step before advancing. Returns true if valid. */
   const validateStep = async (currentStep: number): Promise<boolean> => {
@@ -103,7 +114,7 @@ export default function RegisterSourcePage() {
       case 1:
         return trigger(['name', 'connection.host', 'connection.database', 'connection.container', 'connection.api_url']);
       case 2:
-        return trigger(['schema_definition.auto_detect', 'schema_definition._table_name']);
+        return trigger(['schema_definition.auto_detect', 'schema_definition.table_name']);
       case 3:
         return trigger(['ingestion.mode', 'ingestion.schedule_cron', 'ingestion.batch_size']);
       case 4:

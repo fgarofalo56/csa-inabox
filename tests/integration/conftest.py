@@ -47,7 +47,7 @@ def repo_root() -> Path:
 
 @pytest.fixture(scope="session")
 def seed_data_path() -> Path:
-    """Absolute path to tests/e2e/seed_data/."""
+    """Absolute path to tests/integration/seed_data/."""
     return _SEED_DIR
 
 

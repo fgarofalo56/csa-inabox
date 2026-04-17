@@ -106,8 +106,9 @@ export default function StepQuality({ qualityRules, onAddRule, onRemoveRule }: S
         <h3 className="text-sm font-medium text-gray-700">Add Quality Rule</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
-            <label className="block text-xs font-medium text-gray-600">Rule Name</label>
+            <label htmlFor="quality-rule-name" className="block text-xs font-medium text-gray-600">Rule Name</label>
             <input
+              id="quality-rule-name"
               type="text"
               value={ruleName}
               onChange={(e) => setRuleName(e.target.value)}
@@ -116,8 +117,9 @@ export default function StepQuality({ qualityRules, onAddRule, onRemoveRule }: S
             />
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-600">Rule Type</label>
+            <label htmlFor="quality-rule-type" className="block text-xs font-medium text-gray-600">Rule Type</label>
             <select
+              id="quality-rule-type"
               value={ruleType}
               onChange={(e) => setRuleType(e.target.value as DataQualityRule['rule_type'])}
               className="mt-1 block w-full rounded-md border-gray-300 shadow-sm text-sm"
@@ -128,8 +130,9 @@ export default function StepQuality({ qualityRules, onAddRule, onRemoveRule }: S
             </select>
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-600">Column (optional)</label>
+            <label htmlFor="quality-column" className="block text-xs font-medium text-gray-600">Column (optional)</label>
             <input
+              id="quality-column"
               type="text"
               value={column}
               onChange={(e) => setColumn(e.target.value)}
@@ -138,8 +141,9 @@ export default function StepQuality({ qualityRules, onAddRule, onRemoveRule }: S
             />
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-600">Severity</label>
+            <label htmlFor="quality-severity" className="block text-xs font-medium text-gray-600">Severity</label>
             <select
+              id="quality-severity"
               value={severity}
               onChange={(e) => setSeverity(e.target.value as DataQualityRule['severity'])}
               className="mt-1 block w-full rounded-md border-gray-300 shadow-sm text-sm"

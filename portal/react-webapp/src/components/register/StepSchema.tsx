@@ -40,11 +40,12 @@ export default function StepSchema({ register, watch, setValue }: StepSchemaProp
       {!autoDetect && (
         <div className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700">
+            <label htmlFor="schema-table-name" className="block text-sm font-medium text-gray-700">
               Table Name <span className="text-red-500">*</span>
             </label>
             <input
-              {...register('schema_definition._table_name', {
+              id="schema-table-name"
+              {...register('schema_definition.table_name', {
                 validate: (value: string) => {
                   if (!autoDetect && !value) return 'Table name is required when auto-detect is off';
                   return true;
@@ -57,10 +58,11 @@ export default function StepSchema({ register, watch, setValue }: StepSchemaProp
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700">
+            <label htmlFor="schema-watermark-column" className="block text-sm font-medium text-gray-700">
               Watermark Column
             </label>
             <input
+              id="schema-watermark-column"
               {...register('schema_definition.watermark_column')}
               type="text"
               className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-brand-500 focus:ring-brand-500"
@@ -72,11 +74,12 @@ export default function StepSchema({ register, watch, setValue }: StepSchemaProp
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700">
+            <label htmlFor="schema-primary-key" className="block text-sm font-medium text-gray-700">
               Primary Key Columns
             </label>
             <input
-              {...register('schema_definition._primary_key_csv')}
+              id="schema-primary-key"
+              {...register('schema_definition.primary_key_csv')}
               type="text"
               className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-brand-500 focus:ring-brand-500"
               placeholder="e.g., id, composite_key_col (comma-separated)"

@@ -7,7 +7,7 @@ instance seeded with sample data.  No Azure resources are required.
 Run with:
     make test-e2e              # offline / DuckDB only
     make test-e2e-live         # includes Azure-connected tests
-    pytest tests/e2e/ -v       # verbose
+    pytest tests/integration/ -v       # verbose
 """
 
 from __future__ import annotations
