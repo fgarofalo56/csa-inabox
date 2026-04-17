@@ -231,8 +231,11 @@ jobs:
 
       - name: dbt test
         run: |
+          # Exclude snapshot tests — dbt snapshot is not run in DuckDB CI
+          # so snapshot tables don't exist and their tests would fail.
           dbt test --target ci --profiles-dir ~/.dbt \
-            --vars '{"bronze_database":"","silver_database":"","gold_database":""}'
+            --vars '{"bronze_database":"","silver_database":"","gold_database":""}' \
+            --exclude "snp_customers_history" "snp_products_history"
 
   pr-summary:
     name: PR Summary

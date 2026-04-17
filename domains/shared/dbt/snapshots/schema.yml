@@ -1,5 +1,8 @@
 version: 2
 
+# Snapshot tests are disabled in CI (target=ci) because dbt snapshot
+# is not run in the DuckDB integration pipeline — the snapshots schema
+# does not exist.  These tests validate production snapshot tables only.
 snapshots:
   - name: snp_customers_history
     description: >

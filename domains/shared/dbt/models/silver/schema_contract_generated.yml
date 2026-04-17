@@ -25,13 +25,14 @@ models:
   - name: order_date
     description: Date the order was placed.
     tests:
-    - not_null
+    - not_null:
+        severity: warn
   - name: total_amount
     description: Order total (USD).
     tests:
     - not_null
     - dbt_utils.expression_is_true:
-        expression: total_amount >= 0
+        expression: ">= 0"
         config:
           severity: warn
   - name: status

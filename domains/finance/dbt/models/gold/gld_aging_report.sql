@@ -40,7 +40,7 @@ invoice_balances AS (
         COALESCE(p.total_paid, 0) AS total_paid,
         (i.total_amount + i.tax_amount) - COALESCE(p.total_paid, 0) AS outstanding_balance,
         i.status,
-        DATEDIFF(current_date(), i.due_date) AS days_past_due
+        DATEDIFF('day', i.due_date, current_date()) AS days_past_due
     FROM invoices i
     LEFT JOIN payments p ON i.invoice_id = p.invoice_id
 ),
