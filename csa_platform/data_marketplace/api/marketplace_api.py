@@ -42,7 +42,7 @@ from csa_platform.data_marketplace.models.data_product import (
     QualityHistoryResponse,
     QualityMetric,
 )
-from governance.common.logging import configure_structlog, get_logger
+from csa_platform.common.logging import configure_structlog, get_logger
 
 configure_structlog(service="data-marketplace-api")
 logger = get_logger(__name__)

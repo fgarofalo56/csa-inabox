@@ -30,7 +30,7 @@ from typing import Any, ClassVar
 
 import yaml
 
-from governance.common.logging import configure_structlog, get_logger
+from csa_platform.common.logging import configure_structlog, get_logger
 
 configure_structlog(service="semantic-model-generator")
 logger = get_logger(__name__)

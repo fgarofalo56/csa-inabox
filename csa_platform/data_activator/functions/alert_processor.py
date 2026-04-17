@@ -26,7 +26,7 @@ from typing import Any
 import yaml
 from cachetools import TTLCache
 
-from governance.common.logging import configure_structlog, get_logger
+from csa_platform.common.logging import configure_structlog, get_logger
 
 try:
     import azure.functions as func

@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 
 from azure.core.exceptions import AzureError, ResourceNotFoundError
 
-from governance.common.logging import configure_structlog, get_logger
+from csa_platform.common.logging import configure_structlog, get_logger
 
 configure_structlog(service="model-serving-endpoint")
 logger = get_logger(__name__)

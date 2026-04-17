@@ -30,7 +30,7 @@ from dataclasses import field as dataclass_field
 from email.message import EmailMessage
 from typing import Any
 
-from governance.common.logging import configure_structlog, get_logger
+from csa_platform.common.logging import configure_structlog, get_logger
 
 configure_structlog(service="data-activator-notifier")
 logger = get_logger(__name__)

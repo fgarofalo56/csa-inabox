@@ -3,8 +3,24 @@ name: Test Suite
 on:
   pull_request:
     branches: [main]
+    paths:
+      - 'governance/**'
+      - 'csa_platform/**'
+      - 'domains/**'
+      - 'scripts/**'
+      - 'tests/**'
+      - 'pyproject.toml'
+      - '.github/workflows/test.yml'
   push:
     branches: [main]
+    paths:
+      - 'governance/**'
+      - 'csa_platform/**'
+      - 'domains/**'
+      - 'scripts/**'
+      - 'tests/**'
+      - 'pyproject.toml'
+      - '.github/workflows/test.yml'
   schedule:
     - cron: '37 3 * * 1'
 
