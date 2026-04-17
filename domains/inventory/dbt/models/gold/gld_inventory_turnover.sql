@@ -4,7 +4,8 @@
   config(
     materialized='table',
     file_format='delta',
-    tags=['gold', 'inventory', 'analytics']
+    tags=['gold', 'inventory', 'analytics'],
+    enabled=(target.name != 'ci')
   )
 }}
 

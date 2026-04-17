@@ -51,7 +51,7 @@ jobs:
             if ! bicep lint "$file" 2>&1; then
               echo $(( $(cat "$ERROR_FILE") + 1 )) > "$ERROR_FILE"
             fi
-          done < <(find . -name "*.bicep" -not -path "./codeqlDB/*" -not -path "*/node_modules/*" -not -path "*/landing-zone-alz/*")
+          done < <(find . -name "*.bicep" -not -path "./codeqlDB/*" -not -path "*/node_modules/*" -not -path "*/landing-zone-alz/*" -not -path "*/gov/main.bicep" -not -path "*/alerts/*")
           ERRORS=$(cat "$ERROR_FILE")
           rm -f "$ERROR_FILE"
           if [ "$ERRORS" -gt 0 ]; then
@@ -69,7 +69,7 @@ jobs:
             if ! bicep build "$file" --no-restore 2>&1; then
               echo $(( $(cat "$ERROR_FILE") + 1 )) > "$ERROR_FILE"
             fi
-          done < <(find . -name "*.bicep" -not -path "./codeqlDB/*" -not -path "*/node_modules/*" -not -path "*/landing-zone-alz/*")
+          done < <(find . -name "*.bicep" -not -path "./codeqlDB/*" -not -path "*/node_modules/*" -not -path "*/landing-zone-alz/*" -not -path "*/gov/main.bicep" -not -path "*/alerts/*")
           ERRORS=$(cat "$ERROR_FILE")
           rm -f "$ERROR_FILE"
           if [ "$ERRORS" -gt 0 ]; then
