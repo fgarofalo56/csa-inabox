@@ -1,4 +1,4 @@
-.PHONY: help setup lint test validate deploy-dev deploy-prod deploy-adf prerequisites seed seed-azure clean security typecheck-platform
+.PHONY: help setup lint test validate deploy-dev deploy-prod deploy-adf prerequisites seed seed-azure clean security typecheck-platform portal-dev portal-test portal-lint portal-docker
 
 # Default target
 help: ## Show this help
@@ -108,6 +108,23 @@ seed: ## Load sample data via dbt seed
 
 seed-azure: ## Upload sample data to ADLS (requires --storage-account)
 	python scripts/seed/load_sample_data.py --mode adls --storage-account $(STORAGE_ACCOUNT)
+
+# --- Portal ---
+
+portal-dev:  ## Start portal backend + frontend for local development
+	ENVIRONMENT=local DEMO_MODE=true uvicorn portal.shared.api.main:app --reload --port 8000 &
+	cd portal/react-webapp && npm run dev
+
+portal-test:  ## Run all portal tests (backend + frontend)
+	ENVIRONMENT=local python -m pytest portal/shared/tests/ --tb=short -q
+	cd portal/react-webapp && npx jest --no-cache
+
+portal-lint:  ## Lint portal code (Python + TypeScript)
+	python -m ruff check portal/shared/api/
+	cd portal/react-webapp && npx eslint src/
+
+portal-docker:  ## Start portal via Docker Compose
+	docker compose -f portal/kubernetes/docker/docker-compose.yml up --build
 
 # --- Cleanup ---
 

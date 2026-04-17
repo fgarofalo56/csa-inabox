@@ -5,9 +5,7 @@ Endpoints
 ---------
 GET    /api/v1/stats                      — platform-wide statistics
 GET    /api/v1/stats/domains/{domain}     — single domain overview
-
-The React frontend also calls:
-GET    /api/v1/domains                    — all domain overviews (mounted on main app)
+GET    /api/v1/domains                    — all domain overviews (convenience alias)
 """
 
 from __future__ import annotations
@@ -29,35 +27,40 @@ from ..services.auth import get_current_user
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+# A second router mounted at /api/v1/domains for the React-frontend alias.
+# Kept here so all domain-overview logic is co-located with the stats module.
+domains_router = APIRouter()
+
 
 # ── Store accessors ──────────────────────────────────────────────────────────
 # Import lazily from sibling routers to avoid circular-import issues at
-# module level.  Each router owns its store instance.
+# module level.  Each router exposes a public get_store() function so
+# stats.py never touches private module-level variables.
 
 
 def _get_sources() -> list[dict]:
-    from .sources import _sources_store
-    return _sources_store.list()
+    from .sources import get_store as get_sources_store
+    return get_sources_store().list()
 
 
 def _get_pipelines() -> list[dict]:
-    from .pipelines import _pipelines_store
-    return _pipelines_store.list()
+    from .pipelines import get_store as get_pipelines_store
+    return get_pipelines_store().list()
 
 
 def _get_pipeline_runs() -> list[dict]:
-    from .pipelines import _runs_store
-    return _runs_store.list()
+    from .pipelines import get_runs_store
+    return get_runs_store().list()
 
 
 def _get_products() -> list[dict]:
-    from .marketplace import _products_store
-    return _products_store.list()
+    from .marketplace import get_store as get_products_store
+    return get_products_store().list()
 
 
 def _get_access_requests() -> list[dict]:
-    from .access import _access_store
-    return _access_store.list()
+    from .access import get_store as get_access_store
+    return get_access_store().list()
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -221,3 +224,23 @@ async def get_domain_overview(
     if domain not in overviews:
         raise HTTPException(status_code=404, detail=f"Domain '{domain}' not found.")
     return overviews[domain]
+
+
+# ── /api/v1/domains (React frontend convenience alias) ───────────────────────
+
+
+@domains_router.get(
+    "",
+    response_model=list,
+    summary="All domain overviews",
+    tags=["Statistics"],
+)
+async def list_all_domains(
+    _user: dict = Depends(get_current_user),
+) -> list[dict]:
+    """Return all domain overviews — convenience alias used by the React frontend."""
+    sources = _get_sources()
+    pipelines = _get_pipelines()
+    products = _get_products()
+    overviews = _build_domain_overviews(sources, pipelines, products)
+    return [d.model_dump() for d in overviews.values()]

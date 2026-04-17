@@ -110,6 +110,11 @@ class SourceUpdate(BaseModel):
 _sources_store = SqliteStore("sources.json")
 
 
+def get_store() -> SqliteStore:
+    """Return the sources store instance (public accessor for cross-router use)."""
+    return _sources_store
+
+
 def seed_demo_sources() -> None:
     """Populate a handful of realistic demo sources on first access.
 
@@ -412,29 +417,47 @@ async def provision_source(
     Deploys infrastructure, creates ADF pipeline, and triggers Purview
     scan.  Non-admin users may only provision sources within their own
     domain.
+
+    The provisioning service returns a :class:`ProvisioningResult` with
+    the new field values; this handler applies them to the record and
+    persists the update so the service never mutates the input directly.
     """
     source = _load_source_with_domain_check(source_id, user)
-    result = await provisioning_service.provision(source)
+
+    try:
+        result = await provisioning_service.provision(source)
+    except Exception as exc:
+        # Unexpected infrastructure error — persist error state and re-raise
+        # as an HTTP 502 so the caller gets a meaningful response.
+        from datetime import datetime, timezone
+        logger.exception("Provisioning failed for source %s", source_id)
+        _sources_store.update(source_id, {
+            "status": SourceStatus.ERROR.value,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        })
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Provisioning failed due to an infrastructure error. Check server logs.",
+        ) from exc
 
     if not result.success:
-        # Persist error status if provisioning set it
-        if source.status == SourceStatus.ERROR:
-            _sources_store.update(source_id, {
-                "status": source.status.value,
-                "updated_at": source.updated_at.isoformat(),
-            })
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=result.message,
         )
 
-    # Persist the provisioning results back to the store
-    _sources_store.update(source_id, {
-        "status": source.status.value,
-        "pipeline_id": source.pipeline_id,
-        "purview_scan_id": source.purview_scan_id,
-        "updated_at": source.updated_at.isoformat(),
-    })
+    # Apply the result fields returned by the service and persist.
+    update_payload: dict = {}
+    if result.new_status is not None:
+        update_payload["status"] = result.new_status.value
+    if result.pipeline_id is not None:
+        update_payload["pipeline_id"] = result.pipeline_id
+    if result.scan_id is not None:
+        update_payload["purview_scan_id"] = result.scan_id
+    if result.updated_at is not None:
+        update_payload["updated_at"] = result.updated_at.isoformat()
+    if update_payload:
+        _sources_store.update(source_id, update_payload)
 
     return {
         "status": "provisioning",

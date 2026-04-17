@@ -1,3 +1,9 @@
+{{- if not .Values.global.domain }}
+  {{- fail "global.domain is required — set it in your values override" }}
+{{- end }}
+{{- if not .Values.global.azureAdTenantId }}
+  {{- fail "global.azureAdTenantId is required — set it in your values override" }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -14,13 +20,14 @@ spec:
       labels:
         {{- include "csa-portal.backend.labels" . | nindent 8 }}
     spec:
+      terminationGracePeriodSeconds: 45
       securityContext:
         fsGroup: 1000
         seccompProfile:
           type: RuntimeDefault
       containers:
         - name: backend
-          image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag }}"
+          image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
           ports:
             - containerPort: {{ .Values.backend.service.port }}
@@ -53,7 +60,7 @@ spec:
             {{- toYaml .Values.backend.resources | nindent 12 }}
           livenessProbe:
             httpGet:
-              path: /api/v1/health
+              path: /api/health/live
               port: {{ .Values.backend.service.port }}
             initialDelaySeconds: 15
             periodSeconds: 30

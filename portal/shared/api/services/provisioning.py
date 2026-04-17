@@ -28,7 +28,11 @@ logger = logging.getLogger(__name__)
 
 
 class ProvisioningResult:
-    """Result of a provisioning run."""
+    """Result of a provisioning run.
+
+    Carries the new field values that should be applied to the source record
+    by the caller.  The service itself never mutates the input SourceRecord.
+    """
 
     def __init__(
         self,
@@ -38,6 +42,8 @@ class ProvisioningResult:
         deployment_id: str | None = None,
         pipeline_id: str | None = None,
         scan_id: str | None = None,
+        new_status: SourceStatus | None = None,
+        updated_at: datetime | None = None,
         details: dict[str, Any] | None = None,
     ) -> None:
         self.success = success
@@ -45,6 +51,8 @@ class ProvisioningResult:
         self.deployment_id = deployment_id
         self.pipeline_id = pipeline_id
         self.scan_id = scan_id
+        self.new_status = new_status
+        self.updated_at = updated_at
         self.details = details or {}
 
     def to_dict(self) -> dict[str, Any]:
@@ -180,7 +188,14 @@ class ProvisioningService:
             4. Trigger Purview scan.
 
         Returns:
-            :class:`ProvisioningResult` with status and identifiers.
+            :class:`ProvisioningResult` with status and the new field values
+            that the caller must apply to the record and persist.  This method
+            never mutates the *source* argument.
+
+        Raises:
+            Exception: Any unexpected infrastructure error is re-raised with
+                additional context so the router can persist the error state
+                and return an appropriate HTTP response.
         """
         # 1. Validate
         errors = self.validate(source)
@@ -191,43 +206,30 @@ class ProvisioningService:
                 details={"errors": errors},
             )
 
-        try:
-            # 2. Deploy infrastructure
-            deployment_id = await self.deploy_infrastructure(source)
+        # 2. Deploy infrastructure
+        deployment_id = await self.deploy_infrastructure(source)
 
-            # 3. Create ADF pipeline
-            pipeline_id = await self.create_adf_pipeline(source)
+        # 3. Create ADF pipeline
+        pipeline_id = await self.create_adf_pipeline(source)
 
-            # 4. Trigger Purview scan
-            scan_id = await self.trigger_purview_scan(source)
+        # 4. Trigger Purview scan
+        scan_id = await self.trigger_purview_scan(source)
 
-            # Update source record
-            source.status = SourceStatus.PROVISIONING
-            source.pipeline_id = pipeline_id
-            source.purview_scan_id = scan_id
-            source.updated_at = datetime.now(timezone.utc)
-
-            return ProvisioningResult(
-                success=True,
-                message="Provisioning initiated successfully.",
-                deployment_id=deployment_id,
-                pipeline_id=pipeline_id,
-                scan_id=scan_id,
-                details={
-                    "landing_zone": source.target.landing_zone,
-                    "container": source.target.container,
-                    "format": source.target.format.value,
-                },
-            )
-
-        except Exception:
-            logger.exception("Provisioning failed for source %s", source.id)
-            source.status = SourceStatus.ERROR
-            source.updated_at = datetime.now(timezone.utc)
-            return ProvisioningResult(
-                success=False,
-                message="Provisioning failed. Check server logs for details.",
-            )
+        now = datetime.now(timezone.utc)
+        return ProvisioningResult(
+            success=True,
+            message="Provisioning initiated successfully.",
+            deployment_id=deployment_id,
+            pipeline_id=pipeline_id,
+            scan_id=scan_id,
+            new_status=SourceStatus.PROVISIONING,
+            updated_at=now,
+            details={
+                "landing_zone": source.target.landing_zone,
+                "container": source.target.container,
+                "format": source.target.format.value,
+            },
+        )
 
 
 # Module-level singleton

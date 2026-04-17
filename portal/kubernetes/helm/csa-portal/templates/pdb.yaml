@@ -1,0 +1,25 @@
+{{- if .Values.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "csa-portal.fullname" . }}-backend
+  labels:
+    {{- include "csa-portal.backend.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "csa-portal.name" . }}-backend
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "csa-portal.fullname" . }}-frontend
+  labels:
+    {{- include "csa-portal.frontend.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "csa-portal.name" . }}-frontend
+{{- end }}

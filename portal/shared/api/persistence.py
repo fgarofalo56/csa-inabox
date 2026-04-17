@@ -41,6 +41,19 @@ _DEFAULT_DB_NAME = "portal.db"
 _WRITE_LOCK = threading.RLock()
 
 
+def _open_connection(db_path: str | Path) -> sqlite3.Connection:
+    """Open a SQLite connection and set performance PRAGMAs once."""
+    conn = sqlite3.connect(
+        str(db_path),
+        check_same_thread=False,
+        timeout=30,
+    )
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    return conn
+
+
 def _table_name_from_filename(filename: str) -> str:
     """Derive a safe SQLite table name from a legacy JSON filename.
 
@@ -89,26 +102,29 @@ class SqliteStore:
         # Legacy JSON path — used only for one-time migration
         self._legacy_json_path = self.data_dir / filename
 
+        # Cached per-instance connection.  PRAGMAs are set once here so
+        # every subsequent operation reuses the same connection without
+        # re-issuing PRAGMA statements.  uvicorn runs a single process with
+        # asyncio, so one connection per store instance is sufficient.
+        # _WRITE_LOCK serialises write paths as before.
+        self._conn: sqlite3.Connection = _open_connection(self.db_path)
+
         self._ensure_table()
         self._maybe_migrate_json()
 
     # ── connection helpers ──────────────────────────────────────────────
 
     def _connect(self) -> sqlite3.Connection:
-        """Return a new connection configured for concurrent access."""
-        conn = sqlite3.connect(
-            str(self.db_path),
-            check_same_thread=False,
-            timeout=30,
-        )
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=5000")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        return conn
+        """Return the cached per-instance connection.
+
+        PRAGMAs were already applied during ``__init__`` via
+        :func:`_open_connection`, so no repeated PRAGMA cost is incurred.
+        """
+        return self._conn
 
     @contextmanager
     def _transact_immediate(self) -> Iterator[sqlite3.Connection]:
-        """Yield a connection running a single ``BEGIN IMMEDIATE`` txn.
+        """Yield the cached connection running a single ``BEGIN IMMEDIATE`` txn.
 
         ``BEGIN IMMEDIATE`` acquires SQLite's RESERVED lock up-front, so
         any concurrent writer is either queued (up to ``busy_timeout``)
@@ -119,10 +135,11 @@ class SqliteStore:
         Combined with the process-wide :data:`_WRITE_LOCK`, this gives us
         strong serializable semantics for read-modify-write cycles even
         under concurrent FastAPI worker threads.  Reads outside of such
-        cycles continue to use plain :meth:`_connect` for throughput —
+        cycles continue to use :meth:`_connect` for throughput —
         SQLite WAL lets them proceed without taking the write lock.
         """
-        with _WRITE_LOCK, self._connect() as conn:
+        conn = self._connect()
+        with _WRITE_LOCK:
             try:
                 conn.execute("BEGIN IMMEDIATE")
                 yield conn
@@ -134,17 +151,22 @@ class SqliteStore:
     # ── schema bootstrap ────────────────────────────────────────────────
 
     def _ensure_table(self) -> None:
-        """Create the backing table if it does not yet exist."""
-        with self._connect() as conn:
-            conn.execute(
-                f"""
-                CREATE TABLE IF NOT EXISTS [{self.table}] (
-                    id   TEXT PRIMARY KEY,
-                    data TEXT NOT NULL
-                )
-                """
+        """Create the backing table if it does not yet exist.
+
+        The ``CHECK(json_valid(data))`` constraint lets SQLite reject
+        malformed JSON blobs at the storage layer before they propagate
+        through the application.
+        """
+        conn = self._connect()
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS [{self.table}] (
+                id   TEXT PRIMARY KEY,
+                data TEXT NOT NULL CHECK(json_valid(data))
             )
-            conn.commit()
+            """
+        )
+        conn.commit()
         logger.debug("Ensured table '%s' exists in %s", self.table, self.db_path)
 
     # ── legacy JSON migration ───────────────────────────────────────────
@@ -164,20 +186,20 @@ class SqliteStore:
             return
 
         # Only migrate when the table is empty (idempotent)
-        with self._connect() as conn:
-            row = conn.execute(
-                f"SELECT COUNT(*) FROM [{self.table}]"
-            ).fetchone()
-            if row[0] > 0:
-                return
+        conn = self._connect()
+        row = conn.execute(
+            f"SELECT COUNT(*) FROM [{self.table}]"
+        ).fetchone()
+        if row[0] > 0:
+            return
 
-            for item in items:
-                item_id = str(item.get("id", uuid.uuid4()))
-                conn.execute(
-                    f"INSERT OR IGNORE INTO [{self.table}] (id, data) VALUES (?, ?)",
-                    (item_id, json.dumps(item, default=str)),
-                )
-            conn.commit()
+        for item in items:
+            item_id = str(item.get("id", uuid.uuid4()))
+            conn.execute(
+                f"INSERT OR IGNORE INTO [{self.table}] (id, data) VALUES (?, ?)",
+                (item_id, json.dumps(item, default=str)),
+            )
+        conn.commit()
 
         logger.info(
             "Migrated %d items from %s → table '%s'",
@@ -200,23 +222,23 @@ class SqliteStore:
 
         item_id = str(item["id"])
 
-        with self._connect() as conn:
-            conn.execute(
-                f"INSERT OR REPLACE INTO [{self.table}] (id, data) VALUES (?, ?)",
-                (item_id, json.dumps(item, default=str)),
-            )
-            conn.commit()
+        conn = self._connect()
+        conn.execute(
+            f"INSERT OR REPLACE INTO [{self.table}] (id, data) VALUES (?, ?)",
+            (item_id, json.dumps(item, default=str)),
+        )
+        conn.commit()
 
         logger.debug("Added item %s to [%s]", item_id, self.table)
         return item
 
     def get(self, item_id: str) -> dict[str, Any] | None:
         """Return a single item by its ``id``, or ``None``."""
-        with self._connect() as conn:
-            row = conn.execute(
-                f"SELECT data FROM [{self.table}] WHERE id = ?",
-                (item_id,),
-            ).fetchone()
+        conn = self._connect()
+        row = conn.execute(
+            f"SELECT data FROM [{self.table}] WHERE id = ?",
+            (item_id,),
+        ).fetchone()
         if row is None:
             return None
         return json.loads(row[0])
@@ -301,12 +323,12 @@ class SqliteStore:
 
     def delete(self, item_id: str) -> bool:
         """Delete an item by ``id``.  Returns ``True`` if a row was removed."""
-        with self._connect() as conn:
-            cursor = conn.execute(
-                f"DELETE FROM [{self.table}] WHERE id = ?",
-                (item_id,),
-            )
-            conn.commit()
+        conn = self._connect()
+        cursor = conn.execute(
+            f"DELETE FROM [{self.table}] WHERE id = ?",
+            (item_id,),
+        )
+        conn.commit()
         deleted = cursor.rowcount > 0
         if deleted:
             logger.debug("Deleted item %s from [%s]", item_id, self.table)
@@ -318,10 +340,10 @@ class SqliteStore:
 
     def list(self) -> list[dict[str, Any]]:
         """Return all items."""
-        with self._connect() as conn:
-            rows = conn.execute(
-                f"SELECT data FROM [{self.table}] ORDER BY rowid"
-            ).fetchall()
+        conn = self._connect()
+        rows = conn.execute(
+            f"SELECT data FROM [{self.table}] ORDER BY rowid"
+        ).fetchall()
         return [json.loads(r[0]) for r in rows]
 
     def save(self, data: list[dict[str, Any]]) -> None:
@@ -341,34 +363,42 @@ class SqliteStore:
                 )
 
     def query(self, **filters: Any) -> list[dict[str, Any]]:
-        """Filter items by top-level field values.
+        """Filter items by top-level field values using SQLite ``json_extract``.
 
-        This performs a full table scan with JSON extraction.  Fine for the
-        demo-scale data this portal deals with.
+        Filtering is pushed into the WHERE clause so only matching rows are
+        transferred from the storage engine to Python.  Values are compared
+        without ``str()`` coercion so that integer fields (e.g. status codes)
+        match correctly against integer filter arguments.
         """
         if not filters:
             return self.list()
 
-        items = self.list()
-        results = []
-        for item in items:
-            if all(str(item.get(k)) == str(v) for k, v in filters.items()):
-                results.append(item)
-        return results
+        conditions = [
+            f"json_extract(data, '$.{key}') = ?" for key in filters
+        ]
+        params = list(filters.values())
+        sql = (
+            f"SELECT data FROM [{self.table}]"
+            f" WHERE {' AND '.join(conditions)}"
+            f" ORDER BY rowid"
+        )
+        conn = self._connect()
+        rows = conn.execute(sql, params).fetchall()
+        return [json.loads(r[0]) for r in rows]
 
     def count(self) -> int:
         """Return the number of items in the store."""
-        with self._connect() as conn:
-            row = conn.execute(
-                f"SELECT COUNT(*) FROM [{self.table}]"
-            ).fetchone()
+        conn = self._connect()
+        row = conn.execute(
+            f"SELECT COUNT(*) FROM [{self.table}]"
+        ).fetchone()
         return row[0]
 
     def clear(self) -> None:
         """Remove all items from this store's table."""
-        with self._connect() as conn:
-            conn.execute(f"DELETE FROM [{self.table}]")
-            conn.commit()
+        conn = self._connect()
+        conn.execute(f"DELETE FROM [{self.table}]")
+        conn.commit()
         logger.info("Cleared all items from [%s]", self.table)
 
 

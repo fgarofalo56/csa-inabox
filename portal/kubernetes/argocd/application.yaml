@@ -8,7 +8,7 @@ metadata:
 spec:
   project: csa-inabox
   source:
-    repoURL: https://github.com/your-org/csa-inabox.git
+    repoURL: https://github.com/fgarofalo56/csa-inabox.git
     targetRevision: main
     path: portal/kubernetes/helm/csa-portal
     helm:

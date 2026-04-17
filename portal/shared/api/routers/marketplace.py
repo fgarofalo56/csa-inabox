@@ -31,6 +31,11 @@ _products_store = SqliteStore("marketplace_products.json")
 _quality_store = SqliteStore("marketplace_quality.json")
 
 
+def get_store() -> SqliteStore:
+    """Return the products store instance (public accessor for cross-router use)."""
+    return _products_store
+
+
 def seed_demo_products() -> None:
     """Populate realistic demo data products on first access.
 

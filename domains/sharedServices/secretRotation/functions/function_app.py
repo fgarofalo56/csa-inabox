@@ -86,6 +86,10 @@ import azure.functions as func
 from azure.core.exceptions import HttpResponseError, ServiceRequestError
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
+from domains.sharedServices.common.function_helpers import (
+    build_error_response,
+    build_health_response,
+)
 from governance.common.logging import (
     bind_trace_context,
     configure_structlog,
@@ -500,20 +504,12 @@ async def rotate(req: func.HttpRequest) -> func.HttpResponse:
             body = req.get_json()
         except ValueError:
             logger.warning("rotation.invalid_json")
-            return func.HttpResponse(
-                json.dumps({"error": "Invalid JSON body"}),
-                status_code=400,
-                mimetype="application/json",
-            )
+            return build_error_response(400, "Invalid JSON body")
 
         secret_name = body.get("secret_name", "")
         if not secret_name:
             logger.warning("rotation.missing_secret_name")
-            return func.HttpResponse(
-                json.dumps({"error": "Missing 'secret_name' field"}),
-                status_code=400,
-                mimetype="application/json",
-            )
+            return build_error_response(400, "Missing 'secret_name' field")
 
         parsed = _parse_secret_name(secret_name)
         service = parsed["service"]
@@ -522,15 +518,10 @@ async def rotate(req: func.HttpRequest) -> func.HttpResponse:
         handler = _ROTATION_HANDLERS.get(service)
         if not handler:
             logger.warning("rotation.unsupported_service", service=service)
-            return func.HttpResponse(
-                json.dumps(
-                    {
-                        "error": f"Unsupported service type: {service}",
-                        "supported": list(_ROTATION_HANDLERS.keys()),
-                    }
-                ),
-                status_code=400,
-                mimetype="application/json",
+            return build_error_response(
+                400,
+                f"Unsupported service type: {service}",
+                {"supported": list(_ROTATION_HANDLERS.keys())},
             )
 
         try:
@@ -560,43 +551,24 @@ async def rotate(req: func.HttpRequest) -> func.HttpResponse:
                 error_type=type(e).__name__,
                 error_message=str(e),
             )
-            return func.HttpResponse(
-                json.dumps(
-                    {
-                        "error": f"Azure SDK error: {e!s}",
-                        "secret_name": secret_name,
-                        "service": service,
-                    }
-                ),
-                status_code=503,  # Service Unavailable for retriable errors
-                mimetype="application/json",
+            return build_error_response(
+                503,
+                f"Azure SDK error: {e!s}",
+                {"secret_name": secret_name, "service": service},
             )
         except ValueError as e:
             logger.error("rotation.validation_failed", secret_name=secret_name, error=str(e))
-            return func.HttpResponse(
-                json.dumps(
-                    {
-                        "error": f"Invalid parameters: {e!s}",
-                        "secret_name": secret_name,
-                        "service": service,
-                    }
-                ),
-                status_code=400,
-                mimetype="application/json",
+            return build_error_response(
+                400,
+                f"Invalid parameters: {e!s}",
+                {"secret_name": secret_name, "service": service},
             )
         except Exception as e:
             logger.exception("rotation.manual_failed", secret_name=secret_name)
-            return func.HttpResponse(
-                json.dumps(
-                    {
-                        "error": "Rotation failed. Check service logs for details.",
-                        "secret_name": secret_name,
-                        "service": service,
-                        "error_type": type(e).__name__,
-                    }
-                ),
-                status_code=500,
-                mimetype="application/json",
+            return build_error_response(
+                500,
+                "Rotation failed. Check service logs for details.",
+                {"secret_name": secret_name, "service": service, "error_type": type(e).__name__},
             )
 
 
@@ -611,14 +583,12 @@ async def health(req: func.HttpRequest) -> func.HttpResponse:
     Returns: JSON with service status and configuration checks
     """
     kv_configured = bool(KEY_VAULT_URL)
+    payload = build_health_response(
+        "secret-rotation",
+        extra={"status": "healthy" if kv_configured else "degraded"},
+    )
     return func.HttpResponse(
-        json.dumps(
-            {
-                "status": "healthy" if kv_configured else "degraded",
-                "service": "secret-rotation",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            }
-        ),
+        json.dumps(payload),
         status_code=200,
         mimetype="application/json",
     )

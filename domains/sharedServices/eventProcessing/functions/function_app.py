@@ -32,6 +32,10 @@ from typing import Any
 
 import azure.functions as func
 
+from domains.sharedServices.common.function_helpers import (
+    build_error_response,
+    build_health_response,
+)
 from governance.common.logging import (
     bind_trace_context,
     configure_structlog,
@@ -280,19 +284,11 @@ async def replay_events(
             events = body.get("events", [])
         except ValueError:
             logger.warning("replay.invalid_json")
-            return func.HttpResponse(
-                json.dumps({"error": "Invalid JSON"}),
-                status_code=400,
-                mimetype="application/json",
-            )
+            return build_error_response(400, "Invalid JSON")
 
         if not events:
             logger.warning("replay.empty_payload")
-            return func.HttpResponse(
-                json.dumps({"error": "No events to replay"}),
-                status_code=400,
-                mimetype="application/json",
-            )
+            return build_error_response(400, "No events to replay")
 
         processed = []
         validation_errors = 0
@@ -335,13 +331,7 @@ async def replay_events(
 async def health(req: func.HttpRequest) -> func.HttpResponse:
     """Health check for event processing service."""
     return func.HttpResponse(
-        json.dumps(
-            {
-                "status": "healthy",
-                "service": "event-processing",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            }
-        ),
+        json.dumps(build_health_response("event-processing")),
         status_code=200,
         mimetype="application/json",
     )

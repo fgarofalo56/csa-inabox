@@ -42,6 +42,11 @@ class ReviewBody(BaseModel):
 _access_store = SqliteStore("access_requests.json")
 
 
+def get_store() -> SqliteStore:
+    """Return the access requests store instance (public accessor for cross-router use)."""
+    return _access_store
+
+
 def seed_demo_requests() -> None:
     """Populate realistic demo access requests on first access.
 

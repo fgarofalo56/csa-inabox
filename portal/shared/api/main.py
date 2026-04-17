@@ -23,7 +23,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
-from fastapi import Depends, FastAPI
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -33,6 +33,7 @@ from governance.common.logging import configure_structlog, get_logger
 
 from .config import settings
 from .routers import access, marketplace, pipelines, sources, stats
+from .routers.stats import domains_router
 from .services.auth import get_current_user
 
 # ── Logging ──────────────────────────────────────────────────────────────────
@@ -200,6 +201,7 @@ app.include_router(pipelines.router, prefix="/api/v1/pipelines", tags=["Pipeline
 app.include_router(marketplace.router, prefix="/api/v1/marketplace", tags=["Marketplace"])
 app.include_router(access.router, prefix="/api/v1/access", tags=["Access Requests"])
 app.include_router(stats.router, prefix="/api/v1/stats", tags=["Statistics"])
+app.include_router(domains_router, prefix="/api/v1/domains", tags=["Statistics"])
 
 
 # ── Top-level endpoints ─────────────────────────────────────────────────────
@@ -231,9 +233,9 @@ async def health_ready() -> dict:
     # Check data store (SQLite) — result drives healthy/degraded status
     # but is intentionally not surfaced in the response body.
     try:
-        from .routers.sources import _sources_store
+        from .routers.sources import get_store as get_sources_store
 
-        _sources_store.count()  # simple query to verify DB is accessible
+        get_sources_store().count()  # simple query to verify DB is accessible
     except Exception:
         overall_healthy = False
 
@@ -243,15 +245,3 @@ async def health_ready() -> dict:
     }
 
 
-@app.get("/api/v1/domains", response_model=list, tags=["Statistics"])
-async def list_all_domains(
-    _user: dict = Depends(get_current_user),
-) -> list[dict]:
-    """Return all domain overviews — convenience alias used by the React frontend."""
-    from .routers.stats import _build_domain_overviews, _get_pipelines, _get_products, _get_sources
-
-    sources = _get_sources()
-    pipelines = _get_pipelines()
-    products = _get_products()
-    overviews = _build_domain_overviews(sources, pipelines, products)
-    return [d.model_dump() for d in overviews.values()]

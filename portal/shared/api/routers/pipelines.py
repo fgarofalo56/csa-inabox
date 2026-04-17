@@ -32,6 +32,16 @@ _runs_store = SqliteStore("pipeline_runs.json")
 _sources_store = SqliteStore("sources.json")
 
 
+def get_store() -> SqliteStore:
+    """Return the pipelines store instance (public accessor for cross-router use)."""
+    return _pipelines_store
+
+
+def get_runs_store() -> SqliteStore:
+    """Return the pipeline runs store instance (public accessor for cross-router use)."""
+    return _runs_store
+
+
 def _get_pipeline_domain(pipeline: PipelineRecord) -> str | None:
     """Resolve the domain for a pipeline via its linked source.
 

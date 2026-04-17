@@ -34,6 +34,11 @@ import azure.functions as func
 from azure.core.exceptions import HttpResponseError, ServiceRequestError
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
+from domains.sharedServices.common.function_helpers import (
+    MAX_BLOB_SIZE,
+    build_error_response,
+    build_health_response,
+)
 from governance.common.logging import (
     bind_trace_context,
     configure_structlog,
@@ -261,8 +266,7 @@ async def _analyze_document(blob_data: bytes, content_type: str) -> dict[str, An
         "content_preview": "",
     }
 
-    # Check blob size limit (50 MB)
-    MAX_BLOB_SIZE = 50 * 1024 * 1024  # 50 MB
+    # Check blob size limit (shared constant — see function_helpers.MAX_BLOB_SIZE)
     if len(blob_data) > MAX_BLOB_SIZE:
         results["error"] = f"Document too large: {len(blob_data)} bytes (max: {MAX_BLOB_SIZE})"
         return results
@@ -319,28 +323,16 @@ async def enrich_text(req: func.HttpRequest) -> func.HttpResponse:
             body = req.get_json()
         except ValueError:
             logger.warning("request.invalid_json")
-            return func.HttpResponse(
-                json.dumps({"error": "Invalid JSON body"}),
-                status_code=400,
-                mimetype="application/json",
-            )
+            return build_error_response(400, "Invalid JSON body")
 
         text = body.get("text", "")
         if not text:
             logger.warning("request.missing_field", field="text")
-            return func.HttpResponse(
-                json.dumps({"error": "Missing 'text' field"}),
-                status_code=400,
-                mimetype="application/json",
-            )
+            return build_error_response(400, "Missing 'text' field")
 
         if len(text) > MAX_TEXT_LENGTH:
             logger.warning("request.payload_too_large", input_length=len(text))
-            return func.HttpResponse(
-                json.dumps({"error": f"Text exceeds {MAX_TEXT_LENGTH:,} character limit"}),
-                status_code=413,
-                mimetype="application/json",
-            )
+            return build_error_response(413, f"Text exceeds {MAX_TEXT_LENGTH:,} character limit")
 
         results = await _enrich_text(text)
         results["input_length"] = len(text)
@@ -388,7 +380,6 @@ async def process_inbox_document(
         logger.info("blob.received")
 
         # Check blob size before reading into memory
-        MAX_BLOB_SIZE = 50 * 1024 * 1024  # 50 MB
         if blob.length and blob.length > MAX_BLOB_SIZE:
             skip_result: dict[str, Any] = {
                 "source_blob": blob.name,
@@ -458,13 +449,8 @@ async def health_check(req: func.HttpRequest) -> func.HttpResponse:
     GET /api/health
     Returns: JSON with service status and capability checks
     """
-    status: dict[str, Any] = {
-        "status": "healthy",
-        "service": "ai-enrichment",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
     return func.HttpResponse(
-        json.dumps(status),
+        json.dumps(build_health_response("ai-enrichment")),
         status_code=200,
         mimetype="application/json",
     )
