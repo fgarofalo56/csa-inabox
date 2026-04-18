@@ -67,11 +67,15 @@ def _get_access_requests() -> list[dict]:
 
 
 def _avg_quality_score(products: list[dict]) -> float:
-    """Compute average quality score from data products, defaulting to 0."""
+    """Compute average quality score from data products, defaulting to 0.
+
+    Returns a 0.0-1.0 ratio (CSA-0003). Rounded to 3 decimals so the
+    0-1 scale still produces meaningful dashboard display values.
+    """
     scores = [p.get("quality_score", 0) for p in products if p.get("quality_score")]
     if not scores:
         return 0.0
-    return round(sum(scores) / len(scores), 1)
+    return round(sum(scores) / len(scores), 3)
 
 
 def _count_recent_runs(runs: list[dict], hours: int = 24) -> int:
@@ -109,10 +113,14 @@ def _estimate_volume_gb(sources: list[dict]) -> float:
 
 
 def _domain_status_from_quality(avg_score: float) -> DomainStatus:
-    """Derive a domain health status from its average quality score."""
-    if avg_score >= 90:
+    """Derive a domain health status from its average quality score.
+
+    ``avg_score`` is a 0.0-1.0 ratio (CSA-0003); thresholds are 0.9
+    (healthy) and 0.75 (warning).
+    """
+    if avg_score >= 0.9:
         return DomainStatus.HEALTHY
-    if avg_score >= 75:
+    if avg_score >= 0.75:
         return DomainStatus.WARNING
     return DomainStatus.CRITICAL
 
@@ -156,7 +164,8 @@ def _build_domain_overviews(
     overviews: dict[str, DomainOverview] = {}
     for domain in sorted(all_domains):
         scores = quality_by_domain.get(domain, [])
-        avg_q = round(sum(scores) / len(scores), 1) if scores else 0.0
+        # 0.0-1.0 ratio; 3 decimals preserves dashboard precision (CSA-0003).
+        avg_q = round(sum(scores) / len(scores), 3) if scores else 0.0
         overviews[domain] = DomainOverview(
             name=domain,
             source_count=source_by_domain.get(domain, 0),
@@ -231,7 +240,7 @@ async def get_domain_overview(
 
 @domains_router.get(
     "",
-    response_model=list,
+    response_model=list[DomainOverview],
     summary="All domain overviews",
     tags=["Statistics"],
 )

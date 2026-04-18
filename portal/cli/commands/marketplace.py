@@ -24,8 +24,6 @@ from ..formatters import (
     product_detail,
     products_table,
     quality_table,
-    render,
-    stats_table,
 )
 
 
@@ -40,7 +38,7 @@ def marketplace() -> None:
 
 @marketplace.command("products")
 @click.option("--domain", default=None, help="Filter by business domain.")
-@click.option("--min-quality", default=None, type=float, help="Minimum quality score (0-100).")
+@click.option("--min-quality", default=None, type=float, help="Minimum quality score (0.0-1.0 ratio).")
 @click.option("--limit", default=50, show_default=True, help="Maximum results to return.")
 @click.pass_context
 def list_products(
@@ -203,7 +201,7 @@ def marketplace_stats(ctx: click.Context) -> None:
         fields = [
             ("Total Products", str(result.get("total_products", 0))),
             ("Total Domains", str(result.get("total_domains", 0))),
-            ("Avg Quality Score", f"{result.get('avg_quality_score', 0):.1f}"),
+            ("Avg Quality Score", f"{result.get('avg_quality_score', 0) * 100:.1f}%"),
         ]
         by_domain = result.get("products_by_domain") or {}
         if by_domain:

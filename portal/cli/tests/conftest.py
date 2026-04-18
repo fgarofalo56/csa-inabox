@@ -102,7 +102,8 @@ SAMPLE_PRODUCT: dict = {
     "domain": "human-resources",
     "status": "active",
     "classification": "confidential",
-    "quality_score": 94.5,
+    # quality_score is a 0.0-1.0 ratio (CSA-0003).
+    "quality_score": 0.945,
     "freshness_hours": 6.2,
     "completeness": 0.97,
     "availability": 0.998,
@@ -120,14 +121,14 @@ SAMPLE_PRODUCT: dict = {
 SAMPLE_QUALITY: list[dict] = [
     {
         "date": "2026-04-17",
-        "quality_score": 94.5,
+        "quality_score": 0.945,
         "completeness": 0.97,
         "freshness_hours": 6.2,
         "row_count": 500000,
     },
     {
         "date": "2026-04-16",
-        "quality_score": 93.1,
+        "quality_score": 0.931,
         "completeness": 0.96,
         "freshness_hours": 6.5,
         "row_count": 498000,
@@ -141,7 +142,7 @@ SAMPLE_STATS: dict = {
     "pending_access_requests": 2,
     "total_data_volume_gb": 300.0,
     "last_24h_pipeline_runs": 3,
-    "avg_quality_score": 92.8,
+    "avg_quality_score": 0.928,
 }
 
 SAMPLE_DOMAINS: list[dict] = [
@@ -150,7 +151,7 @@ SAMPLE_DOMAINS: list[dict] = [
         "source_count": 1,
         "pipeline_count": 1,
         "data_product_count": 1,
-        "avg_quality_score": 98.1,
+        "avg_quality_score": 0.981,
         "status": "healthy",
     },
     {
@@ -158,7 +159,7 @@ SAMPLE_DOMAINS: list[dict] = [
         "source_count": 1,
         "pipeline_count": 1,
         "data_product_count": 1,
-        "avg_quality_score": 94.5,
+        "avg_quality_score": 0.945,
         "status": "healthy",
     },
 ]

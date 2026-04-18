@@ -56,7 +56,7 @@ def seed_demo_products() -> None:
             domain="human-resources",
             owner={"name": "Jane Smith", "email": "jane.smith@contoso.com", "team": "People Analytics"},
             classification=ClassificationLevel.CONFIDENTIAL,
-            quality_score=94.5,
+            quality_score=0.945,
             freshness_hours=6.2,
             completeness=0.97,
             availability=0.998,
@@ -92,7 +92,7 @@ def seed_demo_products() -> None:
             domain="manufacturing",
             owner={"name": "Bob Chen", "email": "bob.chen@contoso.com", "team": "Manufacturing IT"},
             classification=ClassificationLevel.INTERNAL,
-            quality_score=91.2,
+            quality_score=0.912,
             freshness_hours=0.1,
             completeness=0.99,
             availability=0.995,
@@ -122,7 +122,7 @@ def seed_demo_products() -> None:
             domain="finance",
             owner={"name": "Alice Park", "email": "alice.park@contoso.com", "team": "Financial Reporting"},
             classification=ClassificationLevel.RESTRICTED,
-            quality_score=98.1,
+            quality_score=0.981,
             freshness_hours=168.0,
             completeness=1.0,
             availability=0.999,
@@ -153,7 +153,7 @@ def seed_demo_products() -> None:
             domain="marketing",
             owner={"name": "Carlos Diaz", "email": "carlos.diaz@contoso.com", "team": "Customer Insights"},
             classification=ClassificationLevel.CONFIDENTIAL,
-            quality_score=87.3,
+            quality_score=0.873,
             freshness_hours=1.5,
             completeness=0.93,
             availability=0.992,
@@ -168,7 +168,7 @@ def seed_demo_products() -> None:
             domain="supply-chain",
             owner={"name": "Diana Torres", "email": "diana.torres@contoso.com", "team": "Supply Chain Ops"},
             classification=ClassificationLevel.INTERNAL,
-            quality_score=92.8,
+            quality_score=0.928,
             freshness_hours=0.5,
             completeness=0.96,
             availability=0.997,
@@ -185,12 +185,17 @@ def seed_demo_products() -> None:
         history: list[dict] = []
         for days_ago in range(30):
             date = (now - timedelta(days=days_ago)).strftime("%Y-%m-%d")
+            # Clamp the perturbed metric back into the [0.0, 1.0] ratio
+            # range so QualityMetric's Field(ge, le) validation passes
+            # even at the extremes (CSA-0003).
+            score = max(0.0, min(1.0, dp.quality_score + _rng.uniform(-0.03, 0.02)))
+            comp = max(0.0, min(1.0, dp.completeness + _rng.uniform(-0.03, 0.01)))
             history.append(
                 QualityMetric(
                     date=date,
-                    quality_score=dp.quality_score + _rng.uniform(-3, 2),
-                    completeness=dp.completeness + _rng.uniform(-0.03, 0.01),
-                    freshness_hours=dp.freshness_hours + _rng.uniform(-1, 2),
+                    quality_score=score,
+                    completeness=comp,
+                    freshness_hours=max(0.0, dp.freshness_hours + _rng.uniform(-1, 2)),
                     row_count=_rng.randint(100_000, 5_000_000),
                 ).model_dump()
             )
@@ -267,12 +272,22 @@ async def get_product(
 async def get_quality_history(
     product_id: str,
     days: int = Query(30, ge=1, le=365),
-    _user: dict = Depends(get_current_user),
+    scope: DomainScope = Depends(get_domain_scope),
 ) -> list[QualityMetric]:
-    """Return quality metric history for a data product."""
-    # Check if product exists
-    if not _products_store.get(product_id):
+    """Return quality metric history for a data product.
+
+    Non-admin users may only view quality history for products in their
+    domain (SEC-0007).
+    """
+    stored = _products_store.get(product_id)
+    if not stored:
         raise HTTPException(status_code=404, detail=f"Product '{product_id}' not found.")
+
+    product = DataProduct.model_validate(stored)
+
+    # Domain scoping: enforce for non-admin callers (SEC-0007).
+    if not scope.is_admin and (not scope.user_domain or product.domain != scope.user_domain):
+        raise HTTPException(status_code=403, detail="You do not have access to this product.")
 
     # Find quality history for this product
     all_quality_data = _quality_store.load()
@@ -314,7 +329,7 @@ async def marketplace_stats(
         "total_domains": len({p.domain for p in products}),
         "avg_quality_score": round(
             sum(p.quality_score for p in products) / len(products) if products else 0,
-            1,
+            3,  # 0.0-1.0 ratio — 3 decimals for dashboard precision (CSA-0003)
         ),
         "products_by_domain": dict(sorted(_count_by_key(products, lambda p: p.domain).items())),
     }

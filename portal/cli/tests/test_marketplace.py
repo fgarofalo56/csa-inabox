@@ -180,19 +180,21 @@ class TestMarketplaceStats:
         mock_client.marketplace_stats.return_value = {
             "total_products": 5,
             "total_domains": 4,
-            "avg_quality_score": 92.8,
+            "avg_quality_score": 0.928,
             "products_by_domain": {"finance": 1, "hr": 1},
         }
         result = runner.invoke(cli, ["marketplace", "stats"])
         assert result.exit_code == 0
         assert "5" in result.output
-        assert "92.8" in result.output
+        # avg_quality_score is a 0.0-1.0 ratio (CSA-0003) displayed as a
+        # percentage in the table formatter.
+        assert "92.8%" in result.output
 
     def test_stats_json(self, runner, mock_client):
         mock_client.marketplace_stats.return_value = {
             "total_products": 5,
             "total_domains": 4,
-            "avg_quality_score": 92.8,
+            "avg_quality_score": 0.928,
             "products_by_domain": {},
         }
         result = runner.invoke(cli, ["--format", "json", "marketplace", "stats"])

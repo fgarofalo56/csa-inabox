@@ -33,10 +33,14 @@ class TestPlatformStats:
         assert data["total_data_volume_gb"] >= 0
 
     def test_platform_stats_quality_score_range(self, client: TestClient):
-        """Should return quality score within valid range."""
+        """Should return quality score within valid range.
+
+        quality_score is a 0.0-1.0 ratio (CSA-0003) — Pydantic enforces
+        the bound, so in-band values are also exercised here.
+        """
         response = client.get("/api/v1/stats")
         data = response.json()
-        assert 0 <= data["avg_quality_score"] <= 100
+        assert 0.0 <= data["avg_quality_score"] <= 1.0
 
 
 class TestDomainOverview:

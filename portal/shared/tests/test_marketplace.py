@@ -27,12 +27,15 @@ class TestListProducts:
         assert all(p["domain"] == "finance" for p in data)
 
     def test_list_products_filter_by_quality(self, client: TestClient):
-        """Should filter products by minimum quality score."""
+        """Should filter products by minimum quality score.
+
+        quality_score is a 0.0-1.0 ratio (CSA-0003).
+        """
         client.get("/api/v1/marketplace/products")  # seed
-        response = client.get("/api/v1/marketplace/products", params={"min_quality": 95})
+        response = client.get("/api/v1/marketplace/products", params={"min_quality": 0.95})
         assert response.status_code == 200
         data = response.json()
-        assert all(p["quality_score"] >= 95 for p in data)
+        assert all(p["quality_score"] >= 0.95 for p in data)
 
     def test_list_products_search(self, client: TestClient):
         """Should search products by name or description."""

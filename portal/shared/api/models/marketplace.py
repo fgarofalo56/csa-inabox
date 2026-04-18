@@ -37,10 +37,15 @@ class DataProduct(BaseModel):
     domain: str
     owner: OwnerInfo
     classification: ClassificationLevel = ClassificationLevel.INTERNAL
-    quality_score: float = 0.0
+    # CSA-0003: quality_score is a 0.0-1.0 ratio, matching completeness /
+    # availability and the React QualityBadge contract under
+    # portal/react-webapp.  Do not switch back to a 0-100 scale without
+    # updating every consumer (Pydantic bounds, seed data, stats router,
+    # CLI formatters, PowerApps flow, frontend badge).
+    quality_score: float = Field(default=0.0, ge=0.0, le=1.0)
     freshness_hours: float = 24.0
-    completeness: float = 0.0
-    availability: float = 0.0
+    completeness: float = Field(default=0.0, ge=0.0, le=1.0)
+    availability: float = Field(default=0.0, ge=0.0, le=1.0)
     tags: dict[str, str] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -84,11 +89,14 @@ class DataProduct(BaseModel):
 
 
 class QualityMetric(BaseModel):
-    """Point-in-time quality measurement for a data product."""
+    """Point-in-time quality measurement for a data product.
+
+    ``quality_score`` and ``completeness`` are 0.0-1.0 ratios (CSA-0003).
+    """
 
     date: date
-    quality_score: float
-    completeness: float
+    quality_score: float = Field(ge=0.0, le=1.0)
+    completeness: float = Field(ge=0.0, le=1.0)
     freshness_hours: float
     row_count: int
 
@@ -141,7 +149,10 @@ class AccessRequest(BaseModel):
 
 
 class PlatformStats(BaseModel):
-    """Platform-wide statistics shown on the dashboard."""
+    """Platform-wide statistics shown on the dashboard.
+
+    ``avg_quality_score`` is a 0.0-1.0 ratio (CSA-0003).
+    """
 
     registered_sources: int = 0
     active_pipelines: int = 0
@@ -149,7 +160,7 @@ class PlatformStats(BaseModel):
     pending_access_requests: int = 0
     total_data_volume_gb: float = 0.0
     last_24h_pipeline_runs: int = 0
-    avg_quality_score: float = 0.0
+    avg_quality_score: float = Field(default=0.0, ge=0.0, le=1.0)
 
 
 class DomainStatus(str, Enum):
@@ -161,11 +172,14 @@ class DomainStatus(str, Enum):
 
 
 class DomainOverview(BaseModel):
-    """Per-domain summary for the domain overview dashboard."""
+    """Per-domain summary for the domain overview dashboard.
+
+    ``avg_quality_score`` is a 0.0-1.0 ratio (CSA-0003).
+    """
 
     name: str
     source_count: int = 0
     pipeline_count: int = 0
     data_product_count: int = 0
-    avg_quality_score: float = 0.0
+    avg_quality_score: float = Field(default=0.0, ge=0.0, le=1.0)
     status: DomainStatus = DomainStatus.HEALTHY

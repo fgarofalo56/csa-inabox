@@ -101,7 +101,7 @@ def domain(ctx: click.Context, domain_name: str) -> None:
             ("Sources", str(result.get("source_count", 0))),
             ("Pipelines", str(result.get("pipeline_count", 0))),
             ("Data Products", str(result.get("data_product_count", 0))),
-            ("Avg Quality Score", f"{result.get('avg_quality_score', 0):.1f}"),
+            ("Avg Quality Score", f"{result.get('avg_quality_score', 0) * 100:.1f}%"),
         ]
         width = max(len(f[0]) for f in fields)
         click.echo(f"Domain Overview: {domain_name}")

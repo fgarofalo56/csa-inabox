@@ -12,7 +12,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-
 # ── JSON ───────────────────────────────────────────────────────────────────────
 
 
@@ -219,7 +218,7 @@ def products_table(products: list[dict]) -> str:
             p.get("id", ""),
             _truncate(p.get("name", ""), 30),
             p.get("domain", ""),
-            f"{p.get('quality_score', 0):.1f}",
+            f"{p.get('quality_score', 0) * 100:.1f}%",
             f"{p.get('freshness_hours', 0):.1f}",
             p.get("status", ""),
             p.get("version", "-"),
@@ -237,7 +236,7 @@ def product_detail(product: dict) -> str:
         ("Status", product.get("status", "")),
         ("Version", product.get("version", "")),
         ("Classification", product.get("classification", "")),
-        ("Quality Score", f"{product.get('quality_score', 0):.1f}"),
+        ("Quality Score", f"{product.get('quality_score', 0) * 100:.1f}%"),
         ("Freshness (h)", f"{product.get('freshness_hours', 0):.2f}"),
         ("Completeness", f"{product.get('completeness', 0):.1%}"),
         ("Availability", f"{product.get('availability', 0):.1%}"),
@@ -267,7 +266,7 @@ def quality_table(metrics: list[dict]) -> str:
     rows = [
         [
             m.get("date", ""),
-            f"{m.get('quality_score', 0):.1f}",
+            f"{m.get('quality_score', 0) * 100:.1f}%",
             f"{m.get('completeness', 0):.1%}",
             f"{m.get('freshness_hours', 0):.2f}",
             str(m.get("row_count", "-")),
@@ -285,7 +284,7 @@ def stats_table(stats: dict) -> str:
         ("Pending Access Requests", str(stats.get("pending_access_requests", 0))),
         ("Total Data Volume (GB)", str(stats.get("total_data_volume_gb", 0))),
         ("Pipeline Runs (24h)", str(stats.get("last_24h_pipeline_runs", 0))),
-        ("Avg Quality Score", f"{stats.get('avg_quality_score', 0):.1f}"),
+        ("Avg Quality Score", f"{stats.get('avg_quality_score', 0) * 100:.1f}%"),
     ]
     width = max(len(f[0]) for f in fields)
     return "\n".join(f"{k:<{width}}  {v}" for k, v in fields)
@@ -302,7 +301,7 @@ def domains_table(domains: list[dict]) -> str:
                 str(d.get("source_count", 0)),
                 str(d.get("pipeline_count", 0)),
                 str(d.get("data_product_count", 0)),
-                f"{d.get('avg_quality_score', 0):.1f}",
+                f"{d.get('avg_quality_score', 0) * 100:.1f}%",
                 d.get("status", ""),
             ]
             for d in domains

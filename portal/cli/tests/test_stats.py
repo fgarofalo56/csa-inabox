@@ -19,7 +19,9 @@ class TestStatsOverview:
         assert result.exit_code == 0
         assert "Platform Overview" in result.output
         assert "4" in result.output   # registered_sources
-        assert "92.8" in result.output
+        # avg_quality_score is a 0.0-1.0 ratio (CSA-0003) but table format
+        # displays it as a percentage for human readability.
+        assert "92.8%" in result.output
 
     def test_overview_json_output(self, runner, mock_client):
         mock_client.platform_stats.return_value = SAMPLE_STATS
@@ -27,7 +29,7 @@ class TestStatsOverview:
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert data["registered_sources"] == 4
-        assert data["avg_quality_score"] == 92.8
+        assert data["avg_quality_score"] == 0.928
 
     def test_overview_yaml_output(self, runner, mock_client):
         mock_client.platform_stats.return_value = SAMPLE_STATS
