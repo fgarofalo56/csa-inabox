@@ -79,12 +79,25 @@ def _is_government_cloud() -> bool:
 
 
 def _auth_disabled() -> bool:
-    return _env_bool("AUTH_DISABLED", False) or not _tenant_id()
+    """Auth is disabled only when AUTH_DISABLED=true is explicitly set.
+
+    An empty ``AZURE_TENANT_ID`` no longer silently disables auth
+    (CSA-0001 / SEC-NEW-0001). Non-local environments with an empty tenant
+    will fail fast at startup via ``enforce_auth_safety_gate``.
+    """
+    return _env_bool("AUTH_DISABLED", False)
 
 
 def _is_local_or_demo() -> bool:
-    env = os.environ.get("ENVIRONMENT", "").strip().lower()
-    return env == "local" or _env_bool("DEMO_MODE", False)
+    """Strict allow-list for environments eligible to run without auth.
+
+    Only ``ENVIRONMENT in ("local", "demo")`` qualifies.  ``DEMO_MODE`` is
+    no longer a get-out-of-jail flag: misconfigured dev / qa / uat / test /
+    preprod / staging / production deployments cannot accidentally serve
+    unauthenticated traffic (CSA-0019 / SEC-NEW-0002).
+    """
+    env = os.environ.get("ENVIRONMENT", "local").strip().lower()
+    return env in ("local", "demo")
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -93,20 +106,42 @@ def _is_local_or_demo() -> bool:
 
 
 def enforce_auth_safety_gate() -> None:
-    """Fail fast if auth is disabled outside local/demo environments.
+    """Fail fast on any auth misconfiguration detectable at startup.
+
+    Three failure modes are caught here:
+
+    1. ``AUTH_DISABLED=true`` outside a local/demo environment.
+    2. ``AZURE_TENANT_ID`` empty outside a local/demo environment (CSA-0001).
+    3. ``DEMO_MODE=true`` set in an environment that is not in the
+       ``{"local", "demo"}`` allow-list (CSA-0019).
 
     Call this once during application startup (e.g. FastAPI ``lifespan``)
     so mis-configured deployments refuse to serve requests rather than
     silently running unauthenticated.
     """
+    env = os.environ.get("ENVIRONMENT", "")
+
     if _auth_disabled() and not _is_local_or_demo():
-        msg = (
-            "SECURITY: AUTH_DISABLED=true (or AZURE_TENANT_ID is empty) "
-            f"but ENVIRONMENT={os.environ.get('ENVIRONMENT', '')!r} is "
-            "not 'local' and DEMO_MODE is not enabled.  Refusing to serve "
-            "requests without authentication in a non-local environment."
+        raise RuntimeError(
+            f"SECURITY: AUTH_DISABLED=true but ENVIRONMENT={env!r} is not in "
+            "{'local', 'demo'}. Refusing to serve requests without "
+            "authentication in a non-local environment."
         )
-        raise RuntimeError(msg)
+
+    if not _tenant_id() and not _is_local_or_demo():
+        raise RuntimeError(
+            f"SECURITY: AZURE_TENANT_ID is empty but ENVIRONMENT={env!r} is "
+            "not in {'local', 'demo'}. Refusing to start without tenant "
+            "configuration — empty tenant no longer silently disables auth."
+        )
+
+    if _env_bool("DEMO_MODE", False) and not _is_local_or_demo():
+        raise RuntimeError(
+            f"SECURITY: DEMO_MODE=true but ENVIRONMENT={env!r} is not in "
+            "{'local', 'demo'}. DEMO_MODE is only honoured in those two "
+            "environments; refusing to start."
+        )
+
     if _auth_disabled() and _is_local_or_demo():
         logger.warning(
             "AUTH DISABLED — running in demo/local mode. All requests "
@@ -179,13 +214,40 @@ async def _validate_token(token: str) -> dict[str, Any]:
         jwks_client = _get_jwks_client()
         signing_key = jwks_client.get_signing_key_from_jwt(token)
 
+        client_id = _client_id()
+        # MSAL v2 issues tokens with ``aud`` equal to ``api://<client-id>``
+        # for protected APIs but the raw client ID for some flows; accept
+        # both forms to stay interoperable (CSA-0018 / SEC-NEW-0005).
+        valid_audiences = [client_id, f"api://{client_id}"] if client_id else []
+
         claims: dict[str, Any] = jwt.decode(
             token,
             signing_key,
             algorithms=["RS256"],
-            audience=_client_id(),
+            audience=valid_audiences,
             issuer=f"{_authority_url()}/v2.0",
+            leeway=30,
+            options={
+                "require": ["exp", "nbf", "iss", "aud", "sub"],
+                "verify_exp": True,
+                "verify_nbf": True,
+                "verify_iat": True,
+                "verify_aud": True,
+                "verify_iss": True,
+                "verify_signature": True,
+            },
         )
+
+        # Pin the token to the expected tenant to block multi-tenant
+        # token-swap attacks (CSA-0018 / SEC-NEW-0006).
+        expected_tid = _tenant_id()
+        actual_tid = claims.get("tid")
+        if expected_tid and actual_tid != expected_tid:
+            raise jwt.exceptions.InvalidTokenError(
+                f"Token tenant mismatch: expected {expected_tid!r}, "
+                f"got {actual_tid!r}"
+            )
+
         return claims
 
     except jwt.exceptions.InvalidTokenError as exc:

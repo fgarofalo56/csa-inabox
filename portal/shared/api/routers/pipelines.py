@@ -29,7 +29,6 @@ router = APIRouter()
 # ── SQLite persistence ──────────────────────────────────────────────────
 _pipelines_store = SqliteStore("pipelines.json")
 _runs_store = SqliteStore("pipeline_runs.json")
-_sources_store = SqliteStore("sources.json")
 
 
 def get_store() -> SqliteStore:
@@ -52,7 +51,8 @@ def _get_pipeline_domain(pipeline: PipelineRecord) -> str | None:
     """
     if pipeline.domain:
         return pipeline.domain
-    stored_source = _sources_store.get(pipeline.source_id)
+    from .sources import get_store as _get_sources_store
+    stored_source = _get_sources_store().get(pipeline.source_id)
     if not stored_source:
         return None
     source = SourceRecord.model_validate(stored_source)
@@ -243,9 +243,12 @@ async def get_pipeline_runs(
 )
 async def trigger_pipeline(
     pipeline_id: str,
-    _user: dict = Depends(require_role("Contributor", "Admin")),
+    user: dict = Depends(require_role("Contributor", "Admin")),
 ) -> PipelineRun:
     """Manually trigger a pipeline execution.
+
+    Non-admin users may only trigger pipelines belonging to their domain
+    (SEC-0002).
 
     In production, would call the ADF REST API to start a pipeline run:
 
@@ -256,6 +259,19 @@ async def trigger_pipeline(
     stored_pipeline = _pipelines_store.get(pipeline_id)
     if not stored_pipeline:
         raise HTTPException(status_code=404, detail=f"Pipeline '{pipeline_id}' not found.")
+
+    pipeline = PipelineRecord.model_validate(stored_pipeline)
+
+    # Domain scoping: enforce for non-admin callers (SEC-0002).
+    user_roles = user.get("roles", [])
+    if "Admin" not in user_roles:
+        pipeline_domain = _get_pipeline_domain(pipeline)
+        user_domain = user.get("domain") or user.get("team")
+        if not user_domain or pipeline_domain != user_domain:
+            raise HTTPException(
+                status_code=403,
+                detail="You do not have access to trigger this pipeline.",
+            )
 
     now = datetime.now(timezone.utc)
     run = PipelineRun(

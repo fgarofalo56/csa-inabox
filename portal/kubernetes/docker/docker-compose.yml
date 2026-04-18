@@ -44,12 +44,18 @@ services:
       redis:
         condition: service_healthy
     environment:
-      - ENVIRONMENT=development
+      # ENVIRONMENT=local is required to keep the demo Reader identity
+      # active without real Entra ID. "development" is NOT an allow-listed
+      # value (CSA-0019) and will cause auth safety-gate to fail fast when
+      # AZURE_TENANT_ID is blank.
+      - ENVIRONMENT=${ENVIRONMENT:-local}
+      - AUTH_DISABLED=${AUTH_DISABLED:-true}
       - REDIS_URL=redis://:${REDIS_PASSWORD:-changeme-in-dotenv}@redis:6379/0
       - LOG_LEVEL=debug
-      # Azure AD (set in .env file or override)
-      - AZURE_AD_TENANT_ID=${AZURE_AD_TENANT_ID:-}
-      - AZURE_AD_CLIENT_ID=${AZURE_AD_CLIENT_ID:-}
+      # Entra ID (formerly Azure AD) — renamed from AZURE_AD_* per CSA-0001.
+      # Pydantic Settings reads AZURE_TENANT_ID / AZURE_CLIENT_ID directly.
+      - AZURE_TENANT_ID=${AZURE_TENANT_ID:-}
+      - AZURE_CLIENT_ID=${AZURE_CLIENT_ID:-}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
       interval: 30s

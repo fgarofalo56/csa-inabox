@@ -362,6 +362,9 @@ class SqliteStore:
                     (item_id, json.dumps(item, default=str)),
                 )
 
+    # Pattern for safe filter keys — prevents SQL injection via key names.
+    _SAFE_KEY = __import__("re").compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+
     def query(self, **filters: Any) -> list[dict[str, Any]]:
         """Filter items by top-level field values using SQLite ``json_extract``.
 
@@ -369,9 +372,16 @@ class SqliteStore:
         transferred from the storage engine to Python.  Values are compared
         without ``str()`` coercion so that integer fields (e.g. status codes)
         match correctly against integer filter arguments.
+
+        Filter keys must be simple identifiers (letters, digits, underscores)
+        to prevent SQL injection through crafted key names (SEC-0001).
         """
         if not filters:
             return self.list()
+
+        for key in filters:
+            if not self._SAFE_KEY.match(key):
+                raise ValueError(f"Unsafe filter key: {key!r}")
 
         conditions = [
             f"json_extract(data, '$.{key}') = ?" for key in filters
@@ -402,7 +412,3 @@ class SqliteStore:
         logger.info("Cleared all items from [%s]", self.table)
 
 
-# ── backward-compatible alias ───────────────────────────────────────────────
-# ``SqliteStore`` is the canonical name.  ``JsonStore`` is kept only for
-# external callers that have not yet been updated; do not use it in new code.
-JsonStore = SqliteStore

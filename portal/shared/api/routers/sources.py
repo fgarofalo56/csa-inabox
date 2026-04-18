@@ -429,7 +429,6 @@ async def provision_source(
     except Exception as exc:
         # Unexpected infrastructure error — persist error state and re-raise
         # as an HTTP 502 so the caller gets a meaningful response.
-        from datetime import datetime, timezone
         logger.exception("Provisioning failed for source %s", source_id)
         _sources_store.update(source_id, {
             "status": SourceStatus.ERROR.value,
@@ -479,7 +478,16 @@ async def scan_source(
     Non-admin users may only scan sources within their own domain.
     """
     source = _load_source_with_domain_check(source_id, user)
-    scan_id = await provisioning_service.trigger_purview_scan(source)
+
+    try:
+        scan_id = await provisioning_service.trigger_purview_scan(source)
+    except Exception as exc:
+        logger.exception("Purview scan failed for source %s", source_id)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Purview scan failed due to an infrastructure error. Check server logs.",
+        ) from exc
+
     source.purview_scan_id = scan_id
     source.updated_at = datetime.now(timezone.utc)
     _sources_store.update(source_id, source.model_dump())

@@ -118,12 +118,16 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
         if not settings.STORAGE_ACCOUNT_NAME:
             logger.warning("STORAGE_ACCOUNT_NAME is not set (env=%s)", settings.ENVIRONMENT)
 
-    # Seed demo data once at startup (instead of per-request)
-    sources.seed_demo_sources()
-    pipelines.seed_demo_pipelines()
-    access.seed_demo_requests()
-    marketplace.seed_demo_products()
-    logger.info("Demo data seeding complete")
+    # Seed demo data only in local/demo environments (STATE-0002).
+    # Production/staging deployments start with empty stores.
+    if env in ("local", "demo") or settings.DEMO_MODE:
+        sources.seed_demo_sources()
+        pipelines.seed_demo_pipelines()
+        access.seed_demo_requests()
+        marketplace.seed_demo_products()
+        logger.info("Demo data seeding complete (env=%s, demo_mode=%s)", env, settings.DEMO_MODE)
+    else:
+        logger.info("Skipping demo data seeding (env=%s)", env)
 
     # Audit routes for missing auth dependencies (SEC-0010)
     for route in _app.routes:

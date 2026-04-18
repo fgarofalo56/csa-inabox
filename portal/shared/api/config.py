@@ -59,7 +59,7 @@ class Settings(BaseSettings):
     # only honoured when ENVIRONMENT=local or DEMO_MODE=true — any other
     # combination causes a hard startup failure to prevent accidental
     # production exposure without authentication.
-    ENVIRONMENT: str = "production"
+    ENVIRONMENT: str = "local"
     DEMO_MODE: bool = False
     AUTH_DISABLED: bool = False
 
