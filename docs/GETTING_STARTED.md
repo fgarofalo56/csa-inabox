@@ -172,7 +172,7 @@ replicate Microsoft Fabric capabilities using Azure PaaS. These live in
 | [Metadata Framework](../csa_platform/metadata_framework/) | Auto-generate ADF pipelines from YAML | Register sources in YAML |
 | [AI Integration](../csa_platform/ai_integration/) | RAG, entity extraction, document classification | Configure Azure OpenAI |
 | [Shared Services](../csa_platform/shared_services/) | Reusable Functions (PII detection, schema validation) | `func azure functionapp publish` |
-| [Governance](../csa_platform/governance/) | Purview classification, lineage, sensitivity labels | Bootstrap Purview catalog |
+| [Governance](../csa_platform/purview_governance/) + [top-level](../governance/) | Purview classification, lineage, sensitivity labels | Bootstrap Purview catalog |
 | [OSS Alternatives](../csa_platform/oss_alternatives/) | Open-source replacements for Gov gaps | Helm charts on AKS |
 
 See [PLATFORM_SERVICES.md](PLATFORM_SERVICES.md) for detailed deployment instructions.

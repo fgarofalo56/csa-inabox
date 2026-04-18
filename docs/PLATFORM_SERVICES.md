@@ -180,8 +180,9 @@ python csa_platform/data_marketplace/api/marketplace_api.py --init
 
 ## 5. 📋 Governance Framework
 
-**Location:** `csa_platform/governance/`
+**Location:** `csa_platform/purview_governance/` (Python automation) + top-level `governance/` (shared logging, contracts, dataquality, finops)
 **Fabric Equivalent:** Purview-integrated governance
+**Note:** These two trees overlap today and are scheduled for consolidation (see AQ-0025 / CSA-0126 in the audit approval queue). Both are canonical until that decision is made.
 
 Extends Microsoft Purview with automated data governance workflows including
 classification, sensitivity labeling, and master data management.

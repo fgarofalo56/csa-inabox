@@ -8,8 +8,12 @@
 > **TL;DR** — Parallel deployment templates for Azure Government (MAG). Provides Fabric-equivalent capabilities using FedRAMP High-authorized PaaS services available in Gov today.
 
 This directory contains **parallel deployment templates** for Azure Government (MAG).
-Every template in the main `deploy/bicep/` and `deploy/terraform/` directories has a
-corresponding Government-compatible version here.
+Every template in the main `deploy/bicep/` directory has a corresponding
+Government-compatible version here.
+
+> [!NOTE]
+> A parallel Terraform path is on the roadmap (see CSA-0015 / audit approval
+> queue). Today, Bicep is the only implemented IaC path.
 
 ## Table of Contents
 
@@ -128,5 +132,8 @@ replacements deployable on AKS in Azure Government.
 ## 🔗 Related Documentation
 
 - [Government Service Matrix](../../../docs/GOV_SERVICE_MATRIX.md) — Full Gov service availability details
-- [Terraform IaC](../../terraform/README.md) — Terraform alternative deployment path
 - [IaC & CI/CD Best Practices](../../../docs/IaC-CICD-Best-Practices.md) — Deployment pipeline guidance
+
+> [!NOTE]
+> A Terraform alternative deployment path is on the roadmap but not yet
+> implemented; link omitted to avoid 404 (CSA-0015).

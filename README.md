@@ -142,7 +142,6 @@ graph TB
 │   ├── 📁 contracts/              # Data contracts & enforcement
 │   ├── 📁 dataquality/            # Quality rules, Great Expectations runner
 │   └── 📁 finops/                 # FinOps budget alerts (Bicep)
-├── 📁 great_expectations/         # GE checkpoints & DataContext config
 ├── 📁 docs/                       # Platform documentation
 │   └── 📁 runbooks/               # Incident response & DR runbooks
 ├── 📁 tests/                      # pytest test suite (80%+ coverage gate)

@@ -269,7 +269,7 @@ capabilities. Each component is independently deployable.
 | Shared Services | Shared Functions | `csa_platform/shared_services/` |
 | OSS Alternatives | N/A (Gov gaps) | `csa_platform/oss_alternatives/` |
 | Multi-Synapse | Multi-workspace | `csa_platform/multi_synapse/` |
-| Governance | Purview Integration | `csa_platform/governance/` |
+| Governance | Purview Integration | `csa_platform/purview_governance/` + top-level `governance/` |
 
 See [PLATFORM_SERVICES.md](PLATFORM_SERVICES.md) for detailed deployment guides.
 
