@@ -23,8 +23,9 @@ from ..models.marketplace import (
     AccessRequestCreate,
     AccessRequestStatus,
 )
+from ..models.source import ClassificationLevel
 from ..persistence import SqliteStore
-from ..services.auth import get_current_user, require_role
+from ..services.auth import DomainScope, get_current_user, get_domain_scope, require_role
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -45,6 +46,47 @@ _access_store = SqliteStore("access_requests.json")
 def get_store() -> SqliteStore:
     """Return the access requests store instance (public accessor for cross-router use)."""
     return _access_store
+
+
+# ── Classification-aware duration caps (CSA-0017) ──────────────────────────
+# Maps a product's classification level → maximum allowed duration_days for
+# any access request targeting it.  Unlisted classifications (e.g. CUI,
+# FOUO) default to the most restrictive cap (30d) fail-closed.
+_DURATION_CAPS_BY_CLASSIFICATION: dict[ClassificationLevel, int] = {
+    ClassificationLevel.PUBLIC: 365,
+    ClassificationLevel.INTERNAL: 365,
+    ClassificationLevel.CONFIDENTIAL: 90,
+    ClassificationLevel.RESTRICTED: 30,
+}
+
+# Classifications that require elevated workflow review_notes on submit.
+_ELEVATED_REVIEW_CLASSIFICATIONS: set[ClassificationLevel] = {
+    ClassificationLevel.RESTRICTED,
+    ClassificationLevel.CUI,
+    ClassificationLevel.FOUO,
+}
+
+
+def _get_products_store() -> SqliteStore:
+    """Lazy-import the marketplace products store for cross-router reads.
+
+    Imported lazily to avoid a circular import at module load and to mirror
+    the pattern used by other cross-router integrations.
+    """
+    from .marketplace import get_store as _marketplace_get_store  # noqa: PLC0415
+
+    return _marketplace_get_store()
+
+
+def _user_identifier(user: dict) -> str:
+    """Best-effort stable identifier for the authenticated user."""
+    return (
+        user.get("email")
+        or user.get("preferred_username")
+        or user.get("oid")
+        or user.get("sub")
+        or "unknown"
+    )
 
 
 def seed_demo_requests() -> None:
@@ -156,32 +198,190 @@ async def create_access_request(
     """Submit a new access request for a data product.
 
     The requester email is extracted from the authenticated user's JWT claims.
+
+    CSA-0017 hardening:
+    - Rejects unknown ``data_product_id`` with 404.
+    - Enforces classification-aware duration caps (422 on overflow).
+    - Tags requests against RESTRICTED/CUI/FOUO products with an elevated
+      review note so downstream reviewers know to escalate.
     """
+    # Validate product exists (CSA-0017)
+    products_store = _get_products_store()
+    stored_product = products_store.get(payload.data_product_id)
+    if not stored_product:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Data product '{payload.data_product_id}' not found.",
+        )
+
+    # Resolve classification; tolerate legacy/unknown values fail-closed.
+    raw_classification = stored_product.get("classification") or "internal"
+    try:
+        classification = ClassificationLevel(raw_classification)
+    except ValueError:
+        classification = ClassificationLevel.RESTRICTED
+
+    # Enforce classification-aware duration cap (CSA-0017).  Classifications
+    # that are not explicitly mapped (CUI, FOUO) inherit the RESTRICTED cap
+    # of 30 days fail-closed.
+    cap_days = _DURATION_CAPS_BY_CLASSIFICATION.get(
+        classification,
+        _DURATION_CAPS_BY_CLASSIFICATION[ClassificationLevel.RESTRICTED],
+    )
+    if payload.duration_days > cap_days:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"duration_days={payload.duration_days} exceeds the "
+                f"{cap_days}-day cap for '{classification.value}' "
+                f"classification."
+            ),
+        )
+
     request_id = str(uuid.uuid4())
+    requester = user.get("email", user.get("preferred_username", "unknown@contoso.com"))
+
+    # Elevated-workflow hint for sensitive classifications (CSA-0017).
+    review_notes: str | None = None
+    if classification in _ELEVATED_REVIEW_CLASSIFICATIONS:
+        review_notes = (
+            f"{classification.value.upper()} data product — "
+            "requires manager approval"
+        )
+
     access_request = AccessRequest(
         id=request_id,
-        requester_email=user.get("email", user.get("preferred_username", "unknown@contoso.com")),
+        requester_email=requester,
         data_product_id=payload.data_product_id,
         justification=payload.justification,
         access_level=payload.access_level,
         duration_days=payload.duration_days,
         status=AccessRequestStatus.PENDING,
         requested_at=datetime.now(timezone.utc),
+        review_notes=review_notes,
     )
 
     # Persist to JSON store
     _access_store.add(access_request.model_dump())
 
-    # In production: Send notification to the data product owner for approval
+    # Structured submit log (CSA-0017).  Full audit sink comes in CSA-0016.
     logger.info(
         "Access request created",
         extra={
-            "request_id": request_id,
+            "actor_sub": user.get("sub") or user.get("oid"),
+            "actor": requester,
+            "action": "access_request.create",
+            "resource_id": request_id,
             "product_id": payload.data_product_id,
-            "requester": access_request.requester_email,
+            "classification": classification.value,
+            "duration_days": payload.duration_days,
+            "elevated": classification in _ELEVATED_REVIEW_CLASSIFICATIONS,
+            "outcome": "success",
         },
     )
     return access_request
+
+
+def _enforce_review_authorization(
+    *,
+    user: dict,
+    scope: DomainScope,
+    access_request: AccessRequest,
+    action: str,
+) -> dict:
+    """Authorize approve/deny on an access request (CSA-0002).
+
+    Rules:
+      * Admins may act cross-domain.
+      * Non-admin Contributors must share the product's domain.
+      * Self-approval/denial is forbidden regardless of role.
+
+    Returns the resolved data product dict for downstream use.
+    Raises HTTPException(403) on failure.
+    """
+    products_store = _get_products_store()
+    stored_product = products_store.get(access_request.data_product_id)
+    if not stored_product:
+        # The product the request points to has vanished — fail closed.
+        logger.warning(
+            "Review blocked: product missing for access request",
+            extra={
+                "actor_sub": user.get("sub") or user.get("oid"),
+                "action": action,
+                "resource_id": access_request.id,
+                "product_id": access_request.data_product_id,
+                "outcome": "denied",
+                "reason": "product_not_found",
+            },
+        )
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Data product '{access_request.data_product_id}' referenced "
+                "by this request no longer exists."
+            ),
+        )
+
+    target_domain = stored_product.get("domain")
+
+    # Self-approval / self-denial is forbidden regardless of role (SoD).
+    caller_identifiers = {
+        user.get("email"),
+        user.get("preferred_username"),
+        user.get("sub"),
+        user.get("oid"),
+    }
+    caller_identifiers.discard(None)
+    caller_identifiers.discard("")
+    if access_request.requester_email in caller_identifiers:
+        logger.warning(
+            "Self-review blocked on access request",
+            extra={
+                "actor_sub": user.get("sub") or user.get("oid"),
+                "actor": _user_identifier(user),
+                "action": action,
+                "resource_id": access_request.id,
+                "product_id": access_request.data_product_id,
+                "target_domain": target_domain,
+                "caller_domain": scope.user_domain,
+                "outcome": "denied",
+                "reason": "self_review_forbidden",
+            },
+        )
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Requesters may not approve or deny their own access "
+                "requests (segregation of duties)."
+            ),
+        )
+
+    # Non-admins must share the product's domain.
+    if not scope.is_admin:
+        if not scope.user_domain or scope.user_domain != target_domain:
+            logger.warning(
+                "Cross-domain review blocked on access request",
+                extra={
+                    "actor_sub": user.get("sub") or user.get("oid"),
+                    "actor": _user_identifier(user),
+                    "action": action,
+                    "resource_id": access_request.id,
+                    "product_id": access_request.data_product_id,
+                    "target_domain": target_domain,
+                    "caller_domain": scope.user_domain,
+                    "outcome": "denied",
+                    "reason": "cross_domain_review_forbidden",
+                },
+            )
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "You may only review access requests for data products "
+                    "in your own domain."
+                ),
+            )
+
+    return stored_product
 
 
 @router.post(
@@ -193,8 +393,12 @@ async def approve_access_request(
     request_id: str,
     body: ReviewBody | None = None,
     user: dict = Depends(require_role("Contributor", "Admin")),
+    scope: DomainScope = Depends(get_domain_scope),
 ) -> AccessRequest:
     """Approve a pending access request and grant RBAC permissions.
+
+    CSA-0002 hardening: non-admin callers must share the product's domain,
+    and nobody may approve their own request regardless of role.
 
     In production, would apply Azure RBAC role assignment using:
 
@@ -212,6 +416,13 @@ async def approve_access_request(
             detail=f"Request is '{req.status.value}', only pending requests can be approved.",
         )
 
+    product = _enforce_review_authorization(
+        user=user,
+        scope=scope,
+        access_request=req,
+        action="access_request.approve",
+    )
+
     now = datetime.now(timezone.utc)
     req.status = AccessRequestStatus.APPROVED
     req.reviewed_at = now
@@ -222,7 +433,19 @@ async def approve_access_request(
     # Update in store
     _access_store.update(request_id, req.model_dump())
 
-    logger.info("Access request approved", extra={"request_id": request_id})
+    logger.info(
+        "Access request approved",
+        extra={
+            "actor_sub": user.get("sub") or user.get("oid"),
+            "actor": _user_identifier(user),
+            "action": "access_request.approve",
+            "resource_id": request_id,
+            "product_id": req.data_product_id,
+            "target_domain": product.get("domain"),
+            "caller_domain": scope.user_domain,
+            "outcome": "success",
+        },
+    )
     return req
 
 
@@ -235,8 +458,13 @@ async def deny_access_request(
     request_id: str,
     body: ReviewBody | None = None,
     user: dict = Depends(require_role("Contributor", "Admin")),
+    scope: DomainScope = Depends(get_domain_scope),
 ) -> AccessRequest:
-    """Deny a pending access request."""
+    """Deny a pending access request.
+
+    CSA-0002 hardening: non-admin callers must share the product's domain,
+    and nobody may deny their own request regardless of role.
+    """
     stored_req = _access_store.get(request_id)
     if not stored_req:
         raise HTTPException(status_code=404, detail=f"Request '{request_id}' not found.")
@@ -248,6 +476,13 @@ async def deny_access_request(
             detail=f"Request is '{req.status.value}', only pending requests can be denied.",
         )
 
+    product = _enforce_review_authorization(
+        user=user,
+        scope=scope,
+        access_request=req,
+        action="access_request.deny",
+    )
+
     req.status = AccessRequestStatus.DENIED
     req.reviewed_at = datetime.now(timezone.utc)
     req.reviewed_by = user.get("email", user.get("preferred_username", "admin"))
@@ -256,5 +491,17 @@ async def deny_access_request(
     # Update in store
     _access_store.update(request_id, req.model_dump())
 
-    logger.info("Access request denied", extra={"request_id": request_id})
+    logger.info(
+        "Access request denied",
+        extra={
+            "actor_sub": user.get("sub") or user.get("oid"),
+            "actor": _user_identifier(user),
+            "action": "access_request.deny",
+            "resource_id": request_id,
+            "product_id": req.data_product_id,
+            "target_domain": product.get("domain"),
+            "caller_domain": scope.user_domain,
+            "outcome": "success",
+        },
+    )
     return req
