@@ -21,6 +21,7 @@ import {
   StepSchema,
   StepIngestion,
   StepQuality,
+  StepOwner,
   StepReview,
 } from '@/components/register';
 
@@ -74,9 +75,13 @@ const sourceRegistrationSchema = z.object({
   owner: z.object({
     name: z.string().min(1, 'Owner name is required'),
     email: z.string().email('Must be a valid email address'),
-    team: z.string().optional(),
-    cost_center: z.string().optional(),
-  }).optional(),
+    team: z
+      .string()
+      .min(1, 'Team is required')
+      .max(128, 'Team must be at most 128 characters'),
+    cost_center: z.string().max(64).optional(),
+    data_product: z.string().max(128).optional(),
+  }),
   quality_rules: z.array(z.any()).optional(),
   tags: z.record(z.string(), z.string()).optional(),
 });
@@ -108,6 +113,7 @@ const STEPS = [
   { id: 'schema', title: 'Schema', description: 'Define data schema' },
   { id: 'ingestion', title: 'Ingestion', description: 'Set schedule and mode' },
   { id: 'quality', title: 'Quality', description: 'Data quality rules' },
+  { id: 'owner', title: 'Owner', description: 'Team and ownership' },
   { id: 'review', title: 'Review', description: 'Confirm and submit' },
 ];
 
@@ -202,6 +208,9 @@ export default function RegisterSourcePage() {
         return trigger(['ingestion.mode', 'ingestion.schedule_cron', 'ingestion.batch_size']);
       case 4:
         return true;
+      case 5:
+        // Owner step — team is required on the backend; name/email come from MSAL.
+        return trigger(['owner.name', 'owner.email', 'owner.team']);
       default:
         return true;
     }
@@ -291,6 +300,9 @@ export default function RegisterSourcePage() {
             />
           )}
           {step === 5 && (
+            <StepOwner register={register} watch={watch} errors={errors} />
+          )}
+          {step === 6 && (
             <StepReview watch={watch} qualityRules={qualityRules} />
           )}
         </div>

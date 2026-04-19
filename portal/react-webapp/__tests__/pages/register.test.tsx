@@ -60,6 +60,13 @@ jest.mock('@/components/register', () => ({
   StepSchema: () => <div data-testid="step-schema">Step: Schema</div>,
   StepIngestion: () => <div data-testid="step-ingestion">Step: Ingestion</div>,
   StepQuality: () => <div data-testid="step-quality">Step: Quality</div>,
+  StepOwner: ({ register }: { register: ReturnType<typeof import('react-hook-form').useForm>['register'] }) => (
+    <div data-testid="step-owner">
+      <span>Step: Owner</span>
+      <label htmlFor="owner-team">Team</label>
+      <input id="owner-team" {...register('owner.team', { required: 'Team is required' })} />
+    </div>
+  ),
   StepReview: () => <div data-testid="step-review">Step: Review</div>,
 }));
 
@@ -97,6 +104,7 @@ describe('RegisterSourcePage', () => {
     expect(screen.getByText('Schema')).toBeInTheDocument();
     expect(screen.getByText('Ingestion')).toBeInTheDocument();
     expect(screen.getByText('Quality')).toBeInTheDocument();
+    expect(screen.getByText('Owner')).toBeInTheDocument();
     expect(screen.getByText('Review')).toBeInTheDocument();
   });
 
@@ -206,10 +214,64 @@ describe('RegisterSourcePage', () => {
     await waitFor(() => expect(screen.getByTestId('step-quality')).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(screen.getByTestId('step-owner')).toBeInTheDocument());
+
+    // Owner step requires team before advancing to Review.
+    fireEvent.change(screen.getByLabelText('Team'), {
+      target: { value: 'Data Platform' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
     await waitFor(() => expect(screen.getByTestId('step-review')).toBeInTheDocument());
 
     expect(screen.getByRole('button', { name: 'Register Source' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Next' })).not.toBeInTheDocument();
+  });
+
+  it('blocks advancing from Owner step when team is empty', async () => {
+    renderWithProviders(<RegisterSourcePage />);
+
+    // Advance from Source Type through Quality to Owner, awaiting each transition.
+    fireEvent.click(screen.getByText('Select Azure SQL'));
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(screen.getByTestId('step-connection')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(screen.getByTestId('step-schema')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(screen.getByTestId('step-ingestion')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(screen.getByTestId('step-quality')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(screen.getByTestId('step-owner')).toBeInTheDocument());
+
+    // Attempt to advance without providing a team.
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+
+    // Should remain on the Owner step; Review should NOT be rendered.
+    await waitFor(() => expect(screen.getByTestId('step-owner')).toBeInTheDocument());
+    expect(screen.queryByTestId('step-review')).not.toBeInTheDocument();
+  });
+
+  it('advances from Owner to Review once team is populated', async () => {
+    renderWithProviders(<RegisterSourcePage />);
+
+    fireEvent.click(screen.getByText('Select Azure SQL'));
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(screen.getByTestId('step-connection')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(screen.getByTestId('step-schema')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(screen.getByTestId('step-ingestion')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(screen.getByTestId('step-quality')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(screen.getByTestId('step-owner')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText('Team'), {
+      target: { value: 'Data Platform' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+
+    await waitFor(() => expect(screen.getByTestId('step-review')).toBeInTheDocument());
   });
 
   it('shows Registering... text when mutation is pending', () => {

@@ -12,6 +12,15 @@ interface StepReviewProps {
 }
 
 export default function StepReview({ watch, qualityRules }: StepReviewProps) {
+  const ownerName = watch('owner.name') || 'Not set';
+  const ownerEmail = watch('owner.email') || 'Not set';
+  const ownerTeam = watch('owner.team') || 'Not set';
+  const ownerCostCenter = watch('owner.cost_center') || 'Not set';
+  // `data_product` is a UI-only owner field (see StepOwner). Cast through
+  // unknown because the shared contract does not declare it.
+  const ownerDataProduct =
+    ((watch as unknown as (n: string) => string | undefined)('owner.data_product')) || 'Not set';
+
   return (
     <div className="space-y-4">
       <h2 className="text-xl font-semibold text-gray-900">
@@ -53,6 +62,25 @@ export default function StepReview({ watch, qualityRules }: StepReviewProps) {
           {watch('schema_definition.auto_detect')
             ? 'Auto-detect'
             : 'Manual configuration'}
+        </p>
+      </div>
+
+      <h3 className="text-base font-semibold text-gray-900 pt-2">Owner</h3>
+      <div className="bg-gray-50 rounded-lg p-6 space-y-3" data-testid="review-owner">
+        <p>
+          <span className="font-medium">Name:</span> {ownerName}
+        </p>
+        <p>
+          <span className="font-medium">Email:</span> {ownerEmail}
+        </p>
+        <p>
+          <span className="font-medium">Team:</span> {ownerTeam}
+        </p>
+        <p>
+          <span className="font-medium">Cost Center:</span> {ownerCostCenter}
+        </p>
+        <p>
+          <span className="font-medium">Data Product:</span> {ownerDataProduct}
         </p>
       </div>
     </div>
