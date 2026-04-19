@@ -5,6 +5,76 @@ end-of-session protocol in `.claude/rules/session-end.md`.
 
 ---
 
+## 2026-04-18/19 (cont.) — Phase-3 Wave 1 + Wave 2 (12 findings landed)
+
+**Archon project:** `145c8d71-7e54-4135-8ec9-d6300caf4517`.
+
+Executed the post-approval remediation loop using three rounds of
+parallel coding-agent dispatch (non-overlapping file scopes) followed
+by central commits. 8 new commits, 12 Archon tasks flipped to `review`.
+665 tests green across csa_platform / portal / CLI; zero regressions.
+
+### Commits landed
+
+- `ecdbf04` fix(security): access-request workflow CSA-0002/0017
+- `4405d3e` fix(portal): Owner wizard step CSA-0007
+- `849246a` chore: agent-harness → dev-loop CSA-0096
+- `9971268` fix(portal): 3 missing/stub pages CSA-0004/0005/0006
+- `3f66975` feat(ops): teardown scripts CSA-0011 (11 scripts)
+- `0bd5700` docs: Entra rename + clone URL CSA-0064/0076
+- `afa9631` feat(security): tamper-evident audit logger CSA-0016
+- `aee1fe2` feat(governance): Phase 1 compliance matrices CSA-0012
+  (NIST 800-53, CMMC 2.0 L2, HIPAA Security — 304 controls / 231
+  evidence items, validator clean)
+
+### Findings resolved (12)
+
+CSA-0002, 0004, 0005, 0006, 0007, 0011, 0012 (Phase 1), 0016, 0017,
+0064, 0076, 0096.
+
+### Deferred
+
+- **CSA-0072** (v0.1.0 tag + release-please) — requires actual git
+  tag + GitHub Actions release-please workflow config + team
+  coordination for release semantics. Stays in `todo`.
+
+### Validation at close
+
+- `pytest tests/csa_platform/` — 425 / 425
+- `pytest portal/shared/tests/` — 84 / 84 (18 new audit-log tests,
+  17 new access-router tests)
+- `pytest portal/cli/tests/` — 156 / 156
+- `npm test` (portal/react-webapp) — 86 / 86 (6 new StepOwner tests,
+  2 new integration tests)
+- Teardown scripts — bash -n clean across all 11
+- Compliance validator — clean across 304 controls / 231 evidence
+  items; every referenced file path resolves
+
+### Scorecard at close (2026-04-19)
+
+| Metric | Session 1 close | Now | Δ |
+|---|---|---|---|
+| Vision alignment (weighted) | ~52% | ~60% | +8pp |
+| CRITICAL findings open | 15 | 8 | −7 |
+| HIGH findings open | 56 | 48 | −8 |
+| Approval-queue items shipped | 0/35 | 2/35 | +2 (0096 rename + 0012 Phase 1) |
+| Tests green | 632 | 665 | +33 |
+
+### Next session
+
+Wave 3 (vision content buildout): CSA-0010 decision trees,
+CSA-0063 Fabric positioning rewrite, CSA-0087 10 ADRs, CSA-0009
+Palantir playbook, CSA-0083 Snowflake/AWS/GCP playbooks.
+
+Wave 4 (platform consolidation): CSA-0126 governance merger,
+CSA-0127 shared-services merger, CSA-0043 Bicep consolidation,
+CSA-0132 OneLake/DirectLake renames.
+
+Wave 5 (strategic builds) — CSA-0008 Copilot MVP, CSA-0129 Fabric
+module, CSA-0093 cybersecurity vertical — is multi-session scope.
+
+---
+
 ## 2026-04-18 — Full forensic audit + vision alignment + Phase-3 Wave 0
 
 **Archon projects:** `145c8d71-7e54-4135-8ec9-d6300caf4517` (Fabric-in-a-Box
