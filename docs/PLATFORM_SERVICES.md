@@ -5,11 +5,13 @@
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Architects
 
 > [!NOTE]
-> **Quick Summary**: Detailed guide to 10 platform services that replicate Microsoft Fabric capabilities using Azure PaaS — OneLake pattern, Data Activator, Direct Lake, Data Marketplace, Governance Framework, Multi-Synapse, Metadata Framework, AI Integration, Shared Services, and OSS alternatives for Government gaps.
+> **Quick Summary**: Detailed guide to 10 platform services that deliver Fabric-parity capabilities on Azure PaaS — OneLake pattern, Data Activator, Direct Lake, Data Marketplace, Governance Framework, Multi-Synapse, Metadata Framework, AI Integration, Shared Services, and OSS alternatives. Intended for Azure Government (where Fabric is forecast, not GA) and for Commercial workloads that need a composable IaC stack as a stepping stone toward a future Fabric migration.
 
-Platform services are the Fabric-equivalent capabilities that extend the base
-landing zones. Each service is independently deployable and has its own README
-with detailed usage instructions.
+Platform services are the Fabric-parity capabilities that extend the base
+landing zones. Each service is independently deployable, has its own README
+with detailed usage instructions, and maps to a Microsoft Fabric equivalent so
+workloads can migrate incrementally as Fabric becomes available in their
+cloud/region.
 
 ## 📑 Table of Contents
 

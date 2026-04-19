@@ -281,7 +281,7 @@ az deployment sub create \
 > Key differences for Government:
 > - All endpoints use `.us` / `.usgovcloudapi.net` instead of `.com`
 > - Compliance tags are automatically applied (FedRAMP, FISMA, NIST 800-53)
-> - Microsoft Fabric is not available — this repo IS the alternative
+> - Microsoft Fabric is forecast, not GA, in Azure Government — this repo delivers Fabric-parity capabilities on Azure PaaS services that ARE available in Gov today
 
 See [GOV_SERVICE_MATRIX.md](GOV_SERVICE_MATRIX.md) for the full service
 availability matrix.

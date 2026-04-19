@@ -38,7 +38,7 @@ services that ARE available in Azure Government today.
 
 | Service | Commercial | Gov FedRAMP High | Gov IL4 | Gov IL5 | Notes |
 |---|---|---|---|---|---|
-| **Microsoft Fabric** | GA | Forecasted | Forecasted | Forecasted | **This repo is the alternative** |
+| **Microsoft Fabric** | GA | Forecasted | Forecasted | Forecasted | **This repo ships Fabric-parity on Azure PaaS while Fabric is pre-GA in Gov** |
 | **ADLS Gen2** | GA | GA | GA | GA | Core storage, fully available |
 | **Azure Databricks** | GA | GA | GA | GA | Unity Catalog available |
 | **Synapse Analytics** | GA | GA | GA | GA | All pool types available |

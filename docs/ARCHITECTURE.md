@@ -5,11 +5,16 @@
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Architects
 
 > [!NOTE]
-> **Quick Summary**: Comprehensive architecture reference for Cloud-Scale Analytics in a Box — an open-source "build-your-own Microsoft Fabric" using Azure PaaS services. Covers the DMLZ/DLZ landing zone pattern, medallion data flow (Bronze/Silver/Gold), streaming via Event Hubs + ADX, AI/ML integration, 9 vertical examples, and Azure Government compatibility.
+> **Quick Summary**: Architecture reference for CSA-in-a-Box — the Azure-native reference implementation of the Microsoft "Unify your data platform" CAF guidance, built on Azure PaaS and open-source tooling. Positions Fabric as the primary control plane where GA, and CSA-in-a-Box as the Azure Government gap-filler (Fabric is forecast, not GA), the post-deprecation CAF CSA reference, and an incremental on-ramp to Fabric. Covers the DMLZ/DLZ landing zone pattern, medallion data flow (Bronze/Silver/Gold), streaming via Event Hubs + ADX, AI/ML integration, 9 vertical examples, and Azure Government compatibility.
 
-A comprehensive architecture reference for Cloud-Scale Analytics in a Box — an
-open-source "build-your-own Microsoft Fabric" using Azure PaaS services and
-open-source tooling.
+A comprehensive architecture reference for CSA-in-a-Box — an Azure-native
+reference implementation of the Microsoft "Unify your data platform" Cloud
+Adoption Framework guidance, built on Azure PaaS services and open-source
+tooling. Where Microsoft Fabric is GA in your region and cloud, Fabric is the
+primary control plane; CSA-in-a-Box is the Fabric-parity stack on Azure PaaS
+for workloads in Azure Government (Fabric forecast, not GA), for regulated
+scenarios that need composable IaC, and as an incremental on-ramp whose
+components compose cleanly into a future Fabric migration.
 
 ## 📑 Table of Contents
 
@@ -465,6 +470,12 @@ All deployments enforce:
 - [QUICKSTART.md](QUICKSTART.md) — 60-minute hands-on tutorial
 - [PLATFORM_SERVICES.md](PLATFORM_SERVICES.md) — Platform component deep-dive
 - [GOV_SERVICE_MATRIX.md](GOV_SERVICE_MATRIX.md) — Azure Government compatibility
+- **Fabric migration path** — See the
+  [`fabric-vs-databricks-vs-synapse` decision tree](../decision-trees/fabric-vs-databricks-vs-synapse/),
+  [ADR-0010 (positioning)](adr/ADR-0010-positioning.md), and the
+  Palantir migration playbook in [`migrations/`](migrations/) for guidance on
+  when to stay on CSA-in-a-Box, when to adopt Microsoft Fabric, and how
+  components compose into a Fabric migration.
 
 ---
 

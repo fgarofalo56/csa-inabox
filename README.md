@@ -6,16 +6,23 @@
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Last Updated](https://img.shields.io/badge/updated-2026--04--15-informational)
 
-> An open-source, Azure-native data platform that delivers Data Mesh, Data Fabric, and Data Lakehouse capabilities as a deployable "in-a-box" solution -- a fully featured alternative to Microsoft Fabric built on Azure services and open-source technologies.
+> CSA-in-a-Box is an Azure-native reference implementation of the Microsoft
+> "Unify your data platform" guidance, built entirely on Azure PaaS services and
+> open-source tooling. It delivers Data Mesh, Data Fabric, and Data Lakehouse
+> capabilities today in Azure Government (where Microsoft Fabric is forecast,
+> not yet GA) and in Azure Commercial when a composable, Bicep-deployable,
+> FedRAMP-aligned stack is preferred. Components compose cleanly into a future
+> Fabric migration.
 
 > [!NOTE]
-> **Quick Summary**: CSA-in-a-Box deploys a complete enterprise data platform across 4 Azure subscriptions, providing Delta Lake storage with medallion architecture, domain-oriented Data Mesh ownership, Purview-based governance, Spark/Databricks compute, ADF integration pipelines, real-time streaming, AI/ML capabilities, and full observability -- all defined as Infrastructure-as-Code with Bicep.
+> **Quick Summary**: CSA-in-a-Box is a Fabric-parity reference stack on Azure PaaS — Delta Lake on ADLS Gen2 with medallion architecture, domain-oriented Data Mesh ownership, Purview-based governance, Spark/Databricks compute, ADF pipelines, real-time streaming, AI/ML, and full observability, deployed as IaC with Bicep across 4 subscriptions. Use it as the Gov gap-filler until Fabric is GA, as the Commercial reference for the "Unify your data platform" CAF guidance (post-deprecation of the old Cloud-Scale Analytics scenario), and as an incremental on-ramp to Microsoft Fabric.
 
 ---
 
 ## 📑 Table of Contents
 
 - [📋 What Is This?](#-what-is-this)
+- [🧭 Use Fabric if… Use this if…](#-use-fabric-if-use-this-if)
 - [🏗️ Architecture](#️-architecture)
 - [🏗️ Subscription Layout (4 Subscriptions)](#️-subscription-layout-4-subscriptions)
 - [📁 Repository Structure](#-repository-structure)
@@ -33,20 +40,63 @@
 
 ## 📋 What Is This?
 
-CSA-in-a-Box deploys a complete enterprise data platform across Azure subscriptions, providing:
+CSA-in-a-Box is a Bicep-deployable reference implementation of the Microsoft
+"Unify your data platform" Cloud Adoption Framework guidance. It assembles
+Azure PaaS primitives and open-source tooling into an opinionated, end-to-end
+data platform that reaches Fabric-equivalent capability **today**, in the
+clouds where Fabric is not yet GA, and composes cleanly into a future Fabric
+migration for workloads that will eventually move.
 
-| Capability | Description |
+It serves three roles in the 2026 Azure data-platform landscape:
+
+1. **Azure Government gap-filler.** Microsoft Fabric is forecast — not GA — in
+   Azure Government as of April 2026. This repo ships the Fabric-parity stack
+   (lakehouse, mesh, streaming, AI/ML, governance) on Azure PaaS services that
+   *are* available in Gov (IL4/IL5) today.
+2. **CAF "Unify your data platform" reference.** The CAF Cloud-Scale Analytics
+   scenario was deprecated in April 2026 in favor of Fabric-first guidance. For
+   teams who still need an end-to-end Bicep reference that is not yet a Fabric
+   workspace, CSA-in-a-Box fills that gap.
+3. **Incremental on-ramp to Microsoft Fabric.** Every capability below maps to
+   a Fabric equivalent. Teams that start here can migrate a workload at a time
+   into Fabric as Gov availability lands or as Commercial procurement fits.
+
+Capability coverage:
+
+| Capability | Description | Microsoft Fabric equivalent |
+|---|---|---|
+| **Data Lakehouse** | Delta Lake on ADLS Gen2 with medallion architecture (Bronze/Silver/Gold) | OneLake + Lakehouse |
+| **Data Mesh** | Domain-oriented data ownership with self-serve infrastructure | Workspaces + Domains |
+| **Data Fabric** | Unified metadata layer with automated governance via Azure Purview | OneLake Catalog + Purview integration |
+| **Data Engineering** | Apache Spark on Synapse/Databricks with dbt transformations | Fabric Data Engineering (Spark) |
+| **Data Integration** | Azure Data Factory / Synapse Pipelines for ETL/ELT | Fabric Data Factory |
+| **Data Warehousing** | Synapse Dedicated SQL Pools and Serverless SQL | Fabric Warehouse |
+| **Real-Time Analytics** | Azure Data Explorer + Event Hubs streaming | Real-Time Intelligence (Eventhouse / KQL DB) |
+| **AI/ML** | Azure Machine Learning + Azure OpenAI integration | Fabric Data Science + Copilot |
+| **Data Governance** | Microsoft Purview for cataloging, classification, and lineage | OneLake Catalog (Purview-powered) |
+| **Observability** | Log Analytics + Azure Monitor + custom KQL dashboards | Fabric Monitoring Hub |
+
+---
+
+## 🧭 Use Fabric if… Use this if…
+
+CSA-in-a-Box is **not** a blanket substitute for Microsoft Fabric. For most
+Azure Commercial greenfield workloads where Fabric is GA in the region,
+Fabric is the right answer. Use this decision table to pick the right tool:
+
+| Use Microsoft Fabric if… | Use CSA-in-a-Box if… |
 |---|---|
-| **Data Lakehouse** | Delta Lake on ADLS Gen2 with medallion architecture (Bronze/Silver/Gold) |
-| **Data Mesh** | Domain-oriented data ownership with self-serve infrastructure |
-| **Data Fabric** | Unified metadata layer with automated governance via Azure Purview |
-| **Data Engineering** | Apache Spark on Synapse/Databricks with dbt transformations |
-| **Data Integration** | Azure Data Factory / Synapse Pipelines for ETL/ELT |
-| **Data Warehousing** | Synapse Dedicated SQL Pools and Serverless SQL |
-| **Real-Time Analytics** | Azure Data Explorer + Event Hubs streaming |
-| **AI/ML** | Azure Machine Learning + Azure OpenAI integration |
-| **Data Governance** | Microsoft Purview for cataloging, classification, and lineage |
-| **Observability** | Log Analytics + Azure Monitor + custom KQL dashboards |
+| Workload is on Azure Commercial and Fabric is GA in your region | Workload is on Azure Government (IL4/IL5) — Fabric is forecast, not GA |
+| Team prefers a unified SaaS control plane over composed Bicep modules | Team requires Bicep/Terraform IaC, controlled deployments, explicit Azure Policy enforcement |
+| Simplicity and managed OneLake are higher priority than control | Composability and Azure PaaS primitives (ADLS Gen2, Databricks, Synapse, Purview, Power BI) are higher priority than a single pane of glass |
+| Preview features are an asset (Data Activator, Fabric Copilot) | Production-stable services and a conservative roll-out pace are required |
+| Commercial-only workloads OR you are starting greenfield with Fabric | Federal / regulated / tribal workloads subject to FedRAMP High, CMMC 2.0 L2, or HIPAA (see `governance/compliance/`) |
+| F-SKU reserved capacity cost model fits your procurement | Consumption-based Azure metering + reserved instances fit your procurement |
+
+For the detailed selection logic, see the
+[`fabric-vs-databricks-vs-synapse` decision tree](decision-trees/fabric-vs-databricks-vs-synapse/),
+[ADR-0010 (positioning)](docs/adr/ADR-0010-positioning.md), and the
+Palantir migration playbook in [`docs/migrations/`](docs/migrations/).
 
 ---
 

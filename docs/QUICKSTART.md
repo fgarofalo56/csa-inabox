@@ -535,7 +535,7 @@ az storage account show \
 > [!NOTE]
 > - All services use `.us` / `.usgovcloudapi.net` endpoints
 > - Compliance tags are auto-applied: FedRAMP High, FISMA, NIST 800-53 Rev5
-> - Microsoft Fabric is NOT available in Gov — this repo provides the alternative
+> - Microsoft Fabric is forecast, not GA, in Azure Government — this repo provides Fabric-parity capabilities on Azure PaaS services that ARE available in Gov today
 > - See [GOV_SERVICE_MATRIX.md](GOV_SERVICE_MATRIX.md) for service availability
 
 ---
