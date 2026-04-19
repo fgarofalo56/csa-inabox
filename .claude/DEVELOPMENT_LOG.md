@@ -5,6 +5,98 @@ end-of-session protocol in `.claude/rules/session-end.md`.
 
 ---
 
+## 2026-04-18 — Full forensic audit + vision alignment + Phase-3 Wave 0
+
+**Archon projects:** `145c8d71-7e54-4135-8ec9-d6300caf4517` (Fabric-in-a-Box
+Vision — audit tasks) + `1bd59749-db0a-4009-82c7-f1a56d24a820` (Cloud-Scale
+Analytics Platform — session context).
+
+Executed the mission-prompt audit pipeline end-to-end through Phase 3 Wave 0.
+Delivered the Vision Alignment Matrix, 7 parallel perspective audits, a
+unified 140-finding registry, a 35-item approval queue (all approved via
+ballot), and shipped 8 CRITICAL / HIGH fixes across 3 commits with zero
+test regressions.
+
+### Phases
+
+**Phase 0 — Discovery & Vision Alignment (1 hr)**
+- Produced `temp/VISION_ALIGNMENT_MATRIX.md` scoring the codebase against
+  all 7 North-Star sections. Overall: ~50%.
+- Key findings: Fabric primacy is token gesture, CSA Copilot 0%, decision
+  trees 0/8, Palantir migration playbook missing, multi-cloud ~10%.
+
+**Phase 1 — 7 parallel perspective audits (~10 min wall-clock, parallel)**
+- Dispatched 7 subagents (architect, security, UX, devops, content,
+  new-dev/federal, AI/Copilot). Each produced a structured findings
+  report under `temp/audit/perspective-<N>-*.md` with 20–35 findings.
+- Architect perspective initially stalled twice (scaffold but no
+  findings); recovered on the third attempt via general-purpose agent.
+
+**Phase 2 — Synthesis**
+- Merged 191 raw per-perspective findings → 140 unique CSA-XXXX entries
+  with deduplicated cross-perspective attribution.
+- Produced `temp/audit/FINDINGS_REGISTRY.md` (17 CRITICAL / 59 HIGH /
+  43 MEDIUM / 21 LOW) and `temp/audit/APPROVAL_QUEUE.md` (35 items
+  across 5 themes).
+- Seeded all 140 findings as Archon tasks under feature
+  `CSA-INABOX-AUDIT-2026-04-18` with priority-aware task_order.
+- Created Archon approval-queue doc `f64af68b-8d61-4958-b208-1e977c0fc3c2`.
+
+**Phase 3 Wave 0 — Fixed 8 findings**
+| ID       | Severity | Area    | Fix |
+|----------|----------|---------|-----|
+| CSA-0001 | CRITICAL | Auth    | env var rename + fail-closed empty tenant |
+| CSA-0003 | CRITICAL | Portal  | quality_score 0-100 → 0.0-1.0 canonical  |
+| CSA-0013 | HIGH     | Docs    | csa_platform/governance/ path repair       |
+| CSA-0014 | HIGH     | Docs    | phantom great_expectations/ entry removed  |
+| CSA-0015 | MEDIUM   | Docs    | Terraform path marked roadmap              |
+| CSA-0018 | HIGH     | Auth    | JWT claim validation hardening             |
+| CSA-0019 | HIGH     | Auth    | strict {local,demo} env allow-list         |
+| CSA-0050 | LOW      | DX      | Azurite artifacts already gitignored       |
+
+**Approval ballot**
+- All 35 approval-queue items approved (A1–A4, B1–B7, C1–C9, D1–D4,
+  E1–E11) via iterative theme-by-theme "all recommended" shortcut.
+- Persisted to approval-queue doc (v1.1 with 35-decision ledger).
+- All 35 underlying CSA tasks tagged `[APPROVED 2026-04-18 — AQ-XXXX /
+  Theme X]` in their descriptions; 4 XL items reassigned to Coding Agent.
+- Full log: `temp/audit/APPROVAL_LOG_2026-04-18.md`.
+
+### Commits
+
+- `bd077cc` fix(security): harden auth safety gate + input validation
+  (CSA-0001/0018/0019) — 11 files, +455/-48, 39 new tests
+- `56eecbd` fix(portal): canonicalize quality_score as 0.0-1.0 ratio
+  (CSA-0003) — 12 files, +105/-58
+- `5b7955f` docs: repair broken repo-structure references
+  (CSA-0013/0014/0015) — 6 files, +22/-17
+
+### Validation
+
+- `pytest tests/csa_platform/` — **425 passed** (includes 39 new
+  auth-safety-gate tests)
+- `pytest portal/shared/tests/` — **51 passed**
+- `pytest portal/cli/tests/` — **156 passed**
+- **Total 632/632 green, zero regressions**
+- `ruff check <edited files>` — clean on authored code
+
+### Archon state at session close
+
+- Fabric-Vision project: 140 new todo tasks + 8 flipped to review + 35
+  approvals tagged. Backlog = 132 open (17 CRITICAL / 59 HIGH).
+- Approval queue doc v1.1 with full decision ledger.
+- Cloud-Scale Analytics project: Session Context doc updated with
+  2026-04-18 snapshot, open questions, next-session scope.
+
+### Next session scope (Wave 1 + Wave 2, ~14 items)
+
+Wave 1 (no-approval CRITICAL/HIGH): CSA-0002, 0004, 0005, 0006, 0007,
+0011, 0012 Phase 1, 0016, 0017.
+Wave 2 (quick-win approvals): CSA-0096 rename, 0064 Entra rename,
+0072 v0.1.0 tag, 0076 clone URL.
+
+---
+
 ## 2026-04-13 (cont.) — Cleanup, tests, and full commit
 
 **Archon project:** `1bd59749-db0a-4009-82c7-f1a56d24a820`
