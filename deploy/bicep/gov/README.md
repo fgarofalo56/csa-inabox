@@ -55,7 +55,7 @@ services that ARE available in Azure Government today.
 | **API Management** | GA | GA | GA | GA | API gateway |
 | **Container Apps** | GA | GA | GA | GA | Container orchestration |
 | **AKS** | GA | GA | GA | GA | Kubernetes |
-| **Azure AD B2C** | GA | **N/A** | **N/A** | **N/A** | Use Entra ID custom policies |
+| **Microsoft Entra External ID** (formerly Azure AD B2C) | GA | **N/A** | **N/A** | **N/A** | Use Entra ID custom policies |
 | **Cosmos DB** | GA | GA | GA | GA | NoSQL database |
 | **Azure SQL** | GA | GA | GA | GA | Relational database |
 | **App Service** | GA | GA | GA | GA | Web hosting |

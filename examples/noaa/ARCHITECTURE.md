@@ -479,7 +479,7 @@ The Gold layer merges batch-processed historical data with near-real-time stream
 ```mermaid
 graph TD
     A[External Consumers] --> B[Azure API Management]
-    B --> C[Azure AD / Managed Identity]
+    B --> C[Microsoft Entra ID / Managed Identity]
     C --> D[Rate Limiting<br/>5 req/sec default]
     D --> E[Data Product APIs]
     E --> F{Data Source}
@@ -522,7 +522,7 @@ spec:
 - **Encryption at Rest**: Azure Storage Service Encryption (SSE) with Microsoft-managed keys
 - **Encryption in Transit**: TLS 1.2+ for all API and Event Hub communications
 - **Network Security**: VNet integration with private endpoints for storage and ADX
-- **Access Control**: Azure AD with RBAC; separate roles for data engineers, analysts, and API consumers
+- **Access Control**: Microsoft Entra ID with RBAC; separate roles for data engineers, analysts, and API consumers
 
 ### 🔒 Federal Compliance
 

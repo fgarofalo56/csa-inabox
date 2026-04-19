@@ -356,7 +356,7 @@ spec:
 - **Encryption at Rest**: Azure Storage Service Encryption (SSE)
 - **Encryption in Transit**: TLS 1.2+ for all API communications
 - **Network Security**: VNet integration with private endpoints
-- **Access Control**: Azure AD integration with RBAC
+- **Access Control**: Microsoft Entra ID integration with RBAC
 
 ### Compliance
 
@@ -369,7 +369,7 @@ spec:
 ```mermaid
 graph TD
     A[Client Application] --> B[Azure API Management]
-    B --> C[Azure AD Authentication]
+    B --> C[Microsoft Entra ID Authentication]
     C --> D[RBAC Authorization]
     D --> E[Rate Limiting]
     E --> F[Data Product API]

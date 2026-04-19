@@ -403,7 +403,7 @@ Three primary dashboards serve different user personas:
 - **Encryption at Rest**: Azure Storage Service Encryption (SSE) with Microsoft-managed keys
 - **Encryption in Transit**: TLS 1.2+ for all API communications
 - **Network Security**: VNet integration with private endpoints for all PaaS services
-- **Access Control**: Azure AD integration with RBAC (Reader, Contributor, Admin roles)
+- **Access Control**: Microsoft Entra ID integration with RBAC (Reader, Contributor, Admin roles)
 
 ### Compliance
 
@@ -417,7 +417,7 @@ Three primary dashboards serve different user personas:
 ```mermaid
 graph TD
     A[Client Application] --> B[Azure API Management]
-    B --> C[Azure AD Authentication]
+    B --> C[Microsoft Entra ID Authentication]
     C --> D[RBAC Authorization]
     D --> E[Rate Limiting<br/>1000 req/hour]
     E --> F[Data Product API]

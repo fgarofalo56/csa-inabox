@@ -39,7 +39,7 @@
 
 ### Azure Requirements
 - **4 Azure Subscriptions**: Management, Connectivity, Data Management (DMLZ), Data Landing Zone (DLZ)
-- **Azure AD Tenant** with Global Admin or Privileged Role Admin access
+- **Microsoft Entra ID Tenant** with Global Admin or Privileged Role Admin access
 - **Contributor** role on all 4 subscriptions
 - **Microsoft.Purview**, **Microsoft.Databricks**, **Microsoft.Synapse** resource providers registered
 
@@ -65,7 +65,7 @@ The deploying identity needs:
 
 ### Step 1: Clone and Setup
 ```bash
-git clone https://github.com/fgarofalo56/csa-inabox.git
+git clone <CLONE_URL>
 cd csa-inabox
 make setup  # or `make setup-win` on Windows
 ```

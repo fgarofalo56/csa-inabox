@@ -5,7 +5,7 @@
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Frontend Developers
 
 > [!NOTE]
-> **TL;DR:** FastAPI shared backend providing common API surface for all four portal frontends — sources, pipelines, marketplace, access requests, and stats. Supports Azure AD/Entra ID JWT auth (Commercial + Gov), demo mode for local development, and Docker deployment.
+> **TL;DR:** FastAPI shared backend providing common API surface for all four portal frontends — sources, pipelines, marketplace, access requests, and stats. Supports Microsoft Entra ID JWT auth (Commercial + Gov), demo mode for local development, and Docker deployment.
 
 The **shared backend** is a FastAPI application that provides the common API surface for all four portal front-end implementations:
 
@@ -47,7 +47,7 @@ portal/shared/
 │   │   ├── access.py         # /api/v1/access/*
 │   │   └── stats.py          # /api/v1/stats/*
 │   └── services/             # Business logic & integrations
-│       ├── auth.py           # Azure AD/Entra ID JWT validation
+│       ├── auth.py           # Microsoft Entra ID JWT validation
 │       └── provisioning.py   # DLZ provisioning orchestrator
 ├── requirements.txt
 ├── Dockerfile
@@ -125,7 +125,7 @@ open http://localhost:8000/api/docs
 
 ## 🔒 Authentication
 
-The API uses **Azure AD / Entra ID** JWT bearer tokens. Both Commercial and Government cloud endpoints are supported, controlled by the `IS_GOVERNMENT_CLOUD` environment variable.
+The API uses **Microsoft Entra ID** JWT bearer tokens. Both Commercial and Government cloud endpoints are supported, controlled by the `IS_GOVERNMENT_CLOUD` environment variable.
 
 > [!TIP]
 > In **demo mode** (no `AZURE_TENANT_ID` set), authentication is bypassed and all endpoints return data for a synthetic demo user.
@@ -145,7 +145,7 @@ All settings are loaded from environment variables (or a `.env` file):
 
 | Variable | Default | Description |
 |---|---|---|
-| `AZURE_TENANT_ID` | *(empty)* | Azure AD tenant ID |
+| `AZURE_TENANT_ID` | *(empty)* | Microsoft Entra ID tenant ID |
 | `AZURE_CLIENT_ID` | *(empty)* | App registration client ID |
 | `IS_GOVERNMENT_CLOUD` | `false` | Use Azure Gov endpoints |
 | `DATABASE_URL` | `sqlite:///./csainabox.db` | Metadata database connection |

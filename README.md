@@ -163,7 +163,7 @@ graph TB
 | Git | >= 2.40 |
 
 > [!IMPORTANT]
-> You will need **4 Azure subscriptions** with Owner or Contributor access, and an **Azure AD** account with Global Admin or Privileged Role Administrator permissions for initial setup.
+> You will need **4 Azure subscriptions** with Owner or Contributor access, and a **Microsoft Entra ID** account with Global Admin or Privileged Role Administrator permissions for initial setup.
 
 ---
 
@@ -172,6 +172,12 @@ graph TB
 See [QUICKSTART.md](docs/QUICKSTART.md) for the complete setup guide, including
 infrastructure deployment, sample data loading, dbt pipeline execution, and
 expected row counts for every model.
+
+> [!NOTE]
+> **Cloning the repository**: throughout the documentation the placeholder `<CLONE_URL>`
+> is used in `git clone` commands. Replace `<CLONE_URL>` with your appropriate
+> internal-fork or upstream repository URL per Contoso policy (for example,
+> `git clone https://github.com/<org>/csa-inabox.git`).
 
 ---
 

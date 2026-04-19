@@ -52,7 +52,7 @@ The project uses ruff with a line length of 120 characters (not PEP 8's default 
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/fgarofalo56/csa-inabox.git
+   git clone <CLONE_URL>
    cd csa-inabox
    ```
 

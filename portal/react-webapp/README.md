@@ -61,7 +61,7 @@ graph TB
 |---|---|---|
 | Framework | Next.js 14 (App Router) | SSR, file-based routing, API routes |
 | UI | Tailwind CSS + Radix UI | Utility-first CSS, accessible components |
-| Auth | MSAL.js (@azure/msal-react) | Azure AD / Entra ID integration |
+| Auth | MSAL.js (@azure/msal-react) | Microsoft Entra ID integration |
 | State | React Query (TanStack) | Server state, caching, optimistic updates |
 | Forms | React Hook Form + Zod | Type-safe forms with validation |
 | HTTP | Axios | HTTP client with interceptors |
@@ -78,7 +78,7 @@ npm install
 
 # Configure environment
 cp .env.example .env.local
-# Edit .env.local with your Azure AD and API settings
+# Edit .env.local with your Microsoft Entra ID and API settings
 
 # Start development server
 npm run dev
@@ -91,7 +91,7 @@ npm run dev
 ## ⚙️ Environment Variables
 
 ```bash
-# Azure AD / Entra ID
+# Microsoft Entra ID
 NEXT_PUBLIC_AZURE_AD_CLIENT_ID=your-client-id
 NEXT_PUBLIC_AZURE_AD_TENANT_ID=your-tenant-id
 NEXT_PUBLIC_AZURE_AD_REDIRECT_URI=http://localhost:3000

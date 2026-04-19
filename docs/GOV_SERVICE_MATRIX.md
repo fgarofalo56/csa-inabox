@@ -93,7 +93,7 @@ authorization levels and impact level (IL) support.
 |---------|-----------|-----------------|---------|---------|-------------|
 | **Microsoft Entra ID** | GA | GA | GA | GA | Direct use |
 | **Entra ID B2C** | GA | **N/A** | **N/A** | **N/A** | Entra ID custom policies |
-| **Azure AD Conditional Access** | GA | GA | GA | GA | Direct use |
+| **Microsoft Entra Conditional Access** | GA | GA | GA | GA | Direct use |
 | **Defender for Cloud** | GA | GA | GA | GA | Direct use |
 
 ---
@@ -122,7 +122,7 @@ When deploying to Azure Government, all service endpoints use different domains:
 | Databricks | `*.azuredatabricks.net` | `*.databricks.azure.us` |
 | Key Vault | `*.vault.azure.net` | `*.vault.usgovcloudapi.net` |
 | Entra ID (login) | `login.microsoftonline.com` | `login.microsoftonline.us` |
-| Azure AD Graph | `graph.microsoft.com` | `graph.microsoft.us` |
+| Microsoft Graph | `graph.microsoft.com` | `graph.microsoft.us` |
 | Management API | `management.azure.com` | `management.usgovcloudapi.net` |
 | Purview | `*.purview.azure.com` | `*.purview.azure.us` |
 | Event Hubs | `*.servicebus.windows.net` | `*.servicebus.usgovcloudapi.net` |

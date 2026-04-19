@@ -154,7 +154,7 @@ graph TD
 ### Access Controls
 
 **Authentication**
-- Azure AD (Gov) with MFA enforced for all interactive access
+- Microsoft Entra ID (Gov) with MFA enforced for all interactive access
 - CAC/PIV smart card support for IHS federal employees
 - Managed Identity for all service-to-service authentication — no shared secrets
 - Conditional Access policies: compliant device required, Gov network preferred
@@ -182,7 +182,7 @@ graph LR
 ```
 
 Audit fields captured:
-- `principal_id`: Azure AD object ID of the accessor
+- `principal_id`: Microsoft Entra ID object ID of the accessor
 - `principal_upn`: User principal name
 - `source_ip`: Client IP address
 - `resource_accessed`: Table/column/row filter applied
@@ -412,7 +412,7 @@ graph TD
 - **Governance**: Microsoft Purview (Gov), Unity Catalog
 
 ### 🔒 Security & Compliance
-- **Identity**: Azure AD (Gov), Conditional Access, PIM
+- **Identity**: Microsoft Entra ID (Gov), Conditional Access, PIM
 - **Secrets**: Key Vault with HSM backing
 - **Networking**: Azure Firewall, Private Link, NSGs
 - **Monitoring**: Azure Monitor, Log Analytics, Microsoft Sentinel (Gov)

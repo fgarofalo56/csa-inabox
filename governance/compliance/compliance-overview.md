@@ -5,7 +5,7 @@
 > **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Security / Compliance
 
 > [!TIP]
-> **TL;DR** — CSA-in-a-Box enforces data residency via Azure Policy, encrypts all data at rest (AES-256) and in transit (TLS 1.2+), uses Azure AD with managed identities for authentication, logs all access to Log Analytics, and follows a zero-trust network architecture with private endpoints throughout.
+> **TL;DR** — CSA-in-a-Box enforces data residency via Azure Policy, encrypts all data at rest (AES-256) and in transit (TLS 1.2+), uses Microsoft Entra ID with managed identities for authentication, logs all access to Log Analytics, and follows a zero-trust network architecture with private endpoints throughout.
 
 ## Table of Contents
 
@@ -68,7 +68,7 @@ controls, and audit capabilities.
 
 | Method | Usage |
 |--------|-------|
-| Azure AD (Entra ID) | All user and service authentication |
+| Microsoft Entra ID (formerly Azure AD) | All user and service authentication |
 | Managed Identity | Service-to-service authentication (no stored credentials) |
 | OIDC Federation | GitHub Actions CI/CD (no stored secrets) |
 | Key Vault References | Application secrets via Key Vault integration |
@@ -92,7 +92,7 @@ Key principles:
 | Source | Destination | Retention |
 |--------|------------|-----------|
 | Azure Activity Log | Log Analytics Workspace | 90 days (hot) + 365 days (archive) |
-| Azure AD Sign-in Logs | Log Analytics Workspace | 90 days |
+| Microsoft Entra sign-in logs | Log Analytics Workspace | 90 days |
 | Data Access Logs | Log Analytics + Storage | 365 days |
 | Purview Audit Logs | Purview built-in | 90 days |
 
