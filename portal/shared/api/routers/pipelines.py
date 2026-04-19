@@ -16,7 +16,9 @@ import random as _rng
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+
+from csa_platform.common.audit import audit_event_from_request, audit_logger
 
 from ..models.pipeline import PipelineRecord, PipelineRun, PipelineStatus, PipelineType
 from ..models.source import SourceRecord
@@ -243,6 +245,7 @@ async def get_pipeline_runs(
 )
 async def trigger_pipeline(
     pipeline_id: str,
+    request: Request,
     user: dict = Depends(require_role("Contributor", "Admin")),
 ) -> PipelineRun:
     """Manually trigger a pipeline execution.
@@ -289,5 +292,22 @@ async def trigger_pipeline(
     }
     _pipelines_store.update(pipeline_id, pipeline_updates)
 
-    logger.info("Triggered pipeline run", extra={"pipeline_id": pipeline_id, "run_id": run.id})
+    # Tamper-evident audit sink (CSA-0016) — triggering a pipeline moves
+    # data through the platform and is subject to AU-2/AU-3.
+    pipeline_domain = _get_pipeline_domain(pipeline)
+    audit_logger.emit(
+        audit_event_from_request(
+            request=request,
+            user=user,
+            action="pipeline.trigger",
+            resource={
+                "type": "pipeline",
+                "id": pipeline_id,
+                "domain": pipeline_domain,
+                "source_id": pipeline.source_id,
+            },
+            outcome="success",
+            after={"run_id": run.id, "status": PipelineStatus.RUNNING.value},
+        )
+    )
     return run

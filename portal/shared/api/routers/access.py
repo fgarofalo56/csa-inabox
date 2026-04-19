@@ -15,8 +15,10 @@ import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
+
+from csa_platform.common.audit import audit_event_from_request, audit_logger
 
 from ..models.marketplace import (
     AccessRequest,
@@ -193,6 +195,7 @@ async def list_access_requests(
 )
 async def create_access_request(
     payload: AccessRequestCreate,
+    request: Request,
     user: dict = Depends(get_current_user),
 ) -> AccessRequest:
     """Submit a new access request for a data product.
@@ -264,20 +267,28 @@ async def create_access_request(
     # Persist to JSON store
     _access_store.add(access_request.model_dump())
 
-    # Structured submit log (CSA-0017).  Full audit sink comes in CSA-0016.
-    logger.info(
-        "Access request created",
-        extra={
-            "actor_sub": user.get("sub") or user.get("oid"),
-            "actor": requester,
-            "action": "access_request.create",
-            "resource_id": request_id,
-            "product_id": payload.data_product_id,
-            "classification": classification.value,
-            "duration_days": payload.duration_days,
-            "elevated": classification in _ELEVATED_REVIEW_CLASSIFICATIONS,
-            "outcome": "success",
-        },
+    # Tamper-evident audit sink (CSA-0016).  Separate namespace from the
+    # operational logger; chain-hashed so offline verification can prove
+    # events have not been deleted or modified.
+    audit_logger.emit(
+        audit_event_from_request(
+            request=request,
+            user=user,
+            action="access_request.create",
+            resource={
+                "type": "access_request",
+                "id": request_id,
+                "domain": stored_product.get("domain"),
+                "classification": classification.value,
+                "product_id": payload.data_product_id,
+            },
+            outcome="success",
+            after={
+                "status": AccessRequestStatus.PENDING.value,
+                "duration_days": payload.duration_days,
+                "elevated": classification in _ELEVATED_REVIEW_CLASSIFICATIONS,
+            },
+        )
     )
     return access_request
 
@@ -391,6 +402,7 @@ def _enforce_review_authorization(
 )
 async def approve_access_request(
     request_id: str,
+    request: Request,
     body: ReviewBody | None = None,
     user: dict = Depends(require_role("Contributor", "Admin")),
     scope: DomainScope = Depends(get_domain_scope),
@@ -433,18 +445,28 @@ async def approve_access_request(
     # Update in store
     _access_store.update(request_id, req.model_dump())
 
-    logger.info(
-        "Access request approved",
-        extra={
-            "actor_sub": user.get("sub") or user.get("oid"),
-            "actor": _user_identifier(user),
-            "action": "access_request.approve",
-            "resource_id": request_id,
-            "product_id": req.data_product_id,
-            "target_domain": product.get("domain"),
-            "caller_domain": scope.user_domain,
-            "outcome": "success",
-        },
+    # Tamper-evident audit sink (CSA-0016).
+    audit_logger.emit(
+        audit_event_from_request(
+            request=request,
+            user=user,
+            action="access_request.approve",
+            resource={
+                "type": "access_request",
+                "id": request_id,
+                "domain": product.get("domain"),
+                "product_id": req.data_product_id,
+            },
+            outcome="success",
+            before={"status": AccessRequestStatus.PENDING.value},
+            after={
+                "status": AccessRequestStatus.APPROVED.value,
+                "reviewer": req.reviewed_by,
+                "expires_at": req.expires_at.isoformat()
+                if req.expires_at
+                else None,
+            },
+        )
     )
     return req
 
@@ -456,6 +478,7 @@ async def approve_access_request(
 )
 async def deny_access_request(
     request_id: str,
+    request: Request,
     body: ReviewBody | None = None,
     user: dict = Depends(require_role("Contributor", "Admin")),
     scope: DomainScope = Depends(get_domain_scope),
@@ -491,17 +514,28 @@ async def deny_access_request(
     # Update in store
     _access_store.update(request_id, req.model_dump())
 
-    logger.info(
-        "Access request denied",
-        extra={
-            "actor_sub": user.get("sub") or user.get("oid"),
-            "actor": _user_identifier(user),
-            "action": "access_request.deny",
-            "resource_id": request_id,
-            "product_id": req.data_product_id,
-            "target_domain": product.get("domain"),
-            "caller_domain": scope.user_domain,
-            "outcome": "success",
-        },
+    # Tamper-evident audit sink (CSA-0016).  A deny is a negative outcome
+    # for the requester but a successful review action by the reviewer —
+    # we capture it as outcome=success with action=access_request.deny so
+    # the chain reflects the reviewer's intent.
+    audit_logger.emit(
+        audit_event_from_request(
+            request=request,
+            user=user,
+            action="access_request.deny",
+            resource={
+                "type": "access_request",
+                "id": request_id,
+                "domain": product.get("domain"),
+                "product_id": req.data_product_id,
+            },
+            outcome="success",
+            before={"status": AccessRequestStatus.PENDING.value},
+            after={
+                "status": AccessRequestStatus.DENIED.value,
+                "reviewer": req.reviewed_by,
+            },
+            reason=req.review_notes,
+        )
     )
     return req

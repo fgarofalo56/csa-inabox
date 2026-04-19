@@ -18,8 +18,10 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
+
+from csa_platform.common.audit import audit_event_from_request, audit_logger
 
 from ..models.source import (
     ClassificationLevel,
@@ -315,6 +317,7 @@ async def get_source(
 )
 async def register_source(
     registration: SourceRegistration,
+    request: Request,
     user: dict = Depends(require_role("Contributor", "Admin")),
 ) -> SourceRecord:
     """Register a new data source in the platform.
@@ -333,15 +336,30 @@ async def register_source(
     )
     # Persist to JSON store
     _sources_store.add(record.model_dump())
-    logger.info(
-        "Registered data source",
-        extra={
-            "source_id": source_id,
-            "name": registration.name,
-            "type": registration.source_type.value,
-            "domain": registration.domain,
-            "user": user.get("preferred_username", user.get("sub", "unknown")),
-        },
+
+    # Tamper-evident audit sink (CSA-0016) — source registration is an
+    # authorised state-changing operation that affects downstream
+    # provisioning and data governance.
+    audit_logger.emit(
+        audit_event_from_request(
+            request=request,
+            user=user,
+            action="source.register",
+            resource={
+                "type": "source",
+                "id": source_id,
+                "domain": registration.domain,
+                "classification": registration.classification.value
+                if registration.classification
+                else None,
+            },
+            outcome="success",
+            after={
+                "name": registration.name,
+                "source_type": registration.source_type.value,
+                "status": record.status.value,
+            },
+        )
     )
     return record
 
@@ -384,6 +402,7 @@ async def update_source(
 )
 async def decommission_source(
     source_id: str,
+    request: Request,
     user: dict = Depends(require_role("Contributor", "Admin")),
 ) -> SourceRecord:
     """Soft-delete a data source by setting its status to *decommissioned*.
@@ -391,15 +410,30 @@ async def decommission_source(
     Non-admin users may only decommission sources within their own domain.
     """
     source = _load_source_with_domain_check(source_id, user)
+    previous_status = source.status
     source.status = SourceStatus.DECOMMISSIONED
     source.updated_at = datetime.now(timezone.utc)
     _sources_store.update(source_id, source.model_dump())
-    logger.info(
-        "Decommissioned source",
-        extra={
-            "source_id": source_id,
-            "user": user.get("preferred_username", user.get("sub", "unknown")),
-        },
+
+    # Tamper-evident audit sink (CSA-0016) — decommission is a
+    # security-relevant terminal state transition.
+    audit_logger.emit(
+        audit_event_from_request(
+            request=request,
+            user=user,
+            action="source.decommission",
+            resource={
+                "type": "source",
+                "id": source_id,
+                "domain": source.domain,
+                "classification": source.classification.value
+                if source.classification
+                else None,
+            },
+            outcome="success",
+            before={"status": previous_status.value},
+            after={"status": SourceStatus.DECOMMISSIONED.value},
+        )
     )
     return source
 
@@ -410,6 +444,7 @@ async def decommission_source(
 )
 async def provision_source(
     source_id: str,
+    request: Request,
     user: dict = Depends(require_role("Contributor", "Admin")),
 ) -> dict:
     """Trigger the full Data Landing Zone provisioning workflow.
@@ -434,12 +469,48 @@ async def provision_source(
             "status": SourceStatus.ERROR.value,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         })
+        # Tamper-evident audit sink — record the failed provisioning
+        # attempt so the audit trail is complete even on error (CSA-0016).
+        audit_logger.emit(
+            audit_event_from_request(
+                request=request,
+                user=user,
+                action="source.provision",
+                resource={
+                    "type": "source",
+                    "id": source_id,
+                    "domain": source.domain,
+                    "classification": source.classification.value
+                    if source.classification
+                    else None,
+                },
+                outcome="error",
+                reason=f"infrastructure_error: {exc!s}"[:256],
+            )
+        )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Provisioning failed due to an infrastructure error. Check server logs.",
         ) from exc
 
     if not result.success:
+        audit_logger.emit(
+            audit_event_from_request(
+                request=request,
+                user=user,
+                action="source.provision",
+                resource={
+                    "type": "source",
+                    "id": source_id,
+                    "domain": source.domain,
+                    "classification": source.classification.value
+                    if source.classification
+                    else None,
+                },
+                outcome="denied",
+                reason=result.message or "provisioning_rejected",
+            )
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=result.message,
@@ -458,6 +529,30 @@ async def provision_source(
     if update_payload:
         _sources_store.update(source_id, update_payload)
 
+    # Tamper-evident audit sink (CSA-0016) — provisioning is a
+    # high-impact state transition that deploys infrastructure.
+    audit_logger.emit(
+        audit_event_from_request(
+            request=request,
+            user=user,
+            action="source.provision",
+            resource={
+                "type": "source",
+                "id": source_id,
+                "domain": source.domain,
+                "classification": source.classification.value
+                if source.classification
+                else None,
+            },
+            outcome="success",
+            after={
+                "status": result.new_status.value if result.new_status else None,
+                "pipeline_id": result.pipeline_id,
+                "scan_id": result.scan_id,
+            },
+        )
+    )
+
     return {
         "status": "provisioning",
         "message": result.message,
@@ -471,6 +566,7 @@ async def provision_source(
 )
 async def scan_source(
     source_id: str,
+    request: Request,
     user: dict = Depends(require_role("Contributor", "Admin")),
 ) -> dict:
     """Trigger a Microsoft Purview metadata scan for this source.
@@ -483,6 +579,23 @@ async def scan_source(
         scan_id = await provisioning_service.trigger_purview_scan(source)
     except Exception as exc:
         logger.exception("Purview scan failed for source %s", source_id)
+        audit_logger.emit(
+            audit_event_from_request(
+                request=request,
+                user=user,
+                action="source.scan",
+                resource={
+                    "type": "source",
+                    "id": source_id,
+                    "domain": source.domain,
+                    "classification": source.classification.value
+                    if source.classification
+                    else None,
+                },
+                outcome="error",
+                reason=f"purview_error: {exc!s}"[:256],
+            )
+        )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Purview scan failed due to an infrastructure error. Check server logs.",
@@ -491,5 +604,25 @@ async def scan_source(
     source.purview_scan_id = scan_id
     source.updated_at = datetime.now(timezone.utc)
     _sources_store.update(source_id, source.model_dump())
+
+    # Tamper-evident audit sink (CSA-0016) — triggers a Purview scan that
+    # touches the source's data plane; security-relevant.
+    audit_logger.emit(
+        audit_event_from_request(
+            request=request,
+            user=user,
+            action="source.scan",
+            resource={
+                "type": "source",
+                "id": source_id,
+                "domain": source.domain,
+                "classification": source.classification.value
+                if source.classification
+                else None,
+            },
+            outcome="success",
+            after={"scan_id": scan_id},
+        )
+    )
 
     return {"status": "scanning", "scan_id": scan_id}
