@@ -1,0 +1,101 @@
+tree_id: "rag-vs-finetune-vs-agents"
+title: "RAG vs. Fine-Tuning vs. Agents"
+last_reviewed: "2026-04-19"
+version: "1.0"
+summary: "Pick the AI integration pattern: retrieval-augmented generation, fine-tuning, or agentic orchestration."
+links:
+  decision_doc: "docs/decisions/rag-vs-finetune-vs-agents.md"
+  related_adrs:
+    - "adr-0006-ai-integration"
+  related_architectures:
+    - "docs/ARCHITECTURE.md#-ai--ml-layer"
+
+nodes:
+  - id: "start"
+    question: "What is the primary AI task?"
+    options:
+      - label: "Answer questions over domain knowledge / documents"
+        next: "q-freshness"
+      - label: "Match a proprietary style, format, or structured output"
+        next: "q-style-complexity"
+      - label: "Take multi-step actions across tools and systems"
+        next: "q-agent-scope"
+
+  - id: "q-freshness"
+    question: "How frequently does the underlying knowledge change?"
+    options:
+      - label: "Daily / weekly — docs refresh constantly"
+        next: "rec-rag"
+      - label: "Rarely — static corpus, stable ontology"
+        next: "q-volume"
+
+  - id: "q-volume"
+    question: "Is the corpus small (<10 MB) with narrow, stable phrasing?"
+    options:
+      - label: "Yes — tight domain, small surface"
+        next: "rec-finetune"
+      - label: "No — broad or growing corpus"
+        next: "rec-rag"
+
+  - id: "q-style-complexity"
+    question: "Is the style / structure achievable with a few-shot prompt + Pydantic output schema?"
+    options:
+      - label: "Yes — prompt engineering is sufficient"
+        next: "rec-rag"
+      - label: "No — persistent stylistic or domain-syntax shift needed"
+        next: "rec-finetune"
+
+  - id: "q-agent-scope"
+    question: "How deterministic is the agent's action space?"
+    options:
+      - label: "Bounded — 3-10 tools, human approval gates"
+        next: "rec-agents"
+      - label: "Open-ended — agent must plan novel sequences autonomously"
+        next: "q-agent-risk"
+
+  - id: "q-agent-risk"
+    question: "What is the blast radius of an agent mistake?"
+    options:
+      - label: "Low — read-only, suggest-only, or sandboxed"
+        next: "rec-agents"
+      - label: "High — production writes, financial, PHI"
+        next: "rec-rag"
+
+  - id: "rec-rag"
+    recommendation: "RAG (Retrieval-Augmented Generation)"
+    rationale: "Default AI pattern for CSA-in-a-Box. Grounds LLM responses in curated domain knowledge; updates at document-ingest cadence; auditable via cited sources."
+    tradeoffs:
+      cost: "Embedding + vector store + LLM inference; scales linearly with queries. Cheaper than fine-tuning at <1M queries."
+      latency: "Seconds per query; retrieval + generation split tunable."
+      compliance: "Inference via Azure OpenAI with data-residency guarantees (Commercial + Gov). Source citations simplify audit."
+      skill_match: "Python + embedding/LLM SDKs. Moderate ramp. Chunking and eval discipline are the real skill gaps."
+    anti_patterns:
+      - "Do not use RAG when the answer is a one-shot transformation the base model already does well (summarization, translation)."
+      - "Do not skip evals — retrieval quality is the ceiling on answer quality."
+    linked_example: "examples/commerce/"
+
+  - id: "rec-finetune"
+    recommendation: "Fine-tuning"
+    rationale: "Right choice for persistent style or narrow domain-syntax shift on a stable corpus. Not a substitute for RAG when knowledge changes."
+    tradeoffs:
+      cost: "Upfront training cost + per-token inference on a custom deployment ($$$). Justified only at high query volume or strict style needs."
+      latency: "Same as base model inference."
+      compliance: "Training-data residency must be proven; Azure OpenAI fine-tuning has Commercial coverage; Gov support varies by model."
+      skill_match: "Requires training data curation and eval discipline. Higher ramp than RAG."
+    anti_patterns:
+      - "Do not fine-tune to inject fresh knowledge — use RAG. Fine-tuning is for style, not facts."
+      - "Do not fine-tune on <1,000 examples — you will hurt base-model performance without meaningful gain."
+    linked_example: "examples/tribal-health/"
+
+  - id: "rec-agents"
+    recommendation: "Agent orchestration (Semantic Kernel / LangGraph / PydanticAI)"
+    rationale: "Right for bounded, tool-using workflows: data onboarding triage, ticket classification, runbook execution, multi-step analysis."
+    tradeoffs:
+      cost: "Multiple LLM calls per task ($$$); cache aggressively; observability tax."
+      latency: "Seconds to minutes depending on tool chain depth."
+      compliance: "Tool-use audit log must be tamper-evident (see CSA-0016). Human-in-the-loop gates for write actions."
+      skill_match: "Requires prompt + tool design + eval harness. Highest ramp of the three."
+    anti_patterns:
+      - "Do not deploy an open-ended agent to production write actions without approval gates."
+      - "Do not build an agent when a single RAG call + structured output does the job."
+    linked_example: "examples/casino-analytics/"

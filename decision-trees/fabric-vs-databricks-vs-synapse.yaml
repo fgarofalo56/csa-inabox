@@ -1,0 +1,120 @@
+tree_id: "fabric-vs-databricks-vs-synapse"
+title: "Fabric vs. Databricks vs. Synapse"
+last_reviewed: "2026-04-19"
+version: "1.0"
+summary: "Choose the primary analytics platform when building a new lakehouse / data warehouse workload on Azure."
+links:
+  decision_doc: "docs/decisions/fabric-vs-databricks-vs-synapse.md"
+  related_adrs:
+    - "adr-0001-etl-orchestrator"
+    - "adr-0003-lakehouse-format"
+  related_architectures:
+    - "docs/ARCHITECTURE.md#-architecture-layers"
+    - "docs/ARCHITECTURE.md#%EF%B8%8F-primary-tech-choices"
+
+nodes:
+  - id: "start"
+    question: "Is the workload deploying to Azure Commercial or Azure Government?"
+    options:
+      - label: "Commercial"
+        next: "q-fabric-fit"
+      - label: "Government (IL4/IL5/FedRAMP High)"
+        next: "q-gov-compliance"
+
+  - id: "q-fabric-fit"
+    question: "Does the team need a Fabric-unique feature (OneLake, Direct Lake for Power BI, Data Activator, Real-Time Intelligence, Copilot for Fabric)?"
+    options:
+      - label: "Yes — Power BI / OneLake / Data Activator is central to the solution"
+        next: "q-fabric-workload-shape"
+      - label: "No — pure data engineering / ML / Spark-heavy workload"
+        next: "q-spark-intensity"
+      - label: "No — SQL-first warehousing with few Spark requirements"
+        next: "q-sql-scale"
+
+  - id: "q-fabric-workload-shape"
+    question: "Does the workload require custom Docker images, non-notebook Python entry points, or >10 TB Spark jobs with heavy tuning?"
+    options:
+      - label: "Yes — advanced Spark / custom runtime required"
+        next: "rec-databricks"
+      - label: "No — notebooks, pipelines, and T-SQL are sufficient"
+        next: "rec-fabric"
+
+  - id: "q-spark-intensity"
+    question: "How critical are mature Spark tooling, MLflow, Unity Catalog fine-grained access, and Photon performance?"
+    options:
+      - label: "Critical — we rely on these daily"
+        next: "rec-databricks"
+      - label: "Nice to have — any reasonable Spark environment works"
+        next: "q-ecosystem-lockin"
+
+  - id: "q-ecosystem-lockin"
+    question: "Is the organization heavily invested in Microsoft 365, Power BI Premium, and Purview?"
+    options:
+      - label: "Yes — M365 / Power BI are strategic"
+        next: "rec-fabric"
+      - label: "Mixed / multi-cloud — portability matters"
+        next: "rec-databricks"
+
+  - id: "q-sql-scale"
+    question: "Is the SQL workload concurrency-heavy (>50 concurrent users, DW-sized MPP) with existing dedicated-pool investment?"
+    options:
+      - label: "Yes — dedicated SQL pools already run the business"
+        next: "rec-synapse"
+      - label: "No — greenfield SQL warehouse or <50 concurrency"
+        next: "rec-fabric"
+
+  - id: "q-gov-compliance"
+    question: "What is the compliance ceiling for this workload?"
+    options:
+      - label: "FedRAMP High / IL4"
+        next: "q-gov-platform"
+      - label: "IL5 / IL6"
+        next: "rec-synapse"
+
+  - id: "q-gov-platform"
+    question: "Is the team already operating Databricks in Azure Gov, or is Synapse the standing pattern?"
+    options:
+      - label: "Databricks is authorized and in use"
+        next: "rec-databricks"
+      - label: "Synapse is the platform of record"
+        next: "rec-synapse"
+
+  - id: "rec-fabric"
+    recommendation: "Microsoft Fabric"
+    rationale: "Unified control plane across OneLake, Data Factory, Warehouse, Power BI, Data Activator, and Real-Time Intelligence. Best choice for mixed-workload Commercial tenants that prioritize Power BI and low operational overhead."
+    tradeoffs:
+      cost: "F-SKU capacity base cost ($$$) plus pay-as-you-use CU overage. Predictable but higher floor than serverless Synapse."
+      latency: "Direct Lake eliminates Power BI semantic-model refresh; sub-second for gold-layer reads."
+      compliance: "Commercial GA. FedRAMP High forecast but not yet GA in Azure Gov as of 2026-Q2 — do NOT recommend for Gov workloads today."
+      skill_match: "Low barrier: SQL, notebooks, Power BI. Minimal Spark/DevOps expertise required."
+    anti_patterns:
+      - "Do not pick Fabric when custom Docker images or non-notebook Python entry points are required — Fabric Spark is notebook-first."
+      - "Do not pick Fabric for Azure Gov workloads until FedRAMP High GA is published."
+      - "Do not pick Fabric when the team has deep MLflow + Unity Catalog muscle memory."
+    linked_example: "examples/commerce/"
+
+  - id: "rec-databricks"
+    recommendation: "Azure Databricks"
+    rationale: "Best-of-breed Spark, Delta Lake, MLflow, and Unity Catalog. Right choice for data engineering, ML, streaming, and multi-cloud portability."
+    tradeoffs:
+      cost: "Pay-as-you-go DBUs; cluster right-sizing is a live operational concern. Photon improves $/TB scanned."
+      latency: "Interactive notebooks seconds; Delta Live Tables streaming sub-minute; SQL Warehouses sub-second for BI."
+      compliance: "Available in Azure Commercial and Azure Gov (FedRAMP High, IL4, IL5 with specific SKUs)."
+      skill_match: "Requires Spark, Python/Scala, and Unity Catalog knowledge. Steeper learning curve than Fabric."
+    anti_patterns:
+      - "Do not pick Databricks for pure SQL warehousing with no Spark needs — serverless Synapse or Fabric Warehouse is cheaper."
+      - "Do not pick Databricks when Power BI Direct Lake and Data Activator are primary requirements."
+    linked_example: "examples/iot-streaming/"
+
+  - id: "rec-synapse"
+    recommendation: "Azure Synapse Analytics"
+    rationale: "Mature MPP SQL (dedicated pools), serverless SQL over ADLS, and Spark pools in a single workspace. Strong fit for Gov workloads and existing SQL-DW estates."
+    tradeoffs:
+      cost: "Dedicated pools are capacity-reserved ($$$); serverless SQL is pay-per-TB-scanned (very cost-effective for ad-hoc)."
+      latency: "Dedicated pools sub-second concurrency for BI; serverless SQL scales with query complexity."
+      compliance: "Full FedRAMP High, IL4, IL5 coverage in Azure Gov. Longest compliance track record of the three."
+      skill_match: "SQL-first; T-SQL and Spark notebooks. Familiar to existing SQL DW teams."
+    anti_patterns:
+      - "Do not pick Synapse for greenfield Commercial lakehouse workloads — Fabric or Databricks has better velocity."
+      - "Do not pick Synapse dedicated pools for intermittent / bursty workloads — serverless SQL or Databricks SQL Warehouse is cheaper."
+    linked_example: "examples/usda/"

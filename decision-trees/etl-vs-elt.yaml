@@ -1,0 +1,82 @@
+tree_id: "etl-vs-elt"
+title: "ETL vs. ELT"
+last_reviewed: "2026-04-19"
+version: "1.0"
+summary: "Transform-before-load (ETL) or load-then-transform (ELT): pick the integration pattern."
+links:
+  decision_doc: "docs/decisions/etl-vs-elt.md"
+  related_adrs:
+    - "adr-0001-etl-orchestrator"
+  related_architectures:
+    - "docs/ARCHITECTURE.md#batch-data-flow"
+
+nodes:
+  - id: "start"
+    question: "Does the source system apply sensitive-data redaction that MUST happen before data lands in the lake (PII, PHI, HIPAA, export-controlled)?"
+    options:
+      - label: "Yes — redact in flight"
+        next: "q-redaction-shape"
+      - label: "No — raw data can land in bronze"
+        next: "q-volume"
+
+  - id: "q-redaction-shape"
+    question: "Is the redaction deterministic (tokenize column X) or does it require business-logic judgment?"
+    options:
+      - label: "Deterministic (mask, hash, tokenize)"
+        next: "rec-etl"
+      - label: "Business logic — classification, entity resolution"
+        next: "rec-hybrid"
+
+  - id: "q-volume"
+    question: "What is the per-batch data volume?"
+    options:
+      - label: "Small — <10 GB per run, many sources"
+        next: "q-dev-velocity"
+      - label: "Large — >100 GB per run, few sources"
+        next: "rec-elt"
+
+  - id: "q-dev-velocity"
+    question: "Does the team prioritize rapid iteration on transforms (dbt-style, version-controlled SQL) over ingestion complexity?"
+    options:
+      - label: "Yes — we want dbt + Git + CI for transforms"
+        next: "rec-elt"
+      - label: "No — complex transforms live in ADF Data Flows / Mapping Data Flows"
+        next: "rec-etl"
+
+  - id: "rec-elt"
+    recommendation: "ELT — land raw in bronze, transform with dbt/Databricks"
+    rationale: "Modern default for lakehouse patterns. Raw data is preserved for replay; transformations are version-controlled SQL with tests and lineage. Lowest $/TB and highest dev velocity."
+    tradeoffs:
+      cost: "Storage cheap; compute elastic. dbt + Databricks/Synapse is the cheapest $/transformation for large volumes."
+      latency: "Minutes for batch; sub-minute with Delta Live Tables."
+      compliance: "Requires bronze-zone access controls because raw PII/PHI lands there. Purview classification + Unity Catalog/Synapse RBAC gates downstream."
+      skill_match: "SQL + dbt + Git. Low ML/Spark friction."
+    anti_patterns:
+      - "Do not use ELT when raw data cannot legally land in storage (e.g., export-controlled fields)."
+      - "Do not skip bronze-zone classification — ELT's whole point is preserving raw."
+    linked_example: "examples/usda/"
+
+  - id: "rec-etl"
+    recommendation: "ETL — transform with ADF Mapping Data Flows / Spark before landing"
+    rationale: "Right call when sensitive-data redaction must happen pre-landing, or when landing-side volume is too large to store raw."
+    tradeoffs:
+      cost: "Higher compute per run (transform on every ingest); lower storage footprint."
+      latency: "Dependent on transform complexity; harder to replay because raw is discarded."
+      compliance: "Strong PII/PHI posture — sensitive data never lands. Required for some export-control / IL5 scenarios."
+      skill_match: "ADF UI designers or Spark developers. Harder to version-control than dbt."
+    anti_patterns:
+      - "Do not pick ETL just because 'that's how we did it in SSIS' — modern ELT is usually cheaper and more testable."
+      - "Do not use ETL Mapping Data Flows for complex ML-grade transforms — move to Databricks/dbt."
+    linked_example: "examples/tribal-health/"
+
+  - id: "rec-hybrid"
+    recommendation: "Hybrid — Tokenize/redact in flight, ELT everything else"
+    rationale: "Pragmatic middle path: a narrow pre-landing redaction step handles regulated fields while the bulk of transforms run as ELT over bronze."
+    tradeoffs:
+      cost: "Slightly higher than pure ELT due to the redaction step."
+      latency: "Near-ELT latency because redaction is a thin projection."
+      compliance: "Satisfies HIPAA/PII redaction while preserving ELT replay benefits on non-sensitive fields."
+      skill_match: "Mixed — ADF/Functions for the redaction leg, dbt for the rest."
+    anti_patterns:
+      - "Do not let the redaction leg grow into a full transform pipeline — keep it narrow."
+    linked_example: "examples/tribal-health/"

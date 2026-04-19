@@ -26,7 +26,7 @@ open-source tooling.
   - [Data Governance Flow](#data-governance-flow)
 - [💡 Vertical Examples](#-vertical-examples)
 - [📁 Repository Structure](#-repository-structure)
-- [⚙️ Technology Decision Matrix](#️-technology-decision-matrix)
+- [⚙️ Primary Tech Choices](#️-primary-tech-choices)
 - [🔒 Security Architecture](#-security-architecture)
 - [🚀 Next Steps](#-next-steps)
 
@@ -427,7 +427,9 @@ csa-inabox/
 
 ---
 
-## ⚙️ Technology Decision Matrix
+## ⚙️ Primary Tech Choices
+
+This table is a **cheat sheet** of the default pick for each concern. For branching decisions with scenario-specific tradeoffs (cost, latency, compliance, skill match, anti-patterns), see the 8 decision trees at [`docs/decisions/`](decisions/) (machine-readable source of truth at [`decision-trees/`](../decision-trees/)).
 
 | Concern | Primary Choice | Alternative | Rationale |
 |---------|---------------|-------------|-----------|

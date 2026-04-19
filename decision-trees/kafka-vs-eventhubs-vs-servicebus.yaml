@@ -1,0 +1,105 @@
+tree_id: "kafka-vs-eventhubs-vs-servicebus"
+title: "Kafka vs. Event Hubs vs. Service Bus"
+last_reviewed: "2026-04-19"
+version: "1.0"
+summary: "Pick the messaging/streaming backbone: self-managed Kafka, managed Event Hubs, or Service Bus."
+links:
+  decision_doc: "docs/decisions/kafka-vs-eventhubs-vs-servicebus.md"
+  related_adrs:
+    - "adr-0004-streaming-backbone"
+  related_architectures:
+    - "docs/ARCHITECTURE.md#streaming-data-flow"
+
+nodes:
+  - id: "start"
+    question: "What is the primary semantics of the workload?"
+    options:
+      - label: "High-throughput event streams (telemetry, logs, IoT, clickstreams)"
+        next: "q-stream-throughput"
+      - label: "Reliable message queuing with ordering, transactions, dead-letter"
+        next: "q-queue-features"
+      - label: "Existing Kafka producers/consumers I must integrate with"
+        next: "q-kafka-client"
+
+  - id: "q-stream-throughput"
+    question: "What is the sustained throughput and retention?"
+    options:
+      - label: ">1 GB/sec and/or >7 days retention needed"
+        next: "rec-eventhubs-premium"
+      - label: "<1 GB/sec, 1-7 day retention typical"
+        next: "rec-eventhubs-standard"
+      - label: "Need Kafka-native features (KRaft, Connect, ksqlDB, per-topic tiered storage)"
+        next: "rec-kafka"
+
+  - id: "q-queue-features"
+    question: "Do you need FIFO ordering, sessions, transactions, or duplicate detection?"
+    options:
+      - label: "Yes — enterprise messaging semantics"
+        next: "rec-servicebus"
+      - label: "No — simple queue, at-least-once is fine"
+        next: "q-simpler"
+
+  - id: "q-simpler"
+    question: "Is this a lightweight queue (<1,000 msg/sec, small payloads)?"
+    options:
+      - label: "Yes"
+        next: "rec-servicebus"
+      - label: "No — high volume queue-style consumption"
+        next: "rec-eventhubs-standard"
+
+  - id: "q-kafka-client"
+    question: "Can producer/consumer code be switched to the Event Hubs Kafka endpoint?"
+    options:
+      - label: "Yes — Event Hubs Kafka API is an acceptable drop-in"
+        next: "rec-eventhubs-standard"
+      - label: "No — we need full Kafka (Connect, Streams, Schema Registry)"
+        next: "rec-kafka"
+
+  - id: "rec-eventhubs-standard"
+    recommendation: "Event Hubs (Standard)"
+    rationale: "Default streaming backbone for CSA-in-a-Box. Managed, Kafka-API compatible, Capture-to-ADLS for cold path."
+    tradeoffs:
+      cost: "TU-based; predictable for <1 GB/sec workloads."
+      latency: "Low ms publish; consumer lag depends on checkpoint cadence."
+      compliance: "Commercial + Gov (FedRAMP High, IL4, IL5 with qualifying SKUs)."
+      skill_match: "Kafka API means existing Kafka producers work with a connection-string change. Low ramp."
+    anti_patterns:
+      - "Do not pick Standard when >1 GB/sec or >7 day retention is required — use Premium/Dedicated."
+      - "Do not pick Event Hubs for queue-style semantics (sessions, transactions) — use Service Bus."
+    linked_example: "examples/iot-streaming/"
+
+  - id: "rec-eventhubs-premium"
+    recommendation: "Event Hubs (Premium / Dedicated)"
+    rationale: "Reserved capacity with predictable performance for high-throughput, long-retention workloads. Right pick for enterprise IoT and telemetry backbones."
+    tradeoffs:
+      cost: "Reserved capacity ($$$); predictable monthly cost; >1 GB/sec feasible."
+      latency: "Isolated tenancy; no noisy-neighbor risk."
+      compliance: "Same as Standard plus customer-managed keys, VNet injection."
+      skill_match: "Same API as Standard — no code change."
+    anti_patterns:
+      - "Do not pick Premium for bursty / intermittent streams — Standard auto-inflate is cheaper."
+    linked_example: "examples/iot-streaming/"
+
+  - id: "rec-kafka"
+    recommendation: "Self-managed Kafka (Confluent Platform on AKS / HDInsight Kafka / Strimzi)"
+    rationale: "Full Kafka ecosystem including Connect, Streams, Schema Registry, ksqlDB. Right call when vendor-neutral Kafka is mandated."
+    tradeoffs:
+      cost: "AKS + storage + ops staff ($$$$). Highest TCO of the three."
+      latency: "Comparable to Event Hubs with tuned brokers."
+      compliance: "Depends on AKS posture; Gov-feasible but operator-heavy."
+      skill_match: "Requires Kafka SRE expertise. High ramp."
+    anti_patterns:
+      - "Do not self-host Kafka when Event Hubs Kafka API covers the use case — you are paying for ops."
+    linked_example: "examples/iot-streaming/"
+
+  - id: "rec-servicebus"
+    recommendation: "Service Bus"
+    rationale: "Enterprise message broker with FIFO, sessions, transactions, dead-letter. Right for order-sensitive business workflows."
+    tradeoffs:
+      cost: "Per-operation pricing; Premium tier for dedicated capacity."
+      latency: "Low ms; ordering guarantees add overhead vs. Event Hubs."
+      compliance: "Full Commercial + Gov coverage."
+      skill_match: "Familiar to .NET / Java enterprise messaging developers."
+    anti_patterns:
+      - "Do not use Service Bus for high-volume telemetry — Event Hubs is orders of magnitude cheaper/faster."
+    linked_example: "examples/commerce/"

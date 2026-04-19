@@ -1,0 +1,76 @@
+tree_id: "materialize-vs-virtualize"
+title: "Materialize vs. Virtualize"
+last_reviewed: "2026-04-19"
+version: "1.0"
+summary: "Persist query results (materialized views, Gold tables) or query source-of-truth on demand (virtualization)?"
+links:
+  decision_doc: "docs/decisions/materialize-vs-virtualize.md"
+  related_adrs:
+    - "adr-0005-semantic-layer"
+  related_architectures:
+    - "docs/ARCHITECTURE.md#%EF%B8%8F-storage--onelake-pattern"
+
+nodes:
+  - id: "start"
+    question: "How frequently is the query pattern executed?"
+    options:
+      - label: ">100 times/day (BI dashboards, APIs)"
+        next: "q-cost-vs-latency"
+      - label: "<100 times/day (ad-hoc exploration, governance reports)"
+        next: "q-freshness-need"
+
+  - id: "q-cost-vs-latency"
+    question: "Is user-facing latency critical (sub-second BI) or is cost the primary lever?"
+    options:
+      - label: "Latency critical"
+        next: "rec-materialize"
+      - label: "Cost critical, seconds OK"
+        next: "q-freshness-need"
+
+  - id: "q-freshness-need"
+    question: "What is the data-freshness tolerance?"
+    options:
+      - label: "Must be <1 minute fresh"
+        next: "rec-virtualize"
+      - label: "<1 hour is fine"
+        next: "rec-materialize"
+      - label: "Mixed — some queries need real-time, others don't"
+        next: "rec-hybrid"
+
+  - id: "rec-materialize"
+    recommendation: "Materialize (Delta Gold tables, Synapse MVs, Fabric Direct Lake)"
+    rationale: "Pre-compute expensive joins/aggregations; serve from Gold layer. Best for high-volume, latency-sensitive BI and APIs."
+    tradeoffs:
+      cost: "Compute pays for refresh + storage pays for materialized copy. Net-cheaper than virtualized at >100 queries/day."
+      latency: "Sub-second for Direct Lake / warehouse MVs."
+      compliance: "Materialized data inherits gold-zone classification and RBAC."
+      skill_match: "dbt/SQL skills; clear lineage via Purview."
+    anti_patterns:
+      - "Do not materialize data that changes faster than your refresh cadence — consumers see stale data without knowing."
+      - "Do not materialize dozens of niche rollups — prune regularly or costs creep."
+    linked_example: "examples/commerce/"
+
+  - id: "rec-virtualize"
+    recommendation: "Virtualize (Serverless SQL, Delta external tables, Synapse Data Virtualization)"
+    rationale: "Query source-of-truth on demand — no refresh lag, no duplicate storage. Best for ad-hoc exploration and <1 min freshness requirements."
+    tradeoffs:
+      cost: "Pay-per-query ($/TB scanned). Expensive at high query volume."
+      latency: "Seconds, depends on scan size and partitioning."
+      compliance: "Reads directly from source, so RBAC at source is the only gate — simpler audit story."
+      skill_match: "SQL-first; no refresh jobs to operate."
+    anti_patterns:
+      - "Do not virtualize high-volume BI dashboards — you will burn money on repeated scans."
+      - "Do not virtualize across slow networks (cross-region, hybrid) — latency compounds."
+    linked_example: "examples/epa/"
+
+  - id: "rec-hybrid"
+    recommendation: "Hybrid — Materialize hot paths, virtualize cold"
+    rationale: "Pareto split: materialize the 20% of queries driving 80% of traffic; virtualize the long tail. Best default for a mixed CSA workload."
+    tradeoffs:
+      cost: "Balanced — moderate refresh cost + moderate scan cost."
+      latency: "Sub-second for hot paths; seconds for cold."
+      compliance: "Combines materialized gold RBAC with source RBAC for virtualized queries."
+      skill_match: "dbt + serverless SQL. Governance maturity required to classify which is which."
+    anti_patterns:
+      - "Do not leave the hot/cold split implicit — document it in the semantic layer."
+    linked_example: "examples/noaa/"

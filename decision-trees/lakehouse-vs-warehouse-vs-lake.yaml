@@ -1,0 +1,94 @@
+tree_id: "lakehouse-vs-warehouse-vs-lake"
+title: "Lakehouse vs. Warehouse vs. Data Lake"
+last_reviewed: "2026-04-19"
+version: "1.0"
+summary: "Pick the storage+compute pattern: pure data lake, traditional warehouse, or lakehouse."
+links:
+  decision_doc: "docs/decisions/lakehouse-vs-warehouse-vs-lake.md"
+  related_adrs:
+    - "adr-0003-lakehouse-format"
+    - "adr-0002-storage-tiering"
+  related_architectures:
+    - "docs/ARCHITECTURE.md#%EF%B8%8F-storage--onelake-pattern"
+
+nodes:
+  - id: "start"
+    question: "What shape is the dominant workload?"
+    options:
+      - label: "Structured BI with heavy concurrency and governed semantic models"
+        next: "q-bi-concurrency"
+      - label: "Mixed — BI + ML + ad-hoc Python/Spark over the same data"
+        next: "q-mixed-scale"
+      - label: "Unstructured / semi-structured exploration (logs, raw JSON, images)"
+        next: "q-lake-governance"
+
+  - id: "q-bi-concurrency"
+    question: "Is the concurrency >100 BI users with strict SLA on sub-second query?"
+    options:
+      - label: "Yes — enterprise BI concurrency"
+        next: "rec-warehouse"
+      - label: "No — ≤100 users, some flexibility on latency"
+        next: "q-also-ml"
+
+  - id: "q-also-ml"
+    question: "Does the same data also need to serve ML / data science?"
+    options:
+      - label: "Yes — avoid duplicating data to a separate ML store"
+        next: "rec-lakehouse"
+      - label: "No — BI-only, closed loop"
+        next: "rec-warehouse"
+
+  - id: "q-mixed-scale"
+    question: "What is the expected data volume in 24 months?"
+    options:
+      - label: ">10 TB with open-format portability required"
+        next: "rec-lakehouse"
+      - label: "<10 TB, SQL-first, minimal ML"
+        next: "rec-warehouse"
+
+  - id: "q-lake-governance"
+    question: "Is there a mandate for row/column governance and ACID transactions on this data?"
+    options:
+      - label: "Yes — must support updates, deletes, time travel"
+        next: "rec-lakehouse"
+      - label: "No — append-only, schema-on-read is fine"
+        next: "rec-datalake"
+
+  - id: "rec-lakehouse"
+    recommendation: "Lakehouse (Delta/Iceberg on ADLS Gen2)"
+    rationale: "Single copy of data serves BI, ML, and ad-hoc exploration with ACID, time travel, and open formats. Matches the medallion pattern in CSA-in-a-Box."
+    tradeoffs:
+      cost: "Storage cheap; compute scales with query pattern. Photon / Direct Lake reduce $/query vs. dedicated warehouses."
+      latency: "Sub-second with Direct Lake / SQL Warehouses; sub-minute with Databricks interactive clusters."
+      compliance: "Full support in Commercial and Gov when paired with Databricks or Synapse Spark; Fabric lakehouse Gov-forecast only."
+      skill_match: "Needs Delta/Parquet literacy and medallion discipline. Moderate ramp."
+    anti_patterns:
+      - "Do not pick lakehouse when the team has no Spark/Delta expertise and timeline is <90 days — warehouse is faster to stand up."
+      - "Do not skip the bronze/silver/gold tiering — an undifferentiated lakehouse degrades to a data swamp."
+    linked_example: "examples/usda/"
+
+  - id: "rec-warehouse"
+    recommendation: "Warehouse (Synapse Dedicated Pool or Fabric Warehouse)"
+    rationale: "Purpose-built MPP SQL with best-in-class concurrency, cached query plans, and governed semantic models. Lowest TCO for pure BI at scale."
+    tradeoffs:
+      cost: "Dedicated capacity reservation ($$$); serverless SQL pay-per-TB-scanned for ad-hoc."
+      latency: "Sub-second at 100+ concurrent BI users."
+      compliance: "Full Commercial + Gov (IL4/IL5) coverage via Synapse."
+      skill_match: "T-SQL-first teams ramp fastest. Low Spark/ML friction if warehouse is read-only from a lakehouse-prepared gold layer."
+    anti_patterns:
+      - "Do not pick dedicated-pool warehouse for sparse / intermittent workloads — idle capacity burns budget."
+      - "Do not put ML feature generation inside the warehouse — export to lakehouse first."
+    linked_example: "examples/usps/"
+
+  - id: "rec-datalake"
+    recommendation: "Data Lake (ADLS Gen2, schema-on-read)"
+    rationale: "Raw, append-only storage for exploration, archival, and downstream transformation. Low-cost landing zone before ETL/ELT into a lakehouse or warehouse."
+    tradeoffs:
+      cost: "Lowest storage cost; compute is BYO (Databricks, Synapse, serverless SQL)."
+      latency: "Query latency depends on compute; no native caching; no ACID guarantees."
+      compliance: "Broad — same ADLS posture as Bronze layer in the CSA medallion."
+      skill_match: "Any SQL-on-files / Spark user can explore. Governance is manual."
+    anti_patterns:
+      - "Do not expose a raw data lake to BI consumers — they will build brittle semantic layers."
+      - "Do not use a raw data lake as a system of record for curated data products — promote to lakehouse/warehouse."
+    linked_example: "examples/iot-streaming/"
