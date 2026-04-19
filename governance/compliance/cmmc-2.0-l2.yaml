@@ -1,0 +1,1207 @@
+# CMMC 2.0 Level 2 — Practice Mapping Manifest
+# Maps each CMMC 2.0 L2 practice to NIST SP 800-171 Rev 2 (the direct source)
+# and to the CSA-in-a-Box implementation evidence.
+#
+# Authoritative references:
+#   CMMC 2.0:     https://dodcio.defense.gov/CMMC/
+#   NIST 800-171: https://csrc.nist.gov/publications/detail/sp/800-171/rev-2/final
+#
+# CMMC 2.0 L2 = 110 NIST 800-171 r2 controls (1:1 mapping). We include all
+# 110 with direct evidence where available. Where status = INHERITED or
+# PLANNED, we note the gap or upstream responsibility.
+#
+# Schema identical to nist-800-53-rev5.yaml (see that file for docs).
+
+framework: "CMMC 2.0 Level 2"
+baseline: "Level 2 (110 practices)"
+version: "2026-04"
+last_reviewed: "2026-04-18"
+reviewer: "csa-inabox audit CSA-0012"
+source_of_truth_url: "https://dodcio.defense.gov/CMMC/Model/"
+
+controls:
+
+  # ─────────────────────────────────────────────────────────────────────
+  # AC — Access Control (22 practices)
+  # ─────────────────────────────────────────────────────────────────────
+
+  - id: "AC.L2-3.1.1"
+    title: "Limit system access to authorized users"
+    family: "AC"
+    status: "IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.1.1 / NIST 800-53 AC-2, AC-3, AC-17"
+    evidence:
+      - kind: "code"
+        path: "csa_platform/common/auth.py"
+        lines: "195-258"
+      - kind: "code"
+        path: "csa_platform/common/auth.py"
+        lines: "266-307"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "AC.L2-3.1.2"
+    title: "Limit system access to authorized functions"
+    family: "AC"
+    status: "IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.1.2 / NIST 800-53 AC-3"
+    evidence:
+      - kind: "code"
+        path: "csa_platform/common/auth.py"
+        lines: "281-307"
+        note: "require_role per-route authorization"
+      - kind: "config"
+        path: "governance/rbac/rbac-matrix.json"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "AC.L2-3.1.3"
+    title: "Control CUI flow"
+    family: "AC"
+    status: "IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.1.3 / NIST 800-53 AC-4"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Network/privateDnsZones/privateDnsZones.bicep"
+      - kind: "bicep"
+        path: "deploy/bicep/shared/policies/policyAssignments.bicep"
+        lines: "36-45"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "AC.L2-3.1.4"
+    title: "Separation of duties"
+    family: "AC"
+    status: "IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.1.4 / NIST 800-53 AC-5"
+    evidence:
+      - kind: "config"
+        path: "governance/rbac/rbac-matrix.json"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "AC.L2-3.1.5"
+    title: "Least privilege"
+    family: "AC"
+    status: "IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.1.5 / NIST 800-53 AC-6"
+    evidence:
+      - kind: "config"
+        path: "governance/rbac/rbac-matrix.json"
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "108-115"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "AC.L2-3.1.6"
+    title: "Non-privileged accounts for non-security functions"
+    family: "AC"
+    status: "PARTIALLY_IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.1.6 / NIST 800-53 AC-6(2)"
+    evidence:
+      - kind: "config"
+        path: "governance/rbac/rbac-matrix.json"
+        note: "Personas split admin vs engineer vs scientist"
+    gaps:
+      - "No PIM JIT elevation shipped"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "AC.L2-3.1.7"
+    title: "Prevent non-privileged users from executing privileged functions"
+    family: "AC"
+    status: "IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.1.7 / NIST 800-53 AC-6(9), AC-6(10)"
+    evidence:
+      - kind: "code"
+        path: "csa_platform/common/auth.py"
+        lines: "281-307"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "AC.L2-3.1.8"
+    title: "Limit unsuccessful logon attempts"
+    family: "AC"
+    status: "INHERITED"
+    cross_reference: "NIST 800-171 3.1.8 / NIST 800-53 AC-7"
+    inheritance:
+      - "Entra ID Smart Lockout"
+    responsible_party: "Microsoft"
+
+  - id: "AC.L2-3.1.9"
+    title: "System use notification"
+    family: "AC"
+    status: "PLANNED"
+    cross_reference: "NIST 800-171 3.1.9 / NIST 800-53 AC-8"
+    gaps:
+      - "No login banner"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "AC.L2-3.1.10"
+    title: "Session lock"
+    family: "AC"
+    status: "INHERITED"
+    cross_reference: "NIST 800-171 3.1.10 / NIST 800-53 AC-11"
+    inheritance:
+      - "Customer MDM / OS lock policy"
+    responsible_party: "Customer"
+
+  - id: "AC.L2-3.1.11"
+    title: "Session termination"
+    family: "AC"
+    status: "IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.1.11 / NIST 800-53 AC-12"
+    evidence:
+      - kind: "code"
+        path: "csa_platform/common/auth.py"
+        lines: "223-239"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "AC.L2-3.1.12"
+    title: "Monitor and control remote access"
+    family: "AC"
+    status: "IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.1.12 / NIST 800-53 AC-17"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/shared/policies/policyAssignments.bicep"
+        lines: "100-125"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "AC.L2-3.1.13"
+    title: "Use cryptographic mechanisms for remote access sessions"
+    family: "AC"
+    status: "IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.1.13 / NIST 800-53 AC-17(2)"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "128-129"
+      - kind: "code"
+        path: "portal/shared/api/main.py"
+        lines: "67-70"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "AC.L2-3.1.14"
+    title: "Route remote access via managed access control points"
+    family: "AC"
+    status: "PARTIALLY_IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.1.14 / NIST 800-53 AC-17(3)"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/APIM/apim.bicep"
+        note: "APIM as managed access control point"
+    gaps:
+      - "Not all routes wired through APIM; per-service private endpoints suffice for L2"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "AC.L2-3.1.15"
+    title: "Authorize remote execution of privileged commands"
+    family: "AC"
+    status: "IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.1.15 / NIST 800-53 AC-17(4)"
+    evidence:
+      - kind: "code"
+        path: "csa_platform/common/auth.py"
+        lines: "281-307"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "AC.L2-3.1.16"
+    title: "Authorize wireless access"
+    family: "AC"
+    status: "NOT_APPLICABLE"
+    cross_reference: "NIST 800-171 3.1.16 / NIST 800-53 AC-18"
+    responsible_party: "N/A (PaaS)"
+
+  - id: "AC.L2-3.1.17"
+    title: "Protect wireless access using authentication and encryption"
+    family: "AC"
+    status: "NOT_APPLICABLE"
+    cross_reference: "NIST 800-171 3.1.17 / NIST 800-53 AC-18(1)"
+    responsible_party: "N/A"
+
+  - id: "AC.L2-3.1.18"
+    title: "Control connection of mobile devices"
+    family: "AC"
+    status: "INHERITED"
+    cross_reference: "NIST 800-171 3.1.18 / NIST 800-53 AC-19"
+    inheritance:
+      - "Customer Intune / MDM"
+    responsible_party: "Customer"
+
+  - id: "AC.L2-3.1.19"
+    title: "Encrypt CUI on mobile devices / mobile computing platforms"
+    family: "AC"
+    status: "INHERITED"
+    cross_reference: "NIST 800-171 3.1.19 / NIST 800-53 AC-19(5)"
+    inheritance:
+      - "Customer MDM / BitLocker / Intune policy"
+    responsible_party: "Customer"
+
+  - id: "AC.L2-3.1.20"
+    title: "Verify and control connections to external systems"
+    family: "AC"
+    status: "IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.1.20 / NIST 800-53 AC-20"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/shared/policies/policyAssignments.bicep"
+        lines: "84-97"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "AC.L2-3.1.21"
+    title: "Limit use of portable storage devices on external systems"
+    family: "AC"
+    status: "NOT_APPLICABLE"
+    cross_reference: "NIST 800-171 3.1.21 / NIST 800-53 AC-20(2)"
+    responsible_party: "N/A"
+
+  - id: "AC.L2-3.1.22"
+    title: "Control CUI posted or processed on publicly accessible systems"
+    family: "AC"
+    status: "IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.1.22 / NIST 800-53 AC-22"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "122"
+    responsible_party: "csa-inabox platform team"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # AT — Awareness and Training (3 practices) — all inherited
+  # ─────────────────────────────────────────────────────────────────────
+
+  - id: "AT.L2-3.2.1"
+    title: "Ensure managers / system admins / users receive security awareness training"
+    family: "AT"
+    status: "INHERITED"
+    cross_reference: "NIST 800-171 3.2.1 / NIST 800-53 AT-2"
+    inheritance:
+      - "Customer security-awareness training program"
+    responsible_party: "Customer"
+
+  - id: "AT.L2-3.2.2"
+    title: "Ensure users are trained for assigned information-security duties"
+    family: "AT"
+    status: "INHERITED"
+    cross_reference: "NIST 800-171 3.2.2 / NIST 800-53 AT-3"
+    inheritance:
+      - "Customer role-based training program"
+    responsible_party: "Customer"
+
+  - id: "AT.L2-3.2.3"
+    title: "Insider threat awareness"
+    family: "AT"
+    status: "INHERITED"
+    cross_reference: "NIST 800-171 3.2.3 / NIST 800-53 AT-2(2)"
+    inheritance:
+      - "Customer insider-threat-awareness training"
+    responsible_party: "Customer"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # AU — Audit and Accountability (9 practices)
+  # ─────────────────────────────────────────────────────────────────────
+
+  - id: "AU.L2-3.3.1"
+    title: "Create and retain audit records"
+    family: "AU"
+    status: "PARTIALLY_IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.3.1 / NIST 800-53 AU-2, AU-3, AU-12"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/KeyVault/keyvault.bicep"
+        lines: "111-123"
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "332-355"
+    gaps:
+      - "Application-layer audit log missing — CSA-0016"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "AU.L2-3.3.2"
+    title: "Ensure actions of individual users can be uniquely traced"
+    family: "AU"
+    status: "PARTIALLY_IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.3.2 / NIST 800-53 AU-3"
+    evidence:
+      - kind: "code"
+        path: "csa_platform/common/auth.py"
+        lines: "199-211"
+        note: "User oid/sub/tid captured in claims"
+    gaps:
+      - "No correlation ID propagated into structured logs — CSA-0016"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "AU.L2-3.3.3"
+    title: "Review and update logged events"
+    family: "AU"
+    status: "PLANNED"
+    cross_reference: "NIST 800-171 3.3.3 / NIST 800-53 AU-2(3)"
+    gaps:
+      - "No periodic log-event review cadence documented"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "AU.L2-3.3.4"
+    title: "Alert in the event of an audit logging process failure"
+    family: "AU"
+    status: "PLANNED"
+    cross_reference: "NIST 800-171 3.3.4 / NIST 800-53 AU-5"
+    gaps:
+      - "No diagnostic-pipeline failure alert"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "AU.L2-3.3.5"
+    title: "Correlate audit record review, analysis, and reporting"
+    family: "AU"
+    status: "PLANNED"
+    cross_reference: "NIST 800-171 3.3.5 / NIST 800-53 AU-6(3)"
+    gaps:
+      - "No SIEM / Sentinel integration"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "AU.L2-3.3.6"
+    title: "Provide audit record reduction and report generation"
+    family: "AU"
+    status: "INHERITED"
+    cross_reference: "NIST 800-171 3.3.6 / NIST 800-53 AU-7"
+    inheritance:
+      - "Log Analytics / Kusto"
+    responsible_party: "Microsoft"
+
+  - id: "AU.L2-3.3.7"
+    title: "Provide authoritative source for time stamps"
+    family: "AU"
+    status: "INHERITED"
+    cross_reference: "NIST 800-171 3.3.7 / NIST 800-53 AU-8"
+    inheritance:
+      - "Azure UTC NTP"
+    responsible_party: "Microsoft"
+
+  - id: "AU.L2-3.3.8"
+    title: "Protect audit information and logging tools from unauthorized access"
+    family: "AU"
+    status: "PARTIALLY_IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.3.8 / NIST 800-53 AU-9"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "357-365"
+    gaps:
+      - "No immutable tier / tamper-evident log — CSA-0016"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "AU.L2-3.3.9"
+    title: "Limit management of audit logging functionality to privileged users"
+    family: "AU"
+    status: "IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.3.9 / NIST 800-53 AU-9(4)"
+    evidence:
+      - kind: "config"
+        path: "governance/rbac/rbac-matrix.json"
+        note: "PlatformAdmin-only diagnostic settings"
+    responsible_party: "csa-inabox platform team"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # CM — Configuration Management (9 practices)
+  # ─────────────────────────────────────────────────────────────────────
+
+  - id: "CM.L2-3.4.1"
+    title: "Establish and maintain baseline configurations"
+    family: "CM"
+    status: "IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.4.1 / NIST 800-53 CM-2, CM-6, CM-8"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/main.bicep"
+      - kind: "bicep"
+        path: "deploy/bicep/gov/main.bicep"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "CM.L2-3.4.2"
+    title: "Establish and enforce security-configuration settings"
+    family: "CM"
+    status: "IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.4.2 / NIST 800-53 CM-6"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/shared/policies/policyAssignments.bicep"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "CM.L2-3.4.3"
+    title: "Track, review, approve, log changes"
+    family: "CM"
+    status: "IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.4.3 / NIST 800-53 CM-3"
+    evidence:
+      - kind: "ci"
+        path: ".github/workflows/bicep-whatif.yml"
+      - kind: "ci"
+        path: ".github/workflows/validate.yml"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "CM.L2-3.4.4"
+    title: "Analyze security impact of changes prior to implementation"
+    family: "CM"
+    status: "IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.4.4 / NIST 800-53 CM-4"
+    evidence:
+      - kind: "ci"
+        path: ".github/workflows/bicep-whatif.yml"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "CM.L2-3.4.5"
+    title: "Define / document / approve / enforce physical + logical access restrictions for changes"
+    family: "CM"
+    status: "INHERITED"
+    cross_reference: "NIST 800-171 3.4.5 / NIST 800-53 CM-5"
+    inheritance:
+      - "GitHub branch-protection / CODEOWNERS"
+    responsible_party: "Customer"
+
+  - id: "CM.L2-3.4.6"
+    title: "Employ least functionality"
+    family: "CM"
+    status: "IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.4.6 / NIST 800-53 CM-7"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/KeyVault/keyvault.bicep"
+        lines: "33-35"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "CM.L2-3.4.7"
+    title: "Restrict / disable nonessential programs, functions, ports, protocols, services"
+    family: "CM"
+    status: "IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.4.7 / NIST 800-53 CM-7"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "123-127"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "CM.L2-3.4.8"
+    title: "Apply deny-by-exception allow-list policy"
+    family: "CM"
+    status: "IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.4.8 / NIST 800-53 CM-7(4), CM-7(5)"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/shared/policies/policyAssignments.bicep"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "CM.L2-3.4.9"
+    title: "Control / monitor user-installed software"
+    family: "CM"
+    status: "NOT_APPLICABLE"
+    cross_reference: "NIST 800-171 3.4.9 / NIST 800-53 CM-11"
+    responsible_party: "N/A (PaaS)"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # IA — Identification and Authentication (11 practices)
+  # ─────────────────────────────────────────────────────────────────────
+
+  - id: "IA.L2-3.5.1"
+    title: "Identify users, processes, or devices"
+    family: "IA"
+    status: "IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.5.1 / NIST 800-53 IA-2"
+    evidence:
+      - kind: "code"
+        path: "csa_platform/common/auth.py"
+        lines: "195-258"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "IA.L2-3.5.2"
+    title: "Authenticate identities"
+    family: "IA"
+    status: "IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.5.2 / NIST 800-53 IA-2, IA-3, IA-5"
+    evidence:
+      - kind: "code"
+        path: "csa_platform/common/auth.py"
+        lines: "213-251"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "IA.L2-3.5.3"
+    title: "Use MFA for local / network access to privileged accounts and for network access to non-privileged accounts"
+    family: "IA"
+    status: "INHERITED"
+    cross_reference: "NIST 800-171 3.5.3 / NIST 800-53 IA-2(1), IA-2(2)"
+    inheritance:
+      - "Entra ID Conditional Access (customer-configured)"
+    gaps:
+      - "Platform does not ship CA baseline"
+    responsible_party: "Customer"
+
+  - id: "IA.L2-3.5.4"
+    title: "Employ replay-resistant authentication mechanisms"
+    family: "IA"
+    status: "IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.5.4 / NIST 800-53 IA-2(8)"
+    evidence:
+      - kind: "code"
+        path: "csa_platform/common/auth.py"
+        lines: "223-249"
+        note: "nbf, exp, iat verified + tenant pin"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "IA.L2-3.5.5"
+    title: "Prevent reuse of identifiers for a defined period"
+    family: "IA"
+    status: "INHERITED"
+    cross_reference: "NIST 800-171 3.5.5 / NIST 800-53 IA-4"
+    inheritance:
+      - "Entra ID identifier lifecycle"
+    responsible_party: "Microsoft"
+
+  - id: "IA.L2-3.5.6"
+    title: "Disable identifiers after a defined period of inactivity"
+    family: "IA"
+    status: "INHERITED"
+    cross_reference: "NIST 800-171 3.5.6 / NIST 800-53 IA-4"
+    inheritance:
+      - "Entra ID inactivity policy (customer-configured)"
+    responsible_party: "Customer"
+
+  - id: "IA.L2-3.5.7"
+    title: "Enforce minimum password complexity / change-of-characters when new passwords are created"
+    family: "IA"
+    status: "INHERITED"
+    cross_reference: "NIST 800-171 3.5.7 / NIST 800-53 IA-5(1)"
+    inheritance:
+      - "Entra ID Password Protection"
+    responsible_party: "Microsoft + Customer"
+
+  - id: "IA.L2-3.5.8"
+    title: "Prohibit password reuse for a specified number of generations"
+    family: "IA"
+    status: "INHERITED"
+    cross_reference: "NIST 800-171 3.5.8 / NIST 800-53 IA-5(1)"
+    inheritance:
+      - "Entra ID password-reuse policy (customer-configured)"
+    responsible_party: "Customer"
+
+  - id: "IA.L2-3.5.9"
+    title: "Allow temporary password use with an immediate change"
+    family: "IA"
+    status: "INHERITED"
+    cross_reference: "NIST 800-171 3.5.9 / NIST 800-53 IA-5(1)"
+    inheritance:
+      - "Entra ID self-service password reset"
+    responsible_party: "Customer"
+
+  - id: "IA.L2-3.5.10"
+    title: "Store and transmit only cryptographically-protected passwords"
+    family: "IA"
+    status: "INHERITED"
+    cross_reference: "NIST 800-171 3.5.10 / NIST 800-53 IA-5(1)"
+    inheritance:
+      - "Entra ID never exposes passwords to platform"
+    responsible_party: "Microsoft"
+
+  - id: "IA.L2-3.5.11"
+    title: "Obscure feedback of authentication information"
+    family: "IA"
+    status: "IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.5.11 / NIST 800-53 IA-6"
+    evidence:
+      - kind: "code"
+        path: "csa_platform/common/auth.py"
+        lines: "253-258"
+    responsible_party: "csa-inabox platform team"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # IR — Incident Response (3 practices)
+  # ─────────────────────────────────────────────────────────────────────
+
+  - id: "IR.L2-3.6.1"
+    title: "Establish an operational incident-handling capability"
+    family: "IR"
+    status: "PLANNED"
+    cross_reference: "NIST 800-171 3.6.1 / NIST 800-53 IR-2, IR-4, IR-5, IR-6, IR-7"
+    gaps:
+      - "No IR runbook / on-call rotation shipped"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "IR.L2-3.6.2"
+    title: "Track, document, and report incidents"
+    family: "IR"
+    status: "PLANNED"
+    cross_reference: "NIST 800-171 3.6.2 / NIST 800-53 IR-4, IR-6"
+    gaps:
+      - "No ticketing / reporting pipeline configured"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "IR.L2-3.6.3"
+    title: "Test organizational incident-response capability"
+    family: "IR"
+    status: "PLANNED"
+    cross_reference: "NIST 800-171 3.6.3 / NIST 800-53 IR-3"
+    gaps:
+      - "No tabletop exercise record"
+    responsible_party: "csa-inabox platform team"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # MA — Maintenance (6 practices)
+  # ─────────────────────────────────────────────────────────────────────
+
+  - id: "MA.L2-3.7.1"
+    title: "Perform maintenance on organizational systems"
+    family: "MA"
+    status: "INHERITED"
+    cross_reference: "NIST 800-171 3.7.1 / NIST 800-53 MA-2"
+    inheritance:
+      - "Azure PaaS maintenance by Microsoft"
+    responsible_party: "Microsoft"
+
+  - id: "MA.L2-3.7.2"
+    title: "Provide controls on the tools, techniques, mechanisms, and personnel used for maintenance"
+    family: "MA"
+    status: "INHERITED"
+    cross_reference: "NIST 800-171 3.7.2 / NIST 800-53 MA-3"
+    inheritance:
+      - "Azure datacenter operational controls"
+    responsible_party: "Microsoft"
+
+  - id: "MA.L2-3.7.3"
+    title: "Ensure equipment removed for off-site maintenance is sanitized of any CUI"
+    family: "MA"
+    status: "INHERITED"
+    cross_reference: "NIST 800-171 3.7.3 / NIST 800-53 MA-2"
+    inheritance:
+      - "Azure NIST SP 800-88 media sanitization on retired hardware"
+    responsible_party: "Microsoft"
+
+  - id: "MA.L2-3.7.4"
+    title: "Check media containing diagnostic and test programs for malicious code"
+    family: "MA"
+    status: "NOT_APPLICABLE"
+    cross_reference: "NIST 800-171 3.7.4 / NIST 800-53 MA-3(2)"
+    responsible_party: "N/A (PaaS)"
+
+  - id: "MA.L2-3.7.5"
+    title: "Require multifactor authentication to establish nonlocal maintenance sessions"
+    family: "MA"
+    status: "INHERITED"
+    cross_reference: "NIST 800-171 3.7.5 / NIST 800-53 MA-4"
+    inheritance:
+      - "Entra ID MFA for admin + Azure operator-assisted maintenance"
+    responsible_party: "Microsoft + Customer"
+
+  - id: "MA.L2-3.7.6"
+    title: "Supervise the maintenance activities of maintenance personnel without required access authorization"
+    family: "MA"
+    status: "INHERITED"
+    cross_reference: "NIST 800-171 3.7.6 / NIST 800-53 MA-5"
+    inheritance:
+      - "Azure datacenter escort + supervision program"
+    responsible_party: "Microsoft"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # MP — Media Protection (9 practices)
+  # ─────────────────────────────────────────────────────────────────────
+
+  - id: "MP.L2-3.8.1"
+    title: "Protect (physical + digital) media containing CUI"
+    family: "MP"
+    status: "IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.8.1 / NIST 800-53 MP-2, MP-4"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "104-165"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "MP.L2-3.8.2"
+    title: "Limit access to CUI on media to authorized users"
+    family: "MP"
+    status: "IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.8.2 / NIST 800-53 MP-2"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "122-124"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "MP.L2-3.8.3"
+    title: "Sanitize or destroy system media containing CUI"
+    family: "MP"
+    status: "PARTIALLY_IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.8.3 / NIST 800-53 MP-6"
+    evidence:
+      - kind: "script"
+        path: "scripts/deploy/teardown-platform.sh"
+    inheritance:
+      - "Azure datacenter NIST 800-88 sanitization"
+    responsible_party: "Microsoft + csa-inabox"
+
+  - id: "MP.L2-3.8.4"
+    title: "Mark media with necessary CUI markings + distribution limits"
+    family: "MP"
+    status: "PARTIALLY_IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.8.4 / NIST 800-53 MP-3"
+    evidence:
+      - kind: "config"
+        path: "governance/purview/classification/classification_rules.json"
+    gaps:
+      - "No automated CUI label application"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "MP.L2-3.8.5"
+    title: "Control access to media containing CUI and maintain accountability"
+    family: "MP"
+    status: "IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.8.5 / NIST 800-53 MP-5"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "332-355"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "MP.L2-3.8.6"
+    title: "Implement cryptographic mechanisms to protect CUI confidentiality on digital media"
+    family: "MP"
+    status: "IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.8.6 / NIST 800-53 MP-5(4)"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "130-155"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "MP.L2-3.8.7"
+    title: "Control the use of removable media"
+    family: "MP"
+    status: "NOT_APPLICABLE"
+    cross_reference: "NIST 800-171 3.8.7 / NIST 800-53 MP-7"
+    responsible_party: "N/A"
+
+  - id: "MP.L2-3.8.8"
+    title: "Prohibit use of portable storage devices with no identifiable owner"
+    family: "MP"
+    status: "NOT_APPLICABLE"
+    cross_reference: "NIST 800-171 3.8.8 / NIST 800-53 MP-7(1)"
+    responsible_party: "N/A"
+
+  - id: "MP.L2-3.8.9"
+    title: "Protect the confidentiality of backup CUI at storage locations"
+    family: "MP"
+    status: "IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.8.9 / NIST 800-53 CP-9(8)"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "167-178"
+    responsible_party: "csa-inabox platform team"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # PS — Personnel Security (2 practices) — inherited
+  # ─────────────────────────────────────────────────────────────────────
+
+  - id: "PS.L2-3.9.1"
+    title: "Screen individuals prior to authorizing access"
+    family: "PS"
+    status: "INHERITED"
+    cross_reference: "NIST 800-171 3.9.1 / NIST 800-53 PS-3"
+    inheritance:
+      - "Customer background-check program + Microsoft Azure personnel screening"
+    responsible_party: "Customer + Microsoft"
+
+  - id: "PS.L2-3.9.2"
+    title: "Ensure CUI + systems are protected during / after personnel actions"
+    family: "PS"
+    status: "INHERITED"
+    cross_reference: "NIST 800-171 3.9.2 / NIST 800-53 PS-4, PS-5"
+    inheritance:
+      - "Customer HR termination / transfer offboarding process"
+    responsible_party: "Customer"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # PE — Physical Protection (6 practices) — inherited
+  # ─────────────────────────────────────────────────────────────────────
+
+  - id: "PE.L2-3.10.1"
+    title: "Limit physical access to systems / equipment / operating environments to authorized individuals"
+    family: "PE"
+    status: "INHERITED"
+    cross_reference: "NIST 800-171 3.10.1 / NIST 800-53 PE-2"
+    inheritance:
+      - "Azure datacenter physical access authorization"
+    responsible_party: "Microsoft"
+
+  - id: "PE.L2-3.10.2"
+    title: "Protect / monitor the physical facility"
+    family: "PE"
+    status: "INHERITED"
+    cross_reference: "NIST 800-171 3.10.2 / NIST 800-53 PE-3, PE-6"
+    inheritance:
+      - "Azure datacenter CCTV + guard patrol"
+    responsible_party: "Microsoft"
+
+  - id: "PE.L2-3.10.3"
+    title: "Escort visitors and monitor visitor activity"
+    family: "PE"
+    status: "INHERITED"
+    cross_reference: "NIST 800-171 3.10.3 / NIST 800-53 PE-3"
+    inheritance:
+      - "Azure datacenter visitor-escort program"
+    responsible_party: "Microsoft"
+
+  - id: "PE.L2-3.10.4"
+    title: "Maintain audit logs of physical access"
+    family: "PE"
+    status: "INHERITED"
+    cross_reference: "NIST 800-171 3.10.4 / NIST 800-53 PE-8"
+    inheritance:
+      - "Azure datacenter badge-log retention"
+    responsible_party: "Microsoft"
+
+  - id: "PE.L2-3.10.5"
+    title: "Control + manage physical access devices"
+    family: "PE"
+    status: "INHERITED"
+    cross_reference: "NIST 800-171 3.10.5 / NIST 800-53 PE-3"
+    inheritance:
+      - "Azure datacenter badge / key management"
+    responsible_party: "Microsoft"
+
+  - id: "PE.L2-3.10.6"
+    title: "Enforce safeguarding measures for CUI at alternate work sites"
+    family: "PE"
+    status: "INHERITED"
+    cross_reference: "NIST 800-171 3.10.6 / NIST 800-53 PE-17"
+    inheritance:
+      - "Customer remote-work / home-office security policy"
+    responsible_party: "Customer"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # RA — Risk Assessment (3 practices)
+  # ─────────────────────────────────────────────────────────────────────
+
+  - id: "RA.L2-3.11.1"
+    title: "Periodically assess risk"
+    family: "RA"
+    status: "PARTIALLY_IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.11.1 / NIST 800-53 RA-3"
+    evidence:
+      - kind: "doc"
+        path: "temp/audit/FINDINGS_REGISTRY.md"
+    gaps:
+      - "No annual RA cadence documented"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "RA.L2-3.11.2"
+    title: "Scan for vulnerabilities periodically + when new vulnerabilities are identified"
+    family: "RA"
+    status: "PARTIALLY_IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.11.2 / NIST 800-53 RA-5"
+    evidence:
+      - kind: "ci"
+        path: ".github/workflows/codeql.yml"
+    gaps:
+      - "No Defender for Cloud / container image scanning"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "RA.L2-3.11.3"
+    title: "Remediate vulnerabilities in accordance with risk assessments"
+    family: "RA"
+    status: "PARTIALLY_IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.11.3 / NIST 800-53 RA-5"
+    evidence:
+      - kind: "doc"
+        path: "temp/audit/FINDINGS_REGISTRY.md"
+        note: "Audit-driven remediation registry"
+    gaps:
+      - "No SLA / severity → due-date matrix published"
+    responsible_party: "csa-inabox platform team"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # CA — Security Assessment (4 practices)
+  # ─────────────────────────────────────────────────────────────────────
+
+  - id: "CA.L2-3.12.1"
+    title: "Periodically assess security controls"
+    family: "CA"
+    status: "PARTIALLY_IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.12.1 / NIST 800-53 CA-2"
+    evidence:
+      - kind: "doc"
+        path: "temp/audit/FINDINGS_REGISTRY.md"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "CA.L2-3.12.2"
+    title: "Develop and implement plans of action to correct deficiencies"
+    family: "CA"
+    status: "IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.12.2 / NIST 800-53 CA-5"
+    evidence:
+      - kind: "doc"
+        path: "temp/audit/FINDINGS_REGISTRY.md"
+        note: "CSA-XXXX finding IDs are POA&M-equivalents"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "CA.L2-3.12.3"
+    title: "Monitor security controls on an ongoing basis"
+    family: "CA"
+    status: "PARTIALLY_IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.12.3 / NIST 800-53 CA-7"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/shared/policies/policyAssignments.bicep"
+        note: "Azure Policy compliance view = continuous-monitoring surface"
+    gaps:
+      - "No dashboard consolidating continuous-monitoring KPIs"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "CA.L2-3.12.4"
+    title: "Develop / document / periodically update system security plans"
+    family: "CA"
+    status: "PLANNED"
+    cross_reference: "NIST 800-171 3.12.4 / NIST 800-53 PL-2"
+    gaps:
+      - "No SSP generated — Phase 2"
+    responsible_party: "csa-inabox platform team"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # SC — System and Communications Protection (16 practices)
+  # ─────────────────────────────────────────────────────────────────────
+
+  - id: "SC.L2-3.13.1"
+    title: "Monitor / control / protect communications at external + key internal boundaries"
+    family: "SC"
+    status: "IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.13.1 / NIST 800-53 SC-7"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/KeyVault/keyvault.bicep"
+        lines: "39-48"
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "157-164"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "SC.L2-3.13.2"
+    title: "Employ architectural designs / techniques / configurations that promote effective information security"
+    family: "SC"
+    status: "IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.13.2 / NIST 800-53 SC-7, SA-8"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/main.bicep"
+      - kind: "doc"
+        path: "docs/ARCHITECTURE.md"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "SC.L2-3.13.3"
+    title: "Separate user functionality from system management functionality"
+    family: "SC"
+    status: "IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.13.3 / NIST 800-53 SC-2"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/main.bicep"
+        note: "Separate management vs data-plane RGs"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "SC.L2-3.13.4"
+    title: "Prevent unauthorized and unintended information transfer via shared system resources"
+    family: "SC"
+    status: "INHERITED"
+    cross_reference: "NIST 800-171 3.13.4 / NIST 800-53 SC-4"
+    inheritance:
+      - "Azure PaaS tenant isolation"
+    responsible_party: "Microsoft"
+
+  - id: "SC.L2-3.13.5"
+    title: "Implement subnetworks for publicly accessible system components"
+    family: "SC"
+    status: "IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.13.5 / NIST 800-53 SC-7"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Network/privateDnsZones/privateDnsZones.bicep"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "SC.L2-3.13.6"
+    title: "Deny network communications by default + allow by exception"
+    family: "SC"
+    status: "IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.13.6 / NIST 800-53 SC-7(5)"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/KeyVault/keyvault.bicep"
+        lines: "41"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "SC.L2-3.13.7"
+    title: "Prevent remote devices from simultaneously establishing non-remote connections"
+    family: "SC"
+    status: "INHERITED"
+    cross_reference: "NIST 800-171 3.13.7 / NIST 800-53 SC-7(7)"
+    inheritance:
+      - "Customer endpoint / VPN split-tunnel policy"
+    responsible_party: "Customer"
+
+  - id: "SC.L2-3.13.8"
+    title: "Implement cryptographic mechanisms to prevent unauthorized disclosure of CUI during transmission"
+    family: "SC"
+    status: "IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.13.8 / NIST 800-53 SC-8, SC-8(1)"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "128-129"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "SC.L2-3.13.9"
+    title: "Terminate network connections at the end of a session or after defined inactivity"
+    family: "SC"
+    status: "INHERITED"
+    cross_reference: "NIST 800-171 3.13.9 / NIST 800-53 SC-10"
+    inheritance:
+      - "Azure Front Door / App Service idle-session timeout"
+    responsible_party: "Microsoft"
+
+  - id: "SC.L2-3.13.10"
+    title: "Establish + manage cryptographic keys"
+    family: "SC"
+    status: "IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.13.10 / NIST 800-53 SC-12"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/KeyVault/keyvault.bicep"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "SC.L2-3.13.11"
+    title: "Employ FIPS-validated cryptography"
+    family: "SC"
+    status: "IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.13.11 / NIST 800-53 SC-13"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/KeyVault/keyvault.bicep"
+        note: "FIPS 140-2 L2 HSM"
+      - kind: "code"
+        path: "csa_platform/common/auth.py"
+        lines: "226"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "SC.L2-3.13.12"
+    title: "Prohibit remote activation of collaborative devices"
+    family: "SC"
+    status: "NOT_APPLICABLE"
+    cross_reference: "NIST 800-171 3.13.12 / NIST 800-53 SC-15"
+    responsible_party: "N/A"
+
+  - id: "SC.L2-3.13.13"
+    title: "Control + monitor use of mobile code"
+    family: "SC"
+    status: "IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.13.13 / NIST 800-53 SC-18"
+    evidence:
+      - kind: "code"
+        path: "portal/shared/api/main.py"
+        lines: "59-66"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "SC.L2-3.13.14"
+    title: "Control + monitor use of VoIP"
+    family: "SC"
+    status: "NOT_APPLICABLE"
+    cross_reference: "NIST 800-171 3.13.14 / NIST 800-53 SC-19"
+    responsible_party: "N/A"
+
+  - id: "SC.L2-3.13.15"
+    title: "Protect authenticity of communications sessions"
+    family: "SC"
+    status: "IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.13.15 / NIST 800-53 SC-23"
+    evidence:
+      - kind: "code"
+        path: "csa_platform/common/auth.py"
+        lines: "241-249"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "SC.L2-3.13.16"
+    title: "Protect confidentiality of CUI at rest"
+    family: "SC"
+    status: "IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.13.16 / NIST 800-53 SC-28"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "130-155"
+    responsible_party: "csa-inabox platform team"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # SI — System and Information Integrity (7 practices)
+  # ─────────────────────────────────────────────────────────────────────
+
+  - id: "SI.L2-3.14.1"
+    title: "Identify / report / correct system flaws in a timely manner"
+    family: "SI"
+    status: "PARTIALLY_IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.14.1 / NIST 800-53 SI-2"
+    evidence:
+      - kind: "ci"
+        path: ".github/workflows/codeql.yml"
+    gaps:
+      - "No formal SLA for flaw-remediation"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "SI.L2-3.14.2"
+    title: "Provide protection from malicious code"
+    family: "SI"
+    status: "INHERITED"
+    cross_reference: "NIST 800-171 3.14.2 / NIST 800-53 SI-3"
+    inheritance:
+      - "Defender for Cloud (customer opt-in)"
+    responsible_party: "Customer + Microsoft"
+
+  - id: "SI.L2-3.14.3"
+    title: "Monitor system security alerts + advisories and take action in response"
+    family: "SI"
+    status: "PLANNED"
+    cross_reference: "NIST 800-171 3.14.3 / NIST 800-53 SI-5"
+    gaps:
+      - "No MSRC feed subscription documented"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "SI.L2-3.14.4"
+    title: "Update malicious-code protection mechanisms when new releases are available"
+    family: "SI"
+    status: "INHERITED"
+    cross_reference: "NIST 800-171 3.14.4 / NIST 800-53 SI-3"
+    inheritance:
+      - "Defender auto-update"
+    responsible_party: "Microsoft"
+
+  - id: "SI.L2-3.14.5"
+    title: "Perform periodic scans of the system + real-time scans of files"
+    family: "SI"
+    status: "INHERITED"
+    cross_reference: "NIST 800-171 3.14.5 / NIST 800-53 SI-3"
+    inheritance:
+      - "Defender for Cloud scheduled + real-time file scans"
+    responsible_party: "Microsoft"
+
+  - id: "SI.L2-3.14.6"
+    title: "Monitor system for attacks + indicators of attack"
+    family: "SI"
+    status: "PARTIALLY_IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.14.6 / NIST 800-53 SI-4"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/KeyVault/keyvault.bicep"
+        lines: "111-123"
+    gaps:
+      - "No Sentinel rules shipped"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "SI.L2-3.14.7"
+    title: "Identify unauthorized use of the system"
+    family: "SI"
+    status: "PARTIALLY_IMPLEMENTED"
+    cross_reference: "NIST 800-171 3.14.7 / NIST 800-53 SI-4"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/shared/policies/policyAssignments.bicep"
+        lines: "48-57"
+    gaps:
+      - "No anomalous-access detection shipped"
+    responsible_party: "csa-inabox platform team"

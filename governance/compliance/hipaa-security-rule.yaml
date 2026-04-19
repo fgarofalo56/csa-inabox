@@ -1,0 +1,684 @@
+# HIPAA Security Rule (45 CFR 164.308 / 310 / 312 / 314 / 316) — Control Mapping
+#
+# Authoritative reference:
+#   45 CFR Part 164 Subpart C — Security Standards for the Protection of
+#   Electronic Protected Health Information.
+#   https://www.hhs.gov/hipaa/for-professionals/security/index.html
+#
+# HIPAA structure:
+#   - Administrative Safeguards — §164.308
+#   - Physical Safeguards      — §164.310
+#   - Technical Safeguards     — §164.312
+#   - Organizational           — §164.314
+#   - Policies & Documentation — §164.316
+#
+# Each HIPAA standard has "Required" or "Addressable" implementation
+# specifications. We note (R) / (A) in the title.
+#
+# Schema identical to nist-800-53-rev5.yaml.
+
+framework: "HIPAA Security Rule"
+baseline: "Covered Entity + Business Associate"
+version: "2026-04"
+last_reviewed: "2026-04-18"
+reviewer: "csa-inabox audit CSA-0012"
+source_of_truth_url: "https://www.hhs.gov/hipaa/for-professionals/security/index.html"
+
+controls:
+
+  # ─────────────────────────────────────────────────────────────────────
+  # §164.308 — Administrative Safeguards
+  # ─────────────────────────────────────────────────────────────────────
+
+  - id: "164.308(a)(1)(i)"
+    title: "Security Management Process (R)"
+    family: "Administrative"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "doc"
+        path: "governance/compliance/compliance-overview.md"
+    gaps:
+      - "No formal security-management-process policy document"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "164.308(a)(1)(ii)(A)"
+    title: "Risk Analysis (R)"
+    family: "Administrative"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "doc"
+        path: "temp/audit/FINDINGS_REGISTRY.md"
+        note: "CSA audit = de-facto risk analysis"
+    gaps:
+      - "No HIPAA-specific PHI risk analysis"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "164.308(a)(1)(ii)(B)"
+    title: "Risk Management (R)"
+    family: "Administrative"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "doc"
+        path: "temp/audit/FINDINGS_REGISTRY.md"
+    gaps:
+      - "No risk-treatment register tied to PHI threats"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "164.308(a)(1)(ii)(C)"
+    title: "Sanction Policy (R)"
+    family: "Administrative"
+    status: "INHERITED"
+    inheritance:
+      - "Customer HR / workforce discipline policy"
+    responsible_party: "Customer"
+
+  - id: "164.308(a)(1)(ii)(D)"
+    title: "Information System Activity Review (R)"
+    family: "Administrative"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/KeyVault/keyvault.bicep"
+        lines: "111-123"
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "332-355"
+    gaps:
+      - "No periodic log review cadence; CSA-0016 application audit log pending"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "164.308(a)(2)"
+    title: "Assigned Security Responsibility (R)"
+    family: "Administrative"
+    status: "INHERITED"
+    inheritance:
+      - "Customer appoints Security Officer"
+    responsible_party: "Customer"
+
+  - id: "164.308(a)(3)(i)"
+    title: "Workforce Security (R)"
+    family: "Administrative"
+    status: "INHERITED"
+    inheritance:
+      - "Customer HR / access-provisioning process"
+    responsible_party: "Customer"
+
+  - id: "164.308(a)(3)(ii)(A)"
+    title: "Authorization and/or Supervision (A)"
+    family: "Administrative"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "config"
+        path: "governance/rbac/rbac-matrix.json"
+      - kind: "code"
+        path: "csa_platform/common/auth.py"
+        lines: "281-307"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "164.308(a)(3)(ii)(B)"
+    title: "Workforce Clearance Procedure (A)"
+    family: "Administrative"
+    status: "INHERITED"
+    inheritance:
+      - "Customer HR clearance / background-check program"
+    responsible_party: "Customer"
+
+  - id: "164.308(a)(3)(ii)(C)"
+    title: "Termination Procedures (A)"
+    family: "Administrative"
+    status: "INHERITED"
+    inheritance:
+      - "Entra ID account disable on termination"
+    responsible_party: "Customer"
+
+  - id: "164.308(a)(4)(i)"
+    title: "Information Access Management (R)"
+    family: "Administrative"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "code"
+        path: "csa_platform/common/auth.py"
+      - kind: "config"
+        path: "governance/rbac/rbac-matrix.json"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "164.308(a)(4)(ii)(A)"
+    title: "Isolating Health Care Clearinghouse Functions (R)"
+    family: "Administrative"
+    status: "NOT_APPLICABLE"
+    gaps:
+      - "Platform not a clearinghouse"
+    responsible_party: "N/A"
+
+  - id: "164.308(a)(4)(ii)(B)"
+    title: "Access Authorization (A)"
+    family: "Administrative"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "config"
+        path: "governance/rbac/rbac-matrix.json"
+      - kind: "script"
+        path: "governance/rbac/apply-rbac.ps1"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "164.308(a)(4)(ii)(C)"
+    title: "Access Establishment and Modification (A)"
+    family: "Administrative"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "script"
+        path: "governance/rbac/apply-rbac.ps1"
+    gaps:
+      - "No access-review attestation workflow"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "164.308(a)(5)(i)"
+    title: "Security Awareness and Training (R)"
+    family: "Administrative"
+    status: "INHERITED"
+    inheritance:
+      - "Customer training program"
+    responsible_party: "Customer"
+
+  - id: "164.308(a)(5)(ii)(A)"
+    title: "Security Reminders (A)"
+    family: "Administrative"
+    status: "INHERITED"
+    inheritance:
+      - "Customer communications / security-awareness program"
+    responsible_party: "Customer"
+
+  - id: "164.308(a)(5)(ii)(B)"
+    title: "Protection from Malicious Software (A)"
+    family: "Administrative"
+    status: "INHERITED"
+    inheritance:
+      - "Defender for Cloud"
+    responsible_party: "Customer + Microsoft"
+
+  - id: "164.308(a)(5)(ii)(C)"
+    title: "Log-in Monitoring (A)"
+    family: "Administrative"
+    status: "INHERITED"
+    inheritance:
+      - "Entra ID sign-in logs / Smart Lockout"
+    responsible_party: "Microsoft + Customer"
+
+  - id: "164.308(a)(5)(ii)(D)"
+    title: "Password Management (A)"
+    family: "Administrative"
+    status: "INHERITED"
+    inheritance:
+      - "Entra ID Password Protection"
+    responsible_party: "Microsoft + Customer"
+
+  - id: "164.308(a)(6)(i)"
+    title: "Security Incident Procedures (R)"
+    family: "Administrative"
+    status: "PLANNED"
+    gaps:
+      - "No incident-response runbook shipped"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "164.308(a)(6)(ii)"
+    title: "Response and Reporting (R)"
+    family: "Administrative"
+    status: "PLANNED"
+    gaps:
+      - "No formal IR-report template / HHS breach-notification workflow"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "164.308(a)(7)(i)"
+    title: "Contingency Plan (R)"
+    family: "Administrative"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "ci"
+        path: ".github/workflows/rollback.yml"
+      - kind: "script"
+        path: "scripts/deploy/teardown-platform.sh"
+    gaps:
+      - "No formal CP document / BIA"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "164.308(a)(7)(ii)(A)"
+    title: "Data Backup Plan (R)"
+    family: "Administrative"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "167-178"
+        note: "Blob versioning + 30-day soft-delete"
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/KeyVault/keyvault.bicep"
+        lines: "36-37"
+        note: "Purge protection + 90-day soft-delete"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "164.308(a)(7)(ii)(B)"
+    title: "Disaster Recovery Plan (R)"
+    family: "Administrative"
+    status: "PLANNED"
+    gaps:
+      - "No paired-region failover module / DR plan shipped"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "164.308(a)(7)(ii)(C)"
+    title: "Emergency Mode Operation Plan (R)"
+    family: "Administrative"
+    status: "PLANNED"
+    gaps:
+      - "No emergency-mode runbook"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "164.308(a)(7)(ii)(D)"
+    title: "Testing and Revision Procedures (A)"
+    family: "Administrative"
+    status: "PLANNED"
+    gaps:
+      - "No DR test cadence"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "164.308(a)(7)(ii)(E)"
+    title: "Applications and Data Criticality Analysis (A)"
+    family: "Administrative"
+    status: "PLANNED"
+    gaps:
+      - "No criticality analysis artifact"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "164.308(a)(8)"
+    title: "Evaluation (R)"
+    family: "Administrative"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "doc"
+        path: "temp/audit/FINDINGS_REGISTRY.md"
+    gaps:
+      - "No periodic HIPAA-specific evaluation cadence"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "164.308(b)(1)"
+    title: "Business Associate Contracts and Other Arrangements (R)"
+    family: "Administrative"
+    status: "INHERITED"
+    inheritance:
+      - "Microsoft Azure BAA (executed at tenant level)"
+    responsible_party: "Customer + Microsoft"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # §164.310 — Physical Safeguards
+  # ─────────────────────────────────────────────────────────────────────
+
+  - id: "164.310(a)(1)"
+    title: "Facility Access Controls (R)"
+    family: "Physical"
+    status: "INHERITED"
+    inheritance:
+      - "Azure datacenter physical security"
+    responsible_party: "Microsoft"
+
+  - id: "164.310(a)(2)(i)"
+    title: "Contingency Operations (A)"
+    family: "Physical"
+    status: "INHERITED"
+    inheritance:
+      - "Azure datacenter contingency operations"
+    responsible_party: "Microsoft"
+
+  - id: "164.310(a)(2)(ii)"
+    title: "Facility Security Plan (A)"
+    family: "Physical"
+    status: "INHERITED"
+    inheritance:
+      - "Azure datacenter facility security plan"
+    responsible_party: "Microsoft"
+
+  - id: "164.310(a)(2)(iii)"
+    title: "Access Control and Validation Procedures (A)"
+    family: "Physical"
+    status: "INHERITED"
+    inheritance:
+      - "Azure datacenter access control + visitor validation"
+    responsible_party: "Microsoft"
+
+  - id: "164.310(a)(2)(iv)"
+    title: "Maintenance Records (A)"
+    family: "Physical"
+    status: "INHERITED"
+    inheritance:
+      - "Azure datacenter maintenance-activity logs"
+    responsible_party: "Microsoft"
+
+  - id: "164.310(b)"
+    title: "Workstation Use (R)"
+    family: "Physical"
+    status: "INHERITED"
+    inheritance:
+      - "Customer MDM / acceptable-use policy"
+    responsible_party: "Customer"
+
+  - id: "164.310(c)"
+    title: "Workstation Security (R)"
+    family: "Physical"
+    status: "INHERITED"
+    inheritance:
+      - "Customer endpoint / workstation management"
+    responsible_party: "Customer"
+
+  - id: "164.310(d)(1)"
+    title: "Device and Media Controls (R)"
+    family: "Physical"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+    inheritance:
+      - "Azure datacenter media handling"
+    responsible_party: "Microsoft + csa-inabox"
+
+  - id: "164.310(d)(2)(i)"
+    title: "Disposal (R)"
+    family: "Physical"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "script"
+        path: "scripts/deploy/teardown-platform.sh"
+    inheritance:
+      - "Azure media sanitization NIST SP 800-88"
+    responsible_party: "Microsoft + csa-inabox"
+
+  - id: "164.310(d)(2)(ii)"
+    title: "Media Re-use (R)"
+    family: "Physical"
+    status: "INHERITED"
+    inheritance:
+      - "Azure media sanitization before re-use (NIST SP 800-88)"
+    responsible_party: "Microsoft"
+
+  - id: "164.310(d)(2)(iii)"
+    title: "Accountability (A)"
+    family: "Physical"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "332-355"
+        note: "Storage account diagnostic logs"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "164.310(d)(2)(iv)"
+    title: "Data Backup and Storage (A)"
+    family: "Physical"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "167-178"
+    responsible_party: "csa-inabox platform team"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # §164.312 — Technical Safeguards (the strongest area for IaC platforms)
+  # ─────────────────────────────────────────────────────────────────────
+
+  - id: "164.312(a)(1)"
+    title: "Access Control (R)"
+    family: "Technical"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "code"
+        path: "csa_platform/common/auth.py"
+        lines: "195-307"
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/KeyVault/keyvault.bicep"
+        lines: "37"
+        note: "enableRbacAuthorization=true"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "164.312(a)(2)(i)"
+    title: "Unique User Identification (R)"
+    family: "Technical"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "code"
+        path: "csa_platform/common/auth.py"
+        lines: "195-258"
+        note: "oid/sub uniquely identify each user"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "164.312(a)(2)(ii)"
+    title: "Emergency Access Procedure (R)"
+    family: "Technical"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "config"
+        path: "governance/rbac/rbac-matrix.json"
+        note: "PlatformAdmin persona = break-glass"
+    gaps:
+      - "No documented break-glass account / PIM-elevation runbook"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "164.312(a)(2)(iii)"
+    title: "Automatic Logoff (A)"
+    family: "Technical"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "code"
+        path: "csa_platform/common/auth.py"
+        lines: "223-239"
+        note: "JWT exp verified each request"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "164.312(a)(2)(iv)"
+    title: "Encryption and Decryption (A)"
+    family: "Technical"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "130-155"
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/KeyVault/keyvault.bicep"
+        lines: "36-54"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "164.312(b)"
+    title: "Audit Controls (R)"
+    family: "Technical"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/KeyVault/keyvault.bicep"
+        lines: "111-123"
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "332-355"
+      - kind: "bicep"
+        path: "deploy/bicep/shared/policies/policyAssignments.bicep"
+        lines: "48-57"
+    gaps:
+      - "Application-layer PHI-access audit log missing — CSA-0016"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "164.312(c)(1)"
+    title: "Integrity (R)"
+    family: "Technical"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "130-155"
+        note: "requireInfrastructureEncryption (double encryption)"
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "167-178"
+        note: "Blob versioning preserves integrity across modifications"
+    gaps:
+      - "No PHI-specific integrity check / ETag validation workflow"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "164.312(c)(2)"
+    title: "Mechanism to Authenticate ePHI (A)"
+    family: "Technical"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "167-178"
+        note: "Versioning + changeFeed provides tamper evidence"
+    gaps:
+      - "No hashing / digital-signature workflow for PHI records"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "164.312(d)"
+    title: "Person or Entity Authentication (R)"
+    family: "Technical"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "code"
+        path: "csa_platform/common/auth.py"
+        lines: "195-258"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "164.312(e)(1)"
+    title: "Transmission Security (R)"
+    family: "Technical"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "128-129"
+      - kind: "bicep"
+        path: "deploy/bicep/shared/policies/policyAssignments.bicep"
+        lines: "100-125"
+      - kind: "code"
+        path: "portal/shared/api/main.py"
+        lines: "67-70"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "164.312(e)(2)(i)"
+    title: "Integrity Controls (A)"
+    family: "Technical"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "128-129"
+        note: "TLS 1.2+ provides in-transit integrity via AEAD ciphers"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "164.312(e)(2)(ii)"
+    title: "Encryption (A)"
+    family: "Technical"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "128-129"
+      - kind: "bicep"
+        path: "deploy/bicep/shared/policies/policyAssignments.bicep"
+        lines: "100-125"
+    responsible_party: "csa-inabox platform team"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # §164.314 — Organizational Requirements
+  # ─────────────────────────────────────────────────────────────────────
+
+  - id: "164.314(a)(1)"
+    title: "Business Associate Contracts or Other Arrangements (R)"
+    family: "Organizational"
+    status: "INHERITED"
+    inheritance:
+      - "Microsoft Azure BAA"
+    responsible_party: "Customer + Microsoft"
+
+  - id: "164.314(a)(2)(i)"
+    title: "Business Associate Contracts — standard content (R)"
+    family: "Organizational"
+    status: "INHERITED"
+    inheritance:
+      - "Microsoft Azure BAA (executed at tenant level)"
+    responsible_party: "Customer + Microsoft"
+
+  - id: "164.314(a)(2)(ii)"
+    title: "Other Arrangements (R)"
+    family: "Organizational"
+    status: "INHERITED"
+    inheritance:
+      - "Customer-managed subcontract arrangements"
+    responsible_party: "Customer"
+
+  - id: "164.314(b)(1)"
+    title: "Requirements for Group Health Plans (R)"
+    family: "Organizational"
+    status: "NOT_APPLICABLE"
+    responsible_party: "N/A (platform does not process group-health-plan data)"
+
+  - id: "164.314(b)(2)"
+    title: "Implementation Specifications (R)"
+    family: "Organizational"
+    status: "NOT_APPLICABLE"
+    responsible_party: "N/A"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # §164.316 — Policies and Procedures & Documentation
+  # ─────────────────────────────────────────────────────────────────────
+
+  - id: "164.316(a)"
+    title: "Policies and Procedures (R)"
+    family: "Documentation"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "doc"
+        path: "governance/compliance/compliance-overview.md"
+      - kind: "doc"
+        path: "governance/compliance/hipaa-security-rule.yaml"
+        note: "This manifest is the machine-readable policy map"
+    gaps:
+      - "No customer-facing policy-set package with signatures / revisions"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "164.316(b)(1)"
+    title: "Documentation (R)"
+    family: "Documentation"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "doc"
+        path: "docs/compliance/hipaa-security-rule.md"
+      - kind: "doc"
+        path: "governance/compliance/hipaa-security-rule.yaml"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "164.316(b)(2)(i)"
+    title: "Time Limit (R) — retain 6 years from creation or last effective date"
+    family: "Documentation"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "192-217"
+    gaps:
+      - "Default lifecycle does not enforce 6-year retention; customer must configure"
+    responsible_party: "Customer + csa-inabox"
+
+  - id: "164.316(b)(2)(ii)"
+    title: "Availability (R)"
+    family: "Documentation"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "doc"
+        path: "docs/compliance/hipaa-security-rule.md"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "164.316(b)(2)(iii)"
+    title: "Updates (R)"
+    family: "Documentation"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "doc"
+        path: "governance/compliance/hipaa-security-rule.yaml"
+        note: "last_reviewed field tracks updates"
+    gaps:
+      - "No automated annual review reminder"
+    responsible_party: "csa-inabox platform team"
