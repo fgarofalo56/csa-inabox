@@ -397,3 +397,53 @@ Azure CLI cloud to `AzureUSGovernment`.
 - [Casino Analytics](../casino-analytics/README.md) — Streaming patterns for slot machine telemetry
 - [EPA Environmental Analytics](../epa/README.md) — Streaming patterns for AQI sensor data
 - [NOAA Climate Analytics](../noaa/README.md) — Streaming patterns for weather station data
+
+
+---
+
+## Prerequisites / Cost / Teardown
+
+> [!IMPORTANT]
+> **Cost-safety:** this vertical deploys real Azure resources. Always run `teardown.sh` when you are done. A forgotten workshop environment can run **$80-150/day**.
+
+### Prerequisites
+
+- Azure CLI 2.50+ logged in (`az login`), subscription selected (`az account set --subscription <id>`)
+- `jq` installed (used by teardown enumeration)
+- Bicep CLI 0.25+ (`az bicep version`)
+- Contributor + User Access Administrator on target subscription (or a pre-created RG with equivalent RBAC)
+- `bash scripts/deploy/validate-prerequisites.sh` passes
+
+### Cost estimate (rough, East US 2)
+
+- **While running:** ~$$80-150/day (services: IoT Hub, Event Hub, Stream Analytics, ADX, Storage)
+- **Idle overnight:** roughly half if you stop compute (Databricks autostop + Synapse pause)
+- **Storage + Key Vault residual:** <$5/month if you skip teardown
+
+Numbers are indicative for a small demo dataset; production workloads vary significantly. Use `az consumption usage list` or Cost Management for live numbers.
+
+### Runtime
+
+- **Deploy:** ~20-30 minutes (first run; cold Bicep)
+- **Teardown:** ~5-10 minutes (async RG delete completes in the background)
+
+### Teardown
+
+When finished, run the per-example teardown script. It enforces a typed `DESTROY-iot-streaming` confirmation, logs every step to `reports/teardown/iot-streaming-<timestamp>.log`, and deletes the resource group `rg-iot-streaming` along with any matching subscription-scope deployments.
+
+```bash
+# Interactive (recommended)
+bash examples/iot-streaming/deploy/teardown.sh
+
+# Dry run (enumerate only)
+bash examples/iot-streaming/deploy/teardown.sh --dry-run
+
+# From the repo root via Makefile
+make teardown-example VERTICAL=iot-streaming
+make teardown-example VERTICAL=iot-streaming DRYRUN=1
+
+# CI automation (no prompt — only for ephemeral environments)
+bash examples/iot-streaming/deploy/teardown.sh --yes
+```
+
+See [`docs/QUICKSTART.md#teardown`](../../docs/QUICKSTART.md#teardown) for the platform-wide teardown flow.

@@ -372,7 +372,7 @@ ORDER BY prenatal_first_trimester_pct ASC;
 This platform is designed with tribal data sovereignty as a foundational principle, not an afterthought.
 
 **Per-Tribe Data Isolation**
-- Each tribal affiliation maps to an Azure AD security group
+- Each tribal affiliation maps to a Microsoft Entra ID security group
 - Row-Level Security (RLS) policies on Silver and Gold tables restrict queries to authorized tribal data only
 - Tribal health directors control who can access their nation's data
 - Cross-tribe queries require explicit data sharing agreements registered in the consent ledger
@@ -500,7 +500,7 @@ SMALL_CELL_THRESHOLD=5
 
 All data access is logged to a tamper-evident audit trail:
 
-- **Who** accessed data (Azure AD principal, IP address)
+- **Who** accessed data (Microsoft Entra ID principal, IP address)
 - **What** data was queried (table, columns, row count, tribal affiliation filter)
 - **When** the access occurred (UTC timestamp)
 - **Why** — linked to authorized purpose code (treatment, operations, research)
@@ -642,3 +642,53 @@ This example uses **entirely synthetic data** generated to reflect publicly avai
 - [Getting Started Guide](../../docs/GETTING_STARTED.md) — Platform setup and onboarding
 - [Interior Natural Resources](../interior/README.md) — Related federal/tribal vertical
 - [Casino Analytics](../casino-analytics/README.md) — Related tribal operations vertical
+
+
+---
+
+## Prerequisites / Cost / Teardown
+
+> [!IMPORTANT]
+> **Cost-safety:** this vertical deploys real Azure resources. Always run `teardown.sh` when you are done. A forgotten workshop environment can run **$180-280/day**.
+
+### Prerequisites
+
+- Azure CLI 2.50+ logged in (`az login`), subscription selected (`az account set --subscription <id>`)
+- `jq` installed (used by teardown enumeration)
+- Bicep CLI 0.25+ (`az bicep version`)
+- Contributor + User Access Administrator on target subscription (or a pre-created RG with equivalent RBAC)
+- `bash scripts/deploy/validate-prerequisites.sh` passes
+
+### Cost estimate (rough, East US 2)
+
+- **While running:** ~$$180-280/day (services: Synapse, Databricks, ADF, Purview, Storage, Key Vault (HIPAA-hardened))
+- **Idle overnight:** roughly half if you stop compute (Databricks autostop + Synapse pause)
+- **Storage + Key Vault residual:** <$5/month if you skip teardown
+
+Numbers are indicative for a small demo dataset; production workloads vary significantly. Use `az consumption usage list` or Cost Management for live numbers.
+
+### Runtime
+
+- **Deploy:** ~40-55 minutes (first run; cold Bicep)
+- **Teardown:** ~15-20 minutes (async RG delete completes in the background)
+
+### Teardown
+
+When finished, run the per-example teardown script. It enforces a typed `DESTROY-tribal-health` confirmation, logs every step to `reports/teardown/tribal-health-<timestamp>.log`, and deletes the resource group `rg-tribal-health-analytics` along with any matching subscription-scope deployments.
+
+```bash
+# Interactive (recommended)
+bash examples/tribal-health/deploy/teardown.sh
+
+# Dry run (enumerate only)
+bash examples/tribal-health/deploy/teardown.sh --dry-run
+
+# From the repo root via Makefile
+make teardown-example VERTICAL=tribal-health
+make teardown-example VERTICAL=tribal-health DRYRUN=1
+
+# CI automation (no prompt — only for ephemeral environments)
+bash examples/tribal-health/deploy/teardown.sh --yes
+```
+
+See [`docs/QUICKSTART.md#teardown`](../../docs/QUICKSTART.md#teardown) for the platform-wide teardown flow.

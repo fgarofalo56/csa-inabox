@@ -497,3 +497,53 @@ This project is licensed under the MIT License. See `LICENSE` file for details.
 - [Getting Started Guide](../../docs/GETTING_STARTED.md) — Platform setup and onboarding
 - [DOT Transportation Analytics](../dot/README.md) — Related federal infrastructure vertical
 - [Tribal Health Analytics](../tribal-health/README.md) — Related federal/tribal vertical
+
+
+---
+
+## Prerequisites / Cost / Teardown
+
+> [!IMPORTANT]
+> **Cost-safety:** this vertical deploys real Azure resources. Always run `teardown.sh` when you are done. A forgotten workshop environment can run **$120-200/day**.
+
+### Prerequisites
+
+- Azure CLI 2.50+ logged in (`az login`), subscription selected (`az account set --subscription <id>`)
+- `jq` installed (used by teardown enumeration)
+- Bicep CLI 0.25+ (`az bicep version`)
+- Contributor + User Access Administrator on target subscription (or a pre-created RG with equivalent RBAC)
+- `bash scripts/deploy/validate-prerequisites.sh` passes
+
+### Cost estimate (rough, East US 2)
+
+- **While running:** ~$$120-200/day (services: Synapse, Databricks, ADF, Storage, Key Vault)
+- **Idle overnight:** roughly half if you stop compute (Databricks autostop + Synapse pause)
+- **Storage + Key Vault residual:** <$5/month if you skip teardown
+
+Numbers are indicative for a small demo dataset; production workloads vary significantly. Use `az consumption usage list` or Cost Management for live numbers.
+
+### Runtime
+
+- **Deploy:** ~30-45 minutes (first run; cold Bicep)
+- **Teardown:** ~10-15 minutes (async RG delete completes in the background)
+
+### Teardown
+
+When finished, run the per-example teardown script. It enforces a typed `DESTROY-interior` confirmation, logs every step to `reports/teardown/interior-<timestamp>.log`, and deletes the resource group `rg-interior-analytics` along with any matching subscription-scope deployments.
+
+```bash
+# Interactive (recommended)
+bash examples/interior/deploy/teardown.sh
+
+# Dry run (enumerate only)
+bash examples/interior/deploy/teardown.sh --dry-run
+
+# From the repo root via Makefile
+make teardown-example VERTICAL=interior
+make teardown-example VERTICAL=interior DRYRUN=1
+
+# CI automation (no prompt — only for ephemeral environments)
+bash examples/interior/deploy/teardown.sh --yes
+```
+
+See [`docs/QUICKSTART.md#teardown`](../../docs/QUICKSTART.md#teardown) for the platform-wide teardown flow.

@@ -1,4 +1,4 @@
-.PHONY: help setup lint test validate deploy-dev deploy-prod deploy-adf prerequisites seed seed-azure clean security typecheck-platform portal-dev portal-test portal-lint portal-docker
+.PHONY: help setup lint test validate deploy-dev deploy-prod deploy-adf prerequisites seed seed-azure clean security typecheck-platform portal-dev portal-test portal-lint portal-docker teardown-dev teardown-staging teardown-prod teardown-example
 
 # Default target
 help: ## Show this help
@@ -102,6 +102,25 @@ deploy-adf: ## Deploy ADF pipelines to a Data Factory instance
 
 prerequisites: ## Validate deployment prerequisites
 	bash scripts/deploy/validate-prerequisites.sh
+
+# --- Teardown (FinOps safety) ---
+
+teardown-dev: ## Tear down dev platform resources (CI automation, skips confirmation)
+	bash scripts/deploy/teardown-platform.sh --env dev --yes
+
+teardown-staging: ## Tear down staging platform resources (interactive confirmation)
+	bash scripts/deploy/teardown-platform.sh --env staging
+
+teardown-prod: ## Tear down production platform resources (interactive confirmation, NEVER --yes)
+	@echo "Refusing to use --yes against prod; you will be prompted to type DESTROY-prod."
+	bash scripts/deploy/teardown-platform.sh --env prod
+
+teardown-example: ## Tear down a single vertical example: make teardown-example VERTICAL=usda
+	@if [ -z "$(VERTICAL)" ]; then echo "Usage: make teardown-example VERTICAL=<name>"; exit 1; fi
+	@if [ ! -f "examples/$(VERTICAL)/deploy/teardown.sh" ]; then \
+		echo "No teardown.sh for '$(VERTICAL)'. Expected examples/$(VERTICAL)/deploy/teardown.sh"; exit 1; \
+	fi
+	bash examples/$(VERTICAL)/deploy/teardown.sh $(if $(DRYRUN),--dry-run) $(if $(YES),--yes)
 
 seed: ## Load sample data via dbt seed
 	cd domains/shared/dbt && dbt seed --profiles-dir .

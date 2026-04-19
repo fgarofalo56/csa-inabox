@@ -408,7 +408,7 @@ COMMERCE_BATCH_SIZE=1000
 - Azure Government endpoints differ from commercial Azure:
   - Storage: `*.blob.core.usgovcloudapi.net`
   - Key Vault: `*.vault.usgovcloudapi.net`
-  - Azure AD: `login.microsoftonline.us`
+  - Microsoft Entra ID: `login.microsoftonline.us`
 - Ensure FedRAMP High compliance for production workloads
 - Use Azure Government-specific resource providers
 - FIPS 140-2 validated cryptographic modules required
@@ -416,7 +416,7 @@ COMMERCE_BATCH_SIZE=1000
 ### FISMA Compliance
 - All data at rest encrypted using AES-256
 - TLS 1.2+ enforced for all data in transit
-- Azure AD conditional access policies for user authentication
+- Microsoft Entra Conditional Access policies for user authentication
 - Audit logging enabled for all data access operations
 - Network segmentation via VNet with private endpoints
 - Data classification: CUI (Controlled Unclassified Information) for economic data
@@ -543,3 +543,53 @@ This project is licensed under the MIT License. See `LICENSE` file for details.
 - [Getting Started Guide](../../docs/GETTING_STARTED.md) — Platform setup and onboarding
 - [Casino Analytics](../casino-analytics/README.md) — Related economic analytics vertical
 - [USPS Postal Operations](../usps/README.md) — Related logistics and trade vertical
+
+
+---
+
+## Prerequisites / Cost / Teardown
+
+> [!IMPORTANT]
+> **Cost-safety:** this vertical deploys real Azure resources. Always run `teardown.sh` when you are done. A forgotten workshop environment can run **$120-200/day**.
+
+### Prerequisites
+
+- Azure CLI 2.50+ logged in (`az login`), subscription selected (`az account set --subscription <id>`)
+- `jq` installed (used by teardown enumeration)
+- Bicep CLI 0.25+ (`az bicep version`)
+- Contributor + User Access Administrator on target subscription (or a pre-created RG with equivalent RBAC)
+- `bash scripts/deploy/validate-prerequisites.sh` passes
+
+### Cost estimate (rough, East US 2)
+
+- **While running:** ~$$120-200/day (services: Synapse, Databricks, Cosmos DB, ADF, Storage, Key Vault)
+- **Idle overnight:** roughly half if you stop compute (Databricks autostop + Synapse pause)
+- **Storage + Key Vault residual:** <$5/month if you skip teardown
+
+Numbers are indicative for a small demo dataset; production workloads vary significantly. Use `az consumption usage list` or Cost Management for live numbers.
+
+### Runtime
+
+- **Deploy:** ~30-45 minutes (first run; cold Bicep)
+- **Teardown:** ~10-15 minutes (async RG delete completes in the background)
+
+### Teardown
+
+When finished, run the per-example teardown script. It enforces a typed `DESTROY-commerce` confirmation, logs every step to `reports/teardown/commerce-<timestamp>.log`, and deletes the resource group `rg-commerce-analytics` along with any matching subscription-scope deployments.
+
+```bash
+# Interactive (recommended)
+bash examples/commerce/deploy/teardown.sh
+
+# Dry run (enumerate only)
+bash examples/commerce/deploy/teardown.sh --dry-run
+
+# From the repo root via Makefile
+make teardown-example VERTICAL=commerce
+make teardown-example VERTICAL=commerce DRYRUN=1
+
+# CI automation (no prompt — only for ephemeral environments)
+bash examples/commerce/deploy/teardown.sh --yes
+```
+
+See [`docs/QUICKSTART.md#teardown`](../../docs/QUICKSTART.md#teardown) for the platform-wide teardown flow.

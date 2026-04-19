@@ -26,6 +26,7 @@ about 60-90 minutes (assuming all prerequisites are met).
 - [🌐 Quick Start: Deploy the Portal](#-quick-start-deploy-the-portal)
 - [🏗️ Quick Start: Platform Services](#️-quick-start-platform-services)
 - [🏛️ Quick Start: Azure Government](#️-quick-start-azure-government)
+- [🧹 Teardown](#-teardown)
 - [➡️ Next Steps](#️-next-steps)
 
 ---
@@ -51,7 +52,7 @@ bash scripts/deploy/validate-prerequisites.sh
 
 ```bash
 # Clone the repo
-git clone https://github.com/fgarofalo56/csa-inabox.git
+git clone <CLONE_URL>
 cd csa-inabox
 
 # Set up Python environment
@@ -536,6 +537,68 @@ az storage account show \
 > - Compliance tags are auto-applied: FedRAMP High, FISMA, NIST 800-53 Rev5
 > - Microsoft Fabric is NOT available in Gov — this repo provides the alternative
 > - See [GOV_SERVICE_MATRIX.md](GOV_SERVICE_MATRIX.md) for service availability
+
+---
+
+## 🧹 Teardown
+
+> [!WARNING]
+> **Cost-safety.** CSA-in-a-Box provisions Synapse, Databricks, ADX, Event Hub, and other billable services. A forgotten demo environment can accrue **$1,000+/day**. Always tear down when you are done.
+
+Every deployable surface ships with a teardown script that:
+
+- Enumerates resources (`az resource list`) before doing anything destructive.
+- Demands a typed `DESTROY-<env>` (platform) or `DESTROY-<vertical>` (example) confirmation — any other input aborts.
+- Deletes in dependency-safe order: diagnostic settings → private endpoints → data services → storage → Key Vault (with purge best-effort) → VNets → resource group.
+- Writes a timestamped log to `reports/teardown/<env>-<ts>.log`.
+- Supports `--dry-run` to preview and `--yes` for CI automation (never use `--yes` against prod).
+
+### Platform teardown
+
+```bash
+# Interactive (recommended)
+bash scripts/deploy/teardown-platform.sh --env dev
+
+# Dry run (enumerate only)
+bash scripts/deploy/teardown-platform.sh --env dev --dry-run
+
+# CI automation (ephemeral environments only)
+bash scripts/deploy/teardown-platform.sh --env dev --yes
+
+# Validate prerequisites (az login, jq, active subscription) without acting
+bash scripts/deploy/teardown-platform.sh --validate
+```
+
+Makefile equivalents:
+
+```bash
+make teardown-dev        # uses --yes for CI pipelines
+make teardown-staging    # interactive
+make teardown-prod       # interactive; NEVER runs --yes
+```
+
+### Vertical-example teardown
+
+```bash
+# Interactive teardown for a specific vertical
+bash examples/usda/deploy/teardown.sh
+
+# Dry run
+bash examples/usda/deploy/teardown.sh --dry-run
+
+# Makefile
+make teardown-example VERTICAL=usda
+make teardown-example VERTICAL=usda DRYRUN=1
+```
+
+Each example README has its own **Prerequisites / Cost / Teardown** section with per-vertical cost estimates and runtime expectations.
+
+### Post-teardown checklist
+
+- [ ] `az group list -o tsv | grep -i <prefix>` returns nothing.
+- [ ] `az keyvault list-deleted -o tsv` — purge any leftovers you own (may require manual purge if purge-protection was enabled).
+- [ ] `az consumption usage list --start-date <yesterday>` — confirm no ongoing charges.
+- [ ] `reports/teardown/<env>-<ts>.log` archived with the change ticket if this was a production teardown.
 
 ---
 
