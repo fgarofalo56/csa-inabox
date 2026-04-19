@@ -121,7 +121,7 @@ exclude = ["*.tests", "*.tests.*", "tests*"]
 [tool.ruff]
 target-version = "py310"
 line-length = 120
-src = ["domains", "scripts", "governance", "agent-harness"]
+src = ["domains", "scripts", "governance", "dev-loop"]
 # Exclude empty/placeholder files that aren't valid Python/Notebook.
 extend-exclude = ["scripts/monitor/SynapseTroubleshooting.ipynb", "domains/spark/ArcGIS_GeoAnalyticsEngine"]
 
@@ -280,7 +280,7 @@ markers = [
 
 [tool.coverage.run]
 # Only measure the code under test today.  As new areas grow a real test
-# suite (dbt Python runners, Azure Functions, agent harness gates),
+# suite (dbt Python runners, Azure Functions, dev loop gates),
 # add them to this list alongside their tests.
 source = [
     "governance/common",

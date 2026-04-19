@@ -62,8 +62,8 @@
 /.github/                            @platform-team
 /.github/workflows/                  @platform-team @devops-team
 
-# Agent Harness
-/agent-harness/                      @platform-team
+# Dev Loop
+/dev-loop/                           @platform-team
 
 # Documentation
 /docs/                               @platform-team

@@ -18,7 +18,7 @@ if (-not $ruffPath) {
 }
 
 Write-Host "Running ruff lint on Python files..."
-$pythonDirs = @("scripts", "domains", "tools", "governance", "agent-harness") |
+$pythonDirs = @("scripts", "domains", "tools", "governance", "dev-loop") |
     ForEach-Object { Join-Path $RepoRoot $_ } |
     Where-Object { Test-Path $_ }
 

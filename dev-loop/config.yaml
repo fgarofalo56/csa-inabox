@@ -1,4 +1,4 @@
-# Agent Harness Configuration — Ralph Loop
+# Dev Loop Configuration — Ralph Loop
 # Controls autonomous task execution, validation gates, and escalation
 
 loop:

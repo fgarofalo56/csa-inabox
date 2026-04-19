@@ -1,6 +1,11 @@
-# CSA-in-a-Box Agent Harness — Ralph Loop
+# CSA-in-a-Box Dev Loop — Ralph Loop
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Developers
+> **Note (2026-04-18):** This directory was renamed from `agent-harness/` to
+> `dev-loop/` to disambiguate from the upcoming CSA Copilot product (which
+> will live under `apps/copilot/`). This is a Ralph-loop CI/CD orchestrator
+> for project development automation; it contains no LLM/agent runtime.
+
+> **Last Updated:** 2026-04-18 | **Status:** Active | **Audience:** Developers
 
 ## Table of Contents
 
@@ -17,7 +22,7 @@
 
 ## 📋 Overview
 
-The Ralph loop is an autonomous agent harness for iterative implementation, testing, and validation of the CSA-in-a-Box platform. It follows a task-driven development cycle where agents pick up Archon tasks, implement changes, validate them through automated gates, and iterate until validation passes.
+The Ralph loop is an autonomous dev loop for iterative implementation, testing, and validation of the CSA-in-a-Box platform. It follows a task-driven development cycle where agents pick up Archon tasks, implement changes, validate them through automated gates, and iterate until validation passes.
 
 ---
 
@@ -49,7 +54,7 @@ flowchart TD
 
 ## 🧪 Validation Gates
 
-Located in `agent-harness/gates/`:
+Located in `dev-loop/gates/`:
 
 | Gate | Script | Runs When |
 |------|--------|-----------|
@@ -74,7 +79,7 @@ Located in `agent-harness/gates/`:
 
 ## ⚙️ Configuration
 
-See `agent-harness/config.yaml` for loop settings:
+See `dev-loop/config.yaml` for loop settings:
 - Max iterations per task
 - Validation gate mappings
 - Human review triggers

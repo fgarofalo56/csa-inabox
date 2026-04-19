@@ -76,16 +76,16 @@ test-dbt: ## Compile and test dbt models
 # --- Validation ---
 
 validate: ## Run all validation gates
-	pwsh -File agent-harness/gates/validate-all.ps1
+	pwsh -File dev-loop/gates/validate-all.ps1
 
 validate-bicep: ## Validate Bicep templates only
-	pwsh -File agent-harness/gates/validate-bicep.ps1
+	pwsh -File dev-loop/gates/validate-bicep.ps1
 
 validate-python: ## Validate Python code only
-	pwsh -File agent-harness/gates/validate-python.ps1
+	pwsh -File dev-loop/gates/validate-python.ps1
 
 validate-dbt: ## Validate dbt models only
-	pwsh -File agent-harness/gates/validate-dbt.ps1
+	pwsh -File dev-loop/gates/validate-dbt.ps1
 # --- Deployment ---
 
 deploy-dev: ## Deploy to dev environment (what-if)

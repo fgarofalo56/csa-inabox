@@ -1,13 +1,13 @@
 <#
 .SYNOPSIS
-    End-to-end integration test for the agent harness.
+    End-to-end integration test for the dev loop.
 
 .DESCRIPTION
     Tests the Ralph loop workflow:
     1. Pick a task from Archon
     2. Execute validation gates
     3. Report results
-    This is a dry-run test — it validates the harness machinery without deploying.
+    This is a dry-run test — it validates the dev loop machinery without deploying.
 #>
 
 [CmdletBinding()]
@@ -18,7 +18,7 @@ param(
 $ErrorActionPreference = 'Continue'
 
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "  Agent Harness Integration Test" -ForegroundColor Cyan
+Write-Host "  Dev Loop Integration Test" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 

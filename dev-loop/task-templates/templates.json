@@ -40,7 +40,7 @@
             "title_template": "Fix: {description}",
             "description_template": "Bug fix: {description}\n\nSteps:\n1. Reproduce the issue\n2. Identify root cause\n3. Implement fix\n4. Add test to prevent regression\n5. Validate with relevant gate scripts",
             "validation_commands": [
-                "pwsh -File agent-harness/gates/validate-all.ps1"
+                "pwsh -File dev-loop/gates/validate-all.ps1"
             ],
             "feature": "bug-fix",
             "estimated_hours": 1
