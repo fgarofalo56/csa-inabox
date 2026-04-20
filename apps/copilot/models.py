@@ -10,7 +10,7 @@ All scoring fields use floating-point similarity in ``[0.0, 1.0]``
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -50,6 +50,16 @@ class IndexReport(BaseModel):
     chunks_skipped: int = Field(
         ge=0,
         description="Chunks whose content hash was already present (idempotent skip).",
+    )
+    chunks_deleted: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Orphan chunks deleted during cleanup — chunks previously indexed "
+            "under a source_path scanned during this run whose id is NOT in "
+            "the newly-emitted id set. Always 0 when orphan cleanup is "
+            "disabled or when ``dry_run=True``."
+        ),
     )
     bytes_embedded: int = Field(
         ge=0,
@@ -109,6 +119,16 @@ class Citation(BaseModel):
     excerpt: str = Field(description="Short excerpt (<=500 chars) from the cited chunk.")
     similarity: float = Field(ge=0.0, le=1.0, description="Retriever similarity score for the cited chunk.")
     chunk_id: str = Field(description="Underlying chunk id (from the vector store).")
+    reranker_score: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=4.0,
+        description=(
+            "Azure AI Search semantic reranker score (0-4 range). "
+            "Populated only when the semantic reranker path was used "
+            "and the underlying ``@search.reranker_score`` was surfaced."
+        ),
+    )
 
     model_config = ConfigDict(frozen=True)
 
@@ -173,3 +193,100 @@ class CitationVerificationResult(BaseModel):
     )
 
     model_config = ConfigDict(frozen=True)
+
+
+# --- Streaming (post-Phase-1) ---
+
+
+AnswerChunkKind = Literal["status", "token", "citation", "done"]
+"""Discriminant for :class:`AnswerChunk`.
+
+* ``status`` — a string describing a lifecycle event (e.g.
+  ``retrieve-start``, ``retrieve-complete``, ``coverage-gate-pass``,
+  ``generate-start``, ``refused:no_coverage``).  The payload is the
+  status string.
+* ``token`` — an LLM delta.  The payload is the token string (may be
+  multiple characters for SDKs that batch).
+* ``citation`` — a verified :class:`Citation` emitted after generation
+  completes.  One event per citation.
+* ``done`` — the terminal event.  The payload is the final
+  :class:`AnswerResponse` (same DTO as the blocking path).
+"""
+
+
+AnswerChunkPayload = Union[str, Citation, "AnswerResponse"]
+"""Type alias for the polymorphic payload carried by :class:`AnswerChunk`."""
+
+
+class AnswerChunk(BaseModel):
+    """One event emitted by :meth:`CopilotAgent.ask_stream`.
+
+    The stream is consumed with ``async for`` and always terminates
+    with exactly one ``done`` event carrying the final
+    :class:`AnswerResponse`.  Refusals produce one ``status`` event
+    whose payload starts with ``refused:`` followed by the refusal
+    reason, then a ``done`` event.
+    """
+
+    kind: AnswerChunkKind = Field(description="Discriminant for the event type.")
+    payload: AnswerChunkPayload = Field(
+        description=(
+            "Event payload. String for status/token events; "
+            "Citation for citation events; AnswerResponse for done."
+        ),
+    )
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=False)
+
+
+# --- Multi-turn conversation (post-Phase-1) ---
+
+
+class ConversationTurn(BaseModel):
+    """A single question/answer pair in a multi-turn conversation.
+
+    Stored in the :class:`ConversationStore` so subsequent turns can
+    retrieve with awareness of prior context.  Frozen so downstream
+    consumers never mutate stored history.
+    """
+
+    turn_index: int = Field(ge=0, description="Zero-based position in the conversation.")
+    question: str = Field(description="The user question for this turn.")
+    answer: str = Field(description="The agent's answer text (empty on refusal).")
+    refused: bool = Field(default=False, description="True if the turn was refused.")
+    refusal_reason: str | None = Field(
+        default=None,
+        description="Reason code when refused=True; None otherwise.",
+    )
+    approx_tokens: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Rough token count for the turn (question + answer). Used by "
+            "the history trimmer to respect ``conversation_max_history_tokens``."
+        ),
+    )
+
+    model_config = ConfigDict(frozen=True)
+
+
+class ConversationHandle(BaseModel):
+    """Opaque handle returned by :meth:`CopilotAgent.start_conversation`.
+
+    Callers treat it as opaque — the only supported operation is to
+    pass it back to :meth:`CopilotAgent.ask_in_conversation`.  The id
+    is a UUID4 string so it is stable across serialisation boundaries
+    (e.g. when a CLI REPL rehydrates after a ``/reset``).
+    """
+
+    conversation_id: str = Field(
+        description="Opaque UUID4 conversation identifier.",
+        min_length=1,
+    )
+
+    model_config = ConfigDict(frozen=True)
+
+
+# Rebuild AnswerChunk model so forward-referenced AnswerResponse
+# in the payload union is fully resolved.
+AnswerChunk.model_rebuild()

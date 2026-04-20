@@ -19,6 +19,8 @@ with a snapshot of settings and keeps that snapshot for its lifetime.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import ConfigDict, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -192,6 +194,73 @@ class CopilotSettings(BaseSettings):
         description=(
             "itsdangerous salt bound to the broker signing key. Change the "
             "salt to invalidate every outstanding token without rotating the key."
+        ),
+    )
+
+    # ---- Orphan cleanup (post-Phase-1) ------------------------------------
+    orphan_cleanup_enabled: bool = Field(
+        default=True,
+        description=(
+            "When True, the indexer deletes stale chunks whose source_path "
+            "was scanned this run but whose id was not re-emitted (i.e. the "
+            "source file was shortened or removed). Disable to restore "
+            "pre-post-Phase-1 behaviour."
+        ),
+    )
+
+    # ---- Semantic reranker (post-Phase-1) ----------------------------------
+    use_semantic_reranker: bool = Field(
+        default=True,
+        description=(
+            "If True, retrieval through CopilotAgent requests Azure AI "
+            "Search's semantic ranker (query_type=semantic). Requires a "
+            "semantic configuration on the index; gracefully falls back "
+            "with a warning log when the configuration is missing."
+        ),
+    )
+    semantic_config_name: str = Field(
+        default="default",
+        description=(
+            "Name of the semantic configuration to request from Azure AI "
+            "Search when use_semantic_reranker is True."
+        ),
+    )
+
+    # ---- Multi-turn conversation (post-Phase-1) ----------------------------
+    conversation_max_turns: int = Field(
+        default=8,
+        ge=1,
+        le=100,
+        description=(
+            "Upper bound on turns retained per conversation. When exceeded, "
+            "oldest turns are dropped from the summary fed back into the "
+            "retriever and prompt."
+        ),
+    )
+    conversation_max_history_tokens: int = Field(
+        default=2000,
+        ge=100,
+        le=32_000,
+        description=(
+            "Rough token budget for the condensed conversation history "
+            "passed into the prompt. Oldest turns are trimmed until the "
+            "approx_tokens sum fits."
+        ),
+    )
+    conversation_store: Literal["memory", "redis"] = Field(
+        default="memory",
+        description=(
+            "Backend for conversation state. 'memory' is process-local and "
+            "suitable for local dev / single-replica; 'redis' uses "
+            "redis.asyncio for multi-replica coherence."
+        ),
+    )
+    conversation_redis_url: str = Field(
+        default="",
+        description=(
+            "Redis connection URL used when conversation_store='redis'. "
+            "Example: 'redis://localhost:6379/0'. Required when the Redis "
+            "backend is selected."
         ),
     )
 

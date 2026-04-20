@@ -4,14 +4,17 @@ Sub-commands::
 
     python -m apps.copilot.cli ingest [--root docs/] [--root examples/] [--dry-run]
     python -m apps.copilot.cli ask "How do I enable private endpoints?" [--show-citations]
+    python -m apps.copilot.cli ask "..." --stream                    # post-Phase-1 streaming
     python -m apps.copilot.cli ask "..." --with-tools               # CSA-0100 agent loop
+    python -m apps.copilot.cli chat                                  # post-Phase-1 REPL
     python -m apps.copilot.cli tools list                           # CSA-0100 tool catalogue
     python -m apps.copilot.cli broker approve <token_id> [--approver ...]
 
 The ingest and ask commands run the grounded Q&A pipeline from Phase
 0-1.  The ``tools`` command enumerates the CSA-0100 tool registry.
 The ``broker`` command surfaces the CSA-0102 approval loop so
-operators can approve tokens out-of-band.
+operators can approve tokens out-of-band.  The ``chat`` command drives
+a multi-turn REPL over the grounded Q&A pipeline.
 
 All commands read configuration from environment variables
 (``COPILOT_*``) via :class:`apps.copilot.config.CopilotSettings`.
@@ -29,7 +32,7 @@ from pathlib import Path
 from apps.copilot.agent import CopilotAgent
 from apps.copilot.config import CopilotSettings
 from apps.copilot.indexer import CorpusIndexer
-from apps.copilot.models import AnswerResponse, IndexReport
+from apps.copilot.models import AnswerChunk, AnswerResponse, Citation, IndexReport
 
 
 def _repo_root() -> Path:
@@ -90,6 +93,10 @@ def _cli_ask(args: argparse.Namespace) -> int:
         return _cli_ask_with_tools(args, settings)
 
     agent = CopilotAgent.from_settings(settings)
+
+    if args.stream:
+        return asyncio.run(_run_ask_stream(agent, args))
+
     response: AnswerResponse = asyncio.run(agent.ask(args.question))
 
     payload = response.model_dump()
@@ -110,6 +117,101 @@ def _cli_ask(args: argparse.Namespace) -> int:
             print(f"    {c.excerpt}")
     print(f"\n(groundedness={response.groundedness:.2f})")
     return 0
+
+
+async def _run_ask_stream(agent: CopilotAgent, args: argparse.Namespace) -> int:
+    """Drive :meth:`CopilotAgent.ask_stream` and render to stdout.
+
+    Status events are rendered as bracketed markers on stderr so they
+    do not contaminate stdout piping; tokens flow to stdout verbatim;
+    the terminal ``done`` event is summarised as either a
+    groundedness line or a refusal line.  JSON mode (``--json``)
+    serialises each :class:`AnswerChunk` as one JSON-lines record.
+    """
+    final: AnswerResponse | None = None
+    collected_citations: list[Citation] = []
+    any_token = False
+
+    async for event in agent.ask_stream(args.question):
+        if args.json:
+            sys.stdout.write(_stream_event_to_jsonline(event))
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+        else:
+            _render_stream_event_human(event)
+
+        if event.kind == "citation" and isinstance(event.payload, Citation):
+            collected_citations.append(event.payload)
+        if event.kind == "token":
+            any_token = True
+        if event.kind == "done" and isinstance(event.payload, AnswerResponse):
+            final = event.payload
+
+    if final is None:
+        # Streams MUST terminate with a done event; anything else is a bug.
+        sys.stderr.write("[stream]: terminated without done event\n")
+        return 1
+
+    if args.json:
+        return 0 if not final.refused else 2
+
+    if final.refused:
+        sys.stderr.write(
+            f"\nREFUSED ({final.refusal_reason}): {final.answer}\n",
+        )
+        return 2
+
+    if not any_token:
+        # Fallback pretty-print when the LLM backend did not emit deltas.
+        sys.stdout.write(final.answer)
+    sys.stdout.write("\n")
+    if args.show_citations and collected_citations:
+        sys.stdout.write("\n--- Citations ---\n")
+        for c in collected_citations:
+            sys.stdout.write(
+                f"[{c.id}] {c.source_path}  (sim={c.similarity:.2f})\n"
+                f"    {c.excerpt}\n",
+            )
+    sys.stdout.write(f"\n(groundedness={final.groundedness:.2f})\n")
+    return 0
+
+
+def _stream_event_to_jsonline(event: AnswerChunk) -> str:
+    """Serialise a streaming event to a single JSON line.
+
+    ``Citation`` / ``AnswerResponse`` payloads are expanded via
+    ``model_dump(mode='json')`` so the consumer gets a flat record.
+    """
+    payload_json: object
+    if isinstance(event.payload, (Citation, AnswerResponse)):
+        payload_json = event.payload.model_dump(mode="json")
+    else:
+        payload_json = event.payload  # str
+    return json.dumps({"kind": event.kind, "payload": payload_json})
+
+
+def _render_stream_event_human(event: AnswerChunk) -> None:
+    """Pretty-print one streaming event to stdout/stderr."""
+    if event.kind == "status":
+        sys.stderr.write(f"[{event.payload}]\n")
+        sys.stderr.flush()
+        return
+    if event.kind == "token":
+        if isinstance(event.payload, str):
+            sys.stdout.write(event.payload)
+            sys.stdout.flush()
+        return
+    if event.kind == "citation":
+        # Citations are collected and printed after the final token
+        # so they appear together; we emit a short indicator here.
+        if isinstance(event.payload, Citation):
+            sys.stderr.write(f"[citation {event.payload.id}]\n")
+            sys.stderr.flush()
+        return
+    if event.kind == "done":
+        # ``done`` is handled by the caller so it can short-circuit
+        # JSON vs human mode. Intentional no-op here.
+        return
 
 
 def _cli_ask_with_tools(args: argparse.Namespace, _settings: CopilotSettings) -> int:
@@ -136,6 +238,133 @@ def _cli_ask_with_tools(args: argparse.Namespace, _settings: CopilotSettings) ->
     # "feature present but not wired".  Shell scripts depending on
     # the Phase-1 codes remain unaffected.
     return 3
+
+
+# ---------------------------------------------------------------------------
+# chat sub-command (post-Phase-1)
+# ---------------------------------------------------------------------------
+
+
+def _cli_chat(args: argparse.Namespace) -> int:
+    """Interactive multi-turn REPL over :meth:`CopilotAgent.ask_in_conversation`.
+
+    Commands honoured by the REPL:
+
+    * ``/reset`` — start a new conversation (prior turns forgotten).
+    * ``/exit`` or empty EOF — quit.
+
+    Agent replies are streamed by default so tokens appear as soon as
+    the LLM produces them; pass ``--no-stream`` to fall back to the
+    blocking path.
+    """
+    settings = _build_settings()
+    agent = CopilotAgent.from_settings(settings)
+    return asyncio.run(_run_chat(agent, stream=not args.no_stream))
+
+
+async def _run_chat(agent: CopilotAgent, *, stream: bool) -> int:
+    """Async body of the ``chat`` sub-command.
+
+    Uses synchronous ``input()`` behind :func:`asyncio.to_thread` so
+    the coroutine remains cooperative with the agent's async I/O.
+    """
+    sys.stdout.write(
+        "CSA Copilot chat. Type /reset to start over, /exit to quit.\n",
+    )
+    sys.stdout.flush()
+
+    handle = await agent.start_conversation()
+
+    while True:
+        try:
+            line = await asyncio.to_thread(input, "you> ")
+        except EOFError:
+            sys.stdout.write("\n")
+            return 0
+        except KeyboardInterrupt:
+            sys.stdout.write("\n")
+            return 130
+
+        if not line or not line.strip():
+            continue
+
+        command = line.strip()
+        if command == "/exit":
+            return 0
+        if command == "/reset":
+            await agent.reset_conversation(handle)
+            handle = await agent.start_conversation()
+            sys.stdout.write("[conversation reset]\n")
+            continue
+
+        # Drive a single turn.
+        if stream:
+            # Capture the prior summary, then stream. We use
+            # ask_stream for deltas but still record the turn via
+            # ask_in_conversation's store update logic; to keep a
+            # single source of truth we drive ask_in_conversation and
+            # accept it is blocking. For user-facing token streaming
+            # during chat we run ask_stream with manual context from
+            # the conversation state.
+            state = await agent.conversation_store.get(handle.conversation_id)
+            context = agent.summarizer.condense(state) if state else ""
+
+            sys.stdout.write("copilot> ")
+            sys.stdout.flush()
+            final: AnswerResponse | None = None
+            async for event in agent.ask_stream(command, extra_context=context):
+                if event.kind == "token" and isinstance(event.payload, str):
+                    sys.stdout.write(event.payload)
+                    sys.stdout.flush()
+                elif event.kind == "status" and isinstance(event.payload, str):
+                    # Show refusals inline; hide the mundane lifecycle
+                    # statuses in REPL mode.
+                    if event.payload.startswith("refused:"):
+                        sys.stderr.write(f"[{event.payload}]\n")
+                elif event.kind == "done" and isinstance(event.payload, AnswerResponse):
+                    final = event.payload
+
+            sys.stdout.write("\n")
+            if final is None:
+                sys.stderr.write("[stream terminated abnormally]\n")
+                continue
+
+            # Persist the turn to the conversation store so the next
+            # turn has history. Replicates the store update done by
+            # ask_in_conversation without re-running the pipeline.
+            from apps.copilot.conversation import approx_token_count
+            from apps.copilot.models import ConversationTurn
+
+            state = await agent.conversation_store.get(handle.conversation_id)
+            if state is not None:
+                new_turn = ConversationTurn(
+                    turn_index=len(state.turns),
+                    question=command,
+                    answer=final.answer,
+                    refused=final.refused,
+                    refusal_reason=final.refusal_reason,
+                    approx_tokens=(
+                        approx_token_count(command) + approx_token_count(final.answer)
+                    ),
+                )
+                updated = state.with_turn_appended(
+                    new_turn,
+                    max_turns=agent.settings.conversation_max_turns,
+                    max_history_tokens=agent.settings.conversation_max_history_tokens,
+                )
+                await agent.conversation_store.set(
+                    updated,
+                    ttl_seconds=agent.conversation_ttl_seconds,
+                )
+        else:
+            response = await agent.ask_in_conversation(handle, command)
+            if response.refused:
+                sys.stdout.write(
+                    f"copilot> REFUSED ({response.refusal_reason}): {response.answer}\n",
+                )
+            else:
+                sys.stdout.write(f"copilot> {response.answer}\n")
+            sys.stdout.flush()
 
 
 # ---------------------------------------------------------------------------
@@ -318,7 +547,27 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Engage the CSA-0100 CopilotAgentLoop (plan/act over the tool registry).",
     )
+    ask.add_argument(
+        "--stream",
+        action="store_true",
+        help=(
+            "Stream tokens as they arrive from the LLM. Status events go "
+            "to stderr; tokens go to stdout. Default is the blocking path."
+        ),
+    )
     ask.set_defaults(func=_cli_ask)
+
+    # chat sub-command
+    chat = sub.add_parser(
+        "chat",
+        help="Multi-turn REPL over the grounded Q&A pipeline.",
+    )
+    chat.add_argument(
+        "--no-stream",
+        action="store_true",
+        help="Disable token streaming in the REPL (block until the full reply).",
+    )
+    chat.set_defaults(func=_cli_chat)
 
     # tools sub-command
     tools = sub.add_parser(

@@ -24,11 +24,23 @@ reuse connection pools.
 
 from __future__ import annotations
 
+import hashlib
+import uuid
+from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any, Protocol
 
 from pydantic import BaseModel, Field
 
 from apps.copilot.config import CopilotSettings
+from apps.copilot.conversation import (
+    ConversationHistoryLimitExceeded,
+    ConversationNotFoundError,
+    ConversationState,
+    ConversationStore,
+    ConversationSummarizer,
+    approx_token_count,
+    build_conversation_store,
+)
 from apps.copilot.grounding import (
     Coverage,
     GroundingPolicy,
@@ -36,9 +48,12 @@ from apps.copilot.grounding import (
     verify_citations,
 )
 from apps.copilot.models import (
+    AnswerChunk,
     AnswerResponse,
     Citation,
     CitationVerificationResult,
+    ConversationHandle,
+    ConversationTurn,
     DocType,
     RetrievedChunk,
 )
@@ -46,9 +61,27 @@ from csa_platform.ai_integration.rag.pipeline import SearchResult, VectorStore
 from csa_platform.common.logging import get_logger
 
 if TYPE_CHECKING:  # pragma: no cover
+    from datetime import datetime
+
     from pydantic_ai import Agent as PydanticAIAgent
 
 logger = get_logger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Typed errors
+# ---------------------------------------------------------------------------
+
+
+class StreamingNotSupportedError(RuntimeError):
+    """Raised when :meth:`CopilotAgent.ask_stream` is invoked with an LLM
+    backend that does not support the streaming contract and no fallback
+    is available."""
+
+
+# ``ConversationNotFoundError`` and ``ConversationHistoryLimitExceeded``
+# are re-exported below so callers can catch them from apps.copilot.agent
+# without knowing about the conversation submodule.
 
 
 # ---------------------------------------------------------------------------
@@ -108,6 +141,35 @@ class LLMGenerator(Protocol):
     """
 
     async def generate(self, prompt: str) -> GenerationResult: ...
+
+
+class LLMStreamChunk(BaseModel):
+    """One chunk yielded by :meth:`LLMStreamingGenerator.stream`.
+
+    ``delta`` is the token text (may be multiple chars if the
+    underlying SDK batches).  When ``final`` is populated, it is the
+    parsed :class:`GenerationResult` and no further chunks will
+    follow.
+    """
+
+    delta: str = Field(default="", description="Token delta text; empty on the terminal chunk.")
+    final: GenerationResult | None = Field(
+        default=None,
+        description="Populated only on the last chunk when the SDK exposes a parsed result.",
+    )
+
+
+class LLMStreamingGenerator(Protocol):
+    """Extension protocol: generators that can stream token deltas.
+
+    :meth:`CopilotAgent.ask_stream` feature-detects this interface and
+    falls back to a synthesised single-chunk stream derived from
+    ``generate`` when a backend does not implement it.
+    """
+
+    async def generate(self, prompt: str) -> GenerationResult: ...
+
+    def stream(self, prompt: str) -> AsyncIterator[LLMStreamChunk]: ...
 
 
 # ---------------------------------------------------------------------------
@@ -183,6 +245,43 @@ class PydanticAIGenerator:
         output: GenerationResult = result.output
         return output
 
+    async def stream(self, prompt: str) -> AsyncIterator[LLMStreamChunk]:
+        """Stream token deltas from the PydanticAI agent.
+
+        PydanticAI's ``Agent.run_stream`` yields deltas as they
+        arrive; we translate them into :class:`LLMStreamChunk` values.
+        The final chunk carries the parsed :class:`GenerationResult`.
+
+        When the underlying SDK is not available or streaming is not
+        supported, the method falls back to a single final chunk so
+        callers always see at least one token-level event.
+        """
+        if self._agent is None:
+            self._agent = self._build_agent()
+
+        try:
+            # run_stream is an async context manager.
+            async with self._agent.run_stream(prompt) as stream_result:
+                prev = ""
+                async for text in stream_result.stream_text():
+                    delta = text[len(prev):] if text.startswith(prev) else text
+                    prev = text
+                    if delta:
+                        yield LLMStreamChunk(delta=delta)
+                # Final parsed output.
+                final: GenerationResult = await stream_result.get_output()
+                yield LLMStreamChunk(final=final)
+        except (AttributeError, NotImplementedError) as exc:
+            # The SDK version does not expose streaming — fall back to
+            # a single final chunk so the agent-level stream still
+            # yields at least one token event.
+            logger.warning(
+                "copilot.agent.stream_fallback",
+                error=str(exc),
+            )
+            final = await self.generate(prompt)
+            yield LLMStreamChunk(delta=final.answer, final=final)
+
 
 # ---------------------------------------------------------------------------
 # Retrieval helpers
@@ -205,10 +304,30 @@ def _normalise_similarity(score: float) -> float:
     return score
 
 
-def _search_result_to_retrieved_chunk(result: SearchResult) -> RetrievedChunk:
-    """Convert a pipeline :class:`SearchResult` to a Copilot chunk."""
-    meta = result.metadata or {}
+def _search_result_to_retrieved_chunk(
+    result: SearchResult,
+    *,
+    semantic_used: bool = False,
+) -> RetrievedChunk:
+    """Convert a pipeline :class:`SearchResult` to a Copilot chunk.
+
+    ``similarity`` is always normalised into ``[0, 1]`` via
+    :func:`_normalise_similarity` so grounding math stays uniform
+    across the rerank-on and rerank-off paths.  When *semantic_used*
+    is True, the raw ``result.score`` is a semantic reranker score in
+    the 0-4 range — we stash it verbatim under
+    ``metadata["reranker_score"]`` (clamped to the SDK's documented
+    range) so downstream :class:`Citation` objects can surface it
+    independently of ``similarity``.
+    """
+    meta: dict[str, Any] = dict(result.metadata or {})
     doc_type: DocType = meta.get("doc_type", "unknown")
+
+    if semantic_used and "reranker_score" not in meta:
+        raw = float(result.score)
+        clamped = max(0.0, min(raw, 4.0))
+        meta["reranker_score"] = clamped
+
     return RetrievedChunk(
         id=result.id,
         source_path=result.source or meta.get("source_path", ""),
@@ -260,11 +379,20 @@ class CopilotAgent:
         retriever: SupportsAsyncSearch,
         embedder: SupportsAsyncEmbed,
         llm: LLMGenerator,
+        conversation_store: ConversationStore | None = None,
+        conversation_ttl_seconds: int = 3600,
     ) -> None:
         self.settings = settings
         self.retriever = retriever
         self.embedder = embedder
         self.llm = llm
+        self.conversation_store: ConversationStore = (
+            conversation_store or build_conversation_store(settings)
+        )
+        self.conversation_ttl_seconds = conversation_ttl_seconds
+        self.summarizer = ConversationSummarizer(
+            max_history_tokens=settings.conversation_max_history_tokens,
+        )
         self.policy = GroundingPolicy(
             min_similarity=settings.min_grounding_similarity,
             min_chunks=settings.min_grounded_chunks,
@@ -357,18 +485,377 @@ class CopilotAgent:
             coverage=coverage,
         )
 
+    # -- streaming -----------------------------------------------------------
+
+    async def ask_stream(
+        self,
+        question: str,
+        *,
+        extra_context: str = "",
+    ) -> AsyncIterator[AnswerChunk]:
+        """Answer *question* as a stream of :class:`AnswerChunk` events.
+
+        The event sequence is::
+
+            status(retrieve-start)
+            status(retrieve-complete)
+            (optional status(refused:...) + done(AnswerResponse) — refusal)
+            status(coverage-gate-pass)
+            status(generate-start)
+            token(...) token(...) ... (LLM deltas)
+            citation(...) citation(...) (verified citations)
+            done(AnswerResponse)
+
+        On refusal paths (empty question, no coverage, citation
+        verification failure after retries) the stream still emits a
+        terminal ``done`` event carrying the refused
+        :class:`AnswerResponse` — callers should always consume until
+        ``done`` to get the final DTO.
+
+        The underlying LLM is feature-detected: if ``self.llm``
+        implements :meth:`LLMStreamingGenerator.stream`, deltas flow
+        through verbatim; otherwise the method falls back to invoking
+        ``generate`` and yielding a single delta the size of the final
+        answer (so the contract of "at least one token event before
+        done" is preserved).
+        """
+        question_hash = _hash_question(question)
+        logger.info(
+            "copilot.agent.stream_start",
+            tool="copilot_agent",
+            question_hash=question_hash,
+        )
+
+        if not question or not question.strip():
+            refused = AnswerResponse(
+                question=question,
+                answer=self.policy.refusal_message,
+                citations=[],
+                groundedness=0.0,
+                refused=True,
+                refusal_reason="empty_question",
+            )
+            yield AnswerChunk(kind="status", payload="refused:empty_question")
+            yield AnswerChunk(kind="done", payload=refused)
+            return
+
+        yield AnswerChunk(kind="status", payload="retrieve-start")
+        retrieved = await self._retrieve(question, extra_context=extra_context)
+        yield AnswerChunk(kind="status", payload="retrieve-complete")
+
+        coverage = evaluate_coverage(retrieved, self.policy)
+        logger.info(
+            "copilot.agent.coverage",
+            tool="copilot_agent",
+            question_hash=question_hash,
+            is_grounded=coverage.is_grounded,
+            groundedness=coverage.max_similarity,
+            total=coverage.total_chunks,
+            above=coverage.chunks_above_threshold,
+        )
+
+        if not coverage.is_grounded:
+            refused = AnswerResponse(
+                question=question,
+                answer=self.policy.refusal_message,
+                citations=[],
+                groundedness=coverage.max_similarity,
+                refused=True,
+                refusal_reason="no_coverage",
+            )
+            yield AnswerChunk(kind="status", payload="refused:no_coverage")
+            yield AnswerChunk(kind="done", payload=refused)
+            return
+
+        yield AnswerChunk(kind="status", payload="coverage-gate-pass")
+
+        id_to_chunk, prompt = self._build_grounded_prompt(question, retrieved)
+
+        yield AnswerChunk(kind="status", payload="generate-start")
+
+        # Streaming path: use the LLM's stream() method when available,
+        # else fall back to generate() and synthesise a single-delta
+        # stream so the contract holds.
+        final_generation: GenerationResult | None = None
+        if hasattr(self.llm, "stream"):
+            accumulated = ""
+            async for chunk in self.llm.stream(prompt):
+                if chunk.delta:
+                    accumulated += chunk.delta
+                    yield AnswerChunk(kind="token", payload=chunk.delta)
+                if chunk.final is not None:
+                    final_generation = chunk.final
+            if final_generation is None:
+                # SDK provided deltas but never a parsed final — build
+                # a best-effort GenerationResult. The accumulator
+                # should be valid prose; citation verification will
+                # fail if not, triggering the refusal branch below.
+                final_generation = GenerationResult(
+                    answer=accumulated,
+                    citations=[],
+                )
+        else:
+            final_generation = await self.llm.generate(prompt)
+            yield AnswerChunk(kind="token", payload=final_generation.answer)
+
+        # Run citation verification on the final generation.
+        chunk_id_by_citation = {
+            cid: id_to_chunk[cid].id for cid in id_to_chunk
+        }
+        verification = verify_citations(
+            answer_text=final_generation.answer,
+            retrieved_chunks=retrieved,
+            cited_ids=final_generation.citations,
+            chunk_id_by_citation=chunk_id_by_citation,
+        )
+
+        if not verification.valid:
+            logger.warning(
+                "copilot.agent.stream_citation_failed",
+                tool="copilot_agent",
+                question_hash=question_hash,
+                groundedness=coverage.max_similarity,
+                missing=verification.missing_markers,
+                fabricated=verification.fabricated_ids,
+            )
+            refused = AnswerResponse(
+                question=question,
+                answer=self.policy.refusal_message,
+                citations=[],
+                groundedness=coverage.max_similarity,
+                refused=True,
+                refusal_reason="citation_verification_failed",
+            )
+            yield AnswerChunk(
+                kind="status",
+                payload="refused:citation_verification_failed",
+            )
+            yield AnswerChunk(kind="done", payload=refused)
+            return
+
+        citations = self._build_citations(
+            cited_ids=final_generation.citations,
+            marker_ids=verification.marker_ids_found,
+            id_to_chunk=id_to_chunk,
+        )
+        for citation in citations:
+            yield AnswerChunk(kind="citation", payload=citation)
+
+        final_response = AnswerResponse(
+            question=question,
+            answer=final_generation.answer,
+            citations=citations,
+            groundedness=coverage.max_similarity,
+            refused=False,
+            refusal_reason=None,
+        )
+        logger.info(
+            "copilot.agent.stream_done",
+            tool="copilot_agent",
+            question_hash=question_hash,
+            groundedness=coverage.max_similarity,
+            citations=len(citations),
+        )
+        yield AnswerChunk(kind="done", payload=final_response)
+
+    # -- multi-turn conversation --------------------------------------------
+
+    async def start_conversation(self) -> ConversationHandle:
+        """Open a new, empty conversation and persist it.
+
+        Returns an opaque :class:`ConversationHandle` whose
+        ``conversation_id`` is a UUID4 string. The handle is the only
+        artifact callers need to make further turns.
+        """
+        conversation_id = uuid.uuid4().hex
+        now = _utc_now()
+        state = ConversationState(
+            conversation_id=conversation_id,
+            created_at=now,
+            turns=[],
+        )
+        await self.conversation_store.set(state, ttl_seconds=self.conversation_ttl_seconds)
+        logger.info(
+            "copilot.agent.conversation_started",
+            tool="copilot_agent",
+            conversation_id=conversation_id,
+        )
+        return ConversationHandle(conversation_id=conversation_id)
+
+    async def ask_in_conversation(
+        self,
+        handle: ConversationHandle,
+        question: str,
+    ) -> AnswerResponse:
+        """Answer *question* with awareness of prior turns in *handle*.
+
+        The prior turns are condensed by
+        :class:`ConversationSummarizer` and passed through as an
+        ``extra_context`` prefix to the retriever and embedding query.
+        Grounding, citation verification, and the refusal contract are
+        applied identically to :meth:`ask` — multi-turn never bypasses
+        the Phase-1 safety net.
+        """
+        state = await self.conversation_store.get(handle.conversation_id)
+        if state is None:
+            raise ConversationNotFoundError(
+                f"No conversation with id={handle.conversation_id!r}. "
+                "Call start_conversation() first.",
+            )
+
+        summary = self.summarizer.condense(state)
+        question_hash = _hash_question(question)
+        logger.info(
+            "copilot.agent.conversation_turn_start",
+            tool="copilot_agent",
+            conversation_id=handle.conversation_id,
+            turn_index=len(state.turns),
+            question_hash=question_hash,
+        )
+
+        response = await self._ask_with_context(question, extra_context=summary)
+
+        new_turn = ConversationTurn(
+            turn_index=len(state.turns),
+            question=question,
+            answer=response.answer,
+            refused=response.refused,
+            refusal_reason=response.refusal_reason,
+            approx_tokens=approx_token_count(question) + approx_token_count(response.answer),
+        )
+        updated = state.with_turn_appended(
+            new_turn,
+            max_turns=self.settings.conversation_max_turns,
+            max_history_tokens=self.settings.conversation_max_history_tokens,
+        )
+        await self.conversation_store.set(
+            updated,
+            ttl_seconds=self.conversation_ttl_seconds,
+        )
+
+        logger.info(
+            "copilot.agent.conversation_turn_done",
+            tool="copilot_agent",
+            conversation_id=handle.conversation_id,
+            turn_index=new_turn.turn_index,
+            groundedness=response.groundedness,
+            refused=response.refused,
+            refusal_reason=response.refusal_reason,
+        )
+        return response
+
+    async def reset_conversation(self, handle: ConversationHandle) -> None:
+        """Delete the state for *handle*.
+
+        Idempotent — no error if the conversation was already evicted.
+        """
+        await self.conversation_store.delete(handle.conversation_id)
+        logger.info(
+            "copilot.agent.conversation_reset",
+            tool="copilot_agent",
+            conversation_id=handle.conversation_id,
+        )
+
+    # -- shared internal -----------------------------------------------------
+
+    async def _ask_with_context(
+        self,
+        question: str,
+        *,
+        extra_context: str,
+    ) -> AnswerResponse:
+        """Same contract as :meth:`ask` but accepts retrieval context."""
+        if not question or not question.strip():
+            return AnswerResponse(
+                question=question,
+                answer=self.policy.refusal_message,
+                citations=[],
+                groundedness=0.0,
+                refused=True,
+                refusal_reason="empty_question",
+            )
+
+        retrieved = await self._retrieve(question, extra_context=extra_context)
+        coverage = evaluate_coverage(retrieved, self.policy)
+        if not coverage.is_grounded:
+            return AnswerResponse(
+                question=question,
+                answer=self.policy.refusal_message,
+                citations=[],
+                groundedness=coverage.max_similarity,
+                refused=True,
+                refusal_reason="no_coverage",
+            )
+
+        id_to_chunk, prompt = self._build_grounded_prompt(question, retrieved)
+        return await self._generate_and_verify(
+            question=question,
+            prompt=prompt,
+            retrieved=retrieved,
+            id_to_chunk=id_to_chunk,
+            coverage=coverage,
+        )
+
     # -- internals -----------------------------------------------------------
 
-    async def _retrieve(self, question: str) -> list[RetrievedChunk]:
-        """Embed + vector-search *question*, return normalised chunks."""
-        embeddings = await self.embedder.embed_texts_async([question])
+    async def _retrieve(
+        self,
+        question: str,
+        *,
+        extra_context: str = "",
+    ) -> list[RetrievedChunk]:
+        """Embed + vector-search *question*, return normalised chunks.
+
+        When :attr:`CopilotSettings.use_semantic_reranker` is True, the
+        retriever is called with ``use_semantic_reranker=True``. If the
+        underlying service rejects the semantic call (e.g. the index
+        has no semantic configuration), we log a warning and retry
+        with the reranker disabled so the agent still answers.
+
+        *extra_context* (optional) is concatenated to the embedding
+        query and hybrid text query so multi-turn follow-ups retrieve
+        against prior context without fabricating new facts.
+        """
+        embedding_input = question if not extra_context else f"{extra_context}\n\n{question}"
+        query_text = question if not extra_context else f"{extra_context}\n\n{question}"
+
+        embeddings = await self.embedder.embed_texts_async([embedding_input])
         query_vector = embeddings[0]
-        raw = await self.retriever.search_async(
-            query_vector=query_vector,
-            query_text=question,
-            top_k=self.settings.top_k,
-        )
-        return [_search_result_to_retrieved_chunk(r) for r in raw]
+
+        semantic_used = False
+        if self.settings.use_semantic_reranker:
+            try:
+                raw = await self.retriever.search_async(
+                    query_vector=query_vector,
+                    query_text=query_text,
+                    top_k=self.settings.top_k,
+                    use_semantic_reranker=True,
+                )
+                semantic_used = True
+            except Exception as exc:
+                # Graceful fallback: the index may lack a semantic
+                # configuration. Log and retry without the reranker.
+                logger.warning(
+                    "copilot.agent.semantic_reranker_fallback",
+                    error=str(exc),
+                    semantic_config=self.settings.semantic_config_name,
+                )
+                raw = await self.retriever.search_async(
+                    query_vector=query_vector,
+                    query_text=query_text,
+                    top_k=self.settings.top_k,
+                    use_semantic_reranker=False,
+                )
+        else:
+            raw = await self.retriever.search_async(
+                query_vector=query_vector,
+                query_text=query_text,
+                top_k=self.settings.top_k,
+            )
+        return [
+            _search_result_to_retrieved_chunk(r, semantic_used=semantic_used)
+            for r in raw
+        ]
 
     def _build_grounded_prompt(
         self,
@@ -503,6 +990,7 @@ class CopilotAgent:
             excerpt = chunk.text.strip()
             if len(excerpt) > 500:
                 excerpt = excerpt[:497].rstrip() + "..."
+            reranker = chunk.metadata.get("reranker_score") if chunk.metadata else None
             citations.append(
                 Citation(
                     id=cid,
@@ -510,6 +998,9 @@ class CopilotAgent:
                     excerpt=excerpt,
                     similarity=chunk.similarity,
                     chunk_id=chunk.id,
+                    reranker_score=(
+                        float(reranker) if reranker is not None else None
+                    ),
                 ),
             )
         return citations
@@ -561,10 +1052,32 @@ def _require_any(value: Any, name: str) -> Any:  # pragma: no cover - defensive
     return value
 
 
+def _hash_question(question: str) -> str:
+    """Return a short SHA-256 prefix of *question* for structured logging.
+
+    Using a hash keeps personally-identifiable user text out of logs
+    while still giving ops a stable key to correlate retrieval,
+    generation, and verification events for the same ask.
+    """
+    return hashlib.sha256(question.encode("utf-8")).hexdigest()[:16]
+
+
+def _utc_now() -> datetime:
+    """Return the current UTC :class:`datetime` (testable via monkeypatch)."""
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc)
+
+
 __all__ = [
     "SYSTEM_PROMPT",
+    "ConversationHistoryLimitExceeded",
+    "ConversationNotFoundError",
     "CopilotAgent",
     "GenerationResult",
     "LLMGenerator",
+    "LLMStreamChunk",
+    "LLMStreamingGenerator",
     "PydanticAIGenerator",
+    "StreamingNotSupportedError",
 ]

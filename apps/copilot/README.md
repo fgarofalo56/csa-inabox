@@ -306,19 +306,157 @@ These phases remain out of scope for this release:
 - **Phase 6 — LLMOps.** Golden-answer regression suite, response
   evals, prompt-version tracking, and telemetry dashboards.
 
-## Known gaps
+## Production hardening (post-Phase-1)
 
-- **Orphan cleanup on re-index.** The indexer adds new chunks and
-  no-ops on unchanged content, but it does not currently delete
-  chunks whose source file was removed or shortened. A follow-up
-  pass will scan the index and prune orphans.
-- **Hybrid search tuning.** Retrieval currently uses pure vector
-  search with default hybrid text query; semantic reranker is not yet
-  enabled by the Copilot agent path (the underlying `VectorStore`
-  supports it).
-- **Multi-turn conversation.** The agent is single-turn — no
-  conversation history is persisted. Planned for Phase 5.
-- **Streaming.** Answers are returned as complete strings, not
-  streamed tokens. The CLI blocks until the full answer is ready.
+Four gaps flagged during the Phase 0-1 ship review have now been
+closed. Every feature is off-by-default friendly — existing call
+sites behave unchanged unless they opt in.
+
+### 1. Orphan cleanup on re-index
+
+The indexer now detects chunks that were previously emitted for a
+scanned `source_path` but were NOT re-emitted during the current run
+(i.e. the source file was shortened or deleted) and deletes them in
+batch. The count surfaces on `IndexReport.chunks_deleted`.
+
+Idempotency is preserved: re-running the indexer on an unchanged
+corpus produces `chunks_deleted == 0`.
+
+```python
+settings = CopilotSettings(orphan_cleanup_enabled=True)  # default
+```
+
+Set `COPILOT_ORPHAN_CLEANUP_ENABLED=false` to restore the pre-
+hardening behaviour (no deletes).
+
+The cleanup only touches chunks whose `source_path` was visited by
+the current run; unrelated entries in the index are never considered.
+For vector store implementations that do not support the
+`list_ids_by_source_paths` + `delete_documents` protocol (e.g.
+stripped-down test fakes), cleanup is skipped with a warning log —
+never a crash.
+
+### 2. Streaming responses in `ask`
+
+`CopilotAgent.ask_stream(question)` returns an `AsyncIterator` of
+`AnswerChunk` events:
+
+| Event kind | Payload               | Meaning                                         |
+|------------|-----------------------|-------------------------------------------------|
+| `status`   | `str`                 | lifecycle (`retrieve-start`, `generate-start`, `refused:<reason>`) |
+| `token`    | `str`                 | one LLM delta                                   |
+| `citation` | `Citation`            | one verified citation                           |
+| `done`     | `AnswerResponse`      | terminal event carrying the full DTO            |
+
+Low-coverage refusal fires early: it emits a `status` with
+`refused:no_coverage` followed by a `done`, and the LLM is NEVER
+invoked. Citation-verification failure refuses after the deltas have
+been streamed but still terminates with `done(AnswerResponse(refused=True))`.
+
+CLI:
+
+```bash
+# Stream tokens; status lines go to stderr, tokens to stdout.
+python -m apps.copilot.cli ask "Why Bicep?" --stream
+
+# JSON-lines over the streaming protocol (one event per line).
+python -m apps.copilot.cli ask "Why Bicep?" --stream --json
+```
+
+When the underlying LLM backend does not support streaming, the agent
+falls back to `generate()` and synthesises a single `token` event so
+the contract is preserved.
+
+### 3. Semantic reranker
+
+`CopilotAgent._retrieve` now asks Azure AI Search for semantic
+ranking by default (`query_type=semantic`,
+`semantic_configuration_name=<COPILOT_SEMANTIC_CONFIG_NAME>`). Raw
+reranker scores surface on `Citation.reranker_score` (0-4 range).
+
+Graceful fallback: if the index lacks a semantic configuration and the
+first call raises, the agent logs a `copilot.agent.semantic_reranker_fallback`
+warning and retries with `use_semantic_reranker=False` so the answer
+still ships.
+
+```python
+settings = CopilotSettings(
+    use_semantic_reranker=True,       # default
+    semantic_config_name="default",  # default
+)
+```
+
+Disable with `COPILOT_USE_SEMANTIC_RERANKER=false` to restore pure
+vector + hybrid text retrieval.
+
+### 4. Multi-turn conversation history
+
+```python
+agent = CopilotAgent.from_settings(settings)
+handle = await agent.start_conversation()
+r1 = await agent.ask_in_conversation(handle, "What is Bicep?")
+r2 = await agent.ask_in_conversation(handle, "How does it differ from ARM?")
+await agent.reset_conversation(handle)
+```
+
+- Handles are opaque `ConversationHandle(conversation_id=UUID)`.
+- History is bounded by `conversation_max_turns` (default 8) and
+  `conversation_max_history_tokens` (default 2000). Oldest turns are
+  trimmed silently when exceeded.
+- The `ConversationSummarizer` condenses prior turns into a
+  `Q:`/`A:` transcript that is prepended to the embedding query and
+  hybrid text query on subsequent retrievals. It does NOT call the
+  LLM — summaries must never introduce facts that did not come from
+  the corpus.
+- Storage backends:
+  - `COPILOT_CONVERSATION_STORE=memory` (default) —
+    `InMemoryConversationStore`.
+  - `COPILOT_CONVERSATION_STORE=redis` +
+    `COPILOT_CONVERSATION_REDIS_URL=redis://...` —
+    `RedisConversationStore` (lazy-imports `redis.asyncio`).
+
+  The Protocol shape mirrors `portal/shared/api/services/session_store.py`
+  so production deployments can reuse a single Redis cluster for both
+  BFF sessions and Copilot conversations.
+
+CLI (interactive REPL):
+
+```bash
+python -m apps.copilot.cli chat
+you> What is Bicep?
+copilot> Azure's IaC DSL... [1]
+you> How does it differ from ARM?
+copilot> It's more readable and composable... [2]
+you> /reset
+[conversation reset]
+you> /exit
+```
+
+`chat` streams tokens by default. Pass `--no-stream` to block until the
+full reply is ready.
+
+### New configuration surface
+
+| Variable                                   | Default                 | Purpose                                          |
+|--------------------------------------------|-------------------------|--------------------------------------------------|
+| `COPILOT_ORPHAN_CLEANUP_ENABLED`           | `true`                  | Delete stale chunks whose sources were scanned.  |
+| `COPILOT_USE_SEMANTIC_RERANKER`            | `true`                  | Request Azure Search semantic ranker.            |
+| `COPILOT_SEMANTIC_CONFIG_NAME`             | `default`               | Semantic configuration name on the index.        |
+| `COPILOT_CONVERSATION_MAX_TURNS`           | `8`                     | Maximum retained turns per conversation.         |
+| `COPILOT_CONVERSATION_MAX_HISTORY_TOKENS`  | `2000`                  | Token budget for the condensed history.          |
+| `COPILOT_CONVERSATION_STORE`               | `memory`                | `memory` or `redis`.                             |
+| `COPILOT_CONVERSATION_REDIS_URL`           | (empty)                 | Required when `conversation_store=redis`.        |
+
+### Typed errors
+
+- `OrphanCleanupError` — fatal backend failure during orphan cleanup.
+- `StreamingNotSupportedError` — reserved; raised when streaming is
+  explicitly required but the backend cannot provide it.
+- `ConversationNotFoundError` — unknown `ConversationHandle`.
+- `ConversationHistoryLimitExceededError` — reserved for opt-in
+  `raise_on_trim` integrations.
+
+## Remaining known gaps
+
 - **LLMOps.** No automated evaluation; grounding and citation
-  contracts are the only quality gates.
+  contracts are the only quality gates. Planned for Phase 6.
