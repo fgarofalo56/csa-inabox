@@ -207,6 +207,33 @@ app.include_router(access.router, prefix="/api/v1/access", tags=["Access Request
 app.include_router(stats.router, prefix="/api/v1/stats", tags=["Statistics"])
 app.include_router(domains_router, prefix="/api/v1/domains", tags=["Statistics"])
 
+# ── BFF auth router (conditionally mounted) — CSA-0020 Phase 2 ──────────────
+# The BFF router runs the MSAL Auth Code + PKCE flow server-side and
+# issues an opaque httpOnly session cookie. It is only mounted when
+# AUTH_MODE=bff so accidental exposure on an SPA-configured deployment
+# is impossible. See docs/adr/0014-msal-bff-auth-pattern.md.
+if settings.AUTH_MODE.lower() == "bff":
+    # Import here to keep the optional `msal` + `itsdangerous` deps out
+    # of the import graph on SPA-mode deployments.
+    from .routers import auth_bff
+
+    _env = settings.ENVIRONMENT.lower()
+    if _env in ("production", "staging"):
+        if not settings.BFF_SESSION_SIGNING_KEY or len(settings.BFF_SESSION_SIGNING_KEY) < 32:
+            raise RuntimeError(
+                "AUTH_MODE=bff requires BFF_SESSION_SIGNING_KEY "
+                "(>=32 chars) to be configured for staging/production.",
+            )
+        if not (settings.BFF_TENANT_ID and settings.BFF_CLIENT_ID and settings.BFF_CLIENT_SECRET):
+            raise RuntimeError(
+                "AUTH_MODE=bff requires BFF_TENANT_ID, BFF_CLIENT_ID, and "
+                "BFF_CLIENT_SECRET to be configured for staging/production.",
+            )
+    app.include_router(auth_bff.router)
+    logger.info("BFF auth router mounted under /auth (AUTH_MODE=bff)")
+else:
+    logger.info("BFF auth router NOT mounted (AUTH_MODE=%s)", settings.AUTH_MODE)
+
 
 # ── Top-level endpoints ─────────────────────────────────────────────────────
 

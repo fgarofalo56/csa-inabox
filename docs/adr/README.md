@@ -32,6 +32,7 @@
 | [0011](./0011-multi-cloud-scope.md) | Multi-cloud scope: OneLake shortcuts + Purview scans only; defer federated compute | accepted | 2026-04-20 | Honest scope — ships governance story for S3/GCS/Snowflake/BigQuery/Redshift; defers cross-cloud compute. |
 | [0012](./0012-data-mesh-federation.md) | Data-mesh federation model: contract-driven, Purview-governed, portal-surfaced | accepted | 2026-04-20 | Contract-first in-monorepo mesh — `contract.yaml` → CI validates → Purview registers → marketplace surfaces; per-domain CODEOWNERS. |
 | [0013](./0013-dbt-as-canonical-transformation.md) | dbt Core as the canonical transformation layer | accepted | 2026-04-20 | Deduplicates Bronze → Silver → Gold logic — dbt owns medallion transforms; Spark notebooks are deprecated for that path and reserved for exploration / provisioning / ML. |
+| [0014](./0014-msal-bff-auth-pattern.md) | MSAL Backend-for-Frontend (BFF) auth pattern | accepted | 2026-04-20 | Phased CSA-0020 remediation — Phase 1 strict CSP + Trusted Types on the SPA; Phase 2 server-side Auth Code + PKCE flow with an httpOnly `csa_sid` session cookie. Tokens never reach the browser. |
 
 ---
 

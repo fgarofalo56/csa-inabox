@@ -101,6 +101,18 @@ portal = [
     "azure-mgmt-datafactory>=7.0.0,<10.0.0",
     "azure-storage-blob>=12.20.0,<13.0.0",
 ]
+bff = [
+    # CSA-0020 Phase 2 — BFF auth pattern (ADR-0014).
+    # Only required when AUTH_MODE=bff; the BFF router is not mounted
+    # on SPA-configured deployments so these imports are lazy and this
+    # extra is optional.
+    "msal>=1.28.0,<2.0.0",                    # MSAL for Python — Auth Code + PKCE flow
+    "itsdangerous>=2.1.2,<3.0.0",             # Signed cookies (session id + pending-auth state)
+    # redis.asyncio is only needed when BFF_SESSION_STORE=redis; an
+    # InMemorySessionStore exists for local dev. Pinning keeps the
+    # supply chain deterministic in gov builds.
+    "redis>=5.0.0,<7.0.0",
+]
 
 [tool.setuptools]
 # Installable Python packages.  csa_platform ships the reusable platform
