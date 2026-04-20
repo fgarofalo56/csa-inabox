@@ -1,0 +1,21 @@
+device_id,type,location_lat,location_lon,vendor,install_date
+iot-temp-0001,temperature,47.6062,-122.3321,Acme Sensors,2024-01-15
+iot-temp-0002,temperature,40.7128,-74.0060,Acme Sensors,2024-02-01
+iot-temp-0003,temperature,34.0522,-118.2437,Bosch,2024-02-14
+iot-temp-0004,temperature,41.8781,-87.6298,Bosch,2024-03-05
+iot-temp-0005,temperature,29.7604,-95.3698,Honeywell,2024-03-20
+iot-hum-0001,humidity,47.6062,-122.3321,Acme Sensors,2024-01-15
+iot-hum-0002,humidity,40.7128,-74.0060,Acme Sensors,2024-02-01
+iot-press-0001,pressure,47.6062,-122.3321,Bosch,2024-01-15
+iot-press-0002,pressure,40.7128,-74.0060,Bosch,2024-02-01
+weather-ghcn-0001,weather,42.3601,-71.0589,NOAA,2020-06-01
+weather-ghcn-0002,weather,37.7749,-122.4194,NOAA,2020-06-01
+weather-ghcn-0003,weather,25.7617,-80.1918,NOAA,2021-03-15
+aqi-epa-0001,aqi,34.0522,-118.2437,EPA,2022-01-10
+aqi-epa-0002,aqi,29.7604,-95.3698,EPA,2022-04-05
+aqi-epa-0003,aqi,41.8781,-87.6298,EPA,2022-07-22
+slots-mgm-0001,slot_machine,36.1699,-115.1398,IGT,2023-11-01
+slots-mgm-0002,slot_machine,36.1699,-115.1398,IGT,2023-11-01
+slots-mgm-0003,slot_machine,36.1699,-115.1398,Aristocrat,2023-12-15
+slots-mgm-0004,slot_machine,36.1699,-115.1398,Aristocrat,2024-01-20
+slots-mgm-0005,slot_machine,36.1699,-115.1398,Scientific Games,2024-02-10

@@ -184,9 +184,23 @@ WHERE anomaly_score > 0.8
 examples/iot-streaming/
 ├── README.md                          # This file
 ├── producers/
-│   └── iot_simulator.py               # Multi-type IoT sensor simulator
+│   └── iot_simulator.py               # Multi-type IoT sensor simulator (streaming)
 ├── data/
-│   └── generators/                    # Seed data generators
+│   ├── generators/                    # Deterministic batch-fixture generators
+│   │   ├── generate_telemetry.py      # Telemetry/weather/AQI/slots CSVs
+│   │   ├── generate_devices.py        # Rebuilds dbt device seeds
+│   │   ├── README.md                  # Generator usage + reproducibility
+│   │   └── tests/test_generators.py   # Determinism + row-count tests
+│   └── seed/                          # Generator output (bronze-layer CSVs)
+├── domains/
+│   └── dbt/                           # dbt medallion (bronze/silver/gold)
+│       ├── dbt_project.yml
+│       ├── models/
+│       │   ├── schema.yml
+│       │   ├── bronze/brz_*.sql
+│       │   ├── silver/slv_*.sql
+│       │   └── gold/gld_*.sql
+│       └── seeds/                     # devices.csv, sensor_metadata.csv
 ├── deploy/
 │   └── bicep/
 │       ├── iot-hub.bicep              # IoT Hub + DPS + Event Hubs
@@ -383,6 +397,83 @@ SensorTelemetry
 | `transform_telemetry.asaql` | Raw passthrough + enrichment (heat index, dew point, quality flags) |
 | `aggregate_metrics.asaql` | Tumbling (5min), hopping (1min/5min), regional, and session windows |
 | `detect_anomalies.asaql` | SpikeAndDip, ChangePoint, and combined threshold+anomaly alerts |
+
+
+---
+
+## 🧱 dbt + Data Generators (Batch / Cold Path)
+
+The streaming examples above cover the **hot** and **warm** paths. For the
+**cold** path (Event Hub Capture → ADLS → dbt medallion) this vertical
+ships a dbt project at [`domains/dbt/`](./domains/dbt/) and deterministic
+seed generators at [`data/generators/`](./data/generators/).
+
+Responsibility split:
+
+| Path | Technology | Owns |
+|------|------------|------|
+| Hot  | ADX (KQL)           | Sub-second dashboards, live alerts |
+| Warm | Stream Analytics    | 1–5 min windowed aggregates, spike/dip anomaly detection |
+| Cold | dbt (this project)  | Historical medallion (bronze/silver/gold), SLO reporting, analytics-ready marts |
+
+The dbt anomaly logic (`slv_anomaly_flags`) intentionally mirrors the ASA
+`detect_anomalies.asaql` thresholds so warm-path and cold-path signals
+stay comparable.
+
+### Generate seed data
+
+```bash
+# 7 days of telemetry across 10 IoT devices (plus weather, AQI, slots)
+python examples/iot-streaming/data/generators/generate_telemetry.py --days 7
+
+# See all options
+python examples/iot-streaming/data/generators/generate_telemetry.py --help
+```
+
+Output lands in `examples/iot-streaming/data/seed/`:
+
+- `telemetry_bronze.csv`  — long format (device_id, event_time, metric_type, value)
+- `weather_bronze.csv`    — NOAA-style weather observations
+- `aqi_bronze.csv`        — EPA-style AQI readings
+- `slots_bronze.csv`      — casino slot-machine events
+
+Generators are **deterministic** — the same `--seed` (default 42) produces
+byte-identical output. The test suite enforces this with sha256.
+
+### Run dbt
+
+```bash
+cd examples/iot-streaming/domains/dbt
+dbt seed          # load devices.csv + sensor_metadata.csv
+dbt run           # build bronze → silver → gold
+dbt test          # column-level not_null / unique / accepted_values
+```
+
+### Medallion output
+
+```text
+bronze/
+  brz_iot_telemetry          — raw sensor readings (long format)
+  brz_weather_observations   — NOAA-style weather
+  brz_aqi_readings           — EPA-style AQI
+  brz_slot_machine_events    — casino telemetry
+
+silver/
+  slv_device_telemetry_cleaned   — deduped, range-validated, UTC-normalized
+  slv_anomaly_flags              — z-score + IQR + threshold anomaly flags
+  slv_sensor_aggregates_1min     — 1-minute tumbling windows per device+metric
+
+gold/
+  gld_device_health_daily        — daily uptime %, data completeness, alert counts
+  gld_anomaly_heatmap            — hour × metric-type anomaly density
+  gld_sla_breach_summary         — 15-minute latency-SLO compliance roll-up
+```
+
+### Run the generator tests
+
+```bash
+python -m pytest examples/iot-streaming/data/generators/tests/ -v
+```
 
 
 ---

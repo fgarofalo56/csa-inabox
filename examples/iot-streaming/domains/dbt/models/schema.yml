@@ -1,0 +1,211 @@
+version: 2
+
+sources:
+  - name: iot
+    description: >
+      IoT streaming data sources. In production these are Event Hub Capture
+      Parquet files landing in ADLS Gen2 bronze. For testing, the dbt seeds
+      produced by `data/generators/generate_telemetry.py` stand in as source
+      fixtures.
+    tables:
+      - name: telemetry_capture
+        description: Raw sensor telemetry (temperature, humidity, pressure, battery)
+        columns:
+          - name: device_id
+            description: Globally unique device identifier
+            tests:
+              - not_null
+          - name: event_time
+            description: Event timestamp emitted by the sensor (UTC)
+            tests:
+              - not_null
+          - name: metric_type
+            description: "Metric class: temperature_c, humidity_pct, pressure_hpa, battery_pct"
+            tests:
+              - not_null
+
+      - name: weather_capture
+        description: NOAA-style weather station observations
+        columns:
+          - name: station_id
+            description: Weather station identifier
+            tests:
+              - not_null
+          - name: event_time
+            description: Observation timestamp (UTC)
+            tests:
+              - not_null
+
+      - name: aqi_capture
+        description: EPA-style AQI monitor readings
+        columns:
+          - name: sensor_id
+            description: AQI monitor identifier
+            tests:
+              - not_null
+          - name: event_time
+            description: Reading timestamp (UTC)
+            tests:
+              - not_null
+
+      - name: slots_capture
+        description: Casino slot machine telemetry events
+        columns:
+          - name: machine_id
+            description: Slot machine identifier
+            tests:
+              - not_null
+          - name: event_time
+            description: Event timestamp (UTC)
+            tests:
+              - not_null
+
+models:
+  # ─── Bronze ────────────────────────────────────────────────────────
+  - name: brz_iot_telemetry
+    description: >
+      Bronze layer — raw sensor telemetry from Event Hub Capture. Each row is
+      one reading (device + metric + timestamp). No validation beyond required
+      field presence; bad values land here so they can be audited.
+    columns:
+      - name: device_id
+        description: Device identifier (foreign key to seeds.devices)
+        tests:
+          - not_null
+      - name: event_time
+        description: Original event timestamp (UTC)
+        tests:
+          - not_null
+      - name: metric_type
+        description: Metric class label
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['temperature_c', 'humidity_pct', 'pressure_hpa', 'battery_pct']
+      - name: value
+        description: Raw metric value
+      - name: quality_flag
+        description: "Source quality: GOOD | UNCERTAIN | BAD | MISSING"
+        tests:
+          - accepted_values:
+              values: ['GOOD', 'UNCERTAIN', 'BAD', 'MISSING']
+      - name: record_hash
+        description: MD5 for deduplication (device_id + event_time + metric_type + value)
+        tests:
+          - not_null
+
+  - name: brz_weather_observations
+    description: Bronze layer — NOAA-style weather station observations
+    columns:
+      - name: station_id
+        tests:
+          - not_null
+      - name: event_time
+        tests:
+          - not_null
+
+  - name: brz_aqi_readings
+    description: Bronze layer — EPA-style AQI monitor readings
+    columns:
+      - name: sensor_id
+        tests:
+          - not_null
+      - name: event_time
+        tests:
+          - not_null
+
+  - name: brz_slot_machine_events
+    description: Bronze layer — casino slot machine telemetry events
+    columns:
+      - name: machine_id
+        tests:
+          - not_null
+      - name: event_time
+        tests:
+          - not_null
+
+  # ─── Silver ────────────────────────────────────────────────────────
+  - name: slv_device_telemetry_cleaned
+    description: >
+      Silver layer — deduplicated, schema-validated, UTC-normalized device
+      telemetry. Joins in the device catalog and sensor metadata seeds for
+      range validation and enrichment.
+    columns:
+      - name: telemetry_sk
+        description: Surrogate key
+        tests:
+          - not_null
+          - unique
+      - name: device_id
+        tests:
+          - not_null
+      - name: event_time_utc
+        description: Event timestamp normalized to UTC
+        tests:
+          - not_null
+      - name: is_valid
+        description: Passes range/type validation
+        tests:
+          - not_null
+          - accepted_values:
+              values: [true, false]
+
+  - name: slv_anomaly_flags
+    description: >
+      Silver layer — per-reading anomaly detection using z-score and IQR
+      outlier methods. Mirrors the spike/dip logic from
+      stream-analytics/detect_anomalies.asaql for parity between the warm
+      path (ASA) and batch path (dbt).
+    columns:
+      - name: telemetry_sk
+        tests:
+          - not_null
+      - name: device_id
+        tests:
+          - not_null
+      - name: is_anomaly
+        tests:
+          - not_null
+      - name: anomaly_method
+        tests:
+          - accepted_values:
+              values: ['zscore', 'iqr', 'threshold', 'combined', 'none']
+
+  - name: slv_sensor_aggregates_1min
+    description: 1-minute tumbling window aggregates per device and metric
+    columns:
+      - name: window_start
+        tests:
+          - not_null
+      - name: device_id
+        tests:
+          - not_null
+      - name: metric_type
+        tests:
+          - not_null
+
+  # ─── Gold ──────────────────────────────────────────────────────────
+  - name: gld_device_health_daily
+    description: >
+      Gold layer — daily device health roll-up: uptime %, data completeness,
+      alert count, anomaly rate. Powers the fleet-overview Power BI page.
+    columns:
+      - name: report_date
+        tests:
+          - not_null
+      - name: device_id
+        tests:
+          - not_null
+      - name: uptime_pct
+        tests:
+          - not_null
+
+  - name: gld_anomaly_heatmap
+    description: >
+      Gold layer — hour x metric-type anomaly counts. Powers the anomaly
+      heatmap visual on the IoT dashboard.
+
+  - name: gld_sla_breach_summary
+    description: >
+      Gold layer — 15-minute latency-SLO compliance roll-up. Captures the
+      share of readings that arrived within the warn/breach thresholds.
