@@ -1,7 +1,8 @@
 /**
  * App Layout — Shell with navigation sidebar and main content area.
  * MSAL authentication wraps the entire application.
- * Auth gating is conditional: skipped in development/demo mode.
+ * Auth gating is controlled by the `NEXT_PUBLIC_AUTH_ENABLED` env var
+ * (see `resolveAuthEnabled` below; CSA-0122).
  */
 
 import React, { useState } from 'react';
@@ -14,7 +15,7 @@ import {
   UnauthenticatedTemplate,
   useMsal,
 } from '@azure/msal-react';
-import { msalConfig, loginRequest } from '@/services/authConfig';
+import { msalConfig, loginRequest, resolveAuthEnabled } from '@/services/authConfig';
 import { Layout } from '@/components/Layout';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import api from '@/services/api';
@@ -43,10 +44,7 @@ api.setMsalInstance(msalInstance);
 
 // ─── Auth Gating ──────────────────────────────────────────────────────────
 
-/** Skip auth gating in development or when explicitly disabled via env var. */
-const isAuthEnabled =
-  process.env.NEXT_PUBLIC_AUTH_ENABLED !== 'false' &&
-  process.env.NODE_ENV === 'production';
+const isAuthEnabled = resolveAuthEnabled();
 
 function LoginPage() {
   const { instance } = useMsal();

@@ -52,3 +52,30 @@ export const apiRequest = {
     `api://${process.env.NEXT_PUBLIC_AZURE_AD_CLIENT_ID}/access_as_user`,
   ],
 };
+
+/**
+ * Resolve whether MSAL auth gating should be active.
+ *
+ * CSA-0122 (HIGH): Previously, the frontend only engaged auth when
+ * `NODE_ENV === 'production'`. Every pre-prod environment (staging, preview,
+ * PR deploys) therefore shipped unauthenticated and the real MSAL code path
+ * was first exercised against production traffic. We now gate on an explicit
+ * `NEXT_PUBLIC_AUTH_ENABLED` flag, mirroring the backend `ENVIRONMENT`
+ * allow-list enforced by CSA-0001 / CSA-0019.
+ *
+ * Precedence:
+ *   1. Explicit `NEXT_PUBLIC_AUTH_ENABLED` always wins ("true" | "false").
+ *   2. If unset, fail closed in production (auth on) and open in dev/test.
+ *
+ * Note: Next.js inlines `NEXT_PUBLIC_*` values at build time, so this must
+ * be evaluated once per process — it does not react to runtime env mutation
+ * outside tests that pass an explicit `env` argument.
+ */
+export function resolveAuthEnabled(
+  env: NodeJS.ProcessEnv = process.env
+): boolean {
+  const flag = env.NEXT_PUBLIC_AUTH_ENABLED;
+  if (flag === 'true') return true;
+  if (flag === 'false') return false;
+  return env.NODE_ENV === 'production';
+}

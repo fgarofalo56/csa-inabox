@@ -103,10 +103,18 @@ NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1
 NEXT_PUBLIC_ENABLE_MARKETPLACE=true
 NEXT_PUBLIC_ENABLE_ACCESS_REQUESTS=true
 NEXT_PUBLIC_ENABLE_PIPELINE_MONITORING=true
+
+# Auth Gate (CSA-0122) — set to "true" for any env that must enforce auth
+# (staging, preview, production). Unset defaults to "false" (demo mode).
+# Must track the backend ENVIRONMENT allow-list (CSA-0001 / CSA-0019).
+NEXT_PUBLIC_AUTH_ENABLED=false
 ```
 
 > [!WARNING]
 > Never commit `.env.local` files containing real credentials. Use Key Vault references in production.
+
+> [!IMPORTANT]
+> `NEXT_PUBLIC_AUTH_ENABLED` must be `true` in every non-local environment. A missing value falls back to "on" only when `NODE_ENV=production` — pre-prod Next.js builds often run with `NODE_ENV=production` locally but need the flag explicit to avoid shipping unauthenticated.
 
 ---
 
