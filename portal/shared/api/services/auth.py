@@ -28,6 +28,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from fastapi import Depends
+
 # ── Re-export the shared auth core ──────────────────────────────────────────
 # All JWT validation, JWKS caching, demo-mode handling, and role enforcement
 # live in the canonical csa_platform module.  The portal re-exports the
@@ -38,7 +40,6 @@ from csa_platform.common.auth import (  # noqa: F401 — re-exported
     get_current_user,
     require_role,
 )
-from fastapi import Depends
 
 # ── Safety gate (fires at import time) ──────────────────────────────────────
 # Defence-in-depth: enforce the safety gate immediately when this module is

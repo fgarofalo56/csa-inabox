@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 from csa_platform.common.audit import audit_event_from_request, audit_logger
 
 from ..config import settings
+from ..dependencies import get_sources_store
 from ..models.source import (
     ClassificationLevel,
     ConnectionConfig,
@@ -38,6 +39,7 @@ from ..models.source import (
     TargetConfig,
 )
 from ..persistence import StoreBackend
+from ..persistence_async import AsyncStoreBackend
 from ..persistence_factory import build_store_backend
 from ..services.auth import DomainScope, get_domain_scope, require_role
 from ..services.provisioning import provisioning_service
@@ -77,9 +79,13 @@ def _assert_user_can_access_domain(user: dict, domain: str) -> None:
         )
 
 
-def _load_source_with_domain_check(source_id: str, user: dict) -> SourceRecord:
+async def _load_source_with_domain_check(
+    source_id: str,
+    user: dict,
+    store: AsyncStoreBackend,
+) -> SourceRecord:
     """Fetch a source by id, enforcing domain scoping against ``user``."""
-    stored = _sources_store.get(source_id)
+    stored = await store.get(source_id)
     if not stored:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -111,23 +117,32 @@ class SourceUpdate(BaseModel):
     model_config = {"populate_by_name": True}
 
 # ── Persistence ─────────────────────────────────────────────────────────────
-# Backend selection (SQLite vs Postgres) is centralised in the factory and
-# driven by ``settings.DATABASE_URL``.  Routers depend on the StoreBackend
-# Protocol so either backend is a drop-in replacement — see CSA-0046.
+# Backend selection (SQLite vs Postgres) is centralised in the async
+# factory and driven by ``settings.DATABASE_URL``.  Routers depend on
+# the AsyncStoreBackend Protocol via FastAPI ``Depends`` — see ADR-0016.
+#
+# The sync ``_sources_store`` module-level singleton below is retained
+# as a transitional compatibility layer for (a) the stats router that
+# computes aggregates synchronously and (b) the existing
+# test_persistence*.py suite that patches it directly.  New code should
+# use ``from ..dependencies import get_sources_store`` and ``Depends``.
 _sources_store: StoreBackend = build_store_backend("sources.json", settings)
 
 
 def get_store() -> StoreBackend:
-    """Return the sources store instance (public accessor for cross-router use)."""
+    """Return the sync sources store (compat; new code uses async DI)."""
     return _sources_store
 
 
-def seed_demo_sources() -> None:
+async def seed_demo_sources() -> None:
     """Populate a handful of realistic demo sources on first access.
 
-    Called once at application startup from the lifespan handler.
+    Called once at application startup from the lifespan handler.  Uses
+    the async store so startup participates in the same event loop as
+    the routes.
     """
-    if _sources_store.count() > 0:
+    async_store = get_sources_store()
+    if await async_store.count() > 0:
         return
 
     demos = [
@@ -241,7 +256,7 @@ def seed_demo_sources() -> None:
         ),
     ]
     for s in demos:
-        _sources_store.add(s.model_dump())
+        await async_store.add(s.model_dump())
 
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
@@ -260,9 +275,10 @@ async def list_sources(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     scope: DomainScope = Depends(get_domain_scope),
+    store: AsyncStoreBackend = Depends(get_sources_store),
 ) -> list[SourceRecord]:
     """Return all registered data sources, with optional filters."""
-    results = [SourceRecord.model_validate(item) for item in _sources_store.load()]
+    results = [SourceRecord.model_validate(item) for item in await store.load()]
 
     # Domain scoping: non-admin users only see their domain's sources.
     # When a non-admin has no domain claim (e.g. demo mode), return empty
@@ -293,9 +309,10 @@ async def list_sources(
 async def get_source(
     source_id: str,
     scope: DomainScope = Depends(get_domain_scope),
+    store: AsyncStoreBackend = Depends(get_sources_store),
 ) -> SourceRecord:
     """Return a single data source by its unique identifier."""
-    stored_source = _sources_store.get(source_id)
+    stored_source = await store.get(source_id)
     if not stored_source:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -324,6 +341,7 @@ async def register_source(
     registration: SourceRegistration,
     request: Request,
     user: dict = Depends(require_role("Contributor", "Admin")),
+    store: AsyncStoreBackend = Depends(get_sources_store),
 ) -> SourceRecord:
     """Register a new data source in the platform.
 
@@ -340,7 +358,7 @@ async def register_source(
         **registration.model_dump(by_alias=True),
     )
     # Persist to JSON store
-    _sources_store.add(record.model_dump())
+    await store.add(record.model_dump())
 
     # Tamper-evident audit sink (CSA-0016) — source registration is an
     # authorised state-changing operation that affects downstream
@@ -378,18 +396,19 @@ async def update_source(
     source_id: str,
     updates: SourceUpdate,
     user: dict = Depends(require_role("Contributor", "Admin")),
+    store: AsyncStoreBackend = Depends(get_sources_store),
 ) -> SourceRecord:
     """Apply a partial update to an existing source registration.
 
     Non-admin users may only update sources within their own domain.
     """
-    existing = _load_source_with_domain_check(source_id, user)
+    existing = await _load_source_with_domain_check(source_id, user, store)
     existing_data = existing.model_dump(by_alias=True)
     existing_data.update(updates.model_dump(exclude_unset=True))
     existing_data["updated_at"] = datetime.now(timezone.utc)
 
     updated = SourceRecord(**existing_data)
-    _sources_store.update(source_id, updated.model_dump())
+    await store.update(source_id, updated.model_dump())
     logger.info(
         "Updated data source",
         extra={
@@ -409,16 +428,17 @@ async def decommission_source(
     source_id: str,
     request: Request,
     user: dict = Depends(require_role("Contributor", "Admin")),
+    store: AsyncStoreBackend = Depends(get_sources_store),
 ) -> SourceRecord:
     """Soft-delete a data source by setting its status to *decommissioned*.
 
     Non-admin users may only decommission sources within their own domain.
     """
-    source = _load_source_with_domain_check(source_id, user)
+    source = await _load_source_with_domain_check(source_id, user, store)
     previous_status = source.status
     source.status = SourceStatus.DECOMMISSIONED
     source.updated_at = datetime.now(timezone.utc)
-    _sources_store.update(source_id, source.model_dump())
+    await store.update(source_id, source.model_dump())
 
     # Tamper-evident audit sink (CSA-0016) — decommission is a
     # security-relevant terminal state transition.
@@ -451,6 +471,7 @@ async def provision_source(
     source_id: str,
     request: Request,
     user: dict = Depends(require_role("Contributor", "Admin")),
+    store: AsyncStoreBackend = Depends(get_sources_store),
 ) -> dict:
     """Trigger the full Data Landing Zone provisioning workflow.
 
@@ -466,7 +487,7 @@ async def provision_source(
     with ``new_status=ERROR`` (already logged with stack context by the
     service).
     """
-    source = _load_source_with_domain_check(source_id, user)
+    source = await _load_source_with_domain_check(source_id, user, store)
 
     result = await provisioning_service.provision(source)
 
@@ -483,7 +504,7 @@ async def provision_source(
     if result.updated_at is not None:
         update_payload["updated_at"] = result.updated_at.isoformat()
     if update_payload:
-        _sources_store.update(source_id, update_payload)
+        await store.update(source_id, update_payload)
 
     # Branch on the result to emit the correct audit outcome + HTTP
     # response.  ``new_status == ERROR`` means infrastructure failure;
@@ -560,12 +581,13 @@ async def scan_source(
     source_id: str,
     request: Request,
     user: dict = Depends(require_role("Contributor", "Admin")),
+    store: AsyncStoreBackend = Depends(get_sources_store),
 ) -> dict:
     """Trigger a Microsoft Purview metadata scan for this source.
 
     Non-admin users may only scan sources within their own domain.
     """
-    source = _load_source_with_domain_check(source_id, user)
+    source = await _load_source_with_domain_check(source_id, user, store)
 
     try:
         scan_id = await provisioning_service.trigger_purview_scan(source)
@@ -595,7 +617,7 @@ async def scan_source(
 
     source.purview_scan_id = scan_id
     source.updated_at = datetime.now(timezone.utc)
-    _sources_store.update(source_id, source.model_dump())
+    await store.update(source_id, source.model_dump())
 
     # Tamper-evident audit sink (CSA-0016) — triggers a Purview scan that
     # touches the source's data plane; security-relevant.

@@ -129,10 +129,10 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     # Seed demo data only in local/demo environments (STATE-0002).
     # Production/staging deployments start with empty stores.
     if env in ("local", "demo") or settings.DEMO_MODE:
-        sources.seed_demo_sources()
-        pipelines.seed_demo_pipelines()
-        access.seed_demo_requests()
-        marketplace.seed_demo_products()
+        await sources.seed_demo_sources()
+        await pipelines.seed_demo_pipelines()
+        await access.seed_demo_requests()
+        await marketplace.seed_demo_products()
         logger.info("Demo data seeding complete (env=%s, demo_mode=%s)", env, settings.DEMO_MODE)
     else:
         logger.info("Skipping demo data seeding (env=%s)", env)
@@ -158,6 +158,24 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
                 )
 
     yield
+
+    # ── Shutdown ────────────────────────────────────────────────────────
+    # Close every async store (flip per-instance init flags) and dispose
+    # of the shared async SQLAlchemy engine + managed-identity credentials.
+    # See ADR-0016.
+    logger.info("Shutting down CSA-in-a-Box API — draining async stores")
+    try:
+        from .dependencies import all_stores
+        from .persistence_async import close_async_engines
+
+        for store in all_stores():
+            try:
+                await store.close()
+            except Exception as exc:
+                logger.warning("Async store close error: %s", exc)
+        await close_async_engines()
+    except Exception as exc:
+        logger.warning("Async store shutdown error: %s", exc)
     logger.info("Shutting down CSA-in-a-Box API")
 
 
@@ -269,12 +287,12 @@ async def health_ready() -> dict:
     """
     overall_healthy = True
 
-    # Check data store (SQLite) — result drives healthy/degraded status
-    # but is intentionally not surfaced in the response body.
+    # Check data store (SQLite/Postgres) — result drives healthy/degraded
+    # status but is intentionally not surfaced in the response body.
     try:
-        from .routers.sources import get_store as get_sources_store
+        from .dependencies import get_sources_store
 
-        get_sources_store().count()  # simple query to verify DB is accessible
+        await get_sources_store().count()  # verify async store is reachable
     except Exception:
         overall_healthy = False
 

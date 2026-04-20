@@ -1,6 +1,13 @@
 """
 Store-backend abstraction for portal persistence (CSA-0046).
 
+.. deprecated:: 0.2.0
+    The sync :class:`StoreBackend` / :class:`SqliteStore` pair in this
+    module is a transitional compatibility layer.  New code should
+    prefer :mod:`portal.shared.api.persistence_async` which is the
+    canonical persistence surface per ADR-0016.  The sync layer will
+    be removed in the next minor release (CSA-0046 v3).
+
 This module defines the :class:`StoreBackend` ``Protocol`` that every
 persistence implementation must satisfy, and ships the historical
 SQLite-based implementation (:class:`SqliteStore`) that remains the

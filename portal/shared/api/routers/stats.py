@@ -16,12 +16,20 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from ..dependencies import (
+    get_access_store,
+    get_pipelines_store,
+    get_products_store,
+    get_runs_store,
+    get_sources_store,
+)
 from ..models.marketplace import (
     AccessRequestStatus,
     DomainOverview,
     DomainStatus,
     PlatformStats,
 )
+from ..persistence_async import AsyncStoreBackend
 from ..services.auth import get_current_user
 
 logger = logging.getLogger(__name__)
@@ -30,37 +38,6 @@ router = APIRouter()
 # A second router mounted at /api/v1/domains for the React-frontend alias.
 # Kept here so all domain-overview logic is co-located with the stats module.
 domains_router = APIRouter()
-
-
-# ── Store accessors ──────────────────────────────────────────────────────────
-# Import lazily from sibling routers to avoid circular-import issues at
-# module level.  Each router exposes a public get_store() function so
-# stats.py never touches private module-level variables.
-
-
-def _get_sources() -> list[dict]:
-    from .sources import get_store as get_sources_store
-    return get_sources_store().list()
-
-
-def _get_pipelines() -> list[dict]:
-    from .pipelines import get_store as get_pipelines_store
-    return get_pipelines_store().list()
-
-
-def _get_pipeline_runs() -> list[dict]:
-    from .pipelines import get_runs_store
-    return get_runs_store().list()
-
-
-def _get_products() -> list[dict]:
-    from .marketplace import get_store as get_products_store
-    return get_products_store().list()
-
-
-def _get_access_requests() -> list[dict]:
-    from .access import get_store as get_access_store
-    return get_access_store().list()
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -178,13 +155,19 @@ def _build_domain_overviews(
     return overviews
 
 
-def _compute_platform_stats() -> PlatformStats:
-    """Aggregate platform stats from actual store data."""
-    sources = _get_sources()
-    pipelines = _get_pipelines()
-    runs = _get_pipeline_runs()
-    products = _get_products()
-    access_requests = _get_access_requests()
+async def _compute_platform_stats(
+    sources_store: AsyncStoreBackend,
+    pipelines_store: AsyncStoreBackend,
+    runs_store: AsyncStoreBackend,
+    products_store: AsyncStoreBackend,
+    access_store: AsyncStoreBackend,
+) -> PlatformStats:
+    """Aggregate platform stats from async stores."""
+    sources = await sources_store.list()
+    pipelines = await pipelines_store.list()
+    runs = await runs_store.list()
+    products = await products_store.list()
+    access_requests = await access_store.list()
 
     pending = [r for r in access_requests if r.get("status") == AccessRequestStatus.PENDING.value]
 
@@ -209,9 +192,16 @@ def _compute_platform_stats() -> PlatformStats:
 )
 async def get_stats(
     _user: dict = Depends(get_current_user),
+    sources_store: AsyncStoreBackend = Depends(get_sources_store),
+    pipelines_store: AsyncStoreBackend = Depends(get_pipelines_store),
+    runs_store: AsyncStoreBackend = Depends(get_runs_store),
+    products_store: AsyncStoreBackend = Depends(get_products_store),
+    access_store: AsyncStoreBackend = Depends(get_access_store),
 ) -> PlatformStats:
     """Return platform-wide aggregate statistics for the dashboard."""
-    return _compute_platform_stats()
+    return await _compute_platform_stats(
+        sources_store, pipelines_store, runs_store, products_store, access_store,
+    )
 
 
 @router.get(
@@ -222,11 +212,14 @@ async def get_stats(
 async def get_domain_overview(
     domain: str,
     _user: dict = Depends(get_current_user),
+    sources_store: AsyncStoreBackend = Depends(get_sources_store),
+    pipelines_store: AsyncStoreBackend = Depends(get_pipelines_store),
+    products_store: AsyncStoreBackend = Depends(get_products_store),
 ) -> DomainOverview:
     """Return an overview of a single data domain."""
-    sources = _get_sources()
-    pipelines = _get_pipelines()
-    products = _get_products()
+    sources = await sources_store.list()
+    pipelines = await pipelines_store.list()
+    products = await products_store.list()
 
     overviews = _build_domain_overviews(sources, pipelines, products)
 
@@ -246,10 +239,13 @@ async def get_domain_overview(
 )
 async def list_all_domains(
     _user: dict = Depends(get_current_user),
+    sources_store: AsyncStoreBackend = Depends(get_sources_store),
+    pipelines_store: AsyncStoreBackend = Depends(get_pipelines_store),
+    products_store: AsyncStoreBackend = Depends(get_products_store),
 ) -> list[dict]:
     """Return all domain overviews — convenience alias used by the React frontend."""
-    sources = _get_sources()
-    pipelines = _get_pipelines()
-    products = _get_products()
+    sources = await sources_store.list()
+    pipelines = await pipelines_store.list()
+    products = await products_store.list()
     overviews = _build_domain_overviews(sources, pipelines, products)
     return [d.model_dump() for d in overviews.values()]

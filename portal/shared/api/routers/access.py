@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from csa_platform.common.audit import audit_event_from_request, audit_logger
 
 from ..config import settings
+from ..dependencies import get_access_store, get_products_store
 from ..models.marketplace import (
     AccessRequest,
     AccessRequestCreate,
@@ -28,6 +29,7 @@ from ..models.marketplace import (
 )
 from ..models.source import ClassificationLevel
 from ..persistence import StoreBackend
+from ..persistence_async import AsyncStoreBackend
 from ..persistence_factory import build_store_backend
 from ..services.auth import DomainScope, get_current_user, get_domain_scope, require_role
 
@@ -44,12 +46,14 @@ class ReviewBody(BaseModel):
     notes: str | None = None
 
 # ── Persistence ─────────────────────────────────────────────────────────────
-# Backend chosen by the factory from ``settings.DATABASE_URL`` (CSA-0046).
+# Backend chosen by the async factory from ``settings.DATABASE_URL`` — see
+# ADR-0016.  The sync ``_access_store`` singleton below is retained as a
+# transitional compat layer for the stats router + existing test fixtures.
 _access_store: StoreBackend = build_store_backend("access_requests.json", settings)
 
 
 def get_store() -> StoreBackend:
-    """Return the access requests store instance (public accessor for cross-router use)."""
+    """Return the sync access store (compat; new code uses async DI)."""
     return _access_store
 
 
@@ -72,17 +76,6 @@ _ELEVATED_REVIEW_CLASSIFICATIONS: set[ClassificationLevel] = {
 }
 
 
-def _get_products_store() -> StoreBackend:
-    """Lazy-import the marketplace products store for cross-router reads.
-
-    Imported lazily to avoid a circular import at module load and to mirror
-    the pattern used by other cross-router integrations.
-    """
-    from .marketplace import get_store as _marketplace_get_store
-
-    return _marketplace_get_store()
-
-
 def _user_identifier(user: dict) -> str:
     """Best-effort stable identifier for the authenticated user."""
     return (
@@ -94,12 +87,13 @@ def _user_identifier(user: dict) -> str:
     )
 
 
-def seed_demo_requests() -> None:
-    """Populate realistic demo access requests on first access.
+async def seed_demo_requests() -> None:
+    """Populate realistic demo access requests on first access (async).
 
     Called once at application startup from the lifespan handler.
     """
-    if _access_store.count() > 0:
+    async_store = get_access_store()
+    if await async_store.count() > 0:
         return
 
     now = datetime.now(timezone.utc)
@@ -153,7 +147,7 @@ def seed_demo_requests() -> None:
         ),
     ]
     for ar in demos:
-        _access_store.add(ar.model_dump())
+        await async_store.add(ar.model_dump())
 
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
@@ -169,9 +163,10 @@ async def list_access_requests(
     data_product_id: str | None = None,
     limit: int = Query(50, ge=1, le=200),
     _user: dict = Depends(get_current_user),
+    store: AsyncStoreBackend = Depends(get_access_store),
 ) -> list[AccessRequest]:
     """Return access requests with optional filters."""
-    results = [AccessRequest.model_validate(item) for item in _access_store.load()]
+    results = [AccessRequest.model_validate(item) for item in await store.load()]
 
     # Domain scoping: non-admin users only see their own requests
     user_roles = _user.get("roles", [])
@@ -200,6 +195,8 @@ async def create_access_request(
     payload: AccessRequestCreate,
     request: Request,
     user: dict = Depends(get_current_user),
+    store: AsyncStoreBackend = Depends(get_access_store),
+    products_store: AsyncStoreBackend = Depends(get_products_store),
 ) -> AccessRequest:
     """Submit a new access request for a data product.
 
@@ -212,8 +209,7 @@ async def create_access_request(
       review note so downstream reviewers know to escalate.
     """
     # Validate product exists (CSA-0017)
-    products_store = _get_products_store()
-    stored_product = products_store.get(payload.data_product_id)
+    stored_product = await products_store.get(payload.data_product_id)
     if not stored_product:
         raise HTTPException(
             status_code=404,
@@ -268,7 +264,7 @@ async def create_access_request(
     )
 
     # Persist to JSON store
-    _access_store.add(access_request.model_dump())
+    await store.add(access_request.model_dump())
 
     # Tamper-evident audit sink (CSA-0016).  Separate namespace from the
     # operational logger; chain-hashed so offline verification can prove
@@ -291,17 +287,18 @@ async def create_access_request(
                 "duration_days": payload.duration_days,
                 "elevated": classification in _ELEVATED_REVIEW_CLASSIFICATIONS,
             },
-        )
+        ),
     )
     return access_request
 
 
-def _enforce_review_authorization(
+async def _enforce_review_authorization(
     *,
     user: dict,
     scope: DomainScope,
     access_request: AccessRequest,
     action: str,
+    products_store: AsyncStoreBackend,
 ) -> dict:
     """Authorize approve/deny on an access request (CSA-0002).
 
@@ -313,8 +310,7 @@ def _enforce_review_authorization(
     Returns the resolved data product dict for downstream use.
     Raises HTTPException(403) on failure.
     """
-    products_store = _get_products_store()
-    stored_product = products_store.get(access_request.data_product_id)
+    stored_product = await products_store.get(access_request.data_product_id)
     if not stored_product:
         # The product the request points to has vanished — fail closed.
         logger.warning(
@@ -371,29 +367,30 @@ def _enforce_review_authorization(
         )
 
     # Non-admins must share the product's domain.
-    if not scope.is_admin:
-        if not scope.user_domain or scope.user_domain != target_domain:
-            logger.warning(
-                "Cross-domain review blocked on access request",
-                extra={
-                    "actor_sub": user.get("sub") or user.get("oid"),
-                    "actor": _user_identifier(user),
-                    "action": action,
-                    "resource_id": access_request.id,
-                    "product_id": access_request.data_product_id,
-                    "target_domain": target_domain,
-                    "caller_domain": scope.user_domain,
-                    "outcome": "denied",
-                    "reason": "cross_domain_review_forbidden",
-                },
-            )
-            raise HTTPException(
-                status_code=403,
-                detail=(
-                    "You may only review access requests for data products "
-                    "in your own domain."
-                ),
-            )
+    if not scope.is_admin and (
+        not scope.user_domain or scope.user_domain != target_domain
+    ):
+        logger.warning(
+            "Cross-domain review blocked on access request",
+            extra={
+                "actor_sub": user.get("sub") or user.get("oid"),
+                "actor": _user_identifier(user),
+                "action": action,
+                "resource_id": access_request.id,
+                "product_id": access_request.data_product_id,
+                "target_domain": target_domain,
+                "caller_domain": scope.user_domain,
+                "outcome": "denied",
+                "reason": "cross_domain_review_forbidden",
+            },
+        )
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "You may only review access requests for data products "
+                "in your own domain."
+            ),
+        )
 
     return stored_product
 
@@ -409,6 +406,8 @@ async def approve_access_request(
     body: ReviewBody | None = None,
     user: dict = Depends(require_role("Contributor", "Admin")),
     scope: DomainScope = Depends(get_domain_scope),
+    store: AsyncStoreBackend = Depends(get_access_store),
+    products_store: AsyncStoreBackend = Depends(get_products_store),
 ) -> AccessRequest:
     """Approve a pending access request and grant RBAC permissions.
 
@@ -420,7 +419,7 @@ async def approve_access_request(
         from azure.mgmt.authorization import AuthorizationManagementClient
         client.role_assignments.create(scope, assignment_name, parameters)
     """
-    stored_req = _access_store.get(request_id)
+    stored_req = await store.get(request_id)
     if not stored_req:
         raise HTTPException(status_code=404, detail=f"Request '{request_id}' not found.")
 
@@ -431,11 +430,12 @@ async def approve_access_request(
             detail=f"Request is '{req.status.value}', only pending requests can be approved.",
         )
 
-    product = _enforce_review_authorization(
+    product = await _enforce_review_authorization(
         user=user,
         scope=scope,
         access_request=req,
         action="access_request.approve",
+        products_store=products_store,
     )
 
     now = datetime.now(timezone.utc)
@@ -446,7 +446,7 @@ async def approve_access_request(
     req.expires_at = now + timedelta(days=req.duration_days)
 
     # Update in store
-    _access_store.update(request_id, req.model_dump())
+    await store.update(request_id, req.model_dump())
 
     # Tamper-evident audit sink (CSA-0016).
     audit_logger.emit(
@@ -469,7 +469,7 @@ async def approve_access_request(
                 if req.expires_at
                 else None,
             },
-        )
+        ),
     )
     return req
 
@@ -485,13 +485,15 @@ async def deny_access_request(
     body: ReviewBody | None = None,
     user: dict = Depends(require_role("Contributor", "Admin")),
     scope: DomainScope = Depends(get_domain_scope),
+    store: AsyncStoreBackend = Depends(get_access_store),
+    products_store: AsyncStoreBackend = Depends(get_products_store),
 ) -> AccessRequest:
     """Deny a pending access request.
 
     CSA-0002 hardening: non-admin callers must share the product's domain,
     and nobody may deny their own request regardless of role.
     """
-    stored_req = _access_store.get(request_id)
+    stored_req = await store.get(request_id)
     if not stored_req:
         raise HTTPException(status_code=404, detail=f"Request '{request_id}' not found.")
 
@@ -502,11 +504,12 @@ async def deny_access_request(
             detail=f"Request is '{req.status.value}', only pending requests can be denied.",
         )
 
-    product = _enforce_review_authorization(
+    product = await _enforce_review_authorization(
         user=user,
         scope=scope,
         access_request=req,
         action="access_request.deny",
+        products_store=products_store,
     )
 
     req.status = AccessRequestStatus.DENIED
@@ -515,7 +518,7 @@ async def deny_access_request(
     req.review_notes = body.notes if body else None
 
     # Update in store
-    _access_store.update(request_id, req.model_dump())
+    await store.update(request_id, req.model_dump())
 
     # Tamper-evident audit sink (CSA-0016).  A deny is a negative outcome
     # for the requester but a successful review action by the reviewer —
@@ -539,6 +542,6 @@ async def deny_access_request(
                 "reviewer": req.reviewed_by,
             },
             reason=req.review_notes,
-        )
+        ),
     )
     return req

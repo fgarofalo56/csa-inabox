@@ -1,6 +1,13 @@
 """
 Azure Database for PostgreSQL (Flexible Server) backed store (CSA-0046).
 
+.. deprecated:: 0.2.0
+    :class:`PostgresStore` is the sync compat shim that predates the
+    async refactor described in ADR-0016.  New code should prefer
+    :class:`portal.shared.api.persistence_async.AsyncPostgresStore`
+    which is the canonical Postgres driver.  The sync class will be
+    removed in the next minor release (CSA-0046 v3).
+
 Provides :class:`PostgresStore`, a :class:`StoreBackend` implementation
 that persists records to a PostgreSQL table-per-logical-store using
 SQLAlchemy 2.0 + ``psycopg`` v3.  The table schema mirrors the SQLite

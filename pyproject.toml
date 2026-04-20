@@ -118,9 +118,16 @@ postgres = [
     # Only required when DATABASE_URL selects PostgreSQL; SQLite remains
     # the default for local/dev/demo so this extra is optional.
     "sqlalchemy[asyncio]>=2.0.25,<3.0.0",
-    "asyncpg>=0.29.0,<1.0.0",                 # async driver (future async engine use)
+    "asyncpg>=0.29.0,<1.0.0",                 # async driver (AsyncPostgresStore)
     "psycopg[binary]>=3.1.18,<4.0.0",         # sync driver used by PostgresStore + alembic env.py
     "alembic>=1.13.0,<2.0.0",
+    # CSA-0046 v2 (ADR-0016) — async SQLite backend.  Lives here (and not
+    # under ``portal``) so SQLite-only dev deployments stay slim but
+    # anyone installing the Postgres extra also gets the async SQLite
+    # path used by the migration CLI's ``--source sqlite:///...``.
+    "aiosqlite>=0.19.0,<1.0.0",
+    # Retry policies for transient DB errors (AsyncStoreBackend + CLI).
+    "tenacity>=8.2.0,<10.0.0",
     # azure-identity is already on the ``portal`` extra; listed here so
     # ``pip install -e .[postgres]`` alone is self-contained for the
     # managed-identity code path.

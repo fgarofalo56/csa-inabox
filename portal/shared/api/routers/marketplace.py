@@ -19,9 +19,11 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ..config import settings
+from ..dependencies import get_products_store, get_quality_store
 from ..models.marketplace import DataProduct, QualityMetric
 from ..models.source import ClassificationLevel
 from ..persistence import StoreBackend
+from ..persistence_async import AsyncStoreBackend
 from ..persistence_factory import build_store_backend
 from ..services.auth import DomainScope, get_current_user, get_domain_scope
 
@@ -29,22 +31,26 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # ── Persistence ─────────────────────────────────────────────────────────────
-# Backend chosen by the factory from ``settings.DATABASE_URL`` (CSA-0046).
+# Backend chosen by the async factory from ``settings.DATABASE_URL`` — see
+# ADR-0016.  The sync singletons below are retained as a transitional compat
+# layer for the stats router + existing test fixtures.
 _products_store: StoreBackend = build_store_backend("marketplace_products.json", settings)
 _quality_store: StoreBackend = build_store_backend("marketplace_quality.json", settings)
 
 
 def get_store() -> StoreBackend:
-    """Return the products store instance (public accessor for cross-router use)."""
+    """Return the sync products store (compat; new code uses async DI)."""
     return _products_store
 
 
-def seed_demo_products() -> None:
-    """Populate realistic demo data products on first access.
+async def seed_demo_products() -> None:
+    """Populate realistic demo data products on first access (async).
 
     Called once at application startup from the lifespan handler.
     """
-    if _products_store.count() > 0:
+    async_products = get_products_store()
+    async_quality = get_quality_store()
+    if await async_products.count() > 0:
         return
 
     _rng.seed(42)
@@ -181,7 +187,7 @@ def seed_demo_products() -> None:
         ),
     ]
     for dp in demos:
-        _products_store.add(dp.model_dump())
+        await async_products.add(dp.model_dump())
 
     # Seed quality history for each product (last 30 days)
     for dp in demos:
@@ -200,9 +206,9 @@ def seed_demo_products() -> None:
                     completeness=comp,
                     freshness_hours=max(0.0, dp.freshness_hours + _rng.uniform(-1, 2)),
                     row_count=_rng.randint(100_000, 5_000_000),
-                ).model_dump()
+                ).model_dump(),
             )
-        _quality_store.add({"product_id": dp.id, "history": history})
+        await async_quality.add({"product_id": dp.id, "history": history})
 
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
@@ -220,9 +226,10 @@ async def list_products(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     scope: DomainScope = Depends(get_domain_scope),
+    store: AsyncStoreBackend = Depends(get_products_store),
 ) -> list[DataProduct]:
     """Browse the data marketplace with optional filters."""
-    results = [DataProduct.model_validate(item) for item in _products_store.load()]
+    results = [DataProduct.model_validate(item) for item in await store.load()]
 
     # Domain scoping: non-admin users only see their domain's products.
     # When a non-admin has no domain claim (e.g. demo mode), return empty
@@ -252,9 +259,10 @@ async def list_products(
 async def get_product(
     product_id: str,
     scope: DomainScope = Depends(get_domain_scope),
+    store: AsyncStoreBackend = Depends(get_products_store),
 ) -> DataProduct:
     """Return detailed data product information."""
-    stored_product = _products_store.get(product_id)
+    stored_product = await store.get(product_id)
     if not stored_product:
         raise HTTPException(status_code=404, detail=f"Product '{product_id}' not found.")
     product = DataProduct.model_validate(stored_product)
@@ -276,13 +284,15 @@ async def get_quality_history(
     product_id: str,
     days: int = Query(30, ge=1, le=365),
     scope: DomainScope = Depends(get_domain_scope),
+    store: AsyncStoreBackend = Depends(get_products_store),
+    quality_store: AsyncStoreBackend = Depends(get_quality_store),
 ) -> list[QualityMetric]:
     """Return quality metric history for a data product.
 
     Non-admin users may only view quality history for products in their
     domain (SEC-0007).
     """
-    stored = _products_store.get(product_id)
+    stored = await store.get(product_id)
     if not stored:
         raise HTTPException(status_code=404, detail=f"Product '{product_id}' not found.")
 
@@ -293,7 +303,7 @@ async def get_quality_history(
         raise HTTPException(status_code=403, detail="You do not have access to this product.")
 
     # Find quality history for this product
-    all_quality_data = _quality_store.load()
+    all_quality_data = await quality_store.load()
     for item in all_quality_data:
         if item.get("product_id") == product_id:
             history = item.get("history", [])
@@ -308,10 +318,11 @@ async def get_quality_history(
 )
 async def list_domains(
     _user: dict = Depends(get_current_user),
+    store: AsyncStoreBackend = Depends(get_products_store),
 ) -> list[dict]:
     """Return all data domains with their product counts."""
     domains: dict[str, int] = {}
-    products = [DataProduct.model_validate(item) for item in _products_store.load()]
+    products = [DataProduct.model_validate(item) for item in await store.load()]
     for product in products:
         domains[product.domain] = domains.get(product.domain, 0) + 1
 
@@ -324,9 +335,10 @@ async def list_domains(
 )
 async def marketplace_stats(
     _user: dict = Depends(get_current_user),
+    store: AsyncStoreBackend = Depends(get_products_store),
 ) -> dict:
     """Return aggregate marketplace statistics."""
-    products = [DataProduct.model_validate(item) for item in _products_store.load()]
+    products = [DataProduct.model_validate(item) for item in await store.load()]
     return {
         "total_products": len(products),
         "total_domains": len({p.domain for p in products}),
