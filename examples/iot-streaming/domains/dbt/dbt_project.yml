@@ -101,30 +101,8 @@ seeds:
         max_valid: decimal(18,6)
         precision: int
 
-sources:
-  - name: iot
-    description: IoT streaming data sources (Event Hub Capture, ADX exports)
-    tables:
-      - name: telemetry_capture
-        description: Event Hub Capture Parquet files (telemetry hub)
-        freshness:
-          warn_after: {count: 1, period: hour}
-          error_after: {count: 4, period: hour}
-      - name: weather_capture
-        description: NOAA-style weather observations from Event Hub Capture
-        freshness:
-          warn_after: {count: 1, period: hour}
-          error_after: {count: 4, period: hour}
-      - name: aqi_capture
-        description: EPA-style AQI readings from Event Hub Capture
-        freshness:
-          warn_after: {count: 1, period: hour}
-          error_after: {count: 4, period: hour}
-      - name: slots_capture
-        description: Casino slot machine events from Event Hub Capture
-        freshness:
-          warn_after: {count: 1, period: hour}
-          error_after: {count: 4, period: hour}
+# sources: moved to models/schema.yml where dbt expects them.
+# (dbt rejects top-level `sources:` in dbt_project.yml — surfaced by dbt-ci workflow.)
 
 snapshots:
   csa_iot_streaming:
