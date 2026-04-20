@@ -5,6 +5,82 @@ end-of-session protocol in `.claude/rules/session-end.md`.
 
 ---
 
+## 2026-04-20 (cont.) — Phase-3 Wave 4.6: 3 more approved-queue items shipped
+
+Third parallel round this day. Three independent approved items on
+non-overlapping scopes. All three clean; no working-tree contention
+(no-checkout/reset rule held).
+
+### Commits
+
+- `27a30d6` refactor: CSA-0131 — promote `portal/cli/` → top-level
+  `cli/` (AQ-0030 Theme E). 19 files renamed via git mv, 9 Python
+  imports + cli README + pyproject.toml + root README updated.
+  156 CLI + 433 csa_platform + 91 portal tests all green.
+- `1bf0058` feat(ci): CSA-0073 — quarterly DR drill CI workflow
+  (AQ-0021 Theme D). `.github/workflows/dr-drill.yml` with cron
+  (1st of Jan/Apr/Jul/Oct @ 10:00 UTC) + workflow_dispatch,
+  4 scenario jobs + report aggregator. New
+  `docs/runbooks/dr-drill.md` runbook; `docs/DR.md` cross-links.
+- `c93c779` docs(multi_synapse): CSA-0139 — mark module legacy /
+  migration-only (AQ-0034 Theme E). README banner + new MIGRATION.md
+  (257 lines) with capability-mapping matrix + 4-phase sequencing.
+  1-line legacy notes added to csa_platform/README + ARCHITECTURE +
+  PLATFORM_SERVICES. Decision tree already consistent.
+
+### Findings status
+
+  * CSA-0131 → review (portal/cli promotion complete; parallel
+    marketplace deprecation portion still open)
+  * CSA-0073 → review (DR drill scope complete)
+  * CSA-0139 → review (multi_synapse legacy marking complete;
+    workspace abstraction + cost_allocator port wait on CSA-0129)
+
+### Approval-queue progress
+
+Shipped 13/35 → **16/35**. Remaining:
+
+Theme B (vision scope): —
+Theme C (breaking changes): CSA-0020 MSAL BFF, CSA-0025 IoT Hub
+  Entra-only, CSA-0046 SQLite→Postgres
+Theme D (operational): CSA-0072 v0.1.0 tag, CSA-0089 iot-streaming
+  dbt rebuild
+Theme E (architectural): CSA-0128 data mesh federation, CSA-0130
+  dbt canonical, CSA-0134 git history purge, CSA-0137 streaming
+  spine, CSA-0138 DLQ pattern, CSA-0140 multi-cloud scope
+Theme A (Copilot): CSA-0008 Copilot MVP, CSA-0100 agent framework,
+  CSA-0102 confirmation broker
+
+### Scorecard
+
+| Metric | Before | After |
+|---|---|---|
+| Vision alignment | ~80% | ~82% |
+| HIGH findings open | 41 | 39 |
+| MEDIUM findings open | ~42 | ~40 |
+| Approval-queue items shipped | 13/35 | 16/35 |
+| Cross-session commits | ~50 | ~55 |
+| Findings fully resolved | 32 | 35 |
+| Findings partial | 1 | 1 (CSA-0133) |
+
+### Lesson reinforced
+
+Parallel dispatch on non-overlapping scopes continues to work
+reliably when every agent follows the no-checkout/reset/stash rule.
+4 rounds of parallel work now under the updated protocol with zero
+working-tree contention.
+
+### Next session candidates
+
+- Wave 5 strategic builds (Copilot MVP XL / Fabric module XL /
+  streaming spine L / Postgres migration L / MSAL BFF L)
+- Remaining Theme E architectural items (data mesh federation,
+  streaming spine, DLQ, multi-cloud scope)
+- IoT Hub Entra-only (CSA-0025 — breaking change, federal-critical)
+- ~38 no-approval HIGH/MEDIUM items
+
+---
+
 ## 2026-04-20 (cont.) — Phase-3 Wave 4.5: 3 approved-queue items shipped in parallel
 
 Three independent approved items dispatched as parallel subagents
