@@ -39,8 +39,9 @@ from csa_platform.common.logging import configure_structlog, get_logger
 
 if TYPE_CHECKING:
     from azure.search.documents import SearchClient
+    from azure.search.documents.aio import SearchClient as AsyncSearchClient
     from azure.search.documents.indexes import SearchIndexClient
-    from openai import AzureOpenAI
+    from openai import AsyncAzureOpenAI, AzureOpenAI
 
 configure_structlog(service="rag-pipeline")
 logger = get_logger(__name__)
@@ -423,6 +424,8 @@ class VectorStore:
         self.embedding_dimensions = embedding_dimensions
         self._search_client: SearchClient | None = None
         self._index_client: SearchIndexClient | None = None
+        self._async_search_client: AsyncSearchClient | None = None
+        self._async_credential: Any = None
 
     def _get_index_client(self) -> SearchIndexClient:
         """Lazily initialise the search index client."""
@@ -639,6 +642,126 @@ class VectorStore:
 
         return results
 
+    def _make_async_credential(self) -> Any:
+        """Create an async-compatible credential for Azure AI Search.
+
+        ``AzureKeyCredential`` is sync-only but accepted by the async
+        ``SearchClient`` (it's just a header provider).  For AAD we must
+        use ``azure.identity.aio.DefaultAzureCredential``.
+        """
+        if self.api_key:
+            from azure.core.credentials import AzureKeyCredential
+
+            return AzureKeyCredential(self.api_key)
+        from azure.identity.aio import DefaultAzureCredential as AsyncDefaultAzureCredential
+
+        return AsyncDefaultAzureCredential()
+
+    def _get_async_search_client(self) -> AsyncSearchClient:
+        """Lazily initialise and cache the async search client.
+
+        The client is reused across calls for connection pooling.  Call
+        :meth:`aclose` when the ``VectorStore`` is no longer needed to
+        release the underlying HTTP session.
+        """
+        if self._async_search_client is None:
+            from azure.search.documents.aio import SearchClient as AsyncSearchClient
+
+            self._async_credential = self._make_async_credential()
+            self._async_search_client = AsyncSearchClient(
+                endpoint=self.endpoint,
+                index_name=self.index_name,
+                credential=self._async_credential,
+            )
+        return self._async_search_client
+
+    async def search_async(
+        self,
+        query_vector: list[float],
+        query_text: str = "",
+        top_k: int = 5,
+        score_threshold: float = 0.0,
+        filters: str | None = None,
+        use_semantic_reranker: bool = False,
+    ) -> list[SearchResult]:
+        """Async variant of :meth:`search` using the async Azure AI Search SDK.
+
+        Uses the cached async client so multiple concurrent calls share
+        one HTTP connection pool instead of each occupying a thread-pool
+        slot.
+
+        Args are identical to :meth:`search`.
+        """
+        from azure.search.documents.models import VectorizedQuery
+
+        vector_query = VectorizedQuery(
+            vector=query_vector,
+            k_nearest_neighbors=top_k,
+            fields="content_vector",
+        )
+
+        search_kwargs: dict[str, Any] = {
+            "vector_queries": [vector_query],
+            "top": top_k,
+        }
+
+        if query_text:
+            search_kwargs["search_text"] = query_text
+
+        if filters:
+            search_kwargs["filter"] = filters
+
+        if use_semantic_reranker:
+            search_kwargs["query_type"] = "semantic"
+            search_kwargs["semantic_configuration_name"] = "csa-semantic-config"
+
+        client = self._get_async_search_client()
+        response = await client.search(**search_kwargs)
+
+        results: list[SearchResult] = []
+        async for doc in response:
+            score = doc.get("@search.score", 0.0)
+            reranker_score = doc.get("@search.reranker_score")
+            effective_score = reranker_score if reranker_score is not None else score
+
+            if effective_score < score_threshold:
+                continue
+
+            metadata = {}
+            with contextlib.suppress(json.JSONDecodeError, TypeError):
+                metadata = json.loads(doc.get("metadata", "{}"))
+
+            results.append(
+                SearchResult(
+                    id=doc["id"],
+                    text=doc.get("content", ""),
+                    score=effective_score,
+                    source=doc.get("source", ""),
+                    metadata=metadata,
+                )
+            )
+
+        return results
+
+    async def aclose(self) -> None:
+        """Close cached async clients and release HTTP connections.
+
+        Idempotent.  Safe to call even if no async client was created.
+        """
+        if self._async_search_client is not None:
+            with contextlib.suppress(Exception):
+                await self._async_search_client.close()
+            self._async_search_client = None
+        if self._async_credential is not None:
+            # Async DefaultAzureCredential exposes close(); key credentials do not.
+            close = getattr(self._async_credential, "close", None)
+            if close is not None:
+                with contextlib.suppress(Exception):
+                    result = close()
+                    if asyncio.iscoroutine(result):
+                        await result
+            self._async_credential = None
+
     def delete_documents(self, document_ids: list[str]) -> int:
         """Delete documents from the search index by ID.
 
@@ -707,11 +830,14 @@ class RAGPipeline:
         score_threshold: float = 0.70,
         use_semantic_reranker: bool = True,
         chat_client: AzureOpenAI | None = None,
+        async_chat_client: AsyncAzureOpenAI | None = None,
     ) -> None:
         self.chunker = chunker
         self.embedder = embedder
         self.vector_store = vector_store
         self.chat_client = chat_client
+        self.async_chat_client = async_chat_client
+        self._cached_async_chat_client: AsyncAzureOpenAI | None = None
         self.chat_deployment = chat_deployment
         self.chat_max_tokens = chat_max_tokens
         self.chat_temperature = chat_temperature
@@ -899,15 +1025,56 @@ class RAGPipeline:
             "context_chunks": [{"text": r.text, "source": r.source, "score": r.score} for r in results],
         }
 
+    def _get_async_chat_client(self) -> AsyncAzureOpenAI:
+        """Get or lazily create the async chat client.
+
+        Precedence: explicitly injected ``async_chat_client`` > lazily
+        built cached singleton derived from the embedder's endpoint and
+        credentials.  The cached client is reused across calls so the
+        underlying ``httpx.AsyncClient`` connection pool is preserved.
+        """
+        if self.async_chat_client is not None:
+            return self.async_chat_client
+        if self._cached_async_chat_client is not None:
+            return self._cached_async_chat_client
+
+        from openai import AsyncAzureOpenAI
+
+        if hasattr(self.embedder, "api_key") and self.embedder.api_key:
+            self._cached_async_chat_client = AsyncAzureOpenAI(
+                azure_endpoint=self.embedder.endpoint,
+                api_key=self.embedder.api_key,
+                api_version=self.embedder.api_version,
+            )
+        else:
+            from azure.identity import get_bearer_token_provider
+            from azure.identity.aio import DefaultAzureCredential as AsyncDefaultAzureCredential
+
+            credential = AsyncDefaultAzureCredential()
+            token_provider = get_bearer_token_provider(
+                credential,  # type: ignore[arg-type]  # async credential accepted at runtime
+                "https://cognitiveservices.azure.com/.default",
+            )
+            self._cached_async_chat_client = AsyncAzureOpenAI(
+                azure_endpoint=self.embedder.endpoint,
+                azure_ad_token_provider=token_provider,
+                api_version=self.embedder.api_version,
+            )
+        return self._cached_async_chat_client
+
     async def query_async(
         self,
         question: str,
         filters: str | None = None,
         system_prompt: str | None = None,
     ) -> dict[str, Any]:
-        """Async version of :meth:`query`.
+        """Execute a RAG query using native async I/O end to end.
 
-        Useful in web frameworks or event-driven architectures.
+        Replaces the former ``run_in_executor`` wrapper: every network
+        hop (embedding, vector search, chat completion) now uses the
+        async SDK directly, so many concurrent ``query_async`` calls
+        share connection pools and never occupy a thread-pool slot
+        while waiting on Azure.
 
         Args:
             question: The user's natural-language question.
@@ -917,12 +1084,82 @@ class RAGPipeline:
         Returns:
             Same structure as :meth:`query`.
         """
-        # For the async path, we run the synchronous pipeline in a thread pool
-        # because the underlying Azure SDK clients may not be fully async.
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(
-            None, lambda: self.query(question, filters=filters, system_prompt=system_prompt)
+        # 1. Embed the question (async)
+        embeddings = await self.embedder.embed_texts_async([question])
+        query_vector = embeddings[0]
+
+        # 2. Search for relevant chunks (async)
+        results = await self.vector_store.search_async(
+            query_vector=query_vector,
+            query_text=question,
+            top_k=self.top_k,
+            score_threshold=self.score_threshold,
+            filters=filters,
+            use_semantic_reranker=self.use_semantic_reranker,
         )
+
+        if not results:
+            return {
+                "answer": "No relevant context found in the knowledge base for this question.",
+                "sources": [],
+                "context_chunks": [],
+            }
+
+        # 3. Build augmented prompt
+        context_parts: list[str] = []
+        sources: list[dict[str, Any]] = []
+        for r in results:
+            context_parts.append(f"[Source: {r.source}]\n{r.text}")
+            sources.append(
+                {
+                    "id": r.id,
+                    "source": r.source,
+                    "score": r.score,
+                    "metadata": r.metadata,
+                }
+            )
+
+        context = "\n\n".join(context_parts)
+        user_message = self._USER_PROMPT_TEMPLATE.format(
+            context=context,
+            question=question,
+        )
+
+        # 4. Generate answer via Azure OpenAI (async)
+        client = self._get_async_chat_client()
+        response = await client.chat.completions.create(
+            model=self.chat_deployment,
+            messages=[
+                {"role": "system", "content": system_prompt or self._SYSTEM_PROMPT},
+                {"role": "user", "content": user_message},
+            ],
+            max_tokens=self.chat_max_tokens,
+            temperature=self.chat_temperature,
+        )
+
+        answer = response.choices[0].message.content or ""
+
+        return {
+            "answer": answer,
+            "sources": sources,
+            "context_chunks": [{"text": r.text, "source": r.source, "score": r.score} for r in results],
+        }
+
+    async def aclose(self) -> None:
+        """Release async resources held by this pipeline.
+
+        Closes the cached async chat client (if any) and delegates to
+        :meth:`VectorStore.aclose` so HTTP connection pools do not leak
+        in long-running processes.  Idempotent.
+        """
+        if self._cached_async_chat_client is not None:
+            with contextlib.suppress(Exception):
+                await self._cached_async_chat_client.close()
+            self._cached_async_chat_client = None
+        aclose = getattr(self.vector_store, "aclose", None)
+        if aclose is not None:
+            with contextlib.suppress(Exception):
+                await aclose()
 
 
 # ---------------------------------------------------------------------------
