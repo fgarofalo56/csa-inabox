@@ -407,7 +407,7 @@ Resource Modules and Deployments
 ***************************************************************************************************************************************************/
 
 // Logging RG
-module loggingResourceGroup 'modules/resourceGroup/resourceGroup.bicep' = if (bool(deployModules.logging)) {
+module loggingResourceGroup '../shared/modules/resourceGroup/resourceGroup.bicep' = if (bool(deployModules.logging)) {
   name: parLoggingResourceGroupName
   scope: subscription(parALZ_SubscriptionId)
   params: {
@@ -652,7 +652,7 @@ module remediationTaskModule 'modules/policy/remediation/policyRemediation.bicep
 ]
 
 // Networking Resources
-module hubResourceGroup 'modules/resourceGroup/resourceGroup.bicep' = if (bool(deployModules.hubNetwork)) {
+module hubResourceGroup '../shared/modules/resourceGroup/resourceGroup.bicep' = if (bool(deployModules.hubNetwork)) {
   name: 'DeployHubRG-${parHubResourceGroupName}'
   scope: subscription(hubNetwork.parHubSubscriptionId)
   params: {
@@ -666,7 +666,7 @@ module hubResourceGroup 'modules/resourceGroup/resourceGroup.bicep' = if (bool(d
 }
 
 // Private DNS Zones RG
-module privateDnsZonesResourceGroup 'modules/resourceGroup/resourceGroup.bicep' = if (bool(deployModules.hubNetwork)) {
+module privateDnsZonesResourceGroup '../shared/modules/resourceGroup/resourceGroup.bicep' = if (bool(deployModules.hubNetwork)) {
   name: 'DeployPrivateDNSZoneRG-${parPrivateDnsZonesResourceGroupName}'
   scope: subscription(hubNetwork.parHubSubscriptionId)
   params: {
