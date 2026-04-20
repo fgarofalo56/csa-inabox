@@ -34,6 +34,9 @@
 | [0013](./0013-dbt-as-canonical-transformation.md) | dbt Core as the canonical transformation layer | accepted | 2026-04-20 | Deduplicates Bronze → Silver → Gold logic — dbt owns medallion transforms; Spark notebooks are deprecated for that path and reserved for exploration / provisioning / ML. |
 | [0014](./0014-msal-bff-auth-pattern.md) | MSAL Backend-for-Frontend (BFF) auth pattern | accepted | 2026-04-20 | Phased CSA-0020 remediation — Phase 1 strict CSP + Trusted Types on the SPA; Phase 2 server-side Auth Code + PKCE flow with an httpOnly `csa_sid` session cookie. Tokens never reach the browser. |
 | [0015](./0015-postgres-portal-persistence.md) | Portal persistence: StoreBackend protocol + SQLite (dev) + Postgres Flexible Server (prod) | accepted | 2026-04-20 | CSA-0046 implementation — dual-backend Protocol, managed-identity AAD tokens for Azure Database for PostgreSQL Flexible Server, Alembic migrations, SQLite kept as the zero-install dev loop. |
+| [0016](./0016-async-store-backend.md) | Async `StoreBackend` canonical; sync layer transitional | accepted | 2026-04-20 | CSA-0046 follow-on — `AsyncStoreBackend` Protocol + `AsyncSqliteStore` (aiosqlite) + `AsyncPostgresStore` (asyncpg + SQLAlchemy AsyncEngine); FastAPI routers go `async def` via Depends; migration CLI ships; sync layer kept one release for backward compat. |
+| [0017](./0017-rag-service-layer.md) | RAG pipeline service-layer extraction (CSA-0133) | accepted | 2026-04-20 | Split the 1,285-line `pipeline.py` god-class into six submodules behind a `RAGService` facade; legacy `pipeline` module is preserved as a compat shim for one release. |
+| [0018](./0018-fabric-rti-adapter.md) | Fabric Real-Time Intelligence adapter (pre-GA, env-gated) | accepted | 2026-04-20 | CSA-0137 follow-on — ship `FabricRTISource` today behind `FABRIC_RTI_ENABLED`; raise-with-pointer when the flag is unset so Gov tenants fail loudly until RTI Gov-GA lands. |
 
 ---
 
