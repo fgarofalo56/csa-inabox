@@ -5,6 +5,88 @@ end-of-session protocol in `.claude/rules/session-end.md`.
 
 ---
 
+## 2026-04-20 (cont.) — Phase-3 Wave 4.7: 3 more approved-queue items shipped
+
+Fifth parallel round of the day. All three on non-overlapping scopes;
+no working-tree contention.
+
+### Commits
+
+- `e69bb7d` feat(deploy): CSA-0138 — canonical DLQ pattern Bicep
+  module + runbook (AQ-0033 Theme E). 235-line shared module with 4
+  Azure resources (container / Event Grid system topic + sub /
+  diagnostic settings / metric alert); 243-line operator runbook
+  with 5-step triage + Replay + Drop + Escalation; ARCHITECTURE +
+  PLATFORM_SERVICES cross-refs.
+- `7c2c803` docs(adr): CSA-0140 — ADR-0011 multi-cloud scope
+  (AQ-0035 Theme E). Scopes multi-cloud to OneLake shortcuts + Purview
+  cross-cloud scans; defers Unity Catalog federation, Denodo, Trino,
+  cross-cloud compute. 169-line MADR with 4 considered options,
+  honest pro/con, validation criterion, NIST control references.
+- `1dc7eb0` fix(security): CSA-0025 — IoT Hub + DPS Entra-only
+  (AQ-0014 Theme C). Breaking change. `disableLocalAuth: true` on
+  both; `listKeys()` call sites removed from routing + Key Vault
+  secret; DPS API bump to 2023-03-01-preview; 2 new role assignments
+  for MSI-based linking. 253-line iot-hub-entra.md migration doc.
+
+### Findings status
+
+  * CSA-0138 → review (DLQ Bicep + runbook shipped; data_activator
+    wiring + FailedOperation Pydantic model + Cosmos persistence
+    remain as follow-up)
+  * CSA-0140 → review (ADR-0011 complete)
+  * CSA-0025 → review (IoT Hub/DPS Entra flip complete; Event Hub
+    SAS remains as CSA-0026 follow-up candidate)
+
+### Approval-queue progress
+
+Shipped 16/35 → **19/35**. Remaining after this round:
+
+Theme C breaking changes: CSA-0020 MSAL BFF, CSA-0046 SQLite→Postgres
+Theme D operational: CSA-0072 v0.1.0 tag, CSA-0089 iot-streaming dbt
+Theme E architectural: CSA-0128 data mesh federation, CSA-0130 dbt
+  canonical, CSA-0134 git history purge, CSA-0137 streaming spine
+Theme A Copilot (XL): CSA-0008 MVP, CSA-0100 agent framework,
+  CSA-0102 confirmation broker
+
+### Scorecard
+
+| Metric | Before | After |
+|---|---|---|
+| Vision alignment | ~82% | ~84% |
+| HIGH findings open | 39 | 36 |
+| MEDIUM findings open | ~40 | ~38 |
+| Approval-queue items shipped | 16/35 | 19/35 |
+| Cross-session commits | ~55 | ~62 |
+| Findings fully resolved | 35 | 38 |
+| Findings partial | 1 | 1 (CSA-0133) |
+
+### Parallel-dispatch protocol
+
+Five consecutive rounds of parallel agents on non-overlapping scopes
+under the no-checkout/reset/stash rule. Zero working-tree contention
+across all 5 rounds. Protocol is load-bearing.
+
+### Follow-ups surfaced this round
+
+- CSA-0026 candidate: Event Hub SAS → Entra migration (mirror of
+  CSA-0025 for the Event Hubs surface)
+- CSA-0138-followup: wire the DLQ pattern into data_activator +
+  FailedOperation Pydantic model + portal UI surface
+- Pre-existing README bug: iot-streaming README line 281 references
+  a telemetryHubListenConnectionString.value output that never
+  existed in Bicep — separate fix
+
+### Next session candidates
+
+- Theme A Copilot MVP (CSA-0008 XL — Phase 0-1 plausible)
+- Theme C remaining: CSA-0020 MSAL BFF (L), CSA-0046 Postgres (L)
+- Theme E remaining: CSA-0128 data mesh federation, CSA-0130 dbt
+  canonical, CSA-0137 streaming spine, CSA-0134 git history purge
+- ~35 remaining no-approval HIGH/MEDIUM for incremental execution
+
+---
+
 ## 2026-04-20 (cont.) — Phase-3 Wave 4.6: 3 more approved-queue items shipped
 
 Third parallel round this day. Three independent approved items on
