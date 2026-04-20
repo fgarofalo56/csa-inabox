@@ -31,7 +31,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from azure.core.exceptions import AzureError
 
-from governance.common.logging import reset_logging_state
+from csa_platform.governance.common.logging import reset_logging_state
 
 # ---------------------------------------------------------------------------
 # Fixtures

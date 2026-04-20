@@ -50,7 +50,7 @@ controls:
         lines: "281-307"
         note: "require_role per-route authorization"
       - kind: "config"
-        path: "governance/rbac/rbac-matrix.json"
+        path: "csa_platform/governance/rbac/rbac-matrix.json"
     responsible_party: "csa-inabox platform team"
 
   - id: "AC.L2-3.1.3"
@@ -73,7 +73,7 @@ controls:
     cross_reference: "NIST 800-171 3.1.4 / NIST 800-53 AC-5"
     evidence:
       - kind: "config"
-        path: "governance/rbac/rbac-matrix.json"
+        path: "csa_platform/governance/rbac/rbac-matrix.json"
     responsible_party: "csa-inabox platform team"
 
   - id: "AC.L2-3.1.5"
@@ -83,7 +83,7 @@ controls:
     cross_reference: "NIST 800-171 3.1.5 / NIST 800-53 AC-6"
     evidence:
       - kind: "config"
-        path: "governance/rbac/rbac-matrix.json"
+        path: "csa_platform/governance/rbac/rbac-matrix.json"
       - kind: "bicep"
         path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
         lines: "108-115"
@@ -96,7 +96,7 @@ controls:
     cross_reference: "NIST 800-171 3.1.6 / NIST 800-53 AC-6(2)"
     evidence:
       - kind: "config"
-        path: "governance/rbac/rbac-matrix.json"
+        path: "csa_platform/governance/rbac/rbac-matrix.json"
         note: "Personas split admin vs engineer vs scientist"
     gaps:
       - "No PIM JIT elevation shipped"
@@ -391,7 +391,7 @@ controls:
     cross_reference: "NIST 800-171 3.3.9 / NIST 800-53 AU-9(4)"
     evidence:
       - kind: "config"
-        path: "governance/rbac/rbac-matrix.json"
+        path: "csa_platform/governance/rbac/rbac-matrix.json"
         note: "PlatformAdmin-only diagnostic settings"
     responsible_party: "csa-inabox platform team"
 
@@ -737,7 +737,7 @@ controls:
     cross_reference: "NIST 800-171 3.8.4 / NIST 800-53 MP-3"
     evidence:
       - kind: "config"
-        path: "governance/purview/classification/classification_rules.json"
+        path: "csa_platform/governance/purview/classification/classification_rules.json"
     gaps:
       - "No automated CUI label application"
     responsible_party: "csa-inabox platform team"

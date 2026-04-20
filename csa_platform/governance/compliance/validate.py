@@ -17,9 +17,9 @@ report).  Emits aggregate stats on success.
 
 Usage::
 
-    python governance/compliance/validate.py
-    python governance/compliance/validate.py --strict      # warnings → errors
-    python governance/compliance/validate.py --manifests governance/compliance/*.yaml
+    python csa_platform/governance/compliance/validate.py
+    python csa_platform/governance/compliance/validate.py --strict      # warnings → errors
+    python csa_platform/governance/compliance/validate.py --manifests csa_platform/governance/compliance/*.yaml
 
 This is deliberately dependency-light: it uses only the standard library
 plus PyYAML, which is already a transitive dependency of the platform.
@@ -39,8 +39,9 @@ except ImportError as exc:  # pragma: no cover
     print("ERROR: PyYAML is required. Install with: pip install pyyaml", file=sys.stderr)
     raise SystemExit(2) from exc
 
-# Repository root is two levels above this file: .../governance/compliance/validate.py
-REPO_ROOT = Path(__file__).resolve().parents[2]
+# Repository root is three levels above this file:
+# .../csa_platform/governance/compliance/validate.py (CSA-0126 consolidation).
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 ALLOWED_STATUS = {
     "IMPLEMENTED",
@@ -71,9 +72,9 @@ REQUIRED_MANIFEST_FIELDS = {
 }
 
 DEFAULT_MANIFESTS = [
-    "governance/compliance/nist-800-53-rev5.yaml",
-    "governance/compliance/cmmc-2.0-l2.yaml",
-    "governance/compliance/hipaa-security-rule.yaml",
+    "csa_platform/governance/compliance/nist-800-53-rev5.yaml",
+    "csa_platform/governance/compliance/cmmc-2.0-l2.yaml",
+    "csa_platform/governance/compliance/hipaa-security-rule.yaml",
 ]
 
 

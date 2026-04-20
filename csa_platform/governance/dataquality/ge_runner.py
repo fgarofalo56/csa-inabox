@@ -34,7 +34,7 @@ from typing import Any
 
 import yaml
 
-from governance.common.logging import get_logger
+from csa_platform.governance.common.logging import get_logger
 
 logger = get_logger(__name__)
 

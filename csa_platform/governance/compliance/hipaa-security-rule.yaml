@@ -36,7 +36,7 @@ controls:
     status: "PARTIALLY_IMPLEMENTED"
     evidence:
       - kind: "doc"
-        path: "governance/compliance/compliance-overview.md"
+        path: "csa_platform/governance/compliance/compliance-overview.md"
     gaps:
       - "No formal security-management-process policy document"
     responsible_party: "csa-inabox platform team"
@@ -109,7 +109,7 @@ controls:
     status: "IMPLEMENTED"
     evidence:
       - kind: "config"
-        path: "governance/rbac/rbac-matrix.json"
+        path: "csa_platform/governance/rbac/rbac-matrix.json"
       - kind: "code"
         path: "csa_platform/common/auth.py"
         lines: "281-307"
@@ -139,7 +139,7 @@ controls:
       - kind: "code"
         path: "csa_platform/common/auth.py"
       - kind: "config"
-        path: "governance/rbac/rbac-matrix.json"
+        path: "csa_platform/governance/rbac/rbac-matrix.json"
     responsible_party: "csa-inabox platform team"
 
   - id: "164.308(a)(4)(ii)(A)"
@@ -156,9 +156,9 @@ controls:
     status: "IMPLEMENTED"
     evidence:
       - kind: "config"
-        path: "governance/rbac/rbac-matrix.json"
+        path: "csa_platform/governance/rbac/rbac-matrix.json"
       - kind: "script"
-        path: "governance/rbac/apply-rbac.ps1"
+        path: "csa_platform/governance/rbac/apply-rbac.ps1"
     responsible_party: "csa-inabox platform team"
 
   - id: "164.308(a)(4)(ii)(C)"
@@ -167,7 +167,7 @@ controls:
     status: "PARTIALLY_IMPLEMENTED"
     evidence:
       - kind: "script"
-        path: "governance/rbac/apply-rbac.ps1"
+        path: "csa_platform/governance/rbac/apply-rbac.ps1"
     gaps:
       - "No access-review attestation workflow"
     responsible_party: "csa-inabox platform team"
@@ -453,7 +453,7 @@ controls:
     status: "PARTIALLY_IMPLEMENTED"
     evidence:
       - kind: "config"
-        path: "governance/rbac/rbac-matrix.json"
+        path: "csa_platform/governance/rbac/rbac-matrix.json"
         note: "PlatformAdmin persona = break-glass"
     gaps:
       - "No documented break-glass account / PIM-elevation runbook"
@@ -631,9 +631,9 @@ controls:
     status: "PARTIALLY_IMPLEMENTED"
     evidence:
       - kind: "doc"
-        path: "governance/compliance/compliance-overview.md"
+        path: "csa_platform/governance/compliance/compliance-overview.md"
       - kind: "doc"
-        path: "governance/compliance/hipaa-security-rule.yaml"
+        path: "csa_platform/governance/compliance/hipaa-security-rule.yaml"
         note: "This manifest is the machine-readable policy map"
     gaps:
       - "No customer-facing policy-set package with signatures / revisions"
@@ -647,7 +647,7 @@ controls:
       - kind: "doc"
         path: "docs/compliance/hipaa-security-rule.md"
       - kind: "doc"
-        path: "governance/compliance/hipaa-security-rule.yaml"
+        path: "csa_platform/governance/compliance/hipaa-security-rule.yaml"
     responsible_party: "csa-inabox platform team"
 
   - id: "164.316(b)(2)(i)"
@@ -677,7 +677,7 @@ controls:
     status: "PARTIALLY_IMPLEMENTED"
     evidence:
       - kind: "doc"
-        path: "governance/compliance/hipaa-security-rule.yaml"
+        path: "csa_platform/governance/compliance/hipaa-security-rule.yaml"
         note: "last_reviewed field tracks updates"
     gaps:
       - "No automated annual review reminder"

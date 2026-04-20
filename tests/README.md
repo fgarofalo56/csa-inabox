@@ -10,9 +10,9 @@
 ```text
 tests/
 ├── conftest.py              # Shared pytest fixtures
-├── common/                  # Tests for governance/common/
-├── contracts/               # Tests for governance/contracts/
-├── dataquality/             # Tests for governance/dataquality/
+├── common/                  # Tests for csa_platform/governance/common/
+├── contracts/               # Tests for csa_platform/governance/contracts/
+├── dataquality/             # Tests for csa_platform/governance/dataquality/
 ├── integration/             # Integration tests (schema, DuckDB, streaming)
 ├── functions/               # Azure Functions unit tests
 ├── load/                    # Load and performance tests (Locust)
@@ -46,9 +46,9 @@ cd tests/load && locust -f locustfile.py
 
 | Test Directory | Tests For | Type |
 |---------------|-----------|------|
-| `common/` | `governance/common/` | Unit |
-| `contracts/` | `governance/contracts/` | Unit |
-| `dataquality/` | `governance/dataquality/` | Unit |
+| `common/` | `csa_platform/csa_platform/governance/common/` | Unit |
+| `contracts/` | `csa_platform/csa_platform/governance/contracts/` | Unit |
+| `dataquality/` | `csa_platform/csa_platform/governance/dataquality/` | Unit |
 | `platform/` | `csa_platform/` services | Unit / Integration |
 | `functions/` | Azure Functions | Unit |
 | `purview/` | Purview integration | Integration |

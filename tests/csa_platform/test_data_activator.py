@@ -22,7 +22,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from governance.common.logging import reset_logging_state
+from csa_platform.governance.common.logging import reset_logging_state
 
 # ---------------------------------------------------------------------------
 # Test credential constants (not real credentials — used only for structural

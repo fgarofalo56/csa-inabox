@@ -90,7 +90,7 @@ Fabric is the right answer. Use this decision table to pick the right tool:
 | Team prefers a unified SaaS control plane over composed Bicep modules | Team requires Bicep/Terraform IaC, controlled deployments, explicit Azure Policy enforcement |
 | Simplicity and managed OneLake are higher priority than control | Composability and Azure PaaS primitives (ADLS Gen2, Databricks, Synapse, Purview, Power BI) are higher priority than a single pane of glass |
 | Preview features are an asset (Data Activator, Fabric Copilot) | Production-stable services and a conservative roll-out pace are required |
-| Commercial-only workloads OR you are starting greenfield with Fabric | Federal / regulated / tribal workloads subject to FedRAMP High, CMMC 2.0 L2, or HIPAA (see `governance/compliance/`) |
+| Commercial-only workloads OR you are starting greenfield with Fabric | Federal / regulated / tribal workloads subject to FedRAMP High, CMMC 2.0 L2, or HIPAA (see `csa_platform/csa_platform/governance/compliance/`) |
 | F-SKU reserved capacity cost model fits your procurement | Consumption-based Azure metering + reserved instances fit your procurement |
 
 For the detailed selection logic, see the

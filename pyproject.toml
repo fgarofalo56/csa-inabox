@@ -29,7 +29,7 @@ governance = [
     "pyyaml>=6.0,<7.0",
     "azure-monitor-ingestion>=1.0.0,<2.0.0",
     # Structured JSON logging with trace/correlation context — see
-    # governance/common/logging.py and docs/LOG_SCHEMA.md.
+    # csa_platform/governance/common/logging.py and docs/LOG_SCHEMA.md.
     "structlog>=24.1.0,<26.0.0",
     # great-expectations: The ge_runner.py checkpoint runner uses an in-memory
     # fallback evaluator; no GE config/checkpoints exist yet. Re-add when a
@@ -103,25 +103,24 @@ portal = [
 ]
 
 [tool.setuptools]
-# Installable Python packages.  The governance package ships the data-
-# quality / contracts toolchain; csa_platform ships the reusable platform
+# Installable Python packages.  csa_platform ships the reusable platform
 # service modules (AI integration, data marketplace, metadata framework,
-# etc.).  Everything else (deploy/, domains/, templates/, scripts/) is
-# non-Python or uses its own import mechanics (Azure Functions, dbt,
-# Databricks).
+# governance, etc.).  Everything else (deploy/, domains/, templates/,
+# scripts/) is non-Python or uses its own import mechanics (Azure
+# Functions, dbt, Databricks).
 #
-# ``find_packages`` is used for csa_platform so that new sub-packages
-# under csa_platform/ are auto-discovered; governance is pinned because
-# its layout is stable and explicit listing documents the public surface.
+# ``find_packages`` auto-discovers sub-packages under csa_platform/.
+# The governance toolchain (data-quality, contracts, compliance, Purview
+# automation) now lives under csa_platform.governance (CSA-0126).
 
 [tool.setuptools.packages.find]
-include = ["governance*", "csa_platform*"]
+include = ["csa_platform*"]
 exclude = ["*.tests", "*.tests.*", "tests*"]
 
 [tool.ruff]
 target-version = "py310"
 line-length = 120
-src = ["domains", "scripts", "governance", "dev-loop"]
+src = ["domains", "scripts", "csa_platform", "dev-loop"]
 # Exclude empty/placeholder files that aren't valid Python/Notebook.
 extend-exclude = ["scripts/monitor/SynapseTroubleshooting.ipynb", "domains/spark/ArcGIS_GeoAnalyticsEngine"]
 
@@ -255,7 +254,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["domains", "governance"]
+known-first-party = ["domains", "csa_platform"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -283,9 +282,9 @@ markers = [
 # suite (dbt Python runners, Azure Functions, dev loop gates),
 # add them to this list alongside their tests.
 source = [
-    "governance/common",
-    "governance/dataquality",
-    "governance/contracts",
+    "csa_platform/governance/common",
+    "csa_platform/governance/dataquality",
+    "csa_platform/governance/contracts",
     "domains/sharedServices/aiEnrichment/functions",
     "domains/sharedServices/eventProcessing/functions",
     "domains/sharedServices/secretRotation/functions",
@@ -331,13 +330,14 @@ python_version = "3.10"
 # weakening this config.
 strict = true
 # Default target when ``mypy`` is run with no arguments: the governance
-# package plus its tests. The two Azure Functions apps both ship a flat
-# ``function_app.py`` at different paths, which otherwise collides at
-# module resolution time — they are type-checked by dedicated ``mypy
-# <path>`` invocations from the Makefile and the test.yml workflow so
-# each app resolves as its own module. See ``make typecheck``.
+# sub-package under csa_platform plus its tests (CSA-0126). The two Azure
+# Functions apps both ship a flat ``function_app.py`` at different paths,
+# which otherwise collides at module resolution time — they are
+# type-checked by dedicated ``mypy <path>`` invocations from the Makefile
+# and the test.yml workflow so each app resolves as its own module. See
+# ``make typecheck``.
 files = [
-    "governance",
+    "csa_platform/governance",
     "tests",
 ]
 # Third-party Azure SDK libraries still ship partial type info — stay
@@ -353,7 +353,7 @@ no_implicit_reexport = true
 # Platform modules use lazy SDK imports and dynamic client initialization.
 # They are type-checked separately via ``make typecheck-platform`` (with
 # --ignore-missing-imports) to allow progressive strictness adoption.  The
-# default mypy run on ``governance`` + ``tests`` should not fail on type
+# default mypy run on ``csa_platform.governance`` + ``tests`` should not fail on type
 # issues inside these modules when they are incidentally imported.
 module = [
     "csa_platform.*",
@@ -364,7 +364,7 @@ disallow_untyped_defs = false
 [[tool.mypy.overrides]]
 # Portal API modules use dynamic JSON schemas (SQLite JSON blob columns)
 # and method names that shadow built-in types (``list``/``save``).  The
-# default ``governance`` + ``tests`` mypy run cannot always resolve these
+# default ``csa_platform.governance`` + ``tests`` mypy run cannot always resolve these
 # precisely when portal modules are incidentally imported by tests.  The
 # portal package is type-checked directly in its own CI lane.
 module = [

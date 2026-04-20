@@ -182,7 +182,7 @@ python csa_platform/data_marketplace/api/marketplace_api.py --init
 
 ## 5. 📋 Governance Framework
 
-**Location:** `csa_platform/purview_governance/` (Python automation) + top-level `governance/` (shared logging, contracts, dataquality, finops)
+**Location:** `csa_platform/csa_platform/governance/purview/` (Python automation) + top-level `csa_platform/governance/` (shared logging, contracts, dataquality, finops)
 **Fabric Equivalent:** Purview-integrated governance
 **Note:** These two trees overlap today and are scheduled for consolidation (see AQ-0025 / CSA-0126 in the audit approval queue). Both are canonical until that decision is made.
 
@@ -201,7 +201,7 @@ classification, sensitivity labeling, and master data management.
 # Bootstrap Purview with glossary, classifications, and scan rules
 python scripts/purview/bootstrap_catalog.py \
   --purview-account <purview-name> \
-  --config governance/purview/catalog-config.yaml
+  --config csa_platform/governance/purview/catalog-config.yaml
 ```
 
 **Dependencies:** Microsoft Purview, Key Vault

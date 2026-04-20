@@ -606,7 +606,7 @@ Each example README has its own **Prerequisites / Cost / Teardown** section with
 
 - [ ] **Add a new domain**: Copy `domains/finance/` as a template, update `dbt_project.yml`
 - [ ] **Add a data product**: Create `contract.yaml` under `data-products/`
-- [ ] **Add quality rules**: Extend `governance/dataquality/` with Great Expectations checkpoints
+- [ ] **Add quality rules**: Extend `csa_platform/csa_platform/governance/dataquality/` with Great Expectations checkpoints
 - [ ] **Scale streaming**: Increase Event Hub partitions, add ADX scaling policies
 - [ ] **Production hardening**: See [`docs/PRODUCTION_CHECKLIST.md`](PRODUCTION_CHECKLIST.md)
 - [ ] **Architecture deep-dive**: See [`docs/ARCHITECTURE.md`](ARCHITECTURE.md)

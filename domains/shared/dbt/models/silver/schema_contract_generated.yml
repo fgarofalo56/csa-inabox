@@ -1,15 +1,15 @@
 # =======================================================================
 # AUTO-GENERATED from data product contracts.  DO NOT EDIT.
 #
-# Regenerate:  python -m governance.contracts.dbt_test_generator --write
-# Check drift: python -m governance.contracts.dbt_test_generator --check
+# Regenerate:  python -m csa_platform.governance.contracts.dbt_test_generator --write
+# Check drift: python -m csa_platform.governance.contracts.dbt_test_generator --check
 # =======================================================================
 
 version: 2
 models:
 - name: slv_orders
   description: 'Auto-generated dbt tests from data contract ''shared.orders'' v1.0.0. DO NOT EDIT -- regenerate with: python
-    -m governance.contracts.dbt_test_generator --write'
+    -m csa_platform.governance.contracts.dbt_test_generator --write'
   columns:
   - name: order_sk
     description: Surrogate key (md5 of order_id). Generated in Silver.

@@ -17,7 +17,7 @@ Find your task below and jump straight to the code.
 
 ### Working on governance?
 
-**Code:** `governance/`, `tests/`
+**Code:** `csa_platform/governance/`, `tests/`
 
 ```bash
 make setup               # Install dependencies
@@ -25,7 +25,7 @@ make test                # Run governance tests (80% coverage gate)
 make typecheck           # Strict mypy validation
 ```
 
-Key modules: `governance/contracts/` (data contracts), `governance/dataquality/` (quality rules), `governance/rbac/` (role-based access), `governance/compliance/` (compliance checks), `governance/finops/` (cost governance).
+Key modules: `csa_platform/csa_platform/governance/contracts/` (data contracts), `csa_platform/csa_platform/governance/dataquality/` (quality rules), `csa_platform/csa_platform/governance/rbac/` (role-based access), `csa_platform/csa_platform/governance/compliance/` (compliance checks), `csa_platform/csa_platform/governance/finops/` (cost governance).
 
 ### Working on data pipelines?
 
@@ -105,12 +105,12 @@ Three function apps: `aiEnrichment/`, `eventProcessing/`, `secretRotation/`. Eac
 - [ ] Review `domains/finance/`, `domains/sales/`, `domains/inventory/` for domain examples
 
 ### Governance Developer
-**Focus areas:** `governance/`, `tests/`
+**Focus areas:** `csa_platform/governance/`, `tests/`
 **Technologies needed:** Python, structlog, pytest
 **Getting started:**
 - [ ] Run `make setup`
 - [ ] Run `make test` — this validates governance code with 80% coverage gate
-- [ ] Key modules: `governance/contracts/` (data contracts), `governance/dataquality/` (quality rules)
+- [ ] Key modules: `csa_platform/csa_platform/governance/contracts/` (data contracts), `csa_platform/csa_platform/governance/dataquality/` (quality rules)
 - [ ] Run `make typecheck` for strict mypy validation
 
 ### Platform / AI Engineer
@@ -158,7 +158,7 @@ Three function apps: `aiEnrichment/`, `eventProcessing/`, `secretRotation/`. Eac
 | `deploy/bicep/` | Infrastructure as Code (Bicep) | DevOps |
 | `domains/` | Data domain models (finance, sales, inventory) | Data Engineer |
 | `examples/` | Reference implementations for gov agencies | Data Engineer |
-| `governance/` | Data governance framework (contracts, quality, RBAC) | Governance Dev |
+| `csa_platform/governance/` | Data governance framework (contracts, quality, RBAC) | Governance Dev |
 | `monitoring/` | Alerting and dashboards (Bicep + Grafana) | DevOps |
 | `csa_platform/` | Platform services (AI, metadata, marketplace) | Platform Engineer |
 | `portal/` | Web portal (React, K8s deployment) | Frontend Dev |
@@ -196,7 +196,7 @@ The naming styles present in the codebase are:
 
 | Style | Examples | Where |
 |-------|----------|-------|
-| `snake_case` | `ai_integration`, `data_marketplace`, `data_activator`, `metadata_framework` | Python packages under `governance/`, `csa_platform/` |
+| `snake_case` | `ai_integration`, `data_marketplace`, `data_activator`, `metadata_framework` | Python packages under `csa_platform/governance/`, `csa_platform/` |
 | `camelCase` | `sharedServices` | Legacy domain directory |
 | `lowercase` | `finops`, `rbac`, `purview` | Short single-word names |
 

@@ -17,13 +17,13 @@
 /deploy/bicep/DMLZ/                  @platform-team @governance-team
 /deploy/bicep/LandingZone\ -\ ALZ/   @platform-team @network-team
 
-# Governance
-/governance/                         @data-governance-team
-/governance/purview/                 @data-governance-team @data-stewards
-/governance/rbac/                    @security-team
-/governance/network/                 @network-team @security-team
-/governance/compliance/              @security-team @data-governance-team
-/governance/keyvault/                @security-team @platform-team
+# Governance (consolidated under csa_platform/governance — CSA-0126)
+/csa_platform/governance/                @data-governance-team
+/csa_platform/governance/purview/        @data-governance-team @data-stewards
+/csa_platform/governance/rbac/           @security-team
+/csa_platform/governance/network/        @network-team @security-team
+/csa_platform/governance/compliance/     @security-team @data-governance-team
+/csa_platform/governance/keyvault/       @security-team @platform-team
 
 # Portal
 /portal/                             @portal-team

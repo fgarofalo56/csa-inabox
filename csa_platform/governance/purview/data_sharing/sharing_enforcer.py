@@ -6,9 +6,9 @@ access by ensuring every sharing grant has a valid, unexpired agreement.
 
 Typical use::
 
-    from csa_platform.purview_governance.data_sharing.sharing_enforcer import SharingEnforcer
+    from csa_platform.governance.purview.data_sharing.sharing_enforcer import SharingEnforcer
 
-    enforcer = SharingEnforcer(agreements_dir="csa_platform/purview_governance/data_sharing/agreements/")
+    enforcer = SharingEnforcer(agreements_dir="csa_platform/governance/purview/data_sharing/agreements/")
 
     result = enforcer.validate_request(
         provider_domain="finance",

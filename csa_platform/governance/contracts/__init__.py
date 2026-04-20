@@ -5,7 +5,7 @@ Also provides a dbt test generator (``dbt_test_generator``) that
 auto-creates schema.yml tests from contract definitions, and a pipeline
 enforcer (``pipeline_enforcer``) for runtime quarantine routing."""
 
-from governance.contracts.contract_validator import (
+from csa_platform.governance.contracts.contract_validator import (
     Column,
     Contract,
     ContractValidationError,
@@ -13,8 +13,8 @@ from governance.contracts.contract_validator import (
     validate_contract_structure,
     validate_rows_against_contract,
 )
-from governance.contracts.dbt_test_generator import generate_schema_yml
-from governance.contracts.pipeline_enforcer import (
+from csa_platform.governance.contracts.dbt_test_generator import generate_schema_yml
+from csa_platform.governance.contracts.pipeline_enforcer import (
     ContractEnforcer,
     QuarantineRecord,
 )

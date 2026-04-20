@@ -36,13 +36,13 @@ def _ensure_repo_root_on_path() -> None:
 if __name__ == "__main__":
     _ensure_repo_root_on_path()
 
-from governance.common.logging import (  # noqa: E402
+from csa_platform.governance.common.logging import (  # noqa: E402
     configure_structlog,
     get_logger,
     new_correlation_id,
 )
-from governance.common.validation import substitute_common_patterns  # noqa: E402
-from governance.dataquality.ge_runner import (  # noqa: E402
+from csa_platform.governance.common.validation import substitute_common_patterns  # noqa: E402
+from csa_platform.governance.dataquality.ge_runner import (  # noqa: E402
     SuiteResult,
     run_ge_checkpoints,
 )

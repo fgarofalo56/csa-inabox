@@ -17,7 +17,7 @@ description = "False-positive allowlist for public reference identifiers."
 paths = [
     # Azure built-in role GUIDs — published by Microsoft, safe to commit.
     # https://learn.microsoft.com/azure/role-based-access-control/built-in-roles
-    '''governance/rbac/rbac-matrix\.json''',
+    '''csa_platform/governance/rbac/rbac-matrix\.json''',
 
     # Synapse / Storage diagnostic logging notebooks contain Azure log
     # output with an "AuthenticationHash" field.  That field is a SHA-256

@@ -26,7 +26,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import yaml
 
-from governance.common.logging import reset_logging_state
+from csa_platform.governance.common.logging import reset_logging_state
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -96,7 +96,7 @@ def config_file(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def runner(config_file: Path) -> Any:
-    from governance.dataquality.run_quality_checks import DataQualityRunner
+    from csa_platform.governance.dataquality.run_quality_checks import DataQualityRunner
 
     return DataQualityRunner(str(config_file))
 
@@ -108,7 +108,7 @@ def runner(config_file: Path) -> Any:
 
 class TestQualityCheckResult:
     def test_to_dict_contains_required_keys(self) -> None:
-        from governance.dataquality.run_quality_checks import QualityCheckResult
+        from csa_platform.governance.dataquality.run_quality_checks import QualityCheckResult
 
         result = QualityCheckResult(
             check_name="dbt_tests",
@@ -125,13 +125,13 @@ class TestQualityCheckResult:
         assert "details" in d
 
     def test_to_dict_details_defaults_to_empty_dict(self) -> None:
-        from governance.dataquality.run_quality_checks import QualityCheckResult
+        from csa_platform.governance.dataquality.run_quality_checks import QualityCheckResult
 
         result = QualityCheckResult(check_name="x", table="y", status="warn")
         assert result.to_dict()["details"] == {}
 
     def test_to_dict_details_preserved(self) -> None:
-        from governance.dataquality.run_quality_checks import QualityCheckResult
+        from csa_platform.governance.dataquality.run_quality_checks import QualityCheckResult
 
         result = QualityCheckResult(
             check_name="x",
@@ -143,7 +143,7 @@ class TestQualityCheckResult:
 
     @pytest.mark.parametrize("status", ["pass", "warn", "fail"])
     def test_all_statuses_round_trip(self, status: str) -> None:
-        from governance.dataquality.run_quality_checks import QualityCheckResult
+        from csa_platform.governance.dataquality.run_quality_checks import QualityCheckResult
 
         r = QualityCheckResult("c", "t", status)
         assert r.to_dict()["status"] == status
@@ -156,7 +156,7 @@ class TestQualityCheckResult:
 
 class TestDataQualityRunnerInit:
     def test_loads_config_from_file(self, config_file: Path) -> None:
-        from governance.dataquality.run_quality_checks import DataQualityRunner
+        from csa_platform.governance.dataquality.run_quality_checks import DataQualityRunner
 
         runner = DataQualityRunner(str(config_file))
         # Config should have been loaded and parsed
@@ -164,7 +164,7 @@ class TestDataQualityRunnerInit:
 
     def test_email_regex_placeholder_substituted(self, tmp_path: Path) -> None:
         """The {EMAIL_REGEX} placeholder must be expanded at load time."""
-        from governance.dataquality.run_quality_checks import DataQualityRunner
+        from csa_platform.governance.dataquality.run_quality_checks import DataQualityRunner
 
         cfg = {
             "great_expectations": {
@@ -198,7 +198,7 @@ class TestDataQualityRunnerInit:
         assert runner.results == []
 
     def test_missing_config_file_raises(self, tmp_path: Path) -> None:
-        from governance.dataquality.run_quality_checks import DataQualityRunner
+        from csa_platform.governance.dataquality.run_quality_checks import DataQualityRunner
 
         with pytest.raises(FileNotFoundError):
             DataQualityRunner(str(tmp_path / "nonexistent.yaml"))
@@ -312,7 +312,7 @@ class TestCheckVolumeRules:
     def _make_runner_with_volume(
         self, tmp_path: Path, rules: list[dict[str, Any]]
     ) -> Any:
-        from governance.dataquality.run_quality_checks import DataQualityRunner
+        from csa_platform.governance.dataquality.run_quality_checks import DataQualityRunner
 
         cfg = _config_with_volume_rules(rules)
         path = tmp_path / "rules.yaml"
@@ -395,7 +395,7 @@ class TestRunGECheckpoints:
     def _make_runner_with_ge(
         self, tmp_path: Path, suites: list[dict[str, Any]]
     ) -> Any:
-        from governance.dataquality.run_quality_checks import DataQualityRunner
+        from csa_platform.governance.dataquality.run_quality_checks import DataQualityRunner
 
         cfg = _config_with_ge_suites(suites)
         path = tmp_path / "rules.yaml"
@@ -494,7 +494,7 @@ class TestRunGECheckpoints:
         runner = self._make_runner_with_ge(tmp_path, [suite])
 
         with patch(
-            "governance.dataquality.ge_runner._great_expectations_available",
+            "csa_platform.governance.dataquality.ge_runner._great_expectations_available",
             return_value=False,
         ):
             results = runner.run_ge_checkpoints()
@@ -524,7 +524,7 @@ class TestRunGECheckpoints:
 
 class TestGenerateReport:
     def _inject_results(self, runner: Any, statuses: list[str]) -> None:
-        from governance.dataquality.run_quality_checks import QualityCheckResult
+        from csa_platform.governance.dataquality.run_quality_checks import QualityCheckResult
 
         for i, status in enumerate(statuses):
             runner.results.append(
@@ -740,7 +740,7 @@ class TestAlertingConfig:
     """Verify the alerting section is parsed from YAML and env vars are referenced."""
 
     def test_teams_webhook_url_env_var_present_in_config(self, tmp_path: Path) -> None:
-        from governance.dataquality.run_quality_checks import DataQualityRunner
+        from csa_platform.governance.dataquality.run_quality_checks import DataQualityRunner
 
         cfg: dict[str, Any] = {
             "alerting": {
@@ -771,7 +771,7 @@ class TestAlertingConfig:
 
 class TestFullRunnerWorkflow:
     def test_run_all_then_generate_report(self, tmp_path: Path) -> None:
-        from governance.dataquality.run_quality_checks import DataQualityRunner
+        from csa_platform.governance.dataquality.run_quality_checks import DataQualityRunner
 
         ge_suite = {
             "name": "bronze_customers_suite",
@@ -805,7 +805,7 @@ class TestFullRunnerWorkflow:
         self, tmp_path: Path
     ) -> None:
         """generate_report should show failures when dbt tests fail."""
-        from governance.dataquality.run_quality_checks import DataQualityRunner
+        from csa_platform.governance.dataquality.run_quality_checks import DataQualityRunner
 
         cfg: dict[str, Any] = {
             "great_expectations": {"suites": []},

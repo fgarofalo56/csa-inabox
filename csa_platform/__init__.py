@@ -11,7 +11,7 @@ CSA-in-a-Box:
     * multi_synapse        — Multi-workspace Synapse orchestration
     * unity_catalog_pattern — Databricks Unity Catalog + ADLS Gen2 metadata
     * oss_alternatives     — Helm charts for Gov-cloud OSS equivalents
-    * purview_governance   — Purview classifications + data-sharing agreements
+    * governance           — Data contracts, DQ, compliance, Purview automation (CSA-0126)
     * shared_services      — Shared Azure Functions (PII, quality, schema)
 
 Each sub-package is independently importable and has its own tests under

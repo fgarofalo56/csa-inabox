@@ -42,10 +42,10 @@ controls:
     status: "PARTIALLY_IMPLEMENTED"
     evidence:
       - kind: "doc"
-        path: "governance/compliance/compliance-overview.md"
+        path: "csa_platform/governance/compliance/compliance-overview.md"
         note: "Access control narrative; policy ownership not yet assigned"
       - kind: "config"
-        path: "governance/rbac/rbac-matrix.json"
+        path: "csa_platform/governance/rbac/rbac-matrix.json"
         note: "RBAC persona / role matrix — codified access policy"
     gaps:
       - "No signed AC policy document with designated owner and annual review cadence"
@@ -65,10 +65,10 @@ controls:
         lines: "266-307"
         note: "get_current_user + require_role dependency injection"
       - kind: "config"
-        path: "governance/rbac/rbac-matrix.json"
+        path: "csa_platform/governance/rbac/rbac-matrix.json"
         note: "Per-persona role assignments (PlatformAdmin, DataEngineer, DataScientist, etc.)"
       - kind: "script"
-        path: "governance/rbac/apply-rbac.ps1"
+        path: "csa_platform/governance/rbac/apply-rbac.ps1"
         note: "Provisions role assignments against RBAC matrix"
     gaps:
       - "No automated periodic access review (annual attestation) — tracked in CSA-0012 Phase 2"
@@ -123,10 +123,10 @@ controls:
     status: "IMPLEMENTED"
     evidence:
       - kind: "config"
-        path: "governance/rbac/rbac-matrix.json"
+        path: "csa_platform/governance/rbac/rbac-matrix.json"
         note: "Distinct PlatformAdmin, DataEngineer, DataScientist, DataSteward, Reader personas"
       - kind: "script"
-        path: "governance/rbac/apply-rbac.ps1"
+        path: "csa_platform/governance/rbac/apply-rbac.ps1"
     responsible_party: "csa-inabox platform team"
 
   - id: "AC-6"
@@ -135,7 +135,7 @@ controls:
     status: "IMPLEMENTED"
     evidence:
       - kind: "config"
-        path: "governance/rbac/rbac-matrix.json"
+        path: "csa_platform/governance/rbac/rbac-matrix.json"
         note: "Scoped role assignments per resource group / service"
       - kind: "bicep"
         path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
@@ -155,7 +155,7 @@ controls:
     status: "INHERITED"
     evidence:
       - kind: "doc"
-        path: "governance/compliance/compliance-overview.md"
+        path: "csa_platform/governance/compliance/compliance-overview.md"
         note: "Entra ID Smart Lockout handles failed logon throttling"
     inheritance:
       - "Microsoft Entra ID Smart Lockout (10 failed attempts → 1-minute lockout, escalating)"
@@ -254,7 +254,7 @@ controls:
     status: "PARTIALLY_IMPLEMENTED"
     evidence:
       - kind: "config"
-        path: "governance/purview/classification/classification_rules.json"
+        path: "csa_platform/governance/purview/classification/classification_rules.json"
         note: "Purview classification taxonomy for sharing decisions"
     gaps:
       - "No automated sharing-decision workflow tied to classifications"
@@ -285,7 +285,7 @@ controls:
     status: "PARTIALLY_IMPLEMENTED"
     evidence:
       - kind: "doc"
-        path: "governance/compliance/compliance-overview.md"
+        path: "csa_platform/governance/compliance/compliance-overview.md"
         note: "Audit trail section names Log Analytics"
     gaps:
       - "No formal audit policy document with retention owner / annual review"
@@ -429,7 +429,7 @@ controls:
     status: "PARTIALLY_IMPLEMENTED"
     evidence:
       - kind: "doc"
-        path: "governance/compliance/compliance-overview.md"
+        path: "csa_platform/governance/compliance/compliance-overview.md"
     gaps:
       - "No formal IA policy document"
     responsible_party: "csa-inabox platform team"
@@ -566,7 +566,7 @@ controls:
     status: "PARTIALLY_IMPLEMENTED"
     evidence:
       - kind: "doc"
-        path: "governance/compliance/compliance-overview.md"
+        path: "csa_platform/governance/compliance/compliance-overview.md"
     gaps:
       - "No signed SC policy document"
     responsible_party: "csa-inabox platform team"
@@ -812,7 +812,7 @@ controls:
     status: "PARTIALLY_IMPLEMENTED"
     evidence:
       - kind: "doc"
-        path: "governance/compliance/compliance-overview.md"
+        path: "csa_platform/governance/compliance/compliance-overview.md"
     gaps:
       - "No formal SI policy"
     responsible_party: "csa-inabox platform team"
@@ -870,13 +870,13 @@ controls:
     status: "PARTIALLY_IMPLEMENTED"
     evidence:
       - kind: "code"
-        path: "governance/contracts/contract_validator.py"
+        path: "csa_platform/governance/contracts/contract_validator.py"
         note: "Data contract validation"
       - kind: "code"
-        path: "governance/dataquality/run_quality_checks.py"
+        path: "csa_platform/governance/dataquality/run_quality_checks.py"
         note: "Data quality check runner"
       - kind: "config"
-        path: "governance/dataquality/quality-rules.yaml"
+        path: "csa_platform/governance/dataquality/quality-rules.yaml"
     gaps:
       - "Binary / image signing (Cosign / Notation) not configured"
     responsible_party: "csa-inabox platform team"
@@ -890,7 +890,7 @@ controls:
         path: "portal/shared/api/models/source.py"
         note: "Pydantic models enforce request validation"
       - kind: "code"
-        path: "governance/contracts/contract_validator.py"
+        path: "csa_platform/governance/contracts/contract_validator.py"
         note: "Contract-based input validation"
     responsible_party: "csa-inabox platform team"
 
@@ -936,7 +936,7 @@ controls:
     status: "PARTIALLY_IMPLEMENTED"
     evidence:
       - kind: "doc"
-        path: "governance/compliance/compliance-overview.md"
+        path: "csa_platform/governance/compliance/compliance-overview.md"
     gaps:
       - "No formal CM policy document"
     responsible_party: "csa-inabox platform team"
@@ -1015,7 +1015,7 @@ controls:
         path: "deploy/bicep/DMLZ/main.bicep"
         note: "IaC is authoritative component inventory"
       - kind: "config"
-        path: "governance/finops/tagging-policy.json"
+        path: "csa_platform/governance/finops/tagging-policy.json"
     gaps:
       - "No automated drift detection reconciling deployed vs declared inventory"
     responsible_party: "csa-inabox platform team"
@@ -1057,7 +1057,7 @@ controls:
     status: "PARTIALLY_IMPLEMENTED"
     evidence:
       - kind: "doc"
-        path: "governance/compliance/compliance-overview.md"
+        path: "csa_platform/governance/compliance/compliance-overview.md"
     gaps:
       - "No formal contingency plan doc / tabletop exercise record"
     responsible_party: "csa-inabox platform team"
@@ -1132,7 +1132,7 @@ controls:
     status: "PARTIALLY_IMPLEMENTED"
     evidence:
       - kind: "doc"
-        path: "governance/compliance/compliance-overview.md"
+        path: "csa_platform/governance/compliance/compliance-overview.md"
     gaps:
       - "No formal media-protection policy"
     responsible_party: "csa-inabox platform team"
@@ -1287,7 +1287,7 @@ controls:
     status: "PARTIALLY_IMPLEMENTED"
     evidence:
       - kind: "doc"
-        path: "governance/compliance/compliance-overview.md"
+        path: "csa_platform/governance/compliance/compliance-overview.md"
     gaps:
       - "No signed PL policy"
     responsible_party: "csa-inabox platform team"
@@ -1316,7 +1316,7 @@ controls:
       - kind: "doc"
         path: "docs/ARCHITECTURE.md"
       - kind: "doc"
-        path: "governance/compliance/compliance-overview.md"
+        path: "csa_platform/governance/compliance/compliance-overview.md"
     gaps:
       - "No dedicated privacy-architecture section; CSA-0012 Phase 2 adds GDPR/CCPA"
     responsible_party: "csa-inabox platform team"

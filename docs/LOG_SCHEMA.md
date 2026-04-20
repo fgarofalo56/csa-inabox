@@ -52,7 +52,7 @@ Any additional key/value pairs come from the caller (via `logger.info("event", f
 
 | Service | Emitting module | Canonical events |
 |---|---|---|
-| `csa-data-quality` | `governance/dataquality/run_quality_checks.py` | `data_quality.run_started`, `data_quality.run_completed`, `dbt.test_failed`, `volume.check_result`, `freshness.result`, `report.emitted` |
+| `csa-data-quality` | `csa_platform/csa_platform/governance/dataquality/run_quality_checks.py` | `data_quality.run_started`, `data_quality.run_completed`, `dbt.test_failed`, `volume.check_result`, `freshness.result`, `report.emitted` |
 | `csa-ai-enrichment` | `domains/sharedServices/aiEnrichment/functions/function_app.py` | `request.received`, `request.invalid_json`, `request.missing_field`, `request.payload_too_large`, `request.completed`, `blob.received`, `blob.unsupported_type`, `blob.completed`, `enrichment.text_failed`, `enrichment.document_failed`, `ai_client.import_failed` |
 | `csa-event-processing` | `domains/sharedServices/eventProcessing/functions/function_app.py` | `batch.received`, `batch.completed`, `event.invalid_json`, `event.processing_failed`, `replay.request_received`, `replay.invalid_json`, `replay.empty_payload`, `replay.completed`, `heartbeat`, `timer.past_due` |
 
@@ -186,7 +186,7 @@ human-readable console renderer:
 
 ```bash
 export LOG_FORMAT=console
-python governance/dataquality/run_quality_checks.py --suite bronze
+python csa_platform/governance/dataquality/run_quality_checks.py --suite bronze
 ```
 
 All other behaviour (trace context binding, service tags) is identical;

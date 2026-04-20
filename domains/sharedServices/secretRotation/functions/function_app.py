@@ -58,7 +58,7 @@ closed cleanly.
 
 Logging
 -------
-All log lines are JSON via :mod:`governance.common.logging` (structlog).
+All log lines are JSON via :mod:`csa_platform.governance.common.logging` (structlog).
 Each invocation binds ``trace_id`` and ``correlation_id`` via
 :func:`bind_trace_context` so cross-service correlation works end-to-end.
 See ``docs/LOG_SCHEMA.md`` for the shared schema and KQL queries.
@@ -90,7 +90,7 @@ from domains.sharedServices.common.function_helpers import (
     build_error_response,
     build_health_response,
 )
-from governance.common.logging import (
+from csa_platform.governance.common.logging import (
     bind_trace_context,
     configure_structlog,
     extract_trace_id_from_headers,

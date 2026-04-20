@@ -8,7 +8,7 @@
 
 ## 1. Executive summary
 
-csa-inabox plus Azure PaaS is a fit-for-purpose Foundry alternative for federal customers. FedRAMP High inheritance is documented today (see `docs/compliance/nist-800-53-rev5.md` and the machine-readable matrix in `governance/compliance/nist-800-53-rev5.yaml`). CMMC 2.0 Level 2 (`governance/compliance/cmmc-2.0-l2.yaml`) and HIPAA Security Rule (`governance/compliance/hipaa-security-rule.yaml`) are likewise mapped to repo artifacts. This playbook maps every significant Foundry capability to a concrete Azure service surfaced inside csa-inabox and walks through a worked federal-case-management ontology migration end-to-end.
+csa-inabox plus Azure PaaS is a fit-for-purpose Foundry alternative for federal customers. FedRAMP High inheritance is documented today (see `docs/compliance/nist-800-53-rev5.md` and the machine-readable matrix in `csa_platform/csa_platform/governance/compliance/nist-800-53-rev5.yaml`). CMMC 2.0 Level 2 (`csa_platform/csa_platform/governance/compliance/cmmc-2.0-l2.yaml`) and HIPAA Security Rule (`csa_platform/csa_platform/governance/compliance/hipaa-security-rule.yaml`) are likewise mapped to repo artifacts. This playbook maps every significant Foundry capability to a concrete Azure service surfaced inside csa-inabox and walks through a worked federal-case-management ontology migration end-to-end.
 
 Foundry's appeal in federal is real: a single vendor, a cohesive ontology-driven UX, deep human-in-the-loop analyst workflows, and a decade of tribal knowledge deployed across DoD components, the Intelligence Community, Treasury, State, and HHS. csa-inabox does not attempt to replicate Foundry's single-vendor UX cohesion. Instead it offers **a composable, Azure-native, open-standards stack** (Delta Lake, Parquet, Purview, dbt, Power BI) with per-consumption pricing, commercial-to-Gov parity, and control-level ATO evidence. For agencies with a forcing function — expiring Foundry license, budget compression, mandate to move to Azure commercial or Azure Government, or an open-standards policy — csa-inabox is the default destination.
 
@@ -18,13 +18,13 @@ This playbook is honest where the gap is real. IL6 (classified SCI) is out of sc
 
 | Consideration | Foundry (today) | csa-inabox (today) | Notes |
 |---|---|---|---|
-| FedRAMP High | Authorized | Inherited through Azure Government + Azure Commercial authorized services; controls mapped in `governance/compliance/nist-800-53-rev5.yaml` | csa-inabox does not hold its own FedRAMP ATO; it inherits from the Azure platform ATOs and documents control coverage for agency-specific SSPs |
+| FedRAMP High | Authorized | Inherited through Azure Government + Azure Commercial authorized services; controls mapped in `csa_platform/csa_platform/governance/compliance/nist-800-53-rev5.yaml` | csa-inabox does not hold its own FedRAMP ATO; it inherits from the Azure platform ATOs and documents control coverage for agency-specific SSPs |
 | DoD IL4 | Covered | Covered in Azure Gov | Full parity on Azure Government for IL4 workloads |
 | DoD IL5 | Covered | Covered in Azure Gov with most services; Fabric IL5 parity forecast per Microsoft roadmap | Near-term parity; see `docs/GOV_SERVICE_MATRIX.md` for service-level status |
 | DoD IL6 | Covered | **Gap** — classified SCI workloads out of scope | Recommend Foundry, Databricks-on-IL6, or bespoke tenant for IL6 |
 | ITAR | Covered | Covered by Azure Government tenant defaults inherited by csa-inabox | Data-residency controls assured by Azure Gov tenant-binding |
-| CMMC 2.0 Level 2 | Covered | Controls mapped in `governance/compliance/cmmc-2.0-l2.yaml` + `docs/compliance/cmmc-2.0-l2.md` | DIB primes can inherit |
-| HIPAA Security Rule | Covered | Mapped in `governance/compliance/hipaa-security-rule.yaml`; see `examples/tribal-health/` | HHS / tribal-health / CMS programs |
+| CMMC 2.0 Level 2 | Covered | Controls mapped in `csa_platform/csa_platform/governance/compliance/cmmc-2.0-l2.yaml` + `docs/compliance/cmmc-2.0-l2.md` | DIB primes can inherit |
+| HIPAA Security Rule | Covered | Mapped in `csa_platform/csa_platform/governance/compliance/hipaa-security-rule.yaml`; see `examples/tribal-health/` | HHS / tribal-health / CMS programs |
 | Tribal data sovereignty | Partial | Documented reference implementations in `examples/tribal-health/` and `examples/casino-analytics/` | Explicit tribal-sovereignty patterns |
 | Per-seat licensing | Yes (Foundry named-user seats) | No | csa-inabox is consumption-priced Azure; Fabric capacity is workspace-level, not per-seat |
 | Vendor lock-in | High (Ontology is proprietary) | Low (Delta, Parquet, dbt, Purview REST APIs all open) | Exit path from csa-inabox is well-understood |
@@ -37,12 +37,12 @@ This is the load-bearing table. Every row cites a real file path in the repo whe
 
 | Foundry capability | csa-inabox equivalent | Mapping notes | Effort | Evidence (repo path) |
 |---|---|---|---|---|
-| **Ontology** (object types, link types, properties) | Purview Unified Catalog business glossary + classifications + dbt semantic layer | Foundry's object types become Purview glossary terms; link types become foreign keys in dbt + relationships in the Power BI semantic model | L | `csa_platform/purview_governance/purview_automation.py`, `csa_platform/purview_governance/classifications/`, `domains/shared/dbt/models/`, `csa_platform/semantic_model/semantic_model_template.yaml` |
+| **Ontology** (object types, link types, properties) | Purview Unified Catalog business glossary + classifications + dbt semantic layer | Foundry's object types become Purview glossary terms; link types become foreign keys in dbt + relationships in the Power BI semantic model | L | `csa_platform/csa_platform/governance/purview/purview_automation.py`, `csa_platform/csa_platform/governance/purview/classifications/`, `domains/shared/dbt/models/`, `csa_platform/semantic_model/semantic_model_template.yaml` |
 | **Pipeline Builder** (visual ETL) | Azure Data Factory + Fabric Data Factory + dbt | ADF replaces visual pipeline builder; dbt replaces transform expressions; Fabric Data Factory brings the visual-pipeline UX to Fabric | L | `domains/shared/pipelines/adf/`, `domains/shared/dbt/dbt_project.yml`, `domains/shared/dbt/models/` |
 | **Code Repositories** (Python / PySpark transforms) | Fabric notebooks + Databricks notebooks + Git-integrated Azure DevOps / GitHub | Transforms move to PySpark notebooks with Git backing; CI/CD via existing workflows | M | `domains/shared/notebooks/`, `.github/workflows/deploy.yml`, `.github/workflows/deploy-dbt.yml`, `csa_platform/unity_catalog_pattern/` |
 | **Contour** (point-and-click analysis) | Power BI + Power BI Copilot + Fabric Data Agent + Direct Lake on OneLake | Contour board → Power BI report with Direct Lake semantic model; no-copy analytics pattern preserved | M | `csa_platform/semantic_model/`, `csa_platform/semantic_model/semantic_model_template.yaml`, `csa_platform/semantic_model/scripts/` |
 | **Workshop** (operational analyst apps) | Power Apps + Power BI Embedded + Fabric Real-Time dashboards + custom React portal | Workshop modules map to Power Apps screens for form-driven workflows, Power BI for analytics, React portal for marketplace/discovery | L | `portal/powerapps/`, `portal/powerapps/flows/`, `portal/powerapps/logic-apps/`, `portal/react-webapp/src/` |
-| **Object Explorer** (ontology-aware search + drill) | Purview Unified Catalog + `portal/` marketplace data-product experience | Purview Data Catalog provides the search+lineage surface; the portal adds a data-product browse experience | M | `csa_platform/data_marketplace/`, `portal/react-webapp/src/pages/`, `csa_platform/purview_governance/` |
+| **Object Explorer** (ontology-aware search + drill) | Purview Unified Catalog + `portal/` marketplace data-product experience | Purview Data Catalog provides the search+lineage surface; the portal adds a data-product browse experience | M | `csa_platform/data_marketplace/`, `portal/react-webapp/src/pages/`, `csa_platform/csa_platform/governance/purview/` |
 | **Functions** (user-defined TypeScript/Python functions) | Azure Functions + Fabric user data functions + shared-services functions library | Foundry Functions move to Azure Functions (general purpose) or Fabric user data functions (analytic compute) | M | `domains/sharedServices/aiEnrichment/functions/`, `domains/sharedServices/eventProcessing/`, `csa_platform/shared_services/functions/` |
 | **AIP (AI Platform) — LLM chat + workflows** | Azure AI Foundry + Azure OpenAI + agentic enrichment patterns | AIP's agent-workflow + grounded-chat surface maps to Azure OpenAI models + AI Foundry orchestration; gap: no first-party chat UX yet (see CSA-0008) | L | `csa_platform/ai_integration/`, `csa_platform/ai_integration/enrichment/`, `csa_platform/ai_integration/rag/`, `csa_platform/ai_integration/model_serving/` |
 | **AIP Agents** (auto-executing agents) | **Gap** — CSA Copilot not shipped | Roadmap via CSA-0008. Primitives exist in `csa_platform/ai_integration/` but no agent loop, chat UX, skill catalog, or eval harness yet | XL | Gap — see CSA-0008. Target location: `apps/copilot/` or `csa_copilot/` |
@@ -51,8 +51,8 @@ This is the load-bearing table. Every row cites a real file path in the repo whe
 | **Fusion** (Excel live connection) | Excel live-connection to Power BI semantic model via Analyze in Excel | Native Microsoft capability, zero new work | XS | `csa_platform/semantic_model/semantic_model_template.yaml` (semantic model is the join point) |
 | **Slate** (custom HTML forms) | Power Apps custom canvas apps + (low-code) Logic Apps | Slate's form-builder UX maps to Power Apps; more complex flows move to Logic Apps | S | `portal/powerapps/`, `portal/powerapps/logic-apps/` |
 | **Magritte** (connectors / agents for source systems) | Azure Data Factory integration runtime + self-hosted IR + Linked Services | ADF has 100+ connectors today; self-hosted IR handles on-prem / gov-edge scenarios | S | `domains/shared/pipelines/adf/`, `docs/SELF_HOSTED_IR.md`, `docs/ADF_SETUP.md` |
-| **Foundry Lineage** | Purview lineage + dbt DAG + ADF pipeline lineage | Purview auto-captures ADF + Fabric lineage; dbt emits lineage through `dbt docs` | M | `csa_platform/purview_governance/purview_automation.py`, `domains/shared/dbt/dbt_project.yml` |
-| **Foundry security (Markings / Classifications)** | Purview classifications + Azure RBAC + column-level security + Unity Catalog (where Databricks is used) | Foundry markings map to Purview classifications + ABAC; see the four classification taxonomies shipped today | M | `csa_platform/purview_governance/classifications/pii_classifications.yaml`, `phi_classifications.yaml`, `government_classifications.yaml`, `financial_classifications.yaml` |
+| **Foundry Lineage** | Purview lineage + dbt DAG + ADF pipeline lineage | Purview auto-captures ADF + Fabric lineage; dbt emits lineage through `dbt docs` | M | `csa_platform/csa_platform/governance/purview/purview_automation.py`, `domains/shared/dbt/dbt_project.yml` |
+| **Foundry security (Markings / Classifications)** | Purview classifications + Azure RBAC + column-level security + Unity Catalog (where Databricks is used) | Foundry markings map to Purview classifications + ABAC; see the four classification taxonomies shipped today | M | `csa_platform/csa_platform/governance/purview/classifications/pii_classifications.yaml`, `phi_classifications.yaml`, `government_classifications.yaml`, `financial_classifications.yaml` |
 | **Foundry Audit** | Azure Monitor diagnostic settings + tamper-evident audit logger + Purview audit | csa-inabox adds a tamper-evident hash-chained audit path (CSA-0016) on top of Azure Monitor | M | Audit logger module (CSA-0016 implementation), Azure Monitor diagnostic settings in Bicep modules |
 | **Foundry on-prem / AirGap** | Azure Stack Hub + Azure Government (classified cloud for IL5) + on-prem Databricks (where required) | True air-gap is Azure Stack Hub territory; IL5 covered by Azure Gov | L | `docs/GOV_SERVICE_MATRIX.md` |
 | **Foundry data contracts** | dbt contracts + JSON Schema contracts per data product | Every data product in csa-inabox ships a `contract.yaml`; dbt enforces column-level contracts at build time | S | `domains/finance/data-products/invoices/contract.yaml`, `domains/inventory/data-products/inventory/contract.yaml`, `domains/sales/contracts/sales_orders.json`, `.github/workflows/validate-contracts.yml` |
@@ -163,7 +163,7 @@ In Foundry, all four types live in a shared ontology namespace with link-type ob
 
 ### 4.2 Target Purview business glossary
 
-Each Foundry object type becomes a Purview glossary term with a classification and steward. The workflow is automated in `csa_platform/purview_governance/purview_automation.py`:
+Each Foundry object type becomes a Purview glossary term with a classification and steward. The workflow is automated in `csa_platform/csa_platform/governance/purview/purview_automation.py`:
 
 | Glossary term | Classification | Steward | Definition |
 |---|---|---|---|
@@ -173,8 +173,8 @@ Each Foundry object type becomes a Purview glossary term with a classification a
 | Case Action | Internal | Case Management Domain Team | A state-changing event on a case (assignment, status change, disposition). |
 
 Classifications resolve to the existing taxonomy files:
-- PII → `csa_platform/purview_governance/classifications/pii_classifications.yaml`
-- CUI-Specified → `csa_platform/purview_governance/classifications/government_classifications.yaml`
+- PII → `csa_platform/csa_platform/governance/purview/classifications/pii_classifications.yaml`
+- CUI-Specified → `csa_platform/csa_platform/governance/purview/classifications/government_classifications.yaml`
 
 ### 4.3 Target dbt model + contract
 
@@ -301,7 +301,7 @@ Inventory every Foundry artifact:
 Deploy the csa-inabox Data Management Landing Zone (DMLZ) and first Data Landing Zone (DLZ):
 
 - Bicep-based deployment (see ADR-0004 on Bicep over Terraform, prospective)
-- Purview provisioned and automated via `csa_platform/purview_governance/purview_automation.py`
+- Purview provisioned and automated via `csa_platform/csa_platform/governance/purview/purview_automation.py`
 - Entra ID groups for domain-steward / data-consumer / data-engineer roles
 - Networking, Private Endpoints, Key Vault, Log Analytics workspace
 - Diagnostic settings on every resource feeding Azure Monitor + the tamper-evident audit path (CSA-0016)
@@ -368,9 +368,9 @@ Parallel-run period, user training, Foundry license end-date:
 
 ## 6. Federal compliance considerations
 
-- **FedRAMP High:** control mappings live in `governance/compliance/nist-800-53-rev5.yaml` with the companion narrative in `docs/compliance/nist-800-53-rev5.md`. Every Bicep module, policy assignment, and diagnostic source is mapped to its control IDs.
-- **CMMC 2.0 Level 2:** covered in `governance/compliance/cmmc-2.0-l2.yaml` with narrative `docs/compliance/cmmc-2.0-l2.md`. DIB primes can inherit the practice-level mappings.
-- **HIPAA Security Rule:** `governance/compliance/hipaa-security-rule.yaml` + `docs/compliance/hipaa-security-rule.md`. See `examples/tribal-health/` for a worked IHS / tribal-health HIPAA-scoped implementation.
+- **FedRAMP High:** control mappings live in `csa_platform/csa_platform/governance/compliance/nist-800-53-rev5.yaml` with the companion narrative in `docs/compliance/nist-800-53-rev5.md`. Every Bicep module, policy assignment, and diagnostic source is mapped to its control IDs.
+- **CMMC 2.0 Level 2:** covered in `csa_platform/csa_platform/governance/compliance/cmmc-2.0-l2.yaml` with narrative `docs/compliance/cmmc-2.0-l2.md`. DIB primes can inherit the practice-level mappings.
+- **HIPAA Security Rule:** `csa_platform/csa_platform/governance/compliance/hipaa-security-rule.yaml` + `docs/compliance/hipaa-security-rule.md`. See `examples/tribal-health/` for a worked IHS / tribal-health HIPAA-scoped implementation.
 - **IL4:** full parity on Azure Government today; csa-inabox patterns apply 1:1.
 - **IL5:** near-parity on Azure Government. Fabric IL5 parity is forecast per the Microsoft roadmap; see `docs/GOV_SERVICE_MATRIX.md`.
 - **IL6 (classified SCI):** csa-inabox is **out of scope**. Foundry covers IL6 today. Recommend keeping IL6 workloads on Foundry or on a bespoke Azure Top-Secret tenant.
@@ -459,9 +459,9 @@ There is no universal right answer. This playbook exists so the CIO can have the
 - **Decision trees (prospective, CSA-0010):** `docs/decisions/fabric-vs-databricks-vs-synapse.md`
 - **ADRs (prospective):** ADR-0004 Bicep over Terraform, ADR-0010 Fabric as strategic target
 - **Compliance matrices:**
-  - `docs/compliance/nist-800-53-rev5.md` / `governance/compliance/nist-800-53-rev5.yaml`
-  - `docs/compliance/cmmc-2.0-l2.md` / `governance/compliance/cmmc-2.0-l2.yaml`
-  - `docs/compliance/hipaa-security-rule.md` / `governance/compliance/hipaa-security-rule.yaml`
+  - `docs/compliance/nist-800-53-rev5.md` / `csa_platform/csa_platform/governance/compliance/nist-800-53-rev5.yaml`
+  - `docs/compliance/cmmc-2.0-l2.md` / `csa_platform/csa_platform/governance/compliance/cmmc-2.0-l2.yaml`
+  - `docs/compliance/hipaa-security-rule.md` / `csa_platform/csa_platform/governance/compliance/hipaa-security-rule.yaml`
 - **Example verticals worth touring before/during migration:**
   - `examples/commerce/` — e-commerce reference, closest analog to transaction-heavy Foundry ontologies
   - `examples/tribal-health/` — HIPAA + tribal sovereignty reference
@@ -475,7 +475,7 @@ There is no universal right answer. This playbook exists so the CIO can have the
   - `docs/COST_MANAGEMENT.md`
   - `docs/SELF_HOSTED_IR.md`
 - **Platform modules most relevant to a Foundry migration:**
-  - `csa_platform/purview_governance/` — ontology / catalog / classifications
+  - `csa_platform/csa_platform/governance/purview/` — ontology / catalog / classifications
   - `csa_platform/semantic_model/` — Direct Lake semantic model for Power BI over OneLake
   - `csa_platform/data_activator/` — Actions analogue
   - `csa_platform/data_marketplace/` — data-product registry for portal discovery

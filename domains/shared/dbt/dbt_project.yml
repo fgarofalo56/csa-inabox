@@ -43,7 +43,7 @@ vars:
   price_tier_value: 25
 
   # Shared validation patterns — KEEP IN SYNC with EMAIL_REGEX_PATTERN in
-  # governance/common/validation.py.  The Spark SQL ``rlike`` operator
+  # csa_platform/governance/common/validation.py.  The Spark SQL ``rlike`` operator
   # consumes this directly via the flag_invalid_email macro.
   email_regex: '^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$'
 

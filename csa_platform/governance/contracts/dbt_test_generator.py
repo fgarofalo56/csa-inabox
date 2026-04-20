@@ -50,8 +50,8 @@ from typing import Any
 
 import yaml
 
-from governance.common.logging import configure_structlog, get_logger
-from governance.contracts.contract_validator import (
+from csa_platform.governance.common.logging import configure_structlog, get_logger
+from csa_platform.governance.contracts.contract_validator import (
     Contract,
     QualityRule,
     find_contracts,

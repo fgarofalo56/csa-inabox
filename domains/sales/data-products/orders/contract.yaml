@@ -3,8 +3,8 @@
 # This file is the authoritative interface between the sales domain and
 # its consumers.  It declares the schema, SLAs, and quality rules for
 # the ``sales.orders`` data product.  The validator in
-# governance/contracts/contract_validator.py reads this file at both
-# CI time (``python -m governance.contracts.contract_validator --ci``)
+# csa_platform/governance/contracts/contract_validator.py reads this file at both
+# CI time (``python -m csa_platform.governance.contracts.contract_validator --ci``)
 # and runtime (ingestion pipeline) to reject data that violates the
 # contract.
 #

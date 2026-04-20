@@ -132,7 +132,7 @@ merge/insert.
 - [ ] Verify the data-quality suite:
 
     ```bash
-    python ../../governance/dataquality/run_quality_checks.py --suite all
+    python ../../csa_platform/governance/dataquality/run_quality_checks.py --suite all
     ```
 
 > [!IMPORTANT]
@@ -214,7 +214,7 @@ After any rollback, run through the following before declaring done:
 - [ ] Confirm the affected workload is functioning (smoke test one
       representative dbt model + one representative ADF pipeline).
 - [ ] Confirm data quality checks pass:
-      `python governance/dataquality/run_quality_checks.py --suite all`.
+      `python csa_platform/governance/dataquality/run_quality_checks.py --suite all`.
 - [ ] Tag the rolled-back state as `rollback/<env>-<sha>-<date>` for
       traceability.
 - [ ] Open a tracking issue describing the root cause of the bad deploy

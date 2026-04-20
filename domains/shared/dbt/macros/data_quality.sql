@@ -15,7 +15,7 @@
 {#
     Validate email format with the canonical regex defined in
     dbt_project.yml var `email_regex` (kept in sync with
-    governance/common/validation.py EMAIL_REGEX_PATTERN).
+    csa_platform/governance/common/validation.py EMAIL_REGEX_PATTERN).
     Returns true when the email is invalid so it can be assigned to a
     `_is_invalid_email` quality flag column.
 #}

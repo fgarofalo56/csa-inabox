@@ -179,7 +179,7 @@ jobs:
 
       - name: Lint Python files
         run: |
-          ruff check domains/ scripts/ governance/ tools/
+          ruff check domains/ scripts/ csa_platform/ tools/
 
   # -------------------------------------------------------------------------
   # Repository Hygiene Check

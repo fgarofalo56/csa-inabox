@@ -30,7 +30,7 @@ from typing import Any
 
 import yaml
 
-from governance.common.logging import configure_structlog, get_logger
+from csa_platform.governance.common.logging import configure_structlog, get_logger
 
 logger = get_logger(__name__)
 

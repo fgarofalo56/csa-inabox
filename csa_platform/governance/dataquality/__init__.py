@@ -1,6 +1,6 @@
 """Data quality orchestration: dbt test runner, freshness, volume, GE hook."""
 
-from governance.dataquality.ge_runner import (
+from csa_platform.governance.dataquality.ge_runner import (
     ExpectationResult,
     SuiteResult,
     run_ge_checkpoints,

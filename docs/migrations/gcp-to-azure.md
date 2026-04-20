@@ -10,7 +10,7 @@
 
 Google Cloud is a strong analytics platform. For federal customers, the move to Azure is usually driven by a combination of **GCP's relatively narrow Assured Workloads for Government coverage**, procurement consolidation toward a single hyperscaler for the mission, a need for services or compliance tiers that sit on Azure Government but not on GCP Assured Workloads today, or a partner/prime requirement. The technical migration itself is well-understood: BigQuery is a close conceptual cousin of Databricks SQL + Delta Lake, Dataproc is Spark-on-managed-VM (Databricks is the target), GCS behaves like S3 or ADLS Gen2 for migration purposes, and Looker's semantic model is a cleaner port to Power BI than most teams expect.
 
-csa-inabox on Azure inherits **FedRAMP High** through Azure Government (`docs/compliance/nist-800-53-rev5.md`, `governance/compliance/nist-800-53-rev5.yaml`), **CMMC 2.0 Level 2** (`governance/compliance/cmmc-2.0-l2.yaml`), and **HIPAA Security Rule** (`governance/compliance/hipaa-security-rule.yaml`), and every row of every capability-mapping table in this playbook cites a real file in the repo.
+csa-inabox on Azure inherits **FedRAMP High** through Azure Government (`docs/compliance/nist-800-53-rev5.md`, `csa_platform/csa_platform/governance/compliance/nist-800-53-rev5.yaml`), **CMMC 2.0 Level 2** (`csa_platform/csa_platform/governance/compliance/cmmc-2.0-l2.yaml`), and **HIPAA Security Rule** (`csa_platform/csa_platform/governance/compliance/hipaa-security-rule.yaml`), and every row of every capability-mapping table in this playbook cites a real file in the repo.
 
 This playbook is honest. BigQuery's separation of storage and slot-based compute is genuinely elegant; BigQuery ML inline SQL feels simpler than Databricks + MLflow on day one; Looker's LookML-as-code discipline is something Power BI is still maturing on. The migration's payoff is **FedRAMP High + IL4/IL5 coverage, consumption-priced compute that scales to zero, and an open storage format (Delta on ADLS Gen2)**, not a per-feature win. For a federal tenant whose mission requires those properties, the trade-offs documented below are worth making.
 
@@ -23,8 +23,8 @@ This playbook is honest. BigQuery's separation of storage and slot-based compute
 | DoD IL5 | **Limited** | Covered on Azure Gov for most services; Fabric IL5 parity forecast per Microsoft roadmap | See `docs/GOV_SERVICE_MATRIX.md` |
 | DoD IL6 | Not covered | **Gap** — out of scope for csa-inabox | Recommend bespoke tenant for IL6 |
 | ITAR | Covered in Assured Workloads ITAR | Covered in Azure Government | Parity where both covered |
-| CMMC 2.0 Level 2 | Customer-managed mappings; controls available | Controls mapped in `governance/compliance/cmmc-2.0-l2.yaml` | DIB primes inherit on csa-inabox |
-| HIPAA Security Rule | Covered with BAA | Covered; mapped in `governance/compliance/hipaa-security-rule.yaml` | See `examples/tribal-health/` |
+| CMMC 2.0 Level 2 | Customer-managed mappings; controls available | Controls mapped in `csa_platform/csa_platform/governance/compliance/cmmc-2.0-l2.yaml` | DIB primes inherit on csa-inabox |
+| HIPAA Security Rule | Covered with BAA | Covered; mapped in `csa_platform/csa_platform/governance/compliance/hipaa-security-rule.yaml` | See `examples/tribal-health/` |
 | Data-residency binding | Assured Workloads region | Azure Government tenant-binding | Azure Gov is a physically separate cloud |
 | Storage format | BigQuery managed (Capacitor columnar) + BigQuery-external Parquet | Delta Lake on ADLS Gen2 (open) | Exit cost delta is real |
 | Compute model | BigQuery slots (autoscaling + editions commitments) + Dataproc clusters | Databricks SQL (serverless + classic) + Databricks Jobs | Consumption parity at comparable workload |
@@ -41,13 +41,13 @@ This playbook is honest. BigQuery's separation of storage and slot-based compute
 | **Partitioned + clustered tables** | Delta Lake partitioning + Z-ordering | Partition column = BigQuery partition; cluster keys = Z-order columns; Delta's stats-based pruning is analogous to BigQuery's block pruning | S | ADR-0003 `docs/adr/0003-delta-lake-over-iceberg-and-parquet.md` |
 | **BigQuery ML** (`CREATE MODEL`, `ML.PREDICT`) | Databricks MLflow + Azure ML + Databricks SQL `ai_query()` | Inline SQL ML training → MLflow training notebooks; `ML.PREDICT` → `ai_query()` for hosted models or MLflow-serving UDFs | L | `csa_platform/ai_integration/model_serving/`, `domains/spark/`, ADR-0007 `docs/adr/0007-azure-openai-over-self-hosted-llm.md` |
 | **BigQuery Omni** (multi-cloud query) | OneLake shortcuts (GCS/S3) + Databricks Lakehouse Federation | For Azure-side reads over GCS during bridge phase | M | `csa_platform/unity_catalog_pattern/onelake_config.yaml` |
-| **Authorized views** | Unity Catalog row filters + fine-grained `GRANT`s + Purview classification-driven access | Authorized view model translates to Unity Catalog security functions; dbt-generated views are still a common pattern | M | `csa_platform/unity_catalog_pattern/unity_catalog/`, `csa_platform/purview_governance/classifications/pii_classifications.yaml` |
+| **Authorized views** | Unity Catalog row filters + fine-grained `GRANT`s + Purview classification-driven access | Authorized view model translates to Unity Catalog security functions; dbt-generated views are still a common pattern | M | `csa_platform/unity_catalog_pattern/unity_catalog/`, `csa_platform/csa_platform/governance/purview/classifications/pii_classifications.yaml` |
 | **Scheduled queries** | dbt jobs + ADF schedule triggers + Databricks Workflows | Simple scheduled queries → Databricks Workflow schedules; cross-system orchestration → ADF | S | ADR-0001 `docs/adr/0001-adf-dbt-over-airflow.md`, `domains/shared/pipelines/adf/` |
 | **Materialized views** | dbt incremental models + Databricks materialized views + Delta Live Tables | Refresh-on-write MVs → DLT; refresh-on-schedule MVs → dbt incremental | M | `domains/shared/dbt/dbt_project.yml`, `domains/finance/dbt/`, `domains/sales/dbt/` |
 | **Table-valued functions + stored procs** | dbt macros + Databricks SQL UDFs + notebook jobs | SQL TVFs → dbt macros or SQL UDFs; imperative SPs → notebooks | M | `domains/shared/dbt/macros/` |
 | **Search indexes + vector search** | Azure AI Search + Databricks Vector Search + OneLake vector tables | Inline `SEARCH` SQL → AI Search query via UDF or RAG pipeline | M | `csa_platform/ai_integration/rag/pipeline.py`, `csa_platform/ai_integration/rag/config.py` |
 | **Row-level security** | Unity Catalog row filters | Policy function body → UC row filter function | M | `csa_platform/unity_catalog_pattern/unity_catalog/` |
-| **Column-level security (policy tags)** | Unity Catalog column masks + Purview classifications | Policy tags map to Purview classifications (PII/PHI/CUI); masking function is a UC column mask | M | `csa_platform/purview_governance/classifications/` (all four taxonomy files) |
+| **Column-level security (policy tags)** | Unity Catalog column masks + Purview classifications | Policy tags map to Purview classifications (PII/PHI/CUI); masking function is a UC column mask | M | `csa_platform/csa_platform/governance/purview/classifications/` (all four taxonomy files) |
 | **Data Transfer Service** | ADF + Fabric Data Factory + Databricks Auto Loader | DTS schedules → ADF pipelines; SaaS connectors → ADF native + self-hosted IR where needed | S | `domains/shared/pipelines/adf/`, `docs/SELF_HOSTED_IR.md`, `docs/ADF_SETUP.md` |
 | **Streaming inserts + Storage Write API** | Event Hubs + Databricks structured streaming + ADX continuous ingest | Direct streaming-insert → Event Hubs + Databricks structured streaming to Delta | M | ADR-0005 `docs/adr/0005-event-hubs-over-kafka.md`, `examples/iot-streaming/` |
 | **Datasets + projects (org hierarchy)** | Entra tenant / Databricks workspace / Unity Catalog catalog / schema | Project → subscription + workspace; dataset → catalog/schema | S | `csa_platform/multi_synapse/rbac_templates/`, `csa_platform/unity_catalog_pattern/unity_catalog/` |
@@ -303,7 +303,7 @@ A realistic mid-to-large federal GCP analytics migration runs 26–34 weeks.
 
 - Deploy DMLZ + first DLZ via Bicep (ADR-0004).
 - Unity Catalog metastore + catalogs mirroring BigQuery project/dataset layout.
-- Purview provisioned and automated (`csa_platform/purview_governance/purview_automation.py`).
+- Purview provisioned and automated (`csa_platform/csa_platform/governance/purview/purview_automation.py`).
 - **OneLake shortcuts to GCS + Lakehouse Federation to BigQuery** for read-only bridge.
 - Entra ID groups + managed identities.
 
@@ -367,12 +367,12 @@ Per-bucket decisions (same pattern as the AWS playbook's S3 phase):
 
 ## 6. Federal compliance considerations
 
-- **FedRAMP High:** the biggest compliance delta. GCP's Assured Workloads for Government has narrower service coverage at FedRAMP High than Azure Government. csa-inabox inherits High across the in-scope analytics services; see `governance/compliance/nist-800-53-rev5.yaml` and `docs/compliance/nist-800-53-rev5.md`.
+- **FedRAMP High:** the biggest compliance delta. GCP's Assured Workloads for Government has narrower service coverage at FedRAMP High than Azure Government. csa-inabox inherits High across the in-scope analytics services; see `csa_platform/csa_platform/governance/compliance/nist-800-53-rev5.yaml` and `docs/compliance/nist-800-53-rev5.md`.
 - **DoD IL4 / IL5:** `docs/GOV_SERVICE_MATRIX.md` is the live reference for Azure Gov coverage. GCP Assured Workloads IL5 is especially narrow; audit both sides before committing.
 - **DoD IL6:** out of scope for csa-inabox; out of scope for GCP. If any workload must stay IL6, plan a bespoke Azure Top Secret tenant (not csa-inabox).
 - **ITAR:** Azure Government tenant-binding inherits all ITAR defaults.
-- **CMMC 2.0 Level 2:** `governance/compliance/cmmc-2.0-l2.yaml` + `docs/compliance/cmmc-2.0-l2.md`. DIB primes inherit directly.
-- **HIPAA:** `governance/compliance/hipaa-security-rule.yaml`. See `examples/tribal-health/` for an IHS worked implementation.
+- **CMMC 2.0 Level 2:** `csa_platform/csa_platform/governance/compliance/cmmc-2.0-l2.yaml` + `docs/compliance/cmmc-2.0-l2.md`. DIB primes inherit directly.
+- **HIPAA:** `csa_platform/csa_platform/governance/compliance/hipaa-security-rule.yaml`. See `examples/tribal-health/` for an IHS worked implementation.
 - **Audit evidence:** the csa-inabox tamper-evident audit chain (CSA-0016) provides stronger FedRAMP High AU-family evidence than GCP Cloud Audit Logs out of the box.
 - **GCP-specific compliance data to archive before decommission:** Cloud Audit Logs (Admin Activity, Data Access), IAM policy history, VPC Service Controls perimeter history. These become evidence in post-migration audits.
 
@@ -465,13 +465,13 @@ Mixed-cloud is also rational. OneLake shortcuts + Lakehouse Federation + Delta S
   - `docs/adr/0007-azure-openai-over-self-hosted-llm.md`
   - `docs/adr/0010-fabric-strategic-target.md`
 - **Compliance matrices:**
-  - `docs/compliance/nist-800-53-rev5.md` / `governance/compliance/nist-800-53-rev5.yaml`
-  - `docs/compliance/cmmc-2.0-l2.md` / `governance/compliance/cmmc-2.0-l2.yaml`
-  - `docs/compliance/hipaa-security-rule.md` / `governance/compliance/hipaa-security-rule.yaml`
+  - `docs/compliance/nist-800-53-rev5.md` / `csa_platform/csa_platform/governance/compliance/nist-800-53-rev5.yaml`
+  - `docs/compliance/cmmc-2.0-l2.md` / `csa_platform/csa_platform/governance/compliance/cmmc-2.0-l2.yaml`
+  - `docs/compliance/hipaa-security-rule.md` / `csa_platform/csa_platform/governance/compliance/hipaa-security-rule.yaml`
 - **Platform modules:**
   - `csa_platform/unity_catalog_pattern/` — OneLake + Unity Catalog + GCS shortcut pattern
   - `csa_platform/semantic_model/` — Direct Lake semantic model (Looker replacement target)
-  - `csa_platform/purview_governance/` — catalog + classifications
+  - `csa_platform/csa_platform/governance/purview/` — catalog + classifications
   - `csa_platform/ai_integration/` — BQML / Vertex replacement primitives
   - `csa_platform/data_marketplace/` — data-product registry (Analytics Hub analogue)
   - `csa_platform/multi_synapse/` — multi-workspace pattern

@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from governance.dataquality.run_quality_checks import DataQualityRunner, QualityCheckResult
+from csa_platform.governance.dataquality.run_quality_checks import DataQualityRunner, QualityCheckResult
 
 
 class TestQualityCheckResult:

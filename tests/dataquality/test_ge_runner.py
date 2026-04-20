@@ -12,8 +12,8 @@ from typing import Any
 
 import pytest
 
-from governance.common.validation import EMAIL_REGEX_PATTERN
-from governance.dataquality.ge_runner import (
+from csa_platform.governance.common.validation import EMAIL_REGEX_PATTERN
+from csa_platform.governance.dataquality.ge_runner import (
     SuiteResult,
     _evaluate_expectation,
     _infer_table_from_suite_name,

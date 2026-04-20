@@ -29,7 +29,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
-from governance.common.logging import configure_structlog, get_logger
+from csa_platform.governance.common.logging import configure_structlog, get_logger
 
 from .config import settings
 from .routers import access, marketplace, pipelines, sources, stats

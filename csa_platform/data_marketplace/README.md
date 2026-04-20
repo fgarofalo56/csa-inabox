@@ -130,7 +130,7 @@ sequenceDiagram
 ## 📊 Quality Scoring
 
 Quality scores are calculated from the data contract's quality rules
-(see `governance/contracts/contract_validator.py`):
+(see `csa_platform/csa_platform/governance/contracts/contract_validator.py`):
 
 | Metric | Weight | Source |
 |---|---|---|
@@ -185,7 +185,7 @@ Registered data products are automatically synced to Azure Purview:
 3. Lineage relationships are created between upstream/downstream products
 4. Classification labels from Purview are reflected in the marketplace
 
-See `csa_platform/purview_governance/purview_automation.py` for the sync implementation.
+See `csa_platform/csa_platform/governance/purview/purview_automation.py` for the sync implementation.
 
 ---
 

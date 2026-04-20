@@ -24,12 +24,12 @@ setup-win: ## Set up development environment (Windows)
 # --- Linting ---
 
 lint: ## Run all linters (uses pyproject.toml rule config)
-	ruff check domains/ scripts/ governance/ tools/ csa_platform/ portal/ examples/
+	ruff check domains/ scripts/ tools/ csa_platform/ portal/ examples/
 	@echo "Python lint passed"
 
 lint-fix: ## Auto-fix lint issues
-	ruff check domains/ scripts/ governance/ tools/ csa_platform/ portal/ examples/ --fix
-	ruff format domains/ scripts/ governance/ tools/ csa_platform/ portal/ examples/
+	ruff check domains/ scripts/ tools/ csa_platform/ portal/ examples/ --fix
+	ruff format domains/ scripts/ tools/ csa_platform/ portal/ examples/
 
 typecheck: ## Run strict mypy on governance, tests, and all three Function apps
 	mypy
@@ -46,7 +46,7 @@ typecheck-platform: ## Run mypy on platform modules (progressive strictness)
 	mypy -p csa_platform.ai_integration --ignore-missing-imports
 	mypy -p csa_platform.data_marketplace --ignore-missing-imports
 	mypy -p csa_platform.metadata_framework --ignore-missing-imports
-	mypy -p csa_platform.purview_governance --ignore-missing-imports
+	mypy -p csa_platform.governance --ignore-missing-imports
 	@echo "mypy platform passed"
 
 lint-bicep: ## Lint all Bicep files
@@ -56,7 +56,7 @@ lint-ps: ## Lint PowerShell scripts
 	pwsh -Command "Get-ChildItem -Recurse -Filter *.ps1 | ForEach-Object { Invoke-ScriptAnalyzer -Path $$_.FullName -Severity Warning }"
 
 security: ## Run Bandit security linter
-	bandit -r governance/ domains/ scripts/ -c pyproject.toml
+	bandit -r csa_platform/ domains/ scripts/ -c pyproject.toml
 
 # --- Testing ---
 

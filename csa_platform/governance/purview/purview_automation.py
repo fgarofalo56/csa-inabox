@@ -7,7 +7,7 @@ governance automation tasks.
 
 Typical use::
 
-    from csa_platform.purview_governance.purview_automation import PurviewAutomation
+    from csa_platform.governance.purview.purview_automation import PurviewAutomation
     from azure.identity import DefaultAzureCredential
 
     purview = PurviewAutomation(
@@ -812,12 +812,12 @@ def main(argv: list[str] | None = None) -> int:
 
     Usage::
 
-        python -m platform.purview_governance.purview_automation \\
+        python -m csa_platform.governance.purview.purview_automation \\
             --account purview-prod \\
             --action apply-classifications \\
             --rules-dir classifications/
 
-        python -m platform.purview_governance.purview_automation \\
+        python -m csa_platform.governance.purview.purview_automation \\
             --account purview-prod \\
             --action import-glossary \\
             --glossary-file glossary/business_terms.yaml

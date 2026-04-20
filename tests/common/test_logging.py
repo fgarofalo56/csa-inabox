@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 import structlog
 
-from governance.common.logging import (
+from csa_platform.governance.common.logging import (
     bind_trace_context,
     configure_structlog,
     extract_trace_id_from_headers,

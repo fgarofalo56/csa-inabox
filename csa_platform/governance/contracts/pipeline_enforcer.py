@@ -16,7 +16,7 @@ Integration patterns
 
 .. code-block:: python
 
-    from governance.contracts import ContractEnforcer, load_contract
+    from csa_platform.governance.contracts import ContractEnforcer, load_contract
 
     contract = load_contract("domains/sales/data-products/orders/contract.yaml")
     enforcer = ContractEnforcer(contract)
@@ -56,8 +56,8 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, TypeVar
 
-from governance.common.logging import get_logger
-from governance.contracts.contract_validator import (
+from csa_platform.governance.common.logging import get_logger
+from csa_platform.governance.contracts.contract_validator import (
     Contract,
     validate_rows_against_contract,
 )

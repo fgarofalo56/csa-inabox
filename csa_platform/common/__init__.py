@@ -8,7 +8,7 @@ Thin, dependency-light utilities reused across the platform packages:
                          SearchClient, PurviewCatalogClient, etc.) with consistent
                          credential management and government cloud support.
     * logging          — Structured JSON logging with trace / correlation IDs
-                         (re-exports from governance.common.logging).
+                         (re-exports from csa_platform.governance.common.logging).
     * platform_settings — Convenience re-export of the platform-wide Pydantic
                           Settings singleton from ``csa_platform.config``.
                           Prefer importing from the canonical location

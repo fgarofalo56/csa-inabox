@@ -1,8 +1,8 @@
 # =======================================================================
 # AUTO-GENERATED from data product contracts.  DO NOT EDIT.
 #
-# Regenerate:  python -m governance.contracts.dbt_test_generator --write
-# Check drift: python -m governance.contracts.dbt_test_generator --check
+# Regenerate:  python -m csa_platform.governance.contracts.dbt_test_generator --write
+# Check drift: python -m csa_platform.governance.contracts.dbt_test_generator --check
 # =======================================================================
 
 version: 2

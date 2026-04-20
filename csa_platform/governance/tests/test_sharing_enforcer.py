@@ -15,7 +15,7 @@ from textwrap import dedent
 # ---------------------------------------------------------------------------
 # Bootstrap: add source dir to path
 # ---------------------------------------------------------------------------
-_data_sharing = str(Path(__file__).resolve().parent.parent / "data_sharing")
+_data_sharing = str(Path(__file__).resolve().parent.parent / "purview" / "data_sharing")
 if _data_sharing not in sys.path:
     sys.path.insert(0, _data_sharing)
 # ---------------------------------------------------------------------------

@@ -78,7 +78,7 @@ class PlatformSettings(BaseSettings):
     COSMOS_DB_DATABASE: str = ""
 
     # ── Microsoft Purview ────────────────────────────────────────────────
-    # Used by: purview_governance/purview_automation.py
+    # Used by: governance/purview/purview_automation.py
     PURVIEW_ACCOUNT_NAME: str = ""
 
     # ── Azure Synapse Analytics ──────────────────────────────────────────

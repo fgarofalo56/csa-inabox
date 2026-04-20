@@ -17,7 +17,7 @@ needs more control.
 
 Logging
 -------
-All log lines are emitted as JSON via :mod:`governance.common.logging`
+All log lines are emitted as JSON via :mod:`csa_platform.governance.common.logging`
 (structlog) so Log Analytics can parse them with a single KQL expression
 (see ``docs/LOG_SCHEMA.md``).  Each invocation binds trace_id and
 correlation_id through :func:`bind_trace_context` so cross-service
@@ -36,7 +36,7 @@ from domains.sharedServices.common.function_helpers import (
     build_error_response,
     build_health_response,
 )
-from governance.common.logging import (
+from csa_platform.governance.common.logging import (
     bind_trace_context,
     configure_structlog,
     extract_trace_id_from_headers,

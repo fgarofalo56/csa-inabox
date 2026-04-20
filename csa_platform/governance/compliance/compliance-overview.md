@@ -75,7 +75,7 @@ controls, and audit capabilities.
 
 ### 🔒 Authorization
 
-See `governance/rbac/rbac-matrix.json` for the complete RBAC matrix.
+See `csa_platform/governance/rbac/rbac-matrix.json` for the complete RBAC matrix.
 
 Key principles:
 - **Least privilege**: Each persona gets only required permissions
@@ -134,7 +134,7 @@ flowchart TD
     DNS -.-> PE
 ```
 
-See `governance/network/validate-network.ps1` for automated validation.
+See `csa_platform/governance/network/validate-network.ps1` for automated validation.
 
 ---
 

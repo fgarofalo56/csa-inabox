@@ -172,7 +172,7 @@ replicate Microsoft Fabric capabilities using Azure PaaS. These live in
 | [Metadata Framework](../csa_platform/metadata_framework/) | Auto-generate ADF pipelines from YAML | Register sources in YAML |
 | [AI Integration](../csa_platform/ai_integration/) | RAG, entity extraction, document classification | Configure Azure OpenAI |
 | [Shared Services](../csa_platform/shared_services/) | Reusable Functions (PII detection, schema validation) | `func azure functionapp publish` |
-| [Governance](../csa_platform/purview_governance/) + [top-level](../governance/) | Purview classification, lineage, sensitivity labels | Bootstrap Purview catalog |
+| [Governance](../csa_platform/csa_platform/governance/purview/) + [top-level](../governance/) | Purview classification, lineage, sensitivity labels | Bootstrap Purview catalog |
 | [OSS Alternatives](../csa_platform/oss_alternatives/) | Open-source replacements for Gov gaps | Helm charts on AKS |
 
 See [PLATFORM_SERVICES.md](PLATFORM_SERVICES.md) for detailed deployment instructions.
@@ -308,8 +308,8 @@ availability matrix.
 
 - [ ] **Configure dbt**: Edit `domains/shared/dbt/profiles.yml` with your Databricks connection
 - [ ] **Set up ADF pipelines**: Import pipeline definitions from `domains/shared/pipelines/adf/`
-- [ ] **Apply RBAC**: Run `governance/rbac/apply-rbac.ps1` to set up access control
-- [ ] **Data Quality**: Configure `governance/dataquality/quality-rules.yaml` for your tables
+- [ ] **Apply RBAC**: Run `csa_platform/csa_platform/governance/rbac/apply-rbac.ps1` to set up access control
+- [ ] **Data Quality**: Configure `csa_platform/csa_platform/governance/dataquality/quality-rules.yaml` for your tables
 - [ ] **Deploy Platform Services**: Follow [PLATFORM_SERVICES.md](PLATFORM_SERVICES.md) for Fabric-equivalent capabilities
 - [ ] **Try a Vertical**: Pick any vertical from `examples/` and run its pipeline end-to-end
 - [ ] **Deploy the Portal**: Choose a frontend from `portal/` and connect it to the shared backend

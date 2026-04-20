@@ -121,7 +121,7 @@ Test-Assertion "Sales domain exists" {
 }
 
 Test-Assertion "Governance RBAC matrix exists" {
-    Test-Path (Join-Path $RepoRoot "governance/rbac/rbac-matrix.json")
+    Test-Path (Join-Path $RepoRoot "csa_platform/governance/rbac/rbac-matrix.json")
 }
 
 Test-Assertion "Data product template exists" {

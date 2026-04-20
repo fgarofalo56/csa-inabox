@@ -49,7 +49,7 @@ def _minimal_config(extra: dict[str, Any] | None = None) -> dict[str, Any]:
 
 def _make_runner(tmp_path: Path, config: dict[str, Any] | None = None) -> Any:
     """Instantiate a DataQualityRunner pointing at a temp YAML config file."""
-    from governance.dataquality.run_quality_checks import DataQualityRunner
+    from csa_platform.governance.dataquality.run_quality_checks import DataQualityRunner
 
     cfg = config if config is not None else _minimal_config()
     config_file = tmp_path / "quality-rules.yaml"
@@ -64,7 +64,7 @@ def _make_runner(tmp_path: Path, config: dict[str, Any] | None = None) -> Any:
 
 class TestQualityCheckResult:
     def test_to_dict_has_required_keys(self) -> None:
-        from governance.dataquality.run_quality_checks import QualityCheckResult
+        from csa_platform.governance.dataquality.run_quality_checks import QualityCheckResult
 
         r = QualityCheckResult(
             check_name="dbt_tests",
@@ -77,7 +77,7 @@ class TestQualityCheckResult:
         assert set(d.keys()) == {"check_name", "table", "status", "message", "details", "timestamp"}
 
     def test_to_dict_values_match_constructor(self) -> None:
-        from governance.dataquality.run_quality_checks import QualityCheckResult
+        from csa_platform.governance.dataquality.run_quality_checks import QualityCheckResult
 
         r = QualityCheckResult(
             check_name="ge:bronze_suite",
@@ -93,7 +93,7 @@ class TestQualityCheckResult:
         assert d["details"]["failed_expectations"] == 2
 
     def test_timestamp_is_iso_utc(self) -> None:
-        from governance.dataquality.run_quality_checks import QualityCheckResult
+        from csa_platform.governance.dataquality.run_quality_checks import QualityCheckResult
 
         r = QualityCheckResult("n", "t", "pass")
         # Should parse without raising
@@ -101,7 +101,7 @@ class TestQualityCheckResult:
         assert dt.tzinfo is not None
 
     def test_details_defaults_to_empty_dict(self) -> None:
-        from governance.dataquality.run_quality_checks import QualityCheckResult
+        from csa_platform.governance.dataquality.run_quality_checks import QualityCheckResult
 
         r = QualityCheckResult("n", "t", "pass")
         assert r.details == {}
@@ -114,7 +114,7 @@ class TestQualityCheckResult:
 
 class TestDataQualityRunnerInit:
     def test_loads_yaml_config(self, tmp_path: Path) -> None:
-        from governance.dataquality.run_quality_checks import DataQualityRunner
+        from csa_platform.governance.dataquality.run_quality_checks import DataQualityRunner
 
         cfg = _minimal_config()
         f = tmp_path / "qr.yaml"
@@ -147,8 +147,8 @@ class TestDataQualityRunnerInit:
                 }
             }
         )
-        from governance.common.validation import EMAIL_REGEX_PATTERN
-        from governance.dataquality.run_quality_checks import DataQualityRunner
+        from csa_platform.governance.common.validation import EMAIL_REGEX_PATTERN
+        from csa_platform.governance.dataquality.run_quality_checks import DataQualityRunner
 
         f = tmp_path / "qr.yaml"
         f.write_text(yaml.dump(cfg), encoding="utf-8")
@@ -445,7 +445,7 @@ class TestCheckVolumeRules:
 
 class TestRunGeCheckpoints:
     def test_delegates_to_ge_runner_and_maps_results(self, tmp_path: Path) -> None:
-        from governance.dataquality.ge_runner import SuiteResult
+        from csa_platform.governance.dataquality.ge_runner import SuiteResult
 
         cfg = _minimal_config(
             {
@@ -473,7 +473,7 @@ class TestRunGeCheckpoints:
         )
 
         with patch(
-            "governance.dataquality.run_quality_checks.run_ge_checkpoints",
+            "csa_platform.governance.dataquality.run_quality_checks.run_ge_checkpoints",
             return_value=[mock_suite_result],
         ):
             results = runner.run_ge_checkpoints()
@@ -485,7 +485,7 @@ class TestRunGeCheckpoints:
         assert ge_results[0].check_name == "ge:bronze_customers_suite"
 
     def test_failed_suite_mapped_to_fail_status(self, tmp_path: Path) -> None:
-        from governance.dataquality.ge_runner import ExpectationResult, SuiteResult
+        from csa_platform.governance.dataquality.ge_runner import ExpectationResult, SuiteResult
 
         runner = _make_runner(tmp_path)
         failed_exp = ExpectationResult(
@@ -504,7 +504,7 @@ class TestRunGeCheckpoints:
         )
 
         with patch(
-            "governance.dataquality.run_quality_checks.run_ge_checkpoints",
+            "csa_platform.governance.dataquality.run_quality_checks.run_ge_checkpoints",
             return_value=[mock_suite],
         ):
             results = runner.run_ge_checkpoints()
@@ -519,7 +519,7 @@ class TestRunGeCheckpoints:
         sample = {"bronze_customers_suite": [{"customer_id": "c1"}]}
 
         with patch(
-            "governance.dataquality.run_quality_checks.run_ge_checkpoints",
+            "csa_platform.governance.dataquality.run_quality_checks.run_ge_checkpoints",
             return_value=[],
         ) as mock_ge:
             runner.run_ge_checkpoints(sample_data=sample)
@@ -528,7 +528,7 @@ class TestRunGeCheckpoints:
         assert kwargs["sample_data"] == sample
 
     def test_expectation_details_in_result(self, tmp_path: Path) -> None:
-        from governance.dataquality.ge_runner import ExpectationResult, SuiteResult
+        from csa_platform.governance.dataquality.ge_runner import ExpectationResult, SuiteResult
 
         runner = _make_runner(tmp_path)
         exp = ExpectationResult(
@@ -547,7 +547,7 @@ class TestRunGeCheckpoints:
         )
 
         with patch(
-            "governance.dataquality.run_quality_checks.run_ge_checkpoints",
+            "csa_platform.governance.dataquality.run_quality_checks.run_ge_checkpoints",
             return_value=[mock_suite],
         ):
             results = runner.run_ge_checkpoints()
@@ -602,7 +602,7 @@ class TestGenerateReport:
         assert report["summary"]["health_score"] == 0.0
 
     def test_all_pass_gives_100_health_score(self, tmp_path: Path) -> None:
-        from governance.dataquality.run_quality_checks import QualityCheckResult
+        from csa_platform.governance.dataquality.run_quality_checks import QualityCheckResult
 
         runner = _make_runner(tmp_path)
         runner.results = [
@@ -615,7 +615,7 @@ class TestGenerateReport:
         assert report["summary"]["failures"] == 0
 
     def test_mixed_results_health_score(self, tmp_path: Path) -> None:
-        from governance.dataquality.run_quality_checks import QualityCheckResult
+        from csa_platform.governance.dataquality.run_quality_checks import QualityCheckResult
 
         runner = _make_runner(tmp_path)
         runner.results = [
@@ -632,7 +632,7 @@ class TestGenerateReport:
         assert report["summary"]["passed"] == 2
 
     def test_report_contains_results_list(self, tmp_path: Path) -> None:
-        from governance.dataquality.run_quality_checks import QualityCheckResult
+        from csa_platform.governance.dataquality.run_quality_checks import QualityCheckResult
 
         runner = _make_runner(tmp_path)
         runner.results = [QualityCheckResult("c1", "t1", "pass", "ok")]
@@ -648,7 +648,7 @@ class TestGenerateReport:
         datetime.fromisoformat(report["report_timestamp"])
 
     def test_health_score_rounded_to_one_decimal(self, tmp_path: Path) -> None:
-        from governance.dataquality.run_quality_checks import QualityCheckResult
+        from csa_platform.governance.dataquality.run_quality_checks import QualityCheckResult
 
         runner = _make_runner(tmp_path)
         # 1 pass out of 3 = 33.333...% → should round to 33.3
@@ -686,7 +686,7 @@ class TestEmitToLogAnalytics:
     def test_emits_to_monitor_when_env_vars_set(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from governance.dataquality.run_quality_checks import QualityCheckResult
+        from csa_platform.governance.dataquality.run_quality_checks import QualityCheckResult
 
         monkeypatch.setenv("MONITOR_DCR_ENDPOINT", "https://dcr.monitor.azure.com")
         monkeypatch.setenv("MONITOR_DCR_RULE_ID", "dcr-12345")
@@ -762,7 +762,7 @@ class TestEmitToLogAnalytics:
 
 class TestParseDbtFailures:
     def test_parses_structured_run_results_json(self, tmp_path: Path) -> None:
-        from governance.dataquality.run_quality_checks import DataQualityRunner
+        from csa_platform.governance.dataquality.run_quality_checks import DataQualityRunner
 
         run_results = {
             "results": [
@@ -803,7 +803,7 @@ class TestParseDbtFailures:
         assert "test.project.unique_orders.order_id" in test_ids
 
     def test_falls_back_to_stdout_when_no_json_file(self) -> None:
-        from governance.dataquality.run_quality_checks import DataQualityRunner
+        from csa_platform.governance.dataquality.run_quality_checks import DataQualityRunner
 
         stdout = (
             "Running 3 tests...\n"
@@ -819,7 +819,7 @@ class TestParseDbtFailures:
         assert len(failures) >= 2
 
     def test_returns_empty_on_clean_output(self) -> None:
-        from governance.dataquality.run_quality_checks import DataQualityRunner
+        from csa_platform.governance.dataquality.run_quality_checks import DataQualityRunner
 
         with patch("pathlib.Path.exists", return_value=False):
             failures = DataQualityRunner._parse_dbt_failures(
@@ -829,7 +829,7 @@ class TestParseDbtFailures:
         assert failures == []
 
     def test_handles_malformed_json_gracefully(self, tmp_path: Path) -> None:
-        from governance.dataquality.run_quality_checks import DataQualityRunner
+        from csa_platform.governance.dataquality.run_quality_checks import DataQualityRunner
 
         results_file = tmp_path / "target" / "run_results.json"
         results_file.parent.mkdir(parents=True)
@@ -858,7 +858,7 @@ class TestFullOrchestration:
     """Simulate a complete run: dbt + freshness + volume + GE -> report."""
 
     def test_full_run_produces_report_with_correct_summary(self, tmp_path: Path) -> None:
-        from governance.dataquality.ge_runner import SuiteResult
+        from csa_platform.governance.dataquality.ge_runner import SuiteResult
 
         cfg = _minimal_config(
             {
@@ -899,7 +899,7 @@ class TestFullOrchestration:
 
         with patch("subprocess.run", side_effect=call_sequence), \
              patch(
-                 "governance.dataquality.run_quality_checks.run_ge_checkpoints",
+                 "csa_platform.governance.dataquality.run_quality_checks.run_ge_checkpoints",
                  return_value=[mock_ge_result],
              ):
             runner.run_dbt_tests()

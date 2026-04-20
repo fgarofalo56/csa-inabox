@@ -24,7 +24,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from governance.common.logging import reset_logging_state
+from csa_platform.governance.common.logging import reset_logging_state
 
 
 # ---------------------------------------------------------------------------

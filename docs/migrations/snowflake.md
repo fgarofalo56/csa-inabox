@@ -10,7 +10,7 @@
 
 Snowflake is a good product. It is not, today, the right federal bet. As of April 2026, Snowflake holds **FedRAMP Moderate** on Snowflake Government — not High — and several of the AI and streaming surfaces (Cortex, Snowpipe Streaming, Snowpark Container Services) have partial or commercial-only coverage in the Gov region. For any federal customer whose Authority to Operate requires FedRAMP High, DoD IL4/IL5, ITAR, or CMMC 2.0 Level 2 coverage, Snowflake imposes either a compliance ceiling or a second-vendor dance to reach parity.
 
-csa-inabox plus Azure PaaS resolves this by inheriting **FedRAMP High** through Azure Government (`docs/compliance/nist-800-53-rev5.md`, `governance/compliance/nist-800-53-rev5.yaml`), **CMMC 2.0 Level 2** (`governance/compliance/cmmc-2.0-l2.yaml`), and **HIPAA Security Rule** (`governance/compliance/hipaa-security-rule.yaml`) at the platform layer, and projecting those controls through to every Bicep module, Purview classification, and Delta Lake table. Data stays in an open format (Delta + Parquet). Compute is consumption-priced and can scale to zero between runs.
+csa-inabox plus Azure PaaS resolves this by inheriting **FedRAMP High** through Azure Government (`docs/compliance/nist-800-53-rev5.md`, `csa_platform/csa_platform/governance/compliance/nist-800-53-rev5.yaml`), **CMMC 2.0 Level 2** (`csa_platform/csa_platform/governance/compliance/cmmc-2.0-l2.yaml`), and **HIPAA Security Rule** (`csa_platform/csa_platform/governance/compliance/hipaa-security-rule.yaml`) at the platform layer, and projecting those controls through to every Bicep module, Purview classification, and Delta Lake table. Data stays in an open format (Delta + Parquet). Compute is consumption-priced and can scale to zero between runs.
 
 This playbook is written for the Snowflake customer who has already made the decision to move or who is under a forcing function — FedRAMP High requirement, budget compression, Azure-first mandate, open-standards policy, or a Cortex feature request that Snowflake has not yet backported to Gov. It maps every significant Snowflake capability to the equivalent in csa-inabox, walks through a worked dbt-on-Snowflake → dbt-on-Databricks migration end-to-end, and gives a phased plan realistic to a mid-to-large federal tenant.
 
@@ -20,14 +20,14 @@ It is also honest where Snowflake is still stronger. Snowflake's account/databas
 
 | Consideration | Snowflake (Gov tenant, today) | csa-inabox (today) | Notes |
 |---|---|---|---|
-| FedRAMP Moderate | Authorized | Inherited (Azure Gov + Azure Commercial authorized services) | csa-inabox documents control coverage in `governance/compliance/nist-800-53-rev5.yaml` |
+| FedRAMP Moderate | Authorized | Inherited (Azure Gov + Azure Commercial authorized services) | csa-inabox documents control coverage in `csa_platform/csa_platform/governance/compliance/nist-800-53-rev5.yaml` |
 | FedRAMP High | **Not authorized** (Moderate only as of 2026-04) | Inherited through Azure Gov High | **Material differentiator for federal tenants that require High** |
 | DoD IL4 | Limited (partner-dependent) | Covered in Azure Gov | Full parity on Azure Government for IL4 workloads |
 | DoD IL5 | **Gap** | Covered in Azure Gov (most services; Fabric IL5 parity forecast per Microsoft roadmap) | See `docs/GOV_SERVICE_MATRIX.md` |
 | DoD IL6 | Gap | **Gap** — out of scope for csa-inabox today | Neither platform; recommend bespoke tenant |
 | ITAR | Covered (Snowflake Gov region) | Covered by Azure Gov tenant defaults | Data-residency assured by Azure Gov tenant-binding |
-| CMMC 2.0 Level 2 | Controls available; customer-managed mappings | Controls mapped in `governance/compliance/cmmc-2.0-l2.yaml` + `docs/compliance/cmmc-2.0-l2.md` | DIB primes inherit directly |
-| HIPAA Security Rule | Covered with BAA | Covered; mapped in `governance/compliance/hipaa-security-rule.yaml` | See `examples/tribal-health/` for HHS / IHS worked example |
+| CMMC 2.0 Level 2 | Controls available; customer-managed mappings | Controls mapped in `csa_platform/csa_platform/governance/compliance/cmmc-2.0-l2.yaml` + `docs/compliance/cmmc-2.0-l2.md` | DIB primes inherit directly |
+| HIPAA Security Rule | Covered with BAA | Covered; mapped in `csa_platform/csa_platform/governance/compliance/hipaa-security-rule.yaml` | See `examples/tribal-health/` for HHS / IHS worked example |
 | Data-residency binding | Snowflake region | Azure Government tenant-binding | Azure Gov is a physically separate cloud instance, not a logical region |
 | Storage format | Proprietary (Snowflake micro-partitions) | Delta Lake on Parquet (open) | Exit cost from Snowflake is material; exit cost from csa-inabox is weeks |
 | Compute pricing | Snowflake credits (per-warehouse, per-second after 1 minute minimum) | Azure consumption (Databricks DBUs, Fabric capacity, ADF activity runs) | Typical 40–50% cost reduction at comparable workload — see Section 7 |
@@ -49,11 +49,11 @@ This is the load-bearing table. Every row cites a real file path in the csa-inab
 | **Zero-Copy Cloning** | Delta Lake SHALLOW CLONE / DEEP CLONE | Snowflake zero-copy clones are metadata-only; Delta SHALLOW CLONE is the direct analog. | XS | ADR-0003 `docs/adr/0003-delta-lake-over-iceberg-and-parquet.md` |
 | **Cortex (LLM functions — `COMPLETE`, `SUMMARIZE`, `TRANSLATE`)** | Azure AI Foundry + Azure OpenAI invoked from dbt macros, notebooks, or Databricks SQL external models | Cortex inline SQL calls become Databricks SQL `ai_query()` calls or dbt macros wrapping Azure OpenAI. | M | `csa_platform/ai_integration/README.md`, `csa_platform/ai_integration/enrichment/`, ADR-0007 `docs/adr/0007-azure-openai-over-self-hosted-llm.md` |
 | **Cortex Search (hybrid vector + keyword)** | Azure AI Search + vector embeddings persisted on OneLake | The RAG pipeline in `csa_platform/ai_integration/rag/pipeline.py` is the reference implementation. | M | `csa_platform/ai_integration/rag/pipeline.py`, `csa_platform/ai_integration/rag/config.py` |
-| **Data Marketplace / Secure Data Sharing** | Purview data products + Delta Sharing + OneLake shortcuts | Outbound sharing uses Delta Sharing (open protocol); inbound uses OneLake shortcuts + Purview-registered data products. | L | `csa_platform/data_marketplace/`, `csa_platform/data_marketplace/api/`, `csa_platform/purview_governance/` |
+| **Data Marketplace / Secure Data Sharing** | Purview data products + Delta Sharing + OneLake shortcuts | Outbound sharing uses Delta Sharing (open protocol); inbound uses OneLake shortcuts + Purview-registered data products. | L | `csa_platform/data_marketplace/`, `csa_platform/data_marketplace/api/`, `csa_platform/csa_platform/governance/purview/` |
 | **External tables on S3** | OneLake shortcuts + Databricks Lakehouse Federation | OneLake shortcuts preserve S3 as the source of truth during bridge phase; Lakehouse Federation queries remote warehouses directly. | S | `csa_platform/unity_catalog_pattern/onelake_config.yaml` |
 | **Dynamic Tables** | dbt incremental models + Databricks DLT (Delta Live Tables) | Lag-based dynamic refresh becomes dbt `incremental` with `unique_key` and `merge` strategy; heavier CDC pipelines move to DLT. | M | `domains/shared/dbt/dbt_project.yml`, `domains/finance/dbt/`, `domains/sales/dbt/` |
-| **Masking policies + dynamic data masking** | Purview sensitivity labels + Databricks Unity Catalog row/column security + Purview classifications | Column-level masking rules re-express as Unity Catalog `MASK` functions; role-based masking via Entra ID groups. | M | `csa_platform/purview_governance/classifications/pii_classifications.yaml`, `phi_classifications.yaml`, `government_classifications.yaml`, `financial_classifications.yaml` |
-| **Row access policies** | Unity Catalog row filters + Purview classification-driven access | Rewrite the policy function body as a Unity Catalog row filter; map `CURRENT_ROLE()` → Entra ID group membership. | M | `csa_platform/purview_governance/purview_automation.py` (classifications reused), `csa_platform/unity_catalog_pattern/unity_catalog/` |
+| **Masking policies + dynamic data masking** | Purview sensitivity labels + Databricks Unity Catalog row/column security + Purview classifications | Column-level masking rules re-express as Unity Catalog `MASK` functions; role-based masking via Entra ID groups. | M | `csa_platform/csa_platform/governance/purview/classifications/pii_classifications.yaml`, `phi_classifications.yaml`, `government_classifications.yaml`, `financial_classifications.yaml` |
+| **Row access policies** | Unity Catalog row filters + Purview classification-driven access | Rewrite the policy function body as a Unity Catalog row filter; map `CURRENT_ROLE()` → Entra ID group membership. | M | `csa_platform/csa_platform/governance/purview/purview_automation.py` (classifications reused), `csa_platform/unity_catalog_pattern/unity_catalog/` |
 | **Snowpipe (batch + streaming ingest)** | Event Hubs + ADX continuous ingest + Databricks Autoloader | Batch Snowpipe → Databricks Autoloader on ADLS Gen2; streaming Snowpipe → Event Hubs + ADX/Databricks structured streaming. | M | ADR-0005 `docs/adr/0005-event-hubs-over-kafka.md`, `examples/iot-streaming/` |
 | **Resource monitors + warehouse auto-suspend** | Databricks SQL warehouse auto-stop + Azure Cost Management budgets + `scripts/deploy/teardown-platform.sh` | Auto-stop (1 min default) replaces auto-suspend; budgets replace resource monitors; teardown script kills workshop/dev spend cold. | XS | `scripts/deploy/teardown-platform.sh`, `docs/COST_MANAGEMENT.md` |
 | **SnowSQL CLI** | Databricks CLI + Azure CLI + dbt CLI | Interactive queries through Databricks SQL editor; scripts ported to `databricks sql` + dbt. | S | `scripts/deploy/deploy-platform.sh`, `.github/workflows/deploy.yml` |
@@ -304,7 +304,7 @@ Deploy the Data Management Landing Zone (DMLZ) and first Data Landing Zone (DLZ)
 
 - Bicep-based deployment (see ADR-0004 `docs/adr/0004-bicep-over-terraform.md`).
 - Unity Catalog metastore + catalogs mirroring the Snowflake database structure.
-- Purview provisioned and automated via `csa_platform/purview_governance/purview_automation.py`.
+- Purview provisioned and automated via `csa_platform/csa_platform/governance/purview/purview_automation.py`.
 - Entra ID groups for domain-steward / data-engineer / data-analyst.
 - Networking, Private Endpoints, Key Vault, Log Analytics, tamper-evident audit path (CSA-0016).
 
@@ -370,9 +370,9 @@ Batch the remaining domains in waves. Most domains after the pilot port in 2–3
 
 ## 6. Federal compliance considerations
 
-- **FedRAMP High path.** The biggest compliance win of this migration. Snowflake Gov holds FedRAMP Moderate (as of 2026-04); csa-inabox inherits FedRAMP High through Azure Government. Control mappings live in `governance/compliance/nist-800-53-rev5.yaml` with the narrative in `docs/compliance/nist-800-53-rev5.md`. Every Bicep module, Purview classification, and diagnostic source is tied to its control IDs.
-- **CMMC 2.0 Level 2.** Covered in `governance/compliance/cmmc-2.0-l2.yaml` with narrative `docs/compliance/cmmc-2.0-l2.md`. DIB primes inherit practice-level mappings.
-- **HIPAA Security Rule.** `governance/compliance/hipaa-security-rule.yaml` + `docs/compliance/hipaa-security-rule.md`. See `examples/tribal-health/` for an IHS worked implementation.
+- **FedRAMP High path.** The biggest compliance win of this migration. Snowflake Gov holds FedRAMP Moderate (as of 2026-04); csa-inabox inherits FedRAMP High through Azure Government. Control mappings live in `csa_platform/csa_platform/governance/compliance/nist-800-53-rev5.yaml` with the narrative in `docs/compliance/nist-800-53-rev5.md`. Every Bicep module, Purview classification, and diagnostic source is tied to its control IDs.
+- **CMMC 2.0 Level 2.** Covered in `csa_platform/csa_platform/governance/compliance/cmmc-2.0-l2.yaml` with narrative `docs/compliance/cmmc-2.0-l2.md`. DIB primes inherit practice-level mappings.
+- **HIPAA Security Rule.** `csa_platform/csa_platform/governance/compliance/hipaa-security-rule.yaml` + `docs/compliance/hipaa-security-rule.md`. See `examples/tribal-health/` for an IHS worked implementation.
 - **IL4:** full parity on Azure Government.
 - **IL5:** near-parity on Azure Government; see `docs/GOV_SERVICE_MATRIX.md` for service-level status and Fabric parity forecast.
 - **IL6:** out of scope for csa-inabox. Snowflake is also not the answer here; recommend a bespoke Azure Top-Secret or AWS Top-Secret tenant.
@@ -466,15 +466,15 @@ Kept professional, not marketing.
   - `docs/adr/0007-azure-openai-over-self-hosted-llm.md`
   - `docs/adr/0010-fabric-strategic-target.md`
 - **Compliance matrices:**
-  - `docs/compliance/nist-800-53-rev5.md` / `governance/compliance/nist-800-53-rev5.yaml`
-  - `docs/compliance/cmmc-2.0-l2.md` / `governance/compliance/cmmc-2.0-l2.yaml`
-  - `docs/compliance/hipaa-security-rule.md` / `governance/compliance/hipaa-security-rule.yaml`
+  - `docs/compliance/nist-800-53-rev5.md` / `csa_platform/csa_platform/governance/compliance/nist-800-53-rev5.yaml`
+  - `docs/compliance/cmmc-2.0-l2.md` / `csa_platform/csa_platform/governance/compliance/cmmc-2.0-l2.yaml`
+  - `docs/compliance/hipaa-security-rule.md` / `csa_platform/csa_platform/governance/compliance/hipaa-security-rule.yaml`
 - **Platform modules most relevant:**
   - `csa_platform/unity_catalog_pattern/` — OneLake + Unity Catalog foundation
   - `csa_platform/semantic_model/` — Direct Lake semantic model for Power BI
   - `csa_platform/ai_integration/` — Cortex replacement primitives
   - `csa_platform/data_marketplace/` — data-product registry (Data Marketplace analogue)
-  - `csa_platform/purview_governance/` — catalog + classifications
+  - `csa_platform/csa_platform/governance/purview/` — catalog + classifications
   - `csa_platform/multi_synapse/` — multi-workspace pattern
 - **Operational guides:**
   - `docs/QUICKSTART.md`, `docs/ARCHITECTURE.md`, `docs/GOV_SERVICE_MATRIX.md`, `docs/COST_MANAGEMENT.md`, `docs/DATABRICKS_GUIDE.md`

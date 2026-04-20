@@ -10,7 +10,7 @@
 
 AWS analytics is a mature stack. The federal reasons to move are rarely technical merit; they are forcing functions — an Azure-first mandate from the mission owner, IL5 coverage gaps on AWS GovCloud for specific workloads, consolidation of the federal tenant onto a single hyperscaler, a mission need for services that are only available (or only available at the right compliance tier) on Azure Government, or a partner/prime requirement.
 
-csa-inabox on Azure inherits **FedRAMP High** through Azure Government (`docs/compliance/nist-800-53-rev5.md`, `governance/compliance/nist-800-53-rev5.yaml`), **CMMC 2.0 Level 2** (`governance/compliance/cmmc-2.0-l2.yaml`), and **HIPAA Security Rule** (`governance/compliance/hipaa-security-rule.yaml`), and ships a reference pattern that projects those controls through every Bicep module, Purview classification, Delta Lake table, and audit source. Every row of every capability-mapping table below cites a real file in the repo.
+csa-inabox on Azure inherits **FedRAMP High** through Azure Government (`docs/compliance/nist-800-53-rev5.md`, `csa_platform/csa_platform/governance/compliance/nist-800-53-rev5.yaml`), **CMMC 2.0 Level 2** (`csa_platform/csa_platform/governance/compliance/cmmc-2.0-l2.yaml`), and **HIPAA Security Rule** (`csa_platform/csa_platform/governance/compliance/hipaa-security-rule.yaml`), and ships a reference pattern that projects those controls through every Bicep module, Purview classification, Delta Lake table, and audit source. Every row of every capability-mapping table below cites a real file in the repo.
 
 This playbook is honest. AWS GovCloud has been federal-first since 2011 and has deep workload coverage. IL4 coverage is broad; IL5 coverage is service-dependent — check the AWS IL5 service boundary list against the `docs/GOV_SERVICE_MATRIX.md` Azure Gov coverage before committing. This document is not a takedown of AWS; it is a migration playbook for federal tenants that have decided to move. For those tenants, the main value is **compressing the five-service AWS analytics estate (Redshift + EMR + Glue + Athena + S3) into a coherent Delta Lake + Databricks + Purview + OneLake stack** and doing it without losing the current Glue Data Catalog investment or having to rip-and-replace S3 on day one.
 
@@ -23,8 +23,8 @@ This playbook is honest. AWS GovCloud has been federal-first since 2011 and has 
 | DoD IL5 | **Service-dependent**; several analytics services have partial IL5 coverage | Covered on Azure Gov for most services; Fabric IL5 parity forecast per Microsoft roadmap | Check AWS IL5 boundary vs `docs/GOV_SERVICE_MATRIX.md` |
 | DoD IL6 | Covered (AWS Top Secret Region) | **Gap** — out of scope for csa-inabox | For IL6, recommend staying on AWS Top Secret or bespoke Azure Top Secret |
 | ITAR | Covered via AWS GovCloud US data-residency | Covered via Azure Government tenant-binding | Parity |
-| CMMC 2.0 Level 2 | Customer-managed mappings; AWS controls available | Controls mapped in `governance/compliance/cmmc-2.0-l2.yaml` + narrative | DIB primes inherit directly on csa-inabox |
-| HIPAA Security Rule | Covered with BAA | Covered; mapped in `governance/compliance/hipaa-security-rule.yaml` | See `examples/tribal-health/` for HHS / IHS worked example |
+| CMMC 2.0 Level 2 | Customer-managed mappings; AWS controls available | Controls mapped in `csa_platform/csa_platform/governance/compliance/cmmc-2.0-l2.yaml` + narrative | DIB primes inherit directly on csa-inabox |
+| HIPAA Security Rule | Covered with BAA | Covered; mapped in `csa_platform/csa_platform/governance/compliance/hipaa-security-rule.yaml` | See `examples/tribal-health/` for HHS / IHS worked example |
 | Storage format | S3 object storage + Glue Catalog | ADLS Gen2 + OneLake + Unity Catalog + Purview | OneLake shortcuts allow S3 to stay source-of-truth during migration |
 | Table format | Parquet/ORC + Iceberg (AWS Glue Iceberg) + Hudi | Delta Lake (primary) + Iceberg (ADR-0003) + Parquet | Delta + Iceberg interop; Glue Iceberg tables readable in Databricks |
 | IaC | CloudFormation / CDK / Terraform | Bicep (ADR-0004 `docs/adr/0004-bicep-over-terraform.md`) | Terraform also supported; Bicep chosen for Azure policy evidence |
@@ -67,9 +67,9 @@ This section is split by service because the AWS estate is rarely migrated as a 
 
 | Glue capability | csa-inabox equivalent | Mapping notes | Effort | Evidence |
 |---|---|---|---|---|
-| Glue Data Catalog | Unity Catalog (primary) + Purview (enterprise catalog) | Unity Catalog holds runtime metadata; Purview holds business glossary, classifications, lineage across catalogs | M | `csa_platform/purview_governance/purview_automation.py`, `csa_platform/unity_catalog_pattern/unity_catalog/`, ADR-0006 `docs/adr/0006-purview-over-atlas.md` |
+| Glue Data Catalog | Unity Catalog (primary) + Purview (enterprise catalog) | Unity Catalog holds runtime metadata; Purview holds business glossary, classifications, lineage across catalogs | M | `csa_platform/csa_platform/governance/purview/purview_automation.py`, `csa_platform/unity_catalog_pattern/unity_catalog/`, ADR-0006 `docs/adr/0006-purview-over-atlas.md` |
 | Glue Jobs (Spark / Python Shell) | Databricks Jobs + notebooks + ADF activities | Spark jobs move to Databricks Jobs; Python-Shell jobs → Azure Functions or small Databricks Python tasks | M | `domains/shared/notebooks/`, `domains/shared/pipelines/adf/` |
-| Glue Crawlers | Purview scan jobs + Databricks Auto Loader schema inference | Crawlers become Purview scans (governance) + Auto Loader (runtime schema evolution) | M | `csa_platform/purview_governance/purview_automation.py`, `csa_platform/unity_catalog_pattern/` |
+| Glue Crawlers | Purview scan jobs + Databricks Auto Loader schema inference | Crawlers become Purview scans (governance) + Auto Loader (runtime schema evolution) | M | `csa_platform/csa_platform/governance/purview/purview_automation.py`, `csa_platform/unity_catalog_pattern/` |
 | Glue Streaming Jobs | Databricks structured streaming + Event Hubs / ADX | Kinesis → Event Hubs bridge; streaming ETL lands on Delta tables | M | ADR-0005 `docs/adr/0005-event-hubs-over-kafka.md`, `examples/iot-streaming/` |
 | DataBrew | Power Query (Fabric) + Databricks SQL + dbt | Most DataBrew transforms re-express as Power Query in a Fabric dataflow or dbt model | S | `domains/shared/dbt/dbt_project.yml` |
 | Glue DataQuality | dbt tests + Great Expectations + data-product `contract.yaml` | Every data product ships a contract; dbt tests enforce column-level rules; GE covers row-level expectations | S | `domains/finance/data-products/invoices/contract.yaml`, `.github/workflows/validate-contracts.yml` |
@@ -370,12 +370,12 @@ Per-bucket decisions:
 
 ## 6. Federal compliance considerations
 
-- **FedRAMP High:** inherited through Azure Government; mappings in `governance/compliance/nist-800-53-rev5.yaml`. AWS GovCloud is also FedRAMP High — the compliance delta here is usually less material than for Snowflake; the migration decision is typically operational (Azure-first mandate, consolidation) rather than compliance-forced.
+- **FedRAMP High:** inherited through Azure Government; mappings in `csa_platform/csa_platform/governance/compliance/nist-800-53-rev5.yaml`. AWS GovCloud is also FedRAMP High — the compliance delta here is usually less material than for Snowflake; the migration decision is typically operational (Azure-first mandate, consolidation) rather than compliance-forced.
 - **DoD IL4 / IL5:** `docs/GOV_SERVICE_MATRIX.md` is the live reference for Azure Gov service-level IL5 coverage. Compare against the AWS IL5 boundary list for each in-scope service before committing.
 - **DoD IL6:** **out of scope for csa-inabox**. If any workload must stay IL6, plan to keep it on AWS Top Secret Region or deploy to a bespoke Azure Top Secret tenant (not csa-inabox).
 - **ITAR:** Azure Government tenant-binding handles data residency.
-- **CMMC 2.0 Level 2:** `governance/compliance/cmmc-2.0-l2.yaml` + `docs/compliance/cmmc-2.0-l2.md`.
-- **HIPAA:** `governance/compliance/hipaa-security-rule.yaml`. See `examples/tribal-health/` for a worked HHS/IHS implementation.
+- **CMMC 2.0 Level 2:** `csa_platform/csa_platform/governance/compliance/cmmc-2.0-l2.yaml` + `docs/compliance/cmmc-2.0-l2.md`.
+- **HIPAA:** `csa_platform/csa_platform/governance/compliance/hipaa-security-rule.yaml`. See `examples/tribal-health/` for a worked HHS/IHS implementation.
 - **Audit evidence:** the csa-inabox tamper-evident audit chain (CSA-0016) provides stronger evidence than the default CloudTrail-equivalent Azure Monitor path for FedRAMP High control families AU-* and AC-*.
 - **AWS-specific data to preserve during migration:** CloudTrail logs of data access; S3 bucket-policy history; Redshift access history. These frequently become evidence in post-migration audits; archive before decommission.
 
@@ -463,12 +463,12 @@ Mixed-cloud is also a rational endpoint. OneLake shortcuts + Delta Sharing make 
   - `docs/adr/0006-purview-over-atlas.md`
   - `docs/adr/0010-fabric-strategic-target.md`
 - **Compliance matrices:**
-  - `docs/compliance/nist-800-53-rev5.md` / `governance/compliance/nist-800-53-rev5.yaml`
-  - `docs/compliance/cmmc-2.0-l2.md` / `governance/compliance/cmmc-2.0-l2.yaml`
-  - `docs/compliance/hipaa-security-rule.md` / `governance/compliance/hipaa-security-rule.yaml`
+  - `docs/compliance/nist-800-53-rev5.md` / `csa_platform/csa_platform/governance/compliance/nist-800-53-rev5.yaml`
+  - `docs/compliance/cmmc-2.0-l2.md` / `csa_platform/csa_platform/governance/compliance/cmmc-2.0-l2.yaml`
+  - `docs/compliance/hipaa-security-rule.md` / `csa_platform/csa_platform/governance/compliance/hipaa-security-rule.yaml`
 - **Platform modules:**
   - `csa_platform/unity_catalog_pattern/` — OneLake + Unity Catalog + S3 shortcut pattern
-  - `csa_platform/purview_governance/` — Purview automation, classifications
+  - `csa_platform/csa_platform/governance/purview/` — Purview automation, classifications
   - `csa_platform/ai_integration/` — AI Foundry / Azure OpenAI primitives
   - `csa_platform/multi_synapse/` — multi-workspace pattern
   - `csa_platform/data_marketplace/` — data-product registry

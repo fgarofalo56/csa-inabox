@@ -25,7 +25,7 @@ a single catalog system that is operational on day one in Azure Government.
 - **Lineage coverage** for ADF activities, dbt models, Databricks Unity
   Catalog, and SQL Server/Synapse sources without writing custom bridges.
 - **RBAC integration** with Entra ID and the platform's existing persona
-  model (`governance/rbac/`).
+  model (`csa_platform/csa_platform/governance/rbac/`).
 - **Operational burden** — prefer managed PaaS so customers do not run
   Atlas + Solr + HBase themselves.
 
@@ -110,14 +110,14 @@ We will know this decision is right if:
 - Decision tree: n/a (catalog choice is cross-cutting; see architecture
   matrix)
 - Related code: `deploy/bicep/DMLZ/` (Purview provisioning),
-  `governance/compliance/nist-800-53-rev5.yaml` (control mappings
+  `csa_platform/csa_platform/governance/compliance/nist-800-53-rev5.yaml` (control mappings
   referencing Purview evidence), `docs/PLATFORM_SERVICES.md` (catalog
   narrative)
 - Framework controls: NIST 800-53 **CA-7** (continuous monitoring via
   Purview scan schedules), **AC-3** (catalog-level access enforcement),
   **AU-6** (audit record review via Purview lineage), **SI-12** (information
-  management and retention). See `governance/compliance/nist-800-53-rev5.yaml`.
+  management and retention). See `csa_platform/csa_platform/governance/compliance/nist-800-53-rev5.yaml`.
 - HIPAA Security Rule: §164.312(b) (audit controls) — satisfied by
   Purview lineage records for PHI-tagged tables. See
-  `governance/compliance/hipaa-security-rule.yaml`.
+  `csa_platform/csa_platform/governance/compliance/hipaa-security-rule.yaml`.
 - Discussion: CSA-0087
