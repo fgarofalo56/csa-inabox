@@ -5,7 +5,7 @@
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Architects
 
 > [!NOTE]
-> **Quick Summary**: Detailed guide to 10 platform services that deliver Fabric-parity capabilities on Azure PaaS — OneLake pattern, Data Activator, Direct Lake, Data Marketplace, Governance Framework, Multi-Synapse, Metadata Framework, AI Integration, Shared Services, and OSS alternatives. Intended for Azure Government (where Fabric is forecast, not GA) and for Commercial workloads that need a composable IaC stack as a stepping stone toward a future Fabric migration.
+> **Quick Summary**: Detailed guide to 10 platform services that deliver Fabric-parity capabilities on Azure PaaS — OneLake pattern, Data Activator, Direct Lake, Data Marketplace, Governance Framework, Multi-Synapse *(legacy — see CSA-0139)*, Metadata Framework, AI Integration, Shared Services, and OSS alternatives. Intended for Azure Government (where Fabric is forecast, not GA) and for Commercial workloads that need a composable IaC stack as a stepping stone toward a future Fabric migration.
 
 Platform services are the Fabric-parity capabilities that extend the base
 landing zones. Each service is independently deployable, has its own README
@@ -210,8 +210,9 @@ python scripts/purview/bootstrap_catalog.py \
 
 ## 6. 🔄 Multi-Synapse
 
-**Location:** `csa_platform/multi_synapse/`
+**Location:** `csa_platform/multi_synapse/` *(legacy / migration-only — see `csa_platform/multi_synapse/README.md` and `csa_platform/multi_synapse/MIGRATION.md`; CSA-0139 / AQ-0034)*
 **Fabric Equivalent:** Multi-workspace Synapse
+**Status:** Legacy. New work should target Databricks + Unity Catalog (ADR-0002) or Fabric where GA (ADR-0010). This module stays deployable for existing Synapse footprints only.
 
 Provides a shared Synapse Analytics environment with per-organization or
 per-domain isolation using workspace-level RBAC and network segmentation.
@@ -378,7 +379,7 @@ Deploy platform services in this recommended order:
 | 6 | AI Integration | Enrichment + RAG |
 | 7 | Data Activator | Alerting + automation |
 | 8 | Direct Lake | Power BI consumption |
-| 9 | Multi-Synapse | If multi-org needed |
+| 9 | Multi-Synapse | Legacy — only if migrating an existing Synapse footprint (CSA-0139) |
 | 10 | OSS Alternatives | If Gov gaps exist |
 
 ---

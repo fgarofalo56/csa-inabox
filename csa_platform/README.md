@@ -32,7 +32,7 @@ functionality using Azure PaaS services and open-source tooling.
 | [semantic-model](semantic_model/) | Direct Lake (conceptual) | Power BI semantic models over Databricks SQL warehouses (renamed from `direct_lake/` in CSA-0132) |
 | [data_marketplace](data_marketplace/) | Data Sharing / Marketplace | Self-service data product discovery, access request, quality tracking |
 | [governance](governance/) | Purview Integration | Automated classification, lineage, MDM, sensitivity labels |
-| [multi-synapse](multi_synapse/) | Multi-workspace | Shared Synapse environment with per-org isolation |
+| [multi-synapse](multi_synapse/) | Multi-workspace | Shared Synapse environment with per-org isolation (legacy / migration-only — see `csa_platform/multi_synapse/README.md`; CSA-0139) |
 | [metadata-framework](metadata_framework/) | Data Factory (metadata-driven) | Auto-generate pipelines from source registration metadata |
 | [ai_integration](ai_integration/) | Copilot / AI | RAG patterns, embeddings, model serving per domain |
 | [functions](functions/) | Shared Functions | Consolidated Azure Functions (validation, aiEnrichment, eventProcessing, secretRotation) |

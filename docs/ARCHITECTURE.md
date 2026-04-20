@@ -273,7 +273,7 @@ capabilities. Each component is independently deployable.
 | AI Integration | Copilot / AI | `csa_platform/ai_integration/` |
 | Shared Services | Shared Functions | `csa_platform/functions/` |
 | OSS Alternatives | N/A (Gov gaps) | `csa_platform/oss_alternatives/` |
-| Multi-Synapse | Multi-workspace | `csa_platform/multi_synapse/` |
+| Multi-Synapse | Multi-workspace | `csa_platform/multi_synapse/` (legacy — see `csa_platform/multi_synapse/README.md`; CSA-0139) |
 | Governance | Purview Integration | `csa_platform/csa_platform/governance/purview/` + top-level `csa_platform/governance/` |
 
 See [PLATFORM_SERVICES.md](PLATFORM_SERVICES.md) for detailed deployment guides.
