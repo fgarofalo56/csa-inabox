@@ -1,0 +1,57 @@
+# CSA-0137 example streaming contract bundle.
+#
+# This YAML is consumed by the CLI validator and by the pytest suite.
+# It describes a single IoT telemetry pipeline that runs end-to-end:
+# IoT Hub source -> ADLS bronze -> dbt silver view -> latency-governed gold.
+
+sources:
+  - name: iot_telemetry
+    source_type: iot_hub
+    connection:
+      namespace: csaiot-iothub
+      entity: telemetry
+      consumer_group: csa-stream
+      fully_qualified_namespace: csaiot-iothub.azure-devices.net
+    partition_key_path: "$.sensor_id"
+    schema_ref: "schemaregistry://csa/iot-telemetry/v1"
+    watermark_field: event_time
+    max_lateness_seconds: 300
+    expected_events_per_second: 500
+    throughput_units: 2
+    compliance_tags:
+      - fedramp-high
+      - iot
+
+bronze:
+  - contract_ref: iot_telemetry
+    storage_account: csabronze
+    container: iot
+    path_template: "bronze/{source}/year={yyyy}/month={mm}/day={dd}/hour={hh}/"
+    format: avro
+    capture_every_seconds: 300
+    capture_size_mb: 300
+
+silver:
+  - name: iot_telemetry_clean
+    upstream_bronze: iot_telemetry
+    dbt_model_ref: silver.iot_telemetry_clean
+    refresh_interval_seconds: 300
+    watermark_field: event_time
+    deduplication_keys:
+      - sensor_id
+      - event_time
+
+gold:
+  - name: iot_dashboard_feed
+    upstream_silver_refs:
+      - iot_telemetry_clean
+    query_spec: gold.iot_dashboard_feed
+    latency_slo:
+      p50_ms: 500
+      p95_ms: 1200
+      p99_ms: 2000
+      sla_threshold_ms: 2500
+      rolling_window_minutes: 5
+    consumers:
+      - powerbi-rt-dashboard
+      - ops-alerting

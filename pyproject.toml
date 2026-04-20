@@ -141,6 +141,23 @@ copilot = [
     "azure-identity>=1.17.0,<2.0.0",
     "azure-search-documents>=11.4.0,<12.0.0",
 ]
+streaming = [
+    # CSA-0137 streaming spine — unified streaming contract (source,
+    # bronze, silver MV, gold+SLO, dbt integration).  Pydantic + PyYAML
+    # are already present on the ``platform`` extra but are re-declared
+    # here so ``pip install -e .[streaming]`` is self-contained.
+    "pydantic>=2.7.0,<3.0.0",
+    "pydantic-settings>=2.3.0,<3.0.0",
+    "PyYAML>=6.0,<7.0",
+    "structlog>=24.1.0,<26.0.0",
+    # Azure async SDKs.  azure-eventhub drives the EventHubSource,
+    # IoTHubSource, and KafkaSource adapters (the last via the Event
+    # Hubs Kafka-compatible endpoint).  azure-storage-blob powers the
+    # BronzeWriter; azure-identity supplies DefaultAzureCredential.
+    "azure-eventhub>=5.11.0,<6.0.0",
+    "azure-storage-blob>=12.20.0,<13.0.0",
+    "azure-identity>=1.17.0,<2.0.0",
+]
 
 [tool.setuptools]
 # Installable Python packages.  csa_platform ships the reusable platform
