@@ -16,9 +16,9 @@ cloud/region.
 ## 📑 Table of Contents
 
 - [🏗️ Services Overview](#️-services-overview)
-- [1. 🗄️ OneLake Pattern](#1-️-onelake_pattern)
+- [1. 🗄️ Unity Catalog Pattern](#1-️-unity-catalog-pattern)
 - [2. ⚡ Data Activator](#2--data_activator)
-- [3. 📊 Direct Lake](#3--direct_lake)
+- [3. 📊 Semantic Model](#3--semantic-model)
 - [4. 🛒 Data Marketplace](#4--data-marketplace)
 - [5. 📋 Governance Framework](#5--governance-framework)
 - [6. 🔄 Multi-Synapse](#6--multi_synapse)
@@ -36,7 +36,7 @@ cloud/region.
 ```mermaid
 graph LR
     subgraph "Core Services"
-        OL[OneLake Pattern]
+        OL[Unity Catalog Pattern]
         MF[Metadata Framework]
         SS[Shared Services]
     end
@@ -68,14 +68,14 @@ graph LR
 
 ---
 
-## 1. 🗄️ OneLake Pattern
+## 1. 🗄️ Unity Catalog Pattern
 
-**Location:** `csa_platform/onelake_pattern/`
-**Fabric Equivalent:** OneLake
+**Location:** `csa_platform/unity_catalog_pattern/` *(renamed from `onelake_pattern/` in CSA-0132; this pattern implements Databricks Unity Catalog with ADLS Gen2, not Microsoft OneLake.)*
+**Fabric Equivalent (conceptual):** OneLake — a future `csa_platform/fabric/` module (CSA-0129) will own the real OneLake integration.
 
-Implements a unified data lake using ADLS Gen2 with Unity Catalog providing the
-shared metadata layer. All domain data lives in a single logical lake with
-physical separation via containers and folders.
+Implements a unified data lake using ADLS Gen2 with Databricks Unity Catalog
+providing the shared metadata layer. All domain data lives in a single logical
+lake with physical separation via containers and folders.
 
 **What it does:**
 - Provides a standardized storage layout (Bronze / Silver / Gold) per domain
@@ -87,8 +87,8 @@ physical separation via containers and folders.
 ```bash
 az deployment group create \
   --resource-group rg-datalake \
-  --template-file csa_platform/onelake_pattern/deploy/onelake.bicep \
-  --parameters csa_platform/onelake_pattern/deploy/params.json
+  --template-file csa_platform/unity_catalog_pattern/deploy/onelake.bicep \
+  --parameters csa_platform/unity_catalog_pattern/deploy/params.json
 ```
 
 **Dependencies:** ADLS Gen2 (from DLZ deployment), Databricks workspace
@@ -121,10 +121,10 @@ az deployment group create \
 
 ---
 
-## 3. 📊 Direct Lake
+## 3. 📊 Semantic Model
 
-**Location:** `csa_platform/direct_lake/`
-**Fabric Equivalent:** Direct Lake mode in Power BI
+**Location:** `csa_platform/semantic_model/` *(renamed from `direct_lake/` in CSA-0132; this pattern implements Power BI semantic models over Databricks SQL, not Microsoft Fabric Direct Lake.)*
+**Fabric Equivalent (conceptual):** Direct Lake mode in Power BI — a future `csa_platform/fabric/` module (CSA-0129) will own the real Direct Lake integration.
 
 Enables Power BI to query Delta Lake files directly from ADLS Gen2 via
 Databricks SQL endpoints, eliminating the need to import data into Power BI

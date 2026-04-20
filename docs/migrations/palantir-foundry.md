@@ -37,18 +37,18 @@ This is the load-bearing table. Every row cites a real file path in the repo whe
 
 | Foundry capability | csa-inabox equivalent | Mapping notes | Effort | Evidence (repo path) |
 |---|---|---|---|---|
-| **Ontology** (object types, link types, properties) | Purview Unified Catalog business glossary + classifications + dbt semantic layer | Foundry's object types become Purview glossary terms; link types become foreign keys in dbt + relationships in the Power BI semantic model | L | `csa_platform/purview_governance/purview_automation.py`, `csa_platform/purview_governance/classifications/`, `domains/shared/dbt/models/`, `csa_platform/direct_lake/semantic_model_template.yaml` |
+| **Ontology** (object types, link types, properties) | Purview Unified Catalog business glossary + classifications + dbt semantic layer | Foundry's object types become Purview glossary terms; link types become foreign keys in dbt + relationships in the Power BI semantic model | L | `csa_platform/purview_governance/purview_automation.py`, `csa_platform/purview_governance/classifications/`, `domains/shared/dbt/models/`, `csa_platform/semantic_model/semantic_model_template.yaml` |
 | **Pipeline Builder** (visual ETL) | Azure Data Factory + Fabric Data Factory + dbt | ADF replaces visual pipeline builder; dbt replaces transform expressions; Fabric Data Factory brings the visual-pipeline UX to Fabric | L | `domains/shared/pipelines/adf/`, `domains/shared/dbt/dbt_project.yml`, `domains/shared/dbt/models/` |
-| **Code Repositories** (Python / PySpark transforms) | Fabric notebooks + Databricks notebooks + Git-integrated Azure DevOps / GitHub | Transforms move to PySpark notebooks with Git backing; CI/CD via existing workflows | M | `domains/shared/notebooks/`, `.github/workflows/deploy.yml`, `.github/workflows/deploy-dbt.yml`, `csa_platform/onelake_pattern/` |
-| **Contour** (point-and-click analysis) | Power BI + Power BI Copilot + Fabric Data Agent + Direct Lake on OneLake | Contour board → Power BI report with Direct Lake semantic model; no-copy analytics pattern preserved | M | `csa_platform/direct_lake/`, `csa_platform/direct_lake/semantic_model_template.yaml`, `csa_platform/direct_lake/scripts/` |
+| **Code Repositories** (Python / PySpark transforms) | Fabric notebooks + Databricks notebooks + Git-integrated Azure DevOps / GitHub | Transforms move to PySpark notebooks with Git backing; CI/CD via existing workflows | M | `domains/shared/notebooks/`, `.github/workflows/deploy.yml`, `.github/workflows/deploy-dbt.yml`, `csa_platform/unity_catalog_pattern/` |
+| **Contour** (point-and-click analysis) | Power BI + Power BI Copilot + Fabric Data Agent + Direct Lake on OneLake | Contour board → Power BI report with Direct Lake semantic model; no-copy analytics pattern preserved | M | `csa_platform/semantic_model/`, `csa_platform/semantic_model/semantic_model_template.yaml`, `csa_platform/semantic_model/scripts/` |
 | **Workshop** (operational analyst apps) | Power Apps + Power BI Embedded + Fabric Real-Time dashboards + custom React portal | Workshop modules map to Power Apps screens for form-driven workflows, Power BI for analytics, React portal for marketplace/discovery | L | `portal/powerapps/`, `portal/powerapps/flows/`, `portal/powerapps/logic-apps/`, `portal/react-webapp/src/` |
 | **Object Explorer** (ontology-aware search + drill) | Purview Unified Catalog + `portal/` marketplace data-product experience | Purview Data Catalog provides the search+lineage surface; the portal adds a data-product browse experience | M | `csa_platform/data_marketplace/`, `portal/react-webapp/src/pages/`, `csa_platform/purview_governance/` |
 | **Functions** (user-defined TypeScript/Python functions) | Azure Functions + Fabric user data functions + shared-services functions library | Foundry Functions move to Azure Functions (general purpose) or Fabric user data functions (analytic compute) | M | `domains/sharedServices/aiEnrichment/functions/`, `domains/sharedServices/eventProcessing/`, `csa_platform/shared_services/functions/` |
 | **AIP (AI Platform) — LLM chat + workflows** | Azure AI Foundry + Azure OpenAI + agentic enrichment patterns | AIP's agent-workflow + grounded-chat surface maps to Azure OpenAI models + AI Foundry orchestration; gap: no first-party chat UX yet (see CSA-0008) | L | `csa_platform/ai_integration/`, `csa_platform/ai_integration/enrichment/`, `csa_platform/ai_integration/rag/`, `csa_platform/ai_integration/model_serving/` |
 | **AIP Agents** (auto-executing agents) | **Gap** — CSA Copilot not shipped | Roadmap via CSA-0008. Primitives exist in `csa_platform/ai_integration/` but no agent loop, chat UX, skill catalog, or eval harness yet | XL | Gap — see CSA-0008. Target location: `apps/copilot/` or `csa_copilot/` |
 | **Actions** (code-extensible state-change rules) | Data Activator + Event Grid + Logic Apps + Azure Functions for extensibility | Rules-first logic lives in Data Activator; code-extensible actions escalate through Event Grid → Logic App or Azure Function | M | `csa_platform/data_activator/rules/`, `csa_platform/data_activator/actions/`, `csa_platform/data_activator/functions/` |
-| **Quiver** (natural-language analysis) | Power BI Copilot + Fabric Copilot + (future) CSA Copilot | Power BI Copilot ships NL-over-semantic-model today; deeper cross-ontology NL analysis lands with CSA Copilot | M | `csa_platform/direct_lake/` (semantic layer Copilot grounds on); Gap — see CSA-0008 |
-| **Fusion** (Excel live connection) | Excel live-connection to Power BI semantic model via Analyze in Excel | Native Microsoft capability, zero new work | XS | `csa_platform/direct_lake/semantic_model_template.yaml` (semantic model is the join point) |
+| **Quiver** (natural-language analysis) | Power BI Copilot + Fabric Copilot + (future) CSA Copilot | Power BI Copilot ships NL-over-semantic-model today; deeper cross-ontology NL analysis lands with CSA Copilot | M | `csa_platform/semantic_model/` (semantic layer Copilot grounds on); Gap — see CSA-0008 |
+| **Fusion** (Excel live connection) | Excel live-connection to Power BI semantic model via Analyze in Excel | Native Microsoft capability, zero new work | XS | `csa_platform/semantic_model/semantic_model_template.yaml` (semantic model is the join point) |
 | **Slate** (custom HTML forms) | Power Apps custom canvas apps + (low-code) Logic Apps | Slate's form-builder UX maps to Power Apps; more complex flows move to Logic Apps | S | `portal/powerapps/`, `portal/powerapps/logic-apps/` |
 | **Magritte** (connectors / agents for source systems) | Azure Data Factory integration runtime + self-hosted IR + Linked Services | ADF has 100+ connectors today; self-hosted IR handles on-prem / gov-edge scenarios | S | `domains/shared/pipelines/adf/`, `docs/SELF_HOSTED_IR.md`, `docs/ADF_SETUP.md` |
 | **Foundry Lineage** | Purview lineage + dbt DAG + ADF pipeline lineage | Purview auto-captures ADF + Fabric lineage; dbt emits lineage through `dbt docs` | M | `csa_platform/purview_governance/purview_automation.py`, `domains/shared/dbt/dbt_project.yml` |
@@ -247,7 +247,7 @@ Measures:
 - `Avg Time to Close (Days) = AVERAGEX(...)`
 - `Overdue High-Priority Cases = CALCULATE(..., DATEDIFF(dim_case[opened_at], TODAY(), DAY) > 30, dim_case[priority] IN {"high", "urgent"})`
 
-The semantic model is authored via `csa_platform/direct_lake/semantic_model_template.yaml` and deployed by `csa_platform/direct_lake/scripts/`.
+The semantic model is authored via `csa_platform/semantic_model/semantic_model_template.yaml` and deployed by `csa_platform/semantic_model/scripts/`.
 
 ### 4.5 Action migration — Foundry Action → Data Activator rule
 
@@ -476,11 +476,11 @@ There is no universal right answer. This playbook exists so the CIO can have the
   - `docs/SELF_HOSTED_IR.md`
 - **Platform modules most relevant to a Foundry migration:**
   - `csa_platform/purview_governance/` — ontology / catalog / classifications
-  - `csa_platform/direct_lake/` — Direct Lake semantic model for Power BI over OneLake
+  - `csa_platform/semantic_model/` — Direct Lake semantic model for Power BI over OneLake
   - `csa_platform/data_activator/` — Actions analogue
   - `csa_platform/data_marketplace/` — data-product registry for portal discovery
   - `csa_platform/ai_integration/` — AIP-style primitives today; CSA Copilot tomorrow
-  - `csa_platform/onelake_pattern/` — OneLake foundational pattern
+  - `csa_platform/unity_catalog_pattern/` — OneLake foundational pattern
   - `csa_platform/multi_synapse/` — multi-workspace Synapse pattern for large tenants
   - `csa_platform/shared_services/` — cross-domain functions, notebook utilities
 

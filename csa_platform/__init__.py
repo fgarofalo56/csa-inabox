@@ -6,10 +6,10 @@ CSA-in-a-Box:
     * ai_integration       — RAG, entity extraction, document classification
     * data_activator       — Event-driven alerting (Teams, PagerDuty, Email)
     * data_marketplace     — Data product discovery + access-request API
-    * direct_lake          — Power BI Direct Lake semantic models
+    * semantic_model       — Power BI semantic models over Databricks SQL
     * metadata_framework   — YAML-driven ADF pipeline auto-generation
     * multi_synapse        — Multi-workspace Synapse orchestration
-    * onelake_pattern      — OneLake + Unity Catalog metadata management
+    * unity_catalog_pattern — Databricks Unity Catalog + ADLS Gen2 metadata
     * oss_alternatives     — Helm charts for Gov-cloud OSS equivalents
     * purview_governance   — Purview classifications + data-sharing agreements
     * shared_services      — Shared Azure Functions (PII, quality, schema)

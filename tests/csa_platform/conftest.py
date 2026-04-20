@@ -37,9 +37,9 @@ _SUB_PACKAGES = [
     "data_activator",
     "metadata_framework",
     "shared_services",
-    "direct_lake",
+    "semantic_model",
     "multi_synapse",
-    "onelake_pattern",
+    "unity_catalog_pattern",
     "oss_alternatives",
 ]
 

@@ -64,7 +64,7 @@ class PlatformSettings(BaseSettings):
     AZURE_SEARCH_KEY: str = ""
 
     # ── Databricks ───────────────────────────────────────────────────────
-    # Used by: direct_lake/scripts/configure_sql_endpoint.py (via CLI args
+    # Used by: semantic_model/scripts/configure_sql_endpoint.py (via CLI args
     # today; will consume from settings after incremental migration).
     DATABRICKS_HOST: str = ""
     DATABRICKS_TOKEN: str = ""

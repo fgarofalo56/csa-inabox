@@ -202,4 +202,4 @@ All workspaces share a managed VNet with:
 - [Platform Components](../README.md) — Platform component index
 - [Platform Services](../../docs/PLATFORM_SERVICES.md) — Detailed platform service descriptions
 - [Architecture](../../docs/ARCHITECTURE.md) — Overall system architecture
-- [Direct Lake](../direct_lake/README.md) — Power BI direct access to Delta Lake
+- [Semantic Model](../semantic_model/README.md) — Power BI semantic models over Databricks SQL

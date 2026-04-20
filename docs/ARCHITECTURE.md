@@ -265,9 +265,9 @@ capabilities. Each component is independently deployable.
 
 | Service | Fabric Equivalent | Location |
 |---------|-------------------|----------|
-| OneLake Pattern | OneLake | `csa_platform/onelake_pattern/` |
+| Unity Catalog Pattern | OneLake (conceptual) | `csa_platform/unity_catalog_pattern/` |
 | Data Activator | Data Activator | `csa_platform/data_activator/` |
-| Direct Lake | Direct Lake mode | `csa_platform/direct_lake/` |
+| Semantic Model | Direct Lake (conceptual) | `csa_platform/semantic_model/` |
 | Data Marketplace | Data Sharing | `csa_platform/data_marketplace/` |
 | Metadata Framework | Metadata-driven ADF | `csa_platform/metadata_framework/` |
 | AI Integration | Copilot / AI | `csa_platform/ai_integration/` |
@@ -400,9 +400,9 @@ csa-inabox/
 │   └── ...                     # 5 more verticals
 │
 ├── csa_platform/                # Fabric-equivalent platform services
-│   ├── onelake_pattern/        # Unified data lake
+│   ├── unity_catalog_pattern/  # Databricks Unity Catalog + ADLS Gen2 data lake
 │   ├── data_activator/         # Event-driven alerting
-│   ├── direct_lake/            # Power BI Direct Lake
+│   ├── semantic_model/         # Power BI semantic models over Databricks SQL
 │   ├── data_marketplace/       # Data product marketplace
 │   ├── metadata_framework/     # Auto-pipeline generation
 │   ├── ai_integration/         # RAG, enrichment, model serving

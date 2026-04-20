@@ -1,8 +1,16 @@
 [← Platform Components](../README.md)
 
-# Direct Lake Pattern — Power BI + Delta Lake via Databricks SQL
+> **Note (2026-04-19):** This directory was renamed from `direct_lake/` to
+> `semantic_model/` per CSA-0132. It implements Power BI semantic models
+> over Databricks SQL warehouses, not Microsoft Fabric Direct Lake. The
+> `csa_platform/fabric/` namespace (see CSA-0129) is reserved for real
+> Direct Lake integration.
+> Renamed from `direct_lake/` in 2026-04 (CSA-0132) to reflect the actual
+> Databricks implementation; see ADR-0010.
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Platform Engineers
+# Semantic Model Pattern — Power BI Semantic Models over Databricks SQL
+
+> **Last Updated:** 2026-04-19 | **Status:** Active | **Audience:** Platform Engineers
 
 > [!NOTE]
 > **TL;DR:** Replicates Fabric's Direct Lake mode using Databricks SQL Warehouse + ADLS Gen2 Delta tables + Power BI DirectQuery. Includes setup guide, performance tuning, RLS configuration, and a feature comparison with native Fabric Direct Lake.
@@ -216,5 +224,5 @@ that maps to the CSA-in-a-Box gold layer tables.
 - [Platform Components](../README.md) — Platform component index
 - [Platform Services](../../docs/PLATFORM_SERVICES.md) — Detailed platform service descriptions
 - [Architecture](../../docs/ARCHITECTURE.md) — Overall system architecture
-- [OneLake Pattern](../onelake_pattern/README.md) — ADLS Gen2 unified data lake
+- [Unity Catalog Pattern](../unity_catalog_pattern/README.md) — ADLS Gen2 unified data lake
 - [Multi-Synapse](../multi_synapse/README.md) — Shared analytics environment

@@ -165,10 +165,10 @@ replicate Microsoft Fabric capabilities using Azure PaaS. These live in
 
 | Service | What It Does | Quick Start |
 |---------|-------------|-------------|
-| [OneLake Pattern](../csa_platform/onelake_pattern/) | Unified data lake with Unity Catalog metadata | Deploy after DLZ |
+| [Unity Catalog Pattern](../csa_platform/unity_catalog_pattern/) | Unified data lake with Databricks Unity Catalog metadata | Deploy after DLZ |
 | [Data Marketplace](../csa_platform/data_marketplace/) | Self-service data product discovery + access requests | `python csa_platform/data_marketplace/api/marketplace_api.py` |
 | [Data Activator](../csa_platform/data_activator/) | Event-driven alerts (Teams, email, PagerDuty) | Deploy Event Grid + Functions |
-| [Direct Lake](../csa_platform/direct_lake/) | Power BI over Delta Lake via Databricks SQL | Configure SQL endpoint |
+| [Semantic Model](../csa_platform/semantic_model/) | Power BI semantic models over Databricks SQL | Configure SQL endpoint |
 | [Metadata Framework](../csa_platform/metadata_framework/) | Auto-generate ADF pipelines from YAML | Register sources in YAML |
 | [AI Integration](../csa_platform/ai_integration/) | RAG, entity extraction, document classification | Configure Azure OpenAI |
 | [Shared Services](../csa_platform/shared_services/) | Reusable Functions (PII detection, schema validation) | `func azure functionapp publish` |

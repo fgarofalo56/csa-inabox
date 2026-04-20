@@ -27,9 +27,9 @@ functionality using Azure PaaS services and open-source tooling.
 
 | Component | Fabric Equivalent | Description |
 |---|---|---|
-| [onelake-pattern](onelake_pattern/) | OneLake | Unified data lake using ADLS Gen2 + Unity Catalog metadata |
+| [unity-catalog-pattern](unity_catalog_pattern/) | OneLake (conceptual) | Unified data lake using ADLS Gen2 + Databricks Unity Catalog (renamed from `onelake_pattern/` in CSA-0132) |
 | [data-activator](data_activator/) | Data Activator | Event-driven alerting with Logic Apps + Event Grid + Functions |
-| [direct-lake](direct_lake/) | Direct Lake | Power BI direct access to Delta Lake via Databricks SQL |
+| [semantic-model](semantic_model/) | Direct Lake (conceptual) | Power BI semantic models over Databricks SQL warehouses (renamed from `direct_lake/` in CSA-0132) |
 | [data_marketplace](data_marketplace/) | Data Sharing / Marketplace | Self-service data product discovery, access request, quality tracking |
 | [governance](governance/) | Purview Integration | Automated classification, lineage, MDM, sensitivity labels |
 | [multi-synapse](multi_synapse/) | Multi-workspace | Shared Synapse environment with per-org isolation |

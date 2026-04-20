@@ -1,8 +1,15 @@
 [← Platform Components](../README.md)
 
-# OneLake Pattern — ADLS Gen2 + Unity Catalog
+> **Note (2026-04-19):** This directory was renamed from `onelake_pattern/`
+> to `unity_catalog_pattern/` per CSA-0132. It implements Databricks Unity
+> Catalog with ADLS Gen2, not Microsoft OneLake. The `csa_platform/fabric/`
+> namespace (see CSA-0129) is reserved for the real OneLake integration.
+> Renamed from `onelake_pattern/` in 2026-04 (CSA-0132) to reflect the actual
+> Databricks implementation; see ADR-0010.
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Platform Engineers
+# Unity Catalog Pattern — ADLS Gen2 + Databricks Unity Catalog
+
+> **Last Updated:** 2026-04-19 | **Status:** Active | **Audience:** Platform Engineers
 
 > [!NOTE]
 > **TL;DR:** Replicates Microsoft Fabric's OneLake using ADLS Gen2 (with HNS) + Delta Lake + Databricks Unity Catalog. Provides unified data lake abstraction with Bronze/Silver/Gold medallion architecture, cross-domain "shortcut" patterns via managed identity, and a layered security model.
@@ -49,7 +56,7 @@ and metadata.
 | **Shortcut** | Linked Service / SAS URI / Managed Identity | Cross-domain or cross-account references |
 | **OneSecurity** | Unity Catalog + Azure RBAC + Purview | Layered access control |
 | **Data Activator** | Logic Apps + Event Grid + Functions | See `csa_platform/data_activator/` |
-| **Direct Lake** | Databricks SQL Endpoint → Power BI | See `csa_platform/direct_lake/` |
+| **Direct Lake** | Databricks SQL Endpoint → Power BI | See `csa_platform/semantic_model/` |
 | **Dataflow Gen2** | ADF Mapping Data Flows | Spark-based ETL |
 | **Notebook** | Databricks Notebooks | Interactive compute |
 
@@ -189,7 +196,7 @@ OneLake-equivalent storage account. Configuration is driven by
 # Deploy for a specific domain
 az deployment group create \
   --resource-group rg-sales-prod \
-  --template-file csa_platform/onelake_pattern/deploy/onelake-storage.bicep \
+  --template-file csa_platform/unity_catalog_pattern/deploy/onelake-storage.bicep \
   --parameters \
     domainName=sales \
     environment=prod \
@@ -232,7 +239,7 @@ to move to Azure Government:
 
 > [!TIP]
 > See also:
-> - `csa_platform/direct_lake/` — Power BI Direct Lake equivalent
+> - `csa_platform/semantic_model/` — Power BI semantic model equivalent
 > - `csa_platform/data_activator/` — Data Activator equivalent
 > - `csa_platform/data_marketplace/` — Data marketplace / product discovery
 
@@ -244,4 +251,4 @@ to move to Azure Government:
 - [Platform Services](../../docs/PLATFORM_SERVICES.md) — Detailed platform service descriptions
 - [Architecture](../../docs/ARCHITECTURE.md) — Overall system architecture
 - [Metadata Framework](../metadata_framework/README.md) — Metadata-driven pipeline generation
-- [Direct Lake](../direct_lake/README.md) — Power BI direct access to Delta Lake
+- [Semantic Model](../semantic_model/README.md) — Power BI semantic models over Databricks SQL
