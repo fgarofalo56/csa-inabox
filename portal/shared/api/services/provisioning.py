@@ -12,6 +12,19 @@ is registered:
 
 In demo mode the service returns realistic-looking mock results.  In
 production each step delegates to the appropriate Azure management SDK.
+
+Data-flow contract (CSA-0045 / AQ-0015)
+---------------------------------------
+The service is **pure** with respect to the ``SourceRecord`` argument:
+it never mutates it.  Instead, ``provision()`` returns a frozen
+:class:`ProvisioningResult` DTO carrying the new values the caller
+should apply to the record and persist.  This makes the data flow
+explicit and unidirectional, and prevents in-memory / DB divergence if
+the caller's persist step fails.
+
+Exceptions from the underlying Azure SDK calls are caught inside
+``provision()``, logged with full stack context via ``logger.exception``,
+and surfaced as an ``ERROR`` result — they are never silently swallowed.
 """
 
 from __future__ import annotations
@@ -21,42 +34,59 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from pydantic import BaseModel, ConfigDict
+
 from ..config import settings
 from ..models.source import SourceRecord, SourceStatus
 
 logger = logging.getLogger(__name__)
 
 
-class ProvisioningResult:
-    """Result of a provisioning run.
+class ProvisioningResult(BaseModel):
+    """Immutable result of a provisioning attempt for a source.
 
-    Carries the new field values that should be applied to the source record
-    by the caller.  The service itself never mutates the input SourceRecord.
+    The caller applies these values to the :class:`SourceRecord` and
+    persists the update; the service itself never mutates the caller's
+    state.  Populated by :meth:`ProvisioningService.provision` per
+    CSA-0045 / AQ-0015.
+
+    Attributes
+    ----------
+    success:
+        ``True`` when all provisioning steps completed; ``False`` for
+        both validation failures and infrastructure errors.  The
+        distinction is carried by ``new_status`` (unset on validation
+        failure, :attr:`SourceStatus.ERROR` on infrastructure error).
+    message:
+        Human-readable status message safe to surface to the caller.
+    deployment_id / pipeline_id / scan_id:
+        Identifiers returned by the underlying Azure SDK calls, or
+        ``None`` if the step did not run.
+    new_status:
+        The status the caller should apply to the record.  ``None``
+        means "leave status unchanged" (used for validation failures
+        where the service does not want to overwrite caller state).
+    updated_at:
+        Timestamp the caller should stamp on the record.  ``None``
+        means "leave ``updated_at`` unchanged".
+    details:
+        Structured context — on success the target configuration
+        snapshot, on error the exception class and message.
     """
 
-    def __init__(
-        self,
-        *,
-        success: bool,
-        message: str,
-        deployment_id: str | None = None,
-        pipeline_id: str | None = None,
-        scan_id: str | None = None,
-        new_status: SourceStatus | None = None,
-        updated_at: datetime | None = None,
-        details: dict[str, Any] | None = None,
-    ) -> None:
-        self.success = success
-        self.message = message
-        self.deployment_id = deployment_id
-        self.pipeline_id = pipeline_id
-        self.scan_id = scan_id
-        self.new_status = new_status
-        self.updated_at = updated_at
-        self.details = details or {}
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    success: bool
+    message: str
+    deployment_id: str | None = None
+    pipeline_id: str | None = None
+    scan_id: str | None = None
+    new_status: SourceStatus | None = None
+    updated_at: datetime | None = None
+    details: dict[str, Any] = {}
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize to a JSON-safe dict."""
+        """Serialize to a JSON-safe dict for API response bodies."""
         return {
             "success": self.success,
             "message": self.message,
@@ -188,16 +218,21 @@ class ProvisioningService:
             4. Trigger Purview scan.
 
         Returns:
-            :class:`ProvisioningResult` with status and the new field values
-            that the caller must apply to the record and persist.  This method
-            never mutates the *source* argument.
+            A frozen :class:`ProvisioningResult` with status and the new
+            field values that the caller must apply to the record and
+            persist.  This method **never** mutates the ``source``
+            argument.
 
-        Raises:
-            Exception: Any unexpected infrastructure error is re-raised with
-                additional context so the router can persist the error state
-                and return an appropriate HTTP response.
+        The method does not raise.  Infrastructure exceptions are caught,
+        logged with ``logger.exception`` (full stack preserved for
+        operators), and reported as a ``success=False`` result with
+        ``new_status=ERROR`` and structured ``details``.  This keeps the
+        data-flow contract unidirectional and prevents silent swallowing
+        of failures (CSA-0045 / AQ-0015).
         """
-        # 1. Validate
+        # 1. Validate — validation failures return without attempting any
+        #    infra work and leave ``new_status`` unset so the caller does
+        #    not blindly overwrite the record's existing status.
         errors = self.validate(source)
         if errors:
             return ProvisioningResult(
@@ -206,14 +241,33 @@ class ProvisioningService:
                 details={"errors": errors},
             )
 
-        # 2. Deploy infrastructure
-        deployment_id = await self.deploy_infrastructure(source)
-
-        # 3. Create ADF pipeline
-        pipeline_id = await self.create_adf_pipeline(source)
-
-        # 4. Trigger Purview scan
-        scan_id = await self.trigger_purview_scan(source)
+        # 2-4. Execute the infra steps.  Any exception is caught, logged
+        #      with full stack context, and returned as an ERROR result.
+        try:
+            deployment_id = await self.deploy_infrastructure(source)
+            pipeline_id = await self.create_adf_pipeline(source)
+            scan_id = await self.trigger_purview_scan(source)
+        except Exception as exc:
+            # ``logger.exception`` emits the stack trace automatically;
+            # never silently swallow (was the original CSA-0045 defect).
+            logger.exception(
+                "Provisioning failed for source %s",
+                source.id,
+                extra={
+                    "source_id": source.id,
+                    "domain": source.domain,
+                },
+            )
+            return ProvisioningResult(
+                success=False,
+                message="Provisioning failed due to an infrastructure error.",
+                new_status=SourceStatus.ERROR,
+                updated_at=datetime.now(timezone.utc),
+                details={
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc)[:512],
+                },
+            )
 
         now = datetime.now(timezone.utc)
         return ProvisioningResult(

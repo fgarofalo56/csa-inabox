@@ -453,70 +453,21 @@ async def provision_source(
     scan.  Non-admin users may only provision sources within their own
     domain.
 
-    The provisioning service returns a :class:`ProvisioningResult` with
-    the new field values; this handler applies them to the record and
-    persists the update so the service never mutates the input directly.
+    The provisioning service returns an immutable
+    :class:`ProvisioningResult` (CSA-0045 / AQ-0015).  This handler
+    applies the result fields to the record and persists the update so
+    the service never mutates the input directly.  The service does not
+    raise — infrastructure errors surface as ``success=False`` results
+    with ``new_status=ERROR`` (already logged with stack context by the
+    service).
     """
     source = _load_source_with_domain_check(source_id, user)
 
-    try:
-        result = await provisioning_service.provision(source)
-    except Exception as exc:
-        # Unexpected infrastructure error — persist error state and re-raise
-        # as an HTTP 502 so the caller gets a meaningful response.
-        logger.exception("Provisioning failed for source %s", source_id)
-        _sources_store.update(source_id, {
-            "status": SourceStatus.ERROR.value,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        })
-        # Tamper-evident audit sink — record the failed provisioning
-        # attempt so the audit trail is complete even on error (CSA-0016).
-        audit_logger.emit(
-            audit_event_from_request(
-                request=request,
-                user=user,
-                action="source.provision",
-                resource={
-                    "type": "source",
-                    "id": source_id,
-                    "domain": source.domain,
-                    "classification": source.classification.value
-                    if source.classification
-                    else None,
-                },
-                outcome="error",
-                reason=f"infrastructure_error: {exc!s}"[:256],
-            )
-        )
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Provisioning failed due to an infrastructure error. Check server logs.",
-        ) from exc
+    result = await provisioning_service.provision(source)
 
-    if not result.success:
-        audit_logger.emit(
-            audit_event_from_request(
-                request=request,
-                user=user,
-                action="source.provision",
-                resource={
-                    "type": "source",
-                    "id": source_id,
-                    "domain": source.domain,
-                    "classification": source.classification.value
-                    if source.classification
-                    else None,
-                },
-                outcome="denied",
-                reason=result.message or "provisioning_rejected",
-            )
-        )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=result.message,
-        )
-
-    # Apply the result fields returned by the service and persist.
+    # Apply whatever fields the service populated and persist.  Doing
+    # this for *every* outcome (including errors) keeps the persisted
+    # record aligned with what the service reported.
     update_payload: dict = {}
     if result.new_status is not None:
         update_payload["status"] = result.new_status.value
@@ -528,6 +479,42 @@ async def provision_source(
         update_payload["updated_at"] = result.updated_at.isoformat()
     if update_payload:
         _sources_store.update(source_id, update_payload)
+
+    # Branch on the result to emit the correct audit outcome + HTTP
+    # response.  ``new_status == ERROR`` means infrastructure failure;
+    # any other ``success=False`` is a validation / eligibility denial.
+    if not result.success:
+        is_infra_error = result.new_status == SourceStatus.ERROR
+        outcome = "error" if is_infra_error else "denied"
+        reason_prefix = "infrastructure_error" if is_infra_error else "provisioning_rejected"
+        error_detail = result.details.get("error_message") if is_infra_error else result.message
+        reason = f"{reason_prefix}: {error_detail}"[:256] if error_detail else reason_prefix
+
+        # Tamper-evident audit sink (CSA-0016) — record the failed
+        # provisioning attempt so the audit trail is complete on error.
+        audit_logger.emit(
+            audit_event_from_request(
+                request=request,
+                user=user,
+                action="source.provision",
+                resource={
+                    "type": "source",
+                    "id": source_id,
+                    "domain": source.domain,
+                    "classification": source.classification.value
+                    if source.classification
+                    else None,
+                },
+                outcome=outcome,
+                reason=reason,
+            )
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY
+            if is_infra_error
+            else status.HTTP_400_BAD_REQUEST,
+            detail=result.message,
+        )
 
     # Tamper-evident audit sink (CSA-0016) — provisioning is a
     # high-impact state transition that deploys infrastructure.

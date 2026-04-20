@@ -4,7 +4,9 @@ Tests for the sources router — CRUD operations on data source registrations.
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 
 class TestListSources:
@@ -121,3 +123,193 @@ class TestUpdateSource:
         assert response.status_code == 200
         data = response.json()
         assert data["description"] == "Updated description"
+
+
+class TestProvisioningResultContract:
+    """ProvisioningResult is an immutable DTO (CSA-0045 / AQ-0015).
+
+    The service must return a frozen result that the caller applies to
+    the record; the service itself must never mutate the input.
+    """
+
+    def test_provisioning_result_is_frozen(self):
+        """Attempting to mutate a ProvisioningResult must raise."""
+        from portal.shared.api.models.source import SourceStatus
+        from portal.shared.api.services.provisioning import ProvisioningResult
+
+        result = ProvisioningResult(
+            success=True,
+            message="ok",
+            new_status=SourceStatus.PROVISIONING,
+        )
+        with pytest.raises(ValidationError):
+            result.success = False  # type: ignore[misc]
+
+    @pytest.mark.asyncio
+    async def test_provision_does_not_mutate_input_on_success(self):
+        """The service must not mutate the SourceRecord on success."""
+        from portal.shared.api.models.source import (
+            ConnectionConfig,
+            OwnerInfo,
+            SourceRecord,
+            SourceStatus,
+            SourceType,
+            TargetConfig,
+        )
+        from portal.shared.api.services.provisioning import provisioning_service
+
+        source = SourceRecord(
+            id="src-test-nomutate",
+            name="nomutate",
+            source_type=SourceType.AZURE_SQL,
+            domain="testing",
+            connection=ConnectionConfig(host="h"),
+            target=TargetConfig(),
+            owner=OwnerInfo(name="T", email="t@t.com", team="T"),
+            status=SourceStatus.APPROVED,
+        )
+        snapshot = source.model_dump()
+
+        result = await provisioning_service.provision(source)
+
+        # Service succeeded and returned a populated result ...
+        assert result.success is True
+        assert result.new_status == SourceStatus.PROVISIONING
+        assert result.pipeline_id is not None
+        assert result.scan_id is not None
+        # ... but the input record is untouched.
+        assert source.model_dump() == snapshot
+
+    @pytest.mark.asyncio
+    async def test_provision_validation_failure_does_not_raise(self):
+        """Ineligible status yields a non-success result without raising."""
+        from portal.shared.api.models.source import (
+            ConnectionConfig,
+            OwnerInfo,
+            SourceRecord,
+            SourceStatus,
+            SourceType,
+            TargetConfig,
+        )
+        from portal.shared.api.services.provisioning import provisioning_service
+
+        source = SourceRecord(
+            id="src-test-invalid",
+            name="invalid",
+            source_type=SourceType.AZURE_SQL,
+            domain="testing",
+            connection=ConnectionConfig(host="h"),
+            target=TargetConfig(),
+            owner=OwnerInfo(name="T", email="t@t.com", team="T"),
+            status=SourceStatus.ACTIVE,  # not eligible for provisioning
+        )
+
+        result = await provisioning_service.provision(source)
+
+        assert result.success is False
+        assert result.new_status is None  # don't overwrite caller status
+        assert "errors" in result.details
+
+    @pytest.mark.asyncio
+    async def test_provision_infrastructure_failure_returns_error_result(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Infra exceptions must be caught and surfaced as ERROR result.
+
+        The service must not re-raise; it must return
+        ``ProvisioningResult(success=False, new_status=ERROR, ...)`` with
+        structured error details and have logged the stack trace.
+        """
+        from portal.shared.api.models.source import (
+            ConnectionConfig,
+            OwnerInfo,
+            SourceRecord,
+            SourceStatus,
+            SourceType,
+            TargetConfig,
+        )
+        from portal.shared.api.services import provisioning as provisioning_module
+
+        async def _boom(self, source):  # pragma: no cover - trivial stub
+            raise RuntimeError("ADF unreachable")
+
+        monkeypatch.setattr(
+            provisioning_module.ProvisioningService,
+            "create_adf_pipeline",
+            _boom,
+        )
+
+        source = SourceRecord(
+            id="src-test-infraerr",
+            name="infraerr",
+            source_type=SourceType.AZURE_SQL,
+            domain="testing",
+            connection=ConnectionConfig(host="h"),
+            target=TargetConfig(),
+            owner=OwnerInfo(name="T", email="t@t.com", team="T"),
+            status=SourceStatus.APPROVED,
+        )
+        snapshot = source.model_dump()
+
+        result = await provisioning_module.provisioning_service.provision(source)
+
+        assert result.success is False
+        assert result.new_status == SourceStatus.ERROR
+        assert result.details["error_type"] == "RuntimeError"
+        assert "ADF unreachable" in result.details["error_message"]
+        # Input must still be untouched on failure.
+        assert source.model_dump() == snapshot
+
+
+class TestProvisionSourceRouter:
+    """POST /api/v1/sources/{source_id}/provision — router wiring."""
+
+    def test_provision_success_applies_result_and_persists(
+        self, client: TestClient
+    ):
+        """Router must apply ProvisioningResult fields and persist them."""
+        client.get("/api/v1/sources")  # seed
+        # src-003 is in APPROVED status — eligible for provisioning.
+        response = client.post("/api/v1/sources/src-003/provision")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is True
+        assert body["pipeline_id"] is not None
+        assert body["scan_id"] is not None
+
+        # The record must now reflect the service result.
+        fetched = client.get("/api/v1/sources/src-003").json()
+        assert fetched["status"] == "provisioning"
+        assert fetched["pipeline_id"] == body["pipeline_id"]
+        assert fetched["purview_scan_id"] == body["scan_id"]
+
+    def test_provision_validation_failure_returns_400(self, client: TestClient):
+        """Ineligible source (ACTIVE) must yield a 400 without mutating."""
+        client.get("/api/v1/sources")  # seed
+        # src-001 is ACTIVE — not eligible.
+        response = client.post("/api/v1/sources/src-001/provision")
+        assert response.status_code == 400
+
+    def test_provision_infrastructure_failure_returns_502(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Infra error from the service must surface as HTTP 502."""
+        from portal.shared.api.services import provisioning as provisioning_module
+
+        async def _boom(self, source):  # pragma: no cover - trivial stub
+            raise RuntimeError("Purview offline")
+
+        monkeypatch.setattr(
+            provisioning_module.ProvisioningService,
+            "trigger_purview_scan",
+            _boom,
+        )
+
+        client.get("/api/v1/sources")  # seed
+        response = client.post("/api/v1/sources/src-003/provision")
+        assert response.status_code == 502
+
+        # The record should have been marked ERROR by the router
+        # applying the service's ERROR result.
+        fetched = client.get("/api/v1/sources/src-003").json()
+        assert fetched["status"] == "error"
