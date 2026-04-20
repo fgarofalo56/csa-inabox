@@ -1,0 +1,22 @@
+{
+  "release-type": "python",
+  "packages": {
+    ".": {
+      "release-type": "python",
+      "package-name": "csa-inabox",
+      "include-v-in-tag": true,
+      "bump-minor-pre-major": true,
+      "bump-patch-for-minor-pre-major": false,
+      "changelog-sections": [
+        {"type": "feat", "section": "Features"},
+        {"type": "fix", "section": "Bug Fixes"},
+        {"type": "refactor", "section": "Code Refactoring"},
+        {"type": "docs", "section": "Documentation"},
+        {"type": "test", "section": "Tests"},
+        {"type": "ci", "section": "Continuous Integration"},
+        {"type": "perf", "section": "Performance Improvements"},
+        {"type": "chore", "section": "Miscellaneous", "hidden": false}
+      ]
+    }
+  }
+}
