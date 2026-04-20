@@ -5,6 +5,70 @@ end-of-session protocol in `.claude/rules/session-end.md`.
 
 ---
 
+## 2026-04-20 (cont.) — Phase-3 Wave 4.8: release pipeline + 2 architectural ADRs
+
+Sixth parallel round of the day. Release automation + 2 architectural
+ADRs (mesh federation, dbt canonical). Non-overlapping doc-focused
+scopes; no code-breaking changes.
+
+### Commits
+
+- `95acf13` feat(ci): CSA-0072 — release-please + v0.1.0 pipeline
+  (AQ-0022). `.release-please-config.json` + manifest +
+  release-please.yml workflow + RELEASE.md runbook + rewritten
+  CHANGELOG.md in Keep-a-Changelog format. v0.1.0 tag NOT created;
+  user cuts via release-please PR or manual `git tag`.
+- `4bb868b` docs(adr): CSA-0128 — ADR-0012 data-mesh federation
+  (AQ-0027). Contract-driven 4-stage pipeline. CODEOWNERS extended
+  for per-domain scoping (finance/inventory/dlz/spark added).
+  validate-contracts.yml already thorough — no changes needed.
+- `add9794` docs(adr): CSA-0130 — ADR-0013 dbt as canonical
+  transformation (AQ-0029). Deprecation banner on
+  bronze_to_silver_spark.py; 7 other notebooks correctly out-of-
+  scope for dbt; new notebooks README.
+
+### Findings status
+
+  * CSA-0072 → review (release pipeline shipped)
+  * CSA-0128 → review (federation ADR + CODEOWNERS scaffold)
+  * CSA-0130 → review (dbt canonical ADR + notebook deprecation)
+
+### Approval-queue progress
+
+Shipped 19/35 → **22/35**. Remaining:
+
+Theme A Copilot (XL): CSA-0008, CSA-0100, CSA-0102 — defer to
+  dedicated multi-session effort
+Theme C breaking (L): CSA-0020 MSAL BFF, CSA-0046 SQLite→Postgres
+Theme D operational: CSA-0089 iot-streaming dbt rebuild
+Theme E architectural: CSA-0134 git history purge (destructive —
+  team coordination required), CSA-0137 streaming spine
+
+### Scorecard
+
+| Metric | Before | After |
+|---|---|---|
+| Vision alignment | ~84% | ~86% |
+| HIGH findings open | 36 | 34 |
+| MEDIUM findings open | ~38 | ~37 |
+| Approval-queue items shipped | 19/35 | 22/35 |
+| Cross-session commits | ~62 | ~66 |
+| Findings fully resolved | 38 | 41 |
+| Findings partial | 1 | 1 |
+
+### Next session candidates
+
+- **Copilot MVP Phase 0-1** (CSA-0008) — highest strategic value,
+  but multi-session XL. Best tackled as its own dedicated effort.
+- **Remaining breaking changes** — CSA-0020 MSAL BFF, CSA-0046
+  Postgres (each L, one per session).
+- **CSA-0137 streaming spine** — L architectural.
+- **CSA-0134 git history purge** — destructive, requires team
+  coordination + all-devs-notified advance notice.
+- ~35 no-approval HIGH/MEDIUM for incremental execution.
+
+---
+
 ## 2026-04-20 (cont.) — Phase-3 Wave 4.7: 3 more approved-queue items shipped
 
 Fifth parallel round of the day. All three on non-overlapping scopes;
