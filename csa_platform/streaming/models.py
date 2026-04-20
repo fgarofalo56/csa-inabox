@@ -16,9 +16,15 @@ drive:
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+if TYPE_CHECKING:  # pragma: no cover
+    from csa_platform.streaming.schema_registry import (
+        SchemaRegistry,
+        ValidationIssue,
+    )
 
 # ---------------------------------------------------------------------------
 # Enumerations
@@ -32,11 +38,19 @@ class SourceType(str, Enum):
     Event Hubs Kafka-compatible endpoint — we do not ship a direct
     Apache Kafka client because CSA-in-a-Box targets Azure-native
     services first.
+
+    ``fabric_rti`` targets Microsoft Fabric Real-Time Intelligence
+    eventstreams.  The adapter (in :mod:`csa_platform.streaming.sources_fabric`)
+    is env-gated: instantiating ``FabricRTISource`` without
+    ``FABRIC_RTI_ENABLED=true`` raises :class:`FabricRTINotAvailableError`
+    so pre-GA tenants surface the gap loudly.  See ADR-0018 for the
+    gating rationale.
     """
 
     EVENT_HUB = "event_hub"
     IOT_HUB = "iot_hub"
     KAFKA = "kafka"
+    FABRIC_RTI = "fabric_rti"
 
 
 class BronzeFormat(str, Enum):
@@ -353,3 +367,98 @@ class StreamingContractBundle(BaseModel):
                 )
 
         return self
+
+    # ------------------------------------------------------------------
+    # Schema registry validation (CSA-0137 Gap 1)
+    # ------------------------------------------------------------------
+
+    async def validate_schemas(
+        self, registry: SchemaRegistry,
+    ) -> list[ValidationIssue]:
+        """Resolve every ``schema_ref`` against ``registry`` and report issues.
+
+        The method never raises: every problem (missing ref, registry
+        error, fingerprint conflict between two contracts sharing the
+        same schema name, version mismatches) is surfaced as a
+        :class:`ValidationIssue`.  The returned list is empty when every
+        ``schema_ref`` resolves cleanly and inter-source fingerprints
+        agree.
+        """
+        from csa_platform.streaming.schema_registry import (
+            ValidationIssue,
+            resolve_all,
+        )
+
+        pairs = [(s.name, s.schema_ref) for s in self.sources]
+        entries = await resolve_all(registry, pairs)
+
+        issues: list[ValidationIssue] = []
+        by_name: dict[str, list[tuple[str, str, str, str]]] = {}
+        #            schema_name -> [(source_name, ref, version, fingerprint)]
+
+        for entry in entries:
+            if entry.error is not None:
+                issues.append(
+                    ValidationIssue(
+                        ref=entry.ref,
+                        source_name=entry.source_name,
+                        severity="error",
+                        message=entry.error,
+                    ),
+                )
+                continue
+            schema = entry.schema
+            if schema is None:  # pragma: no cover - defensive
+                issues.append(
+                    ValidationIssue(
+                        ref=entry.ref,
+                        source_name=entry.source_name,
+                        severity="error",
+                        message="registry returned no schema and no error",
+                    ),
+                )
+                continue
+            by_name.setdefault(schema.name, []).append(
+                (entry.source_name, entry.ref, schema.version, schema.fingerprint),
+            )
+
+        # Cross-source consistency: when two sources reference the same
+        # schema name, their versions and fingerprints must agree.  A
+        # version mismatch is an error (bronze and silver disagree on
+        # payload shape); a fingerprint mismatch at the same version is
+        # also an error (registry drift between resolutions).
+        for name, group in by_name.items():
+            if len(group) < 2:
+                continue
+            versions = {g[2] for g in group}
+            fingerprints = {g[3] for g in group}
+            if len(versions) > 1:
+                for src, ref, ver, _ in group:
+                    issues.append(
+                        ValidationIssue(
+                            ref=ref,
+                            source_name=src,
+                            severity="error",
+                            message=(
+                                f"schema {name!r} has conflicting versions "
+                                f"across sources: {sorted(versions)}; this "
+                                f"source is at {ver!r}"
+                            ),
+                        ),
+                    )
+            elif len(fingerprints) > 1:
+                for src, ref, _, fp in group:
+                    issues.append(
+                        ValidationIssue(
+                            ref=ref,
+                            source_name=src,
+                            severity="error",
+                            message=(
+                                f"schema {name!r} fingerprint mismatch across "
+                                f"sources: {sorted(fingerprints)}; this "
+                                f"source fingerprint is {fp!r}"
+                            ),
+                        ),
+                    )
+
+        return issues

@@ -5,36 +5,54 @@ that require real-time ingestion, materialization, and SLO-managed
 consumption.  The module is intentionally thin and contract-first: all
 runtime behaviours are expressed as frozen Pydantic models + small async
 adapters over the Azure SDK, so the same contract can drive dbt sources,
-Stream Analytics jobs, ADX tables, and Fabric Real-Time Intelligence (when
-the latter reaches Government GA).
+Stream Analytics jobs, ADX tables, and Fabric Real-Time Intelligence (gated
+on ``FABRIC_RTI_ENABLED=true`` pre-GA — see ADR-0018).
 
 Public surface::
 
     from csa_platform.streaming import (
+        # Core contracts
         SourceContract,
         StreamingBronze,
         SilverMaterializedView,
         GoldStreamContract,
+        StreamingContractBundle,
         LatencySLO,
-        SLOMonitor,
         SourceType,
         BronzeFormat,
+        # SLO
+        SLOMonitor,
+        SLOBreach,
+        # Publishers (durable fan-out, Gap 2)
+        BreachPublisher,
+        NoopBreachPublisher,
+        LogBreachPublisher,
+        EventGridBreachPublisher,
+        CosmosBreachPublisher,
+        # Schema registry (Gap 1)
+        SchemaRegistry,
+        NoopSchemaRegistry,
+        ConfluentCompatRegistry,
+        AzureSchemaRegistry,
+        ResolvedSchema,
+        ValidationIssue,
+        # Fabric RTI (Gap 3 — pre-GA, env-gated)
+        FabricRTISource,
+        FabricRTINotAvailableError,
+        # dbt
         generate_sources_yaml,
     )
-
-The :mod:`csa_platform.streaming.sources` module exposes the
-:class:`SourceAdapter` protocol plus concrete adapters for Event Hub and
-IoT Hub; :mod:`csa_platform.streaming.bronze` writes raw events to
-ADLS Gen2 using a date-partitioned layout; :mod:`csa_platform.streaming.silver`
-and :mod:`csa_platform.streaming.gold` model materialized views and the
-latency-governed gold contract respectively.
-
-The CLI (``python -m csa_platform.streaming validate <path>``) validates
-YAML contract files without requiring Azure credentials — useful in CI.
 """
 
 from __future__ import annotations
 
+from csa_platform.streaming.breach_publisher import (
+    BreachPublisher,
+    CosmosBreachPublisher,
+    EventGridBreachPublisher,
+    LogBreachPublisher,
+    NoopBreachPublisher,
+)
 from csa_platform.streaming.dbt_integration import generate_sources_yaml
 from csa_platform.streaming.models import (
     BronzeFormat,
@@ -45,19 +63,50 @@ from csa_platform.streaming.models import (
     SourceContract,
     SourceType,
     StreamingBronze,
+    StreamingContractBundle,
+)
+from csa_platform.streaming.schema_registry import (
+    AzureSchemaRegistry,
+    ConfluentCompatRegistry,
+    NoopSchemaRegistry,
+    ResolvedSchema,
+    SchemaNotFoundError,
+    SchemaRegistry,
+    SchemaRegistryError,
+    ValidationIssue,
 )
 from csa_platform.streaming.slo import SLOBreach, SLOMonitor
+from csa_platform.streaming.sources_fabric import (
+    FabricRTINotAvailableError,
+    FabricRTISource,
+)
 
 __all__ = [
+    "AzureSchemaRegistry",
+    "BreachPublisher",
     "BronzeFormat",
+    "ConfluentCompatRegistry",
+    "CosmosBreachPublisher",
+    "EventGridBreachPublisher",
+    "FabricRTINotAvailableError",
+    "FabricRTISource",
     "GoldStreamContract",
     "LatencySLO",
+    "LogBreachPublisher",
+    "NoopBreachPublisher",
+    "NoopSchemaRegistry",
+    "ResolvedSchema",
     "SLOBreach",
     "SLOMonitor",
+    "SchemaNotFoundError",
+    "SchemaRegistry",
+    "SchemaRegistryError",
     "SilverMaterializedView",
     "SourceConnection",
     "SourceContract",
     "SourceType",
     "StreamingBronze",
+    "StreamingContractBundle",
+    "ValidationIssue",
     "generate_sources_yaml",
 ]

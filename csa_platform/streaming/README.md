@@ -154,31 +154,101 @@ Freshness thresholds are derived from `max_lateness_seconds` — warn at
 ## CLI usage
 
 ```bash
-# Validate a contract bundle YAML
+# Validate a contract bundle YAML (structure + cross-references).
 python -m csa_platform.streaming validate path/to/contract.yaml
+
+# Resolve every schema_ref against a registry.  The Noop registry
+# accepts any ref and is safe to run in CI without network access.
+python -m csa_platform.streaming validate-schemas path/to/contract.yaml --registry noop
+
+# Confluent-compatible HTTP registry (Event Hubs Schema Registry, classic
+# Confluent Schema Registry):
+python -m csa_platform.streaming validate-schemas path/to/contract.yaml \
+    --registry confluent --registry-url https://my-schema-registry.example
+
+# Azure Schema Registry (first-party SDK, DefaultAzureCredential):
+python -m csa_platform.streaming validate-schemas path/to/contract.yaml \
+    --registry azure --registry-url my-eh-ns.servicebus.windows.net
 ```
 
-Exit codes:
+Exit codes (both subcommands):
 
 | Code | Meaning |
 |---|---|
-| 0 | Parsed and cross-references resolved. |
-| 1 | YAML / Pydantic validation error (first error printed). |
-| 2 | Usage error (missing arg, file not found). |
+| 0 | Parsed and cross-references (or schemas) resolved. |
+| 1 | YAML / Pydantic validation error, or schema-registry issue (registry 5xx, 404, fingerprint mismatch, version conflict). |
+| 2 | Usage error (missing arg, file not found, required flag missing). |
 
 A sample contract is committed under
 `csa_platform/streaming/tests/fixtures/example_contract.yaml` and can
 be used as a template for new verticals.
 
-## Configuration env vars
+## Schema registry integration (Gap 1 closed)
 
-The module itself has no env-var configuration — contracts are always
-loaded from YAML by the caller.  Downstream runtime components (source
-adapters, bronze writer) resolve auth via `DefaultAzureCredential`
-which honours the standard Azure environment variables
-(`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, etc.) plus managed identity when
-running on Azure compute.  No `AZURE_*` variables are required to run
-the unit-test suite.
+`StreamingContractBundle.validate_schemas(registry)` resolves every
+`schema_ref` in `sources` against a `SchemaRegistry` and surfaces
+issues as a list of `ValidationIssue` objects.  Problems reported:
+
+* unresolvable refs (registry 404 / unknown name);
+* fingerprint (SHA-256) mismatches across sources that claim to share
+  a schema name — catches drift between bronze and silver that would
+  otherwise only be caught at runtime;
+* version conflicts across sources claiming the same schema name —
+  catches the "bronze is on v1, silver is on v2" foot-gun.
+
+Three registry adapters ship out of the box:
+
+| Adapter | Transport | When to use |
+|---|---|---|
+| `NoopSchemaRegistry` | none | Local dev, CI smoke tests, contract-structure-only validation. |
+| `ConfluentCompatRegistry` | httpx (REST) | Event Hubs Schema Registry via the Confluent-compatible endpoint, classic Confluent Schema Registry. 5xx retried via tenacity (max 3 attempts, exponential backoff); results cached in a TTL cache. |
+| `AzureSchemaRegistry` | `azure-schemaregistry` SDK | Azure Schema Registry with `DefaultAzureCredential`.  Ref shape: `<group>/<name>[#vN]`. |
+
+All Azure SDK imports are lazy so unit tests can exercise each
+adapter without touching the network or installing the Azure SDKs.
+
+## Durable SLO-breach fan-out (Gap 2 closed)
+
+`SLOMonitor` now accepts a list of `BreachPublisher` implementations
+and fans each breach out to every publisher in addition to the
+legacy `on_breach` callback.  Publisher failures are logged but
+never propagated — a misbehaving publisher cannot knock the monitor
+loop offline.
+
+Four publishers ship out of the box:
+
+| Publisher | Transport | Notes |
+|---|---|---|
+| `NoopBreachPublisher` | none | Test / explicit opt-out. |
+| `LogBreachPublisher` | structlog | Default when nothing else is configured. |
+| `EventGridBreachPublisher` | `azure.eventgrid.aio` | Emits a `csa.streaming.slo.breach` Event Grid event.  Accepts `AzureKeyCredential` or any token credential. |
+| `CosmosBreachPublisher` | `azure.cosmos.aio` | Upserts to a Cosmos DB container; `partition_key` defaults to the contract name. |
+
+Both Azure publishers retry transient failures via tenacity (max 3
+attempts, exponential backoff).
+
+### Deduplication window
+
+`SLOMonitor(dedupe_window_seconds=60)` (default 60s) coalesces
+repeated breaches for the same contract inside the window — the
+monitor emits one breach per window so downstream sinks are not
+flooded while a contract is in sustained breach.  Pass `0` to
+disable coalescing entirely.
+
+## Fabric Real-Time Intelligence adapter (Gap 3 — surface landed; runtime Gov-GA-gated)
+
+`FabricRTISource` implements the `SourceAdapter` protocol so code
+that targets Fabric compiles today.  Behaviour is controlled by
+environment variables:
+
+| Env var | Purpose | Default |
+|---|---|---|
+| `FABRIC_RTI_ENABLED` | Gate flag; adapter raises `FabricRTINotAvailableError` unless set to `true`. | unset |
+| `FABRIC_RTI_ENDPOINT` | Override the REST endpoint (useful for Gov-cloud preview tenants). | `https://{workspace}.fabric.microsoft.com/eventstreams/{entity}/events` |
+| `FABRIC_RTI_TOKEN` | Static bearer token (CI / smoke tests).  When unset, the adapter falls back to `DefaultAzureCredential`. | unset |
+
+See [ADR-0018](../../docs/adr/0018-fabric-rti-adapter.md) for the
+gating rationale.
 
 ## Testing
 
@@ -193,18 +263,42 @@ monkeypatched with in-memory fakes.
 
 ## Known gaps / deferred work
 
-* **Fabric Real-Time Intelligence**: no adapter yet.  Deferred until
-  Fabric RTI reaches Azure Government GA.  When it does, add a
-  `FabricRTISource` and `FabricEventstreamContract` alongside the
-  existing models (same protocol, different client).
-* **Vanilla Apache Kafka**: the `KafkaSource` currently uses the Event
-  Hubs Kafka-compatible endpoint (which is what CSA-in-a-Box deploys).
-  A dedicated `aiokafka`-based adapter can be dropped in once a
-  customer explicitly requires a non-EH Kafka cluster.
-* **Schema registry resolution**: `SourceContract.schema_ref` is a free
-  string today.  A future iteration can plug in Azure Schema Registry
-  lookup so that Avro framing is validated server-side at contract
-  registration time.
-* **SLOMonitor persistence**: the monitor is in-process only.  For
-  cross-pod SLO tracking the gold runtime should push breach events to
-  Application Insights / Log Analytics via `csa_platform.common.logging`.
+### Landed (previously on this list)
+
+* **Schema registry resolution (Gap 1)** — `SourceContract.schema_ref`
+  is validated against a `SchemaRegistry` via
+  `StreamingContractBundle.validate_schemas`.  Adapters: `Noop`,
+  `ConfluentCompat` (Event Hubs Schema Registry via the
+  Confluent-compatible endpoint), `AzureSchemaRegistry` (first-party
+  SDK).  Wired into the `validate-schemas` CLI subcommand.
+* **SLOMonitor persistence (Gap 2)** — `SLOMonitor` now accepts a list
+  of `BreachPublisher` implementations (`Noop`, `Log` via structlog,
+  `EventGrid`, `Cosmos`) with tenacity-backed retries and a
+  per-contract deduplication window.  Failures are isolated from the
+  monitor loop.
+* **Fabric Real-Time Intelligence adapter surface (Gap 3)** —
+  `FabricRTISource` ships today behind the `FABRIC_RTI_ENABLED` env
+  flag.  See [ADR-0018](../../docs/adr/0018-fabric-rti-adapter.md)
+  for the gating rationale.
+
+### Still deferred
+
+* **Fabric RTI Gov-GA runtime enablement** — the adapter surface is
+  live and tested, but **runtime ingestion remains gated until Fabric
+  RTI reaches Azure Government GA**.  Until then,
+  `FABRIC_RTI_ENABLED=true` will work in Commercial tenants only
+  (preview programme).  Tracking: ADR-0018 validation section.
+* **Vanilla Apache Kafka** — the `KafkaSource` currently uses the
+  Event Hubs Kafka-compatible endpoint (which is what CSA-in-a-Box
+  deploys).  A dedicated `aiokafka`-based adapter can be dropped in
+  once a customer explicitly requires a non-EH Kafka cluster.
+* **Deep wire-format validation** — `SchemaRegistry.validate(ref,
+  sample)` currently returns `True` when the ref resolves and the
+  sample is non-empty.  Deep Avro/Protobuf decoding against the
+  resolved schema body is format-specific work; callers that need
+  it can use `ResolvedSchema.body` directly.
+* **Breach publisher auto-discovery** — today `SLOMonitor` takes an
+  explicit publisher list.  A future enhancement can wire
+  `csa_platform.common.settings` to materialise publishers from
+  environment/config so the monitor bootstraps with Event Grid +
+  Cosmos in production and stays in-memory in dev.

@@ -161,6 +161,19 @@ streaming = [
     "azure-eventhub>=5.11.0,<6.0.0",
     "azure-storage-blob>=12.20.0,<13.0.0",
     "azure-identity>=1.17.0,<2.0.0",
+    # HTTP client — used by ConfluentCompatRegistry (schema registry)
+    # and FabricRTISource (Fabric RTI REST API, ADR-0018).
+    "httpx>=0.27.0,<1.0.0",
+    # Retry policies for schema registry lookups and durable breach
+    # publishers — exponential backoff, max 3 attempts by default.
+    "tenacity>=8.2.0,<10.0.0",
+    # Azure Schema Registry — Gap 1 lookup adapter.  Imported lazily so
+    # the streaming contract models remain usable without it in CI.
+    "azure-schemaregistry>=1.2.0,<2.0.0",
+    # Event Grid + Cosmos — durable SLO-breach publishers (Gap 2).
+    # Lazy-imported so contract validation alone does not pull them.
+    "azure-eventgrid>=4.17.0,<5.0.0",
+    "azure-cosmos>=4.5.0,<5.0.0",
 ]
 
 [tool.setuptools]

@@ -295,4 +295,11 @@ def build_source_adapter(contract: SourceContract) -> SourceAdapter:
         return IoTHubSource(contract)
     if contract.source_type is SourceType.KAFKA:
         return KafkaSource(contract)
+    if contract.source_type is SourceType.FABRIC_RTI:
+        # Imported lazily so the module remains importable when
+        # FABRIC_RTI_ENABLED is unset (the FabricRTISource constructor
+        # raises in that case).
+        from csa_platform.streaming.sources_fabric import FabricRTISource
+
+        return FabricRTISource(contract)
     raise ValueError(f"Unsupported source_type {contract.source_type!r}")  # pragma: no cover
