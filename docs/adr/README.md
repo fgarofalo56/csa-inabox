@@ -29,6 +29,7 @@
 | [0008](./0008-dbt-core-over-dbt-cloud.md) | dbt Core over dbt Cloud for transformations | accepted | 2026-04-19 | Open-source CLI keeps metadata inside the tenant boundary; no SaaS FedRAMP surface to clear. |
 | [0009](./0009-sqlite-to-postgres-portal-db.md) | SQLite (portal dev) → Postgres (portal prod) phased database strategy | accepted | 2026-04-19 | Zero-install dev loop; managed Postgres PaaS in Gov for production durability. |
 | [0010](./0010-fabric-strategic-target.md) | Microsoft Fabric as strategic target; current build as Fabric-parity on Azure PaaS | accepted | 2026-04-19 | Every primitive (Delta, Purview, dbt, Spark) maps forward into Fabric when Gov GA lands. |
+| [0011](./0011-multi-cloud-scope.md) | Multi-cloud scope: OneLake shortcuts + Purview scans only; defer federated compute | accepted | 2026-04-20 | Honest scope — ships governance story for S3/GCS/Snowflake/BigQuery/Redshift; defers cross-cloud compute. |
 
 ---
 
