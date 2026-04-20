@@ -165,6 +165,36 @@ class CopilotSettings(BaseSettings):
         description="File extensions considered documentation (case-insensitive).",
     )
 
+    # ---- Confirmation broker (CSA-0102) ------------------------------------
+    broker_signing_key: str = Field(
+        default="",
+        description=(
+            "HMAC signing key for confirmation tokens. REQUIRED when execute-"
+            "class tools are enabled; tests may set a fixed value. An empty "
+            "value is treated as 'broker disabled' by CopilotAgentLoop."
+        ),
+    )
+    broker_token_ttl_seconds: int = Field(
+        default=600,
+        ge=1,
+        le=86_400,
+        description="Validity window for issued confirmation tokens (seconds).",
+    )
+    broker_require_four_eyes: bool = Field(
+        default=False,
+        description=(
+            "If true, the approver_principal must differ from the "
+            "caller_principal when approving a ConfirmationRequest."
+        ),
+    )
+    broker_token_salt: str = Field(
+        default="csa.copilot.broker.v1",
+        description=(
+            "itsdangerous salt bound to the broker signing key. Change the "
+            "salt to invalidate every outstanding token without rotating the key."
+        ),
+    )
+
     # pydantic-settings configuration: env var prefix + immutability.  The
     # frozen config enforces the "configuration is a snapshot" contract
     # required by the Copilot agent.

@@ -12,15 +12,15 @@ indexer and the grounding-with-citations agent. Phases 2-5 remain
 
 Copilot is built as six phases, only two of which are implemented today.
 
-| Phase | Name                          | Status    |
-|-------|-------------------------------|-----------|
-| 0     | Corpus Indexer                | Shipped   |
-| 1     | Grounding + Citations         | Shipped   |
-| 2     | Decision-tree walker          | Deferred  |
-| 3     | Skill catalog                 | Deferred  |
-| 4     | Gated execute broker          | Deferred  |
-| 5     | Four surfaces (Web/CLI/MCP/API) | Deferred |
-| 6     | LLMOps / evals                | Deferred  |
+| Phase | Name                            | Status    |
+|-------|---------------------------------|-----------|
+| 0     | Corpus Indexer                  | Shipped   |
+| 1     | Grounding + Citations           | Shipped   |
+| 2     | Tool registry + agent loop      | Shipped (CSA-0100) |
+| 3     | Skill catalog                   | Deferred  |
+| 4     | Gated execute broker            | Shipped (CSA-0102) |
+| 5     | Four surfaces (Web/CLI/MCP/API) | Deferred  |
+| 6     | LLMOps / evals                  | Deferred  |
 
 ```
                     apps/copilot/
@@ -185,18 +185,122 @@ ruff check apps/copilot/
 mypy apps/copilot/ --ignore-missing-imports
 ```
 
+## Tool registry (CSA-0100)
+
+The Phase-2 tool catalogue lives in `apps/copilot/tools/`. A `ToolRegistry`
+is an append-only, name-keyed catalogue of typed `Tool` objects. Every
+tool declares a category (`read` or `execute`), typed Pydantic
+`input_model` / `output_model`, and an async `__call__`. Read tools
+run freely; execute tools are gated by the confirmation broker.
+
+Shipped read tools:
+
+- `search_corpus` — vector retrieval over the indexed corpus (reuses
+  the Phase-1 retriever + embedder).
+- `walk_decision_tree` — walks YAML trees under `decision-trees/`.
+- `read_repo_file` — bounded read under an allowlisted subset of the
+  repo (`docs/adr`, `docs/decisions`, `docs/migrations`, ...).
+- `validate_gate_dry_run` — invokes a `dev-loop/gates/validate-*.ps1`
+  script in `-WhatIf` mode with `COPILOT_DRY_RUN=1`. Skips cleanly
+  when PowerShell is not installed.
+
+Shipped execute tools (broker-gated):
+
+- `run_alembic_upgrade` — runs an injected alembic runner. Tests pass
+  a fake runner so no real database is touched.
+- `publish_draft_adr` — promotes `docs/adr/drafts/*.md` into
+  `docs/adr/`. All path handling is rooted under `repo_root`.
+
+List the catalogue from the CLI:
+
+```bash
+python -m apps.copilot.cli tools list
+```
+
+Build a registry programmatically:
+
+```python
+from apps.copilot.tools import ToolRegistry
+from apps.copilot.tools.readonly import ReadRepoFileTool
+
+registry = ToolRegistry()
+registry.register(ReadRepoFileTool(repo_root=Path.cwd()))
+print([s.name for s in registry.list_tools()])
+```
+
+## Confirmation broker (CSA-0102)
+
+Execute-class tools only run after the `ConfirmationBroker` has
+issued and verified an opaque signed token. Tokens are:
+
+- **Signed** — HMAC via `itsdangerous.URLSafeSerializer` under a salt.
+- **Scoped** — bound to `tool_name`, `scope`, and a SHA-256 hash of
+  the canonical JSON input. Replaying the token against a different
+  tool or payload fails verification.
+- **TTL-bound** — `broker_token_ttl_seconds` (default 600).
+- **Single-use** — once `verify` succeeds the token id is consumed.
+- **Four-eyes optional** — when `broker_require_four_eyes=true`, the
+  approver principal must differ from the caller principal.
+
+Every lifecycle transition (`request`, `approve`, `deny`, `used`,
+`rejected`, `expired`) emits a `BrokerAuditEvent` chained via SHA-256.
+The chain reuses the CSA-0016 hash primitive so tamper-evidence is
+identical to the platform audit logger. The broker writes to
+`csa.audit.broker` so SIEM routing stays independent of general
+platform audit traffic.
+
+```python
+from apps.copilot.broker import (
+    ConfirmationBroker, ConfirmationRequest,
+)
+from apps.copilot.broker.broker import compute_input_hash
+from apps.copilot.config import CopilotSettings
+
+settings = CopilotSettings(broker_signing_key="...")  # non-empty
+broker = ConfirmationBroker(settings)
+req = ConfirmationRequest(
+    request_id="req-1",
+    tool_name="publish_draft_adr",
+    caller_principal="alice@example.com",
+    scope="dev",
+    input_hash=compute_input_hash({"draft_name": "0042-demo.md"}),
+)
+await broker.request(req)
+token = await broker.approve(req.request_id, "bob@example.com")
+# Token is now ready to be handed to the tool.
+```
+
+New settings for the broker:
+
+| Variable                              | Default                | Purpose                                          |
+|---------------------------------------|------------------------|--------------------------------------------------|
+| `COPILOT_BROKER_SIGNING_KEY`          | (empty = broker off)   | HMAC signing key. Empty = no tokens can be minted. |
+| `COPILOT_BROKER_TOKEN_TTL_SECONDS`    | `600`                  | Token validity window.                            |
+| `COPILOT_BROKER_REQUIRE_FOUR_EYES`    | `false`                | Enforce approver != caller.                       |
+| `COPILOT_BROKER_TOKEN_SALT`           | `csa.copilot.broker.v1`| Salt bound to signing key; rotate to invalidate.  |
+
+## Agent loop (`CopilotAgentLoop`)
+
+`apps/copilot/agent_loop.py` ships the CSA-0100 plan/act surface.
+The loop takes an injectable `Planner` (whose `plan` coroutine
+returns a list of `PlannedStep` instructions), a `ToolRegistry`, and
+a `ConfirmationBroker`. Every run returns an `AgentTrace` recording
+every step, the tool output, the token id (if any), and the
+terminal status. Refusals and failures become trace steps — the
+trace is the single source of truth for what happened during the
+run.
+
+The CLI `ask --with-tools` flag surfaces the loop but requires a
+planner wiring that is deferred to Phase 3; today it returns exit
+code `3` with a clear message.
+
 ## Roadmap (deferred)
 
-These phases are intentionally **not** shipped in this release:
+These phases remain out of scope for this release:
 
-- **Phase 2 — Decision-tree walker.** Given a question like "Should I
-  use ADF or Synapse Pipelines?", walk the decision-tree definitions
-  under `decision-trees/` and surface the matching path.
 - **Phase 3 — Skill catalog.** Declarative descriptions of operational
   skills (e.g. "rotate a secret", "create a new data domain") keyed
   by doc references.
-- **Phase 4 — Gated execute broker.** Safely execute skills behind a
-  human-approval gate with full audit logging.
 - **Phase 5 — Four surfaces.** Web UI, persistent CLI daemon, MCP
   server, and a FastAPI route so other services can call the agent.
 - **Phase 6 — LLMOps.** Golden-answer regression suite, response
