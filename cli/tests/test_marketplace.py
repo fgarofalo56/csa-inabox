@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
-from portal.cli.__main__ import cli
-from portal.cli.client import APIError
+from cli.__main__ import cli
+from cli.client import APIError
 
 from .conftest import SAMPLE_PRODUCT, SAMPLE_QUALITY
 

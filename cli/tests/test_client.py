@@ -9,8 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from portal.cli.client import APIClient, APIError
-
+from cli.client import APIClient, APIError
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -81,27 +80,24 @@ class TestErrorHandling:
     def test_http_error_raises_api_error(self):
         client = APIClient("http://localhost:8000/api/v1")
         error = _make_http_error(404, json.dumps({"detail": "Not found"}))
-        with patch("urllib.request.urlopen", side_effect=error):
-            with pytest.raises(APIError) as exc_info:
-                client.get("/sources/missing")
+        with patch("urllib.request.urlopen", side_effect=error), pytest.raises(APIError) as exc_info:
+            client.get("/sources/missing")
         assert exc_info.value.status == 404
         assert "Not found" in exc_info.value.detail
 
     def test_url_error_raises_api_error_with_status_zero(self):
         client = APIClient("http://localhost:8000/api/v1")
         error = _make_url_error("[Errno 111] Connection refused")
-        with patch("urllib.request.urlopen", side_effect=error):
-            with pytest.raises(APIError) as exc_info:
-                client.get("/sources")
+        with patch("urllib.request.urlopen", side_effect=error), pytest.raises(APIError) as exc_info:
+            client.get("/sources")
         assert exc_info.value.status == 0
         assert "Connection error" in exc_info.value.detail
 
     def test_http_error_non_json_body(self):
         client = APIClient("http://localhost:8000/api/v1")
         error = _make_http_error(502, "Bad Gateway — non-JSON")
-        with patch("urllib.request.urlopen", side_effect=error):
-            with pytest.raises(APIError) as exc_info:
-                client.get("/sources")
+        with patch("urllib.request.urlopen", side_effect=error), pytest.raises(APIError) as exc_info:
+            client.get("/sources")
         assert exc_info.value.status == 502
         assert "Bad Gateway" in exc_info.value.detail
 

@@ -11,9 +11,7 @@ from unittest.mock import MagicMock
 import pytest
 from click.testing import CliRunner
 
-from portal.cli.__main__ import cli
-from portal.cli.client import APIClient
-
+from cli.client import APIClient
 
 # ── Fixtures ───────────────────────────────────────────────────────────────────
 
@@ -32,18 +30,18 @@ def mock_client(monkeypatch) -> MagicMock:
     ``mock_client.list_sources.return_value = [...]``.
 
     We use sys.modules to get the actual module objects rather than
-    ``import portal.cli.commands.sources``, which would resolve to the
+    ``import cli.commands.sources``, which would resolve to the
     re-exported Click Group of the same name from commands/__init__.py.
     """
     import sys
 
     # Ensure the modules are imported so they appear in sys.modules.
-    import portal.cli.commands  # noqa: F401  (triggers submodule imports)
+    import cli.commands  # noqa: F401  (triggers submodule imports)
 
-    _sources_mod = sys.modules["portal.cli.commands.sources"]
-    _pipelines_mod = sys.modules["portal.cli.commands.pipelines"]
-    _marketplace_mod = sys.modules["portal.cli.commands.marketplace"]
-    _stats_mod = sys.modules["portal.cli.commands.stats"]
+    _sources_mod = sys.modules["cli.commands.sources"]
+    _pipelines_mod = sys.modules["cli.commands.pipelines"]
+    _marketplace_mod = sys.modules["cli.commands.marketplace"]
+    _stats_mod = sys.modules["cli.commands.stats"]
 
     mock = MagicMock(spec=APIClient)
     monkeypatch.setattr(_sources_mod, "APIClient", lambda **_: mock)

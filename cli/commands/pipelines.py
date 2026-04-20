@@ -147,7 +147,7 @@ def trigger_pipeline(ctx: click.Context, pipeline_id: str, yes: bool) -> None:
     elif fmt == "yaml":
         click.echo(format_yaml(result))
     else:
-        click.echo(f"Pipeline run triggered.")
+        click.echo("Pipeline run triggered.")
         click.echo(f"Run ID:  {result.get('id')}")
         click.echo(f"Status:  {result.get('status')}")
         started = (result.get("started_at") or "")[:19].replace("T", " ")

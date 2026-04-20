@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
-from portal.cli.formatters import (
+from cli.formatters import (
     domains_table,
     format_json,
     format_yaml,
@@ -30,7 +28,6 @@ from .conftest import (
     SAMPLE_SOURCE,
     SAMPLE_STATS,
 )
-
 
 # ── JSON formatter ─────────────────────────────────────────────────────────────
 

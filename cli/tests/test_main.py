@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import pytest
-
-from portal.cli.__main__ import cli
+from cli.__main__ import cli
 
 
 class TestCLIEntryPoint:

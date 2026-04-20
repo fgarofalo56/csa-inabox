@@ -2,7 +2,7 @@
 
 Usage::
 
-    python -m portal.cli [OPTIONS] COMMAND [ARGS]...
+    python -m cli [OPTIONS] COMMAND [ARGS]...
 
 Environment variables
 ---------------------
@@ -14,12 +14,11 @@ CSA_FORMAT      Default output format: table | json | yaml
 from __future__ import annotations
 
 import os
-import sys
 
 import click
 
-from .commands import marketplace, pipelines, sources, stats
 from . import __version__
+from .commands import marketplace, pipelines, sources, stats
 
 
 @click.group()

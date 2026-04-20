@@ -185,7 +185,8 @@ graph TB
 │   ├── 📁 metadata_framework/    # Metadata management framework
 │   ├── 📁 purview_governance/    # Purview automation & governance
 │   └── 📁 functions/             # Consolidated Azure Functions (validation, aiEnrichment, eventProcessing, secretRotation)
-├── 📁 portal/                     # Web portal (FastAPI backend + frontend)
+├── 📁 portal/                     # Web portal (FastAPI backend + 3 UI frontends: React, AKS/K8s, PowerApps)
+├── 📁 cli/                        # Platform CLI (sibling of portal UIs; shares the portal/shared/api backend)
 ├── 📁 governance/                 # Data governance framework
 │   ├── 📁 common/                 # Shared logging, validation utilities
 │   ├── 📁 contracts/              # Data contracts & enforcement
