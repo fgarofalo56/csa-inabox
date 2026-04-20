@@ -175,7 +175,6 @@ graph TB
 │   ├── 📁 inventory/              # Inventory domain (turnover, reorder alerts, warehouses)
 │   ├── 📁 sales/                  # Sales domain (sales metrics, order analytics)
 │   ├── 📁 shared/                 # Shared domain (customers, orders, products, CLV)
-│   ├── 📁 sharedServices/         # Azure Functions (AI enrichment, event processing)
 │   ├── 📁 dlz/                    # Data Landing Zone examples
 │   └── 📁 spark/                  # Spark configurations & libraries
 ├── 📁 scripts/                    # Operations & management scripts
@@ -185,7 +184,7 @@ graph TB
 │   ├── 📁 data_marketplace/      # Data product marketplace
 │   ├── 📁 metadata_framework/    # Metadata management framework
 │   ├── 📁 purview_governance/    # Purview automation & governance
-│   └── 📁 shared_services/       # Shared platform services
+│   └── 📁 functions/             # Consolidated Azure Functions (validation, aiEnrichment, eventProcessing, secretRotation)
 ├── 📁 portal/                     # Web portal (FastAPI backend + frontend)
 ├── 📁 governance/                 # Data governance framework
 │   ├── 📁 common/                 # Shared logging, validation utilities

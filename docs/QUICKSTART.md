@@ -439,7 +439,7 @@ Deploy shared platform services that provide Fabric-equivalent capabilities.
 ### Step A: Deploy Shared Services (Azure Functions)
 
 ```bash
-cd csa_platform/shared_services/functions
+cd csa_platform/functions/validation
 
 # Install dependencies
 pip install -r requirements.txt

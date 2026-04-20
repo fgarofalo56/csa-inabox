@@ -1,11 +1,21 @@
 [← Platform Components](../README.md)
 
-# Shared Services — Reusable Function Library
+# Platform Functions — Consolidated Azure Functions namespace
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Platform Engineers
+> **Last Updated:** 2026-04-19 | **Status:** Active | **Audience:** Platform Engineers
+
+> **Note (2026-04-19):** This directory consolidates the former
+> `csa_platform/shared_services/` (v1-style Azure Functions app with
+> PII / schema / quality / Teams validators) and `domains/sharedServices/`
+> (v2 Python Functions: `aiEnrichment`, `eventProcessing`,
+> `secretRotation` + `common/` helpers) into a single canonical
+> namespace (CSA-0127 / AQ-0026). Library helpers live under `common/`;
+> each deployable function app is a sibling top-level subdirectory.
+> The former `csa_platform/shared_services/functions/` v1 app now lives
+> under `validation/`.
 
 > [!NOTE]
-> **TL;DR:** Reusable Azure Functions and Container Apps shared across all data landing zones — covering data validation, format conversion, AI enrichment, and notifications — all exposed via Azure API Management gateway.
+> **TL;DR:** Reusable Azure Functions shared across all data landing zones — covering data validation, AI enrichment, event processing, secret rotation, and notifications — all exposed via Azure API Management gateway.
 
 Reusable Azure Functions, Container Apps, and API patterns that can be
 shared across all data landing zones in the CSA-in-a-Box platform.
@@ -105,28 +115,23 @@ az deployment group create \
 ## 📁 Directory Structure
 
 ```text
-csa_platform/shared_services/
+csa_platform/functions/
 ├── README.md
-├── functions/
+├── common/                         # Shared helpers (build_health_response, build_error_response, MAX_BLOB_SIZE)
+├── validation/                     # v1 Functions app (PII / schema / quality / Teams alerts)
 │   ├── host.json
 │   ├── requirements.txt
-│   ├── validate_schema/
-│   ├── validate_quality/
 │   ├── detect_pii/
-│   ├── csv_to_delta/
-│   ├── json_to_parquet/
-│   ├── extract_entities/
-│   └── send_teams_alert/
-├── container-apps/
-│   ├── stateful-processor/    # Long-running data processing
-│   └── batch-orchestrator/    # Batch job orchestration
-├── apim/
-│   ├── policies/              # API Management policies
-│   └── products/              # API products (internal, external)
-└── deploy/
-    ├── functions.bicep
-    ├── apim.bicep
-    └── params.json
+│   ├── send_teams_alert/
+│   ├── validate_quality/
+│   ├── validate_schema/
+│   └── tests/
+├── aiEnrichment/                   # v2 Python Functions app
+│   └── functions/
+├── eventProcessing/                # v2 Python Functions app
+│   └── functions/
+└── secretRotation/                 # v2 Python Functions app
+    └── functions/
 ```
 
 ---

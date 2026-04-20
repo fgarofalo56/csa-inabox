@@ -32,7 +32,7 @@ from typing import Any
 
 import azure.functions as func
 
-from domains.sharedServices.common.function_helpers import (
+from csa_platform.functions.common.function_helpers import (
     build_error_response,
     build_health_response,
 )

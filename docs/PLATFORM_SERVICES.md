@@ -24,7 +24,7 @@ cloud/region.
 - [6. 🔄 Multi-Synapse](#6--multi_synapse)
 - [7. ⚙️ Metadata Framework](#7-️-metadata_framework)
 - [8. 🤖 AI Integration](#8--ai-integration)
-- [9. 🔧 Shared Services](#9--shared_services)
+- [9. 🔧 Shared Services](#9--shared-services)
 - [10. 🔓 OSS Alternatives](#10--oss_alternatives)
 - [📦 Service Dependency Map](#-service-dependency-map)
 - [⚙️ Configuration](#️-configuration)
@@ -303,7 +303,7 @@ export AZURE_OPENAI_DEPLOYMENT=gpt-4
 
 ## 9. 🔧 Shared Services
 
-**Location:** `csa_platform/shared_services/`
+**Location:** `csa_platform/functions/` (validation, aiEnrichment, eventProcessing, secretRotation)
 **Fabric Equivalent:** Shared utility functions
 
 A library of reusable Azure Functions for common data operations used across
@@ -320,7 +320,7 @@ pipelines and platform services.
 
 **Deploy:**
 ```bash
-cd csa_platform/shared_services/functions
+cd csa_platform/functions/validation
 
 # Deploy to Azure Functions
 func azure functionapp publish <function-app-name> --python
@@ -328,7 +328,7 @@ func azure functionapp publish <function-app-name> --python
 # Or deploy via Bicep
 az deployment group create \
   --resource-group rg-platform \
-  --template-file csa_platform/shared_services/deploy/functions.bicep
+  --template-file csa_platform/functions/deploy/functions.bicep
 ```
 
 **Dependencies:** Azure Functions runtime, Key Vault, Teams webhook URL

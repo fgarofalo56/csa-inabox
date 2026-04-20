@@ -83,7 +83,7 @@ Alert modules: `monitoring/alerts/main.bicep` (orchestrator), individual modules
 
 ### Working on Azure Functions?
 
-**Code:** `domains/sharedServices/*/functions/`
+**Code:** `csa_platform/functions/*/functions/` (aiEnrichment / eventProcessing / secretRotation) and `csa_platform/functions/validation/` (PII / schema / quality / Teams)
 
 ```bash
 pip install -e ".[functions]"    # Install Functions dependencies
@@ -141,7 +141,7 @@ Three function apps: `aiEnrichment/`, `eventProcessing/`, `secretRotation/`. Eac
 - [ ] Auth config: `portal/react-webapp/src/services/authConfig.ts`
 
 ### Azure Functions Developer
-**Focus areas:** `domains/sharedServices/*/functions/`
+**Focus areas:** `csa_platform/functions/*/functions/` and `csa_platform/functions/validation/`
 **Technologies needed:** Python, Azure Functions SDK, Azure SDKs
 **Getting started:**
 - [ ] Run `pip install -e ".[functions]"`
@@ -197,7 +197,7 @@ The naming styles present in the codebase are:
 | Style | Examples | Where |
 |-------|----------|-------|
 | `snake_case` | `ai_integration`, `data_marketplace`, `data_activator`, `metadata_framework` | Python packages under `csa_platform/governance/`, `csa_platform/` |
-| `camelCase` | `sharedServices` | Legacy domain directory |
+| `camelCase` | `aiEnrichment`, `eventProcessing`, `secretRotation` | Azure Functions app subdirectories under `csa_platform/functions/` |
 | `lowercase` | `finops`, `rbac`, `purview` | Short single-word names |
 
 **Guidelines for new directories:**

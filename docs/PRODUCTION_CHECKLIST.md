@@ -57,7 +57,7 @@ where available.
 
 ## 🔒 3. Security
 
-> See also: Secret rotation functions in `domains/sharedServices/secretRotation/`
+> See also: Secret rotation functions in `csa_platform/functions/secretRotation/`
 
 - [ ] All service-to-service auth uses managed identity (no shared keys or connection strings)
 - [ ] RBAC roles follow least-privilege principle (no Contributor at subscription level)

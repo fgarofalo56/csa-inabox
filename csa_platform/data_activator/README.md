@@ -161,4 +161,4 @@ rules:
 - [Platform Services](../../docs/PLATFORM_SERVICES.md) — Detailed platform service descriptions
 - [Architecture](../../docs/ARCHITECTURE.md) — Overall system architecture
 - [AI Integration](../ai_integration/README.md) — AI enrichment patterns
-- [Shared Services](../shared_services/README.md) — Reusable function library
+- [Platform Functions](../functions/README.md) — Consolidated Azure Functions library

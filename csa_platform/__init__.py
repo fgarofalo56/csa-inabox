@@ -12,7 +12,7 @@ CSA-in-a-Box:
     * unity_catalog_pattern — Databricks Unity Catalog + ADLS Gen2 metadata
     * oss_alternatives     — Helm charts for Gov-cloud OSS equivalents
     * governance           — Data contracts, DQ, compliance, Purview automation (CSA-0126)
-    * shared_services      — Shared Azure Functions (PII, quality, schema)
+    * functions            — Consolidated Azure Functions: validation (PII, quality, schema, Teams), aiEnrichment, eventProcessing, secretRotation + common helpers (CSA-0127)
 
 Each sub-package is independently importable and has its own tests under
 ``csa_platform/<module>/tests/`` plus (for the ones with coverage

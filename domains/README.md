@@ -27,7 +27,6 @@ architecture** (Bronze → Silver → Gold) using dbt on Delta Lake.
 | [sales/](sales/) | Revenue and sales analytics |
 | [inventory/](inventory/) | Inventory tracking and supply chain |
 | [shared/](shared/) | Cross-domain models, shared dbt macros, and data product contracts |
-| [sharedServices/](sharedServices/) | Azure Functions for AI enrichment, event processing, and secret rotation |
 | [dlz/](dlz/) | Data Landing Zone configuration and storage layout |
 | [spark/](spark/) | PySpark utilities and GeoAnalytics Engine integration |
 

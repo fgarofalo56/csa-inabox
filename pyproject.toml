@@ -41,7 +41,7 @@ functions = [
     "azure-functions>=1.18.0,<2.0.0",
     # Retry logic for transient Azure SDK failures.
     "tenacity>=8.2.0,<10.0.0",
-    # Azure SDK packages used by the shared_services functions.
+    # Azure SDK packages used by the csa_platform/functions Azure Functions apps.
     "azure-core>=1.28.0,<2.0.0",
     "azure-identity>=1.17.0,<2.0.0",
     "azure-keyvault-secrets>=4.7.0,<5.0.0",
@@ -285,9 +285,10 @@ source = [
     "csa_platform/governance/common",
     "csa_platform/governance/dataquality",
     "csa_platform/governance/contracts",
-    "domains/sharedServices/aiEnrichment/functions",
-    "domains/sharedServices/eventProcessing/functions",
-    "domains/sharedServices/secretRotation/functions",
+    "csa_platform/functions/aiEnrichment/functions",
+    "csa_platform/functions/eventProcessing/functions",
+    "csa_platform/functions/secretRotation/functions",
+    "csa_platform/functions/validation",
     # Platform and portal sources are measured here so coverage reports show
     # the true coverage gap.  They are excluded from the fail_under threshold
     # (currently 80%) until their test suites reach parity — do NOT raise

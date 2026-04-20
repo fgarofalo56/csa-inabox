@@ -271,7 +271,7 @@ capabilities. Each component is independently deployable.
 | Data Marketplace | Data Sharing | `csa_platform/data_marketplace/` |
 | Metadata Framework | Metadata-driven ADF | `csa_platform/metadata_framework/` |
 | AI Integration | Copilot / AI | `csa_platform/ai_integration/` |
-| Shared Services | Shared Functions | `csa_platform/shared_services/` |
+| Shared Services | Shared Functions | `csa_platform/functions/` |
 | OSS Alternatives | N/A (Gov gaps) | `csa_platform/oss_alternatives/` |
 | Multi-Synapse | Multi-workspace | `csa_platform/multi_synapse/` |
 | Governance | Purview Integration | `csa_platform/csa_platform/governance/purview/` + top-level `csa_platform/governance/` |
@@ -406,7 +406,7 @@ csa-inabox/
 │   ├── data_marketplace/       # Data product marketplace
 │   ├── metadata_framework/     # Auto-pipeline generation
 │   ├── ai_integration/         # RAG, enrichment, model serving
-│   ├── shared_services/        # Reusable Azure Functions
+│   ├── functions/              # Consolidated Azure Functions (validation, aiEnrichment, eventProcessing, secretRotation)
 │   └── oss_alternatives/       # OSS for Gov gaps
 │
 ├── portal/                     # Data onboarding portal (3 frontends)

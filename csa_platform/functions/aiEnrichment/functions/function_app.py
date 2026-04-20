@@ -34,7 +34,7 @@ import azure.functions as func
 from azure.core.exceptions import HttpResponseError, ServiceRequestError
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
-from domains.sharedServices.common.function_helpers import (
+from csa_platform.functions.common.function_helpers import (
     MAX_BLOB_SIZE,
     build_error_response,
     build_health_response,

@@ -248,7 +248,7 @@ pytest csa_platform/governance/tests/ -v
 ## 📦 Deployment
 
 1. **CI/CD pipeline steps** — contract validation + dbt test drift checks on every PR (see `.github/workflows/test.yml`).
-2. **Scheduled Azure Functions** — classification sync and lineage push (see `domains/sharedServices/`).
+2. **Scheduled Azure Functions** — classification sync and lineage push (see `csa_platform/functions/`).
 3. **CLI tools** — ad-hoc glossary imports and classification rule updates.
 
 ```bash
@@ -283,7 +283,7 @@ namespace to import from.
 - [Platform Services](../../docs/PLATFORM_SERVICES.md) — Detailed platform service descriptions
 - [Architecture](../../docs/ARCHITECTURE.md) — Overall system architecture
 - [Data Marketplace](../data_marketplace/README.md) — Data product discovery and access
-- [Shared Services](../shared_services/README.md) — Reusable function library
+- [Platform Functions](../functions/README.md) — Consolidated Azure Functions library
 - [Log Schema](../../docs/LOG_SCHEMA.md) — Structured logging format
 - [Compliance Overview](compliance/compliance-overview.md)
 - [Repo Split Plan](../../REPO_SPLIT.md)

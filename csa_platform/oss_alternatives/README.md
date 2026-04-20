@@ -133,4 +133,4 @@ All open-source alternatives integrate with the core CSA platform via:
 - [Platform Services](../../docs/PLATFORM_SERVICES.md) — Detailed platform service descriptions
 - [Architecture](../../docs/ARCHITECTURE.md) — Overall system architecture
 - [Governance](../governance/README.md) — Purview automation and classification
-- [Shared Services](../shared_services/README.md) — Reusable function library
+- [Platform Functions](../functions/README.md) — Consolidated Azure Functions library

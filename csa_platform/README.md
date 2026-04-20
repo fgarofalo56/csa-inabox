@@ -35,7 +35,7 @@ functionality using Azure PaaS services and open-source tooling.
 | [multi-synapse](multi_synapse/) | Multi-workspace | Shared Synapse environment with per-org isolation |
 | [metadata-framework](metadata_framework/) | Data Factory (metadata-driven) | Auto-generate pipelines from source registration metadata |
 | [ai_integration](ai_integration/) | Copilot / AI | RAG patterns, embeddings, model serving per domain |
-| [shared-services](shared_services/) | Shared Functions | Reusable Azure Function library for data operations |
+| [functions](functions/) | Shared Functions | Consolidated Azure Functions (validation, aiEnrichment, eventProcessing, secretRotation) |
 | [oss-alternatives](oss_alternatives/) | N/A (Gov gaps) | Open-source alternatives for Gov-unavailable services |
 
 ---

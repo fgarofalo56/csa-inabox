@@ -171,7 +171,7 @@ replicate Microsoft Fabric capabilities using Azure PaaS. These live in
 | [Semantic Model](../csa_platform/semantic_model/) | Power BI semantic models over Databricks SQL | Configure SQL endpoint |
 | [Metadata Framework](../csa_platform/metadata_framework/) | Auto-generate ADF pipelines from YAML | Register sources in YAML |
 | [AI Integration](../csa_platform/ai_integration/) | RAG, entity extraction, document classification | Configure Azure OpenAI |
-| [Shared Services](../csa_platform/shared_services/) | Reusable Functions (PII detection, schema validation) | `func azure functionapp publish` |
+| [Platform Functions](../csa_platform/functions/) | Consolidated Azure Functions (validation, AI enrichment, event processing, secret rotation) | `func azure functionapp publish` |
 | [Governance](../csa_platform/csa_platform/governance/purview/) + [top-level](../governance/) | Purview classification, lineage, sensitivity labels | Bootstrap Purview catalog |
 | [OSS Alternatives](../csa_platform/oss_alternatives/) | Open-source replacements for Gov gaps | Helm charts on AKS |
 

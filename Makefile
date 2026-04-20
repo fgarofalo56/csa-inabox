@@ -33,9 +33,9 @@ lint-fix: ## Auto-fix lint issues
 
 typecheck: ## Run strict mypy on governance, tests, and all three Function apps
 	mypy
-	mypy domains/sharedServices/aiEnrichment/functions/function_app.py
-	mypy domains/sharedServices/eventProcessing/functions/function_app.py
-	mypy domains/sharedServices/secretRotation/functions/function_app.py
+	mypy csa_platform/functions/aiEnrichment/functions/function_app.py
+	mypy csa_platform/functions/eventProcessing/functions/function_app.py
+	mypy csa_platform/functions/secretRotation/functions/function_app.py
 	@echo "mypy strict passed"
 
 typecheck-platform: ## Run mypy on platform modules (progressive strictness)

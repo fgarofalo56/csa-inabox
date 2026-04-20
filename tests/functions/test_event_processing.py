@@ -41,7 +41,7 @@ def _reset_logging() -> Iterator[None]:
 @pytest.fixture
 def function_app() -> types.ModuleType:
     """Import (or reimport) the event processing function_app module."""
-    func_dir = "domains/sharedServices/eventProcessing/functions"
+    func_dir = "csa_platform/functions/eventProcessing/functions"
     if func_dir not in sys.path:
         sys.path.insert(0, func_dir)
     if "function_app" in sys.modules:

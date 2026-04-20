@@ -75,9 +75,9 @@ jobs:
           # are checked with explicit invocations (one per app) to avoid
           # module-path collisions.
           mypy
-          mypy domains/sharedServices/aiEnrichment/functions/function_app.py
-          mypy domains/sharedServices/eventProcessing/functions/function_app.py
-          mypy domains/sharedServices/secretRotation/functions/function_app.py
+          mypy csa_platform/functions/aiEnrichment/functions/function_app.py
+          mypy csa_platform/functions/eventProcessing/functions/function_app.py
+          mypy csa_platform/functions/secretRotation/functions/function_app.py
 
       - name: Validate data product contracts
         run: |

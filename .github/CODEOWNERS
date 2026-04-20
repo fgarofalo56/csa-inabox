@@ -43,10 +43,13 @@
 # Domain: Sales
 /domains/sales/                      @sales-domain-team
 
-# Shared Services
-/domains/sharedServices/             @platform-team
-/domains/sharedServices/aiEnrichment/ @ai-team @platform-team
-/domains/sharedServices/eventProcessing/ @data-engineering @platform-team
+# Shared Functions (consolidated 2026-04-19, CSA-0127)
+/csa_platform/functions/             @platform-team
+/csa_platform/functions/aiEnrichment/ @ai-team @platform-team
+/csa_platform/functions/eventProcessing/ @data-engineering @platform-team
+/csa_platform/functions/secretRotation/ @platform-team
+/csa_platform/functions/validation/  @platform-team
+/csa_platform/functions/common/      @platform-team
 
 # Examples
 /examples/                           @solutions-team

@@ -49,7 +49,7 @@ def function_app() -> types.ModuleType:
     The reimport ensures module-level side effects (configure_structlog, env
     reads) happen after the autouse logging reset fixture runs.
     """
-    func_dir = "domains/sharedServices/secretRotation/functions"
+    func_dir = "csa_platform/functions/secretRotation/functions"
     if func_dir not in sys.path:
         sys.path.insert(0, func_dir)
     # Force a fresh import each time
