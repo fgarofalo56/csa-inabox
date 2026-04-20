@@ -5,6 +5,65 @@ end-of-session protocol in `.claude/rules/session-end.md`.
 
 ---
 
+## 2026-04-20 (cont.) — Phase-3 Wave 4.5: 3 approved-queue items shipped in parallel
+
+Three independent approved items dispatched as parallel subagents
+on non-overlapping scopes. All three returned clean; three commits
+landed.
+
+### Commits
+
+- `e79800e` fix(portal): CSA-0122 — gate auth by
+  `NEXT_PUBLIC_AUTH_ENABLED` not `NODE_ENV`. Coordinates with
+  backend CSA-0001/0019 allow-list so staging/preview stop shipping
+  unauthenticated. `resolveAuthEnabled()` helper + 5 new tests.
+  Frontend suite 91/91 green (+5 tests).
+- `382af5c` refactor(portal): CSA-0045 — provisioning returns
+  immutable `ProvisioningResult` Pydantic model (frozen=True). Drops
+  mutate-at-distance pattern and exception-swallowing; router now
+  applies result unidirectionally with distinct audit outcomes
+  (success 200 / validation 400 / infra 502). 7 new tests. Portal
+  suite 91/91 green.
+- `90826ca` refactor(ai): CSA-0133 partial — drop fake-async
+  `run_in_executor` wrapper in RAG pipeline. `VectorStore.search_async`
+  via `azure.search.documents.aio.SearchClient`; `RAGPipeline` chat
+  via `openai.AsyncAzureOpenAI`; per-instance async-client caching
+  + idempotent `aclose()`. 8 new tests including concurrency proof.
+  csa_platform suite 433/433 green.
+
+### Findings status
+
+  * CSA-0122 → review (complete)
+  * CSA-0045 → review (complete)
+  * CSA-0133 → doing (partial — RAG async done; service-layer
+    extraction + RAG submodule split still open for a future session)
+
+### Scorecard delta
+
+| Metric | Before | After |
+|---|---|---|
+| Vision alignment | ~78% | ~80% |
+| HIGH findings open | 43 | 41 |
+| MEDIUM findings open | — | 42 |
+| Approval-queue items shipped | 10/35 | 13/35 |
+| Approval-queue partial | 0 | 1 (CSA-0133) |
+
+Cross-session tally:
+  * ~50 commits on `audit/full-codebase-remediation`
+  * 32 findings fully resolved, 1 partial
+  * Zero regressions
+
+### Next session candidates
+
+- CSA-0133 remaining scope: RAG submodule split + router/service
+  layer extraction (L effort, M-L effort respectively).
+- CSA-0008 Copilot MVP phase 0-1 (XL, multi-session — corpus
+  indexer + grounding).
+- CSA-0129 real `csa_platform/fabric/` module (XL).
+- ~40 no-approval HIGH/MEDIUM items ready to execute incrementally.
+
+---
+
 ## 2026-04-20 — Phase-3 Wave 4 complete (3 additional findings landed)
 
 **Archon project:** `145c8d71-7e54-4135-8ec9-d6300caf4517`.
