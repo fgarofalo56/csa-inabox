@@ -30,6 +30,8 @@
 | [0009](./0009-sqlite-to-postgres-portal-db.md) | SQLite (portal dev) → Postgres (portal prod) phased database strategy | accepted | 2026-04-19 | Zero-install dev loop; managed Postgres PaaS in Gov for production durability. |
 | [0010](./0010-fabric-strategic-target.md) | Microsoft Fabric as strategic target; current build as Fabric-parity on Azure PaaS | accepted | 2026-04-19 | Every primitive (Delta, Purview, dbt, Spark) maps forward into Fabric when Gov GA lands. |
 | [0011](./0011-multi-cloud-scope.md) | Multi-cloud scope: OneLake shortcuts + Purview scans only; defer federated compute | accepted | 2026-04-20 | Honest scope — ships governance story for S3/GCS/Snowflake/BigQuery/Redshift; defers cross-cloud compute. |
+| [0012](./0012-data-mesh-federation.md) | Data-mesh federation model: contract-driven, Purview-governed, portal-surfaced | accepted | 2026-04-20 | Contract-first in-monorepo mesh — `contract.yaml` → CI validates → Purview registers → marketplace surfaces; per-domain CODEOWNERS. |
+| [0013](./0013-dbt-as-canonical-transformation.md) | dbt Core as the canonical transformation layer | accepted | 2026-04-20 | Deduplicates Bronze → Silver → Gold logic — dbt owns medallion transforms; Spark notebooks are deprecated for that path and reserved for exploration / provisioning / ML. |
 
 ---
 

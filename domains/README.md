@@ -1,5 +1,11 @@
 # Data Domains — Data Mesh Ownership
 
+> **Federation model:** This repo follows the contract-driven mesh
+> federation model described in
+> [ADR-0012](../docs/adr/0012-data-mesh-federation.md) — each domain
+> publishes a `contract.yaml`, CI validates, Purview registers, the
+> portal marketplace surfaces.
+
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers
 
 > [!TIP]

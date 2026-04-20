@@ -34,7 +34,17 @@
 # Platform Services
 /csa_platform/                       @platform-team
 
-# Data Pipelines (Shared)
+# ---------------------------------------------------------------------------
+# Data-mesh federation (CSA-0128 / AQ-0027 / ADR-0012)
+# Each domain has its own owner set; central platform team owns
+# csa_platform/, deploy/, portal/shared/api/, and .github/. Domain PRs
+# require domain-owner approval; platform PRs require platform-team
+# approval.
+# TODO: replace placeholder *-domain-team handles with the real GitHub
+# team handles before go-live; keep the per-domain section structure.
+# ---------------------------------------------------------------------------
+
+# Domain: Shared (cross-domain models, dbt macros, data product contracts)
 /domains/shared/                     @data-engineering
 /domains/shared/dbt/                 @data-engineering
 /domains/shared/pipelines/           @data-engineering
@@ -42,6 +52,18 @@
 
 # Domain: Sales
 /domains/sales/                      @sales-domain-team
+
+# Domain: Finance
+/domains/finance/                    @finance-domain-team @data-governance-team
+
+# Domain: Inventory
+/domains/inventory/                  @inventory-domain-team
+
+# Domain: DLZ (Data Landing Zone — storage layout / landing contracts)
+/domains/dlz/                        @data-engineering @platform-team
+
+# Domain: Spark (PySpark + GeoAnalytics utilities, cross-domain)
+/domains/spark/                      @data-engineering @data-science
 
 # Shared Functions (consolidated 2026-04-19, CSA-0127)
 /csa_platform/functions/             @platform-team
