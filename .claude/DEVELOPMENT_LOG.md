@@ -5,6 +5,43 @@ end-of-session protocol in `.claude/rules/session-end.md`.
 
 ---
 
+## 2026-04-19 (cont.) — Phase-3 Wave 4 partial (1 complete, 1 partial)
+
+Two parallel agents on Wave 4 platform-consolidation work. CSA-0132
+landed clean; CSA-0043 shipped scaffold-only due to working-tree
+interaction between the two parallel agents (the CSA-0132 rename
+agent invoked `git checkout HEAD -- deploy/` during its validation,
+which reverted the CSA-0043 caller-redirection edits before they
+could be staged).
+
+Commits:
+  ce0b113 refactor(csa_platform): CSA-0132 — rename onelake_pattern/
+    → unity_catalog_pattern/ and direct_lake/ → semantic_model/.
+    16 files renamed via git mv (history preserved); 14 cross-ref
+    files updated; disambiguation READMEs; all 665 tests green.
+  5da2e80 feat(deploy): CSA-0043 partial — canonical shared/modules/
+    resourceGroup/resourceGroup.bicep scaffold with consolidation
+    banner. Caller redirects deferred.
+
+Findings:
+  * CSA-0132 → review (complete)
+  * CSA-0043 → doing (partial; follow-ups documented)
+
+Wave 4 remaining (not started this session):
+  * CSA-0126 governance tree merger
+  * CSA-0127 shared-services merger
+
+Scorecard:
+  * Vision alignment ~72% → ~74%
+  * Audit tasks in review: 26 (across all loops)
+  * Audit tasks in doing: 1 (CSA-0043 partial)
+  * Tests: 665 green (no regressions)
+
+Next session: complete CSA-0043 caller redirects (15-line edit
+across 3 main.bicep files), then tackle CSA-0126 + CSA-0127.
+
+---
+
 ## 2026-04-19 (cont.) — Phase-3 Wave 3 (5 findings landed)
 
 **Archon project:** `145c8d71-7e54-4135-8ec9-d6300caf4517`.
