@@ -5,6 +5,88 @@ end-of-session protocol in `.claude/rules/session-end.md`.
 
 ---
 
+## 2026-04-20 — Phase-3 Wave 4 complete (3 additional findings landed)
+
+**Archon project:** `145c8d71-7e54-4135-8ec9-d6300caf4517`.
+
+Closed out Wave 4 platform consolidation. One inline finish for the
+stalled CSA-0043 caller redirects, then two heavy structural refactors
+via sequential subagent dispatch (CSA-0126 governance, CSA-0127
+shared-services). 4 new commits, 3 Archon tasks flipped to `review`.
+
+### Commits landed
+
+- `716c523` feat(deploy): complete resourceGroup caller redirects
+  (CSA-0043 step 2) — 18 call sites in DLZ + landing-zone-alz
+  redirected to `../shared/modules/resourceGroup/resourceGroup.bicep`;
+  3 duplicate module files deleted. `az bicep build` clean on both
+  main.bicep targets.
+- `bb6efd5` refactor(governance): consolidate governance trees into
+  `csa_platform/governance/` (CSA-0126) — 111 files changed. All
+  `governance/{common,contracts,dataquality,finops,compliance,
+  keyvault,network,policies,rbac}` + `csa_platform/purview_governance/`
+  merged. 35 Python imports + 6 YAML contracts + 4 compliance evidence
+  paths + 4 CI workflows + pyproject + Makefile + 15 docs rewritten.
+  978 tests pass (broader suite now discoverable), 1 xfail, 1 skip.
+- `02d8b51` refactor(functions): merge shared-services trees into
+  `csa_platform/functions/` (CSA-0127) — 48 files changed.
+  `csa_platform/shared_services/` → `validation/`, `domains/
+  sharedServices/{common,aiEnrichment,eventProcessing,secretRotation}`
+  all moved under a single canonical namespace. Empty
+  `domains/sharedServices/` removed. 767 tests pass across 5 suites;
+  ruff clean.
+
+### Findings resolved
+
+  * CSA-0043 → review (complete: scaffold + callers + duplicates deleted)
+  * CSA-0126 → review (complete)
+  * CSA-0127 → review (complete)
+
+Wave 4 fully shipped:
+  ✅ CSA-0043 Bicep resourceGroup consolidation (with 4 new
+     follow-up findings tracked for remaining module families)
+  ✅ CSA-0126 governance tree merger
+  ✅ CSA-0127 shared-services merger
+  ✅ CSA-0132 OneLake/DirectLake module renames (from 2026-04-19)
+
+### Lessons from last session incorporated
+
+- Parallel agents must not invoke `git checkout`, `git reset`, or
+  `git stash` on any path — the CSA-0132 agent's `git checkout HEAD
+  -- deploy/` last session clobbered the parallel CSA-0043 agent's
+  work. This session used sequential dispatch for the final two
+  heavy refactors (CSA-0126 then CSA-0127) to eliminate working-tree
+  contention. Rule now baked into agent prompts.
+
+### Scorecard
+
+| Metric | Pre-Wave-4 | Post-Wave-4 |
+|---|---|---|
+| Vision alignment | ~72% | ~78% |
+| CRITICAL findings open | 5 | 3 |
+| HIGH findings open | 46 | 43 |
+| Approval-queue items shipped | 7/35 | 10/35 |
+| Platform consolidation | Forked trees | Single canonical |
+| Governance tree count | 2 (forked) | 1 (merged) |
+| Shared-services tree count | 2 (forked) | 1 (merged) |
+| Bicep shared-module library | Dead | Active (resourceGroup) |
+| Tests green | 751 | 978 (broader discovery) |
+
+### Next session
+
+Wave 5 strategic builds (multi-session scope):
+  * CSA-0008 Copilot MVP (XL — 10-18 weeks of 3-engineer work)
+  * CSA-0129 real `csa_platform/fabric/` module (XL)
+  * CSA-0093 cybersecurity vertical (XL)
+  * CSA-0137 streaming spine (L)
+  * CSA-0046 Postgres migration for portal (L)
+  * CSA-0020 MSAL BFF pattern (L)
+
+Also open: ~40 no-approval HIGH/MEDIUM findings that can execute
+incrementally; 2 Wave-1/2 deferrals (CSA-0072 release-please).
+
+---
+
 ## 2026-04-19 (cont.) — Phase-3 Wave 4 partial (1 complete, 1 partial)
 
 Two parallel agents on Wave 4 platform-consolidation work. CSA-0132
