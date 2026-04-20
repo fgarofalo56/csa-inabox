@@ -318,6 +318,7 @@ pipelines and platform services.
 | `validate_schema` | Validates incoming data against registered JSON/Avro schemas |
 | `validate_quality` | Runs Great Expectations checkpoints and returns results |
 | `send_teams_alert` | Posts formatted alerts to Microsoft Teams via webhook |
+| Dead-letter pattern | Canonical per-pipeline DLQ (container + Event Grid + alert) — see [`deploy/bicep/shared/modules/deadletter/`](../deploy/bicep/shared/modules/deadletter/deadletter.bicep) + [runbooks/dead-letter.md](runbooks/dead-letter.md) (CSA-0138) |
 
 **Deploy:**
 ```bash

@@ -229,6 +229,10 @@ metadata layer across all storage accounts.
   real-time events. Supports Capture to ADLS for cold-path archival.
 - **IoT Hub + DPS** — Managed device provisioning and telemetry routing for IoT
   scenarios (weather stations, AQI sensors, industrial equipment).
+- **Dead-Letter Queue (DLQ)** — Canonical per-pipeline poison-message sink
+  (container + Event Grid + metric alert) provided by the shared module
+  [`deploy/bicep/shared/modules/deadletter/`](../deploy/bicep/shared/modules/deadletter/deadletter.bicep);
+  operator triage + replay procedure in [runbooks/dead-letter.md](runbooks/dead-letter.md) (CSA-0138 / AQ-0033).
 
 #### ⚡ Compute Layer
 
