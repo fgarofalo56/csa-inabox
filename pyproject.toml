@@ -113,6 +113,21 @@ bff = [
     # supply chain deterministic in gov builds.
     "redis>=5.0.0,<7.0.0",
 ]
+copilot = [
+    # CSA Copilot (CSA-0008) Phases 0-1 — corpus indexer + grounded Q&A.
+    # Agent framework (approved via AQ-0003).
+    "pydantic-ai>=1.0.0,<2.0.0",
+    # Settings + model typing (already on the platform extra but listed
+    # here so `pip install -e .[copilot]` is self-contained).
+    "pydantic>=2.7.0,<3.0.0",
+    "pydantic-settings>=2.3.0,<3.0.0",
+    # Structured logging (aligns with csa_platform.common.logging).
+    "structlog>=24.1.0,<26.0.0",
+    # Azure OpenAI + AI Search — reused via csa_platform.ai_integration.rag.
+    "openai>=1.0.0,<3.0.0",
+    "azure-identity>=1.17.0,<2.0.0",
+    "azure-search-documents>=11.4.0,<12.0.0",
+]
 
 [tool.setuptools]
 # Installable Python packages.  csa_platform ships the reusable platform
@@ -126,13 +141,13 @@ bff = [
 # automation) now lives under csa_platform.governance (CSA-0126).
 
 [tool.setuptools.packages.find]
-include = ["csa_platform*"]
+include = ["csa_platform*", "apps*"]
 exclude = ["*.tests", "*.tests.*", "tests*"]
 
 [tool.ruff]
 target-version = "py310"
 line-length = 120
-src = ["domains", "scripts", "csa_platform", "dev-loop", "cli"]
+src = ["domains", "scripts", "csa_platform", "dev-loop", "cli", "apps"]
 # Exclude empty/placeholder files that aren't valid Python/Notebook.
 extend-exclude = ["scripts/monitor/SynapseTroubleshooting.ipynb", "domains/spark/ArcGIS_GeoAnalyticsEngine"]
 
@@ -266,7 +281,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["domains", "csa_platform"]
+known-first-party = ["apps", "domains", "csa_platform"]
 
 [tool.ruff.format]
 quote-style = "double"
