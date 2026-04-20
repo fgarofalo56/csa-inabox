@@ -5,6 +5,58 @@ end-of-session protocol in `.claude/rules/session-end.md`.
 
 ---
 
+## 2026-04-19 (cont.) — Phase-3 Wave 3 (5 findings landed)
+
+**Archon project:** `145c8d71-7e54-4135-8ec9-d6300caf4517`.
+
+Executed Wave 3 vision-content buildout via two rounds of parallel
+subagents on non-overlapping scopes, then central commits. 5 new
+commits, 5 CSA tasks flipped to `review`. Doc-only changes; no code
+touched; no test regressions possible.
+
+### Commits landed
+
+- `0513dc8` feat(docs): 8 decision trees + Primary Tech Choices
+  rename (CSA-0010) — 19 files
+- `fe6ca97` feat(docs): 10 MADR ADRs (CSA-0087) — 11 files
+- `33f32e2` feat(docs): Palantir Foundry migration playbook
+  (CSA-0009) — 3 files, 4,325-word playbook + 184-line ontology YAML
+- `595c6b1` docs: reframe as Fabric-parity reference (CSA-0063) —
+  7 files (README, ARCHITECTURE, PLATFORM_SERVICES, GETTING_STARTED,
+  QUICKSTART, gov README, pyproject)
+- `08a7bcc` feat(docs): Snowflake + AWS + GCP migration playbooks
+  (CSA-0083) — 4 files totaling 12,659 words across 3 playbooks
+
+### Findings resolved (5)
+
+CSA-0009 (Palantir), CSA-0010 (decision trees), CSA-0063 (Fabric
+positioning), CSA-0083 (Snowflake/AWS/GCP), CSA-0087 (10 ADRs).
+
+### Scorecard at close
+
+| Metric | Pre-Wave-3 | Post-Wave-3 |
+|---|---|---|
+| Vision alignment (weighted) | ~60% | ~72% |
+| CRITICAL findings open | 8 | 5 |
+| HIGH findings open | 48 | 46 |
+| Approval-queue items shipped | 2/35 | 7/35 |
+| Decision trees | 0/8 | 8/8 |
+| ADRs | 0 | 10 |
+| Migration playbooks | 0 | 4 (Palantir, Snowflake, AWS, GCP) |
+| Section §7 (Copilot) | 0% | 0% — not in Wave 3 scope |
+
+### Next session
+
+Wave 4 (platform consolidation): CSA-0126 governance merger,
+CSA-0127 shared-services merger, CSA-0043 Bicep consolidation,
+CSA-0132 OneLake/DirectLake renames.
+
+Wave 5 (strategic builds — multi-session): CSA-0008 Copilot MVP,
+CSA-0129 real Fabric module, CSA-0093 cybersecurity vertical,
+CSA-0137 streaming spine, CSA-0046 Postgres migration.
+
+---
+
 ## 2026-04-18/19 (cont.) — Phase-3 Wave 1 + Wave 2 (12 findings landed)
 
 **Archon project:** `145c8d71-7e54-4135-8ec9-d6300caf4517`.
