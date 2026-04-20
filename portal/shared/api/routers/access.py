@@ -20,13 +20,15 @@ from pydantic import BaseModel
 
 from csa_platform.common.audit import audit_event_from_request, audit_logger
 
+from ..config import settings
 from ..models.marketplace import (
     AccessRequest,
     AccessRequestCreate,
     AccessRequestStatus,
 )
 from ..models.source import ClassificationLevel
-from ..persistence import SqliteStore
+from ..persistence import StoreBackend
+from ..persistence_factory import build_store_backend
 from ..services.auth import DomainScope, get_current_user, get_domain_scope, require_role
 
 logger = logging.getLogger(__name__)
@@ -41,11 +43,12 @@ class ReviewBody(BaseModel):
 
     notes: str | None = None
 
-# ── SQLite persistence ──────────────────────────────────────────────────────
-_access_store = SqliteStore("access_requests.json")
+# ── Persistence ─────────────────────────────────────────────────────────────
+# Backend chosen by the factory from ``settings.DATABASE_URL`` (CSA-0046).
+_access_store: StoreBackend = build_store_backend("access_requests.json", settings)
 
 
-def get_store() -> SqliteStore:
+def get_store() -> StoreBackend:
     """Return the access requests store instance (public accessor for cross-router use)."""
     return _access_store
 
@@ -69,13 +72,13 @@ _ELEVATED_REVIEW_CLASSIFICATIONS: set[ClassificationLevel] = {
 }
 
 
-def _get_products_store() -> SqliteStore:
+def _get_products_store() -> StoreBackend:
     """Lazy-import the marketplace products store for cross-router reads.
 
     Imported lazily to avoid a circular import at module load and to mirror
     the pattern used by other cross-router integrations.
     """
-    from .marketplace import get_store as _marketplace_get_store  # noqa: PLC0415
+    from .marketplace import get_store as _marketplace_get_store
 
     return _marketplace_get_store()
 

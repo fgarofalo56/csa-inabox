@@ -33,6 +33,7 @@
 | [0012](./0012-data-mesh-federation.md) | Data-mesh federation model: contract-driven, Purview-governed, portal-surfaced | accepted | 2026-04-20 | Contract-first in-monorepo mesh — `contract.yaml` → CI validates → Purview registers → marketplace surfaces; per-domain CODEOWNERS. |
 | [0013](./0013-dbt-as-canonical-transformation.md) | dbt Core as the canonical transformation layer | accepted | 2026-04-20 | Deduplicates Bronze → Silver → Gold logic — dbt owns medallion transforms; Spark notebooks are deprecated for that path and reserved for exploration / provisioning / ML. |
 | [0014](./0014-msal-bff-auth-pattern.md) | MSAL Backend-for-Frontend (BFF) auth pattern | accepted | 2026-04-20 | Phased CSA-0020 remediation — Phase 1 strict CSP + Trusted Types on the SPA; Phase 2 server-side Auth Code + PKCE flow with an httpOnly `csa_sid` session cookie. Tokens never reach the browser. |
+| [0015](./0015-postgres-portal-persistence.md) | Portal persistence: StoreBackend protocol + SQLite (dev) + Postgres Flexible Server (prod) | accepted | 2026-04-20 | CSA-0046 implementation — dual-backend Protocol, managed-identity AAD tokens for Azure Database for PostgreSQL Flexible Server, Alembic migrations, SQLite kept as the zero-install dev loop. |
 
 ---
 

@@ -8,6 +8,7 @@ should be injected via environment variables in deployed environments.
 
 from __future__ import annotations
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -20,8 +21,73 @@ class Settings(BaseSettings):
     IS_GOVERNMENT_CLOUD: bool = False
 
     # ── Database ─────────────────────────────────────────────────────────
-    # SQLite-based persistence for demo/development — swap to Cosmos DB or PostgreSQL in production
+    # SQLite remains the default for local/dev/demo; in staging and
+    # production DATABASE_URL points at an Azure Database for PostgreSQL
+    # Flexible Server URL and the factory
+    # (:func:`portal.shared.api.persistence_factory.build_store_backend`)
+    # selects the ``PostgresStore`` automatically.  See ``CSA-0046`` and
+    # ``docs/adr/0015-postgres-portal-persistence.md``.
     DATA_DIR: str = "./data"
+    # Leave empty (or ``sqlite:///...``) for the default SQLite backend
+    # under ``DATA_DIR``.  For Postgres use
+    # ``postgresql://<user>@<server>.postgres.database.azure.com:5432/<db>``
+    # — no embedded password when managed identity is enabled; the
+    # Postgres backend fetches a bearer token via
+    # ``azure.identity.DefaultAzureCredential``.  The driver suffix
+    # (``+psycopg``/``+asyncpg``) is normalised by the factory and
+    # Alembic env.py so operators can use the short form.
+    DATABASE_URL: str = ""
+    # SQLAlchemy engine pool sizing (used by Postgres; SQLite uses a
+    # single per-store connection instead).
+    DATABASE_POOL_SIZE: int = 10
+    DATABASE_MAX_OVERFLOW: int = 20
+    # Seconds before ``expires_on`` at which the cached AAD token is
+    # refreshed.  5 minutes is Azure's guidance.
+    DATABASE_TOKEN_REFRESH_MARGIN_SECONDS: int = 300
+
+    # Legacy per-component Postgres settings retained for compatibility
+    # with deployment templates that pre-date DATABASE_URL.  Prefer
+    # DATABASE_URL in new code.
+    POSTGRES_HOST: str = ""
+    POSTGRES_PORT: int = 5432
+    POSTGRES_DB: str = ""
+    POSTGRES_USER: str = ""
+    # When True, PostgresStore replaces the connection password with a
+    # fresh AAD access token on every new pool connection.  See
+    # ``persistence_postgres._ManagedIdentityTokenProvider``.  Leave
+    # False for local Postgres with a password embedded in the URL.
+    POSTGRES_USE_MANAGED_IDENTITY: bool = False
+    # PostgreSQL SSL mode — Azure Flexible Server enforces TLS by default
+    # and rejects ``disable``.  ``require`` is the safe production value;
+    # ``verify-full`` may be preferred for CA-pinned deployments.
+    POSTGRES_SSL_MODE: str = "require"
+
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def _validate_database_url(cls, v: object) -> object:
+        """Reject unsupported URL schemes early.
+
+        Accepts SQLite (``sqlite://``) and PostgreSQL
+        (``postgresql://``, ``postgresql+psycopg://``,
+        ``postgresql+asyncpg://``).  Any other scheme raises
+        ``ValueError`` at settings-load time rather than falling
+        through to a silent default.
+        """
+        if not isinstance(v, str) or not v:
+            return v
+        lower = v.lower()
+        if lower.startswith(("sqlite://", "sqlite:///")):
+            return v
+        if lower.startswith(("postgresql://", "postgres://")):
+            return v
+        if lower.startswith(("postgresql+", "postgres+")):
+            # Accept any SQLAlchemy driver suffix — the factory + alembic
+            # env.py coerce to psycopg for sync callers when needed.
+            return v
+        raise ValueError(
+            f"DATABASE_URL scheme not supported: {v!r}. "
+            "Expected sqlite://..., postgresql://..., or postgresql+<driver>://...",
+        )
 
     # ── Azure Storage ────────────────────────────────────────────────────
     STORAGE_ACCOUNT_NAME: str = ""

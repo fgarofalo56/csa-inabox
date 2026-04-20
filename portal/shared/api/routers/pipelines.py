@@ -20,25 +20,30 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from csa_platform.common.audit import audit_event_from_request, audit_logger
 
+from ..config import settings
 from ..models.pipeline import PipelineRecord, PipelineRun, PipelineStatus, PipelineType
 from ..models.source import SourceRecord
-from ..persistence import SqliteStore
+from ..persistence import StoreBackend
+from ..persistence_factory import build_store_backend
 from ..services.auth import DomainScope, get_domain_scope, require_role
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# ── SQLite persistence ──────────────────────────────────────────────────
-_pipelines_store = SqliteStore("pipelines.json")
-_runs_store = SqliteStore("pipeline_runs.json")
+# ── Persistence ─────────────────────────────────────────────────────────
+# Backend is chosen by the factory based on ``settings.DATABASE_URL`` —
+# SQLite for local/dev, Postgres Flexible Server in staging/production.
+# Routers interact with the StoreBackend Protocol only (CSA-0046).
+_pipelines_store: StoreBackend = build_store_backend("pipelines.json", settings)
+_runs_store: StoreBackend = build_store_backend("pipeline_runs.json", settings)
 
 
-def get_store() -> SqliteStore:
+def get_store() -> StoreBackend:
     """Return the pipelines store instance (public accessor for cross-router use)."""
     return _pipelines_store
 
 
-def get_runs_store() -> SqliteStore:
+def get_runs_store() -> StoreBackend:
     """Return the pipeline runs store instance (public accessor for cross-router use)."""
     return _runs_store
 

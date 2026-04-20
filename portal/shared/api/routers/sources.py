@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 
 from csa_platform.common.audit import audit_event_from_request, audit_logger
 
+from ..config import settings
 from ..models.source import (
     ClassificationLevel,
     ConnectionConfig,
@@ -36,7 +37,8 @@ from ..models.source import (
     SourceType,
     TargetConfig,
 )
-from ..persistence import SqliteStore
+from ..persistence import StoreBackend
+from ..persistence_factory import build_store_backend
 from ..services.auth import DomainScope, get_domain_scope, require_role
 from ..services.provisioning import provisioning_service
 
@@ -108,11 +110,14 @@ class SourceUpdate(BaseModel):
 
     model_config = {"populate_by_name": True}
 
-# ── SQLite persistence ──────────────────────────────────────────────────────
-_sources_store = SqliteStore("sources.json")
+# ── Persistence ─────────────────────────────────────────────────────────────
+# Backend selection (SQLite vs Postgres) is centralised in the factory and
+# driven by ``settings.DATABASE_URL``.  Routers depend on the StoreBackend
+# Protocol so either backend is a drop-in replacement — see CSA-0046.
+_sources_store: StoreBackend = build_store_backend("sources.json", settings)
 
 
-def get_store() -> SqliteStore:
+def get_store() -> StoreBackend:
     """Return the sources store instance (public accessor for cross-router use)."""
     return _sources_store
 

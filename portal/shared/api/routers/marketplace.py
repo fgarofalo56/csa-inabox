@@ -18,20 +18,23 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from ..config import settings
 from ..models.marketplace import DataProduct, QualityMetric
 from ..models.source import ClassificationLevel
-from ..persistence import SqliteStore
+from ..persistence import StoreBackend
+from ..persistence_factory import build_store_backend
 from ..services.auth import DomainScope, get_current_user, get_domain_scope
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# ── SQLite persistence ──────────────────────────────────────────────────────
-_products_store = SqliteStore("marketplace_products.json")
-_quality_store = SqliteStore("marketplace_quality.json")
+# ── Persistence ─────────────────────────────────────────────────────────────
+# Backend chosen by the factory from ``settings.DATABASE_URL`` (CSA-0046).
+_products_store: StoreBackend = build_store_backend("marketplace_products.json", settings)
+_quality_store: StoreBackend = build_store_backend("marketplace_quality.json", settings)
 
 
-def get_store() -> SqliteStore:
+def get_store() -> StoreBackend:
     """Return the products store instance (public accessor for cross-router use)."""
     return _products_store
 

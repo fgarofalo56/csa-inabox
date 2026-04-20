@@ -1,25 +1,37 @@
 """
-SQLite-backed persistence utility with WAL mode for concurrent access.
+Store-backend abstraction for portal persistence (CSA-0046).
 
-Replaces the original JSON-file persistence with a thread-safe, atomic SQLite
-backend.  Each store maps to a table in a shared database; rows are stored as
-JSON blobs so the interface stays schemaless.
+This module defines the :class:`StoreBackend` ``Protocol`` that every
+persistence implementation must satisfy, and ships the historical
+SQLite-based implementation (:class:`SqliteStore`) that remains the
+default for local / dev / demo environments.
 
-The public API is identical to the former ``JsonStore`` so every router works
-as a drop-in replacement.
+The Protocol mirrors the public surface the routers already depend on:
+``add``, ``get``, ``list`` / ``load``, ``update``, ``update_atomic``,
+``delete``, ``count``, ``clear``, ``save``, ``query``.  Any new backend
+(Postgres in :mod:`portal.shared.api.persistence_postgres`) is a drop-in
+replacement without changes to router call-sites.
+
+Construction of the backend at runtime is centralised in
+:func:`portal.shared.api.persistence_factory.build_store_backend` which
+consults :mod:`portal.shared.api.config` to select between SQLite
+(``sqlite://``) and PostgreSQL (``postgresql://``) URLs.  SQLite remains
+the default when ``DATABASE_URL`` is unset so no existing dev workflow
+breaks.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 import threading
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +53,78 @@ _DEFAULT_DB_NAME = "portal.db"
 _WRITE_LOCK = threading.RLock()
 
 
+# ── Protocol ────────────────────────────────────────────────────────────────
+
+
+@runtime_checkable
+class StoreBackend(Protocol):
+    """Common persistence contract shared by SQLite and Postgres backends.
+
+    Records are untyped dictionaries with at minimum an ``id`` key; every
+    method is synchronous so that the existing FastAPI routers can call
+    through without becoming ``await``-heavy.  Backends that use async
+    I/O drivers wrap the async engine in a sync facade.
+
+    The methods mirror the historical ``SqliteStore`` surface one-for-one;
+    any backend satisfying this protocol is a drop-in replacement.
+    """
+
+    def add(self, item: dict[str, Any]) -> dict[str, Any]:
+        """Insert or replace a record.  Generates an ``id`` when absent."""
+        ...
+
+    def get(self, item_id: str) -> dict[str, Any] | None:
+        """Return a record by ``id`` or ``None``."""
+        ...
+
+    def list(self) -> list[dict[str, Any]]:
+        """Return all records in insertion order."""
+        ...
+
+    def load(self) -> list[dict[str, Any]]:
+        """Alias for :meth:`list` preserved for legacy callers."""
+        ...
+
+    def update(
+        self,
+        item_id: str,
+        updates: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Shallow-merge ``updates`` into an existing record."""
+        ...
+
+    def update_atomic(
+        self,
+        item_id: str,
+        mutator: Callable[[dict[str, Any]], dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        """Read-modify-write under a single transaction."""
+        ...
+
+    def delete(self, item_id: str) -> bool:
+        """Delete a record by ``id``.  Returns ``True`` if removed."""
+        ...
+
+    def count(self) -> int:
+        """Return total number of records in the store."""
+        ...
+
+    def clear(self) -> None:
+        """Remove all records from the store."""
+        ...
+
+    def save(self, data: list[dict[str, Any]]) -> None:
+        """Bulk-replace every record (legacy API, single atomic txn)."""
+        ...
+
+    def query(self, **filters: Any) -> list[dict[str, Any]]:
+        """Filter records by top-level field equality."""
+        ...
+
+
+# ── SQLite helpers ──────────────────────────────────────────────────────────
+
+
 def _open_connection(db_path: str | Path) -> sqlite3.Connection:
     """Open a SQLite connection and set performance PRAGMAs once."""
     conn = sqlite3.connect(
@@ -55,7 +139,7 @@ def _open_connection(db_path: str | Path) -> sqlite3.Connection:
 
 
 def _table_name_from_filename(filename: str) -> str:
-    """Derive a safe SQLite table name from a legacy JSON filename.
+    """Derive a safe SQLite / Postgres table name from a legacy JSON filename.
 
     ``"sources.json"``  → ``"sources"``
     ``"pipeline_runs.json"`` → ``"pipeline_runs"``
@@ -246,7 +330,7 @@ class SqliteStore:
     def update_atomic(
         self,
         item_id: str,
-        mutator: Any,
+        mutator: Callable[[dict[str, Any]], dict[str, Any]],
     ) -> dict[str, Any] | None:
         """Apply a *function* to an existing item inside a single txn.
 
@@ -363,7 +447,7 @@ class SqliteStore:
                 )
 
     # Pattern for safe filter keys — prevents SQL injection via key names.
-    _SAFE_KEY = __import__("re").compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+    _SAFE_KEY = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
     def query(self, **filters: Any) -> list[dict[str, Any]]:
         """Filter items by top-level field values using SQLite ``json_extract``.
@@ -412,3 +496,8 @@ class SqliteStore:
         logger.info("Cleared all items from [%s]", self.table)
 
 
+__all__ = [
+    "SqliteStore",
+    "StoreBackend",
+    "_table_name_from_filename",
+]

@@ -89,12 +89,20 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
         settings.IS_GOVERNMENT_CLOUD,
         settings.DEBUG,
     )
-    # Initialize data directory for SQLite persistence
+    # Initialize data directory for SQLite persistence when SQLite is
+    # the selected backend (default when DATABASE_URL is empty).  When
+    # DATABASE_URL targets Postgres the factory picks PostgresStore and
+    # schema is applied via ``alembic upgrade head`` — see
+    # ``portal/shared/api/alembic/`` and ``persistence_factory.py``.
     from pathlib import Path
 
-    data_dir = Path(settings.DATA_DIR)
-    data_dir.mkdir(parents=True, exist_ok=True)
-    logger.info(f"SQLite persistence data directory: {data_dir}")
+    _db_url = (settings.DATABASE_URL or "").strip()
+    if not _db_url or _db_url.startswith("sqlite:"):
+        data_dir = Path(settings.DATA_DIR)
+        data_dir.mkdir(parents=True, exist_ok=True)
+        logger.info("SQLite persistence data directory: %s", data_dir)
+    else:
+        logger.info("Using external persistence backend (DATABASE_URL=%s)", _db_url.split("@")[-1])
 
     # OPS-0012: Validate critical configuration before accepting traffic.
     # In production/staging environments, missing Azure settings cause a hard

@@ -113,6 +113,19 @@ bff = [
     # supply chain deterministic in gov builds.
     "redis>=5.0.0,<7.0.0",
 ]
+postgres = [
+    # CSA-0046 — Postgres backend for portal persistence (AQ-0016).
+    # Only required when DATABASE_URL selects PostgreSQL; SQLite remains
+    # the default for local/dev/demo so this extra is optional.
+    "sqlalchemy[asyncio]>=2.0.25,<3.0.0",
+    "asyncpg>=0.29.0,<1.0.0",                 # async driver (future async engine use)
+    "psycopg[binary]>=3.1.18,<4.0.0",         # sync driver used by PostgresStore + alembic env.py
+    "alembic>=1.13.0,<2.0.0",
+    # azure-identity is already on the ``portal`` extra; listed here so
+    # ``pip install -e .[postgres]`` alone is self-contained for the
+    # managed-identity code path.
+    "azure-identity>=1.17.0,<2.0.0",
+]
 copilot = [
     # CSA Copilot (CSA-0008) Phases 0-1 — corpus indexer + grounded Q&A.
     # Agent framework (approved via AQ-0003).
