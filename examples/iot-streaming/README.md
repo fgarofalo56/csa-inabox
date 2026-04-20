@@ -219,6 +219,12 @@ examples/iot-streaming/
 
 ### ⚡ Step 1: Deploy IoT Hub and Event Hubs
 
+> [!IMPORTANT]
+> **Entra-only (CSA-0025 / AQ-0014).** IoT Hub and DPS are deployed with
+> `disableLocalAuth: true`. SAS-key device authentication is disabled.
+> Legacy SAS clients must migrate before deploying this template — see
+> [`docs/migrations/iot-hub-entra.md`](../../docs/migrations/iot-hub-entra.md).
+
 ```bash
 # Create resource group
 az group create --name rg-iot-streaming --location eastus
@@ -231,15 +237,38 @@ az deployment group create \
       baseName=csaiot \
       captureStorageAccountName=<your-adls-account> \
       logAnalyticsWorkspaceId=<your-law-id>
+
+# Post-deploy: establish identity-based DPS → IoT Hub link.
+# (Required because the ARM DPS schema still requires a SAS connection
+# string for inline linking — we defer linking to the CLI so the DPS
+# managed identity can be used. See docs/migrations/iot-hub-entra.md.)
+IOT_HUB_ID=$(az deployment group show \
+  --resource-group rg-iot-streaming --name iot-hub \
+  --query properties.outputs.iotHubResourceId.value -o tsv)
+DPS_NAME=$(az deployment group show \
+  --resource-group rg-iot-streaming --name iot-hub \
+  --query properties.outputs.dpsName.value -o tsv)
+az iot dps linked-hub create \
+  --dps-name "$DPS_NAME" --resource-group rg-iot-streaming \
+  --hub-resource-id "$IOT_HUB_ID" \
+  --allocation-weight 1 \
+  --authentication-type identityBased
 ```
 
 This deploys:
-- **IoT Hub** (S1) with Device Provisioning Service
+- **IoT Hub** (S1) with system-assigned managed identity, Entra-only auth
+  (`disableLocalAuth: true`), no SAS authorization policies, and
+  identity-based routing to the Event Hub telemetry hub.
+- **Device Provisioning Service** (S1) with system-assigned managed identity.
+  DPS is deployed unlinked; the IoT Hub link is established post-deploy as
+  identity-based (no SAS connection string is ever emitted).
 - **Event Hub Namespace** (Standard, auto-inflate) with three hubs:
   - `telemetry` — raw device data with Capture to ADLS
   - `alerts` — anomaly and threshold alerts
   - `processed` — enriched/aggregated output
 - **Consumer groups** for ADX, Stream Analytics, and Capture
+- **Role assignments:** DPS MI → IoT Hub Data Contributor; IoT Hub MI →
+  Event Hubs Data Sender (required for identity-based routing).
 - **Diagnostic settings** to Log Analytics
 
 ### 🔄 Step 2: Deploy Stream Analytics

@@ -8,6 +8,7 @@ Working migration guides from other analytics platforms to csa-inabox.
 | Snowflake | Authored 2026-04-19 | [snowflake.md](snowflake.md) |
 | AWS Redshift / EMR / Glue / Athena / S3 | Authored 2026-04-19 | [aws-to-azure.md](aws-to-azure.md) |
 | Google BigQuery / Dataproc / GCS / Looker | Authored 2026-04-19 | [gcp-to-azure.md](gcp-to-azure.md) |
+| IoT Hub / DPS — SAS to Entra-only (CSA-0025, BREAKING) | Authored 2026-04-19 | [iot-hub-entra.md](iot-hub-entra.md) |
 | Cloudera (CDP / CDH / HDP) | Backlog | — |
 | On-prem Hadoop / Teradata / Oracle Exadata | Backlog | — |
 | Legacy CAF Cloud-Scale Analytics (deprecated April 2026) | Backlog | — |
