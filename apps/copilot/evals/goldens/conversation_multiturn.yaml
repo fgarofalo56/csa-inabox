@@ -1,0 +1,76 @@
+# Copilot golden set — multi-turn conversation cases.
+#
+# Each entry represents a SINGLE turn in a pre-primed conversation.
+# The harness ties turns together via the ``conversation_id`` field;
+# turns with the same id run sequentially so later turns see the prior
+# state.  All other rubrics apply as usual.
+goldens:
+  - id: multiturn-followup-private-endpoints
+    conversation_id: conv-arch-001
+    question: "Tell me about CSA architecture."
+    expected_citations:
+      - docs/ARCHITECTURE.md
+    expected_phrases:
+      - "architecture"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.50
+      citation_accuracy: 0.65
+      answer_relevance: 0.60
+    tags: [multiturn, architecture]
+
+  - id: multiturn-followup-why-private
+    conversation_id: conv-arch-001
+    question: "Why private endpoints in that architecture?"
+    expected_citations:
+      - docs/ARCHITECTURE.md
+    expected_phrases:
+      - "private"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.55
+      citation_accuracy: 0.65
+      answer_relevance: 0.60
+    tags: [multiturn, architecture, followup]
+
+  - id: multiturn-fabric-overview
+    conversation_id: conv-fabric-001
+    question: "What is Microsoft Fabric?"
+    expected_citations:
+      - docs/GOV_SERVICE_MATRIX.md
+    expected_phrases:
+      - "Fabric"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.50
+      citation_accuracy: 0.60
+      answer_relevance: 0.60
+    tags: [multiturn, fabric]
+
+  - id: multiturn-fabric-parity
+    conversation_id: conv-fabric-001
+    question: "Which parts are available in GovCloud today?"
+    expected_citations:
+      - docs/GOV_SERVICE_MATRIX.md
+    expected_phrases:
+      - "Gov"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.50
+      citation_accuracy: 0.60
+      answer_relevance: 0.60
+    tags: [multiturn, fabric, gov]
+
+  - id: multiturn-cost-then-tags
+    conversation_id: conv-cost-001
+    question: "How does CSA track costs?"
+    expected_citations:
+      - docs/COST_MANAGEMENT.md
+    expected_phrases:
+      - "cost"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.50
+      citation_accuracy: 0.60
+      answer_relevance: 0.60
+    tags: [multiturn, cost]

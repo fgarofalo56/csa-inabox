@@ -151,6 +151,15 @@ copilot = [
     "itsdangerous>=2.1.2,<3.0.0",
     # CSA-0100 decision-tree walker reads YAML trees in decision-trees/.
     "PyYAML>=6.0,<7.0",
+    # Phase 6 LLMOps — OpenTelemetry tracing + strict golden schema validation.
+    # OTel packages are soft-dependencies: the telemetry module degrades to a
+    # no-op tracer when absent.  Listed here so `pip install -e .[copilot]`
+    # gives production installs full observability without requiring a
+    # separate install step.
+    "opentelemetry-api>=1.25,<2.0",
+    "opentelemetry-sdk>=1.25,<2.0",
+    "opentelemetry-exporter-otlp>=1.25,<2.0",
+    "jsonschema>=4.22,<5.0",
     # Phase 5 client-facing surfaces (apps/copilot/surfaces/**):
     #   * FastAPI router + standalone launcher (api/).
     #   * MCP server (mcp/) — stdio transport.

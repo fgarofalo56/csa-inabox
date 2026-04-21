@@ -1,0 +1,1162 @@
+{
+  "schema_version": "eval-report-v1",
+  "run_id": "97a0db37c94c40e1ad9c75ffd99b032d",
+  "timestamp": "2026-04-20T23:31:34.491674Z",
+  "tag": "v0.1.0",
+  "goldens_source": "apps/copilot/evals/goldens/corpus_qa.yaml",
+  "prompt_hashes": {
+    "conversation_summarizer": "19821551352348592f186b2018d75c6ba57ffc6b61ab7c0dea1b7aa568d0b974",
+    "ground_and_cite": "7f7d0fefb7a34318d7f94e76ed9d0f339c4dedfac0573061bab6e1def002fad2",
+    "refusal_off_scope": "4f24af6ea736073336031038e6646ba1df1163035d5aecc78bdd7bdd1391cb6a"
+  },
+  "deterministic": true,
+  "results": [
+    {
+      "case_id": "architecture-private-endpoints",
+      "skill": "grounded-corpus-qa",
+      "latency_ms": 0.04359999729786068,
+      "refused": false,
+      "refusal_reason": null,
+      "groundedness": 0.9,
+      "answer_excerpt": "Deterministic dry-run answer for architecture-private-endpoints. private endpoint [1]",
+      "citations": [
+        "docs/ARCHITECTURE.md"
+      ],
+      "scores": [
+        {
+          "rubric": "groundedness",
+          "value": 0.9,
+          "reason": "groundedness=0.900 >= threshold=0.600",
+          "threshold": 0.6,
+          "passed": true
+        },
+        {
+          "rubric": "citation_accuracy",
+          "value": 1.0,
+          "reason": "tp=1 precision=1.00 recall=1.00 expected=['docs/ARCHITECTURE.md'] cited=['docs/ARCHITECTURE.md']",
+          "threshold": 0.75,
+          "passed": true
+        },
+        {
+          "rubric": "answer_relevance",
+          "value": 1.0,
+          "reason": "hits=1/1 missing=[]",
+          "threshold": 0.7,
+          "passed": true
+        },
+        {
+          "rubric": "refusal_correctness",
+          "value": 1.0,
+          "reason": "expected_refuse=False actual_refuse=False",
+          "threshold": null,
+          "passed": true
+        },
+        {
+          "rubric": "latency_p50",
+          "value": 0.04359999729786068,
+          "reason": "latency_ms=0.0 budget=30000.0",
+          "threshold": 30000.0,
+          "passed": true
+        }
+      ],
+      "passed": true,
+      "error": null
+    },
+    {
+      "case_id": "bicep-what-if-pipeline",
+      "skill": "grounded-corpus-qa",
+      "latency_ms": 0.020500010577961802,
+      "refused": false,
+      "refusal_reason": null,
+      "groundedness": 0.9,
+      "answer_excerpt": "Deterministic dry-run answer for bicep-what-if-pipeline. what-if [1]",
+      "citations": [
+        "docs/IaC-CICD-Best-Practices.md"
+      ],
+      "scores": [
+        {
+          "rubric": "groundedness",
+          "value": 0.9,
+          "reason": "groundedness=0.900 >= threshold=0.600",
+          "threshold": 0.6,
+          "passed": true
+        },
+        {
+          "rubric": "citation_accuracy",
+          "value": 1.0,
+          "reason": "tp=1 precision=1.00 recall=1.00 expected=['docs/IaC-CICD-Best-Practices.md'] cited=['docs/IaC-CICD-Best-Practices.md']",
+          "threshold": 0.7,
+          "passed": true
+        },
+        {
+          "rubric": "answer_relevance",
+          "value": 1.0,
+          "reason": "hits=1/1 missing=[]",
+          "threshold": 0.65,
+          "passed": true
+        },
+        {
+          "rubric": "refusal_correctness",
+          "value": 1.0,
+          "reason": "expected_refuse=False actual_refuse=False",
+          "threshold": null,
+          "passed": true
+        },
+        {
+          "rubric": "latency_p50",
+          "value": 0.020500010577961802,
+          "reason": "latency_ms=0.0 budget=30000.0",
+          "threshold": 30000.0,
+          "passed": true
+        }
+      ],
+      "passed": true,
+      "error": null
+    },
+    {
+      "case_id": "fabric-parity-gov",
+      "skill": "grounded-corpus-qa",
+      "latency_ms": 0.016099991626106203,
+      "refused": false,
+      "refusal_reason": null,
+      "groundedness": 0.9,
+      "answer_excerpt": "Deterministic dry-run answer for fabric-parity-gov. Fabric [1]",
+      "citations": [
+        "docs/GOV_SERVICE_MATRIX.md"
+      ],
+      "scores": [
+        {
+          "rubric": "groundedness",
+          "value": 0.9,
+          "reason": "groundedness=0.900 >= threshold=0.550",
+          "threshold": 0.55,
+          "passed": true
+        },
+        {
+          "rubric": "citation_accuracy",
+          "value": 1.0,
+          "reason": "tp=1 precision=1.00 recall=1.00 expected=['docs/GOV_SERVICE_MATRIX.md'] cited=['docs/GOV_SERVICE_MATRIX.md']",
+          "threshold": 0.65,
+          "passed": true
+        },
+        {
+          "rubric": "answer_relevance",
+          "value": 1.0,
+          "reason": "hits=1/1 missing=[]",
+          "threshold": 0.6,
+          "passed": true
+        },
+        {
+          "rubric": "refusal_correctness",
+          "value": 1.0,
+          "reason": "expected_refuse=False actual_refuse=False",
+          "threshold": null,
+          "passed": true
+        },
+        {
+          "rubric": "latency_p50",
+          "value": 0.016099991626106203,
+          "reason": "latency_ms=0.0 budget=30000.0",
+          "threshold": 30000.0,
+          "passed": true
+        }
+      ],
+      "passed": true,
+      "error": null
+    },
+    {
+      "case_id": "migration-palantir-ontology",
+      "skill": "grounded-corpus-qa",
+      "latency_ms": 0.016000005416572094,
+      "refused": false,
+      "refusal_reason": null,
+      "groundedness": 0.9,
+      "answer_excerpt": "Deterministic dry-run answer for migration-palantir-ontology. Unity Catalog Purview [1]",
+      "citations": [
+        "docs/migrations/palantir-foundry.md"
+      ],
+      "scores": [
+        {
+          "rubric": "groundedness",
+          "value": 0.9,
+          "reason": "groundedness=0.900 >= threshold=0.600",
+          "threshold": 0.6,
+          "passed": true
+        },
+        {
+          "rubric": "citation_accuracy",
+          "value": 1.0,
+          "reason": "tp=1 precision=1.00 recall=1.00 expected=['docs/migrations/palantir-foundry.md'] cited=['docs/migrations/palantir-foundry.md']",
+          "threshold": 0.8,
+          "passed": true
+        },
+        {
+          "rubric": "answer_relevance",
+          "value": 1.0,
+          "reason": "hits=2/2 missing=[]",
+          "threshold": 0.7,
+          "passed": true
+        },
+        {
+          "rubric": "refusal_correctness",
+          "value": 1.0,
+          "reason": "expected_refuse=False actual_refuse=False",
+          "threshold": null,
+          "passed": true
+        },
+        {
+          "rubric": "latency_p50",
+          "value": 0.016000005416572094,
+          "reason": "latency_ms=0.0 budget=30000.0",
+          "threshold": 30000.0,
+          "passed": true
+        }
+      ],
+      "passed": true,
+      "error": null
+    },
+    {
+      "case_id": "adr-0014-bff",
+      "skill": "grounded-corpus-qa",
+      "latency_ms": 0.016000005416572094,
+      "refused": false,
+      "refusal_reason": null,
+      "groundedness": 0.9,
+      "answer_excerpt": "Deterministic dry-run answer for adr-0014-bff. BFF [1]",
+      "citations": [
+        "docs/adr/ADR-0014-bff-auth.md"
+      ],
+      "scores": [
+        {
+          "rubric": "groundedness",
+          "value": 0.9,
+          "reason": "groundedness=0.900 >= threshold=0.550",
+          "threshold": 0.55,
+          "passed": true
+        },
+        {
+          "rubric": "citation_accuracy",
+          "value": 1.0,
+          "reason": "tp=1 precision=1.00 recall=1.00 expected=['docs/adr/ADR-0014-bff-auth.md'] cited=['docs/adr/ADR-0014-bff-auth.md']",
+          "threshold": 0.7,
+          "passed": true
+        },
+        {
+          "rubric": "answer_relevance",
+          "value": 1.0,
+          "reason": "hits=1/1 missing=[]",
+          "threshold": 0.65,
+          "passed": true
+        },
+        {
+          "rubric": "refusal_correctness",
+          "value": 1.0,
+          "reason": "expected_refuse=False actual_refuse=False",
+          "threshold": null,
+          "passed": true
+        },
+        {
+          "rubric": "latency_p50",
+          "value": 0.016000005416572094,
+          "reason": "latency_ms=0.0 budget=30000.0",
+          "threshold": 30000.0,
+          "passed": true
+        }
+      ],
+      "passed": true,
+      "error": null
+    },
+    {
+      "case_id": "decision-purview-catalog",
+      "skill": "grounded-corpus-qa",
+      "latency_ms": 0.014000004739500582,
+      "refused": false,
+      "refusal_reason": null,
+      "groundedness": 0.9,
+      "answer_excerpt": "Deterministic dry-run answer for decision-purview-catalog. Purview [1]",
+      "citations": [
+        "docs/decisions/purview-vs-unity.md"
+      ],
+      "scores": [
+        {
+          "rubric": "groundedness",
+          "value": 0.9,
+          "reason": "groundedness=0.900 >= threshold=0.550",
+          "threshold": 0.55,
+          "passed": true
+        },
+        {
+          "rubric": "citation_accuracy",
+          "value": 1.0,
+          "reason": "tp=1 precision=1.00 recall=1.00 expected=['docs/decisions/purview-vs-unity.md'] cited=['docs/decisions/purview-vs-unity.md']",
+          "threshold": 0.65,
+          "passed": true
+        },
+        {
+          "rubric": "answer_relevance",
+          "value": 1.0,
+          "reason": "hits=1/1 missing=[]",
+          "threshold": 0.6,
+          "passed": true
+        },
+        {
+          "rubric": "refusal_correctness",
+          "value": 1.0,
+          "reason": "expected_refuse=False actual_refuse=False",
+          "threshold": null,
+          "passed": true
+        },
+        {
+          "rubric": "latency_p50",
+          "value": 0.014000004739500582,
+          "reason": "latency_ms=0.0 budget=30000.0",
+          "threshold": 30000.0,
+          "passed": true
+        }
+      ],
+      "passed": true,
+      "error": null
+    },
+    {
+      "case_id": "compliance-fedramp-controls",
+      "skill": "grounded-corpus-qa",
+      "latency_ms": 0.014300007023848593,
+      "refused": false,
+      "refusal_reason": null,
+      "groundedness": 0.9,
+      "answer_excerpt": "Deterministic dry-run answer for compliance-fedramp-controls. FedRAMP [1]",
+      "citations": [
+        "docs/compliance/fedramp-high.md"
+      ],
+      "scores": [
+        {
+          "rubric": "groundedness",
+          "value": 0.9,
+          "reason": "groundedness=0.900 >= threshold=0.550",
+          "threshold": 0.55,
+          "passed": true
+        },
+        {
+          "rubric": "citation_accuracy",
+          "value": 1.0,
+          "reason": "tp=1 precision=1.00 recall=1.00 expected=['docs/compliance/fedramp-high.md'] cited=['docs/compliance/fedramp-high.md']",
+          "threshold": 0.65,
+          "passed": true
+        },
+        {
+          "rubric": "answer_relevance",
+          "value": 1.0,
+          "reason": "hits=1/1 missing=[]",
+          "threshold": 0.6,
+          "passed": true
+        },
+        {
+          "rubric": "refusal_correctness",
+          "value": 1.0,
+          "reason": "expected_refuse=False actual_refuse=False",
+          "threshold": null,
+          "passed": true
+        },
+        {
+          "rubric": "latency_p50",
+          "value": 0.014300007023848593,
+          "reason": "latency_ms=0.0 budget=30000.0",
+          "threshold": 30000.0,
+          "passed": true
+        }
+      ],
+      "passed": true,
+      "error": null
+    },
+    {
+      "case_id": "runbook-dr-failover",
+      "skill": "grounded-corpus-qa",
+      "latency_ms": 0.014000004739500582,
+      "refused": false,
+      "refusal_reason": null,
+      "groundedness": 0.9,
+      "answer_excerpt": "Deterministic dry-run answer for runbook-dr-failover. failover [1]",
+      "citations": [
+        "docs/runbooks/dr-drill.md"
+      ],
+      "scores": [
+        {
+          "rubric": "groundedness",
+          "value": 0.9,
+          "reason": "groundedness=0.900 >= threshold=0.550",
+          "threshold": 0.55,
+          "passed": true
+        },
+        {
+          "rubric": "citation_accuracy",
+          "value": 1.0,
+          "reason": "tp=1 precision=1.00 recall=1.00 expected=['docs/runbooks/dr-drill.md'] cited=['docs/runbooks/dr-drill.md']",
+          "threshold": 0.65,
+          "passed": true
+        },
+        {
+          "rubric": "answer_relevance",
+          "value": 1.0,
+          "reason": "hits=1/1 missing=[]",
+          "threshold": 0.6,
+          "passed": true
+        },
+        {
+          "rubric": "refusal_correctness",
+          "value": 1.0,
+          "reason": "expected_refuse=False actual_refuse=False",
+          "threshold": null,
+          "passed": true
+        },
+        {
+          "rubric": "latency_p50",
+          "value": 0.014000004739500582,
+          "reason": "latency_ms=0.0 budget=30000.0",
+          "threshold": 30000.0,
+          "passed": true
+        }
+      ],
+      "passed": true,
+      "error": null
+    },
+    {
+      "case_id": "example-databricks-delta-share",
+      "skill": "grounded-corpus-qa",
+      "latency_ms": 0.014800010831095278,
+      "refused": false,
+      "refusal_reason": null,
+      "groundedness": 0.9,
+      "answer_excerpt": "Deterministic dry-run answer for example-databricks-delta-share. Delta Sharing [1]",
+      "citations": [
+        "examples/databricks/delta-sharing.md"
+      ],
+      "scores": [
+        {
+          "rubric": "groundedness",
+          "value": 0.9,
+          "reason": "groundedness=0.900 >= threshold=0.500",
+          "threshold": 0.5,
+          "passed": true
+        },
+        {
+          "rubric": "citation_accuracy",
+          "value": 1.0,
+          "reason": "tp=1 precision=1.00 recall=1.00 expected=['examples/databricks/delta-sharing.md'] cited=['examples/databricks/delta-sharing.md']",
+          "threshold": 0.7,
+          "passed": true
+        },
+        {
+          "rubric": "answer_relevance",
+          "value": 1.0,
+          "reason": "hits=1/1 missing=[]",
+          "threshold": 0.65,
+          "passed": true
+        },
+        {
+          "rubric": "refusal_correctness",
+          "value": 1.0,
+          "reason": "expected_refuse=False actual_refuse=False",
+          "threshold": null,
+          "passed": true
+        },
+        {
+          "rubric": "latency_p50",
+          "value": 0.014800010831095278,
+          "reason": "latency_ms=0.0 budget=30000.0",
+          "threshold": 30000.0,
+          "passed": true
+        }
+      ],
+      "passed": true,
+      "error": null
+    },
+    {
+      "case_id": "overview-getting-started",
+      "skill": "grounded-corpus-qa",
+      "latency_ms": 0.01340000017080456,
+      "refused": false,
+      "refusal_reason": null,
+      "groundedness": 0.9,
+      "answer_excerpt": "Deterministic dry-run answer for overview-getting-started. deploy [1]",
+      "citations": [
+        "docs/GETTING_STARTED.md"
+      ],
+      "scores": [
+        {
+          "rubric": "groundedness",
+          "value": 0.9,
+          "reason": "groundedness=0.900 >= threshold=0.500",
+          "threshold": 0.5,
+          "passed": true
+        },
+        {
+          "rubric": "citation_accuracy",
+          "value": 1.0,
+          "reason": "tp=1 precision=1.00 recall=1.00 expected=['docs/GETTING_STARTED.md'] cited=['docs/GETTING_STARTED.md']",
+          "threshold": 0.65,
+          "passed": true
+        },
+        {
+          "rubric": "answer_relevance",
+          "value": 1.0,
+          "reason": "hits=1/1 missing=[]",
+          "threshold": 0.6,
+          "passed": true
+        },
+        {
+          "rubric": "refusal_correctness",
+          "value": 1.0,
+          "reason": "expected_refuse=False actual_refuse=False",
+          "threshold": null,
+          "passed": true
+        },
+        {
+          "rubric": "latency_p50",
+          "value": 0.01340000017080456,
+          "reason": "latency_ms=0.0 budget=30000.0",
+          "threshold": 30000.0,
+          "passed": true
+        }
+      ],
+      "passed": true,
+      "error": null
+    },
+    {
+      "case_id": "streaming-contract-bronze",
+      "skill": "grounded-corpus-qa",
+      "latency_ms": 0.014500008546747267,
+      "refused": false,
+      "refusal_reason": null,
+      "groundedness": 0.9,
+      "answer_excerpt": "Deterministic dry-run answer for streaming-contract-bronze. bronze [1]",
+      "citations": [
+        "docs/adr/ADR-0018-streaming-contract.md"
+      ],
+      "scores": [
+        {
+          "rubric": "groundedness",
+          "value": 0.9,
+          "reason": "groundedness=0.900 >= threshold=0.550",
+          "threshold": 0.55,
+          "passed": true
+        },
+        {
+          "rubric": "citation_accuracy",
+          "value": 1.0,
+          "reason": "tp=1 precision=1.00 recall=1.00 expected=['docs/adr/ADR-0018-streaming-contract.md'] cited=['docs/adr/ADR-0018-streaming-contract.md']",
+          "threshold": 0.65,
+          "passed": true
+        },
+        {
+          "rubric": "answer_relevance",
+          "value": 1.0,
+          "reason": "hits=1/1 missing=[]",
+          "threshold": 0.6,
+          "passed": true
+        },
+        {
+          "rubric": "refusal_correctness",
+          "value": 1.0,
+          "reason": "expected_refuse=False actual_refuse=False",
+          "threshold": null,
+          "passed": true
+        },
+        {
+          "rubric": "latency_p50",
+          "value": 0.014500008546747267,
+          "reason": "latency_ms=0.0 budget=30000.0",
+          "threshold": 30000.0,
+          "passed": true
+        }
+      ],
+      "passed": true,
+      "error": null
+    },
+    {
+      "case_id": "cost-management-tagging",
+      "skill": "grounded-corpus-qa",
+      "latency_ms": 0.02720000338740647,
+      "refused": false,
+      "refusal_reason": null,
+      "groundedness": 0.9,
+      "answer_excerpt": "Deterministic dry-run answer for cost-management-tagging. tag [1]",
+      "citations": [
+        "docs/COST_MANAGEMENT.md"
+      ],
+      "scores": [
+        {
+          "rubric": "groundedness",
+          "value": 0.9,
+          "reason": "groundedness=0.900 >= threshold=0.500",
+          "threshold": 0.5,
+          "passed": true
+        },
+        {
+          "rubric": "citation_accuracy",
+          "value": 1.0,
+          "reason": "tp=1 precision=1.00 recall=1.00 expected=['docs/COST_MANAGEMENT.md'] cited=['docs/COST_MANAGEMENT.md']",
+          "threshold": 0.65,
+          "passed": true
+        },
+        {
+          "rubric": "answer_relevance",
+          "value": 1.0,
+          "reason": "hits=1/1 missing=[]",
+          "threshold": 0.6,
+          "passed": true
+        },
+        {
+          "rubric": "refusal_correctness",
+          "value": 1.0,
+          "reason": "expected_refuse=False actual_refuse=False",
+          "threshold": null,
+          "passed": true
+        },
+        {
+          "rubric": "latency_p50",
+          "value": 0.02720000338740647,
+          "reason": "latency_ms=0.0 budget=30000.0",
+          "threshold": 30000.0,
+          "passed": true
+        }
+      ],
+      "passed": true,
+      "error": null
+    },
+    {
+      "case_id": "security-managed-identity",
+      "skill": "grounded-corpus-qa",
+      "latency_ms": 0.012100004823878407,
+      "refused": false,
+      "refusal_reason": null,
+      "groundedness": 0.9,
+      "answer_excerpt": "Deterministic dry-run answer for security-managed-identity. managed identity [1]",
+      "citations": [
+        "docs/ARCHITECTURE.md"
+      ],
+      "scores": [
+        {
+          "rubric": "groundedness",
+          "value": 0.9,
+          "reason": "groundedness=0.900 >= threshold=0.550",
+          "threshold": 0.55,
+          "passed": true
+        },
+        {
+          "rubric": "citation_accuracy",
+          "value": 1.0,
+          "reason": "tp=1 precision=1.00 recall=1.00 expected=['docs/ARCHITECTURE.md'] cited=['docs/ARCHITECTURE.md']",
+          "threshold": 0.6,
+          "passed": true
+        },
+        {
+          "rubric": "answer_relevance",
+          "value": 1.0,
+          "reason": "hits=1/1 missing=[]",
+          "threshold": 0.6,
+          "passed": true
+        },
+        {
+          "rubric": "refusal_correctness",
+          "value": 1.0,
+          "reason": "expected_refuse=False actual_refuse=False",
+          "threshold": null,
+          "passed": true
+        },
+        {
+          "rubric": "latency_p50",
+          "value": 0.012100004823878407,
+          "reason": "latency_ms=0.0 budget=30000.0",
+          "threshold": 30000.0,
+          "passed": true
+        }
+      ],
+      "passed": true,
+      "error": null
+    },
+    {
+      "case_id": "multi-region-active-active",
+      "skill": "grounded-corpus-qa",
+      "latency_ms": 0.011899988749064505,
+      "refused": false,
+      "refusal_reason": null,
+      "groundedness": 0.9,
+      "answer_excerpt": "Deterministic dry-run answer for multi-region-active-active. multi-region [1]",
+      "citations": [
+        "docs/MULTI_REGION.md"
+      ],
+      "scores": [
+        {
+          "rubric": "groundedness",
+          "value": 0.9,
+          "reason": "groundedness=0.900 >= threshold=0.550",
+          "threshold": 0.55,
+          "passed": true
+        },
+        {
+          "rubric": "citation_accuracy",
+          "value": 1.0,
+          "reason": "tp=1 precision=1.00 recall=1.00 expected=['docs/MULTI_REGION.md'] cited=['docs/MULTI_REGION.md']",
+          "threshold": 0.65,
+          "passed": true
+        },
+        {
+          "rubric": "answer_relevance",
+          "value": 1.0,
+          "reason": "hits=1/1 missing=[]",
+          "threshold": 0.6,
+          "passed": true
+        },
+        {
+          "rubric": "refusal_correctness",
+          "value": 1.0,
+          "reason": "expected_refuse=False actual_refuse=False",
+          "threshold": null,
+          "passed": true
+        },
+        {
+          "rubric": "latency_p50",
+          "value": 0.011899988749064505,
+          "reason": "latency_ms=0.0 budget=30000.0",
+          "threshold": 30000.0,
+          "passed": true
+        }
+      ],
+      "passed": true,
+      "error": null
+    },
+    {
+      "case_id": "multi-tenant-isolation",
+      "skill": "grounded-corpus-qa",
+      "latency_ms": 0.010899995686486363,
+      "refused": false,
+      "refusal_reason": null,
+      "groundedness": 0.9,
+      "answer_excerpt": "Deterministic dry-run answer for multi-tenant-isolation. tenant [1]",
+      "citations": [
+        "docs/MULTI_TENANT.md"
+      ],
+      "scores": [
+        {
+          "rubric": "groundedness",
+          "value": 0.9,
+          "reason": "groundedness=0.900 >= threshold=0.550",
+          "threshold": 0.55,
+          "passed": true
+        },
+        {
+          "rubric": "citation_accuracy",
+          "value": 1.0,
+          "reason": "tp=1 precision=1.00 recall=1.00 expected=['docs/MULTI_TENANT.md'] cited=['docs/MULTI_TENANT.md']",
+          "threshold": 0.65,
+          "passed": true
+        },
+        {
+          "rubric": "answer_relevance",
+          "value": 1.0,
+          "reason": "hits=1/1 missing=[]",
+          "threshold": 0.6,
+          "passed": true
+        },
+        {
+          "rubric": "refusal_correctness",
+          "value": 1.0,
+          "reason": "expected_refuse=False actual_refuse=False",
+          "threshold": null,
+          "passed": true
+        },
+        {
+          "rubric": "latency_p50",
+          "value": 0.010899995686486363,
+          "reason": "latency_ms=0.0 budget=30000.0",
+          "threshold": 30000.0,
+          "passed": true
+        }
+      ],
+      "passed": true,
+      "error": null
+    },
+    {
+      "case_id": "platform-services-catalog",
+      "skill": "grounded-corpus-qa",
+      "latency_ms": 0.010499992640689015,
+      "refused": false,
+      "refusal_reason": null,
+      "groundedness": 0.9,
+      "answer_excerpt": "Deterministic dry-run answer for platform-services-catalog. service [1]",
+      "citations": [
+        "docs/PLATFORM_SERVICES.md"
+      ],
+      "scores": [
+        {
+          "rubric": "groundedness",
+          "value": 0.9,
+          "reason": "groundedness=0.900 >= threshold=0.500",
+          "threshold": 0.5,
+          "passed": true
+        },
+        {
+          "rubric": "citation_accuracy",
+          "value": 1.0,
+          "reason": "tp=1 precision=1.00 recall=1.00 expected=['docs/PLATFORM_SERVICES.md'] cited=['docs/PLATFORM_SERVICES.md']",
+          "threshold": 0.6,
+          "passed": true
+        },
+        {
+          "rubric": "answer_relevance",
+          "value": 1.0,
+          "reason": "hits=1/1 missing=[]",
+          "threshold": 0.6,
+          "passed": true
+        },
+        {
+          "rubric": "refusal_correctness",
+          "value": 1.0,
+          "reason": "expected_refuse=False actual_refuse=False",
+          "threshold": null,
+          "passed": true
+        },
+        {
+          "rubric": "latency_p50",
+          "value": 0.010499992640689015,
+          "reason": "latency_ms=0.0 budget=30000.0",
+          "threshold": 30000.0,
+          "passed": true
+        }
+      ],
+      "passed": true,
+      "error": null
+    },
+    {
+      "case_id": "production-checklist",
+      "skill": "grounded-corpus-qa",
+      "latency_ms": 0.010500007192604244,
+      "refused": false,
+      "refusal_reason": null,
+      "groundedness": 0.9,
+      "answer_excerpt": "Deterministic dry-run answer for production-checklist. checklist [1]",
+      "citations": [
+        "docs/PRODUCTION_CHECKLIST.md"
+      ],
+      "scores": [
+        {
+          "rubric": "groundedness",
+          "value": 0.9,
+          "reason": "groundedness=0.900 >= threshold=0.500",
+          "threshold": 0.5,
+          "passed": true
+        },
+        {
+          "rubric": "citation_accuracy",
+          "value": 1.0,
+          "reason": "tp=1 precision=1.00 recall=1.00 expected=['docs/PRODUCTION_CHECKLIST.md'] cited=['docs/PRODUCTION_CHECKLIST.md']",
+          "threshold": 0.65,
+          "passed": true
+        },
+        {
+          "rubric": "answer_relevance",
+          "value": 1.0,
+          "reason": "hits=1/1 missing=[]",
+          "threshold": 0.6,
+          "passed": true
+        },
+        {
+          "rubric": "refusal_correctness",
+          "value": 1.0,
+          "reason": "expected_refuse=False actual_refuse=False",
+          "threshold": null,
+          "passed": true
+        },
+        {
+          "rubric": "latency_p50",
+          "value": 0.010500007192604244,
+          "reason": "latency_ms=0.0 budget=30000.0",
+          "threshold": 30000.0,
+          "passed": true
+        }
+      ],
+      "passed": true,
+      "error": null
+    },
+    {
+      "case_id": "troubleshooting-deploy",
+      "skill": "grounded-corpus-qa",
+      "latency_ms": 0.010599993402138352,
+      "refused": false,
+      "refusal_reason": null,
+      "groundedness": 0.9,
+      "answer_excerpt": "Deterministic dry-run answer for troubleshooting-deploy. log [1]",
+      "citations": [
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "scores": [
+        {
+          "rubric": "groundedness",
+          "value": 0.9,
+          "reason": "groundedness=0.900 >= threshold=0.500",
+          "threshold": 0.5,
+          "passed": true
+        },
+        {
+          "rubric": "citation_accuracy",
+          "value": 1.0,
+          "reason": "tp=1 precision=1.00 recall=1.00 expected=['docs/TROUBLESHOOTING.md'] cited=['docs/TROUBLESHOOTING.md']",
+          "threshold": 0.6,
+          "passed": true
+        },
+        {
+          "rubric": "answer_relevance",
+          "value": 1.0,
+          "reason": "hits=1/1 missing=[]",
+          "threshold": 0.6,
+          "passed": true
+        },
+        {
+          "rubric": "refusal_correctness",
+          "value": 1.0,
+          "reason": "expected_refuse=False actual_refuse=False",
+          "threshold": null,
+          "passed": true
+        },
+        {
+          "rubric": "latency_p50",
+          "value": 0.010599993402138352,
+          "reason": "latency_ms=0.0 budget=30000.0",
+          "threshold": 30000.0,
+          "passed": true
+        }
+      ],
+      "passed": true,
+      "error": null
+    },
+    {
+      "case_id": "log-schema-fields",
+      "skill": "grounded-corpus-qa",
+      "latency_ms": 0.010299991117790341,
+      "refused": false,
+      "refusal_reason": null,
+      "groundedness": 0.9,
+      "answer_excerpt": "Deterministic dry-run answer for log-schema-fields. trace [1]",
+      "citations": [
+        "docs/LOG_SCHEMA.md"
+      ],
+      "scores": [
+        {
+          "rubric": "groundedness",
+          "value": 0.9,
+          "reason": "groundedness=0.900 >= threshold=0.550",
+          "threshold": 0.55,
+          "passed": true
+        },
+        {
+          "rubric": "citation_accuracy",
+          "value": 1.0,
+          "reason": "tp=1 precision=1.00 recall=1.00 expected=['docs/LOG_SCHEMA.md'] cited=['docs/LOG_SCHEMA.md']",
+          "threshold": 0.7,
+          "passed": true
+        },
+        {
+          "rubric": "answer_relevance",
+          "value": 1.0,
+          "reason": "hits=1/1 missing=[]",
+          "threshold": 0.6,
+          "passed": true
+        },
+        {
+          "rubric": "refusal_correctness",
+          "value": 1.0,
+          "reason": "expected_refuse=False actual_refuse=False",
+          "threshold": null,
+          "passed": true
+        },
+        {
+          "rubric": "latency_p50",
+          "value": 0.010299991117790341,
+          "reason": "latency_ms=0.0 budget=30000.0",
+          "threshold": 30000.0,
+          "passed": true
+        }
+      ],
+      "passed": true,
+      "error": null
+    },
+    {
+      "case_id": "rollback-workflow",
+      "skill": "grounded-corpus-qa",
+      "latency_ms": 0.010099989594891667,
+      "refused": false,
+      "refusal_reason": null,
+      "groundedness": 0.9,
+      "answer_excerpt": "Deterministic dry-run answer for rollback-workflow. rollback [1]",
+      "citations": [
+        "docs/ROLLBACK.md"
+      ],
+      "scores": [
+        {
+          "rubric": "groundedness",
+          "value": 0.9,
+          "reason": "groundedness=0.900 >= threshold=0.550",
+          "threshold": 0.55,
+          "passed": true
+        },
+        {
+          "rubric": "citation_accuracy",
+          "value": 1.0,
+          "reason": "tp=1 precision=1.00 recall=1.00 expected=['docs/ROLLBACK.md'] cited=['docs/ROLLBACK.md']",
+          "threshold": 0.65,
+          "passed": true
+        },
+        {
+          "rubric": "answer_relevance",
+          "value": 1.0,
+          "reason": "hits=1/1 missing=[]",
+          "threshold": 0.6,
+          "passed": true
+        },
+        {
+          "rubric": "refusal_correctness",
+          "value": 1.0,
+          "reason": "expected_refuse=False actual_refuse=False",
+          "threshold": null,
+          "passed": true
+        },
+        {
+          "rubric": "latency_p50",
+          "value": 0.010099989594891667,
+          "reason": "latency_ms=0.0 budget=30000.0",
+          "threshold": 30000.0,
+          "passed": true
+        }
+      ],
+      "passed": true,
+      "error": null
+    },
+    {
+      "case_id": "developer-pathways",
+      "skill": "grounded-corpus-qa",
+      "latency_ms": 0.009499999578110874,
+      "refused": false,
+      "refusal_reason": null,
+      "groundedness": 0.9,
+      "answer_excerpt": "Deterministic dry-run answer for developer-pathways. path [1]",
+      "citations": [
+        "docs/DEVELOPER_PATHWAYS.md"
+      ],
+      "scores": [
+        {
+          "rubric": "groundedness",
+          "value": 0.9,
+          "reason": "groundedness=0.900 >= threshold=0.500",
+          "threshold": 0.5,
+          "passed": true
+        },
+        {
+          "rubric": "citation_accuracy",
+          "value": 1.0,
+          "reason": "tp=1 precision=1.00 recall=1.00 expected=['docs/DEVELOPER_PATHWAYS.md'] cited=['docs/DEVELOPER_PATHWAYS.md']",
+          "threshold": 0.6,
+          "passed": true
+        },
+        {
+          "rubric": "answer_relevance",
+          "value": 1.0,
+          "reason": "hits=1/1 missing=[]",
+          "threshold": 0.6,
+          "passed": true
+        },
+        {
+          "rubric": "refusal_correctness",
+          "value": 1.0,
+          "reason": "expected_refuse=False actual_refuse=False",
+          "threshold": null,
+          "passed": true
+        },
+        {
+          "rubric": "latency_p50",
+          "value": 0.009499999578110874,
+          "reason": "latency_ms=0.0 budget=30000.0",
+          "threshold": 30000.0,
+          "passed": true
+        }
+      ],
+      "passed": true,
+      "error": null
+    }
+  ],
+  "aggregates": [
+    {
+      "rubric": "answer_relevance",
+      "mean": 1.0,
+      "p50": 1.0,
+      "p95": 1.0,
+      "p99": 1.0,
+      "count": 21,
+      "passed": 21,
+      "failed": 0
+    },
+    {
+      "rubric": "citation_accuracy",
+      "mean": 1.0,
+      "p50": 1.0,
+      "p95": 1.0,
+      "p99": 1.0,
+      "count": 21,
+      "passed": 21,
+      "failed": 0
+    },
+    {
+      "rubric": "groundedness",
+      "mean": 0.9000000000000001,
+      "p50": 0.9,
+      "p95": 0.9,
+      "p99": 0.9,
+      "count": 21,
+      "passed": 21,
+      "failed": 0
+    },
+    {
+      "rubric": "latency_p50",
+      "mean": 0.015276191074268095,
+      "p50": 0.014000004739500582,
+      "p95": 0.02720000338740647,
+      "p99": 0.04359999729786068,
+      "count": 21,
+      "passed": 21,
+      "failed": 0
+    },
+    {
+      "rubric": "latency_p95",
+      "mean": 0.015276191074268095,
+      "p50": 0.014000004739500582,
+      "p95": 0.02720000338740647,
+      "p99": 0.04359999729786068,
+      "count": 21,
+      "passed": 21,
+      "failed": 0
+    },
+    {
+      "rubric": "latency_p99",
+      "mean": 0.015276191074268095,
+      "p50": 0.014000004739500582,
+      "p95": 0.02720000338740647,
+      "p99": 0.04359999729786068,
+      "count": 21,
+      "passed": 21,
+      "failed": 0
+    },
+    {
+      "rubric": "refusal_correctness",
+      "mean": 1.0,
+      "p50": 1.0,
+      "p95": 1.0,
+      "p99": 1.0,
+      "count": 21,
+      "passed": 21,
+      "failed": 0
+    }
+  ],
+  "total_cases": 21,
+  "passed_cases": 21,
+  "failed_cases": 0,
+  "error_cases": 0
+}

@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "csa-copilot-evals-golden-v1",
+  "title": "Copilot Golden Example",
+  "type": "object",
+  "required": ["id", "question"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable case id; used in reports + regression gate diffs."
+    },
+    "question": {
+      "type": "string",
+      "minLength": 1
+    },
+    "skill": {
+      "type": "string",
+      "minLength": 1,
+      "default": "grounded-corpus-qa"
+    },
+    "conversation_id": {
+      "type": ["string", "null"]
+    },
+    "expected_citations": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "default": []
+    },
+    "expected_phrases": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "default": []
+    },
+    "must_refuse": {
+      "type": "boolean",
+      "default": false
+    },
+    "thresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "groundedness": {"type": ["number", "null"], "minimum": 0.0, "maximum": 1.0},
+        "citation_accuracy": {"type": ["number", "null"], "minimum": 0.0, "maximum": 1.0},
+        "answer_relevance": {"type": ["number", "null"], "minimum": 0.0, "maximum": 1.0},
+        "refusal_correctness": {"type": ["number", "null"], "minimum": 0.0, "maximum": 1.0}
+      }
+    },
+    "tags": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    }
+  }
+}
