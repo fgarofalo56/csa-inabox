@@ -50,7 +50,7 @@ if TYPE_CHECKING:  # pragma: no cover
 
 _ENV_FLAG = "FABRIC_RTI_ENABLED"
 _ENV_ENDPOINT = "FABRIC_RTI_ENDPOINT"
-_ENV_TOKEN = "FABRIC_RTI_TOKEN"
+_ENV_TOKEN = "FABRIC_RTI_TOKEN"  # nosec B105  # env var name, not a secret
 _DEFAULT_ENDPOINT_TEMPLATE = (
     "https://{workspace}.fabric.microsoft.com/eventstreams/{entity}/events"
 )

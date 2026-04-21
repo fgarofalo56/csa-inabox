@@ -100,7 +100,7 @@ class DatabricksSQLEndpointManager:
     def __init__(
         self,
         workspace_url: str = "",
-        token: str = "",
+        token: str = "",  # nosec B107  # empty default, real token injected at runtime
     ) -> None:
         self.workspace_url = workspace_url.rstrip("/")
         self._token = token

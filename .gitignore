@@ -32,6 +32,8 @@ data/
 # Un-ignore example verticals' data/ dirs (they host source generators).
 # gitignore can only re-include files if the parent dir is un-ignored first.
 !examples/*/data/
+# Un-ignore cookiecutter template data/ (same pattern as examples).
+!templates/example-vertical/*/data/
 # Re-ignore generator *output* (fixtures produced at runtime).
 examples/*/data/seed/
 

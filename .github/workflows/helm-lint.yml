@@ -51,6 +51,10 @@ jobs:
         with:
           version: v3.16.2
 
+      - name: Remove cached helm-diff plugin (avoid platformHooks poison)
+        run: |
+          rm -rf ~/.local/share/helm/plugins/helm-diff || true
+
       - name: Install helm-diff plugin
         run: |
           helm plugin install https://github.com/databus23/helm-diff || true

@@ -253,8 +253,8 @@ class SynapseWorkspaceManager:
 
         if allow_azure_services:
             rule = IpFirewallRuleInfo(
-                start_ip_address="0.0.0.0",
-                end_ip_address="0.0.0.0",
+                start_ip_address="0.0.0.0",  # nosec B104  # Azure "Allow Azure services" sentinel IP
+                end_ip_address="0.0.0.0",  # nosec B104  # Azure "Allow Azure services" sentinel IP
             )
             poller = client.ip_firewall_rules.begin_create_or_update(
                 resource_group_name=resource_group,
