@@ -3,13 +3,7 @@ name: Test Suite
 on:
   pull_request:
     branches: [main]
-    paths:
-      - 'csa_platform/**'
-      - 'domains/**'
-      - 'scripts/**'
-      - 'tests/**'
-      - 'pyproject.toml'
-      - '.github/workflows/test.yml'
+    # No paths filter — branch protection requires these checks on every PR.
   push:
     branches: [main]
     paths:
