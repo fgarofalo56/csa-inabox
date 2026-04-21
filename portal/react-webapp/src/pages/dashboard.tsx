@@ -34,6 +34,7 @@ import {
 import ErrorBanner from '@/components/ErrorBanner';
 import EmptyState from '@/components/EmptyState';
 import { RouteErrorBoundary } from '@/components/RouteErrorBoundary';
+import { ActivityFeed } from '@/components/ActivityFeed';
 import type { DataProduct, DomainOverview, PlatformStats } from '@/types';
 
 interface KpiCardProps {
@@ -340,6 +341,10 @@ function DashboardContent() {
           <TopProductsTable products={products} />
         )}
       </section>
+
+      {/* Recent activity — CSA-0124(14). Pulls live pipeline-run + pending
+          access-request data via existing hooks; no new endpoints. */}
+      <ActivityFeed limit={10} />
     </div>
   );
 }

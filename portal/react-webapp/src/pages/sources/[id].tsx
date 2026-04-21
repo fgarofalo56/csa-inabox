@@ -23,6 +23,7 @@ import { StatusBadge } from '@/components/StatusBadge';
 import Button from '@/components/Button';
 import { Modal } from '@/components/Modal';
 import { Toast } from '@/components/Toast';
+import { Breadcrumbs } from '@/components/Breadcrumbs';
 import type { PipelineRecord, ColumnDefinition, DataQualityRule } from '@/types';
 
 type ActionKind = 'provision' | 'scan' | 'decommission' | null;
@@ -210,9 +211,16 @@ export default function SourceDetailPage() {
     <div className="space-y-6">
       <PageHeader
         breadcrumb={
-          <Link href="/sources" className="text-brand-600 hover:text-brand-800">
-            &larr; Sources
-          </Link>
+          /* CSA-0124(9): real breadcrumb trail replaces the single
+             back-link. Builds Home → Sources → <source name> so the user
+             can jump to either parent in one click. */
+          <Breadcrumbs
+            items={[
+              { label: 'Home', href: '/' },
+              { label: 'Sources', href: '/sources' },
+              { label: source.name },
+            ]}
+          />
         }
         title={source.name}
         description={source.description}

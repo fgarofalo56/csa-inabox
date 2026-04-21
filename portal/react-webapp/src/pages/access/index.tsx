@@ -7,9 +7,13 @@
  *    submitted or has review rights over (backend scopes this by role /
  *    domain). Pending rows expose approve / deny actions; the backend
  *    enforces whether the current caller may execute them.
+ *
+ * CSA-0124-remaining: bulk selection + bulk actions (scope creep).
+ * CSA-0124-remaining: CSV export (needs backend endpoint).
+ * CSA-0124-remaining: optimistic UI on approve/deny (mutation layer change).
  */
 
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
 import {
   useAccessRequests,
@@ -23,10 +27,17 @@ import EmptyState from '@/components/EmptyState';
 import PageHeader from '@/components/PageHeader';
 import { RouteErrorBoundary } from '@/components/RouteErrorBoundary';
 import { StatusBadge } from '@/components/StatusBadge';
+import { TableSkeleton } from '@/components/TableSkeleton';
 import Button from '@/components/Button';
 import { Modal } from '@/components/Modal';
 import { Toast } from '@/components/Toast';
 import type { AccessRequest, AccessLevel } from '@/types';
+
+/** Read a query-string param as a single string (collapse arrays). */
+function readParam(value: string | string[] | undefined): string {
+  if (Array.isArray(value)) return value[0] ?? '';
+  return value ?? '';
+}
 
 type ReviewAction = { kind: 'approve' | 'deny'; request: AccessRequest } | null;
 
@@ -233,6 +244,37 @@ function AccessPageContent() {
   const showForm = !!productId && !submittedInSession;
 
   const [statusFilter, setStatusFilter] = useState<string>('');
+
+  // ─── URL-synced filter state (CSA-0124(7)) ───────────────────────────
+  // Hydrate the status filter from `?status=…` on first ready render;
+  // push changes back with router.replace so the view is deep-linkable.
+  // Note: we intentionally do NOT sync `product_id` — that param toggles
+  // the whole page between form and list mode and is already URL-driven.
+  useEffect(() => {
+    if (!router.isReady) return;
+    const s = readParam(router.query?.status);
+    setStatusFilter((prev) => (prev === s ? prev : s));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [router.isReady, router.query?.status]);
+
+  const pushStatusQuery = useCallback(
+    (status: string) => {
+      if (!router.isReady) return;
+      const query: Record<string, string> = {};
+      // Preserve an in-flight product_id if the user is still in form mode.
+      const pid = readParam(router.query?.product_id);
+      if (pid) query.product_id = pid;
+      if (status) query.status = status;
+      void router.replace({ pathname: router.pathname, query }, undefined, { shallow: true });
+    },
+    [router],
+  );
+
+  const onChangeStatusFilter = (value: string) => {
+    setStatusFilter(value);
+    pushStatusQuery(value);
+  };
+
   const {
     data: requests,
     isLoading,
@@ -304,7 +346,7 @@ function AccessPageContent() {
           <div className="flex flex-wrap gap-3">
             <select
               value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
+              onChange={(e) => onChangeStatusFilter(e.target.value)}
               aria-label="Filter by status"
               className="px-3 py-2 border border-gray-300 rounded-md text-sm"
             >
@@ -324,11 +366,12 @@ function AccessPageContent() {
               onRetry={() => refetch()}
             />
           ) : isLoading ? (
-            <div className="flex items-center justify-center h-64">
-              <div role="status" aria-label="Loading">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-600" />
-              </div>
-            </div>
+            /* CSA-0124(10): shared table skeleton for consistent loading feel. */
+            <TableSkeleton
+              columns={['Product', 'Requester', 'Level', 'Duration', 'Status', 'Requested', 'Notes', 'Review']}
+              rows={5}
+              ariaLabel="Loading access requests"
+            />
           ) : (
             <AccessRequestsTable
               requests={requests ?? []}

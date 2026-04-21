@@ -27,12 +27,17 @@ const mockUseStats = jest.fn();
 const mockUseDomainOverview = jest.fn();
 const mockUsePipelines = jest.fn();
 const mockUseDataProducts = jest.fn();
+// CSA-0124(14): the dashboard now hosts <ActivityFeed/>, which in turn
+// calls useAccessRequests. Mock it so the dashboard test doesn't explode
+// with "useAccessRequests is not a function".
+const mockUseAccessRequests = jest.fn();
 
 jest.mock('@/hooks/useApi', () => ({
   useStats: (...args: unknown[]) => mockUseStats(...args),
   useDomainOverview: (...args: unknown[]) => mockUseDomainOverview(...args),
   usePipelines: (...args: unknown[]) => mockUsePipelines(...args),
   useDataProducts: (...args: unknown[]) => mockUseDataProducts(...args),
+  useAccessRequests: (...args: unknown[]) => mockUseAccessRequests(...args),
 }));
 
 import DashboardPage from '@/pages/dashboard';
@@ -83,6 +88,10 @@ describe('DashboardPage (/dashboard)', () => {
     mockUseDomainOverview.mockReset();
     mockUsePipelines.mockReset();
     mockUseDataProducts.mockReset();
+    // ActivityFeed calls useAccessRequests — default to an empty list so
+    // tests that don't care about it still render cleanly.
+    mockUseAccessRequests.mockReset();
+    mockUseAccessRequests.mockReturnValue({ data: [], isLoading: false, error: null });
   });
 
   it('renders the loading skeleton when stats are loading', () => {

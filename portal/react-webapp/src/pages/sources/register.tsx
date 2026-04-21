@@ -24,6 +24,7 @@ import {
   StepOwner,
   StepReview,
 } from '@/components/register';
+import { Breadcrumbs } from '@/components/Breadcrumbs';
 
 // ─── Zod validation schema for source registration ───────────────────────
 
@@ -301,6 +302,16 @@ export default function RegisterSourcePage() {
   return (
     <div className="max-w-4xl mx-auto">
       <div className="mb-8">
+        {/* CSA-0124(9): breadcrumb trail so users can jump back to the
+            sources list or home without using the browser back button. */}
+        <Breadcrumbs
+          className="mb-2"
+          items={[
+            { label: 'Home', href: '/' },
+            { label: 'Sources', href: '/sources' },
+            { label: `Register — ${STEPS[step].title}` },
+          ]}
+        />
         <h1 className="text-2xl font-bold text-gray-900">
           Register Data Source
         </h1>
@@ -344,7 +355,12 @@ export default function RegisterSourcePage() {
             <StepOwner register={register} watch={watch} errors={errors} />
           )}
           {step === 6 && (
-            <StepReview watch={watch} qualityRules={qualityRules} />
+            <StepReview
+              watch={watch}
+              qualityRules={qualityRules}
+              errors={errors}
+              onJumpToStep={(idx) => setStep(Math.max(0, Math.min(STEPS.length - 1, idx)))}
+            />
           )}
         </div>
 

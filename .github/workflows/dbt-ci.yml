@@ -81,6 +81,7 @@ jobs:
             "examples/epa/domains/dbt"
             "examples/interior/domains/dbt"
             "examples/iot-streaming/domains/dbt"
+            "examples/ml-lifecycle/domains/dbt"
             "examples/noaa/domains/dbt"
             "examples/tribal-health/domains/dbt"
             "examples/usda/domains/dbt"
@@ -181,6 +182,7 @@ jobs:
           casino_analytics: *ci_duckdb
           dot_analytics: *ci_duckdb
           csa_iot_streaming: *ci_duckdb
+          csa_ml_lifecycle: *ci_duckdb
           tribal_health_analytics: *ci_duckdb
           usps_analytics: *ci_duckdb
           PROFILES

@@ -4,9 +4,14 @@
  * Lists every pipeline, supports filtering by status / source domain /
  * free-text search, expands a row inline to show recent run history,
  * and supports triggering a pipeline run with a confirmation dialog.
+ *
+ * CSA-0124-remaining: bulk selection + bulk actions (scope creep).
+ * CSA-0124-remaining: CSV export (needs backend endpoint).
+ * CSA-0124-remaining: pagination on long lists (needs backend pagination).
  */
 
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/router';
 import {
   usePipelines,
   usePipelineRuns,
@@ -14,16 +19,27 @@ import {
   useSources,
 } from '@/hooks/useApi';
 import { useDebounce } from '@/hooks/useDebounce';
+import { useColumnSort } from '@/hooks/useColumnSort';
 import { useToast } from '@/hooks/useToast';
 import ErrorBanner from '@/components/ErrorBanner';
 import EmptyState from '@/components/EmptyState';
 import PageHeader from '@/components/PageHeader';
 import { RouteErrorBoundary } from '@/components/RouteErrorBoundary';
 import { StatusBadge } from '@/components/StatusBadge';
+import { TableSkeleton } from '@/components/TableSkeleton';
 import Button from '@/components/Button';
 import { Modal } from '@/components/Modal';
 import { Toast } from '@/components/Toast';
 import type { PipelineRecord, PipelineRun, SourceRecord } from '@/types';
+
+/** Sortable columns on the pipelines table. */
+type PipelineSortKey = 'name' | 'source' | 'pipeline_type' | 'status' | 'last_run_at' | 'schedule_cron';
+
+/** Read a query-string param as a single string (collapsing arrays). */
+function readParam(value: string | string[] | undefined): string {
+  if (Array.isArray(value)) return value[0] ?? '';
+  return value ?? '';
+}
 
 function formatDate(iso?: string): string {
   if (!iso) return '—';
@@ -75,11 +91,52 @@ function PipelineRunsPanel({ pipelineId }: { pipelineId: string }) {
 }
 
 function PipelinesPageContent() {
+  const router = useRouter();
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [domainFilter, setDomainFilter] = useState<string>('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [pendingTrigger, setPendingTrigger] = useState<PipelineRecord | null>(null);
+
+  // ─── URL-synced filter state (CSA-0124(7)) ───────────────────────────
+  // Hydrate from the URL on first ready render; push changes back via
+  // router.replace so the current view is deep-linkable.
+  useEffect(() => {
+    if (!router.isReady) return;
+    const q = router.query ?? {};
+    const searchValue = readParam(q.search);
+    const statusValue = readParam(q.status);
+    const domainValue = readParam(q.domain);
+    setSearch((prev) => (prev === searchValue ? prev : searchValue));
+    setStatusFilter((prev) => (prev === statusValue ? prev : statusValue));
+    setDomainFilter((prev) => (prev === domainValue ? prev : domainValue));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [router.isReady, router.query?.search, router.query?.status, router.query?.domain]);
+
+  const pushQuery = useCallback(
+    (next: { search?: string; status?: string; domain?: string }) => {
+      if (!router.isReady) return;
+      const query: Record<string, string> = {};
+      if (next.search) query.search = next.search;
+      if (next.status) query.status = next.status;
+      if (next.domain) query.domain = next.domain;
+      void router.replace({ pathname: router.pathname, query }, undefined, { shallow: true });
+    },
+    [router],
+  );
+
+  const onChangeSearch = (value: string) => {
+    setSearch(value);
+    pushQuery({ search: value, status: statusFilter, domain: domainFilter });
+  };
+  const onChangeStatus = (value: string) => {
+    setStatusFilter(value);
+    pushQuery({ search, status: value, domain: domainFilter });
+  };
+  const onChangeDomain = (value: string) => {
+    setDomainFilter(value);
+    pushQuery({ search, status: statusFilter, domain: value });
+  };
 
   const debouncedSearch = useDebounce(search);
 
@@ -121,6 +178,21 @@ function PipelinesPageContent() {
     });
   }, [pipelines, debouncedSearch, domainFilter, sourceById]);
 
+  // Column-sortable wrapper (CSA-0124(5)). Sort is applied AFTER filter so
+  // users only re-order what they can see.
+  const { setSort, sortedItems, ariaSortFor, sortKey, sortDir } = useColumnSort<
+    PipelineRecord,
+    PipelineSortKey
+  >(filtered, {
+    getValue: (row, key) => {
+      if (key === 'source') return sourceById.get(row.source_id)?.name ?? '';
+      if (key === 'last_run_at') return row.last_run_at ? new Date(row.last_run_at) : null;
+      return (row as unknown as Record<string, string | undefined>)[key];
+    },
+  });
+  const sortIndicator = (key: PipelineSortKey): string =>
+    sortKey === key ? (sortDir === 'asc' ? ' ↑' : ' ↓') : '';
+
   const confirmTrigger = async () => {
     if (!pendingTrigger) return;
     try {
@@ -148,14 +220,14 @@ function PipelinesPageContent() {
         <input
           type="text"
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={(e) => onChangeSearch(e.target.value)}
           placeholder="Search pipelines…"
           aria-label="Search pipelines"
           className="flex-1 min-w-[220px] px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-brand-500 focus:border-brand-500"
         />
         <select
           value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
+          onChange={(e) => onChangeStatus(e.target.value)}
           aria-label="Filter by status"
           className="px-3 py-2 border border-gray-300 rounded-md text-sm"
         >
@@ -169,7 +241,7 @@ function PipelinesPageContent() {
         </select>
         <select
           value={domainFilter}
-          onChange={(e) => setDomainFilter(e.target.value)}
+          onChange={(e) => onChangeDomain(e.target.value)}
           aria-label="Filter by source domain"
           className="px-3 py-2 border border-gray-300 rounded-md text-sm"
         >
@@ -188,11 +260,12 @@ function PipelinesPageContent() {
           onRetry={() => refetch()}
         />
       ) : isLoading ? (
-        <div className="flex items-center justify-center h-64">
-          <div role="status" aria-label="Loading">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-600" />
-          </div>
-        </div>
+        /* CSA-0124(10): shared table skeleton for consistent loading feel. */
+        <TableSkeleton
+          columns={['Name', 'Source', 'Type', 'Status', 'Last run', 'Schedule', 'Actions']}
+          rows={5}
+          ariaLabel="Loading pipelines"
+        />
       ) : filtered.length === 0 ? (
         /* CSA-0124(2): friendly empty state with a CTA rather than a
            plain message. The CTA points at the source-registration flow
@@ -215,17 +288,36 @@ function PipelinesPageContent() {
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Source</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Last run</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Schedule</th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Actions</th>
+                {([
+                  { key: 'name', label: 'Name' },
+                  { key: 'source', label: 'Source' },
+                  { key: 'pipeline_type', label: 'Type' },
+                  { key: 'status', label: 'Status' },
+                  { key: 'last_run_at', label: 'Last run' },
+                  { key: 'schedule_cron', label: 'Schedule' },
+                ] as ReadonlyArray<{ key: PipelineSortKey; label: string }>).map((col) => (
+                  <th
+                    key={col.key}
+                    scope="col"
+                    aria-sort={ariaSortFor(col.key)}
+                    className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setSort(col.key)}
+                      aria-label={`Sort by ${col.label}`}
+                      className="inline-flex items-center gap-1 font-medium uppercase tracking-wider text-gray-500 hover:text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2 rounded"
+                    >
+                      <span>{col.label}</span>
+                      <span aria-hidden="true">{sortIndicator(col.key)}</span>
+                    </button>
+                  </th>
+                ))}
+                <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Actions</th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {filtered.map((p) => {
+              {sortedItems.map((p) => {
                 const src = sourceById.get(p.source_id);
                 const expanded = expandedId === p.id;
                 return (
