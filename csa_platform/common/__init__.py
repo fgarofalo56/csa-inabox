@@ -22,7 +22,7 @@ sub-packages need it.  Service-specific helpers belong in the owning
 sub-package.
 """
 
-from csa_platform.common import azure_clients  # noqa: F401 — re-export
-from csa_platform.config import platform_settings  # noqa: F401 — re-export
+from csa_platform.common import azure_clients  # — re-export
+from csa_platform.config import platform_settings  # — re-export
 
 __all__: list[str] = ["azure_clients", "platform_settings"]

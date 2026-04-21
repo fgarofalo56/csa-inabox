@@ -80,8 +80,8 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install cookiecutter
-        run: pip install 'cookiecutter>=2.6.0,<3.0.0'
+      - name: Install cookiecutter + pytest
+        run: pip install 'cookiecutter>=2.6.0,<3.0.0' pytest
 
       - name: Generate a sample vertical from the template
         run: |

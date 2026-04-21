@@ -53,8 +53,7 @@ jobs:
 
       - name: Install helm-diff plugin
         run: |
-          helm plugin install https://github.com/databus23/helm-diff || \
-            helm plugin update diff
+          helm plugin install https://github.com/databus23/helm-diff || true
 
       - name: helm lint --strict (schema-enforced)
         # CSA-0053: values.schema.json is checked by --strict. Any unknown

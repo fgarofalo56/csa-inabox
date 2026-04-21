@@ -32,7 +32,7 @@ from typing import Any
 
 from csa_platform.common.logging import configure_structlog, get_logger
 
-from .dlq import DLQEnvelope, DeadLetterQueue, get_default_dlq
+from .dlq import DeadLetterQueue, DLQEnvelope, get_default_dlq
 from .errors import DataActivatorFatalError, DataActivatorTransientError
 from .retry import retry_sync
 
@@ -224,7 +224,7 @@ class BaseNotifier(ABC):
             )
             self._dead_letter(payload, exc, "transient_exhausted", attempts)
             return False
-        except Exception as exc:  # noqa: BLE001 — last-resort guard
+        except Exception as exc:
             logger.exception(
                 "data_activator.notifier.unexpected",
                 notifier_type=self.NOTIFIER_TYPE,
@@ -258,7 +258,7 @@ class BaseNotifier(ABC):
         )
         try:
             self._dlq.send(envelope)
-        except Exception:  # noqa: BLE001 — DLQ itself must never crash the loop
+        except Exception:  # DLQ itself must never crash the loop
             logger.exception(
                 "data_activator.notifier.dlq_error",
                 notifier_type=self.NOTIFIER_TYPE,
@@ -313,7 +313,7 @@ class TeamsNotifier(BaseNotifier):
         return True
 
     def _deliver(self, payload: AlertPayload) -> None:
-        assert requests is not None  # guaranteed by validate_config  # noqa: S101
+        assert requests is not None  # guaranteed by validate_config
         from .teams_card import build_alert_card
 
         card = build_alert_card(payload)
@@ -486,7 +486,7 @@ class WebhookNotifier(BaseNotifier):
         return True
 
     def _deliver(self, payload: AlertPayload) -> None:
-        assert requests is not None  # guaranteed by validate_config  # noqa: S101
+        assert requests is not None  # guaranteed by validate_config
         body = {
             "rule_name": payload.rule_name,
             "description": payload.description,
@@ -573,7 +573,7 @@ class IncidentCreator(BaseNotifier):
 
     def _create_pagerduty_incident(self, payload: AlertPayload) -> None:
         """Create a PagerDuty incident via Events API v2 — raises typed errors."""
-        assert requests is not None  # guaranteed by validate_config  # noqa: S101
+        assert requests is not None  # guaranteed by validate_config
 
         pd_payload = {
             "routing_key": self.api_key,
@@ -605,7 +605,7 @@ class IncidentCreator(BaseNotifier):
 
     def _create_servicenow_incident(self, payload: AlertPayload) -> None:
         """Create a ServiceNow incident via REST API — raises typed errors."""
-        assert requests is not None  # guaranteed by validate_config  # noqa: S101
+        assert requests is not None  # guaranteed by validate_config
 
         sn_url = self.api_url or os.environ.get("SERVICENOW_INSTANCE_URL", "")
         sn_payload = {

@@ -91,25 +91,7 @@ seeds:
     +schema: seeds
     +tags: ['seed', 'noaa']
 
-sources:
-  - name: noaa
-    description: NOAA environmental observation data sources
-    tables:
-      - name: ghcn_daily
-        description: GHCN-Daily weather station observations
-        freshness:
-          warn_after: {count: 2, period: day}
-          error_after: {count: 4, period: day}
-      - name: storm_events
-        description: NCEI Storm Events Database
-        freshness:
-          warn_after: {count: 30, period: day}
-          error_after: {count: 60, period: day}
-      - name: ndbc_buoy
-        description: NDBC buoy meteorological and oceanographic observations
-        freshness:
-          warn_after: {count: 1, period: day}
-          error_after: {count: 3, period: day}
+# sources: moved to models/schema.yml where dbt expects them.
 
 snapshots:
   csa_noaa:

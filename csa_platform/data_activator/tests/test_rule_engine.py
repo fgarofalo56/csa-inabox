@@ -7,6 +7,7 @@ batch evaluation, and alert notification routing.
 from __future__ import annotations
 
 import pytest
+
 from csa_platform.data_activator.rules.engine import RuleEngine
 from csa_platform.data_activator.rules.schema import (
     Action,

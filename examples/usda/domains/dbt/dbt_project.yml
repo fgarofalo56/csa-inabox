@@ -62,25 +62,7 @@ seeds:
     +schema: seeds
     +tags: ['seed', 'usda']
 
-sources:
-  - name: usda
-    description: USDA agricultural data sources
-    tables:
-      - name: nass_crop_yields
-        description: NASS QuickStats crop yield data
-        freshness:
-          warn_after: {count: 1, period: day}
-          error_after: {count: 2, period: day}
-      - name: snap_enrollment
-        description: FNS SNAP enrollment data
-        freshness:
-          warn_after: {count: 7, period: day}
-          error_after: {count: 14, period: day}
-      - name: fsis_inspections
-        description: FSIS food safety inspection data
-        freshness:
-          warn_after: {count: 1, period: day}
-          error_after: {count: 3, period: day}
+# sources: moved to models/schema.yml where dbt expects them.
 
 snapshots:
   csa_usda:

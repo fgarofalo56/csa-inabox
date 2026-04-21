@@ -21,8 +21,7 @@ ge = pytest.importorskip(
 )
 pd = pytest.importorskip("pandas")
 
-from csa_platform.governance.dataquality.ge_example import ge_demo  # noqa: E402
-
+from csa_platform.governance.dataquality.ge_example import ge_demo
 
 SUITE_JSON = (
     Path(ge_demo.__file__).resolve().parent

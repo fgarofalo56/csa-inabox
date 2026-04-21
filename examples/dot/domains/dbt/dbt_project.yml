@@ -77,22 +77,4 @@ seeds:
     +schema: seeds
     +tags: ['seed', 'dot']
 
-sources:
-  - name: dot
-    description: DOT transportation data sources
-    tables:
-      - name: fars_crash_data
-        description: NHTSA FARS fatal crash records
-        freshness:
-          warn_after: {count: 30, period: day}
-          error_after: {count: 60, period: day}
-      - name: highway_conditions
-        description: FHWA bridge and pavement condition data
-        freshness:
-          warn_after: {count: 30, period: day}
-          error_after: {count: 90, period: day}
-      - name: ntd_transit_performance
-        description: NTD transit agency performance metrics
-        freshness:
-          warn_after: {count: 7, period: day}
-          error_after: {count: 30, period: day}
+# sources: moved to models/schema.yml where dbt expects them.

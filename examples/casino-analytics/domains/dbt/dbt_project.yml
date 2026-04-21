@@ -70,25 +70,7 @@ seeds:
     +schema: seeds
     +tags: ['seed', 'casino', 'synthetic']
 
-sources:
-  - name: casino
-    description: Casino analytics data sources (synthetic for development)
-    tables:
-      - name: player_sessions
-        description: Player tracking session data
-        freshness:
-          warn_after: {count: 1, period: day}
-          error_after: {count: 2, period: day}
-      - name: slot_events
-        description: Slot machine telemetry events
-        freshness:
-          warn_after: {count: 1, period: hour}
-          error_after: {count: 4, period: hour}
-      - name: fnb_transactions
-        description: Food and beverage POS transactions
-        freshness:
-          warn_after: {count: 1, period: day}
-          error_after: {count: 2, period: day}
+# sources: moved to models/schema.yml where dbt expects them.
 
 snapshots:
   csa_casino:

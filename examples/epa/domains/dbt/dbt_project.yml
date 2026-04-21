@@ -92,25 +92,7 @@ seeds:
     +schema: seeds
     +tags: ['seed', 'epa']
 
-sources:
-  - name: epa
-    description: EPA environmental monitoring data sources
-    tables:
-      - name: aqs_air_quality
-        description: AQS air quality monitoring observations
-        freshness:
-          warn_after: {count: 1, period: day}
-          error_after: {count: 3, period: day}
-      - name: sdwis_water_systems
-        description: SDWIS safe drinking water system data
-        freshness:
-          warn_after: {count: 7, period: day}
-          error_after: {count: 14, period: day}
-      - name: tri_releases
-        description: TRI toxic release inventory reports
-        freshness:
-          warn_after: {count: 30, period: day}
-          error_after: {count: 90, period: day}
+# sources: moved to models/schema.yml where dbt expects them.
 
 snapshots:
   csa_epa:

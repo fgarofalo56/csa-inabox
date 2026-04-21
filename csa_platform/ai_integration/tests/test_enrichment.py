@@ -8,10 +8,9 @@ required.  Follows the patterns established in test_rag_pipeline.py.
 from __future__ import annotations
 
 import json
-import tempfile
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 import yaml
@@ -33,7 +32,6 @@ from csa_platform.ai_integration.enrichment.text_summarizer import (
     SummarizationStyle,
     TextSummarizer,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -886,14 +884,14 @@ class TestTextSummarizerSummarize:
         self, summarizer_with_mock: tuple[TextSummarizer, MagicMock]
     ) -> None:
         summarizer, _ = summarizer_with_mock
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="magic"):
             summarizer.summarize("Text.", mode="magic")
 
     def test_invalid_style_raises_value_error(
         self, summarizer_with_mock: tuple[TextSummarizer, MagicMock]
     ) -> None:
         summarizer, _ = summarizer_with_mock
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="haiku"):
             summarizer.summarize("Text.", style="haiku")
 
     def test_single_chunk_makes_one_api_call(

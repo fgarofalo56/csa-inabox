@@ -226,19 +226,17 @@ class AzureStorageQueueDLQ:
     def _ensure_queue(self, client: Any) -> None:
         if self._ensured:
             return
-        try:
+        import contextlib
+
+        with contextlib.suppress(Exception):
             client.create_queue()
-        except Exception:  # noqa: BLE001 — create_queue raises a grab-bag of SDK errors
-            # Queue already exists / forbidden / transient — keep going; the
-            # send call is the real authority on whether the queue works.
-            pass
         self._ensured = True
 
     def send(self, envelope: DLQEnvelope) -> bool:
         """Enqueue the envelope.  Always returns a bool; never raises."""
         try:
             client = self._ensure_client()
-        except Exception:  # noqa: BLE001 — defensive guard
+        except Exception:
             logger.exception(
                 "data_activator.dlq.client_unavailable",
                 rule_name=envelope.rule_name,
@@ -254,7 +252,7 @@ class AzureStorageQueueDLQ:
 
         try:
             client.send_message(body)
-        except Exception:  # noqa: BLE001 — defensive guard
+        except Exception:
             logger.exception(
                 "data_activator.dlq.send_failed",
                 rule_name=envelope.rule_name,
