@@ -247,12 +247,14 @@ class CopilotSettings(BaseSettings):
             "approx_tokens sum fits."
         ),
     )
-    conversation_store: Literal["memory", "redis"] = Field(
+    conversation_store: Literal["memory", "redis", "cosmos"] = Field(
         default="memory",
         description=(
             "Backend for conversation state. 'memory' is process-local and "
             "suitable for local dev / single-replica; 'redis' uses "
-            "redis.asyncio for multi-replica coherence."
+            "redis.asyncio for multi-replica coherence; 'cosmos' (CSA-0116) "
+            "uses azure.cosmos.aio with per-document TTL for durable, "
+            "globally distributed conversation history."
         ),
     )
     conversation_redis_url: str = Field(
@@ -261,6 +263,29 @@ class CopilotSettings(BaseSettings):
             "Redis connection URL used when conversation_store='redis'. "
             "Example: 'redis://localhost:6379/0'. Required when the Redis "
             "backend is selected."
+        ),
+    )
+    conversation_cosmos_endpoint: str = Field(
+        default="",
+        description=(
+            "Azure Cosmos DB endpoint used when conversation_store='cosmos'. "
+            "Example: 'https://<account>.documents.azure.com:443/'. "
+            "Required when the Cosmos backend is selected."
+        ),
+    )
+    conversation_cosmos_database: str = Field(
+        default="copilot",
+        description=(
+            "Cosmos DB database name holding the conversation container. "
+            "Used only when conversation_store='cosmos'."
+        ),
+    )
+    conversation_cosmos_container: str = Field(
+        default="conversations",
+        description=(
+            "Cosmos DB container name storing conversation state. The "
+            "container MUST be provisioned with TTL enabled (DefaultTimeToLive=-1) "
+            "so per-document TTL seconds are honoured."
         ),
     )
 

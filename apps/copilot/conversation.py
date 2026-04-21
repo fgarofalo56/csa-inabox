@@ -15,6 +15,10 @@ This module ships:
   under ``csa:copilot:conv:<id>`` with EX TTL for multi-replica
   deployments.  The ``redis`` import is deferred inside ``__init__`` so
   ``memory``-configured deployments never pull the optional dep.
+* :class:`CosmosConversationStore` — ``azure.cosmos.aio``-backed store
+  (CSA-0116) using Cosmos's built-in TTL for per-document expiry.  The
+  Azure SDK import is likewise deferred inside ``__init__`` so
+  non-Cosmos deployments never pull the dep.
 * :class:`ConversationSummarizer` — deterministic, LLM-free history
   condenser.  Joins turns into a compact Q/A transcript, trims to fit
   ``conversation_max_history_tokens`` with a simple char-per-4-tokens
@@ -32,7 +36,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -243,6 +247,159 @@ class RedisConversationStore:
 
 
 # ---------------------------------------------------------------------------
+# Cosmos DB-backed implementation (CSA-0116)
+# ---------------------------------------------------------------------------
+
+
+class CosmosConversationStore:
+    """Azure Cosmos DB (async) conversation store.
+
+    Each conversation is persisted as a single document keyed on
+    ``conversation_id`` (also used as the partition key).  Per-document
+    TTL uses Cosmos's built-in ``ttl`` property so expiry is handled by
+    the service without a sweeper; the container must be provisioned
+    with TTL enabled (``DefaultTimeToLive = -1``) for per-item TTLs to
+    be honoured.
+
+    The ``azure.cosmos`` import is deferred inside ``__init__`` so the
+    module remains importable on deployments where Cosmos is not
+    installed.
+
+    The store is **lazy**: it does not open a network connection until
+    the first ``get/set/delete``.  Closing is idempotent.
+    """
+
+    def __init__(
+        self,
+        *,
+        endpoint: str,
+        database_name: str,
+        container_name: str,
+        credential: object | None = None,
+        client: object | None = None,
+    ) -> None:
+        if not endpoint:
+            msg = (
+                "CosmosConversationStore requires an endpoint. Set "
+                "COPILOT_CONVERSATION_COSMOS_ENDPOINT or pass endpoint="
+                "... explicitly."
+            )
+            raise RuntimeError(msg)
+        self._endpoint = endpoint
+        self._database_name = database_name
+        self._container_name = container_name
+        self._credential_override = credential
+        # Allow explicit client injection for tests — bypasses the
+        # lazy-import path entirely when set.
+        self._client: object | None = client
+        self._container: object | None = None
+        self._closed = False
+
+    # -- client plumbing ----------------------------------------------------
+
+    def _load_client_class(self) -> object:
+        """Return ``azure.cosmos.aio.CosmosClient`` with a helpful error if missing."""
+        try:
+            from azure.cosmos.aio import CosmosClient
+        except ImportError as exc:  # pragma: no cover — guard exercised at boot
+            msg = (
+                "COPILOT_CONVERSATION_STORE=cosmos requires the "
+                "'azure-cosmos' package. Install with `pip install "
+                "azure-cosmos` or set COPILOT_CONVERSATION_STORE=memory "
+                "for local dev."
+            )
+            raise RuntimeError(msg) from exc
+        return CosmosClient
+
+    def _default_credential(self) -> object:
+        from azure.identity.aio import DefaultAzureCredential as AsyncDefaultAzureCredential
+
+        return AsyncDefaultAzureCredential()
+
+    async def _ensure_container(self) -> object:
+        if self._container is not None:
+            return self._container
+        if self._client is None:
+            client_cls = self._load_client_class()
+            credential = self._credential_override or self._default_credential()
+            # CosmosClient accepts (url, credential) positionally; keep kwargs
+            # so mocked clients using MagicMock(spec=...) match the signature.
+            self._client = client_cls(url=self._endpoint, credential=credential)  # type: ignore[operator]
+        client: Any = self._client
+        database = client.get_database_client(self._database_name)
+        self._container = database.get_container_client(self._container_name)
+        return self._container
+
+    # -- Store API ----------------------------------------------------------
+
+    async def get(self, conversation_id: str) -> ConversationState | None:
+        container = await self._ensure_container()
+        try:
+            item = await container.read_item(  # type: ignore[attr-defined]
+                item=conversation_id,
+                partition_key=conversation_id,
+            )
+        except Exception as exc:  # pragma: no cover — defensive catch
+            # Cosmos raises CosmosResourceNotFoundError for missing docs.
+            # We match on class name so the test suite can inject any
+            # mock error type without importing the Cosmos SDK.
+            if exc.__class__.__name__ == "CosmosResourceNotFoundError":
+                return None
+            # A 404 status code also maps to "missing".
+            status = getattr(exc, "status_code", None)
+            if status == 404:
+                return None
+            raise
+        if item is None:
+            return None
+        payload = item.get("state") if isinstance(item, dict) else None
+        if payload is None:
+            # Backwards compatibility: accept the flat shape too.
+            payload = item
+        return ConversationState.model_validate(payload)
+
+    async def set(self, state: ConversationState, ttl_seconds: int) -> None:
+        container = await self._ensure_container()
+        document = {
+            "id": state.conversation_id,
+            "conversation_id": state.conversation_id,
+            # Cosmos per-item TTL: integer seconds; -1 = never expire; 0
+            # triggers immediate eviction (same semantics as the in-memory
+            # store's ttl_seconds=0 case).
+            "ttl": int(ttl_seconds),
+            "state": state.model_dump(mode="json"),
+        }
+        await container.upsert_item(document)  # type: ignore[attr-defined]
+
+    async def delete(self, conversation_id: str) -> None:
+        container = await self._ensure_container()
+        try:
+            await container.delete_item(  # type: ignore[attr-defined]
+                item=conversation_id,
+                partition_key=conversation_id,
+            )
+        except Exception as exc:  # pragma: no cover — defensive catch
+            if exc.__class__.__name__ == "CosmosResourceNotFoundError":
+                return
+            status = getattr(exc, "status_code", None)
+            if status == 404:
+                return
+            raise
+
+    async def close(self) -> None:  # pragma: no cover — shutdown hook
+        if self._closed:
+            return
+        self._closed = True
+        client = self._client
+        if client is not None:
+            close = getattr(client, "close", None)
+            if close is not None:
+                result = close()
+                if hasattr(result, "__await__"):
+                    await result
+
+
+# ---------------------------------------------------------------------------
 # Summarizer
 # ---------------------------------------------------------------------------
 
@@ -318,6 +475,7 @@ def build_conversation_store(settings: CopilotSettings) -> ConversationStore:
 
     ``conversation_store='memory'`` → :class:`InMemoryConversationStore`
     ``conversation_store='redis'``  → :class:`RedisConversationStore`
+    ``conversation_store='cosmos'`` → :class:`CosmosConversationStore`
 
     Any other value raises — a typo cannot silently fall back to
     in-memory storage in a production deployment.
@@ -333,8 +491,24 @@ def build_conversation_store(settings: CopilotSettings) -> ConversationStore:
             )
             raise RuntimeError(msg)
         return RedisConversationStore(settings.conversation_redis_url)
+    if backend == "cosmos":
+        if not settings.conversation_cosmos_endpoint:
+            msg = (
+                "conversation_store='cosmos' requires "
+                "conversation_cosmos_endpoint to be set (e.g. "
+                "https://<account>.documents.azure.com:443/)."
+            )
+            raise RuntimeError(msg)
+        return CosmosConversationStore(
+            endpoint=settings.conversation_cosmos_endpoint,
+            database_name=settings.conversation_cosmos_database,
+            container_name=settings.conversation_cosmos_container,
+        )
     # Unreachable under the Literal type, but guard explicitly.
-    msg = f"Unknown conversation_store={backend!r}; must be 'memory' or 'redis'."
+    msg = (
+        f"Unknown conversation_store={backend!r}; "
+        "must be 'memory', 'redis', or 'cosmos'."
+    )
     raise RuntimeError(msg)
 
 
@@ -345,6 +519,7 @@ __all__ = [
     "ConversationState",
     "ConversationStore",
     "ConversationSummarizer",
+    "CosmosConversationStore",
     "InMemoryConversationStore",
     "RedisConversationStore",
     "approx_token_count",

@@ -21,6 +21,7 @@ from apps.copilot.conversation import (
     ConversationNotFoundError,
     ConversationState,
     ConversationSummarizer,
+    CosmosConversationStore,
     InMemoryConversationStore,
     approx_token_count,
     build_conversation_store,
@@ -327,6 +328,191 @@ class TestStoreFactory:
         )
         with pytest.raises(RuntimeError, match="conversation_redis_url"):
             build_conversation_store(settings)
+
+    def test_cosmos_backend_requires_endpoint(self) -> None:
+        settings = CopilotSettings(
+            conversation_store="cosmos",
+            conversation_cosmos_endpoint="",
+        )
+        with pytest.raises(RuntimeError, match="conversation_cosmos_endpoint"):
+            build_conversation_store(settings)
+
+    def test_cosmos_backend_builds_store(self) -> None:
+        settings = CopilotSettings(
+            conversation_store="cosmos",
+            conversation_cosmos_endpoint="https://fake.documents.azure.com:443/",
+            conversation_cosmos_database="copilot",
+            conversation_cosmos_container="conversations",
+        )
+        store = build_conversation_store(settings)
+        assert isinstance(store, CosmosConversationStore)
+
+
+# ---------------------------------------------------------------------------
+# CosmosConversationStore (CSA-0116) — mocked async client end-to-end
+# ---------------------------------------------------------------------------
+
+
+# Stand-in for ``azure.cosmos.exceptions.CosmosResourceNotFoundError`` —
+# the production guard matches on class name + status_code, so a local
+# exception type with the same name and a status_code attribute is
+# sufficient to exercise the "missing item" branch.
+CosmosResourceNotFoundError = type(
+    "CosmosResourceNotFoundError",
+    (Exception,),
+    {"status_code": 404},
+)
+
+
+class _FakeCosmosContainer:
+    """Minimal async stand-in for a Cosmos container client."""
+
+    def __init__(self) -> None:
+        from unittest.mock import AsyncMock
+
+        self._items: dict[str, dict[str, object]] = {}
+        self.read_item = AsyncMock(side_effect=self._read)
+        self.upsert_item = AsyncMock(side_effect=self._upsert)
+        self.delete_item = AsyncMock(side_effect=self._delete)
+
+    async def _read(self, *, item: str, partition_key: str) -> dict[str, object]:
+        assert item == partition_key
+        if item not in self._items:
+            raise CosmosResourceNotFoundError("not found")
+        return dict(self._items[item])
+
+    async def _upsert(self, document: dict[str, object]) -> None:
+        self._items[str(document["id"])] = document
+
+    async def _delete(self, *, item: str, partition_key: str) -> None:
+        assert item == partition_key
+        if item not in self._items:
+            raise CosmosResourceNotFoundError("not found")
+        self._items.pop(item, None)
+
+
+class _FakeCosmosDatabase:
+    def __init__(self, container: _FakeCosmosContainer) -> None:
+        self._container = container
+
+    def get_container_client(self, _name: str) -> _FakeCosmosContainer:
+        return self._container
+
+
+class _FakeCosmosClient:
+    def __init__(self, container: _FakeCosmosContainer) -> None:
+        self._database = _FakeCosmosDatabase(container)
+        self.closed = False
+
+    def get_database_client(self, _name: str) -> _FakeCosmosDatabase:
+        return self._database
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class TestCosmosConversationStore:
+    def _store_with_fake_client(
+        self,
+    ) -> tuple[CosmosConversationStore, _FakeCosmosContainer]:
+        container = _FakeCosmosContainer()
+        client = _FakeCosmosClient(container)
+        store = CosmosConversationStore(
+            endpoint="https://fake.documents.azure.com:443/",
+            database_name="copilot",
+            container_name="conversations",
+            client=client,
+        )
+        return store, container
+
+    def test_rejects_empty_endpoint(self) -> None:
+        with pytest.raises(RuntimeError, match="endpoint"):
+            CosmosConversationStore(
+                endpoint="",
+                database_name="copilot",
+                container_name="conversations",
+            )
+
+    @pytest.mark.asyncio
+    async def test_set_get_roundtrip(self) -> None:
+        store, container = self._store_with_fake_client()
+        state = ConversationState(
+            conversation_id="c1",
+            created_at=datetime.now(timezone.utc),
+            turns=[],
+        )
+        await store.set(state, ttl_seconds=600)
+
+        # Upsert called with the right shape.
+        container.upsert_item.assert_awaited_once()
+        await_args = container.upsert_item.await_args
+        assert await_args is not None
+        payload = await_args.args[0]
+        assert payload["id"] == "c1"
+        assert payload["ttl"] == 600
+        assert payload["state"]["conversation_id"] == "c1"
+
+        fetched = await store.get("c1")
+        assert fetched is not None
+        assert fetched.conversation_id == "c1"
+
+    @pytest.mark.asyncio
+    async def test_get_missing_returns_none(self) -> None:
+        store, _container = self._store_with_fake_client()
+        assert await store.get("does-not-exist") is None
+
+    @pytest.mark.asyncio
+    async def test_delete_roundtrip(self) -> None:
+        store, container = self._store_with_fake_client()
+        state = ConversationState(
+            conversation_id="c1",
+            created_at=datetime.now(timezone.utc),
+            turns=[],
+        )
+        await store.set(state, ttl_seconds=60)
+        await store.delete("c1")
+        container.delete_item.assert_awaited_once()
+        assert await store.get("c1") is None
+
+    @pytest.mark.asyncio
+    async def test_delete_missing_is_idempotent(self) -> None:
+        store, _container = self._store_with_fake_client()
+        # Should not raise even though nothing is there.
+        await store.delete("missing")
+
+    @pytest.mark.asyncio
+    async def test_set_includes_ttl_from_caller(self) -> None:
+        store, container = self._store_with_fake_client()
+        state = ConversationState(
+            conversation_id="c1",
+            created_at=datetime.now(timezone.utc),
+            turns=[],
+        )
+        await store.set(state, ttl_seconds=123)
+        await_args = container.upsert_item.await_args
+        assert await_args is not None
+        payload = await_args.args[0]
+        assert payload["ttl"] == 123
+
+    @pytest.mark.asyncio
+    async def test_get_returns_state_with_turns(self) -> None:
+        store, _container = self._store_with_fake_client()
+        turn = ConversationTurn(
+            turn_index=0,
+            question="q",
+            answer="a",
+            approx_tokens=5,
+        )
+        state = ConversationState(
+            conversation_id="c2",
+            created_at=datetime.now(timezone.utc),
+            turns=[turn],
+        )
+        await store.set(state, ttl_seconds=60)
+        got = await store.get("c2")
+        assert got is not None
+        assert len(got.turns) == 1
+        assert got.turns[0].question == "q"
 
 
 # ---------------------------------------------------------------------------

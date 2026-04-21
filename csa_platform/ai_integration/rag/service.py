@@ -289,7 +289,16 @@ class RAGService:
 
         sources = (
             [
-                Citation(id=r.id, source=r.source, score=r.score, metadata=dict(r.metadata))
+                Citation(
+                    id=r.id,
+                    source=r.source,
+                    score=r.score,
+                    metadata=dict(r.metadata),
+                    # CSA-0099 — carry the chunk-time section anchor through
+                    # to the citation when the retriever returned it in
+                    # metadata (e.g. '#setup', 'Page 3', 'Heading: ...').
+                    section_anchor=r.metadata.get("section_anchor"),
+                )
                 for r in results
             ]
             if with_citations
