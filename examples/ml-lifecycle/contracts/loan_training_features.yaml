@@ -1,0 +1,85 @@
+# CSA data contract — loan training features
+#
+# Consumed by:
+#   * examples/ml-lifecycle/training/train.py
+#   * examples/ml-lifecycle/domains/dbt/models/gold/gld_training_features.sql
+#
+# Follows the shape used in csa_platform/streaming/contracts/*.yaml so a
+# contract validator can load either without special-casing.
+contract_name: loan_training_features
+version: "1.0.0"
+owner: csa-ml-lifecycle
+description: |
+  Feature set consumed by the loan-default classifier.  One row per
+  loan application.  Target is ``defaulted`` (binary).  Distribution is
+  intentionally imbalanced (~20% positive) to exercise class-weighted
+  learning paths.
+
+classification: unrestricted
+pii: false
+
+schema:
+  primary_key:
+    - application_id
+  fields:
+    - name: applicant_age
+      type: integer
+      nullable: false
+      min: 18
+      max: 80
+    - name: annual_income
+      type: number
+      nullable: false
+      min: 10000
+      max: 500000
+    - name: loan_amount
+      type: number
+      nullable: false
+      min: 1000
+      max: 250000
+    - name: loan_term_months
+      type: integer
+      nullable: false
+      enum: [12, 24, 36, 48, 60]
+    - name: credit_score
+      type: integer
+      nullable: false
+      min: 300
+      max: 850
+    - name: employment_years
+      type: number
+      nullable: false
+      min: 0
+      max: 40
+    - name: debt_to_income
+      type: number
+      nullable: false
+      min: 0.0
+      max: 1.5
+    - name: home_ownership
+      type: string
+      nullable: false
+      enum: [OWN, RENT, MORTGAGE]
+    - name: loan_purpose
+      type: string
+      nullable: false
+      enum: [AUTO, HOME_IMPROVEMENT, DEBT_CONSOLIDATION, BUSINESS, EDUCATION]
+    - name: delinquencies_2yr
+      type: integer
+      nullable: false
+      min: 0
+      max: 10
+    - name: defaulted
+      type: integer
+      nullable: false
+      enum: [0, 1]
+      description: Target label (1 = default within 24 months, 0 otherwise).
+
+quality:
+  # Asserted by training tests (test_train.py)
+  training_auc_minimum: 0.70
+  # Upstream (silver) should cap missingness for any required field.
+  null_tolerance:
+    credit_score: 0
+    annual_income: 0
+    defaulted: 0

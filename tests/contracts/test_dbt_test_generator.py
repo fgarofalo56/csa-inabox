@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 import yaml
 
-from governance.contracts.contract_validator import load_contract
-from governance.contracts.dbt_test_generator import (
+from csa_platform.governance.contracts.contract_validator import load_contract
+from csa_platform.governance.contracts.dbt_test_generator import (
     generate_schema_yml,
     group_contracts_by_domain,
     main,

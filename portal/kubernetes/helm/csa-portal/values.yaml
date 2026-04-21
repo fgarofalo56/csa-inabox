@@ -9,8 +9,8 @@ global:
 frontend:
   image:
     repository: csaregistry.azurecr.io/csa-portal-frontend
-    tag: "0.1.0"  # Pin to specific version; never use 'latest' in production
-    pullPolicy: Always
+    tag: ""  # Defaults to Chart.AppVersion when empty
+    pullPolicy: IfNotPresent
   replicas: 2
   resources:
     requests:
@@ -31,8 +31,8 @@ frontend:
 backend:
   image:
     repository: csaregistry.azurecr.io/csa-portal-backend
-    tag: "0.1.0"  # Pin to specific version; never use 'latest' in production
-    pullPolicy: Always
+    tag: ""  # Defaults to Chart.AppVersion when empty
+    pullPolicy: IfNotPresent
   replicas: 2
   resources:
     requests:
@@ -78,6 +78,12 @@ redis:
   architecture: standalone
   auth:
     enabled: true
+
+networkPolicy:
+  enabled: false
+
+pdb:
+  enabled: true
 
 monitoring:
   serviceMonitor:

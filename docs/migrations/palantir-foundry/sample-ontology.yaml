@@ -1,0 +1,184 @@
+# Worked migration example: Federal Case Management ontology
+# Source: Palantir Foundry ontology (4 linked object types)
+# Target: csa-inabox Purview glossary + dbt models + Power BI semantic model
+#
+# This file is the machine-readable companion to Section 4 of
+# docs/migrations/palantir-foundry.md.
+#
+# Domain choice: case-management — realistic for DoJ, State, HHS-OIG,
+# agency IG offices, and federal grants-adjudication workflows.
+
+ontology:
+  name: federal_case_management
+  version: 1.0.0
+  owner: case_management_domain_team
+  compliance:
+    frameworks: [fedramp_high, cmmc_2_l2, title_26_irs_adjacent]
+    data_classifications: [pii, cui_basic, cui_specified]
+
+  object_types:
+
+    - name: Case
+      foundry_source: case_object
+      purview_glossary_term: Case
+      purview_classification: CUI-Specified
+      target_dbt_model: domains/case_management/dbt/models/gold/dim_case.sql
+      target_contract: domains/case_management/data-products/case/contract.yaml
+      powerbi_role: dimension
+      description: >
+        A legal, investigative, or adjudicative matter tracked from intake
+        through disposition. One case aggregates parties, evidence, and
+        actions.
+      properties:
+        - name: case_id
+          type: string
+          is_primary_key: true
+          classification: public
+        - name: case_number
+          type: string
+          description: Agency-assigned human-readable identifier
+          classification: internal
+        - name: status
+          type: enum
+          values: [open, under_review, closed, appealed]
+        - name: priority
+          type: enum
+          values: [low, normal, high, urgent]
+        - name: opened_at
+          type: timestamp
+        - name: closed_at
+          type: timestamp
+          nullable: true
+        - name: assigned_officer_id
+          type: string
+          classification: pii
+        - name: jurisdiction
+          type: string
+      relationships:
+        - to: Party
+          name: involves
+          cardinality: many_to_many
+        - to: Evidence
+          name: contains
+          cardinality: one_to_many
+        - to: Action
+          name: triggers
+          cardinality: one_to_many
+
+    - name: Party
+      foundry_source: party_object
+      purview_glossary_term: Party (Case Participant)
+      purview_classification: PII
+      target_dbt_model: domains/case_management/dbt/models/gold/dim_party.sql
+      target_contract: domains/case_management/data-products/party/contract.yaml
+      powerbi_role: dimension
+      description: >
+        Any person or organization involved in a case (complainant,
+        subject, witness, counsel).
+      properties:
+        - name: party_id
+          type: string
+          is_primary_key: true
+        - name: role
+          type: enum
+          values: [complainant, subject, witness, counsel, other]
+        - name: full_name
+          type: string
+          classification: pii
+        - name: date_of_birth
+          type: date
+          classification: pii
+          masking: hash_or_redact
+        - name: organization
+          type: string
+          nullable: true
+
+    - name: Evidence
+      foundry_source: evidence_object
+      purview_glossary_term: Evidence Item
+      purview_classification: CUI-Specified
+      target_dbt_model: domains/case_management/dbt/models/gold/fact_evidence.sql
+      target_contract: domains/case_management/data-products/evidence/contract.yaml
+      powerbi_role: fact
+      description: >
+        A document, digital artifact, or physical item preserved under
+        chain-of-custody for a case.
+      properties:
+        - name: evidence_id
+          type: string
+          is_primary_key: true
+        - name: case_id
+          type: string
+          is_foreign_key: true
+          references: Case.case_id
+        - name: type
+          type: enum
+          values: [document, digital_media, physical, testimony]
+        - name: collected_at
+          type: timestamp
+        - name: collected_by
+          type: string
+          classification: pii
+        - name: storage_location
+          type: string
+        - name: chain_of_custody_hash
+          type: string
+          description: Tamper-evident audit hash (see CSA-0016 audit logger)
+
+    - name: Action
+      foundry_source: action_object
+      purview_glossary_term: Case Action
+      purview_classification: Internal
+      target_dbt_model: domains/case_management/dbt/models/gold/fact_action.sql
+      target_contract: domains/case_management/data-products/action/contract.yaml
+      powerbi_role: fact
+      description: >
+        A state-changing event on a case (status change, assignment,
+        disposition). Populated by both human users and Data Activator rules.
+      properties:
+        - name: action_id
+          type: string
+          is_primary_key: true
+        - name: case_id
+          type: string
+          is_foreign_key: true
+          references: Case.case_id
+        - name: action_type
+          type: enum
+          values:
+            [
+              assign,
+              reassign,
+              escalate,
+              status_change,
+              disposition,
+              appeal_filed,
+            ]
+        - name: performed_at
+          type: timestamp
+        - name: performed_by
+          type: string
+          classification: pii
+        - name: source
+          type: enum
+          values: [human, data_activator_rule, power_automate_flow]
+
+  foundry_actions_migrated:
+    - foundry_action: EscalateOverdueCase
+      description: >
+        When a case has been in 'open' status for more than 30 days and
+        priority is 'high' or 'urgent', auto-escalate to supervisor.
+      target_mechanism: azure_data_activator
+      target_rule: csa_platform/data_activator/rules/case-escalation.yaml
+      trigger:
+        source_model: fact_action
+        condition: |
+          Case.status == 'open'
+          AND Case.priority IN ('high', 'urgent')
+          AND DATEDIFF(NOW(), Case.opened_at, DAYS) > 30
+      action:
+        type: emit_event
+        event_grid_topic: case-escalation-events
+        downstream:
+          - logic_app: notify-supervisor-flow
+          - power_automate_flow: update-case-priority-flow

@@ -227,7 +227,10 @@ and confirm:
 ## 🧪 4. Failover Readiness — Quarterly Drill
 
 Rollback procedures rot when they are not exercised. Schedule a
-chaos-engineering drill once per quarter:
+chaos-engineering drill once per quarter. The drill is automated via
+[`.github/workflows/dr-drill.yml`](../.github/workflows/dr-drill.yml)
+and documented in detail in
+[`runbooks/dr-drill.md`](runbooks/dr-drill.md) (CSA-0073):
 
 - [ ] Pick one critical-tier service (rotate Cosmos → Storage → Databricks
    over the year).
@@ -313,10 +316,12 @@ rollout:
   replication. The current posture is "accept 24h RPO and re-scan from
   source after a disaster"; workloads with stricter requirements need
   a different catalog service.
-- **Automated DR drills**: §4's drill procedure is currently manual.
-  Wiring it into a scheduled GitHub Actions workflow that walks through
-  a dev-environment failover on the first of every quarter is on the
-  backlog.
+- **Automated DR drills**: §4's drill procedure is now wired into
+  [`.github/workflows/dr-drill.yml`](../.github/workflows/dr-drill.yml)
+  on a quarterly cron against a scratch subscription (CSA-0073). The
+  per-scenario shell scripts under `scripts/drill/` are still stubbed
+  and tracked as follow-ups in
+  [`runbooks/dr-drill.md`](runbooks/dr-drill.md) §8.
 - **Traffic Manager + Front Door**: no global-routing layer is
   currently deployed. Clients talk to region-specific endpoints. If
   this becomes a pain point, deploy Azure Front Door with priority
@@ -332,7 +337,7 @@ rollout:
 | Region unavailable | This document |
 | Individual resource deleted | `ROLLBACK.md` §5–6 (Cosmos PITR / storage soft-delete) |
 | dbt model regression | `tests/load/README.md` → `benchmark_dbt_models.py` |
-| Quarterly drill | §4 above |
+| Quarterly drill | §4 above + [`runbooks/dr-drill.md`](runbooks/dr-drill.md) |
 
 ---
 

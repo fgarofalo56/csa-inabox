@@ -1,0 +1,84 @@
+version: 2
+
+# sources: declared here (NOT in dbt_project.yml) — this is the canonical
+# location per CSA-0089. A top-level `sources:` block in dbt_project.yml is a
+# dbt parse error and is flagged by scripts/lint-vertical.sh.
+sources:
+  - name: {{ cookiecutter.vertical_slug | replace("-", "_") }}
+    description: >
+      Raw source tables for the {{ cookiecutter.vertical_name }} vertical.
+      In production these are ADLS Gen2 Bronze landing zone files; in tests
+      they are the seeds produced by data/generators/generate_seed.py.
+    tables:
+      - name: observations_raw
+        description: Raw observation records from the upstream source
+        columns:
+          - name: station_id
+            description: Source station identifier
+            tests:
+              - not_null
+          - name: event_time
+            description: Observation timestamp (UTC)
+            tests:
+              - not_null
+          - name: metric_name
+            description: Metric identifier
+            tests:
+              - not_null
+          - name: value
+            description: Numeric metric value
+
+models:
+  # --- Bronze --------------------------------------------------------
+  - name: brz_observations
+    description: Bronze layer - raw observations, no validation beyond required-field presence.
+    columns:
+      - name: station_id
+        tests:
+          - not_null
+      - name: event_time
+        tests:
+          - not_null
+      - name: metric_name
+        tests:
+          - not_null
+      - name: record_hash
+        description: MD5 for deduplication
+        tests:
+          - not_null
+          - unique
+
+  # --- Silver --------------------------------------------------------
+  - name: slv_observations_cleaned
+    description: Silver layer - deduplicated, UTC-normalized, range-validated observations.
+    columns:
+      - name: observation_sk
+        description: Surrogate key
+        tests:
+          - not_null
+          - unique
+      - name: station_id
+        tests:
+          - not_null
+      - name: event_time_utc
+        tests:
+          - not_null
+      - name: is_valid
+        tests:
+          - not_null
+          - accepted_values:
+              values: [true, false]
+
+  # --- Gold ----------------------------------------------------------
+  - name: gld_observations_daily
+    description: Gold layer - daily aggregates per station and metric.
+    columns:
+      - name: report_date
+        tests:
+          - not_null
+      - name: station_id
+        tests:
+          - not_null
+      - name: metric_name
+        tests:
+          - not_null

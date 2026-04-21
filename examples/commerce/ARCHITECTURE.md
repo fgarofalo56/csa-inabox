@@ -356,7 +356,7 @@ spec:
 - **Encryption at Rest**: Azure Storage Service Encryption (SSE) with AES-256
 - **Encryption in Transit**: TLS 1.2+ for all API communications
 - **Network Security**: VNet integration with private endpoints
-- **Access Control**: Azure AD integration with RBAC
+- **Access Control**: Microsoft Entra ID integration with RBAC
 
 ### Compliance
 

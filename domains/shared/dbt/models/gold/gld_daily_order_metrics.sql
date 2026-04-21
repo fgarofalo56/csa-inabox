@@ -3,8 +3,8 @@
     materialized='incremental',
     unique_key='order_date',
     incremental_strategy='merge',
-    partition_by=['order_date'],
-    file_format='delta',
+    partition_by=['order_date'] if target.type != 'duckdb' else none,
+    file_format='delta' if target.type != 'duckdb' else none,
     tags=['gold', 'orders', 'metrics'],
     on_schema_change='fail'
   )

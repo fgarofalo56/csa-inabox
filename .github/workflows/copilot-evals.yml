@@ -1,0 +1,117 @@
+name: Copilot Evals
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'apps/copilot/**'
+      - 'csa_platform/ai_integration/rag/**'
+      - 'pyproject.toml'
+      - '.github/workflows/copilot-evals.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/copilot/**'
+      - 'csa_platform/ai_integration/rag/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write  # sticky PR comment with deltas
+
+jobs:
+  evals:
+    name: Copilot Evals (dry-run + gate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Force the deterministic scorer so CI is fully reproducible.
+      COPILOT_EVALS_DETERMINISTIC: "true"
+      # Disable OTel export in CI — we still exercise span code paths
+      # but nothing is shipped off-box.
+      COPILOT_OTEL_DISABLE: "1"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,copilot]"
+          # jsonschema for strict schema validation (used by evals).
+          pip install "jsonschema>=4.22,<5.0"
+
+      - name: Lint new code (ruff)
+        run: |
+          python -m ruff check \
+            apps/copilot/evals/ \
+            apps/copilot/prompts/ \
+            apps/copilot/telemetry/
+
+      - name: Type-check new code (mypy)
+        run: |
+          python -m mypy \
+            apps/copilot/evals/ \
+            apps/copilot/prompts/ \
+            apps/copilot/telemetry/ \
+            --ignore-missing-imports
+        continue-on-error: true
+
+      - name: Run unit tests
+        run: |
+          python -m pytest \
+            apps/copilot/evals/tests/ \
+            apps/copilot/prompts/tests/ \
+            apps/copilot/telemetry/tests/ \
+            -v --strict-markers
+
+      - name: Run eval harness (dry-run)
+        run: |
+          python -m apps.copilot.evals run \
+            --goldens apps/copilot/evals/goldens/corpus_qa.yaml \
+            --output evals_out.json \
+            --dry-run \
+            --concurrency 4
+
+      - name: Regression gate
+        run: |
+          python -m apps.copilot.evals gate \
+            --current evals_out.json \
+            --baseline apps/copilot/evals/baselines/baseline_v0.1.0.json \
+            --max-score-regression 0.02 \
+            --max-latency-p95-regression-pct 10
+
+      - name: Upload eval report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: copilot-eval-report
+          path: evals_out.json
+          retention-days: 30
+
+      - name: Post sticky PR comment with score deltas
+        if: github.event_name == 'pull_request' && always()
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: copilot-evals
+          message: |
+            ## Copilot Evals
+
+            Dry-run eval report uploaded as artifact `copilot-eval-report`.
+
+            Regression gate status: ${{ job.status == 'success' && 'PASS' || 'REGRESSION DETECTED' }}
+
+            Baseline: `apps/copilot/evals/baselines/baseline_v0.1.0.json`
+            Thresholds:
+              - `max_score_regression`: 0.02
+              - `max_latency_p95_regression_pct`: 10%
+
+            See the workflow summary for the full gate output.

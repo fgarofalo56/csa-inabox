@@ -4,7 +4,7 @@
 
 {# Check if a date column has future dates #}
 {% macro flag_future_date(column_name) %}
-    case when {{ column_name }} > current_date() then true else false end
+    case when {{ column_name }} > {{ current_date_expr() }} then true else false end
 {% endmacro %}
 
 {# Check if a numeric column has negative values #}
@@ -15,7 +15,7 @@
 {#
     Validate email format with the canonical regex defined in
     dbt_project.yml var `email_regex` (kept in sync with
-    governance/common/validation.py EMAIL_REGEX_PATTERN).
+    csa_platform/governance/common/validation.py EMAIL_REGEX_PATTERN).
     Returns true when the email is invalid so it can be assigned to a
     `_is_invalid_email` quality flag column.
 #}

@@ -466,13 +466,30 @@ class PipelineGenerator:
         endpoint = source_config.get("endpoint", "")
         database_name = source_config.get("database", "")
         container_name = source_config.get("container", "")
-        sample_size = source_config.get("sample_size", 100)
+        sample_size_raw = source_config.get("sample_size", 100)
 
         if not all([endpoint, database_name, container_name]):
             raise SchemaDetectionError("endpoint, database, and container are required for Cosmos DB schema detection")
 
+        # CSA-0026: sample_size is user-controlled (source YAML). Cosmos
+        # DB's SQL dialect does not accept parameters for the TOP clause,
+        # so we strict-validate the value as a bounded integer instead of
+        # relying on parameterisation. This closes the SQL-injection
+        # pattern flagged in the audit.
+        try:
+            sample_size = int(sample_size_raw)
+        except (TypeError, ValueError) as exc:
+            raise SchemaDetectionError(
+                f"sample_size must be an integer; got {sample_size_raw!r}"
+            ) from exc
+        if not 1 <= sample_size <= 10_000:
+            raise SchemaDetectionError(
+                f"sample_size must be between 1 and 10000; got {sample_size}"
+            )
+
         logger.info("Sampling Cosmos DB for schema detection",
-                    endpoint=endpoint, database=database_name, container=container_name)
+                    endpoint=endpoint, database=database_name, container=container_name,
+                    sample_size=sample_size)
 
         try:
             # Prefer Managed Identity, fall back to key
@@ -484,7 +501,8 @@ class PipelineGenerator:
             database = client.get_database_client(database_name)
             container = database.get_container_client(container_name)
 
-            # Sample documents
+            # Cosmos SQL: TOP cannot be parameterised; sample_size has
+            # been range-validated above so the interpolation is safe.
             query = f"SELECT TOP {sample_size} * FROM c"
             documents = list(container.query_items(query=query, enable_cross_partition_query=True))
         except Exception as exc:
@@ -758,7 +776,146 @@ class PipelineGenerator:
                 recommended_watermark_columns={hub_name: ["enqueuedTime", "timestamp"]},
             )
 
-        raise SchemaDetectionError(f"Stream schema detection not yet implemented for {source_type}")
+        # Kafka schema detection — sample messages from a topic using
+        # the confluent-kafka consumer or the kafka-python library.
+        if source_type == "kafka":
+            bootstrap_servers = source_config.get("bootstrap_servers", "")
+            topic = source_config.get("topic", source_config.get("name", ""))
+            consumer_group = source_config.get("consumer_group", "csa-schema-detection")
+            sample_count = source_config.get("sample_size", 50)
+            timeout_seconds = source_config.get("timeout_seconds", 10)
+
+            if not bootstrap_servers or not topic:
+                raise SchemaDetectionError("bootstrap_servers and topic are required for Kafka schema detection")
+
+            logger.info(
+                "Sampling Kafka topic for schema detection",
+                bootstrap_servers=bootstrap_servers,
+                topic=topic,
+            )
+
+            samples: list[dict[str, Any]] = []  # type: ignore[no-redef]
+
+            # Prefer confluent-kafka (faster, C-based); fall back to kafka-python
+            try:
+                from confluent_kafka import Consumer, KafkaError  # type: ignore[import-not-found]
+
+                conf = {
+                    "bootstrap.servers": bootstrap_servers,
+                    "group.id": consumer_group,
+                    "auto.offset.reset": "earliest",
+                    "enable.auto.commit": False,
+                    "security.protocol": source_config.get("security_protocol", "PLAINTEXT"),
+                }
+                if source_config.get("sasl_mechanism"):
+                    conf["sasl.mechanism"] = source_config["sasl_mechanism"]
+                    conf["sasl.username"] = source_config.get("sasl_username", "")
+                    conf["sasl.password"] = source_config.get("sasl_password", "")
+
+                consumer = Consumer(conf)
+                consumer.subscribe([topic])
+                import time
+
+                deadline = time.monotonic() + timeout_seconds
+                try:
+                    while len(samples) < sample_count and time.monotonic() < deadline:
+                        msg = consumer.poll(timeout=1.0)
+                        if msg is None:
+                            continue
+                        if msg.error():
+                            if msg.error().code() == KafkaError._PARTITION_EOF:
+                                break
+                            raise SchemaDetectionError(f"Kafka error: {msg.error()}")
+                        try:
+                            import json as _json
+
+                            body = _json.loads(msg.value().decode("utf-8"))
+                            if isinstance(body, dict):
+                                samples.append(body)
+                        except (ValueError, UnicodeDecodeError):
+                            pass  # Skip non-JSON or binary messages
+                finally:
+                    consumer.close()
+
+            except ImportError:
+                # Fallback to kafka-python
+                try:
+                    import json as _json
+
+                    from kafka import KafkaConsumer  # type: ignore[import-not-found]
+
+                    consumer_kp = KafkaConsumer(
+                        topic,
+                        bootstrap_servers=bootstrap_servers.split(","),
+                        group_id=consumer_group,
+                        auto_offset_reset="earliest",
+                        enable_auto_commit=False,
+                        consumer_timeout_ms=timeout_seconds * 1000,
+                        value_deserializer=lambda m: _json.loads(m.decode("utf-8")),
+                    )
+                    for msg in consumer_kp:
+                        if len(samples) >= sample_count:
+                            break
+                        if isinstance(msg.value, dict):
+                            samples.append(msg.value)
+                    consumer_kp.close()
+                except ImportError:
+                    raise SchemaDetectionError(
+                        "Neither confluent-kafka nor kafka-python is installed. "
+                        "Install one to enable Kafka schema detection."
+                    ) from None
+                except Exception as exc:
+                    raise SchemaDetectionError(f"Kafka (kafka-python) connection failed: {exc}") from exc
+            except Exception as exc:
+                raise SchemaDetectionError(f"Kafka (confluent-kafka) connection failed: {exc}") from exc
+
+            if not samples:
+                return SourceDetectionResult(
+                    tables=[{"table_name": topic, "columns": []}],
+                    estimated_row_counts={},
+                    primary_keys={},
+                    data_types={},
+                    recommended_watermark_columns={topic: ["timestamp", "offset"]},
+                )
+
+            # Merge schemas from sampled messages
+            all_fields: dict[str, set[str]] = {}  # type: ignore[no-redef]
+            for sample in samples:
+                for key, value in sample.items():
+                    if key not in all_fields:
+                        all_fields[key] = set()
+                    all_fields[key].add(type(value).__name__)
+
+            kafka_type_map = {
+                "str": "string",
+                "int": "integer",
+                "float": "float",
+                "bool": "boolean",
+                "NoneType": "string",
+                "list": "array",
+                "dict": "object",
+            }
+            kafka_columns: list[dict[str, Any]] = [
+                {
+                    "name": k,
+                    "type": kafka_type_map.get(
+                        next(iter(v - {"NoneType"}), "str"), "string"
+                    ),
+                    "nullable": "NoneType" in v
+                    or len([s for s in samples if k not in s]) > 0,
+                }
+                for k, v in all_fields.items()
+            ]
+
+            return SourceDetectionResult(
+                tables=[{"table_name": topic, "columns": kafka_columns}],
+                estimated_row_counts={topic: len(samples)},
+                primary_keys={},
+                data_types={topic: {c["name"]: c["type"] for c in kafka_columns}},
+                recommended_watermark_columns={topic: ["timestamp", "offset"]},
+            )
+
+        raise SchemaDetectionError(f"Stream schema detection not implemented for source_type={source_type!r}")
 
     def select_template(self, source_type: str, ingestion_mode: str) -> str:
         """Select appropriate pipeline template.
@@ -893,6 +1050,58 @@ class PipelineGenerator:
                 "defaultValue": ingestion["watermark_column"],
             }
 
+        # CDC mode — wire change-tracking / change-data-capture parameters
+        elif ingestion["mode"] == "cdc":
+            cdc_config = ingestion.get("cdc", {})
+
+            # CDC mechanism: "change_tracking" (SQL Server CT) or "cdc_table" (SQL CDC)
+            cdc_mechanism = cdc_config.get("mechanism", "change_tracking")
+            template["parameters"]["cdcMechanism"] = {
+                "type": "string",
+                "defaultValue": cdc_mechanism,
+            }
+
+            # Tables to capture — defaults to wildcard (all tables in the schema)
+            tables_to_capture = cdc_config.get("tables", ["*"])
+            template["parameters"]["cdcTables"] = {
+                "type": "array",
+                "defaultValue": tables_to_capture,
+            }
+
+            # Watermark column used to track the high-water mark across runs.
+            # For SQL Server Change Tracking this is typically the CT version
+            # number stored in a control table; for CDC tables it is the LSN.
+            watermark_column = cdc_config.get(
+                "watermark_column",
+                ingestion.get("watermark_column", ""),
+            )
+            if watermark_column:
+                template["parameters"]["cdcWatermarkColumn"] = {
+                    "type": "string",
+                    "defaultValue": watermark_column,
+                }
+
+            # Control table that stores the last-processed watermark value
+            control_table = cdc_config.get("control_table", "cdc_watermark_control")
+            template["parameters"]["cdcControlTable"] = {
+                "type": "string",
+                "defaultValue": control_table,
+            }
+
+            # Operation filter — capture INSERT/UPDATE/DELETE or a subset
+            operations = cdc_config.get("operations", ["INSERT", "UPDATE", "DELETE"])
+            template["parameters"]["cdcOperations"] = {
+                "type": "array",
+                "defaultValue": operations,
+            }
+
+            logger.info(
+                "CDC template parameters applied",
+                mechanism=cdc_mechanism,
+                tables=tables_to_capture,
+                control_table=control_table,
+            )
+
     def _customize_api_template(self, template: dict[str, Any], source_config: dict[str, Any]) -> None:
         """Customize template for API sources."""
         connection = source_config["connection"]
@@ -910,14 +1119,99 @@ class PipelineGenerator:
             )
 
     def _customize_streaming_template(self, template: dict[str, Any], source_config: dict[str, Any]) -> None:
-        """Customize template for streaming sources."""
-        connection = source_config["connection"]
+        """Customize template for streaming sources (Event Hub and Kafka).
 
-        template["parameters"].update(
-            {
-                "eventHubName": {"type": "string", "defaultValue": connection["name"]},
-                "consumerGroup": {"type": "string", "defaultValue": connection.get("consumer_group", "$Default")},
-            }
+        Fills in all parameters required by ``adf_streaming.json``:
+        - Hub / topic identity and consumer group
+        - Checkpoint storage so ADF can resume from the last committed offset
+        - Micro-batch trigger interval
+        - Starting position (earliest | latest | specific enqueued-time)
+        - Source-type discriminator so the same template works for both EH and Kafka
+        """
+        connection = source_config["connection"]
+        source_type = source_config.get("source_type", "event_hub")
+        streaming_config = source_config.get("ingestion", {}).get("streaming", {})
+
+        # ── Core identity parameters ────────────────────────────────────────
+        if source_type == "event_hub":
+            hub_name = connection.get("name", connection.get("event_hub_name", ""))
+            namespace = connection.get("namespace", connection.get("event_hub_namespace", ""))
+            template["parameters"].update(
+                {
+                    "eventHubName": {"type": "string", "defaultValue": hub_name},
+                    "eventHubNamespace": {"type": "string", "defaultValue": namespace},
+                    "consumerGroup": {
+                        "type": "string",
+                        "defaultValue": connection.get("consumer_group", "$Default"),
+                    },
+                }
+            )
+        elif source_type == "kafka":
+            bootstrap_servers = connection.get("bootstrap_servers", "")
+            topic = connection.get("topic", connection.get("name", ""))
+            template["parameters"].update(
+                {
+                    "kafkaBootstrapServers": {"type": "string", "defaultValue": bootstrap_servers},
+                    "kafkaTopic": {"type": "string", "defaultValue": topic},
+                    "kafkaConsumerGroup": {
+                        "type": "string",
+                        "defaultValue": connection.get("consumer_group", "csa-consumer-group"),
+                    },
+                    "kafkaSecurityProtocol": {
+                        "type": "string",
+                        "defaultValue": connection.get("security_protocol", "SASL_SSL"),
+                    },
+                }
+            )
+
+        # ── Checkpoint location — required for exactly-once semantics ───────
+        # Defaults to a path under the target container so artifact storage
+        # is co-located with the ingested data.
+        target = source_config.get("target", {})
+        default_checkpoint = (
+            f"{target.get('container', 'checkpoints')}/"
+            f"streaming/{source_type}/{connection.get('name', 'stream')}/checkpoint"
+        )
+        checkpoint_location = streaming_config.get("checkpoint_location", default_checkpoint)
+        template["parameters"]["checkpointLocation"] = {
+            "type": "string",
+            "defaultValue": checkpoint_location,
+        }
+
+        # ── Micro-batch trigger interval ────────────────────────────────────
+        trigger_interval_seconds = streaming_config.get("trigger_interval_seconds", 60)
+        template["parameters"]["triggerIntervalSeconds"] = {
+            "type": "int",
+            "defaultValue": trigger_interval_seconds,
+        }
+
+        # ── Starting position / offset ──────────────────────────────────────
+        # "earliest" | "latest" | ISO-8601 datetime string for Event Hub
+        starting_position = streaming_config.get("starting_position", "latest")
+        template["parameters"]["startingPosition"] = {
+            "type": "string",
+            "defaultValue": starting_position,
+        }
+
+        # ── Max events per micro-batch ──────────────────────────────────────
+        max_events_per_trigger = streaming_config.get("max_events_per_trigger", 10000)
+        template["parameters"]["maxEventsPerTrigger"] = {
+            "type": "int",
+            "defaultValue": max_events_per_trigger,
+        }
+
+        # ── Source-type discriminator used inside the ADF template ──────────
+        template["parameters"]["streamSourceType"] = {
+            "type": "string",
+            "defaultValue": source_type,
+        }
+
+        logger.info(
+            "Streaming template parameters applied",
+            source_type=source_type,
+            trigger_interval_seconds=trigger_interval_seconds,
+            starting_position=starting_position,
+            checkpoint_location=checkpoint_location,
         )
 
     def generate_parameters_file(

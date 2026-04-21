@@ -16,15 +16,15 @@ and `.claude/agents/` respectively and are not tracked here.
 | `lint-ps` | Run PSScriptAnalyzer against every `.ps1` |
 | `test` | Run pytest against `tests/` |
 | `test-dbt` | `dbt compile` + `dbt test` from `domains/shared/dbt` |
-| `validate` / `validate-bicep` / `validate-python` / `validate-dbt` | Harness validation gates under `agent-harness/gates/` |
+| `validate` / `validate-bicep` / `validate-python` / `validate-dbt` | Dev Loop validation gates under `dev-loop/gates/` |
 | `deploy-dev` | What-if both DLZ and DMLZ against the dev params files |
 | `clean` | Remove caches, `.venv`, and dbt artifacts |
 
-## Agent harness (`agent-harness/`)
+## Dev Loop (`dev-loop/`)
 
 - `config.yaml` — Ralph loop configuration (`auto_commit: false` enforced by
   audit finding CI/CD critical #3). Archon project ID is pinned here.
-- `gates/validate-*.ps1` — per-language validation gates invoked by the harness
+- `gates/validate-*.ps1` — per-language validation gates invoked by the dev loop
   and surfaced via the `make validate*` targets.
 
 ## Governance scripts

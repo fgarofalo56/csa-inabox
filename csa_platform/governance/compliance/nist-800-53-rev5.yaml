@@ -1,0 +1,1544 @@
+# NIST SP 800-53 Rev 5 — Control Mapping Manifest
+# CSA-in-a-Box control implementation / coverage registry.
+#
+# Authoritative catalog: https://csrc.nist.gov/publications/detail/sp/800-53/rev-5/final
+# Baseline reference: NIST SP 800-53B "Control Baselines for Information Systems and Organizations"
+#
+# Status codes:
+#   IMPLEMENTED             Evidence exists in repo and materially satisfies the control.
+#   PARTIALLY_IMPLEMENTED   Some evidence; enhancements or follow-up controls outstanding.
+#   PLANNED                 Tracked gap; no evidence yet. See `gaps:` and linked CSA-XXXX findings.
+#   NOT_APPLICABLE          Control does not apply to this system's scope / role.
+#   INHERITED               Satisfied by an underlying layer (e.g. Azure shared responsibility).
+#
+# Evidence kinds:
+#   bicep     Infrastructure-as-code module / template.
+#   policy    Azure Policy definition / assignment.
+#   code      Application-layer Python/TypeScript implementation.
+#   script    Operational script (deploy, teardown, validation).
+#   ci        CI/CD workflow YAML.
+#   doc       Narrative documentation (reference only — not primary evidence).
+#   config    Configuration file (YAML/JSON) that enforces a rule.
+#
+# Audit: CSA-0012 Phase 1 (2026-04-18). This manifest is machine-readable;
+# see docs/compliance/nist-800-53-rev5.md for the narrative companion.
+
+framework: "NIST 800-53 Rev 5"
+baseline: "Moderate + High"
+version: "2026-04"
+last_reviewed: "2026-04-18"
+reviewer: "csa-inabox audit CSA-0012"
+source_of_truth_url: "https://csrc.nist.gov/publications/detail/sp/800-53/rev-5/final"
+
+controls:
+
+  # ─────────────────────────────────────────────────────────────────────
+  # AC — Access Control
+  # ─────────────────────────────────────────────────────────────────────
+
+  - id: "AC-1"
+    title: "Policy and Procedures"
+    family: "AC"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "doc"
+        path: "csa_platform/governance/compliance/compliance-overview.md"
+        note: "Access control narrative; policy ownership not yet assigned"
+      - kind: "config"
+        path: "csa_platform/governance/rbac/rbac-matrix.json"
+        note: "RBAC persona / role matrix — codified access policy"
+    gaps:
+      - "No signed AC policy document with designated owner and annual review cadence"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "AC-2"
+    title: "Account Management"
+    family: "AC"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "code"
+        path: "csa_platform/common/auth.py"
+        lines: "108-151"
+        note: "enforce_auth_safety_gate — refuses to start without tenant config"
+      - kind: "code"
+        path: "csa_platform/common/auth.py"
+        lines: "266-307"
+        note: "get_current_user + require_role dependency injection"
+      - kind: "config"
+        path: "csa_platform/governance/rbac/rbac-matrix.json"
+        note: "Per-persona role assignments (PlatformAdmin, DataEngineer, DataScientist, etc.)"
+      - kind: "script"
+        path: "csa_platform/governance/rbac/apply-rbac.ps1"
+        note: "Provisions role assignments against RBAC matrix"
+    gaps:
+      - "No automated periodic access review (annual attestation) — tracked in CSA-0012 Phase 2"
+    inheritance:
+      - "Entra ID manages account lifecycle (create / disable / delete)"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "AC-3"
+    title: "Access Enforcement"
+    family: "AC"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "code"
+        path: "csa_platform/common/auth.py"
+        lines: "195-258"
+        note: "JWT validation — signature, audience, issuer, tenant-pin"
+      - kind: "code"
+        path: "csa_platform/common/auth.py"
+        lines: "281-307"
+        note: "require_role enforces per-route authorization"
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/KeyVault/keyvault.bicep"
+        lines: "37-48"
+        note: "enableRbacAuthorization=true; publicNetworkAccess=Disabled"
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "122-164"
+        note: "allowSharedKeyAccess=false; Azure AD only"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "AC-4"
+    title: "Information Flow Enforcement"
+    family: "AC"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Network/privateDnsZones/privateDnsZones.bicep"
+        note: "Private DNS zones gate outbound name resolution"
+      - kind: "bicep"
+        path: "deploy/bicep/shared/policies/policyAssignments.bicep"
+        lines: "36-45"
+        note: "Require private endpoints on storage accounts"
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "157-164"
+        note: "networkAcls defaultAction=Deny; publicNetworkAccess=Disabled"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "AC-5"
+    title: "Separation of Duties"
+    family: "AC"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "config"
+        path: "csa_platform/governance/rbac/rbac-matrix.json"
+        note: "Distinct PlatformAdmin, DataEngineer, DataScientist, DataSteward, Reader personas"
+      - kind: "script"
+        path: "csa_platform/governance/rbac/apply-rbac.ps1"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "AC-6"
+    title: "Least Privilege"
+    family: "AC"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "config"
+        path: "csa_platform/governance/rbac/rbac-matrix.json"
+        note: "Scoped role assignments per resource group / service"
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "108-115"
+        note: "System-assigned managed identity (no shared keys)"
+      - kind: "code"
+        path: "csa_platform/common/auth.py"
+        lines: "281-307"
+        note: "require_role with narrowest role set per route"
+    gaps:
+      - "No Privileged Identity Management (PIM) just-in-time elevation configured"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "AC-7"
+    title: "Unsuccessful Logon Attempts"
+    family: "AC"
+    status: "INHERITED"
+    evidence:
+      - kind: "doc"
+        path: "csa_platform/governance/compliance/compliance-overview.md"
+        note: "Entra ID Smart Lockout handles failed logon throttling"
+    inheritance:
+      - "Microsoft Entra ID Smart Lockout (10 failed attempts → 1-minute lockout, escalating)"
+    responsible_party: "Microsoft (Entra ID)"
+
+  - id: "AC-8"
+    title: "System Use Notification"
+    family: "AC"
+    status: "PLANNED"
+    gaps:
+      - "No login banner / system-use notification configured on portal or Azure tenant"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "AC-11"
+    title: "Device Lock"
+    family: "AC"
+    status: "NOT_APPLICABLE"
+    gaps:
+      - "Platform does not manage end-user workstations; inherited from Intune / customer MDM"
+    inheritance:
+      - "Customer-managed endpoint (out of CSA-in-a-Box control scope)"
+    responsible_party: "Customer"
+
+  - id: "AC-12"
+    title: "Session Termination"
+    family: "AC"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "code"
+        path: "csa_platform/common/auth.py"
+        lines: "223-239"
+        note: "JWT expiry (exp claim) verified on every request; leeway=30s"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "AC-14"
+    title: "Permitted Actions without Identification or Authentication"
+    family: "AC"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "code"
+        path: "portal/shared/api/main.py"
+        note: "Health probe routes only; all data routes require auth"
+      - kind: "code"
+        path: "csa_platform/common/auth.py"
+        lines: "266-278"
+        note: "Missing auth header returns 401 (no anonymous data access)"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "AC-17"
+    title: "Remote Access"
+    family: "AC"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/shared/policies/policyAssignments.bicep"
+        lines: "100-125"
+        note: "Require HTTPS + TLS 1.2 minimum (policies)"
+      - kind: "code"
+        path: "portal/shared/api/main.py"
+        lines: "47-71"
+        note: "HSTS + strict security headers"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "AC-18"
+    title: "Wireless Access"
+    family: "AC"
+    status: "NOT_APPLICABLE"
+    inheritance:
+      - "Platform runs in Azure PaaS; no wireless infrastructure"
+    responsible_party: "N/A"
+
+  - id: "AC-19"
+    title: "Access Control for Mobile Devices"
+    family: "AC"
+    status: "NOT_APPLICABLE"
+    inheritance:
+      - "Customer MDM / Intune controls mobile device posture"
+    responsible_party: "Customer"
+
+  - id: "AC-20"
+    title: "Use of External Systems"
+    family: "AC"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/shared/policies/policyAssignments.bicep"
+        lines: "84-97"
+        note: "Allowed locations policy restricts region egress"
+    gaps:
+      - "No formal external-system agreement catalog / data-sharing MOU registry"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "AC-21"
+    title: "Information Sharing"
+    family: "AC"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "config"
+        path: "csa_platform/governance/purview/classification/classification_rules.json"
+        note: "Purview classification taxonomy for sharing decisions"
+    gaps:
+      - "No automated sharing-decision workflow tied to classifications"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "AC-22"
+    title: "Publicly Accessible Content"
+    family: "AC"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "122"
+        note: "allowBlobPublicAccess=false on all storage accounts"
+      - kind: "bicep"
+        path: "deploy/bicep/shared/policies/policyAssignments.bicep"
+        lines: "24-33"
+        note: "Policy denies public access on storage"
+    responsible_party: "csa-inabox platform team"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # AU — Audit and Accountability
+  # ─────────────────────────────────────────────────────────────────────
+
+  - id: "AU-1"
+    title: "Policy and Procedures"
+    family: "AU"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "doc"
+        path: "csa_platform/governance/compliance/compliance-overview.md"
+        note: "Audit trail section names Log Analytics"
+    gaps:
+      - "No formal audit policy document with retention owner / annual review"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "AU-2"
+    title: "Event Logging"
+    family: "AU"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/KeyVault/keyvault.bicep"
+        lines: "111-123"
+        note: "Key Vault diagnostic settings → Log Analytics (allLogs)"
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "332-355"
+        note: "Storage account + blob diagnostic settings → Log Analytics"
+      - kind: "bicep"
+        path: "deploy/bicep/shared/policies/policyAssignments.bicep"
+        lines: "48-57"
+        note: "Azure Policy audits resources missing diagnostic settings"
+      - kind: "code"
+        path: "portal/shared/api/main.py"
+        lines: "32-42"
+        note: "structlog configured for portal API"
+    gaps:
+      - "No application-layer security-event audit log — CSA-0016 tracks tamper-evident log"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "AU-3"
+    title: "Content of Audit Records"
+    family: "AU"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/KeyVault/keyvault.bicep"
+        lines: "115-122"
+        note: "categoryGroup=allLogs captures who/what/when/where"
+    gaps:
+      - "Application-layer events missing structured who/what/when/where fields — CSA-0016"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "AU-4"
+    title: "Audit Log Storage Capacity"
+    family: "AU"
+    status: "INHERITED"
+    inheritance:
+      - "Log Analytics workspace autoscales; retention configured per workspace"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "192-217"
+        note: "Lifecycle management for audit storage account"
+    responsible_party: "Microsoft + csa-inabox platform team"
+
+  - id: "AU-5"
+    title: "Response to Audit Logging Process Failures"
+    family: "AU"
+    status: "PLANNED"
+    gaps:
+      - "No alerting on diagnostic-pipeline failure (e.g. diagnostic settings disabled)"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "AU-6"
+    title: "Audit Record Review, Analysis, and Reporting"
+    family: "AU"
+    status: "PLANNED"
+    gaps:
+      - "No SIEM / Sentinel analytic rules shipped with platform"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "AU-7"
+    title: "Audit Record Reduction and Report Generation"
+    family: "AU"
+    status: "INHERITED"
+    inheritance:
+      - "Log Analytics / Kusto provides query + report generation"
+    responsible_party: "Microsoft"
+
+  - id: "AU-8"
+    title: "Time Stamps"
+    family: "AU"
+    status: "INHERITED"
+    inheritance:
+      - "Azure platform NTP-synchronized UTC timestamps on all diagnostic logs"
+    responsible_party: "Microsoft"
+
+  - id: "AU-9"
+    title: "Protection of Audit Information"
+    family: "AU"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "357-365"
+        note: "CanNotDelete lock on governance / audit storage account"
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "167-178"
+        note: "Blob versioning + 30-day soft-delete"
+    gaps:
+      - "No immutable (WORM) tier or tamper-evident hashing — CSA-0016"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "AU-11"
+    title: "Audit Record Retention"
+    family: "AU"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "192-217"
+        note: "90-day tiering; retention policy configurable"
+    gaps:
+      - "Log Analytics retention default 30 days — customer must configure 365+ for FedRAMP High"
+    responsible_party: "Customer (workspace config) + csa-inabox"
+
+  - id: "AU-12"
+    title: "Audit Record Generation"
+    family: "AU"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/KeyVault/keyvault.bicep"
+        lines: "111-123"
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "332-355"
+    gaps:
+      - "Application audit events for security-relevant portal actions missing — CSA-0016"
+    responsible_party: "csa-inabox platform team"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # IA — Identification and Authentication
+  # ─────────────────────────────────────────────────────────────────────
+
+  - id: "IA-1"
+    title: "Policy and Procedures"
+    family: "IA"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "doc"
+        path: "csa_platform/governance/compliance/compliance-overview.md"
+    gaps:
+      - "No formal IA policy document"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "IA-2"
+    title: "Identification and Authentication (Organizational Users)"
+    family: "IA"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "code"
+        path: "csa_platform/common/auth.py"
+        lines: "195-258"
+        note: "Entra ID OIDC JWT validation — signature + issuer + audience + tid-pin"
+      - kind: "code"
+        path: "csa_platform/common/auth.py"
+        lines: "158-171"
+        note: "Commercial + USGov authority URL switching"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "IA-2(1)"
+    title: "IA-2(1) MFA to Privileged Accounts"
+    family: "IA"
+    status: "INHERITED"
+    inheritance:
+      - "Entra ID Conditional Access policies (customer-configured) enforce MFA"
+    gaps:
+      - "Platform does not ship baseline Conditional Access policy templates"
+    responsible_party: "Customer (Entra tenant admin)"
+
+  - id: "IA-2(2)"
+    title: "IA-2(2) MFA to Non-Privileged Accounts"
+    family: "IA"
+    status: "INHERITED"
+    inheritance:
+      - "Entra ID Conditional Access (customer-configured)"
+    responsible_party: "Customer"
+
+  - id: "IA-3"
+    title: "Device Identification and Authentication"
+    family: "IA"
+    status: "NOT_APPLICABLE"
+    inheritance:
+      - "Device-level identity is enforced by customer Intune / Conditional Access"
+    responsible_party: "Customer"
+
+  - id: "IA-4"
+    title: "Identifier Management"
+    family: "IA"
+    status: "INHERITED"
+    inheritance:
+      - "Entra ID manages user identifiers; platform consumes oid/sub claims"
+    evidence:
+      - kind: "code"
+        path: "csa_platform/common/auth.py"
+        lines: "199-211"
+        note: "Claims passed through (oid, sub, tid) with tenant pin"
+    responsible_party: "Microsoft (Entra ID)"
+
+  - id: "IA-5"
+    title: "Authenticator Management"
+    family: "IA"
+    status: "INHERITED"
+    inheritance:
+      - "Entra ID handles password / passkey / FIDO2 lifecycle"
+    responsible_party: "Microsoft"
+
+  - id: "IA-5(1)"
+    title: "IA-5(1) Password-Based Authentication"
+    family: "IA"
+    status: "INHERITED"
+    inheritance:
+      - "Entra ID Password Protection + banned-password list"
+    responsible_party: "Microsoft + Customer"
+
+  - id: "IA-6"
+    title: "Authentication Feedback"
+    family: "IA"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "code"
+        path: "csa_platform/common/auth.py"
+        lines: "253-258"
+        note: "JWT errors return generic 401 'Invalid or expired token'; no leakage"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "IA-7"
+    title: "Cryptographic Module Authentication"
+    family: "IA"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "code"
+        path: "csa_platform/common/auth.py"
+        lines: "226"
+        note: "RS256 algorithm pinned; no 'none' or HS256 downgrade"
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/KeyVault/keyvault.bicep"
+        note: "HSM-backed Key Vault keys (FIPS 140-2 L2)"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "IA-8"
+    title: "Identification and Authentication (Non-Organizational Users)"
+    family: "IA"
+    status: "NOT_APPLICABLE"
+    gaps:
+      - "Platform is org-internal; B2B/B2C flows out of scope for Phase 1"
+    responsible_party: "N/A"
+
+  - id: "IA-11"
+    title: "Re-authentication"
+    family: "IA"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "code"
+        path: "csa_platform/common/auth.py"
+        lines: "229-239"
+        note: "Token exp verified every request; short JWT lifetime re-auths user"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "IA-12"
+    title: "Identity Proofing"
+    family: "IA"
+    status: "INHERITED"
+    inheritance:
+      - "Customer tenant onboarding process; Entra ID Verified ID optional"
+    responsible_party: "Customer"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # SC — System and Communications Protection
+  # ─────────────────────────────────────────────────────────────────────
+
+  - id: "SC-1"
+    title: "Policy and Procedures"
+    family: "SC"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "doc"
+        path: "csa_platform/governance/compliance/compliance-overview.md"
+    gaps:
+      - "No signed SC policy document"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "SC-2"
+    title: "Separation of System and User Functionality"
+    family: "SC"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/main.bicep"
+        note: "DMLZ separates management-plane RGs from data-plane RGs"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "SC-4"
+    title: "Information in Shared System Resources"
+    family: "SC"
+    status: "INHERITED"
+    inheritance:
+      - "Azure PaaS multi-tenant isolation (documented in Microsoft ATO)"
+    responsible_party: "Microsoft"
+
+  - id: "SC-5"
+    title: "Denial-of-Service Protection"
+    family: "SC"
+    status: "INHERITED"
+    inheritance:
+      - "Azure DDoS Basic (free tier) on all public IPs; DDoS Standard recommended"
+    gaps:
+      - "No opinionated DDoS Standard deployment shipped — Phase 2 candidate"
+    responsible_party: "Microsoft + csa-inabox"
+
+  - id: "SC-7"
+    title: "Boundary Protection"
+    family: "SC"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Network/privateDnsZones/privateDnsZones.bicep"
+        note: "Private DNS zones for all PaaS services"
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/KeyVault/keyvault.bicep"
+        lines: "39-48"
+        note: "networkAcls defaultAction=Deny; publicNetworkAccess=Disabled"
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "157-164"
+        note: "Same — storage defaultAction=Deny"
+      - kind: "bicep"
+        path: "deploy/bicep/shared/policies/policyAssignments.bicep"
+        lines: "24-45"
+        note: "Policy enforces no-public-access + private endpoints"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "SC-7(3)"
+    title: "SC-7(3) Access Points"
+    family: "SC"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "220-329"
+        note: "Single private endpoint per service (blob/table/queue)"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "SC-7(4)"
+    title: "SC-7(4) External Telecommunications Services"
+    family: "SC"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Network/privateDnsZones/virtualNetworkLinks.bicep"
+    gaps:
+      - "No ExpressRoute / VPN module shipped; relies on customer landing zone"
+    responsible_party: "Customer + csa-inabox"
+
+  - id: "SC-7(5)"
+    title: "SC-7(5) Deny by Default — Allow by Exception"
+    family: "SC"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/KeyVault/keyvault.bicep"
+        lines: "41"
+        note: "defaultAction: 'Deny'"
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "159"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "SC-8"
+    title: "Transmission Confidentiality and Integrity"
+    family: "SC"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "128-129"
+        note: "minimumTlsVersion: 'TLS1_2'; supportsHttpsTrafficOnly: true"
+      - kind: "bicep"
+        path: "deploy/bicep/shared/policies/policyAssignments.bicep"
+        lines: "100-125"
+        note: "Policy enforces HTTPS + TLS 1.2 minimum"
+      - kind: "code"
+        path: "portal/shared/api/main.py"
+        lines: "67-70"
+        note: "HSTS header max-age=31536000"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "SC-8(1)"
+    title: "SC-8(1) Cryptographic Protection"
+    family: "SC"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "128"
+        note: "TLS 1.2 minimum (FIPS-approved ciphers)"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "SC-10"
+    title: "Network Disconnect"
+    family: "SC"
+    status: "INHERITED"
+    inheritance:
+      - "Azure Front Door / App Service idle-session timeout"
+    responsible_party: "Microsoft"
+
+  - id: "SC-12"
+    title: "Cryptographic Key Establishment and Management"
+    family: "SC"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/KeyVault/keyvault.bicep"
+        lines: "36-54"
+        note: "Purge protection + soft-delete 90 days + HSM-backed"
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "130-146"
+        note: "CMK support (parEnableCmk) with key rotation"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "SC-13"
+    title: "Cryptographic Protection"
+    family: "SC"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "149-155"
+        note: "AES-256 Storage encryption at rest with infrastructure double encryption"
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/KeyVault/keyvault.bicep"
+        note: "FIPS 140-2 L2 HSM Key Vault"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "SC-17"
+    title: "Public Key Infrastructure Certificates"
+    family: "SC"
+    status: "INHERITED"
+    inheritance:
+      - "Azure-managed TLS certs for PaaS endpoints; customer-provided for custom domains"
+    responsible_party: "Microsoft + Customer"
+
+  - id: "SC-18"
+    title: "Mobile Code"
+    family: "SC"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "code"
+        path: "portal/shared/api/main.py"
+        lines: "59-66"
+        note: "Strict CSP — script-src 'self'; no inline eval; frame-ancestors 'none'"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "SC-20"
+    title: "Secure Name/Address Resolution (Authoritative)"
+    family: "SC"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Network/privateDnsZones/privateDnsZones.bicep"
+        note: "Azure Private DNS zones (DNSSEC inheritance from Azure)"
+    responsible_party: "Microsoft + csa-inabox"
+
+  - id: "SC-21"
+    title: "Secure Name/Address Resolution (Recursive)"
+    family: "SC"
+    status: "INHERITED"
+    inheritance:
+      - "Azure-provided DNS recursion"
+    responsible_party: "Microsoft"
+
+  - id: "SC-23"
+    title: "Session Authenticity"
+    family: "SC"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "code"
+        path: "csa_platform/common/auth.py"
+        lines: "241-249"
+        note: "Tenant pin blocks token-swap attacks across tenants"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "SC-28"
+    title: "Protection of Information at Rest"
+    family: "SC"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "130-155"
+        note: "requireInfrastructureEncryption=true (double encryption)"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "SC-28(1)"
+    title: "SC-28(1) Cryptographic Protection"
+    family: "SC"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "130-146"
+        note: "CMK via Key Vault (customer controls key)"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "SC-39"
+    title: "Process Isolation"
+    family: "SC"
+    status: "INHERITED"
+    inheritance:
+      - "Azure PaaS runtime isolation"
+    responsible_party: "Microsoft"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # SI — System and Information Integrity
+  # ─────────────────────────────────────────────────────────────────────
+
+  - id: "SI-1"
+    title: "Policy and Procedures"
+    family: "SI"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "doc"
+        path: "csa_platform/governance/compliance/compliance-overview.md"
+    gaps:
+      - "No formal SI policy"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "SI-2"
+    title: "Flaw Remediation"
+    family: "SI"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "ci"
+        path: ".github/workflows/codeql.yml"
+        note: "CodeQL SAST on push + weekly schedule"
+    gaps:
+      - "No Azure Update Manager / patch SLA policy documented"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "SI-3"
+    title: "Malicious Code Protection"
+    family: "SI"
+    status: "INHERITED"
+    inheritance:
+      - "Microsoft Defender for Cloud (customer opt-in)"
+    gaps:
+      - "No opinionated Defender plan activation in Bicep"
+    responsible_party: "Customer + Microsoft"
+
+  - id: "SI-4"
+    title: "System Monitoring"
+    family: "SI"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/KeyVault/keyvault.bicep"
+        lines: "111-123"
+        note: "Log Analytics diagnostics on every module"
+      - kind: "bicep"
+        path: "deploy/bicep/shared/policies/policyAssignments.bicep"
+        lines: "48-57"
+        note: "Policy audits resources missing diagnostics"
+    gaps:
+      - "No Sentinel analytic rules / alert templates shipped — CSA-0016 follow-up"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "SI-5"
+    title: "Security Alerts, Advisories, and Directives"
+    family: "SI"
+    status: "PLANNED"
+    gaps:
+      - "No subscription to Microsoft Security Response Center feed documented"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "SI-7"
+    title: "Software, Firmware, and Information Integrity"
+    family: "SI"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "code"
+        path: "csa_platform/governance/contracts/contract_validator.py"
+        note: "Data contract validation"
+      - kind: "code"
+        path: "csa_platform/governance/dataquality/run_quality_checks.py"
+        note: "Data quality check runner"
+      - kind: "config"
+        path: "csa_platform/governance/dataquality/quality-rules.yaml"
+    gaps:
+      - "Binary / image signing (Cosign / Notation) not configured"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "SI-10"
+    title: "Information Input Validation"
+    family: "SI"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "code"
+        path: "portal/shared/api/models/source.py"
+        note: "Pydantic models enforce request validation"
+      - kind: "code"
+        path: "csa_platform/governance/contracts/contract_validator.py"
+        note: "Contract-based input validation"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "SI-11"
+    title: "Error Handling"
+    family: "SI"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "code"
+        path: "csa_platform/common/auth.py"
+        lines: "253-258"
+        note: "Generic error messages; no stack leakage"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "SI-12"
+    title: "Information Management and Retention"
+    family: "SI"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "192-217"
+        note: "Lifecycle management — tier to Cool at 90 days"
+    gaps:
+      - "No explicit records-retention schedule by data classification"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "SI-16"
+    title: "Memory Protection"
+    family: "SI"
+    status: "INHERITED"
+    inheritance:
+      - "Azure PaaS runtime ASLR / DEP / stack canaries"
+    responsible_party: "Microsoft"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # CM — Configuration Management
+  # ─────────────────────────────────────────────────────────────────────
+
+  - id: "CM-1"
+    title: "Policy and Procedures"
+    family: "CM"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "doc"
+        path: "csa_platform/governance/compliance/compliance-overview.md"
+    gaps:
+      - "No formal CM policy document"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "CM-2"
+    title: "Baseline Configuration"
+    family: "CM"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/main.bicep"
+        note: "Bicep as-code baseline for DMLZ"
+      - kind: "bicep"
+        path: "deploy/bicep/gov/main.bicep"
+        note: "Azure Gov baseline"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "CM-3"
+    title: "Configuration Change Control"
+    family: "CM"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "ci"
+        path: ".github/workflows/bicep-whatif.yml"
+        note: "Bicep what-if preview on PRs"
+      - kind: "ci"
+        path: ".github/workflows/validate.yml"
+        note: "Pre-merge validation gate"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "CM-4"
+    title: "Impact Analyses"
+    family: "CM"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "ci"
+        path: ".github/workflows/bicep-whatif.yml"
+        note: "what-if produces deterministic impact diff"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "CM-5"
+    title: "Access Restrictions for Change"
+    family: "CM"
+    status: "INHERITED"
+    inheritance:
+      - "GitHub branch-protection + CODEOWNERS (customer-configured)"
+    responsible_party: "Customer"
+
+  - id: "CM-6"
+    title: "Configuration Settings"
+    family: "CM"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/shared/policies/policyAssignments.bicep"
+        note: "Policy-as-code for baseline settings"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "CM-7"
+    title: "Least Functionality"
+    family: "CM"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/KeyVault/keyvault.bicep"
+        lines: "33-35"
+        note: "enabledForDeployment/DiskEncryption/TemplateDeployment all false"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "CM-8"
+    title: "System Component Inventory"
+    family: "CM"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/main.bicep"
+        note: "IaC is authoritative component inventory"
+      - kind: "config"
+        path: "csa_platform/governance/finops/tagging-policy.json"
+    gaps:
+      - "No automated drift detection reconciling deployed vs declared inventory"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "CM-10"
+    title: "Software Usage Restrictions"
+    family: "CM"
+    status: "INHERITED"
+    inheritance:
+      - "Customer license / SaaS agreement governance"
+    responsible_party: "Customer"
+
+  - id: "CM-11"
+    title: "User-Installed Software"
+    family: "CM"
+    status: "NOT_APPLICABLE"
+    inheritance:
+      - "PaaS-only; no user-installable software surface"
+    responsible_party: "N/A"
+
+  - id: "CM-12"
+    title: "Information Location"
+    family: "CM"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/shared/policies/policyAssignments.bicep"
+        lines: "84-97"
+        note: "Allowed-locations policy pins data residency"
+    responsible_party: "csa-inabox platform team"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # CP — Contingency Planning
+  # ─────────────────────────────────────────────────────────────────────
+
+  - id: "CP-1"
+    title: "Policy and Procedures"
+    family: "CP"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "doc"
+        path: "csa_platform/governance/compliance/compliance-overview.md"
+    gaps:
+      - "No formal contingency plan doc / tabletop exercise record"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "CP-2"
+    title: "Contingency Plan"
+    family: "CP"
+    status: "PLANNED"
+    gaps:
+      - "No formal CP document or BIA results shipped"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "CP-6"
+    title: "Alternate Storage Site"
+    family: "CP"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "20-28"
+        note: "Standard_ZRS/GRS/RAGRS options for geo-redundant storage"
+    gaps:
+      - "Default SKU is LRS/ZRS; cross-region replication opt-in only"
+    responsible_party: "Customer (choose SKU)"
+
+  - id: "CP-7"
+    title: "Alternate Processing Site"
+    family: "CP"
+    status: "PLANNED"
+    gaps:
+      - "No paired-region failover module shipped — Phase 2"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "CP-9"
+    title: "System Backup"
+    family: "CP"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "167-178"
+        note: "Blob versioning + 30-day soft-delete + 30-day container delete retention"
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/KeyVault/keyvault.bicep"
+        lines: "36-37"
+        note: "Purge protection + 90-day soft-delete"
+    gaps:
+      - "No Azure Backup vault for Databricks / Synapse workspace backups"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "CP-10"
+    title: "System Recovery and Reconstitution"
+    family: "CP"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "ci"
+        path: ".github/workflows/rollback.yml"
+      - kind: "script"
+        path: "scripts/deploy/teardown-platform.sh"
+        note: "Tear-down flow enables reconstitute-from-IaC"
+    gaps:
+      - "No documented RTO/RPO targets"
+    responsible_party: "csa-inabox platform team"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # MP — Media Protection
+  # ─────────────────────────────────────────────────────────────────────
+
+  - id: "MP-1"
+    title: "Policy and Procedures"
+    family: "MP"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "doc"
+        path: "csa_platform/governance/compliance/compliance-overview.md"
+    gaps:
+      - "No formal media-protection policy"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "MP-2"
+    title: "Media Access"
+    family: "MP"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "122-164"
+        note: "allowSharedKeyAccess=false; AAD-gated media access"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "MP-4"
+    title: "Media Storage"
+    family: "MP"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/Storage/storage.bicep"
+        lines: "104-164"
+        note: "Encrypted at rest; private endpoints; no public network access"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "MP-5"
+    title: "Media Transport"
+    family: "MP"
+    status: "NOT_APPLICABLE"
+    inheritance:
+      - "No physical media transport — cloud-only"
+    responsible_party: "Microsoft (datacenter media handling)"
+
+  - id: "MP-6"
+    title: "Media Sanitization"
+    family: "MP"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "script"
+        path: "scripts/deploy/teardown-platform.sh"
+        note: "Typed-DESTROY teardown ensures deletion + purge"
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/modules/KeyVault/keyvault.bicep"
+        lines: "36-37"
+        note: "Purge protection prevents accidental sanitization"
+    inheritance:
+      - "Azure datacenter media sanitization per NIST SP 800-88"
+    gaps:
+      - "No explicit customer-facing certificate-of-destruction workflow"
+    responsible_party: "Microsoft + csa-inabox"
+
+  - id: "MP-7"
+    title: "Media Use"
+    family: "MP"
+    status: "NOT_APPLICABLE"
+    inheritance:
+      - "No portable media supported"
+    responsible_party: "N/A"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # PE — Physical and Environmental Protection
+  # ─────────────────────────────────────────────────────────────────────
+
+  - id: "PE-1"
+    title: "Policy and Procedures"
+    family: "PE"
+    status: "INHERITED"
+    inheritance:
+      - "Azure datacenter physical security (FedRAMP-authorized)"
+    responsible_party: "Microsoft"
+
+  - id: "PE-2"
+    title: "Physical Access Authorizations"
+    family: "PE"
+    status: "INHERITED"
+    inheritance:
+      - "Azure datacenter physical security (FedRAMP-authorized)"
+    responsible_party: "Microsoft"
+
+  - id: "PE-3"
+    title: "Physical Access Control"
+    family: "PE"
+    status: "INHERITED"
+    inheritance:
+      - "Azure datacenter physical security (FedRAMP-authorized)"
+    responsible_party: "Microsoft"
+
+  - id: "PE-6"
+    title: "Monitoring Physical Access"
+    family: "PE"
+    status: "INHERITED"
+    inheritance:
+      - "Azure datacenter CCTV + badge monitoring"
+    responsible_party: "Microsoft"
+
+  - id: "PE-8"
+    title: "Visitor Access Records"
+    family: "PE"
+    status: "INHERITED"
+    inheritance:
+      - "Azure datacenter visitor-log program"
+    responsible_party: "Microsoft"
+
+  - id: "PE-12"
+    title: "Emergency Lighting"
+    family: "PE"
+    status: "INHERITED"
+    inheritance:
+      - "Azure datacenter facility controls"
+    responsible_party: "Microsoft"
+
+  - id: "PE-13"
+    title: "Fire Protection"
+    family: "PE"
+    status: "INHERITED"
+    inheritance:
+      - "Azure datacenter fire suppression"
+    responsible_party: "Microsoft"
+
+  - id: "PE-14"
+    title: "Environmental Controls"
+    family: "PE"
+    status: "INHERITED"
+    inheritance:
+      - "Azure datacenter HVAC / humidity"
+    responsible_party: "Microsoft"
+
+  - id: "PE-15"
+    title: "Water Damage Protection"
+    family: "PE"
+    status: "INHERITED"
+    inheritance:
+      - "Azure datacenter facility controls"
+    responsible_party: "Microsoft"
+
+  - id: "PE-16"
+    title: "Delivery and Removal"
+    family: "PE"
+    status: "INHERITED"
+    inheritance:
+      - "Azure datacenter shipping / receiving controls"
+    responsible_party: "Microsoft"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # PL — Planning
+  # ─────────────────────────────────────────────────────────────────────
+
+  - id: "PL-1"
+    title: "Policy and Procedures"
+    family: "PL"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "doc"
+        path: "csa_platform/governance/compliance/compliance-overview.md"
+    gaps:
+      - "No signed PL policy"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "PL-2"
+    title: "System Security and Privacy Plans"
+    family: "PL"
+    status: "PLANNED"
+    gaps:
+      - "No SSP template generated — tracked under CSA-0012 Phase 2"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "PL-4"
+    title: "Rules of Behavior"
+    family: "PL"
+    status: "PLANNED"
+    gaps:
+      - "No acceptable-use / rules-of-behavior artifact"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "PL-8"
+    title: "Security and Privacy Architectures"
+    family: "PL"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "doc"
+        path: "docs/ARCHITECTURE.md"
+      - kind: "doc"
+        path: "csa_platform/governance/compliance/compliance-overview.md"
+    gaps:
+      - "No dedicated privacy-architecture section; CSA-0012 Phase 2 adds GDPR/CCPA"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "PL-10"
+    title: "Baseline Selection"
+    family: "PL"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "bicep"
+        path: "deploy/bicep/gov/main.bicep"
+        note: "Gov baseline; FedRAMP High target parameter"
+      - kind: "bicep"
+        path: "deploy/bicep/DMLZ/main.bicep"
+        note: "Moderate baseline target"
+    responsible_party: "csa-inabox platform team"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Additional High-baseline controls (PLANNED / illustrative)
+  # ─────────────────────────────────────────────────────────────────────
+
+  - id: "AC-2(12)"
+    title: "AC-2(12) Account Monitoring for Atypical Usage (High)"
+    family: "AC"
+    status: "PLANNED"
+    gaps:
+      - "No Entra ID Identity Protection risk-policy integration shipped"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "AU-9(4)"
+    title: "AU-9(4) Access by Subset of Privileged Users (High)"
+    family: "AU"
+    status: "PLANNED"
+    gaps:
+      - "No separate audit-admin role defined in RBAC matrix"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "CP-2(5)"
+    title: "CP-2(5) Continuity of Mission (High)"
+    family: "CP"
+    status: "PLANNED"
+    gaps:
+      - "No documented continuity-of-mission procedure"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "SC-7(18)"
+    title: "SC-7(18) Fail Secure (High)"
+    family: "SC"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "code"
+        path: "csa_platform/common/auth.py"
+        lines: "108-151"
+        note: "enforce_auth_safety_gate fails secure on misconfig"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "SI-4(12)"
+    title: "SI-4(12) Automated Organization-Generated Alerts (High)"
+    family: "SI"
+    status: "PLANNED"
+    gaps:
+      - "No Sentinel / Defender alert templates shipped"
+    responsible_party: "csa-inabox platform team"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # RA — Risk Assessment (abbreviated)
+  # ─────────────────────────────────────────────────────────────────────
+
+  - id: "RA-1"
+    title: "Policy and Procedures"
+    family: "RA"
+    status: "PLANNED"
+    gaps:
+      - "No formal RA policy"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "RA-3"
+    title: "Risk Assessment"
+    family: "RA"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "doc"
+        path: "temp/audit/FINDINGS_REGISTRY.md"
+        note: "CSA audit findings registry is de-facto risk register"
+    gaps:
+      - "No repeatable annual RA process artifact"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "RA-5"
+    title: "Vulnerability Monitoring and Scanning"
+    family: "RA"
+    status: "PARTIALLY_IMPLEMENTED"
+    evidence:
+      - kind: "ci"
+        path: ".github/workflows/codeql.yml"
+        note: "CodeQL SAST weekly + on push"
+    gaps:
+      - "No Defender for Cloud / container-image scanning in pipeline"
+    responsible_party: "csa-inabox platform team"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # SA — System and Services Acquisition (abbreviated)
+  # ─────────────────────────────────────────────────────────────────────
+
+  - id: "SA-11"
+    title: "Developer Testing and Evaluation"
+    family: "SA"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "ci"
+        path: ".github/workflows/test.yml"
+      - kind: "ci"
+        path: ".github/workflows/validate.yml"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "SA-15"
+    title: "Development Process, Standards, and Tools"
+    family: "SA"
+    status: "IMPLEMENTED"
+    evidence:
+      - kind: "ci"
+        path: ".github/workflows/codeql.yml"
+      - kind: "ci"
+        path: ".github/workflows/validate.yml"
+    responsible_party: "csa-inabox platform team"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # IR — Incident Response (abbreviated)
+  # ─────────────────────────────────────────────────────────────────────
+
+  - id: "IR-1"
+    title: "Policy and Procedures"
+    family: "IR"
+    status: "PLANNED"
+    gaps:
+      - "No formal IR policy / runbook"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "IR-4"
+    title: "Incident Handling"
+    family: "IR"
+    status: "PLANNED"
+    gaps:
+      - "No incident-response runbook; CSA-0012 Phase 2"
+    responsible_party: "csa-inabox platform team"
+
+  - id: "IR-6"
+    title: "Incident Reporting"
+    family: "IR"
+    status: "PLANNED"
+    gaps:
+      - "No automated incident-report channel / FedRAMP US-CERT reporting hook"
+    responsible_party: "csa-inabox platform team"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # AT — Awareness and Training (inherited)
+  # ─────────────────────────────────────────────────────────────────────
+
+  - id: "AT-1"
+    title: "Policy and Procedures"
+    family: "AT"
+    status: "INHERITED"
+    inheritance:
+      - "Customer organizational security-awareness program"
+    responsible_party: "Customer"
+
+  - id: "AT-2"
+    title: "Literacy Training and Awareness"
+    family: "AT"
+    status: "INHERITED"
+    inheritance:
+      - "Customer security-awareness training program"
+    responsible_party: "Customer"
+
+  - id: "AT-3"
+    title: "Role-Based Training"
+    family: "AT"
+    status: "INHERITED"
+    inheritance:
+      - "Customer role-based training program"
+    responsible_party: "Customer"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # PS — Personnel Security (inherited)
+  # ─────────────────────────────────────────────────────────────────────
+
+  - id: "PS-1"
+    title: "Policy and Procedures"
+    family: "PS"
+    status: "INHERITED"
+    inheritance:
+      - "Customer HR / personnel-security policy"
+    responsible_party: "Customer"
+
+  - id: "PS-3"
+    title: "Personnel Screening"
+    family: "PS"
+    status: "INHERITED"
+    inheritance:
+      - "Customer background-check program + Microsoft Azure personnel screening"
+    responsible_party: "Customer + Microsoft"
+
+  - id: "PS-4"
+    title: "Personnel Termination"
+    family: "PS"
+    status: "INHERITED"
+    inheritance:
+      - "Entra ID account disable on termination (customer HRIS integration)"
+    responsible_party: "Customer"
+
+  - id: "PS-5"
+    title: "Personnel Transfer"
+    family: "PS"
+    status: "INHERITED"
+    inheritance:
+      - "Customer HR transfer / reassignment process"
+    responsible_party: "Customer"
+
+  - id: "PS-6"
+    title: "Access Agreements"
+    family: "PS"
+    status: "INHERITED"
+    inheritance:
+      - "Customer acceptable-use / access-agreement program"
+    responsible_party: "Customer"

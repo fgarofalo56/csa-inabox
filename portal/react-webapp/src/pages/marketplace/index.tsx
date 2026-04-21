@@ -5,6 +5,10 @@
 import React, { useState } from 'react';
 import { useRouter } from 'next/router';
 import { useDataProducts, useDomains } from '@/hooks/useApi';
+import { useDebounce } from '@/hooks/useDebounce';
+import ErrorBanner from '@/components/ErrorBanner';
+import EmptyState from '@/components/EmptyState';
+import { RouteErrorBoundary } from '@/components/RouteErrorBoundary';
 import type { DataProduct } from '@/types';
 
 function QualityBadge({ score }: { score: number }) {
@@ -86,14 +90,15 @@ function ProductCard({ product, onRequestAccess }: { product: DataProduct; onReq
   );
 }
 
-export default function MarketplacePage() {
+function MarketplacePageContent() {
   const router = useRouter();
   const [search, setSearch] = useState('');
   const [selectedDomain, setSelectedDomain] = useState('');
   const [minQuality, setMinQuality] = useState(0);
+  const debouncedSearch = useDebounce(search);
 
   const { data: products, isLoading, error, refetch } = useDataProducts({
-    search: search || undefined,
+    search: debouncedSearch || undefined,
     domain: selectedDomain || undefined,
     min_quality: minQuality || undefined,
   });
@@ -120,12 +125,14 @@ export default function MarketplacePage() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search data products..."
+            aria-label="Search data products"
             className="w-full px-4 py-2 border border-gray-300 rounded-md text-sm focus:ring-brand-500 focus:border-brand-500"
           />
         </div>
         <select
           value={selectedDomain}
           onChange={(e) => setSelectedDomain(e.target.value)}
+          aria-label="Filter by domain"
           className="px-3 py-2 border border-gray-300 rounded-md text-sm"
         >
           <option value="">All domains</option>
@@ -138,6 +145,7 @@ export default function MarketplacePage() {
         <select
           value={minQuality.toString()}
           onChange={(e) => setMinQuality(Number(e.target.value))}
+          aria-label="Filter by minimum quality score"
           className="px-3 py-2 border border-gray-300 rounded-md text-sm"
         >
           <option value="0">Any quality</option>
@@ -149,21 +157,11 @@ export default function MarketplacePage() {
 
       {/* Error State */}
       {error ? (
-        <div className="bg-red-50 border border-red-200 rounded-lg p-6 text-center">
-          <svg className="mx-auto h-10 w-10 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
-          </svg>
-          <h3 className="mt-2 text-sm font-medium text-red-800">Failed to load data products</h3>
-          <p className="mt-1 text-sm text-red-600">
-            {error instanceof Error ? error.message : 'An unexpected error occurred.'}
-          </p>
-          <button
-            onClick={() => refetch()}
-            className="mt-4 inline-flex items-center px-4 py-2 text-sm font-medium text-red-700 bg-red-100 border border-red-300 rounded-md hover:bg-red-200"
-          >
-            Retry
-          </button>
-        </div>
+        <ErrorBanner
+          title="Failed to load data products"
+          message={error instanceof Error ? error.message : 'An unexpected error occurred.'}
+          onRetry={() => refetch()}
+        />
       ) : isLoading ? (
         /* Loading State */
         <div className="flex items-center justify-center h-64">
@@ -183,13 +181,22 @@ export default function MarketplacePage() {
           ))}
         </div>
       ) : (
-        <div className="text-center py-16 bg-gray-50 rounded-lg">
-          <p className="text-gray-500">No data products found.</p>
-          <p className="text-sm text-gray-400 mt-1">
-            Try adjusting your search criteria.
-          </p>
-        </div>
+        <EmptyState
+          title="No data products found."
+          description="Try adjusting your search criteria."
+        />
       )}
     </div>
+  );
+}
+
+/**
+ * Route-scoped error boundary (CSA-0124(4)).
+ */
+export default function MarketplacePage() {
+  return (
+    <RouteErrorBoundary routeLabel="Marketplace">
+      <MarketplacePageContent />
+    </RouteErrorBoundary>
   );
 }

@@ -1,0 +1,32 @@
+# Secrets and environment
+.env
+.env.*
+!.env.example
+
+# Git
+.git
+.gitignore
+
+# Python artifacts
+__pycache__
+*.pyc
+*.pyo
+.mypy_cache
+.pytest_cache
+.ruff_cache
+
+# Virtual environments
+.venv
+venv
+env
+
+# Tests (not needed in production image)
+tests/
+
+# Documentation
+*.md
+docs/
+
+# IDE
+.vscode
+.idea

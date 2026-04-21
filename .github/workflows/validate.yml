@@ -113,7 +113,7 @@ jobs:
         with:
           directory: deploy/
           framework: bicep,arm
-          soft_fail: true
+          soft_fail: false
           output_format: sarif
           output_file_path: results.sarif
           skip_path: deploy/bicep/landing-zone-alz
@@ -179,7 +179,7 @@ jobs:
 
       - name: Lint Python files
         run: |
-          ruff check domains/ scripts/ governance/ tools/
+          ruff check domains/ scripts/ csa_platform/ tools/
 
   # -------------------------------------------------------------------------
   # Repository Hygiene Check

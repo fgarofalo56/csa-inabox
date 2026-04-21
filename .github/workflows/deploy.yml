@@ -219,7 +219,7 @@ jobs:
 
       - name: Validate data product contracts
         run: |
-          python -m governance.contracts.contract_validator --ci --repo-root .
+          python -m csa_platform.governance.contracts.contract_validator --ci --repo-root .
 
       - name: Check Gold layer tables
         if: ${{ secrets.DBT_DATABRICKS_HOST != '' }}

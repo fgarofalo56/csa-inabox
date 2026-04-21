@@ -2,7 +2,32 @@
 
 # Multi-Synapse — Shared Analytics Environment
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Platform Engineers
+> **⚠️ LEGACY / MIGRATION-ONLY (2026-04-20)** — CSA-0139 / AQ-0034
+>
+> **Recommended compute platforms for new work: Microsoft Fabric**
+> (where GA in your cloud) **and Azure Databricks** (see
+> [ADR-0002](../../docs/adr/0002-databricks-over-oss-spark.md) and
+> [fabric-vs-databricks-vs-synapse decision tree](../../docs/decisions/fabric-vs-databricks-vs-synapse.md)).
+> Synapse is supported here only for existing deployments migrating
+> off. If you are starting greenfield, do not use this module.
+>
+> **Migration targets:**
+> * Synapse Dedicated SQL Pool → Azure Databricks SQL Warehouse
+>   (see [gcp-to-azure.md](../../docs/migrations/gcp-to-azure.md) and
+>   [aws-to-azure.md](../../docs/migrations/aws-to-azure.md) for
+>   analogous patterns) or Fabric Warehouse
+> * Synapse Serverless SQL → Databricks Lakehouse Federation or
+>   Fabric SQL endpoint
+> * Synapse Spark → Databricks Spark + Unity Catalog
+> * Synapse Pipelines → Azure Data Factory (+ dbt) or Fabric Data
+>   Factory
+>
+> See [MIGRATION.md](MIGRATION.md) in this module for the full
+> capability-mapping matrix and migration playbook.
+>
+> This README continues below for customers still operating Synapse.
+
+> **Last Updated:** 2026-04-20 | **Status:** Legacy / Migration-Only | **Audience:** Platform Engineers
 
 > [!NOTE]
 > **TL;DR:** Deploys per-organization Synapse workspaces with isolated compute and storage over shared network infrastructure, supporting cross-workspace query federation, pre-built RBAC templates, and cost allocation by organization tag.
@@ -202,4 +227,4 @@ All workspaces share a managed VNet with:
 - [Platform Components](../README.md) — Platform component index
 - [Platform Services](../../docs/PLATFORM_SERVICES.md) — Detailed platform service descriptions
 - [Architecture](../../docs/ARCHITECTURE.md) — Overall system architecture
-- [Direct Lake](../direct_lake/README.md) — Power BI direct access to Delta Lake
+- [Semantic Model](../semantic_model/README.md) — Power BI semantic models over Databricks SQL

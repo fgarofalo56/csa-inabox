@@ -3,7 +3,7 @@
 # This file is the authoritative interface between the finance domain
 # and its consumers.  It declares the schema, SLAs, and quality rules
 # for the ``finance.invoices`` data product.  The validator in
-# governance/contracts/contract_validator.py reads this file at both
+# csa_platform/governance/contracts/contract_validator.py reads this file at both
 # CI time and runtime to reject data that violates the contract.
 
 apiVersion: csa.microsoft.com/v1

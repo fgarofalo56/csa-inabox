@@ -184,9 +184,23 @@ WHERE anomaly_score > 0.8
 examples/iot-streaming/
 ├── README.md                          # This file
 ├── producers/
-│   └── iot_simulator.py               # Multi-type IoT sensor simulator
+│   └── iot_simulator.py               # Multi-type IoT sensor simulator (streaming)
 ├── data/
-│   └── generators/                    # Seed data generators
+│   ├── generators/                    # Deterministic batch-fixture generators
+│   │   ├── generate_telemetry.py      # Telemetry/weather/AQI/slots CSVs
+│   │   ├── generate_devices.py        # Rebuilds dbt device seeds
+│   │   ├── README.md                  # Generator usage + reproducibility
+│   │   └── tests/test_generators.py   # Determinism + row-count tests
+│   └── seed/                          # Generator output (bronze-layer CSVs)
+├── domains/
+│   └── dbt/                           # dbt medallion (bronze/silver/gold)
+│       ├── dbt_project.yml
+│       ├── models/
+│       │   ├── schema.yml
+│       │   ├── bronze/brz_*.sql
+│       │   ├── silver/slv_*.sql
+│       │   └── gold/gld_*.sql
+│       └── seeds/                     # devices.csv, sensor_metadata.csv
 ├── deploy/
 │   └── bicep/
 │       ├── iot-hub.bicep              # IoT Hub + DPS + Event Hubs
@@ -219,6 +233,12 @@ examples/iot-streaming/
 
 ### ⚡ Step 1: Deploy IoT Hub and Event Hubs
 
+> [!IMPORTANT]
+> **Entra-only (CSA-0025 / AQ-0014).** IoT Hub and DPS are deployed with
+> `disableLocalAuth: true`. SAS-key device authentication is disabled.
+> Legacy SAS clients must migrate before deploying this template — see
+> [`docs/migrations/iot-hub-entra.md`](../../docs/migrations/iot-hub-entra.md).
+
 ```bash
 # Create resource group
 az group create --name rg-iot-streaming --location eastus
@@ -231,15 +251,38 @@ az deployment group create \
       baseName=csaiot \
       captureStorageAccountName=<your-adls-account> \
       logAnalyticsWorkspaceId=<your-law-id>
+
+# Post-deploy: establish identity-based DPS → IoT Hub link.
+# (Required because the ARM DPS schema still requires a SAS connection
+# string for inline linking — we defer linking to the CLI so the DPS
+# managed identity can be used. See docs/migrations/iot-hub-entra.md.)
+IOT_HUB_ID=$(az deployment group show \
+  --resource-group rg-iot-streaming --name iot-hub \
+  --query properties.outputs.iotHubResourceId.value -o tsv)
+DPS_NAME=$(az deployment group show \
+  --resource-group rg-iot-streaming --name iot-hub \
+  --query properties.outputs.dpsName.value -o tsv)
+az iot dps linked-hub create \
+  --dps-name "$DPS_NAME" --resource-group rg-iot-streaming \
+  --hub-resource-id "$IOT_HUB_ID" \
+  --allocation-weight 1 \
+  --authentication-type identityBased
 ```
 
 This deploys:
-- **IoT Hub** (S1) with Device Provisioning Service
+- **IoT Hub** (S1) with system-assigned managed identity, Entra-only auth
+  (`disableLocalAuth: true`), no SAS authorization policies, and
+  identity-based routing to the Event Hub telemetry hub.
+- **Device Provisioning Service** (S1) with system-assigned managed identity.
+  DPS is deployed unlinked; the IoT Hub link is established post-deploy as
+  identity-based (no SAS connection string is ever emitted).
 - **Event Hub Namespace** (Standard, auto-inflate) with three hubs:
   - `telemetry` — raw device data with Capture to ADLS
   - `alerts` — anomaly and threshold alerts
   - `processed` — enriched/aggregated output
 - **Consumer groups** for ADX, Stream Analytics, and Capture
+- **Role assignments:** DPS MI → IoT Hub Data Contributor; IoT Hub MI →
+  Event Hubs Data Sender (required for identity-based routing).
 - **Diagnostic settings** to Log Analytics
 
 ### 🔄 Step 2: Deploy Stream Analytics
@@ -358,6 +401,83 @@ SensorTelemetry
 
 ---
 
+## 🧱 dbt + Data Generators (Batch / Cold Path)
+
+The streaming examples above cover the **hot** and **warm** paths. For the
+**cold** path (Event Hub Capture → ADLS → dbt medallion) this vertical
+ships a dbt project at [`domains/dbt/`](./domains/dbt/) and deterministic
+seed generators at [`data/generators/`](./data/generators/).
+
+Responsibility split:
+
+| Path | Technology | Owns |
+|------|------------|------|
+| Hot  | ADX (KQL)           | Sub-second dashboards, live alerts |
+| Warm | Stream Analytics    | 1–5 min windowed aggregates, spike/dip anomaly detection |
+| Cold | dbt (this project)  | Historical medallion (bronze/silver/gold), SLO reporting, analytics-ready marts |
+
+The dbt anomaly logic (`slv_anomaly_flags`) intentionally mirrors the ASA
+`detect_anomalies.asaql` thresholds so warm-path and cold-path signals
+stay comparable.
+
+### Generate seed data
+
+```bash
+# 7 days of telemetry across 10 IoT devices (plus weather, AQI, slots)
+python examples/iot-streaming/data/generators/generate_telemetry.py --days 7
+
+# See all options
+python examples/iot-streaming/data/generators/generate_telemetry.py --help
+```
+
+Output lands in `examples/iot-streaming/data/seed/`:
+
+- `telemetry_bronze.csv`  — long format (device_id, event_time, metric_type, value)
+- `weather_bronze.csv`    — NOAA-style weather observations
+- `aqi_bronze.csv`        — EPA-style AQI readings
+- `slots_bronze.csv`      — casino slot-machine events
+
+Generators are **deterministic** — the same `--seed` (default 42) produces
+byte-identical output. The test suite enforces this with sha256.
+
+### Run dbt
+
+```bash
+cd examples/iot-streaming/domains/dbt
+dbt seed          # load devices.csv + sensor_metadata.csv
+dbt run           # build bronze → silver → gold
+dbt test          # column-level not_null / unique / accepted_values
+```
+
+### Medallion output
+
+```text
+bronze/
+  brz_iot_telemetry          — raw sensor readings (long format)
+  brz_weather_observations   — NOAA-style weather
+  brz_aqi_readings           — EPA-style AQI
+  brz_slot_machine_events    — casino telemetry
+
+silver/
+  slv_device_telemetry_cleaned   — deduped, range-validated, UTC-normalized
+  slv_anomaly_flags              — z-score + IQR + threshold anomaly flags
+  slv_sensor_aggregates_1min     — 1-minute tumbling windows per device+metric
+
+gold/
+  gld_device_health_daily        — daily uptime %, data completeness, alert counts
+  gld_anomaly_heatmap            — hour × metric-type anomaly density
+  gld_sla_breach_summary         — 15-minute latency-SLO compliance roll-up
+```
+
+### Run the generator tests
+
+```bash
+python -m pytest examples/iot-streaming/data/generators/tests/ -v
+```
+
+
+---
+
 ## Integration with Other Verticals
 
 This streaming infrastructure is shared across verticals:
@@ -397,3 +517,53 @@ Azure CLI cloud to `AzureUSGovernment`.
 - [Casino Analytics](../casino-analytics/README.md) — Streaming patterns for slot machine telemetry
 - [EPA Environmental Analytics](../epa/README.md) — Streaming patterns for AQI sensor data
 - [NOAA Climate Analytics](../noaa/README.md) — Streaming patterns for weather station data
+
+
+---
+
+## Prerequisites / Cost / Teardown
+
+> [!IMPORTANT]
+> **Cost-safety:** this vertical deploys real Azure resources. Always run `teardown.sh` when you are done. A forgotten workshop environment can run **$80-150/day**.
+
+### Prerequisites
+
+- Azure CLI 2.50+ logged in (`az login`), subscription selected (`az account set --subscription <id>`)
+- `jq` installed (used by teardown enumeration)
+- Bicep CLI 0.25+ (`az bicep version`)
+- Contributor + User Access Administrator on target subscription (or a pre-created RG with equivalent RBAC)
+- `bash scripts/deploy/validate-prerequisites.sh` passes
+
+### Cost estimate (rough, East US 2)
+
+- **While running:** ~$$80-150/day (services: IoT Hub, Event Hub, Stream Analytics, ADX, Storage)
+- **Idle overnight:** roughly half if you stop compute (Databricks autostop + Synapse pause)
+- **Storage + Key Vault residual:** <$5/month if you skip teardown
+
+Numbers are indicative for a small demo dataset; production workloads vary significantly. Use `az consumption usage list` or Cost Management for live numbers.
+
+### Runtime
+
+- **Deploy:** ~20-30 minutes (first run; cold Bicep)
+- **Teardown:** ~5-10 minutes (async RG delete completes in the background)
+
+### Teardown
+
+When finished, run the per-example teardown script. It enforces a typed `DESTROY-iot-streaming` confirmation, logs every step to `reports/teardown/iot-streaming-<timestamp>.log`, and deletes the resource group `rg-iot-streaming` along with any matching subscription-scope deployments.
+
+```bash
+# Interactive (recommended)
+bash examples/iot-streaming/deploy/teardown.sh
+
+# Dry run (enumerate only)
+bash examples/iot-streaming/deploy/teardown.sh --dry-run
+
+# From the repo root via Makefile
+make teardown-example VERTICAL=iot-streaming
+make teardown-example VERTICAL=iot-streaming DRYRUN=1
+
+# CI automation (no prompt — only for ephemeral environments)
+bash examples/iot-streaming/deploy/teardown.sh --yes
+```
+
+See [`docs/QUICKSTART.md#teardown`](../../docs/QUICKSTART.md#teardown) for the platform-wide teardown flow.

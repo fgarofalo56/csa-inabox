@@ -13,6 +13,16 @@
 > [!IMPORTANT]
 > This document describes the target-state architecture and recommended improvements. For current CI/CD workflows, see `.github/workflows/`. For current deployment instructions, see [QUICKSTART.md](QUICKSTART.md) or [GETTING_STARTED.md](GETTING_STARTED.md).
 
+> [!NOTE]
+> **CAF scenario update (CSA-0068).** The legacy "Cloud-Scale Analytics"
+> CAF scenario was **deprecated in April 2026** and replaced by
+> [Microsoft CAF — Unify your data platform](https://aka.ms/cafdata).
+> Links in this document to
+> `https://learn.microsoft.com/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/...`
+> are preserved for historical cross-reference only. For authoritative
+> 2026 guidance on Fabric, data mesh, and landing zones, follow the
+> "Unify your data platform" link above.
+
 ## 📑 Table of Contents
 
 - [🏗️ 1. Bicep Best Practices for Large-Scale Azure Deployments](#️-1-bicep-best-practices-for-large-scale-azure-deployments)
@@ -1766,7 +1776,8 @@ Environment: prod
 - [What-If Deployments](https://learn.microsoft.com/en-us/azure/azure-resource-manager/bicep/deploy-what-if)
 - [Bicep Linter](https://learn.microsoft.com/en-us/azure/azure-resource-manager/bicep/linter)
 - [GitHub OIDC with Azure](https://learn.microsoft.com/en-us/azure/developer/github/connect-from-azure-openid-connect)
-- [Cloud-Scale Analytics Architectures](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/architectures/overview-architectures)
+- [Microsoft CAF — Unify your data platform (2026 guidance)](https://aka.ms/cafdata) — replaces the deprecated Cloud-Scale Analytics scenario (April 2026)
+- [Cloud-Scale Analytics Architectures (deprecated, kept for historical cross-reference)](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/architectures/overview-architectures)
 - [PSRule for Azure](https://azure.github.io/PSRule.Rules.Azure/)
 - [GitHub Reusable Workflows](https://docs.github.com/en/actions/sharing-automations/reusing-workflows)
 

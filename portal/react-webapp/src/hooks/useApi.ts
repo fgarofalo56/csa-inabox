@@ -83,6 +83,17 @@ export function useProvisionSource() {
   });
 }
 
+export function useScanSource() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.scanSource(id),
+    onSuccess: (_data, id) => {
+      queryClient.invalidateQueries({ queryKey: ['sources', id] });
+      queryClient.invalidateQueries({ queryKey: ['sources'] });
+    },
+  });
+}
+
 // ─── Pipeline Hooks ────────────────────────────────────────────────────────
 
 export function usePipelines(params?: {

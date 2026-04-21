@@ -1,0 +1,49 @@
+{
+    "task_templates": {
+        "new_bicep_module": {
+            "title_template": "Create Bicep module: {service_name}",
+            "description_template": "Create a new Bicep module for {service_name} at deploy/bicep/{landing_zone}/modules/{service_name}/{service_name}.bicep.\n\nRequirements:\n- SystemAssigned managed identity\n- Private endpoint support (conditional on parameter)\n- Diagnostic settings to Log Analytics (conditional)\n- Parameter decorators (@description, @allowed, etc.)\n- Outputs: resourceId, resourceName, managedIdentityPrincipalId\n\nFollow existing pattern in deploy/bicep/DLZ/modules/synapse/synapse.bicep",
+            "validation_commands": [
+                "bicep build deploy/bicep/{landing_zone}/modules/{service_name}/{service_name}.bicep"
+            ],
+            "feature": "infrastructure",
+            "estimated_hours": 2
+        },
+        "new_dbt_model": {
+            "title_template": "Create dbt {layer} model: {model_name}",
+            "description_template": "Create a new dbt {layer} model at domains/{domain}/dbt/models/{layer}/{model_name}.sql.\n\nRequirements:\n- Follow medallion architecture conventions\n- Bronze: incremental with merge, add audit columns\n- Silver: dedup, type cast, data quality flags\n- Gold: table materialization, business metrics\n- Add schema.yml entry with tests\n- Add source definition if needed",
+            "validation_commands": [
+                "cd domains/{domain}/dbt && dbt compile --select {model_name}"
+            ],
+            "feature": "data-pipelines",
+            "estimated_hours": 1
+        },
+        "new_data_domain": {
+            "title_template": "Onboard data domain: {domain_name}",
+            "description_template": "Set up a new data domain following the Data Mesh pattern.\n\n1. Copy template: cp -r templates/data-product/scaffold domains/{domain_name}\n2. Configure dbt_project.yml with domain name\n3. Define sources in models/bronze/sources.yml\n4. Create at least one bronze → silver → gold pipeline\n5. Define data product contract\n6. Register in Purview\n7. Update CODEOWNERS",
+            "validation_commands": [
+                "cd domains/{domain_name}/dbt && dbt compile --profiles-dir ../../shared/dbt"
+            ],
+            "feature": "data-mesh",
+            "estimated_hours": 4
+        },
+        "new_adf_pipeline": {
+            "title_template": "Create ADF pipeline: {pipeline_name}",
+            "description_template": "Create an ADF pipeline definition at domains/{domain}/pipelines/adf/{pipeline_name}.json.\n\nRequirements:\n- Valid ARM template JSON\n- Parameterized (factory name, connection strings)\n- Error handling (retry, alerting)\n- Metadata logging (timestamps, row counts)",
+            "validation_commands": [
+                "az deployment group validate --template-file domains/{domain}/pipelines/adf/{pipeline_name}.json --parameters factoryName=test"
+            ],
+            "feature": "data-pipelines",
+            "estimated_hours": 2
+        },
+        "bug_fix": {
+            "title_template": "Fix: {description}",
+            "description_template": "Bug fix: {description}\n\nSteps:\n1. Reproduce the issue\n2. Identify root cause\n3. Implement fix\n4. Add test to prevent regression\n5. Validate with relevant gate scripts",
+            "validation_commands": [
+                "pwsh -File dev-loop/gates/validate-all.ps1"
+            ],
+            "feature": "bug-fix",
+            "estimated_hours": 1
+        }
+    }
+}

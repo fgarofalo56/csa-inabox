@@ -1,0 +1,69 @@
+{
+  "schema_version": "eval-report-v1",
+  "run_id": "test-baseline-run",
+  "timestamp": "2026-01-01T00:00:00+00:00",
+  "tag": "v0.0.1-fixture",
+  "goldens_source": "fixtures/sample_goldens.yaml",
+  "prompt_hashes": {
+    "ground_and_cite": "fakehash-0",
+    "refusal_off_scope": "fakehash-1"
+  },
+  "deterministic": true,
+  "results": [],
+  "aggregates": [
+    {
+      "rubric": "groundedness",
+      "mean": 0.85,
+      "p50": 0.85,
+      "p95": 0.9,
+      "p99": 0.92,
+      "count": 10,
+      "passed": 10,
+      "failed": 0
+    },
+    {
+      "rubric": "citation_accuracy",
+      "mean": 0.88,
+      "p50": 0.9,
+      "p95": 0.95,
+      "p99": 0.97,
+      "count": 10,
+      "passed": 10,
+      "failed": 0
+    },
+    {
+      "rubric": "answer_relevance",
+      "mean": 0.82,
+      "p50": 0.82,
+      "p95": 0.85,
+      "p99": 0.87,
+      "count": 10,
+      "passed": 10,
+      "failed": 0
+    },
+    {
+      "rubric": "refusal_correctness",
+      "mean": 1.0,
+      "p50": 1.0,
+      "p95": 1.0,
+      "p99": 1.0,
+      "count": 10,
+      "passed": 10,
+      "failed": 0
+    },
+    {
+      "rubric": "latency_p95",
+      "mean": 1200.0,
+      "p50": 900.0,
+      "p95": 1500.0,
+      "p99": 1800.0,
+      "count": 10,
+      "passed": 10,
+      "failed": 0
+    }
+  ],
+  "total_cases": 10,
+  "passed_cases": 10,
+  "failed_cases": 0,
+  "error_cases": 0
+}

@@ -275,7 +275,7 @@ graph TD
 - **Encryption at Rest**: Azure Storage Service Encryption (SSE) with AES-256
 - **Encryption in Transit**: TLS 1.2+ including Event Hub AMQP connections
 - **Network Security**: VNet integration with private endpoints for all services
-- **Access Control**: Azure AD with RBAC, separate roles for streaming and batch
+- **Access Control**: Microsoft Entra ID with RBAC, separate roles for streaming and batch
 
 ### Compliance
 

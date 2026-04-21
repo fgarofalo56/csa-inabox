@@ -1,0 +1,104 @@
+# Conformance lint for CSA-in-a-Box example verticals.
+#
+# Runs scripts/lint-vertical.sh against every vertical changed in a PR.
+# Enforces the canonical vertical layout (README sections, dbt project,
+# Bicep deploy, contracts) and specifically catches the CSA-0089 regression
+# (sources: must not appear at the top level of dbt_project.yml).
+name: Vertical Conformance
+
+on:
+  pull_request:
+    paths:
+      - 'examples/**'
+      - 'templates/example-vertical/**'
+      - 'scripts/lint-vertical.sh'
+      - 'scripts/new-vertical.sh'
+      - '.github/workflows/vertical-conformance.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'examples/**'
+      - 'templates/example-vertical/**'
+      - 'scripts/lint-vertical.sh'
+
+jobs:
+  lint-verticals:
+    name: Lint Verticals
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+
+      - name: Discover verticals
+        id: discover
+        run: |
+          set -euo pipefail
+          # Enumerate every sub-directory under examples/ that looks like a
+          # vertical (has a README and a domains/ or deploy/).
+          verticals=()
+          for d in examples/*/; do
+            d="${d%/}"
+            [[ -f "${d}/README.md" ]] || continue
+            [[ -d "${d}/domains" || -d "${d}/deploy" ]] || continue
+            verticals+=("${d}")
+          done
+          {
+            echo "verticals<<EOF"
+            printf '%s\n' "${verticals[@]}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "Found ${#verticals[@]} vertical(s):"
+          printf '  - %s\n' "${verticals[@]}"
+
+      - name: Run lint-vertical.sh on every vertical
+        run: |
+          set -euo pipefail
+          failed=0
+          while IFS= read -r vertical; do
+            [[ -z "${vertical}" ]] && continue
+            echo ""
+            echo "::group::Lint ${vertical}"
+            if ! bash scripts/lint-vertical.sh "${vertical}"; then
+              failed=$((failed + 1))
+              echo "::error file=${vertical}::Vertical ${vertical} is non-conformant"
+            fi
+            echo "::endgroup::"
+          done <<< "${{ steps.discover.outputs.verticals }}"
+
+          if [[ ${failed} -gt 0 ]]; then
+            echo "::error::${failed} vertical(s) are non-conformant"
+            exit 1
+          fi
+          echo "All verticals pass conformance lint."
+
+  validate-template:
+    name: Validate Cookiecutter Template
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v5
+        with:
+          python-version: '3.12'
+
+      - name: Install cookiecutter + pytest
+        run: pip install 'cookiecutter>=2.6.0,<3.0.0' pytest
+
+      - name: Generate a sample vertical from the template
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/test-vertical
+          cookiecutter templates/example-vertical/ \
+            -o /tmp/test-vertical --no-input \
+            vertical_slug=demo-test \
+            vertical_name="Demo Test" \
+            description="CI-generated sanity check vertical" \
+            domain_owner=ci@example.com
+          ls -la /tmp/test-vertical/demo-test
+
+      - name: Lint the generated vertical
+        run: bash scripts/lint-vertical.sh /tmp/test-vertical/demo-test
+
+      - name: Run the generator tests in the scaffolded vertical
+        run: |
+          cd /tmp/test-vertical/demo-test
+          python -m pytest data/generators/tests/ -v

@@ -12,28 +12,95 @@ POST   /api/v1/pipelines/{pipeline_id}/trigger    — trigger a pipeline run
 from __future__ import annotations
 
 import logging
-import random
+import random as _rng
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
+from csa_platform.common.audit import audit_event_from_request, audit_logger
+
+from ..config import settings
+from ..dependencies import (
+    get_pipelines_store,
+    get_sources_store,
+)
+from ..dependencies import (
+    get_runs_store as _get_async_runs_store,
+)
 from ..models.pipeline import PipelineRecord, PipelineRun, PipelineStatus, PipelineType
-from ..persistence import JsonStore
-from ..services.auth import get_current_user, require_role
+from ..models.source import SourceRecord
+from ..observability.rate_limit import build_rate_limiter, get_route_limit
+from ..persistence import StoreBackend
+from ..persistence_async import AsyncStoreBackend
+from ..persistence_factory import build_store_backend
+from ..services.auth import DomainScope, get_domain_scope, require_role
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# ── JSON-based persistence ──────────────────────────────────────────────────
-_pipelines_store = JsonStore("pipelines.json")
-_runs_store = JsonStore("pipeline_runs.json")
+# Per-principal sliding-window rate limiter (CSA-0030).
+_limiter = build_rate_limiter()
+
+# ── Persistence ─────────────────────────────────────────────────────────
+# Backend is chosen by the async factory based on ``settings.DATABASE_URL``;
+# routers await the AsyncStoreBackend via FastAPI ``Depends`` — see ADR-0016.
+# The sync singletons below are retained as a transitional compat layer
+# for the stats router + existing test fixtures.
+_pipelines_store: StoreBackend = build_store_backend("pipelines.json", settings)
+_runs_store: StoreBackend = build_store_backend("pipeline_runs.json", settings)
 
 
-def _seed_demo_pipelines() -> None:
-    """Populate realistic demo pipelines on first access."""
-    if _pipelines_store.count() > 0:
+def get_store() -> StoreBackend:
+    """Return the sync pipelines store (compat; new code uses async DI)."""
+    return _pipelines_store
+
+
+def get_runs_store() -> StoreBackend:
+    """Return the sync pipeline runs store (compat; new code uses async DI)."""
+    return _runs_store
+
+
+async def _resolve_pipeline_domain(
+    pipeline: PipelineRecord,
+    sources_store: AsyncStoreBackend,
+) -> str | None:
+    """Async variant of :func:`_get_pipeline_domain` used by async routes."""
+    if pipeline.domain:
+        return pipeline.domain
+    stored_source = await sources_store.get(pipeline.source_id)
+    if not stored_source:
+        return None
+    source = SourceRecord.model_validate(stored_source)
+    return source.domain
+
+
+def _get_pipeline_domain(pipeline: PipelineRecord) -> str | None:
+    """Resolve the domain for a pipeline via its linked source.
+
+    Pipelines do not store a domain directly — they carry a ``source_id``
+    that points to the source record which owns the domain.  When the
+    pipeline record itself has a ``domain`` set (populated at seed or
+    trigger time) that value is used directly to avoid an extra lookup.
+    """
+    if pipeline.domain:
+        return pipeline.domain
+    from .sources import get_store as _get_sources_store
+    stored_source = _get_sources_store().get(pipeline.source_id)
+    if not stored_source:
+        return None
+    source = SourceRecord.model_validate(stored_source)
+    return source.domain
+
+
+async def seed_demo_pipelines() -> None:
+    """Populate realistic demo pipelines once at startup (async)."""
+    async_pipelines = get_pipelines_store()
+    async_runs = _get_async_runs_store()
+    if await async_pipelines.count() > 0:
         return
+
+    _rng.seed(42)
 
     now = datetime.now(timezone.utc)
 
@@ -78,24 +145,24 @@ def _seed_demo_pipelines() -> None:
         ),
     ]
     for p in demos:
-        _pipelines_store.add(p.model_dump())
+        await async_pipelines.add(p.model_dump())
 
     # Seed some runs for the first pipeline
     for i in range(5):
         run_start = now - timedelta(days=i, hours=2)
-        run_end = run_start + timedelta(minutes=random.randint(3, 25))
+        run_end = run_start + timedelta(minutes=_rng.randint(3, 25))
         run = PipelineRun(
             id=f"run-{uuid.uuid4().hex[:8]}",
             pipeline_id="pl-001",
             status=PipelineStatus.SUCCEEDED if i != 2 else PipelineStatus.FAILED,
             started_at=run_start,
             ended_at=run_end,
-            rows_read=random.randint(50_000, 200_000),
-            rows_written=random.randint(49_000, 199_000),
+            rows_read=_rng.randint(50_000, 200_000),
+            rows_written=_rng.randint(49_000, 199_000),
             error_message="Connection timeout after 600s" if i == 2 else None,
             duration_seconds=int((run_end - run_start).total_seconds()),
         )
-        _runs_store.add(run.model_dump())
+        await async_runs.add(run.model_dump())
 
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
@@ -111,17 +178,27 @@ async def list_pipelines(
     status_filter: PipelineStatus | None = Query(None, alias="status"),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
-    _user: dict = Depends(get_current_user),
+    scope: DomainScope = Depends(get_domain_scope),
+    store: AsyncStoreBackend = Depends(get_pipelines_store),
+    sources_store: AsyncStoreBackend = Depends(get_sources_store),
 ) -> list[PipelineRecord]:
     """Return all pipelines, optionally filtered by source or status."""
-    _seed_demo_pipelines()
-    results = [PipelineRecord.model_validate(item) for item in _pipelines_store.load()]
+    results = [PipelineRecord.model_validate(item) for item in await store.load()]
 
-    # Domain scoping: non-admin users can only see their domain's pipelines
-    user_roles = _user.get("roles", [])
-    user_domain = _user.get("domain") or _user.get("team")
-    if "Admin" not in user_roles and user_domain:
-        results = [p for p in results if p.domain == user_domain]
+    # Domain scoping: non-admin users can only see their domain's pipelines.
+    # Resolve each pipeline's domain via its linked source when the record
+    # does not carry an explicit domain field.
+    # When a non-admin has no domain claim (e.g. demo mode), return empty
+    # rather than leaking data across all domains (SEC-0005).
+    if not scope.is_admin:
+        if not scope.user_domain:
+            return []
+        filtered: list[PipelineRecord] = []
+        for p in results:
+            domain = await _resolve_pipeline_domain(p, sources_store)
+            if domain == scope.user_domain:
+                filtered.append(p)
+        results = filtered
 
     if source_id:
         results = [p for p in results if p.source_id == source_id]
@@ -138,14 +215,31 @@ async def list_pipelines(
 )
 async def get_pipeline(
     pipeline_id: str,
-    _user: dict = Depends(get_current_user),
+    scope: DomainScope = Depends(get_domain_scope),
+    store: AsyncStoreBackend = Depends(get_pipelines_store),
+    sources_store: AsyncStoreBackend = Depends(get_sources_store),
 ) -> PipelineRecord:
-    """Return a single pipeline by ID."""
-    _seed_demo_pipelines()
-    stored_pipeline = _pipelines_store.get(pipeline_id)
+    """Return a single pipeline by ID.
+
+    Non-admin users may only retrieve pipelines whose source belongs to
+    their own domain.  Previously this endpoint had no domain scoping at
+    all (ARCH-0006 / SEC-0009).
+    """
+    stored_pipeline = await store.get(pipeline_id)
     if not stored_pipeline:
         raise HTTPException(status_code=404, detail=f"Pipeline '{pipeline_id}' not found.")
-    return PipelineRecord.model_validate(stored_pipeline)
+    pipeline = PipelineRecord.model_validate(stored_pipeline)
+
+    # Domain scoping: enforce for non-admin callers.
+    if not scope.is_admin:
+        pipeline_domain = await _resolve_pipeline_domain(pipeline, sources_store)
+        if not scope.user_domain or pipeline_domain != scope.user_domain:
+            raise HTTPException(
+                status_code=403,
+                detail="You do not have access to this pipeline.",
+            )
+
+    return pipeline
 
 
 @router.get(
@@ -156,16 +250,32 @@ async def get_pipeline(
 async def get_pipeline_runs(
     pipeline_id: str,
     limit: int = Query(20, ge=1, le=100),
-    _user: dict = Depends(get_current_user),
+    scope: DomainScope = Depends(get_domain_scope),
+    store: AsyncStoreBackend = Depends(get_pipelines_store),
+    runs_store: AsyncStoreBackend = Depends(_get_async_runs_store),
+    sources_store: AsyncStoreBackend = Depends(get_sources_store),
 ) -> list[PipelineRun]:
-    """Return recent execution runs for a pipeline."""
-    _seed_demo_pipelines()
-    # Check if pipeline exists
-    if not _pipelines_store.get(pipeline_id):
+    """Return recent execution runs for a pipeline.
+
+    Non-admin users may only retrieve runs for pipelines in their domain.
+    Previously this endpoint had no domain scoping at all (ARCH-0006 / SEC-0009).
+    """
+    stored_pipeline = await store.get(pipeline_id)
+    if not stored_pipeline:
         raise HTTPException(status_code=404, detail=f"Pipeline '{pipeline_id}' not found.")
 
+    # Domain scoping: enforce for non-admin callers before returning any runs.
+    if not scope.is_admin:
+        pipeline = PipelineRecord.model_validate(stored_pipeline)
+        pipeline_domain = await _resolve_pipeline_domain(pipeline, sources_store)
+        if not scope.user_domain or pipeline_domain != scope.user_domain:
+            raise HTTPException(
+                status_code=403,
+                detail="You do not have access to this pipeline.",
+            )
+
     # Get runs for this pipeline
-    all_runs = _runs_store.load()
+    all_runs = await runs_store.load()
     pipeline_runs = [PipelineRun.model_validate(run) for run in all_runs if run.get("pipeline_id") == pipeline_id]
 
     # Sort by started_at descending (most recent first)
@@ -179,11 +289,19 @@ async def get_pipeline_runs(
     response_model=PipelineRun,
     summary="Trigger a pipeline run",
 )
+@_limiter.limit(get_route_limit("pipelines_trigger", write=True))
 async def trigger_pipeline(
+    request: Request,
     pipeline_id: str,
-    _user: dict = Depends(require_role("Contributor", "Admin")),
+    user: dict = Depends(require_role("Contributor", "Admin")),
+    store: AsyncStoreBackend = Depends(get_pipelines_store),
+    runs_store: AsyncStoreBackend = Depends(_get_async_runs_store),
+    sources_store: AsyncStoreBackend = Depends(get_sources_store),
 ) -> PipelineRun:
     """Manually trigger a pipeline execution.
+
+    Non-admin users may only trigger pipelines belonging to their domain
+    (SEC-0002).
 
     In production, would call the ADF REST API to start a pipeline run:
 
@@ -191,10 +309,22 @@ async def trigger_pipeline(
              providers/Microsoft.DataFactory/factories/{factory}/
              pipelines/{pipeline}/createRun?api-version=2018-06-01
     """
-    _seed_demo_pipelines()
-    stored_pipeline = _pipelines_store.get(pipeline_id)
+    stored_pipeline = await store.get(pipeline_id)
     if not stored_pipeline:
         raise HTTPException(status_code=404, detail=f"Pipeline '{pipeline_id}' not found.")
+
+    pipeline = PipelineRecord.model_validate(stored_pipeline)
+
+    # Domain scoping: enforce for non-admin callers (SEC-0002).
+    user_roles = user.get("roles", [])
+    if "Admin" not in user_roles:
+        pipeline_domain = await _resolve_pipeline_domain(pipeline, sources_store)
+        user_domain = user.get("domain") or user.get("team")
+        if not user_domain or pipeline_domain != user_domain:
+            raise HTTPException(
+                status_code=403,
+                detail="You do not have access to trigger this pipeline.",
+            )
 
     now = datetime.now(timezone.utc)
     run = PipelineRun(
@@ -203,14 +333,31 @@ async def trigger_pipeline(
         status=PipelineStatus.RUNNING,
         started_at=now,
     )
-    _runs_store.add(run.model_dump())
+    await runs_store.add(run.model_dump())
 
     # Update pipeline status and last_run_at
     pipeline_updates = {
         "status": PipelineStatus.RUNNING.value,
         "last_run_at": now.isoformat(),
     }
-    _pipelines_store.update(pipeline_id, pipeline_updates)
+    await store.update(pipeline_id, pipeline_updates)
 
-    logger.info("Triggered pipeline run", extra={"pipeline_id": pipeline_id, "run_id": run.id})
+    # Tamper-evident audit sink (CSA-0016) — triggering a pipeline moves
+    # data through the platform and is subject to AU-2/AU-3.
+    pipeline_domain = await _resolve_pipeline_domain(pipeline, sources_store)
+    audit_logger.emit(
+        audit_event_from_request(
+            request=request,
+            user=user,
+            action="pipeline.trigger",
+            resource={
+                "type": "pipeline",
+                "id": pipeline_id,
+                "domain": pipeline_domain,
+                "source_id": pipeline.source_id,
+            },
+            outcome="success",
+            after={"run_id": run.id, "status": PipelineStatus.RUNNING.value},
+        )
+    )
     return run

@@ -1,8 +1,40 @@
 """FastAPI application for the CSA-in-a-Box Data Marketplace.
 
-Provides REST endpoints for data product registration, discovery, access
-request workflows, and quality monitoring. Backed by Azure Cosmos DB and
-integrated with Azure Purview for governance.
+.. deprecated::
+    This module is the **platform-layer** marketplace implementation with
+    richer domain models (``QualityScore``, ``SLADefinition``,
+    ``LineageInfo``, ``DataProductSchema``) and Cosmos DB persistence.
+
+    The **actively-served** marketplace is in
+    ``portal.shared.api.routers.marketplace`` (backed by SQLite, consumed
+    by the React frontend).  The two share the same *concept* but have
+    divergent schemas and persistence strategies.
+
+    **Consolidation plan** (ARCH-0001):**
+
+    - **Phase 1 — COMPLETE (2026-04-16):** Optional enrichment fields
+      (``sla``, ``lineage``, ``schema_info``, ``version``, ``status``) have
+      been added to ``portal.shared.api.models.marketplace.DataProduct``
+      and the corresponding TypeScript interfaces
+      (``SLADefinition``, ``LineageInfo``, ``SchemaInfo``) have been added
+      to ``portal/shared/contracts/types.ts``.  The API contract is fully
+      backward-compatible — all new fields are optional with ``None``
+      defaults.  Three demo products in the seed data now carry SLA and
+      lineage payloads to showcase the new fields end-to-end.
+
+    - **Phase 2 (pending):** Add a response DTO adapter so the React
+      frontend type contract is preserved as the platform models evolve.
+
+    - **Phase 3 (pending):** Migrate the portal's flat
+      ``quality_score: float`` to the dimensioned ``QualityScore`` object
+      from this module.
+
+    - **Phase 4 (pending):** Once the portal fully consumes these models,
+      delete this standalone API.
+
+    Until Phase 4 this module serves as the **reference design** for the
+    target-state marketplace and is exercised by
+    ``csa_platform/data_marketplace/tests/``.
 
 Endpoints:
     GET  /products                      — List all data products
@@ -30,6 +62,7 @@ from csa_platform.common.auth import (
     enforce_auth_safety_gate,
     require_role,
 )
+from csa_platform.common.logging import configure_structlog, get_logger
 from csa_platform.data_marketplace.models.data_product import (
     AccessRequest,
     AccessRequestApproval,
@@ -42,7 +75,6 @@ from csa_platform.data_marketplace.models.data_product import (
     QualityHistoryResponse,
     QualityMetric,
 )
-from csa_platform.common.logging import configure_structlog, get_logger
 
 configure_structlog(service="data-marketplace-api")
 logger = get_logger(__name__)

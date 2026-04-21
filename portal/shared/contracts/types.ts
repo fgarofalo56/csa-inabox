@@ -92,10 +92,18 @@ export interface ColumnDefinition {
 /**
  * Schema definition for a data source.
  * Matches Python `SchemaDefinition` in models/source.py.
+ *
+ * `auto_detect` and `table_name` are portal-only fields used during
+ * registration; the backend resolves them before persisting.
+ * `primary_key_csv` is a convenience field for the form; it is split
+ * into `primary_key` before submission.
  */
 export interface SchemaDefinition {
+  auto_detect?: boolean;
+  table_name?: string;
   columns?: ColumnDefinition[];
   primary_key?: string[];
+  primary_key_csv?: string;
   partition_columns?: string[];
   watermark_column?: string;
 }
@@ -248,8 +256,43 @@ export interface PipelineRun {
 // ─── Marketplace Types ─────────────────────────────────────────────────────
 
 /**
+ * Service Level Agreement snapshot for a data product.
+ * Matches the `sla` dict shape on Python `DataProduct` (ARCH-0001 Phase 1).
+ */
+export interface SLADefinition {
+  freshness_minutes?: number;
+  availability_percent?: number;
+  valid_row_ratio?: number;
+}
+
+/**
+ * Lineage metadata snapshot for a data product.
+ * Matches the `lineage` dict shape on Python `DataProduct` (ARCH-0001 Phase 1).
+ */
+export interface LineageInfo {
+  upstream?: string[];
+  downstream?: string[];
+  transformations?: string[];
+}
+
+/**
+ * Schema metadata snapshot for a data product.
+ * Matches the `schema_info` dict shape on Python `DataProduct` (ARCH-0001 Phase 1).
+ */
+export interface SchemaInfo {
+  format?: string;
+  location?: string;
+  columns?: Record<string, unknown>[];
+  partition_by?: string[];
+}
+
+/**
  * A published data product in the marketplace.
  * Matches Python `DataProduct` in models/marketplace.py.
+ *
+ * ARCH-0001 Phase 1 adds optional enrichment fields (sla, lineage,
+ * schema_info, version, status).  All additions are optional so existing
+ * consumers are unaffected.
  */
 export interface DataProduct {
   id: string;
@@ -268,6 +311,16 @@ export interface DataProduct {
   schema_definition?: SchemaDefinition;
   sample_queries?: string[];
   documentation_url?: string;
+  /** Semantic version of the data product (ARCH-0001 Phase 1). */
+  version?: string;
+  /** Lifecycle status: active | deprecated | draft (ARCH-0001 Phase 1). */
+  status?: string;
+  /** SLA contract for freshness, availability, and quality (ARCH-0001 Phase 1). */
+  sla?: SLADefinition;
+  /** Upstream / downstream lineage graph (ARCH-0001 Phase 1). */
+  lineage?: LineageInfo;
+  /** Storage schema snapshot (ARCH-0001 Phase 1). */
+  schema_info?: SchemaInfo;
 }
 
 /**

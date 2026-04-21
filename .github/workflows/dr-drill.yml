@@ -1,0 +1,132 @@
+name: dr-drill
+
+# CSA-0073 — Quarterly DR drill workflow.
+# Exercises failover/failback paths against a scratch subscription so
+# the runbooks in docs/DR.md and docs/runbooks/dr-drill.md stay honest
+# instead of rotting between real incidents.
+#
+# See docs/runbooks/dr-drill.md for cadence, required permissions,
+# scenario behaviours, verification steps, and rollback paths.
+
+on:
+  schedule:
+    # Quarterly: 1st day of Jan/Apr/Jul/Oct at 10:00 UTC.
+    - cron: "0 10 1 1,4,7,10 *"
+  workflow_dispatch:
+    inputs:
+      environment:
+        type: choice
+        description: Target drill environment
+        options:
+          - scratch
+          - staging
+        default: scratch
+      scenarios:
+        type: string
+        description: Comma-separated scenarios to run (all | cosmos-failover | storage-failover | keyvault-restore | bicep-rollback)
+        default: all
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  pre-flight:
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.resolve.outputs.environment }}
+      scenarios: ${{ steps.resolve.outputs.scenarios }}
+      drill_id: ${{ steps.resolve.outputs.drill_id }}
+    steps:
+      - id: resolve
+        run: |
+          ENV="${{ inputs.environment || 'scratch' }}"
+          SCEN="${{ inputs.scenarios || 'all' }}"
+          DRILL_ID="drill-$(date -u +%Y%m%dT%H%M%SZ)"
+          echo "environment=$ENV" >> $GITHUB_OUTPUT
+          echo "scenarios=$SCEN" >> $GITHUB_OUTPUT
+          echo "drill_id=$DRILL_ID" >> $GITHUB_OUTPUT
+          echo "DR drill $DRILL_ID targeting $ENV, scenarios: $SCEN"
+
+  cosmos-failover:
+    needs: pre-flight
+    if: contains(needs.pre-flight.outputs.scenarios, 'all') || contains(needs.pre-flight.outputs.scenarios, 'cosmos-failover')
+    runs-on: ubuntu-latest
+    environment: ${{ needs.pre-flight.outputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID_SCRATCH }}
+      - name: Trigger Cosmos DB region failover
+        run: |
+          # Runbook reference: docs/runbooks/dr-drill.md § Cosmos Failover
+          # ... az cosmosdb failover-priority-change ...
+          echo "TODO: wire to scripts/drill/cosmos-failover.sh"
+      - name: Verify failback
+        run: echo "TODO: wire verification"
+
+  storage-failover:
+    needs: pre-flight
+    if: contains(needs.pre-flight.outputs.scenarios, 'all') || contains(needs.pre-flight.outputs.scenarios, 'storage-failover')
+    runs-on: ubuntu-latest
+    environment: ${{ needs.pre-flight.outputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID_SCRATCH }}
+      - name: Initiate storage account failover
+        run: echo "TODO: wire to scripts/drill/storage-failover.sh"
+      - name: Verify failback
+        run: echo "TODO"
+
+  keyvault-restore:
+    needs: pre-flight
+    if: contains(needs.pre-flight.outputs.scenarios, 'all') || contains(needs.pre-flight.outputs.scenarios, 'keyvault-restore')
+    runs-on: ubuntu-latest
+    environment: ${{ needs.pre-flight.outputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID_SCRATCH }}
+      - name: Purge-protected soft-deleted secret restore test
+        run: echo "TODO: wire to scripts/drill/keyvault-restore.sh"
+
+  bicep-rollback:
+    needs: pre-flight
+    if: contains(needs.pre-flight.outputs.scenarios, 'all') || contains(needs.pre-flight.outputs.scenarios, 'bicep-rollback')
+    runs-on: ubuntu-latest
+    environment: ${{ needs.pre-flight.outputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID_SCRATCH }}
+      - name: Deploy previous main.bicep and what-if diff
+        run: echo "TODO: wire to scripts/drill/bicep-rollback.sh"
+
+  report:
+    needs: [pre-flight, cosmos-failover, storage-failover, keyvault-restore, bicep-rollback]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Aggregate drill results
+        run: |
+          echo "DR drill ${{ needs.pre-flight.outputs.drill_id }} complete."
+          echo "cosmos-failover:   ${{ needs.cosmos-failover.result }}"
+          echo "storage-failover:  ${{ needs.storage-failover.result }}"
+          echo "keyvault-restore:  ${{ needs.keyvault-restore.result }}"
+          echo "bicep-rollback:    ${{ needs.bicep-rollback.result }}"
+      - name: Post to ops channel
+        if: always()
+        run: echo "TODO: Teams webhook POST with result summary"

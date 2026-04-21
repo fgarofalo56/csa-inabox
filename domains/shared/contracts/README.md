@@ -48,7 +48,7 @@ Use the contract template to scaffold a new data product contract:
 4. Save as `domains/<domain>/data-products/<product>/contract.yaml`
 5. Run the CI validator to check your contract:
    ```bash
-   python -m governance.contracts.contract_validator --ci
+   python -m csa_platform.governance.contracts.contract_validator --ci
    ```
 
 ---
@@ -59,9 +59,9 @@ Tooling for validating contracts against the schema lives in:
 
 | Tool | Purpose |
 |------|---------|
-| `governance/contracts/contract_validator.py` | Validates contract YAML against the JSON Schema template |
-| `governance/contracts/dbt_test_generator.py` | Generates dbt tests from contract quality rules |
-| `governance/contracts/pipeline_enforcer.py` | Enforces contract SLAs in pipeline runs |
+| `csa_platform/csa_platform/governance/contracts/contract_validator.py` | Validates contract YAML against the JSON Schema template |
+| `csa_platform/csa_platform/governance/contracts/dbt_test_generator.py` | Generates dbt tests from contract quality rules |
+| `csa_platform/csa_platform/governance/contracts/pipeline_enforcer.py` | Enforces contract SLAs in pipeline runs |
 
 ---
 

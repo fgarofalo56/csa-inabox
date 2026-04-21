@@ -5,7 +5,18 @@
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Security / Compliance
 
 > [!NOTE]
-> **Quick Summary**: Comprehensive matrix of Azure service availability across Commercial vs Government regions (FedRAMP High, IL4, IL5), including endpoint URL differences, API version caveats, Bicep configuration for Gov, compliance requirements by vertical, and open-source alternatives for Government gaps.
+> **Quick Summary**: Comprehensive matrix of Azure service availability across Commercial vs Government regions (FedRAMP High, IL4, IL5, IL6), including endpoint URL differences, API version caveats, Bicep configuration for Gov, compliance requirements by vertical, and open-source alternatives for Government gaps.
+
+> [!IMPORTANT]
+> **Impact Level 6 (Classified / SIPR) — CSA-0086.** IL6 workloads run on
+> **Azure Government Secret** — a separate physically-isolated cloud with
+> its own Authority to Operate. It is **not** reachable from Azure
+> Government (IL4/IL5) and **none** of the Bicep, dbt, or portal
+> deployments in this repo have been authorized for IL6. DoD SIPR/TS
+> customers should treat this matrix as IL4/IL5-scoped and engage their
+> sponsor for the Azure Government Secret onboarding process. The
+> column below therefore reads `N/A — Azure Government Secret
+> (separate ATO)` uniformly. Honesty over silence.
 
 This document tracks the availability of every Azure service used by CSA-in-a-Box
 across Azure Commercial and Azure Government regions, including FedRAMP
@@ -35,22 +46,27 @@ authorization levels and impact level (IL) support.
 
 ## ☁️ Core Services
 
-| Service | Commercial | Gov FedRAMP High | Gov IL4 | Gov IL5 | Alternative in This Repo |
-|---------|-----------|-----------------|---------|---------|-------------------------|
-| **Microsoft Fabric** | GA | Forecasted | Forecasted | Forecasted | **This entire repository** |
-| **ADLS Gen2** | GA | GA | GA | GA | Direct use |
-| **Azure Databricks** | GA | GA | GA | GA | Direct use (Unity Catalog available) |
-| **Azure Synapse Analytics** | GA | GA | GA | GA | Direct use (all pool types) |
-| **Azure Data Factory** | GA | GA | GA | GA | Direct use (SHIR supported) |
-| **Microsoft Purview** | GA | GA | GA | GA | Direct use |
-| **Azure Data Explorer (ADX)** | GA | GA | GA | GA | Direct use |
-| **Event Hubs** | GA | GA | GA | GA | Direct use (Kafka API available) |
-| **IoT Hub** | GA | GA | GA | GA | Direct use (DPS available) |
-| **Stream Analytics** | GA | GA | GA | GA | Direct use |
-| **Azure Key Vault** | GA | GA | GA | GA | Direct use |
-| **Azure Functions** | GA | GA | GA | GA | Direct use |
-| **Logic Apps** | GA | GA | GA | GA | Direct use (Consumption + Standard) |
-| **API Management** | GA | GA | GA | GA | Direct use |
+| Service | Commercial | Gov FedRAMP High | Gov IL4 | Gov IL5 | Gov IL6 | Alternative in This Repo |
+|---------|-----------|-----------------|---------|---------|---------|-------------------------|
+| **Microsoft Fabric** | GA | Forecasted | Forecasted | Forecasted | N/A (Secret) | **This entire repository** |
+| **ADLS Gen2** | GA | GA | GA | GA | N/A (Secret) | Direct use |
+| **Azure Databricks** | GA | GA | GA | GA | N/A (Secret) | Direct use (Unity Catalog available) |
+| **Azure Synapse Analytics** | GA | GA | GA | GA | N/A (Secret) | Direct use (all pool types) |
+| **Azure Data Factory** | GA | GA | GA | GA | N/A (Secret) | Direct use (SHIR supported) |
+| **Microsoft Purview** | GA | GA | GA | GA | N/A (Secret) | Direct use |
+| **Azure Data Explorer (ADX)** | GA | GA | GA | GA | N/A (Secret) | Direct use |
+| **Event Hubs** | GA | GA | GA | GA | N/A (Secret) | Direct use (Kafka API available) |
+| **IoT Hub** | GA | GA | GA | GA | N/A (Secret) | Direct use (DPS available) |
+| **Stream Analytics** | GA | GA | GA | GA | N/A (Secret) | Direct use |
+| **Azure Key Vault** | GA | GA | GA | GA | N/A (Secret) | Direct use |
+| **Azure Functions** | GA | GA | GA | GA | N/A (Secret) | Direct use |
+| **Logic Apps** | GA | GA | GA | GA | N/A (Secret) | Direct use (Consumption + Standard) |
+| **API Management** | GA | GA | GA | GA | N/A (Secret) | Direct use |
+
+> "N/A (Secret)" means the service exists in Azure Government Secret
+> but csa-inabox has not been authorized against that cloud. Customers
+> requiring IL6 must engage their sponsor for the Azure Government
+> Secret onboarding process.
 
 ---
 
@@ -93,7 +109,7 @@ authorization levels and impact level (IL) support.
 |---------|-----------|-----------------|---------|---------|-------------|
 | **Microsoft Entra ID** | GA | GA | GA | GA | Direct use |
 | **Entra ID B2C** | GA | **N/A** | **N/A** | **N/A** | Entra ID custom policies |
-| **Azure AD Conditional Access** | GA | GA | GA | GA | Direct use |
+| **Microsoft Entra Conditional Access** | GA | GA | GA | GA | Direct use |
 | **Defender for Cloud** | GA | GA | GA | GA | Direct use |
 
 ---
@@ -122,7 +138,7 @@ When deploying to Azure Government, all service endpoints use different domains:
 | Databricks | `*.azuredatabricks.net` | `*.databricks.azure.us` |
 | Key Vault | `*.vault.azure.net` | `*.vault.usgovcloudapi.net` |
 | Entra ID (login) | `login.microsoftonline.com` | `login.microsoftonline.us` |
-| Azure AD Graph | `graph.microsoft.com` | `graph.microsoft.us` |
+| Microsoft Graph | `graph.microsoft.com` | `graph.microsoft.us` |
 | Management API | `management.azure.com` | `management.usgovcloudapi.net` |
 | Purview | `*.purview.azure.com` | `*.purview.azure.us` |
 | Event Hubs | `*.servicebus.windows.net` | `*.servicebus.usgovcloudapi.net` |

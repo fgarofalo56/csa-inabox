@@ -6,9 +6,14 @@
  * form state, and submission.
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useRouter } from 'next/router';
 import { useForm } from 'react-hook-form';
+import { useMsal } from '@azure/msal-react';
+import { z } from 'zod';
 import { useRegisterSource } from '@/hooks/useApi';
+import { useToast } from '@/hooks/useToast';
+import { Toast } from '@/components/Toast';
 import type { SourceRegistration, DataQualityRule } from '@/types';
 import {
   StepSourceType,
@@ -16,8 +21,105 @@ import {
   StepSchema,
   StepIngestion,
   StepQuality,
+  StepOwner,
   StepReview,
 } from '@/components/register';
+import { Breadcrumbs } from '@/components/Breadcrumbs';
+
+// ─── Zod validation schema for source registration ───────────────────────
+
+const SOURCE_TYPES = [
+  'azure_sql', 'synapse', 'cosmos_db', 'adls_gen2', 'blob_storage',
+  'databricks', 'postgresql', 'mysql', 'oracle', 'rest_api',
+  'odata', 'sftp', 'sharepoint', 'event_hub', 'iot_hub', 'kafka',
+] as const;
+
+const sourceRegistrationSchema = z.object({
+  name: z
+    .string()
+    .min(3, 'Source name must be at least 3 characters')
+    .max(128, 'Source name must be at most 128 characters')
+    .regex(/^[a-zA-Z0-9_\-\s]+$/, 'Name may only contain letters, numbers, spaces, hyphens, and underscores'),
+  source_type: z.enum(SOURCE_TYPES, { message: 'Please select a source type' }),
+  description: z.string().max(1000, 'Description must be at most 1000 characters').optional(),
+  // CSA-0118: Domain must match backend regex ^[a-z][a-z0-9-]{0,62}[a-z0-9]$
+  // so the form rejects invalid values client-side rather than relying on
+  // a 422 from the API. The field is still optional at form level because
+  // the wizard may later autopopulate from a select; if provided, it
+  // must conform.
+  domain: z
+    .string()
+    .min(2, 'Domain must be 2-64 characters, lowercase letters, numbers, or hyphens')
+    .max(64, 'Domain must be 2-64 characters')
+    .regex(
+      /^[a-z][a-z0-9-]{0,62}[a-z0-9]$/,
+      'Domain must start with a lowercase letter, contain only lowercase letters, numbers, and hyphens, and end with a letter or number',
+    )
+    .optional(),
+  classification: z.enum(['public', 'internal', 'confidential', 'restricted', 'cui', 'fouo']),
+  connection: z.object({
+    host: z.string().min(1, 'Host is required').optional(),
+    port: z.coerce.number().int().min(1).max(65535).optional(),
+    database: z.string().optional(),
+    schema_name: z.string().optional(),
+    container: z.string().optional(),
+    path: z.string().optional(),
+    api_url: z.string().url('Must be a valid URL').optional(),
+    authentication_method: z.string().optional(),
+    key_vault_secret_name: z.string().optional(),
+  }).optional(),
+  schema_definition: z.object({
+    auto_detect: z.boolean().optional(),
+    table_name: z.string().optional(),
+  }).optional(),
+  ingestion: z.object({
+    mode: z.enum(['full', 'incremental', 'cdc', 'streaming']),
+    schedule_cron: z.string().optional(),
+    batch_size: z.coerce.number().int().min(1).max(1_000_000).optional(),
+    parallelism: z.coerce.number().int().min(1).max(64).optional(),
+    max_retry_count: z.coerce.number().int().min(0).max(10).optional(),
+    timeout_minutes: z.coerce.number().int().min(1).max(1440).optional(),
+  }),
+  target: z.object({
+    landing_zone: z.string(),
+    container: z.string(),
+    path_pattern: z.string(),
+    format: z.enum(['delta', 'parquet', 'csv', 'json']),
+  }),
+  owner: z.object({
+    name: z.string().min(1, 'Owner name is required'),
+    email: z.string().email('Must be a valid email address'),
+    team: z
+      .string()
+      .min(1, 'Team is required')
+      .max(128, 'Team must be at most 128 characters'),
+    cost_center: z.string().max(64).optional(),
+    data_product: z.string().max(128).optional(),
+  }),
+  quality_rules: z.array(z.any()).optional(),
+  tags: z.record(z.string(), z.string()).optional(),
+});
+
+/**
+ * Inline Zod resolver for react-hook-form (avoids @hookform/resolvers dependency).
+ * Parses form data against the schema and maps Zod errors to react-hook-form format.
+ */
+function zodResolver(schema: z.ZodType) {
+  return async (values: Record<string, unknown>) => {
+    const result = schema.safeParse(values);
+    if (result.success) {
+      return { values: result.data, errors: {} };
+    }
+    const fieldErrors: Record<string, { type: string; message: string }> = {};
+    for (const issue of result.error.issues) {
+      const path = issue.path.join('.');
+      if (!fieldErrors[path]) {
+        fieldErrors[path] = { type: issue.code, message: issue.message };
+      }
+    }
+    return { values: {}, errors: fieldErrors };
+  };
+}
 
 const STEPS = [
   { id: 'type', title: 'Source Type', description: 'Select your data source' },
@@ -25,6 +127,7 @@ const STEPS = [
   { id: 'schema', title: 'Schema', description: 'Define data schema' },
   { id: 'ingestion', title: 'Ingestion', description: 'Set schedule and mode' },
   { id: 'quality', title: 'Quality', description: 'Data quality rules' },
+  { id: 'owner', title: 'Owner', description: 'Team and ownership' },
   { id: 'review', title: 'Review', description: 'Confirm and submit' },
 ];
 
@@ -71,14 +174,17 @@ function StepIndicator({ currentStep }: { currentStep: number }) {
 }
 
 export default function RegisterSourcePage() {
+  const router = useRouter();
   const [step, setStep] = useState(0);
   const [qualityRules, setQualityRules] = useState<DataQualityRule[]>([]);
+  const { toast, showToast, setOpen: setToastOpen } = useToast();
   const {
     register,
     handleSubmit,
     watch,
     setValue,
     trigger,
+    setError,
     formState: { errors },
   } = useForm<SourceRegistration>({
     defaultValues: {
@@ -86,26 +192,62 @@ export default function RegisterSourcePage() {
       target: { format: 'delta', container: 'bronze', path_pattern: '', landing_zone: '' },
       classification: 'internal',
       quality_rules: [],
-      tags: [],
+      tags: {},
       schema_definition: { auto_detect: true },
     },
   });
   const mutation = useRegisterSource();
   const selectedType = watch('source_type');
+  const { accounts } = useMsal();
+
+  // Auto-populate owner from the active MSAL account
+  useEffect(() => {
+    const account = accounts[0];
+    if (account) {
+      setValue('owner.name', account.name ?? '');
+      setValue('owner.email', account.username ?? '');
+    }
+  }, [accounts, setValue]);
 
   /** Validate the current step before advancing. Returns true if valid. */
   const validateStep = async (currentStep: number): Promise<boolean> => {
     switch (currentStep) {
       case 0:
         return !!selectedType;
-      case 1:
-        return trigger(['name', 'connection.host', 'connection.database', 'connection.container', 'connection.api_url']);
+      case 1: {
+        // CSA-0119: validate only the fields relevant to the chosen
+        // source type. StepConnection uses the same isDatabase/
+        // isStorage/isApi buckets to decide which inputs to render.
+        const isDatabase = ['azure_sql', 'synapse', 'postgresql', 'mysql', 'oracle'].includes(
+          selectedType,
+        );
+        const isStorage = ['adls_gen2', 'blob_storage', 'sftp', 'sharepoint'].includes(
+          selectedType,
+        );
+        const isApi = ['rest_api', 'odata'].includes(selectedType);
+
+        const fields: Array<keyof SourceRegistration | string> = ['name', 'domain'];
+        if (isDatabase) {
+          fields.push('connection.host', 'connection.database');
+        }
+        if (isStorage) {
+          fields.push('connection.container');
+        }
+        if (isApi) {
+          fields.push('connection.api_url');
+        }
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return trigger(fields as any);
+      }
       case 2:
-        return trigger(['schema_definition.auto_detect', 'schema_definition._table_name']);
+        return trigger(['schema_definition.auto_detect', 'schema_definition.table_name']);
       case 3:
         return trigger(['ingestion.mode', 'ingestion.schedule_cron', 'ingestion.batch_size']);
       case 4:
         return true;
+      case 5:
+        // Owner step — team is required on the backend; name/email come from MSAL.
+        return trigger(['owner.name', 'owner.email', 'owner.team']);
       default:
         return true;
     }
@@ -131,18 +273,45 @@ export default function RegisterSourcePage() {
   };
 
   const onSubmit = async (data: SourceRegistration) => {
+    data.quality_rules = qualityRules;
+
+    // Run Zod validation before submission
+    const result = sourceRegistrationSchema.safeParse(data);
+    if (!result.success) {
+      for (const issue of result.error.issues) {
+        const path = issue.path.join('.') as keyof SourceRegistration;
+        if (path) {
+          setError(path, { type: issue.code, message: issue.message });
+        }
+      }
+      showToast('Please fix validation errors before submitting.', 'error');
+      return;
+    }
+
     try {
-      data.quality_rules = qualityRules;
       await mutation.mutateAsync(data);
-      window.location.href = '/sources';
-    } catch (error) {
-      console.error('Registration failed:', error);
+      showToast('Source registered successfully', 'success');
+      // Allow toast to be visible briefly before navigating
+      setTimeout(() => router.push('/sources'), 1200);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'An unexpected error occurred. Please try again.';
+      showToast(`Registration failed: ${message}`, 'error');
     }
   };
 
   return (
     <div className="max-w-4xl mx-auto">
       <div className="mb-8">
+        {/* CSA-0124(9): breadcrumb trail so users can jump back to the
+            sources list or home without using the browser back button. */}
+        <Breadcrumbs
+          className="mb-2"
+          items={[
+            { label: 'Home', href: '/' },
+            { label: 'Sources', href: '/sources' },
+            { label: `Register — ${STEPS[step].title}` },
+          ]}
+        />
         <h1 className="text-2xl font-bold text-gray-900">
           Register Data Source
         </h1>
@@ -162,7 +331,12 @@ export default function RegisterSourcePage() {
             />
           )}
           {step === 1 && (
-            <StepConnection sourceType={selectedType} register={register} errors={errors} />
+            <StepConnection
+              sourceType={selectedType}
+              register={register}
+              errors={errors}
+              setValue={setValue}
+            />
           )}
           {step === 2 && (
             <StepSchema register={register} watch={watch} setValue={setValue} />
@@ -178,9 +352,24 @@ export default function RegisterSourcePage() {
             />
           )}
           {step === 5 && (
-            <StepReview watch={watch} qualityRules={qualityRules} />
+            <StepOwner register={register} watch={watch} errors={errors} />
+          )}
+          {step === 6 && (
+            <StepReview
+              watch={watch}
+              qualityRules={qualityRules}
+              errors={errors}
+              onJumpToStep={(idx) => setStep(Math.max(0, Math.min(STEPS.length - 1, idx)))}
+            />
           )}
         </div>
+
+        <Toast
+          open={toast.open}
+          onOpenChange={setToastOpen}
+          message={toast.message}
+          variant={toast.variant}
+        />
 
         {/* Navigation buttons */}
         <div className="flex justify-between">

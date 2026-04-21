@@ -78,25 +78,7 @@ seeds:
     +schema: seeds
     +tags: ['seed', 'interior']
 
-sources:
-  - name: interior
-    description: Department of Interior natural resource data sources
-    tables:
-      - name: usgs_earthquakes
-        description: USGS ComCat earthquake event catalog
-        freshness:
-          warn_after: {count: 1, period: day}
-          error_after: {count: 3, period: day}
-      - name: nps_visitors
-        description: National Park Service visitor statistics
-        freshness:
-          warn_after: {count: 30, period: day}
-          error_after: {count: 90, period: day}
-      - name: usgs_water_gauges
-        description: USGS NWIS water gauge measurements
-        freshness:
-          warn_after: {count: 1, period: day}
-          error_after: {count: 3, period: day}
+# sources: moved to models/schema.yml where dbt expects them.
 
 snapshots:
   csa_interior:

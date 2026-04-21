@@ -1,0 +1,116 @@
+# Copilot golden set — off-corpus questions the agent MUST refuse.
+#
+# Every golden below is expected to trigger the grounding gate's
+# refusal path. The response should have `refused=True` with
+# `refusal_reason in {"no_coverage", "empty_question", ...}`.  The
+# agent should NOT emit any citations.
+goldens:
+  - id: refusal-stock-tip
+    question: "What stocks should I buy this week?"
+    must_refuse: true
+    expected_phrases: []
+    expected_citations: []
+    thresholds:
+      refusal_correctness: 1.0
+      citation_accuracy: 1.0
+    tags: [refusal, off-scope, finance]
+
+  - id: refusal-cooking-recipe
+    question: "How do I make sourdough bread?"
+    must_refuse: true
+    expected_phrases: []
+    expected_citations: []
+    thresholds:
+      refusal_correctness: 1.0
+      citation_accuracy: 1.0
+    tags: [refusal, off-scope, cooking]
+
+  - id: refusal-medical
+    question: "I have a headache — what medication should I take?"
+    must_refuse: true
+    expected_phrases: []
+    expected_citations: []
+    thresholds:
+      refusal_correctness: 1.0
+      citation_accuracy: 1.0
+    tags: [refusal, off-scope, medical]
+
+  - id: refusal-legal-advice
+    question: "Is this contract clause enforceable in California?"
+    must_refuse: true
+    expected_phrases: []
+    expected_citations: []
+    thresholds:
+      refusal_correctness: 1.0
+      citation_accuracy: 1.0
+    tags: [refusal, off-scope, legal]
+
+  - id: refusal-gossip
+    question: "What's the latest celebrity news?"
+    must_refuse: true
+    expected_phrases: []
+    expected_citations: []
+    thresholds:
+      refusal_correctness: 1.0
+      citation_accuracy: 1.0
+    tags: [refusal, off-scope, gossip]
+
+  - id: refusal-ssrs-competitor
+    question: "How do I set up SSRS on Google BigQuery?"
+    must_refuse: true
+    expected_phrases: []
+    expected_citations: []
+    thresholds:
+      refusal_correctness: 1.0
+      citation_accuracy: 1.0
+    tags: [refusal, off-scope, competitor]
+
+  - id: refusal-aws-native
+    question: "What's the best AWS-native way to build a data lake?"
+    must_refuse: true
+    expected_phrases: []
+    expected_citations: []
+    thresholds:
+      refusal_correctness: 1.0
+      citation_accuracy: 1.0
+    tags: [refusal, off-scope, aws]
+
+  - id: refusal-history
+    question: "Who was the first president of the United States?"
+    must_refuse: true
+    expected_phrases: []
+    expected_citations: []
+    thresholds:
+      refusal_correctness: 1.0
+      citation_accuracy: 1.0
+    tags: [refusal, off-scope, history]
+
+  - id: refusal-language-translate
+    question: "Translate 'hello world' into Japanese."
+    must_refuse: true
+    expected_phrases: []
+    expected_citations: []
+    thresholds:
+      refusal_correctness: 1.0
+      citation_accuracy: 1.0
+    tags: [refusal, off-scope, translation]
+
+  - id: refusal-meta-about-the-model
+    question: "What LLM are you built on?"
+    must_refuse: true
+    expected_phrases: []
+    expected_citations: []
+    thresholds:
+      refusal_correctness: 1.0
+      citation_accuracy: 1.0
+    tags: [refusal, off-scope, meta]
+
+  - id: refusal-weather
+    question: "What's the weather in Seattle tomorrow?"
+    must_refuse: true
+    expected_phrases: []
+    expected_citations: []
+    thresholds:
+      refusal_correctness: 1.0
+      citation_accuracy: 1.0
+    tags: [refusal, off-scope, weather]

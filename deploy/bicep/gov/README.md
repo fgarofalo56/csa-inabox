@@ -8,8 +8,12 @@
 > **TL;DR** — Parallel deployment templates for Azure Government (MAG). Provides Fabric-equivalent capabilities using FedRAMP High-authorized PaaS services available in Gov today.
 
 This directory contains **parallel deployment templates** for Azure Government (MAG).
-Every template in the main `deploy/bicep/` and `deploy/terraform/` directories has a
-corresponding Government-compatible version here.
+Every template in the main `deploy/bicep/` directory has a corresponding
+Government-compatible version here.
+
+> [!NOTE]
+> A parallel Terraform path is on the roadmap (see CSA-0015 / audit approval
+> queue). Today, Bicep is the only implemented IaC path.
 
 ## Table of Contents
 
@@ -34,7 +38,7 @@ services that ARE available in Azure Government today.
 
 | Service | Commercial | Gov FedRAMP High | Gov IL4 | Gov IL5 | Notes |
 |---|---|---|---|---|---|
-| **Microsoft Fabric** | GA | Forecasted | Forecasted | Forecasted | **This repo is the alternative** |
+| **Microsoft Fabric** | GA | Forecasted | Forecasted | Forecasted | **This repo ships Fabric-parity on Azure PaaS while Fabric is pre-GA in Gov** |
 | **ADLS Gen2** | GA | GA | GA | GA | Core storage, fully available |
 | **Azure Databricks** | GA | GA | GA | GA | Unity Catalog available |
 | **Synapse Analytics** | GA | GA | GA | GA | All pool types available |
@@ -51,7 +55,7 @@ services that ARE available in Azure Government today.
 | **API Management** | GA | GA | GA | GA | API gateway |
 | **Container Apps** | GA | GA | GA | GA | Container orchestration |
 | **AKS** | GA | GA | GA | GA | Kubernetes |
-| **Azure AD B2C** | GA | **N/A** | **N/A** | **N/A** | Use Entra ID custom policies |
+| **Microsoft Entra External ID** (formerly Azure AD B2C) | GA | **N/A** | **N/A** | **N/A** | Use Entra ID custom policies |
 | **Cosmos DB** | GA | GA | GA | GA | NoSQL database |
 | **Azure SQL** | GA | GA | GA | GA | Relational database |
 | **App Service** | GA | GA | GA | GA | Web hosting |
@@ -128,5 +132,8 @@ replacements deployable on AKS in Azure Government.
 ## 🔗 Related Documentation
 
 - [Government Service Matrix](../../../docs/GOV_SERVICE_MATRIX.md) — Full Gov service availability details
-- [Terraform IaC](../../terraform/README.md) — Terraform alternative deployment path
 - [IaC & CI/CD Best Practices](../../../docs/IaC-CICD-Best-Practices.md) — Deployment pipeline guidance
+
+> [!NOTE]
+> A Terraform alternative deployment path is on the roadmap but not yet
+> implemented; link omitted to avoid 404 (CSA-0015).

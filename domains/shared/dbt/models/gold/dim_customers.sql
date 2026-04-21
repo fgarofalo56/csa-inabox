@@ -3,7 +3,7 @@
 {{
   config(
     materialized='table',
-    file_format='delta',
+    file_format='delta' if target.type != 'duckdb' else none,
     tags=['gold', 'customers', 'dimension']
   )
 }}

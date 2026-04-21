@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="chat" data-sse-endpoint="{{ sse_endpoint }}">
+  <ul id="messages" class="messages" aria-live="polite"></ul>
+  <form id="chat-form" class="chat-form" autocomplete="off">
+    <label for="question" class="visually-hidden">Ask a question</label>
+    <input type="text" id="question" name="question" placeholder="Ask anything about CSA-in-a-Box..." required>
+    <button type="submit">Send</button>
+  </form>
+  <p class="hint">Responses stream live via Server-Sent Events. Grounded answers cite the source docs.</p>
+</section>
+{% endblock %}

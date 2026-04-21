@@ -26,6 +26,7 @@ about 60-90 minutes (assuming all prerequisites are met).
 - [🌐 Quick Start: Deploy the Portal](#-quick-start-deploy-the-portal)
 - [🏗️ Quick Start: Platform Services](#️-quick-start-platform-services)
 - [🏛️ Quick Start: Azure Government](#️-quick-start-azure-government)
+- [🧹 Teardown](#-teardown)
 - [➡️ Next Steps](#️-next-steps)
 
 ---
@@ -35,7 +36,7 @@ about 60-90 minutes (assuming all prerequisites are met).
 | Tool | Minimum Version | Check |
 |------|----------------|-------|
 | Azure CLI | 2.50+ | `az version` |
-| Bicep CLI | 0.22+ | `az bicep version` |
+| Bicep CLI | 0.25+ | `az bicep version` |
 | Python | 3.10+ | `python --version` |
 | dbt | 1.7+ | `dbt --version` |
 | git | 2.x | `git --version` |
@@ -51,7 +52,7 @@ bash scripts/deploy/validate-prerequisites.sh
 
 ```bash
 # Clone the repo
-git clone https://github.com/fgarofalo56/csa-inabox.git
+git clone <CLONE_URL>
 cd csa-inabox
 
 # Set up Python environment
@@ -398,10 +399,10 @@ cd portal/shared
 # Install Python dependencies
 pip install -r requirements.txt
 
-# Start the FastAPI backend
-uvicorn api.main:app --reload --port 8000
+# Start the FastAPI backend (ENVIRONMENT=local enables demo mode)
+ENVIRONMENT=local uvicorn api.main:app --reload --port 8000
 
-# Verify: http://localhost:8000/docs (Swagger UI)
+# Verify: http://localhost:8000/api/docs (Swagger UI)
 ```
 
 ### Step B: Start a Frontend
@@ -416,10 +417,23 @@ npm run dev
 
 **Docker Compose (both at once):**
 ```bash
-cd portal
-docker-compose up
+# From the repository root:
+docker compose -f portal/kubernetes/docker/docker-compose.yml up --build
 # Backend: http://localhost:8000
 # Frontend: http://localhost:3000
+```
+
+**CLI variant (CSA-0066 — 4th portal variant):**
+```bash
+# Install with portal extras (CSA-0062)
+make setup EXTRAS=dev,portal
+
+# Point the CLI at your running backend and use it
+export CSA_API_URL=http://localhost:8000/api/v1
+python -m cli --help                         # list commands
+python -m cli sources list                   # list registered sources
+python -m cli marketplace products           # list data products
+python -m cli --format json stats overview   # JSON output for CI pipelines
 ```
 
 ### Step C: Register a Data Source
@@ -438,7 +452,7 @@ Deploy shared platform services that provide Fabric-equivalent capabilities.
 ### Step A: Deploy Shared Services (Azure Functions)
 
 ```bash
-cd csa_platform/shared_services/functions
+cd csa_platform/functions/validation
 
 # Install dependencies
 pip install -r requirements.txt
@@ -452,14 +466,24 @@ func azure functionapp publish <your-function-app-name> --python
 
 ### Step B: Deploy the Data Marketplace
 
-```bash
-# Deploy infrastructure
-az deployment group create \
-  --resource-group rg-platform \
-  --template-file csa_platform/data_marketplace/deploy/marketplace.bicep
+> [!IMPORTANT]
+> **CSA-0067 / CSA-0131:** The legacy reference marketplace under
+> `csa_platform/data_marketplace/` is **deprecated** and does not ship
+> an `--init` CLI. Use the actively-served marketplace at
+> `portal.shared.api.routers.marketplace` instead — it seeds demo
+> products automatically when `ENVIRONMENT=local` or `DEMO_MODE=true`.
 
-# Initialize the catalog
-python csa_platform/data_marketplace/api/marketplace_api.py --init
+```bash
+# (Option A, recommended) Start the portal — seed data loads on startup.
+cd portal/kubernetes/docker && docker compose up --build
+
+# (Option B) Run the backend directly — demo products appear on first
+# request when ENVIRONMENT=local:
+ENVIRONMENT=local uvicorn portal.shared.api.main:app --reload --port 8000
+
+# The marketplace browsable at:
+#   http://localhost:3000/marketplace   (React frontend)
+#   http://localhost:8000/api/v1/marketplace/products   (JSON API)
 ```
 
 ### Step C: Configure AI Integration
@@ -534,8 +558,70 @@ az storage account show \
 > [!NOTE]
 > - All services use `.us` / `.usgovcloudapi.net` endpoints
 > - Compliance tags are auto-applied: FedRAMP High, FISMA, NIST 800-53 Rev5
-> - Microsoft Fabric is NOT available in Gov — this repo provides the alternative
+> - Microsoft Fabric is forecast, not GA, in Azure Government — this repo provides Fabric-parity capabilities on Azure PaaS services that ARE available in Gov today
 > - See [GOV_SERVICE_MATRIX.md](GOV_SERVICE_MATRIX.md) for service availability
+
+---
+
+## 🧹 Teardown
+
+> [!WARNING]
+> **Cost-safety.** CSA-in-a-Box provisions Synapse, Databricks, ADX, Event Hub, and other billable services. A forgotten demo environment can accrue **$1,000+/day**. Always tear down when you are done.
+
+Every deployable surface ships with a teardown script that:
+
+- Enumerates resources (`az resource list`) before doing anything destructive.
+- Demands a typed `DESTROY-<env>` (platform) or `DESTROY-<vertical>` (example) confirmation — any other input aborts.
+- Deletes in dependency-safe order: diagnostic settings → private endpoints → data services → storage → Key Vault (with purge best-effort) → VNets → resource group.
+- Writes a timestamped log to `reports/teardown/<env>-<ts>.log`.
+- Supports `--dry-run` to preview and `--yes` for CI automation (never use `--yes` against prod).
+
+### Platform teardown
+
+```bash
+# Interactive (recommended)
+bash scripts/deploy/teardown-platform.sh --env dev
+
+# Dry run (enumerate only)
+bash scripts/deploy/teardown-platform.sh --env dev --dry-run
+
+# CI automation (ephemeral environments only)
+bash scripts/deploy/teardown-platform.sh --env dev --yes
+
+# Validate prerequisites (az login, jq, active subscription) without acting
+bash scripts/deploy/teardown-platform.sh --validate
+```
+
+Makefile equivalents:
+
+```bash
+make teardown-dev        # uses --yes for CI pipelines
+make teardown-staging    # interactive
+make teardown-prod       # interactive; NEVER runs --yes
+```
+
+### Vertical-example teardown
+
+```bash
+# Interactive teardown for a specific vertical
+bash examples/usda/deploy/teardown.sh
+
+# Dry run
+bash examples/usda/deploy/teardown.sh --dry-run
+
+# Makefile
+make teardown-example VERTICAL=usda
+make teardown-example VERTICAL=usda DRYRUN=1
+```
+
+Each example README has its own **Prerequisites / Cost / Teardown** section with per-vertical cost estimates and runtime expectations.
+
+### Post-teardown checklist
+
+- [ ] `az group list -o tsv | grep -i <prefix>` returns nothing.
+- [ ] `az keyvault list-deleted -o tsv` — purge any leftovers you own (may require manual purge if purge-protection was enabled).
+- [ ] `az consumption usage list --start-date <yesterday>` — confirm no ongoing charges.
+- [ ] `reports/teardown/<env>-<ts>.log` archived with the change ticket if this was a production teardown.
 
 ---
 
@@ -543,7 +629,7 @@ az storage account show \
 
 - [ ] **Add a new domain**: Copy `domains/finance/` as a template, update `dbt_project.yml`
 - [ ] **Add a data product**: Create `contract.yaml` under `data-products/`
-- [ ] **Add quality rules**: Extend `governance/dataquality/` with Great Expectations checkpoints
+- [ ] **Add quality rules**: Extend `csa_platform/csa_platform/governance/dataquality/` with Great Expectations checkpoints
 - [ ] **Scale streaming**: Increase Event Hub partitions, add ADX scaling policies
 - [ ] **Production hardening**: See [`docs/PRODUCTION_CHECKLIST.md`](PRODUCTION_CHECKLIST.md)
 - [ ] **Architecture deep-dive**: See [`docs/ARCHITECTURE.md`](ARCHITECTURE.md)

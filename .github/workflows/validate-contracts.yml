@@ -121,4 +121,4 @@ jobs:
       - name: Validate data contracts (Python)
         run: |
           pip install -e ".[governance]"
-          python -m governance.contracts.contract_validator --ci
+          python -m csa_platform.governance.contracts.contract_validator --ci

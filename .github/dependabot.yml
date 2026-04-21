@@ -24,10 +24,6 @@ updates:
       interval: "weekly"
     labels: ["dependencies", "javascript"]
     open-pull-requests-limit: 10
-
-  - package-ecosystem: "npm"
-    directory: "/portal/static-webapp"
-    schedule:
-      interval: "weekly"
-    labels: ["dependencies", "javascript"]
-    open-pull-requests-limit: 10
+  # CSA-0048: portal/static-webapp was archived on 2026-04-15; its
+  # dependabot entry was removed here so PRs aren't opened against a
+  # non-existent directory.

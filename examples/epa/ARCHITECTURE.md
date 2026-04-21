@@ -480,7 +480,7 @@ graph TD
 ```mermaid
 graph TD
     A[External Consumers] --> B[Azure API Management]
-    B --> C[Azure AD / Managed Identity]
+    B --> C[Microsoft Entra ID / Managed Identity]
     C --> D[Rate Limiting]
     D --> E[Data Product APIs]
     E --> F{Data Source}
@@ -521,7 +521,7 @@ spec:
 - **Encryption at Rest**: Azure Storage Service Encryption (SSE)
 - **Encryption in Transit**: TLS 1.2+ for all API communications
 - **Network Security**: VNet integration with private endpoints
-- **Access Control**: Azure AD with RBAC; role-based data access
+- **Access Control**: Microsoft Entra ID with RBAC; role-based data access
 
 ### 🔒 Federal Compliance
 

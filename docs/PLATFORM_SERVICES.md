@@ -5,24 +5,26 @@
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Architects
 
 > [!NOTE]
-> **Quick Summary**: Detailed guide to 10 platform services that replicate Microsoft Fabric capabilities using Azure PaaS — OneLake pattern, Data Activator, Direct Lake, Data Marketplace, Governance Framework, Multi-Synapse, Metadata Framework, AI Integration, Shared Services, and OSS alternatives for Government gaps.
+> **Quick Summary**: Detailed guide to 10 platform services that deliver Fabric-parity capabilities on Azure PaaS — OneLake pattern, Data Activator, Direct Lake, Data Marketplace, Governance Framework, Multi-Synapse *(legacy — see CSA-0139)*, Metadata Framework, AI Integration, Shared Services, and OSS alternatives. Intended for Azure Government (where Fabric is forecast, not GA) and for Commercial workloads that need a composable IaC stack as a stepping stone toward a future Fabric migration.
 
-Platform services are the Fabric-equivalent capabilities that extend the base
-landing zones. Each service is independently deployable and has its own README
-with detailed usage instructions.
+Platform services are the Fabric-parity capabilities that extend the base
+landing zones. Each service is independently deployable, has its own README
+with detailed usage instructions, and maps to a Microsoft Fabric equivalent so
+workloads can migrate incrementally as Fabric becomes available in their
+cloud/region.
 
 ## 📑 Table of Contents
 
 - [🏗️ Services Overview](#️-services-overview)
-- [1. 🗄️ OneLake Pattern](#1-️-onelake_pattern)
+- [1. 🗄️ Unity Catalog Pattern](#1-️-unity-catalog-pattern)
 - [2. ⚡ Data Activator](#2--data_activator)
-- [3. 📊 Direct Lake](#3--direct_lake)
+- [3. 📊 Semantic Model](#3--semantic-model)
 - [4. 🛒 Data Marketplace](#4--data-marketplace)
 - [5. 📋 Governance Framework](#5--governance-framework)
 - [6. 🔄 Multi-Synapse](#6--multi_synapse)
 - [7. ⚙️ Metadata Framework](#7-️-metadata_framework)
 - [8. 🤖 AI Integration](#8--ai-integration)
-- [9. 🔧 Shared Services](#9--shared_services)
+- [9. 🔧 Shared Services](#9--shared-services)
 - [10. 🔓 OSS Alternatives](#10--oss_alternatives)
 - [📦 Service Dependency Map](#-service-dependency-map)
 - [⚙️ Configuration](#️-configuration)
@@ -34,7 +36,7 @@ with detailed usage instructions.
 ```mermaid
 graph LR
     subgraph "Core Services"
-        OL[OneLake Pattern]
+        OL[Unity Catalog Pattern]
         MF[Metadata Framework]
         SS[Shared Services]
     end
@@ -66,14 +68,14 @@ graph LR
 
 ---
 
-## 1. 🗄️ OneLake Pattern
+## 1. 🗄️ Unity Catalog Pattern
 
-**Location:** `csa_platform/onelake_pattern/`
-**Fabric Equivalent:** OneLake
+**Location:** `csa_platform/unity_catalog_pattern/` *(renamed from `onelake_pattern/` in CSA-0132; this pattern implements Databricks Unity Catalog with ADLS Gen2, not Microsoft OneLake.)*
+**Fabric Equivalent (conceptual):** OneLake — a future `csa_platform/fabric/` module (CSA-0129) will own the real OneLake integration.
 
-Implements a unified data lake using ADLS Gen2 with Unity Catalog providing the
-shared metadata layer. All domain data lives in a single logical lake with
-physical separation via containers and folders.
+Implements a unified data lake using ADLS Gen2 with Databricks Unity Catalog
+providing the shared metadata layer. All domain data lives in a single logical
+lake with physical separation via containers and folders.
 
 **What it does:**
 - Provides a standardized storage layout (Bronze / Silver / Gold) per domain
@@ -85,8 +87,8 @@ physical separation via containers and folders.
 ```bash
 az deployment group create \
   --resource-group rg-datalake \
-  --template-file csa_platform/onelake_pattern/deploy/onelake.bicep \
-  --parameters csa_platform/onelake_pattern/deploy/params.json
+  --template-file csa_platform/unity_catalog_pattern/deploy/onelake.bicep \
+  --parameters csa_platform/unity_catalog_pattern/deploy/params.json
 ```
 
 **Dependencies:** ADLS Gen2 (from DLZ deployment), Databricks workspace
@@ -119,10 +121,10 @@ az deployment group create \
 
 ---
 
-## 3. 📊 Direct Lake
+## 3. 📊 Semantic Model
 
-**Location:** `csa_platform/direct_lake/`
-**Fabric Equivalent:** Direct Lake mode in Power BI
+**Location:** `csa_platform/semantic_model/` *(renamed from `direct_lake/` in CSA-0132; this pattern implements Power BI semantic models over Databricks SQL, not Microsoft Fabric Direct Lake.)*
+**Fabric Equivalent (conceptual):** Direct Lake mode in Power BI — a future `csa_platform/fabric/` module (CSA-0129) will own the real Direct Lake integration.
 
 Enables Power BI to query Delta Lake files directly from ADLS Gen2 via
 Databricks SQL endpoints, eliminating the need to import data into Power BI
@@ -163,25 +165,32 @@ products published across the organization.
 - Publishes usage metrics and consumer analytics
 
 **Deploy:**
-```bash
-# Deploy the marketplace API
-az deployment group create \
-  --resource-group rg-platform \
-  --template-file csa_platform/data_marketplace/deploy/marketplace.bicep \
-  --parameters csa_platform/data_marketplace/deploy/params.json
+> [!IMPORTANT]
+> **CSA-0067 / CSA-0131.** The legacy marketplace under
+> `csa_platform/data_marketplace/` is deprecated. It does not ship a
+> `--init` CLI; the previously documented command never existed. Use
+> the actively-served marketplace in `portal.shared.api.routers.marketplace`
+> instead.
 
-# Initialize the catalog
-python csa_platform/data_marketplace/api/marketplace_api.py --init
+```bash
+# Recommended — the portal seeds demo products on startup when
+# ENVIRONMENT=local or DEMO_MODE=true.
+cd portal/kubernetes/docker && docker compose up --build
+
+# Browsable at:
+#   http://localhost:3000/marketplace             (React frontend)
+#   http://localhost:8000/api/v1/marketplace/...  (JSON API)
 ```
 
-**Dependencies:** Purview, API Management, Azure SQL or Cosmos DB for catalog state
+**Dependencies:** Purview, API Management, SQLite or Postgres for catalog state (see `portal/shared/api/persistence_factory.py`).
 
 ---
 
 ## 5. 📋 Governance Framework
 
-**Location:** `csa_platform/governance/`
+**Location:** `csa_platform/csa_platform/governance/purview/` (Python automation) + top-level `csa_platform/governance/` (shared logging, contracts, dataquality, finops)
 **Fabric Equivalent:** Purview-integrated governance
+**Note:** These two trees overlap today and are scheduled for consolidation (see AQ-0025 / CSA-0126 in the audit approval queue). Both are canonical until that decision is made.
 
 Extends Microsoft Purview with automated data governance workflows including
 classification, sensitivity labeling, and master data management.
@@ -198,7 +207,7 @@ classification, sensitivity labeling, and master data management.
 # Bootstrap Purview with glossary, classifications, and scan rules
 python scripts/purview/bootstrap_catalog.py \
   --purview-account <purview-name> \
-  --config governance/purview/catalog-config.yaml
+  --config csa_platform/governance/purview/catalog-config.yaml
 ```
 
 **Dependencies:** Microsoft Purview, Key Vault
@@ -207,8 +216,9 @@ python scripts/purview/bootstrap_catalog.py \
 
 ## 6. 🔄 Multi-Synapse
 
-**Location:** `csa_platform/multi_synapse/`
+**Location:** `csa_platform/multi_synapse/` *(legacy / migration-only — see `csa_platform/multi_synapse/README.md` and `csa_platform/multi_synapse/MIGRATION.md`; CSA-0139 / AQ-0034)*
 **Fabric Equivalent:** Multi-workspace Synapse
+**Status:** Legacy. New work should target Databricks + Unity Catalog (ADR-0002) or Fabric where GA (ADR-0010). This module stays deployable for existing Synapse footprints only.
 
 Provides a shared Synapse Analytics environment with per-organization or
 per-domain isolation using workspace-level RBAC and network segmentation.
@@ -300,7 +310,7 @@ export AZURE_OPENAI_DEPLOYMENT=gpt-4
 
 ## 9. 🔧 Shared Services
 
-**Location:** `csa_platform/shared_services/`
+**Location:** `csa_platform/functions/` (validation, aiEnrichment, eventProcessing, secretRotation)
 **Fabric Equivalent:** Shared utility functions
 
 A library of reusable Azure Functions for common data operations used across
@@ -314,10 +324,11 @@ pipelines and platform services.
 | `validate_schema` | Validates incoming data against registered JSON/Avro schemas |
 | `validate_quality` | Runs Great Expectations checkpoints and returns results |
 | `send_teams_alert` | Posts formatted alerts to Microsoft Teams via webhook |
+| Dead-letter pattern | Canonical per-pipeline DLQ (container + Event Grid + alert) — see [`deploy/bicep/shared/modules/deadletter/`](../deploy/bicep/shared/modules/deadletter/deadletter.bicep) + [runbooks/dead-letter.md](runbooks/dead-letter.md) (CSA-0138) |
 
 **Deploy:**
 ```bash
-cd csa_platform/shared_services/functions
+cd csa_platform/functions/validation
 
 # Deploy to Azure Functions
 func azure functionapp publish <function-app-name> --python
@@ -325,7 +336,7 @@ func azure functionapp publish <function-app-name> --python
 # Or deploy via Bicep
 az deployment group create \
   --resource-group rg-platform \
-  --template-file csa_platform/shared_services/deploy/functions.bicep
+  --template-file csa_platform/functions/deploy/functions.bicep
 ```
 
 **Dependencies:** Azure Functions runtime, Key Vault, Teams webhook URL
@@ -375,7 +386,7 @@ Deploy platform services in this recommended order:
 | 6 | AI Integration | Enrichment + RAG |
 | 7 | Data Activator | Alerting + automation |
 | 8 | Direct Lake | Power BI consumption |
-| 9 | Multi-Synapse | If multi-org needed |
+| 9 | Multi-Synapse | Legacy — only if migrating an existing Synapse footprint (CSA-0139) |
 | 10 | OSS Alternatives | If Gov gaps exist |
 
 ---

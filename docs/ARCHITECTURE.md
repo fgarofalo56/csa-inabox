@@ -5,11 +5,26 @@
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Architects
 
 > [!NOTE]
-> **Quick Summary**: Comprehensive architecture reference for Cloud-Scale Analytics in a Box — an open-source "build-your-own Microsoft Fabric" using Azure PaaS services. Covers the DMLZ/DLZ landing zone pattern, medallion data flow (Bronze/Silver/Gold), streaming via Event Hubs + ADX, AI/ML integration, 9 vertical examples, and Azure Government compatibility.
+> **Quick Summary**: Architecture reference for CSA-in-a-Box — the Azure-native reference implementation of the Microsoft "Unify your data platform" CAF guidance, built on Azure PaaS and open-source tooling. Positions Fabric as the primary control plane where GA, and CSA-in-a-Box as the Azure Government gap-filler (Fabric is forecast, not GA), the post-deprecation CAF CSA reference, and an incremental on-ramp to Fabric. Covers the DMLZ/DLZ landing zone pattern, medallion data flow (Bronze/Silver/Gold), streaming via Event Hubs + ADX, AI/ML integration, 9 vertical examples, and Azure Government compatibility.
 
-A comprehensive architecture reference for Cloud-Scale Analytics in a Box — an
-open-source "build-your-own Microsoft Fabric" using Azure PaaS services and
-open-source tooling.
+A comprehensive architecture reference for CSA-in-a-Box — an Azure-native
+reference implementation of the Microsoft "Unify your data platform" Cloud
+Adoption Framework guidance, built on Azure PaaS services and open-source
+tooling. Where Microsoft Fabric is GA in your region and cloud, Fabric is the
+primary control plane; CSA-in-a-Box is the Fabric-parity stack on Azure PaaS
+for workloads in Azure Government (Fabric forecast, not GA), for regulated
+scenarios that need composable IaC, and as an incremental on-ramp whose
+components compose cleanly into a future Fabric migration.
+
+> [!NOTE]
+> **CAF scenario update (CSA-0068).** The legacy "Cloud-Scale Analytics"
+> CAF scenario was **deprecated in April 2026** and replaced by
+> [Microsoft CAF — Unify your data platform](https://aka.ms/cafdata).
+> This document tracks the 2026 "Unify your data platform" guidance.
+> Historical references to the deprecated *Cloud-Scale Analytics* scenario
+> are retained for context and cross-referencing only — do not use
+> `https://learn.microsoft.com/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/`
+> as an authoritative source for new work.
 
 ## 📑 Table of Contents
 
@@ -26,7 +41,7 @@ open-source tooling.
   - [Data Governance Flow](#data-governance-flow)
 - [💡 Vertical Examples](#-vertical-examples)
 - [📁 Repository Structure](#-repository-structure)
-- [⚙️ Technology Decision Matrix](#️-technology-decision-matrix)
+- [⚙️ Primary Tech Choices](#️-primary-tech-choices)
 - [🔒 Security Architecture](#-security-architecture)
 - [🚀 Next Steps](#-next-steps)
 
@@ -224,6 +239,10 @@ metadata layer across all storage accounts.
   real-time events. Supports Capture to ADLS for cold-path archival.
 - **IoT Hub + DPS** — Managed device provisioning and telemetry routing for IoT
   scenarios (weather stations, AQI sensors, industrial equipment).
+- **Dead-Letter Queue (DLQ)** — Canonical per-pipeline poison-message sink
+  (container + Event Grid + metric alert) provided by the shared module
+  [`deploy/bicep/shared/modules/deadletter/`](../deploy/bicep/shared/modules/deadletter/deadletter.bicep);
+  operator triage + replay procedure in [runbooks/dead-letter.md](runbooks/dead-letter.md) (CSA-0138 / AQ-0033).
 
 #### ⚡ Compute Layer
 
@@ -260,16 +279,16 @@ capabilities. Each component is independently deployable.
 
 | Service | Fabric Equivalent | Location |
 |---------|-------------------|----------|
-| OneLake Pattern | OneLake | `csa_platform/onelake_pattern/` |
+| Unity Catalog Pattern | OneLake (conceptual) | `csa_platform/unity_catalog_pattern/` |
 | Data Activator | Data Activator | `csa_platform/data_activator/` |
-| Direct Lake | Direct Lake mode | `csa_platform/direct_lake/` |
+| Semantic Model | Direct Lake (conceptual) | `csa_platform/semantic_model/` |
 | Data Marketplace | Data Sharing | `csa_platform/data_marketplace/` |
 | Metadata Framework | Metadata-driven ADF | `csa_platform/metadata_framework/` |
 | AI Integration | Copilot / AI | `csa_platform/ai_integration/` |
-| Shared Services | Shared Functions | `csa_platform/shared_services/` |
+| Shared Services | Shared Functions | `csa_platform/functions/` |
 | OSS Alternatives | N/A (Gov gaps) | `csa_platform/oss_alternatives/` |
-| Multi-Synapse | Multi-workspace | `csa_platform/multi_synapse/` |
-| Governance | Purview Integration | `csa_platform/governance/` |
+| Multi-Synapse | Multi-workspace | `csa_platform/multi_synapse/` (legacy — see `csa_platform/multi_synapse/README.md`; CSA-0139) |
+| Governance | Purview Integration | `csa_platform/csa_platform/governance/purview/` + top-level `csa_platform/governance/` |
 
 See [PLATFORM_SERVICES.md](PLATFORM_SERVICES.md) for detailed deployment guides.
 
@@ -279,8 +298,9 @@ The consumer layer exposes processed data to end users and downstream systems.
 
 - **Power BI** — Direct Lake mode connects Power BI directly to Delta Lake files
   in ADLS Gen2 via Databricks SQL endpoints, eliminating data import overhead.
-- **Data Onboarding Portal** — Three implementations (PowerApps, React/Next.js,
-  Kubernetes) sharing a common FastAPI backend.
+- **Data Onboarding Portal** — Four implementations (PowerApps, React/Next.js,
+  Kubernetes, and `python -m cli`) sharing a common FastAPI backend
+  (CSA-0066).
 - **REST APIs** — Data product APIs exposed through API Management with OAuth2
   authentication and rate limiting.
 - **Teams Alerts** — Webhook-based notifications for pipeline failures, data
@@ -395,13 +415,13 @@ csa-inabox/
 │   └── ...                     # 5 more verticals
 │
 ├── csa_platform/                # Fabric-equivalent platform services
-│   ├── onelake_pattern/        # Unified data lake
+│   ├── unity_catalog_pattern/  # Databricks Unity Catalog + ADLS Gen2 data lake
 │   ├── data_activator/         # Event-driven alerting
-│   ├── direct_lake/            # Power BI Direct Lake
+│   ├── semantic_model/         # Power BI semantic models over Databricks SQL
 │   ├── data_marketplace/       # Data product marketplace
 │   ├── metadata_framework/     # Auto-pipeline generation
 │   ├── ai_integration/         # RAG, enrichment, model serving
-│   ├── shared_services/        # Reusable Azure Functions
+│   ├── functions/              # Consolidated Azure Functions (validation, aiEnrichment, eventProcessing, secretRotation)
 │   └── oss_alternatives/       # OSS for Gov gaps
 │
 ├── portal/                     # Data onboarding portal (3 frontends)
@@ -427,7 +447,9 @@ csa-inabox/
 
 ---
 
-## ⚙️ Technology Decision Matrix
+## ⚙️ Primary Tech Choices
+
+This table is a **cheat sheet** of the default pick for each concern. For branching decisions with scenario-specific tradeoffs (cost, latency, compliance, skill match, anti-patterns), see the 8 decision trees at [`docs/decisions/`](decisions/) (machine-readable source of truth at [`decision-trees/`](../decision-trees/)).
 
 | Concern | Primary Choice | Alternative | Rationale |
 |---------|---------------|-------------|-----------|
@@ -463,6 +485,12 @@ All deployments enforce:
 - [QUICKSTART.md](QUICKSTART.md) — 60-minute hands-on tutorial
 - [PLATFORM_SERVICES.md](PLATFORM_SERVICES.md) — Platform component deep-dive
 - [GOV_SERVICE_MATRIX.md](GOV_SERVICE_MATRIX.md) — Azure Government compatibility
+- **Fabric migration path** — See the
+  [`fabric-vs-databricks-vs-synapse` decision tree](../decision-trees/fabric-vs-databricks-vs-synapse/),
+  [ADR-0010 (positioning)](adr/ADR-0010-positioning.md), and the
+  Palantir migration playbook in [`migrations/`](migrations/) for guidance on
+  when to stay on CSA-in-a-Box, when to adopt Microsoft Fabric, and how
+  components compose into a Fabric migration.
 
 ---
 

@@ -7,13 +7,13 @@ from typing import Any
 
 import pytest
 
-from governance.contracts.contract_validator import (
+from csa_platform.governance.contracts.contract_validator import (
     SLA,
     Column,
     Contract,
     load_contract,
 )
-from governance.contracts.pipeline_enforcer import (
+from csa_platform.governance.contracts.pipeline_enforcer import (
     ContractEnforcer,
 )
 

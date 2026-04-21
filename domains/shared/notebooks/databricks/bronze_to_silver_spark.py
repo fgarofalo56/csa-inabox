@@ -1,6 +1,38 @@
 # Databricks notebook source
+# flake8: noqa
+# ruff: noqa
+"""
+DEPRECATED (2026-04-20) — CSA-0130 / AQ-0029 / ADR-0013
+
+This notebook duplicates the Bronze -> Silver dbt models and is
+therefore deprecated. Per ADR-0013, dbt Core is the canonical
+transformation layer for Bronze -> Silver -> Gold in csa-inabox.
+Maintain the dbt models, not this notebook.
+
+Canonical replacement:
+    domains/shared/dbt/models/silver/slv_customers.sql
+    domains/shared/dbt/models/silver/slv_orders.sql
+    domains/shared/dbt/models/silver/slv_products.sql
+    (and per-domain equivalents under
+     domains/finance/dbt/models/silver/,
+     domains/sales/dbt/models/silver/,
+     domains/inventory/dbt/models/silver/)
+
+Decision record:
+    docs/adr/0013-dbt-as-canonical-transformation.md
+
+This file remains in the repo for historical reference and to keep
+any ad-hoc one-off runs working during the migration window. NEW
+medallion transformation work MUST happen in the dbt tree -- do not
+extend, branch from, or copy the logic below into new notebooks.
+"""
+
 # MAGIC %md
 # MAGIC # Bronze to Silver: Spark Processing Pipeline
+# MAGIC
+# MAGIC > DEPRECATED (2026-04-20) - see module docstring above and
+# MAGIC > docs/adr/0013-dbt-as-canonical-transformation.md.
+# MAGIC > Canonical path: `domains/<domain>/dbt/models/silver/`.
 # MAGIC
 # MAGIC Alternative to dbt for teams that prefer native Spark processing.
 # MAGIC Reads raw data from ADLS Bronze layer, applies schema enforcement,

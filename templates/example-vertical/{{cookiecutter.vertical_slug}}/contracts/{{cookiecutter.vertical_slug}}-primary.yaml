@@ -1,0 +1,99 @@
+# Data product contract - {{ cookiecutter.vertical_slug | replace("-", "_") }}.observations
+#
+# Canonical declaration of the primary data product for the
+# {{ cookiecutter.vertical_name }} vertical. Covers schema, SLA, quality rules,
+# lineage, and contact routing. Mirrors the pattern under
+# examples/noaa/contracts/*.yaml.
+
+apiVersion: csa.example.com/v1
+kind: DataProductContract
+
+metadata:
+  name: {{ cookiecutter.vertical_slug | replace("-", "_") }}.observations
+  domain: {{ cookiecutter.vertical_slug }}
+  owner: {{ cookiecutter.domain_owner }}
+  version: "1.0.0"
+  description: >
+    Primary {{ cookiecutter.vertical_name }} observation stream.
+    {{ cookiecutter.description }}
+
+schema:
+  primary_key: [station_id, event_time, metric_name]
+  columns:
+    - name: station_id
+      type: string
+      nullable: false
+      description: Station identifier (stable across refreshes)
+    - name: event_time
+      type: timestamp
+      nullable: false
+      description: Observation timestamp (UTC)
+    - name: metric_name
+      type: string
+      nullable: false
+      description: Metric identifier (e.g. temperature_c, humidity_pct)
+      allowed_values:
+        - temperature_c
+        - humidity_pct
+        - pressure_hpa
+    - name: value
+      type: decimal(18,6)
+      nullable: true
+      description: Numeric metric value
+    - name: quality_flag
+      type: string
+      nullable: false
+      description: "Source quality: GOOD | UNCERTAIN | BAD | MISSING"
+      allowed_values: [GOOD, UNCERTAIN, BAD, MISSING]
+    - name: latitude
+      type: decimal(9,6)
+      nullable: false
+    - name: longitude
+      type: decimal(9,6)
+      nullable: false
+    - name: load_time
+      type: timestamp
+      nullable: false
+      description: When the record was loaded into the warehouse
+
+sla:
+  freshness_minutes: {{ cookiecutter.sample_frequency_hours|int * 60 }}
+  valid_row_ratio: 0.95
+  supported_until: "2027-12-31"
+  update_frequency: "Every {{ cookiecutter.sample_frequency_hours }} hour(s)"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: station_id
+  - rule: expect_column_values_to_not_be_null
+    column: event_time
+  - rule: expect_column_values_to_not_be_null
+    column: metric_name
+  - rule: expect_column_values_to_be_in_set
+    column: metric_name
+    value_set: [temperature_c, humidity_pct, pressure_hpa]
+  - rule: expect_column_values_to_be_in_set
+    column: quality_flag
+    value_set: [GOOD, UNCERTAIN, BAD, MISSING]
+  - rule: expect_column_values_to_be_between
+    column: latitude
+    min_value: -90
+    max_value: 90
+  - rule: expect_column_values_to_be_between
+    column: longitude
+    min_value: -180
+    max_value: 180
+
+data_lineage:
+  upstream_sources:
+    - name: "{{ cookiecutter.vertical_name }} source API"
+      url: "https://example.com/{{ cookiecutter.vertical_slug }}"
+      description: "Primary upstream source"
+      refresh_schedule: "Every {{ cookiecutter.sample_frequency_hours }} hour(s)"
+  downstream_consumers:
+    - name: "Power BI dashboards"
+      description: "Executive and operational reporting"
+
+contact:
+  technical: {{ cookiecutter.domain_owner }}
+  business: {{ cookiecutter.domain_owner }}

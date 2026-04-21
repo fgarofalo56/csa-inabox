@@ -1,0 +1,18 @@
+# Dependencies managed in pyproject.toml [project.optional-dependencies.functions]
+# This file is kept for Azure Functions deployment (host.json + requirements.txt).
+#
+# DO NOT include azure-functions-worker in this file
+# The Python Worker is managed by Azure Functions platform
+# Manually managing azure-functions-worker may cause unexpected issues
+
+azure-functions>=1.17.0,<2.0.0
+azure-ai-textanalytics>=5.3.0,<6.0.0
+azure-ai-formrecognizer>=3.3.0,<4.0.0
+azure-core>=1.29.0,<2.0.0
+# Structured JSON logging with trace IDs — see governance/common/logging.py
+# and docs/LOG_SCHEMA.md.  The function_app imports
+# csa_platform.governance.common.logging directly so the package must be available on
+# the Python path at runtime (deployed alongside the function app code).
+structlog>=24.1.0,<25.0.0
+# Retry logic for Azure SDK calls
+tenacity>=8.0.0,<9.0.0

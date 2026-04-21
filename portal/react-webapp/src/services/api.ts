@@ -3,7 +3,8 @@
  * Communicates with portal/shared/api/ (FastAPI).
  */
 
-import axios, { AxiosInstance, AxiosError } from 'axios';
+import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig } from 'axios';
+import { PublicClientApplication, InteractionRequiredAuthError } from '@azure/msal-browser';
 import type {
   SourceRecord,
   SourceRegistration,
@@ -15,11 +16,21 @@ import type {
   PlatformStats,
   DomainOverview,
 } from '@/types';
+import { apiRequest } from './authConfig';
+import { apiV1BaseUrl } from './apiClient';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
+/**
+ * Base URL for all versioned CSA API calls.
+ *
+ * CSA-0123: resolved through `apiClient.apiV1BaseUrl` so that every
+ * outbound call shares one source of truth for `NEXT_PUBLIC_API_URL`
+ * with a `/api/v1` same-origin default. No hard-coded host/port.
+ */
+const API_URL = apiV1BaseUrl();
 
 class ApiClient {
   private client: AxiosInstance;
+  private msalInstance: PublicClientApplication | null = null;
 
   constructor() {
     this.client = axios.create({
@@ -30,14 +41,23 @@ class ApiClient {
       },
     });
 
-    // Request interceptor for auth token
-    this.client.interceptors.request.use((config) => {
-      // MSAL token injection would go here
-      const token = typeof window !== 'undefined'
-        ? sessionStorage.getItem('msal_access_token')
-        : null;
-      if (token) {
-        config.headers.Authorization = `Bearer ${token}`;
+    // Request interceptor — acquires MSAL token silently
+    this.client.interceptors.request.use(async (config: InternalAxiosRequestConfig) => {
+      if (this.msalInstance) {
+        const account = this.msalInstance.getActiveAccount();
+        if (account) {
+          try {
+            const response = await this.msalInstance.acquireTokenSilent({
+              scopes: apiRequest.scopes,
+              account,
+            });
+            config.headers.Authorization = `Bearer ${response.accessToken}`;
+          } catch (err) {
+            if (err instanceof InteractionRequiredAuthError) {
+              window.dispatchEvent(new CustomEvent('auth:expired'));
+            }
+          }
+        }
       }
       return config;
     });
@@ -47,12 +67,16 @@ class ApiClient {
       (response) => response,
       (error: AxiosError) => {
         if (error.response?.status === 401) {
-          // Trigger re-authentication
           window.dispatchEvent(new CustomEvent('auth:expired'));
         }
         return Promise.reject(error);
       }
     );
+  }
+
+  /** Bind the MSAL instance so the interceptor can acquire tokens. */
+  setMsalInstance(instance: PublicClientApplication): void {
+    this.msalInstance = instance;
   }
 
   // ─── Sources ───────────────────────────────────────────────────────────

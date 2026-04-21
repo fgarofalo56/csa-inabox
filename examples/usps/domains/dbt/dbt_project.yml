@@ -79,22 +79,4 @@ seeds:
     +schema: seeds
     +tags: ['seed', 'usps']
 
-sources:
-  - name: usps
-    description: USPS postal operations data sources
-    tables:
-      - name: delivery_performance
-        description: Delivery tracking and performance records
-        freshness:
-          warn_after: {count: 1, period: day}
-          error_after: {count: 3, period: day}
-      - name: facility_operations
-        description: Processing facility operational metrics
-        freshness:
-          warn_after: {count: 1, period: day}
-          error_after: {count: 7, period: day}
-      - name: mail_volume
-        description: Daily mail and parcel volume by product class
-        freshness:
-          warn_after: {count: 1, period: day}
-          error_after: {count: 3, period: day}
+# sources: moved to models/schema.yml where dbt expects them.

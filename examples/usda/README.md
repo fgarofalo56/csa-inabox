@@ -491,3 +491,53 @@ This project is licensed under the MIT License. See `LICENSE` file for details.
 - [Getting Started Guide](../../docs/GETTING_STARTED.md) — Platform setup and onboarding
 - [EPA Environmental Analytics](../epa/README.md) — Related agriculture/environment vertical
 - [NOAA Climate Analytics](../noaa/README.md) — Related environmental data vertical
+
+
+---
+
+## Prerequisites / Cost / Teardown
+
+> [!IMPORTANT]
+> **Cost-safety:** this vertical deploys real Azure resources. Always run `teardown.sh` when you are done. A forgotten workshop environment can run **$180-300/day**.
+
+### Prerequisites
+
+- Azure CLI 2.50+ logged in (`az login`), subscription selected (`az account set --subscription <id>`)
+- `jq` installed (used by teardown enumeration)
+- Bicep CLI 0.25+ (`az bicep version`)
+- Contributor + User Access Administrator on target subscription (or a pre-created RG with equivalent RBAC)
+- `bash scripts/deploy/validate-prerequisites.sh` passes
+
+### Cost estimate (rough, East US 2)
+
+- **While running:** ~$$180-300/day (services: Synapse, Databricks, ML, ADX, ADF, Cosmos DB, Storage, Key Vault)
+- **Idle overnight:** roughly half if you stop compute (Databricks autostop + Synapse pause)
+- **Storage + Key Vault residual:** <$5/month if you skip teardown
+
+Numbers are indicative for a small demo dataset; production workloads vary significantly. Use `az consumption usage list` or Cost Management for live numbers.
+
+### Runtime
+
+- **Deploy:** ~45-60 minutes (first run; cold Bicep)
+- **Teardown:** ~15-20 minutes (async RG delete completes in the background)
+
+### Teardown
+
+When finished, run the per-example teardown script. It enforces a typed `DESTROY-usda` confirmation, logs every step to `reports/teardown/usda-<timestamp>.log`, and deletes the resource group `rg-usda-analytics` along with any matching subscription-scope deployments.
+
+```bash
+# Interactive (recommended)
+bash examples/usda/deploy/teardown.sh
+
+# Dry run (enumerate only)
+bash examples/usda/deploy/teardown.sh --dry-run
+
+# From the repo root via Makefile
+make teardown-example VERTICAL=usda
+make teardown-example VERTICAL=usda DRYRUN=1
+
+# CI automation (no prompt — only for ephemeral environments)
+bash examples/usda/deploy/teardown.sh --yes
+```
+
+See [`docs/QUICKSTART.md#teardown`](../../docs/QUICKSTART.md#teardown) for the platform-wide teardown flow.

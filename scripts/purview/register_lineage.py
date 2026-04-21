@@ -24,7 +24,7 @@ import sys
 import uuid
 from typing import Any
 
-from governance.common.logging import configure_structlog, get_logger
+from csa_platform.governance.common.logging import configure_structlog, get_logger
 
 configure_structlog(service="csa-purview-lineage")
 logger = get_logger(__name__)

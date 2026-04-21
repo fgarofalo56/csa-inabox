@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from governance.common.validation import (
+from csa_platform.governance.common.validation import (
     EMAIL_REGEX_PATTERN,
     is_valid_email,
     substitute_common_patterns,

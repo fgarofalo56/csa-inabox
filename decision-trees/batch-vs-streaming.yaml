@@ -1,0 +1,86 @@
+tree_id: "batch-vs-streaming"
+title: "Batch vs. Streaming Ingestion"
+last_reviewed: "2026-04-19"
+version: "1.0"
+summary: "Batch, micro-batch, or true streaming — pick the ingestion cadence."
+links:
+  decision_doc: "docs/decisions/batch-vs-streaming.md"
+  related_adrs:
+    - "adr-0001-etl-orchestrator"
+    - "adr-0004-streaming-backbone"
+  related_architectures:
+    - "docs/ARCHITECTURE.md#streaming-data-flow"
+    - "docs/ARCHITECTURE.md#batch-data-flow"
+
+nodes:
+  - id: "start"
+    question: "What is the business SLA for data freshness?"
+    options:
+      - label: "<1 second (dashboard, alerting, anomaly)"
+        next: "rec-streaming"
+      - label: "<5 minutes"
+        next: "q-volume-velocity"
+      - label: "Hourly or daily"
+        next: "q-source-shape"
+
+  - id: "q-volume-velocity"
+    question: "What is the event velocity?"
+    options:
+      - label: ">1,000 events/sec sustained"
+        next: "rec-streaming"
+      - label: "Bursty, <1,000 events/sec average"
+        next: "rec-micro-batch"
+
+  - id: "q-source-shape"
+    question: "Are the sources file-drop / DB pull, or event-driven?"
+    options:
+      - label: "File-drop / DB pull (SFTP, SQL, REST APIs)"
+        next: "rec-batch"
+      - label: "Event-driven but freshness SLA is lax"
+        next: "q-cost-sensitivity"
+
+  - id: "q-cost-sensitivity"
+    question: "Is the team cost-sensitive and willing to accept delayed data for 60%+ cost reduction?"
+    options:
+      - label: "Yes — cost first"
+        next: "rec-batch"
+      - label: "No — operational simplicity matters"
+        next: "rec-micro-batch"
+
+  - id: "rec-streaming"
+    recommendation: "True streaming (Event Hubs + Stream Analytics / ADX / Databricks Structured Streaming)"
+    rationale: "Sub-second event processing for IoT, anomaly detection, real-time dashboards, and operational alerting."
+    tradeoffs:
+      cost: "Always-on compute ($$$); Event Hubs TUs or PUs reserved; ADX hot cache sized for retention window."
+      latency: "Sub-second end-to-end."
+      compliance: "Event Hubs + ADX available in Commercial and Gov (FedRAMP High, IL4). IL5 requires specific SKUs."
+      skill_match: "Requires stream-processing patterns (watermarking, exactly-once, late-arrival handling). Moderate ramp."
+    anti_patterns:
+      - "Do not pick streaming for data that is read once a day by a single BI report."
+      - "Do not stream into a warehouse without a hot-path landing (ADX) — you will blow up capacity."
+    linked_example: "examples/iot-streaming/"
+
+  - id: "rec-micro-batch"
+    recommendation: "Micro-batch (Delta Live Tables, Databricks Structured Streaming with 1-5 min triggers)"
+    rationale: "Streaming semantics with batch economics. Right balance for 'within 5 minutes' SLAs without always-on cluster costs."
+    tradeoffs:
+      cost: "Cluster spin-up per trigger; cheaper than always-on for <1,000 events/sec average."
+      latency: "1-5 minute end-to-end."
+      compliance: "Same posture as Databricks — Commercial + Gov."
+      skill_match: "Delta Live Tables reduces operational burden vs. raw Structured Streaming."
+    anti_patterns:
+      - "Do not pick micro-batch for sub-second SLAs — the trigger interval dominates."
+    linked_example: "examples/noaa/"
+
+  - id: "rec-batch"
+    recommendation: "Batch (ADF orchestration, metadata-driven pipelines, dbt runs)"
+    rationale: "Cheapest and most operationally mature for file-drop, SFTP, DB-pull sources with hourly/daily SLA."
+    tradeoffs:
+      cost: "Lowest — pay only for run duration. Serverless SQL / dbt Cloud keeps idle cost near zero."
+      latency: "Minutes to hours."
+      compliance: "Full Commercial + Gov coverage via ADF, self-hosted IR for on-prem sources."
+      skill_match: "Standard DE team — ADF + dbt + Git. Lowest ramp."
+    anti_patterns:
+      - "Do not force batch when the business has a sub-5-minute SLA — you will rebuild as streaming anyway."
+      - "Do not skip a bronze-layer raw copy in batch — it is your replay story."
+    linked_example: "examples/usda/"

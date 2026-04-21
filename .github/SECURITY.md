@@ -22,5 +22,5 @@ We will acknowledge receipt within 48 hours and provide a detailed response with
 - Secrets are managed via Azure Key Vault (never in code)
 - Dependencies are scanned by Dependabot and Gitleaks
 - Static analysis via CodeQL, Bandit, and Checkov
-- Authentication via Azure AD with JWT validation
+- Authentication via Microsoft Entra ID with JWT validation
 - Authorization is domain-scoped (non-admin users see only their domain)

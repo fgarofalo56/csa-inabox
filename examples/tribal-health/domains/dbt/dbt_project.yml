@@ -77,25 +77,7 @@ seeds:
     +schema: seeds
     +tags: ['seed', 'tribal_health', 'synthetic']
 
-sources:
-  - name: tribal_health
-    description: Tribal health data sources (synthetic for development)
-    tables:
-      - name: patient_demographics
-        description: Synthetic patient demographic data
-        freshness:
-          warn_after: {count: 7, period: day}
-          error_after: {count: 14, period: day}
-      - name: encounters
-        description: Synthetic clinical encounter records
-        freshness:
-          warn_after: {count: 1, period: day}
-          error_after: {count: 3, period: day}
-      - name: facilities
-        description: IHS and tribal facility reference data
-        freshness:
-          warn_after: {count: 30, period: day}
-          error_after: {count: 60, period: day}
+# sources: moved to models/schema.yml where dbt expects them.
 
 snapshots:
   csa_tribal_health:

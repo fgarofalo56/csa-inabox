@@ -1,0 +1,302 @@
+# Copilot golden set — in-corpus Q&A.
+#
+# Every golden below is expected to be answered by the Copilot with a
+# grounded response citing the listed source paths. Authors should
+# keep the per-case thresholds realistic: the CI gate compares
+# aggregates against the committed baseline, so inflating thresholds
+# here makes the gate brittle without improving real quality.
+goldens:
+  - id: architecture-private-endpoints
+    skill: grounded-corpus-qa
+    question: "Why does CSA-in-a-Box require private endpoints for production?"
+    expected_citations:
+      - docs/ARCHITECTURE.md
+    expected_phrases:
+      - "private endpoint"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.60
+      citation_accuracy: 0.75
+      answer_relevance: 0.70
+    tags: [architecture, networking, prod]
+
+  - id: bicep-what-if-pipeline
+    skill: grounded-corpus-qa
+    question: "How does the Bicep what-if workflow block risky changes?"
+    expected_citations:
+      - docs/IaC-CICD-Best-Practices.md
+    expected_phrases:
+      - "what-if"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.60
+      citation_accuracy: 0.70
+      answer_relevance: 0.65
+    tags: [bicep, ci, safety]
+
+  - id: fabric-parity-gov
+    skill: grounded-corpus-qa
+    question: "Which Fabric capabilities does CSA provide parity for in GovCloud?"
+    expected_citations:
+      - docs/GOV_SERVICE_MATRIX.md
+    expected_phrases:
+      - "Fabric"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.55
+      citation_accuracy: 0.65
+      answer_relevance: 0.60
+    tags: [fabric, gov, parity]
+
+  - id: migration-palantir-ontology
+    skill: grounded-corpus-qa
+    question: "How do I migrate a Palantir Foundry ontology to Azure?"
+    expected_citations:
+      - docs/migrations/palantir-foundry.md
+    expected_phrases:
+      - "Unity Catalog"
+      - "Purview"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.60
+      citation_accuracy: 0.80
+      answer_relevance: 0.70
+    tags: [migrations, palantir, federal]
+
+  - id: adr-0014-bff
+    skill: grounded-corpus-qa
+    question: "What is ADR-0014 and why did we choose the BFF pattern?"
+    expected_citations:
+      - docs/adr/ADR-0014-bff-auth.md
+    expected_phrases:
+      - "BFF"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.55
+      citation_accuracy: 0.70
+      answer_relevance: 0.65
+    tags: [adr, auth, bff]
+
+  - id: decision-purview-catalog
+    skill: grounded-corpus-qa
+    question: "Why did we choose Microsoft Purview over Unity Catalog for governance?"
+    expected_citations:
+      - docs/decisions/purview-vs-unity.md
+    expected_phrases:
+      - "Purview"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.55
+      citation_accuracy: 0.65
+      answer_relevance: 0.60
+    tags: [decisions, governance, purview]
+
+  - id: compliance-fedramp-controls
+    skill: grounded-corpus-qa
+    question: "Which FedRAMP High controls does CSA automate?"
+    expected_citations:
+      - docs/compliance/fedramp-high.md
+    expected_phrases:
+      - "FedRAMP"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.55
+      citation_accuracy: 0.65
+      answer_relevance: 0.60
+    tags: [compliance, fedramp]
+
+  - id: runbook-dr-failover
+    skill: grounded-corpus-qa
+    question: "How do we run a DR drill for the platform?"
+    expected_citations:
+      - docs/runbooks/dr-drill.md
+    expected_phrases:
+      - "failover"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.55
+      citation_accuracy: 0.65
+      answer_relevance: 0.60
+    tags: [runbook, dr]
+
+  - id: example-databricks-delta-share
+    skill: grounded-corpus-qa
+    question: "Where is the Databricks Delta Sharing example?"
+    expected_citations:
+      - examples/databricks/delta-sharing.md
+    expected_phrases:
+      - "Delta Sharing"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.50
+      citation_accuracy: 0.70
+      answer_relevance: 0.65
+    tags: [examples, databricks]
+
+  - id: overview-getting-started
+    skill: grounded-corpus-qa
+    question: "What's the fastest way to get CSA-in-a-Box running?"
+    expected_citations:
+      - docs/GETTING_STARTED.md
+    expected_phrases:
+      - "deploy"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.50
+      citation_accuracy: 0.65
+      answer_relevance: 0.60
+    tags: [overview, onboarding]
+
+  - id: streaming-contract-bronze
+    skill: grounded-corpus-qa
+    question: "How does the streaming bronze writer enforce the contract?"
+    expected_citations:
+      - docs/adr/ADR-0018-streaming-contract.md
+    expected_phrases:
+      - "bronze"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.55
+      citation_accuracy: 0.65
+      answer_relevance: 0.60
+    tags: [streaming, contracts]
+
+  - id: cost-management-tagging
+    skill: grounded-corpus-qa
+    question: "Which tags does CSA require for chargeback?"
+    expected_citations:
+      - docs/COST_MANAGEMENT.md
+    expected_phrases:
+      - "tag"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.50
+      citation_accuracy: 0.65
+      answer_relevance: 0.60
+    tags: [cost, finops]
+
+  - id: security-managed-identity
+    skill: grounded-corpus-qa
+    question: "Why does CSA prefer managed identities over service principals?"
+    expected_citations:
+      - docs/ARCHITECTURE.md
+    expected_phrases:
+      - "managed identity"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.55
+      citation_accuracy: 0.60
+      answer_relevance: 0.60
+    tags: [security, identity]
+
+  - id: multi-region-active-active
+    skill: grounded-corpus-qa
+    question: "Does CSA support active-active multi-region?"
+    expected_citations:
+      - docs/MULTI_REGION.md
+    expected_phrases:
+      - "multi-region"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.55
+      citation_accuracy: 0.65
+      answer_relevance: 0.60
+    tags: [multi-region, ha]
+
+  - id: multi-tenant-isolation
+    skill: grounded-corpus-qa
+    question: "How does CSA isolate tenants at the data plane?"
+    expected_citations:
+      - docs/MULTI_TENANT.md
+    expected_phrases:
+      - "tenant"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.55
+      citation_accuracy: 0.65
+      answer_relevance: 0.60
+    tags: [multi-tenant, isolation]
+
+  - id: platform-services-catalog
+    skill: grounded-corpus-qa
+    question: "What platform services does CSA ship?"
+    expected_citations:
+      - docs/PLATFORM_SERVICES.md
+    expected_phrases:
+      - "service"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.50
+      citation_accuracy: 0.60
+      answer_relevance: 0.60
+    tags: [overview, services]
+
+  - id: production-checklist
+    skill: grounded-corpus-qa
+    question: "What's on the production readiness checklist?"
+    expected_citations:
+      - docs/PRODUCTION_CHECKLIST.md
+    expected_phrases:
+      - "checklist"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.50
+      citation_accuracy: 0.65
+      answer_relevance: 0.60
+    tags: [ops, prod]
+
+  - id: troubleshooting-deploy
+    skill: grounded-corpus-qa
+    question: "The deploy workflow failed mid-stage — where do I start?"
+    expected_citations:
+      - docs/TROUBLESHOOTING.md
+    expected_phrases:
+      - "log"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.50
+      citation_accuracy: 0.60
+      answer_relevance: 0.60
+    tags: [ops, troubleshoot]
+
+  - id: log-schema-fields
+    skill: grounded-corpus-qa
+    question: "Which fields are required on every structured log event?"
+    expected_citations:
+      - docs/LOG_SCHEMA.md
+    expected_phrases:
+      - "trace"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.55
+      citation_accuracy: 0.70
+      answer_relevance: 0.60
+    tags: [observability, logging]
+
+  - id: rollback-workflow
+    skill: grounded-corpus-qa
+    question: "How do we roll back a bad deployment?"
+    expected_citations:
+      - docs/ROLLBACK.md
+    expected_phrases:
+      - "rollback"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.55
+      citation_accuracy: 0.65
+      answer_relevance: 0.60
+    tags: [ops, rollback]
+
+  - id: developer-pathways
+    skill: grounded-corpus-qa
+    question: "Where do new engineers start learning CSA?"
+    expected_citations:
+      - docs/DEVELOPER_PATHWAYS.md
+    expected_phrases:
+      - "path"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.50
+      citation_accuracy: 0.60
+      answer_relevance: 0.60
+    tags: [onboarding]

@@ -60,11 +60,15 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push backend
+        # CSA-0039: Use the canonical backend Dockerfile with repo-root
+        # context. The legacy portal/shared/Dockerfile has been removed —
+        # it drifted (different UID/healthcheck/module path) from the
+        # Helm/compose-consumed image.
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         id: build
         with:
-          context: portal/shared
-          file: portal/shared/Dockerfile
+          context: .
+          file: portal/kubernetes/docker/backend/Dockerfile
           push: true
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/portal-backend:${{ github.sha }}
@@ -94,16 +98,16 @@ jobs:
           echo "path=portal/react-webapp" >> "$GITHUB_OUTPUT"
 
       - name: Build and push frontend
+        # CSA-0039: Repo-root context — the Dockerfile references paths
+        # relative to the repo root (portal/react-webapp/...).
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
-          context: ${{ steps.frontend.outputs.path }}
+          context: .
           file: portal/kubernetes/docker/frontend/Dockerfile
           push: true
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/portal-frontend:${{ github.sha }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/portal-frontend:latest
-          build-args: |
-            FRONTEND_PATH=${{ steps.frontend.outputs.path }}
 
       - id: meta
         run: echo "tags=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/portal-frontend:${{ github.sha }}" >> "$GITHUB_OUTPUT"
@@ -163,14 +167,23 @@ jobs:
             --name csa-aks-${{ github.event.inputs.environment }}
 
       - name: Deploy with Helm
+        # CSA-0044: Helm chart hard-fails without global.domain and
+        # global.azureAdTenantId (see templates/backend.yaml). Wire both
+        # from inputs/secrets here — previously the first AKS deploy
+        # would abort at chart render time.
+        env:
+          PORTAL_DOMAIN: portal-${{ github.event.inputs.environment }}.csa-platform.example.com
+          AZURE_AD_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
         run: |
           helm upgrade --install csa-portal \
             portal/kubernetes/helm/csa-portal \
             --namespace csa-portal \
             --create-namespace \
+            --set global.domain="${PORTAL_DOMAIN}" \
+            --set global.azureAdTenantId="${AZURE_AD_TENANT_ID}" \
             --set frontend.image.repository=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/portal-frontend \
             --set frontend.image.tag=${{ github.sha }} \
             --set backend.image.repository=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/portal-backend \
             --set backend.image.tag=${{ github.sha }} \
-            --set ingress.hosts[0].host=portal-${{ github.event.inputs.environment }}.csa-platform.example.com \
+            --set ingress.hosts[0].host="${PORTAL_DOMAIN}" \
             --wait --timeout 5m

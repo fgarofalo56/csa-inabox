@@ -100,7 +100,7 @@ graph TB
 | **VMSS (Virtual Machine Scale Set)** | Compute platform for SHIR nodes | Windows Server 2022, Standard_DS2_v2, 1-10 instances |
 | **Internal Load Balancer** | Health monitoring and traffic distribution | Standard SKU, TCP/80 probe, 5s interval |
 | **Custom Script Extension** | Automated SHIR installation | PowerShell script deployment via customData |
-| **System Managed Identity** | Azure AD authentication for VMSS | Enabled for secure Azure service access |
+| **System Managed Identity** | Microsoft Entra ID authentication for VMSS | Enabled for secure Azure service access |
 | **ADF Integration Runtime** | Logical connection point in Data Factory | Created separately, provides auth key |
 
 ### Data Flow Architecture
@@ -138,7 +138,7 @@ The SHIR nodes require outbound internet access to specific Azure Service Tags a
 |-------------|------|---------|----------|
 | `*.servicebus.windows.net` | 443 (HTTPS) | Control plane communication | ✅ Critical |
 | `download.microsoft.com` | 443 (HTTPS) | SHIR gateway downloads and updates | ✅ Critical |
-| `login.microsoftonline.com` | 443 (HTTPS) | Azure AD authentication | ✅ Critical |
+| `login.microsoftonline.com` | 443 (HTTPS) | Microsoft Entra ID authentication | ✅ Critical |
 | `*.blob.core.windows.net` | 443 (HTTPS) | Staging and temporary storage | ⚠️ Recommended |
 | `*.database.windows.net` | 1433 (TDS) | Azure SQL Database sources | 🔵 If used |
 | `*.vault.azure.net` | 443 (HTTPS) | Key Vault linked services | 🔵 If used |
@@ -686,7 +686,7 @@ The SHIR module implements defense-in-depth security:
 ### Identity & Access Management
 
 **System-Assigned Managed Identity:**
-- Each VMSS instance gets a unique Azure AD identity
+- Each VMSS instance gets a unique Microsoft Entra ID identity
 - No stored credentials or certificates required
 - Automatic token refresh and lifecycle management
 

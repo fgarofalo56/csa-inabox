@@ -1,0 +1,56 @@
+# GE 1.x Checkpoint definition for the ge_example tutorial.
+#
+# In GE 1.x Checkpoints are code-first: the canonical construction is via
+# gx.Checkpoint(...) in Python. This YAML is a declarative mirror of the
+# daily-quality checkpoint assembled in ge_demo.py so operators can read the
+# same intent from either surface.
+#
+# The YAML below is *documentation* - the Python code in ge_demo.py builds
+# the equivalent object via the SDK. This keeps the demo runnable without a
+# YAML-based loader shim while still exposing the checkpoint topology for
+# code reviewers.
+
+name: daily_quality
+description: >
+  Validate the noaa.observations Bronze dataset on every scheduled dbt run.
+  Pass/fail is the PR gate for the NOAA medallion pipeline.
+
+# The validation definitions this checkpoint runs.  In Python (GE 1.x):
+#   checkpoint = gx.Checkpoint(
+#       name="daily_quality",
+#       validation_definitions=[validation_definition],
+#       actions=[
+#           gx.checkpoint.UpdateDataDocsAction(name="update_data_docs"),
+#       ],
+#       result_format={"result_format": "COMPLETE"},
+#   )
+validations:
+  - name: noaa_observations_validation
+    expectation_suite_name: noaa_observations_suite
+    batch_definition: daily_batch
+
+# Built-in GE 1.x actions.  UpdateDataDocsAction rebuilds the HTML Data Docs
+# after each run; SlackNotificationAction is commented out as a reference for
+# operators wiring in an alert webhook.
+actions:
+  - name: update_data_docs
+    type: UpdateDataDocs
+  # - name: send_slack_notification
+  #   type: SlackNotification
+  #   slack_webhook: "${SLACK_WEBHOOK_URL}"
+  #   notify_on: failure
+  #   notify_with:
+  #     - local_site
+
+result_format:
+  result_format: COMPLETE
+
+notes: |
+  Runtime usage (from Python):
+      import great_expectations as gx
+      context = gx.get_context(project_root_dir="<path to ge_example>")
+      checkpoint = context.checkpoints.get("daily_quality")
+      result = checkpoint.run(batch_parameters={"dataframe": df})
+
+  The in-repo demo at ge_demo.py calls this exact path and returns a
+  CheckpointResult.

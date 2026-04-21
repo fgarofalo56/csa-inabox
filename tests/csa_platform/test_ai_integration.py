@@ -21,17 +21,19 @@ ensure no import errors.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from azure.core.exceptions import AzureError
 
-from governance.common.logging import reset_logging_state
+from csa_platform.governance.common.logging import reset_logging_state
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -523,6 +525,285 @@ class TestRAGPipeline:
 
         with pytest.raises(FileNotFoundError):
             pipeline.ingest_directory(tmp_path / "nonexistent")
+
+    # ----- Real async (CSA-0133) ------------------------------------------
+
+    def test_query_async_uses_native_async_sdks(self) -> None:
+        """query_async must call native async SDKs, not wrap the sync path.
+
+        Regression test for CSA-0133: the old implementation delegated to
+        ``loop.run_in_executor(None, self.query, ...)`` which defeated
+        concurrency.  The new implementation must await on the embedder's
+        async embed path, the vector store's async search, and the async
+        chat client.
+        """
+        from csa_platform.ai_integration.rag.pipeline import (
+            DocumentChunker,
+            EmbeddingGenerator,
+            RAGPipeline,
+            SearchResult,
+            VectorStore,
+        )
+
+        chunker = MagicMock(spec=DocumentChunker)
+        embedder = MagicMock(spec=EmbeddingGenerator)
+        vector_store = MagicMock(spec=VectorStore)
+
+        # Async mocks for the real-async path
+        embedder.embed_texts_async = AsyncMock(return_value=[[0.1, 0.2]])
+        vector_store.search_async = AsyncMock(
+            return_value=[
+                SearchResult(id="r1", text="CSA rocks", score=0.95, source="docs.txt"),
+            ]
+        )
+
+        async_chat_client = MagicMock()
+        mock_choice = MagicMock()
+        mock_choice.message.content = "CSA rocks answer."
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        async_chat_client.chat.completions.create = AsyncMock(return_value=mock_response)
+
+        pipeline = RAGPipeline(
+            chunker=chunker,
+            embedder=embedder,
+            vector_store=vector_store,
+            async_chat_client=async_chat_client,
+        )
+
+        result = asyncio.run(pipeline.query_async("What is CSA?"))
+
+        assert result["answer"] == "CSA rocks answer."
+        assert len(result["sources"]) == 1
+        embedder.embed_texts_async.assert_awaited_once_with(["What is CSA?"])
+        vector_store.search_async.assert_awaited_once()
+        async_chat_client.chat.completions.create.assert_awaited_once()
+        # Ensure no sync fallback ran
+        embedder.embed_single.assert_not_called()
+        vector_store.search.assert_not_called()
+
+    def test_query_async_no_results(self) -> None:
+        """query_async short-circuits when the async search returns no hits."""
+        from csa_platform.ai_integration.rag.pipeline import (
+            DocumentChunker,
+            EmbeddingGenerator,
+            RAGPipeline,
+            VectorStore,
+        )
+
+        chunker = MagicMock(spec=DocumentChunker)
+        embedder = MagicMock(spec=EmbeddingGenerator)
+        vector_store = MagicMock(spec=VectorStore)
+        embedder.embed_texts_async = AsyncMock(return_value=[[0.1]])
+        vector_store.search_async = AsyncMock(return_value=[])
+
+        async_chat_client = MagicMock()
+        async_chat_client.chat.completions.create = AsyncMock()
+
+        pipeline = RAGPipeline(
+            chunker=chunker,
+            embedder=embedder,
+            vector_store=vector_store,
+            async_chat_client=async_chat_client,
+        )
+        result = asyncio.run(pipeline.query_async("Nothing"))
+        assert "No relevant context" in result["answer"]
+        assert result["sources"] == []
+        # Chat completion is never called when there's no context
+        async_chat_client.chat.completions.create.assert_not_awaited()
+
+    def test_query_async_runs_concurrently(self) -> None:
+        """Multiple concurrent query_async calls must actually overlap.
+
+        Uses a shared counter to record how many calls are in flight at
+        the same time inside the simulated Azure round-trips.  With the
+        old thread-pool wrapper we'd see overlap limited by worker count
+        and thread-pool scheduling; with real async and ``asyncio.gather``
+        all N calls enter the await simultaneously.
+        """
+        from csa_platform.ai_integration.rag.pipeline import (
+            DocumentChunker,
+            EmbeddingGenerator,
+            RAGPipeline,
+            SearchResult,
+            VectorStore,
+        )
+
+        in_flight = 0
+        max_in_flight = 0
+
+        async def _record_overlap(*_args: Any, **_kwargs: Any) -> Any:
+            nonlocal in_flight, max_in_flight
+            in_flight += 1
+            max_in_flight = max(max_in_flight, in_flight)
+            await asyncio.sleep(0.05)
+            in_flight -= 1
+            # Return a valid search-result list shape
+            return [SearchResult(id="r1", text="ctx", score=0.9, source="s")]
+
+        chunker = MagicMock(spec=DocumentChunker)
+        embedder = MagicMock(spec=EmbeddingGenerator)
+        vector_store = MagicMock(spec=VectorStore)
+        embedder.embed_texts_async = AsyncMock(return_value=[[0.1]])
+        vector_store.search_async = _record_overlap
+
+        async_chat_client = MagicMock()
+        mock_choice = MagicMock()
+        mock_choice.message.content = "ok"
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        async_chat_client.chat.completions.create = AsyncMock(return_value=mock_response)
+
+        pipeline = RAGPipeline(
+            chunker=chunker,
+            embedder=embedder,
+            vector_store=vector_store,
+            async_chat_client=async_chat_client,
+        )
+
+        async def run_many() -> float:
+            start = time.perf_counter()
+            await asyncio.gather(*(pipeline.query_async(f"q{i}") for i in range(5)))
+            return time.perf_counter() - start
+
+        elapsed = asyncio.run(run_many())
+
+        # If all 5 calls actually run concurrently, wall-clock time should
+        # be well under the serial bound (5 * 0.05s = 0.25s).  Allow some
+        # scheduler slack but require clear overlap.
+        assert max_in_flight >= 2, f"calls did not overlap (max_in_flight={max_in_flight})"
+        assert elapsed < 0.25, f"expected concurrent execution, ran {elapsed:.3f}s"
+
+    def test_query_async_closes_clients(self) -> None:
+        """pipeline.aclose() must close cached async clients."""
+        from csa_platform.ai_integration.rag.pipeline import (
+            DocumentChunker,
+            EmbeddingGenerator,
+            RAGPipeline,
+            VectorStore,
+        )
+
+        chunker = MagicMock(spec=DocumentChunker)
+        embedder = MagicMock(spec=EmbeddingGenerator)
+        vector_store = MagicMock(spec=VectorStore)
+        vector_store.aclose = AsyncMock()
+
+        async_chat_client = MagicMock()
+        async_chat_client.close = AsyncMock()
+
+        pipeline = RAGPipeline(
+            chunker=chunker,
+            embedder=embedder,
+            vector_store=vector_store,
+        )
+        pipeline._cached_async_chat_client = async_chat_client
+
+        asyncio.run(pipeline.aclose())
+        async_chat_client.close.assert_awaited_once()
+        vector_store.aclose.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# VectorStore async tests (CSA-0133)
+# ---------------------------------------------------------------------------
+
+
+class TestVectorStoreAsync:
+    """Tests for the async VectorStore surface."""
+
+    def _make_store(self, **kwargs: Any) -> Any:
+        from csa_platform.ai_integration.rag.pipeline import VectorStore
+
+        defaults = {"endpoint": "https://test.search.windows.net", "api_key": "test-key"}
+        defaults.update(kwargs)
+        return VectorStore(**defaults)
+
+    def test_search_async_returns_results(self) -> None:
+        """search_async parses async-iterated documents into SearchResult."""
+        store = self._make_store()
+
+        # Build an async-iterable response over one document.
+        doc = {
+            "id": "doc1",
+            "content": "async content",
+            "source": "test.txt",
+            "metadata": '{"chunk_index": 0}',
+            "@search.score": 0.95,
+        }
+
+        class _AsyncIter:
+            def __init__(self, items: list[dict[str, Any]]) -> None:
+                self._items = list(items)
+
+            def __aiter__(self) -> _AsyncIter:
+                return self
+
+            async def __anext__(self) -> dict[str, Any]:
+                if not self._items:
+                    raise StopAsyncIteration
+                return self._items.pop(0)
+
+        mock_async_client = MagicMock()
+        mock_async_client.search = AsyncMock(return_value=_AsyncIter([doc]))
+        store._async_search_client = mock_async_client
+
+        with patch.dict("sys.modules", {"azure.search.documents.models": MagicMock()}):
+            results = asyncio.run(
+                store.search_async(query_vector=[0.1, 0.2], query_text="test", top_k=5)
+            )
+
+        assert len(results) == 1
+        assert results[0].id == "doc1"
+        assert results[0].text == "async content"
+        assert results[0].score == 0.95
+        assert results[0].metadata == {"chunk_index": 0}
+        mock_async_client.search.assert_awaited_once()
+
+    def test_search_async_respects_score_threshold(self) -> None:
+        """search_async filters low-score docs identically to sync search."""
+        store = self._make_store()
+
+        class _AsyncIter:
+            def __init__(self, items: list[dict[str, Any]]) -> None:
+                self._items = list(items)
+
+            def __aiter__(self) -> _AsyncIter:
+                return self
+
+            async def __anext__(self) -> dict[str, Any]:
+                if not self._items:
+                    raise StopAsyncIteration
+                return self._items.pop(0)
+
+        low = {"id": "a", "content": "", "source": "", "metadata": "{}", "@search.score": 0.2}
+        high = {"id": "b", "content": "", "source": "", "metadata": "{}", "@search.score": 0.9}
+
+        mock_async_client = MagicMock()
+        mock_async_client.search = AsyncMock(return_value=_AsyncIter([low, high]))
+        store._async_search_client = mock_async_client
+
+        with patch.dict("sys.modules", {"azure.search.documents.models": MagicMock()}):
+            results = asyncio.run(store.search_async(query_vector=[0.1], score_threshold=0.5))
+
+        assert len(results) == 1
+        assert results[0].id == "b"
+
+    def test_aclose_closes_async_client(self) -> None:
+        """aclose closes the cached async client."""
+        store = self._make_store()
+        mock_async_client = MagicMock()
+        mock_async_client.close = AsyncMock()
+        store._async_search_client = mock_async_client
+
+        asyncio.run(store.aclose())
+        mock_async_client.close.assert_awaited_once()
+        assert store._async_search_client is None
+
+    def test_aclose_idempotent(self) -> None:
+        """aclose is safe to call when no async client was created."""
+        store = self._make_store()
+        asyncio.run(store.aclose())
+        asyncio.run(store.aclose())
 
 
 # ---------------------------------------------------------------------------

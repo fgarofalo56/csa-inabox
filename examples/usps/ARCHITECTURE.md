@@ -313,7 +313,7 @@ graph TD
 - **Encryption at Rest**: Azure SSE with Microsoft-managed keys
 - **Encryption in Transit**: TLS 1.2+ for all communications
 - **Network Security**: VNet integration with private endpoints
-- **Access Control**: Azure AD RBAC for role-based access
+- **Access Control**: Microsoft Entra ID RBAC for role-based access
 
 ### 🔒 Data Classification Notes
 

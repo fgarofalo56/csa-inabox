@@ -11,9 +11,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # ── Enumerations ─────────────────────────────────────────────────────────────
 
@@ -138,14 +137,35 @@ class IngestionConfig(BaseModel):
     timeout_minutes: int | None = None
 
 
+class QualityRuleType(str, Enum):
+    """Allowed quality rule types — constrained to prevent injection (SEC-0004)."""
+
+    NOT_NULL = "not_null"
+    UNIQUE = "unique"
+    RANGE = "range"
+    REGEX = "regex"
+    FRESHNESS = "freshness"
+    COMPLETENESS = "completeness"
+    ALLOWED_VALUES = "allowed_values"
+    REFERENTIAL = "referential"
+
+
+class QualitySeverity(str, Enum):
+    """Quality rule severity levels."""
+
+    WARNING = "warning"
+    ERROR = "error"
+    CRITICAL = "critical"
+
+
 class QualityRule(BaseModel):
     """Data quality rule definition."""
 
-    rule_name: str
-    rule_type: str  # not_null | unique | range | regex | custom_sql | freshness | completeness
-    column: str | None = None
-    parameters: dict[str, Any] = Field(default_factory=dict)
-    severity: str = "warning"  # warning | error | critical
+    rule_name: str = Field(..., max_length=128, pattern=r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+    rule_type: QualityRuleType
+    column: str | None = Field(None, max_length=128, pattern=r"^[a-zA-Z_][a-zA-Z0-9_.]*$")
+    parameters: dict[str, str | int | float | bool] = Field(default_factory=dict)
+    severity: QualitySeverity = QualitySeverity.WARNING
 
 
 class DataProductConfig(BaseModel):
@@ -162,11 +182,19 @@ class DataProductConfig(BaseModel):
 class TargetConfig(BaseModel):
     """Target storage configuration."""
 
-    landing_zone: str = "dlz-default"
-    container: str = "bronze"
+    landing_zone: str = Field("dlz-default", pattern=r"^[a-zA-Z0-9][a-zA-Z0-9\-]{0,62}$")
+    container: str = Field("bronze", pattern=r"^[a-z0-9][a-z0-9\-]{0,62}$")
     path_pattern: str = "{domain}/{source_name}/{year}/{month}/{day}"
     format: TargetFormat = TargetFormat.DELTA
     partition_by: list[str] | None = None
+
+    @field_validator("path_pattern")
+    @classmethod
+    def no_path_traversal(cls, v: str) -> str:
+        """Reject path traversal sequences (SEC-0005)."""
+        if ".." in v or v.startswith("/") or "\\" in v:
+            raise ValueError("path_pattern must not contain '..', backslashes, or absolute paths")
+        return v
 
 
 class OwnerInfo(BaseModel):
@@ -187,7 +215,7 @@ class SourceRegistration(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
     description: str = ""
     source_type: SourceType
-    domain: str
+    domain: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9\-]{0,62}[a-z0-9]$")
     classification: ClassificationLevel = ClassificationLevel.INTERNAL
     connection: ConnectionConfig
     schema_def: SchemaDefinition | None = Field(None, alias="schema")

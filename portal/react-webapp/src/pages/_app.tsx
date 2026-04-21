@@ -1,10 +1,11 @@
 /**
  * App Layout — Shell with navigation sidebar and main content area.
  * MSAL authentication wraps the entire application.
- * Auth gating is conditional: skipped in development/demo mode.
+ * Auth gating is controlled by the `NEXT_PUBLIC_AUTH_ENABLED` env var
+ * (see `resolveAuthEnabled` below; CSA-0122).
  */
 
-import React from 'react';
+import React, { useState } from 'react';
 import type { AppProps } from 'next/app';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { PublicClientApplication, EventType } from '@azure/msal-browser';
@@ -14,8 +15,11 @@ import {
   UnauthenticatedTemplate,
   useMsal,
 } from '@azure/msal-react';
-import { msalConfig, loginRequest } from '@/services/authConfig';
+import { msalConfig, loginRequest, resolveAuthEnabled } from '@/services/authConfig';
 import { Layout } from '@/components/Layout';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
+import api from '@/services/api';
 import '@/styles/globals.css';
 
 // ─── MSAL Instance (created once, outside component) ──────────────────────
@@ -36,23 +40,12 @@ msalInstance.addEventCallback((event) => {
   }
 });
 
-// ─── React Query Client ───────────────────────────────────────────────────
-
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      retry: 1,
-      refetchOnWindowFocus: false,
-    },
-  },
-});
+// Bind the MSAL instance to the API client so it can acquire tokens
+api.setMsalInstance(msalInstance);
 
 // ─── Auth Gating ──────────────────────────────────────────────────────────
 
-/** Skip auth gating in development or when explicitly disabled via env var. */
-const isAuthEnabled =
-  process.env.NEXT_PUBLIC_AUTH_ENABLED !== 'false' &&
-  process.env.NODE_ENV === 'production';
+const isAuthEnabled = resolveAuthEnabled();
 
 function LoginPage() {
   const { instance } = useMsal();
@@ -76,6 +69,11 @@ function LoginPage() {
 }
 
 function AuthGatedContent({ children }: { children: React.ReactNode }) {
+  // CSA-0124(5): install global keyboard shortcuts once per app tree.
+  // The hook self-guards against SSR (`window` check) and against typing
+  // into form fields.
+  useKeyboardShortcuts();
+
   if (!isAuthEnabled) {
     return <>{children}</>;
   }
@@ -93,15 +91,30 @@ function AuthGatedContent({ children }: { children: React.ReactNode }) {
 // ─── App Component ────────────────────────────────────────────────────────
 
 export default function App({ Component, pageProps }: AppProps) {
+  // QueryClient inside the component so it's per-React-tree (safe for SSR)
+  const [queryClient] = useState(
+    () =>
+      new QueryClient({
+        defaultOptions: {
+          queries: {
+            retry: 1,
+            refetchOnWindowFocus: false,
+          },
+        },
+      })
+  );
+
   return (
-    <MsalProvider instance={msalInstance}>
-      <QueryClientProvider client={queryClient}>
-        <AuthGatedContent>
-          <Layout>
-            <Component {...pageProps} />
-          </Layout>
-        </AuthGatedContent>
-      </QueryClientProvider>
-    </MsalProvider>
+    <ErrorBoundary>
+      <MsalProvider instance={msalInstance}>
+        <QueryClientProvider client={queryClient}>
+          <AuthGatedContent>
+            <Layout>
+              <Component {...pageProps} />
+            </Layout>
+          </AuthGatedContent>
+        </QueryClientProvider>
+      </MsalProvider>
+    </ErrorBoundary>
   );
 }

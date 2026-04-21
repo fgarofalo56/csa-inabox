@@ -45,10 +45,10 @@ import os
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-import httpx
-from cachetools import TTLCache
+import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jwt import PyJWKClient
 
 logger = logging.getLogger(__name__)
 
@@ -79,12 +79,25 @@ def _is_government_cloud() -> bool:
 
 
 def _auth_disabled() -> bool:
-    return _env_bool("AUTH_DISABLED", False) or not _tenant_id()
+    """Auth is disabled only when AUTH_DISABLED=true is explicitly set.
+
+    An empty ``AZURE_TENANT_ID`` no longer silently disables auth
+    (CSA-0001 / SEC-NEW-0001). Non-local environments with an empty tenant
+    will fail fast at startup via ``enforce_auth_safety_gate``.
+    """
+    return _env_bool("AUTH_DISABLED", False)
 
 
 def _is_local_or_demo() -> bool:
-    env = os.environ.get("ENVIRONMENT", "").strip().lower()
-    return env == "local" or _env_bool("DEMO_MODE", False)
+    """Strict allow-list for environments eligible to run without auth.
+
+    Only ``ENVIRONMENT in ("local", "demo")`` qualifies.  ``DEMO_MODE`` is
+    no longer a get-out-of-jail flag: misconfigured dev / qa / uat / test /
+    preprod / staging / production deployments cannot accidentally serve
+    unauthenticated traffic (CSA-0019 / SEC-NEW-0002).
+    """
+    env = os.environ.get("ENVIRONMENT", "local").strip().lower()
+    return env in ("local", "demo")
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -93,20 +106,42 @@ def _is_local_or_demo() -> bool:
 
 
 def enforce_auth_safety_gate() -> None:
-    """Fail fast if auth is disabled outside local/demo environments.
+    """Fail fast on any auth misconfiguration detectable at startup.
+
+    Three failure modes are caught here:
+
+    1. ``AUTH_DISABLED=true`` outside a local/demo environment.
+    2. ``AZURE_TENANT_ID`` empty outside a local/demo environment (CSA-0001).
+    3. ``DEMO_MODE=true`` set in an environment that is not in the
+       ``{"local", "demo"}`` allow-list (CSA-0019).
 
     Call this once during application startup (e.g. FastAPI ``lifespan``)
     so mis-configured deployments refuse to serve requests rather than
     silently running unauthenticated.
     """
+    env = os.environ.get("ENVIRONMENT", "")
+
     if _auth_disabled() and not _is_local_or_demo():
-        msg = (
-            "SECURITY: AUTH_DISABLED=true (or AZURE_TENANT_ID is empty) "
-            f"but ENVIRONMENT={os.environ.get('ENVIRONMENT', '')!r} is "
-            "not 'local' and DEMO_MODE is not enabled.  Refusing to serve "
-            "requests without authentication in a non-local environment."
+        raise RuntimeError(
+            f"SECURITY: AUTH_DISABLED=true but ENVIRONMENT={env!r} is not in "
+            "{'local', 'demo'}. Refusing to serve requests without "
+            "authentication in a non-local environment."
         )
-        raise RuntimeError(msg)
+
+    if not _tenant_id() and not _is_local_or_demo():
+        raise RuntimeError(
+            f"SECURITY: AZURE_TENANT_ID is empty but ENVIRONMENT={env!r} is "
+            "not in {'local', 'demo'}. Refusing to start without tenant "
+            "configuration — empty tenant no longer silently disables auth."
+        )
+
+    if _env_bool("DEMO_MODE", False) and not _is_local_or_demo():
+        raise RuntimeError(
+            f"SECURITY: DEMO_MODE=true but ENVIRONMENT={env!r} is not in "
+            "{'local', 'demo'}. DEMO_MODE is only honoured in those two "
+            "environments; refusing to start."
+        )
+
     if _auth_disabled() and _is_local_or_demo():
         logger.warning(
             "AUTH DISABLED — running in demo/local mode. All requests "
@@ -123,8 +158,10 @@ def enforce_auth_safety_gate() -> None:
 _COMMERCIAL_AUTHORITY = "https://login.microsoftonline.com"
 _GOVERNMENT_AUTHORITY = "https://login.microsoftonline.us"
 
-# 24h TTL JWKS cache — Azure AD rotates signing keys periodically.
-_JWKS_CACHE: TTLCache[str, dict[str, Any]] = TTLCache(maxsize=10, ttl=86400)
+# PyJWKClient fetches the JWKS URI and caches signing keys internally.
+# lifespan=86400 keeps keys for 24 hours, matching Azure AD's rotation period.
+# One client per (tenant, cloud) pair is created lazily and reused.
+_jwks_clients: dict[str, PyJWKClient] = {}
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -134,28 +171,25 @@ def _authority_url() -> str:
     return f"{base}/{_tenant_id()}"
 
 
-def _openid_config_url() -> str:
-    return f"{_authority_url()}/v2.0/.well-known/openid-configuration"
+def _jwks_uri() -> str:
+    """Return the JWKS URI for the current tenant and cloud."""
+    return f"{_authority_url()}/discovery/v2.0/keys"
 
 
-async def _get_jwks() -> dict[str, Any]:
-    """Fetch (and cache with 24h TTL) the JSON Web Key Set from Azure AD."""
+def _get_jwks_client() -> PyJWKClient:
+    """Return a cached PyJWKClient for the current tenant.
+
+    Config functions are called at validation time (not import time) so tests
+    can override environment variables after module import.
+    """
     cache_key = f"{_tenant_id()}:{_is_government_cloud()}"
-    cached: dict[str, Any] | None = _JWKS_CACHE.get(cache_key)
-    if cached is not None:
-        return cached
-
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        oidc_resp = await client.get(_openid_config_url())
-        oidc_resp.raise_for_status()
-        jwks_uri = oidc_resp.json()["jwks_uri"]
-
-        jwks_resp = await client.get(jwks_uri)
-        jwks_resp.raise_for_status()
-        jwks_data: dict[str, Any] = jwks_resp.json()
-        _JWKS_CACHE[cache_key] = jwks_data
-
-    return jwks_data
+    if cache_key not in _jwks_clients:
+        _jwks_clients[cache_key] = PyJWKClient(
+            uri=_jwks_uri(),
+            lifespan=86400,  # 24h — matches Azure AD key rotation cadence
+            cache_jwk_set=True,
+        )
+    return _jwks_clients[cache_key]
 
 
 async def _validate_token(token: str) -> dict[str, Any]:
@@ -177,41 +211,46 @@ async def _validate_token(token: str) -> dict[str, Any]:
         }
 
     try:
-        from jose import JWTError  # type: ignore[import-untyped]
-        from jose import jwt as jose_jwt
+        jwks_client = _get_jwks_client()
+        signing_key = jwks_client.get_signing_key_from_jwt(token)
 
-        jwks = await _get_jwks()
-        unverified_header = jose_jwt.get_unverified_header(token)
-        kid = unverified_header.get("kid")
+        client_id = _client_id()
+        # MSAL v2 issues tokens with ``aud`` equal to ``api://<client-id>``
+        # for protected APIs but the raw client ID for some flows; accept
+        # both forms to stay interoperable (CSA-0018 / SEC-NEW-0005).
+        valid_audiences = [client_id, f"api://{client_id}"] if client_id else []
 
-        rsa_key: dict[str, str] = {}
-        for key in jwks.get("keys", []):
-            if key["kid"] == kid:
-                rsa_key = {
-                    "kty": key["kty"],
-                    "kid": key["kid"],
-                    "use": key["use"],
-                    "n": key["n"],
-                    "e": key["e"],
-                }
-                break
+        claims: dict[str, Any] = jwt.decode(
+            token,
+            signing_key,
+            algorithms=["RS256"],
+            audience=valid_audiences,
+            issuer=f"{_authority_url()}/v2.0",
+            leeway=30,
+            options={
+                "require": ["exp", "nbf", "iss", "aud", "sub"],
+                "verify_exp": True,
+                "verify_nbf": True,
+                "verify_iat": True,
+                "verify_aud": True,
+                "verify_iss": True,
+                "verify_signature": True,
+            },
+        )
 
-        if not rsa_key:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Unable to find appropriate signing key.",
+        # Pin the token to the expected tenant to block multi-tenant
+        # token-swap attacks (CSA-0018 / SEC-NEW-0006).
+        expected_tid = _tenant_id()
+        actual_tid = claims.get("tid")
+        if expected_tid and actual_tid != expected_tid:
+            raise jwt.exceptions.InvalidTokenError(
+                f"Token tenant mismatch: expected {expected_tid!r}, "
+                f"got {actual_tid!r}"
             )
 
-        claims: dict[str, Any] = jose_jwt.decode(
-            token,
-            rsa_key,
-            algorithms=["RS256"],
-            audience=_client_id(),
-            issuer=f"{_authority_url()}/v2.0",
-        )
         return claims
 
-    except JWTError as exc:
+    except jwt.exceptions.InvalidTokenError as exc:
         logger.warning("JWT validation failed: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

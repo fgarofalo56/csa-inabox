@@ -3,9 +3,9 @@
     materialized='incremental',
     unique_key='order_sk',
     incremental_strategy='merge',
-    partition_by=['order_date'],
-    clustered_by=['customer_id'],
-    file_format='delta',
+    partition_by=['order_date'] if target.type != 'duckdb' else none,
+    clustered_by=['customer_id'] if target.type != 'duckdb' else none,
+    file_format='delta' if target.type != 'duckdb' else none,
     tags=['silver', 'orders'],
     on_schema_change='fail'
   )
@@ -67,7 +67,7 @@ validated AS (
         CASE WHEN customer_id IS NULL THEN TRUE ELSE FALSE END AS _is_missing_customer_id,
         CASE WHEN order_date IS NULL THEN TRUE ELSE FALSE END AS _is_missing_order_date,
         CASE WHEN total_amount < 0 THEN TRUE ELSE FALSE END AS _is_negative_amount,
-        CASE WHEN order_date > current_date() THEN TRUE ELSE FALSE END AS _is_future_date
+        CASE WHEN order_date > {{ current_date_expr() }} THEN TRUE ELSE FALSE END AS _is_future_date
     FROM cleaned
 )
 

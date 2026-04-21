@@ -1,5 +1,11 @@
 # Data Domains — Data Mesh Ownership
 
+> **Federation model:** This repo follows the contract-driven mesh
+> federation model described in
+> [ADR-0012](../docs/adr/0012-data-mesh-federation.md) — each domain
+> publishes a `contract.yaml`, CI validates, Purview registers, the
+> portal marketplace surfaces.
+
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers
 
 > [!TIP]
@@ -27,7 +33,6 @@ architecture** (Bronze → Silver → Gold) using dbt on Delta Lake.
 | [sales/](sales/) | Revenue and sales analytics |
 | [inventory/](inventory/) | Inventory tracking and supply chain |
 | [shared/](shared/) | Cross-domain models, shared dbt macros, and data product contracts |
-| [sharedServices/](sharedServices/) | Azure Functions for AI enrichment, event processing, and secret rotation |
 | [dlz/](dlz/) | Data Landing Zone configuration and storage layout |
 | [spark/](spark/) | PySpark utilities and GeoAnalytics Engine integration |
 

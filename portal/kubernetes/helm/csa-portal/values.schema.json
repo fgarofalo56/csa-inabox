@@ -1,0 +1,232 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://csa-inabox.example.com/helm/csa-portal/values.schema.json",
+  "title": "CSA Portal Helm Values",
+  "description": "JSON Schema for portal/kubernetes/helm/csa-portal/values.yaml (CSA-0053). Covers every key referenced in templates/*.yaml. Validate with: helm lint --strict portal/kubernetes/helm/csa-portal/",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["global", "frontend", "backend", "ingress", "redis", "networkPolicy", "pdb", "monitoring"],
+  "properties": {
+    "global": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["environment", "azureAdTenantId", "azureAdClientId", "domain"],
+      "properties": {
+        "environment": {
+          "type": "string",
+          "enum": ["local", "dev", "staging", "production", "gov-dev", "gov-staging", "gov-prod"],
+          "description": "Deployment environment. Consumed by backend ENVIRONMENT env var."
+        },
+        "azureAdTenantId": {
+          "type": "string",
+          "description": "Microsoft Entra ID (Azure AD) tenant ID. Required — chart fails without it (templates/backend.yaml)."
+        },
+        "azureAdClientId": {
+          "type": "string",
+          "description": "Microsoft Entra ID application (client) ID for MSAL. Empty string allowed for scenarios where auth is disabled (demo mode)."
+        },
+        "domain": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Fully qualified portal domain. Required — chart fails without it (templates/backend.yaml)."
+        }
+      }
+    },
+    "frontend": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["image", "replicas", "resources", "autoscaling", "service"],
+      "properties": {
+        "image": { "$ref": "#/definitions/imageSpec" },
+        "replicas": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "resources": { "$ref": "#/definitions/resources" },
+        "autoscaling": { "$ref": "#/definitions/autoscaling" },
+        "service": { "$ref": "#/definitions/service" }
+      }
+    },
+    "backend": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["image", "replicas", "resources", "autoscaling", "service"],
+      "properties": {
+        "image": { "$ref": "#/definitions/imageSpec" },
+        "replicas": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "resources": { "$ref": "#/definitions/resources" },
+        "autoscaling": { "$ref": "#/definitions/autoscaling" },
+        "service": { "$ref": "#/definitions/service" },
+        "env": {
+          "type": "array",
+          "description": "Extra env vars injected into the backend container. Supports literal and valueFrom (secretKeyRef/configMapKeyRef).",
+          "items": {
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "value": { "type": "string" },
+              "valueFrom": { "type": "object" }
+            },
+            "oneOf": [
+              { "required": ["name", "value"] },
+              { "required": ["name", "valueFrom"] }
+            ]
+          }
+        }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "className": { "type": "string" },
+        "annotations": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "hosts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["host", "paths"],
+            "properties": {
+              "host": { "type": "string", "minLength": 1 },
+              "paths": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["path", "pathType", "service"],
+                  "properties": {
+                    "path": { "type": "string", "pattern": "^/" },
+                    "pathType": { "type": "string", "enum": ["Exact", "Prefix", "ImplementationSpecific"] },
+                    "service": { "type": "string", "enum": ["frontend", "backend"] }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tls": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["secretName", "hosts"],
+            "properties": {
+              "secretName": { "type": "string", "minLength": 1 },
+              "hosts": {
+                "type": "array",
+                "items": { "type": "string", "minLength": 1 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "redis": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["enabled"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "architecture": { "type": "string", "enum": ["standalone", "replication"] },
+        "auth": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": {
+        "enabled": { "type": "boolean" }
+      }
+    },
+    "pdb": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": {
+        "enabled": { "type": "boolean" }
+      }
+    },
+    "monitoring": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "serviceMonitor": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "interval": {
+              "type": "string",
+              "pattern": "^[0-9]+(ms|s|m|h)$",
+              "description": "Prometheus scrape interval (e.g. 30s, 1m)."
+            }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "imageSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "pullPolicy"],
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": {
+          "type": "string",
+          "description": "Image tag. Empty string falls back to Chart.AppVersion (see backend.yaml / frontend.yaml)."
+        },
+        "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requests": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "cpu": { "type": ["string", "number"] },
+            "memory": { "type": "string" }
+          }
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "cpu": { "type": ["string", "number"] },
+            "memory": { "type": "string" }
+          }
+        }
+      }
+    },
+    "autoscaling": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "minReplicas": { "type": "integer", "minimum": 1 },
+        "maxReplicas": { "type": "integer", "minimum": 1 },
+        "targetCPUUtilization": { "type": "integer", "minimum": 1, "maximum": 100 }
+      }
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["port", "type"],
+      "properties": {
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "type": { "type": "string", "enum": ["ClusterIP", "NodePort", "LoadBalancer"] }
+      }
+    }
+  }
+}

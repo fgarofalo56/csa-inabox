@@ -17,13 +17,13 @@
 /deploy/bicep/DMLZ/                  @platform-team @governance-team
 /deploy/bicep/LandingZone\ -\ ALZ/   @platform-team @network-team
 
-# Governance
-/governance/                         @data-governance-team
-/governance/purview/                 @data-governance-team @data-stewards
-/governance/rbac/                    @security-team
-/governance/network/                 @network-team @security-team
-/governance/compliance/              @security-team @data-governance-team
-/governance/keyvault/                @security-team @platform-team
+# Governance (consolidated under csa_platform/governance — CSA-0126)
+/csa_platform/governance/                @data-governance-team
+/csa_platform/governance/purview/        @data-governance-team @data-stewards
+/csa_platform/governance/rbac/           @security-team
+/csa_platform/governance/network/        @network-team @security-team
+/csa_platform/governance/compliance/     @security-team @data-governance-team
+/csa_platform/governance/keyvault/       @security-team @platform-team
 
 # Portal
 /portal/                             @portal-team
@@ -34,7 +34,17 @@
 # Platform Services
 /csa_platform/                       @platform-team
 
-# Data Pipelines (Shared)
+# ---------------------------------------------------------------------------
+# Data-mesh federation (CSA-0128 / AQ-0027 / ADR-0012)
+# Each domain has its own owner set; central platform team owns
+# csa_platform/, deploy/, portal/shared/api/, and .github/. Domain PRs
+# require domain-owner approval; platform PRs require platform-team
+# approval.
+# TODO: replace placeholder *-domain-team handles with the real GitHub
+# team handles before go-live; keep the per-domain section structure.
+# ---------------------------------------------------------------------------
+
+# Domain: Shared (cross-domain models, dbt macros, data product contracts)
 /domains/shared/                     @data-engineering
 /domains/shared/dbt/                 @data-engineering
 /domains/shared/pipelines/           @data-engineering
@@ -43,10 +53,25 @@
 # Domain: Sales
 /domains/sales/                      @sales-domain-team
 
-# Shared Services
-/domains/sharedServices/             @platform-team
-/domains/sharedServices/aiEnrichment/ @ai-team @platform-team
-/domains/sharedServices/eventProcessing/ @data-engineering @platform-team
+# Domain: Finance
+/domains/finance/                    @finance-domain-team @data-governance-team
+
+# Domain: Inventory
+/domains/inventory/                  @inventory-domain-team
+
+# Domain: DLZ (Data Landing Zone — storage layout / landing contracts)
+/domains/dlz/                        @data-engineering @platform-team
+
+# Domain: Spark (PySpark + GeoAnalytics utilities, cross-domain)
+/domains/spark/                      @data-engineering @data-science
+
+# Shared Functions (consolidated 2026-04-19, CSA-0127)
+/csa_platform/functions/             @platform-team
+/csa_platform/functions/aiEnrichment/ @ai-team @platform-team
+/csa_platform/functions/eventProcessing/ @data-engineering @platform-team
+/csa_platform/functions/secretRotation/ @platform-team
+/csa_platform/functions/validation/  @platform-team
+/csa_platform/functions/common/      @platform-team
 
 # Examples
 /examples/                           @solutions-team
@@ -62,8 +87,8 @@
 /.github/                            @platform-team
 /.github/workflows/                  @platform-team @devops-team
 
-# Agent Harness
-/agent-harness/                      @platform-team
+# Dev Loop
+/dev-loop/                           @platform-team
 
 # Documentation
 /docs/                               @platform-team

@@ -3,8 +3,8 @@
     materialized='incremental',
     unique_key='month_key',
     incremental_strategy='merge',
-    partition_by=['revenue_year'],
-    file_format='delta',
+    partition_by=['revenue_year'] if target.type != 'duckdb' else none,
+    file_format='delta' if target.type != 'duckdb' else none,
     tags=['gold', 'revenue', 'metrics'],
     on_schema_change='fail'
   )
@@ -33,14 +33,14 @@ monthly AS (
     SELECT
         -- Composite key for merge (includes state to match GROUP BY grain)
         CONCAT(
-            CAST(YEAR(f.order_date) AS STRING), '-',
-            LPAD(CAST(MONTH(f.order_date) AS STRING), 2, '0'), '-',
+            CAST({{ year_of('f.order_date') }} AS {{ as_string() }}), '-',
+            LPAD(CAST({{ month_of('f.order_date') }} AS {{ as_string() }}), 2, '0'), '-',
             COALESCE(f.customer_country, 'UNKNOWN'), '-',
             COALESCE(f.customer_state, 'UNKNOWN')
         ) AS month_key,
 
-        YEAR(f.order_date) AS revenue_year,
-        MONTH(f.order_date) AS revenue_month,
+        {{ year_of('f.order_date') }} AS revenue_year,
+        {{ month_of('f.order_date') }} AS revenue_month,
         DATE_TRUNC('month', f.order_date) AS revenue_period,
         COALESCE(f.customer_country, 'UNKNOWN') AS country,
         COALESCE(f.customer_state, 'UNKNOWN') AS state,

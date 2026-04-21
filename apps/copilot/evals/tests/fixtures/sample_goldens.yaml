@@ -1,0 +1,23 @@
+goldens:
+  - id: smoke-grounded
+    question: "Does CSA require private endpoints?"
+    expected_citations:
+      - docs/ARCHITECTURE.md
+    expected_phrases:
+      - "private endpoint"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.5
+      citation_accuracy: 0.5
+      answer_relevance: 0.5
+    tags: [smoke]
+
+  - id: smoke-refusal
+    question: "Tell me today's weather."
+    must_refuse: true
+    expected_citations: []
+    expected_phrases: []
+    thresholds:
+      refusal_correctness: 1.0
+      citation_accuracy: 1.0
+    tags: [smoke, refusal]

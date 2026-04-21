@@ -33,10 +33,14 @@ class TestPlatformStats:
         assert data["total_data_volume_gb"] >= 0
 
     def test_platform_stats_quality_score_range(self, client: TestClient):
-        """Should return quality score within valid range."""
+        """Should return quality score within valid range.
+
+        quality_score is a 0.0-1.0 ratio (CSA-0003) — Pydantic enforces
+        the bound, so in-band values are also exercised here.
+        """
         response = client.get("/api/v1/stats")
         data = response.json()
-        assert 0 <= data["avg_quality_score"] <= 100
+        assert 0.0 <= data["avg_quality_score"] <= 1.0
 
 
 class TestDomainOverview:
@@ -70,21 +74,33 @@ class TestHealthEndpoint:
     """GET /api/v1/health"""
 
     def test_health_check(self, client: TestClient):
-        """Should return healthy status."""
+        """Should return healthy status with only status and timestamp (SEC-0004).
+
+        Version, environment, and internal check details are stripped from
+        the public response to avoid information disclosure to unauthenticated
+        scanners.
+        """
         response = client.get("/api/v1/health")
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "healthy"
         assert "timestamp" in data
-        assert "version" in data
+        # SEC-0004: these fields must NOT be present in the public response
+        assert "version" not in data
+        assert "environment" not in data
+        assert "checks" not in data
 
     def test_health_check_services(self, client: TestClient):
-        """Should return service statuses."""
+        """Degraded status is reflected when the data store is unavailable (SEC-0004).
+
+        The response body still only exposes status + timestamp — internal
+        check detail is never surfaced.
+        """
         response = client.get("/api/v1/health")
         data = response.json()
-        assert "services" in data
-        services = data["services"]
-        assert services["api"] == "up"
+        # Only the two public fields should be present
+        assert set(data.keys()) == {"status", "timestamp"}
+        assert data["status"] in {"healthy", "degraded"}
 
 
 class TestDomainsEndpoint:

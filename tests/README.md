@@ -10,10 +10,10 @@
 ```text
 tests/
 ├── conftest.py              # Shared pytest fixtures
-├── common/                  # Tests for governance/common/
-├── contracts/               # Tests for governance/contracts/
-├── dataquality/             # Tests for governance/dataquality/
-├── e2e/                     # End-to-end integration tests
+├── common/                  # Tests for csa_platform/governance/common/
+├── contracts/               # Tests for csa_platform/governance/contracts/
+├── dataquality/             # Tests for csa_platform/governance/dataquality/
+├── integration/             # Integration tests (schema, DuckDB, streaming)
 ├── functions/               # Azure Functions unit tests
 ├── load/                    # Load and performance tests (Locust)
 │   └── baselines/           # Performance baselines
@@ -27,7 +27,7 @@ tests/
 
 ```bash
 # Run all unit tests
-pytest tests/ -v --ignore=tests/e2e --ignore=tests/load
+pytest tests/ -v --ignore=tests/integration --ignore=tests/load
 
 # Run governance tests only
 pytest tests/contracts/ tests/dataquality/ tests/common/ -v
@@ -36,7 +36,7 @@ pytest tests/contracts/ tests/dataquality/ tests/common/ -v
 pytest tests/csa_platform/ -v
 
 # Run e2e tests (requires deployed environment)
-pytest tests/e2e/ -v
+pytest tests/integration/ -v
 
 # Run load tests
 cd tests/load && locust -f locustfile.py
@@ -46,13 +46,13 @@ cd tests/load && locust -f locustfile.py
 
 | Test Directory | Tests For | Type |
 |---------------|-----------|------|
-| `common/` | `governance/common/` | Unit |
-| `contracts/` | `governance/contracts/` | Unit |
-| `dataquality/` | `governance/dataquality/` | Unit |
+| `common/` | `csa_platform/csa_platform/governance/common/` | Unit |
+| `contracts/` | `csa_platform/csa_platform/governance/contracts/` | Unit |
+| `dataquality/` | `csa_platform/csa_platform/governance/dataquality/` | Unit |
 | `platform/` | `csa_platform/` services | Unit / Integration |
 | `functions/` | Azure Functions | Unit |
 | `purview/` | Purview integration | Integration |
-| `e2e/` | Cross-component workflows | End-to-end |
+| `integration/` | Cross-component workflows | Integration |
 | `load/` | API and pipeline performance | Load |
 
 ## 🔗 Related Documentation

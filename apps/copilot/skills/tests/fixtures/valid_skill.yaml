@@ -1,0 +1,34 @@
+id: valid-fixture
+name: "Valid fixture skill"
+description: "Fixture skill that references two read tools and exercises interpolation."
+category: read
+inputs:
+  - name: query
+    type: string
+    description: "Corpus query."
+    required: true
+  - name: top_k
+    type: integer
+    description: "Retrieval depth."
+    required: false
+    default: 3
+outputs:
+  type: object
+  fields:
+    answer: "Retrieved corpus chunks."
+steps:
+  - id: read-template
+    tool: read_repo_file
+    input:
+      path: docs/adr/README.md
+      max_bytes: 5000
+  - id: search
+    tool: search_corpus
+    input:
+      query: "{input.query}"
+      top_k: "{input.top_k}"
+fallback_if_tool_missing: fail
+version: "1.0"
+tags:
+  - fixture
+  - test

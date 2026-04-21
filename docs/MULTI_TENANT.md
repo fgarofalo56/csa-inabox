@@ -204,7 +204,7 @@ Tenants get dedicated storage and databases but share compute resources
 - [ ] Tenant subscription provisioned (or resource groups designated)
 - [ ] Spoke VNet deployed and peered to the hub
 - [ ] Private DNS zones linked to the tenant's spoke VNet
-- [ ] Tenant admin group created in Azure AD
+- [ ] Tenant admin group created in Microsoft Entra ID
 - [ ] CMK Key Vault provisioned (if using per-tenant CMK)
 
 ### 4.2 Creating the Parameter File
@@ -244,7 +244,7 @@ az deployment sub show \
 ### 4.4 Post-Deployment RBAC
 
 ```bash
-TENANT_ADMIN_GROUP_ID="<AZURE_AD_GROUP_OBJECT_ID>"
+TENANT_ADMIN_GROUP_ID="<ENTRA_GROUP_OBJECT_ID>"
 
 # Storage Blob Data Contributor on the tenant's storage
 az role assignment create \
@@ -325,7 +325,7 @@ az costmanagement export create \
 
 ## 🔑 6. Identity & Access Management per Tenant
 
-### 6.1 Azure AD Group Structure
+### 6.1 Microsoft Entra ID Group Structure
 
 | Group Name | Role | Scope |
 |---|---|---|
@@ -523,7 +523,7 @@ account before decommissioning the tenant stamp.
 - [ ] Verify all resource groups deleted
 - [ ] Verify DNS records cleaned up
 - [ ] Remove tenant from monitoring dashboards
-- [ ] Remove tenant Azure AD groups (or repurpose)
+- [ ] Remove tenant Microsoft Entra ID groups (or repurpose)
 - [ ] Update cost management to stop tracking tenant
 - [ ] Archive decommission record in incident tracker
 - [ ] Update `docs/MULTI_TENANT.md` if the tenant had special configuration

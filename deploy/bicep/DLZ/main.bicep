@@ -202,7 +202,7 @@ Resource Modules and Deployments
 ***************************************************************************************************************************************************/
 
 // Cosmos DB RG
-module cosmosdbresourcegroup 'modules/resourceGroup/resourceGroup.bicep' = if (contains(deployModules, 'cosmosDB') && bool(deployModules.cosmosDB)) {
+module cosmosdbresourcegroup '../shared/modules/resourceGroup/resourceGroup.bicep' = if (contains(deployModules, 'cosmosDB') && bool(deployModules.cosmosDB)) {
   name: 'deployCosmosDbRg'
   scope: subscription()
   params: {
@@ -250,7 +250,7 @@ module cosmosdb 'modules/cosmos/cosmosdb.bicep' = if (contains(deployModules, 'c
 }
 
 // Storage Resources:
-module storageResourceGroup 'modules/resourceGroup/resourceGroup.bicep' = if (contains(deployModules, 'storageZones') && bool(deployModules.storageZones)) {
+module storageResourceGroup '../shared/modules/resourceGroup/resourceGroup.bicep' = if (contains(deployModules, 'storageZones') && bool(deployModules.storageZones)) {
   name: 'rg-${basename}-storage-${parLocationShort}'
   scope: subscription()
   params: {
@@ -282,7 +282,7 @@ module storageServices 'modules/storage/lakezones.bicep' = if (contains(deployMo
 
 // External storage resources
 // External Storage Resource Group
-module externalStorageResourceGroup 'modules/resourceGroup/resourceGroup.bicep' = if (contains(deployModules, 'externalStorage') && bool(deployModules.externalStorage)) {
+module externalStorageResourceGroup '../shared/modules/resourceGroup/resourceGroup.bicep' = if (contains(deployModules, 'externalStorage') && bool(deployModules.externalStorage)) {
   name: 'rg-${basename}-externalstorage-${parLocationShort}'
   scope: subscription()
   params: {
@@ -313,7 +313,7 @@ module externalStorageServices 'modules/storage/externalstorageMain.bicep' = if 
 }
 
 // Deploy Azure Synapse Analytics
-module synapseResourceGroup 'modules/resourceGroup/resourceGroup.bicep' = if (contains(deployModules, 'synapse') && bool(deployModules.synapse)) {
+module synapseResourceGroup '../shared/modules/resourceGroup/resourceGroup.bicep' = if (contains(deployModules, 'synapse') && bool(deployModules.synapse)) {
   name: 'rg-${basename}-synapse-${parLocationShort}'
   scope: subscription()
   params: {
@@ -342,7 +342,7 @@ module synapseWorkspace 'modules/synapse/synapse.bicep' = if (contains(deployMod
 }
 
 // Deploy Azure Databricks
-module databricksResourceGroup 'modules/resourceGroup/resourceGroup.bicep' = if (contains(deployModules, 'databricks') && bool(deployModules.databricks)) {
+module databricksResourceGroup '../shared/modules/resourceGroup/resourceGroup.bicep' = if (contains(deployModules, 'databricks') && bool(deployModules.databricks)) {
   name: 'rg-${basename}-databricks-${parLocationShort}'
   scope: subscription()
   params: {
@@ -378,7 +378,7 @@ module databricksWorkspace 'modules/databricks/databricks.bicep' = if (contains(
 }
 
 // Deploy Azure Data Factory
-module datafactoryResourceGroup 'modules/resourceGroup/resourceGroup.bicep' = if (contains(deployModules, 'dataFactory') && bool(deployModules.dataFactory)) {
+module datafactoryResourceGroup '../shared/modules/resourceGroup/resourceGroup.bicep' = if (contains(deployModules, 'dataFactory') && bool(deployModules.dataFactory)) {
   name: 'rg-${basename}-adf-${parLocationShort}'
   scope: subscription()
   params: {
@@ -412,7 +412,7 @@ module dataFactory 'modules/datafactory/datafactory.bicep' = if (contains(deploy
 }
 
 // Deploy Event Hubs
-module eventhubsResourceGroup 'modules/resourceGroup/resourceGroup.bicep' = if (contains(deployModules, 'eventHubs') && bool(deployModules.eventHubs)) {
+module eventhubsResourceGroup '../shared/modules/resourceGroup/resourceGroup.bicep' = if (contains(deployModules, 'eventHubs') && bool(deployModules.eventHubs)) {
   name: 'rg-${basename}-eventhubs-${parLocationShort}'
   scope: subscription()
   params: {
@@ -446,7 +446,7 @@ module eventHubs 'modules/eventhubs/eventhubs.bicep' = if (contains(deployModule
 }
 
 // Deploy Azure Data Explorer (Kusto)
-module dataExplorerResourceGroup 'modules/resourceGroup/resourceGroup.bicep' = if (contains(deployModules, 'dataExplorer') && bool(deployModules.dataExplorer)) {
+module dataExplorerResourceGroup '../shared/modules/resourceGroup/resourceGroup.bicep' = if (contains(deployModules, 'dataExplorer') && bool(deployModules.dataExplorer)) {
   name: 'rg-${basename}-adx-${parLocationShort}'
   scope: subscription()
   params: {
@@ -481,7 +481,7 @@ module dataExplorer 'modules/dataexplorer/dataexplorer.bicep' = if (contains(dep
 }
 
 // Deploy Azure Machine Learning
-module mlResourceGroup 'modules/resourceGroup/resourceGroup.bicep' = if (contains(deployModules, 'machineLearning') && bool(deployModules.machineLearning)) {
+module mlResourceGroup '../shared/modules/resourceGroup/resourceGroup.bicep' = if (contains(deployModules, 'machineLearning') && bool(deployModules.machineLearning)) {
   name: 'rg-${basename}-ml-${parLocationShort}'
   scope: subscription()
   params: {
@@ -514,7 +514,7 @@ module machineLearning 'modules/machinelearning/machinelearning.bicep' = if (con
 }
 
 // Deploy Application Insights
-module appInsightsResourceGroup 'modules/resourceGroup/resourceGroup.bicep' = if (contains(deployModules, 'appInsights') && bool(deployModules.appInsights)) {
+module appInsightsResourceGroup '../shared/modules/resourceGroup/resourceGroup.bicep' = if (contains(deployModules, 'appInsights') && bool(deployModules.appInsights)) {
   name: 'rg-${basename}-monitoring-${parLocationShort}'
   scope: subscription()
   params: {
@@ -541,7 +541,7 @@ module appInsights 'modules/monitoring/appinsights.bicep' = if (contains(deployM
 }
 
 // Deploy Azure Functions
-module functionsResourceGroup 'modules/resourceGroup/resourceGroup.bicep' = if (contains(deployModules, 'functions') && bool(deployModules.functions)) {
+module functionsResourceGroup '../shared/modules/resourceGroup/resourceGroup.bicep' = if (contains(deployModules, 'functions') && bool(deployModules.functions)) {
   name: 'rg-${basename}-functions-${parLocationShort}'
   scope: subscription()
   params: {
@@ -578,7 +578,7 @@ module functions 'modules/functions/functions.bicep' = if (contains(deployModule
 }
 
 // Deploy Stream Analytics
-module streamAnalyticsResourceGroup 'modules/resourceGroup/resourceGroup.bicep' = if (contains(deployModules, 'streamAnalytics') && bool(deployModules.streamAnalytics)) {
+module streamAnalyticsResourceGroup '../shared/modules/resourceGroup/resourceGroup.bicep' = if (contains(deployModules, 'streamAnalytics') && bool(deployModules.streamAnalytics)) {
   name: 'rg-${basename}-asa-${parLocationShort}'
   scope: subscription()
   params: {
@@ -607,7 +607,7 @@ module streamAnalytics 'modules/streamanalytics/streamanalytics.bicep' = if (con
 }
 
 // Deploy Generic Storage Account (separate from lake zones)
-module genericStorageResourceGroup 'modules/resourceGroup/resourceGroup.bicep' = if (contains(deployModules, 'genericStorage') && bool(deployModules.genericStorage)) {
+module genericStorageResourceGroup '../shared/modules/resourceGroup/resourceGroup.bicep' = if (contains(deployModules, 'genericStorage') && bool(deployModules.genericStorage)) {
   name: 'rg-${basename}-genericstorage-${parLocationShort}'
   scope: subscription()
   params: {
@@ -660,7 +660,7 @@ module privateEndpoints 'modules/network/privatelink.bicep' = if (contains(deplo
 
 // Deploy Self-Hosted Integration Runtime (VMSS for ADF)
 // Set deployModules.selfHostedIR = true in params to activate.
-module shirResourceGroup 'modules/resourceGroup/resourceGroup.bicep' = if (contains(deployModules, 'selfHostedIR') && bool(deployModules.selfHostedIR)) {
+module shirResourceGroup '../shared/modules/resourceGroup/resourceGroup.bicep' = if (contains(deployModules, 'selfHostedIR') && bool(deployModules.selfHostedIR)) {
   name: 'rg-${basename}-shir-${parLocationShort}'
   scope: subscription()
   params: {
@@ -691,7 +691,7 @@ module selfHostedIR 'modules/vms/selfHostedIntegrationRuntime.bicep' = if (conta
 }
 
 // Deploy Monitoring Alerts
-module monitoringAlertsResourceGroup 'modules/resourceGroup/resourceGroup.bicep' = if (contains(deployModules, 'monitoringAlerts') && bool(deployModules.monitoringAlerts)) {
+module monitoringAlertsResourceGroup '../shared/modules/resourceGroup/resourceGroup.bicep' = if (contains(deployModules, 'monitoringAlerts') && bool(deployModules.monitoringAlerts)) {
   name: 'rg-${basename}-alerts-${parLocationShort}'
   scope: subscription()
   params: {

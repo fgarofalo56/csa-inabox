@@ -1,0 +1,200 @@
+name: SLSA Provenance
+
+# CSA-0032 — SLSA Level 3 provenance generation.
+#
+# Emits signed, non-falsifiable build provenance attestations on every
+# tagged release for both:
+#   • The source-distribution tarball + wheel of csa_platform (generated
+#     via `python -m build`) — Python artifact provenance.
+#   • The two portal container images (after they are pushed to GHCR in
+#     the deploy pipeline) — container-image provenance.
+#
+# The SLSA reusable workflows from slsa-framework/slsa-github-generator
+# are deliberately referenced by tag rather than SHA: the generator
+# enforces the ref format and validates it inside the reusable workflow
+# to issue provenance that chains back to a specific published release.
+# SHA equivalents are recorded in comments for audit traceability.
+#
+# Verification:
+#   slsa-verifier verify-artifact <file> \
+#     --provenance-path <file>.intoto.jsonl \
+#     --source-uri github.com/${{ github.repository }} \
+#     --source-tag <tag>
+#
+# See docs/SUPPLY_CHAIN.md for the full verification procedure.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to produce provenance for'
+        required: true
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false  # Never cancel a provenance run mid-signing.
+
+# Top-level least-privilege. The reusable workflow jobs below set their
+# own permissions as required by the SLSA generator.
+permissions:
+  contents: read
+
+jobs:
+  # ───────────────────────────────────────────────────────────────────────
+  # 1. Build the Python sdist + wheel, emit sha256 digests for the SLSA
+  #    generator to consume.
+  # ───────────────────────────────────────────────────────────────────────
+  build-python:
+    name: Build Python artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      hashes: ${{ steps.hash.outputs.hashes }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v5
+        with:
+          python-version: '3.12'
+
+      - name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install 'build>=1.2,<2'
+
+      - name: Build sdist + wheel
+        run: python -m build --outdir dist/
+
+      - name: Compute SHA-256 digests for provenance
+        id: hash
+        working-directory: dist
+        run: |
+          # The SLSA generator expects a base64-encoded sha256sum line per
+          # artifact, which it writes into the provenance statement.
+          echo "hashes=$(sha256sum ./* | base64 -w0)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b # v4.5.0
+        with:
+          name: python-dist
+          path: dist/
+          retention-days: 90
+
+  # ───────────────────────────────────────────────────────────────────────
+  # 2. SLSA Level 3 provenance for the Python artifacts.
+  #
+  # The SLSA reusable workflow:
+  #   • Runs on an isolated runner that the calling repo cannot modify.
+  #   • Signs the attestation via Sigstore's Fulcio + Rekor (keyless).
+  #   • Emits `*.intoto.jsonl` — upload this to the Release alongside
+  #     the wheels and sdist.
+  #
+  # Pinned: slsa-framework/slsa-github-generator generic generator
+  #         v2.1.0 — SHA f7dd8c54c2067bafc12ca7a55595d5ee9b75204a
+  # ───────────────────────────────────────────────────────────────────────
+  slsa-python:
+    name: SLSA provenance (python artifacts)
+    needs: [build-python]
+    permissions:
+      # id-token:write is required for Sigstore keyless signing.
+      id-token: write
+      # contents:write is required to upload provenance to the Release.
+      contents: write
+      # actions:read is required to read the workflow run metadata.
+      actions: read
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
+    with:
+      base64-subjects: ${{ needs.build-python.outputs.hashes }}
+      upload-assets: ${{ github.event_name == 'release' }}
+      provenance-name: csa-inabox-python.intoto.jsonl
+
+  # ───────────────────────────────────────────────────────────────────────
+  # 3. SLSA Level 3 provenance for the portal container images.
+  #
+  # This job assumes the release-publish pipeline has already pushed the
+  # images to GHCR under:
+  #   ghcr.io/${{ github.repository }}/portal-backend:<tag>
+  #   ghcr.io/${{ github.repository }}/portal-frontend:<tag>
+  # and produced image digests. The container SLSA generator reads a
+  # pushed image by digest and issues provenance against it.
+  #
+  # Pinned: slsa-framework/slsa-github-generator container generator
+  #         v2.1.0 — SHA f7dd8c54c2067bafc12ca7a55595d5ee9b75204a
+  # ───────────────────────────────────────────────────────────────────────
+  resolve-image-digests:
+    name: Resolve image digests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Only run on a published release so the images actually exist in GHCR.
+    if: github.event_name == 'release'
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      backend-image: ${{ steps.digests.outputs.backend-image }}
+      backend-digest: ${{ steps.digests.outputs.backend-digest }}
+      frontend-image: ${{ steps.digests.outputs.frontend-image }}
+      frontend-digest: ${{ steps.digests.outputs.frontend-digest }}
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve digests
+        id: digests
+        env:
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          be_image="ghcr.io/${REPO}/portal-backend"
+          fe_image="ghcr.io/${REPO}/portal-frontend"
+          be_digest=$(docker buildx imagetools inspect "${be_image}:${TAG}" --format '{{json .Manifest}}' | jq -r '.digest')
+          fe_digest=$(docker buildx imagetools inspect "${fe_image}:${TAG}" --format '{{json .Manifest}}' | jq -r '.digest')
+          echo "backend-image=${be_image}" >> "$GITHUB_OUTPUT"
+          echo "backend-digest=${be_digest}" >> "$GITHUB_OUTPUT"
+          echo "frontend-image=${fe_image}" >> "$GITHUB_OUTPUT"
+          echo "frontend-digest=${fe_digest}" >> "$GITHUB_OUTPUT"
+
+  slsa-container-backend:
+    name: SLSA provenance (portal-backend image)
+    needs: [resolve-image-digests]
+    if: github.event_name == 'release'
+    permissions:
+      id-token: write
+      contents: write
+      packages: write
+      actions: read
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_container_slsa3.yml@v2.1.0
+    with:
+      image: ${{ needs.resolve-image-digests.outputs.backend-image }}
+      digest: ${{ needs.resolve-image-digests.outputs.backend-digest }}
+      registry-username: ${{ github.actor }}
+    secrets:
+      registry-password: ${{ secrets.GITHUB_TOKEN }}
+
+  slsa-container-frontend:
+    name: SLSA provenance (portal-frontend image)
+    needs: [resolve-image-digests]
+    if: github.event_name == 'release'
+    permissions:
+      id-token: write
+      contents: write
+      packages: write
+      actions: read
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_container_slsa3.yml@v2.1.0
+    with:
+      image: ${{ needs.resolve-image-digests.outputs.frontend-image }}
+      digest: ${{ needs.resolve-image-digests.outputs.frontend-digest }}
+      registry-username: ${{ github.actor }}
+    secrets:
+      registry-password: ${{ secrets.GITHUB_TOKEN }}

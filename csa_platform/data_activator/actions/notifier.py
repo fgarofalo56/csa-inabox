@@ -32,6 +32,10 @@ from typing import Any
 
 from csa_platform.common.logging import configure_structlog, get_logger
 
+from .dlq import DeadLetterQueue, DLQEnvelope, get_default_dlq
+from .errors import DataActivatorFatalError, DataActivatorTransientError
+from .retry import retry_sync
+
 configure_structlog(service="data-activator-notifier")
 logger = get_logger(__name__)
 
@@ -39,6 +43,51 @@ try:
     import requests
 except ImportError:
     requests = None  # type: ignore[assignment]
+
+
+# ---------------------------------------------------------------------------
+# Error classification helpers
+# ---------------------------------------------------------------------------
+
+
+_TRANSIENT_STATUS_CODES: frozenset[int] = frozenset({408, 425, 429, 500, 502, 503, 504})
+
+
+def _classify_http_error(exc: Any) -> DataActivatorTransientError | DataActivatorFatalError:
+    """Map a ``requests`` exception to a typed Data Activator error.
+
+    Timeouts, connection errors, chunked encoding issues, and 5xx / 408 /
+    425 / 429 responses are transient; everything else (4xx auth, 400
+    validation) is fatal.
+    """
+    if requests is None:  # pragma: no cover - guarded by caller
+        return DataActivatorFatalError(str(exc))
+
+    # requests.exceptions hosts the canonical classes; the ``requests``
+    # module re-exports most of them, but ChunkedEncodingError lives
+    # only under the submodule in some installs.
+    req_exc = requests.exceptions
+
+    if isinstance(exc, req_exc.Timeout):
+        return DataActivatorTransientError(f"timeout: {exc}")
+    if isinstance(exc, req_exc.ConnectionError):
+        return DataActivatorTransientError(f"connection: {exc}")
+    if isinstance(exc, req_exc.ChunkedEncodingError):
+        return DataActivatorTransientError(f"chunked: {exc}")
+    if isinstance(exc, req_exc.HTTPError):
+        status = getattr(getattr(exc, "response", None), "status_code", 0) or 0
+        if status in _TRANSIENT_STATUS_CODES or (500 <= status < 600):
+            return DataActivatorTransientError(f"http {status}: {exc}")
+        return DataActivatorFatalError(f"http {status}: {exc}")
+    # Any other RequestException is treated as transient — the retry
+    # loop handles it and the DLQ catches a pathological exhaustion.
+    return DataActivatorTransientError(f"unknown: {exc}")
+
+
+def _payload_to_dict(payload: AlertPayload) -> dict[str, Any]:
+    from dataclasses import asdict
+
+    return asdict(payload)
 
 
 # ---------------------------------------------------------------------------
@@ -79,19 +128,142 @@ class AlertPayload:
 
 
 class BaseNotifier(ABC):
-    """Abstract base class for notification dispatchers."""
+    """Abstract base class for notification dispatchers.
+
+    Concrete notifiers implement :meth:`_deliver` (a single outbound
+    attempt).  :meth:`send` wraps the attempt in tenacity exponential
+    backoff (via :func:`retry_sync`) and, on exhaustion or fatal error,
+    pushes the original payload to the configured
+    :class:`~csa_platform.data_activator.actions.dlq.DeadLetterQueue`.
+
+    Args:
+        retry_attempts: Max attempts (including the first try).  The
+            default ``3`` matches the streaming breach publisher.
+        dlq: Optional DLQ override.  Defaults to
+            :func:`get_default_dlq`, which picks up
+            ``DATA_ACTIVATOR_DLQ_CONNECTION_STRING``.
+    """
+
+    #: Human-readable notifier type for DLQ envelopes.  Overridden by subclasses.
+    NOTIFIER_TYPE: str = "base"
+
+    def __init__(
+        self,
+        *,
+        retry_attempts: int = 3,
+        dlq: DeadLetterQueue | None = None,
+    ) -> None:
+        self._retry_attempts = max(1, retry_attempts)
+        self._dlq: DeadLetterQueue = dlq if dlq is not None else get_default_dlq()
+
+    @property
+    def dlq(self) -> DeadLetterQueue:
+        return self._dlq
+
+    @property
+    def retry_attempts(self) -> int:
+        return self._retry_attempts
 
     @abstractmethod
+    def _deliver(self, payload: AlertPayload) -> None:
+        """Perform a single delivery attempt.
+
+        Implementations MUST raise
+        :class:`~csa_platform.data_activator.actions.errors.DataActivatorTransientError`
+        for retry-eligible failures and
+        :class:`~csa_platform.data_activator.actions.errors.DataActivatorFatalError`
+        for non-retryable failures.  Successful delivery must return
+        ``None``.
+        """
+        ...
+
     def send(self, payload: AlertPayload) -> bool:
-        """Send a notification.
+        """Send a notification with retries + DLQ fallback.
 
         Args:
             payload: The standardised alert payload.
 
         Returns:
-            ``True`` if the notification was delivered successfully.
+            ``True`` if the notification was delivered successfully; ``False``
+            if all retries were exhausted or a fatal error occurred (in
+            which case the payload was sent to the DLQ).
         """
-        ...
+        if not self.validate_config():
+            logger.warning(
+                "data_activator.notifier.not_configured",
+                notifier_type=self.NOTIFIER_TYPE,
+                rule_name=payload.rule_name,
+            )
+            return False
+
+        attempts = 0
+
+        def _attempt() -> None:
+            nonlocal attempts
+            attempts += 1
+            self._deliver(payload)
+
+        try:
+            retry_sync(_attempt, max_attempts=self._retry_attempts)
+        except DataActivatorFatalError as exc:
+            logger.error(
+                "data_activator.notifier.fatal",
+                notifier_type=self.NOTIFIER_TYPE,
+                rule_name=payload.rule_name,
+                error=str(exc),
+            )
+            self._dead_letter(payload, exc, "fatal", attempts)
+            return False
+        except DataActivatorTransientError as exc:
+            logger.error(
+                "data_activator.notifier.retry_exhausted",
+                notifier_type=self.NOTIFIER_TYPE,
+                rule_name=payload.rule_name,
+                attempts=attempts,
+                error=str(exc),
+            )
+            self._dead_letter(payload, exc, "transient_exhausted", attempts)
+            return False
+        except Exception as exc:
+            logger.exception(
+                "data_activator.notifier.unexpected",
+                notifier_type=self.NOTIFIER_TYPE,
+                rule_name=payload.rule_name,
+            )
+            self._dead_letter(payload, exc, "fatal", attempts)
+            return False
+
+        logger.info(
+            "data_activator.notifier.delivered",
+            notifier_type=self.NOTIFIER_TYPE,
+            rule_name=payload.rule_name,
+            attempts=attempts,
+        )
+        return True
+
+    def _dead_letter(
+        self,
+        payload: AlertPayload,
+        error: BaseException,
+        reason: str,
+        attempts: int,
+    ) -> None:
+        envelope = DLQEnvelope.build(
+            rule_name=payload.rule_name,
+            notifier_type=self.NOTIFIER_TYPE,
+            failure_reason=reason,
+            error=error,
+            attempts=attempts,
+            payload=_payload_to_dict(payload),
+        )
+        try:
+            self._dlq.send(envelope)
+        except Exception:  # DLQ itself must never crash the loop
+            logger.exception(
+                "data_activator.notifier.dlq_error",
+                notifier_type=self.NOTIFIER_TYPE,
+                rule_name=payload.rule_name,
+            )
 
     @abstractmethod
     def validate_config(self) -> bool:
@@ -115,36 +287,36 @@ class TeamsNotifier(BaseNotifier):
 
     Args:
         webhook_url: Teams incoming webhook URL.
+        retry_attempts: Max outbound attempts (default 3).
+        dlq: Optional DLQ override for tests.
     """
 
-    def __init__(self, webhook_url: str = "") -> None:
+    NOTIFIER_TYPE = "teams"
+
+    def __init__(
+        self,
+        webhook_url: str = "",
+        *,
+        retry_attempts: int = 3,
+        dlq: DeadLetterQueue | None = None,
+    ) -> None:
+        super().__init__(retry_attempts=retry_attempts, dlq=dlq)
         self.webhook_url = webhook_url or os.environ.get("TEAMS_WEBHOOK_URL", "")
 
     def validate_config(self) -> bool:
         """Check that the webhook URL is configured."""
-        return bool(self.webhook_url)
-
-    def send(self, payload: AlertPayload) -> bool:
-        """Send an Adaptive Card alert to Teams.
-
-        Args:
-            payload: The alert payload.
-
-        Returns:
-            ``True`` on success.
-        """
-        if not self.validate_config():
-            logger.warning("TeamsNotifier: webhook URL not configured")
+        if not self.webhook_url:
             return False
-
         if requests is None:
             logger.error("TeamsNotifier: 'requests' library not installed")
             return False
+        return True
 
+    def _deliver(self, payload: AlertPayload) -> None:
+        assert requests is not None  # guaranteed by validate_config
         from .teams_card import build_alert_card
 
         card = build_alert_card(payload)
-
         try:
             resp = requests.post(
                 self.webhook_url,
@@ -153,11 +325,8 @@ class TeamsNotifier(BaseNotifier):
                 timeout=10,
             )
             resp.raise_for_status()
-            logger.info("teams.notification_sent", rule_name=payload.rule_name)
-            return True
-        except requests.RequestException:
-            logger.exception("teams.notification_failed", rule_name=payload.rule_name)
-            return False
+        except requests.RequestException as exc:
+            raise _classify_http_error(exc) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -178,6 +347,8 @@ class EmailNotifier(BaseNotifier):
         smtp_port: SMTP server port.
     """
 
+    NOTIFIER_TYPE = "email"
+
     def __init__(
         self,
         recipients: list[str] | None = None,
@@ -185,7 +356,11 @@ class EmailNotifier(BaseNotifier):
         sendgrid_api_key: str = "",
         smtp_host: str = "",
         smtp_port: int = 587,
+        *,
+        retry_attempts: int = 3,
+        dlq: DeadLetterQueue | None = None,
     ) -> None:
+        super().__init__(retry_attempts=retry_attempts, dlq=dlq)
         self.recipients = recipients or []
         self.from_address = from_address or os.environ.get("ALERT_FROM_EMAIL", "alerts@csa-inabox.gov")
         self.sendgrid_api_key = sendgrid_api_key or os.environ.get("SENDGRID_API_KEY", "")
@@ -198,29 +373,18 @@ class EmailNotifier(BaseNotifier):
             return False
         return bool(self.sendgrid_api_key) or bool(self.smtp_host)
 
-    def send(self, payload: AlertPayload) -> bool:
-        """Send an alert email.
-
-        Args:
-            payload: The alert payload.
-
-        Returns:
-            ``True`` on success.
-        """
-        if not self.recipients:
-            logger.warning("EmailNotifier: no recipients configured")
-            return False
-
+    def _deliver(self, payload: AlertPayload) -> None:
         subject = f"[CSA Alert] {payload.severity.upper()}: {payload.rule_name}"
         body = self._build_body(payload)
 
         if self.sendgrid_api_key:
-            return self._send_sendgrid(subject, body)
+            self._send_sendgrid(subject, body)
+            return
         if self.smtp_host:
-            return self._send_smtp(subject, body)
+            self._send_smtp(subject, body)
+            return
 
-        logger.warning("EmailNotifier: no email transport configured")
-        return False
+        raise DataActivatorFatalError("no email transport configured")
 
     def _build_body(self, payload: AlertPayload) -> str:
         """Build the email body from the alert payload."""
@@ -236,11 +400,10 @@ class EmailNotifier(BaseNotifier):
             f"\nMetadata:\n{json.dumps(payload.metadata, indent=2)}"
         )
 
-    def _send_sendgrid(self, subject: str, body: str) -> bool:
-        """Send email via SendGrid API."""
+    def _send_sendgrid(self, subject: str, body: str) -> None:
+        """Send email via SendGrid API — raises typed errors on failure."""
         if requests is None:
-            logger.error("EmailNotifier: 'requests' library not installed")
-            return False
+            raise DataActivatorFatalError("'requests' library not installed")
 
         sg_payload = {
             "personalizations": [{"to": [{"email": r} for r in self.recipients]}],
@@ -259,21 +422,18 @@ class EmailNotifier(BaseNotifier):
                 timeout=10,
             )
             resp.raise_for_status()
-            logger.info("sendgrid.email_sent", recipients=self.recipients)
-            return True
-        except requests.RequestException:
-            logger.exception("SendGrid email failed")
-            return False
+        except requests.RequestException as exc:
+            raise _classify_http_error(exc) from exc
 
-    def _send_smtp(self, subject: str, body: str) -> bool:
-        """Send email via SMTP."""
+    def _send_smtp(self, subject: str, body: str) -> None:
+        """Send email via SMTP — raises typed errors on failure."""
+        msg = EmailMessage()
+        msg["Subject"] = subject
+        msg["From"] = self.from_address
+        msg["To"] = ", ".join(self.recipients)
+        msg.set_content(body)
+
         try:
-            msg = EmailMessage()
-            msg["Subject"] = subject
-            msg["From"] = self.from_address
-            msg["To"] = ", ".join(self.recipients)
-            msg.set_content(body)
-
             with smtplib.SMTP(self.smtp_host, self.smtp_port) as server:
                 server.starttls()
                 smtp_user = os.environ.get("SMTP_USER", "")
@@ -281,12 +441,12 @@ class EmailNotifier(BaseNotifier):
                 if smtp_user:
                     server.login(smtp_user, smtp_pass)
                 server.send_message(msg)
-
-            logger.info("smtp.email_sent", recipients=self.recipients)
-            return True
-        except (smtplib.SMTPException, OSError):
-            logger.exception("SMTP email failed")
-            return False
+        except smtplib.SMTPAuthenticationError as exc:
+            raise DataActivatorFatalError(f"smtp auth: {exc}") from exc
+        except smtplib.SMTPRecipientsRefused as exc:
+            raise DataActivatorFatalError(f"smtp recipients: {exc}") from exc
+        except (smtplib.SMTPException, OSError) as exc:
+            raise DataActivatorTransientError(f"smtp: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -302,35 +462,31 @@ class WebhookNotifier(BaseNotifier):
         headers: Optional HTTP headers to include.
     """
 
+    NOTIFIER_TYPE = "webhook"
+
     def __init__(
         self,
         url: str = "",
         headers: dict[str, str] | None = None,
+        *,
+        retry_attempts: int = 3,
+        dlq: DeadLetterQueue | None = None,
     ) -> None:
+        super().__init__(retry_attempts=retry_attempts, dlq=dlq)
         self.url = url
         self.headers = headers or {"Content-Type": "application/json"}
 
     def validate_config(self) -> bool:
         """Check that the URL is configured."""
-        return bool(self.url)
-
-    def send(self, payload: AlertPayload) -> bool:
-        """POST the alert payload to the webhook URL.
-
-        Args:
-            payload: The alert payload.
-
-        Returns:
-            ``True`` on success.
-        """
-        if not self.validate_config():
-            logger.warning("WebhookNotifier: URL not configured")
+        if not self.url:
             return False
-
         if requests is None:
             logger.error("WebhookNotifier: 'requests' library not installed")
             return False
+        return True
 
+    def _deliver(self, payload: AlertPayload) -> None:
+        assert requests is not None  # guaranteed by validate_config
         body = {
             "rule_name": payload.rule_name,
             "description": payload.description,
@@ -351,11 +507,8 @@ class WebhookNotifier(BaseNotifier):
                 timeout=10,
             )
             resp.raise_for_status()
-            logger.info("webhook.notification_sent", url=self.url)
-            return True
-        except requests.RequestException:
-            logger.exception("webhook.notification_failed", url=self.url)
-            return False
+        except requests.RequestException as exc:
+            raise _classify_http_error(exc) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -373,13 +526,19 @@ class IncidentCreator(BaseNotifier):
         severity: Incident severity level.
     """
 
+    NOTIFIER_TYPE = "incident"
+
     def __init__(
         self,
         service: str = "pagerduty",
         api_url: str = "",
         api_key: str = "",
         severity: str = "high",
+        *,
+        retry_attempts: int = 3,
+        dlq: DeadLetterQueue | None = None,
     ) -> None:
+        super().__init__(retry_attempts=retry_attempts, dlq=dlq)
         self.service = service.lower()
         self.api_key = api_key or os.environ.get(
             f"{self.service.upper()}_API_KEY",
@@ -389,35 +548,32 @@ class IncidentCreator(BaseNotifier):
         self.severity = severity
 
     def validate_config(self) -> bool:
-        """Check that the API key is configured."""
-        return bool(self.api_key)
-
-    def send(self, payload: AlertPayload) -> bool:
-        """Create an incident.
-
-        Args:
-            payload: The alert payload.
-
-        Returns:
-            ``True`` on success.
-        """
-        if not self.validate_config():
-            logger.warning("incident_creator.api_key_missing", service=self.service)
+        """Check that the API key is configured and supported service selected."""
+        if not self.api_key:
             return False
-
-        if self.service == "pagerduty":
-            return self._create_pagerduty_incident(payload)
-        if self.service == "servicenow":
-            return self._create_servicenow_incident(payload)
-
-        logger.warning("incident_creator.unsupported_service", service=self.service)
-        return False
-
-    def _create_pagerduty_incident(self, payload: AlertPayload) -> bool:
-        """Create a PagerDuty incident via Events API v2."""
+        if self.service not in {"pagerduty", "servicenow"}:
+            return False
+        if self.service == "servicenow" and not (
+            self.api_url or os.environ.get("SERVICENOW_INSTANCE_URL", "")
+        ):
+            return False
         if requests is None:
             logger.error("IncidentCreator: 'requests' library not installed")
             return False
+        return True
+
+    def _deliver(self, payload: AlertPayload) -> None:
+        if self.service == "pagerduty":
+            self._create_pagerduty_incident(payload)
+            return
+        if self.service == "servicenow":
+            self._create_servicenow_incident(payload)
+            return
+        raise DataActivatorFatalError(f"unsupported incident service: {self.service}")
+
+    def _create_pagerduty_incident(self, payload: AlertPayload) -> None:
+        """Create a PagerDuty incident via Events API v2 — raises typed errors."""
+        assert requests is not None  # guaranteed by validate_config
 
         pd_payload = {
             "routing_key": self.api_key,
@@ -444,23 +600,14 @@ class IncidentCreator(BaseNotifier):
                 timeout=10,
             )
             resp.raise_for_status()
-            logger.info("pagerduty.incident_created", rule_name=payload.rule_name)
-            return True
-        except requests.RequestException:
-            logger.exception("PagerDuty incident creation failed")
-            return False
+        except requests.RequestException as exc:
+            raise _classify_http_error(exc) from exc
 
-    def _create_servicenow_incident(self, payload: AlertPayload) -> bool:
-        """Create a ServiceNow incident via REST API."""
-        if requests is None:
-            logger.error("IncidentCreator: 'requests' library not installed")
-            return False
+    def _create_servicenow_incident(self, payload: AlertPayload) -> None:
+        """Create a ServiceNow incident via REST API — raises typed errors."""
+        assert requests is not None  # guaranteed by validate_config
 
         sn_url = self.api_url or os.environ.get("SERVICENOW_INSTANCE_URL", "")
-        if not sn_url:
-            logger.warning("IncidentCreator: ServiceNow instance URL not configured")
-            return False
-
         sn_payload = {
             "short_description": f"CSA Alert: {payload.rule_name}",
             "description": (
@@ -486,11 +633,8 @@ class IncidentCreator(BaseNotifier):
                 timeout=15,
             )
             resp.raise_for_status()
-            logger.info("servicenow.incident_created", rule_name=payload.rule_name)
-            return True
-        except requests.RequestException:
-            logger.exception("ServiceNow incident creation failed")
-            return False
+        except requests.RequestException as exc:
+            raise _classify_http_error(exc) from exc
 
 
 # ---------------------------------------------------------------------------

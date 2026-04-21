@@ -1,0 +1,111 @@
+name: 'csa_iot_streaming'
+version: '1.0.0'
+config-version: 2
+require-dbt-version: [">=1.7.0", "<2.0.0"]
+
+# Uses the shared CSA analytics profile (Databricks SQL warehouse).
+# Override with: dbt run --profile csa_iot_streaming --target dev
+profile: 'csa_iot_streaming'
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+macro-paths: ["../../../domains/shared/dbt/macros"]
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+vars:
+  bronze_database: "bronze"
+  silver_database: "silver"
+  gold_database: "gold"
+  file_format: "delta"
+  incremental_strategy: "merge"
+  freshness_warn_hours: 1
+  freshness_error_hours: 4
+
+  # IoT-specific variables
+  # Anomaly-detection thresholds (match stream-analytics/detect_anomalies.asaql)
+  temp_min_valid_c: -40.0
+  temp_max_valid_c: 85.0
+  temp_critical_spike_c: 45.0
+  temp_critical_dip_c: -20.0
+  temp_warning_high_c: 40.0
+  temp_warning_low_c: -15.0
+
+  humidity_min_valid_pct: 0.0
+  humidity_max_valid_pct: 100.0
+
+  pressure_min_valid_hpa: 800.0
+  pressure_max_valid_hpa: 1100.0
+
+  battery_low_pct: 20.0
+  battery_critical_pct: 5.0
+
+  # Z-score threshold for silver anomaly flags (IQR/z-score hybrid)
+  zscore_anomaly_threshold: 3.0
+  iqr_multiplier: 1.5
+
+  # Latency SLO for sensor → bronze ingestion (seconds)
+  sla_latency_warn_sec: 30
+  sla_latency_breach_sec: 120
+
+  # Dedup window — drop duplicates within this many seconds per device+metric
+  dedup_window_sec: 60
+
+  # AQI categories (EPA breakpoints)
+  aqi_category_good_max: 50
+  aqi_category_moderate_max: 100
+  aqi_category_usg_max: 150
+  aqi_category_unhealthy_max: 200
+  aqi_category_very_unhealthy_max: 300
+
+models:
+  csa_iot_streaming:
+    bronze:
+      +materialized: incremental
+      +file_format: delta
+      +schema: bronze
+      +tags: ['bronze', 'iot', 'raw']
+      +on_schema_change: "append_new_columns"
+    silver:
+      +materialized: incremental
+      +file_format: delta
+      +schema: silver
+      +tags: ['silver', 'iot', 'cleaned']
+      +incremental_strategy: merge
+      +on_schema_change: "sync_all_columns"
+    gold:
+      +materialized: table
+      +file_format: delta
+      +schema: gold
+      +tags: ['gold', 'iot', 'analytics']
+
+seeds:
+  csa_iot_streaming:
+    +schema: seeds
+    +tags: ['seed', 'iot']
+    devices:
+      +column_types:
+        device_id: string
+        type: string
+        location_lat: decimal(9,6)
+        location_lon: decimal(9,6)
+        vendor: string
+        install_date: date
+    sensor_metadata:
+      +column_types:
+        metric_type: string
+        unit: string
+        min_valid: decimal(18,6)
+        max_valid: decimal(18,6)
+        precision: int
+
+# sources: moved to models/schema.yml where dbt expects them.
+# (dbt rejects top-level `sources:` in dbt_project.yml — surfaced by dbt-ci workflow.)
+
+snapshots:
+  csa_iot_streaming:
+    +target_schema: snapshots
+    +strategy: timestamp
+    +updated_at: ingestion_ts

@@ -62,16 +62,14 @@ The primary deployment path uses Azure Bicep templates under `deploy/bicep/`. Be
 > [!IMPORTANT]
 > Bicep estimates are best-effort. The Azure Retail Prices API returns list prices — actual costs depend on EA/CSP agreements, reserved instances, and consumption-based meters.
 
-### Terraform Path (Future)
+### Terraform Path (Roadmap — not implemented)
 
-A parallel Terraform deployment is planned under `deploy/terraform/`. This path will use Infracost natively for accurate, resource-level cost breakdowns.
-
-**Config:** `.infracost/terraform.yml`
-
-```bash
-# Once Terraform modules are ready:
-infracost breakdown --config-file .infracost/terraform.yml
-```
+> [!WARNING]
+> A parallel Terraform deployment is **on the roadmap**, not available today
+> (CSA-0015 / audit approval queue item AQ-0024). `deploy/terraform/` does
+> not exist in the repository. The `.infracost/terraform.yml` configuration
+> is a scaffold that will activate once Terraform modules ship. Until then,
+> use the Bicep path (above) for all cost analyses.
 
 ---
 

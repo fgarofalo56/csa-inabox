@@ -27,15 +27,15 @@ functionality using Azure PaaS services and open-source tooling.
 
 | Component | Fabric Equivalent | Description |
 |---|---|---|
-| [onelake-pattern](onelake_pattern/) | OneLake | Unified data lake using ADLS Gen2 + Unity Catalog metadata |
+| [unity-catalog-pattern](unity_catalog_pattern/) | OneLake (conceptual) | Unified data lake using ADLS Gen2 + Databricks Unity Catalog (renamed from `onelake_pattern/` in CSA-0132) |
 | [data-activator](data_activator/) | Data Activator | Event-driven alerting with Logic Apps + Event Grid + Functions |
-| [direct-lake](direct_lake/) | Direct Lake | Power BI direct access to Delta Lake via Databricks SQL |
+| [semantic-model](semantic_model/) | Direct Lake (conceptual) | Power BI semantic models over Databricks SQL warehouses (renamed from `direct_lake/` in CSA-0132) |
 | [data_marketplace](data_marketplace/) | Data Sharing / Marketplace | Self-service data product discovery, access request, quality tracking |
 | [governance](governance/) | Purview Integration | Automated classification, lineage, MDM, sensitivity labels |
-| [multi-synapse](multi_synapse/) | Multi-workspace | Shared Synapse environment with per-org isolation |
+| [multi-synapse](multi_synapse/) | Multi-workspace | Shared Synapse environment with per-org isolation (legacy / migration-only — see `csa_platform/multi_synapse/README.md`; CSA-0139) |
 | [metadata-framework](metadata_framework/) | Data Factory (metadata-driven) | Auto-generate pipelines from source registration metadata |
-| [ai_integration](ai_integration/) | Copilot / AI | RAG patterns, embeddings, model serving per domain |
-| [shared-services](shared_services/) | Shared Functions | Reusable Azure Function library for data operations |
+| [ai_integration](ai_integration/) | Copilot / AI | RAG primitives (chunk/embed/retrieve/generate). Product surface in `apps/copilot/` — see capability matrix in [`ai_integration/README.md`](ai_integration/README.md#capability-matrix) (CSA-0114). |
+| [functions](functions/) | Shared Functions | Consolidated Azure Functions (validation, aiEnrichment, eventProcessing, secretRotation) |
 | [oss-alternatives](oss_alternatives/) | N/A (Gov gaps) | Open-source alternatives for Gov-unavailable services |
 
 ---

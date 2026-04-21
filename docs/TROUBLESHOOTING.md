@@ -258,7 +258,7 @@ For ADF-to-Purview lineage:
 
 The GE runner found no suites in `quality-rules.yaml`:
 - [ ] Verify `quality-rules.yaml` has a `great_expectations.suites` section
-- [ ] Check for YAML syntax errors: `python -c "import yaml; yaml.safe_load(open('governance/dataquality/quality-rules.yaml'))"`
+- [ ] Check for YAML syntax errors: `python -c "import yaml; yaml.safe_load(open('csa_platform/governance/dataquality/quality-rules.yaml'))"`
 
 ### "Checkpoint not found"
 

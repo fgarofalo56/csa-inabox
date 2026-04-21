@@ -22,10 +22,11 @@ export default function StepIngestion({ register, watch, errors }: StepIngestion
       </h2>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div>
-          <label className="block text-sm font-medium text-gray-700">
+          <label htmlFor="ingestion-mode" className="block text-sm font-medium text-gray-700">
             Ingestion Mode <span className="text-red-500">*</span>
           </label>
           <select
+            id="ingestion-mode"
             {...register('ingestion.mode', { required: 'Ingestion mode is required' })}
             className="mt-1 block w-full rounded-md border-gray-300 shadow-sm"
           >
@@ -40,13 +41,14 @@ export default function StepIngestion({ register, watch, errors }: StepIngestion
           )}
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-700">
+          <label htmlFor="ingestion-schedule" className="block text-sm font-medium text-gray-700">
             Schedule (cron){' '}
             {(ingestionMode === 'incremental' || ingestionMode === 'full') && (
               <span className="text-red-500">*</span>
             )}
           </label>
           <input
+            id="ingestion-schedule"
             {...register('ingestion.schedule_cron', {
               validate: (value: string) => {
                 if ((ingestionMode === 'incremental' || ingestionMode === 'full') && !value) {
@@ -64,10 +66,11 @@ export default function StepIngestion({ register, watch, errors }: StepIngestion
           )}
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-700">
+          <label htmlFor="ingestion-batch-size" className="block text-sm font-medium text-gray-700">
             Batch Size
           </label>
           <input
+            id="ingestion-batch-size"
             {...register('ingestion.batch_size', {
               valueAsNumber: true,
               validate: (value: number) => {
@@ -87,10 +90,11 @@ export default function StepIngestion({ register, watch, errors }: StepIngestion
           )}
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-700">
+          <label htmlFor="ingestion-timeout" className="block text-sm font-medium text-gray-700">
             Timeout (minutes)
           </label>
           <input
+            id="ingestion-timeout"
             {...register('ingestion.timeout_minutes', { valueAsNumber: true })}
             type="number"
             className="mt-1 block w-full rounded-md border-gray-300 shadow-sm"
@@ -98,10 +102,11 @@ export default function StepIngestion({ register, watch, errors }: StepIngestion
           />
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-700">
+          <label htmlFor="ingestion-target-format" className="block text-sm font-medium text-gray-700">
             Target Format
           </label>
           <select
+            id="ingestion-target-format"
             {...register('target.format')}
             className="mt-1 block w-full rounded-md border-gray-300 shadow-sm"
           >
@@ -109,14 +114,14 @@ export default function StepIngestion({ register, watch, errors }: StepIngestion
             <option value="parquet">Parquet</option>
             <option value="csv">CSV</option>
             <option value="json">JSON</option>
-            <option value="avro">Avro</option>
           </select>
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-700">
+          <label htmlFor="ingestion-landing-zone" className="block text-sm font-medium text-gray-700">
             Landing Zone
           </label>
           <input
+            id="ingestion-landing-zone"
             {...register('target.landing_zone')}
             type="text"
             className="mt-1 block w-full rounded-md border-gray-300 shadow-sm"

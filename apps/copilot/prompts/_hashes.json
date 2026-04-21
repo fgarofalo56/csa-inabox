@@ -1,0 +1,14 @@
+{
+  "conversation_summarizer": {
+    "content_hash": "19821551352348592f186b2018d75c6ba57ffc6b61ab7c0dea1b7aa568d0b974",
+    "version": "v1"
+  },
+  "ground_and_cite": {
+    "content_hash": "7f7d0fefb7a34318d7f94e76ed9d0f339c4dedfac0573061bab6e1def002fad2",
+    "version": "v1"
+  },
+  "refusal_off_scope": {
+    "content_hash": "4f24af6ea736073336031038e6646ba1df1163035d5aecc78bdd7bdd1391cb6a",
+    "version": "v1"
+  }
+}

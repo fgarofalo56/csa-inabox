@@ -3,9 +3,9 @@
         materialized='incremental',
         unique_key='customer_sk',
         incremental_strategy='merge',
-        partition_by=['country_code'],
-        clustered_by=['customer_sk'],
-        file_format='delta',
+        partition_by=['country_code'] if target.type != 'duckdb' else none,
+        clustered_by=['customer_sk'] if target.type != 'duckdb' else none,
+        file_format='delta' if target.type != 'duckdb' else none,
         tags=['silver', 'customers'],
         on_schema_change='fail'
     )
@@ -52,7 +52,7 @@ cleaned as (
         {{ dbt_utils.generate_surrogate_key(['customer_id']) }} as customer_sk,
 
         -- Natural key
-        cast(customer_id as string) as customer_id,
+        cast(customer_id as {{ as_string() }}) as customer_id,
 
         -- Attributes
         trim(upper(coalesce(first_name, ''))) as first_name,

@@ -5,7 +5,7 @@
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Frontend Developers
 
 > [!NOTE]
-> **TL;DR:** FastAPI shared backend providing common API surface for all four portal frontends — sources, pipelines, marketplace, access requests, and stats. Supports Azure AD/Entra ID JWT auth (Commercial + Gov), demo mode for local development, and Docker deployment.
+> **TL;DR:** FastAPI shared backend providing common API surface for all four portal frontends — sources, pipelines, marketplace, access requests, and stats. Supports Microsoft Entra ID JWT auth (Commercial + Gov), demo mode for local development, and Docker deployment.
 
 The **shared backend** is a FastAPI application that provides the common API surface for all four portal front-end implementations:
 
@@ -47,7 +47,7 @@ portal/shared/
 │   │   ├── access.py         # /api/v1/access/*
 │   │   └── stats.py          # /api/v1/stats/*
 │   └── services/             # Business logic & integrations
-│       ├── auth.py           # Azure AD/Entra ID JWT validation
+│       ├── auth.py           # Microsoft Entra ID JWT validation
 │       └── provisioning.py   # DLZ provisioning orchestrator
 ├── requirements.txt
 ├── Dockerfile
@@ -125,7 +125,7 @@ open http://localhost:8000/api/docs
 
 ## 🔒 Authentication
 
-The API uses **Azure AD / Entra ID** JWT bearer tokens. Both Commercial and Government cloud endpoints are supported, controlled by the `IS_GOVERNMENT_CLOUD` environment variable.
+The API uses **Microsoft Entra ID** JWT bearer tokens. Both Commercial and Government cloud endpoints are supported, controlled by the `IS_GOVERNMENT_CLOUD` environment variable.
 
 > [!TIP]
 > In **demo mode** (no `AZURE_TENANT_ID` set), authentication is bypassed and all endpoints return data for a synthetic demo user.
@@ -139,13 +139,87 @@ The API uses **Azure AD / Entra ID** JWT bearer tokens. Both Commercial and Gove
 
 ---
 
+## 🔄 BFF reverse-proxy (CSA-0020 Phase 3)
+
+When `AUTH_MODE=bff` AND `BFF_PROXY_ENABLED=true`, the shared backend
+mounts a reverse-proxy at `/api/{path:path}` that:
+
+1. Resolves the SPA's `csa_sid` cookie → server-side session.
+2. Silently acquires a bearer token for the upstream API via MSAL
+   (`acquire_token_silent` → `acquire_token_by_refresh_token`
+   fallback).
+3. Forwards the request — with `Authorization: Bearer …` injected —
+   to `BFF_UPSTREAM_API_ORIGIN`.
+4. Streams the response back, stripping hop-by-hop headers and any
+   upstream `Set-Cookie` (cookies on the BFF origin are BFF-managed
+   only).
+
+```
+  Browser (SPA)            BFF                     Upstream API
+  ───────────              ───                     ─────────────
+  fetch('/api/v1/x',
+        {credentials:            csa_sid cookie
+         'include'})     ──────────────────►
+                                    │
+                                    │  TokenBroker.acquire_token()
+                                    │  → silent-hit OR refresh_token
+                                    │  (cache via Redis, HMAC-sealed)
+                                    ▼
+                                 GET /api/v1/x
+                                 Authorization: Bearer …
+                                                   ──────────────►
+                                                           │
+                                                           ▼
+                                                      200 JSON
+                                  ◄───────────────────
+                             (strip set-cookie,
+                              strip hop-by-hop)
+                           200 JSON
+  ◄─────────────────────
+```
+
+### Feature flags
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `AUTH_MODE` | `spa` | Set to `bff` to enable server-side auth + cookie. |
+| `BFF_PROXY_ENABLED` | `false` | Mount the reverse-proxy (requires `AUTH_MODE=bff`). |
+| `BFF_UPSTREAM_API_ORIGIN` | `http://localhost:8001` | Where to forward `/api/*`. |
+| `BFF_UPSTREAM_API_SCOPE` | *(required)* | MSAL scope for the upstream bearer (e.g. `api://<id>/.default`). |
+| `BFF_UPSTREAM_API_TIMEOUT_SECONDS` | `30` | Per-request upstream timeout. |
+| `BFF_TOKEN_CACHE_BACKEND` | `memory` | `memory` (dev) or `redis` (prod). |
+| `BFF_TOKEN_CACHE_TTL_SECONDS` | `86400` | Redis EX TTL for the sealed cache. |
+| `BFF_TOKEN_CACHE_HMAC_KEY` | *(required when `redis`)* | ≥ 32-char HMAC key for sealing. |
+
+### SPA change
+
+Replace direct-token calls with cookie-only fetches:
+
+```ts
+// Before (Phase 2 — direct handoff)
+const token = await bffFetchToken('api');
+const resp = await fetch('https://api.example.com/v1/sources', {
+  headers: { Authorization: `Bearer ${token}` },
+});
+
+// After (Phase 3 — reverse proxy)
+const resp = await fetch('/api/v1/sources', {
+  credentials: 'include', // sends csa_sid cookie
+});
+```
+
+See [`docs/adr/0019-bff-reverse-proxy.md`](../../docs/adr/0019-bff-reverse-proxy.md)
+for the full rationale and migration plan.
+
+---
+
 ## ⚙️ Configuration
 
 All settings are loaded from environment variables (or a `.env` file):
 
 | Variable | Default | Description |
 |---|---|---|
-| `AZURE_TENANT_ID` | *(empty)* | Azure AD tenant ID |
+| `AZURE_TENANT_ID` | *(empty)* | Microsoft Entra ID tenant ID |
 | `AZURE_CLIENT_ID` | *(empty)* | App registration client ID |
 | `IS_GOVERNMENT_CLOUD` | `false` | Use Azure Gov endpoints |
 | `DATABASE_URL` | `sqlite:///./csainabox.db` | Metadata database connection |

@@ -3,7 +3,7 @@
     materialized='incremental',
     unique_key='product_sk',
     incremental_strategy='merge',
-    file_format='delta',
+    file_format='delta' if target.type != 'duckdb' else none,
     tags=['silver', 'products'],
     on_schema_change='fail'
   )

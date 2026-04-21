@@ -1,0 +1,36 @@
+# CSA data contract — loan-default prediction response
+#
+# Contract for the response payload returned by
+#   examples/ml-lifecycle/training/score.run(...)
+# and by the Azure ML managed online endpoint.
+contract_name: loan_prediction_response
+version: "1.0.0"
+owner: csa-ml-lifecycle
+description: Prediction response — one record per input row.
+
+classification: unrestricted
+pii: false
+
+schema:
+  fields:
+    - name: probability_default
+      type: number
+      nullable: false
+      min: 0.0
+      max: 1.0
+      description: Sigmoid output of the logistic regression.
+    - name: prediction
+      type: integer
+      nullable: false
+      enum: [0, 1]
+      description: Hard classification at the 0.5 threshold.
+
+sla:
+  p99_latency_ms: 350
+  availability_percent: 99.5
+
+monitoring:
+  drift_detector: examples/ml-lifecycle/monitoring/drift_detection.py
+  drift_threshold_psi: 0.20
+  drift_min_columns: 2
+  drift_cadence: "0 */6 * * *"   # every 6 hours

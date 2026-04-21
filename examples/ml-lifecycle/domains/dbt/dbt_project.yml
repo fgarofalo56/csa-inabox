@@ -1,0 +1,71 @@
+name: 'csa_ml_lifecycle'
+version: '1.0.0'
+config-version: 2
+require-dbt-version: [">=1.7.0", "<2.0.0"]
+
+# Profile name is registered in the shared CI stub profile block in
+# .github/workflows/dbt-ci.yml — see the `setup-profiles` step.
+profile: 'csa_ml_lifecycle'
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+macro-paths: ["../../../../domains/shared/dbt/macros"]
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+vars:
+  bronze_database: "bronze"
+  silver_database: "silver"
+  gold_database: "gold"
+  file_format: "delta"
+  incremental_strategy: "merge"
+  freshness_warn_hours: 24
+  freshness_error_hours: 72
+
+  # Loan-default feature engineering thresholds
+  min_credit_score: 300
+  max_credit_score: 850
+  max_debt_to_income: 1.5
+  min_annual_income: 0
+  # Anything with an income below this is winsorised at training time.
+  income_floor_usd: 10000
+
+models:
+  csa_ml_lifecycle:
+    bronze:
+      +materialized: view
+      +schema: bronze
+      +tags: ['bronze', 'ml', 'raw']
+    silver:
+      +materialized: view
+      +schema: silver
+      +tags: ['silver', 'ml', 'cleaned']
+    gold:
+      +materialized: view
+      +schema: gold
+      +tags: ['gold', 'ml', 'features']
+
+seeds:
+  csa_ml_lifecycle:
+    +schema: seeds
+    +tags: ['seed', 'ml']
+    loan_applications:
+      +column_types:
+        application_id: varchar
+        application_ts: varchar
+        applicant_age: integer
+        annual_income: double
+        loan_amount: double
+        loan_term_months: integer
+        credit_score: integer
+        employment_years: double
+        debt_to_income: double
+        home_ownership: varchar
+        loan_purpose: varchar
+        delinquencies_2yr: integer
+        defaulted: integer
+
+# sources: live in models/schema.yml where dbt expects them.
+# (dbt rejects top-level `sources:` in dbt_project.yml — surfaced by dbt-ci workflow.)

@@ -3,9 +3,9 @@
         materialized='incremental',
         unique_key='customer_id',
         incremental_strategy='merge',
-        partition_by=['customer_segment'],
-        clustered_by=['value_tier'],
-        file_format='delta',
+        partition_by=['customer_segment'] if target.type != 'duckdb' else none,
+        clustered_by=['value_tier'] if target.type != 'duckdb' else none,
+        file_format='delta' if target.type != 'duckdb' else none,
         tags=['gold', 'customers', 'metrics'],
         on_schema_change='fail'
     )
@@ -69,8 +69,8 @@ final as (
         -- Derived metrics
         case
             when total_orders = 0 then 'never_purchased'
-            when datediff('day', last_order_date, current_date()) <= {{ var('clv_new_days', 90) }} then 'active'
-            when datediff('day', last_order_date, current_date()) <= {{ var('clv_active_days', 365) }} then 'at_risk'
+            when {{ datediff_expr('day', 'last_order_date', current_date_expr()) }} <= {{ var('clv_new_days', 90) }} then 'active'
+            when {{ datediff_expr('day', 'last_order_date', current_date_expr()) }} <= {{ var('clv_active_days', 365) }} then 'at_risk'
             else 'churned'
         end as customer_segment,
 
@@ -83,7 +83,7 @@ final as (
 
         coalesce(
             lifetime_revenue / nullif(
-                datediff('month', customer_since, current_date()), 0
+                {{ datediff_expr('month', 'customer_since', current_date_expr()) }}, 0
             ), 0
         ) as monthly_revenue_rate,
 

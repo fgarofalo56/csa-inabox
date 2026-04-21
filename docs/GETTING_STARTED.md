@@ -39,7 +39,7 @@
 
 ### Azure Requirements
 - **4 Azure Subscriptions**: Management, Connectivity, Data Management (DMLZ), Data Landing Zone (DLZ)
-- **Azure AD Tenant** with Global Admin or Privileged Role Admin access
+- **Microsoft Entra ID Tenant** with Global Admin or Privileged Role Admin access
 - **Contributor** role on all 4 subscriptions
 - **Microsoft.Purview**, **Microsoft.Databricks**, **Microsoft.Synapse** resource providers registered
 
@@ -65,7 +65,7 @@ The deploying identity needs:
 
 ### Step 1: Clone and Setup
 ```bash
-git clone https://github.com/fgarofalo56/csa-inabox.git
+git clone <CLONE_URL>
 cd csa-inabox
 make setup  # or `make setup-win` on Windows
 ```
@@ -165,14 +165,14 @@ replicate Microsoft Fabric capabilities using Azure PaaS. These live in
 
 | Service | What It Does | Quick Start |
 |---------|-------------|-------------|
-| [OneLake Pattern](../csa_platform/onelake_pattern/) | Unified data lake with Unity Catalog metadata | Deploy after DLZ |
-| [Data Marketplace](../csa_platform/data_marketplace/) | Self-service data product discovery + access requests | `python csa_platform/data_marketplace/api/marketplace_api.py` |
+| [Unity Catalog Pattern](../csa_platform/unity_catalog_pattern/) | Unified data lake with Databricks Unity Catalog metadata | Deploy after DLZ |
+| Data Marketplace (portal) | Self-service data product discovery + access requests | `docker compose -f portal/kubernetes/docker/docker-compose.yml up` (the legacy reference in `csa_platform/data_marketplace/` is deprecated — CSA-0067/CSA-0131) |
 | [Data Activator](../csa_platform/data_activator/) | Event-driven alerts (Teams, email, PagerDuty) | Deploy Event Grid + Functions |
-| [Direct Lake](../csa_platform/direct_lake/) | Power BI over Delta Lake via Databricks SQL | Configure SQL endpoint |
+| [Semantic Model](../csa_platform/semantic_model/) | Power BI semantic models over Databricks SQL | Configure SQL endpoint |
 | [Metadata Framework](../csa_platform/metadata_framework/) | Auto-generate ADF pipelines from YAML | Register sources in YAML |
 | [AI Integration](../csa_platform/ai_integration/) | RAG, entity extraction, document classification | Configure Azure OpenAI |
-| [Shared Services](../csa_platform/shared_services/) | Reusable Functions (PII detection, schema validation) | `func azure functionapp publish` |
-| [Governance](../csa_platform/governance/) | Purview classification, lineage, sensitivity labels | Bootstrap Purview catalog |
+| [Platform Functions](../csa_platform/functions/) | Consolidated Azure Functions (validation, AI enrichment, event processing, secret rotation) | `func azure functionapp publish` |
+| [Governance](../csa_platform/csa_platform/governance/purview/) + [top-level](../governance/) | Purview classification, lineage, sensitivity labels | Bootstrap Purview catalog |
 | [OSS Alternatives](../csa_platform/oss_alternatives/) | Open-source replacements for Gov gaps | Helm charts on AKS |
 
 See [PLATFORM_SERVICES.md](PLATFORM_SERVICES.md) for detailed deployment instructions.
@@ -181,9 +181,10 @@ See [PLATFORM_SERVICES.md](PLATFORM_SERVICES.md) for detailed deployment instruc
 
 ## 🌐 Data Onboarding Portal
 
-The `portal/` directory contains three implementations of an autonomous data
-onboarding portal — each with a different frontend but sharing the same FastAPI
-backend API.
+The `portal/` directory contains three browser-based implementations of the
+autonomous data onboarding portal plus a fourth command-line variant at
+`/cli/` in the repo root — each with a different frontend but all sharing the
+same FastAPI backend API (CSA-0066).
 
 ### Choosing a Frontend
 
@@ -192,15 +193,16 @@ backend API.
 | [PowerApps](../portal/powerapps/) | M365-native orgs, low-code teams | ~30 min |
 | [React/Next.js](../portal/react-webapp/) | Custom enterprise portals, maximum flexibility | ~45 min |
 | [Kubernetes](../portal/kubernetes/) | Enterprise-scale, multi-tenant, HA | ~60 min |
+| [CLI (`python -m cli`)](../cli/) | Automation, CI/CD, scripts, air-gapped ops | minutes |
 
 All frontends connect to the shared backend at `portal/shared/api/`. To get
 started:
 
 ```bash
-# Start the shared backend
+# Start the shared backend (ENVIRONMENT=local enables demo mode)
 cd portal/shared
 pip install -r requirements.txt
-uvicorn api.main:app --reload --port 8000
+ENVIRONMENT=local uvicorn api.main:app --reload --port 8000
 
 # Then start your chosen frontend (e.g., React)
 cd ../react-webapp
@@ -281,7 +283,7 @@ az deployment sub create \
 > Key differences for Government:
 > - All endpoints use `.us` / `.usgovcloudapi.net` instead of `.com`
 > - Compliance tags are automatically applied (FedRAMP, FISMA, NIST 800-53)
-> - Microsoft Fabric is not available — this repo IS the alternative
+> - Microsoft Fabric is forecast, not GA, in Azure Government — this repo delivers Fabric-parity capabilities on Azure PaaS services that ARE available in Gov today
 
 See [GOV_SERVICE_MATRIX.md](GOV_SERVICE_MATRIX.md) for the full service
 availability matrix.
@@ -308,8 +310,8 @@ availability matrix.
 
 - [ ] **Configure dbt**: Edit `domains/shared/dbt/profiles.yml` with your Databricks connection
 - [ ] **Set up ADF pipelines**: Import pipeline definitions from `domains/shared/pipelines/adf/`
-- [ ] **Apply RBAC**: Run `governance/rbac/apply-rbac.ps1` to set up access control
-- [ ] **Data Quality**: Configure `governance/dataquality/quality-rules.yaml` for your tables
+- [ ] **Apply RBAC**: Run `csa_platform/csa_platform/governance/rbac/apply-rbac.ps1` to set up access control
+- [ ] **Data Quality**: Configure `csa_platform/csa_platform/governance/dataquality/quality-rules.yaml` for your tables
 - [ ] **Deploy Platform Services**: Follow [PLATFORM_SERVICES.md](PLATFORM_SERVICES.md) for Fabric-equivalent capabilities
 - [ ] **Try a Vertical**: Pick any vertical from `examples/` and run its pipeline end-to-end
 - [ ] **Deploy the Portal**: Choose a frontend from `portal/` and connect it to the shared backend

@@ -1,0 +1,73 @@
+tree_id: "delta-vs-iceberg-vs-parquet"
+title: "Delta vs. Iceberg vs. Parquet"
+last_reviewed: "2026-04-19"
+version: "1.0"
+summary: "Choose the lake table format: Delta Lake, Apache Iceberg, or plain Parquet."
+links:
+  decision_doc: "docs/decisions/delta-vs-iceberg-vs-parquet.md"
+  related_adrs:
+    - "adr-0003-lakehouse-format"
+  related_architectures:
+    - "docs/ARCHITECTURE.md#%EF%B8%8F-storage--onelake-pattern"
+
+nodes:
+  - id: "start"
+    question: "Do you need ACID transactions, UPSERTs, or time travel?"
+    options:
+      - label: "Yes — updates, deletes, merge, CDC"
+        next: "q-engine"
+      - label: "No — append-only raw / bronze landing"
+        next: "rec-parquet"
+
+  - id: "q-engine"
+    question: "What is the primary compute engine?"
+    options:
+      - label: "Databricks / Fabric / Synapse Spark (Microsoft ecosystem)"
+        next: "q-multi-engine"
+      - label: "Multi-engine — Trino, Flink, Snowflake, Athena, and Spark"
+        next: "rec-iceberg"
+
+  - id: "q-multi-engine"
+    question: "Is there a credible 24-month roadmap to add non-Spark engines (Trino, Snowflake external tables, Athena)?"
+    options:
+      - label: "Yes — we want vendor optionality"
+        next: "rec-iceberg"
+      - label: "No — Spark / Direct Lake only"
+        next: "rec-delta"
+
+  - id: "rec-delta"
+    recommendation: "Delta Lake"
+    rationale: "Default choice for Microsoft-ecosystem lakehouses. First-class support in Databricks, Fabric (OneLake), Synapse Spark, Power BI Direct Lake, and Purview."
+    tradeoffs:
+      cost: "Same storage as Parquet plus transaction log overhead (<5%)."
+      latency: "Sub-second with Direct Lake; Photon-accelerated; liquid clustering improves skipping."
+      compliance: "Inherits ADLS Gen2 encryption + RBAC; supported in Commercial and Gov via Databricks/Synapse."
+      skill_match: "Default in Databricks docs and samples. Minimal ramp for Spark users."
+    anti_patterns:
+      - "Do not pick Delta when non-Spark engines (Trino, Snowflake external, Athena) are equal citizens — Iceberg has better multi-engine story (though Delta UniForm is narrowing this)."
+    linked_example: "examples/usda/"
+
+  - id: "rec-iceberg"
+    recommendation: "Apache Iceberg"
+    rationale: "Open table format with the broadest multi-engine support (Spark, Trino, Flink, Snowflake, Athena, DuckDB). Right pick for multi-cloud / multi-engine strategies."
+    tradeoffs:
+      cost: "Similar to Delta; compute-engine support is where real cost differences show up."
+      latency: "Comparable to Delta with good partitioning; engine-specific optimizations vary."
+      compliance: "ADLS Gen2 posture identical; catalog choice (Nessie, Polaris, AWS Glue) affects audit model."
+      skill_match: "Lower adoption in Microsoft shops; stronger in AWS/open-source stacks. Spec-driven design reduces bugs."
+    anti_patterns:
+      - "Do not pick Iceberg for pure Databricks / Fabric shops without a real multi-engine need — you lose first-class Direct Lake and Photon optimizations."
+    linked_example: "examples/commerce/"
+
+  - id: "rec-parquet"
+    recommendation: "Plain Parquet"
+    rationale: "Simplest columnar format for append-only, immutable bronze-layer data. Lowest cost and dependency-free."
+    tradeoffs:
+      cost: "Lowest. No transaction log, no catalog required."
+      latency: "Columnar scan; depends entirely on file layout and partitioning."
+      compliance: "ADLS Gen2 posture; no schema enforcement at write time."
+      skill_match: "Any data engineer — universal format."
+    anti_patterns:
+      - "Do not use plain Parquet for silver/gold — you lose ACID, schema evolution, and time travel."
+      - "Do not use plain Parquet when consumers need UPSERT/MERGE semantics — promote to Delta/Iceberg."
+    linked_example: "examples/iot-streaming/"

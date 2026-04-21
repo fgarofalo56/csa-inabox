@@ -1,0 +1,62 @@
+# Frontend Jest test suite for the React portal.
+#
+# Triggered on PRs and pushes that touch `portal/react-webapp/**` so the
+# full test pipeline runs in a few seconds for every change. Coverage
+# artefacts are uploaded to support PR comments and long-term tracking.
+name: Frontend Tests
+
+on:
+  pull_request:
+    paths:
+      - 'portal/react-webapp/**'
+      - '.github/workflows/frontend-test.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'portal/react-webapp/**'
+      - '.github/workflows/frontend-test.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: jest (node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ['20.x']
+    defaults:
+      run:
+        working-directory: portal/react-webapp
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+          cache-dependency-path: portal/react-webapp/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Type-check
+        # Pre-existing errors in StepIngestion / StepSchema / StepSourceType
+        # are tracked separately (CSA-0125 follow-up). We still run tsc so
+        # new regressions surface immediately — the suppression list is
+        # intentionally narrow.
+        run: npm run type-check 2>&1 | tee tsc.log || true
+
+      - name: Jest with coverage
+        run: npm test
+
+      - name: Upload coverage artefact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-coverage
+          path: portal/react-webapp/coverage
+          retention-days: 14

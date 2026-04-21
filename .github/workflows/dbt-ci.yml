@@ -1,0 +1,279 @@
+# dbt CI — parse + compile every vertical dbt project
+#
+# SCOPE:
+#   This workflow runs `dbt deps`, `dbt parse`, and `dbt compile` for every
+#   dbt project in the monorepo on each pull request and on pushes to `main`
+#   or long-running `audit/*` branches. It validates that:
+#     * `dbt_project.yml` is well-formed
+#     * every ref()/source()/macro resolves
+#     * Jinja templates compile against the declared profile
+#     * seed/schema YAML is syntactically valid
+#
+#   `dbt run` and `dbt test` are explicitly OUT OF SCOPE here — those run
+#   against real warehouses in `deploy-dbt.yml`. This workflow uses a
+#   stub DuckDB profile so parse+compile can run offline in CI.
+#
+# ADDING A NEW dbt PROJECT:
+#   1. Add the project path to the hard-coded fallback list in
+#      `discover-projects.projects` below, AND
+#   2. If your project uses a brand-new profile name, add it to the
+#      generated `~/.dbt/profiles.yml` block in `setup-profiles`.
+#   The `discover` step also globs for `dbt_project.yml` so forgetting (1)
+#   will still find the project — but keeping the list in sync provides
+#   a stable matrix ordering and makes missing projects obvious in PRs.
+#
+# RELATED: docs/runbooks/dbt-ci.md — operator guide for triaging failures.
+
+name: dbt CI (parse + compile)
+
+on:
+  pull_request:
+    paths:
+      - '**/dbt/**'
+      - '**/dbt_project.yml'
+      - '**/schema.yml'
+      - '**/*.sql'
+      - '.github/workflows/dbt-ci.yml'
+  push:
+    branches:
+      - main
+      - 'audit/**'
+    paths:
+      - '**/dbt/**'
+      - '**/dbt_project.yml'
+      - '**/schema.yml'
+      - '**/*.sql'
+      - '.github/workflows/dbt-ci.yml'
+
+concurrency:
+  group: dbt-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  discover-projects:
+    name: Discover dbt projects
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      projects: ${{ steps.set-matrix.outputs.projects }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v4.2.2
+
+      - id: set-matrix
+        name: Build matrix of dbt project paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Canonical list — keeps matrix order stable and makes missing
+          # projects obvious. New projects must be added here.
+          declare -a EXPECTED=(
+            "domains/finance/dbt"
+            "domains/inventory/dbt"
+            "domains/sales/dbt"
+            "domains/shared/dbt"
+            "examples/casino-analytics/domains/dbt"
+            "examples/commerce/domains/dbt"
+            "examples/dot/domains/dbt"
+            "examples/epa/domains/dbt"
+            "examples/interior/domains/dbt"
+            "examples/iot-streaming/domains/dbt"
+            "examples/ml-lifecycle/domains/dbt"
+            "examples/noaa/domains/dbt"
+            "examples/tribal-health/domains/dbt"
+            "examples/usda/domains/dbt"
+            "examples/usps/domains/dbt"
+          )
+
+          # Verify each canonical project exists; warn on any extras.
+          missing=()
+          for p in "${EXPECTED[@]}"; do
+            if [ ! -f "$p/dbt_project.yml" ]; then
+              missing+=("$p")
+            fi
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Missing dbt_project.yml in ${missing[*]}"
+            exit 1
+          fi
+
+          discovered=$(find . -name dbt_project.yml -not -path '*/dbt_packages/*' -not -path '*/target/*' \
+            | sed 's|^\./||; s|/dbt_project.yml$||' | sort)
+          for p in $discovered; do
+            hit=false
+            for e in "${EXPECTED[@]}"; do [ "$p" = "$e" ] && hit=true; done
+            if [ "$hit" = false ]; then
+              echo "::warning::dbt project $p is not in the canonical matrix list; add it to .github/workflows/dbt-ci.yml"
+            fi
+          done
+
+          json=$(printf '%s\n' "${EXPECTED[@]}" | jq -R -s -c 'split("\n") | map(select(length>0))')
+          echo "projects=$json" >> "$GITHUB_OUTPUT"
+          echo "Matrix: $json"
+
+  dbt-parse-compile:
+    name: Parse+compile (${{ matrix.project }})
+    runs-on: ubuntu-latest
+    needs: discover-projects
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        project: ${{ fromJSON(needs.discover-projects.outputs.projects) }}
+    env:
+      DBT_PROFILES_DIR: ${{ github.workspace }}/.dbt-ci
+      # Disable network egress for package refs beyond what we need — dbt
+      # still needs the public package hub for `dbt deps`.
+      DBT_SEND_ANONYMOUS_USAGE_STATS: "false"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v4.2.2
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v5.4.0
+        with:
+          python-version: '3.12'
+
+      - name: Cache pip + dbt package installs
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57  # v4.2.0
+        with:
+          path: |
+            ~/.cache/pip
+            ${{ matrix.project }}/dbt_packages
+          key: dbt-ci-${{ runner.os }}-py312-${{ hashFiles('**/packages.yml', '**/dbt_project.yml') }}-${{ matrix.project }}
+          restore-keys: |
+            dbt-ci-${{ runner.os }}-py312-${{ hashFiles('**/packages.yml', '**/dbt_project.yml') }}-
+            dbt-ci-${{ runner.os }}-py312-
+
+      - name: Install dbt adapters
+        shell: bash
+        run: |
+          set -euo pipefail
+          # dbt-duckdb is the actual CI adapter — it backs every stub profile.
+          # dbt-databricks and dbt-spark are installed so projects that
+          # reference adapter-specific macros (e.g. `{{ adapter.dispatch() }}`)
+          # still parse cleanly. They are not used to connect to anything.
+          python -m pip install --upgrade pip
+          pip install \
+            "dbt-core>=1.7,<2.0" \
+            "dbt-duckdb>=1.7,<2.0" \
+            "dbt-databricks>=1.7,<2.0" \
+            "dbt-spark>=1.7,<2.0"
+          dbt --version
+
+      - name: Write stub profiles.yml (offline DuckDB)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$DBT_PROFILES_DIR"
+          # Every profile name used across the 14 projects is mapped to
+          # an in-memory DuckDB target. This lets `dbt parse` and
+          # `dbt compile` succeed without any real warehouse credentials.
+          # Keep this list in sync when new profiles are introduced.
+          cat > "$DBT_PROFILES_DIR/profiles.yml" <<'PROFILES'
+          csa_analytics: &ci_duckdb
+            target: ci
+            outputs:
+              ci:
+                type: duckdb
+                path: ":memory:"
+                threads: 2
+          casino_analytics: *ci_duckdb
+          dot_analytics: *ci_duckdb
+          csa_iot_streaming: *ci_duckdb
+          csa_ml_lifecycle: *ci_duckdb
+          tribal_health_analytics: *ci_duckdb
+          usps_analytics: *ci_duckdb
+          PROFILES
+          echo "Wrote stub profile:"
+          cat "$DBT_PROFILES_DIR/profiles.yml"
+
+      - name: dbt deps
+        working-directory: ${{ matrix.project }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f packages.yml ] || [ -f dependencies.yml ]; then
+            dbt deps --profiles-dir "$DBT_PROFILES_DIR"
+          else
+            echo "No packages.yml or dependencies.yml — skipping dbt deps."
+          fi
+
+      - name: dbt parse
+        working-directory: ${{ matrix.project }}
+        shell: bash
+        run: dbt parse --profiles-dir "$DBT_PROFILES_DIR" --target ci
+
+      - name: dbt compile
+        working-directory: ${{ matrix.project }}
+        shell: bash
+        run: dbt compile --profiles-dir "$DBT_PROFILES_DIR" --target ci
+
+      - name: Upload dbt target/ on failure
+        if: failure()
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08  # v4.6.0
+        with:
+          # Artifact names must be unique — slash in project path would
+          # be rejected, so flatten it.
+          name: dbt-target-${{ strategy.job-index }}-${{ github.run_attempt }}
+          path: |
+            ${{ matrix.project }}/target/
+            ${{ matrix.project }}/logs/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  pr-summary:
+    name: PR summary comment
+    runs-on: ubuntu-latest
+    needs: [discover-projects, dbt-parse-compile]
+    if: always() && github.event_name == 'pull_request'
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Build summary body
+        id: body
+        shell: bash
+        env:
+          MATRIX_RESULT: ${{ needs.dbt-parse-compile.result }}
+          PROJECTS_JSON: ${{ needs.discover-projects.outputs.projects }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ "$MATRIX_RESULT" = "success" ]; then
+            status_icon="PASS"
+            status_line="All dbt projects parsed and compiled cleanly."
+          elif [ "$MATRIX_RESULT" = "skipped" ]; then
+            status_icon="SKIP"
+            status_line="Matrix was skipped (likely because discovery failed)."
+          else
+            status_icon="FAIL"
+            status_line="One or more dbt projects failed to parse or compile."
+          fi
+
+          project_count=$(echo "$PROJECTS_JSON" | jq 'length')
+
+          {
+            echo "body<<'__DBT_CI_BODY__'"
+            echo "### dbt CI — $status_icon"
+            echo ""
+            echo "$status_line"
+            echo ""
+            echo "- Projects in matrix: \`$project_count\`"
+            echo "- Matrix result: \`$MATRIX_RESULT\`"
+            echo "- Full logs: [run #${{ github.run_id }}]($RUN_URL)"
+            echo ""
+            if [ "$MATRIX_RESULT" != "success" ]; then
+              echo "**Triage:** see \`docs/runbooks/dbt-ci.md\` for reproduction steps."
+              echo "Failing jobs upload their \`target/\` and \`logs/\` directories as artifacts named \`dbt-target-<index>-<attempt>\`."
+            fi
+            echo "__DBT_CI_BODY__"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Post sticky PR comment
+        uses: marocchino/sticky-pull-request-comment@52423e01640425a022ef5fd42c6fb5f633a02728  # v2.9.1
+        with:
+          header: dbt-ci
+          message: ${{ steps.body.outputs.body }}

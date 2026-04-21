@@ -61,7 +61,7 @@ graph TB
 |---|---|---|
 | Framework | Next.js 14 (App Router) | SSR, file-based routing, API routes |
 | UI | Tailwind CSS + Radix UI | Utility-first CSS, accessible components |
-| Auth | MSAL.js (@azure/msal-react) | Azure AD / Entra ID integration |
+| Auth | MSAL.js (@azure/msal-react) | Microsoft Entra ID integration |
 | State | React Query (TanStack) | Server state, caching, optimistic updates |
 | Forms | React Hook Form + Zod | Type-safe forms with validation |
 | HTTP | Axios | HTTP client with interceptors |
@@ -78,7 +78,7 @@ npm install
 
 # Configure environment
 cp .env.example .env.local
-# Edit .env.local with your Azure AD and API settings
+# Edit .env.local with your Microsoft Entra ID and API settings
 
 # Start development server
 npm run dev
@@ -91,7 +91,7 @@ npm run dev
 ## ⚙️ Environment Variables
 
 ```bash
-# Azure AD / Entra ID
+# Microsoft Entra ID
 NEXT_PUBLIC_AZURE_AD_CLIENT_ID=your-client-id
 NEXT_PUBLIC_AZURE_AD_TENANT_ID=your-tenant-id
 NEXT_PUBLIC_AZURE_AD_REDIRECT_URI=http://localhost:3000
@@ -103,10 +103,18 @@ NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1
 NEXT_PUBLIC_ENABLE_MARKETPLACE=true
 NEXT_PUBLIC_ENABLE_ACCESS_REQUESTS=true
 NEXT_PUBLIC_ENABLE_PIPELINE_MONITORING=true
+
+# Auth Gate (CSA-0122) — set to "true" for any env that must enforce auth
+# (staging, preview, production). Unset defaults to "false" (demo mode).
+# Must track the backend ENVIRONMENT allow-list (CSA-0001 / CSA-0019).
+NEXT_PUBLIC_AUTH_ENABLED=false
 ```
 
 > [!WARNING]
 > Never commit `.env.local` files containing real credentials. Use Key Vault references in production.
+
+> [!IMPORTANT]
+> `NEXT_PUBLIC_AUTH_ENABLED` must be `true` in every non-local environment. A missing value falls back to "on" only when `NODE_ENV=production` — pre-prod Next.js builds often run with `NODE_ENV=production` locally but need the flag explicit to avoid shipping unauthenticated.
 
 ---
 

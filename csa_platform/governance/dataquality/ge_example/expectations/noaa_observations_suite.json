@@ -1,0 +1,101 @@
+{
+    "name": "noaa_observations_suite",
+    "meta": {
+        "great_expectations_version": "1.0.0",
+        "notes": "Tutorial suite for CSA-in-a-Box ge_example. Validates a tiny synthetic NOAA-style observations DataFrame produced by ge_demo.py. Mirrors the contract at examples/noaa/contracts/ocean-buoys.yaml."
+    },
+    "expectations": [
+        {
+            "type": "expect_table_row_count_to_be_between",
+            "kwargs": {
+                "min_value": 1,
+                "max_value": 100000
+            },
+            "meta": {
+                "purpose": "sanity-check ingestion produced data"
+            }
+        },
+        {
+            "type": "expect_column_to_exist",
+            "kwargs": {
+                "column": "station_id"
+            }
+        },
+        {
+            "type": "expect_column_to_exist",
+            "kwargs": {
+                "column": "observation_datetime"
+            }
+        },
+        {
+            "type": "expect_column_to_exist",
+            "kwargs": {
+                "column": "air_temperature_c"
+            }
+        },
+        {
+            "type": "expect_column_values_to_not_be_null",
+            "kwargs": {
+                "column": "station_id"
+            }
+        },
+        {
+            "type": "expect_column_values_to_not_be_null",
+            "kwargs": {
+                "column": "observation_datetime"
+            }
+        },
+        {
+            "type": "expect_column_values_to_be_in_set",
+            "kwargs": {
+                "column": "station_type",
+                "value_set": ["Buoy", "C-MAN"]
+            }
+        },
+        {
+            "type": "expect_column_values_to_be_between",
+            "kwargs": {
+                "column": "latitude",
+                "min_value": -90,
+                "max_value": 90
+            }
+        },
+        {
+            "type": "expect_column_values_to_be_between",
+            "kwargs": {
+                "column": "longitude",
+                "min_value": -180,
+                "max_value": 180
+            }
+        },
+        {
+            "type": "expect_column_values_to_be_between",
+            "kwargs": {
+                "column": "air_temperature_c",
+                "min_value": -60,
+                "max_value": 60,
+                "mostly": 0.99
+            }
+        },
+        {
+            "type": "expect_column_values_to_be_between",
+            "kwargs": {
+                "column": "pressure_hpa",
+                "min_value": 870,
+                "max_value": 1084,
+                "mostly": 0.99
+            }
+        },
+        {
+            "type": "expect_column_values_to_be_between",
+            "kwargs": {
+                "column": "wind_speed_ms",
+                "min_value": 0,
+                "max_value": 100,
+                "mostly": 0.99
+            }
+        }
+    ],
+    "notes": "Referential integrity to the station catalog is declared here but enforced in a separate suite that joins observations to stations, per the GE 1.x pattern.",
+    "suite_parameters": {}
+}

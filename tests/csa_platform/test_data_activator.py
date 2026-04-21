@@ -22,7 +22,16 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from governance.common.logging import reset_logging_state
+from csa_platform.governance.common.logging import reset_logging_state
+
+# ---------------------------------------------------------------------------
+# Test credential constants (not real credentials — used only for structural
+# validation in unit tests; all external HTTP calls are mocked).
+# ---------------------------------------------------------------------------
+
+_FAKE_API_KEY = "key123"
+_FAKE_SENDGRID_KEY = "sg-key"
+_FAKE_PAGERDUTY_ROUTING_KEY = "routing-key"
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -432,7 +441,7 @@ class TestEmailNotifier:
         """validate_config returns True with SendGrid key and recipients."""
         from csa_platform.data_activator.actions.notifier import EmailNotifier  # type: ignore[import-untyped]
 
-        notifier = EmailNotifier(recipients=["user@test.com"], sendgrid_api_key="key123")
+        notifier = EmailNotifier(recipients=["user@test.com"], sendgrid_api_key=_FAKE_API_KEY)
         assert notifier.validate_config() is True
 
     def test_send_no_recipients(self) -> None:
@@ -452,7 +461,7 @@ class TestEmailNotifier:
             EmailNotifier,
         )
 
-        notifier = EmailNotifier(recipients=["user@test.com"], sendgrid_api_key="sg-key")
+        notifier = EmailNotifier(recipients=["user@test.com"], sendgrid_api_key=_FAKE_SENDGRID_KEY)
         payload = AlertPayload(rule_name="test", severity="critical")
 
         mock_response = MagicMock()
@@ -472,7 +481,7 @@ class TestIncidentCreator:
         """validate_config checks for API key."""
         from csa_platform.data_activator.actions.notifier import IncidentCreator  # type: ignore[import-untyped]
 
-        assert IncidentCreator(api_key="key123").validate_config() is True
+        assert IncidentCreator(api_key=_FAKE_API_KEY).validate_config() is True
         assert IncidentCreator(api_key="").validate_config() is False
 
     def test_send_pagerduty(self) -> None:
@@ -482,7 +491,7 @@ class TestIncidentCreator:
             IncidentCreator,
         )
 
-        creator = IncidentCreator(service="pagerduty", api_key="routing-key")
+        creator = IncidentCreator(service="pagerduty", api_key=_FAKE_PAGERDUTY_ROUTING_KEY)
         payload = AlertPayload(rule_name="test", severity="critical", field="cpu", actual_value=99.0, threshold=90.0)
 
         mock_response = MagicMock()

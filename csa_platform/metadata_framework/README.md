@@ -503,5 +503,5 @@ MIT License - see `LICENSE` file in repository root.
 - [Platform Components](../README.md) — Platform component index
 - [Platform Services](../../docs/PLATFORM_SERVICES.md) — Detailed platform service descriptions
 - [Architecture](../../docs/ARCHITECTURE.md) — Overall system architecture
-- [OneLake Pattern](../onelake_pattern/README.md) — ADLS Gen2 unified data lake
-- [Direct Lake](../direct_lake/README.md) — Power BI direct access to Delta Lake
+- [Unity Catalog Pattern](../unity_catalog_pattern/README.md) — ADLS Gen2 unified data lake
+- [Semantic Model](../semantic_model/README.md) — Power BI semantic models over Databricks SQL

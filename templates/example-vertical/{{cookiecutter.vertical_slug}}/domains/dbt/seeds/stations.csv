@@ -1,0 +1,4 @@
+station_id,station_name,latitude,longitude
+{{ cookiecutter.vertical_slug }}-0001,Primary Station,40.7128,-74.0060
+{{ cookiecutter.vertical_slug }}-0002,Secondary Station,34.0522,-118.2437
+{{ cookiecutter.vertical_slug }}-0003,Tertiary Station,41.8781,-87.6298

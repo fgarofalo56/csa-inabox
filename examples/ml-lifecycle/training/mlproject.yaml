@@ -1,0 +1,72 @@
+# Azure ML pipeline definition for the loan-default training job.
+#
+# Registering this with:
+#     az ml job create --file mlproject.yaml
+# submits a pipeline with three steps:
+#   1. generate_data — deterministic synthetic CSV
+#   2. train          — sklearn logistic regression with AUC metric
+#   3. register       — MLflow model registration
+#
+# The ``code`` reference points at the containing directory so both
+# train.py and the ../data/generators/generate_loan_data.py utility are
+# uploaded together.
+$schema: https://azuremlschemas.azureedge.net/latest/pipelineJob.schema.json
+type: pipeline
+experiment_name: loan_default_training
+description: |
+  CSA-0115 — End-to-end ML lifecycle example.
+  Trains a logistic regression on synthetic loan-default data, evaluates
+  ROC-AUC on a held-out 25% split, and registers the pipeline artifact
+  into the Azure ML model registry.
+
+settings:
+  default_compute: azureml:csa-cpu-cluster
+  continue_on_step_failure: false
+
+inputs:
+  rows:
+    type: integer
+    default: 5000
+  seed:
+    type: integer
+    default: 42
+  data_path:
+    type: uri_file
+    default: azureml://datastores/workspaceblobstore/paths/csa-ml-lifecycle/loans.csv
+
+jobs:
+  train_and_evaluate:
+    type: command
+    component:
+      name: csa_loan_default_trainer
+      version: "1"
+      type: command
+      code: ..
+      environment:
+        conda_file: ./conda.yaml
+        image: mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu22.04:latest
+      command: >-
+        python training/train.py
+        --rows ${{inputs.rows}}
+        --seed ${{inputs.seed}}
+        --output-dir ${{outputs.model_artifact}}
+      inputs:
+        rows:
+          type: integer
+        seed:
+          type: integer
+      outputs:
+        model_artifact:
+          type: uri_folder
+          mode: rw_mount
+    inputs:
+      rows: ${{parent.inputs.rows}}
+      seed: ${{parent.inputs.seed}}
+    outputs:
+      model_artifact:
+        type: uri_folder
+        mode: rw_mount
+
+outputs:
+  trained_model:
+    type: uri_folder

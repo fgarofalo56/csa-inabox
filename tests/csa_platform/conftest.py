@@ -36,10 +36,10 @@ _csa_platform = sys.modules["csa_platform"]
 _SUB_PACKAGES = [
     "data_activator",
     "metadata_framework",
-    "shared_services",
-    "direct_lake",
+    "functions",
+    "semantic_model",
     "multi_synapse",
-    "onelake_pattern",
+    "unity_catalog_pattern",
     "oss_alternatives",
 ]
 

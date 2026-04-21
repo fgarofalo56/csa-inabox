@@ -18,9 +18,13 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
+from csa_platform.common.audit import audit_event_from_request, audit_logger
+
+from ..config import settings
+from ..dependencies import get_sources_store
 from ..models.source import (
     ClassificationLevel,
     ConnectionConfig,
@@ -34,12 +38,21 @@ from ..models.source import (
     SourceType,
     TargetConfig,
 )
-from ..persistence import JsonStore
-from ..services.auth import get_current_user, require_role
+from ..observability.rate_limit import build_rate_limiter, get_route_limit
+from ..persistence import StoreBackend
+from ..persistence_async import AsyncStoreBackend
+from ..persistence_factory import build_store_backend
+from ..services.auth import DomainScope, get_domain_scope, require_role
 from ..services.provisioning import provisioning_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# Per-principal sliding-window rate limiter (CSA-0030).  Returns a no-op
+# limiter when PORTAL_RATE_LIMIT_ENABLED=false, so decoration is always
+# safe.  Resolving limits at import time pins the env vars at process
+# start — consistent with the rest of pydantic-settings-driven config.
+_limiter = build_rate_limiter()
 
 
 # ── Domain-scoping helpers ─────────────────────────────────────────────────
@@ -73,9 +86,13 @@ def _assert_user_can_access_domain(user: dict, domain: str) -> None:
         )
 
 
-def _load_source_with_domain_check(source_id: str, user: dict) -> SourceRecord:
+async def _load_source_with_domain_check(
+    source_id: str,
+    user: dict,
+    store: AsyncStoreBackend,
+) -> SourceRecord:
     """Fetch a source by id, enforcing domain scoping against ``user``."""
-    stored = _sources_store.get(source_id)
+    stored = await store.get(source_id)
     if not stored:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -106,16 +123,33 @@ class SourceUpdate(BaseModel):
 
     model_config = {"populate_by_name": True}
 
-# ── JSON-based persistence ──────────────────────────────────────────────────
-_sources_store = JsonStore("sources.json")
+# ── Persistence ─────────────────────────────────────────────────────────────
+# Backend selection (SQLite vs Postgres) is centralised in the async
+# factory and driven by ``settings.DATABASE_URL``.  Routers depend on
+# the AsyncStoreBackend Protocol via FastAPI ``Depends`` — see ADR-0016.
+#
+# The sync ``_sources_store`` module-level singleton below is retained
+# as a transitional compatibility layer for (a) the stats router that
+# computes aggregates synchronously and (b) the existing
+# test_persistence*.py suite that patches it directly.  New code should
+# use ``from ..dependencies import get_sources_store`` and ``Depends``.
+_sources_store: StoreBackend = build_store_backend("sources.json", settings)
 
 
-def seed_demo_sources() -> None:
+def get_store() -> StoreBackend:
+    """Return the sync sources store (compat; new code uses async DI)."""
+    return _sources_store
+
+
+async def seed_demo_sources() -> None:
     """Populate a handful of realistic demo sources on first access.
 
-    Called once at application startup from the lifespan handler.
+    Called once at application startup from the lifespan handler.  Uses
+    the async store so startup participates in the same event loop as
+    the routes.
     """
-    if _sources_store.count() > 0:
+    async_store = get_sources_store()
+    if await async_store.count() > 0:
         return
 
     demos = [
@@ -229,7 +263,7 @@ def seed_demo_sources() -> None:
         ),
     ]
     for s in demos:
-        _sources_store.add(s.model_dump())
+        await async_store.add(s.model_dump())
 
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
@@ -247,16 +281,19 @@ async def list_sources(
     search: str | None = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    _user: dict = Depends(get_current_user),
+    scope: DomainScope = Depends(get_domain_scope),
+    store: AsyncStoreBackend = Depends(get_sources_store),
 ) -> list[SourceRecord]:
     """Return all registered data sources, with optional filters."""
-    results = [SourceRecord.model_validate(item) for item in _sources_store.load()]
+    results = [SourceRecord.model_validate(item) for item in await store.load()]
 
-    # Domain scoping: non-admin users only see their domain's sources
-    user_roles = _user.get("roles", [])
-    user_domain = _user.get("domain") or _user.get("team")
-    if "Admin" not in user_roles and user_domain:
-        results = [s for s in results if s.domain == user_domain]
+    # Domain scoping: non-admin users only see their domain's sources.
+    # When a non-admin has no domain claim (e.g. demo mode), return empty
+    # rather than leaking data across all domains (SEC-0005).
+    if not scope.is_admin:
+        if not scope.user_domain:
+            return []
+        results = [s for s in results if s.domain == scope.user_domain]
 
     if domain:
         results = [s for s in results if s.domain == domain]
@@ -278,10 +315,11 @@ async def list_sources(
 )
 async def get_source(
     source_id: str,
-    _user: dict = Depends(get_current_user),
+    scope: DomainScope = Depends(get_domain_scope),
+    store: AsyncStoreBackend = Depends(get_sources_store),
 ) -> SourceRecord:
     """Return a single data source by its unique identifier."""
-    stored_source = _sources_store.get(source_id)
+    stored_source = await store.get(source_id)
     if not stored_source:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -289,10 +327,9 @@ async def get_source(
         )
     source = SourceRecord.model_validate(stored_source)
 
-    # Domain scoping: non-admin users can only access their domain's sources
-    user_roles = _user.get("roles", [])
-    user_domain = _user.get("domain") or _user.get("team")
-    if "Admin" not in user_roles and user_domain and source.domain != user_domain:
+    # Domain scoping: non-admin users can only access their domain's sources.
+    # A non-admin with no domain claim is denied regardless of the source domain.
+    if not scope.is_admin and (not scope.user_domain or source.domain != scope.user_domain):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You do not have access to this source.",
@@ -307,9 +344,12 @@ async def get_source(
     status_code=status.HTTP_201_CREATED,
     summary="Register a new data source",
 )
+@_limiter.limit(get_route_limit("sources_post", write=True))
 async def register_source(
+    request: Request,
     registration: SourceRegistration,
     user: dict = Depends(require_role("Contributor", "Admin")),
+    store: AsyncStoreBackend = Depends(get_sources_store),
 ) -> SourceRecord:
     """Register a new data source in the platform.
 
@@ -326,16 +366,31 @@ async def register_source(
         **registration.model_dump(by_alias=True),
     )
     # Persist to JSON store
-    _sources_store.add(record.model_dump())
-    logger.info(
-        "Registered data source",
-        extra={
-            "source_id": source_id,
-            "name": registration.name,
-            "type": registration.source_type.value,
-            "domain": registration.domain,
-            "user": user.get("preferred_username", user.get("sub", "unknown")),
-        },
+    await store.add(record.model_dump())
+
+    # Tamper-evident audit sink (CSA-0016) — source registration is an
+    # authorised state-changing operation that affects downstream
+    # provisioning and data governance.
+    audit_logger.emit(
+        audit_event_from_request(
+            request=request,
+            user=user,
+            action="source.register",
+            resource={
+                "type": "source",
+                "id": source_id,
+                "domain": registration.domain,
+                "classification": registration.classification.value
+                if registration.classification
+                else None,
+            },
+            outcome="success",
+            after={
+                "name": registration.name,
+                "source_type": registration.source_type.value,
+                "status": record.status.value,
+            },
+        )
     )
     return record
 
@@ -345,22 +400,25 @@ async def register_source(
     response_model=SourceRecord,
     summary="Update a data source",
 )
+@_limiter.limit(get_route_limit("sources_patch", write=True))
 async def update_source(
+    request: Request,  # noqa: ARG001 — required by slowapi for per-principal keying
     source_id: str,
     updates: SourceUpdate,
     user: dict = Depends(require_role("Contributor", "Admin")),
+    store: AsyncStoreBackend = Depends(get_sources_store),
 ) -> SourceRecord:
     """Apply a partial update to an existing source registration.
 
     Non-admin users may only update sources within their own domain.
     """
-    existing = _load_source_with_domain_check(source_id, user)
+    existing = await _load_source_with_domain_check(source_id, user, store)
     existing_data = existing.model_dump(by_alias=True)
     existing_data.update(updates.model_dump(exclude_unset=True))
     existing_data["updated_at"] = datetime.now(timezone.utc)
 
     updated = SourceRecord(**existing_data)
-    _sources_store.update(source_id, updated.model_dump())
+    await store.update(source_id, updated.model_dump())
     logger.info(
         "Updated data source",
         extra={
@@ -376,24 +434,42 @@ async def update_source(
     response_model=SourceRecord,
     summary="Decommission a data source",
 )
+@_limiter.limit(get_route_limit("sources_decommission", write=True))
 async def decommission_source(
+    request: Request,
     source_id: str,
     user: dict = Depends(require_role("Contributor", "Admin")),
+    store: AsyncStoreBackend = Depends(get_sources_store),
 ) -> SourceRecord:
     """Soft-delete a data source by setting its status to *decommissioned*.
 
     Non-admin users may only decommission sources within their own domain.
     """
-    source = _load_source_with_domain_check(source_id, user)
+    source = await _load_source_with_domain_check(source_id, user, store)
+    previous_status = source.status
     source.status = SourceStatus.DECOMMISSIONED
     source.updated_at = datetime.now(timezone.utc)
-    _sources_store.update(source_id, source.model_dump())
-    logger.info(
-        "Decommissioned source",
-        extra={
-            "source_id": source_id,
-            "user": user.get("preferred_username", user.get("sub", "unknown")),
-        },
+    await store.update(source_id, source.model_dump())
+
+    # Tamper-evident audit sink (CSA-0016) — decommission is a
+    # security-relevant terminal state transition.
+    audit_logger.emit(
+        audit_event_from_request(
+            request=request,
+            user=user,
+            action="source.decommission",
+            resource={
+                "type": "source",
+                "id": source_id,
+                "domain": source.domain,
+                "classification": source.classification.value
+                if source.classification
+                else None,
+            },
+            outcome="success",
+            before={"status": previous_status.value},
+            after={"status": SourceStatus.DECOMMISSIONED.value},
+        )
     )
     return source
 
@@ -402,38 +478,105 @@ async def decommission_source(
     "/{source_id}/provision",
     summary="Trigger DLZ provisioning",
 )
+@_limiter.limit(get_route_limit("sources_provision", write=True))
 async def provision_source(
+    request: Request,
     source_id: str,
     user: dict = Depends(require_role("Contributor", "Admin")),
+    store: AsyncStoreBackend = Depends(get_sources_store),
 ) -> dict:
     """Trigger the full Data Landing Zone provisioning workflow.
 
     Deploys infrastructure, creates ADF pipeline, and triggers Purview
     scan.  Non-admin users may only provision sources within their own
     domain.
+
+    The provisioning service returns an immutable
+    :class:`ProvisioningResult` (CSA-0045 / AQ-0015).  This handler
+    applies the result fields to the record and persists the update so
+    the service never mutates the input directly.  The service does not
+    raise — infrastructure errors surface as ``success=False`` results
+    with ``new_status=ERROR`` (already logged with stack context by the
+    service).
     """
-    source = _load_source_with_domain_check(source_id, user)
+    source = await _load_source_with_domain_check(source_id, user, store)
+
     result = await provisioning_service.provision(source)
 
+    # Apply whatever fields the service populated and persist.  Doing
+    # this for *every* outcome (including errors) keeps the persisted
+    # record aligned with what the service reported.
+    update_payload: dict = {}
+    if result.new_status is not None:
+        update_payload["status"] = result.new_status.value
+    if result.pipeline_id is not None:
+        update_payload["pipeline_id"] = result.pipeline_id
+    if result.scan_id is not None:
+        update_payload["purview_scan_id"] = result.scan_id
+    if result.updated_at is not None:
+        update_payload["updated_at"] = result.updated_at.isoformat()
+    if update_payload:
+        await store.update(source_id, update_payload)
+
+    # Branch on the result to emit the correct audit outcome + HTTP
+    # response.  ``new_status == ERROR`` means infrastructure failure;
+    # any other ``success=False`` is a validation / eligibility denial.
     if not result.success:
-        # Persist error status if provisioning set it
-        if source.status == SourceStatus.ERROR:
-            _sources_store.update(source_id, {
-                "status": source.status.value,
-                "updated_at": source.updated_at.isoformat(),
-            })
+        is_infra_error = result.new_status == SourceStatus.ERROR
+        outcome = "error" if is_infra_error else "denied"
+        reason_prefix = "infrastructure_error" if is_infra_error else "provisioning_rejected"
+        error_detail = result.details.get("error_message") if is_infra_error else result.message
+        reason = f"{reason_prefix}: {error_detail}"[:256] if error_detail else reason_prefix
+
+        # Tamper-evident audit sink (CSA-0016) — record the failed
+        # provisioning attempt so the audit trail is complete on error.
+        audit_logger.emit(
+            audit_event_from_request(
+                request=request,
+                user=user,
+                action="source.provision",
+                resource={
+                    "type": "source",
+                    "id": source_id,
+                    "domain": source.domain,
+                    "classification": source.classification.value
+                    if source.classification
+                    else None,
+                },
+                outcome=outcome,
+                reason=reason,
+            )
+        )
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_502_BAD_GATEWAY
+            if is_infra_error
+            else status.HTTP_400_BAD_REQUEST,
             detail=result.message,
         )
 
-    # Persist the provisioning results back to the store
-    _sources_store.update(source_id, {
-        "status": source.status.value,
-        "pipeline_id": source.pipeline_id,
-        "purview_scan_id": source.purview_scan_id,
-        "updated_at": source.updated_at.isoformat(),
-    })
+    # Tamper-evident audit sink (CSA-0016) — provisioning is a
+    # high-impact state transition that deploys infrastructure.
+    audit_logger.emit(
+        audit_event_from_request(
+            request=request,
+            user=user,
+            action="source.provision",
+            resource={
+                "type": "source",
+                "id": source_id,
+                "domain": source.domain,
+                "classification": source.classification.value
+                if source.classification
+                else None,
+            },
+            outcome="success",
+            after={
+                "status": result.new_status.value if result.new_status else None,
+                "pipeline_id": result.pipeline_id,
+                "scan_id": result.scan_id,
+            },
+        )
+    )
 
     return {
         "status": "provisioning",
@@ -446,18 +589,67 @@ async def provision_source(
     "/{source_id}/scan",
     summary="Trigger Purview scan",
 )
+@_limiter.limit(get_route_limit("sources_scan", write=True))
 async def scan_source(
+    request: Request,
     source_id: str,
     user: dict = Depends(require_role("Contributor", "Admin")),
+    store: AsyncStoreBackend = Depends(get_sources_store),
 ) -> dict:
     """Trigger a Microsoft Purview metadata scan for this source.
 
     Non-admin users may only scan sources within their own domain.
     """
-    source = _load_source_with_domain_check(source_id, user)
-    scan_id = await provisioning_service.trigger_purview_scan(source)
+    source = await _load_source_with_domain_check(source_id, user, store)
+
+    try:
+        scan_id = await provisioning_service.trigger_purview_scan(source)
+    except Exception as exc:
+        logger.exception("Purview scan failed for source %s", source_id)
+        audit_logger.emit(
+            audit_event_from_request(
+                request=request,
+                user=user,
+                action="source.scan",
+                resource={
+                    "type": "source",
+                    "id": source_id,
+                    "domain": source.domain,
+                    "classification": source.classification.value
+                    if source.classification
+                    else None,
+                },
+                outcome="error",
+                reason=f"purview_error: {exc!s}"[:256],
+            )
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Purview scan failed due to an infrastructure error. Check server logs.",
+        ) from exc
+
     source.purview_scan_id = scan_id
     source.updated_at = datetime.now(timezone.utc)
-    _sources_store.update(source_id, source.model_dump())
+    await store.update(source_id, source.model_dump())
+
+    # Tamper-evident audit sink (CSA-0016) — triggers a Purview scan that
+    # touches the source's data plane; security-relevant.
+    audit_logger.emit(
+        audit_event_from_request(
+            request=request,
+            user=user,
+            action="source.scan",
+            resource={
+                "type": "source",
+                "id": source_id,
+                "domain": source.domain,
+                "classification": source.classification.value
+                if source.classification
+                else None,
+            },
+            outcome="success",
+            after={"scan_id": scan_id},
+        )
+    )
 
     return {"status": "scanning", "scan_id": scan_id}

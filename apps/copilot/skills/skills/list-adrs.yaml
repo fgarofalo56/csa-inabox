@@ -1,0 +1,33 @@
+id: list-adrs
+name: "List architecture decision records"
+description: "Read the ADR index file and run a grounded corpus search scoped to the requested topic so the caller gets both a deterministic list and contextual citations."
+category: read
+inputs:
+  - name: topic
+    type: string
+    description: "Topic keywords to search for (e.g. 'bicep', 'fabric', 'portal auth')."
+    required: true
+outputs:
+  type: object
+  fields:
+    adr_index: "Contents of docs/adr/README.md, which enumerates every ADR."
+    matching_chunks: "Corpus chunks matching the topic keywords."
+steps:
+  - id: read-adr-index
+    tool: read_repo_file
+    description: "Fetch the ADR README that catalogues every ADR."
+    input:
+      path: docs/adr/README.md
+      max_bytes: 40000
+  - id: search-topic
+    tool: search_corpus
+    description: "Grounded chunks for the requested topic."
+    input:
+      query: "ADR {input.topic}"
+      top_k: 8
+fallback_if_tool_missing: fail
+version: "1.0"
+tags:
+  - adr
+  - discovery
+  - index

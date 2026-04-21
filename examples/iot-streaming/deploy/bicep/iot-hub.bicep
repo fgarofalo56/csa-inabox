@@ -1,6 +1,26 @@
 // ─────────────────────────────────────────────────────────────
 // IoT Hub + Device Provisioning Service + Event Hub for Telemetry
 // CSA-in-a-Box IoT Streaming Example
+//
+// BREAKING CHANGE — CSA-0025 / AQ-0014 (FedRAMP High / IL5 posture)
+// ─────────────────────────────────────────────────────────────
+// IoT Hub and DPS are Entra-only. Shared Access Signature (SAS) key
+// authentication is DISABLED (`disableLocalAuth: true`) on both
+// resources per CSA-0025 (approved via ballot AQ-0014).
+//
+// • No `listKeys()` on IoT Hub — the `iotHubOwnerKeySecret` that
+//   previously materialized the primary key into Key Vault has
+//   been removed. Device clients authenticate via workload
+//   identity (managed identity + OAuth token) or X.509 +
+//   DPS Entra enrollment.
+// • DPS no longer accepts a SAS connection string for linking to
+//   IoT Hub. DPS uses its system-assigned managed identity to
+//   enroll devices (`authenticationType: 'identityBased'`).
+// • Legacy SAS device clients MUST migrate before deploying this
+//   template. See docs/migrations/iot-hub-entra.md.
+// • Rollback: flipping `disableLocalAuth` back to `false` takes
+//   the deployment off the FedRAMP High / IL5 path. Do not do
+//   this in gov or regulated environments.
 // ─────────────────────────────────────────────────────────────
 
 @description('Base name for all resources (will be suffixed)')
@@ -217,19 +237,25 @@ resource ehListenConnectionStringSecret 'Microsoft.KeyVault/vaults/secrets@2023-
   }
 }
 
-resource iotHubOwnerKeySecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
-  parent: keyVault
-  name: 'iothub-owner-primary-key'
-  properties: {
-    value: iotHub.listKeys().value[0].primaryKey
-  }
-}
+// REMOVED per CSA-0025 — IoT Hub SAS key is no longer materialized
+// into Key Vault. With `disableLocalAuth: true` there is no SAS
+// connection string to store. Consumers use Entra workload identity
+// and the `Azure IoT Hub Data Contributor` / `Azure IoT Hub Data
+// Reader` RBAC roles on the hub resource ID below.
+//   output iotHubResourceId string = iotHub.id
+// resource iotHubOwnerKeySecret ... REMOVED (CSA-0025)
 
-// ─── IoT Hub ─────────────────────────────────────────────────
+// ─── IoT Hub (Entra-only per CSA-0025 / AQ-0014) ─────────────
+// SAS authentication is disabled. Device clients authenticate via
+// workload identity (MSI + OAuth) or X.509 + DPS Entra enrollment.
+// Legacy SAS clients must migrate — see docs/migrations/iot-hub-entra.md.
 resource iotHub 'Microsoft.Devices/IotHubs@2023-06-30' = {
   name: iotHubName
   location: location
   tags: tags
+  identity: {
+    type: 'SystemAssigned'
+  }
   sku: {
     name: iotHubSku
     capacity: iotHubCapacity
@@ -246,7 +272,13 @@ resource iotHub 'Microsoft.Devices/IotHubs@2023-06-30' = {
         eventHubs: [
           {
             name: 'telemetry-route'
-            connectionString: sendRule.listKeys().primaryConnectionString
+            // Identity-based routing (CSA-0025) — IoT Hub uses its
+            // system-assigned managed identity to authenticate to
+            // Event Hubs. The hub's MI must be granted
+            // "Azure Event Hubs Data Sender" on the namespace.
+            authenticationType: 'identityBased'
+            endpointUri: 'sb://${eventHubNamespace.name}.servicebus.windows.net'
+            entityPath: telemetryHubName
             resourceGroup: resourceGroup().name
             subscriptionId: subscription().subscriptionId
           }
@@ -287,30 +319,79 @@ resource iotHub 'Microsoft.Devices/IotHubs@2023-06-30' = {
     }
     features: 'None'
     minTlsVersion: '1.2'
-    disableLocalAuth: false
+    // CSA-0025: SAS auth disabled. Use Entra workload identity.
+    disableLocalAuth: true
+    // No SAS authorization policies — Entra only.
+    authorizationPolicies: []
   }
 }
 
-// ─── Device Provisioning Service ─────────────────────────────
-resource dps 'Microsoft.Devices/provisioningServices@2022-12-12' = {
+// ─── Device Provisioning Service (Entra-only per CSA-0025) ──
+// DPS is deployed UNLINKED from IoT Hub. The Bicep/ARM DPS schema
+// currently requires a SAS connection string for inline IoT-Hub
+// linking (`IotHubDefinitionDescription.connectionString` is
+// marked required through API 2025-02-01-preview). Since IoT Hub
+// has `disableLocalAuth: true`, no valid SAS string exists — so
+// we leave `iotHubs: []` and establish the identity-based link
+// post-deploy. The DPS system-assigned identity below is granted
+// "IoT Hub Data Contributor" so that the post-deploy link can be
+// configured with `authenticationType: identityBased` via:
+//
+//   az iot dps linked-hub create \
+//     --dps-name <dps>  --resource-group <rg> \
+//     --hub-resource-id <iotHub.id> \
+//     --allocation-weight 1 \
+//     --authentication-type identityBased
+//
+// See docs/migrations/iot-hub-entra.md for the full playbook.
+resource dps 'Microsoft.Devices/provisioningServices@2023-03-01-preview' = {
   name: dpsName
   location: location
   tags: tags
+  identity: {
+    type: 'SystemAssigned'
+  }
   sku: {
     name: 'S1'
     capacity: 1
   }
   properties: {
-    iotHubs: [
-      {
-        connectionString: 'HostName=${iotHub.properties.hostName};SharedAccessKeyName=iothubowner;SharedAccessKey=${iotHub.listKeys().value[0].primaryKey}'
-        location: location
-        // NOTE: DPS requires inline connection string at deploy time.
-        // The key is also stored in Key Vault (secret: iothub-owner-primary-key)
-        // for runtime access by applications.
-      }
-    ]
+    // CSA-0025: no SAS link. Link established post-deploy via CLI
+    // using the DPS system-assigned identity (see comment above).
+    iotHubs: []
     allocationPolicy: 'Hashed'
+  }
+}
+
+// ─── Role Assignment: DPS MI → IoT Hub Data Contributor ─────
+// Required for identity-based DPS→IoT Hub linking (CSA-0025).
+// Role GUID: 4fc6c259-987e-4a07-842e-c321cc9d413f (IoT Hub Data Contributor)
+resource dpsIotHubContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: iotHub
+  name: guid(iotHub.id, dps.id, 'IoTHubDataContributor')
+  properties: {
+    principalId: dps.identity.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      '4fc6c259-987e-4a07-842e-c321cc9d413f'
+    )
+  }
+}
+
+// ─── Role Assignment: IoT Hub MI → Event Hubs Data Sender ───
+// Required for identity-based IoT Hub routing to Event Hubs (CSA-0025).
+// Role GUID: 2b629674-e913-4c01-ae53-ef4638d8f975 (Azure Event Hubs Data Sender)
+resource iotHubEhSender 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: eventHubNamespace
+  name: guid(eventHubNamespace.id, iotHub.id, 'EventHubsDataSender')
+  properties: {
+    principalId: iotHub.identity.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      '2b629674-e913-4c01-ae53-ef4638d8f975'
+    )
   }
 }
 
@@ -345,16 +426,26 @@ resource ehDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview
 
 // ─── Outputs ─────────────────────────────────────────────────
 output iotHubName string = iotHub.name
+output iotHubResourceId string = iotHub.id
 output iotHubHostName string = iotHub.properties.hostName
+output iotHubPrincipalId string = iotHub.identity.principalId
 output dpsName string = dps.name
+output dpsResourceId string = dps.id
 output dpsIdScope string = dps.properties.idScope
+output dpsEndpoint string = dps.properties.deviceProvisioningHostName
+output dpsPrincipalId string = dps.identity.principalId
 output eventHubNamespaceName string = eventHubNamespace.name
 output telemetryHubName string = telemetryHub.name
 output alertsHubName string = alertsHub.name
 output processedHubName string = processedHub.name
 output eventHubNamespaceId string = eventHubNamespace.id
-// Connection strings are stored in Key Vault — never expose as Bicep outputs.
-// Use Key Vault secret references: 'eh-telemetry-send-connection-string'
-// and 'eh-telemetry-listen-connection-string' at runtime.
+// CSA-0025: IoT Hub SAS output REMOVED. No `iothub-owner-primary-key`
+// Key Vault secret and no `iotHubConnectionString` output. Consumers
+// authenticate to IoT Hub via Entra (workload identity + OAuth token).
+// See docs/migrations/iot-hub-entra.md for the migration playbook.
+// Event Hub SAS connection strings are still available in Key Vault
+// ('eh-telemetry-send-connection-string' / 'eh-telemetry-listen-connection-string')
+// for Stream Analytics compatibility — see CSA-0026 for the Event Hub
+// identity migration (tracked separately).
 output keyVaultName string = keyVault.name
 output keyVaultUri string = keyVault.properties.vaultUri

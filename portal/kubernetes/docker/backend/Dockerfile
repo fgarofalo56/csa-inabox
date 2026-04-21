@@ -1,5 +1,6 @@
 # ─── Stage 1: Dependencies ───────────────────────────────────────────────────
-FROM python:3.12-slim AS builder
+# python:3.12-slim (pinned 2026-04-17)
+FROM python:3.12-slim@sha256:ac212230555ffb7ec17c214fb4cf036ced11b30b5b460994376b0725c7f6c151 AS builder
 
 WORKDIR /app
 
@@ -28,7 +29,8 @@ RUN if [ -f requirements.txt ] && [ -s requirements.txt ]; then \
     fi
 
 # ─── Stage 2: Runtime ───────────────────────────────────────────────────────
-FROM python:3.12-slim AS production
+# python:3.12-slim (pinned 2026-04-17)
+FROM python:3.12-slim@sha256:ac212230555ffb7ec17c214fb4cf036ced11b30b5b460994376b0725c7f6c151 AS production
 
 WORKDIR /app
 

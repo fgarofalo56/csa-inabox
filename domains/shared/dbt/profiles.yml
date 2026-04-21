@@ -18,6 +18,13 @@
 csa_analytics:
   target: dev
   outputs:
+    # ── DuckDB (CI integration tests) ─────────────────────────────────
+    duckdb:
+      type: duckdb
+      path: "target/csa_analytics_ci.duckdb"
+      schema: main
+      threads: 1
+
     # ── Development (OAuth M2M with PAT fallback) ──────────────────────
     dev:
       type: databricks

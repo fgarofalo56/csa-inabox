@@ -87,7 +87,7 @@ Built on Dataverse tables for full CRUD with business rules:
 
 - Microsoft 365 license with Power Platform (E3/E5 or standalone)
 - Power Platform environment (with Dataverse)
-- Azure AD app registration for API access
+- Microsoft Entra ID app registration for API access
 
 ### Step 1: Import Solution
 
@@ -108,7 +108,7 @@ pac solution import --path ./solution/CSAPortal_managed.zip
 2. Edit the "CSA Data Onboarding" canvas app
 3. Update the `API_BASE_URL` environment variable
 4. Configure the HTTP connector with your API endpoint
-5. Set up Azure AD connector for authentication
+5. Set up Microsoft Entra ID connector for authentication
 
 ### Step 3: Configure Flows
 

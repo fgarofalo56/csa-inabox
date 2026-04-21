@@ -1,0 +1,20 @@
+{
+    "vertical_name": "Example Vertical",
+    "vertical_slug": "example-vertical",
+    "description": "A new CSA-in-a-Box vertical analytics example.",
+    "fedramp_level": ["moderate", "high", "il4", "il5"],
+    "domain_owner": "data-engineering@contoso.com",
+    "uses_streaming": ["no", "yes"],
+    "uses_iot": ["no", "yes"],
+    "sample_frequency_hours": "1",
+    "__prompts__": {
+        "vertical_name": "Human-readable vertical name (e.g. 'NOAA Climate')",
+        "vertical_slug": "URL / directory slug (lowercase, hyphenated, e.g. 'noaa')",
+        "description": "One-line description of the vertical",
+        "fedramp_level": "FedRAMP target level",
+        "domain_owner": "Owning team email",
+        "uses_streaming": "Does this vertical use Event Hub / Stream Analytics?",
+        "uses_iot": "Does this vertical use IoT Hub?",
+        "sample_frequency_hours": "How often does source data refresh (hours)"
+    }
+}
