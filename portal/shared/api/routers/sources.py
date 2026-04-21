@@ -38,6 +38,7 @@ from ..models.source import (
     SourceType,
     TargetConfig,
 )
+from ..observability.rate_limit import build_rate_limiter, get_route_limit
 from ..persistence import StoreBackend
 from ..persistence_async import AsyncStoreBackend
 from ..persistence_factory import build_store_backend
@@ -46,6 +47,12 @@ from ..services.provisioning import provisioning_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# Per-principal sliding-window rate limiter (CSA-0030).  Returns a no-op
+# limiter when PORTAL_RATE_LIMIT_ENABLED=false, so decoration is always
+# safe.  Resolving limits at import time pins the env vars at process
+# start — consistent with the rest of pydantic-settings-driven config.
+_limiter = build_rate_limiter()
 
 
 # ── Domain-scoping helpers ─────────────────────────────────────────────────
@@ -337,9 +344,10 @@ async def get_source(
     status_code=status.HTTP_201_CREATED,
     summary="Register a new data source",
 )
+@_limiter.limit(get_route_limit("sources_post", write=True))
 async def register_source(
-    registration: SourceRegistration,
     request: Request,
+    registration: SourceRegistration,
     user: dict = Depends(require_role("Contributor", "Admin")),
     store: AsyncStoreBackend = Depends(get_sources_store),
 ) -> SourceRecord:
@@ -392,7 +400,9 @@ async def register_source(
     response_model=SourceRecord,
     summary="Update a data source",
 )
+@_limiter.limit(get_route_limit("sources_patch", write=True))
 async def update_source(
+    request: Request,  # noqa: ARG001 — required by slowapi for per-principal keying
     source_id: str,
     updates: SourceUpdate,
     user: dict = Depends(require_role("Contributor", "Admin")),
@@ -424,9 +434,10 @@ async def update_source(
     response_model=SourceRecord,
     summary="Decommission a data source",
 )
+@_limiter.limit(get_route_limit("sources_decommission", write=True))
 async def decommission_source(
-    source_id: str,
     request: Request,
+    source_id: str,
     user: dict = Depends(require_role("Contributor", "Admin")),
     store: AsyncStoreBackend = Depends(get_sources_store),
 ) -> SourceRecord:
@@ -467,9 +478,10 @@ async def decommission_source(
     "/{source_id}/provision",
     summary="Trigger DLZ provisioning",
 )
+@_limiter.limit(get_route_limit("sources_provision", write=True))
 async def provision_source(
-    source_id: str,
     request: Request,
+    source_id: str,
     user: dict = Depends(require_role("Contributor", "Admin")),
     store: AsyncStoreBackend = Depends(get_sources_store),
 ) -> dict:
@@ -577,9 +589,10 @@ async def provision_source(
     "/{source_id}/scan",
     summary="Trigger Purview scan",
 )
+@_limiter.limit(get_route_limit("sources_scan", write=True))
 async def scan_source(
-    source_id: str,
     request: Request,
+    source_id: str,
     user: dict = Depends(require_role("Contributor", "Admin")),
     store: AsyncStoreBackend = Depends(get_sources_store),
 ) -> dict:

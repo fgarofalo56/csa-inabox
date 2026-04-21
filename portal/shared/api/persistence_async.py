@@ -285,25 +285,41 @@ class AsyncSqliteStore:
 
     @_retry_transient()
     async def add(self, item: dict[str, Any]) -> dict[str, Any]:
+        # Lazy import of the metrics helper so SQLite-only deployments
+        # that don't enable Prometheus never import prometheus_client.
+        from .observability.metrics import record_async_store_error, record_sqlite_store_op
+
         if "id" not in item:
             item["id"] = str(uuid.uuid4())
         item_id = str(item["id"])
-        conn = await self._ensure_ready()
-        await conn.execute(
-            f"INSERT OR REPLACE INTO [{self.table}] (id, data) VALUES (?, ?)",
-            (item_id, json.dumps(item, default=str)),
-        )
-        await conn.commit()
+        try:
+            conn = await self._ensure_ready()
+            await conn.execute(
+                f"INSERT OR REPLACE INTO [{self.table}] (id, data) VALUES (?, ?)",
+                (item_id, json.dumps(item, default=str)),
+            )
+            await conn.commit()
+        except Exception:
+            record_async_store_error("sqlite", "add")
+            raise
+        record_sqlite_store_op("add")
         return item
 
     @_retry_transient()
     async def get(self, item_id: str) -> dict[str, Any] | None:
-        conn = await self._ensure_ready()
-        async with conn.execute(
-            f"SELECT data FROM [{self.table}] WHERE id = ?",
-            (item_id,),
-        ) as cursor:
-            row = await cursor.fetchone()
+        from .observability.metrics import record_async_store_error, record_sqlite_store_op
+
+        try:
+            conn = await self._ensure_ready()
+            async with conn.execute(
+                f"SELECT data FROM [{self.table}] WHERE id = ?",
+                (item_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+        except Exception:
+            record_async_store_error("sqlite", "get")
+            raise
+        record_sqlite_store_op("get")
         if row is None:
             return None
         return json.loads(row[0])
@@ -313,20 +329,28 @@ class AsyncSqliteStore:
         item_id: str,
         updates: dict[str, Any],
     ) -> dict[str, Any] | None:
-        async with self._transact() as conn:
-            async with conn.execute(
-                f"SELECT data FROM [{self.table}] WHERE id = ?",
-                (item_id,),
-            ) as cur:
-                row = await cur.fetchone()
-            if row is None:
-                return None
-            item = json.loads(row[0])
-            item.update(updates)
-            await conn.execute(
-                f"UPDATE [{self.table}] SET data = ? WHERE id = ?",
-                (json.dumps(item, default=str), item_id),
-            )
+        from .observability.metrics import record_async_store_error, record_sqlite_store_op
+
+        try:
+            async with self._transact() as conn:
+                async with conn.execute(
+                    f"SELECT data FROM [{self.table}] WHERE id = ?",
+                    (item_id,),
+                ) as cur:
+                    row = await cur.fetchone()
+                if row is None:
+                    record_sqlite_store_op("update")
+                    return None
+                item = json.loads(row[0])
+                item.update(updates)
+                await conn.execute(
+                    f"UPDATE [{self.table}] SET data = ? WHERE id = ?",
+                    (json.dumps(item, default=str), item_id),
+                )
+        except Exception:
+            record_async_store_error("sqlite", "update")
+            raise
+        record_sqlite_store_op("update")
         return item
 
     async def update_atomic(
@@ -358,12 +382,19 @@ class AsyncSqliteStore:
 
     @_retry_transient()
     async def delete(self, item_id: str) -> bool:
-        conn = await self._ensure_ready()
-        cursor = await conn.execute(
-            f"DELETE FROM [{self.table}] WHERE id = ?",
-            (item_id,),
-        )
-        await conn.commit()
+        from .observability.metrics import record_async_store_error, record_sqlite_store_op
+
+        try:
+            conn = await self._ensure_ready()
+            cursor = await conn.execute(
+                f"DELETE FROM [{self.table}] WHERE id = ?",
+                (item_id,),
+            )
+            await conn.commit()
+        except Exception:
+            record_async_store_error("sqlite", "delete")
+            raise
+        record_sqlite_store_op("delete")
         return (cursor.rowcount or 0) > 0
 
     @_retry_transient()

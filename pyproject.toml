@@ -100,6 +100,16 @@ portal = [
     "azure-mgmt-resource>=23.1.0,<26.0.0",
     "azure-mgmt-datafactory>=7.0.0,<10.0.0",
     "azure-storage-blob>=12.20.0,<13.0.0",
+    # Observability (CSA-0042 / CSA-0061 / CSA-0030) — all optional and
+    # imported lazily; see portal/shared/api/observability/*.py and
+    # docs/adr/0020-portal-observability-and-rate-limiting.md.  The
+    # portal remains startable without these extras installed.
+    "prometheus-client>=0.20.0,<1.0.0",
+    "slowapi>=0.1.9,<1.0.0",
+    "opentelemetry-instrumentation-fastapi>=0.46b0",
+    "opentelemetry-instrumentation-httpx>=0.46b0",
+    "opentelemetry-instrumentation-sqlalchemy>=0.46b0",
+    "opentelemetry-instrumentation-redis>=0.46b0",
 ]
 bff = [
     # CSA-0020 Phase 2 — BFF auth pattern (ADR-0014).

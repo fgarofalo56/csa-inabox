@@ -30,6 +30,7 @@ from ..dependencies import (
 )
 from ..models.pipeline import PipelineRecord, PipelineRun, PipelineStatus, PipelineType
 from ..models.source import SourceRecord
+from ..observability.rate_limit import build_rate_limiter, get_route_limit
 from ..persistence import StoreBackend
 from ..persistence_async import AsyncStoreBackend
 from ..persistence_factory import build_store_backend
@@ -37,6 +38,9 @@ from ..services.auth import DomainScope, get_domain_scope, require_role
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# Per-principal sliding-window rate limiter (CSA-0030).
+_limiter = build_rate_limiter()
 
 # ── Persistence ─────────────────────────────────────────────────────────
 # Backend is chosen by the async factory based on ``settings.DATABASE_URL``;
@@ -285,9 +289,10 @@ async def get_pipeline_runs(
     response_model=PipelineRun,
     summary="Trigger a pipeline run",
 )
+@_limiter.limit(get_route_limit("pipelines_trigger", write=True))
 async def trigger_pipeline(
-    pipeline_id: str,
     request: Request,
+    pipeline_id: str,
     user: dict = Depends(require_role("Contributor", "Admin")),
     store: AsyncStoreBackend = Depends(get_pipelines_store),
     runs_store: AsyncStoreBackend = Depends(_get_async_runs_store),

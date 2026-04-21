@@ -28,6 +28,7 @@ from ..models.marketplace import (
     AccessRequestStatus,
 )
 from ..models.source import ClassificationLevel
+from ..observability.rate_limit import build_rate_limiter, get_route_limit
 from ..persistence import StoreBackend
 from ..persistence_async import AsyncStoreBackend
 from ..persistence_factory import build_store_backend
@@ -35,6 +36,9 @@ from ..services.auth import DomainScope, get_current_user, get_domain_scope, req
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# Per-principal sliding-window rate limiter (CSA-0030).
+_limiter = build_rate_limiter()
 
 
 # ── Request Models ─────────────────────────────────────────────────────────
@@ -191,9 +195,10 @@ async def list_access_requests(
     status_code=status.HTTP_201_CREATED,
     summary="Create access request",
 )
+@_limiter.limit(get_route_limit("access_post", write=True))
 async def create_access_request(
-    payload: AccessRequestCreate,
     request: Request,
+    payload: AccessRequestCreate,
     user: dict = Depends(get_current_user),
     store: AsyncStoreBackend = Depends(get_access_store),
     products_store: AsyncStoreBackend = Depends(get_products_store),
@@ -400,9 +405,10 @@ async def _enforce_review_authorization(
     response_model=AccessRequest,
     summary="Approve access request",
 )
+@_limiter.limit(get_route_limit("access_approve", write=True))
 async def approve_access_request(
-    request_id: str,
     request: Request,
+    request_id: str,
     body: ReviewBody | None = None,
     user: dict = Depends(require_role("Contributor", "Admin")),
     scope: DomainScope = Depends(get_domain_scope),
@@ -479,9 +485,10 @@ async def approve_access_request(
     response_model=AccessRequest,
     summary="Deny access request",
 )
+@_limiter.limit(get_route_limit("access_deny", write=True))
 async def deny_access_request(
-    request_id: str,
     request: Request,
+    request_id: str,
     body: ReviewBody | None = None,
     user: dict = Depends(require_role("Contributor", "Admin")),
     scope: DomainScope = Depends(get_domain_scope),

@@ -38,6 +38,7 @@
 | [0017](./0017-rag-service-layer.md) | RAG pipeline service-layer extraction (CSA-0133) | accepted | 2026-04-20 | Split the 1,285-line `pipeline.py` god-class into six submodules behind a `RAGService` facade; legacy `pipeline` module is preserved as a compat shim for one release. |
 | [0018](./0018-fabric-rti-adapter.md) | Fabric Real-Time Intelligence adapter (pre-GA, env-gated) | accepted | 2026-04-20 | CSA-0137 follow-on — ship `FabricRTISource` today behind `FABRIC_RTI_ENABLED`; raise-with-pointer when the flag is unset so Gov tenants fail loudly until RTI Gov-GA lands. |
 | [0019](./0019-bff-reverse-proxy.md) | BFF reverse-proxy + HMAC-sealed MSAL token cache | accepted | 2026-04-20 | CSA-0020 Phase 3 — mount `/api/*` proxy behind `BFF_PROXY_ENABLED`; persist MSAL `SerializableTokenCache` to Redis with HMAC sealing so a Redis compromise is tamper-evident. Completes AQ-0012's long-term column — tokens never reach the browser. |
+| [0020](./0020-portal-observability-and-rate-limiting.md) | Portal observability (OTel + Prometheus) and per-principal rate limiting | accepted | 2026-04-20 | CSA-0042 / CSA-0061 / CSA-0030 — OpenTelemetry with OTLP exporter + W3C trace-context, Prometheus `/metrics` on a private registry, per-principal sliding-window rate limiter on every write endpoint.  All three feature-flagged and lazy-imported so the portal still boots without the optional extras. |
 
 ---
 

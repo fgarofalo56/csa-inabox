@@ -242,11 +242,16 @@ class SealedTokenCache(msal.SerializableTokenCache):  # type: ignore[misc]
         token. This is the safe failure mode — no tokens reused from
         a tampered blob.
         """
+        # Lazy import avoids pulling prometheus_client into the import
+        # graph of a deployment that never enabled metrics.
+        from ..observability.metrics import record_token_cache_hit
+
         sealed = await self._backend.load(self._cache_key)
         if sealed is None:
             logger.debug(
                 "bff.token_cache.miss cache_key=%s", self._cache_key
             )
+            record_token_cache_hit("miss")
             return
         try:
             body = _unseal(self._hmac_key, sealed)
@@ -260,6 +265,7 @@ class SealedTokenCache(msal.SerializableTokenCache):  # type: ignore[misc]
             # fresh one — and the next ``async_load`` does not keep
             # re-reporting the same tamper event on every request.
             await self._backend.delete(self._cache_key)
+            record_token_cache_hit("tamper")
             return
         self.deserialize(body.decode("utf-8"))
         logger.debug(
@@ -267,6 +273,7 @@ class SealedTokenCache(msal.SerializableTokenCache):  # type: ignore[misc]
             self._cache_key,
             len(body),
         )
+        record_token_cache_hit("hit")
 
     async def async_save(self) -> None:
         """Persist this cache instance back to the backend if dirty.

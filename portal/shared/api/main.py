@@ -36,6 +36,14 @@ from starlette.responses import Response
 from csa_platform.governance.common.logging import configure_structlog, get_logger
 
 from .config import settings
+from .observability import (
+    build_metrics_registry,
+    build_rate_limit_config,
+    configure_tracing,
+    shutdown_tracing,
+)
+from .observability.metrics import install_metrics
+from .observability.rate_limit import install_rate_limiting
 from .routers import access, marketplace, pipelines, sources, stats
 from .routers.stats import domains_router
 from .services.auth import get_current_user
@@ -187,6 +195,14 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
                     route.path,
                 )
 
+    # CSA-0042 — OpenTelemetry bootstrap.  Runs inside lifespan so the
+    # TracerProvider is owned by the same event loop that serves traffic.
+    # No-op when OTEL_EXPORTER_OTLP_ENDPOINT is unset.
+    try:
+        configure_tracing(_app)
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.warning("OpenTelemetry bootstrap failed: %s", exc)
+
     yield
 
     # ── Shutdown ────────────────────────────────────────────────────────
@@ -194,6 +210,8 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     # of the shared async SQLAlchemy engine + managed-identity credentials.
     # See ADR-0016.
     logger.info("Shutting down CSA-in-a-Box API — draining async stores")
+    # Flush any pending OTel spans before the SDK shuts down.
+    shutdown_tracing()
     # Close BFF proxy resources first (httpx client) so in-flight proxy
     # requests see a clean cancellation rather than a half-closed engine.
     if settings.AUTH_MODE.lower() == "bff" and settings.BFF_PROXY_ENABLED:
@@ -261,6 +279,26 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
+
+# ── Observability: Prometheus /metrics + per-principal rate limiter ─────────
+# CSA-0061 — Prometheus exposition and HTTP-metrics middleware.  No-op
+# when PORTAL_METRICS_ENABLED is unset.  Build the registry first so
+# downstream code (main lifespan, routers) can safely import the helpers
+# without the env var side-effect of double-building.
+build_metrics_registry()
+install_metrics(app)
+
+# CSA-0030 — slowapi-backed sliding-window rate limiter + RateLimitExceeded
+# handler wired into the same exception pipeline as the validation and
+# HTTPException handlers above.  Returns a no-op limiter when slowapi is
+# missing or PORTAL_RATE_LIMIT_ENABLED=false, so the router decorators are
+# always safe.
+limiter = install_rate_limiting(app)
+_rate_limit_cfg = build_rate_limit_config()
+if _rate_limit_cfg.enabled:
+    logger.info(
+        "Portal rate limiting enabled (storage=%s)", _rate_limit_cfg.storage_uri,
+    )
 
 # ── Exception Handlers (CSA-0029) ────────────────────────────────────────────
 # Every uncaught exception becomes a structured JSON 500 with a
