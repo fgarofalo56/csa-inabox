@@ -1,0 +1,58 @@
+# Great Expectations 1.x config for the CSA-in-a-Box ge_example demo.
+#
+# Minimal, runnable configuration intended to:
+#   * prove the full GE loop (DataSource -> ExpectationSuite -> Checkpoint)
+#     works end-to-end in unit tests without touching a real warehouse;
+#   * serve as a copy-paste starting point for the tutorial at
+#     docs/tutorials/great-expectations.md.
+#
+# Runtime surface in GE 1.x:
+#   - DataContext loads this config (via ge.get_context(project_root_dir=...)).
+#   - A Pandas datasource is added programmatically in ge_demo.py so the
+#     example works without needing Spark/ADLS credentials.
+#   - The expectation suite JSON files live under ./expectations/.
+#   - Checkpoint YAML files live under ./checkpoints/.
+#
+# Keep this file as a valid GE 1.x config - the tutorial references the
+# exact keys documented at
+# https://docs.greatexpectations.io/docs/core/configure_project_settings/.
+
+config_version: 4.0
+datasources: {}
+
+# Stores below are the GE 1.x defaults written to the local filesystem, which
+# is sufficient for the demo and for CI-driven tutorial validation.
+stores:
+  expectations_store:
+    class_name: ExpectationsStore
+    store_backend:
+      class_name: TupleFilesystemStoreBackend
+      base_directory: expectations/
+
+  validation_results_store:
+    class_name: ValidationResultsStore
+    store_backend:
+      class_name: TupleFilesystemStoreBackend
+      base_directory: uncommitted/validations/
+
+  checkpoint_store:
+    class_name: CheckpointStore
+    store_backend:
+      class_name: TupleFilesystemStoreBackend
+      base_directory: checkpoints/
+
+expectations_store_name: expectations_store
+validation_results_store_name: validation_results_store
+checkpoint_store_name: checkpoint_store
+
+data_docs_sites:
+  local_site:
+    class_name: SiteBuilder
+    show_how_to_buttons: true
+    store_backend:
+      class_name: TupleFilesystemStoreBackend
+      base_directory: uncommitted/data_docs/local_site/
+    site_index_builder:
+      class_name: DefaultSiteIndexBuilder
+
+analytics_enabled: false

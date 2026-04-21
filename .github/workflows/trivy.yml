@@ -1,0 +1,292 @@
+name: Trivy
+
+# CSA-0032 — Trivy vulnerability scanning.
+#
+# Three surfaces covered:
+#   1. Filesystem scan of requirements/*.lock (Python CVEs).  This is the
+#      cheapest surface and runs on every PR touching a lock file.
+#   2. Docker image scans for the two portal images built from
+#      portal/kubernetes/docker/{backend,frontend}/Dockerfile.
+#   3. IaC/config scan of the repo (Dockerfiles, compose, k8s manifests)
+#      — separately gated so a misconfiguration does not block an
+#      otherwise-clean dependency PR.
+#
+# PR gating rules (enforced via the `severity` / `exit-code` knobs):
+#   • CRITICAL findings fail the PR.
+#   • HIGH findings are posted as a PR comment but do not block.
+#   • MEDIUM and below go to the workflow summary only.
+#
+# SARIF output from the image scans is uploaded to GitHub Code Scanning
+# so findings surface alongside CodeQL alerts.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'requirements/**.lock'
+      - 'pyproject.toml'
+      - 'portal/kubernetes/docker/**'
+      - '.github/workflows/trivy.yml'
+  push:
+    branches: [main]
+  schedule:
+    # Weekly full re-scan to catch newly-disclosed CVEs in unchanged deps.
+    - cron: '19 4 * * 2'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  # Upload SARIF results to Code Scanning.
+  security-events: write
+  # Post PR comment with HIGH findings.
+  pull-requests: write
+
+jobs:
+  # ───────────────────────────────────────────────────────────────────────
+  # 1. Lock-file CVE scan — fast, runs first.  Fails on CRITICAL.
+  # ───────────────────────────────────────────────────────────────────────
+  trivy-fs:
+    name: Trivy Filesystem (lock files)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+
+      # Fail the job on CRITICAL.
+      - name: Trivy filesystem scan — fail on CRITICAL
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        with:
+          scan-type: fs
+          scan-ref: requirements/
+          severity: CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true
+          format: table
+          vuln-type: library
+
+      # Non-blocking scan for HIGH — emits SARIF for code-scanning + JSON
+      # for the PR-comment step.
+      - name: Trivy filesystem scan — HIGH (SARIF)
+        if: always()
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        with:
+          scan-type: fs
+          scan-ref: requirements/
+          severity: HIGH,CRITICAL
+          exit-code: '0'
+          ignore-unfixed: true
+          format: sarif
+          output: trivy-fs.sarif
+          vuln-type: library
+
+      - name: Upload SARIF to Code Scanning
+        if: always() && github.event_name != 'pull_request'
+        uses: github/codeql-action/upload-sarif@6825d5659bf007b85a0866e2d0f434aacf50de94 # v3.27.5
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-fs
+
+      - name: Trivy filesystem scan — JSON (for PR comment)
+        if: github.event_name == 'pull_request'
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        with:
+          scan-type: fs
+          scan-ref: requirements/
+          severity: HIGH
+          exit-code: '0'
+          ignore-unfixed: true
+          format: json
+          output: trivy-fs-high.json
+          vuln-type: library
+
+      - name: Post HIGH findings to PR
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const fs = require('fs');
+            let findings = [];
+            try {
+              const raw = fs.readFileSync('trivy-fs-high.json', 'utf8');
+              const report = JSON.parse(raw);
+              for (const result of report.Results || []) {
+                for (const vuln of result.Vulnerabilities || []) {
+                  findings.push({
+                    pkg: vuln.PkgName,
+                    id: vuln.VulnerabilityID,
+                    severity: vuln.Severity,
+                    installed: vuln.InstalledVersion,
+                    fixed: vuln.FixedVersion || 'n/a',
+                    target: result.Target,
+                  });
+                }
+              }
+            } catch (e) {
+              core.info(`No trivy-fs-high.json or parse error: ${e.message}`);
+            }
+
+            const marker = '## Trivy — HIGH findings (lock files)';
+            let body;
+            if (findings.length === 0) {
+              body = `${marker}\n\nNo HIGH-severity CVEs detected in lock files.`;
+            } else {
+              const rows = findings
+                .map(f => `| ${f.target} | ${f.pkg} | ${f.id} | ${f.severity} | ${f.installed} | ${f.fixed} |`)
+                .join('\n');
+              body = [
+                marker,
+                '',
+                'The following HIGH-severity vulnerabilities were detected.',
+                'They do **not** block this PR, but should be addressed.',
+                '',
+                '| File | Package | CVE | Severity | Installed | Fixed |',
+                '|------|---------|-----|----------|-----------|-------|',
+                rows,
+                '',
+                '> CRITICAL findings (if any) have already failed the PR check.',
+              ].join('\n');
+            }
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find(c => c.body?.startsWith(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+  # ───────────────────────────────────────────────────────────────────────
+  # 2. Docker image scans.
+  # ───────────────────────────────────────────────────────────────────────
+  trivy-image:
+    name: Trivy Image (${{ matrix.component }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: portal-backend
+            dockerfile: portal/kubernetes/docker/backend/Dockerfile
+            context: .
+          - component: portal-frontend
+            dockerfile: portal/kubernetes/docker/frontend/Dockerfile
+            context: portal/react-webapp
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@6524bf65af31da8d45b59e8c27de4bd072b392f5 # v3.8.0
+
+      - name: Build image
+        uses: docker/build-push-action@48aba3b46d1b1fec4febb7c5d0c644b249a11355 # v6.10.0
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: false
+          load: true
+          tags: csa/${{ matrix.component }}:trivy-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Trivy image scan — fail on CRITICAL
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        with:
+          image-ref: csa/${{ matrix.component }}:trivy-${{ github.sha }}
+          severity: CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true
+          format: table
+
+      - name: Trivy image scan — HIGH+CRITICAL (SARIF)
+        if: always()
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        with:
+          image-ref: csa/${{ matrix.component }}:trivy-${{ github.sha }}
+          severity: HIGH,CRITICAL
+          exit-code: '0'
+          ignore-unfixed: true
+          format: sarif
+          output: trivy-image-${{ matrix.component }}.sarif
+
+      - name: Upload SARIF to Code Scanning
+        if: always() && github.event_name != 'pull_request'
+        uses: github/codeql-action/upload-sarif@6825d5659bf007b85a0866e2d0f434aacf50de94 # v3.27.5
+        with:
+          sarif_file: trivy-image-${{ matrix.component }}.sarif
+          category: trivy-image-${{ matrix.component }}
+
+  # ───────────────────────────────────────────────────────────────────────
+  # 3. Config scan (Dockerfile + k8s manifests).  Never blocks a PR on
+  #    its own — reports only.
+  # ───────────────────────────────────────────────────────────────────────
+  trivy-config:
+    name: Trivy Config (Dockerfile + k8s)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+
+      - name: Trivy config scan
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        with:
+          scan-type: config
+          scan-ref: portal/kubernetes/
+          severity: HIGH,CRITICAL
+          exit-code: '0'
+          format: sarif
+          output: trivy-config.sarif
+
+      - name: Upload config SARIF to Code Scanning
+        if: always() && github.event_name != 'pull_request'
+        uses: github/codeql-action/upload-sarif@6825d5659bf007b85a0866e2d0f434aacf50de94 # v3.27.5
+        with:
+          sarif_file: trivy-config.sarif
+          category: trivy-config
+
+  # ───────────────────────────────────────────────────────────────────────
+  # 4. Summary — single required check for branch protection.
+  # ───────────────────────────────────────────────────────────────────────
+  trivy-summary:
+    name: Trivy Summary
+    if: always()
+    needs: [trivy-fs, trivy-image, trivy-config]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Evaluate results
+        env:
+          FS_RESULT: ${{ needs.trivy-fs.result }}
+          IMG_RESULT: ${{ needs.trivy-image.result }}
+          CFG_RESULT: ${{ needs.trivy-config.result }}
+        run: |
+          echo "trivy-fs:     ${FS_RESULT}"
+          echo "trivy-image:  ${IMG_RESULT}"
+          echo "trivy-config: ${CFG_RESULT}"
+          # Only the CRITICAL gates (fs + image) fail the summary.
+          # Config scan is informational and is allowed to fail on its own.
+          if [[ "${FS_RESULT}" != "success" || "${IMG_RESULT}" != "success" ]]; then
+            echo "::error::Trivy CRITICAL gate failed."
+            exit 1
+          fi

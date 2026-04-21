@@ -1,0 +1,67 @@
+name: 'csa_{{ cookiecutter.vertical_slug | replace("-", "_") }}'
+version: '1.0.0'
+config-version: 2
+require-dbt-version: [">=1.7.0", "<2.0.0"]
+
+# Uses the shared CSA analytics profile (Databricks SQL warehouse).
+# Override with: dbt run --profile csa_{{ cookiecutter.vertical_slug | replace("-", "_") }} --target dev
+profile: 'csa_{{ cookiecutter.vertical_slug | replace("-", "_") }}'
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+macro-paths: ["../../../domains/shared/dbt/macros"]
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+vars:
+  bronze_database: "bronze"
+  silver_database: "silver"
+  gold_database: "gold"
+  file_format: "delta"
+  incremental_strategy: "merge"
+  freshness_warn_hours: {{ cookiecutter.sample_frequency_hours }}
+  freshness_error_hours: {{ cookiecutter.sample_frequency_hours|int * 4 }}
+
+models:
+  csa_{{ cookiecutter.vertical_slug | replace("-", "_") }}:
+    bronze:
+      +materialized: incremental
+      +file_format: delta
+      +schema: bronze
+      +tags: ['bronze', '{{ cookiecutter.vertical_slug }}', 'raw']
+      +on_schema_change: "append_new_columns"
+    silver:
+      +materialized: incremental
+      +file_format: delta
+      +schema: silver
+      +tags: ['silver', '{{ cookiecutter.vertical_slug }}', 'cleaned']
+      +incremental_strategy: merge
+      +on_schema_change: "sync_all_columns"
+    gold:
+      +materialized: table
+      +file_format: delta
+      +schema: gold
+      +tags: ['gold', '{{ cookiecutter.vertical_slug }}', 'analytics']
+
+seeds:
+  csa_{{ cookiecutter.vertical_slug | replace("-", "_") }}:
+    +schema: seeds
+    +tags: ['seed', '{{ cookiecutter.vertical_slug }}']
+    stations:
+      +column_types:
+        station_id: string
+        station_name: string
+        latitude: decimal(9,6)
+        longitude: decimal(9,6)
+
+# NOTE (CSA-0089): do NOT add a top-level `sources:` block here.
+# dbt rejects `sources:` in dbt_project.yml — it belongs in `models/schema.yml`.
+# The dbt-ci workflow enforces this (scripts/lint-vertical.sh also checks).
+
+snapshots:
+  csa_{{ cookiecutter.vertical_slug | replace("-", "_") }}:
+    +target_schema: snapshots
+    +strategy: timestamp
+    +updated_at: ingestion_ts

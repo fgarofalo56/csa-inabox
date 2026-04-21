@@ -24,6 +24,22 @@ dev = [
     # during a `pip install -e ".[dev]"` workflow.
     "types-PyYAML>=6.0,<7.0",
     "types-requests>=2.31.0,<3.0.0",
+    # CSA-0047 — Cookiecutter scaffold for new verticals.  Used by
+    # scripts/new-vertical.sh and templates/example-vertical/.
+    "cookiecutter>=2.6.0,<3.0.0",
+]
+tutorials = [
+    # CSA-0074 — Great Expectations tutorial (docs/tutorials/great-expectations.md)
+    # plus the runnable example at
+    # csa_platform/governance/dataquality/ge_example/.
+    # GE is intentionally NOT a core dependency (~200MB install); the
+    # tutorial and its pytest suite are the only consumers.
+    "great-expectations>=1.0.0,<2.0.0",
+    # Pandas is imported lazily by the ge_example demo to seed the
+    # synthetic DataFrame.  Pinned alongside GE so the tutorial is
+    # self-contained.
+    "pandas>=2.0.0,<3.0.0",
+    "pyyaml>=6.0,<7.0",
 ]
 governance = [
     "pyyaml>=6.0,<7.0",
@@ -31,6 +47,11 @@ governance = [
     # Structured JSON logging with trace/correlation context — see
     # csa_platform/governance/common/logging.py and docs/LOG_SCHEMA.md.
     "structlog>=24.1.0,<26.0.0",
+    # CSA-0112 — Azure AI Content Safety client used by
+    # csa_platform.common.content_safety.  Imported lazily so the rest of
+    # the platform stays importable without this dep; listed here so
+    # ``pip install -e .[governance]`` gets a working prod posture.
+    "azure-ai-contentsafety>=1.0.0,<2.0.0",
     # great-expectations: The ge_runner.py checkpoint runner uses an in-memory
     # fallback evaluator; no GE config/checkpoints exist yet. Re-add when a
     # Spark-backed checkpoint pipeline is implemented.

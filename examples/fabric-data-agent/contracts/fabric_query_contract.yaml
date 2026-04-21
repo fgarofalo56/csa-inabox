@@ -1,0 +1,84 @@
+# CSA contract — Fabric Data Agent query
+#
+# Describes the read-class query surface exposed by the agent.  Used by
+# reviewers, SREs, and automated CI checks to verify the agent cannot
+# exceed its scope (no writes, row cap, citation mandatory).
+contract_name: fabric_data_agent_query
+version: "1.0.0"
+owner: csa-fabric-reference
+description: |
+  The Fabric Data Agent answers natural-language questions over a
+  registered set of Fabric Lakehouse tables.  The agent is strictly
+  read-class: any SQL statement that is not a bare SELECT/WITH is
+  rejected by the retriever before execution.
+
+classification: unrestricted
+
+request_schema:
+  fields:
+    - name: question
+      type: string
+      nullable: false
+      description: Natural-language question posed by the user.
+    - name: table_alias
+      type: string
+      nullable: false
+      description: Registered alias in the agent's ``table_registry``.
+
+response_schema:
+  fields:
+    - name: answer
+      type: string
+      nullable: false
+      description: Grounded natural-language answer with citation block.
+    - name: citation.source_type
+      type: string
+      nullable: false
+      enum: [lakehouse_sql, semantic_model]
+    - name: citation.table_or_model
+      type: string
+      nullable: false
+    - name: citation.columns
+      type: array
+      nullable: false
+    - name: citation.sql
+      type: string
+      nullable: false
+      description: Executed read-class SQL (auditable).
+    - name: row_count
+      type: integer
+      nullable: false
+      min: 0
+    - name: error
+      type: string
+      nullable: true
+      description: Populated when the agent refused the request.
+
+safety:
+  read_only: true
+  blocked_sql_keywords:
+    - INSERT
+    - UPDATE
+    - DELETE
+    - MERGE
+    - DROP
+    - ALTER
+    - CREATE
+    - TRUNCATE
+    - GRANT
+    - REVOKE
+    - EXEC
+    - EXECUTE
+  max_rows_per_query: 500
+  query_timeout_seconds: 30
+  multi_statement_rejected: true
+
+observability:
+  log_fields:
+    - question
+    - table_alias
+    - citation.table_or_model
+    - citation.sql
+    - row_count
+    - error
+  retention_days: 90

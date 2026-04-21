@@ -1,0 +1,75 @@
+version: 2
+
+# -----------------------------------------------------------------------------
+# Sources — seed-backed in CI, Delta tables in production.
+# Top-level `sources:` belong HERE (not in dbt_project.yml) per the
+# dbt-ci lint rule (see examples/iot-streaming/domains/dbt/dbt_project.yml
+# for the same fix).
+# -----------------------------------------------------------------------------
+
+sources:
+  - name: ml_lifecycle
+    description: >
+      Synthetic loan-default application records produced by
+      ``data/generators/generate_loan_data.py`` and loaded either via
+      the dbt seed (CI/local) or via Event Hub Capture → Delta bronze
+      (production).
+    tables:
+      - name: loan_applications
+        description: Raw loan applications (one row per application)
+        columns:
+          - name: application_id
+            description: Globally unique application identifier
+            tests:
+              - not_null
+              - unique
+          - name: application_ts
+            description: Application submission timestamp (UTC ISO-8601)
+            tests:
+              - not_null
+          - name: defaulted
+            description: Target label (1 = default within 24m, 0 otherwise)
+            tests:
+              - not_null
+              - accepted_values:
+                  values: [0, 1]
+
+# -----------------------------------------------------------------------------
+# Model documentation
+# -----------------------------------------------------------------------------
+
+models:
+  - name: brz_loan_applications
+    description: Bronze-layer raw loan applications (no cleansing).
+    columns:
+      - name: application_id
+        tests: [not_null, unique]
+
+  - name: slv_loan_features
+    description: >
+      Silver-layer — schema-valid features with range winsorisation and
+      derived ratios (payment/income, amount/income).  One row per
+      unique application.
+    columns:
+      - name: application_id
+        tests: [not_null, unique]
+      - name: credit_score
+        description: Clipped to the 300..850 FICO range.
+        tests:
+          - not_null
+      - name: payment_income_ratio
+        description: Approx monthly payment / monthly income.
+
+  - name: gld_training_features
+    description: >
+      Gold-layer — the feature set consumed by ``training/train.py``.
+      Excludes the raw ``application_id``; includes only the columns
+      defined in ``contracts/loan_training_features.yaml``.
+    columns:
+      - name: credit_score
+        tests: [not_null]
+      - name: defaulted
+        tests:
+          - not_null
+          - accepted_values:
+              values: [0, 1]

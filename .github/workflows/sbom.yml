@@ -1,0 +1,196 @@
+name: SBOM
+
+# CSA-0032 — Software Bill of Materials generation.
+#
+# Emits CycloneDX and SPDX SBOMs on every push to main and on every
+# tagged release for:
+#   1. The Python source tree (resolved from requirements/*.lock so the
+#      SBOM reflects the exact pinned, hash-verified dependency set that
+#      ships in CI and Docker images).
+#   2. The two portal container images (backend + frontend), built locally
+#      from the Dockerfiles in portal/kubernetes/docker/*/.
+#
+# SBOMs are:
+#   • Uploaded to the workflow run as artifacts (retention: 90 days).
+#   • Attached to the GitHub Release when the trigger is a tag push.
+#
+# See docs/SUPPLY_CHAIN.md for the full pipeline and incident-response
+# procedure.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'requirements/**.lock'
+      - 'pyproject.toml'
+      - 'portal/kubernetes/docker/**/Dockerfile'
+      - '.github/workflows/sbom.yml'
+  release:
+    types: [published]
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref so a fast-follow push replaces
+# an in-flight SBOM run instead of racing it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least-privilege permissions — only the Release upload step needs write.
+permissions:
+  contents: read
+
+jobs:
+  # ───────────────────────────────────────────────────────────────────────
+  # 1. Python source SBOM (CycloneDX + SPDX) for each extra.
+  # ───────────────────────────────────────────────────────────────────────
+  python-sbom:
+    name: Python SBOM (${{ matrix.extra }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        extra:
+          - base
+          - dev
+          - governance
+          - functions
+          - platform
+          - portal
+          - bff
+          - postgres
+          - copilot
+          - streaming
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+
+      - name: Verify lock file exists
+        run: |
+          test -f "requirements/${{ matrix.extra }}.lock" || {
+            echo "::error::requirements/${{ matrix.extra }}.lock is missing. Run scripts/update-locks.sh."
+            exit 1
+          }
+
+      # anchore/sbom-action is Syft-under-the-hood; it scans the
+      # `requirements/*.lock` file (recognized as `python-requirements`)
+      # and emits CycloneDX JSON.
+      - name: Generate CycloneDX SBOM
+        uses: anchore/sbom-action@f325610c9f50a54015d37c8d16cb3b0e2c8f4de0 # v0.18.0
+        with:
+          path: requirements/${{ matrix.extra }}.lock
+          format: cyclonedx-json
+          artifact-name: sbom-python-${{ matrix.extra }}-cyclonedx.json
+          output-file: sbom-python-${{ matrix.extra }}-cyclonedx.json
+          upload-artifact: true
+          upload-artifact-retention: 90
+
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@f325610c9f50a54015d37c8d16cb3b0e2c8f4de0 # v0.18.0
+        with:
+          path: requirements/${{ matrix.extra }}.lock
+          format: spdx-json
+          artifact-name: sbom-python-${{ matrix.extra }}-spdx.json
+          output-file: sbom-python-${{ matrix.extra }}-spdx.json
+          upload-artifact: true
+          upload-artifact-retention: 90
+
+      # Attach to the GitHub Release when this run was triggered by one.
+      - name: Attach SBOM to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@7b4da11513bf3f43f9999e90eabced41ab8bb048 # v2.2.0
+        with:
+          files: |
+            sbom-python-${{ matrix.extra }}-cyclonedx.json
+            sbom-python-${{ matrix.extra }}-spdx.json
+          fail_on_unmatched_files: true
+
+  # ───────────────────────────────────────────────────────────────────────
+  # 2. Docker image SBOMs for portal backend + frontend.
+  #    Images are built locally (no push) and scanned by Syft directly
+  #    from the local Docker daemon.
+  # ───────────────────────────────────────────────────────────────────────
+  docker-sbom:
+    name: Docker SBOM (${{ matrix.component }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: portal-backend
+            dockerfile: portal/kubernetes/docker/backend/Dockerfile
+            context: .
+          - component: portal-frontend
+            dockerfile: portal/kubernetes/docker/frontend/Dockerfile
+            context: portal/react-webapp
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@6524bf65af31da8d45b59e8c27de4bd072b392f5 # v3.8.0
+
+      # Build to local daemon (no push) so Syft can inspect it.
+      - name: Build image
+        uses: docker/build-push-action@48aba3b46d1b1fec4febb7c5d0c644b249a11355 # v6.10.0
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: false
+          load: true
+          tags: csa/${{ matrix.component }}:sbom-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Generate CycloneDX SBOM for image
+        uses: anchore/sbom-action@f325610c9f50a54015d37c8d16cb3b0e2c8f4de0 # v0.18.0
+        with:
+          image: csa/${{ matrix.component }}:sbom-${{ github.sha }}
+          format: cyclonedx-json
+          artifact-name: sbom-image-${{ matrix.component }}-cyclonedx.json
+          output-file: sbom-image-${{ matrix.component }}-cyclonedx.json
+          upload-artifact: true
+          upload-artifact-retention: 90
+
+      - name: Generate SPDX SBOM for image
+        uses: anchore/sbom-action@f325610c9f50a54015d37c8d16cb3b0e2c8f4de0 # v0.18.0
+        with:
+          image: csa/${{ matrix.component }}:sbom-${{ github.sha }}
+          format: spdx-json
+          artifact-name: sbom-image-${{ matrix.component }}-spdx.json
+          output-file: sbom-image-${{ matrix.component }}-spdx.json
+          upload-artifact: true
+          upload-artifact-retention: 90
+
+      - name: Attach image SBOM to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@7b4da11513bf3f43f9999e90eabced41ab8bb048 # v2.2.0
+        with:
+          files: |
+            sbom-image-${{ matrix.component }}-cyclonedx.json
+            sbom-image-${{ matrix.component }}-spdx.json
+          fail_on_unmatched_files: true
+
+  # ───────────────────────────────────────────────────────────────────────
+  # 3. Summary job — aggregates status so branch protection can require
+  #    a single check named "SBOM Summary" instead of one per matrix cell.
+  # ───────────────────────────────────────────────────────────────────────
+  sbom-summary:
+    name: SBOM Summary
+    if: always()
+    needs: [python-sbom, docker-sbom]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Check matrix outcomes
+        env:
+          PY_RESULT: ${{ needs.python-sbom.result }}
+          DOCKER_RESULT: ${{ needs.docker-sbom.result }}
+        run: |
+          echo "python-sbom: ${PY_RESULT}"
+          echo "docker-sbom: ${DOCKER_RESULT}"
+          if [[ "${PY_RESULT}" != "success" || "${DOCKER_RESULT}" != "success" ]]; then
+            echo "::error::One or more SBOM jobs failed."
+            exit 1
+          fi
