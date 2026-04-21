@@ -84,7 +84,7 @@ def _classify_http_error(exc: Any) -> DataActivatorTransientError | DataActivato
     return DataActivatorTransientError(f"unknown: {exc}")
 
 
-def _payload_to_dict(payload: AlertPayload) -> dict[str, Any]:  # type: ignore[name-defined]
+def _payload_to_dict(payload: AlertPayload) -> dict[str, Any]:
     from dataclasses import asdict
 
     return asdict(payload)

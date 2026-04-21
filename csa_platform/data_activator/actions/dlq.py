@@ -160,7 +160,7 @@ class InMemoryDLQ:
 
 def _load_queue_client() -> Any:
     """Lazy import of :class:`azure.storage.queue.QueueClient`."""
-    from azure.storage.queue import QueueClient  # type: ignore[import-not-found]
+    from azure.storage.queue import QueueClient
 
     return QueueClient
 

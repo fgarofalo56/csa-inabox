@@ -108,7 +108,7 @@ class TestEventSchemaAlignment:
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
 
-        producer_event_types: list[str] = mod.EVENT_TYPES  # type: ignore[attr-defined]
+        producer_event_types: list[str] = mod.EVENT_TYPES
         assert len(producer_event_types) > 0, "produce_events.py EVENT_TYPES list is empty"
 
         unknown = set(producer_event_types) - _EXPECTED_EVENT_TYPES

@@ -124,7 +124,7 @@ def _validate_control(
     control: dict[str, Any],
     source: Path,
     report: ValidationReport,
-    evidence_counter: Counter,
+    evidence_counter: Counter[str],
 ) -> None:
     cid = control.get("id", "<unknown>")
     where = f"{source.name}:{cid}"
@@ -203,9 +203,9 @@ def validate_manifest(path: Path, report: ValidationReport) -> None:
     _validate_manifest_shape(manifest, path, report)
 
     controls = manifest.get("controls") or []
-    status_counts: Counter = Counter()
-    family_counts: dict[str, Counter] = defaultdict(Counter)
-    evidence_counter: Counter = Counter()
+    status_counts: Counter[str] = Counter()
+    family_counts: dict[str, Counter[str]] = defaultdict(Counter)
+    evidence_counter: Counter[str] = Counter()
 
     for control in controls:
         if not isinstance(control, dict):

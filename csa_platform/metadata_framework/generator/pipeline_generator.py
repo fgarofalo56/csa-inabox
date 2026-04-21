@@ -794,7 +794,7 @@ class PipelineGenerator:
                 topic=topic,
             )
 
-            samples: list[dict[str, Any]] = []
+            samples: list[dict[str, Any]] = []  # type: ignore[no-redef]
 
             # Prefer confluent-kafka (faster, C-based); fall back to kafka-python
             try:
@@ -879,7 +879,7 @@ class PipelineGenerator:
                 )
 
             # Merge schemas from sampled messages
-            all_fields: dict[str, set[str]] = {}
+            all_fields: dict[str, set[str]] = {}  # type: ignore[no-redef]
             for sample in samples:
                 for key, value in sample.items():
                     if key not in all_fields:

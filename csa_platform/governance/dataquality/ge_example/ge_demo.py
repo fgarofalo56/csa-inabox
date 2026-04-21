@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    import pandas as pd
+    import pandas as pd  # type: ignore[import-untyped]
 
 # Module-level paths so tests can import them without constructing the demo.
 MODULE_DIR = Path(__file__).resolve().parent
@@ -123,7 +123,7 @@ def _load_suite_json(path: Path = SUITE_JSON) -> dict[str, Any]:
             f"Expectation suite JSON not found at {path}. "
             f"The ge_example module is missing files - please reinstall.",
         )
-    return json.loads(path.read_text(encoding="utf-8"))
+    return json.loads(path.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
 
 
 def _build_suite(context: Any, suite_name: str = SUITE_NAME) -> Any:
