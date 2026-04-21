@@ -88,14 +88,19 @@ describe('SourcesPage', () => {
   it('shows the Register Source link', () => {
     mockUseSources.mockReturnValue({ data: [], isLoading: false, error: null, refetch: jest.fn() });
     renderWithProviders(<SourcesPage />);
-    expect(screen.getByText('+ Register Source')).toBeInTheDocument();
+    // When the list is empty, both the page header and the empty-state CTA
+    // render a "+ Register Source" link (CSA-0124 polish). getAllByText
+    // returns both and asserts the link is present in at least one form.
+    const links = screen.getAllByText('+ Register Source');
+    expect(links.length).toBeGreaterThanOrEqual(1);
   });
 
-  // Loading state
-  it('shows a loading indicator while data is loading', () => {
+  // Loading state — CSA-0124(1) introduced a full-table skeleton with
+  // the accessible name "Loading sources" in place of the generic spinner.
+  it('shows a loading skeleton while data is loading', () => {
     mockUseSources.mockReturnValue({ data: undefined, isLoading: true, error: null, refetch: jest.fn() });
     renderWithProviders(<SourcesPage />);
-    expect(screen.getByRole('status', { name: 'Loading' })).toBeInTheDocument();
+    expect(screen.getByRole('status', { name: 'Loading sources' })).toBeInTheDocument();
   });
 
   // Error state

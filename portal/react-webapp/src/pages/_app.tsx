@@ -18,6 +18,7 @@ import {
 import { msalConfig, loginRequest, resolveAuthEnabled } from '@/services/authConfig';
 import { Layout } from '@/components/Layout';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import api from '@/services/api';
 import '@/styles/globals.css';
 
@@ -68,6 +69,11 @@ function LoginPage() {
 }
 
 function AuthGatedContent({ children }: { children: React.ReactNode }) {
+  // CSA-0124(5): install global keyboard shortcuts once per app tree.
+  // The hook self-guards against SSR (`window` check) and against typing
+  // into form fields.
+  useKeyboardShortcuts();
+
   if (!isAuthEnabled) {
     return <>{children}</>;
   }

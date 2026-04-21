@@ -19,7 +19,9 @@ import {
 } from '@/hooks/useApi';
 import { useToast } from '@/hooks/useToast';
 import ErrorBanner from '@/components/ErrorBanner';
+import EmptyState from '@/components/EmptyState';
 import PageHeader from '@/components/PageHeader';
+import { RouteErrorBoundary } from '@/components/RouteErrorBoundary';
 import { StatusBadge } from '@/components/StatusBadge';
 import Button from '@/components/Button';
 import { Modal } from '@/components/Modal';
@@ -146,10 +148,13 @@ function AccessRequestsTable({
   reviewPendingId: string | null;
 }) {
   if (requests.length === 0) {
+    // CSA-0124(2): reuse the shared EmptyState component so the look is
+    // consistent across sources, pipelines, and access lists.
     return (
-      <div className="text-center py-16 bg-gray-50 rounded-lg">
-        <p className="text-gray-500">No access requests.</p>
-      </div>
+      <EmptyState
+        title="No access requests"
+        description="Requests submitted by users in your domain will appear here."
+      />
     );
   }
   return (
@@ -217,7 +222,7 @@ function AccessRequestsTable({
   );
 }
 
-export default function AccessPage() {
+function AccessPageContent() {
   const router = useRouter();
   const rawProductId = router.query.product_id;
   const productId = typeof rawProductId === 'string' ? rawProductId : '';
@@ -398,5 +403,16 @@ export default function AccessPage() {
         variant={toast.variant}
       />
     </div>
+  );
+}
+
+/**
+ * Route-scoped error boundary (CSA-0124(4)).
+ */
+export default function AccessPage() {
+  return (
+    <RouteErrorBoundary routeLabel="Access requests">
+      <AccessPageContent />
+    </RouteErrorBoundary>
   );
 }

@@ -9,7 +9,7 @@
     "start": "next start",
     "lint": "next lint",
     "type-check": "tsc --noEmit",
-    "test": "jest",
+    "test": "jest --coverage --maxWorkers=2",
     "test:watch": "jest --watch"
   },
   "dependencies": {

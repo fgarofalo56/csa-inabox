@@ -16,7 +16,9 @@ import {
 import { useDebounce } from '@/hooks/useDebounce';
 import { useToast } from '@/hooks/useToast';
 import ErrorBanner from '@/components/ErrorBanner';
+import EmptyState from '@/components/EmptyState';
 import PageHeader from '@/components/PageHeader';
+import { RouteErrorBoundary } from '@/components/RouteErrorBoundary';
 import { StatusBadge } from '@/components/StatusBadge';
 import Button from '@/components/Button';
 import { Modal } from '@/components/Modal';
@@ -72,7 +74,7 @@ function PipelineRunsPanel({ pipelineId }: { pipelineId: string }) {
   );
 }
 
-export default function PipelinesPage() {
+function PipelinesPageContent() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [domainFilter, setDomainFilter] = useState<string>('');
@@ -192,14 +194,22 @@ export default function PipelinesPage() {
           </div>
         </div>
       ) : filtered.length === 0 ? (
-        <div className="text-center py-16 bg-gray-50 rounded-lg">
-          <p className="text-gray-500">No pipelines found.</p>
-          <p className="text-sm text-gray-400 mt-1">
-            {pipelines && pipelines.length > 0
-              ? 'Try adjusting your search or filter criteria.'
-              : 'Register a data source to create your first pipeline.'}
-          </p>
-        </div>
+        /* CSA-0124(2): friendly empty state with a CTA rather than a
+           plain message. The CTA points at the source-registration flow
+           when no pipelines exist at all, and stays out of the way when
+           the user is just filtering an existing list. */
+        pipelines && pipelines.length > 0 ? (
+          <EmptyState
+            title="No pipelines found"
+            description="Try adjusting your search or filter criteria."
+          />
+        ) : (
+          <EmptyState
+            title="No pipelines yet"
+            description="Register a data source to create your first pipeline."
+            action={{ label: '+ Register Source', href: '/sources/register' }}
+          />
+        )
       ) : (
         <div className="bg-white shadow-sm rounded-lg border border-gray-200 overflow-hidden">
           <table className="min-w-full divide-y divide-gray-200">
@@ -318,5 +328,18 @@ export default function PipelinesPage() {
         variant={toast.variant}
       />
     </div>
+  );
+}
+
+/**
+ * Route-scoped error boundary (CSA-0124(4)) so render-time exceptions in
+ * the pipelines view fall back gracefully instead of tearing down the
+ * shell.
+ */
+export default function PipelinesPage() {
+  return (
+    <RouteErrorBoundary routeLabel="Pipelines">
+      <PipelinesPageContent />
+    </RouteErrorBoundary>
   );
 }

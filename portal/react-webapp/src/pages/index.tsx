@@ -6,6 +6,7 @@
 import React from 'react';
 import { useStats, useDomainOverview, usePipelines } from '@/hooks/useApi';
 import ErrorBanner from '@/components/ErrorBanner';
+import { RouteErrorBoundary } from '@/components/RouteErrorBoundary';
 import type { PlatformStats, DomainOverview } from '@/types';
 
 function StatCard({
@@ -80,7 +81,7 @@ function DomainCard({ domain }: { domain: DomainOverview }) {
   );
 }
 
-export default function DashboardPage() {
+function DashboardPageContent() {
   const { data: stats, isLoading: statsLoading, error: statsError, refetch: refetchStats } = useStats();
   const { data: domains, isLoading: domainsLoading, error: domainsError, refetch: refetchDomains } = useDomainOverview();
   const { data: pipelines } = usePipelines({ status: 'running' });
@@ -220,5 +221,19 @@ export default function DashboardPage() {
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * Route-scoped error boundary (CSA-0124(4)) — the top-level
+ * `ErrorBoundary` in `_app.tsx` still catches app-level failures; this
+ * inner boundary confines render faults to the dashboard card so the
+ * sidebar / auth context keep working.
+ */
+export default function DashboardLandingPage() {
+  return (
+    <RouteErrorBoundary routeLabel="Dashboard">
+      <DashboardPageContent />
+    </RouteErrorBoundary>
   );
 }

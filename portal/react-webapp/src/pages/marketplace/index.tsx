@@ -7,6 +7,8 @@ import { useRouter } from 'next/router';
 import { useDataProducts, useDomains } from '@/hooks/useApi';
 import { useDebounce } from '@/hooks/useDebounce';
 import ErrorBanner from '@/components/ErrorBanner';
+import EmptyState from '@/components/EmptyState';
+import { RouteErrorBoundary } from '@/components/RouteErrorBoundary';
 import type { DataProduct } from '@/types';
 
 function QualityBadge({ score }: { score: number }) {
@@ -88,7 +90,7 @@ function ProductCard({ product, onRequestAccess }: { product: DataProduct; onReq
   );
 }
 
-export default function MarketplacePage() {
+function MarketplacePageContent() {
   const router = useRouter();
   const [search, setSearch] = useState('');
   const [selectedDomain, setSelectedDomain] = useState('');
@@ -179,13 +181,22 @@ export default function MarketplacePage() {
           ))}
         </div>
       ) : (
-        <div className="text-center py-16 bg-gray-50 rounded-lg">
-          <p className="text-gray-500">No data products found.</p>
-          <p className="text-sm text-gray-400 mt-1">
-            Try adjusting your search criteria.
-          </p>
-        </div>
+        <EmptyState
+          title="No data products found."
+          description="Try adjusting your search criteria."
+        />
       )}
     </div>
+  );
+}
+
+/**
+ * Route-scoped error boundary (CSA-0124(4)).
+ */
+export default function MarketplacePage() {
+  return (
+    <RouteErrorBoundary routeLabel="Marketplace">
+      <MarketplacePageContent />
+    </RouteErrorBoundary>
   );
 }

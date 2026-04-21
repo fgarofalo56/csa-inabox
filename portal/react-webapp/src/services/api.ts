@@ -17,8 +17,16 @@ import type {
   DomainOverview,
 } from '@/types';
 import { apiRequest } from './authConfig';
+import { apiV1BaseUrl } from './apiClient';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
+/**
+ * Base URL for all versioned CSA API calls.
+ *
+ * CSA-0123: resolved through `apiClient.apiV1BaseUrl` so that every
+ * outbound call shares one source of truth for `NEXT_PUBLIC_API_URL`
+ * with a `/api/v1` same-origin default. No hard-coded host/port.
+ */
+const API_URL = apiV1BaseUrl();
 
 class ApiClient {
   private client: AxiosInstance;

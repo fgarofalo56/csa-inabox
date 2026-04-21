@@ -7,10 +7,13 @@ import Link from 'next/link';
 import { useSources } from '@/hooks/useApi';
 import { useDebounce } from '@/hooks/useDebounce';
 import ErrorBanner from '@/components/ErrorBanner';
+import EmptyState from '@/components/EmptyState';
+import { SourcesTableSkeleton } from '@/components/SourcesTableSkeleton';
+import { RouteErrorBoundary } from '@/components/RouteErrorBoundary';
 import { StatusBadge } from '@/components/StatusBadge';
 import type { SourceRecord } from '@/types';
 
-export default function SourcesPage() {
+function SourcesPageContent() {
   const [domainFilter, setDomainFilter] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<string>('');
   const debouncedDomain = useDebounce(domainFilter);
@@ -69,12 +72,17 @@ export default function SourcesPage() {
           onRetry={() => refetch()}
         />
       ) : isLoading ? (
-        /* Loading State */
-        <div className="flex items-center justify-center h-64">
-          <div role="status" aria-label="Loading">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-600" />
-          </div>
-        </div>
+        /* Loading State — CSA-0124(1): full table skeleton replaces the
+           generic spinner so layout does not reflow when data resolves. */
+        <SourcesTableSkeleton rows={5} />
+      ) : sources && sources.length === 0 ? (
+        /* Empty State — CSA-0124(2). The copy intentionally preserves the
+           "No data sources found" phrase that downstream tests grep for. */
+        <EmptyState
+          title="No data sources found"
+          description="Register your first data source to get started."
+          action={{ label: '+ Register Source', href: '/sources/register' }}
+        />
       ) : (
         /* Sources Table */
         <div className="bg-white shadow-sm rounded-lg border border-gray-200 overflow-hidden">
@@ -102,55 +110,53 @@ export default function SourcesPage() {
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {sources && sources.length > 0 ? (
-                sources.map((source: SourceRecord) => (
-                    <tr
-                      key={source.id}
-                      className="hover:bg-gray-50"
+              {(sources ?? []).map((source: SourceRecord) => (
+                <tr key={source.id} className="hover:bg-gray-50">
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <Link
+                      href={`/sources/${source.id}`}
+                      className="text-sm font-medium text-brand-600 hover:text-brand-800"
                     >
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <Link
-                          href={`/sources/${source.id}`}
-                          className="text-sm font-medium text-brand-600 hover:text-brand-800"
-                        >
-                          {source.name}
-                        </Link>
-                        <p className="text-xs text-gray-500">
-                          {source.description?.substring(0, 60)}
-                        </p>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {source.source_type.replace(/_/g, ' ')}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 capitalize">
-                        {source.domain}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <StatusBadge status={source.status} />
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 uppercase">
-                        {source.classification}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {new Date(source.updated_at).toLocaleDateString()}
-                      </td>
-                    </tr>
-                  ))
-              ) : (
-                <tr>
-                  <td
-                    colSpan={6}
-                    className="px-6 py-12 text-center text-gray-500"
-                  >
-                    No data sources found. Register your first source to get
-                    started.
+                      {source.name}
+                    </Link>
+                    <p className="text-xs text-gray-500">
+                      {source.description?.substring(0, 60)}
+                    </p>
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    {source.source_type.replace(/_/g, ' ')}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 capitalize">
+                    {source.domain}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <StatusBadge status={source.status} />
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 uppercase">
+                    {source.classification}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    {new Date(source.updated_at).toLocaleDateString()}
                   </td>
                 </tr>
-              )}
+              ))}
             </tbody>
           </table>
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Default export wraps the page in a route-scoped error boundary so a
+ * render-time bug here does not take down the surrounding shell
+ * (CSA-0124(4)).
+ */
+export default function SourcesPage() {
+  return (
+    <RouteErrorBoundary routeLabel="Sources">
+      <SourcesPageContent />
+    </RouteErrorBoundary>
   );
 }

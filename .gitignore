@@ -17,6 +17,15 @@ _archived/**/.svelte-kit/
 .infracost/
 
 # ---------------------------
+# Next.js build + test output (portal/react-webapp)
+# ---------------------------
+portal/react-webapp/.next/
+portal/react-webapp/next-env.d.ts
+portal/react-webapp/tsconfig.tsbuildinfo
+portal/react-webapp/coverage/
+portal/react-webapp/out/
+
+# ---------------------------
 # Portal persistence data (JSON store)
 # ---------------------------
 data/
