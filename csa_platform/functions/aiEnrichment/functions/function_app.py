@@ -14,6 +14,14 @@ loop on I/O.  Clients are instantiated per-invocation inside
 ``async with`` blocks so the SDK's aiohttp transport gets closed
 cleanly; there is no module-level client cache.
 
+CSA-0117 audit (2026-04-20): All HTTP + blob triggers are already
+``async def`` (``enrich_text``, ``process_inbox_document``,
+``health_check``) and every outbound client dependency uses the
+``.aio`` SDK surface under ``async with``.  No conversion required —
+Durable Functions were considered and rejected as over-engineering
+given the short-lived, single-stage enrichment pipeline.  The audit
+is closed.
+
 Logging
 -------
 All log lines are emitted as JSON via :mod:`csa_platform.governance.common.logging`
