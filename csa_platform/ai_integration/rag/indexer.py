@@ -13,6 +13,9 @@ from typing import TYPE_CHECKING, Any
 
 from csa_platform.common.logging import get_logger
 
+from .rate_limit import AzureOpenAIRateLimiter, get_default_limiter
+from .telemetry import record_openai_call
+
 if TYPE_CHECKING:  # pragma: no cover
     from openai import AzureOpenAI
 
@@ -41,6 +44,7 @@ class EmbeddingGenerator:
         dimensions: int = 1536,
         batch_size: int = 100,
         max_concurrent: int = 5,
+        rate_limiter: AzureOpenAIRateLimiter | None = None,
     ) -> None:
         self.endpoint = endpoint
         self.api_key = api_key
@@ -55,6 +59,9 @@ class EmbeddingGenerator:
         # can dispose it on shutdown — AsyncAzureOpenAI.close() does not
         # reach into the bearer-token provider's underlying credential.
         self._cached_async_credential: Any = None
+        # CSA-0108: every embed call is routed through the shared limiter
+        # so RPM / TPM caps are honoured across sync + async entry points.
+        self._rate_limiter = rate_limiter
 
     def _get_client(self) -> AzureOpenAI:
         """Lazily initialise the sync Azure OpenAI client."""
@@ -112,17 +119,28 @@ class EmbeddingGenerator:
         return self._cached_async_client
 
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
-        """Sync batched embedding generation."""
+        """Sync batched embedding generation (telemetry-instrumented)."""
         client = self._get_client()
         all_embeddings: list[list[float]] = []
         for i in range(0, len(texts), self.batch_size):
             batch = texts[i : i + self.batch_size]
             logger.info("Embedding batch", batch_start=i, batch_end=i + len(batch), total=len(texts))
-            response = client.embeddings.create(
-                input=batch,
-                model=self.deployment,
-                dimensions=self.dimensions,
-            )
+            with record_openai_call(
+                operation="embeddings.create", model=self.deployment
+            ) as record:
+                response = client.embeddings.create(
+                    input=batch,
+                    model=self.deployment,
+                    dimensions=self.dimensions,
+                )
+                usage = getattr(response, "usage", None)
+                if usage is not None:
+                    # Embedding endpoints only bill prompt tokens.
+                    record["prompt_tokens"] = int(
+                        getattr(usage, "prompt_tokens", 0)
+                        or getattr(usage, "total_tokens", 0)
+                        or 0
+                    )
             all_embeddings.extend(item.embedding for item in response.data)
         return all_embeddings
 
@@ -133,21 +151,47 @@ class EmbeddingGenerator:
     async def embed_texts_async(self, texts: list[str]) -> list[list[float]]:
         """Async batched embedding generation.
 
-        Uses a semaphore to bound concurrency at :attr:`max_concurrent`.
-        The underlying ``AsyncAzureOpenAI`` client is cached across calls.
+        Uses a semaphore to bound concurrency at :attr:`max_concurrent`
+        and routes every batch through the shared
+        :class:`AzureOpenAIRateLimiter` (CSA-0108) so RPM / TPM caps
+        are enforced and 429s are retried with ``Retry-After`` honoured.
+        Telemetry is emitted per batch via
+        :func:`record_openai_call` (CSA-0105).  The underlying
+        ``AsyncAzureOpenAI`` client is cached across calls.
         """
         async_client = self._async_openai_client
         semaphore = asyncio.Semaphore(self.max_concurrent)
+        limiter = self._rate_limiter or get_default_limiter()
         all_embeddings: list[list[float]] = [[] for _ in texts]
 
         async def _embed_batch(start: int, batch: list[str]) -> None:
             async with semaphore:
                 logger.info("async_embedding_batch", batch_start=start, batch_end=start + len(batch))
-                response = await async_client.embeddings.create(
-                    input=batch,
-                    model=self.deployment,
-                    dimensions=self.dimensions,
-                )
+
+                async def _call() -> Any:
+                    return await async_client.embeddings.create(
+                        input=batch,
+                        model=self.deployment,
+                        dimensions=self.dimensions,
+                    )
+
+                # Rough TPM reservation: ~1 token per 4 chars of input.
+                estimated = sum(max(1, len(t) // 4) for t in batch)
+                with record_openai_call(
+                    operation="embeddings.create", model=self.deployment
+                ) as record:
+                    response = await limiter.run(
+                        _call, model=self.deployment, estimated_tokens=estimated
+                    )
+                    usage = getattr(response, "usage", None)
+                    if usage is not None:
+                        billed = int(
+                            getattr(usage, "prompt_tokens", 0)
+                            or getattr(usage, "total_tokens", 0)
+                            or 0
+                        )
+                        record["prompt_tokens"] = billed
+                        limiter.record_usage(prompt_tokens=billed, completion_tokens=0)
                 for j, item in enumerate(response.data):
                     all_embeddings[start + j] = item.embedding
 

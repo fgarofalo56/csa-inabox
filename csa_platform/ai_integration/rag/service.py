@@ -6,6 +6,16 @@ wraps :mod:`.indexer`, :mod:`.retriever`, :mod:`.rerank`, and
 of the Azure clients.  Behaviour is equivalent to
 :class:`~csa_platform.ai_integration.rag.pipeline.RAGPipeline`; see
 ADR 0017 for the migration story.
+
+CSA-0110 audit (2026-04-20): every method touching the network
+(``ingest``, ``query``, ``close``) is ``async def``; the embedder and
+retriever dependencies are structurally typed as ``SupportsAsync*``.
+The only sync entry points remaining on the codebase are on
+:class:`~csa_platform.ai_integration.rag.pipeline.RAGPipeline`
+(legacy shim) and the CLI in :mod:`.pipeline` (argparse wrapper).
+Explicit :meth:`ingest_async` / :meth:`query_async` aliases are
+provided so thin sync wrappers (CLI, external orchestrators) can pick
+the async surface unambiguously.
 """
 
 from __future__ import annotations
@@ -22,8 +32,10 @@ from csa_platform.common.logging import get_logger
 from .chunker import Chunk, DocumentChunker
 from .generate import build_prompt, generate_answer_async
 from .models import AnswerResponse, Citation, ContextChunk, IndexReport
+from .rate_limit import AzureOpenAIRateLimiter, get_default_limiter
 from .rerank import RerankPolicy, apply_policy
 from .retriever import SearchResult
+from .telemetry import observe_chunk_count, observe_request_latency
 
 if TYPE_CHECKING:  # pragma: no cover
     from .config import RAGSettings
@@ -93,6 +105,7 @@ class RAGService:
         chunker: DocumentChunker | None = None,
         chat_client: SupportsAsyncGenerate | None = None,
         rerank_policy: RerankPolicy | None = None,
+        rate_limiter: AzureOpenAIRateLimiter | None = None,
     ) -> None:
         self.settings = settings
         self.embedder = embedder
@@ -109,6 +122,10 @@ class RAGService:
             enabled=settings.search.use_semantic_reranker,
             configuration_name=settings.azure_search.semantic_config_name,
         )
+        # CSA-0108: share a single limiter across generator + indexer so
+        # RPM/TPM is enforced across both surfaces even when each builds
+        # its own Azure OpenAI client.
+        self._rate_limiter = rate_limiter or get_default_limiter()
         self._closed = False
 
     # -- factories ----------------------------------------------------------
@@ -184,8 +201,9 @@ class RAGService:
         extensions: Sequence[str] = (".txt", ".md", ".json", ".csv"),
         metadata: dict[str, Any] | None = None,
     ) -> IndexReport:
-        """Ingest a file or directory tree into the vector store."""
+        """Ingest a file or directory tree into the vector store (async)."""
         self._ensure_open()
+        ingest_start = time.perf_counter()
 
         files: list[Path]
         if root.is_file():
@@ -223,11 +241,19 @@ class RAGService:
                 dry_run=dry_run,
             )
 
+        elapsed = time.perf_counter() - ingest_start
+        observe_request_latency(
+            operation="ingest",
+            model=self.settings.azure_openai.embedding_deployment,
+            seconds=elapsed,
+        )
+        observe_chunk_count("ingest", total_chunks)
         logger.info(
             "rag_service.ingest_complete",
             files=scanned,
             chunks=total_chunks,
             dry_run=dry_run,
+            elapsed_ms=int(elapsed * 1000),
         )
         return IndexReport(files_scanned=scanned, chunks_stored=total_chunks, dry_run=dry_run)
 
@@ -285,6 +311,7 @@ class RAGService:
             system_prompt=system_prompt,
             max_tokens=self.settings.azure_openai.chat_max_tokens,
             temperature=self.settings.azure_openai.chat_temperature,
+            rate_limiter=self._rate_limiter,
         )
 
         sources = (
@@ -308,13 +335,66 @@ class RAGService:
             ContextChunk(text=r.text, source=r.source, score=r.score) for r in results
         ]
 
+        elapsed = time.perf_counter() - start
+        observe_request_latency(
+            operation="query",
+            model=self.settings.azure_openai.chat_deployment,
+            seconds=elapsed,
+        )
+        observe_chunk_count("query", len(results))
         logger.info(
             "rag_service.query_complete",
             question_len=len(question),
             chunks=len(results),
-            elapsed_ms=int((time.perf_counter() - start) * 1000),
+            elapsed_ms=int(elapsed * 1000),
         )
         return AnswerResponse(answer=answer, sources=sources, context_chunks=context_chunks)
+
+    # -- explicit async aliases (CSA-0110) ----------------------------------
+    #
+    # ``ingest`` + ``query`` are already ``async def``; ``ingest_async`` /
+    # ``query_async`` exist as named shims so callers (CLI wrappers,
+    # external orchestrators) can pick the async surface unambiguously
+    # without relying on reflection.  They take identical kwargs — any
+    # future divergence should happen on the pair, not one side.
+
+    async def ingest_async(
+        self,
+        root: Path,
+        *,
+        dry_run: bool = False,
+        extensions: Sequence[str] = (".txt", ".md", ".json", ".csv"),
+        metadata: dict[str, Any] | None = None,
+    ) -> IndexReport:
+        """Explicit async alias of :meth:`ingest` (CSA-0110)."""
+        return await self.ingest(
+            root,
+            dry_run=dry_run,
+            extensions=extensions,
+            metadata=metadata,
+        )
+
+    async def query_async(
+        self,
+        question: str,
+        *,
+        k: int = 6,
+        with_rerank: bool = True,
+        with_citations: bool = True,
+        filters: str | None = None,
+        score_threshold: float | None = None,
+        system_prompt: str | None = None,
+    ) -> AnswerResponse:
+        """Explicit async alias of :meth:`query` (CSA-0110)."""
+        return await self.query(
+            question,
+            k=k,
+            with_rerank=with_rerank,
+            with_citations=with_citations,
+            filters=filters,
+            score_threshold=score_threshold,
+            system_prompt=system_prompt,
+        )
 
     # -- lifecycle ----------------------------------------------------------
 

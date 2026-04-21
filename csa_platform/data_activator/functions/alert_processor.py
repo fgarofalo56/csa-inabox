@@ -66,6 +66,7 @@ if _da_name not in sys.modules and _da_dir.exists():
 
 from csa_platform.data_activator.actions.notifier import (  # noqa: E402
     AlertPayload,
+    IncidentCreator,
     TeamsNotifier,
     WebhookNotifier,
 )
@@ -671,45 +672,20 @@ def _dispatch_teams(evaluation: AlertEvaluation, _action: ActionConfig) -> bool:
 
 
 def _dispatch_pagerduty(evaluation: AlertEvaluation, action: ActionConfig) -> bool:
-    """Send PagerDuty notification via canonical WebhookNotifier."""
+    """Send PagerDuty notification via canonical IncidentCreator (retry + DLQ)."""
     routing_key = action.config.get("routingKey") or os.environ.get(
         "PAGERDUTY_INTEGRATION_KEY", ""
     )
     if not routing_key or routing_key.startswith("$"):
         logger.warning("PagerDuty integration key not configured, skipping")
         return False
-    if requests is None:
-        logger.warning("requests library not available, skipping PagerDuty notification")
-        return False
 
-    payload = _evaluation_to_payload(evaluation)
-    pd_payload = {
-        "routing_key": routing_key,
-        "event_action": "trigger",
-        "payload": {
-            "summary": payload.description,
-            "severity": action.config.get("severity", payload.severity),
-            "source": f"csa-inabox/{payload.source}",
-            "component": evaluation.event_data.get("dataProduct", "unknown"),
-            "custom_details": {
-                "rule_name": payload.rule_name,
-                "details": payload.metadata,
-                "event_data": evaluation.event_data,
-            },
-        },
-    }
-    try:
-        resp = requests.post(
-            "https://events.pagerduty.com/v2/enqueue",
-            json=pd_payload,
-            timeout=10,
-        )
-        resp.raise_for_status()
-        logger.info("pagerduty.event_sent", rule_name=evaluation.rule_name)
-        return True
-    except requests.RequestException:
-        logger.exception("pagerduty.event_failed", rule_name=evaluation.rule_name)
-        return False
+    creator = IncidentCreator(
+        service="pagerduty",
+        api_key=routing_key,
+        severity=action.config.get("severity", evaluation.severity.value),
+    )
+    return creator.send(_evaluation_to_payload(evaluation))
 
 
 def _dispatch_email(evaluation: AlertEvaluation, action: ActionConfig) -> bool:
