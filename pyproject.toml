@@ -207,7 +207,7 @@ copilot = [
     #   * Web SSE demo (web/) — Jinja2 + sse-starlette.
     "fastapi>=0.115.0,<1.0.0",
     "uvicorn[standard]>=0.30.0,<1.0.0",
-    "sse-starlette>=2.1.0,<3.0.0",
+    "sse-starlette>=2.1.0,<4.0.0",
     "jinja2>=3.1.0,<4.0.0",
     "mcp>=1.0.0,<2.0.0",
     # CSA-0116 — Cosmos-backed conversation store.  Imported lazily
