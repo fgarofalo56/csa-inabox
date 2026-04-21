@@ -8,7 +8,9 @@ should be injected via environment variables in deployed environments.
 
 from __future__ import annotations
 
-from pydantic import field_validator
+from typing import Literal
+
+from pydantic import AnyHttpUrl, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -175,6 +177,77 @@ class Settings(BaseSettings):
     # for multi-replica deployments.
     BFF_SESSION_STORE: str = "memory"  # one of: "memory" | "redis"
     BFF_REDIS_URL: str = ""
+
+    # ── BFF reverse-proxy (CSA-0020 Phase 3, ADR-0019) ──────────────────
+    # When BFF_PROXY_ENABLED=true AND AUTH_MODE=bff, the ``api_proxy``
+    # router is mounted at ``/api/*`` — the SPA calls the BFF with its
+    # cookie, the BFF resolves the session, silently acquires a bearer
+    # token via MSAL, and forwards the request to the upstream API. The
+    # access token never reaches the browser.
+    #
+    # The flag defaults to False so existing BFF deployments that still
+    # use the direct ``/auth/token`` handoff aren't broken by an upgrade.
+    # See ``docs/adr/0019-bff-reverse-proxy.md``.
+    BFF_PROXY_ENABLED: bool = False
+
+    # Upstream API the proxy forwards requests to. Typically the portal
+    # backend running on a separate port (dev) or a private endpoint /
+    # internal load balancer FQDN (prod). Trailing slash tolerated.
+    BFF_UPSTREAM_API_ORIGIN: AnyHttpUrl = AnyHttpUrl("http://localhost:8001")
+
+    # Scope the BFF requests when acquiring a bearer token for the
+    # upstream API. No safe default — operators must configure this
+    # against their app registration (e.g. ``api://<client-id>/.default``
+    # or ``api://<client-id>/access_as_user``). Fail-closed.
+    BFF_UPSTREAM_API_SCOPE: str = ""
+
+    # Upstream request timeout in seconds. Covers connect + read + write;
+    # transient 5xx responses from the upstream are retried inside this
+    # budget via tenacity (3 attempts, jittered backoff).
+    BFF_UPSTREAM_API_TIMEOUT_SECONDS: int = 30
+
+    # ── MSAL token cache (persistent, HMAC-sealed) ─────────────────────
+    # ``memory`` keeps the cache in process — dev/test only; tokens are
+    # lost on restart and not shared across replicas. ``redis`` persists
+    # the serialised ``msal.SerializableTokenCache`` under
+    # ``csa:bff:tcache:<sha256(session_id)>`` with a Redis EX TTL and an
+    # HMAC seal so a Redis compromise cannot replay or tamper with cache
+    # entries.
+    BFF_TOKEN_CACHE_BACKEND: Literal["memory", "redis"] = "memory"
+    BFF_TOKEN_CACHE_TTL_SECONDS: int = 86400  # 24h — refresh-token lifetime + margin
+    # HMAC key used to seal cache blobs. Required when the backend is
+    # ``redis``; ignored for ``memory``. Must be >= 32 chars — the
+    # validator below enforces this at startup, not at first request.
+    BFF_TOKEN_CACHE_HMAC_KEY: SecretStr = SecretStr("")
+
+    @model_validator(mode="after")
+    def _validate_bff_proxy_settings(self) -> Settings:
+        """Enforce Phase-3 required-when-bff invariants.
+
+        These checks run at settings-load time so a misconfigured
+        deployment fails fast at boot rather than at first proxied
+        request. The rules:
+
+        * When ``AUTH_MODE=bff`` AND ``BFF_PROXY_ENABLED=true``, the
+          upstream API scope MUST be set (no safe default exists).
+        * When ``AUTH_MODE=bff`` AND ``BFF_TOKEN_CACHE_BACKEND=redis``,
+          the HMAC key MUST be set and >= 32 chars.
+        """
+        if self.AUTH_MODE.lower() != "bff":
+            return self
+        if self.BFF_PROXY_ENABLED and not self.BFF_UPSTREAM_API_SCOPE.strip():
+            raise ValueError(
+                "AUTH_MODE=bff with BFF_PROXY_ENABLED=true requires "
+                "BFF_UPSTREAM_API_SCOPE (e.g. 'api://<client-id>/.default').",
+            )
+        if self.BFF_TOKEN_CACHE_BACKEND == "redis":
+            secret = self.BFF_TOKEN_CACHE_HMAC_KEY.get_secret_value()
+            if len(secret) < 32:
+                raise ValueError(
+                    "BFF_TOKEN_CACHE_BACKEND=redis requires "
+                    "BFF_TOKEN_CACHE_HMAC_KEY to be >= 32 chars.",
+                )
+        return self
 
     model_config = {
         "env_file": ".env",

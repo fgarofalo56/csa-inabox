@@ -123,3 +123,25 @@ class PendingAuthState(BaseModel):
     code_verifier: str
     redirect_to: str
     issued_at: datetime
+
+
+# ── Phase 3: reverse-proxy + persistent token cache DTOs ────────────────────
+
+
+class AcquiredToken(BaseModel):
+    """Result returned by :class:`~portal.shared.api.services.token_broker.TokenBroker`.
+
+    The proxy consumes this to attach the ``Authorization`` header when
+    forwarding a request upstream. ``cache_hit`` is True when the token
+    came from the MSAL cache without a refresh-token round trip; it is
+    emitted as a structured-log field so operators can observe
+    cache-hit ratios over time.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    access_token: str
+    token_type: str = "Bearer"
+    expires_on: datetime
+    cache_hit: bool
+    acquisition_ms: float

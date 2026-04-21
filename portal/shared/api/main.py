@@ -19,12 +19,16 @@ Run locally::
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
@@ -137,6 +141,32 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     else:
         logger.info("Skipping demo data seeding (env=%s)", env)
 
+    # CSA-0020 Phase 3 — initialise the BFF reverse-proxy resources (ADR-0019).
+    # The router is mounted below at module-import time when the feature
+    # flag is on; the httpx client + token broker are created here so
+    # shutdown can close them deterministically under the same lifespan.
+    if settings.AUTH_MODE.lower() == "bff" and settings.BFF_PROXY_ENABLED:
+        import httpx as _httpx
+
+        from .routers import api_proxy
+        from .services.token_broker import TokenBroker
+        from .services.token_cache import build_token_cache_backend
+
+        _tc_backend = build_token_cache_backend(settings)
+        _proxy_client = _httpx.AsyncClient(
+            timeout=settings.BFF_UPSTREAM_API_TIMEOUT_SECONDS,
+            follow_redirects=False,
+        )
+        _broker = TokenBroker(settings=settings, backend=_tc_backend)
+        api_proxy.get_proxy_resources().configure(
+            client=_proxy_client, broker=_broker,
+        )
+        logger.info(
+            "BFF reverse-proxy resources initialised (upstream=%s, cache=%s)",
+            settings.BFF_UPSTREAM_API_ORIGIN,
+            settings.BFF_TOKEN_CACHE_BACKEND,
+        )
+
     # Audit routes for missing auth dependencies (SEC-0010)
     for route in _app.routes:
         if hasattr(route, "dependant") and hasattr(route, "path"):
@@ -164,6 +194,16 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     # of the shared async SQLAlchemy engine + managed-identity credentials.
     # See ADR-0016.
     logger.info("Shutting down CSA-in-a-Box API — draining async stores")
+    # Close BFF proxy resources first (httpx client) so in-flight proxy
+    # requests see a clean cancellation rather than a half-closed engine.
+    if settings.AUTH_MODE.lower() == "bff" and settings.BFF_PROXY_ENABLED:
+        try:
+            from .routers import api_proxy
+
+            await api_proxy.get_proxy_resources().aclose()
+            logger.info("BFF reverse-proxy httpx client closed")
+        except Exception as exc:
+            logger.warning("BFF proxy shutdown error: %s", exc)
     try:
         from .dependencies import all_stores
         from .persistence_async import close_async_engines
@@ -222,6 +262,94 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
 )
 
+# ── Exception Handlers (CSA-0029) ────────────────────────────────────────────
+# Every uncaught exception becomes a structured JSON 500 with a
+# correlation id. Stack traces are NEVER surfaced to callers — they are
+# logged with correlation_id so operators can find them in Log Analytics
+# via a single identifier. Validation and HTTP errors get the same
+# correlation-id envelope for uniformity across the API.
+
+
+def _correlation_id(request: Request) -> str:
+    """Return the request correlation id, preferring inbound headers.
+
+    If a reverse proxy / front door already emitted ``x-correlation-id``
+    or ``x-request-id``, propagate it; otherwise mint a UUID4.
+    """
+    for header in ("x-correlation-id", "x-request-id"):
+        value = request.headers.get(header)
+        if value:
+            return value
+    return str(uuid.uuid4())
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_exception_handler(
+    request: Request, exc: RequestValidationError,
+) -> JSONResponse:
+    """422 responses with correlation id; body errors are safe to return."""
+    cid = _correlation_id(request)
+    logger.warning(
+        "Request validation failed",
+        path=request.url.path,
+        method=request.method,
+        errors=exc.errors(),
+        correlation_id=cid,
+    )
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": exc.errors(),
+            "correlation_id": cid,
+            "type": "validation_error",
+        },
+        headers={"x-correlation-id": cid},
+    )
+
+
+@app.exception_handler(StarletteHTTPException)
+async def _http_exception_handler(
+    request: Request, exc: StarletteHTTPException,
+) -> JSONResponse:
+    """Preserve HTTPException semantics while attaching a correlation id."""
+    cid = _correlation_id(request)
+    content: dict[str, object] = {
+        "detail": exc.detail,
+        "correlation_id": cid,
+    }
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=content,
+        headers={"x-correlation-id": cid, **(exc.headers or {})},
+    )
+
+
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(
+    request: Request, exc: Exception,
+) -> JSONResponse:
+    """Catch-all: 500 with correlation id; NEVER leak traceback."""
+    cid = _correlation_id(request)
+    # exc_info=True routes the traceback to structlog — visible in Log
+    # Analytics AppTraces but never returned to the caller.
+    logger.exception(
+        "Unhandled exception",
+        path=request.url.path,
+        method=request.method,
+        correlation_id=cid,
+        exception_type=type(exc).__name__,
+    )
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "Internal server error",
+            "correlation_id": cid,
+            "type": "internal_error",
+        },
+        headers={"x-correlation-id": cid},
+    )
+
+
 # ── Routers ──────────────────────────────────────────────────────────────────
 # The React frontend (api.ts) calls everything under /api/v1/.
 # Legacy routes/ remain at /api/ for backward compatibility via app.py.
@@ -257,6 +385,22 @@ if settings.AUTH_MODE.lower() == "bff":
             )
     app.include_router(auth_bff.router)
     logger.info("BFF auth router mounted under /auth (AUTH_MODE=bff)")
+
+    # CSA-0020 Phase 3 — reverse-proxy router (ADR-0019).  Opt-in via
+    # BFF_PROXY_ENABLED so existing BFF deployments using the direct
+    # /auth/token handoff aren't broken by an upgrade. The upstream
+    # origin + scope are validated in config.py at settings-load time;
+    # the httpx client + token broker are instantiated in ``lifespan``
+    # and torn down on shutdown.
+    if settings.BFF_PROXY_ENABLED:
+        from .routers import api_proxy
+
+        app.include_router(api_proxy.router)
+        logger.info(
+            "BFF reverse-proxy router mounted (upstream=%s, cache=%s)",
+            settings.BFF_UPSTREAM_API_ORIGIN,
+            settings.BFF_TOKEN_CACHE_BACKEND,
+        )
 else:
     logger.info("BFF auth router NOT mounted (AUTH_MODE=%s)", settings.AUTH_MODE)
 
