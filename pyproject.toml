@@ -105,7 +105,7 @@ platform = [
     # CSA-0097 — RAG document loaders for PDF and DOCX.  Both imports
     # are deferred inside csa_platform.ai_integration.rag.loaders so the
     # rest of the platform package stays importable without them.
-    "pypdf>=4.0.0,<6.0.0",
+    "pypdf>=4.0.0,<7.0.0",
     "python-docx>=1.1.0,<2.0.0",
     # Optional Azure Document Intelligence path for table-heavy PDFs,
     # gated on the RAG_DOC_INTELLIGENCE_ENDPOINT env; falls back to
