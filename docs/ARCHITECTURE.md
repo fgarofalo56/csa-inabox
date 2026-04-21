@@ -16,6 +16,16 @@ for workloads in Azure Government (Fabric forecast, not GA), for regulated
 scenarios that need composable IaC, and as an incremental on-ramp whose
 components compose cleanly into a future Fabric migration.
 
+> [!NOTE]
+> **CAF scenario update (CSA-0068).** The legacy "Cloud-Scale Analytics"
+> CAF scenario was **deprecated in April 2026** and replaced by
+> [Microsoft CAF — Unify your data platform](https://aka.ms/cafdata).
+> This document tracks the 2026 "Unify your data platform" guidance.
+> Historical references to the deprecated *Cloud-Scale Analytics* scenario
+> are retained for context and cross-referencing only — do not use
+> `https://learn.microsoft.com/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/`
+> as an authoritative source for new work.
+
 ## 📑 Table of Contents
 
 - [🏗️ High-Level Architecture](#️-high-level-architecture)
@@ -288,8 +298,9 @@ The consumer layer exposes processed data to end users and downstream systems.
 
 - **Power BI** — Direct Lake mode connects Power BI directly to Delta Lake files
   in ADLS Gen2 via Databricks SQL endpoints, eliminating data import overhead.
-- **Data Onboarding Portal** — Three implementations (PowerApps, React/Next.js,
-  Kubernetes) sharing a common FastAPI backend.
+- **Data Onboarding Portal** — Four implementations (PowerApps, React/Next.js,
+  Kubernetes, and `python -m cli`) sharing a common FastAPI backend
+  (CSA-0066).
 - **REST APIs** — Data product APIs exposed through API Management with OAuth2
   authentication and rate limiting.
 - **Teams Alerts** — Webhook-based notifications for pipeline failures, data

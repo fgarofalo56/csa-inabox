@@ -186,7 +186,7 @@ graph TB
 │   ├── 📁 purview_governance/    # Purview automation & governance
 │   └── 📁 functions/             # Consolidated Azure Functions (validation, aiEnrichment, eventProcessing, secretRotation)
 ├── 📁 portal/                     # Web portal (FastAPI backend + 3 UI frontends: React, AKS/K8s, PowerApps)
-├── 📁 cli/                        # Platform CLI (sibling of portal UIs; shares the portal/shared/api backend)
+├── 📁 cli/                        # Platform CLI — 4th portal variant (CSA-0066); shares portal/shared/api backend
 ├── 📁 governance/                 # Data governance framework
 │   ├── 📁 common/                 # Shared logging, validation utilities
 │   ├── 📁 contracts/              # Data contracts & enforcement
@@ -237,6 +237,37 @@ expected row counts for every model.
 > is used in `git clone` commands. Replace `<CLONE_URL>` with your appropriate
 > internal-fork or upstream repository URL per Contoso policy (for example,
 > `git clone https://github.com/<org>/csa-inabox.git`).
+
+### Install dev environment (`make setup`)
+
+`make setup` installs the repo as an editable package with the pyproject
+extras named by the `EXTRAS` variable. The default covers backend-only
+development; add `portal`, `copilot`, or `platform` when you need those
+code paths (CSA-0062).
+
+| Command                                                     | Extras installed                                        |
+| ----------------------------------------------------------- | ------------------------------------------------------- |
+| `make setup`                                                | `dev,governance,functions` (default)                    |
+| `make setup EXTRAS=dev,portal`                              | Add FastAPI + portal dependencies                       |
+| `make setup EXTRAS=dev,portal,copilot`                      | Portal + Copilot RAG / eval / telemetry                 |
+| `make setup EXTRAS=dev,governance,functions,portal,copilot,platform` | Everything (kitchen-sink dev install)           |
+
+One-shot sample vertical bring-up (CSA-0052):
+
+```bash
+make sample-up NAME=usda          # validate → deploy (--dry-run) → seed → dbt → verify
+make sample-up NAME=noaa FULL_DEPLOY=1   # real deploy against dev subscription
+make sample-down NAME=usda        # tear down the same vertical
+```
+
+Portal local dev with supervised processes (CSA-0051):
+
+```bash
+make setup EXTRAS=dev,portal
+make portal-dev           # starts backend + frontend + dbt-ci stub (Ctrl-C stops all)
+make portal-dev-stop      # kill any orphaned pids
+# Logs: logs/portal-dev/{backend,frontend,dbt-ci}.log
+```
 
 ---
 
@@ -317,9 +348,18 @@ This project is licensed under the MIT License -- see the [LICENSE](LICENSE) fil
 
 ## 🔗 Related Resources
 
-- [Azure Cloud-Scale Analytics](https://learn.microsoft.com/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/)
+> [!NOTE]
+> **CAF scenario update (CSA-0068).** The legacy "Cloud-Scale Analytics"
+> CAF scenario was **deprecated in April 2026** and replaced by
+> [Microsoft CAF — Unify your data platform](https://aka.ms/cafdata).
+> Older `cloud-scale-analytics/...` URLs below are retained for
+> historical cross-reference only; follow the `aka.ms/cafdata` link
+> above for authoritative 2026 guidance.
+
+- [Microsoft CAF — Unify your data platform (2026 guidance)](https://aka.ms/cafdata) — replaces Cloud-Scale Analytics
+- [Azure Cloud-Scale Analytics (deprecated, historical)](https://learn.microsoft.com/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/)
 - [Azure Landing Zones](https://learn.microsoft.com/azure/cloud-adoption-framework/ready/landing-zone/)
-- [Data Mesh Architecture](https://learn.microsoft.com/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/architectures/data-mesh-pattern)
+- [Data Mesh Architecture (deprecated — see Unify your data platform above)](https://learn.microsoft.com/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/architectures/data-mesh-pattern)
 - [Azure Well-Architected Framework](https://learn.microsoft.com/azure/well-architected/)
 
 ---

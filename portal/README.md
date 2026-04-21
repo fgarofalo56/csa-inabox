@@ -3,11 +3,12 @@
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Frontend Developers
 
 > [!NOTE]
-> **TL;DR:** Three portal implementations (PowerApps, React/Next.js, Kubernetes) all sharing the same FastAPI backend for self-service data source registration, pipeline monitoring, marketplace discovery, and access request workflows.
+> **TL;DR:** Four portal implementations — PowerApps, React/Next.js, Kubernetes, and CLI (`cli/` at the repo root) — all sharing the same FastAPI backend for self-service data source registration, pipeline monitoring, marketplace discovery, and access request workflows.
 
-This directory contains **three different implementations** of the autonomous data
-onboarding portal, each using a different technology stack. All implementations share
-the same backend API and provide the same functionality.
+This directory contains **three browser / app implementations** of the autonomous data
+onboarding portal plus a **fourth command-line variant** at `/cli/` in the repo root
+(shipped as the `python -m cli` module). All four implementations share the same backend
+API and provide the same functionality.
 
 ## Table of Contents
 
@@ -77,6 +78,17 @@ sequenceDiagram
 - **Cons:** Most complex, requires K8s expertise
 - **Deploy time:** ~60 minutes
 
+### 4. CLI (`/cli/` at the repo root)
+- **Best for:** Automation, CI/CD pipelines, scripts, ops power-users
+- **Stack:** Click + `python -m cli` (shares `portal/shared/api` over HTTP)
+- **Entry point:** `python -m cli --help`
+- **Commands:** `sources`, `pipelines`, `marketplace`, `stats`
+- **Pros:** Scriptable, no browser required, works over SSH / in air-gapped
+  environments, honors `CSA_API_URL` / `CSA_API_TOKEN` / `CSA_FORMAT` env vars
+- **Cons:** No interactive dashboards — use one of the web variants above
+  for visual workflows.
+- **Deploy time:** minutes — `pip install -e ".[dev,portal]"` and run
+
 ---
 
 ## 🔌 Shared Backend (`shared/`)
@@ -111,15 +123,16 @@ portal/shared/
 
 ## 📋 Quick Comparison
 
-| Feature | PowerApps | React | Kubernetes |
-|---|---|---|---|
-| Cost | $$ (Power Platform) | $ (App Service) | $$$ (AKS cluster) |
-| Customization | Low | High | High |
-| Scalability | Medium | Medium | High |
-| Auth | M365 built-in | MSAL | Custom |
-| Gov Cloud | ✅ | ✅ | ✅ |
-| Offline/PWA | ❌ | ✅ | ✅ |
-| GitOps | ❌ | ✅ | ✅ |
+| Feature | PowerApps | React | Kubernetes | CLI |
+|---|---|---|---|---|
+| Cost | $$ (Power Platform) | $ (App Service) | $$$ (AKS cluster) | $ (local / dev box) |
+| Customization | Low | High | High | N/A (API client) |
+| Scalability | Medium | Medium | High | N/A (per-invocation) |
+| Auth | M365 built-in | MSAL | Custom | Bearer token via `CSA_API_TOKEN` |
+| Gov Cloud | ✅ | ✅ | ✅ | ✅ |
+| Offline/PWA | ❌ | ✅ | ✅ | ✅ (against local backend) |
+| GitOps | ❌ | ✅ | ✅ | ✅ (scriptable) |
+| CI/CD-friendly | ❌ | ⚠️ | ⚠️ | ✅ |
 
 ---
 

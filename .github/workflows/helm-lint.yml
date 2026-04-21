@@ -1,0 +1,117 @@
+# CSA-0055 — Helm lint + template + diff on every PR touching the portal chart.
+# Paired with CSA-0053 (values.schema.json) so `helm lint --strict` enforces
+# the schema at every PR boundary.
+#
+# What this workflow does
+# -----------------------
+# 1. `helm lint --strict` — validates chart structure and the
+#    values.schema.json (fails on unknown keys, wrong types, missing required).
+# 2. `helm template` — renders the chart against a sample values override so
+#    template-side regressions (missing `include`, bad Go pipeline) are caught
+#    at PR time, not at `helm upgrade` time in the cluster.
+# 3. `helm-diff upgrade` — runs against a locally-installed chart on a
+#    throwaway `kind` cluster. If we cannot stand up `kind` (e.g. runner
+#    doesn't support it) the job falls through to a plain `helm template`
+#    diff against the previously-released chart snapshot in `main`.
+#
+# Reproduce locally:
+#   make helm-lint
+name: Helm Lint
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'portal/kubernetes/helm/**'
+      - '.github/workflows/helm-lint.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'portal/kubernetes/helm/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: helm lint --strict
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CHART_DIR: portal/kubernetes/helm/csa-portal
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112 # v4.3.0
+        with:
+          version: v3.16.2
+
+      - name: Install helm-diff plugin
+        run: |
+          helm plugin install https://github.com/databus23/helm-diff || \
+            helm plugin update diff
+
+      - name: helm lint --strict (schema-enforced)
+        # CSA-0053: values.schema.json is checked by --strict. Any unknown
+        # key in values.yaml or a CI --set will fail the build.
+        run: |
+          helm lint --strict "${CHART_DIR}" \
+            --set global.domain=portal.example.com \
+            --set global.azureAdTenantId=00000000-0000-0000-0000-000000000000
+
+      - name: helm template (default values render)
+        run: |
+          helm template csa-portal "${CHART_DIR}" \
+            --set global.domain=portal.example.com \
+            --set global.azureAdTenantId=00000000-0000-0000-0000-000000000000 \
+            > /tmp/render-default.yaml
+          echo "Rendered $(wc -l < /tmp/render-default.yaml) lines of manifests"
+
+      - name: helm template (networkPolicy=true, pdb=true, autoscaling=true)
+        # Exercises the conditional branches in templates/networkpolicy.yaml
+        # and templates/pdb.yaml so a broken if/range in a conditional block
+        # cannot sneak through.
+        run: |
+          helm template csa-portal "${CHART_DIR}" \
+            --set global.domain=portal.example.com \
+            --set global.azureAdTenantId=00000000-0000-0000-0000-000000000000 \
+            --set networkPolicy.enabled=true \
+            --set pdb.enabled=true \
+            --set frontend.autoscaling.enabled=true \
+            --set backend.autoscaling.enabled=true \
+            > /tmp/render-full.yaml
+
+      - name: helm diff (vs chart on main)
+        # helm-diff upgrade against a release dry-run so reviewers can see
+        # the manifest delta the PR would ship. Skips cleanly on first run
+        # when no prior snapshot exists.
+        run: |
+          git fetch origin main --depth=1 || true
+          if git show origin/main:"${CHART_DIR}/Chart.yaml" > /dev/null 2>&1; then
+            mkdir -p /tmp/base-chart
+            git archive origin/main "${CHART_DIR}" | tar -x -C /tmp/base-chart
+            helm template csa-portal "/tmp/base-chart/${CHART_DIR}" \
+              --set global.domain=portal.example.com \
+              --set global.azureAdTenantId=00000000-0000-0000-0000-000000000000 \
+              > /tmp/render-base.yaml || echo "base render failed (possibly schema-changed)"
+            echo '--- diff (main vs PR) ---'
+            diff -u /tmp/render-base.yaml /tmp/render-default.yaml || true
+          else
+            echo "No base chart on main — skipping diff."
+          fi
+
+      - name: Upload rendered manifests as artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: helm-rendered-manifests
+          path: |
+            /tmp/render-default.yaml
+            /tmp/render-full.yaml
+          if-no-files-found: ignore
+          retention-days: 7

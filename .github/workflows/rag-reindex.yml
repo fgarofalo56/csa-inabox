@@ -1,0 +1,148 @@
+# CSA-0098 — Re-index the Copilot RAG vector store on pushes to main that
+# change documentation / examples / ADRs. The index drifts silently
+# without this, so every content change ships with a fresh embedding run.
+#
+# What this workflow does
+# -----------------------
+# 1. Checks out main.
+# 2. Installs Copilot deps via the existing pyproject extras.
+# 3. Runs `python -m apps.copilot.cli ingest --json` which emits an
+#    IndexReport to stdout (see apps/copilot/cli.py::_cli_ingest).
+# 4. Uploads the IndexReport as a workflow artifact so reviewers can
+#    see what shipped, what got skipped, and the per-file embedding costs.
+#
+# Gating
+# ------
+# Vector-store writes require the Azure OpenAI endpoint secret. When
+# `COPILOT_AZURE_OPENAI_ENDPOINT` is absent (common for forks and for
+# PRs from external contributors) the workflow skips cleanly — it does
+# not fail and it does not produce a partial index.
+name: Copilot RAG Reindex
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'examples/**/README.md'
+      - 'docs/adr/**'
+      - '.github/workflows/rag-reindex.yml'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'If true, run ingest without writing to the vector store'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['true', 'false']
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false  # don't cancel mid-embed — incomplete indexes are worse than late ones
+
+permissions:
+  contents: read
+  id-token: write  # for Azure OIDC federated credential (if wired in org)
+
+jobs:
+  check-secret:
+    name: Gate on COPILOT_AZURE_OPENAI_ENDPOINT
+    runs-on: ubuntu-latest
+    outputs:
+      has_secret: ${{ steps.check.outputs.has_secret }}
+    steps:
+      - id: check
+        env:
+          HAS_ENDPOINT: ${{ secrets.COPILOT_AZURE_OPENAI_ENDPOINT != '' }}
+        run: |
+          if [ "${HAS_ENDPOINT}" = "true" ]; then
+            echo "has_secret=true" >> "$GITHUB_OUTPUT"
+            echo "COPILOT_AZURE_OPENAI_ENDPOINT is set — proceeding with reindex."
+          else
+            echo "has_secret=false" >> "$GITHUB_OUTPUT"
+            echo "COPILOT_AZURE_OPENAI_ENDPOINT is NOT set — skipping reindex."
+            echo "To enable reindex, set the repository secret COPILOT_AZURE_OPENAI_ENDPOINT."
+          fi
+
+  reindex:
+    name: Ingest docs into Copilot RAG
+    needs: check-secret
+    if: needs.check-secret.outputs.has_secret == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # Surface the endpoint to the CLI. The pipeline honors these per
+      # apps/copilot/config.py.
+      COPILOT_AZURE_OPENAI_ENDPOINT: ${{ secrets.COPILOT_AZURE_OPENAI_ENDPOINT }}
+      COPILOT_AZURE_OPENAI_API_KEY: ${{ secrets.COPILOT_AZURE_OPENAI_API_KEY }}
+      COPILOT_OTEL_DISABLE: '1'  # suppress off-box telemetry in CI
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+        with:
+          fetch-depth: 2  # need HEAD~1 so the ingester can diff changed files
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install Copilot dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,copilot]"
+
+      - name: Run ingest (JSON IndexReport)
+        run: |
+          mkdir -p artifacts
+          python -m apps.copilot.cli ingest --json \
+            > artifacts/index-report.json \
+            2> artifacts/ingest.stderr.log || {
+              rc=$?
+              echo "ingest failed rc=$rc — stderr follows:" >&2
+              cat artifacts/ingest.stderr.log >&2 || true
+              exit "$rc"
+            }
+
+      - name: Summarize IndexReport
+        if: always()
+        run: |
+          if [ -s artifacts/index-report.json ]; then
+            python - <<'PY'
+          import json
+          import pathlib
+          p = pathlib.Path("artifacts/index-report.json")
+          data = json.loads(p.read_text() or "{}")
+          total = data.get("total_chunks") or data.get("chunks_indexed") or "unknown"
+          files = data.get("files_indexed") or data.get("files") or "unknown"
+          skipped = data.get("files_skipped") or data.get("skipped") or "unknown"
+          print(f"Index report summary:")
+          print(f"  files indexed : {files}")
+          print(f"  chunks written: {total}")
+          print(f"  files skipped : {skipped}")
+          PY
+          else
+            echo "index-report.json was empty."
+          fi
+
+      - name: Upload IndexReport artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rag-index-report-${{ github.sha }}
+          path: |
+            artifacts/index-report.json
+            artifacts/ingest.stderr.log
+          if-no-files-found: ignore
+          retention-days: 30
+
+  skipped:
+    name: Skipped — secret missing
+    needs: check-secret
+    if: needs.check-secret.outputs.has_secret != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Log skip reason
+        run: |
+          echo "::notice::COPILOT_AZURE_OPENAI_ENDPOINT is not set. RAG reindex was skipped."
+          echo "To enable: set the repository secret COPILOT_AZURE_OPENAI_ENDPOINT (and optionally COPILOT_AZURE_OPENAI_API_KEY)."

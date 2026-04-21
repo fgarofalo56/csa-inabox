@@ -423,6 +423,19 @@ docker compose -f portal/kubernetes/docker/docker-compose.yml up --build
 # Frontend: http://localhost:3000
 ```
 
+**CLI variant (CSA-0066 — 4th portal variant):**
+```bash
+# Install with portal extras (CSA-0062)
+make setup EXTRAS=dev,portal
+
+# Point the CLI at your running backend and use it
+export CSA_API_URL=http://localhost:8000/api/v1
+python -m cli --help                         # list commands
+python -m cli sources list                   # list registered sources
+python -m cli marketplace products           # list data products
+python -m cli --format json stats overview   # JSON output for CI pipelines
+```
+
 ### Step C: Register a Data Source
 
 - [ ] Open the portal at `http://localhost:3000`

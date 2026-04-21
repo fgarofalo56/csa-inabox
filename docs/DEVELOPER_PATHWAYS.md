@@ -52,13 +52,15 @@ Bicep modules: `deploy/bicep/DLZ/` (Data Landing Zone), `deploy/bicep/DMLZ/` (Da
 
 ### Working on the portal?
 
-**Code:** `portal/`
+**Code:** `portal/` (UI implementations) and `/cli/` (CLI variant, CSA-0066)
 
 ```bash
 cd portal/react-webapp && npm install && npm run dev    # React portal
+python -m cli --help                                    # CLI variant
+make portal-dev                                         # Supervised backend+frontend+dbt (CSA-0051)
 ```
 
-Shared types: `portal/shared/contracts/types.ts`. Components: `portal/react-webapp/src/components/`. Auth: `portal/react-webapp/src/services/authConfig.ts`. K8s deployment: `portal/kubernetes/`.
+Shared types: `portal/shared/contracts/types.ts`. Components: `portal/react-webapp/src/components/`. Auth: `portal/react-webapp/src/services/authConfig.ts`. K8s deployment: `portal/kubernetes/`. CLI commands: `cli/commands/`.
 
 ### Working on AI/ML?
 

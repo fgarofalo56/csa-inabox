@@ -1,4 +1,4 @@
-.PHONY: help setup lint test validate deploy-dev deploy-prod deploy-adf prerequisites seed seed-azure clean security typecheck-platform portal-dev portal-test portal-lint portal-docker teardown-dev teardown-staging teardown-prod teardown-example
+.PHONY: help setup lint test validate deploy-dev deploy-prod deploy-adf prerequisites seed seed-azure clean security typecheck-platform portal-dev portal-dev-stop portal-test portal-lint portal-docker teardown-dev teardown-staging teardown-prod teardown-example sample-up sample-down helm-lint
 
 # Default target
 help: ## Show this help
@@ -6,19 +6,32 @@ help: ## Show this help
 
 # --- Setup ---
 
-setup: ## Set up development environment
+# CSA-0062: EXTRAS variable drives which pyproject.toml extras are installed.
+# Default is "dev,governance,functions" for backward compatibility. Override
+# to include portal/copilot/platform when you need them:
+#     make setup EXTRAS=dev,portal,copilot
+# Common recipes:
+#     make setup                                 # backend-only dev
+#     make setup EXTRAS=dev,portal               # portal work
+#     make setup EXTRAS=dev,portal,copilot       # portal + copilot
+#     make setup EXTRAS=dev,governance,functions,portal,copilot,platform   # everything
+EXTRAS ?= dev,governance,functions
+
+setup: ## Set up development environment (override with EXTRAS=dev,portal,copilot)
 	python -m venv .venv && \
 	. .venv/bin/activate && \
 	pip install --upgrade pip && \
-	pip install -e ".[dev,governance,functions]"
+	pip install -e ".[$(EXTRAS)]"
 	@echo ""
+	@echo "Installed with extras: [$(EXTRAS)]"
 	@echo "Activate with: source .venv/bin/activate"
 
-setup-win: ## Set up development environment (Windows)
+setup-win: ## Set up development environment (Windows; honors EXTRAS)
 	python -m venv .venv
 	.venv\Scripts\pip install --upgrade pip
-	.venv\Scripts\pip install -e ".[dev,governance,functions]"
+	.venv\Scripts\pip install -e ".[$(EXTRAS)]"
 	@echo ""
+	@echo "Installed with extras: [$(EXTRAS)]"
 	@echo "Activate with: .venv\Scripts\activate"
 
 # --- Linting ---
@@ -130,9 +143,48 @@ seed-azure: ## Upload sample data to ADLS (requires --storage-account)
 
 # --- Portal ---
 
-portal-dev:  ## Start portal backend + frontend for local development
-	ENVIRONMENT=local DEMO_MODE=true uvicorn portal.shared.api.main:app --reload --port 8000 &
-	cd portal/react-webapp && npm run dev
+# CSA-0051: portal-dev supervises FastAPI + Next.js + the dbt-ci stub in
+# parallel and traps SIGINT / SIGTERM so Ctrl-C kills the whole process
+# tree (previously the uvicorn child was orphaned). Plain bash supervisor
+# — no honcho/overmind dependency required. POSIX-bash compatible.
+#
+# Log files land in ./logs/portal-dev/<component>.log so components are
+# separable. `make portal-dev-stop` kills any lingering pids.
+#
+# Prerequisites:
+#   - Python deps:  make setup EXTRAS=dev,portal
+#   - Node deps:    cd portal/react-webapp && npm install
+#   - dbt deps:     pip install "dbt-core>=1.7,<2.0" "dbt-duckdb>=1.7,<2.0"
+portal-dev:  ## Start portal backend + frontend + dbt-ci stub under one supervisor
+	@mkdir -p logs/portal-dev
+	@rm -f logs/portal-dev/.pids
+	@echo "Starting portal-dev supervisor (logs in logs/portal-dev/)"
+	@bash -c ' \
+		set -m; \
+		trap "echo Stopping...; kill 0 2>/dev/null; wait" INT TERM; \
+		( ENVIRONMENT=local DEMO_MODE=true \
+		  uvicorn portal.shared.api.main:app --reload --port 8000 \
+		  2>&1 | tee logs/portal-dev/backend.log ) & \
+		echo $$! >> logs/portal-dev/.pids; \
+		( cd portal/react-webapp && npm run dev \
+		  2>&1 | tee ../../logs/portal-dev/frontend.log ) & \
+		echo $$! >> logs/portal-dev/.pids; \
+		( bash .github/workflows/dbt-ci-smoke.sh \
+		  2>&1 | tee logs/portal-dev/dbt-ci.log ) & \
+		echo $$! >> logs/portal-dev/.pids; \
+		wait \
+	'
+
+portal-dev-stop:  ## Stop any pids left behind by portal-dev
+	@if [ -f logs/portal-dev/.pids ]; then \
+		while read pid; do \
+			[ -n "$$pid" ] && kill "$$pid" 2>/dev/null || true; \
+		done < logs/portal-dev/.pids; \
+		rm -f logs/portal-dev/.pids; \
+		echo "portal-dev stopped"; \
+	else \
+		echo "no portal-dev pids to stop"; \
+	fi
 
 portal-test:  ## Run all portal tests (backend + frontend)
 	ENVIRONMENT=local python -m pytest portal/shared/tests/ --tb=short -q
@@ -144,6 +196,48 @@ portal-lint:  ## Lint portal code (Python + TypeScript)
 
 portal-docker:  ## Start portal via Docker Compose
 	docker compose -f portal/kubernetes/docker/docker-compose.yml up --build
+
+# --- Sample vertical bring-up (CSA-0052) ---
+
+# `make sample-up NAME=<vertical>` runs the full chain for a single
+# vertical example: validate → deploy (dry-run) → seed → dbt → verify.
+# Stage scripts live in scripts/sample-up/; each is POSIX-bash and safe
+# to run individually. Pass FULL_DEPLOY=1 to run a real deploy instead
+# of --dry-run.
+#
+# Usage:
+#   make sample-up NAME=usda
+#   make sample-up NAME=noaa FULL_DEPLOY=1
+#   make sample-down NAME=usda
+sample-up:  ## Validate → deploy → seed → dbt → verify a vertical example
+	@if [ -z "$(NAME)" ]; then echo "Usage: make sample-up NAME=<vertical>"; exit 1; fi
+	bash scripts/sample-up/01-validate.sh "$(NAME)"
+	bash scripts/sample-up/02-deploy.sh "$(NAME)"
+	bash scripts/sample-up/03-seed.sh "$(NAME)"
+	bash scripts/sample-up/04-dbt.sh "$(NAME)"
+	bash scripts/sample-up/05-verify.sh "$(NAME)"
+
+sample-down:  ## Tear down the vertical brought up by sample-up (alias for teardown-example)
+	@if [ -z "$(NAME)" ]; then echo "Usage: make sample-down NAME=<vertical>"; exit 1; fi
+	$(MAKE) teardown-example VERTICAL="$(NAME)" $(if $(DRYRUN),DRYRUN=1) $(if $(YES),YES=1)
+
+# --- Helm (CSA-0055) ---
+
+# helm-lint mirrors the .github/workflows/helm-lint.yml CI job so PR
+# failures reproduce locally. Uses --strict so values.schema.json
+# (CSA-0053) is enforced.
+HELM_CHART_DIR ?= portal/kubernetes/helm/csa-portal
+
+helm-lint:  ## Run helm lint --strict + template render on the portal chart
+	@command -v helm >/dev/null 2>&1 || { echo "helm not installed — see https://helm.sh/docs/intro/install/"; exit 1; }
+	helm lint --strict $(HELM_CHART_DIR) \
+	    --set global.domain=portal.example.com \
+	    --set global.azureAdTenantId=00000000-0000-0000-0000-000000000000
+	helm template csa-portal $(HELM_CHART_DIR) \
+	    --set global.domain=portal.example.com \
+	    --set global.azureAdTenantId=00000000-0000-0000-0000-000000000000 \
+	    > /dev/null
+	@echo "helm-lint OK"
 
 # --- Cleanup ---
 

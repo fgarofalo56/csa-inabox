@@ -181,9 +181,10 @@ See [PLATFORM_SERVICES.md](PLATFORM_SERVICES.md) for detailed deployment instruc
 
 ## 🌐 Data Onboarding Portal
 
-The `portal/` directory contains three implementations of an autonomous data
-onboarding portal — each with a different frontend but sharing the same FastAPI
-backend API.
+The `portal/` directory contains three browser-based implementations of the
+autonomous data onboarding portal plus a fourth command-line variant at
+`/cli/` in the repo root — each with a different frontend but all sharing the
+same FastAPI backend API (CSA-0066).
 
 ### Choosing a Frontend
 
@@ -192,6 +193,7 @@ backend API.
 | [PowerApps](../portal/powerapps/) | M365-native orgs, low-code teams | ~30 min |
 | [React/Next.js](../portal/react-webapp/) | Custom enterprise portals, maximum flexibility | ~45 min |
 | [Kubernetes](../portal/kubernetes/) | Enterprise-scale, multi-tenant, HA | ~60 min |
+| [CLI (`python -m cli`)](../cli/) | Automation, CI/CD, scripts, air-gapped ops | minutes |
 
 All frontends connect to the shared backend at `portal/shared/api/`. To get
 started:
