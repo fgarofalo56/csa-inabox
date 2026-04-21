@@ -16,6 +16,32 @@ from __future__ import annotations
 import os
 from typing import Protocol
 
+# ---------------------------------------------------------------------------
+# Typed errors
+# ---------------------------------------------------------------------------
+
+
+class LiveEvalConfigurationError(RuntimeError):
+    """Raised when a live eval run is requested without the required env.
+
+    Live evals require *both*:
+
+    * ``COPILOT_EVALS_LIVE=true`` (explicit opt-in per run), and
+    * ``AZURE_OPENAI_ENDPOINT`` set to a reachable endpoint.
+
+    The CLI uses this error to produce a single, actionable message
+    instead of a deep stack trace.
+    """
+
+
+class LiveScorerError(RuntimeError):
+    """Raised when the live :class:`LLMJudgeScorer` cannot produce a score.
+
+    The deterministic path never raises this; the live path does so
+    the harness can surface it as an explicit per-case error rather
+    than masking it as ``score=0.5``.
+    """
+
 
 class Scorer(Protocol):
     """Minimal interface for an answer-relevance judge."""
@@ -164,8 +190,59 @@ class LLMJudgeScorer:
         return score, reason
 
 
+def live_eval_enabled() -> bool:
+    """Return True when ``COPILOT_EVALS_LIVE`` is truthy.
+
+    Centralising the env check keeps the CLI and scorer in lock-step —
+    every ``live_eval_enabled()``-gated code path uses the same
+    truthiness rules as :mod:`apps.copilot.telemetry.tracer`.
+    """
+    raw = os.environ.get("COPILOT_EVALS_LIVE", "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def build_live_scorer(
+    *,
+    endpoint: str | None = None,
+    chat_deployment: str | None = None,
+    api_version: str = "2024-06-01",
+) -> LLMJudgeScorer:
+    """Construct a :class:`LLMJudgeScorer` for live LLM-as-judge runs.
+
+    Validates the required env surface and raises
+    :class:`LiveEvalConfigurationError` otherwise so callers never
+    ship a partially-configured live run.  The Azure OpenAI endpoint
+    is read from ``AZURE_OPENAI_ENDPOINT`` (the RAG-service standard)
+    when not provided explicitly.
+    """
+    if not live_eval_enabled():
+        raise LiveEvalConfigurationError(
+            "Live eval is not enabled.  Set COPILOT_EVALS_LIVE=true to "
+            "opt in to non-deterministic LLM-as-judge scoring.",
+        )
+    resolved_endpoint = (
+        endpoint
+        or os.environ.get("AZURE_OPENAI_ENDPOINT", "")
+        or os.environ.get("COPILOT_AZURE_OPENAI_ENDPOINT", "")
+    ).strip()
+    if not resolved_endpoint:
+        raise LiveEvalConfigurationError(
+            "Live eval requires AZURE_OPENAI_ENDPOINT (or "
+            "COPILOT_AZURE_OPENAI_ENDPOINT) to be set.",
+        )
+    return LLMJudgeScorer(
+        endpoint=resolved_endpoint,
+        chat_deployment=chat_deployment,
+        api_version=api_version,
+    )
+
+
 __all__ = [
     "DeterministicScorer",
     "LLMJudgeScorer",
+    "LiveEvalConfigurationError",
+    "LiveScorerError",
     "Scorer",
+    "build_live_scorer",
+    "live_eval_enabled",
 ]

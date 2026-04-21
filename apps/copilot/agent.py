@@ -57,6 +57,7 @@ from apps.copilot.models import (
     DocType,
     RetrievedChunk,
 )
+from apps.copilot.telemetry import SpanAttribute, copilot_span
 from csa_platform.ai_integration.rag.pipeline import SearchResult, VectorStore
 from csa_platform.common.logging import get_logger
 
@@ -453,10 +454,44 @@ class CopilotAgent:
                 refusal_reason="empty_question",
             )
 
-        retrieved = await self._retrieve(question)
-        coverage = evaluate_coverage(retrieved, self.policy)
+        question_hash = _hash_question(question)
+
+        async with copilot_span(
+            "copilot.retrieve",
+            attributes={
+                SpanAttribute.QUESTION_HASH: question_hash,
+                SpanAttribute.TOP_K: self.settings.top_k,
+                SpanAttribute.EXTRA_CONTEXT_PRESENT: False,
+            },
+        ) as retrieve_span:
+            retrieved = await self._retrieve(question)
+            retrieve_span.set_attribute(
+                SpanAttribute.RETRIEVAL_RESULTS, len(retrieved),
+            )
+            retrieve_span.set_attribute(
+                SpanAttribute.RETRIEVAL_SEMANTIC_USED,
+                bool(self.settings.use_semantic_reranker),
+            )
+
+        async with copilot_span(
+            "copilot.coverage",
+            attributes={SpanAttribute.QUESTION_HASH: question_hash},
+        ) as coverage_span:
+            coverage = evaluate_coverage(retrieved, self.policy)
+            coverage_span.set_attribute(
+                SpanAttribute.COVERAGE_GROUNDED, bool(coverage.is_grounded),
+            )
+            coverage_span.set_attribute(
+                SpanAttribute.COVERAGE_CHUNKS_ABOVE,
+                int(coverage.chunks_above_threshold),
+            )
+            coverage_span.set_attribute(
+                SpanAttribute.GROUNDEDNESS, float(coverage.max_similarity),
+            )
+
         logger.info(
             "copilot.agent.coverage",
+            question_hash=question_hash,
             is_grounded=coverage.is_grounded,
             max_sim=coverage.max_similarity,
             total=coverage.total_chunks,
@@ -483,6 +518,7 @@ class CopilotAgent:
             retrieved=retrieved,
             id_to_chunk=id_to_chunk,
             coverage=coverage,
+            question_hash=question_hash,
         )
 
     # -- streaming -----------------------------------------------------------
@@ -540,10 +576,39 @@ class CopilotAgent:
             return
 
         yield AnswerChunk(kind="status", payload="retrieve-start")
-        retrieved = await self._retrieve(question, extra_context=extra_context)
+        async with copilot_span(
+            "copilot.retrieve",
+            attributes={
+                SpanAttribute.QUESTION_HASH: question_hash,
+                SpanAttribute.TOP_K: self.settings.top_k,
+                SpanAttribute.EXTRA_CONTEXT_PRESENT: bool(extra_context),
+            },
+        ) as retrieve_span:
+            retrieved = await self._retrieve(question, extra_context=extra_context)
+            retrieve_span.set_attribute(
+                SpanAttribute.RETRIEVAL_RESULTS, len(retrieved),
+            )
+            retrieve_span.set_attribute(
+                SpanAttribute.RETRIEVAL_SEMANTIC_USED,
+                bool(self.settings.use_semantic_reranker),
+            )
         yield AnswerChunk(kind="status", payload="retrieve-complete")
 
-        coverage = evaluate_coverage(retrieved, self.policy)
+        async with copilot_span(
+            "copilot.coverage",
+            attributes={SpanAttribute.QUESTION_HASH: question_hash},
+        ) as coverage_span:
+            coverage = evaluate_coverage(retrieved, self.policy)
+            coverage_span.set_attribute(
+                SpanAttribute.COVERAGE_GROUNDED, bool(coverage.is_grounded),
+            )
+            coverage_span.set_attribute(
+                SpanAttribute.COVERAGE_CHUNKS_ABOVE,
+                int(coverage.chunks_above_threshold),
+            )
+            coverage_span.set_attribute(
+                SpanAttribute.GROUNDEDNESS, float(coverage.max_similarity),
+            )
         logger.info(
             "copilot.agent.coverage",
             tool="copilot_agent",
@@ -577,37 +642,62 @@ class CopilotAgent:
         # else fall back to generate() and synthesise a single-delta
         # stream so the contract holds.
         final_generation: GenerationResult | None = None
-        if hasattr(self.llm, "stream"):
-            accumulated = ""
-            async for chunk in self.llm.stream(prompt):
-                if chunk.delta:
-                    accumulated += chunk.delta
-                    yield AnswerChunk(kind="token", payload=chunk.delta)
-                if chunk.final is not None:
-                    final_generation = chunk.final
-            if final_generation is None:
-                # SDK provided deltas but never a parsed final — build
-                # a best-effort GenerationResult. The accumulator
-                # should be valid prose; citation verification will
-                # fail if not, triggering the refusal branch below.
-                final_generation = GenerationResult(
-                    answer=accumulated,
-                    citations=[],
-                )
-        else:
-            final_generation = await self.llm.generate(prompt)
-            yield AnswerChunk(kind="token", payload=final_generation.answer)
+        async with copilot_span(
+            "copilot.generate",
+            attributes={
+                SpanAttribute.QUESTION_HASH: question_hash,
+            },
+        ) as generate_span:
+            if hasattr(self.llm, "stream"):
+                accumulated = ""
+                async for chunk in self.llm.stream(prompt):
+                    if chunk.delta:
+                        accumulated += chunk.delta
+                        yield AnswerChunk(kind="token", payload=chunk.delta)
+                    if chunk.final is not None:
+                        final_generation = chunk.final
+                if final_generation is None:
+                    # SDK provided deltas but never a parsed final — build
+                    # a best-effort GenerationResult. The accumulator
+                    # should be valid prose; citation verification will
+                    # fail if not, triggering the refusal branch below.
+                    final_generation = GenerationResult(
+                        answer=accumulated,
+                        citations=[],
+                    )
+            else:
+                final_generation = await self.llm.generate(prompt)
+                yield AnswerChunk(kind="token", payload=final_generation.answer)
+            generate_span.set_attribute(
+                SpanAttribute.GENERATION_TOKENS,
+                len(final_generation.answer.split()),
+            )
 
         # Run citation verification on the final generation.
-        chunk_id_by_citation = {
-            cid: id_to_chunk[cid].id for cid in id_to_chunk
-        }
-        verification = verify_citations(
-            answer_text=final_generation.answer,
-            retrieved_chunks=retrieved,
-            cited_ids=final_generation.citations,
-            chunk_id_by_citation=chunk_id_by_citation,
-        )
+        async with copilot_span(
+            "copilot.verify",
+            attributes={SpanAttribute.QUESTION_HASH: question_hash},
+        ) as verify_span:
+            chunk_id_by_citation = {
+                cid: id_to_chunk[cid].id for cid in id_to_chunk
+            }
+            verification = verify_citations(
+                answer_text=final_generation.answer,
+                retrieved_chunks=retrieved,
+                cited_ids=final_generation.citations,
+                chunk_id_by_citation=chunk_id_by_citation,
+            )
+            verify_span.set_attribute(
+                SpanAttribute.VERIFICATION_VALID, bool(verification.valid),
+            )
+            verify_span.set_attribute(
+                SpanAttribute.MISSING_MARKERS,
+                [str(m) for m in verification.missing_markers],
+            )
+            verify_span.set_attribute(
+                SpanAttribute.FABRICATED_IDS,
+                [str(i) for i in verification.fabricated_ids],
+            )
 
         if not verification.valid:
             logger.warning(
@@ -775,8 +865,40 @@ class CopilotAgent:
                 refusal_reason="empty_question",
             )
 
-        retrieved = await self._retrieve(question, extra_context=extra_context)
-        coverage = evaluate_coverage(retrieved, self.policy)
+        question_hash = _hash_question(question)
+
+        async with copilot_span(
+            "copilot.retrieve",
+            attributes={
+                SpanAttribute.QUESTION_HASH: question_hash,
+                SpanAttribute.TOP_K: self.settings.top_k,
+                SpanAttribute.EXTRA_CONTEXT_PRESENT: bool(extra_context),
+            },
+        ) as retrieve_span:
+            retrieved = await self._retrieve(question, extra_context=extra_context)
+            retrieve_span.set_attribute(
+                SpanAttribute.RETRIEVAL_RESULTS, len(retrieved),
+            )
+            retrieve_span.set_attribute(
+                SpanAttribute.RETRIEVAL_SEMANTIC_USED,
+                bool(self.settings.use_semantic_reranker),
+            )
+
+        async with copilot_span(
+            "copilot.coverage",
+            attributes={SpanAttribute.QUESTION_HASH: question_hash},
+        ) as coverage_span:
+            coverage = evaluate_coverage(retrieved, self.policy)
+            coverage_span.set_attribute(
+                SpanAttribute.COVERAGE_GROUNDED, bool(coverage.is_grounded),
+            )
+            coverage_span.set_attribute(
+                SpanAttribute.COVERAGE_CHUNKS_ABOVE,
+                int(coverage.chunks_above_threshold),
+            )
+            coverage_span.set_attribute(
+                SpanAttribute.GROUNDEDNESS, float(coverage.max_similarity),
+            )
         if not coverage.is_grounded:
             return AnswerResponse(
                 question=question,
@@ -794,6 +916,7 @@ class CopilotAgent:
             retrieved=retrieved,
             id_to_chunk=id_to_chunk,
             coverage=coverage,
+            question_hash=question_hash,
         )
 
     # -- internals -----------------------------------------------------------
@@ -891,29 +1014,59 @@ class CopilotAgent:
         retrieved: list[RetrievedChunk],
         id_to_chunk: dict[int, RetrievedChunk],
         coverage: Coverage,
+        question_hash: str | None = None,
     ) -> AnswerResponse:
         """Drive the LLM + citation verifier, with optional retry."""
         attempts = 0
         last_verification: CitationVerificationResult | None = None
         last_generation: GenerationResult | None = None
         current_prompt = prompt
+        q_hash = question_hash or _hash_question(question)
 
         max_attempts = 1 + self.settings.max_citation_verification_retries
 
         while attempts < max_attempts:
             attempts += 1
-            generation = await self.llm.generate(current_prompt)
+
+            async with copilot_span(
+                "copilot.generate",
+                attributes={
+                    SpanAttribute.QUESTION_HASH: q_hash,
+                },
+            ) as generate_span:
+                generation = await self.llm.generate(current_prompt)
+                generate_span.set_attribute(
+                    SpanAttribute.GENERATION_TOKENS,
+                    len(generation.answer.split()),
+                )
             last_generation = generation
 
-            chunk_id_by_citation = {
-                cid: id_to_chunk[cid].id for cid in id_to_chunk if cid in id_to_chunk
-            }
-            verification = verify_citations(
-                answer_text=generation.answer,
-                retrieved_chunks=retrieved,
-                cited_ids=generation.citations,
-                chunk_id_by_citation=chunk_id_by_citation,
-            )
+            async with copilot_span(
+                "copilot.verify",
+                attributes={SpanAttribute.QUESTION_HASH: q_hash},
+            ) as verify_span:
+                chunk_id_by_citation = {
+                    cid: id_to_chunk[cid].id
+                    for cid in id_to_chunk
+                    if cid in id_to_chunk
+                }
+                verification = verify_citations(
+                    answer_text=generation.answer,
+                    retrieved_chunks=retrieved,
+                    cited_ids=generation.citations,
+                    chunk_id_by_citation=chunk_id_by_citation,
+                )
+                verify_span.set_attribute(
+                    SpanAttribute.VERIFICATION_VALID, bool(verification.valid),
+                )
+                verify_span.set_attribute(
+                    SpanAttribute.MISSING_MARKERS,
+                    [str(m) for m in verification.missing_markers],
+                )
+                verify_span.set_attribute(
+                    SpanAttribute.FABRICATED_IDS,
+                    [str(i) for i in verification.fabricated_ids],
+                )
             last_verification = verification
 
             if verification.valid:
@@ -942,6 +1095,7 @@ class CopilotAgent:
             )
             logger.warning(
                 "copilot.agent.citation_retry",
+                question_hash=q_hash,
                 attempt=attempts,
                 missing=verification.missing_markers,
                 fabricated=verification.fabricated_ids,

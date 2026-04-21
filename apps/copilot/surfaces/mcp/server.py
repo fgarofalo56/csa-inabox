@@ -262,11 +262,16 @@ class CopilotMCPServer:
 
     # ─── SDK integration ────────────────────────────────────────────────
 
-    async def run_stdio(self) -> None:
-        """Attach the dispatcher to the MCP SDK's stdio transport."""
+    # ─── MCP SDK server wiring ──────────────────────────────────────────
+
+    def _build_lowlevel_server(self) -> Any:
+        """Construct an ``mcp.server.Server`` bound to our dispatch methods.
+
+        The server is used by both the stdio and the streamable HTTP
+        transports — keep the SDK-specific registration in one place.
+        """
         import mcp.types as mcp_types
         from mcp.server import Server
-        from mcp.server.stdio import stdio_server
 
         server: Server = Server("csa-copilot")
 
@@ -305,6 +310,14 @@ class CopilotMCPServer:
         async def _read_resource(uri: Any) -> str:
             return await self.handle_read_resource(str(uri))
 
+        return server
+
+    async def run_stdio(self) -> None:
+        """Attach the dispatcher to the MCP SDK's stdio transport."""
+        from mcp.server.stdio import stdio_server
+
+        server = self._build_lowlevel_server()
+
         async with AsyncExitStack() as stack:
             streams = await stack.enter_async_context(stdio_server())
             read_stream, write_stream = streams
@@ -313,6 +326,120 @@ class CopilotMCPServer:
                 write_stream,
                 server.create_initialization_options(),
             )
+
+    def build_http_app(
+        self,
+        *,
+        stateless: bool = True,
+        json_response: bool = False,
+        mount_path: str = "/mcp",
+    ) -> Any:
+        """Build a Starlette ASGI application hosting the MCP streamable HTTP transport.
+
+        Args:
+            stateless: When True (default) each request is handled with
+                a fresh transport — matches the ``--session-mode``
+                default on the CLI.  False enables stateful session
+                tracking via the ``Mcp-Session-Id`` header.
+            json_response: When True, responses are emitted as plain
+                JSON instead of SSE event streams. Useful for test
+                clients that don't speak SSE.
+            mount_path: URL path the MCP endpoint is mounted under
+                (default ``/mcp``).
+
+        Returns:
+            A :class:`starlette.applications.Starlette` app that can be
+            served with ``uvicorn.run`` or driven in-process by
+            ``httpx.AsyncClient`` / :class:`starlette.testclient.TestClient`.
+        """
+        from contextlib import asynccontextmanager
+
+        from mcp.server.streamable_http_manager import (
+            StreamableHTTPSessionManager,
+        )
+        from starlette.applications import Starlette
+        from starlette.routing import Mount
+        from starlette.types import Receive, Scope, Send
+
+        low_level = self._build_lowlevel_server()
+        session_manager = StreamableHTTPSessionManager(
+            app=low_level,
+            event_store=None,
+            json_response=json_response,
+            stateless=stateless,
+        )
+
+        async def _handle_streamable(
+            scope: Scope,
+            receive: Receive,
+            send: Send,
+        ) -> None:
+            await session_manager.handle_request(scope, receive, send)
+
+        @asynccontextmanager
+        async def _lifespan(_app: Starlette) -> Any:
+            async with session_manager.run():
+                logger.info(
+                    "copilot.mcp.http_lifespan_started",
+                    surface="mcp",
+                    transport="http",
+                    stateless=stateless,
+                )
+                try:
+                    yield
+                finally:
+                    logger.info(
+                        "copilot.mcp.http_lifespan_stopped",
+                        surface="mcp",
+                        transport="http",
+                    )
+
+        starlette_app = Starlette(
+            debug=False,
+            routes=[Mount(mount_path, app=_handle_streamable)],
+            lifespan=_lifespan,
+        )
+        starlette_app.state.mcp_session_manager = session_manager
+        starlette_app.state.mcp_mount_path = mount_path
+        return starlette_app
+
+    async def run_http(
+        self,
+        *,
+        host: str,
+        port: int,
+        stateless: bool = True,
+        json_response: bool = False,
+        mount_path: str = "/mcp",
+    ) -> None:
+        """Serve the streamable HTTP transport via uvicorn.
+
+        Blocks until the server is interrupted.  Tests should use
+        :meth:`build_http_app` + a TestClient / ASGI harness instead.
+        """
+        import uvicorn
+
+        app = self.build_http_app(
+            stateless=stateless,
+            json_response=json_response,
+            mount_path=mount_path,
+        )
+        config = uvicorn.Config(
+            app,
+            host=host,
+            port=port,
+            log_level="info",
+        )
+        logger.info(
+            "copilot.mcp.http_starting",
+            surface="mcp",
+            transport="http",
+            host=host,
+            port=port,
+            stateless=stateless,
+            mount_path=mount_path,
+        )
+        await uvicorn.Server(config).serve()
 
 
 __all__ = ["CopilotMCPServer"]

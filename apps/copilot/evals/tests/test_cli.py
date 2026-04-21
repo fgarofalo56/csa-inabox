@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
 
+from apps.copilot.evals import cli as cli_module
 from apps.copilot.evals.cli import main
+from apps.copilot.models import AnswerResponse, Citation
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 GOLDENS_DIR = Path(__file__).parent.parent / "goldens"
@@ -199,6 +202,219 @@ class TestCliDiff:
         assert "Report A" in out
         assert "Report B" in out
         assert "DIFF" in out
+
+
+class _FakeLiveScorer:
+    """Deterministic stand-in for :class:`LLMJudgeScorer` used by tests.
+
+    Always scores 1.0 so every rubric passes.  Records invocations so
+    tests can assert the judge was actually consulted.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, list[str]]] = []
+
+    async def score_relevance(
+        self,
+        question: str,
+        answer: str,
+        expected_phrases: list[str],
+    ) -> tuple[float, str]:
+        self.calls.append((question, answer, list(expected_phrases)))
+        return 1.0, "fake live scorer: always 1.0"
+
+
+class _FakeLiveAgent:
+    """Stand-in for a live :class:`CopilotAgent`.
+
+    Returns a grounded answer that embeds every expected phrase / cites
+    every expected source path so the rubrics produced by the harness
+    pass without calling Azure.
+    """
+
+    def __init__(self, goldens: Sequence[object]) -> None:
+        self._by_q: dict[str, object] = {
+            getattr(g, "question"): g for g in goldens  # noqa: B009
+        }
+
+    async def __call__(
+        self,
+        question: str,
+        conversation_id: str | None = None,  # noqa: ARG002
+    ) -> AnswerResponse:
+        golden = self._by_q.get(question)
+        if golden is None or getattr(golden, "must_refuse", False):
+            return AnswerResponse(
+                question=question,
+                answer="Refusal — no golden.",
+                citations=[],
+                groundedness=0.1,
+                refused=True,
+                refusal_reason="no_coverage",
+            )
+        phrases: list[str] = list(getattr(golden, "expected_phrases", []))
+        sources: list[str] = list(getattr(golden, "expected_citations", []))
+        parts: list[str] = ["Live-mocked answer."]
+        parts.extend(phrases)
+        for idx, _ in enumerate(sources, start=1):
+            parts.append(f"[{idx}]")
+        answer = " ".join(parts)
+        citations: list[Citation] = []
+        for idx, src in enumerate(sources, start=1):
+            citations.append(
+                Citation(
+                    id=idx,
+                    source_path=src,
+                    excerpt=f"Live excerpt for {src}",
+                    similarity=0.95,
+                    chunk_id=f"live-chunk-{idx}",
+                    reranker_score=None,
+                ),
+            )
+        if not citations:
+            citations.append(
+                Citation(
+                    id=1,
+                    source_path="docs/live.md",
+                    excerpt="Placeholder",
+                    similarity=0.9,
+                    chunk_id="live-placeholder",
+                    reranker_score=None,
+                ),
+            )
+            answer = f"{answer} [1]"
+        return AnswerResponse(
+            question=question,
+            answer=answer,
+            citations=citations,
+            groundedness=0.92,
+            refused=False,
+            refusal_reason=None,
+        )
+
+
+class TestCliLiveMode:
+    def test_live_without_env_exits_with_clear_error(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Without COPILOT_EVALS_LIVE=true the CLI refuses to run --live."""
+        monkeypatch.delenv("COPILOT_EVALS_LIVE", raising=False)
+        monkeypatch.delenv("AZURE_OPENAI_ENDPOINT", raising=False)
+        rc = main(
+            [
+                "run",
+                "--goldens",
+                str(FIXTURE_DIR / "sample_goldens.yaml"),
+                "--output",
+                str(tmp_path / "r.json"),
+                "--live",
+            ],
+        )
+        assert rc == 2
+        err = capsys.readouterr().err
+        assert "Live eval misconfigured" in err
+        assert "COPILOT_EVALS_LIVE" in err
+
+    def test_live_with_env_but_no_endpoint_exits_clearly(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Missing AZURE_OPENAI_ENDPOINT is reported distinctly."""
+        monkeypatch.setenv("COPILOT_EVALS_LIVE", "true")
+        monkeypatch.delenv("AZURE_OPENAI_ENDPOINT", raising=False)
+        monkeypatch.delenv("COPILOT_AZURE_OPENAI_ENDPOINT", raising=False)
+        rc = main(
+            [
+                "run",
+                "--goldens",
+                str(FIXTURE_DIR / "sample_goldens.yaml"),
+                "--output",
+                str(tmp_path / "r.json"),
+                "--live",
+            ],
+        )
+        assert rc == 2
+        err = capsys.readouterr().err
+        assert "AZURE_OPENAI_ENDPOINT" in err
+
+    def test_live_mode_with_mocked_scorer_and_agent_completes(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Live mode runs end-to-end when fakes are injected.
+
+        We set the env gates, inject a fake scorer + fake agent (so no
+        Azure call is made), and assert the CLI produces a report.
+        """
+        monkeypatch.setenv("COPILOT_EVALS_LIVE", "true")
+        monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://example.invalid")
+
+        from apps.copilot.evals.harness import EvalHarness
+
+        goldens = EvalHarness.load_goldens(FIXTURE_DIR / "sample_goldens.yaml")
+
+        fake_scorer = _FakeLiveScorer()
+        fake_agent = _FakeLiveAgent(goldens)
+        cli_module._set_live_scorer_override(fake_scorer)
+        cli_module._set_live_agent_override(fake_agent)
+        try:
+            output = tmp_path / "live.json"
+            rc = main(
+                [
+                    "run",
+                    "--goldens",
+                    str(FIXTURE_DIR / "sample_goldens.yaml"),
+                    "--output",
+                    str(output),
+                    "--live",
+                    "--tag",
+                    "live-mock",
+                ],
+            )
+        finally:
+            cli_module._set_live_scorer_override(None)
+            cli_module._set_live_agent_override(None)
+
+        assert rc == 0, capsys.readouterr().err
+        assert output.exists()
+        data = json.loads(output.read_text(encoding="utf-8"))
+        assert data["deterministic"] is False
+        assert data["tag"] == "live-mock"
+        assert data["total_cases"] == 2
+        err = capsys.readouterr().err
+        # The warning line must be emitted in live mode.
+        assert "--live mode calls Azure" in err
+
+    def test_live_and_dry_run_are_mutually_exclusive(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Supplying both flags is a configuration error."""
+        monkeypatch.setenv("COPILOT_EVALS_LIVE", "true")
+        monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://example.invalid")
+        rc = main(
+            [
+                "run",
+                "--goldens",
+                str(FIXTURE_DIR / "sample_goldens.yaml"),
+                "--output",
+                str(tmp_path / "r.json"),
+                "--dry-run",
+                "--live",
+            ],
+        )
+        assert rc == 2
+        err = capsys.readouterr().err
+        assert "mutually exclusive" in err
 
 
 class TestCliWithShippedBaseline:

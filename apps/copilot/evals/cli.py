@@ -3,9 +3,17 @@
 Usage::
 
     python -m apps.copilot.evals run --goldens <path> --output <out>
+    python -m apps.copilot.evals run --goldens <path> --live     # LLM-as-judge
     python -m apps.copilot.evals baseline --from <report> --tag <tag>
     python -m apps.copilot.evals gate --current <report> --baseline <path>
     python -m apps.copilot.evals diff --a <report_a> --b <report_b>
+
+Live mode (``--live``):
+    Gated on ``COPILOT_EVALS_LIVE=true`` AND ``AZURE_OPENAI_ENDPOINT`` so
+    a misconfigured CI environment cannot accidentally trigger a paid
+    run.  Uses :class:`LLMJudgeScorer` backed by
+    :class:`openai.AsyncAzureOpenAI` (same primitives the RAG service
+    consumes).
 
 Exit codes:
 
@@ -27,6 +35,47 @@ from apps.copilot.evals.goldens_schema import GoldenSchemaError
 from apps.copilot.evals.harness import EvalHarness
 from apps.copilot.evals.models import EvalReport
 from apps.copilot.evals.regression import RegressionGate
+from apps.copilot.evals.scorer import (
+    LiveEvalConfigurationError,
+    Scorer,
+    build_live_scorer,
+)
+from csa_platform.common.logging import get_logger
+
+logger = get_logger(__name__)
+
+
+# Test hook: when set, the CLI uses this scorer for ``--live`` runs
+# instead of constructing a real :class:`LLMJudgeScorer`.  Production
+# never sets this — it's exclusively for the live-mode test suite to
+# inject a deterministic fake without patching Azure credentials.
+_LIVE_SCORER_OVERRIDE: Scorer | None = None
+
+
+def _set_live_scorer_override(scorer: Scorer | None) -> None:
+    """Inject a scorer used by ``--live`` runs instead of the real judge.
+
+    Exposed for tests via :func:`apps.copilot.evals.cli._set_live_scorer_override`.
+    Production must not call this.
+    """
+    global _LIVE_SCORER_OVERRIDE
+    _LIVE_SCORER_OVERRIDE = scorer
+
+
+# Test hook: when set, the CLI uses this agent for ``--live`` runs
+# instead of constructing a real :class:`CopilotAgent`.  Lets us
+# exercise the live code path without hitting Azure.
+_LIVE_AGENT_OVERRIDE: Any = None
+
+
+def _set_live_agent_override(agent: Any) -> None:
+    """Inject an agent callable used by ``--live`` runs.
+
+    Exposed for tests only — production builds the agent from
+    :class:`CopilotSettings`.
+    """
+    global _LIVE_AGENT_OVERRIDE
+    _LIVE_AGENT_OVERRIDE = agent
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -62,6 +111,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Run with the deterministic DryRunAgent — no Azure / LLM calls. "
             "Used by CI."
+        ),
+    )
+    p_run.add_argument(
+        "--live",
+        action="store_true",
+        help=(
+            "Run with a real CopilotAgent + LLM-as-judge scorer.  Requires "
+            "COPILOT_EVALS_LIVE=true AND AZURE_OPENAI_ENDPOINT to be set — "
+            "otherwise the CLI exits 2 with a clear error."
         ),
     )
     p_run.add_argument(
@@ -119,6 +177,66 @@ def _load_report(path: Path) -> EvalReport:
     return EvalReport.from_json_dict(data)
 
 
+def _build_live_harness(
+    goldens: list[Any],  # noqa: ARG001 — kept for future live-agent wiring
+    *,
+    concurrency: int,
+) -> EvalHarness:
+    """Construct a harness wired to a live agent + :class:`LLMJudgeScorer`.
+
+    Tests can inject a stand-in scorer via
+    :func:`_set_live_scorer_override` and a stand-in agent via
+    :func:`_set_live_agent_override`.  Production builds both from
+    :class:`apps.copilot.config.CopilotSettings`.
+
+    Raises :class:`LiveEvalConfigurationError` when
+    ``COPILOT_EVALS_LIVE`` is false or ``AZURE_OPENAI_ENDPOINT`` is
+    missing — the CLI converts that to a non-zero exit code.
+    """
+    # Build the scorer first so the env check happens before we try
+    # constructing an Azure client for the agent.
+    scorer: Scorer
+    if _LIVE_SCORER_OVERRIDE is not None:
+        # Still enforce the env gate so a test that forgets the flag
+        # sees the same failure mode as production.
+        from apps.copilot.evals.scorer import live_eval_enabled
+
+        if not live_eval_enabled():
+            raise LiveEvalConfigurationError(
+                "Live eval is not enabled.  Set COPILOT_EVALS_LIVE=true.",
+            )
+        scorer = _LIVE_SCORER_OVERRIDE
+    else:
+        scorer = build_live_scorer()
+
+    if _LIVE_AGENT_OVERRIDE is not None:
+        agent_callable = _LIVE_AGENT_OVERRIDE
+    else:
+        # Lazy import so ``--dry-run`` paths (and CLI --help) never
+        # need Azure credentials.
+        from apps.copilot.agent import CopilotAgent
+        from apps.copilot.config import CopilotSettings
+        from apps.copilot.models import AnswerResponse
+
+        settings = CopilotSettings()
+        agent = CopilotAgent.from_settings(settings)
+
+        async def _agent_callable(
+            question: str,
+            conversation_id: str | None = None,  # noqa: ARG001
+        ) -> AnswerResponse:
+            return await agent.ask(question)
+
+        agent_callable = _agent_callable
+
+    return EvalHarness(
+        agent=agent_callable,
+        scorer=scorer,
+        concurrency=concurrency,
+        deterministic=False,
+    )
+
+
 async def _cmd_run(args: argparse.Namespace) -> int:
     goldens_path: Path = args.goldens
     try:
@@ -127,20 +245,42 @@ async def _cmd_run(args: argparse.Namespace) -> int:
         sys.stderr.write(f"{exc}\n")
         return 2
 
+    if args.dry_run and args.live:
+        sys.stderr.write(
+            "--dry-run and --live are mutually exclusive.\n",
+        )
+        return 2
+
     if args.dry_run:
         harness = EvalHarness.dry_run_from_goldens(
             goldens,
             concurrency=args.concurrency,
         )
-    else:
-        # Non-dry runs require a live agent — we don't provide one from
-        # the CLI directly (that would couple the CLI to Azure). Callers
-        # running live evals must build a harness in Python and invoke
-        # its ``run`` method programmatically. The CLI remains a
-        # CI-first surface.
+    elif args.live:
+        try:
+            harness = _build_live_harness(
+                goldens,
+                concurrency=args.concurrency,
+            )
+        except LiveEvalConfigurationError as exc:
+            sys.stderr.write(f"Live eval misconfigured: {exc}\n")
+            return 2
         sys.stderr.write(
-            "Non-dry-run mode requires programmatic invocation. "
-            "Use --dry-run for CI or build a harness in Python for live evals.\n",
+            "WARNING: --live mode calls Azure OpenAI; runs incur cost and "
+            "are non-deterministic.  Set COPILOT_EVALS_LIVE=false to disable.\n",
+        )
+        logger.warning(
+            "copilot.evals.live_mode_enabled",
+            surface="cli",
+            concurrency=args.concurrency,
+        )
+    else:
+        # No mode selected — keep the old message for callers still
+        # expecting the "programmatic" hint.  The CLI never spins up a
+        # live run implicitly.
+        sys.stderr.write(
+            "Non-dry-run mode requires --live (with COPILOT_EVALS_LIVE=true) "
+            "or programmatic invocation.\n",
         )
         return 2
 
