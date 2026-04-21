@@ -1,0 +1,6 @@
+# Deliberately broken: description too short, no steps, bad id.
+id: "BadID"
+name: ""
+description: "nope"
+category: read
+steps: []

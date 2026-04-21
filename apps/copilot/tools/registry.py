@@ -125,6 +125,34 @@ class ToolRegistry:
     def __len__(self) -> int:
         return len(self._tools)
 
+    def register_skills(
+        self,
+        catalog: Any,
+        broker: Any = None,
+        *,
+        dispatcher: Any = None,
+        approval_callback: Any = None,
+    ) -> list[str]:
+        """Register every skill in *catalog* as a :class:`SkillTool`.
+
+        Thin facade over
+        :func:`apps.copilot.tools.skill_tool.register_all_into` so
+        callers do not have to import from two places.  Returns the
+        list of tool names that were added (``["skill.<id>", ...]``).
+
+        The import is local to avoid a circular dependency — skill
+        tool construction references :class:`ToolRegistry` by type.
+        """
+        from apps.copilot.tools.skill_tool import register_all_into
+
+        return register_all_into(
+            self,
+            catalog,
+            broker=broker,
+            dispatcher=dispatcher,
+            approval_callback=approval_callback,
+        )
+
     # -- helpers -------------------------------------------------------------
 
     @staticmethod

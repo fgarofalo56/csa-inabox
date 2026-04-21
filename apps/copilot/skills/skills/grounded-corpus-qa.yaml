@@ -1,0 +1,31 @@
+id: grounded-corpus-qa
+name: "Grounded corpus Q&A"
+description: "Default single-skill wrapper around search_corpus so the agent loop can plan corpus Q&A alongside other skills with a uniform signature."
+category: read
+inputs:
+  - name: question
+    type: string
+    description: "Natural-language question about the CSA-in-a-Box platform."
+    required: true
+  - name: top_k
+    type: integer
+    description: "How many grounded chunks to retrieve."
+    required: false
+    default: 6
+outputs:
+  type: object
+  fields:
+    chunks: "Retrieved corpus chunks ordered by retriever score."
+steps:
+  - id: search
+    tool: search_corpus
+    description: "Hybrid + semantic retrieval over the indexed corpus."
+    input:
+      query: "{input.question}"
+      top_k: "{input.top_k}"
+fallback_if_tool_missing: fail
+version: "1.0"
+tags:
+  - grounded
+  - qa
+  - default

@@ -1,0 +1,45 @@
+id: score-deployment-readiness
+name: "Score deployment readiness"
+description: "Run the deployment validation gate in dry-run mode, fetch the Bicep ADR, and retrieve deployment-runbook chunks so the caller can score their environment."
+category: read
+inputs:
+  - name: environment
+    type: string
+    description: "Environment label forwarded to the deployment gate (dev, stage, prod)."
+    required: false
+    default: dev
+    enum:
+      - dev
+      - stage
+      - prod
+outputs:
+  type: object
+  fields:
+    gate_output: "validate-deployment dry-run output."
+    bicep_adr: "Contents of ADR 0004 (Bicep over Terraform)."
+    runbook_chunks: "Relevant runbook citations."
+steps:
+  - id: gate-dry-run
+    tool: validate_gate_dry_run
+    description: "Invoke dev-loop/gates/validate-deployment.ps1 in -WhatIf mode."
+    input:
+      gate: validate-deployment
+      environment: "{input.environment}"
+  - id: fetch-bicep-adr
+    tool: read_repo_file
+    description: "Fetch ADR 0004 to ground the IaC recommendation."
+    input:
+      path: docs/adr/0004-bicep-over-terraform.md
+      max_bytes: 20000
+  - id: search-runbooks
+    tool: search_corpus
+    description: "Retrieve runbook chunks relevant to the target environment."
+    input:
+      query: "deployment readiness {input.environment} runbook"
+      top_k: 5
+fallback_if_tool_missing: skip
+version: "1.0"
+tags:
+  - deployment
+  - readiness
+  - bicep

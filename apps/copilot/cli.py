@@ -28,6 +28,7 @@ import json
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 from apps.copilot.agent import CopilotAgent
 from apps.copilot.config import CopilotSettings
@@ -484,6 +485,210 @@ def _cli_broker_approve(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# skills sub-command (Phase 3)
+# ---------------------------------------------------------------------------
+
+
+def _build_default_skill_registry() -> tuple[Any, Any]:
+    """Build a tool registry suitable for skill dispatch in the CLI.
+
+    Mirrors the shape of :func:`_cli_tools_list` — read tools use null
+    retriever/embedder stubs so listing + showing skills is cheap, and
+    no Azure credentials are required.  Returns ``(registry, catalog)``.
+    """
+    from apps.copilot.broker.broker import ConfirmationBroker
+    from apps.copilot.config import CopilotSettings
+    from apps.copilot.skills.catalog import SkillCatalog
+    from apps.copilot.tools.execute import (
+        PublishDraftADRTool,
+        RunAlembicUpgradeTool,
+    )
+    from apps.copilot.tools.readonly import (
+        ReadRepoFileTool,
+        SearchCorpusTool,
+        ValidateGateDryRunTool,
+        WalkDecisionTreeTool,
+    )
+    from apps.copilot.tools.registry import ToolRegistry
+    from csa_platform.ai_integration.rag.pipeline import SearchResult
+
+    class _NullEmbedder:
+        async def embed_texts_async(self, texts: list[str]) -> list[list[float]]:
+            return [[0.0] for _ in texts]
+
+    class _NullRetriever:
+        async def search_async(
+            self,
+            query_vector: list[float],  # noqa: ARG002
+            query_text: str = "",  # noqa: ARG002
+            top_k: int = 5,  # noqa: ARG002
+            score_threshold: float = 0.0,  # noqa: ARG002
+            filters: str | None = None,  # noqa: ARG002
+            use_semantic_reranker: bool = False,  # noqa: ARG002
+        ) -> list[SearchResult]:
+            return []
+
+    repo_root = _repo_root()
+    registry = ToolRegistry()
+    registry.register(
+        SearchCorpusTool(retriever=_NullRetriever(), embedder=_NullEmbedder()),
+    )
+    registry.register(WalkDecisionTreeTool(trees_root=repo_root / "decision-trees"))
+    registry.register(ReadRepoFileTool(repo_root=repo_root))
+    registry.register(ValidateGateDryRunTool(repo_root=repo_root))
+
+    exec_settings = CopilotSettings(broker_signing_key="cli-skills-only")
+    broker = ConfirmationBroker(exec_settings)
+
+    async def _null_alembic(_: object) -> tuple[int, str, str]:
+        return (0, "", "")
+
+    registry.register(RunAlembicUpgradeTool(broker=broker, runner=_null_alembic))
+    registry.register(PublishDraftADRTool(broker=broker, repo_root=repo_root))
+
+    catalog = SkillCatalog.from_shipped()
+    return registry, catalog
+
+
+def _cli_skills_list(args: argparse.Namespace) -> int:
+    """``skills list`` — print the shipped skill catalog."""
+    from apps.copilot.skills.catalog import SkillCatalog
+
+    catalog = SkillCatalog.from_shipped()
+    if args.json:
+        payload = [
+            {
+                "id": s.id,
+                "name": s.name,
+                "category": s.category,
+                "version": s.version,
+                "description": s.description,
+                "tags": list(s.tags),
+            }
+            for s in catalog.list()
+        ]
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0
+
+    print(f"{'ID':<34} {'CATEGORY':<10} {'VERSION':<8} DESCRIPTION")
+    print("-" * 100)
+    for s in catalog.list():
+        desc = s.description if len(s.description) <= 48 else s.description[:45] + "..."
+        print(f"{s.id:<34} {s.category:<10} {s.version:<8} {desc}")
+    return 0
+
+
+def _cli_skills_show(args: argparse.Namespace) -> int:
+    """``skills show <id>`` — pretty-print a skill spec + its resolved tool chain."""
+    from apps.copilot.skills.catalog import SkillCatalog
+    from apps.copilot.skills.errors import SkillNotFoundError
+
+    catalog = SkillCatalog.from_shipped()
+    try:
+        spec = catalog.get(args.skill_id)
+    except SkillNotFoundError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
+    payload = spec.model_dump(mode="json")
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0
+
+    print(f"id:          {spec.id}")
+    print(f"name:        {spec.name}")
+    print(f"category:    {spec.category}")
+    print(f"version:     {spec.version}")
+    print(f"tags:        {', '.join(spec.tags) or '(none)'}")
+    print(f"description: {spec.description}")
+    print()
+    print("inputs:")
+    if not spec.inputs:
+        print("  (none)")
+    for f in spec.inputs:
+        default_txt = "" if f.default is None else f" [default={f.default!r}]"
+        req_txt = "required" if f.required else "optional"
+        print(f"  - {f.name} ({f.type}, {req_txt}){default_txt}")
+        if f.description:
+            print(f"      {f.description}")
+    print()
+    print("steps:")
+    for step in spec.steps:
+        print(f"  - {step.id}: tool={step.tool}")
+        if step.description:
+            print(f"      {step.description}")
+        if step.input:
+            print(f"      input={json.dumps(step.input, indent=6)[1:-1].strip()}")
+    print(f"\nfallback_if_tool_missing: {spec.fallback_if_tool_missing}")
+    return 0
+
+
+def _cli_skills_run(args: argparse.Namespace) -> int:
+    """``skills run <id> --input-json '{...}'`` — dispatch a skill."""
+    from apps.copilot.skills.errors import (
+        SkillInputError,
+        SkillNotFoundError,
+    )
+
+    registry, catalog = _build_default_skill_registry()
+
+    try:
+        spec = catalog.get(args.skill_id)
+    except SkillNotFoundError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        inputs = json.loads(args.input_json) if args.input_json else {}
+    except json.JSONDecodeError as exc:
+        print(f"ERROR: --input-json is not valid JSON: {exc}", file=sys.stderr)
+        return 1
+    if not isinstance(inputs, dict):
+        print("ERROR: --input-json must decode to a JSON object.", file=sys.stderr)
+        return 1
+
+    if spec.category == "execute" and not args.confirm:
+        print(
+            f"REFUSED: skill {spec.id!r} is execute-class; re-run with "
+            "--confirm to proceed through the auto-approve broker.",
+            file=sys.stderr,
+        )
+        return 2
+
+    try:
+        result = asyncio.run(
+            catalog.dispatch(
+                args.skill_id,
+                inputs,
+                registry=registry,
+            ),
+        )
+    except SkillInputError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
+    payload = result.model_dump(mode="json")
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(f"skill_id:   {result.skill_id}")
+        print(f"trace_id:   {result.trace_id}")
+        print(f"success:    {result.success}")
+        print(f"total_ms:   {result.total_ms}")
+        if result.message:
+            print(f"message:    {result.message}")
+        print("steps:")
+        for step in result.steps:
+            print(
+                f"  - {step.step_id} ({step.tool}) status={step.status} "
+                f"took_ms={step.took_ms}",
+            )
+            if step.message:
+                print(f"      {step.message}")
+    return 0 if result.success else 2
+
+
+# ---------------------------------------------------------------------------
 # argparse wiring
 # ---------------------------------------------------------------------------
 
@@ -603,6 +808,61 @@ def build_parser() -> argparse.ArgumentParser:
         help="Principal approving the request (default: 'operator').",
     )
     broker_approve.set_defaults(func=_cli_broker_approve)
+
+    # skills sub-command (Phase 3)
+    skills = sub.add_parser(
+        "skills",
+        help="Phase 3 skill catalog operations.",
+    )
+    skills_sub = skills.add_subparsers(dest="skills_command", required=True)
+
+    skills_list = skills_sub.add_parser(
+        "list",
+        help="List every skill in the shipped catalog.",
+    )
+    skills_list.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the catalog as JSON on stdout.",
+    )
+    skills_list.set_defaults(func=_cli_skills_list)
+
+    skills_show = skills_sub.add_parser(
+        "show",
+        help="Show a skill's full YAML + resolved tool chain.",
+    )
+    skills_show.add_argument("skill_id", help="Skill id (kebab-case).")
+    skills_show.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the spec as JSON on stdout.",
+    )
+    skills_show.set_defaults(func=_cli_skills_show)
+
+    skills_run = skills_sub.add_parser(
+        "run",
+        help="Dispatch a skill and print the structured result.",
+    )
+    skills_run.add_argument("skill_id", help="Skill id to run.")
+    skills_run.add_argument(
+        "--input-json",
+        default="{}",
+        help="JSON object with caller inputs.",
+    )
+    skills_run.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the SkillResult as JSON on stdout.",
+    )
+    skills_run.add_argument(
+        "--confirm",
+        action="store_true",
+        help=(
+            "Required when running execute-class skills; enables the auto-approve "
+            "broker callback so side-effect steps can obtain tokens."
+        ),
+    )
+    skills_run.set_defaults(func=_cli_skills_run)
 
     return parser
 

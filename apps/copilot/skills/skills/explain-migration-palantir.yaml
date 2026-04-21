@@ -1,0 +1,40 @@
+id: explain-migration-palantir
+name: "Explain migration from Palantir Foundry"
+description: "Read the Palantir Foundry migration playbook and pull relevant corpus citations so the caller gets a capability-mapping answer grounded in both sources."
+category: read
+inputs:
+  - name: focus
+    type: string
+    description: "Migration focus area (e.g. 'ontology', 'pipelines', 'workshop')."
+    required: false
+    default: "capability mapping"
+outputs:
+  type: object
+  fields:
+    playbook_excerpt: "The top of the migration playbook."
+    citations: "Grounded corpus citations for the focus area."
+steps:
+  - id: read-playbook
+    tool: read_repo_file
+    description: "Fetch the Palantir Foundry migration playbook."
+    input:
+      path: docs/migrations/palantir-foundry.md
+      max_bytes: 30000
+  - id: read-ontology-sample
+    tool: read_repo_file
+    description: "Load the sample ontology to anchor capability mapping."
+    input:
+      path: docs/migrations/palantir-foundry/sample-ontology.yaml
+      max_bytes: 10000
+  - id: grounded-citations
+    tool: search_corpus
+    description: "Retrieve corpus chunks scoped to the focus area."
+    input:
+      query: "Palantir Foundry migration {input.focus}"
+      top_k: 5
+fallback_if_tool_missing: fail
+version: "1.0"
+tags:
+  - migration
+  - palantir
+  - foundry

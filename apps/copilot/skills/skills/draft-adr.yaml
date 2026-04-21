@@ -1,0 +1,50 @@
+id: draft-adr
+name: "Draft a new architecture decision record"
+description: "Gather the material for a new ADR: read an existing ADR as a template, walk a related decision tree, and pull grounded corpus citations for the decision topic."
+category: read
+inputs:
+  - name: topic
+    type: string
+    description: "ADR topic (e.g. 'Adopt private endpoints for Azure Storage')."
+    required: true
+  - name: template_adr_path
+    type: string
+    description: "Existing ADR to mirror when drafting."
+    required: false
+    default: docs/adr/0004-bicep-over-terraform.md
+  - name: related_tree_id
+    type: string
+    description: "Optional decision-tree id to walk alongside the draft."
+    required: false
+    default: fabric-vs-databricks-vs-synapse
+outputs:
+  type: object
+  fields:
+    template: "The existing ADR's text used as a stylistic template."
+    tree_summary: "Walk of the related decision tree."
+    citations: "Grounded corpus citations for the topic."
+steps:
+  - id: load-template
+    tool: read_repo_file
+    description: "Read the template ADR."
+    input:
+      path: "{input.template_adr_path}"
+      max_bytes: 20000
+  - id: walk-related-tree
+    tool: walk_decision_tree
+    description: "Walk the related decision tree for context."
+    input:
+      tree_id: "{input.related_tree_id}"
+      choices: []
+  - id: search-topic
+    tool: search_corpus
+    description: "Grounded chunks for the ADR topic."
+    input:
+      query: "{input.topic}"
+      top_k: 6
+fallback_if_tool_missing: fail
+version: "1.0"
+tags:
+  - adr
+  - draft
+  - authoring

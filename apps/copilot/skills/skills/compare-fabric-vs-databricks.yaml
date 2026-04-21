@@ -1,0 +1,46 @@
+id: compare-fabric-vs-databricks
+name: "Compare Fabric vs Databricks vs Synapse"
+description: "Walk the Fabric/Databricks/Synapse decision tree and fetch the strategic ADR so the caller gets a grounded recommendation with full context."
+category: read
+inputs:
+  - name: scenario
+    type: string
+    description: "Workload context sentence (used as a grounded search query)."
+    required: true
+  - name: choices
+    type: array
+    description: "Ordered labels selected at each decision node (empty = return the first branching question)."
+    required: false
+    default: []
+outputs:
+  type: object
+  fields:
+    recommendation: "Name of the recommended platform (Fabric, Databricks, or Synapse)."
+    rationale: "Decision-tree rationale for the recommendation."
+    citations: "ADR + grounded corpus citations supporting the recommendation."
+steps:
+  - id: walk-tree
+    tool: walk_decision_tree
+    description: "Traverse the fabric-vs-databricks-vs-synapse tree."
+    input:
+      tree_id: fabric-vs-databricks-vs-synapse
+      choices: "{input.choices}"
+  - id: fetch-adr-0010
+    tool: read_repo_file
+    description: "Fetch ADR 0010 (Fabric strategic target) for citation."
+    input:
+      path: docs/adr/0010-fabric-strategic-target.md
+      max_bytes: 20000
+  - id: search-grounding
+    tool: search_corpus
+    description: "Pull the top grounded chunks for the caller's scenario."
+    input:
+      query: "{input.scenario}"
+      top_k: 5
+fallback_if_tool_missing: fail
+version: "1.0"
+tags:
+  - decision
+  - fabric
+  - databricks
+  - synapse

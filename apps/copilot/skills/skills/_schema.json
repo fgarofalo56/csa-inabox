@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://csa-in-a-box.dev/schemas/copilot-skill.json",
+  "title": "Copilot Skill",
+  "description": "Declarative, YAML-authored workflow composed of Copilot tool invocations.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "name", "description", "category", "steps"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$",
+      "description": "Kebab-case, globally unique skill id."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Human-readable title."
+    },
+    "description": {
+      "type": "string",
+      "minLength": 20,
+      "description": "At least 20 characters so listings are useful."
+    },
+    "category": {
+      "type": "string",
+      "enum": ["read", "execute"],
+      "description": "Read skills run freely; execute skills gate through the broker."
+    },
+    "inputs": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "type"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["string", "integer", "number", "boolean", "array", "object"]
+          },
+          "description": { "type": "string" },
+          "required": { "type": "boolean", "default": true },
+          "default": {},
+          "enum": { "type": "array" }
+        }
+      }
+    },
+    "outputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": { "type": "string", "enum": ["object"] },
+        "fields": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "tool"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_-]*$"
+          },
+          "tool": {
+            "type": "string",
+            "minLength": 1
+          },
+          "input": { "type": "object" },
+          "description": { "type": "string" }
+        }
+      }
+    },
+    "fallback_if_tool_missing": {
+      "type": "string",
+      "enum": ["skip", "fail"],
+      "default": "fail"
+    },
+    "version": { "type": "string" },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}
