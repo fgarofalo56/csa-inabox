@@ -151,7 +151,7 @@ bff = [
     # redis.asyncio is only needed when BFF_SESSION_STORE=redis; an
     # InMemorySessionStore exists for local dev. Pinning keeps the
     # supply chain deterministic in gov builds.
-    "redis>=5.0.0,<7.0.0",
+    "redis>=5.0.0,<8.0.0",
 ]
 postgres = [
     # CSA-0046 — Postgres backend for portal persistence (AQ-0016).
