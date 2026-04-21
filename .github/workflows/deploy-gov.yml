@@ -81,9 +81,11 @@ jobs:
       - name: Determine parameters file
         id: params
         run: |
+          # CSA-0057: gov-staging now has its own params file so it
+          # cannot silently drift with gov-dev.
           case "${{ github.event.inputs.environment }}" in
             gov-dev)           echo "file=params.gov-dev.json" >> "$GITHUB_OUTPUT" ;;
-            gov-staging)       echo "file=params.gov-dev.json" >> "$GITHUB_OUTPUT" ;; # intentional: staging uses dev params until a dedicated staging params file is created
+            gov-staging)       echo "file=params.gov-staging.json" >> "$GITHUB_OUTPUT" ;;
             gov-prod)          echo "file=params.gov-prod.json" >> "$GITHUB_OUTPUT" ;;
             gov-tribal-health) echo "file=params.gov-tribal-health.json" >> "$GITHUB_OUTPUT" ;;
           esac
@@ -120,9 +122,11 @@ jobs:
       - name: Determine parameters file
         id: params
         run: |
+          # CSA-0057: gov-staging now has its own params file so it
+          # cannot silently drift with gov-dev.
           case "${{ github.event.inputs.environment }}" in
             gov-dev)           echo "file=params.gov-dev.json" >> "$GITHUB_OUTPUT" ;;
-            gov-staging)       echo "file=params.gov-dev.json" >> "$GITHUB_OUTPUT" ;; # intentional: staging uses dev params until a dedicated staging params file is created
+            gov-staging)       echo "file=params.gov-staging.json" >> "$GITHUB_OUTPUT" ;;
             gov-prod)          echo "file=params.gov-prod.json" >> "$GITHUB_OUTPUT" ;;
             gov-tribal-health) echo "file=params.gov-tribal-health.json" >> "$GITHUB_OUTPUT" ;;
           esac

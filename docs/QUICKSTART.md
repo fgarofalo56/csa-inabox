@@ -453,14 +453,24 @@ func azure functionapp publish <your-function-app-name> --python
 
 ### Step B: Deploy the Data Marketplace
 
-```bash
-# Deploy infrastructure
-az deployment group create \
-  --resource-group rg-platform \
-  --template-file csa_platform/data_marketplace/deploy/marketplace.bicep
+> [!IMPORTANT]
+> **CSA-0067 / CSA-0131:** The legacy reference marketplace under
+> `csa_platform/data_marketplace/` is **deprecated** and does not ship
+> an `--init` CLI. Use the actively-served marketplace at
+> `portal.shared.api.routers.marketplace` instead — it seeds demo
+> products automatically when `ENVIRONMENT=local` or `DEMO_MODE=true`.
 
-# Initialize the catalog
-python csa_platform/data_marketplace/api/marketplace_api.py --init
+```bash
+# (Option A, recommended) Start the portal — seed data loads on startup.
+cd portal/kubernetes/docker && docker compose up --build
+
+# (Option B) Run the backend directly — demo products appear on first
+# request when ENVIRONMENT=local:
+ENVIRONMENT=local uvicorn portal.shared.api.main:app --reload --port 8000
+
+# The marketplace browsable at:
+#   http://localhost:3000/marketplace   (React frontend)
+#   http://localhost:8000/api/v1/marketplace/products   (JSON API)
 ```
 
 ### Step C: Configure AI Integration

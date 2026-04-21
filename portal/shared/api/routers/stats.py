@@ -30,7 +30,7 @@ from ..models.marketplace import (
     PlatformStats,
 )
 from ..persistence_async import AsyncStoreBackend
-from ..services.auth import get_current_user
+from ..services.auth import DomainScope, get_domain_scope
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -155,19 +155,59 @@ def _build_domain_overviews(
     return overviews
 
 
+def _filter_by_domain(
+    items: list[dict], domain: str | None, *, key: str = "domain",
+) -> list[dict]:
+    """Return *items* whose ``key`` field equals *domain*, empty list on None."""
+    if domain is None:
+        return []
+    return [i for i in items if i.get(key) == domain]
+
+
+def _filter_pipelines_by_source_domain(
+    pipelines: list[dict], sources: list[dict], domain: str | None,
+) -> list[dict]:
+    """Filter pipelines whose source belongs to *domain*."""
+    if domain is None:
+        return []
+    domain_source_ids = {s.get("id") for s in sources if s.get("domain") == domain}
+    return [p for p in pipelines if p.get("source_id") in domain_source_ids]
+
+
 async def _compute_platform_stats(
     sources_store: AsyncStoreBackend,
     pipelines_store: AsyncStoreBackend,
     runs_store: AsyncStoreBackend,
     products_store: AsyncStoreBackend,
     access_store: AsyncStoreBackend,
+    scope: DomainScope | None = None,
 ) -> PlatformStats:
-    """Aggregate platform stats from async stores."""
+    """Aggregate platform stats from async stores.
+
+    When *scope* is a non-admin ``DomainScope``, counts and aggregates
+    are filtered to the caller's domain (CSA-0024). Admins and callers
+    without a scope see platform-wide totals.
+    """
     sources = await sources_store.list()
     pipelines = await pipelines_store.list()
     runs = await runs_store.list()
     products = await products_store.list()
     access_requests = await access_store.list()
+
+    # CSA-0024: non-admin callers see only their own domain's aggregates.
+    if scope is not None and not scope.is_admin:
+        sources = _filter_by_domain(sources, scope.user_domain)
+        products = _filter_by_domain(products, scope.user_domain)
+        pipelines = _filter_pipelines_by_source_domain(
+            pipelines, sources, scope.user_domain,
+        )
+        in_scope_pipeline_ids = {p.get("id") for p in pipelines}
+        runs = [r for r in runs if r.get("pipeline_id") in in_scope_pipeline_ids]
+        in_scope_product_ids = {p.get("id") for p in products}
+        access_requests = [
+            r for r in access_requests
+            if r.get("data_product_id") in in_scope_product_ids
+        ]
 
     pending = [r for r in access_requests if r.get("status") == AccessRequestStatus.PENDING.value]
 
@@ -191,16 +231,21 @@ async def _compute_platform_stats(
     summary="Platform statistics",
 )
 async def get_stats(
-    _user: dict = Depends(get_current_user),
+    scope: DomainScope = Depends(get_domain_scope),
     sources_store: AsyncStoreBackend = Depends(get_sources_store),
     pipelines_store: AsyncStoreBackend = Depends(get_pipelines_store),
     runs_store: AsyncStoreBackend = Depends(get_runs_store),
     products_store: AsyncStoreBackend = Depends(get_products_store),
     access_store: AsyncStoreBackend = Depends(get_access_store),
 ) -> PlatformStats:
-    """Return platform-wide aggregate statistics for the dashboard."""
+    """Return aggregate statistics for the dashboard.
+
+    CSA-0024: non-admin callers see only their own domain's counts.
+    Admins retain platform-wide visibility.
+    """
     return await _compute_platform_stats(
         sources_store, pipelines_store, runs_store, products_store, access_store,
+        scope=scope,
     )
 
 
@@ -211,12 +256,19 @@ async def get_stats(
 )
 async def get_domain_overview(
     domain: str,
-    _user: dict = Depends(get_current_user),
+    scope: DomainScope = Depends(get_domain_scope),
     sources_store: AsyncStoreBackend = Depends(get_sources_store),
     pipelines_store: AsyncStoreBackend = Depends(get_pipelines_store),
     products_store: AsyncStoreBackend = Depends(get_products_store),
 ) -> DomainOverview:
-    """Return an overview of a single data domain."""
+    """Return an overview of a single data domain.
+
+    CSA-0024: non-admin callers may only view their own domain. Admins
+    retain cross-domain visibility.
+    """
+    if not scope.is_admin and (not scope.user_domain or scope.user_domain != domain):
+        raise HTTPException(status_code=403, detail="You do not have access to this domain.")
+
     sources = await sources_store.list()
     pipelines = await pipelines_store.list()
     products = await products_store.list()
@@ -238,14 +290,22 @@ async def get_domain_overview(
     tags=["Statistics"],
 )
 async def list_all_domains(
-    _user: dict = Depends(get_current_user),
+    scope: DomainScope = Depends(get_domain_scope),
     sources_store: AsyncStoreBackend = Depends(get_sources_store),
     pipelines_store: AsyncStoreBackend = Depends(get_pipelines_store),
     products_store: AsyncStoreBackend = Depends(get_products_store),
 ) -> list[dict]:
-    """Return all domain overviews — convenience alias used by the React frontend."""
+    """Return domain overviews — React frontend convenience alias.
+
+    CSA-0024: non-admin callers see only their own domain. Admins retain
+    platform-wide visibility.
+    """
     sources = await sources_store.list()
     pipelines = await pipelines_store.list()
     products = await products_store.list()
     overviews = _build_domain_overviews(sources, pipelines, products)
+    if not scope.is_admin:
+        if not scope.user_domain or scope.user_domain not in overviews:
+            return []
+        return [overviews[scope.user_domain].model_dump()]
     return [d.model_dump() for d in overviews.values()]

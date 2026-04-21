@@ -1,5 +1,6 @@
 # Dependencies managed in pyproject.toml [project.optional-dependencies.portal]
-# This file is kept for Docker builds (portal/shared/Dockerfile).
+# This file is kept for Docker builds
+# (portal/kubernetes/docker/backend/Dockerfile).
 #
 # CSA-in-a-Box Shared Backend — Python Dependencies
 # Install: pip install -r requirements.txt

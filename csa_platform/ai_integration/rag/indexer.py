@@ -51,6 +51,10 @@ class EmbeddingGenerator:
         self.max_concurrent = max_concurrent
         self._client: AzureOpenAI | None = None
         self._cached_async_client: Any = None
+        # CSA-0106: track the async credential separately so aclose()
+        # can dispose it on shutdown — AsyncAzureOpenAI.close() does not
+        # reach into the bearer-token provider's underlying credential.
+        self._cached_async_credential: Any = None
 
     def _get_client(self) -> AzureOpenAI:
         """Lazily initialise the sync Azure OpenAI client."""
@@ -94,6 +98,8 @@ class EmbeddingGenerator:
                 from azure.identity.aio import DefaultAzureCredential as AsyncDefaultAzureCredential
 
                 credential = AsyncDefaultAzureCredential()
+                # Retain a reference so aclose() can dispose it later.
+                self._cached_async_credential = credential
                 token_provider = get_bearer_token_provider(
                     credential,  # type: ignore[arg-type]  # async cred accepted at runtime
                     "https://cognitiveservices.azure.com/.default",
@@ -152,6 +158,37 @@ class EmbeddingGenerator:
         await asyncio.gather(*tasks)
         # Cached client persists across calls; do not close it here.
         return all_embeddings
+
+    async def aclose(self) -> None:
+        """Release the async Azure OpenAI client + credential (CSA-0106).
+
+        Call this from your FastAPI shutdown / lifespan exit. Silently
+        tolerates a generator that has never emitted an async client —
+        closing is idempotent. Safe to call multiple times.
+        """
+        client = self._cached_async_client
+        self._cached_async_client = None
+        if client is not None:
+            close = getattr(client, "close", None)
+            if close is not None:
+                try:
+                    result = close()
+                    if hasattr(result, "__await__"):
+                        await result
+                except Exception as exc:  # pragma: no cover — defensive
+                    logger.warning("async_openai_client_close_failed", error=str(exc))
+
+        credential = self._cached_async_credential
+        self._cached_async_credential = None
+        if credential is not None:
+            close = getattr(credential, "close", None)
+            if close is not None:
+                try:
+                    result = close()
+                    if hasattr(result, "__await__"):
+                        await result
+                except Exception as exc:  # pragma: no cover — defensive
+                    logger.warning("async_credential_close_failed", error=str(exc))
 
 
 __all__ = ["EmbeddingGenerator"]

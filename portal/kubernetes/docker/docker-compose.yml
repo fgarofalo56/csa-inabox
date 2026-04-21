@@ -50,7 +50,8 @@ services:
       # AZURE_TENANT_ID is blank.
       - ENVIRONMENT=${ENVIRONMENT:-local}
       - AUTH_DISABLED=${AUTH_DISABLED:-true}
-      - REDIS_URL=redis://:${REDIS_PASSWORD:-changeme-in-dotenv}@redis:6379/0
+      # CSA-0021: REDIS_PASSWORD is required — no insecure fallback.
+      - REDIS_URL=redis://:${REDIS_PASSWORD:?REDIS_PASSWORD is required — see .env.example}@redis:6379/0
       - LOG_LEVEL=debug
       # Entra ID (formerly Azure AD) — renamed from AZURE_AD_* per CSA-0001.
       # Pydantic Settings reads AZURE_TENANT_ID / AZURE_CLIENT_ID directly.
@@ -71,13 +72,17 @@ services:
     # redis:7-alpine (pinned 2026-04-17)
     image: redis:7-alpine@sha256:cfb3c5629ec846b1665d348f8c82ed160c911cab5a2cc88053f4219ab4b5835c
     container_name: csa-portal-redis
-    ports:
-      - "6379:6379"
-    command: redis-server --requirepass ${REDIS_PASSWORD:-changeme-in-dotenv} --maxmemory 128mb --maxmemory-policy allkeys-lru
+    # CSA-0021: No host port publish — Redis is only reachable on the
+    # internal compose network. Override via a docker-compose.override.yml
+    # for ad-hoc local debugging.
+    expose:
+      - "6379"
+    # CSA-0021: REDIS_PASSWORD is mandatory — no "changeme" fallback.
+    command: redis-server --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD is required — see .env.example} --maxmemory 128mb --maxmemory-policy allkeys-lru
     volumes:
       - redis-data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-changeme-in-dotenv}", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:?REDIS_PASSWORD is required}", "ping"]
       interval: 10s
       timeout: 3s
       retries: 5

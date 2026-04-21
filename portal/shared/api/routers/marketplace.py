@@ -25,7 +25,7 @@ from ..models.source import ClassificationLevel
 from ..persistence import StoreBackend
 from ..persistence_async import AsyncStoreBackend
 from ..persistence_factory import build_store_backend
-from ..services.auth import DomainScope, get_current_user, get_domain_scope
+from ..services.auth import DomainScope, get_domain_scope
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -317,12 +317,20 @@ async def get_quality_history(
     summary="List domains",
 )
 async def list_domains(
-    _user: dict = Depends(get_current_user),
+    scope: DomainScope = Depends(get_domain_scope),
     store: AsyncStoreBackend = Depends(get_products_store),
 ) -> list[dict]:
-    """Return all data domains with their product counts."""
+    """Return data domains with their product counts.
+
+    CSA-0024: non-admin callers see only their own domain. Admins
+    retain platform-wide visibility.
+    """
     domains: dict[str, int] = {}
     products = [DataProduct.model_validate(item) for item in await store.load()]
+    if not scope.is_admin:
+        if not scope.user_domain:
+            return []
+        products = [p for p in products if p.domain == scope.user_domain]
     for product in products:
         domains[product.domain] = domains.get(product.domain, 0) + 1
 
@@ -334,11 +342,20 @@ async def list_domains(
     summary="Marketplace statistics",
 )
 async def marketplace_stats(
-    _user: dict = Depends(get_current_user),
+    scope: DomainScope = Depends(get_domain_scope),
     store: AsyncStoreBackend = Depends(get_products_store),
 ) -> dict:
-    """Return aggregate marketplace statistics."""
+    """Return aggregate marketplace statistics.
+
+    CSA-0024: non-admin callers see only their own domain's aggregates.
+    Admins retain platform-wide totals.
+    """
     products = [DataProduct.model_validate(item) for item in await store.load()]
+    if not scope.is_admin:
+        if not scope.user_domain:
+            products = []
+        else:
+            products = [p for p in products if p.domain == scope.user_domain]
     return {
         "total_products": len(products),
         "total_domains": len({p.domain for p in products}),

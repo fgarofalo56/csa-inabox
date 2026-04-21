@@ -13,8 +13,11 @@ RUN npm ci --prefer-offline --no-audit
 # Copy source code
 COPY portal/react-webapp/ ./
 
-# Build the React/Next.js app as static export
-RUN npm run build:static || npm run build
+# CSA-0040: Static export controlled by STATIC_EXPORT env var consumed by
+# next.config.js (`output: process.env.STATIC_EXPORT === 'true' ? 'export' : undefined`).
+# Setting it at build time writes the static bundle to `out/` which nginx serves.
+ENV STATIC_EXPORT=true
+RUN npm run build
 
 # ─── Stage 2: Serve ─────────────────────────────────────────────────────────
 # nginx:1.27-alpine (pinned 2026-04-17)
@@ -26,10 +29,9 @@ RUN rm /etc/nginx/conf.d/default.conf
 # Copy custom nginx config
 COPY portal/kubernetes/docker/frontend/nginx.conf /etc/nginx/conf.d/default.conf
 
-# Copy built static files from builder stage
+# Copy built static files from builder stage. `next build` with
+# STATIC_EXPORT=true produces `out/` per next.config.js.
 COPY --from=builder /app/out /usr/share/nginx/html
-# Fallback: if Next.js outputs to .next/static or build/
-# COPY --from=builder /app/build /usr/share/nginx/html
 
 # Create non-root user
 RUN addgroup -g 1001 -S appgroup && \

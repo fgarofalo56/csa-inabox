@@ -466,13 +466,30 @@ class PipelineGenerator:
         endpoint = source_config.get("endpoint", "")
         database_name = source_config.get("database", "")
         container_name = source_config.get("container", "")
-        sample_size = source_config.get("sample_size", 100)
+        sample_size_raw = source_config.get("sample_size", 100)
 
         if not all([endpoint, database_name, container_name]):
             raise SchemaDetectionError("endpoint, database, and container are required for Cosmos DB schema detection")
 
+        # CSA-0026: sample_size is user-controlled (source YAML). Cosmos
+        # DB's SQL dialect does not accept parameters for the TOP clause,
+        # so we strict-validate the value as a bounded integer instead of
+        # relying on parameterisation. This closes the SQL-injection
+        # pattern flagged in the audit.
+        try:
+            sample_size = int(sample_size_raw)
+        except (TypeError, ValueError) as exc:
+            raise SchemaDetectionError(
+                f"sample_size must be an integer; got {sample_size_raw!r}"
+            ) from exc
+        if not 1 <= sample_size <= 10_000:
+            raise SchemaDetectionError(
+                f"sample_size must be between 1 and 10000; got {sample_size}"
+            )
+
         logger.info("Sampling Cosmos DB for schema detection",
-                    endpoint=endpoint, database=database_name, container=container_name)
+                    endpoint=endpoint, database=database_name, container=container_name,
+                    sample_size=sample_size)
 
         try:
             # Prefer Managed Identity, fall back to key
@@ -484,7 +501,8 @@ class PipelineGenerator:
             database = client.get_database_client(database_name)
             container = database.get_container_client(container_name)
 
-            # Sample documents
+            # Cosmos SQL: TOP cannot be parameterised; sample_size has
+            # been range-validated above so the interpolation is safe.
             query = f"SELECT TOP {sample_size} * FROM c"
             documents = list(container.query_items(query=query, enable_cross_partition_query=True))
         except Exception as exc:
@@ -822,8 +840,9 @@ class PipelineGenerator:
             except ImportError:
                 # Fallback to kafka-python
                 try:
-                    from kafka import KafkaConsumer  # type: ignore[import-not-found]
                     import json as _json
+
+                    from kafka import KafkaConsumer  # type: ignore[import-not-found]
 
                     consumer_kp = KafkaConsumer(
                         topic,

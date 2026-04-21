@@ -96,3 +96,48 @@ class TestEmbeddingGeneratorAsync:
         gen._client = mock_client
 
         assert gen.embed_single("hello") == [0.9]
+
+    def test_aclose_disposes_async_client_and_credential(self) -> None:
+        """CSA-0106: aclose() releases the cached async client + credential."""
+        gen = self._make()
+
+        async_client = MagicMock()
+        async_client.close = AsyncMock(return_value=None)
+        credential = MagicMock()
+        credential.close = AsyncMock(return_value=None)
+
+        gen._cached_async_client = async_client
+        gen._cached_async_credential = credential
+
+        asyncio.run(gen.aclose())
+
+        async_client.close.assert_awaited_once()
+        credential.close.assert_awaited_once()
+        assert gen._cached_async_client is None
+        assert gen._cached_async_credential is None
+
+    def test_aclose_is_idempotent(self) -> None:
+        """Calling aclose() on a fresh generator or twice must not raise."""
+        gen = self._make()
+        asyncio.run(gen.aclose())
+        asyncio.run(gen.aclose())
+
+    def test_aclose_swallows_close_failures(self) -> None:
+        """aclose() never lets a flaky close() propagate (defensive shutdown)."""
+        gen = self._make()
+        async_client = MagicMock()
+        async_client.close = AsyncMock(side_effect=RuntimeError("boom"))
+        gen._cached_async_client = async_client
+
+        asyncio.run(gen.aclose())
+        assert gen._cached_async_client is None
+
+    def test_aclose_accepts_sync_close_callables(self) -> None:
+        """Some client/credential wrappers expose a sync close()."""
+        gen = self._make()
+        async_client = MagicMock()
+        async_client.close = MagicMock(return_value=None)
+        gen._cached_async_client = async_client
+
+        asyncio.run(gen.aclose())
+        async_client.close.assert_called_once()

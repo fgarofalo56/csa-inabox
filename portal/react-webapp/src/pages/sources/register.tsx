@@ -41,7 +41,20 @@ const sourceRegistrationSchema = z.object({
     .regex(/^[a-zA-Z0-9_\-\s]+$/, 'Name may only contain letters, numbers, spaces, hyphens, and underscores'),
   source_type: z.enum(SOURCE_TYPES, { message: 'Please select a source type' }),
   description: z.string().max(1000, 'Description must be at most 1000 characters').optional(),
-  domain: z.string().min(1, 'Domain is required').optional(),
+  // CSA-0118: Domain must match backend regex ^[a-z][a-z0-9-]{0,62}[a-z0-9]$
+  // so the form rejects invalid values client-side rather than relying on
+  // a 422 from the API. The field is still optional at form level because
+  // the wizard may later autopopulate from a select; if provided, it
+  // must conform.
+  domain: z
+    .string()
+    .min(2, 'Domain must be 2-64 characters, lowercase letters, numbers, or hyphens')
+    .max(64, 'Domain must be 2-64 characters')
+    .regex(
+      /^[a-z][a-z0-9-]{0,62}[a-z0-9]$/,
+      'Domain must start with a lowercase letter, contain only lowercase letters, numbers, and hyphens, and end with a letter or number',
+    )
+    .optional(),
   classification: z.enum(['public', 'internal', 'confidential', 'restricted', 'cui', 'fouo']),
   connection: z.object({
     host: z.string().min(1, 'Host is required').optional(),
@@ -200,8 +213,31 @@ export default function RegisterSourcePage() {
     switch (currentStep) {
       case 0:
         return !!selectedType;
-      case 1:
-        return trigger(['name', 'connection.host', 'connection.database', 'connection.container', 'connection.api_url']);
+      case 1: {
+        // CSA-0119: validate only the fields relevant to the chosen
+        // source type. StepConnection uses the same isDatabase/
+        // isStorage/isApi buckets to decide which inputs to render.
+        const isDatabase = ['azure_sql', 'synapse', 'postgresql', 'mysql', 'oracle'].includes(
+          selectedType,
+        );
+        const isStorage = ['adls_gen2', 'blob_storage', 'sftp', 'sharepoint'].includes(
+          selectedType,
+        );
+        const isApi = ['rest_api', 'odata'].includes(selectedType);
+
+        const fields: Array<keyof SourceRegistration | string> = ['name', 'domain'];
+        if (isDatabase) {
+          fields.push('connection.host', 'connection.database');
+        }
+        if (isStorage) {
+          fields.push('connection.container');
+        }
+        if (isApi) {
+          fields.push('connection.api_url');
+        }
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return trigger(fields as any);
+      }
       case 2:
         return trigger(['schema_definition.auto_detect', 'schema_definition.table_name']);
       case 3:
@@ -284,7 +320,12 @@ export default function RegisterSourcePage() {
             />
           )}
           {step === 1 && (
-            <StepConnection sourceType={selectedType} register={register} errors={errors} />
+            <StepConnection
+              sourceType={selectedType}
+              register={register}
+              errors={errors}
+              setValue={setValue}
+            />
           )}
           {step === 2 && (
             <StepSchema register={register} watch={watch} setValue={setValue} />

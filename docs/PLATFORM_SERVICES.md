@@ -165,18 +165,24 @@ products published across the organization.
 - Publishes usage metrics and consumer analytics
 
 **Deploy:**
-```bash
-# Deploy the marketplace API
-az deployment group create \
-  --resource-group rg-platform \
-  --template-file csa_platform/data_marketplace/deploy/marketplace.bicep \
-  --parameters csa_platform/data_marketplace/deploy/params.json
+> [!IMPORTANT]
+> **CSA-0067 / CSA-0131.** The legacy marketplace under
+> `csa_platform/data_marketplace/` is deprecated. It does not ship a
+> `--init` CLI; the previously documented command never existed. Use
+> the actively-served marketplace in `portal.shared.api.routers.marketplace`
+> instead.
 
-# Initialize the catalog
-python csa_platform/data_marketplace/api/marketplace_api.py --init
+```bash
+# Recommended — the portal seeds demo products on startup when
+# ENVIRONMENT=local or DEMO_MODE=true.
+cd portal/kubernetes/docker && docker compose up --build
+
+# Browsable at:
+#   http://localhost:3000/marketplace             (React frontend)
+#   http://localhost:8000/api/v1/marketplace/...  (JSON API)
 ```
 
-**Dependencies:** Purview, API Management, Azure SQL or Cosmos DB for catalog state
+**Dependencies:** Purview, API Management, SQLite or Postgres for catalog state (see `portal/shared/api/persistence_factory.py`).
 
 ---
 

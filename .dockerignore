@@ -1,0 +1,108 @@
+# CSA-0054 — Root .dockerignore.
+# The backend + frontend Docker builds use the repo root as build
+# context (see portal/kubernetes/docker/*/Dockerfile). Without this
+# file the build tarball ships gigabytes of irrelevant state — .next/,
+# node_modules/, .venv/, __blobstorage__/, dbt logs, coverage data —
+# which slows builds, poisons caches, and risks accidentally baking
+# secrets into images.
+
+# ── Git & CI ─────────────────────────────────────────────────────────
+.git
+.github
+.gitignore
+.gitattributes
+
+# ── Python ───────────────────────────────────────────────────────────
+__pycache__
+**/__pycache__
+*.py[cod]
+*$py.class
+*.egg-info
+*.egg
+.venv
+**/.venv
+venv
+**/venv
+env
+**/env
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.tox
+.coverage
+.coverage.*
+coverage.xml
+htmlcov
+.hypothesis
+
+# ── Node / Next.js ───────────────────────────────────────────────────
+node_modules
+**/node_modules
+.next
+**/.next
+out
+**/out
+.nuxt
+.cache
+.parcel-cache
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ── Azure / Azurite local-state ──────────────────────────────────────
+__azurite_db_blob__.json
+__azurite_db_blob_extent__.json
+__blobstorage__
+__queuestorage__
+__tablestorage__
+.azurite
+
+# ── dbt ──────────────────────────────────────────────────────────────
+tools/dbt/dbt-env
+target
+**/target
+dbt_packages
+**/dbt_packages
+logs
+**/logs
+.user.yml
+profiles.yml
+
+# ── IDE / editor ─────────────────────────────────────────────────────
+.vscode
+.idea
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ── Build artifacts & temp ───────────────────────────────────────────
+build
+dist
+*.log
+temp
+tmp
+.tmp
+
+# ── Secrets (defence in depth — .gitignore'd already) ────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+!tests/**/*.key
+secrets
+.secrets
+credentials.json
+
+# ── Docs / tests that shouldn't end up in runtime images ─────────────
+.playwright-mcp
+.claude
+temp/audit
+
+# ── Documentation binaries ──────────────────────────────────────────
+*.pdf
+*.pptx
+*.docx
+*.xlsx

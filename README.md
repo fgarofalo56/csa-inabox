@@ -194,11 +194,20 @@ graph TB
 │   └── 📁 finops/                 # FinOps budget alerts (Bicep)
 ├── 📁 docs/                       # Platform documentation
 │   └── 📁 runbooks/               # Incident response & DR runbooks
-├── 📁 tests/                      # pytest test suite (80%+ coverage gate)
+├── 📁 tests/                      # pytest test suite (80% coverage gate — see note below)
 ├── 📁 tools/                      # Development tools
 │   └── 📁 dbt/                    # dbt for data transformations
 └── 📁 .github/                    # CI/CD workflows
 ```
+
+> [!NOTE]
+> **Coverage gate scope (CSA-0088).** The `fail_under = 80` gate in
+> `pyproject.toml` applies to `governance/` (common, dataquality, contracts)
+> and the Azure Functions packages under `csa_platform/functions/`.
+> `csa_platform/` (broad) and `portal/shared/api/` are **measured** in the
+> coverage report so the true gap is visible, but they are **not** yet
+> gated — their suites are still growing. Do not raise `fail_under` until
+> those packages have real parity tests.
 
 ---
 

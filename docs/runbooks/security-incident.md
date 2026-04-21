@@ -2,10 +2,35 @@
 
 # Incident Response Runbook — Security Events
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Operations
+> **Last Updated:** 2026-04-20 | **Last Drilled:** _not yet drilled — see Drill Log below (CSA-0085)_ | **Status:** Active | **Audience:** Operations
 
 > [!NOTE]
 > **Quick Summary**: Step-by-step incident response procedures for CSA-in-a-Box security events, including severity classification (P1-P4), containment steps, investigation KQL queries, common scenarios (exposed keys, token leaks, policy violations, pipeline tampering), evidence preservation, and communication templates.
+
+## ✅ Before First Use — Customization Checklist (CSA-0070)
+
+This runbook ships with **placeholder contacts**. It is not safe to invoke
+in a live incident until your organisation has completed the items
+below. Check each off in a PR against this file so the runbook history
+reflects who customised which fields and when.
+
+- [ ] Populate the [Contact Information](#-contact-information) table with
+      your Platform Team Lead, Security Officer, Data Protection
+      Officer, and Legal Counsel. Remove the `*(set via ...)*` stubs.
+- [ ] Replace generic Azure Support link with your organisation's
+      Azure TAM / Premier Support channel if applicable.
+- [ ] Wire up an on-call rotation in PagerDuty / OpsGenie / Teams
+      Shifts — paste the on-call URL into the Contact table.
+- [ ] Confirm your SOC queue address (DL) for the internal notification
+      template under [Communication Templates](#-communication-templates).
+- [ ] Add any region-specific legal notification windows (e.g. GDPR
+      72-hour DPO notification, HIPAA 60-day breach notification).
+- [ ] Update the **Last Drilled** banner above and the
+      [Drill Log](#️-drill-log-csa-0085) after each tabletop / live drill.
+
+> [!WARNING]
+> **Do not remove this section** after first use. New operators need
+> the same onboarding pass on every fork / airgapped deployment.
 
 ## 📑 Table of Contents
 
@@ -222,6 +247,28 @@ AzureActivity
 | Data Protection Officer | *(set via your org's DPO)* | *(office hours)* | PII breach only |
 | Legal Counsel | *(set via your org's legal team)* | *(office hours)* | P1 with data exposure |
 | Azure Support | [Case via Portal](https://portal.azure.com/#blade/Microsoft_Azure_Support/HelpAndSupportBlade) | N/A | Platform issues |
+
+---
+
+## 🗓️ Drill Log (CSA-0085)
+
+Runbook currency is measured by drill cadence. Add one row per
+tabletop or live drill. Blocks should run **quarterly** at a
+minimum (Jan / Apr / Jul / Oct). File a PR updating this table and the
+`Last Drilled:` banner at the top of the document after every
+exercise.
+
+| Quarter | Date | Type (tabletop / live) | Scenario exercised | Lead | Gaps identified | Fixes tracked |
+|---------|------|------------------------|--------------------|------|------------------|---------------|
+| Q1 — Jan | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| Q2 — Apr | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| Q3 — Jul | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| Q4 — Oct | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+
+> [!TIP]
+> Archive historical drill log tables under a collapsed `<details>`
+> block once a calendar year completes; keep the current year's rows
+> visible.
 
 ---
 

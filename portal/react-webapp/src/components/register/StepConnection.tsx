@@ -3,16 +3,17 @@
  */
 
 import React from 'react';
-import type { UseFormRegister, FieldErrors } from 'react-hook-form';
+import type { UseFormRegister, FieldErrors, UseFormSetValue } from 'react-hook-form';
 import type { SourceRegistration, SourceType } from '@/types';
 
 interface StepConnectionProps {
   sourceType: SourceType;
   register: UseFormRegister<SourceRegistration>;
   errors: FieldErrors<SourceRegistration>;
+  setValue: UseFormSetValue<SourceRegistration>;
 }
 
-export default function StepConnection({ sourceType, register, errors }: StepConnectionProps) {
+export default function StepConnection({ sourceType, register, errors, setValue }: StepConnectionProps) {
   const isDatabase = ['azure_sql', 'synapse', 'postgresql', 'mysql', 'oracle'].includes(sourceType);
   const isStorage = ['adls_gen2', 'blob_storage', 'sftp', 'sharepoint'].includes(sourceType);
   const isApi = ['rest_api', 'odata'].includes(sourceType);
@@ -44,11 +45,33 @@ export default function StepConnection({ sourceType, register, errors }: StepCon
           </label>
           <input
             id="connection-domain"
-            {...register('domain')}
+            {...register('domain', {
+              // CSA-0118: lowercase-on-blur matches the backend regex so
+              // "Finance" auto-normalizes to "finance" instead of failing
+              // validation after submit.
+              onBlur: (event: React.FocusEvent<HTMLInputElement>) => {
+                const normalized = event.target.value.trim().toLowerCase();
+                if (normalized !== event.target.value) {
+                  setValue('domain', normalized, { shouldValidate: true });
+                }
+              },
+            })}
             type="text"
+            inputMode="text"
+            autoCapitalize="none"
+            spellCheck={false}
             className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-brand-500 focus:ring-brand-500"
-            placeholder="e.g., agriculture, transportation"
+            placeholder="lowercase, e.g. agriculture, transportation, finance"
+            aria-describedby="connection-domain-hint"
           />
+          <p id="connection-domain-hint" className="mt-1 text-xs text-gray-500">
+            Lowercase letters, numbers, and hyphens only. Must start with a letter.
+          </p>
+          {errors.domain && (
+            <p className="mt-1 text-sm text-red-600">
+              {String(errors.domain.message ?? 'Invalid domain')}
+            </p>
+          )}
         </div>
         <div className="col-span-2">
           <label htmlFor="connection-description" className="block text-sm font-medium text-gray-700">

@@ -2,10 +2,38 @@
 
 # AI Integration — Data Landing Zone AI Enrichment
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Platform Engineers
+> **Last Updated:** 2026-04-20 | **Status:** Library primitives complete, product surface partial | **Audience:** Platform Engineers
 
 > [!NOTE]
 > **TL;DR:** Provides patterns for integrating Azure AI services (OpenAI, AI Search, ML, Document Intelligence) with CSA-in-a-Box data landing zones for enrichment, classification, RAG, embeddings, and model serving — all GA in Azure Government.
+
+> [!IMPORTANT]
+> **Scope clarification (CSA-0114).** The library under this tree ships
+> production-grade primitives (chunking, embedding, retrieval,
+> generation, content-safety hooks). It is **not** a turnkey AI
+> product. The downstream product surface — the CSA Copilot
+> (`apps/copilot/`) — provides the agent loop, skill catalog, evals,
+> and UI. See the capability matrix below and `apps/copilot/README.md`
+> for what the product ships today.
+
+## Capability matrix
+
+| Capability | Status | Notes |
+|---|---|---|
+| Chunking (markdown, code, generic) | ✅ Library | `rag/chunker.py` |
+| Embedding (Azure OpenAI, sync + async) | ✅ Library | `rag/indexer.py` with async credential lifecycle (CSA-0106) |
+| Retrieval (Azure AI Search) | ✅ Library | `rag/retriever.py` |
+| Generation (Azure OpenAI chat) | ✅ Library | `rag/generate.py` |
+| Grounding gate + refusal contract | ✅ Library | Covered in `apps/copilot/` surfaces |
+| Evaluation harness | ⚠️ Partial | See `apps/copilot/evals/` |
+| Decision-tree walker skill | ⚠️ Partial | See `apps/copilot/skills/` |
+| MCP server | ⚠️ Partial | See `apps/copilot/mcp_server/` |
+| Document Intelligence (PDF/DOCX/ipynb) | 🛑 Tracked by CSA-0097 | Duplicate code path in `domains/sharedServices` |
+| Azure AI Foundry hub/project Bicep | 🛑 Tracked by CSA-0104 | Not yet wired |
+| Content safety pre/post filters | 🛑 Tracked by CSA-0112 | Partial — Bicep floor only |
+| Conversation memory (Cosmos-backed) | 🛑 Tracked by CSA-0116 | Design only |
+
+Legend: ✅ production-ready · ⚠️ partial / in flight · 🛑 planned, finding tracked.
 
 ## Table of Contents
 

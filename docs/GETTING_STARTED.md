@@ -166,7 +166,7 @@ replicate Microsoft Fabric capabilities using Azure PaaS. These live in
 | Service | What It Does | Quick Start |
 |---------|-------------|-------------|
 | [Unity Catalog Pattern](../csa_platform/unity_catalog_pattern/) | Unified data lake with Databricks Unity Catalog metadata | Deploy after DLZ |
-| [Data Marketplace](../csa_platform/data_marketplace/) | Self-service data product discovery + access requests | `python csa_platform/data_marketplace/api/marketplace_api.py` |
+| Data Marketplace (portal) | Self-service data product discovery + access requests | `docker compose -f portal/kubernetes/docker/docker-compose.yml up` (the legacy reference in `csa_platform/data_marketplace/` is deprecated — CSA-0067/CSA-0131) |
 | [Data Activator](../csa_platform/data_activator/) | Event-driven alerts (Teams, email, PagerDuty) | Deploy Event Grid + Functions |
 | [Semantic Model](../csa_platform/semantic_model/) | Power BI semantic models over Databricks SQL | Configure SQL endpoint |
 | [Metadata Framework](../csa_platform/metadata_framework/) | Auto-generate ADF pipelines from YAML | Register sources in YAML |
