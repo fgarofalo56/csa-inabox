@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """csa_platform.streaming.event_processor — Generic Event Hubs processor with checkpointing.
 
 This module provides a generic event processor that reads from Azure Event Hubs,

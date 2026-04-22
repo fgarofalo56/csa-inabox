@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """csa_platform.streaming.speed_layer — Real-time processing layer for Lambda architecture.
 
 This module implements the speed layer (hot path) of the Lambda architecture,

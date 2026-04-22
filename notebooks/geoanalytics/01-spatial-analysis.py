@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Databricks notebook source
 # MAGIC %md
 # MAGIC # Spatial Analysis with CSA-in-a-Box GeoAnalytics

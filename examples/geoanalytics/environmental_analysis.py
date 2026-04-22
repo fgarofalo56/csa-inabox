@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 Environmental Spatial Analysis Example for CSA-in-a-Box GeoAnalytics.
 

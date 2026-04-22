@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """GraphRAG index builder for CSA-in-a-Box.
 
 Orchestrates the Microsoft GraphRAG indexing pipeline to build a knowledge

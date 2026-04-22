@@ -1,3 +1,5 @@
+targetScope = 'resourceGroup'
+
 @description('The name prefix for all resources')
 param namePrefix string = 'csa'
 

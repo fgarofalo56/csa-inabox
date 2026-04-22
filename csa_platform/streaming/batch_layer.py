@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """csa_platform.streaming.batch_layer — Batch processing layer for Lambda architecture.
 
 This module implements the batch layer (cold path) of the Lambda architecture,

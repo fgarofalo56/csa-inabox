@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """CSA Platform MCP Server implementation.
 
 Provides resources, tools, and prompts for the CSA-in-a-Box platform

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Real-time earthquake monitoring using CSA Lambda architecture.
 
 This example demonstrates the complete Lambda architecture pipeline:

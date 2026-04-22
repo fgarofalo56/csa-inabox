@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Multi-Agent Governance Review — 3 agents collaborating via GroupChatOrchestration.
 
 Demonstrates Semantic Kernel multi-agent orchestration where:

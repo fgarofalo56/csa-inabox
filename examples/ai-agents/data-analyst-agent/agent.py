@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Data Analyst Agent — Single agent with CSA platform plugins.
 
 Demonstrates building an AI agent using Azure AI Foundry and Semantic Kernel

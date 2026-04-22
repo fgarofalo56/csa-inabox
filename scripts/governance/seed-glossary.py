@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """Seed Purview business glossary from a YAML file.
 
 Reads hierarchical glossary terms from a YAML file and creates them in

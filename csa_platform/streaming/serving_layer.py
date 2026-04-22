@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """csa_platform.streaming.serving_layer — Serving layer for Lambda architecture.
 
 This module implements the serving layer of the Lambda architecture,
