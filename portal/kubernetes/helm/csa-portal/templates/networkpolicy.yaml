@@ -63,7 +63,9 @@ spec:
           protocol: TCP
     # Allow ingress from the ingress controller for /api routes
     - from:
-        - namespaceSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
           podSelector:
             matchLabels:
               app.kubernetes.io/name: ingress-nginx

@@ -123,7 +123,7 @@ def _load_suite_json(path: Path = SUITE_JSON) -> dict[str, Any]:
             f"Expectation suite JSON not found at {path}. "
             f"The ge_example module is missing files - please reinstall.",
         )
-    return json.loads(path.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _build_suite(context: Any, suite_name: str = SUITE_NAME) -> Any:

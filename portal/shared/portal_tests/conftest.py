@@ -4,13 +4,11 @@ Pytest configuration and shared fixtures for the CSA-in-a-Box shared backend tes
 Provides a FastAPI TestClient with mocked authentication so tests can
 exercise endpoints without requiring Azure AD.
 
-The test client shares a single SQLite database file between the sync
-``StoreBackend`` singletons (retained as a compat layer) and the async
-``AsyncStoreBackend`` instances in :mod:`portal.shared.api.dependencies`.
-Both sets of stores are re-pointed at a session-scoped temporary
-directory so tests never touch production data; clearing either side
-truncates the shared SQLite table so the test fixture only needs to
-orchestrate one reset path.
+The async ``AsyncStoreBackend`` instances in
+:mod:`portal.shared.api.dependencies` are the canonical persistence
+surface.  The sync ``SqliteStore`` is used directly for clearing and
+seeding test data (no event loop required) — both share the same
+physical SQLite file.
 """
 
 from __future__ import annotations
@@ -65,40 +63,11 @@ def _test_db_dir(tmp_path_factory):
 def app(_test_db_dir):
     """Create the FastAPI app with mocked auth dependencies.
 
-    All SqliteStore instances in the routers are pointed at a temporary
-    database so tests never touch production data.  The async stores
-    exposed through :mod:`portal.shared.api.dependencies` are re-pointed
-    at the same file so the sync compat layer and the async routes
-    observe the same rows.
+    Stores use the default ``./data/portal.db`` path.  Both async
+    endpoints and sync seeders share the same physical SQLite file.
     """
     from portal.shared.api import dependencies as deps
-    from portal.shared.api.routers import access, marketplace, pipelines, sources
 
-    # Re-point the legacy sync stores at the temp test database.
-    sync_stores = [
-        sources._sources_store,
-        pipelines._pipelines_store,
-        pipelines._runs_store,
-        access._access_store,
-        marketplace._products_store,
-        marketplace._quality_store,
-    ]
-    for store in sync_stores:
-        store.data_dir = _test_db_dir
-        store.db_path = _test_db_dir / "test_portal.db"
-        store._legacy_json_path = _test_db_dir / "nonexistent.json"
-        store._ensure_table()
-
-    # Note: the legacy sync SqliteStore opens its cached connection at
-    # ``__init__`` time using the default ``./data/portal.db`` path,
-    # and re-assigning ``store.db_path`` here does not re-open that
-    # connection — so the sync stores transparently continue to write
-    # against ``./data/portal.db``.  To preserve the same-DB invariant
-    # (routes that go through the async path must see the rows the
-    # sync seeder wrote), the async stores are intentionally NOT
-    # re-pointed: they use the same default ``./data/portal.db`` and
-    # thus share the exact physical table with the sync compat layer.
-    # This keeps existing tests passing under the async refactor.
     _ = deps.all_stores()  # side-effect import; value not needed here
 
     from portal.shared.api.main import app as fastapi_app
@@ -129,49 +98,36 @@ def client(app) -> Generator[TestClient, None, None]:
 def _reset_stores():
     """Clear all stores and re-seed demo data between tests.
 
-    The sync SqliteStore and AsyncSqliteStore both read / write the same
-    physical table, so clearing either is sufficient.  We clear via the
-    sync path (no event loop required) and re-seed via the sync
-    SourceRecord / PipelineRecord constructors directly against the
-    sync store — this avoids spinning up a fresh asyncio loop per test
-    just to reach the async seeders.  Tests that exercise the async
-    path still see the rows because the physical table is shared.
+    Uses lightweight sync ``SqliteStore`` handles for clearing and
+    seeding — these share the same physical SQLite file as the async
+    stores so async endpoints see the seeded rows.
     """
+    from portal.shared.api.persistence import SqliteStore
 
-    from portal.shared.api.routers import access, marketplace, pipelines, sources
+    _sync_stores = {
+        "sources": SqliteStore("sources.json"),
+        "pipelines": SqliteStore("pipelines.json"),
+        "runs": SqliteStore("pipeline_runs.json"),
+        "access": SqliteStore("access_requests.json"),
+        "products": SqliteStore("marketplace_products.json"),
+        "quality": SqliteStore("marketplace_quality.json"),
+    }
 
-    sync_stores = [
-        sources._sources_store,
-        pipelines._pipelines_store,
-        pipelines._runs_store,
-        access._access_store,
-        marketplace._products_store,
-        marketplace._quality_store,
-    ]
-
-    for store in sync_stores:
+    for store in _sync_stores.values():
         store.clear()
 
-    # Inline synchronous seeders — mirror the async seed_demo_* bodies
-    # but call the sync store directly, avoiding an event-loop bounce
-    # on every test.
-    _seed_sources_sync(sources._sources_store)
-    _seed_pipelines_sync(pipelines._pipelines_store, pipelines._runs_store)
-    _seed_access_sync(access._access_store)
-    _seed_marketplace_sync(marketplace._products_store, marketplace._quality_store)
+    _seed_sources_sync(_sync_stores["sources"])
+    _seed_pipelines_sync(_sync_stores["pipelines"], _sync_stores["runs"])
+    _seed_access_sync(_sync_stores["access"])
+    _seed_marketplace_sync(_sync_stores["products"], _sync_stores["quality"])
 
     yield
 
-    for store in sync_stores:
+    for store in _sync_stores.values():
         store.clear()
 
 
 # ── Sync demo-data seeders (test helpers) ──────────────────────────────────
-#
-# These mirror the async ``seed_demo_*`` coroutines on each router so the
-# tests can seed without spinning up an event loop per fixture.  Keeping
-# the data identical between the two paths is asserted indirectly by
-# every router-level test continuing to pass.
 
 
 def _seed_sources_sync(store: Any) -> None:

@@ -23,7 +23,6 @@ from pydantic import BaseModel, Field
 
 from csa_platform.common.audit import audit_event_from_request, audit_logger
 
-from ..config import settings
 from ..dependencies import get_sources_store
 from ..models.source import (
     ClassificationLevel,
@@ -39,9 +38,7 @@ from ..models.source import (
     TargetConfig,
 )
 from ..observability.rate_limit import build_rate_limiter, get_route_limit
-from ..persistence import StoreBackend
 from ..persistence_async import AsyncStoreBackend
-from ..persistence_factory import build_store_backend
 from ..services.auth import DomainScope, get_domain_scope, require_role
 from ..services.provisioning import provisioning_service
 
@@ -122,23 +119,6 @@ class SourceUpdate(BaseModel):
     tags: dict[str, str] | None = None
 
     model_config = {"populate_by_name": True}
-
-# ── Persistence ─────────────────────────────────────────────────────────────
-# Backend selection (SQLite vs Postgres) is centralised in the async
-# factory and driven by ``settings.DATABASE_URL``.  Routers depend on
-# the AsyncStoreBackend Protocol via FastAPI ``Depends`` — see ADR-0016.
-#
-# The sync ``_sources_store`` module-level singleton below is retained
-# as a transitional compatibility layer for (a) the stats router that
-# computes aggregates synchronously and (b) the existing
-# test_persistence*.py suite that patches it directly.  New code should
-# use ``from ..dependencies import get_sources_store`` and ``Depends``.
-_sources_store: StoreBackend = build_store_backend("sources.json", settings)
-
-
-def get_store() -> StoreBackend:
-    """Return the sync sources store (compat; new code uses async DI)."""
-    return _sources_store
 
 
 async def seed_demo_sources() -> None:
@@ -278,7 +258,7 @@ async def list_sources(
     domain: str | None = None,
     status_filter: SourceStatus | None = Query(None, alias="status"),
     source_type: SourceType | None = None,
-    search: str | None = None,
+    search: str | None = Query(None, max_length=256),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     scope: DomainScope = Depends(get_domain_scope),

@@ -1,0 +1,174 @@
+site_name: CSA-in-a-Box
+site_description: Azure-native reference implementation for Data Mesh, Data Fabric, and Data Lakehouse
+site_url: https://fgarofalo56.github.io/csa-inabox/
+repo_url: https://github.com/fgarofalo56/csa-inabox
+repo_name: fgarofalo56/csa-inabox
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: amber
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: amber
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - toc.follow
+  icon:
+    repo: fontawesome/brands/github
+
+plugins:
+  - search
+  - minify:
+      minify_html: true
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.snippets
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.mark
+  - pymdownx.smartsymbols
+  - pymdownx.caret
+  - pymdownx.tilde
+  - pymdownx.betterem
+
+extra_css:
+  - stylesheets/copilot-chat.css
+
+extra_javascript:
+  - javascripts/copilot-chat.js
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Quickstart: QUICKSTART.md
+      - Getting Started Guide: GETTING_STARTED.md
+      - Developer Pathways: DEVELOPER_PATHWAYS.md
+  - Architecture:
+      - Overview: ARCHITECTURE.md
+      - Platform Services: PLATFORM_SERVICES.md
+      - Multi-Region: MULTI_REGION.md
+      - Multi-Tenant: MULTI_TENANT.md
+      - Disaster Recovery: DR.md
+  - Guides:
+      - ADF Setup: ADF_SETUP.md
+      - Databricks: DATABRICKS_GUIDE.md
+      - Self-Hosted IR: SELF_HOSTED_IR.md
+      - IaC & CI/CD Best Practices: IaC-CICD-Best-Practices.md
+      - Cost Management: COST_MANAGEMENT.md
+      - Production Checklist: PRODUCTION_CHECKLIST.md
+      - Rollback: ROLLBACK.md
+      - Troubleshooting: TROUBLESHOOTING.md
+      - Supply Chain Security: SUPPLY_CHAIN.md
+      - Log Schema: LOG_SCHEMA.md
+      - Environment Protection: ENVIRONMENT_PROTECTION.md
+      - Gov Service Matrix: GOV_SERVICE_MATRIX.md
+  - ADRs:
+      - Overview: adr/README.md
+      - "0001: ADF + dbt over Airflow": adr/0001-adf-dbt-over-airflow.md
+      - "0002: Databricks over OSS Spark": adr/0002-databricks-over-oss-spark.md
+      - "0003: Delta Lake over Iceberg": adr/0003-delta-lake-over-iceberg-and-parquet.md
+      - "0004: Bicep over Terraform": adr/0004-bicep-over-terraform.md
+      - "0005: Event Hubs over Kafka": adr/0005-event-hubs-over-kafka.md
+      - "0006: Purview over Atlas": adr/0006-purview-over-atlas.md
+      - "0007: Azure OpenAI over Self-Hosted": adr/0007-azure-openai-over-self-hosted-llm.md
+      - "0008: dbt Core over dbt Cloud": adr/0008-dbt-core-over-dbt-cloud.md
+      - "0009: SQLite to Postgres": adr/0009-sqlite-to-postgres-portal-db.md
+      - "0010: Fabric Strategic Target": adr/0010-fabric-strategic-target.md
+      - "0011: Multi-Cloud Scope": adr/0011-multi-cloud-scope.md
+      - "0012: Data Mesh Federation": adr/0012-data-mesh-federation.md
+      - "0013: dbt as Canonical Transform": adr/0013-dbt-as-canonical-transformation.md
+      - "0014: MSAL BFF Auth Pattern": adr/0014-msal-bff-auth-pattern.md
+      - "0015: Postgres Portal Persistence": adr/0015-postgres-portal-persistence.md
+      - "0016: Async Store Backend": adr/0016-async-store-backend.md
+      - "0017: RAG Service Layer": adr/0017-rag-service-layer.md
+      - "0018: Fabric RTI Adapter": adr/0018-fabric-rti-adapter.md
+      - "0019: BFF Reverse Proxy": adr/0019-bff-reverse-proxy.md
+      - "0020: Portal Observability": adr/0020-portal-observability-and-rate-limiting.md
+  - Compliance:
+      - Overview: compliance/README.md
+      - NIST 800-53 Rev 5: compliance/nist-800-53-rev5.md
+      - CMMC 2.0 Level 2: compliance/cmmc-2.0-l2.md
+      - HIPAA Security Rule: compliance/hipaa-security-rule.md
+  - Decision Trees:
+      - Overview: decisions/README.md
+      - Batch vs Streaming: decisions/batch-vs-streaming.md
+      - Delta vs Iceberg vs Parquet: decisions/delta-vs-iceberg-vs-parquet.md
+      - ETL vs ELT: decisions/etl-vs-elt.md
+      - Fabric vs Databricks vs Synapse: decisions/fabric-vs-databricks-vs-synapse.md
+      - Kafka vs Event Hubs vs Service Bus: decisions/kafka-vs-eventhubs-vs-servicebus.md
+      - Lakehouse vs Warehouse vs Lake: decisions/lakehouse-vs-warehouse-vs-lake.md
+      - Materialize vs Virtualize: decisions/materialize-vs-virtualize.md
+      - RAG vs Fine-Tune vs Agents: decisions/rag-vs-finetune-vs-agents.md
+  - Migrations:
+      - Overview: migrations/README.md
+      - AWS to Azure: migrations/aws-to-azure.md
+      - GCP to Azure: migrations/gcp-to-azure.md
+      - Snowflake to Azure: migrations/snowflake.md
+      - Palantir Foundry: migrations/palantir-foundry.md
+      - IoT Hub + Entra: migrations/iot-hub-entra.md
+  - Runbooks:
+      - Data Pipeline Failure: runbooks/data-pipeline-failure.md
+      - Break-Glass Access: runbooks/break-glass-access.md
+      - DR Drill: runbooks/dr-drill.md
+      - dbt CI: runbooks/dbt-ci.md
+      - Dead Letter Queue: runbooks/dead-letter.md
+      - Key Rotation: runbooks/key-rotation.md
+      - Security Incident: runbooks/security-incident.md
+      - Tenant Onboarding: runbooks/tenant-onboarding.md
+  - Tutorials:
+      - Great Expectations: tutorials/great-expectations.md
+  - Research:
+      - Platform Research Report: research/CSA-Platform-Research-Report.md
+  - AI Copilot: chat.md

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -141,7 +142,7 @@ def dbt_manifest(tmp_path: Path) -> Path:
 class TestClassificationRules:
     """Test classification rule loading and application."""
 
-    def test_load_classification_rules(self, purview, classification_yaml):
+    def test_load_classification_rules(self, purview: Any, classification_yaml: Any) -> None:
         rules = purview.load_classification_rules(classification_yaml)
 
         assert len(rules) == 2
@@ -151,7 +152,7 @@ class TestClassificationRules:
         assert len(rules[0].data_patterns) == 1
         assert rules[0].minimum_percentage_match == 80.0
 
-    def test_classification_payload_structure(self, purview, classification_yaml):
+    def test_classification_payload_structure(self, purview: Any, classification_yaml: Any) -> None:
         rules = purview.load_classification_rules(classification_yaml)
         payload = purview._build_classification_payload(rules[0])
 
@@ -162,7 +163,7 @@ class TestClassificationRules:
         assert "dataPatterns" in payload["properties"]
 
     @patch("requests.request")
-    def test_apply_classification_rules_dry_run(self, mock_request, purview, classification_yaml):
+    def test_apply_classification_rules_dry_run(self, mock_request: Any, purview: Any, classification_yaml: Any) -> None:
         results = purview.apply_classification_rules(classification_yaml, dry_run=True)
 
         assert len(results) == 2
@@ -170,7 +171,7 @@ class TestClassificationRules:
         mock_request.assert_not_called()
 
     @patch("requests.request")
-    def test_apply_classification_rules(self, mock_request, purview, classification_yaml):
+    def test_apply_classification_rules(self, mock_request: Any, purview: Any, classification_yaml: Any) -> None:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.text = '{"status": "ok"}'
@@ -191,7 +192,7 @@ class TestClassificationRules:
 class TestGlossaryTerms:
     """Test glossary term loading and import."""
 
-    def test_load_glossary_terms(self, purview, glossary_yaml):
+    def test_load_glossary_terms(self, purview: Any, glossary_yaml: Any) -> None:
         terms = purview.load_glossary_terms(glossary_yaml)
 
         assert len(terms) == 2
@@ -201,7 +202,7 @@ class TestGlossaryTerms:
         assert len(terms[0].contacts) == 1
 
     @patch("requests.request")
-    def test_import_glossary_terms_dry_run(self, mock_request, purview, glossary_yaml):
+    def test_import_glossary_terms_dry_run(self, mock_request: Any, purview: Any, glossary_yaml: Any) -> None:
         results = purview.import_glossary_terms(glossary_yaml, dry_run=True)
 
         assert len(results) == 2
@@ -209,7 +210,7 @@ class TestGlossaryTerms:
         mock_request.assert_not_called()
 
     @patch("requests.request")
-    def test_import_glossary_terms(self, mock_request, purview, glossary_yaml):
+    def test_import_glossary_terms(self, mock_request: Any, purview: Any, glossary_yaml: Any) -> None:
         # Mock glossary list (empty, triggers create)
         mock_list_resp = MagicMock()
         mock_list_resp.status_code = 200
@@ -245,7 +246,7 @@ class TestScanScheduling:
     """Test scan schedule creation."""
 
     @patch("requests.request")
-    def test_schedule_scan_dry_run(self, mock_request, purview):
+    def test_schedule_scan_dry_run(self, mock_request: Any, purview: Any) -> None:
         schedule = ScanSchedule(
             source_name="adls-source",
             scan_name="weekly-scan",
@@ -259,7 +260,7 @@ class TestScanScheduling:
         mock_request.assert_not_called()
 
     @patch("requests.request")
-    def test_schedule_scan(self, mock_request, purview):
+    def test_schedule_scan(self, mock_request: Any, purview: Any) -> None:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.text = '{"status": "ok"}'
@@ -287,7 +288,7 @@ class TestLineageRegistration:
     """Test ADF and dbt lineage registration."""
 
     @patch("requests.request")
-    def test_register_adf_lineage_dry_run(self, mock_request, purview):
+    def test_register_adf_lineage_dry_run(self, mock_request: Any, purview: Any) -> None:
         result = purview.register_adf_lineage(
             pipeline_name="orders-etl",
             factory_name="adf-prod",
@@ -300,7 +301,7 @@ class TestLineageRegistration:
         assert result["entities"] > 0
 
     @patch("requests.request")
-    def test_register_adf_lineage(self, mock_request, purview):
+    def test_register_adf_lineage(self, mock_request: Any, purview: Any) -> None:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.text = '{"mutatedEntities": {}}'
@@ -316,7 +317,7 @@ class TestLineageRegistration:
 
         assert result["status"] == "registered"
 
-    def test_register_dbt_lineage_dry_run(self, purview, dbt_manifest):
+    def test_register_dbt_lineage_dry_run(self, purview: Any, dbt_manifest: Any) -> None:
         result = purview.register_dbt_lineage(dbt_manifest, dry_run=True)
 
         assert result["status"] == "dry_run"
@@ -324,7 +325,7 @@ class TestLineageRegistration:
         assert result["models"] == 2
 
     @patch("requests.request")
-    def test_register_dbt_lineage(self, mock_request, purview, dbt_manifest):
+    def test_register_dbt_lineage(self, mock_request: Any, purview: Any, dbt_manifest: Any) -> None:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.text = '{"mutatedEntities": {}}'

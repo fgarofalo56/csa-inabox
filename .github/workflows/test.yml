@@ -48,7 +48,7 @@ jobs:
           # Install the project with dev + governance + functions extras so
           # ruff / pytest / pytest-cov / mypy and all Azure SDK deps come
           # from pyproject.toml.
-          pip install -e ".[dev,governance,functions,portal]"
+          pip install -e ".[dev,governance,functions,portal,bff,postgres]"
           # Install any additional per-domain requirements.
           for req in $(find . -name "requirements.txt" -not -path "*/dbt-env/*" -not -path "*/.venv/*"); do
             pip install -r "$req" || true
@@ -155,15 +155,11 @@ jobs:
 
       - name: Compile dbt models
         run: |
-          dbt compile --project-dir . --profiles-dir . 2>&1 || {
-            exit_code=$?
-            if [ $exit_code -eq 2 ]; then
-              echo "::warning::dbt compile failed - may need database connection"
-            else
-              echo "::error::dbt compile failed with unexpected error"
-              exit $exit_code
-            fi
-          }
+          if [ -n "$DBT_DATABRICKS_HOST" ]; then
+            dbt compile --project-dir . --profiles-dir .
+          else
+            echo "::notice::Skipping dbt compile — no DBT_DATABRICKS_HOST configured. Compilation requires a live connection."
+          fi
         env:
           DBT_DATABRICKS_HOST: ${{ secrets.DBT_DATABRICKS_HOST }}
           DBT_DATABRICKS_HTTP_PATH: ${{ secrets.DBT_DATABRICKS_HTTP_PATH }}

@@ -11,6 +11,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from textwrap import dedent
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Bootstrap: add source dir to path
@@ -113,7 +114,7 @@ def enforcer(agreements_dir: Path) -> SharingEnforcer:
 class TestLoadAgreement:
     """Test YAML agreement loading and parsing."""
 
-    def test_load_single_agreement(self, agreements_dir):
+    def test_load_single_agreement(self, agreements_dir: Any) -> None:
         agreement = load_agreement(agreements_dir / "finance-to-sales.yaml")
         assert agreement.name == "finance-to-sales"
         assert agreement.provider_domain == "finance"
@@ -121,20 +122,20 @@ class TestLoadAgreement:
         assert "invoices" in agreement.data_products
         assert "revenue" in agreement.data_products
 
-    def test_load_agreement_with_phi(self, agreements_dir):
+    def test_load_agreement_with_phi(self, agreements_dir: Any) -> None:
         agreement = load_agreement(agreements_dir / "health-to-research.yaml")
         assert agreement.phi_allowed is True
         assert agreement.pii_allowed is True
         assert agreement.copy_allowed is True
 
-    def test_enforcer_loads_all_agreements(self, enforcer):
+    def test_enforcer_loads_all_agreements(self, enforcer: Any) -> None:
         assert len(enforcer.agreements) == 2
 
-    def test_load_nonexistent_dir_raises(self):
+    def test_load_nonexistent_dir_raises(self) -> None:
         with pytest.raises(FileNotFoundError):
             _ = SharingEnforcer(agreements_dir="/nonexistent/path").agreements
 
-    def test_template_files_skipped(self, agreements_dir):
+    def test_template_files_skipped(self, agreements_dir: Any) -> None:
         _write_agreement_yaml(
             agreements_dir / "template-sharing.yaml",
             """\
@@ -165,7 +166,7 @@ class TestLoadAgreement:
 class TestValidateRequest:
     """Test data sharing request validation."""
 
-    def test_approved_request(self, enforcer):
+    def test_approved_request(self, enforcer: Any) -> None:
         result = enforcer.validate_request(
             provider_domain="finance",
             consumer_domain="sales",
@@ -177,7 +178,7 @@ class TestValidateRequest:
         assert result.agreement_name == "finance-to-sales"
         assert len(result.conditions) > 0
 
-    def test_no_matching_agreement(self, enforcer):
+    def test_no_matching_agreement(self, enforcer: Any) -> None:
         result = enforcer.validate_request(
             provider_domain="unknown",
             consumer_domain="sales",
@@ -187,7 +188,7 @@ class TestValidateRequest:
         assert result.approved is False
         assert "No sharing agreement" in result.reason
 
-    def test_unknown_data_product_denied(self, enforcer):
+    def test_unknown_data_product_denied(self, enforcer: Any) -> None:
         result = enforcer.validate_request(
             provider_domain="finance",
             consumer_domain="sales",
@@ -196,7 +197,7 @@ class TestValidateRequest:
 
         assert result.approved is False
 
-    def test_expired_agreement_denied(self, enforcer):
+    def test_expired_agreement_denied(self, enforcer: Any) -> None:
         result = enforcer.validate_request(
             provider_domain="health",
             consumer_domain="research",
@@ -206,7 +207,7 @@ class TestValidateRequest:
         assert result.approved is False
         assert "expired" in result.reason.lower()
 
-    def test_pii_denied_when_not_allowed(self, enforcer):
+    def test_pii_denied_when_not_allowed(self, enforcer: Any) -> None:
         result = enforcer.validate_request(
             provider_domain="finance",
             consumer_domain="sales",
@@ -217,7 +218,7 @@ class TestValidateRequest:
         assert result.approved is False
         assert "PII" in result.reason
 
-    def test_phi_denied_when_not_allowed(self, enforcer):
+    def test_phi_denied_when_not_allowed(self, enforcer: Any) -> None:
         result = enforcer.validate_request(
             provider_domain="finance",
             consumer_domain="sales",
@@ -228,7 +229,7 @@ class TestValidateRequest:
         assert result.approved is False
         assert "PHI" in result.reason
 
-    def test_access_level_hierarchy_denies_escalation(self, enforcer):
+    def test_access_level_hierarchy_denies_escalation(self, enforcer: Any) -> None:
         result = enforcer.validate_request(
             provider_domain="finance",
             consumer_domain="sales",
@@ -239,7 +240,7 @@ class TestValidateRequest:
         assert result.approved is False
         assert "access level" in result.reason.lower()
 
-    def test_copy_denied_when_not_allowed(self, enforcer):
+    def test_copy_denied_when_not_allowed(self, enforcer: Any) -> None:
         result = enforcer.validate_request(
             provider_domain="finance",
             consumer_domain="sales",
@@ -250,7 +251,7 @@ class TestValidateRequest:
         assert result.approved is False
         assert "copy" in result.reason.lower()
 
-    def test_sensitivity_level_denied_if_exceeded(self, enforcer):
+    def test_sensitivity_level_denied_if_exceeded(self, enforcer: Any) -> None:
         result = enforcer.validate_request(
             provider_domain="finance",
             consumer_domain="sales",
@@ -270,21 +271,21 @@ class TestValidateRequest:
 class TestListAgreementsForDomain:
     """Test listing agreements by domain role."""
 
-    def test_list_as_provider(self, enforcer):
+    def test_list_as_provider(self, enforcer: Any) -> None:
         results = enforcer.list_agreements_for_domain("finance", role="provider")
         assert len(results) == 1
         assert results[0].provider_domain == "finance"
 
-    def test_list_as_consumer(self, enforcer):
+    def test_list_as_consumer(self, enforcer: Any) -> None:
         results = enforcer.list_agreements_for_domain("sales", role="consumer")
         assert len(results) == 1
         assert results[0].consumer_domain == "sales"
 
-    def test_list_any_role(self, enforcer):
+    def test_list_any_role(self, enforcer: Any) -> None:
         results = enforcer.list_agreements_for_domain("finance", role="any")
         assert len(results) >= 1
 
-    def test_list_unknown_domain(self, enforcer):
+    def test_list_unknown_domain(self, enforcer: Any) -> None:
         results = enforcer.list_agreements_for_domain("nonexistent")
         assert results == []
 
@@ -297,18 +298,18 @@ class TestListAgreementsForDomain:
 class TestExpiredDetection:
     """Test expired and expiring-soon agreement detection."""
 
-    def test_get_expired_agreements(self, enforcer):
+    def test_get_expired_agreements(self, enforcer: Any) -> None:
         expired = enforcer.get_expired_agreements()
         assert len(expired) == 1
         assert expired[0].name == "health-to-research"
 
-    def test_get_expiring_soon(self, enforcer):
+    def test_get_expiring_soon(self, enforcer: Any) -> None:
         """health-to-research is already expired, finance-to-sales expires in 2099."""
         expiring = enforcer.get_expiring_soon(days=30)
         # Neither should be "expiring soon" (one is already expired, other in 2099)
         assert len(expiring) == 0
 
-    def test_get_expiring_soon_with_near_expiry(self, agreements_dir):
+    def test_get_expiring_soon_with_near_expiry(self, agreements_dir: Any) -> None:
         """Add an agreement expiring in 15 days to test near-expiry detection."""
         near_expiry = (datetime.now(timezone.utc) + timedelta(days=15)).isoformat()
         _write_agreement_yaml(

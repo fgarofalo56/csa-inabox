@@ -187,7 +187,7 @@ portal-dev-stop:  ## Stop any pids left behind by portal-dev
 	fi
 
 portal-test:  ## Run all portal tests (backend + frontend)
-	ENVIRONMENT=local python -m pytest portal/shared/tests/ --tb=short -q
+	ENVIRONMENT=local python -m pytest portal/shared/portal_tests/ --tb=short -q
 	cd portal/react-webapp && npx jest --no-cache
 
 portal-lint:  ## Lint portal code (Python + TypeScript)

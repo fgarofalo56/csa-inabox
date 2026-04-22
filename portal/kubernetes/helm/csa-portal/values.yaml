@@ -80,7 +80,7 @@ redis:
     enabled: true
 
 networkPolicy:
-  enabled: false
+  enabled: true
 
 pdb:
   enabled: true

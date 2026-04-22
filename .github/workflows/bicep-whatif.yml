@@ -26,6 +26,7 @@ jobs:
   detect-changes:
     name: Detect Changed Landing Zones
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     outputs:
       alz_changed: ${{ steps.changes.outputs.alz }}
       dmlz_changed: ${{ steps.changes.outputs.dmlz }}
@@ -52,6 +53,7 @@ jobs:
   bicep-build:
     name: Validate Bicep (${{ matrix.zone }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: detect-changes
     strategy:
       fail-fast: false
@@ -85,6 +87,7 @@ jobs:
   whatif:
     name: What-If (${{ matrix.zone }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: [detect-changes, bicep-build]
     # Skip when OIDC credentials are not configured (e.g. community forks / PRs from forks).
     if: vars.AZURE_CREDENTIALS_CONFIGURED == 'true'
@@ -202,6 +205,7 @@ jobs:
   cost-estimate:
     name: Cost Estimate (${{ matrix.zone }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: [detect-changes, whatif]
     if: always() && !cancelled() && vars.AZURE_CREDENTIALS_CONFIGURED == 'true'
     strategy:

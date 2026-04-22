@@ -1,0 +1,15 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "python",
+    "AZURE_OPENAI_ENDPOINT": "https://YOUR-INSTANCE.openai.azure.com",
+    "AZURE_OPENAI_KEY": "YOUR-API-KEY-HERE",
+    "AZURE_OPENAI_DEPLOYMENT": "gpt-4o-mini",
+    "ALLOWED_ORIGINS": "https://fgarofalo56.github.io,http://localhost:8000"
+  },
+  "Host": {
+    "CORS": "https://fgarofalo56.github.io,http://localhost:8000",
+    "CORSCredentials": false
+  }
+}

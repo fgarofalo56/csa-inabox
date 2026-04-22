@@ -13,7 +13,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import yaml
 from jsonschema import ValidationError, validate  # type: ignore[import-untyped]
@@ -351,7 +351,7 @@ class PipelineGenerator:
                         row = cursor.fetchone()
                         estimated_row_counts[table_name] = int(row.row_count) if row and row.row_count else 0
                     except Exception:
-                        logger.warning("row_count.estimation_failed", table=table_name)
+                        logger.warning("row_count.estimation_failed", table=table_name, exc_info=True)
                         estimated_row_counts[table_name] = -1  # Unknown
 
                     tables.append({"table_name": table_name, "schema": schema_name, "columns": columns})
@@ -561,6 +561,67 @@ class PipelineGenerator:
             recommended_watermark_columns={container_name: watermark_candidates} if watermark_candidates else {},
         )
 
+    # Allowed base directories for local file access. Configure via environment
+    # variable ``ALLOWED_DATA_DIRS`` (comma-separated list of absolute paths).
+    # When empty, *only* relative paths that stay within the current working
+    # directory are permitted.
+    ALLOWED_DATA_DIRS: ClassVar[list[Path]] = []
+
+    def _validate_file_path(self, file_path: str) -> Path:
+        """Validate a file path to prevent path-traversal attacks.
+
+        Resolves the path and ensures it falls within one of the configured
+        ``ALLOWED_DATA_DIRS`` or the generator's own working directories
+        (output_dir, template_dir, schema_dir).  When no allowed directories
+        are configured the resolved path must reside under the current
+        working directory.
+
+        Raises:
+            SchemaDetectionError: If the path is rejected.
+        """
+        import os
+
+        resolved = Path(file_path).resolve()
+
+        # Build the list of allowed roots
+        allowed_dirs: list[Path] = list(PipelineGenerator.ALLOWED_DATA_DIRS)
+
+        # Include the generator's own working directories
+        for attr in ("output_directory", "template_directory", "schema_directory"):
+            d = getattr(self, attr, None)
+            if d is not None:
+                allowed_dirs.append(Path(d).resolve())
+
+        # Also honour the ALLOWED_DATA_DIRS environment variable
+        env_dirs = os.environ.get("ALLOWED_DATA_DIRS", "")
+        if env_dirs:
+            for d in env_dirs.split(","):
+                d = d.strip()
+                if d:
+                    allowed_dirs.append(Path(d).resolve())
+
+        # Fallback: current working directory
+        if not allowed_dirs:
+            allowed_dirs.append(Path.cwd())
+
+        for allowed in allowed_dirs:
+            try:
+                resolved.relative_to(allowed)
+                return resolved  # Path is within an allowed directory
+            except ValueError:
+                continue
+
+        logger.warning(
+            "Rejected file path: outside allowed directories",
+            file_path=file_path,
+            resolved=str(resolved),
+            allowed_dirs=[str(d) for d in allowed_dirs],
+        )
+        raise SchemaDetectionError(
+            f"File path '{file_path}' is outside allowed directories. "
+            "Set the ALLOWED_DATA_DIRS environment variable to permit access."
+        )
+
     def _detect_file_schema(self, source_config: dict[str, Any]) -> SourceDetectionResult:
         """Detect schema by sampling files from blob storage or local filesystem."""
         import io
@@ -588,8 +649,10 @@ class PipelineGenerator:
             except Exception as exc:
                 raise SchemaDetectionError(f"Failed to read blob: {exc}") from exc
         elif file_path:
+            # Validate path to prevent directory-traversal attacks
+            safe_path = self._validate_file_path(file_path)
             try:
-                with open(file_path, "rb") as f:
+                with open(safe_path, "rb") as f:
                     raw_data = f.read(10 * 1024 * 1024)
             except OSError as exc:
                 raise SchemaDetectionError(f"Failed to read file: {exc}") from exc
@@ -718,7 +781,7 @@ class PipelineGenerator:
 
             samples: list[dict[str, Any]] = []
 
-            def on_event(_partition_context, event):
+            def on_event(_partition_context: Any, event: Any) -> None:
                 if event and len(samples) < sample_count:
                     try:
                         body = event.body_as_json()

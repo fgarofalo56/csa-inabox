@@ -3,10 +3,22 @@ Store-backend abstraction for portal persistence (CSA-0046).
 
 .. deprecated:: 0.2.0
     The sync :class:`StoreBackend` / :class:`SqliteStore` pair in this
-    module is a transitional compatibility layer.  New code should
-    prefer :mod:`portal.shared.api.persistence_async` which is the
-    canonical persistence surface per ADR-0016.  The sync layer will
-    be removed in the next minor release (CSA-0046 v3).
+    module is a transitional compatibility layer.  New code **must** use
+    :mod:`portal.shared.api.persistence_async` which is the canonical
+    persistence surface per ADR-0016.
+
+    **Migration status (2026-04-21):** All routers have been migrated to
+    ``AsyncStoreBackend`` via ``Depends()``.  No router imports this
+    module anymore.  The sync layer is retained only for:
+
+    - ``tests/functions/test_concurrency.py`` (SqliteStore stress test)
+    - ``portal/shared/portal_tests/test_persistence.py`` (unit tests)
+    - ``portal/shared/portal_tests/test_persistence_factory.py`` (factory tests)
+
+    Once these test suites are migrated to async stores, this module and
+    ``persistence_factory.py`` can be deleted.
+
+    Tracked: CSA-0046 v4.
 
 This module defines the :class:`StoreBackend` ``Protocol`` that every
 persistence implementation must satisfy, and ships the historical

@@ -18,29 +18,14 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from ..config import settings
 from ..dependencies import get_products_store, get_quality_store
-from ..models.marketplace import DataProduct, QualityMetric
+from ..models.marketplace import DataProduct, LineageInfo, QualityMetric, SLADefinition
 from ..models.source import ClassificationLevel
-from ..persistence import StoreBackend
 from ..persistence_async import AsyncStoreBackend
-from ..persistence_factory import build_store_backend
 from ..services.auth import DomainScope, get_domain_scope
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
-# ── Persistence ─────────────────────────────────────────────────────────────
-# Backend chosen by the async factory from ``settings.DATABASE_URL`` — see
-# ADR-0016.  The sync singletons below are retained as a transitional compat
-# layer for the stats router + existing test fixtures.
-_products_store: StoreBackend = build_store_backend("marketplace_products.json", settings)
-_quality_store: StoreBackend = build_store_backend("marketplace_quality.json", settings)
-
-
-def get_store() -> StoreBackend:
-    """Return the sync products store (compat; new code uses async DI)."""
-    return _products_store
 
 
 async def seed_demo_products() -> None:
@@ -79,19 +64,19 @@ async def seed_demo_products() -> None:
             documentation_url="https://wiki.contoso.com/data/hr-employee-master",
             version="2.1.0",
             status="active",
-            sla={
-                "freshness_minutes": 360,
-                "availability_percent": 99.8,
-                "valid_row_ratio": 0.97,
-            },
-            lineage={
-                "upstream": ["workday-hris-raw", "org-hierarchy-raw"],
-                "downstream": ["workforce-analytics", "headcount-reporting"],
-                "transformations": [
+            sla=SLADefinition(
+                freshness_minutes=360,
+                availability_percent=99.8,
+                valid_row_ratio=0.97,
+            ),
+            lineage=LineageInfo(
+                upstream=["workday-hris-raw", "org-hierarchy-raw"],
+                downstream=["workforce-analytics", "headcount-reporting"],
+                transformations=[
                     "dbt model: hr_employee_cleansed",
                     "dbt model: hr_employee_master",
                 ],
-            },
+            ),
         ),
         DataProduct(
             id="dp-002",
@@ -110,19 +95,19 @@ async def seed_demo_products() -> None:
             updated_at=now - timedelta(minutes=5),
             version="1.3.0",
             status="active",
-            sla={
-                "freshness_minutes": 10,
-                "availability_percent": 99.5,
-                "valid_row_ratio": 0.99,
-            },
-            lineage={
-                "upstream": ["iot-hub-raw-telemetry"],
-                "downstream": ["predictive-maintenance-model", "oee-dashboard"],
-                "transformations": [
+            sla=SLADefinition(
+                freshness_minutes=10,
+                availability_percent=99.5,
+                valid_row_ratio=0.99,
+            ),
+            lineage=LineageInfo(
+                upstream=["iot-hub-raw-telemetry"],
+                downstream=["predictive-maintenance-model", "oee-dashboard"],
+                transformations=[
                     "ADF pipeline: sensor_5min_aggregation",
                     "dbt model: sensor_analytics_gold",
                 ],
-            },
+            ),
         ),
         DataProduct(
             id="dp-003",
@@ -140,20 +125,20 @@ async def seed_demo_products() -> None:
             updated_at=now - timedelta(days=3),
             version="3.0.0",
             status="active",
-            sla={
-                "freshness_minutes": 10080,
-                "availability_percent": 99.9,
-                "valid_row_ratio": 1.0,
-            },
-            lineage={
-                "upstream": ["sap-erp-gl-extract", "manual-journal-entries"],
-                "downstream": ["external-financial-reporting", "management-accounts"],
-                "transformations": [
+            sla=SLADefinition(
+                freshness_minutes=10080,
+                availability_percent=99.9,
+                valid_row_ratio=1.0,
+            ),
+            lineage=LineageInfo(
+                upstream=["sap-erp-gl-extract", "manual-journal-entries"],
+                downstream=["external-financial-reporting", "management-accounts"],
+                transformations=[
                     "dbt model: gl_staging",
                     "dbt model: gl_validated",
                     "dbt model: gl_snapshot_weekly",
                 ],
-            },
+            ),
         ),
         DataProduct(
             id="dp-004",
@@ -221,7 +206,7 @@ async def seed_demo_products() -> None:
 )
 async def list_products(
     domain: str | None = None,
-    search: str | None = None,
+    search: str | None = Query(None, max_length=256),
     min_quality: float | None = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),

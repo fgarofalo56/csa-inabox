@@ -23,6 +23,7 @@ jobs:
   test:
     name: jest (node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:

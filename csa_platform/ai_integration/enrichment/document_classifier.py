@@ -17,6 +17,7 @@ Usage::
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import time
@@ -267,13 +268,27 @@ class DocumentClassifier:
             except RuntimeError:
                 loop = None
             if loop and loop.is_running():
-                # We are inside an async context — cannot block with time.sleep.
-                # However this sync method can't await, so callers in async
-                # contexts should use an async-aware rate limiter instead.
-                # TODO: Provide an async _rate_limit for fully-async pipelines.
-                time.sleep(delay)
-            else:
-                time.sleep(delay)
+                # We are inside a running event loop — blocking sleep will
+                # stall it.  Log a warning; callers should use
+                # _rate_limit_async() for async pipelines.
+                logger.warning(
+                    "rate_limit.blocking_sleep_in_async",
+                    delay=delay,
+                    hint="Consider using _rate_limit_async() in async contexts",
+                )
+            time.sleep(delay)
+        self._last_request_time = time.monotonic()
+
+    async def _rate_limit_async(self) -> None:
+        """Async-aware rate limiting — use this in async pipelines.
+
+        Uses ``asyncio.sleep`` so the event loop is not blocked.
+        """
+        now = time.monotonic()
+        elapsed = now - self._last_request_time
+        if elapsed < self._min_interval:
+            delay = self._min_interval - elapsed
+            await asyncio.sleep(delay)
         self._last_request_time = time.monotonic()
 
     @retry(

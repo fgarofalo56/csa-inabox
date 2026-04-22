@@ -256,18 +256,19 @@ export interface PipelineRun {
 // ─── Marketplace Types ─────────────────────────────────────────────────────
 
 /**
- * Service Level Agreement snapshot for a data product.
- * Matches the `sla` dict shape on Python `DataProduct` (ARCH-0001 Phase 1).
+ * Service Level Agreement for a data product.
+ * Matches Python `SLADefinition` in models/marketplace.py (ARCH-0001 Phase 2).
  */
 export interface SLADefinition {
   freshness_minutes?: number;
   availability_percent?: number;
   valid_row_ratio?: number;
+  supported_until?: string;
 }
 
 /**
- * Lineage metadata snapshot for a data product.
- * Matches the `lineage` dict shape on Python `DataProduct` (ARCH-0001 Phase 1).
+ * Lineage metadata for a data product.
+ * Matches Python `LineageInfo` in models/marketplace.py (ARCH-0001 Phase 2).
  */
 export interface LineageInfo {
   upstream?: string[];
@@ -277,7 +278,7 @@ export interface LineageInfo {
 
 /**
  * Schema metadata snapshot for a data product.
- * Matches the `schema_info` dict shape on Python `DataProduct` (ARCH-0001 Phase 1).
+ * Matches Python `SchemaInfo` in models/marketplace.py (ARCH-0001 Phase 2).
  */
 export interface SchemaInfo {
   format?: string;
@@ -287,12 +288,26 @@ export interface SchemaInfo {
 }
 
 /**
+ * Per-dimension quality breakdown (ARCH-0001 Phase 3).
+ * Matches Python `QualityDimensions` in models/marketplace.py.
+ * When present, `overall_score` should equal the parent `quality_score`.
+ */
+export interface QualityDimensions {
+  overall_score: number;
+  completeness?: number;
+  freshness?: number;
+  accuracy?: number;
+  consistency?: number;
+  uniqueness?: number;
+  measured_at?: string;
+}
+
+/**
  * A published data product in the marketplace.
  * Matches Python `DataProduct` in models/marketplace.py.
  *
- * ARCH-0001 Phase 1 adds optional enrichment fields (sla, lineage,
- * schema_info, version, status).  All additions are optional so existing
- * consumers are unaffected.
+ * ARCH-0001 Phase 2 upgrades enrichment fields from untyped dicts to
+ * validated sub-models.  Phase 3 adds `quality_dimensions`.
  */
 export interface DataProduct {
   id: string;
@@ -311,16 +326,18 @@ export interface DataProduct {
   schema_definition?: SchemaDefinition;
   sample_queries?: string[];
   documentation_url?: string;
-  /** Semantic version of the data product (ARCH-0001 Phase 1). */
+  /** Semantic version of the data product. */
   version?: string;
-  /** Lifecycle status: active | deprecated | draft (ARCH-0001 Phase 1). */
+  /** Lifecycle status: active | deprecated | draft. */
   status?: string;
-  /** SLA contract for freshness, availability, and quality (ARCH-0001 Phase 1). */
+  /** SLA contract for freshness, availability, and quality. */
   sla?: SLADefinition;
-  /** Upstream / downstream lineage graph (ARCH-0001 Phase 1). */
+  /** Upstream / downstream lineage graph. */
   lineage?: LineageInfo;
-  /** Storage schema snapshot (ARCH-0001 Phase 1). */
+  /** Storage schema snapshot (ARCH-0001 Phase 2). */
   schema_info?: SchemaInfo;
+  /** Per-dimension quality breakdown (ARCH-0001 Phase 3). */
+  quality_dimensions?: QualityDimensions;
 }
 
 /**
