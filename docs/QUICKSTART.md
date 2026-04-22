@@ -144,7 +144,7 @@ dbt test
 
 ### Expected Row Counts
 
-<details>
+<details markdown="1">
 <summary>Shared Domain</summary>
 
 | Layer | Model | Expected Rows |
@@ -164,7 +164,7 @@ dbt test
 
 </details>
 
-<details>
+<details markdown="1">
 <summary>Finance Domain</summary>
 
 | Layer | Model | Expected Rows |
@@ -178,7 +178,7 @@ dbt test
 
 </details>
 
-<details>
+<details markdown="1">
 <summary>Inventory Domain</summary>
 
 | Layer | Model | Expected Rows |
@@ -194,7 +194,7 @@ dbt test
 
 </details>
 
-<details>
+<details markdown="1">
 <summary>Sales Domain</summary>
 
 | Layer | Model | Expected Rows |

@@ -205,7 +205,7 @@ The deployment expects the PowerShell installation script at:
 - **Path:** `deploy/bicep/DLZ/code/installSHIRGateway.ps1`
 - **Purpose:** Automated SHIR gateway installation and registration
 
-<details>
+<details markdown="1">
 <summary>Example script structure</summary>
 
 ```powershell
@@ -249,7 +249,7 @@ Start-Service "Microsoft Integration Runtime Service"
 mkdir -p deploy/bicep/DLZ/code
 ```
 
-<details>
+<details markdown="1">
 <summary>Full installSHIRGateway.ps1 script</summary>
 
 ```bash
@@ -638,7 +638,7 @@ The SHIR module implements defense-in-depth security:
 - Outbound internet access controlled via NSG and firewall rules
 - VPN or ExpressRoute connectivity for on-premises access
 
-<details>
+<details markdown="1">
 <summary>NSG Rules (Recommended)</summary>
 
 ```json
@@ -815,7 +815,7 @@ Configure ADF linked services for optimal parallelism:
 
 ### Data Transfer Optimization
 
-<details>
+<details markdown="1">
 <summary>Copy Activity Settings (JSON)</summary>
 
 ```json

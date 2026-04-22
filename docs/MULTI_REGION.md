@@ -109,7 +109,7 @@ documents the strategy for each service deployed by CSA-in-a-Box.
 | **Stream Analytics** | No native support | Stamp per region | < 4 h | < 4 h |
 | **Purview** | No native support | Accept 24h RPO | < 24 h | < 24 h |
 
-<details>
+<details markdown="1">
 <summary>Legend</summary>
 
 - **Native**: The service replicates data automatically across regions.
