@@ -1,0 +1,68 @@
+# Apache Airflow — Standalone Orchestration
+# Replaces ADF orchestration capabilities.
+#
+# NOTE: Requires an external PostgreSQL database for the metadata backend.
+# Use the shared PostgreSQL from csa-oss-stack or provision a dedicated instance.
+
+image:
+  repository: apache/airflow
+  tag: "2.9.0"
+  pullPolicy: IfNotPresent
+
+# Combined webserver + scheduler deployment (simple mode)
+# For production, split into separate deployments.
+replicas: 1
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 2Gi
+  limits:
+    cpu: 2000m
+    memory: 4Gi
+
+service:
+  type: ClusterIP
+  port: 8080
+
+persistence:
+  dags:
+    enabled: true
+    size: 5Gi
+    storageClass: managed-csi
+    accessMode: ReadWriteOnce
+  logs:
+    enabled: true
+    size: 10Gi
+    storageClass: managed-csi
+    accessMode: ReadWriteOnce
+
+# airflow.cfg overrides via environment variables
+config:
+  AIRFLOW__CORE__EXECUTOR: LocalExecutor
+  AIRFLOW__CORE__SQL_ALCHEMY_CONN: ""              # e.g. postgresql+psycopg2://user:pass@host/airflow
+  AIRFLOW__CORE__FERNET_KEY: ""                     # Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+  AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+  AIRFLOW__WEBSERVER__SECRET_KEY: ""                # Random string for webserver sessions
+  AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "false"
+  AIRFLOW__WEBSERVER__RBAC: "true"
+
+# Init: run db migrate and create admin user
+init:
+  adminUser: admin
+  adminPassword: ""     # Set via --set or secret
+  adminEmail: admin@csa-platform.local
+
+probes:
+  readiness:
+    path: /health
+    initialDelaySeconds: 30
+    periodSeconds: 10
+  liveness:
+    path: /health
+    initialDelaySeconds: 60
+    periodSeconds: 30
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

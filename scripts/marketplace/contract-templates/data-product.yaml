@@ -1,0 +1,101 @@
+# CSA-in-a-Box Data Product Contract
+# Fill in all required fields and run:
+#   python marketplace-cli.py validate --contract data-product.yaml
+#   python marketplace-cli.py register --contract data-product.yaml
+
+name: ""          # required: Data product name (e.g., "Customer 360 Profile")
+domain: ""        # required: finance, healthcare, environmental, manufacturing, human-resources, marketing, supply-chain, operations, engineering, research
+description: ""   # required: What this data product provides (minimum 10 characters)
+version: "1.0.0"  # required: Semantic version (major.minor.patch)
+
+# Owner information (required)
+owner:
+  name: ""        # required: Full name of the product owner
+  email: ""       # required: Valid email address
+  team: ""        # required: Team or department name
+
+# Schema definition (required)
+schema:
+  format: delta   # delta, parquet, csv, json, avro
+  location: "abfss://gold@<storage>.dfs.core.windows.net/<domain>/<product>/"
+  columns: []     # list of column definitions (see examples below)
+  partition_by: []
+
+# Example column definitions (uncomment and modify as needed):
+# columns:
+#   - name: "customer_id"
+#     type: "string"
+#     description: "Unique customer identifier"
+#     nullable: false
+#   - name: "customer_name"
+#     type: "string"
+#     description: "Customer full name"
+#     nullable: false
+#   - name: "email"
+#     type: "string"
+#     description: "Customer email address"
+#     nullable: true
+#   - name: "registration_date"
+#     type: "timestamp"
+#     description: "Date customer registered"
+#     nullable: false
+#   - name: "total_orders"
+#     type: "integer"
+#     description: "Total number of orders placed"
+#     nullable: false
+
+# Service Level Agreement (required)
+sla:
+  freshness_minutes: 120     # Maximum acceptable data staleness (1-43200)
+  availability_percent: 99.5 # Target availability percentage (50.0-100.0)
+  valid_row_ratio: 0.95      # Minimum ratio of valid rows (0.0-1.0)
+  supported_until: ""        # YYYY-MM-DD format (optional, future date)
+
+# Data classification (required)
+classification: internal  # public, internal, confidential, restricted
+
+# Tags for discovery and metadata (optional)
+tags: {}
+# Example tags:
+# tags:
+#   pii: "masked"
+#   refresh: "daily"
+#   source_system: "crm"
+#   compliance: "gdpr"
+
+# Documentation URL (optional)
+documentation_url: ""
+
+# Sample queries for users (optional but recommended)
+sample_queries: []
+# Example queries:
+# sample_queries:
+#   - "SELECT * FROM product_table WHERE domain = 'finance'"
+#   - "SELECT COUNT(*) FROM product_table GROUP BY customer_segment"
+#   - "SELECT AVG(order_value) FROM product_table WHERE registration_date > '2024-01-01'"
+
+# Quality thresholds (required)
+quality_thresholds:
+  completeness: 0.90    # Percentage of required fields filled (0.0-1.0)
+  accuracy: 0.85        # Percentage of values that are accurate (0.0-1.0)
+  timeliness: 0.80      # Percentage of data that meets freshness SLA (0.0-1.0)
+  consistency: 0.85     # Percentage of data consistent across systems (0.0-1.0)
+
+# Data lineage information (optional but recommended)
+lineage:
+  upstream: []      # Source systems or tables
+  downstream: []    # Systems or reports that consume this data
+  transformations: []
+
+# Example lineage:
+# lineage:
+#   upstream:
+#     - "crm-raw-customers"
+#     - "orders-raw-transactions"
+#   downstream:
+#     - "customer-analytics-dashboard"
+#     - "marketing-segmentation-model"
+#   transformations:
+#     - "dbt model: customer_cleansed"
+#     - "dbt model: customer_360_enriched"
+#     - "ADF pipeline: customer_daily_refresh"

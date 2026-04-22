@@ -1,0 +1,46 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-superset-config
+  labels:
+    app.kubernetes.io/name: {{ .Chart.Name }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+data:
+  superset_config.py: |
+    import os
+
+    # --- Core ---
+    SECRET_KEY = os.environ.get("SUPERSET_SECRET_KEY", {{ .Values.config.SECRET_KEY | quote }})
+    SQLALCHEMY_DATABASE_URI = os.environ.get(
+        "SUPERSET_DATABASE_URI",
+        {{ .Values.config.SQLALCHEMY_DATABASE_URI | quote }}
+    )
+
+    # --- Cache (Redis) ---
+    CACHE_CONFIG = {
+        "CACHE_TYPE": {{ .Values.config.CACHE_CONFIG.CACHE_TYPE | quote }},
+        "CACHE_DEFAULT_TIMEOUT": {{ .Values.config.CACHE_CONFIG.CACHE_DEFAULT_TIMEOUT }},
+        "CACHE_KEY_PREFIX": {{ .Values.config.CACHE_CONFIG.CACHE_KEY_PREFIX | quote }},
+        "CACHE_REDIS_URL": os.environ.get(
+            "SUPERSET_REDIS_URL",
+            {{ .Values.config.CACHE_CONFIG.CACHE_REDIS_URL | quote }}
+        ),
+    }
+
+    # --- Security ---
+    WTF_CSRF_ENABLED = {{ .Values.config.WTF_CSRF_ENABLED }}
+    ENABLE_PROXY_FIX = {{ .Values.config.ENABLE_PROXY_FIX }}
+
+    # --- Maps ---
+    MAPBOX_API_KEY = os.environ.get("MAPBOX_API_KEY", {{ .Values.config.MAPBOX_API_KEY | quote }})
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Release.Name }}-superset-secret
+  labels:
+    app.kubernetes.io/name: {{ .Chart.Name }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+type: Opaque
+stringData:
+  admin-password: {{ .Values.init.adminPassword | quote }}

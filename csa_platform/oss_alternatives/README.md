@@ -108,11 +108,29 @@ graph LR
 
 ## ⚙️ Helm Charts
 
-Each alternative includes:
-- `helm/` — Helm chart for AKS deployment
-- `config/` — Configuration templates
-- `docs/` — Setup and integration guide
-- `tests/` — Validation scripts
+### Umbrella Chart (deploy everything)
+- `helm/csa-oss-stack/` — Deploy the full OSS stack with a single Helm install
+
+### Individual Charts (deploy selectively)
+- `helm/atlas/` — Apache Atlas standalone (data catalog)
+- `helm/superset/` — Apache Superset standalone (dashboards)
+- `helm/trino/` — Trino standalone (SQL analytics)
+- `helm/airflow/` — Apache Airflow standalone (orchestration)
+- `helm/opensearch/` — OpenSearch standalone (AI Search alternative)
+
+### Deploy Script
+```bash
+# Deploy full stack or individual services
+scripts/deploy-oss-stack.sh -g <rg> -l <location> --services atlas,trino,superset
+```
+
+---
+
+## 📖 Guides
+
+- [OSS Ecosystem Overview](../../docs/guides/oss-ecosystem.md) — Architecture decisions and integration
+- [Migration Playbook](../../docs/guides/oss-migration-playbook.md) — Azure PaaS ↔ OSS migration
+- [Monitoring Setup](../../docs/guides/oss-monitoring.md) — Prometheus, Grafana, alerting
 
 ---
 

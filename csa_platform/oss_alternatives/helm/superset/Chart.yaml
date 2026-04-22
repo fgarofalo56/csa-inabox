@@ -1,0 +1,16 @@
+apiVersion: v2
+name: csa-superset
+description: >
+  Apache Superset standalone chart for data visualization and dashboarding.
+  Replaces Power BI in Azure Government deployments.
+type: application
+version: 1.0.0
+appVersion: "3.1.0"
+keywords:
+  - visualization
+  - dashboards
+  - superset
+  - azure-government
+maintainers:
+  - name: CSA-in-a-Box Team
+    email: csa-team@contoso.com

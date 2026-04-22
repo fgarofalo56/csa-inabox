@@ -1,0 +1,62 @@
+# Apache Superset — Standalone Visualization
+# Replaces Power BI for embedded analytics.
+
+image:
+  repository: apache/superset
+  tag: "3.1.0"
+  pullPolicy: IfNotPresent
+
+replicas: 1
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 1Gi
+  limits:
+    cpu: 2000m
+    memory: 4Gi
+
+service:
+  type: ClusterIP
+  port: 8088
+
+persistence:
+  enabled: true
+  size: 10Gi
+  storageClass: managed-csi
+  accessMode: ReadWriteOnce
+
+# Init container creates the DB schema and admin user
+init:
+  adminUser: admin
+  adminPassword: ""        # Set via --set or secret
+  adminFirstName: Admin
+  adminLastName: User
+  adminEmail: admin@csa-platform.local
+
+# superset_config.py overrides
+config:
+  SECRET_KEY: ""                            # REQUIRED — set via Kubernetes secret
+  SQLALCHEMY_DATABASE_URI: ""               # e.g. postgresql+psycopg2://user:pass@host:5432/superset
+  CACHE_CONFIG:
+    CACHE_TYPE: RedisCache
+    CACHE_DEFAULT_TIMEOUT: 300
+    CACHE_KEY_PREFIX: superset_
+    CACHE_REDIS_URL: "redis://redis-master:6379/0"
+  WTF_CSRF_ENABLED: true
+  ENABLE_PROXY_FIX: true
+  MAPBOX_API_KEY: ""
+
+probes:
+  readiness:
+    path: /health
+    initialDelaySeconds: 30
+    periodSeconds: 10
+  liveness:
+    path: /health
+    initialDelaySeconds: 60
+    periodSeconds: 30
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

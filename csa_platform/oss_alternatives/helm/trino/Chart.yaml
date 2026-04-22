@@ -1,0 +1,16 @@
+apiVersion: v2
+name: csa-trino
+description: >
+  Trino standalone chart for federated SQL query engine.
+  Replaces Synapse Serverless in Azure Government deployments.
+type: application
+version: 1.0.0
+appVersion: "440"
+keywords:
+  - query-engine
+  - federated-sql
+  - trino
+  - azure-government
+maintainers:
+  - name: CSA-in-a-Box Team
+    email: csa-team@contoso.com

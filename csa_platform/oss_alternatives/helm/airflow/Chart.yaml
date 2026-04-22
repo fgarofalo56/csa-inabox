@@ -1,0 +1,16 @@
+apiVersion: v2
+name: csa-airflow
+description: >
+  Apache Airflow standalone chart for workflow orchestration.
+  Replaces ADF orchestration in Azure Government deployments.
+type: application
+version: 1.0.0
+appVersion: "2.9.0"
+keywords:
+  - orchestration
+  - workflow
+  - airflow
+  - azure-government
+maintainers:
+  - name: CSA-in-a-Box Team
+    email: csa-team@contoso.com

@@ -1,0 +1,102 @@
+# CSA-in-a-Box Gold Layer Data Product Contract
+# Pre-configured for Gold layer data products with strict quality requirements
+# Fill in the required fields and run:
+#   python marketplace-cli.py validate --contract gold-layer.yaml
+#   python marketplace-cli.py register --contract gold-layer.yaml
+
+name: ""          # required: Data product name (e.g., "Finance GL Gold")
+domain: ""        # required: finance, healthcare, environmental, manufacturing, human-resources, marketing, supply-chain, operations, engineering, research
+description: ""   # required: What this data product provides (minimum 10 characters)
+version: "1.0.0"  # required: Semantic version
+
+# Owner information (required)
+owner:
+  name: ""        # required: Full name of the product owner
+  email: ""       # required: Valid email address
+  team: ""        # required: Team or department name
+
+# Schema definition (required) - Gold layer typically uses Delta format
+schema:
+  format: delta   # Gold layer standard: Delta Lake for ACID transactions
+  location: "abfss://gold@<storage>.dfs.core.windows.net/<domain>/<product>/"
+  columns: []     # Define your business-ready columns here
+  partition_by: [] # Consider partitioning by date, domain, or other high-cardinality columns
+
+# Example Gold layer columns (business-ready, conformed dimensions):
+# columns:
+#   - name: "record_id"
+#     type: "string"
+#     description: "Unique business record identifier"
+#     nullable: false
+#   - name: "business_date"
+#     type: "date"
+#     description: "Business effective date for reporting"
+#     nullable: false
+#   - name: "created_timestamp"
+#     type: "timestamp"
+#     description: "Record creation timestamp"
+#     nullable: false
+#   - name: "modified_timestamp"
+#     type: "timestamp"
+#     description: "Last modification timestamp"
+#     nullable: false
+
+# Service Level Agreement - Gold layer has strict requirements
+sla:
+  freshness_minutes: 720     # 12 hours max for Gold layer (business hours)
+  availability_percent: 99.8 # High availability for business-critical data
+  valid_row_ratio: 0.98      # Very high data quality for Gold layer
+  supported_until: ""        # Optional: YYYY-MM-DD format
+
+# Data classification - Gold layer often contains sensitive business data
+classification: confidential  # Gold layer typically confidential or restricted
+
+# Tags for Gold layer products
+tags:
+  layer: "gold"
+  quality_tier: "premium"
+  business_ready: "true"
+  # Add domain-specific tags:
+  # compliance: "sox"
+  # audit_trail: "full"
+  # refresh_frequency: "daily"
+
+# Documentation URL (strongly recommended for Gold layer)
+documentation_url: ""
+
+# Sample queries - Gold layer should provide business-focused examples
+sample_queries: []
+# Example business queries:
+# sample_queries:
+#   - "SELECT * FROM gold_table WHERE business_date = CURRENT_DATE()"
+#   - "SELECT category, SUM(amount) FROM gold_table WHERE business_date >= '2024-01-01' GROUP BY category"
+#   - "SELECT COUNT(DISTINCT customer_id) FROM gold_table WHERE status = 'active'"
+
+# Quality thresholds - Gold layer has the highest standards
+quality_thresholds:
+  completeness: 0.98    # Very high completeness for business data
+  accuracy: 0.95        # Very high accuracy for Gold layer
+  timeliness: 0.95      # Strict timeliness requirements
+  consistency: 0.98     # High consistency across business rules
+
+# Data lineage - Gold layer typically has complex transformations
+lineage:
+  upstream: []      # Silver layer tables, external systems
+  downstream: []    # Reports, dashboards, ML models
+  transformations: []
+
+# Example Gold layer lineage:
+# lineage:
+#   upstream:
+#     - "silver_customer_master"
+#     - "silver_transaction_history"
+#     - "silver_product_catalog"
+#   downstream:
+#     - "executive_dashboard"
+#     - "financial_reporting_cube"
+#     - "customer_analytics_model"
+#   transformations:
+#     - "dbt model: dim_customer_gold"
+#     - "dbt model: fact_transactions_gold"
+#     - "dbt test suite: gold_data_quality_checks"
+#     - "Data quality rules: business_validation_suite"

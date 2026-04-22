@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-atlas-config
+  labels:
+    app.kubernetes.io/name: {{ .Chart.Name }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+data:
+  atlas-application.properties: |
+    {{- range $key, $value := .Values.config }}
+    {{ $key }}={{ $value }}
+    {{- end }}

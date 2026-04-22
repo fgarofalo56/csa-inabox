@@ -8,6 +8,11 @@ adapters over the Azure SDK, so the same contract can drive dbt sources,
 Stream Analytics jobs, ADX tables, and Fabric Real-Time Intelligence (gated
 on ``FABRIC_RTI_ENABLED=true`` pre-GA — see ADR-0018).
 
+Lambda Architecture Extensions:
+This package now includes a complete Lambda architecture implementation with
+EventProcessor, SpeedLayer, BatchLayer, and ServingLayer components for
+real-time and batch processing with unified serving capabilities.
+
 Public surface::
 
     from csa_platform.streaming import (
@@ -20,6 +25,12 @@ Public surface::
         LatencySLO,
         SourceType,
         BronzeFormat,
+        # Lambda Architecture Components
+        EventProcessor,
+        EventSchema,
+        SpeedLayer,
+        BatchLayer,
+        ServingLayer,
         # SLO
         SLOMonitor,
         SLOBreach,
@@ -80,14 +91,21 @@ from csa_platform.streaming.sources_fabric import (
     FabricRTINotAvailableError,
     FabricRTISource,
 )
+from csa_platform.streaming.event_processor import EventProcessor, EventSchema
+from csa_platform.streaming.speed_layer import SpeedLayer
+from csa_platform.streaming.batch_layer import BatchLayer
+from csa_platform.streaming.serving_layer import ServingLayer
 
 __all__ = [
     "AzureSchemaRegistry",
+    "BatchLayer",
     "BreachPublisher",
     "BronzeFormat",
     "ConfluentCompatRegistry",
     "CosmosBreachPublisher",
     "EventGridBreachPublisher",
+    "EventProcessor",
+    "EventSchema",
     "FabricRTINotAvailableError",
     "FabricRTISource",
     "GoldStreamContract",
@@ -101,10 +119,12 @@ __all__ = [
     "SchemaNotFoundError",
     "SchemaRegistry",
     "SchemaRegistryError",
+    "ServingLayer",
     "SilverMaterializedView",
     "SourceConnection",
     "SourceContract",
     "SourceType",
+    "SpeedLayer",
     "StreamingBronze",
     "StreamingContractBundle",
     "ValidationIssue",

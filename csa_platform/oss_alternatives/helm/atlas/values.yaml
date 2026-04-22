@@ -1,0 +1,56 @@
+# Apache Atlas — Standalone Data Catalog
+# Replaces Microsoft Purview where Gov features are limited.
+
+image:
+  repository: apache/atlas
+  tag: "2.3.0"
+  pullPolicy: IfNotPresent
+
+replicas: 1
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 2Gi
+  limits:
+    cpu: 2000m
+    memory: 4Gi
+
+service:
+  type: ClusterIP
+  port: 21000
+  # Set to LoadBalancer for external access
+  # type: LoadBalancer
+
+persistence:
+  enabled: true
+  size: 20Gi
+  storageClass: managed-csi
+  accessMode: ReadWriteOnce
+
+# atlas-application.properties overrides
+config:
+  atlas.server.bind.address: "0.0.0.0"
+  atlas.server.http.port: "21000"
+  atlas.audit.hbase.zookeeper.property.clientPort: "2181"
+  atlas.graph.storage.backend: "berkeleyje"
+  atlas.graph.index.search.backend: "solr"
+  atlas.graph.index.search.solr.mode: "cloud"
+  atlas.notification.embedded: "true"
+  atlas.kafka.data: "/opt/atlas/data/kafka"
+  atlas.kafka.zookeeper.connect: "localhost:2181"
+  atlas.rest.address: "http://localhost:21000"
+
+probes:
+  readiness:
+    path: /api/atlas/admin/version
+    initialDelaySeconds: 60
+    periodSeconds: 10
+  liveness:
+    path: /api/atlas/admin/version
+    initialDelaySeconds: 120
+    periodSeconds: 30
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -28,3 +28,41 @@ pydantic-settings>=2.3.0,<3.0.0
 
 # YAML parsing for taxonomy and config files
 pyyaml>=6.0,<7.0
+
+# Semantic Kernel for multi-agent orchestration
+semantic-kernel[azure]>=1.41.0,<2.0.0
+
+# MCP SDK for Model Context Protocol server
+mcp>=1.0.0,<2.0.0
+
+# GraphRAG for knowledge graph construction
+graphrag>=2.0.0,<3.0.0
+
+# Azure Cosmos DB (Gremlin API for graph, SQL API for memory)
+gremlinpython>=3.7.0,<4.0.0
+azure-cosmos>=4.7.0,<5.0.0
+
+# Azure AI Foundry
+azure-ai-projects>=1.0.0,<2.0.0
+
+# Document Intelligence for PDF extraction
+azure-ai-documentintelligence>=1.0.0,<2.0.0
+
+# Azure Event Hubs for streaming
+azure-eventhub>=5.11.0,<6.0.0
+
+# Azure Data Explorer
+azure-kusto-data>=4.4.0,<5.0.0
+
+# PDF fallback
+pypdf2>=3.0.0,<4.0.0
+
+# Word documents
+python-docx>=1.1.0,<2.0.0
+
+# Geospatial (optional — for geoanalytics module)
+# geopandas>=0.14.0
+# h3>=4.0.0
+# pyproj>=3.6.0
+# shapely>=2.0.0
+# geoalchemy2>=0.14.0

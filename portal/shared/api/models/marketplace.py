@@ -102,6 +102,27 @@ class QualityDimensions(BaseModel):
         )
 
 
+class DataProductCreate(BaseModel):
+    """Payload to create a new data product."""
+
+    name: str
+    description: str
+    domain: str
+    owner: OwnerInfo
+    classification: ClassificationLevel = ClassificationLevel.INTERNAL
+    tags: dict[str, str] = Field(default_factory=dict)
+    schema_def: SchemaDefinition | None = Field(None, alias="schema")
+    sample_queries: list[str] | None = None
+    documentation_url: str | None = None
+    version: str = "1.0.0"
+    status: str = "active"
+    sla: SLADefinition | None = Field(default=None, description="Service Level Agreement contract")
+    lineage: LineageInfo | None = Field(default=None, description="Upstream / downstream lineage graph")
+    schema_info: SchemaInfo | None = Field(default=None, description="Storage schema snapshot")
+
+    model_config = {"populate_by_name": True}
+
+
 class DataProduct(BaseModel):
     """A published data product in the marketplace.
 

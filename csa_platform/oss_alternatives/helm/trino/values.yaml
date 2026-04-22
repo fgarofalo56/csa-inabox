@@ -1,0 +1,80 @@
+# Trino — Standalone Federated Query Engine
+# Replaces Synapse Serverless for federated queries.
+
+image:
+  repository: trinodb/trino
+  tag: "440"
+  pullPolicy: IfNotPresent
+
+coordinator:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 1000m
+      memory: 4Gi
+    limits:
+      cpu: 4000m
+      memory: 8Gi
+  config:
+    query.max-memory: "4GB"
+    query.max-memory-per-node: "1GB"
+    node-scheduler.include-coordinator: "false"
+  jvmConfig: |
+    -server
+    -Xmx6G
+    -XX:InitialRAMPercentage=80
+    -XX:MaxRAMPercentage=80
+    -XX:+UseG1GC
+    -XX:G1HeapRegionSize=32M
+    -XX:+ExplicitGCInvokesConcurrent
+    -XX:+ExitOnOutOfMemoryError
+    -Djdk.attach.allowAttachSelf=true
+
+worker:
+  replicas: 2
+  resources:
+    requests:
+      cpu: 1000m
+      memory: 4Gi
+    limits:
+      cpu: 4000m
+      memory: 8Gi
+  jvmConfig: |
+    -server
+    -Xmx6G
+    -XX:InitialRAMPercentage=80
+    -XX:MaxRAMPercentage=80
+    -XX:+UseG1GC
+    -XX:G1HeapRegionSize=32M
+    -XX:+ExplicitGCInvokesConcurrent
+    -XX:+ExitOnOutOfMemoryError
+
+service:
+  type: ClusterIP
+  port: 8080
+
+# Catalog connectors
+catalogs:
+  delta:
+    connector.name: delta_lake
+    hive.metastore.uri: "thrift://hive-metastore:9083"
+    delta.enable-non-concurrent-writes: "true"
+  postgresql:
+    connector.name: postgresql
+    connection-url: ""         # e.g. jdbc:postgresql://pg-host:5432/mydb
+    connection-user: ""
+    connection-password: ""    # From Key Vault
+
+probes:
+  readiness:
+    path: /v1/info
+    initialDelaySeconds: 30
+    periodSeconds: 10
+  liveness:
+    path: /v1/info
+    initialDelaySeconds: 60
+    periodSeconds: 30
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
