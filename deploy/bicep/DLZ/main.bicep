@@ -65,18 +65,42 @@ param privateDNSZones object
 param parCosmosDB object
 
 // Storage parameters
-// TODO: Convert parStorage to a typed object (like databricksConfig) to eliminate contains() boilerplate
-@description('Storage parameters')
-param parStorage object
+@description('Storage account and lake zone configuration')
+type storageConfig = {
+  @description('Storage account name')
+  storageAccountName: string
+  @description('Private endpoint subnet configurations')
+  privateEndpointSubnets: array
+  @description('Domain file system (container) names')
+  domainFileSystemNames: array
+  @description('Data product file system (container) names')
+  dataProductFileSystemNames: array
+  @description('Resource tags')
+  tags: object
+  @description('Enable resource lock on storage account')
+  enableResourceLock: bool?
+}
+param parStorage storageConfig
 
 // External Storage parameters
 @description('External Storage parameters')
 param parExternalStorage object
 
 // Synapse parameters
-// TODO: Convert parSynapse to a typed object (like databricksConfig) to eliminate contains() boilerplate
-@description('Synapse parameters')
-param parSynapse object
+@description('Synapse Analytics workspace configuration')
+type synapseConfig = {
+  @description('Synapse workspace name override')
+  synapseWorkspaceName: string?
+  @description('SQL admin username')
+  sqlAdminUsername: string?
+  @description('SQL admin password (prefer Key Vault reference)')
+  sqlAdminPassword: string?
+  @description('Private endpoint subnet configurations')
+  privateEndpointSubnets: array?
+  @description('Resource tags')
+  tags: object
+}
+param parSynapse synapseConfig
 
 // Databricks parameters
 @description('Databricks workspace parameters')
@@ -145,16 +169,19 @@ param parGenericStorage object = {}
 param parSelfHostedIR object = {}
 
 @secure()
+@minLength(1)
 @description('SQL admin password for Synapse workspace. Prefer Key Vault reference over plaintext.')
-param synapseSqlAdminPassword string = ''
+param synapseSqlAdminPassword string
 
 @secure()
+@minLength(1)
 @description('Administrator password for Self-Hosted Integration Runtime VMSS.')
-param shirAdminPassword string = ''
+param shirAdminPassword string
 
 @secure()
+@minLength(1)
 @description('Data Factory Integration Runtime authentication key for SHIR.')
-param shirAuthKey string = ''
+param shirAuthKey string
 
 // Private Endpoints parameters
 @description('Private Endpoints configuration parameters')
@@ -273,7 +300,7 @@ module storageServices 'modules/storage/lakezones.bicep' = if (contains(deployMo
     dataProductFileSystemNames: parStorage.dataProductFileSystemNames
     tags: varStorageTags
     logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
-    enableResourceLock: contains(parStorage, 'enableResourceLock') ? parStorage.enableResourceLock : true
+    enableResourceLock: parStorage.enableResourceLock ?? true
   }
   dependsOn: [
     storageResourceGroup
@@ -329,11 +356,11 @@ module synapseWorkspace 'modules/synapse/synapse.bicep' = if (contains(deployMod
   params: {
     location: location
     tags: varSynapseTags
-    synapseName: contains(parSynapse, 'synapseWorkspaceName') ? parSynapse.synapseWorkspaceName : '${basename}-synapse'
-    administratorUsername: contains(parSynapse, 'sqlAdminUsername') ? parSynapse.sqlAdminUsername : 'synadmin_${uniqueString(subscription().subscriptionId)}'
-    administratorPassword: synapseSqlAdminPassword != '' ? synapseSqlAdminPassword : (contains(parSynapse, 'sqlAdminPassword') ? parSynapse.sqlAdminPassword : '')
+    synapseName: parSynapse.synapseWorkspaceName ?? '${basename}-synapse'
+    administratorUsername: parSynapse.sqlAdminUsername ?? 'synadmin_${uniqueString(subscription().subscriptionId)}'
+    administratorPassword: synapseSqlAdminPassword != '' ? synapseSqlAdminPassword : (parSynapse.sqlAdminPassword ?? '')
     synapseDefaultStorageAccountFileSystemId: storageServices.outputs.storageWorkspaceFileSystemId
-    privateEndpointSubnets: contains(parSynapse, 'privateEndpointSubnets') ? parSynapse.privateEndpointSubnets : parStorage.privateEndpointSubnets
+    privateEndpointSubnets: parSynapse.privateEndpointSubnets ?? parStorage.privateEndpointSubnets
   }
   dependsOn: [
     synapseResourceGroup

@@ -60,7 +60,7 @@ def finance_client(app) -> Generator[TestClient, None, None]:
             yield c
     finally:
         # Restore the default admin-like mock user from conftest
-        from portal.shared.tests.conftest import mock_get_current_user
+        from portal.shared.portal_tests.conftest import mock_get_current_user
 
         app.dependency_overrides[get_current_user] = mock_get_current_user
 
@@ -75,7 +75,7 @@ def marketing_client(app) -> Generator[TestClient, None, None]:
         with TestClient(app) as c:
             yield c
     finally:
-        from portal.shared.tests.conftest import mock_get_current_user
+        from portal.shared.portal_tests.conftest import mock_get_current_user
 
         app.dependency_overrides[get_current_user] = mock_get_current_user
 
@@ -90,7 +90,7 @@ def domainless_client(app) -> Generator[TestClient, None, None]:
         with TestClient(app) as c:
             yield c
     finally:
-        from portal.shared.tests.conftest import mock_get_current_user
+        from portal.shared.portal_tests.conftest import mock_get_current_user
 
         app.dependency_overrides[get_current_user] = mock_get_current_user
 

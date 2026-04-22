@@ -97,12 +97,13 @@ jobs:
 
       - name: What-If / Deploy ALZ
         run: |
-          MODE=${{ inputs.dry_run && '--what-if' || '' }}
+          MODE=""
+          if [ "${{ inputs.dry_run }}" = "true" ]; then MODE="--what-if"; fi
           az deployment sub create \
             --location ${{ env.AZURE_REGION }} \
             --template-file "deploy/bicep/landing-zone-alz/main.bicep" \
             --parameters "deploy/bicep/landing-zone-alz/params.${{ inputs.environment }}.json" \
-            "$MODE"
+            $MODE
 
   # -------------------------------------------------------------------------
   # Deploy Data Management Landing Zone
@@ -126,12 +127,13 @@ jobs:
 
       - name: What-If / Deploy DMLZ
         run: |
-          MODE=${{ inputs.dry_run && '--what-if' || '' }}
+          MODE=""
+          if [ "${{ inputs.dry_run }}" = "true" ]; then MODE="--what-if"; fi
           az deployment sub create \
             --location ${{ env.AZURE_REGION }} \
             --template-file deploy/bicep/DMLZ/main.bicep \
             --parameters deploy/bicep/DMLZ/params.${{ inputs.environment }}.json \
-            "$MODE"
+            $MODE
 
   # -------------------------------------------------------------------------
   # Deploy Data Landing Zone
@@ -155,12 +157,13 @@ jobs:
 
       - name: What-If / Deploy DLZ
         run: |
-          MODE=${{ inputs.dry_run && '--what-if' || '' }}
+          MODE=""
+          if [ "${{ inputs.dry_run }}" = "true" ]; then MODE="--what-if"; fi
           az deployment sub create \
             --location ${{ env.AZURE_REGION }} \
             --template-file deploy/bicep/DLZ/main.bicep \
             --parameters deploy/bicep/DLZ/params.${{ inputs.environment }}.json \
-            "$MODE"
+            $MODE
 
   # -------------------------------------------------------------------------
   # Post-Deployment Validation
@@ -223,8 +226,13 @@ jobs:
 
       - name: Check Gold layer tables
         if: ${{ secrets.DBT_DATABRICKS_HOST != '' }}
+        env:
+          DBT_DATABRICKS_HOST: ${{ secrets.DBT_DATABRICKS_HOST }}
+          DBT_DATABRICKS_HTTP_PATH: ${{ secrets.DBT_DATABRICKS_HTTP_PATH }}
+          DBT_DATABRICKS_TOKEN: ${{ secrets.DBT_DATABRICKS_TOKEN }}
         run: |
           echo "=== Gold Layer Smoke Test ==="
+          pip install databricks-sql-connector --quiet
           TABLES=(
             "gold.fact_orders"
             "gold.dim_customers"
@@ -234,14 +242,35 @@ jobs:
             "gold.fact_inventory_snapshot"
             "gold.dim_warehouses"
           )
+          FAILED=0
           for table in "${TABLES[@]}"; do
             echo -n "  $table ... "
-            # TODO: Implement real Databricks SQL query when SQL endpoint is available.
-            #   Example: ROW_COUNT=$(databricks sql query "SELECT COUNT(*) AS cnt FROM $table" --output json | jq '.[0].cnt')
-            echo "SKIPPED (no live SQL endpoint configured in CI)"
+            ROW_COUNT=$(python -c "
+          from databricks import sql
+          import os
+          conn = sql.connect(
+              server_hostname=os.environ['DBT_DATABRICKS_HOST'],
+              http_path=os.environ['DBT_DATABRICKS_HTTP_PATH'],
+              access_token=os.environ['DBT_DATABRICKS_TOKEN'],
+          )
+          cursor = conn.cursor()
+          cursor.execute('SELECT COUNT(*) AS cnt FROM $table')
+          print(cursor.fetchone()[0])
+          cursor.close()
+          conn.close()
+          " 2>/dev/null) || { echo "QUERY FAILED"; FAILED=1; continue; }
+            if [ "$ROW_COUNT" -gt 0 ]; then
+              echo "OK ($ROW_COUNT rows)"
+            else
+              echo "EMPTY (0 rows)"
+              FAILED=1
+            fi
           done
-          echo ""
-          echo "::notice::Gold layer row-count validation requires a live Databricks SQL endpoint. Contract validation passed in the previous step."
+          if [ "$FAILED" -eq 1 ]; then
+            echo "::error::One or more Gold layer tables are empty or unreachable"
+            exit 1
+          fi
+          echo "All Gold layer tables verified."
 
   # -------------------------------------------------------------------------
   # Tag a successful, non-dry-run deployment so the Rollback workflow can

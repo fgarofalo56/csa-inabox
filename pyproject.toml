@@ -405,15 +405,10 @@ quote-style = "double"
 indent-style = "space"
 
 [tool.pytest.ini_options]
-# Portal tests live in ``portal/shared/tests`` and are deliberately NOT
-# included here: both that directory and the root ``tests/`` directory
-# are Python packages (``__init__.py`` present) named ``tests``, which
-# causes pytest's import mode to resolve them to the same module path
-# ``tests.conftest`` and raise ``ImportPathMismatchError``.  The portal
-# package is tested by its own ``pytest portal/shared/tests`` invocation
-# (see Makefile / portal CI lane).  Refactoring to a single rootdir is
-# tracked as a follow-up.
-testpaths = ["tests"]
+# Both test directories are now discoverable without namespace collision:
+# portal/shared/tests/ was renamed to portal/shared/portal_tests/ so the
+# conftest.py files no longer resolve to the same ``tests.conftest`` module.
+testpaths = ["tests", "portal/shared/portal_tests"]
 python_files = ["test_*.py", "*_test.py"]
 python_functions = ["test_*"]
 addopts = "--tb=short -q --strict-markers"
@@ -435,16 +430,11 @@ source = [
     "csa_platform/functions/secretRotation/functions",
     "csa_platform/functions/validation",
     "csa_platform/ai_integration/rag",
-    # metadata_framework has inline tests in csa_platform/metadata_framework/tests/.
-    # "csa_platform/metadata_framework",
-    # Modules with inline tests (not in tests/) are excluded from coverage
-    # until we consolidate test discovery.  They have their own test suites
-    # in csa_platform/*/tests/ run by Makefile / standalone pytest invocations.
-    # "csa_platform/streaming",
-    # "csa_platform/common",
-    # "csa_platform/data_activator",
-    # portal/shared/api has its own test suite in portal/shared/tests/.
-    # "portal/shared/api",
+    "csa_platform/ai_integration/enrichment",
+    "csa_platform/common",
+    "csa_platform/streaming",
+    "csa_platform/data_activator",
+    "csa_platform/metadata_framework",
 ]
 branch = true
 omit = [
@@ -459,6 +449,8 @@ omit = [
 # below this threshold (see .github/workflows/test.yml).  The threshold
 # ratchets upward as the test suite grows — do not lower it without an
 # explicit justification in the commit message.
+# Target: raise to 70 once streaming/data_activator/metadata_framework
+# test suites are consolidated into the root test runner.
 fail_under = 60
 show_missing = true
 skip_covered = false
@@ -505,11 +497,14 @@ no_implicit_reexport = true
 # --ignore-missing-imports) to allow progressive strictness adoption.  The
 # default mypy run on ``csa_platform.governance`` + ``tests`` should not fail on type
 # issues inside these modules when they are incidentally imported.
+# Progressive adoption: disallow_untyped_defs is enabled for modules with
+# good type coverage; weaken only where SDK stubs are missing.
 module = [
     "csa_platform.*",
 ]
 ignore_errors = false
-disallow_untyped_defs = false
+disallow_untyped_defs = true
+warn_return_any = false
 
 [[tool.mypy.overrides]]
 # Portal API modules use dynamic JSON schemas (SQLite JSON blob columns)

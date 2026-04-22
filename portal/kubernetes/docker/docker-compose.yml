@@ -49,7 +49,7 @@ services:
       # value (CSA-0019) and will cause auth safety-gate to fail fast when
       # AZURE_TENANT_ID is blank.
       - ENVIRONMENT=${ENVIRONMENT:-local}
-      - AUTH_DISABLED=${AUTH_DISABLED:-true}
+      - AUTH_DISABLED=${AUTH_DISABLED:-false}
       # CSA-0021: REDIS_PASSWORD is required — no insecure fallback.
       - REDIS_URL=redis://:${REDIS_PASSWORD:?REDIS_PASSWORD is required — see .env.example}@redis:6379/0
       - LOG_LEVEL=debug

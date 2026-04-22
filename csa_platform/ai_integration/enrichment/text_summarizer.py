@@ -144,8 +144,8 @@ class TextSummarizer:
 
         .. note:: Uses ``time.sleep`` for synchronous callers.  If this
            method is invoked from an async context, the blocking sleep
-           will stall the event loop.
-           TODO: Provide an async _rate_limit for fully-async pipelines.
+           will stall the event loop.  Use :meth:`_rate_limit_async` for
+           async pipelines.
         """
         import asyncio
 
@@ -167,6 +167,20 @@ class TextSummarizer:
                     hint="Consider using an async rate limiter in async contexts",
                 )
             time.sleep(delay)
+        self._last_request_time = time.monotonic()
+
+    async def _rate_limit_async(self) -> None:
+        """Async-aware rate limiting — use this in async pipelines.
+
+        Uses ``asyncio.sleep`` so the event loop is not blocked.
+        """
+        import asyncio
+
+        now = time.monotonic()
+        elapsed = now - self._last_request_time
+        if elapsed < self._min_interval:
+            delay = self._min_interval - elapsed
+            await asyncio.sleep(delay)
         self._last_request_time = time.monotonic()
 
     # -- Prompt construction ------------------------------------------------

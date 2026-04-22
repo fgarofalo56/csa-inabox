@@ -20,7 +20,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from csa_platform.common.audit import audit_event_from_request, audit_logger
 
-from ..config import settings
 from ..dependencies import (
     get_pipelines_store,
     get_sources_store,
@@ -31,9 +30,7 @@ from ..dependencies import (
 from ..models.pipeline import PipelineRecord, PipelineRun, PipelineStatus, PipelineType
 from ..models.source import SourceRecord
 from ..observability.rate_limit import build_rate_limiter, get_route_limit
-from ..persistence import StoreBackend
 from ..persistence_async import AsyncStoreBackend
-from ..persistence_factory import build_store_backend
 from ..services.auth import DomainScope, get_domain_scope, require_role
 
 logger = logging.getLogger(__name__)
@@ -41,24 +38,6 @@ router = APIRouter()
 
 # Per-principal sliding-window rate limiter (CSA-0030).
 _limiter = build_rate_limiter()
-
-# ── Persistence ─────────────────────────────────────────────────────────
-# Backend is chosen by the async factory based on ``settings.DATABASE_URL``;
-# routers await the AsyncStoreBackend via FastAPI ``Depends`` — see ADR-0016.
-# The sync singletons below are retained as a transitional compat layer
-# for the stats router + existing test fixtures.
-_pipelines_store: StoreBackend = build_store_backend("pipelines.json", settings)
-_runs_store: StoreBackend = build_store_backend("pipeline_runs.json", settings)
-
-
-def get_store() -> StoreBackend:
-    """Return the sync pipelines store (compat; new code uses async DI)."""
-    return _pipelines_store
-
-
-def get_runs_store() -> StoreBackend:
-    """Return the sync pipeline runs store (compat; new code uses async DI)."""
-    return _runs_store
 
 
 async def _resolve_pipeline_domain(

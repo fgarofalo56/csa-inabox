@@ -30,13 +30,19 @@ const nextConfig = {
   reactStrictMode: true,
   output: process.env.STATIC_EXPORT === 'true' ? 'export' : undefined,
   env: {
-    API_URL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api',
+    API_URL: process.env.NEXT_PUBLIC_API_URL || '/api',
   },
   async rewrites() {
+    // In production the frontend is served behind a reverse proxy that
+    // routes /api/* to the backend — no rewrite needed.  For local dev
+    // NEXT_PUBLIC_API_URL should point at the backend (e.g.
+    // http://localhost:8000/api).
+    const backendUrl = process.env.NEXT_PUBLIC_API_URL;
+    if (!backendUrl) return [];
     return [
       {
         source: '/api/:path*',
-        destination: `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api'}/:path*`,
+        destination: `${backendUrl}/:path*`,
       },
     ];
   },

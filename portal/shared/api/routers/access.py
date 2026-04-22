@@ -20,7 +20,6 @@ from pydantic import BaseModel
 
 from csa_platform.common.audit import audit_event_from_request, audit_logger
 
-from ..config import settings
 from ..dependencies import get_access_store, get_products_store
 from ..models.marketplace import (
     AccessRequest,
@@ -29,9 +28,7 @@ from ..models.marketplace import (
 )
 from ..models.source import ClassificationLevel
 from ..observability.rate_limit import build_rate_limiter, get_route_limit
-from ..persistence import StoreBackend
 from ..persistence_async import AsyncStoreBackend
-from ..persistence_factory import build_store_backend
 from ..services.auth import DomainScope, get_current_user, get_domain_scope, require_role
 
 logger = logging.getLogger(__name__)
@@ -48,17 +45,6 @@ class ReviewBody(BaseModel):
     """Optional body for approve / deny review actions."""
 
     notes: str | None = None
-
-# ── Persistence ─────────────────────────────────────────────────────────────
-# Backend chosen by the async factory from ``settings.DATABASE_URL`` — see
-# ADR-0016.  The sync ``_access_store`` singleton below is retained as a
-# transitional compat layer for the stats router + existing test fixtures.
-_access_store: StoreBackend = build_store_backend("access_requests.json", settings)
-
-
-def get_store() -> StoreBackend:
-    """Return the sync access store (compat; new code uses async DI)."""
-    return _access_store
 
 
 # ── Classification-aware duration caps (CSA-0017) ──────────────────────────
