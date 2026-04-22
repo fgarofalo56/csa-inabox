@@ -4,12 +4,12 @@
 
 > **Last Updated:** 2026-04-19 | **Status:** Active | **Audience:** Operations, Platform Engineering
 
-> [!NOTE]
-> **Quick Summary**: Quarterly disaster-recovery drill that exercises
-> Cosmos failover, Storage failover, Key Vault restore, and Bicep
-> rollback against a scratch subscription. Automated via
-> [`.github/workflows/dr-drill.yml`](../../.github/workflows/dr-drill.yml)
-> on the first day of each quarter with on-demand `workflow_dispatch`.
+!!! note
+    **Quick Summary**: Quarterly disaster-recovery drill that exercises
+    Cosmos failover, Storage failover, Key Vault restore, and Bicep
+    rollback against a scratch subscription. Automated via
+    [`.github/workflows/dr-drill.yml`](../../.github/workflows/dr-drill.yml)
+    on the first day of each quarter with on-demand `workflow_dispatch`.
 
 This runbook operationalises [`docs/DR.md`](../DR.md) §4 ("Failover
 Readiness — Quarterly Drill"). The parent DR document is the
@@ -85,11 +85,11 @@ The scratch subscription ID is stored in the repository secret
 `AZURE_TENANT_ID`. The drill **must not** use the production
 subscription secret.
 
-> [!WARNING]
-> Real storage-account failovers drop the account to LRS and the
-> replication seed can take hours to rebuild. That is fine on a
-> scratch account; do **not** run the storage-failover scenario
-> against staging or prod.
+!!! warning
+    Real storage-account failovers drop the account to LRS and the
+    replication seed can take hours to rebuild. That is fine on a
+    scratch account; do **not** run the storage-failover scenario
+    against staging or prod.
 
 ---
 

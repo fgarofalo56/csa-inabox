@@ -4,8 +4,8 @@
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** New Users
 
-> [!NOTE]
-> **Quick Summary**: Prerequisites and deployment walkthrough for CSA-in-a-Box — clone, configure parameter files for 4 Azure subscriptions, deploy ALZ → DMLZ → DLZ in order, then layer on platform services, data portals, and vertical examples (USDA, DOT, USPS, NOAA, EPA, and more).
+!!! note
+    **Quick Summary**: Prerequisites and deployment walkthrough for CSA-in-a-Box — clone, configure parameter files for 4 Azure subscriptions, deploy ALZ → DMLZ → DLZ in order, then layer on platform services, data portals, and vertical examples (USDA, DOT, USPS, NOAA, EPA, and more).
 
 ## 📑 Table of Contents
 
@@ -140,8 +140,8 @@ graph TD
     B --> C["3. DLZ<br/>Data Landing Zone<br/>(per domain)"]
 ```
 
-> [!IMPORTANT]
-> Each layer depends on the previous one. Deploy in order.
+!!! important
+    Each layer depends on the previous one. Deploy in order.
 
 ---
 
@@ -279,11 +279,11 @@ az deployment sub create \
   --parameters deploy/bicep/gov/params.gov-dev.json
 ```
 
-> [!NOTE]
-> Key differences for Government:
-> - All endpoints use `.us` / `.usgovcloudapi.net` instead of `.com`
-> - Compliance tags are automatically applied (FedRAMP, FISMA, NIST 800-53)
-> - Microsoft Fabric is forecast, not GA, in Azure Government — this repo delivers Fabric-parity capabilities on Azure PaaS services that ARE available in Gov today
+!!! note
+    Key differences for Government:
+    - All endpoints use `.us` / `.usgovcloudapi.net` instead of `.com`
+    - Compliance tags are automatically applied (FedRAMP, FISMA, NIST 800-53)
+    - Microsoft Fabric is forecast, not GA, in Azure Government — this repo delivers Fabric-parity capabilities on Azure PaaS services that ARE available in Gov today
 
 See [GOV_SERVICE_MATRIX.md](GOV_SERVICE_MATRIX.md) for the full service
 availability matrix.

@@ -4,14 +4,14 @@
 
 > **Last Updated:** 2026-04-20 | **Status:** Active | **Audience:** Data Engineering, Platform Engineering
 
-> [!NOTE]
-> **Quick Summary**: The `dbt-ci` GitHub Actions workflow runs
-> `dbt deps`, `dbt parse`, and `dbt compile` for all 14 vertical dbt
-> projects on every pull request and on pushes to `main` /
-> `audit/**`. It validates YAML and Jinja without touching a real
-> warehouse by routing every profile through an offline DuckDB stub.
-> Real `dbt run` / `dbt test` stay in
-> [`deploy-dbt.yml`](../../.github/workflows/deploy-dbt.yml).
+!!! note
+    **Quick Summary**: The `dbt-ci` GitHub Actions workflow runs
+    `dbt deps`, `dbt parse`, and `dbt compile` for all 14 vertical dbt
+    projects on every pull request and on pushes to `main` /
+    `audit/**`. It validates YAML and Jinja without touching a real
+    warehouse by routing every profile through an offline DuckDB stub.
+    Real `dbt run` / `dbt test` stay in
+    [`deploy-dbt.yml`](../../.github/workflows/deploy-dbt.yml).
 
 This runbook covers: what the workflow does, how to triage a failing
 PR, how to reproduce failures locally, and how to bump the dbt version

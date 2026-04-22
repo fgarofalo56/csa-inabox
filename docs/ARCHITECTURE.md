@@ -4,8 +4,8 @@
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Architects
 
-> [!NOTE]
-> **Quick Summary**: Architecture reference for CSA-in-a-Box — the Azure-native reference implementation of the Microsoft "Unify your data platform" CAF guidance, built on Azure PaaS and open-source tooling. Positions Fabric as the primary control plane where GA, and CSA-in-a-Box as the Azure Government gap-filler (Fabric is forecast, not GA), the post-deprecation CAF CSA reference, and an incremental on-ramp to Fabric. Covers the DMLZ/DLZ landing zone pattern, medallion data flow (Bronze/Silver/Gold), streaming via Event Hubs + ADX, AI/ML integration, 9 vertical examples, and Azure Government compatibility.
+!!! note
+    **Quick Summary**: Architecture reference for CSA-in-a-Box — the Azure-native reference implementation of the Microsoft "Unify your data platform" CAF guidance, built on Azure PaaS and open-source tooling. Positions Fabric as the primary control plane where GA, and CSA-in-a-Box as the Azure Government gap-filler (Fabric is forecast, not GA), the post-deprecation CAF CSA reference, and an incremental on-ramp to Fabric. Covers the DMLZ/DLZ landing zone pattern, medallion data flow (Bronze/Silver/Gold), streaming via Event Hubs + ADX, AI/ML integration, 9 vertical examples, and Azure Government compatibility.
 
 A comprehensive architecture reference for CSA-in-a-Box — an Azure-native
 reference implementation of the Microsoft "Unify your data platform" Cloud
@@ -16,15 +16,15 @@ for workloads in Azure Government (Fabric forecast, not GA), for regulated
 scenarios that need composable IaC, and as an incremental on-ramp whose
 components compose cleanly into a future Fabric migration.
 
-> [!NOTE]
-> **CAF scenario update (CSA-0068).** The legacy "Cloud-Scale Analytics"
-> CAF scenario was **deprecated in April 2026** and replaced by
-> [Microsoft CAF — Unify your data platform](https://aka.ms/cafdata).
-> This document tracks the 2026 "Unify your data platform" guidance.
-> Historical references to the deprecated *Cloud-Scale Analytics* scenario
-> are retained for context and cross-referencing only — do not use
-> `https://learn.microsoft.com/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/`
-> as an authoritative source for new work.
+!!! note
+    **CAF scenario update (CSA-0068).** The legacy "Cloud-Scale Analytics"
+    CAF scenario was **deprecated in April 2026** and replaced by
+    [Microsoft CAF — Unify your data platform](https://aka.ms/cafdata).
+    This document tracks the 2026 "Unify your data platform" guidance.
+    Historical references to the deprecated *Cloud-Scale Analytics* scenario
+    are retained for context and cross-referencing only — do not use
+    `https://learn.microsoft.com/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/`
+    as an authoritative source for new work.
 
 ## 📑 Table of Contents
 

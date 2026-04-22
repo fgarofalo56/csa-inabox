@@ -6,12 +6,12 @@
 > Architects, platform engineers, auditors, federal customers preparing
 > ATO packages
 
-> [!NOTE]
-> **Quick Summary**: This directory captures the *why* behind the core
-> technology choices in CSA-in-a-Box. Each record follows the
-> [MADR](https://adr.github.io/madr/) format. Records are immutable once
-> accepted — revisions happen by adding a superseding ADR with an
-> incremented number.
+!!! note
+    **Quick Summary**: This directory captures the *why* behind the core
+    technology choices in CSA-in-a-Box. Each record follows the
+    [MADR](https://adr.github.io/madr/) format. Records are immutable once
+    accepted — revisions happen by adding a superseding ADR with an
+    incremented number.
 
 ---
 

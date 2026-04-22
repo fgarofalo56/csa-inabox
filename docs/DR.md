@@ -4,8 +4,8 @@
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Operations
 
-> [!NOTE]
-> **Quick Summary**: Authoritative DR runbook for CSA-in-a-Box covering RPO/RTO targets by service tier, primary/secondary region pairing, step-by-step failover procedures (Cosmos DB, Storage, ADF, Databricks, DNS), quarterly drill cadence, failback procedures, and known gaps.
+!!! note
+    **Quick Summary**: Authoritative DR runbook for CSA-in-a-Box covering RPO/RTO targets by service tier, primary/secondary region pairing, step-by-step failover procedures (Cosmos DB, Storage, ADF, Databricks, DNS), quarterly drill cadence, failback procedures, and known gaps.
 
 This runbook is the authoritative answer to "what do we do when a region
 goes down?" It pairs with the deploy-time rollback procedure in
@@ -14,11 +14,11 @@ covers *regional unavailability* (Azure region outage, networking
 partition, storage replication failure) where the fix is failing over to
 a different region, not redeploying.
 
-> [!IMPORTANT]
-> **Scope:** the CSA-in-a-Box platform's four landing zones (Management,
-> Connectivity, DMLZ, DLZ). Out of scope: application-layer DR for
-> workloads owned by domain teams — those are expected to follow the
-> per-service guidance in this runbook and document their own RPO/RTO.
+!!! important
+    **Scope:** the CSA-in-a-Box platform's four landing zones (Management,
+    Connectivity, DMLZ, DLZ). Out of scope: application-layer DR for
+    workloads owned by domain teams — those are expected to follow the
+    per-service guidance in this runbook and document their own RPO/RTO.
 
 ## 📑 Table of Contents
 
@@ -65,10 +65,10 @@ row to this table and wire up the matching configuration.
 | **Event Hub** | Critical | < 5 min | < 15 min | Geo-DR pairing | Manual: configure `Microsoft.EventHub/namespaces/disasterRecoveryConfigs` in a follow-up commit |
 | **Purview** | Standard | < 24 h | < 24 h | No built-in geo-replication; rely on the collection export + reimport procedure below | Manual |
 
-> [!NOTE]
-> Tiers higher than "Critical" (near-zero RPO/RTO, e.g. for regulated
-> workloads) require multi-region active/active and are out of scope for
-> this runbook; those workloads should be reviewed individually.
+!!! note
+    Tiers higher than "Critical" (near-zero RPO/RTO, e.g. for regulated
+    workloads) require multi-region active/active and are out of scope for
+    this runbook; those workloads should be reviewed individually.
 
 ---
 
@@ -95,11 +95,11 @@ parameters linked in the table above.
 
 ## 🚀 3. Failover Procedure
 
-> [!CAUTION]
-> Trigger this procedure when the primary region is confirmed unavailable
-> via the [Azure Service Health dashboard](https://status.azure.com/) and
-> has been down for > 5 minutes (shorter incidents are usually cheaper to
-> wait out).
+!!! danger
+    Trigger this procedure when the primary region is confirmed unavailable
+    via the [Azure Service Health dashboard](https://status.azure.com/) and
+    has been down for > 5 minutes (shorter incidents are usually cheaper to
+    wait out).
 
 ### Step 1 — Declare the incident
 
@@ -122,11 +122,11 @@ az account list-locations --query "[?metadata.regionType=='Physical'].{Name:name
 az resource list --location eastus --query "[?provisioningState!='Succeeded'].{Name:name, Type:type, State:provisioningState}" -o table
 ```
 
-> [!IMPORTANT]
-> If only one resource group or service is affected, use the
-> [per-service rollback](ROLLBACK.md) procedure instead — failing over
-> the whole platform for a single stuck resource is more risk than
-> reward.
+!!! important
+    If only one resource group or service is affected, use the
+    [per-service rollback](ROLLBACK.md) procedure instead — failing over
+    the whole platform for a single stuck resource is more risk than
+    reward.
 
 ### Step 3 — Cosmos DB failover
 
@@ -160,11 +160,11 @@ az storage account failover \
   --yes
 ```
 
-> [!WARNING]
-> After the command returns, the account's primary region flips to the
-> paired secondary and the replication type drops to LRS (you need to
-> re-enable geo replication after the original region recovers — see
-> §5 Failback). Expected time: 10–60 minutes.
+!!! warning
+    After the command returns, the account's primary region flips to the
+    paired secondary and the replication type drops to LRS (you need to
+    re-enable geo replication after the original region recovers — see
+    §5 Failback). Expected time: 10–60 minutes.
 
 Verify:
 
@@ -240,19 +240,19 @@ and documented in detail in
    incident tracker instead).
 - [ ] Update this runbook with anything that drifted.
 
-> [!NOTE]
-> The dev-environment drill is the minimum bar. For regulated workloads
-> add a second drill per year against a pre-prod clone of production.
+!!! note
+    The dev-environment drill is the minimum bar. For regulated workloads
+    add a second drill per year against a pre-prod clone of production.
 
 ---
 
 ## 🔄 5. Failback Procedure
 
-> [!CAUTION]
-> Do **not** fail back at the first sign that the primary region is
-> healthy again — you risk oscillating and losing data. Wait at least
-> one full business day after the Azure Service Health dashboard shows
-> the primary region as green, and only then start the failback.
+!!! danger
+    Do **not** fail back at the first sign that the primary region is
+    healthy again — you risk oscillating and losing data. Wait at least
+    one full business day after the Azure Service Health dashboard shows
+    the primary region as green, and only then start the failback.
 
 ### Step 1 — Re-enable geo replication
 

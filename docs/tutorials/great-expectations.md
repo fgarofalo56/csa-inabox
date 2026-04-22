@@ -4,13 +4,13 @@
 
 > **Last Updated:** 2026-04-20 | **Status:** Active | **Audience:** Data Engineering, Platform Engineering
 
-> [!TIP]
-> **TL;DR** - Stand up a Great Expectations 1.x project, write an
-> expectation suite against ADLS Gen2 Bronze/Silver Delta tables, run a
-> checkpoint as a PR gate, and plug the result into the CSA-in-a-Box
-> governance runner (`csa_platform/governance/dataquality/ge_runner.py`).
-> A fully runnable example lives at
-> [`csa_platform/governance/dataquality/ge_example/`](../../csa_platform/governance/dataquality/ge_example/).
+!!! tip
+    **TL;DR** - Stand up a Great Expectations 1.x project, write an
+    expectation suite against ADLS Gen2 Bronze/Silver Delta tables, run a
+    checkpoint as a PR gate, and plug the result into the CSA-in-a-Box
+    governance runner (`csa_platform/governance/dataquality/ge_runner.py`).
+    A fully runnable example lives at
+    [`csa_platform/governance/dataquality/ge_example/`](../../csa_platform/governance/dataquality/ge_example/).
 
 Great Expectations (GE) is the data-quality backbone of CSA-in-a-Box. The
 platform's governance runner already has a stable interface for executing

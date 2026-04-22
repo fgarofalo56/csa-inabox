@@ -4,8 +4,8 @@
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** All Developers
 
-> [!NOTE]
-> **Quick Summary**: Role-based navigation guide for the CSA-in-a-Box codebase — find your area of focus (governance, pipelines, infra, portal, AI/ML, Functions, monitoring), jump to the relevant code, and get started with key commands and directory maps.
+!!! note
+    **Quick Summary**: Role-based navigation guide for the CSA-in-a-Box codebase — find your area of focus (governance, pipelines, infra, portal, AI/ML, Functions, monitoring), jump to the relevant code, and get started with key commands and directory maps.
 
 This guide maps developer roles to the relevant parts of the codebase. Instead of trying to understand everything at once, focus on the area you'll be working in.
 
@@ -191,8 +191,8 @@ Three function apps: `aiEnrichment/`, `eventProcessing/`, `secretRotation/`. Eac
 
 ## 📛 Directory Naming Conventions
 
-> [!WARNING]
-> Directory names in this repo use **mixed conventions** for historical reasons. Do **not** rename existing directories, as doing so would break Python imports, Bicep module references, CI/CD paths, and dbt project references.
+!!! warning
+    Directory names in this repo use **mixed conventions** for historical reasons. Do **not** rename existing directories, as doing so would break Python imports, Bicep module references, CI/CD paths, and dbt project references.
 
 The naming styles present in the codebase are:
 

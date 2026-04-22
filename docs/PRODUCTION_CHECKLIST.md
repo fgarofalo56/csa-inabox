@@ -4,8 +4,8 @@
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Release Engineers
 
-> [!NOTE]
-> **Quick Summary**: Comprehensive pre-production readiness checklist covering environment promotion, infrastructure hardening, security, data platform validation, observability, disaster recovery, governance, operational readiness, cost management, and compliance — with sign-off table for stakeholder approval.
+!!! note
+    **Quick Summary**: Comprehensive pre-production readiness checklist covering environment promotion, infrastructure hardening, security, data platform validation, observability, disaster recovery, governance, operational readiness, cost management, and compliance — with sign-off table for stakeholder approval.
 
 Use this checklist when promoting CSA-in-a-Box from development to production.
 Each section includes actionable items with cross-references to detailed guides
@@ -203,9 +203,9 @@ where available.
 
 ---
 
-> [!NOTE]
-> This checklist complements the [Quick Start Guide](QUICKSTART.md) for development
-> and the [DR](DR.md) / [Rollback](ROLLBACK.md) guides for incident response.
+!!! note
+    This checklist complements the [Quick Start Guide](QUICKSTART.md) for development
+    and the [DR](DR.md) / [Rollback](ROLLBACK.md) guides for incident response.
 
 ---
 

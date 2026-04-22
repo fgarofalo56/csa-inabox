@@ -4,8 +4,8 @@
 
 > **Last Updated:** 2026-04-20 | **Last Drilled:** _not yet drilled — see Drill Log below_ | **Status:** Active | **Audience:** Platform Engineering, Security, Customer Success
 
-> [!NOTE]
-> **Quick Summary**: End-to-end procedure to onboard a new tenant (new customer domain, new regulated workload) onto CSA-in-a-Box — create the Entra ID app registration, wire OIDC federated credentials, provision the DLZ (Data Landing Zone) via Bicep, assign RBAC from the governance matrix, seed the marketplace, and run the post-onboarding verification.
+!!! note
+    **Quick Summary**: End-to-end procedure to onboard a new tenant (new customer domain, new regulated workload) onto CSA-in-a-Box — create the Entra ID app registration, wire OIDC federated credentials, provision the DLZ (Data Landing Zone) via Bicep, assign RBAC from the governance matrix, seed the marketplace, and run the post-onboarding verification.
 
 ## Before First Use — Customization Checklist
 
@@ -261,8 +261,8 @@ Audit cadence: verify every tenant's artifact chain once per quarter.
 
 ## 📎 9. Contact Information
 
-> [!WARNING]
-> **Action Required:** Populate these before first production use.
+!!! warning
+    **Action Required:** Populate these before first production use.
 
 | Role                       | Contact                                      | Phone                        | Escalation                     |
 | -------------------------- | -------------------------------------------- | ---------------------------- | ------------------------------ |

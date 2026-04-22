@@ -4,8 +4,8 @@
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers
 
-> [!NOTE]
-> **Quick Summary**: Deploy and manage ADF pipeline artifacts for the CSA-in-a-Box platform, including linked services, datasets, pipelines, triggers, and CI/CD integration with Purview lineage.
+!!! note
+    **Quick Summary**: Deploy and manage ADF pipeline artifacts for the CSA-in-a-Box platform, including linked services, datasets, pipelines, triggers, and CI/CD integration with Purview lineage.
 
 ## 📑 Table of Contents
 
@@ -106,12 +106,12 @@ Or via Make:
 make deploy-adf FACTORY_NAME=csadlzdevdf RESOURCE_GROUP=rg-csadlz-dev
 ```
 
-> [!IMPORTANT]
-> **Deployment order** (handled automatically):
-> 1. Linked Services (connections to ADLS, Databricks, Key Vault)
-> 2. Datasets (parameterized data shapes)
-> 3. Pipelines (orchestration logic)
-> 4. Triggers (schedules — started automatically after creation)
+!!! important
+    **Deployment order** (handled automatically):
+    1. Linked Services (connections to ADLS, Databricks, Key Vault)
+    2. Datasets (parameterized data shapes)
+    3. Pipelines (orchestration logic)
+    4. Triggers (schedules — started automatically after creation)
 
 ### Manual deployment (Azure Portal)
 

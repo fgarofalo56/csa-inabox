@@ -4,15 +4,15 @@
 
 > **Last Updated:** 2026-04-20 | **Last Drilled:** _not yet drilled — see Drill Log below_ | **Status:** Active | **Audience:** Security, Platform Engineering, Executive On-Call
 
-> [!NOTE]
-> **Quick Summary**: Emergency administrative access procedure for CSA-in-a-Box — when the primary identity / PIM / normal RBAC path is unavailable (locked-out tenant admin, region outage, active security incident requiring overriding PIM). Covers activation preconditions, the two-person control requirement, PIM / Privileged Access activation, audit trail, deactivation, and mandatory post-incident review.
+!!! note
+    **Quick Summary**: Emergency administrative access procedure for CSA-in-a-Box — when the primary identity / PIM / normal RBAC path is unavailable (locked-out tenant admin, region outage, active security incident requiring overriding PIM). Covers activation preconditions, the two-person control requirement, PIM / Privileged Access activation, audit trail, deactivation, and mandatory post-incident review.
 
-> [!CAUTION]
-> **This is not a regular administrative tool.** Break-glass accounts
-> exist so that a genuine emergency does not become a platform outage.
-> Every activation produces audit evidence reviewable by Security
-> within one business day. Unauthorized or unnecessary use is a policy
-> violation regardless of intent.
+!!! danger
+    **This is not a regular administrative tool.** Break-glass accounts
+    exist so that a genuine emergency does not become a platform outage.
+    Every activation produces audit evidence reviewable by Security
+    within one business day. Unauthorized or unnecessary use is a policy
+    violation regardless of intent.
 
 ## Before First Use — Customization Checklist
 
@@ -153,9 +153,9 @@ Use break-glass only for:
 
 ## 🔚 6. Deactivation Steps
 
-> [!IMPORTANT]
-> Deactivation is not optional. A break-glass account left active is
-> a critical finding in every ATO audit.
+!!! important
+    Deactivation is not optional. A break-glass account left active is
+    a critical finding in every ATO audit.
 
 1. **Sign out** from every browser session.
 2. **Rotate the break-glass account's password** via a privileged
@@ -207,10 +207,10 @@ AzureActivity
 | order by TimeGenerated desc
 ```
 
-> [!TIP]
-> Wire the first query into a Sentinel analytic rule that pages
-> Security **on every sign-in**. A break-glass sign-in is always
-> noteworthy, even during a declared incident.
+!!! tip
+    Wire the first query into a Sentinel analytic rule that pages
+    Security **on every sign-in**. A break-glass sign-in is always
+    noteworthy, even during a declared incident.
 
 ---
 
@@ -236,8 +236,8 @@ business days:
 
 ## 📎 9. Contact Information
 
-> [!WARNING]
-> **Action Required:** Populate these before first production use.
+!!! warning
+    **Action Required:** Populate these before first production use.
 
 | Role              | Contact                                       | Phone                        | Escalation                    |
 | ----------------- | --------------------------------------------- | ---------------------------- | ----------------------------- |

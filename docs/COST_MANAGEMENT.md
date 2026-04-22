@@ -4,8 +4,8 @@
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** FinOps / Administrators
 
-> [!NOTE]
-> **Quick Summary**: FinOps practices for CSA-in-a-Box covering cost estimation (Bicep + Terraform paths), budget guardrails per environment, CI/CD cost comments, required tagging strategy, optimization tips (reserved instances, auto-pause, storage tiering, right-sizing), and a FinOps maturity roadmap (Crawl → Walk → Run).
+!!! note
+    **Quick Summary**: FinOps practices for CSA-in-a-Box covering cost estimation (Bicep + Terraform paths), budget guardrails per environment, CI/CD cost comments, required tagging strategy, optimization tips (reserved instances, auto-pause, storage tiering, right-sizing), and a FinOps maturity roadmap (Crawl → Walk → Run).
 
 This document covers cost estimation, budget guardrails, and FinOps practices for the CSA-in-a-Box platform.
 
@@ -59,17 +59,17 @@ The primary deployment path uses Azure Bicep templates under `deploy/bicep/`. Be
 
 **Script:** `scripts/deploy/estimate-costs.sh`
 
-> [!IMPORTANT]
-> Bicep estimates are best-effort. The Azure Retail Prices API returns list prices — actual costs depend on EA/CSP agreements, reserved instances, and consumption-based meters.
+!!! important
+    Bicep estimates are best-effort. The Azure Retail Prices API returns list prices — actual costs depend on EA/CSP agreements, reserved instances, and consumption-based meters.
 
 ### Terraform Path (Roadmap — not implemented)
 
-> [!WARNING]
-> A parallel Terraform deployment is **on the roadmap**, not available today
-> (CSA-0015 / audit approval queue item AQ-0024). `deploy/terraform/` does
-> not exist in the repository. The `.infracost/terraform.yml` configuration
-> is a scaffold that will activate once Terraform modules ship. Until then,
-> use the Bicep path (above) for all cost analyses.
+!!! warning
+    A parallel Terraform deployment is **on the roadmap**, not available today
+    (CSA-0015 / audit approval queue item AQ-0024). `deploy/terraform/` does
+    not exist in the repository. The `.infracost/terraform.yml` configuration
+    is a scaffold that will activate once Terraform modules ship. Until then,
+    use the Bicep path (above) for all cost analyses.
 
 ---
 

@@ -4,15 +4,15 @@
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** DevOps Engineers
 
-> [!NOTE]
-> **Quick Summary**: Deploy a highly available, auto-scaling Self-Hosted Integration Runtime on Windows Server VMSS — bridges on-premises and private network data sources to Azure Data Factory via HTTPS/443 with internal load balancing, system-managed identity, auto-scale 1–10 nodes, and full monitoring/security/DR operations runbook.
+!!! note
+    **Quick Summary**: Deploy a highly available, auto-scaling Self-Hosted Integration Runtime on Windows Server VMSS — bridges on-premises and private network data sources to Azure Data Factory via HTTPS/443 with internal load balancing, system-managed identity, auto-scale 1–10 nodes, and full monitoring/security/DR operations runbook.
 
 The Self-Hosted Integration Runtime (SHIR) module enables CSA-in-a-Box to securely connect to on-premises and private network data sources from Azure Data Factory. This module deploys a highly available, auto-scaling Windows Server infrastructure that bridges your private networks with Azure's cloud analytics services.
 
-> [!IMPORTANT]
-> **Module Location:** `deploy/bicep/DLZ/modules/vms/selfHostedIntegrationRuntime.bicep`
-> **Status:** Available but commented out in `deploy/bicep/DLZ/main.bicep`
-> **Prerequisites:** Requires `installSHIRGateway.ps1` script and ADF Integration Runtime auth key
+!!! important
+    **Module Location:** `deploy/bicep/DLZ/modules/vms/selfHostedIntegrationRuntime.bicep`
+    **Status:** Available but commented out in `deploy/bicep/DLZ/main.bicep`
+    **Prerequisites:** Requires `installSHIRGateway.ps1` script and ADF Integration Runtime auth key
 
 ## 📑 Table of Contents
 
@@ -1034,8 +1034,8 @@ SELECT MAX(LastModified) FROM SyncMetadata WHERE Status = 'Success'
 
 ### Emergency Procedures
 
-> [!CAUTION]
-> **Complete SHIR outage response** — follow these steps in order, escalating if unresolved within the stated timeframe.
+!!! danger
+    **Complete SHIR outage response** — follow these steps in order, escalating if unresolved within the stated timeframe.
 
 - [ ] **Immediate assessment (0-15 minutes):**
   - Check ADF pipeline status and failure patterns

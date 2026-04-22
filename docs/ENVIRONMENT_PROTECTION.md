@@ -4,8 +4,8 @@
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Security / Compliance
 
-> [!NOTE]
-> **Quick Summary**: Setup procedure for GitHub Environment protection rules across dev/test/prod — required reviewers, branch restrictions, wait timers, environment secrets, and branch protection for `main`. Run through every step before the first production deploy.
+!!! note
+    **Quick Summary**: Setup procedure for GitHub Environment protection rules across dev/test/prod — required reviewers, branch restrictions, wait timers, environment secrets, and branch protection for `main`. Run through every step before the first production deploy.
 
 ## 📑 Table of Contents
 
@@ -27,9 +27,9 @@ restrictions, wait timers) have to be configured in the GitHub UI,
 because the GitHub API for environment creation is scoped to
 repository admins and cannot be checked into the repo.
 
-> [!IMPORTANT]
-> This document is the authoritative setup procedure for the environments.
-> **Run through every step before the first production deploy.**
+!!! important
+    This document is the authoritative setup procedure for the environments.
+    **Run through every step before the first production deploy.**
 
 ---
 

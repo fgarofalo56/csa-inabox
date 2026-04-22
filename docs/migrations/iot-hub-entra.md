@@ -4,11 +4,11 @@
 > **Finding:** CSA-0025 (HIGH, BREAKING) | **Ballot:** AQ-0014 (approved)
 > **Applies to:** `examples/iot-streaming/deploy/bicep/iot-hub.bicep`
 
-> [!IMPORTANT]
-> **This is a breaking change.** Devices using SAS-key authentication (symmetric
-> keys, iothubowner, or any SAS connection string) will stop authenticating after
-> this template is redeployed. All device fleets must complete the migration
-> before the redeploy window.
+!!! important
+    **This is a breaking change.** Devices using SAS-key authentication (symmetric
+    keys, iothubowner, or any SAS connection string) will stop authenticating after
+    this template is redeployed. All device fleets must complete the migration
+    before the redeploy window.
 
 ---
 
@@ -202,10 +202,10 @@ az iot hub show -g "$RG" -n "$IOT_HUB" \
 
 ## Rollback (Not Recommended — Exits FedRAMP Path)
 
-> [!WARNING]
-> Rolling back to SAS takes the deployment off the FedRAMP High / IL5
-> compliance path. Do not perform this in regulated or government
-> environments. Document the exception per your SSP.
+!!! warning
+    Rolling back to SAS takes the deployment off the FedRAMP High / IL5
+    compliance path. Do not perform this in regulated or government
+    environments. Document the exception per your SSP.
 
 If a workshop or legacy-device emergency absolutely requires SAS:
 

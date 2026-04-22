@@ -4,8 +4,8 @@
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers
 
-> [!NOTE]
-> **Quick Summary**: Structured JSON logging schema for all CSA-in-a-Box Python services via structlog — baseline fields (service, timestamp, level, event, trace_id, correlation_id), per-trigger binding conventions (HTTP, Blob, Event Hub, Timer, CLI), and KQL queries for Log Analytics parsing.
+!!! note
+    **Quick Summary**: Structured JSON logging schema for all CSA-in-a-Box Python services via structlog — baseline fields (service, timestamp, level, event, trace_id, correlation_id), per-trigger binding conventions (HTTP, Blob, Event Hub, Timer, CLI), and KQL queries for Log Analytics parsing.
 
 All Python services in CSA-in-a-Box emit structured JSON log lines via
 `governance.common.logging` (which wraps [structlog](https://www.structlog.org)).
@@ -56,9 +56,9 @@ Any additional key/value pairs come from the caller (via `logger.info("event", f
 | `csa-ai-enrichment` | `csa_platform/functions/aiEnrichment/functions/function_app.py` | `request.received`, `request.invalid_json`, `request.missing_field`, `request.payload_too_large`, `request.completed`, `blob.received`, `blob.unsupported_type`, `blob.completed`, `enrichment.text_failed`, `enrichment.document_failed`, `ai_client.import_failed` |
 | `csa-event-processing` | `csa_platform/functions/eventProcessing/functions/function_app.py` | `batch.received`, `batch.completed`, `event.invalid_json`, `event.processing_failed`, `replay.request_received`, `replay.invalid_json`, `replay.empty_payload`, `replay.completed`, `heartbeat`, `timer.past_due` |
 
-> [!IMPORTANT]
-> When a service adds a new event, add it here so operators have a single
-> index of what can appear in the log stream.
+!!! important
+    When a service adds a new event, add it here so operators have a single
+    index of what can appear in the log stream.
 
 ---
 
