@@ -781,7 +781,7 @@ class PipelineGenerator:
 
             samples: list[dict[str, Any]] = []
 
-            def on_event(_partition_context, event):
+            def on_event(_partition_context: Any, event: Any) -> None:
                 if event and len(samples) < sample_count:
                     try:
                         body = event.body_as_json()
