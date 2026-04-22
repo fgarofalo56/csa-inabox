@@ -13,7 +13,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import yaml
 from jsonschema import ValidationError, validate  # type: ignore[import-untyped]
@@ -565,7 +565,7 @@ class PipelineGenerator:
     # variable ``ALLOWED_DATA_DIRS`` (comma-separated list of absolute paths).
     # When empty, *only* relative paths that stay within the current working
     # directory are permitted.
-    ALLOWED_DATA_DIRS: list[Path] = []
+    ALLOWED_DATA_DIRS: ClassVar[list[Path]] = []
 
     def _validate_file_path(self, file_path: str) -> Path:
         """Validate a file path to prevent path-traversal attacks.
