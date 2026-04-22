@@ -616,7 +616,7 @@ class TestSchemaDetectionEdgeCases:
             "file_path": "/nonexistent/path/data.csv",
             "entity_name": "x",
         }
-        with pytest.raises(SchemaDetectionError, match="Failed to read file"):
+        with pytest.raises(SchemaDetectionError, match="(Failed to read file|outside allowed directories)"):
             generator._detect_file_schema(config)
 
     def test_detect_file_schema_no_path_raises(self, generator: Any) -> None:

@@ -287,7 +287,7 @@ def _load_checkpoint_configs(
         try:
             raw: dict[str, Any] = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         except Exception:
-            logger.warning("ge.checkpoint_load_failed", path=str(path))
+            logger.warning("ge.checkpoint_load_failed", path=str(path), exc_info=True)
             continue
 
         for validation in raw.get("validations", []):

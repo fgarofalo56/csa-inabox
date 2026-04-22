@@ -258,7 +258,7 @@ async def list_sources(
     domain: str | None = None,
     status_filter: SourceStatus | None = Query(None, alias="status"),
     source_type: SourceType | None = None,
-    search: str | None = None,
+    search: str | None = Query(None, max_length=256),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     scope: DomainScope = Depends(get_domain_scope),

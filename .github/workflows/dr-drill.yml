@@ -33,6 +33,7 @@ permissions:
 jobs:
   pre-flight:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     outputs:
       environment: ${{ steps.resolve.outputs.environment }}
       scenarios: ${{ steps.resolve.outputs.scenarios }}
@@ -52,6 +53,7 @@ jobs:
     needs: pre-flight
     if: contains(needs.pre-flight.outputs.scenarios, 'all') || contains(needs.pre-flight.outputs.scenarios, 'cosmos-failover')
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     environment: ${{ needs.pre-flight.outputs.environment }}
     steps:
       - uses: actions/checkout@v4
@@ -72,6 +74,7 @@ jobs:
     needs: pre-flight
     if: contains(needs.pre-flight.outputs.scenarios, 'all') || contains(needs.pre-flight.outputs.scenarios, 'storage-failover')
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     environment: ${{ needs.pre-flight.outputs.environment }}
     steps:
       - uses: actions/checkout@v4
@@ -89,6 +92,7 @@ jobs:
     needs: pre-flight
     if: contains(needs.pre-flight.outputs.scenarios, 'all') || contains(needs.pre-flight.outputs.scenarios, 'keyvault-restore')
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     environment: ${{ needs.pre-flight.outputs.environment }}
     steps:
       - uses: actions/checkout@v4
@@ -104,6 +108,7 @@ jobs:
     needs: pre-flight
     if: contains(needs.pre-flight.outputs.scenarios, 'all') || contains(needs.pre-flight.outputs.scenarios, 'bicep-rollback')
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     environment: ${{ needs.pre-flight.outputs.environment }}
     steps:
       - uses: actions/checkout@v4
@@ -119,6 +124,7 @@ jobs:
     needs: [pre-flight, cosmos-failover, storage-failover, keyvault-restore, bicep-rollback]
     if: always()
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - name: Aggregate drill results
         run: |

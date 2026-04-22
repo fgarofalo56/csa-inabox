@@ -15,6 +15,7 @@ jobs:
   validate-generators:
     name: Validate Generators
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       matrix:
         python-version: ['3.11', '3.12']

@@ -47,6 +47,7 @@ jobs:
   build-backend:
     name: Build Backend Image
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     outputs:
       image: ${{ steps.meta.outputs.tags }}
     steps:
@@ -80,6 +81,7 @@ jobs:
   build-frontend:
     name: Build Frontend Image
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     outputs:
       image: ${{ steps.meta.outputs.tags }}
     steps:
@@ -115,6 +117,7 @@ jobs:
   deploy-container-apps:
     name: Deploy to Container Apps
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: [build-backend, build-frontend]
     if: github.event.inputs.target == 'container-apps'
     environment: ${{ github.event.inputs.environment }}
@@ -147,6 +150,7 @@ jobs:
   deploy-aks:
     name: Deploy to AKS
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: [build-backend, build-frontend]
     if: github.event.inputs.target == 'aks'
     environment: ${{ github.event.inputs.environment }}

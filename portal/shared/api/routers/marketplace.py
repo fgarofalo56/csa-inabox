@@ -206,7 +206,7 @@ async def seed_demo_products() -> None:
 )
 async def list_products(
     domain: str | None = None,
-    search: str | None = None,
+    search: str | None = Query(None, max_length=256),
     min_quality: float | None = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
