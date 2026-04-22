@@ -1,4 +1,3 @@
-from typing import Any
 """Tests for the data sharing agreement enforcer.
 
 Tests SharingEnforcer: YAML agreement loading, request validation
@@ -12,6 +11,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from textwrap import dedent
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Bootstrap: add source dir to path
