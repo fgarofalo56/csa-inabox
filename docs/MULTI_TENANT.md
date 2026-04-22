@@ -4,8 +4,8 @@
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Platform Engineers
 
-> [!NOTE]
-> **Quick Summary**: Stamped multi-tenant deployment model for CSA-in-a-Box — resource naming conventions, three data isolation strategies (physical, logical, hybrid), tenant onboarding/offboarding procedures, cost attribution via tags, per-tenant IAM and monitoring, dbt multi-tenant configuration, and decommission runbook.
+!!! note
+    **Quick Summary**: Stamped multi-tenant deployment model for CSA-in-a-Box — resource naming conventions, three data isolation strategies (physical, logical, hybrid), tenant onboarding/offboarding procedures, cost attribution via tags, per-tenant IAM and monitoring, dbt multi-tenant configuration, and decommission runbook.
 
 This guide covers deploying CSA-in-a-Box in a multi-tenant configuration
 where each tenant (customer, business unit, or organizational boundary)
@@ -13,10 +13,10 @@ receives an isolated set of data platform resources. It pairs with the
 standard deployment procedure in [GETTING_STARTED.md](GETTING_STARTED.md)
 and the disaster recovery runbook in [DR.md](DR.md).
 
-> [!IMPORTANT]
-> **Scope:** the CSA-in-a-Box Data Landing Zone (DLZ). The Management,
-> Connectivity, and DMLZ landing zones are shared infrastructure and are
-> deployed once regardless of tenant count.
+!!! important
+    **Scope:** the CSA-in-a-Box Data Landing Zone (DLZ). The Management,
+    Connectivity, and DMLZ landing zones are shared infrastructure and are
+    deployed once regardless of tenant count.
 
 ## 📑 Table of Contents
 
@@ -120,13 +120,13 @@ propagates through all resource group and resource names automatically.
 
 ### Naming constraints
 
-> [!WARNING]
-> - **Storage accounts**: max 24 characters, lowercase alphanumeric only.
->   The Bicep module truncates and sanitizes names automatically.
-> - **Cosmos DB accounts**: max 44 characters, lowercase alphanumeric and
->   hyphens only.
-> - **ADX clusters**: max 22 characters, lowercase alphanumeric only.
->   Keep tenant prefixes short.
+!!! warning
+    - **Storage accounts**: max 24 characters, lowercase alphanumeric only.
+      The Bicep module truncates and sanitizes names automatically.
+    - **Cosmos DB accounts**: max 44 characters, lowercase alphanumeric and
+      hyphens only.
+    - **ADX clusters**: max 22 characters, lowercase alphanumeric only.
+      Keep tenant prefixes short.
 
 ---
 
@@ -509,11 +509,11 @@ git commit -m "chore: decommission tenant contoso"
 
 ### 9.3 Data Retention
 
-> [!WARNING]
-> After decommission, Cosmos DB data is retained for the soft-delete
-> period (90 days with purge protection). Storage account data is
-> available for 30 days via soft-delete. After these windows expire,
-> data is irrecoverable.
+!!! warning
+    After decommission, Cosmos DB data is retained for the soft-delete
+    period (90 days with purge protection). Storage account data is
+    available for 30 days via soft-delete. After these windows expire,
+    data is irrecoverable.
 
 For regulated workloads, export data to a long-term archive storage
 account before decommissioning the tenant stamp.

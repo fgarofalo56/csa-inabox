@@ -4,8 +4,8 @@
 
 > **Last Updated:** 2026-04-15 | **Status:** Reference | **Audience:** Architects / Leadership
 
-> [!NOTE]
-> **Quick Summary**: Deep research report for building a complete Cloud-Scale Analytics / Data Mesh / Data Fabric platform in Azure as an open-source alternative to Microsoft Fabric — covers CSA architecture (DMLZ + DLZ + Medallion), Data Mesh domain ownership, Data Fabric metadata layer, component mapping from Fabric to Azure PaaS, 50+ required Azure services, 4-subscription deployment strategy with VNet address spaces and RBAC, Well-Architected best practices, zero-trust networking, data classification, FinOps, DR/BCDR, and IaC reference templates.
+!!! note
+    **Quick Summary**: Deep research report for building a complete Cloud-Scale Analytics / Data Mesh / Data Fabric platform in Azure as an open-source alternative to Microsoft Fabric — covers CSA architecture (DMLZ + DLZ + Medallion), Data Mesh domain ownership, Data Fabric metadata layer, component mapping from Fabric to Azure PaaS, 50+ required Azure services, 4-subscription deployment strategy with VNet address spaces and RBAC, Well-Architected best practices, zero-trust networking, data classification, FinOps, DR/BCDR, and IaC reference templates.
 
 **Date:** 2026-04-09
 **Purpose:** Deep research for building a complete Cloud-Scale Analytics / Data Mesh / Data Fabric platform in Azure as an open-source alternative to Microsoft Fabric.
@@ -67,8 +67,8 @@
 
 Microsoft's Cloud-Scale Analytics (CSA) was the reference architecture for building enterprise data platforms on Azure. It was part of the Cloud Adoption Framework (CAF) and provided prescriptive guidance for data landing zones, governance, and scalable analytics.
 
-> [!WARNING]
-> As of early 2026, Microsoft has **deprecated** the Cloud-Scale Analytics scenario. The deprecation notice states: *"The Cloud-Scale Analytics scenario has been deprecated and is no longer maintained or supported. To ensure only the best guidance is surfaced, this guidance will be deleted April 2026."* Microsoft redirects to their new **"Unify your data platform"** guidance at `https://aka.ms/cafdata`.
+!!! warning
+    As of early 2026, Microsoft has **deprecated** the Cloud-Scale Analytics scenario. The deprecation notice states: *"The Cloud-Scale Analytics scenario has been deprecated and is no longer maintained or supported. To ensure only the best guidance is surfaced, this guidance will be deleted April 2026."* Microsoft redirects to their new **"Unify your data platform"** guidance at `https://aka.ms/cafdata`.
 
 **What this means for csa-inabox:** The CSA architecture remains the best-documented and most comprehensive open reference for building a modular, enterprise-grade data platform on Azure. While Microsoft is consolidating guidance (likely pushing toward Fabric), the architectural patterns, landing zone structure, and IaC templates remain valid and are exactly what we need. Our project preserves and extends these patterns with open-source tooling.
 
@@ -93,8 +93,8 @@ A **separate Azure subscription** that provides centralized governance for the e
 | Networking | VNet, DNS, Peering | Hub connectivity to all data landing zones |
 | Security | Key Vault, Defender | Centralized secrets and threat protection |
 
-> [!IMPORTANT]
-> The DMLZ must be deployed as a separate subscription under a management group with appropriate governance policies. It connects to data landing zones via VNet peering and to the connectivity subscription.
+!!! important
+    The DMLZ must be deployed as a separate subscription under a management group with appropriate governance policies. It connects to data landing zones via VNet peering and to the connectivity subscription.
 
 #### Data Landing Zone (DLZ)
 Each DLZ is a **separate Azure subscription** that hosts analytics workloads for a specific domain or business unit:
@@ -354,8 +354,8 @@ Implementation approach:
 | **Cost** | Included with Azure (consumption model) | Included with Databricks Premium |
 | **Recommendation** | Use as enterprise-wide catalog | Use in addition to Purview for Databricks-specific governance |
 
-> [!NOTE]
-> **Best Practice:** Use **both** together. Purview provides the enterprise-wide catalog, classification, and cross-platform lineage. Unity Catalog provides fine-grained access control, auditing, and lineage within the Databricks ecosystem. They are complementary, not competing.
+!!! note
+    **Best Practice:** Use **both** together. Purview provides the enterprise-wide catalog, classification, and cross-platform lineage. Unity Catalog provides fine-grained access control, auditing, and lineage within the Databricks ecosystem. They are complementary, not competing.
 
 ---
 

@@ -4,8 +4,8 @@
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers
 
-> [!NOTE]
-> **Quick Summary**: Setting up and operating Databricks within CSA-in-a-Box — workspace configuration, cluster sizing (dev vs prod), notebook orchestration (3 patterns), dbt integration with Unity Catalog, and troubleshooting common issues.
+!!! note
+    **Quick Summary**: Setting up and operating Databricks within CSA-in-a-Box — workspace configuration, cluster sizing (dev vs prod), notebook orchestration (3 patterns), dbt integration with Unity Catalog, and troubleshooting common issues.
 
 This guide covers setting up and operating Databricks within the
 CSA-in-a-Box platform, including workspace configuration, notebook
@@ -86,9 +86,9 @@ spark.openlineage.namespace csa-inabox-databricks
 spark.extraListeners io.openlineage.spark.agent.OpenLineageSparkListener
 ```
 
-> [!IMPORTANT]
-> Replace `<STORAGE>` with your ADLS account name and `<PURVIEW_ACCOUNT>`
-> with your Purview account name.
+!!! important
+    Replace `<STORAGE>` with your ADLS account name and `<PURVIEW_ACCOUNT>`
+    with your Purview account name.
 
 ---
 

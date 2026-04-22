@@ -4,8 +4,8 @@
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** New Users
 
-> [!NOTE]
-> **Quick Summary**: Get a working Cloud-Scale Analytics platform deployed and flowing data in 60-90 minutes — deploy infrastructure (ALZ → DMLZ → DLZ), load seed data, run the dbt medallion pipeline across 4 domains, set up streaming, bootstrap Purview, deploy the portal, and try vertical examples (USDA, Gov).
+!!! note
+    **Quick Summary**: Get a working Cloud-Scale Analytics platform deployed and flowing data in 60-90 minutes — deploy infrastructure (ALZ → DMLZ → DLZ), load seed data, run the dbt medallion pipeline across 4 domains, set up streaming, bootstrap Purview, deploy the portal, and try vertical examples (USDA, Gov).
 
 Get a working Cloud-Scale Analytics platform deployed and flowing data in
 about 60-90 minutes (assuming all prerequisites are met).
@@ -466,12 +466,12 @@ func azure functionapp publish <your-function-app-name> --python
 
 ### Step B: Deploy the Data Marketplace
 
-> [!IMPORTANT]
-> **CSA-0067 / CSA-0131:** The legacy reference marketplace under
-> `csa_platform/data_marketplace/` is **deprecated** and does not ship
-> an `--init` CLI. Use the actively-served marketplace at
-> `portal.shared.api.routers.marketplace` instead — it seeds demo
-> products automatically when `ENVIRONMENT=local` or `DEMO_MODE=true`.
+!!! important
+    **CSA-0067 / CSA-0131:** The legacy reference marketplace under
+    `csa_platform/data_marketplace/` is **deprecated** and does not ship
+    an `--init` CLI. Use the actively-served marketplace at
+    `portal.shared.api.routers.marketplace` instead — it seeds demo
+    products automatically when `ENVIRONMENT=local` or `DEMO_MODE=true`.
 
 ```bash
 # (Option A, recommended) Start the portal — seed data loads on startup.
@@ -555,18 +555,18 @@ az storage account show \
 
 ### Government-Specific Notes
 
-> [!NOTE]
-> - All services use `.us` / `.usgovcloudapi.net` endpoints
-> - Compliance tags are auto-applied: FedRAMP High, FISMA, NIST 800-53 Rev5
-> - Microsoft Fabric is forecast, not GA, in Azure Government — this repo provides Fabric-parity capabilities on Azure PaaS services that ARE available in Gov today
-> - See [GOV_SERVICE_MATRIX.md](GOV_SERVICE_MATRIX.md) for service availability
+!!! note
+    - All services use `.us` / `.usgovcloudapi.net` endpoints
+    - Compliance tags are auto-applied: FedRAMP High, FISMA, NIST 800-53 Rev5
+    - Microsoft Fabric is forecast, not GA, in Azure Government — this repo provides Fabric-parity capabilities on Azure PaaS services that ARE available in Gov today
+    - See [GOV_SERVICE_MATRIX.md](GOV_SERVICE_MATRIX.md) for service availability
 
 ---
 
 ## 🧹 Teardown
 
-> [!WARNING]
-> **Cost-safety.** CSA-in-a-Box provisions Synapse, Databricks, ADX, Event Hub, and other billable services. A forgotten demo environment can accrue **$1,000+/day**. Always tear down when you are done.
+!!! warning
+    **Cost-safety.** CSA-in-a-Box provisions Synapse, Databricks, ADX, Event Hub, and other billable services. A forgotten demo environment can accrue **$1,000+/day**. Always tear down when you are done.
 
 Every deployable surface ships with a teardown script that:
 

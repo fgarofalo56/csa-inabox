@@ -4,8 +4,8 @@
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Platform Engineers
 
-> [!NOTE]
-> **Quick Summary**: Active-active multi-region deployment for CSA-in-a-Box — service capability matrix (native replication vs stamp-per-region), data replication patterns (RA-GZRS, Cosmos multi-master, Event Hubs Geo-DR), failover procedures, RPO/RTO targets, step-by-step deployment, chaos testing, monitoring, and cost implications (+40-80% overhead).
+!!! note
+    **Quick Summary**: Active-active multi-region deployment for CSA-in-a-Box — service capability matrix (native replication vs stamp-per-region), data replication patterns (RA-GZRS, Cosmos multi-master, Event Hubs Geo-DR), failover procedures, RPO/RTO targets, step-by-step deployment, chaos testing, monitoring, and cost implications (+40-80% overhead).
 
 This guide covers deploying CSA-in-a-Box in an active-active
 multi-region configuration for high availability and disaster recovery.
@@ -13,11 +13,11 @@ It extends the standard deployment in
 [GETTING_STARTED.md](GETTING_STARTED.md) and pairs with the DR runbook
 in [DR.md](DR.md) which documents the operational failover procedures.
 
-> [!IMPORTANT]
-> **Scope:** the CSA-in-a-Box Data Landing Zone (DLZ) and its dependent
-> services. The Management and Connectivity landing zones have their own
-> multi-region considerations (Azure Policy replication, hub VNet per
-> region) that are out of scope here.
+!!! important
+    **Scope:** the CSA-in-a-Box Data Landing Zone (DLZ) and its dependent
+    services. The Management and Connectivity landing zones have their own
+    multi-region considerations (Azure Policy replication, hub VNet per
+    region) that are out of scope here.
 
 ## 📑 Table of Contents
 
@@ -194,12 +194,12 @@ dbt run --target prod_eastus2
 dbt run --target prod_westus2
 ```
 
-> [!NOTE]
-> Since the source data (Storage RA-GZRS) is eventually consistent
-> across regions, model outputs may differ slightly during replication
-> lag. For critical aggregations, run dbt in the primary region first
-> and let replication propagate the source data before running in the
-> secondary.
+!!! note
+    Since the source data (Storage RA-GZRS) is eventually consistent
+    across regions, model outputs may differ slightly during replication
+    lag. For critical aggregations, run dbt in the primary region first
+    and let replication propagate the source data before running in the
+    secondary.
 
 ### 3.4 Event Hubs: Geo-DR Namespace Pairing
 
@@ -218,13 +218,13 @@ az eventhubs georecovery-alias create \
   --partner-namespace "/subscriptions/<SUB_ID>/resourceGroups/rg-dlz-prod-eventhubs-westus2/providers/Microsoft.EventHub/namespaces/dlz-prod-ehns-westus2"
 ```
 
-> [!WARNING]
-> - Messages in-flight during failover may be lost. Design consumers for
->   at-least-once processing with idempotent writes.
-> - After failover, the secondary becomes the new primary. The old primary
->   must be re-paired as the secondary.
-> - Consumer offsets are not replicated — consumers restart from the latest
->   checkpoint or the beginning of the retention window.
+!!! warning
+    - Messages in-flight during failover may be lost. Design consumers for
+      at-least-once processing with idempotent writes.
+    - After failover, the secondary becomes the new primary. The old primary
+      must be re-paired as the secondary.
+    - Consumer offsets are not replicated — consumers restart from the latest
+      checkpoint or the beginning of the retention window.
 
 ---
 

@@ -4,28 +4,28 @@
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Security / Compliance
 
-> [!NOTE]
-> **Quick Summary**: Comprehensive matrix of Azure service availability across Commercial vs Government regions (FedRAMP High, IL4, IL5, IL6), including endpoint URL differences, API version caveats, Bicep configuration for Gov, compliance requirements by vertical, and open-source alternatives for Government gaps.
+!!! note
+    **Quick Summary**: Comprehensive matrix of Azure service availability across Commercial vs Government regions (FedRAMP High, IL4, IL5, IL6), including endpoint URL differences, API version caveats, Bicep configuration for Gov, compliance requirements by vertical, and open-source alternatives for Government gaps.
 
-> [!IMPORTANT]
-> **Impact Level 6 (Classified / SIPR) — CSA-0086.** IL6 workloads run on
-> **Azure Government Secret** — a separate physically-isolated cloud with
-> its own Authority to Operate. It is **not** reachable from Azure
-> Government (IL4/IL5) and **none** of the Bicep, dbt, or portal
-> deployments in this repo have been authorized for IL6. DoD SIPR/TS
-> customers should treat this matrix as IL4/IL5-scoped and engage their
-> sponsor for the Azure Government Secret onboarding process. The
-> column below therefore reads `N/A — Azure Government Secret
-> (separate ATO)` uniformly. Honesty over silence.
+!!! important
+    **Impact Level 6 (Classified / SIPR) — CSA-0086.** IL6 workloads run on
+    **Azure Government Secret** — a separate physically-isolated cloud with
+    its own Authority to Operate. It is **not** reachable from Azure
+    Government (IL4/IL5) and **none** of the Bicep, dbt, or portal
+    deployments in this repo have been authorized for IL6. DoD SIPR/TS
+    customers should treat this matrix as IL4/IL5-scoped and engage their
+    sponsor for the Azure Government Secret onboarding process. The
+    column below therefore reads `N/A — Azure Government Secret
+    (separate ATO)` uniformly. Honesty over silence.
 
 This document tracks the availability of every Azure service used by CSA-in-a-Box
 across Azure Commercial and Azure Government regions, including FedRAMP
 authorization levels and impact level (IL) support.
 
-> [!IMPORTANT]
-> **Last verified:** April 2026. Check
-> [Azure Government Services by Region](https://azure.microsoft.com/en-us/explore/global-infrastructure/government/by-region/)
-> for the latest status.
+!!! important
+    **Last verified:** April 2026. Check
+    [Azure Government Services by Region](https://azure.microsoft.com/en-us/explore/global-infrastructure/government/by-region/)
+    for the latest status.
 
 ## 📑 Table of Contents
 

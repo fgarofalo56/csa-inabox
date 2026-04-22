@@ -4,8 +4,8 @@
 
 > **Last Updated:** 2026-04-20 | **Last Drilled:** _not yet drilled — see Drill Log below_ | **Status:** Active | **Audience:** Operations, Security, Platform Engineering
 
-> [!NOTE]
-> **Quick Summary**: Scheduled + emergency rotation procedures for every credential class in CSA-in-a-Box — Key Vault secrets, Storage account access keys, MSAL / Entra ID token-signing keys, SQL and Cosmos master keys, Databricks PATs, and ADF linked-service credentials. Covers cadence, automation (secret rotation Function), manual steps for each class, and verification queries.
+!!! note
+    **Quick Summary**: Scheduled + emergency rotation procedures for every credential class in CSA-in-a-Box — Key Vault secrets, Storage account access keys, MSAL / Entra ID token-signing keys, SQL and Cosmos master keys, Databricks PATs, and ADF linked-service credentials. Covers cadence, automation (secret rotation Function), manual steps for each class, and verification queries.
 
 ## Before First Use — Customization Checklist
 
@@ -65,10 +65,10 @@ certificate re-enrollment (owned by IT endpoint management).
 | ADF linked-service creds                | 90 days            | Automatic via Key Vault reference (no rotation at ADF layer) |
 | Service principal client secrets        | Migrate to OIDC FedCred | N/A once migrated                          |
 
-> [!IMPORTANT]
-> Scheduled rotations run at 02:00 UTC Sunday in the rotation window
-> defined in `.github/workflows/deploy.yml` environment guards. Any
-> manual rotation during business hours **must** be P2-approved.
+!!! important
+    Scheduled rotations run at 02:00 UTC Sunday in the rotation window
+    defined in `.github/workflows/deploy.yml` environment guards. Any
+    manual rotation during business hours **must** be P2-approved.
 
 ---
 
@@ -142,9 +142,9 @@ no consumer ever sees an invalid key.
    ```
 5. Flip Key Vault back to `key1` on the next scheduled rotation.
 
-> [!TIP]
-> Prefer Microsoft Entra ID / managed-identity RBAC over access keys
-> wherever possible. Every rotation is a chance to retire one more key.
+!!! tip
+    Prefer Microsoft Entra ID / managed-identity RBAC over access keys
+    wherever possible. Every rotation is a chance to retire one more key.
 
 ### 4.4 MSAL / Entra ID token-signing keys
 
@@ -202,9 +202,9 @@ pipeline run after each rotation.
 
 ## 🚨 5. Emergency Rotation (Compromise)
 
-> [!CAUTION]
-> Start here if a key is suspected to be compromised. Do **not** wait
-> for the scheduled rotation window.
+!!! danger
+    Start here if a key is suspected to be compromised. Do **not** wait
+    for the scheduled rotation window.
 
 Run the procedures below in parallel where possible.
 
@@ -267,8 +267,8 @@ For emergency rotations, preserve:
 
 ## 📎 8. Contact Information
 
-> [!WARNING]
-> **Action Required:** Populate these before first production use.
+!!! warning
+    **Action Required:** Populate these before first production use.
 
 | Role                 | Contact                                       | Phone                         | Escalation                   |
 | -------------------- | --------------------------------------------- | ----------------------------- | ---------------------------- |

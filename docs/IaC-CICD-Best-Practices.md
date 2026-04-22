@@ -4,24 +4,24 @@
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** DevOps Engineers
 
-> [!NOTE]
-> **Quick Summary**: Comprehensive guide for deploying a Cloud-Scale Analytics platform across 4 Azure subscriptions using Bicep and GitHub Actions — covers Bicep module organization, `.bicepparam` files, Deployment Stacks, what-if validation, OIDC auth, reusable workflows, matrix deployments, PSRule/Checkov/gitleaks security scanning, ALZ accelerators (AVM migration), progressive ring-based deployments, feature flags, policy-as-code, and a phased implementation plan with tool matrix.
+!!! note
+    **Quick Summary**: Comprehensive guide for deploying a Cloud-Scale Analytics platform across 4 Azure subscriptions using Bicep and GitHub Actions — covers Bicep module organization, `.bicepparam` files, Deployment Stacks, what-if validation, OIDC auth, reusable workflows, matrix deployments, PSRule/Checkov/gitleaks security scanning, ALZ accelerators (AVM migration), progressive ring-based deployments, feature flags, policy-as-code, and a phased implementation plan with tool matrix.
 
 > **Research Report** | April 2026
 > Comprehensive guide for deploying a Cloud-Scale Analytics platform across 4 Azure subscriptions using Bicep and GitHub Actions.
 
-> [!IMPORTANT]
-> This document describes the target-state architecture and recommended improvements. For current CI/CD workflows, see `.github/workflows/`. For current deployment instructions, see [QUICKSTART.md](QUICKSTART.md) or [GETTING_STARTED.md](GETTING_STARTED.md).
+!!! important
+    This document describes the target-state architecture and recommended improvements. For current CI/CD workflows, see `.github/workflows/`. For current deployment instructions, see [QUICKSTART.md](QUICKSTART.md) or [GETTING_STARTED.md](GETTING_STARTED.md).
 
-> [!NOTE]
-> **CAF scenario update (CSA-0068).** The legacy "Cloud-Scale Analytics"
-> CAF scenario was **deprecated in April 2026** and replaced by
-> [Microsoft CAF — Unify your data platform](https://aka.ms/cafdata).
-> Links in this document to
-> `https://learn.microsoft.com/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/...`
-> are preserved for historical cross-reference only. For authoritative
-> 2026 guidance on Fabric, data mesh, and landing zones, follow the
-> "Unify your data platform" link above.
+!!! note
+    **CAF scenario update (CSA-0068).** The legacy "Cloud-Scale Analytics"
+    CAF scenario was **deprecated in April 2026** and replaced by
+    [Microsoft CAF — Unify your data platform](https://aka.ms/cafdata).
+    Links in this document to
+    `https://learn.microsoft.com/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/...`
+    are preserved for historical cross-reference only. For authoritative
+    2026 guidance on Fabric, data mesh, and landing zones, follow the
+    "Unify your data platform" link above.
 
 ## 📑 Table of Contents
 
@@ -267,13 +267,13 @@ az stack sub create \
   --deny-settings-excluded-principals '<deployment-sp-object-id>'
 ```
 
-> [!WARNING]
-> **Known limitations (as of early 2026):**
-> - Maximum 800 deployment stacks per scope
-> - Maximum 2,000 deny assignments per scope
-> - What-if is not yet supported with deployment stacks
-> - Microsoft Graph provider is not supported
-> - Deleting resource groups can bypass deny assignments
+!!! warning
+    **Known limitations (as of early 2026):**
+    - Maximum 800 deployment stacks per scope
+    - Maximum 2,000 deny assignments per scope
+    - What-if is not yet supported with deployment stacks
+    - Microsoft Graph provider is not supported
+    - Deleting resource groups can bypass deny assignments
 
 ### 1.5 What-If Deployments and Validation
 
@@ -333,8 +333,8 @@ module networkResources 'modules/networking.bicep' = {
 }
 ```
 
-> [!IMPORTANT]
-> The deploying identity needs appropriate RBAC on all target subscriptions. For management group scoped deployments, use `targetScope = 'managementGroup'` and deploy to child subscriptions.
+!!! important
+    The deploying identity needs appropriate RBAC on all target subscriptions. For management group scoped deployments, use `targetScope = 'managementGroup'` and deploy to child subscriptions.
 
 ### 1.7 Conditional Deployment Patterns
 
@@ -966,8 +966,8 @@ jobs:
             --parameters "deploy/bicep/orchestration/${{ matrix.zone }}/params.${{ inputs.environment }}.bicepparam"
 ```
 
-> [!NOTE]
-> For true ordered sequential deployment with dependencies, use separate jobs with `needs:` rather than a matrix. Matrices run jobs in parallel (or `max-parallel: 1` but without dependency outputs between runs).
+!!! note
+    For true ordered sequential deployment with dependencies, use separate jobs with `needs:` rather than a matrix. Matrices run jobs in parallel (or `max-parallel: 1` but without dependency outputs between runs).
 
 ---
 
@@ -1183,8 +1183,8 @@ class DataLakeEncryption(BaseResourceCheck):
 
 ### 4.1 ALZ-Bicep vs Azure Verified Modules (AVM)
 
-> [!WARNING]
-> **Critical update: ALZ-Bicep is being deprecated.**
+!!! warning
+    **Critical update: ALZ-Bicep is being deprecated.**
 
 | Aspect | ALZ-Bicep | Azure Verified Modules (AVM) |
 |--------|-----------|------------------------------|

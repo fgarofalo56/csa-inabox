@@ -4,8 +4,8 @@
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Architects
 
-> [!NOTE]
-> **Quick Summary**: Detailed guide to 10 platform services that deliver Fabric-parity capabilities on Azure PaaS — OneLake pattern, Data Activator, Direct Lake, Data Marketplace, Governance Framework, Multi-Synapse *(legacy — see CSA-0139)*, Metadata Framework, AI Integration, Shared Services, and OSS alternatives. Intended for Azure Government (where Fabric is forecast, not GA) and for Commercial workloads that need a composable IaC stack as a stepping stone toward a future Fabric migration.
+!!! note
+    **Quick Summary**: Detailed guide to 10 platform services that deliver Fabric-parity capabilities on Azure PaaS — OneLake pattern, Data Activator, Direct Lake, Data Marketplace, Governance Framework, Multi-Synapse *(legacy — see CSA-0139)*, Metadata Framework, AI Integration, Shared Services, and OSS alternatives. Intended for Azure Government (where Fabric is forecast, not GA) and for Commercial workloads that need a composable IaC stack as a stepping stone toward a future Fabric migration.
 
 Platform services are the Fabric-parity capabilities that extend the base
 landing zones. Each service is independently deployable, has its own README
@@ -165,12 +165,12 @@ products published across the organization.
 - Publishes usage metrics and consumer analytics
 
 **Deploy:**
-> [!IMPORTANT]
-> **CSA-0067 / CSA-0131.** The legacy marketplace under
-> `csa_platform/data_marketplace/` is deprecated. It does not ship a
-> `--init` CLI; the previously documented command never existed. Use
-> the actively-served marketplace in `portal.shared.api.routers.marketplace`
-> instead.
+!!! important
+    **CSA-0067 / CSA-0131.** The legacy marketplace under
+    `csa_platform/data_marketplace/` is deprecated. It does not ship a
+    `--init` CLI; the previously documented command never existed. Use
+    the actively-served marketplace in `portal.shared.api.routers.marketplace`
+    instead.
 
 ```bash
 # Recommended — the portal seeds demo products on startup when

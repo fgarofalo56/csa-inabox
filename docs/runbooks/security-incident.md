@@ -4,8 +4,8 @@
 
 > **Last Updated:** 2026-04-20 | **Last Drilled:** _not yet drilled — see Drill Log below (CSA-0085)_ | **Status:** Active | **Audience:** Operations
 
-> [!NOTE]
-> **Quick Summary**: Step-by-step incident response procedures for CSA-in-a-Box security events, including severity classification (P1-P4), containment steps, investigation KQL queries, common scenarios (exposed keys, token leaks, policy violations, pipeline tampering), evidence preservation, and communication templates.
+!!! note
+    **Quick Summary**: Step-by-step incident response procedures for CSA-in-a-Box security events, including severity classification (P1-P4), containment steps, investigation KQL queries, common scenarios (exposed keys, token leaks, policy violations, pipeline tampering), evidence preservation, and communication templates.
 
 ## ✅ Before First Use — Customization Checklist (CSA-0070)
 
@@ -28,9 +28,9 @@ reflects who customised which fields and when.
 - [ ] Update the **Last Drilled** banner above and the
       [Drill Log](#️-drill-log-csa-0085) after each tabletop / live drill.
 
-> [!WARNING]
-> **Do not remove this section** after first use. New operators need
-> the same onboarding pass on every fork / airgapped deployment.
+!!! warning
+    **Do not remove this section** after first use. New operators need
+    the same onboarding pass on every fork / airgapped deployment.
 
 ## 📑 Table of Contents
 
@@ -89,8 +89,8 @@ SecurityAlert
 
 ### Step 2: Contain
 
-> [!CAUTION]
-> **DO NOT** delete evidence or modify logs.
+!!! danger
+    **DO NOT** delete evidence or modify logs.
 
 - [ ] If active breach: Disable compromised identities immediately
    ```powershell
@@ -194,8 +194,8 @@ AzureActivity
 
 ## 📋 Evidence Preservation Checklist
 
-> [!IMPORTANT]
-> Before any remediation, preserve evidence:
+!!! important
+    Before any remediation, preserve evidence:
 
 - [ ] Screenshot or export of the security alert
 - [ ] Export relevant Log Analytics queries to CSV
@@ -235,10 +235,10 @@ AzureActivity
 
 ## 📎 Contact Information
 
-> [!WARNING]
-> **Action Required:** Update these contacts with your organization's actual
-> personnel before using this runbook in production. File a PR against this
-> table whenever roles change.
+!!! warning
+    **Action Required:** Update these contacts with your organization's actual
+    personnel before using this runbook in production. File a PR against this
+    table whenever roles change.
 
 | Role | Contact | Phone | Escalation |
 |------|---------|-------|------------|
@@ -265,10 +265,10 @@ exercise.
 | Q3 — Jul | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
 | Q4 — Oct | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
 
-> [!TIP]
-> Archive historical drill log tables under a collapsed `<details>`
-> block once a calendar year completes; keep the current year's rows
-> visible.
+!!! tip
+    Archive historical drill log tables under a collapsed `<details>`
+    block once a calendar year completes; keep the current year's rows
+    visible.
 
 ---
 

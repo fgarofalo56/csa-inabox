@@ -4,18 +4,18 @@
 
 > **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Operations
 
-> [!NOTE]
-> **Quick Summary**: Step-by-step rollback procedures for failed CSA-in-a-Box deployments — Bicep landing zone redeployment from git tags, ADF pipeline restore, dbt model full-refresh, Cosmos DB point-in-time restore, and storage account blob/container recovery via soft-delete and versioning.
+!!! note
+    **Quick Summary**: Step-by-step rollback procedures for failed CSA-in-a-Box deployments — Bicep landing zone redeployment from git tags, ADF pipeline restore, dbt model full-refresh, Cosmos DB point-in-time restore, and storage account blob/container recovery via soft-delete and versioning.
 
 This runbook covers how to recover from a failed or bad deployment. It pairs
 with the `Rollback Deployment` GitHub Actions workflow
 (`.github/workflows/rollback.yml`) and the point-in-time restore features
 wired into the Bicep modules.
 
-> [!CAUTION]
-> **Before you start:** rollback is a high-risk, privileged operation. Always
-> run the rollback workflow in `dry_run: true` mode first, read the what-if
-> output, and only flip to a real rollback once the blast radius is clear.
+!!! danger
+    **Before you start:** rollback is a high-risk, privileged operation. Always
+    run the rollback workflow in `dry_run: true` mode first, read the what-if
+    output, and only flip to a real rollback once the blast radius is clear.
 
 ## 📑 Table of Contents
 
@@ -76,13 +76,13 @@ and you want to return the subscription to the previous good state.
 
 ### When a rollback is the wrong tool
 
-> [!WARNING]
-> - **Schema-changing dbt deploys.** Bicep rollback will not undo Delta table
->   schema changes. Use dbt model rollback (section 4) first, *then* Bicep if
->   needed.
-> - **Resource deletions.** If the bad deploy deleted resources, plain Bicep
->   redeploy will not recreate data inside them. Use PITR (section 5) or
->   storage soft-delete (section 6) to restore data first, then redeploy.
+!!! warning
+    - **Schema-changing dbt deploys.** Bicep rollback will not undo Delta table
+      schema changes. Use dbt model rollback (section 4) first, *then* Bicep if
+      needed.
+    - **Resource deletions.** If the bad deploy deleted resources, plain Bicep
+      redeploy will not recreate data inside them. Use PITR (section 5) or
+      storage soft-delete (section 6) to restore data first, then redeploy.
 
 ---
 
@@ -100,10 +100,10 @@ Azure.
    Studio "Import ARM template" or your CI step).
 - [ ] Publish and re-trigger.
 
-> [!NOTE]
-> **Prevention:** Always run the `Bicep What-If` workflow on a PR that
-> touches ADF JSON so what-if rejects structurally invalid pipeline changes
-> before they land.
+!!! note
+    **Prevention:** Always run the `Bicep What-If` workflow on a PR that
+    touches ADF JSON so what-if rejects structurally invalid pipeline changes
+    before they land.
 
 ---
 
@@ -135,9 +135,9 @@ merge/insert.
     python ../../csa_platform/governance/dataquality/run_quality_checks.py --suite all
     ```
 
-> [!IMPORTANT]
-> If the bad deploy added new columns or dropped columns, you may have to
-> drop the affected Delta tables by hand before the full-refresh.
+!!! important
+    If the bad deploy added new columns or dropped columns, you may have to
+    drop the affected Delta tables by hand before the full-refresh.
 
 ---
 
