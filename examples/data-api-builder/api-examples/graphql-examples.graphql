@@ -1,0 +1,139 @@
+# =============================================================================
+# Data API Builder — GraphQL API Examples
+# CSA-in-a-Box | Data Mesh Sharing
+# =============================================================================
+
+# ─── Query: All products with pagination ─────────────────────────────────────
+
+query AllProducts($first: Int = 10, $after: String) {
+  dataProducts(first: $first, after: $after) {
+    items {
+      id
+      name
+      description
+      domain
+      owner_team
+      quality_score
+      status
+      version
+    }
+    hasNextPage
+    endCursor
+  }
+}
+
+# ─── Query: Single product with nested quality metrics ───────────────────────
+
+query ProductWithQuality($id: Int!) {
+  dataProduct_by_pk(id: $id) {
+    id
+    name
+    description
+    domain
+    owner_name
+    owner_team
+    classification
+    quality_score
+    freshness_hours
+    completeness
+    availability
+    status
+    version
+    qualityMetrics {
+      items {
+        date
+        quality_score
+        completeness
+        freshness_hours
+        row_count
+        accuracy
+        consistency
+      }
+    }
+    domain_info {
+      name
+      description
+      owner_team
+      product_count
+    }
+  }
+}
+
+# ─── Query: Products filtered by domain ──────────────────────────────────────
+
+query ProductsByDomain($domain: String!) {
+  dataProducts(filter: { domain: { eq: $domain }, status: { eq: "active" } }) {
+    items {
+      id
+      name
+      quality_score
+      owner_team
+      classification
+    }
+  }
+}
+
+# ─── Query: All domains with product counts ──────────────────────────────────
+
+query AllDomains {
+  domains {
+    items {
+      id
+      name
+      description
+      owner_team
+      product_count
+    }
+  }
+}
+
+# ─── Mutation: Create a new data product ─────────────────────────────────────
+
+mutation CreateProduct($input: CreateDataProductInput!) {
+  createDataProduct(item: $input) {
+    id
+    name
+    domain
+    status
+    version
+  }
+}
+
+# Variables for CreateProduct:
+# {
+#   "input": {
+#     "name": "Customer Lifetime Value",
+#     "description": "Predicted CLV by customer segment",
+#     "domain": "marketing",
+#     "owner_name": "Dan Wilson",
+#     "owner_email": "dan@contoso.com",
+#     "owner_team": "Marketing Insights",
+#     "classification": "confidential",
+#     "quality_score": 85.0,
+#     "freshness_hours": 48,
+#     "completeness": 92.0,
+#     "status": "draft",
+#     "version": 1
+#   }
+# }
+
+# ─── Mutation: Update an existing product ────────────────────────────────────
+
+mutation UpdateProduct($id: Int!, $input: UpdateDataProductInput!) {
+  updateDataProduct(id: $id, item: $input) {
+    id
+    name
+    quality_score
+    version
+    status
+  }
+}
+
+# Variables for UpdateProduct:
+# {
+#   "id": 1,
+#   "input": {
+#     "quality_score": 94.2,
+#     "version": 3
+#   }
+# }

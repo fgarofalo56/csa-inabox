@@ -29,7 +29,12 @@ graph TD
 
     MKT --> T10[10 - Marketplace Publishing]
 
+    BRANCH --> DAB[Path G: Data API Builder]
+    DAB --> T11[11 - Data API Builder]
+    T11 --> MKT
+
     style START fill:#0078d4,color:#fff
+    style DAB fill:#00a4ef,color:#fff
     style T01 fill:#107c10,color:#fff
     style BRANCH fill:#ffb900,color:#000
     style GOV fill:#5c2d91,color:#fff
@@ -104,6 +109,16 @@ All paths begin with **01 - Foundation Platform**, which deploys the core Azure 
 | [10 - Data Marketplace](./10-data-marketplace/README.md) | 60 min | Register data products, run quality assessments, manage access requests, and sync with Purview catalog. |
 
 **Prerequisites:** Path A complete, Cosmos DB deployed
+
+---
+
+### Path G: Data API Builder & APIM Gateway
+
+| Tutorial | Time | Description |
+|----------|------|-------------|
+| [11 - Data API Builder](./11-data-api-builder/README.md) | 90 min | Deploy Azure SQL + DAB on Container Apps, expose domain data as REST & GraphQL APIs, build a frontend catalog, integrate with APIM as the unified Data Mesh gateway. |
+
+**Prerequisites:** Path A complete, Azure SQL, Azure Container Apps
 
 ---
 

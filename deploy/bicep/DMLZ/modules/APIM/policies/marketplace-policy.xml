@@ -1,0 +1,90 @@
+<!--
+  CSA-in-a-Box — Data Marketplace Policy
+  Domain-scoped filtering from JWT, response caching, and HATEOAS link injection.
+-->
+<policies>
+    <inbound>
+        <base />
+
+        <!-- Extract domain from JWT for domain-scoped data filtering -->
+        <set-variable name="userDomain" value="@{
+            var auth = context.Request.Headers.GetValueOrDefault("Authorization","");
+            if (string.IsNullOrEmpty(auth)) return "unknown";
+            try {
+                var jwt = auth.Replace("Bearer ", "");
+                var parts = jwt.Split('.');
+                if (parts.Length < 2) return "unknown";
+                var payload = System.Text.Encoding.UTF8.GetString(
+                    Convert.FromBase64String(parts[1].PadRight(parts[1].Length + (4 - parts[1].Length % 4) % 4, '=')));
+                var json = Newtonsoft.Json.Linq.JObject.Parse(payload);
+                return json["domain"]?.ToString() ?? json["tid"]?.ToString() ?? "unknown";
+            } catch {
+                return "unknown";
+            }
+        }" />
+
+        <!-- Pass domain to backend for scoped queries -->
+        <set-header name="X-User-Domain" exists-action="override">
+            <value>@((string)context.Variables["userDomain"])</value>
+        </set-header>
+
+        <!-- Cache GET /products for 2 minutes -->
+        <choose>
+            <when condition="@(context.Request.Method == "GET" &amp;&amp; context.Request.Url.Path.Contains("/products"))">
+                <cache-lookup vary-by-developer="false" vary-by-developer-groups="false">
+                    <vary-by-header>Authorization</vary-by-header>
+                    <vary-by-query-parameter>domain,page,pageSize,search</vary-by-query-parameter>
+                </cache-lookup>
+            </when>
+        </choose>
+
+        <!-- Cache GET /domains for 10 minutes -->
+        <choose>
+            <when condition="@(context.Request.Method == "GET" &amp;&amp; context.Request.Url.Path.Contains("/domains"))">
+                <cache-lookup vary-by-developer="false" vary-by-developer-groups="false" duration="600">
+                    <vary-by-header>Authorization</vary-by-header>
+                </cache-lookup>
+            </when>
+        </choose>
+    </inbound>
+
+    <backend>
+        <set-backend-service backend-id="marketplace-backend" />
+        <forward-request timeout="30" />
+    </backend>
+
+    <outbound>
+        <base />
+
+        <!-- Cache store for products (2 min) -->
+        <choose>
+            <when condition="@(context.Request.Method == "GET" &amp;&amp; context.Request.Url.Path.Contains("/products"))">
+                <cache-store duration="120" />
+            </when>
+        </choose>
+
+        <!-- Cache store for domains (10 min) -->
+        <choose>
+            <when condition="@(context.Request.Method == "GET" &amp;&amp; context.Request.Url.Path.Contains("/domains"))">
+                <cache-store duration="600" />
+            </when>
+        </choose>
+
+        <!-- Add pagination headers -->
+        <set-header name="X-Total-Count" exists-action="skip">
+            <value>@(context.Response.Headers.GetValueOrDefault("X-Total-Count","0"))</value>
+        </set-header>
+
+        <!-- Add HATEOAS self-link -->
+        <set-header name="Link" exists-action="skip">
+            <value>@{
+                var baseUrl = context.Request.OriginalUrl.ToString();
+                return $"<{baseUrl}>; rel=\"self\"";
+            }</value>
+        </set-header>
+    </outbound>
+
+    <on-error>
+        <base />
+    </on-error>
+</policies>

@@ -35,6 +35,26 @@
 
 Legend: ✅ production-ready · ⚠️ partial / in flight · 🛑 planned, finding tracked.
 
+## Azure OpenAI Capability Summary
+
+| Category | Implemented | Available | Out of Scope |
+|----------|-------------|-----------|--------------|
+| Embeddings | 5 features | 2 features | 0 |
+| Chat Completions | 3 features | 6 features | 0 |
+| Assistants API | 0 | 0 | 4 features |
+| Batch API | 0 | 1 feature | 1 feature |
+| Fine-Tuning | 0 | 0 | 2 features |
+| On Your Data | 1 feature | 2 features | 0 |
+| Content Safety | 0 | 1 feature (CSA-0112) | 1 feature |
+
+> **Full details:** See [CAPABILITY_MATRIX.md](./CAPABILITY_MATRIX.md) for complete feature-by-feature breakdown with status, models, modules, and configuration.
+
+### Design Decisions
+
+- **RAG over Fine-Tuning**: Domain knowledge is injected via retrieval-augmented generation rather than fine-tuning, enabling dynamic updates without retraining.
+- **Semantic Kernel over Assistants API**: Agent orchestration uses Semantic Kernel for full control over plugin composition and multi-agent workflows.
+- **Custom RAG over On Your Data**: Purpose-built pipeline (chunking → embedding → retrieval → reranking → generation) provides more control than the built-in Azure OpenAI On Your Data feature.
+
 ## Table of Contents
 
 - [Capabilities](#capabilities)

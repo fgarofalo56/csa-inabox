@@ -1,0 +1,101 @@
+name: sentinel-alerts
+version: "1.0.0"
+domain: cybersecurity
+owner: security-operations-center
+description: >
+  Normalized security alerts from Azure Sentinel enriched with
+  MITRE ATT&CK technique mapping and composite risk scoring.
+  Primary data product for threat landscape and compliance reporting.
+
+schema:
+  fields:
+    - name: alert_id
+      type: string
+      description: Unique Sentinel alert identifier
+      required: true
+      pii: false
+
+    - name: alert_name
+      type: string
+      description: Human-readable alert title
+      required: true
+      pii: false
+
+    - name: severity_level
+      type: integer
+      description: "Numeric severity: 1=Low, 2=Medium, 3=High, 4=Critical"
+      required: true
+      pii: false
+
+    - name: severity_label
+      type: string
+      description: Text severity label
+      required: true
+      pii: false
+
+    - name: provider_name
+      type: string
+      description: Security provider that generated the alert
+      required: true
+      pii: false
+
+    - name: time_generated
+      type: timestamp
+      description: UTC timestamp when the alert was generated
+      required: true
+      pii: false
+
+    - name: technique_id
+      type: string
+      description: MITRE ATT&CK technique ID (e.g., T1059.001)
+      required: false
+      pii: false
+
+    - name: tactic_name
+      type: string
+      description: MITRE ATT&CK tactic name
+      required: false
+      pii: false
+
+    - name: composite_risk_score
+      type: double
+      description: Combined risk score from severity and MITRE weight (0-4)
+      required: true
+      pii: false
+
+    - name: host_entities
+      type: array
+      description: Array of affected host entities
+      required: false
+      pii: false
+
+    - name: account_entities
+      type: array
+      description: Array of affected account entities
+      required: false
+      pii: true
+
+    - name: ip_entities
+      type: array
+      description: Array of related IP address entities
+      required: false
+      pii: false
+
+quality:
+  freshness:
+    max_delay_minutes: 15
+    description: Alerts must appear in Silver within 15 minutes
+  completeness:
+    min_percentage: 99.5
+    description: No more than 0.5% alert loss during ingestion
+  accuracy:
+    mitre_mapping_validation: true
+    description: Technique IDs validated against ATT&CK v14+
+
+sla:
+  availability:
+    target_percentage: 99.9
+    measurement_window: monthly
+  latency:
+    p95_query_ms: 5000
+    description: Gold layer queries respond within 5s at p95

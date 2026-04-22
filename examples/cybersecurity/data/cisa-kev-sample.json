@@ -1,0 +1,128 @@
+{
+  "title": "CISA Known Exploited Vulnerabilities Catalog (Sample)",
+  "catalogVersion": "2026.04.15",
+  "dateReleased": "2026-04-15T12:00:00Z",
+  "count": 10,
+  "vulnerabilities": [
+    {
+      "cveID": "CVE-2024-21887",
+      "vendorProject": "Ivanti",
+      "product": "Connect Secure",
+      "vulnerabilityName": "Ivanti Connect Secure Command Injection Vulnerability",
+      "dateAdded": "2024-01-10",
+      "shortDescription": "Ivanti Connect Secure and Policy Secure contain a command injection vulnerability in the web component allowing an authenticated administrator to send specially crafted requests to execute arbitrary commands.",
+      "requiredAction": "Apply mitigations per vendor instructions or discontinue use of the product if mitigations are unavailable.",
+      "dueDate": "2024-01-31",
+      "knownRansomwareCampaignUse": "Known",
+      "notes": "https://www.ivanti.com/blog/security-update-for-ivanti-connect-secure"
+    },
+    {
+      "cveID": "CVE-2024-3400",
+      "vendorProject": "Palo Alto Networks",
+      "product": "PAN-OS GlobalProtect",
+      "vulnerabilityName": "Palo Alto Networks PAN-OS Command Injection Vulnerability",
+      "dateAdded": "2024-04-12",
+      "shortDescription": "A command injection vulnerability in the GlobalProtect feature of Palo Alto Networks PAN-OS allows unauthenticated attackers to execute arbitrary code with root privileges on the firewall.",
+      "requiredAction": "Apply mitigations per vendor instructions or discontinue use of the product if mitigations are unavailable.",
+      "dueDate": "2024-04-19",
+      "knownRansomwareCampaignUse": "Unknown",
+      "notes": "https://security.paloaltonetworks.com/CVE-2024-3400"
+    },
+    {
+      "cveID": "CVE-2023-22515",
+      "vendorProject": "Atlassian",
+      "product": "Confluence Data Center and Server",
+      "vulnerabilityName": "Atlassian Confluence Broken Access Control Vulnerability",
+      "dateAdded": "2023-10-05",
+      "shortDescription": "Atlassian Confluence Data Center and Server contain a broken access control vulnerability allowing an attacker to create unauthorized administrator accounts and access Confluence instances.",
+      "requiredAction": "Apply mitigations per vendor instructions or discontinue use of the product if mitigations are unavailable.",
+      "dueDate": "2023-10-26",
+      "knownRansomwareCampaignUse": "Known",
+      "notes": "https://confluence.atlassian.com/security/cve-2023-22515"
+    },
+    {
+      "cveID": "CVE-2024-1709",
+      "vendorProject": "ConnectWise",
+      "product": "ScreenConnect",
+      "vulnerabilityName": "ConnectWise ScreenConnect Authentication Bypass Vulnerability",
+      "dateAdded": "2024-02-22",
+      "shortDescription": "ConnectWise ScreenConnect contains an authentication bypass vulnerability that allows an attacker to directly access confidential information or critical systems.",
+      "requiredAction": "Apply mitigations per vendor instructions or discontinue use of the product if mitigations are unavailable.",
+      "dueDate": "2024-02-29",
+      "knownRansomwareCampaignUse": "Known",
+      "notes": "https://www.connectwise.com/company/trust/security-bulletins/connectwise-screenconnect-23.9.8"
+    },
+    {
+      "cveID": "CVE-2023-46805",
+      "vendorProject": "Ivanti",
+      "product": "Connect Secure",
+      "vulnerabilityName": "Ivanti Connect Secure Authentication Bypass Vulnerability",
+      "dateAdded": "2024-01-10",
+      "shortDescription": "Ivanti Connect Secure and Policy Secure contain an authentication bypass vulnerability in the web component allowing remote attackers to access restricted resources.",
+      "requiredAction": "Apply mitigations per vendor instructions or discontinue use of the product if mitigations are unavailable.",
+      "dueDate": "2024-01-31",
+      "knownRansomwareCampaignUse": "Known",
+      "notes": "https://www.ivanti.com/blog/security-update-for-ivanti-connect-secure"
+    },
+    {
+      "cveID": "CVE-2024-23897",
+      "vendorProject": "Jenkins",
+      "product": "Jenkins",
+      "vulnerabilityName": "Jenkins Arbitrary File Read Vulnerability",
+      "dateAdded": "2024-01-29",
+      "shortDescription": "Jenkins has a built-in CLI that allows attackers to read arbitrary files on the Jenkins controller file system using the args4j library.",
+      "requiredAction": "Apply mitigations per vendor instructions or discontinue use of the product if mitigations are unavailable.",
+      "dueDate": "2024-02-19",
+      "knownRansomwareCampaignUse": "Unknown",
+      "notes": "https://www.jenkins.io/security/advisory/2024-01-24/"
+    },
+    {
+      "cveID": "CVE-2023-4966",
+      "vendorProject": "Citrix",
+      "product": "NetScaler ADC and Gateway",
+      "vulnerabilityName": "Citrix NetScaler Information Disclosure Vulnerability",
+      "dateAdded": "2023-10-18",
+      "shortDescription": "Citrix NetScaler ADC and Gateway contain a buffer overflow vulnerability allowing sensitive information disclosure when configured as a gateway or AAA virtual server.",
+      "requiredAction": "Apply mitigations per vendor instructions or discontinue use of the product if mitigations are unavailable.",
+      "dueDate": "2023-11-08",
+      "knownRansomwareCampaignUse": "Known",
+      "notes": "https://support.citrix.com/article/CTX579459"
+    },
+    {
+      "cveID": "CVE-2024-27198",
+      "vendorProject": "JetBrains",
+      "product": "TeamCity",
+      "vulnerabilityName": "JetBrains TeamCity Authentication Bypass Vulnerability",
+      "dateAdded": "2024-03-07",
+      "shortDescription": "JetBrains TeamCity contains an authentication bypass vulnerability that allows a remote unauthenticated attacker to perform admin actions.",
+      "requiredAction": "Apply mitigations per vendor instructions or discontinue use of the product if mitigations are unavailable.",
+      "dueDate": "2024-03-28",
+      "knownRansomwareCampaignUse": "Unknown",
+      "notes": "https://www.jetbrains.com/privacy-security/issues-fixed/"
+    },
+    {
+      "cveID": "CVE-2024-21762",
+      "vendorProject": "Fortinet",
+      "product": "FortiOS",
+      "vulnerabilityName": "Fortinet FortiOS Out-of-Bound Write Vulnerability",
+      "dateAdded": "2024-02-09",
+      "shortDescription": "Fortinet FortiOS contains an out-of-bound write vulnerability in sslvpnd that may allow a remote unauthenticated attacker to execute arbitrary code via specially crafted HTTP requests.",
+      "requiredAction": "Apply mitigations per vendor instructions or discontinue use of the product if mitigations are unavailable.",
+      "dueDate": "2024-02-16",
+      "knownRansomwareCampaignUse": "Known",
+      "notes": "https://www.fortiguard.com/psirt/FG-IR-24-015"
+    },
+    {
+      "cveID": "CVE-2023-20198",
+      "vendorProject": "Cisco",
+      "product": "IOS XE Web UI",
+      "vulnerabilityName": "Cisco IOS XE Web UI Privilege Escalation Vulnerability",
+      "dateAdded": "2023-10-16",
+      "shortDescription": "Cisco IOS XE Web UI contains a privilege escalation vulnerability that allows a remote unauthenticated attacker to create an account with privilege level 15 access.",
+      "requiredAction": "Apply mitigations per vendor instructions, check for indicators of compromise, or discontinue use of the product if mitigations are unavailable.",
+      "dueDate": "2023-10-20",
+      "knownRansomwareCampaignUse": "Unknown",
+      "notes": "https://sec.cloudapps.cisco.com/security/center/content/CiscoSecurityAdvisory/cisco-sa-iosxe-webui-privesc-j22SaA4z"
+    }
+  ]
+}

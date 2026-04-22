@@ -1,0 +1,318 @@
+{
+  "$schema": "https://github.com/Azure/data-api-builder/releases/latest/download/dab.draft.schema.json",
+  "data-source": {
+    "database-type": "mssql",
+    "connection-string": "@env('SQL_CONNECTION_STRING')",
+    "options": {
+      "set-session-context": true
+    }
+  },
+  "runtime": {
+    "rest": {
+      "enabled": true,
+      "path": "/api",
+      "request-body-strict": true
+    },
+    "graphql": {
+      "enabled": true,
+      "path": "/graphql",
+      "allow-introspection": true
+    },
+    "host": {
+      "cors": {
+        "origins": [
+          "http://localhost:4280",
+          "https://*.azurestaticapps.net"
+        ],
+        "allow-credentials": true
+      },
+      "authentication": {
+        "provider": "StaticWebApps"
+      },
+      "mode": "production"
+    }
+  },
+  "entities": {
+    "DataProducts": {
+      "source": {
+        "object": "dbo.DataProducts",
+        "type": "table"
+      },
+      "graphql": {
+        "enabled": true,
+        "type": {
+          "singular": "DataProduct",
+          "plural": "DataProducts"
+        }
+      },
+      "rest": {
+        "enabled": true,
+        "path": "/products"
+      },
+      "permissions": [
+        {
+          "role": "anonymous",
+          "actions": [
+            {
+              "action": "read",
+              "fields": {
+                "include": ["id", "name", "description", "domain", "owner_team", "classification", "quality_score", "status", "version"],
+                "exclude": ["owner_email"]
+              },
+              "policy": {
+                "database": "@item.status ne 'draft'"
+              }
+            }
+          ]
+        },
+        {
+          "role": "authenticated",
+          "actions": [
+            { "action": "read" },
+            {
+              "action": "create",
+              "fields": {
+                "exclude": ["id", "created_at", "updated_at"]
+              }
+            },
+            {
+              "action": "update",
+              "fields": {
+                "exclude": ["id", "created_at"]
+              }
+            }
+          ]
+        },
+        {
+          "role": "admin",
+          "actions": [
+            { "action": "*" }
+          ]
+        }
+      ],
+      "relationships": {
+        "qualityMetrics": {
+          "cardinality": "many",
+          "target.entity": "QualityMetrics",
+          "source.fields": ["id"],
+          "target.fields": ["product_id"],
+          "linking.object": null
+        },
+        "domain_info": {
+          "cardinality": "one",
+          "target.entity": "Domains",
+          "source.fields": ["domain"],
+          "target.fields": ["name"]
+        },
+        "accessGrants": {
+          "cardinality": "many",
+          "target.entity": "AccessGrants",
+          "source.fields": ["id"],
+          "target.fields": ["product_id"]
+        },
+        "lineageAsSource": {
+          "cardinality": "many",
+          "target.entity": "DataLineage",
+          "source.fields": ["id"],
+          "target.fields": ["source_product_id"]
+        }
+      }
+    },
+    "QualityMetrics": {
+      "source": {
+        "object": "dbo.QualityMetrics",
+        "type": "table"
+      },
+      "graphql": {
+        "enabled": true,
+        "type": {
+          "singular": "QualityMetric",
+          "plural": "QualityMetrics"
+        }
+      },
+      "rest": {
+        "enabled": true,
+        "path": "/quality-metrics"
+      },
+      "permissions": [
+        {
+          "role": "anonymous",
+          "actions": [
+            { "action": "read" }
+          ]
+        },
+        {
+          "role": "authenticated",
+          "actions": [
+            { "action": "read" }
+          ]
+        },
+        {
+          "role": "admin",
+          "actions": [
+            { "action": "*" }
+          ]
+        }
+      ]
+    },
+    "AccessGrants": {
+      "source": {
+        "object": "dbo.AccessGrants",
+        "type": "table"
+      },
+      "graphql": {
+        "enabled": true,
+        "type": {
+          "singular": "AccessGrant",
+          "plural": "AccessGrants"
+        }
+      },
+      "rest": {
+        "enabled": true,
+        "path": "/access-grants"
+      },
+      "permissions": [
+        {
+          "role": "authenticated",
+          "actions": [
+            {
+              "action": "read",
+              "policy": {
+                "database": "@claims.email eq @item.requester_email"
+              }
+            },
+            {
+              "action": "create",
+              "fields": {
+                "exclude": ["id", "granted_at", "granted_by", "created_at"]
+              }
+            }
+          ]
+        },
+        {
+          "role": "admin",
+          "actions": [
+            { "action": "*" }
+          ]
+        }
+      ]
+    },
+    "Domains": {
+      "source": {
+        "object": "dbo.Domains",
+        "type": "table"
+      },
+      "graphql": {
+        "enabled": true,
+        "type": {
+          "singular": "Domain",
+          "plural": "Domains"
+        }
+      },
+      "rest": {
+        "enabled": true,
+        "path": "/domains"
+      },
+      "permissions": [
+        {
+          "role": "anonymous",
+          "actions": [
+            { "action": "read" }
+          ]
+        },
+        {
+          "role": "authenticated",
+          "actions": [
+            { "action": "read" }
+          ]
+        },
+        {
+          "role": "admin",
+          "actions": [
+            { "action": "*" }
+          ]
+        }
+      ]
+    },
+    "DataLineage": {
+      "source": {
+        "object": "dbo.DataLineage",
+        "type": "table"
+      },
+      "graphql": {
+        "enabled": true,
+        "type": {
+          "singular": "DataLineage",
+          "plural": "DataLineages"
+        }
+      },
+      "rest": {
+        "enabled": true,
+        "path": "/lineage"
+      },
+      "permissions": [
+        {
+          "role": "authenticated",
+          "actions": [
+            { "action": "read" }
+          ]
+        },
+        {
+          "role": "admin",
+          "actions": [
+            { "action": "*" }
+          ]
+        }
+      ]
+    },
+    "DomainStats": {
+      "source": {
+        "object": "dbo.sp_domain_stats",
+        "type": "stored-procedure",
+        "parameters": {}
+      },
+      "graphql": {
+        "enabled": false
+      },
+      "rest": {
+        "enabled": true,
+        "path": "/domain-stats",
+        "methods": ["GET"]
+      },
+      "permissions": [
+        {
+          "role": "anonymous",
+          "actions": [
+            { "action": "execute" }
+          ]
+        }
+      ]
+    },
+    "QualityTrend": {
+      "source": {
+        "object": "dbo.sp_quality_trend",
+        "type": "stored-procedure",
+        "parameters": {
+          "product_id": 1,
+          "days": 30
+        }
+      },
+      "graphql": {
+        "enabled": false
+      },
+      "rest": {
+        "enabled": true,
+        "path": "/quality-trend",
+        "methods": ["GET"]
+      },
+      "permissions": [
+        {
+          "role": "anonymous",
+          "actions": [
+            { "action": "execute" }
+          ]
+        }
+      ]
+    }
+  }
+}
