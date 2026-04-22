@@ -202,6 +202,7 @@
     var panel = document.createElement("div");
     panel.className = "copilot-panel copilot-hidden";
     panel.innerHTML =
+      '<div class="copilot-resize" title="Drag to resize"></div>' +
       '<div class="copilot-header">' +
       "  <span>🤖 CSA-in-a-Box Copilot</span>" +
       '  <div class="copilot-header-actions">' +
@@ -266,6 +267,49 @@
       this.style.height = "auto";
       this.style.height = Math.min(this.scrollHeight, 100) + "px";
     });
+
+    // Drag-to-resize from top-left corner
+    var resizeHandle = panel.querySelector(".copilot-resize");
+    if (resizeHandle && !isFullPage) {
+      var startX, startY, startW, startH;
+
+      resizeHandle.addEventListener("mousedown", onResizeStart);
+      resizeHandle.addEventListener("touchstart", onResizeStart, { passive: false });
+
+      function onResizeStart(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        var ev = e.touches ? e.touches[0] : e;
+        startX = ev.clientX;
+        startY = ev.clientY;
+        startW = panel.offsetWidth;
+        startH = panel.offsetHeight;
+        panel.classList.add("copilot-resizing");
+        document.addEventListener("mousemove", onResizeMove);
+        document.addEventListener("mouseup", onResizeEnd);
+        document.addEventListener("touchmove", onResizeMove, { passive: false });
+        document.addEventListener("touchend", onResizeEnd);
+      }
+
+      function onResizeMove(e) {
+        var ev = e.touches ? e.touches[0] : e;
+        // Panel is anchored bottom-right, so dragging top-left outward = larger
+        var dw = startX - ev.clientX;
+        var dh = startY - ev.clientY;
+        var newW = Math.max(300, Math.min(startW + dw, window.innerWidth - 32));
+        var newH = Math.max(280, Math.min(startH + dh, window.innerHeight - 120));
+        panel.style.width = newW + "px";
+        panel.style.height = newH + "px";
+      }
+
+      function onResizeEnd() {
+        panel.classList.remove("copilot-resizing");
+        document.removeEventListener("mousemove", onResizeMove);
+        document.removeEventListener("mouseup", onResizeEnd);
+        document.removeEventListener("touchmove", onResizeMove);
+        document.removeEventListener("touchend", onResizeEnd);
+      }
+    }
 
     /* ── Send Logic ────────────────────────────────── */
     function doSend() {
