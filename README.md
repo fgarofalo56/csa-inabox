@@ -6,6 +6,8 @@
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Last Updated](https://img.shields.io/badge/updated-2026--04--15-informational)
 
+[![Documentation](https://img.shields.io/badge/docs-fgarofalo56.github.io%2Fcsa--inabox-blue?logo=materialformkdocs)](https://fgarofalo56.github.io/csa-inabox/)
+
 > CSA-in-a-Box is an Azure-native reference implementation of the Microsoft
 > "Unify your data platform" guidance, built entirely on Azure PaaS services and
 > open-source tooling. It delivers Data Mesh, Data Fabric, and Data Lakehouse
@@ -368,6 +370,7 @@ This project is licensed under the MIT License -- see the [LICENSE](LICENSE) fil
 
 | Document | Description |
 |---|---|
+| [**CSA-in-a-Box Documentation**](https://fgarofalo56.github.io/csa-inabox/) | Full documentation site — architecture, guides, ADRs, runbooks, compliance, and AI Copilot |
 | [Getting Started](docs/GETTING_STARTED.md) | Prerequisites and deployment walkthrough |
 | [Quick Start](docs/QUICKSTART.md) | 60-minute hands-on tutorial |
 | [Architecture](docs/ARCHITECTURE.md) | Comprehensive architecture reference |
