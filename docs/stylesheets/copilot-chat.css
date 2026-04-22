@@ -98,7 +98,7 @@
 .copilot-msg-assistant .copilot-bubble { background: #f1f3f4; color: #1a1a1a; }
 .copilot-msg-user .copilot-bubble { background: #0078d4; color: #fff; }
 
-/* Code inside bubbles */
+/* ── Typography inside bubbles ─────────────────────────── */
 .copilot-bubble code {
   font-family: "Cascadia Code", "Fira Code", monospace;
   font-size: 12px;
@@ -118,7 +118,62 @@
 .copilot-bubble pre code { background: transparent; padding: 0; color: inherit; }
 .copilot-bubble a { color: #0078d4; text-decoration: underline; }
 .copilot-bubble ul, .copilot-bubble ol { margin: 4px 0; padding-left: 18px; }
+.copilot-bubble ol { list-style: decimal; }
 .copilot-bubble p { margin: 4px 0; }
+.copilot-bubble h1, .copilot-bubble h2, .copilot-bubble h3, .copilot-bubble h4 {
+  margin: 10px 0 4px;
+  line-height: 1.3;
+  font-weight: 600;
+}
+.copilot-bubble h1 { font-size: 16px; }
+.copilot-bubble h2 { font-size: 15px; }
+.copilot-bubble h3 { font-size: 14px; }
+.copilot-bubble h4 { font-size: 13.5px; }
+.copilot-bubble hr {
+  border: none;
+  border-top: 1px solid rgba(0,0,0,.12);
+  margin: 8px 0;
+}
+
+/* ── References Card ──────────────────────────────────── */
+.copilot-refs-bubble {
+  padding: 6px 10px !important;
+}
+.copilot-refs-header {
+  font-size: 12px;
+  font-weight: 600;
+  color: #555;
+  margin-bottom: 4px;
+  letter-spacing: .3px;
+}
+.copilot-ref-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(0,0,0,.06);
+}
+.copilot-ref-item:last-child { border-bottom: none; }
+.copilot-ref-page {
+  flex: 1;
+  font-size: 12.5px;
+  color: #0078d4;
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.copilot-ref-page:hover { text-decoration: underline; }
+.copilot-ref-gh {
+  flex-shrink: 0;
+  color: #666;
+  display: flex;
+  align-items: center;
+  padding: 2px;
+  border-radius: 3px;
+  transition: color .15s;
+}
+.copilot-ref-gh:hover { color: #1a1a1a; }
 
 /* ── Input Area ────────────────────────────────────────── */
 .copilot-input-area {
@@ -140,6 +195,8 @@
   outline: none;
   font-family: inherit;
   line-height: 1.4;
+  background: #fff;
+  color: #1a1a1a;
 }
 .copilot-input:focus { border-color: #0078d4; }
 .copilot-send {
@@ -162,14 +219,71 @@
 }
 @keyframes copilot-blink { 50% { opacity: 0; } }
 
-/* ── Dark Mode ─────────────────────────────────────────── */
-[data-md-color-scheme="slate"] .copilot-panel { background: #2d2d2d; }
-[data-md-color-scheme="slate"] .copilot-msg-assistant .copilot-bubble { background: #3a3a3a; color: #e0e0e0; }
-[data-md-color-scheme="slate"] .copilot-msg-assistant .copilot-avatar { background: #444; }
-[data-md-color-scheme="slate"] .copilot-input { background: #333; color: #e0e0e0; border-color: #555; }
-[data-md-color-scheme="slate"] .copilot-input-area { border-top-color: #444; }
+/* ══════════════════════════════════════════════════════════
+   Dark Mode — MkDocs Material [data-md-color-scheme="slate"]
+   ══════════════════════════════════════════════════════════ */
+[data-md-color-scheme="slate"] .copilot-panel { background: #1e1e1e; }
+[data-md-color-scheme="slate"] .copilot-msg-assistant .copilot-bubble { background: #2d2d2d; color: #e0e0e0; }
+[data-md-color-scheme="slate"] .copilot-msg-assistant .copilot-avatar { background: #383838; }
+[data-md-color-scheme="slate"] .copilot-input { background: #2a2a2a; color: #e0e0e0; border-color: #444; }
+[data-md-color-scheme="slate"] .copilot-input-area { border-top-color: #333; }
 [data-md-color-scheme="slate"] .copilot-bubble code { background: rgba(255,255,255,.08); }
 [data-md-color-scheme="slate"] .copilot-bubble a { color: #4da6ff; }
+[data-md-color-scheme="slate"] .copilot-bubble hr { border-top-color: rgba(255,255,255,.15); }
+/* References card — dark */
+[data-md-color-scheme="slate"] .copilot-refs-header { color: #999; }
+[data-md-color-scheme="slate"] .copilot-ref-item { border-bottom-color: rgba(255,255,255,.06); }
+[data-md-color-scheme="slate"] .copilot-ref-page { color: #4da6ff; }
+[data-md-color-scheme="slate"] .copilot-ref-gh { color: #888; }
+[data-md-color-scheme="slate"] .copilot-ref-gh:hover { color: #ccc; }
+
+/* ══════════════════════════════════════════════════════════
+   Dark Mode — Browser prefers-color-scheme (fallback)
+   Applies when user has dark OS/browser setting but MkDocs
+   scheme attribute is not set (e.g., embedded or standalone)
+   ══════════════════════════════════════════════════════════ */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-md-color-scheme="default"]):not([data-md-color-scheme]) .copilot-panel,
+  body:not([data-md-color-scheme="default"]):not([data-md-color-scheme]) .copilot-panel {
+    background: #1e1e1e;
+  }
+  :root:not([data-md-color-scheme="default"]):not([data-md-color-scheme]) .copilot-msg-assistant .copilot-bubble,
+  body:not([data-md-color-scheme="default"]):not([data-md-color-scheme]) .copilot-msg-assistant .copilot-bubble {
+    background: #2d2d2d; color: #e0e0e0;
+  }
+  :root:not([data-md-color-scheme="default"]):not([data-md-color-scheme]) .copilot-msg-assistant .copilot-avatar,
+  body:not([data-md-color-scheme="default"]):not([data-md-color-scheme]) .copilot-msg-assistant .copilot-avatar {
+    background: #383838;
+  }
+  :root:not([data-md-color-scheme="default"]):not([data-md-color-scheme]) .copilot-input,
+  body:not([data-md-color-scheme="default"]):not([data-md-color-scheme]) .copilot-input {
+    background: #2a2a2a; color: #e0e0e0; border-color: #444;
+  }
+  :root:not([data-md-color-scheme="default"]):not([data-md-color-scheme]) .copilot-input-area,
+  body:not([data-md-color-scheme="default"]):not([data-md-color-scheme]) .copilot-input-area {
+    border-top-color: #333;
+  }
+  :root:not([data-md-color-scheme="default"]):not([data-md-color-scheme]) .copilot-bubble code,
+  body:not([data-md-color-scheme="default"]):not([data-md-color-scheme]) .copilot-bubble code {
+    background: rgba(255,255,255,.08);
+  }
+  :root:not([data-md-color-scheme="default"]):not([data-md-color-scheme]) .copilot-bubble a,
+  body:not([data-md-color-scheme="default"]):not([data-md-color-scheme]) .copilot-bubble a {
+    color: #4da6ff;
+  }
+  :root:not([data-md-color-scheme="default"]):not([data-md-color-scheme]) .copilot-refs-header,
+  body:not([data-md-color-scheme="default"]):not([data-md-color-scheme]) .copilot-refs-header {
+    color: #999;
+  }
+  :root:not([data-md-color-scheme="default"]):not([data-md-color-scheme]) .copilot-ref-page,
+  body:not([data-md-color-scheme="default"]):not([data-md-color-scheme]) .copilot-ref-page {
+    color: #4da6ff;
+  }
+  :root:not([data-md-color-scheme="default"]):not([data-md-color-scheme]) .copilot-ref-gh,
+  body:not([data-md-color-scheme="default"]):not([data-md-color-scheme]) .copilot-ref-gh {
+    color: #888;
+  }
+}
 
 /* ── Full-Page Mode ────────────────────────────────────── */
 .copilot-fullpage-mode .copilot-fab { display: none; }
