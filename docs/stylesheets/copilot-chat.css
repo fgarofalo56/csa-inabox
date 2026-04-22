@@ -28,7 +28,11 @@
   bottom: 92px;
   right: 24px;
   width: 400px;
-  max-height: 560px;
+  height: 520px;
+  min-width: 300px;
+  min-height: 280px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 120px);
   border-radius: 16px;
   display: flex;
   flex-direction: column;
@@ -37,6 +41,34 @@
   z-index: 9999;
   overflow: hidden;
   transition: opacity .25s ease, transform .25s ease;
+}
+.copilot-panel.copilot-resizing { transition: none; }
+
+/* ── Resize Handle (top-left corner) ───────────────────── */
+.copilot-resize {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 18px;
+  height: 18px;
+  cursor: nwse-resize;
+  z-index: 10001;
+  background: transparent;
+  border-top-left-radius: 16px;
+}
+.copilot-resize::after {
+  content: "";
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  width: 8px;
+  height: 8px;
+  border-top: 2px solid rgba(0,0,0,.25);
+  border-left: 2px solid rgba(0,0,0,.25);
+  border-radius: 2px 0 0 0;
+}
+.copilot-resize:hover::after {
+  border-color: rgba(0,0,0,.5);
 }
 .copilot-hidden { opacity: 0; pointer-events: none; transform: translateY(16px); }
 .copilot-visible { opacity: 1; pointer-events: auto; transform: translateY(0); }
@@ -223,6 +255,8 @@
    Dark Mode — MkDocs Material [data-md-color-scheme="slate"]
    ══════════════════════════════════════════════════════════ */
 [data-md-color-scheme="slate"] .copilot-panel { background: #1e1e1e; }
+[data-md-color-scheme="slate"] .copilot-resize::after { border-color: rgba(255,255,255,.25); }
+[data-md-color-scheme="slate"] .copilot-resize:hover::after { border-color: rgba(255,255,255,.5); }
 [data-md-color-scheme="slate"] .copilot-msg-assistant .copilot-bubble { background: #2d2d2d; color: #e0e0e0; }
 [data-md-color-scheme="slate"] .copilot-msg-assistant .copilot-avatar { background: #383838; }
 [data-md-color-scheme="slate"] .copilot-input { background: #2a2a2a; color: #e0e0e0; border-color: #444; }
@@ -310,8 +344,10 @@
     width: calc(100vw - 16px);
     right: 8px;
     bottom: 80px;
+    height: calc(100vh - 120px);
     max-height: calc(100vh - 120px);
   }
+  .copilot-resize { display: none; }
 }
 
 /* ── Custom Scrollbar ──────────────────────────────────── */
