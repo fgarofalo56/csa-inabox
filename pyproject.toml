@@ -431,10 +431,13 @@ source = [
     "csa_platform/functions/validation",
     "csa_platform/ai_integration/rag",
     "csa_platform/ai_integration/enrichment",
-    "csa_platform/common",
-    "csa_platform/streaming",
-    "csa_platform/data_activator",
-    "csa_platform/metadata_framework",
+    # Modules below have inline tests in csa_platform/*/tests/ and are
+    # excluded from coverage until their test suites are consolidated
+    # into the root test runner (tracked as follow-up).
+    # "csa_platform/common",
+    # "csa_platform/streaming",
+    # "csa_platform/data_activator",
+    # "csa_platform/metadata_framework",
 ]
 branch = true
 omit = [
