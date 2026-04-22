@@ -83,12 +83,11 @@
 
     return scored.slice(0, maxResults).map(function (s) {
       var loc = s.doc.location;
-      // Build page URL
-      var pageUrl = SITE_URL + (loc ? loc + "/" : "");
+      // Build page URL — avoid double slashes
+      var locClean = loc ? loc.replace(/\/+$/, "") : "";
+      var pageUrl = SITE_URL + (locClean ? locClean + "/" : "");
       // Build GitHub source URL — map location to docs/ file path
-      var ghPath = loc ? loc : "index";
-      // Remove trailing slashes
-      ghPath = ghPath.replace(/\/+$/, "");
+      var ghPath = locClean || "index";
       var ghUrl = REPO_URL + "/blob/main/docs/" + ghPath + ".md";
 
       return {

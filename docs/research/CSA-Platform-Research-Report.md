@@ -118,7 +118,7 @@ Each DLZ provisions **three ADLS Gen2 storage accounts** forming a logical data 
 | 2 | Curated | Gold | `data-products` | Aggregated, modeled, consumption-ready |
 | 3 | Development | N/A | `analytics-sandbox`, `synapse-primary-*` | Exploratory sandboxes, workspace storage |
 
-<details>
+<details markdown="1">
 <summary>Container Folder Structures</summary>
 
 **Container Folder Structure (Raw/Landing):**
@@ -218,7 +218,7 @@ graph TB
 - NSGs and route tables per subnet
 - Azure Firewall in the hub for traffic inspection
 
-<details>
+<details markdown="1">
 <summary>Private DNS Zones Required</summary>
 
 - `privatelink.blob.core.windows.net`
@@ -441,7 +441,7 @@ This section maps each Microsoft Fabric capability to equivalent Azure services 
 
 ### 4.2 Detailed Component Analysis
 
-<details>
+<details markdown="1">
 <summary>4.2.1 Data Lakehouse: Delta Lake on ADLS Gen2</summary>
 
 **Architecture:**
@@ -459,7 +459,7 @@ This section maps each Microsoft Fabric capability to equivalent Azure services 
 
 </details>
 
-<details>
+<details markdown="1">
 <summary>4.2.2 Compute: Synapse Spark Pools vs Databricks</summary>
 
 **Synapse Spark Pools:**
@@ -482,7 +482,7 @@ This section maps each Microsoft Fabric capability to equivalent Azure services 
 
 </details>
 
-<details>
+<details markdown="1">
 <summary>4.2.3 Data Warehouse: Synapse SQL Options</summary>
 
 **Synapse Dedicated SQL Pool:**
@@ -504,7 +504,7 @@ This section maps each Microsoft Fabric capability to equivalent Azure services 
 
 </details>
 
-<details>
+<details markdown="1">
 <summary>4.2.4 Data Integration: Azure Data Factory</summary>
 
 **Core Capabilities:**
@@ -526,7 +526,7 @@ This section maps each Microsoft Fabric capability to equivalent Azure services 
 
 </details>
 
-<details>
+<details markdown="1">
 <summary>4.2.5 Real-Time Analytics</summary>
 
 **Azure Data Explorer (ADX / Kusto):**
@@ -551,7 +551,7 @@ Sources → Event Hubs → Databricks Structured Streaming → Delta Lake
 
 </details>
 
-<details>
+<details markdown="1">
 <summary>4.2.6 Power BI</summary>
 
 Power BI standalone works identically to Fabric Power BI for reporting:
@@ -565,7 +565,7 @@ Power BI standalone works identically to Fabric Power BI for reporting:
 
 </details>
 
-<details>
+<details markdown="1">
 <summary>4.2.7 AI/ML</summary>
 
 **Azure Machine Learning:**
@@ -598,7 +598,7 @@ Power BI standalone works identically to Fabric Power BI for reporting:
 
 ### 5.1 Complete Service Catalog
 
-<details>
+<details markdown="1">
 <summary>Networking Services</summary>
 
 | Service | Purpose | Subscription |
@@ -616,7 +616,7 @@ Power BI standalone works identically to Fabric Power BI for reporting:
 
 </details>
 
-<details>
+<details markdown="1">
 <summary>Identity & Access Services</summary>
 
 | Service | Purpose | Subscription |
@@ -631,7 +631,7 @@ Power BI standalone works identically to Fabric Power BI for reporting:
 
 </details>
 
-<details>
+<details markdown="1">
 <summary>Storage Services</summary>
 
 | Service | Purpose | Subscription |
@@ -643,7 +643,7 @@ Power BI standalone works identically to Fabric Power BI for reporting:
 
 </details>
 
-<details>
+<details markdown="1">
 <summary>Compute Services</summary>
 
 | Service | Purpose | Subscription |
@@ -656,7 +656,7 @@ Power BI standalone works identically to Fabric Power BI for reporting:
 
 </details>
 
-<details>
+<details markdown="1">
 <summary>Data Integration Services</summary>
 
 | Service | Purpose | Subscription |
@@ -670,7 +670,7 @@ Power BI standalone works identically to Fabric Power BI for reporting:
 
 </details>
 
-<details>
+<details markdown="1">
 <summary>Governance Services</summary>
 
 | Service | Purpose | Subscription |
@@ -682,7 +682,7 @@ Power BI standalone works identically to Fabric Power BI for reporting:
 
 </details>
 
-<details>
+<details markdown="1">
 <summary>Security Services</summary>
 
 | Service | Purpose | Subscription |
@@ -696,7 +696,7 @@ Power BI standalone works identically to Fabric Power BI for reporting:
 
 </details>
 
-<details>
+<details markdown="1">
 <summary>Monitoring Services</summary>
 
 | Service | Purpose | Subscription |
@@ -709,7 +709,7 @@ Power BI standalone works identically to Fabric Power BI for reporting:
 
 </details>
 
-<details>
+<details markdown="1">
 <summary>AI/ML Services</summary>
 
 | Service | Purpose | Subscription |

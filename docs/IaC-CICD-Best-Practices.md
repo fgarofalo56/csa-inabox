@@ -366,7 +366,7 @@ var diagnosticsRetentionDays = isProduction ? 365 : 30
 
 User-defined types provide strong typing and validation. Combined with `@export()` and `import`, they enable shared type libraries:
 
-<details>
+<details markdown="1">
 <summary>Shared types library (_shared/types.bicep)</summary>
 
 ```bicep
@@ -555,7 +555,7 @@ jobs:
 
 ### 2.4 Reusable Workflows and Composite Actions
 
-<details>
+<details markdown="1">
 <summary>Reusable workflow for deploying to any subscription</summary>
 
 ```yaml
@@ -646,7 +646,7 @@ jobs:
 
 </details>
 
-<details>
+<details markdown="1">
 <summary>Caller workflow example</summary>
 
 ```yaml
@@ -753,7 +753,7 @@ GitHub Environments Configuration:
 
 ### 2.6 Bicep Lint, Validate, What-If in PR Checks
 
-<details>
+<details markdown="1">
 <summary>Complete PR validation workflow</summary>
 
 ```yaml
@@ -880,7 +880,7 @@ Infrastructure doesn't "roll back" like application code. Instead:
 2. **Deployment Stacks with detach**: If using deployment stacks, unmanaged resources can be detached rather than deleted.
 3. **Git-based rollback workflow**:
 
-<details>
+<details markdown="1">
 <summary>Rollback workflow</summary>
 
 ```yaml
@@ -1114,7 +1114,7 @@ Checkov supports both Bicep and ARM templates with 750+ built-in policies.
 | CKV_AZURE_110 | Ensure Key Vault enables purge protection |
 | CKV_AZURE_190 | Ensure Databricks workspace uses private endpoint |
 
-<details>
+<details markdown="1">
 <summary>Custom policy example</summary>
 
 ```python
@@ -1253,7 +1253,7 @@ Management Group Hierarchy:
 
 ### 4.3 Custom Policy Definitions for Data Governance
 
-<details>
+<details markdown="1">
 <summary>Custom policy Bicep examples</summary>
 
 ```bicep
@@ -1458,7 +1458,7 @@ secret-scan:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-<details>
+<details markdown="1">
 <summary>Custom gitleaks configuration (.gitleaks.toml)</summary>
 
 ```toml
@@ -1552,7 +1552,7 @@ pre-commit install
 
 Azure Policy enforces governance at the Azure control plane level. Combine with OPA/Gatekeeper for Kubernetes workloads if applicable:
 
-<details>
+<details markdown="1">
 <summary>Policy-as-Code Bicep examples</summary>
 
 ```bicep
@@ -1683,7 +1683,7 @@ graph TD
 
 ## 📎 Appendix A: Complete bicepconfig.json
 
-<details>
+<details markdown="1">
 <summary>Full bicepconfig.json</summary>
 
 ```json
