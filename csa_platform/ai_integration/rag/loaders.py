@@ -137,7 +137,7 @@ def load_docx(path: Path) -> list[tuple[str, str | None]]:
     no headings produce a single ``(body, None)`` segment.
     """
     try:
-        import docx  # type: ignore[import-untyped]  # python-docx
+        import docx  # python-docx
     except ImportError as exc:  # pragma: no cover — guard exercised at boot
         msg = (
             "DOCX ingestion requires the 'python-docx' package. Install with "
