@@ -311,7 +311,7 @@ class DocumentLoader:
         try:
             blob_service.create_container(container_name)
             logger.info("Created container: %s", container_name)
-        except Exception:
+        except Exception:  # nosec B110
             pass  # Container may already exist
 
         container_client = blob_service.get_container_client(container_name)

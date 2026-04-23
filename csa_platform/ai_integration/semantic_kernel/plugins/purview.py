@@ -170,7 +170,7 @@ class PurviewPlugin:
                             attr_qualified_name=qualified_name
                         )
                         break
-                    except Exception:
+                    except Exception:  # nosec B112
                         continue
                 else:
                     return f"Asset with qualified name '{qualified_name}' not found."

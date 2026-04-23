@@ -61,7 +61,7 @@ class PurviewGlossarySeeder:
                     if g.get("name") == name:
                         print(f"  Found existing glossary: {name} ({g['guid']})")
                         return g["guid"]
-        except Exception:
+        except Exception:  # nosec B110
             pass
 
         print(f"  Creating glossary: {name}")
