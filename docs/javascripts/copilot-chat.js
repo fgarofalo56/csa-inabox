@@ -1,21 +1,47 @@
-/* CSA-in-a-Box Copilot Chat Widget — Vanilla JS */
+/* CSA-in-a-Box Copilot Chat Widget — Vanilla JS (Security-Hardened) */
 (function () {
   "use strict";
 
   var SITE_URL = "https://fgarofalo56.github.io/csa-inabox/";
   var REPO_URL = "https://github.com/fgarofalo56/csa-inabox";
 
-  var CONFIG = Object.assign(
-    {
-      apiEndpoint:
-        "https://func-csa-inabox-copilot.azurewebsites.net/api/chat",
-      maxHistory: 20,
-      rateLimitMs: 1500,
-      welcomeMessage:
-        "Hi! I'm the **CSA-in-a-Box Copilot**. Ask me anything about the codebase, architecture, deployment, or troubleshooting.",
-    },
-    window.COPILOT_CONFIG || {}
-  );
+  // Hardcoded configuration — no runtime override allowed (SEC-COPILOT)
+  var CONFIG = {
+    apiEndpoint:
+      "https://func-csa-inabox-copilot.azurewebsites.net/api/chat",
+    maxHistory: 10,
+    rateLimitMs: 3000,
+    maxMessageLength: 2000,
+    welcomeMessage:
+      "Hi! I'm the **CSA-in-a-Box Copilot**. Ask me anything about the codebase, architecture, deployment, or troubleshooting.",
+  };
+
+  /* ── Request Token Generation (SEC-COPILOT) ──────── */
+  function generateRequestToken() {
+    var ts = Math.floor(Date.now() / 30000); // 30-second windows
+    var payload = ts + ":csa-copilot-2024";
+    // Simple hash — not cryptographically secure but raises the bar
+    var hash = 0;
+    for (var i = 0; i < payload.length; i++) {
+      var ch = payload.charCodeAt(i);
+      hash = ((hash << 5) - hash) + ch;
+      hash = hash & hash; // Convert to 32-bit integer
+    }
+    // Match backend SHA-256 — use SubtleCrypto if available
+    if (window.crypto && window.crypto.subtle) {
+      return window.crypto.subtle.digest(
+        "SHA-256",
+        new TextEncoder().encode(payload)
+      ).then(function (buf) {
+        var arr = Array.from(new Uint8Array(buf));
+        var hex = arr.map(function (b) { return b.toString(16).padStart(2, "0"); }).join("");
+        return ts + ":" + hex.substring(0, 16);
+      });
+    }
+    // Fallback: use timestamp + simple hash (backend will also validate)
+    var simpleHash = Math.abs(hash).toString(16).padStart(8, "0").substring(0, 16);
+    return Promise.resolve(ts + ":" + simpleHash);
+  }
 
   /* ── Search Index ─────────────────────────────────── */
   var searchIndex = [];
@@ -106,8 +132,8 @@
 
     results.forEach(function (r) {
       html += '<div class="copilot-ref-item">';
-      html += '<a class="copilot-ref-page" href="' + r.pageUrl + '" title="View documentation page">' + esc(r.title) + '</a>';
-      html += '<a class="copilot-ref-gh" href="' + r.ghUrl + '" target="_blank" rel="noopener" title="View source on GitHub">';
+      html += '<a class="copilot-ref-page" href="' + esc(r.pageUrl) + '" title="View documentation page">' + esc(r.title) + '</a>';
+      html += '<a class="copilot-ref-gh" href="' + esc(r.ghUrl) + '" target="_blank" rel="noopener" title="View source on GitHub">';
       html += '<svg viewBox="0 0 16 16" width="14" height="14"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>';
       html += '</a>';
       html += '</div>';
@@ -117,26 +143,35 @@
     return html;
   }
 
-  /* ── Minimal Markdown renderer ─────────────────────── */
+  /* ── Minimal Markdown renderer (XSS-hardened) ────── */
   function md(text) {
     if (!text) return "";
     // Code blocks — extract and replace with placeholders to protect contents
     var codeBlocks = [];
     text = text.replace(/```(\w*)\n([\s\S]*?)```/g, function (_, lang, code) {
       var idx = codeBlocks.length;
-      codeBlocks.push('<pre><code class="language-' + (lang || "") + '">' + esc(code.trim()) + "</code></pre>");
+      var safeLang = (lang || "").replace(/[^a-zA-Z0-9-]/g, "");
+      codeBlocks.push('<pre><code class="language-' + safeLang + '">' + esc(code.trim()) + "</code></pre>");
       return "\n\n__CODEBLOCK_" + idx + "__\n\n";
     });
     // Inline code
-    text = text.replace(/`([^`]+)`/g, "<code>$1</code>");
+    text = text.replace(/`([^`]+)`/g, function (_, code) {
+      return "<code>" + esc(code) + "</code>";
+    });
     // Bold
     text = text.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
     // Italic
     text = text.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, "<em>$1</em>");
-    // Links
+    // Links — SEC-COPILOT: validate URL protocol to prevent javascript: XSS
     text = text.replace(
       /\[([^\]]+)\]\(([^)]+)\)/g,
-      '<a href="$2" target="_blank" rel="noopener">$1</a>'
+      function (_, linkText, url) {
+        // Only allow http/https URLs
+        if (!/^https?:\/\//i.test(url.trim())) {
+          return esc(linkText);
+        }
+        return '<a href="' + esc(url.trim()) + '" target="_blank" rel="noopener noreferrer">' + esc(linkText) + '</a>';
+      }
     );
     // Headings (must be before paragraphs)
     text = text.replace(/^#### (.+)$/gm, '<h4 class="copilot-h">$1</h4>');
@@ -212,7 +247,7 @@
       "</div>" +
       '<div class="copilot-messages"></div>' +
       '<div class="copilot-input-area">' +
-      '  <textarea class="copilot-input" placeholder="Ask about CSA-in-a-Box..." rows="1"></textarea>' +
+      '  <textarea class="copilot-input" placeholder="Ask about CSA-in-a-Box..." rows="1" maxlength="' + CONFIG.maxMessageLength + '"></textarea>' +
       '  <button class="copilot-send">Send</button>' +
       "</div>";
 
@@ -316,6 +351,12 @@
       var text = inputEl.value.trim();
       if (!text || sending) return;
 
+      // SEC-COPILOT: Client-side message length enforcement
+      if (text.length > CONFIG.maxMessageLength) {
+        text = text.substring(0, CONFIG.maxMessageLength);
+      }
+
+      // SEC-COPILOT: Rate limiting (3 seconds between sends)
       var now = Date.now();
       if (now - lastSendTime < CONFIG.rateLimitMs) return;
       lastSendTime = now;
@@ -409,14 +450,20 @@
       path: window.location.pathname,
     };
 
-    return fetch(CONFIG.apiEndpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        message: message,
-        history: history.slice(-CONFIG.maxHistory * 2),
-        pageContext: pageContext,
-      }),
+    // SEC-COPILOT: Generate time-based request token
+    return generateRequestToken().then(function (token) {
+      return fetch(CONFIG.apiEndpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Copilot-Token": token,
+        },
+        body: JSON.stringify({
+          message: message,
+          history: history.slice(-CONFIG.maxHistory * 2),
+          pageContext: pageContext,
+        }),
+      });
     }).then(function (resp) {
       if (!resp.ok)
         return resp.json().then(function (e) {
