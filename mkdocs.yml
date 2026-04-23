@@ -176,5 +176,8 @@ nav:
       - Antitrust Analytics on Azure: use-cases/antitrust-analytics.md
       - "DOJ Antitrust: Step-by-Step Domain Build": use-cases/doj-antitrust-deep-dive.md
       - Government Data Analytics on Azure: use-cases/government-data-analytics.md
+      - Unified Analytics on Microsoft Fabric: use-cases/fabric-unified-analytics.md
+      - "Real-Time Intelligence: Anomaly Detection": use-cases/realtime-intelligence-anomaly-detection.md
+      - "AI Document Analytics & eDiscovery": use-cases/ai-document-analytics-ediscovery.md
       - "Azure Analytics: White Papers & Resources": use-cases/azure-analytics-resources.md
   - AI Copilot: chat.md

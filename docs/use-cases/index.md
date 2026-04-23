@@ -20,6 +20,7 @@ Government agencies face unique challenges: strict compliance requirements (FedR
 | [Antitrust Analytics on Azure](antitrust-analytics.md) | End-to-end analytics for DOJ Antitrust Division data — merger reviews, enforcement trends, and penalty analysis using CSA-in-a-Box patterns |
 | [DOJ Antitrust: Step-by-Step Domain Build](doj-antitrust-deep-dive.md) | Detailed walkthrough of building the DOJ antitrust domain from data discovery through gold-layer analytics |
 | [Government Data Analytics on Azure](government-data-analytics.md) | Azure Government Cloud capabilities, compliance frameworks, and reference architectures for public sector analytics |
+| [Unified Analytics on Microsoft Fabric](fabric-unified-analytics.md) | Migrating CSA-in-a-Box domains to Microsoft Fabric — OneLake, Lakehouse, dbt on Fabric Data Warehouse, and Purview governance |
 
 !!! tip "Start Here"
     If you're new to CSA-in-a-Box, the [DOJ Antitrust Deep Dive](doj-antitrust-deep-dive.md) is the best end-to-end example of how a domain gets built from scratch.
@@ -33,6 +34,7 @@ Legal analytics transforms unstructured court filings, enforcement actions, and 
 | Use Case | Description |
 |---|---|
 | [Antitrust Analytics on Azure](antitrust-analytics.md) | Covers Sherman Act, Clayton Act, and FTC Act enforcement data pipelines |
+| [AI Document Analytics & eDiscovery](ai-document-analytics-ediscovery.md) | AI-enhanced document review, Purview eDiscovery integration, and governed analytics for litigation workflows |
 | [Azure Analytics Resources](azure-analytics-resources.md) | Includes eDiscovery and legal analytics white papers and architecture guidance |
 
 ---
@@ -41,8 +43,12 @@ Legal analytics transforms unstructured court filings, enforcement actions, and 
 
 Financial institutions require real-time risk analytics, regulatory reporting (Basel III, Dodd-Frank), and fraud detection pipelines — all under strict audit and compliance controls.
 
-!!! note "Coming Soon"
-    Detailed financial services use cases are in development. The patterns demonstrated in the antitrust analytics domain — medallion architecture, data quality gates, and data product contracts — apply directly to financial regulatory reporting.
+| Use Case | Description |
+|---|---|
+| [Real-Time Intelligence: Anomaly Detection](realtime-intelligence-anomaly-detection.md) | Streaming anomaly detection with Fabric RTI — Eventstreams, Eventhouse (KQL), Activator alerts, and historical enrichment via OneLake |
+
+!!! note "More Coming Soon"
+    Additional financial services use cases are in development. The patterns demonstrated in the antitrust analytics domain — medallion architecture, data quality gates, and data product contracts — apply directly to financial regulatory reporting.
 
 ---
 
