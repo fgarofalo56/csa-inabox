@@ -13,17 +13,17 @@ This use case applies the CSA-in-a-Box medallion architecture to federal cyberse
 
 ## Data Sources
 
-| Source | Description | Volume / Coverage | Update Frequency | Access Method |
-|---|---|---|---|---|
-| **Azure Sentinel Alerts** | Security alerts from analytics rules, ML models, and fusion detection | Varies by environment, typically 1K–100K alerts/day | Near real-time | Log Analytics API / Event Hub export |
-| **Windows Security Events** | Logon events (4624/4625), process creation (4688), privilege use (4672), service installs (7045) | 10–500 GB/day depending on endpoint count | Real-time via AMA | Data Collection Rules → Log Analytics |
-| **NSG Flow Logs** | Network Security Group flow records — source/dest IP, port, protocol, bytes, allow/deny | 1–50 GB/day per subscription | 1-minute aggregation | ADLS Gen2 (JSON) |
-| **Azure Activity Log** | Control-plane operations — resource creation, RBAC changes, policy assignments | Low volume, high signal | Near real-time | Diagnostic Settings → Event Hub |
-| **Microsoft Defender for Cloud** | Security recommendations, secure score, vulnerability assessments, regulatory compliance | Per-subscription | Continuous | REST API / Log Analytics |
-| **CISA KEV Catalog** | Known Exploited Vulnerabilities — CVEs with mandated remediation deadlines | ~1,100 entries, growing | Updated as needed | JSON download / REST API |
+| Source                           | Description                                                                                      | Volume / Coverage                                   | Update Frequency     | Access Method                         |
+| -------------------------------- | ------------------------------------------------------------------------------------------------ | --------------------------------------------------- | -------------------- | ------------------------------------- |
+| **Azure Sentinel Alerts**        | Security alerts from analytics rules, ML models, and fusion detection                            | Varies by environment, typically 1K–100K alerts/day | Near real-time       | Log Analytics API / Event Hub export  |
+| **Windows Security Events**      | Logon events (4624/4625), process creation (4688), privilege use (4672), service installs (7045) | 10–500 GB/day depending on endpoint count           | Real-time via AMA    | Data Collection Rules → Log Analytics |
+| **NSG Flow Logs**                | Network Security Group flow records — source/dest IP, port, protocol, bytes, allow/deny          | 1–50 GB/day per subscription                        | 1-minute aggregation | ADLS Gen2 (JSON)                      |
+| **Azure Activity Log**           | Control-plane operations — resource creation, RBAC changes, policy assignments                   | Low volume, high signal                             | Near real-time       | Diagnostic Settings → Event Hub       |
+| **Microsoft Defender for Cloud** | Security recommendations, secure score, vulnerability assessments, regulatory compliance         | Per-subscription                                    | Continuous           | REST API / Log Analytics              |
+| **CISA KEV Catalog**             | Known Exploited Vulnerabilities — CVEs with mandated remediation deadlines                       | ~1,100 entries, growing                             | Updated as needed    | JSON download / REST API              |
 
 !!! info "Data Collection"
-    Windows Security Events use the Azure Monitor Agent (AMA) with Data Collection Rules for selective event forwarding. NSG Flow Logs v2 write directly to ADLS Gen2. Sentinel alerts can be exported to Event Hub for real-time downstream processing. The CISA KEV catalog is publicly available at [cisa.gov/known-exploited-vulnerabilities-catalog](https://www.cisa.gov/known-exploited-vulnerabilities-catalog).
+Windows Security Events use the Azure Monitor Agent (AMA) with Data Collection Rules for selective event forwarding. NSG Flow Logs v2 write directly to ADLS Gen2. Sentinel alerts can be exported to Event Hub for real-time downstream processing. The CISA KEV catalog is publicly available at [cisa.gov/known-exploited-vulnerabilities-catalog](https://www.cisa.gov/known-exploited-vulnerabilities-catalog).
 
 ---
 
@@ -182,7 +182,7 @@ az deployment group create \
 ```
 
 !!! note "Full Templates"
-    Complete Bicep templates are in `examples/cybersecurity/deploy/`. The workspace template also provisions a managed identity and diagnostic settings for workspace audit logging.
+Complete Bicep templates are in `examples/cybersecurity/deploy/`. The workspace template also provisions a managed identity and diagnostic settings for workspace audit logging.
 
 ---
 
@@ -217,13 +217,13 @@ resource bruteForceRule 'Microsoft.SecurityInsights/alertRules@2023-02-01-previe
 }
 ```
 
-| Rule | Tactic | Technique | Severity |
-|---|---|---|---|
-| Brute Force — Failed Sign-Ins | Credential Access | T1110 | Medium |
-| Suspicious PowerShell Execution | Execution, Defense Evasion | T1059.001 | High |
-| Lateral Movement — RDP from Unusual Source | Lateral Movement | T1021.001 | High |
-| Data Exfiltration — Large Outbound Transfer | Exfiltration | T1048 | High |
-| Communication with Known Malicious IP | Command and Control | T1071 | High |
+| Rule                                        | Tactic                     | Technique | Severity |
+| ------------------------------------------- | -------------------------- | --------- | -------- |
+| Brute Force — Failed Sign-Ins               | Credential Access          | T1110     | Medium   |
+| Suspicious PowerShell Execution             | Execution, Defense Evasion | T1059.001 | High     |
+| Lateral Movement — RDP from Unusual Source  | Lateral Movement           | T1021.001 | High     |
+| Data Exfiltration — Large Outbound Transfer | Exfiltration               | T1048     | High     |
+| Communication with Known Malicious IP       | Command and Control        | T1071     | High     |
 
 ---
 
@@ -310,7 +310,7 @@ pdf["priority_score"] = (
 ```
 
 !!! warning "Model Tuning"
-    The `contamination=0.15` parameter should be calibrated to your environment's baseline alert volume. High-alert environments may need lower contamination rates to avoid alert fatigue. Evaluate precision/recall trade-offs on labeled historical data before production deployment.
+The `contamination=0.15` parameter should be calibrated to your environment's baseline alert volume. High-alert environments may need lower contamination rates to avoid alert fatigue. Evaluate precision/recall trade-offs on labeled historical data before production deployment.
 
 ---
 
@@ -352,11 +352,11 @@ posture AS (
 SELECT * FROM posture ORDER BY remediation_priority DESC
 ```
 
-| Framework | Controls Mapped | Assessment Frequency |
-|---|---|---|
-| NIST 800-53 Rev 5 | AC, CM, IA, SI, SC, CP, MP | Continuous (30-day rolling) |
-| CMMC Level 2 | Maps via NIST 800-53 crosswalk | Continuous |
-| FedRAMP High | Inherits NIST 800-53 High baseline | Continuous |
+| Framework         | Controls Mapped                    | Assessment Frequency        |
+| ----------------- | ---------------------------------- | --------------------------- |
+| NIST 800-53 Rev 5 | AC, CM, IA, SI, SC, CP, MP         | Continuous (30-day rolling) |
+| CMMC Level 2      | Maps via NIST 800-53 crosswalk     | Continuous                  |
+| FedRAMP High      | Inherits NIST 800-53 High baseline | Continuous                  |
 
 ---
 
@@ -434,16 +434,16 @@ print(f"CISA KEV: {len(df_kev)} total, {overdue_count} past remediation deadline
 
 The analytics pipeline supports Zero Trust Architecture principles by providing continuous verification signals across identity, device, network, and workload pillars.
 
-| Zero Trust Pillar | Data Source | Analytics Output |
-|---|---|---|
-| **Identity** | Azure AD Sign-In Logs, Security Events (4624/4625) | Impossible travel detection, brute force alerts, MFA gap analysis |
-| **Device** | Defender for Endpoint, Security Events (7045) | Endpoint compliance scoring, unauthorized software detection |
-| **Network** | NSG Flow Logs, DNS logs | Lateral movement detection, C2 beaconing, data exfiltration tracking |
-| **Workload** | Azure Activity Log, Defender for Cloud | Resource misconfiguration alerts, privilege escalation detection |
-| **Data** | DLP alerts, Azure Information Protection | Sensitive data access anomalies, unauthorized sharing patterns |
+| Zero Trust Pillar | Data Source                                        | Analytics Output                                                     |
+| ----------------- | -------------------------------------------------- | -------------------------------------------------------------------- |
+| **Identity**      | Azure AD Sign-In Logs, Security Events (4624/4625) | Impossible travel detection, brute force alerts, MFA gap analysis    |
+| **Device**        | Defender for Endpoint, Security Events (7045)      | Endpoint compliance scoring, unauthorized software detection         |
+| **Network**       | NSG Flow Logs, DNS logs                            | Lateral movement detection, C2 beaconing, data exfiltration tracking |
+| **Workload**      | Azure Activity Log, Defender for Cloud             | Resource misconfiguration alerts, privilege escalation detection     |
+| **Data**          | DLP alerts, Azure Information Protection           | Sensitive data access anomalies, unauthorized sharing patterns       |
 
 !!! tip "Conditional Access Integration"
-    Anomaly scores from the Isolation Forest model can feed Azure AD Conditional Access policies via custom risk signals, enabling automated session revocation when user behavior deviates from baseline.
+Anomaly scores from the Isolation Forest model can feed Azure AD Conditional Access policies via custom risk signals, enabling automated session revocation when user behavior deviates from baseline.
 
 ---
 
@@ -451,13 +451,13 @@ The analytics pipeline supports Zero Trust Architecture principles by providing 
 
 The Gold-layer `rpt_mttd_mttr` model computes SOC performance metrics from alert and incident lifecycle timestamps.
 
-| Metric | Definition | Target (Federal SOC) |
-|---|---|---|
-| **MTTD** | Time from threat activity to first alert generation | < 15 minutes |
-| **MTTR** | Time from alert creation to incident closure | < 4 hours (Critical), < 24 hours (High) |
-| **Alert-to-Triage** | Time from alert creation to analyst assignment | < 10 minutes |
-| **False Positive Rate** | Percentage of alerts closed as benign | < 30% |
-| **Coverage Ratio** | MITRE ATT&CK techniques with active detection rules | > 60% of applicable techniques |
+| Metric                  | Definition                                          | Target (Federal SOC)                    |
+| ----------------------- | --------------------------------------------------- | --------------------------------------- |
+| **MTTD**                | Time from threat activity to first alert generation | < 15 minutes                            |
+| **MTTR**                | Time from alert creation to incident closure        | < 4 hours (Critical), < 24 hours (High) |
+| **Alert-to-Triage**     | Time from alert creation to analyst assignment      | < 10 minutes                            |
+| **False Positive Rate** | Percentage of alerts closed as benign               | < 30%                                   |
+| **Coverage Ratio**      | MITRE ATT&CK techniques with active detection rules | > 60% of applicable techniques          |
 
 ```mermaid
 graph TD
@@ -474,20 +474,16 @@ graph TD
 
 For FedRAMP High workloads, deploy all resources to Azure Government regions. Key differences from commercial Azure:
 
-| Component | Commercial | Azure Government |
-|---|---|---|
-| Sentinel | All regions | USGov Virginia, USGov Arizona |
-| Log Analytics | All regions | USGov Virginia, USGov Arizona, USDoD Central, USDoD East |
-| Event Hub | All regions | USGov Virginia, USGov Arizona |
-| ADLS Gen2 | All regions | USGov Virginia, USGov Arizona |
-| Defender for Cloud | All regions | USGov Virginia, USGov Arizona |
-| ARM endpoint | `management.azure.com` | `management.usgovcloudapi.net` |
+| Component          | Commercial             | Azure Government                                         |
+| ------------------ | ---------------------- | -------------------------------------------------------- |
+| Sentinel           | All regions            | USGov Virginia, USGov Arizona                            |
+| Log Analytics      | All regions            | USGov Virginia, USGov Arizona, USDoD Central, USDoD East |
+| Event Hub          | All regions            | USGov Virginia, USGov Arizona                            |
+| ADLS Gen2          | All regions            | USGov Virginia, USGov Arizona                            |
+| Defender for Cloud | All regions            | USGov Virginia, USGov Arizona                            |
+| ARM endpoint       | `management.azure.com` | `management.usgovcloudapi.net`                           |
 
-!!! warning "Azure Government Considerations"
-    - Use `az cloud set --name AzureUSGovernment` before deploying
-    - Sentinel content hub solutions may have delayed availability in government regions
-    - Log Analytics workspace IDs differ between clouds — update `WORKSPACE_ID` references
-    - Some Defender for Cloud features (e.g., CSPM) may have feature parity gaps — check [Azure Government services availability](https://learn.microsoft.com/en-us/azure/azure-government/compare-azure-government-global-azure)
+!!! warning "Azure Government Considerations" - Use `az cloud set --name AzureUSGovernment` before deploying - Sentinel content hub solutions may have delayed availability in government regions - Log Analytics workspace IDs differ between clouds — update `WORKSPACE_ID` references - Some Defender for Cloud features (e.g., CSPM) may have feature parity gaps — check [Azure Government services availability](https://learn.microsoft.com/en-us/azure/azure-government/compare-azure-government-global-azure)
 
 ```bash
 # Deploy to Azure Government

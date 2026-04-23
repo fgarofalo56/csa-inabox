@@ -63,20 +63,20 @@ graph LR
 
 ## Data Sources
 
-| Source | Description | Volume / Coverage | Update Frequency | Access Method |
-|---|---|---|---|---|
-| **USGS Earthquake API** | ComCat earthquake catalog — origin time, magnitude, depth, felt reports, tsunami flags from the Advanced National Seismic System | 8,000+ sensors, ~20,000 events/year globally (M2.5+) | Real-time (seconds) | [REST API (GeoJSON)](https://earthquake.usgs.gov/fdsnws/event/1/) |
-| **USGS Water Services** | National Water Information System (NWIS) — daily and instantaneous streamflow, gauge height, water temperature, dissolved oxygen | 13,000+ active stream gauges, 850,000+ historical sites | Real-time (15 min) to daily | [REST API (JSON/RDB)](https://waterservices.usgs.gov/rest/) |
-| **NPS Visitor Statistics** | Monthly recreation visits, camping, lodging, and backcountry use across all NPS units | 400+ park units, 300M+ recreation visits/year | Monthly | [IRMA Stats API](https://irmaservices.nps.gov/v3/rest/stats) |
-| **NIFC Wildfire Data** | National Interagency Fire Center — active fire perimeters, prescribed burns, fire weather zones | 50,000+ fires/year, GIS perimeter polygons | Daily during fire season | [ArcGIS REST / GeoJSON](https://data-nifc.opendata.arcgis.com/) |
-| **FWS ECOS** | Environmental Conservation Online System — threatened/endangered species listings, critical habitat designations, recovery plans | 1,600+ listed species, 800+ critical habitat designations | Quarterly | [ECOS REST API](https://ecos.fws.gov/ecp/) |
-| **BLM Public Data** | Land status, mining claims, grazing allotments, oil & gas lease parcels, right-of-way grants | 245M acres of public land, 63,000+ grazing permits | Monthly | [BLM Navigator / ArcGIS](https://navigator.blm.gov/) |
+| Source                     | Description                                                                                                                      | Volume / Coverage                                         | Update Frequency            | Access Method                                                     |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- | --------------------------- | ----------------------------------------------------------------- |
+| **USGS Earthquake API**    | ComCat earthquake catalog — origin time, magnitude, depth, felt reports, tsunami flags from the Advanced National Seismic System | 8,000+ sensors, ~20,000 events/year globally (M2.5+)      | Real-time (seconds)         | [REST API (GeoJSON)](https://earthquake.usgs.gov/fdsnws/event/1/) |
+| **USGS Water Services**    | National Water Information System (NWIS) — daily and instantaneous streamflow, gauge height, water temperature, dissolved oxygen | 13,000+ active stream gauges, 850,000+ historical sites   | Real-time (15 min) to daily | [REST API (JSON/RDB)](https://waterservices.usgs.gov/rest/)       |
+| **NPS Visitor Statistics** | Monthly recreation visits, camping, lodging, and backcountry use across all NPS units                                            | 400+ park units, 300M+ recreation visits/year             | Monthly                     | [IRMA Stats API](https://irmaservices.nps.gov/v3/rest/stats)      |
+| **NIFC Wildfire Data**     | National Interagency Fire Center — active fire perimeters, prescribed burns, fire weather zones                                  | 50,000+ fires/year, GIS perimeter polygons                | Daily during fire season    | [ArcGIS REST / GeoJSON](https://data-nifc.opendata.arcgis.com/)   |
+| **FWS ECOS**               | Environmental Conservation Online System — threatened/endangered species listings, critical habitat designations, recovery plans | 1,600+ listed species, 800+ critical habitat designations | Quarterly                   | [ECOS REST API](https://ecos.fws.gov/ecp/)                        |
+| **BLM Public Data**        | Land status, mining claims, grazing allotments, oil & gas lease parcels, right-of-way grants                                     | 245M acres of public land, 63,000+ grazing permits        | Monthly                     | [BLM Navigator / ArcGIS](https://navigator.blm.gov/)              |
 
 !!! info "Data Access"
-    All Interior datasets listed above are publicly available at no cost. The USGS Earthquake API and Water Services require no authentication. The NPS Stats API is open but rate-limited. NIFC and BLM data are available through ArcGIS Open Data portals. FWS ECOS provides both a web interface and downloadable bulk files.
+All Interior datasets listed above are publicly available at no cost. The USGS Earthquake API and Water Services require no authentication. The NPS Stats API is open but rate-limited. NIFC and BLM data are available through ArcGIS Open Data portals. FWS ECOS provides both a web interface and downloadable bulk files.
 
 !!! warning "Rate Limits"
-    USGS Water Services requests should include a `User-Agent` header identifying your application. Batch fetches against NPS IRMA should observe a 300 ms delay between requests to avoid throttling. The USGS Earthquake API limits queries to 20,000 events per request — use date windowing for larger extractions.
+USGS Water Services requests should include a `User-Agent` header identifying your application. Batch fetches against NPS IRMA should observe a 300 ms delay between requests to avoid throttling. The USGS Earthquake API limits queries to 20,000 events per request — use date windowing for larger extractions.
 
 ---
 
@@ -267,7 +267,7 @@ END AS specific_discharge_cfs_per_sqmi
 ```
 
 !!! tip "Hydrologic Unit Codes"
-    The silver model extracts HUC region and sub-region codes from the full HUC identifier, enabling watershed-level aggregation. HUC-2 regions align with major river basins (e.g., `14` = Upper Colorado, `15` = Lower Colorado), while HUC-4 sub-regions provide finer drainage area groupings.
+The silver model extracts HUC region and sub-region codes from the full HUC identifier, enabling watershed-level aggregation. HUC-2 regions align with major river basins (e.g., `14` = Upper Colorado, `15` = Lower Colorado), while HUC-4 sub-regions provide finer drainage area groupings.
 
 ---
 
@@ -380,15 +380,15 @@ FWS ECOS tracks 1,600+ species listed under the Endangered Species Act, includin
 
 ### Conservation Overlap Analysis
 
-| Analysis | Data Sources | Output |
-|---|---|---|
-| Critical habitat vs. active mining claims | FWS ECOS habitat polygons + BLM mining claims | Conflict parcels requiring Section 7 consultation |
-| Species range vs. wildfire perimeters | FWS species occurrence + NIFC active fires | At-risk populations for emergency response |
-| Aquatic species vs. drought conditions | FWS aquatic species + USGS streamflow drought index | Streams where listed fish face low-flow stress |
-| Habitat connectivity vs. BLM rights-of-way | FWS habitat corridors + BLM ROW grants | Fragmentation risk scoring for permit review |
+| Analysis                                   | Data Sources                                        | Output                                            |
+| ------------------------------------------ | --------------------------------------------------- | ------------------------------------------------- |
+| Critical habitat vs. active mining claims  | FWS ECOS habitat polygons + BLM mining claims       | Conflict parcels requiring Section 7 consultation |
+| Species range vs. wildfire perimeters      | FWS species occurrence + NIFC active fires          | At-risk populations for emergency response        |
+| Aquatic species vs. drought conditions     | FWS aquatic species + USGS streamflow drought index | Streams where listed fish face low-flow stress    |
+| Habitat connectivity vs. BLM rights-of-way | FWS habitat corridors + BLM ROW grants              | Fragmentation risk scoring for permit review      |
 
 !!! note "Section 7 Consultation"
-    Under the Endangered Species Act, federal agencies must consult with FWS before authorizing actions that may affect listed species or critical habitat. The overlap analysis automates the initial screening step, identifying parcels where formal consultation is likely required.
+Under the Endangered Species Act, federal agencies must consult with FWS before authorizing actions that may affect listed species or critical habitat. The overlap analysis automates the initial screening step, identifying parcels where formal consultation is likely required.
 
 ---
 
@@ -398,13 +398,13 @@ BLM administers 245 million acres of public land, issuing permits for grazing, m
 
 ### Key BLM Datasets
 
-| Dataset | Records | Description |
-|---|---|---|
-| Grazing allotments | 18,000+ | Boundaries, AUMs, permittee, livestock type |
-| Mining claims | 350,000+ active | Lode, placer, mill site, tunnel site claims |
-| Oil & gas leases | 25,000+ active | Lease parcels, production volumes, royalties |
-| Rights-of-way | 63,000+ | Roads, pipelines, power lines, communication sites |
-| Solar/wind energy zones | 700+ | Designated renewable energy development areas |
+| Dataset                 | Records         | Description                                        |
+| ----------------------- | --------------- | -------------------------------------------------- |
+| Grazing allotments      | 18,000+         | Boundaries, AUMs, permittee, livestock type        |
+| Mining claims           | 350,000+ active | Lode, placer, mill site, tunnel site claims        |
+| Oil & gas leases        | 25,000+ active  | Lease parcels, production volumes, royalties       |
+| Rights-of-way           | 63,000+         | Roads, pipelines, power lines, communication sites |
+| Solar/wind energy zones | 700+            | Designated renewable energy development areas      |
 
 ---
 
@@ -412,13 +412,13 @@ BLM administers 245 million acres of public land, issuing permits for grazing, m
 
 The unified lakehouse enables queries that span bureau boundaries — analysis that is difficult or impossible when each bureau maintains isolated data stores.
 
-| Scenario | Bureaus | Question Answered |
-|---|---|---|
-| Seismic impact on water supply | USGS Earthquake + USGS Water | Do M5+ earthquakes cause measurable streamflow changes within 100 km? |
-| Wildfire smoke and park visitation | NIFC + NPS | How do active fires within 50 miles affect monthly park visits? |
-| Drought and grazing permits | USGS Water + BLM | Which grazing allotments are in watersheds experiencing extreme drought? |
-| Habitat and energy development | FWS + BLM | Do proposed solar energy zones overlap with critical habitat? |
-| Park infrastructure and flood risk | NPS + USGS Water | Which park facilities are within flood-stage watersheds? |
+| Scenario                           | Bureaus                      | Question Answered                                                        |
+| ---------------------------------- | ---------------------------- | ------------------------------------------------------------------------ |
+| Seismic impact on water supply     | USGS Earthquake + USGS Water | Do M5+ earthquakes cause measurable streamflow changes within 100 km?    |
+| Wildfire smoke and park visitation | NIFC + NPS                   | How do active fires within 50 miles affect monthly park visits?          |
+| Drought and grazing permits        | USGS Water + BLM             | Which grazing allotments are in watersheds experiencing extreme drought? |
+| Habitat and energy development     | FWS + BLM                    | Do proposed solar energy zones overlap with critical habitat?            |
+| Park infrastructure and flood risk | NPS + USGS Water             | Which park facilities are within flood-stage watersheds?                 |
 
 ---
 
@@ -462,15 +462,15 @@ examples/interior/
 
 ## Sources
 
-| Resource | URL |
-|---|---|
-| USGS Earthquake Hazards API | <https://earthquake.usgs.gov/fdsnws/event/1/> |
-| USGS Water Services (NWIS) | <https://waterservices.usgs.gov/rest/> |
-| NPS Visitor Use Statistics | <https://irmaservices.nps.gov/v3/rest/stats> |
-| NPS Stats Portal | <https://irma.nps.gov/Stats/> |
-| NIFC Open Data | <https://data-nifc.opendata.arcgis.com/> |
-| FWS ECOS | <https://ecos.fws.gov/ecp/> |
-| FWS Critical Habitat Maps | <https://fws.gov/library/collections/critical-habitat-online-mapper> |
-| BLM Navigator | <https://navigator.blm.gov/> |
-| BLM GeoCommunicator | <https://geocommunicator.blm.gov/> |
-| USGS National Map | <https://apps.nationalmap.gov/> |
+| Resource                    | URL                                                                  |
+| --------------------------- | -------------------------------------------------------------------- |
+| USGS Earthquake Hazards API | <https://earthquake.usgs.gov/fdsnws/event/1/>                        |
+| USGS Water Services (NWIS)  | <https://waterservices.usgs.gov/rest/>                               |
+| NPS Visitor Use Statistics  | <https://irmaservices.nps.gov/v3/rest/stats>                         |
+| NPS Stats Portal            | <https://irma.nps.gov/Stats/>                                        |
+| NIFC Open Data              | <https://data-nifc.opendata.arcgis.com/>                             |
+| FWS ECOS                    | <https://ecos.fws.gov/ecp/>                                          |
+| FWS Critical Habitat Maps   | <https://fws.gov/library/collections/critical-habitat-online-mapper> |
+| BLM Navigator               | <https://navigator.blm.gov/>                                         |
+| BLM GeoCommunicator         | <https://geocommunicator.blm.gov/>                                   |
+| USGS National Map           | <https://apps.nationalmap.gov/>                                      |

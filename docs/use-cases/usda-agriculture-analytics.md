@@ -8,7 +8,7 @@ description: End-to-end guide for building USDA agricultural analytics using CSA
 This use case covers the ingestion, transformation, and analysis of data from multiple USDA agencies — NASS, FNS, FSIS, and FoodData Central — using Azure Cloud Scale Analytics patterns. The implementation combines crop production statistics with nutrition assistance program data, food safety inspection records, and nutritional composition databases to produce yield forecasts, enrollment trend analysis, food safety risk scores, and agricultural dashboards.
 
 !!! info "Reference Implementation"
-    The complete working code for this domain lives in [`examples/usda/`](../../examples/usda/). This page explains the architecture, data sources, and step-by-step build process.
+The complete working code for this domain lives in [`examples/usda/`](../../examples/usda/). This page explains the architecture, data sources, and step-by-step build process.
 
 ---
 
@@ -88,15 +88,15 @@ graph LR
 
 ## Data Sources
 
-| Source | Agency | Data Content | Format | Update Frequency |
-|--------|--------|-------------|--------|-----------------|
-| **NASS QuickStats API** | National Agricultural Statistics Service | Crop yields (bu/acre), planted & harvested acres, production volumes by commodity, state, and county | JSON (REST) | Daily (current year), monthly (historical) |
-| **FNS SNAP Data** | Food and Nutrition Service | SNAP enrollment counts, benefit amounts by state and county, household demographics | CSV (data.gov) | Monthly (2-month lag) |
-| **FSIS Inspection Data** | Food Safety and Inspection Service | Meat, poultry, and egg inspection results, violation records, establishment compliance status | XML / CSV | Daily batch |
-| **FoodData Central** | Agricultural Research Service | Nutritional composition per food item, nutrient amounts, food categories | JSON (REST) | Quarterly |
+| Source                   | Agency                                   | Data Content                                                                                         | Format         | Update Frequency                           |
+| ------------------------ | ---------------------------------------- | ---------------------------------------------------------------------------------------------------- | -------------- | ------------------------------------------ |
+| **NASS QuickStats API**  | National Agricultural Statistics Service | Crop yields (bu/acre), planted & harvested acres, production volumes by commodity, state, and county | JSON (REST)    | Daily (current year), monthly (historical) |
+| **FNS SNAP Data**        | Food and Nutrition Service               | SNAP enrollment counts, benefit amounts by state and county, household demographics                  | CSV (data.gov) | Monthly (2-month lag)                      |
+| **FSIS Inspection Data** | Food Safety and Inspection Service       | Meat, poultry, and egg inspection results, violation records, establishment compliance status        | XML / CSV      | Daily batch                                |
+| **FoodData Central**     | Agricultural Research Service            | Nutritional composition per food item, nutrient amounts, food categories                             | JSON (REST)    | Quarterly                                  |
 
 !!! tip "API Registration"
-    NASS QuickStats API keys are free. Register at [quickstats.nass.usda.gov/api](https://quickstats.nass.usda.gov/api). The free tier allows 1,000 requests per day — sufficient for daily incremental loads but requires rate-limiting logic for historical backfills.
+NASS QuickStats API keys are free. Register at [quickstats.nass.usda.gov/api](https://quickstats.nass.usda.gov/api). The free tier allows 1,000 requests per day — sufficient for daily incremental loads but requires rate-limiting logic for historical backfills.
 
 ---
 
@@ -144,7 +144,7 @@ def fetch_crop_yields(
 ```
 
 !!! warning "Rate Limits"
-    The free-tier NASS API enforces 1,000 requests/day. Use the `--delay` flag on `fetch_nass.py` to throttle requests. For county-level backfills across all states, schedule the load across multiple days or request an elevated quota from NASS.
+The free-tier NASS API enforces 1,000 requests/day. Use the `--delay` flag on `fetch_nass.py` to throttle requests. For county-level backfills across all states, schedule the load across multiple days or request an elevated quota from NASS.
 
 The full fetcher with multi-commodity support, CSV/JSON export, and connection testing is at [`examples/usda/data/open-data/fetch_nass.py`](../../examples/usda/data/open-data/fetch_nass.py).
 
@@ -173,11 +173,11 @@ FROM {{ source('usda_raw', 'crop_yields') }}
 
 Three Bronze tables map to the primary source systems:
 
-| Bronze Model | Source | Key Fields |
-|-------------|--------|-----------|
-| `brz_crop_yields` | NASS QuickStats | `commodity_desc`, `state_fips_code`, `year`, `value` |
-| `brz_snap_enrollment` | FNS SNAP | `state_code`, `enrollment_date`, `persons`, `benefits` |
-| `brz_food_inspections` | FSIS | `establishment_number`, `inspection_date`, `violation_type` |
+| Bronze Model           | Source          | Key Fields                                                  |
+| ---------------------- | --------------- | ----------------------------------------------------------- |
+| `brz_crop_yields`      | NASS QuickStats | `commodity_desc`, `state_fips_code`, `year`, `value`        |
+| `brz_snap_enrollment`  | FNS SNAP        | `state_code`, `enrollment_date`, `persons`, `benefits`      |
+| `brz_food_inspections` | FSIS            | `establishment_number`, `inspection_date`, `violation_type` |
 
 ### Step 3 — Build Silver Layer (Cleansed and Conformed)
 
@@ -263,7 +263,7 @@ forecasting AS (
 ```
 
 !!! tip "Forecast Method"
-    The default forecast uses linear trend extrapolation from 5-year slopes. For production workloads, integrate Azure ML to train ARIMA or Prophet models on the Silver-layer time series and write predictions back to the Gold table via the `yield_forecast_next_year` column.
+The default forecast uses linear trend extrapolation from 5-year slopes. For production workloads, integrate Azure ML to train ARIMA or Prophet models on the Silver-layer time series and write predictions back to the Gold table via the `yield_forecast_next_year` column.
 
 ### Step 5 — Build Gold Layer: SNAP Enrollment Trends
 
@@ -291,11 +291,11 @@ The model classifies each state-month as `INCREASING` (>5% YoY growth), `DECREAS
 
 The risk scoring model computes a composite 0-100 score for each FSIS-inspected establishment based on three weighted components:
 
-| Component | Weight | Scoring Logic |
-|-----------|--------|--------------|
-| Violation history | 40% | 12-month violation rate mapped to 0-100 scale |
-| Inspection recency | 30% | Days since last inspection — longer gaps increase risk |
-| Violation severity | 30% | Critical/moderate/minor breakdown with recency decay |
+| Component          | Weight | Scoring Logic                                          |
+| ------------------ | ------ | ------------------------------------------------------ |
+| Violation history  | 40%    | 12-month violation rate mapped to 0-100 scale          |
+| Inspection recency | 30%    | Days since last inspection — longer gaps increase risk |
+| Violation severity | 30%    | Critical/moderate/minor breakdown with recency decay   |
 
 The composite score is adjusted by industry multiplier (slaughter facilities 1.2x, retail 0.9x) and establishment size, then categorized into five tiers: `CRITICAL`, `HIGH`, `MODERATE`, `LOW`, `MINIMAL`.
 
@@ -317,18 +317,18 @@ ORDER BY adjusted_risk_score DESC;
 ```
 
 !!! warning "Score Reliability"
-    The `is_risk_score_reliable` flag is `TRUE` only when an establishment has 3+ inspections within the last 12 months. New or infrequently inspected establishments may have artificially low scores. Filter on this flag for enforcement-priority dashboards.
+The `is_risk_score_reliable` flag is `TRUE` only when an establishment has 3+ inspections within the last 12 months. New or infrequently inspected establishments may have artificially low scores. Filter on this flag for enforcement-priority dashboards.
 
 ---
 
 ## Gold Layer Data Products
 
-| Data Product | dbt Model | Key Metrics | Refresh |
-|-------------|-----------|-------------|---------|
-| Crop Yield Forecast | `gld_crop_yield_forecast` | `yield_per_acre`, `yield_3yr_avg`, `yield_forecast_next_year`, `yield_trend_5yr` | Daily |
-| SNAP Enrollment Trends | `gld_snap_trends` | `current_enrollment`, `enrollment_change_1yr`, `enrollment_trend`, `avg_benefits_per_person` | Monthly |
-| Food Safety Risk Score | `gld_food_safety_risk_score` | `adjusted_risk_score`, `adjusted_risk_category`, `compliance_rate`, `recommended_action` | Weekly |
-| Agricultural Dashboard | `gld_agricultural_dashboard` | Cross-domain KPIs for executive reporting | Daily |
+| Data Product           | dbt Model                    | Key Metrics                                                                                  | Refresh |
+| ---------------------- | ---------------------------- | -------------------------------------------------------------------------------------------- | ------- |
+| Crop Yield Forecast    | `gld_crop_yield_forecast`    | `yield_per_acre`, `yield_3yr_avg`, `yield_forecast_next_year`, `yield_trend_5yr`             | Daily   |
+| SNAP Enrollment Trends | `gld_snap_trends`            | `current_enrollment`, `enrollment_change_1yr`, `enrollment_trend`, `avg_benefits_per_person` | Monthly |
+| Food Safety Risk Score | `gld_food_safety_risk_score` | `adjusted_risk_score`, `adjusted_risk_category`, `compliance_rate`, `recommended_action`     | Weekly  |
+| Agricultural Dashboard | `gld_agricultural_dashboard` | Cross-domain KPIs for executive reporting                                                    | Daily   |
 
 ---
 
@@ -356,7 +356,7 @@ graph TD
 ## Deployment
 
 !!! warning "Cost"
-    This vertical deploys real Azure resources. A running environment costs approximately **$180-300/day** (Synapse, Databricks, ADF, Storage, Key Vault). Always run `teardown.sh` when finished. See [`examples/usda/deploy/teardown.sh`](../../examples/usda/deploy/teardown.sh).
+This vertical deploys real Azure resources. A running environment costs approximately **$180-300/day** (Synapse, Databricks, ADF, Storage, Key Vault). Always run `teardown.sh` when finished. See [`examples/usda/deploy/teardown.sh`](../../examples/usda/deploy/teardown.sh).
 
 ```bash
 # Deploy infrastructure
@@ -385,11 +385,11 @@ Two parameter files are provided: `params.dev.json` for commercial Azure and `pa
 
 ## Data Sources and API References
 
-| Resource | URL |
-|----------|-----|
-| NASS QuickStats API | [quickstats.nass.usda.gov/api](https://quickstats.nass.usda.gov/api) |
-| NASS QuickStats Web Interface | [quickstats.nass.usda.gov](https://quickstats.nass.usda.gov/) |
-| FoodData Central API | [fdc.nal.usda.gov](https://fdc.nal.usda.gov/) |
-| FNS SNAP Data (data.gov) | [catalog.data.gov/dataset/snap-data](https://catalog.data.gov/dataset?q=SNAP&sort=score+desc%2C+name+asc&tags=food-assistance) |
-| FSIS Inspection Data | [www.fsis.usda.gov/science-data](https://www.fsis.usda.gov/science-data) |
-| USDA ERS Data Products | [ers.usda.gov/data-products](https://www.ers.usda.gov/data-products/) |
+| Resource                      | URL                                                                                                                            |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| NASS QuickStats API           | [quickstats.nass.usda.gov/api](https://quickstats.nass.usda.gov/api)                                                           |
+| NASS QuickStats Web Interface | [quickstats.nass.usda.gov](https://quickstats.nass.usda.gov/)                                                                  |
+| FoodData Central API          | [fdc.nal.usda.gov](https://fdc.nal.usda.gov/)                                                                                  |
+| FNS SNAP Data (data.gov)      | [catalog.data.gov/dataset/snap-data](https://catalog.data.gov/dataset?q=SNAP&sort=score+desc%2C+name+asc&tags=food-assistance) |
+| FSIS Inspection Data          | [www.fsis.usda.gov/science-data](https://www.fsis.usda.gov/science-data)                                                       |
+| USDA ERS Data Products        | [ers.usda.gov/data-products](https://www.ers.usda.gov/data-products/)                                                          |

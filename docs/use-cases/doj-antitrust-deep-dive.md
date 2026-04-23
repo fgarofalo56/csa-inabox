@@ -25,16 +25,16 @@ For the DOJ Antitrust domain, the discovery process involved:
 
 ### Sources Identified
 
-| Source | Format | Access Method | Refresh |
-|---|---|---|---|
-| HSR Annual Reports | PDF tables, some CSV | HTTP download | Annual |
-| Criminal enforcement charts | HTML tables, PDF | Web scraping / manual extract | Periodic |
-| FJC Integrated Database | CSV, SAS datasets | HTTP download | Quarterly |
-| USSC Commission Datafiles | CSV, SAS datasets | HTTP download | Annual |
-| DOJ press releases | HTML | RSS / web scraping | Ongoing |
+| Source                      | Format               | Access Method                 | Refresh   |
+| --------------------------- | -------------------- | ----------------------------- | --------- |
+| HSR Annual Reports          | PDF tables, some CSV | HTTP download                 | Annual    |
+| Criminal enforcement charts | HTML tables, PDF     | Web scraping / manual extract | Periodic  |
+| FJC Integrated Database     | CSV, SAS datasets    | HTTP download                 | Quarterly |
+| USSC Commission Datafiles   | CSV, SAS datasets    | HTTP download                 | Annual    |
+| DOJ press releases          | HTML                 | RSS / web scraping            | Ongoing   |
 
 !!! warning "Data Format Challenges"
-    Government data frequently arrives in PDF tables or legacy SAS formats. Plan for format conversion in your ingestion pipeline. For the seed data approach used here, manual extraction to CSV is acceptable; for production pipelines, consider tools like Tabula (PDF) or the `pandas` SAS reader.
+Government data frequently arrives in PDF tables or legacy SAS formats. Plan for format conversion in your ingestion pipeline. For the seed data approach used here, manual extraction to CSV is acceptable; for production pipelines, consider tools like Tabula (PDF) or the `pandas` SAS reader.
 
 ---
 
@@ -186,30 +186,36 @@ fiscal_year,violation_type,defendant_name,fine_amount,sentence_months,imprisonme
 version: 2
 
 seeds:
-  - name: criminal_enforcement_seed
-    description: >
-      Criminal antitrust enforcement actions from DOJ published charts.
-      Source: https://www.justice.gov/atr/criminal-enforcement-fine-and-jail-charts
-    config:
-      column_types:
-        fiscal_year: integer
-        fine_amount: float
-        sentence_months: integer
-    columns:
-      - name: fiscal_year
-        description: Federal fiscal year of the enforcement action
-        tests:
-          - not_null
-      - name: violation_type
-        description: Category of antitrust violation
-        tests:
-          - not_null
-          - accepted_values:
-              values: ['Price Fixing', 'Bid Rigging', 'Market Allocation', 'Other']
+    - name: criminal_enforcement_seed
+      description: >
+          Criminal antitrust enforcement actions from DOJ published charts.
+          Source: https://www.justice.gov/atr/criminal-enforcement-fine-and-jail-charts
+      config:
+          column_types:
+              fiscal_year: integer
+              fine_amount: float
+              sentence_months: integer
+      columns:
+          - name: fiscal_year
+            description: Federal fiscal year of the enforcement action
+            tests:
+                - not_null
+          - name: violation_type
+            description: Category of antitrust violation
+            tests:
+                - not_null
+                - accepted_values:
+                      values:
+                          [
+                              "Price Fixing",
+                              "Bid Rigging",
+                              "Market Allocation",
+                              "Other",
+                          ]
 ```
 
 !!! tip "Seeds vs. Ingestion Pipelines"
-    Seeds are ideal for reference data, lookup tables, and slowly-changing datasets that you want version-controlled. For high-volume or frequently-updated data, use ADF pipelines to land files directly in the bronze layer.
+Seeds are ideal for reference data, lookup tables, and slowly-changing datasets that you want version-controlled. For high-volume or frequently-updated data, use ADF pipelines to land files directly in the bronze layer.
 
 ---
 
@@ -247,10 +253,10 @@ domains/doj_antitrust/
 
 ```yaml
 name: doj_antitrust
-version: '1.0.0'
+version: "1.0.0"
 config-version: 2
 
-profile: 'databricks'
+profile: "databricks"
 
 model-paths: ["models"]
 seed-paths: ["seeds"]
@@ -258,19 +264,19 @@ test-paths: ["tests"]
 analysis-paths: ["analyses"]
 
 models:
-  doj_antitrust:
-    bronze:
-      +materialized: table
-      +schema: bronze
-      +tags: ['bronze', 'doj']
-    silver:
-      +materialized: table
-      +schema: silver
-      +tags: ['silver', 'doj']
-    gold:
-      +materialized: table
-      +schema: gold
-      +tags: ['gold', 'doj']
+    doj_antitrust:
+        bronze:
+            +materialized: table
+            +schema: bronze
+            +tags: ["bronze", "doj"]
+        silver:
+            +materialized: table
+            +schema: silver
+            +tags: ["silver", "doj"]
+        gold:
+            +materialized: table
+            +schema: gold
+            +tags: ["gold", "doj"]
 ```
 
 ---
@@ -330,14 +336,14 @@ FROM validated
 
 ### Quality Status Levels
 
-| Status | Meaning | Action |
-|---|---|---|
-| `CLEAN` | All checks passed | Include in gold layer |
-| `WARNING` | Minor issues detected | Include in gold with flag; review periodically |
-| `QUARANTINE` | Critical issues | Exclude from gold; route to data steward |
+| Status       | Meaning               | Action                                         |
+| ------------ | --------------------- | ---------------------------------------------- |
+| `CLEAN`      | All checks passed     | Include in gold layer                          |
+| `WARNING`    | Minor issues detected | Include in gold with flag; review periodically |
+| `QUARANTINE` | Critical issues       | Exclude from gold; route to data steward       |
 
 !!! info "Why Flag-Don't-Drop?"
-    Dropping records silently creates invisible data loss. Government data often contains legitimate edge cases (historical records, unusual formats). Flagging preserves the data for human review while protecting downstream analytics from bad inputs.
+Dropping records silently creates invisible data loss. Government data often contains legitimate edge cases (historical records, unusual formats). Flagging preserves the data for human review while protecting downstream analytics from bad inputs.
 
 ---
 
@@ -399,48 +405,48 @@ Data product contracts define the schema, SLAs, and ownership of gold-layer data
 ```yaml
 # data_products/doj_enforcement_actions.yml
 data_product:
-  name: doj_enforcement_actions
-  version: "1.0.0"
-  domain: doj_antitrust
-  owner: analytics-team
-  description: >
-    Consolidated antitrust enforcement actions combining criminal and civil
-    cases from DOJ published data. Includes fines, sentences, and violation
-    classifications.
+    name: doj_enforcement_actions
+    version: "1.0.0"
+    domain: doj_antitrust
+    owner: analytics-team
+    description: >
+        Consolidated antitrust enforcement actions combining criminal and civil
+        cases from DOJ published data. Includes fines, sentences, and violation
+        classifications.
 
-  schema:
-    table: fact_enforcement_actions
-    columns:
-      - name: enforcement_action_id
-        type: STRING
-        description: Surrogate key
+    schema:
+        table: fact_enforcement_actions
+        columns:
+            - name: enforcement_action_id
+              type: STRING
+              description: Surrogate key
+              pii: false
+            - name: fiscal_year
+              type: INT
+              description: Federal fiscal year
+            - name: enforcement_type
+              type: STRING
+              description: "criminal or civil"
+            - name: violation_type
+              type: STRING
+              description: Category of antitrust violation
+            - name: fine_amount
+              type: DECIMAL(18,2)
+              description: Fine or remedy amount in USD
+
+    sla:
+        freshness: monthly
+        completeness: ">= 95%"
+        availability: "99.5%"
+
+    classification:
+        sensitivity: public
         pii: false
-      - name: fiscal_year
-        type: INT
-        description: Federal fiscal year
-      - name: enforcement_type
-        type: STRING
-        description: "criminal or civil"
-      - name: violation_type
-        type: STRING
-        description: Category of antitrust violation
-      - name: fine_amount
-        type: DECIMAL(18,2)
-        description: Fine or remedy amount in USD
+        export_control: none
 
-  sla:
-    freshness: monthly
-    completeness: ">= 95%"
-    availability: "99.5%"
-
-  classification:
-    sensitivity: public
-    pii: false
-    export_control: none
-
-  consumers:
-    - power_bi_enforcement_dashboard
-    - research_notebooks
+    consumers:
+        - power_bi_enforcement_dashboard
+        - research_notebooks
 ```
 
 ---
@@ -534,16 +540,16 @@ Connect Power BI directly to gold-layer Delta tables via Databricks SQL endpoint
 
 Building the DOJ Antitrust domain followed the standard CSA-in-a-Box pattern:
 
-| Step | What | Why |
-|---|---|---|
-| 1. Discovery | Identify sources and formats | Know what you're working with |
-| 2. Schema design | Bronze/Silver/Gold layers | Separation of concerns |
-| 3. Seed data | CSV files from public sources | Version-controlled, reproducible |
-| 4. dbt models | SQL transformations per layer | Testable, documented |
-| 5. Data quality | Flag-don't-drop pattern | Preserve data, protect analytics |
-| 6. Gold logic | Business rules and dimensions | Analytics-ready output |
-| 7. Contracts | Schema + SLA definitions | Consumer confidence |
-| 8. Notebooks | Exploratory analytics | Derive insights |
-| 9. Azure services | ADF, Purview, Power BI | Production operations |
+| Step              | What                          | Why                              |
+| ----------------- | ----------------------------- | -------------------------------- |
+| 1. Discovery      | Identify sources and formats  | Know what you're working with    |
+| 2. Schema design  | Bronze/Silver/Gold layers     | Separation of concerns           |
+| 3. Seed data      | CSV files from public sources | Version-controlled, reproducible |
+| 4. dbt models     | SQL transformations per layer | Testable, documented             |
+| 5. Data quality   | Flag-don't-drop pattern       | Preserve data, protect analytics |
+| 6. Gold logic     | Business rules and dimensions | Analytics-ready output           |
+| 7. Contracts      | Schema + SLA definitions      | Consumer confidence              |
+| 8. Notebooks      | Exploratory analytics         | Derive insights                  |
+| 9. Azure services | ADF, Purview, Power BI        | Production operations            |
 
 This pattern is repeatable for any new domain. Replace the data sources and business logic, but keep the architecture consistent.

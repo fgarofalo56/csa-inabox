@@ -17,19 +17,19 @@ CSA-in-a-Box's core pipeline uses dbt to transform data through bronze → silve
 
 RTI is for scenarios where **detection latency matters**:
 
-| Scenario | Why Batch Isn't Enough | RTI Detection Window |
-|---|---|---|
-| **Price-fixing surveillance** | Parallel price movements across competitors must be flagged before the next pricing cycle | Minutes |
-| **Bid rigging detection** | Suspiciously similar bids need investigation before contract award | Hours |
-| **Market share monitoring** | Concentration shifts from large transactions should trigger review immediately | Minutes to hours |
-| **Merger compliance monitoring** | Hold-separate agreement violations (e.g., information sharing between merging parties) require near-instant detection | Minutes |
-| **Capacity withdrawal** | Coordinated production cuts to raise prices can be detected through real-time output data | Hours |
+| Scenario                         | Why Batch Isn't Enough                                                                                                | RTI Detection Window |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------- | -------------------- |
+| **Price-fixing surveillance**    | Parallel price movements across competitors must be flagged before the next pricing cycle                             | Minutes              |
+| **Bid rigging detection**        | Suspiciously similar bids need investigation before contract award                                                    | Hours                |
+| **Market share monitoring**      | Concentration shifts from large transactions should trigger review immediately                                        | Minutes to hours     |
+| **Merger compliance monitoring** | Hold-separate agreement violations (e.g., information sharing between merging parties) require near-instant detection | Minutes              |
+| **Capacity withdrawal**          | Coordinated production cuts to raise prices can be detected through real-time output data                             | Hours                |
 
 !!! tip "ADR-0018: Fabric RTI Adapter"
-    CSA-in-a-Box includes a Fabric RTI adapter (see [ADR-0018](../adr/0018-fabric-rti-adapter.md)) that is environment-gated — it activates only when Fabric RTI is available in the target environment. Deployments without Fabric RTI continue to use the batch-only pipeline with no configuration changes.
+CSA-in-a-Box includes a Fabric RTI adapter (see [ADR-0018](../adr/0018-fabric-rti-adapter.md)) that is environment-gated — it activates only when Fabric RTI is available in the target environment. Deployments without Fabric RTI continue to use the batch-only pipeline with no configuration changes.
 
 !!! info "Batch and streaming are complementary"
-    RTI does not replace the batch pipeline. Streaming detects anomalies in real time; batch analytics provides the historical context needed to determine whether an anomaly is genuinely suspicious or simply reflects normal market dynamics. The architecture below connects both paths.
+RTI does not replace the batch pipeline. Streaming detects anomalies in real time; batch analytics provides the historical context needed to determine whether an anomaly is genuinely suspicious or simply reflects normal market dynamics. The architecture below connects both paths.
 
 ---
 
@@ -133,7 +133,7 @@ az eventhubs eventhub create \
 ```
 
 !!! warning "Partition count sizing"
-    Partition count determines maximum consumer parallelism. For high-volume market data feeds (>10,000 events/second), increase partition count to 16 or 32. Partition count cannot be changed after creation on Standard tier — plan accordingly.
+Partition count determines maximum consumer parallelism. For high-volume market data feeds (>10,000 events/second), increase partition count to 16 or 32. Partition count cannot be changed after creation on Standard tier — plan accordingly.
 
 ### Step 2 — Create an Eventstream in Fabric
 
@@ -155,7 +155,7 @@ Eventstreams connect Event Hubs to Eventhouse with built-in transformation capab
     - Ingestion mapping: Map JSON fields to table columns
 
 !!! info "Transformation in Eventstreams"
-    Eventstreams supports inline transformations — filtering, field projection, calculated columns — before data reaches Eventhouse. Use this to drop irrelevant fields at ingestion time rather than storing and filtering later.
+Eventstreams supports inline transformations — filtering, field projection, calculated columns — before data reaches Eventhouse. Use this to drop irrelevant fields at ingestion time rather than storing and filtering later.
 
 Repeat for `bid-submissions` and `market-share-updates` event hubs, creating separate eventstreams for each data domain.
 
@@ -251,7 +251,7 @@ PriceTransactions
     ChangePercent < -0.5, "DOWN",
     "FLAT")
 | where Direction != "FLAT"
-| summarize 
+| summarize
     CompaniesMoving = dcount(CompanyId),
     Companies = make_set(CompanyName),
     AvgChangePercent = round(avg(ChangePercent), 2),
@@ -268,7 +268,7 @@ PriceTransactions
 ```
 
 !!! warning "False positives"
-    Parallel price movements are common in commodity markets responding to input cost changes (e.g., oil prices). Always join with external market data to distinguish coordinated conduct from independent responses to common stimuli. The historical enrichment in Step 7 addresses this.
+Parallel price movements are common in commodity markets responding to input cost changes (e.g., oil prices). Always join with external market data to distinguish coordinated conduct from independent responses to common stimuli. The historical enrichment in Step 7 addresses this.
 
 #### Bid Pattern Analysis
 
@@ -280,7 +280,7 @@ Detect suspiciously similar bid amounts — a hallmark of bid-rigging schemes wh
 // to but above the designated winner's bid
 BidSubmissions
 | where Timestamp > ago(7d)
-| summarize 
+| summarize
     BidCount = count(),
     Bidders = make_set(BidderName),
     BidderIds = make_set(BidderId),
@@ -303,7 +303,7 @@ BidSubmissions
 BidSubmissions
 | where Timestamp > ago(90d)
 | where BidStatus == "AWARDED"
-| summarize 
+| summarize
     ContractsWon = count(),
     Contracts = make_set(ContractId),
     TotalValue = sum(BidAmount)
@@ -313,7 +313,7 @@ BidSubmissions
     | where Timestamp > ago(90d)
     | summarize Participants = make_set(BidderId) by ContractId
 ) on $left.Contracts has_any ($right.Participants)
-| summarize 
+| summarize
     WinnerCount = dcount(BidderId),
     Winners = make_set(BidderName),
     TotalContracts = dcount(ContractId)
@@ -340,7 +340,7 @@ MarketShareUpdates
 | lookup SectorRevenue on IndustrySector
 | extend SharePercent = round(CompanyRevenue / TotalRevenue * 100, 2)
 | extend HHIContribution = round(SharePercent * SharePercent, 2)
-| summarize 
+| summarize
     HHI = round(sum(HHIContribution), 0),
     TopFirms = array_sort_desc(make_list(pack("company", CompanyName, "share", SharePercent))),
     FirmCount = dcount(CompanyId)
@@ -386,16 +386,16 @@ Fabric Activator monitors data conditions and triggers actions automatically. Co
 1. In the Fabric portal, open the Eventhouse and select **Set alert** on a saved query.
 2. Configure the following alert rules:
 
-| Alert Rule | Trigger Condition | Action | Severity |
-|---|---|---|---|
-| Price Correlation | `CompaniesMoving >= 3` in price correlation query | Teams notification to `#antitrust-surveillance` | High |
-| Bid Clustering | `Spread < 1.0` in bid pattern query | Power Automate → create investigation ticket | Critical |
-| HHI Threshold | `HHI >= 2500` for any sector | Email to enforcement team + Teams alert | High |
-| Volume Anomaly | `ZScore > 3.0` or `ZScore < -3.0` | Teams notification + log to investigation queue | Medium |
-| Near-Identical Bids | `Spread < 0.1` in bid pattern query | Immediate escalation via Power Automate | Critical |
+| Alert Rule          | Trigger Condition                                 | Action                                          | Severity |
+| ------------------- | ------------------------------------------------- | ----------------------------------------------- | -------- |
+| Price Correlation   | `CompaniesMoving >= 3` in price correlation query | Teams notification to `#antitrust-surveillance` | High     |
+| Bid Clustering      | `Spread < 1.0` in bid pattern query               | Power Automate → create investigation ticket    | Critical |
+| HHI Threshold       | `HHI >= 2500` for any sector                      | Email to enforcement team + Teams alert         | High     |
+| Volume Anomaly      | `ZScore > 3.0` or `ZScore < -3.0`                 | Teams notification + log to investigation queue | Medium   |
+| Near-Identical Bids | `Spread < 0.1` in bid pattern query               | Immediate escalation via Power Automate         | Critical |
 
 !!! tip "Alert fatigue mitigation"
-    Start with conservative thresholds (e.g., `CompaniesMoving >= 5` instead of 3) and tighten as the team calibrates. Track false-positive rates in the investigation queue and adjust monthly.
+Start with conservative thresholds (e.g., `CompaniesMoving >= 5` instead of 3) and tighten as the team calibrates. Track false-positive rates in the investigation queue and adjust monthly.
 
 3. For Power Automate integration, create a flow that:
     - Receives the Activator trigger payload (anomaly details, affected companies, scores)
@@ -409,15 +409,15 @@ Create a Real-Time Dashboard in Fabric with the following tiles:
 
 **Dashboard: Market Surveillance Command Center**
 
-| Tile | Visualization | Data Source | Refresh |
-|---|---|---|---|
-| Live Anomaly Feed | Table with conditional formatting | Price correlation query | 30 seconds |
-| Price Movement Heatmap | Heatmap (sector × company) | Price change aggregation | 1 minute |
-| HHI by Sector | Bar chart with threshold lines at 1500/2500 | HHI query | 5 minutes |
-| Bid Spread Distribution | Scatter plot (contract × spread) | Bid pattern query | 5 minutes |
-| Alert History | Timeline | Activator alert log | 1 minute |
-| Volume Anomaly Map | Map overlay (by MarketRegion) | Volume anomaly query | 5 minutes |
-| Top Suspicion Scores | KPI cards | Composite scoring query | 30 seconds |
+| Tile                    | Visualization                               | Data Source              | Refresh    |
+| ----------------------- | ------------------------------------------- | ------------------------ | ---------- |
+| Live Anomaly Feed       | Table with conditional formatting           | Price correlation query  | 30 seconds |
+| Price Movement Heatmap  | Heatmap (sector × company)                  | Price change aggregation | 1 minute   |
+| HHI by Sector           | Bar chart with threshold lines at 1500/2500 | HHI query                | 5 minutes  |
+| Bid Spread Distribution | Scatter plot (contract × spread)            | Bid pattern query        | 5 minutes  |
+| Alert History           | Timeline                                    | Activator alert log      | 1 minute   |
+| Volume Anomaly Map      | Map overlay (by MarketRegion)               | Volume anomaly query     | 5 minutes  |
+| Top Suspicion Scores    | KPI cards                                   | Composite scoring query  | 30 seconds |
 
 To create the dashboard:
 
@@ -441,7 +441,7 @@ Streaming anomalies are more meaningful when compared against historical baselin
     AvgPrice: decimal,
     TotalVolume: long,
     MarketRegion: string
-) 
+)
 kind=delta
 (
     'abfss://analytics-lakehouse@onelake.dfs.fabric.microsoft.com/gold/price_history'
@@ -456,13 +456,13 @@ let CurrentAnomaly = PriceTransactions
     | summarize CurrentAvgPrice = avg(Price) by IndustrySector, CompanyId, ProductCategory;
 let HistoricalBaseline = external_table('HistoricalPrices')
     | where TransactionDate > ago(1825d)  // 5 years
-    | summarize 
+    | summarize
         HistAvgPrice = avg(AvgPrice),
         HistStdDev = stdev(AvgPrice),
         DataPoints = count()
         by IndustrySector, CompanyId, ProductCategory;
 CurrentAnomaly
-| join kind=inner HistoricalBaseline 
+| join kind=inner HistoricalBaseline
     on IndustrySector, CompanyId, ProductCategory
 | extend DeviationFromHistorical = round(
     (CurrentAvgPrice - HistAvgPrice) / HistStdDev, 2)
@@ -471,7 +471,7 @@ CurrentAnomaly
     abs(DeviationFromHistorical) > 4.0, "EXTREME — unprecedented in 5-year history",
     abs(DeviationFromHistorical) > 3.0, "SEVERE — outside 99.7% historical range",
     "NOTABLE — outside 95% historical range")
-| project IndustrySector, CompanyId, ProductCategory, 
+| project IndustrySector, CompanyId, ProductCategory,
     CurrentAvgPrice, HistAvgPrice, DeviationFromHistorical, Assessment, DataPoints
 | order by abs(DeviationFromHistorical) desc
 ```
@@ -497,15 +497,15 @@ Eventhouse supports tiered retention policies to balance query performance again
 .alter table MarketShareUpdates policy retention softdelete = 365d recoverability = enabled
 ```
 
-| Tier | Retention | Query Performance | Storage Cost | Use Case |
-|---|---|---|---|---|
-| **Hot** | 30 days | Full-speed KQL | Highest | Active surveillance, real-time dashboards |
-| **Warm** | 31–365 days | Slower queries, still in Eventhouse | Medium | Recent historical analysis, trend detection |
-| **Cold** | 1–7 years | OneLake Delta tables, batch query | Lowest | Long-term retention, deep historical analysis |
-| **Archive** | 7+ years | OneLake with Purview retention policies | Minimal | Legal hold, regulatory compliance |
+| Tier        | Retention   | Query Performance                       | Storage Cost | Use Case                                      |
+| ----------- | ----------- | --------------------------------------- | ------------ | --------------------------------------------- |
+| **Hot**     | 30 days     | Full-speed KQL                          | Highest      | Active surveillance, real-time dashboards     |
+| **Warm**    | 31–365 days | Slower queries, still in Eventhouse     | Medium       | Recent historical analysis, trend detection   |
+| **Cold**    | 1–7 years   | OneLake Delta tables, batch query       | Lowest       | Long-term retention, deep historical analysis |
+| **Archive** | 7+ years    | OneLake with Purview retention policies | Minimal      | Legal hold, regulatory compliance             |
 
 !!! info "Legal hold integration"
-    For investigations where data preservation is legally mandated, integrate with Microsoft Purview retention policies. Tag relevant data with a litigation hold label in Purview, which prevents deletion regardless of the retention policies configured above. See [Purview retention documentation](https://learn.microsoft.com/en-us/purview/retention) for configuration details.
+For investigations where data preservation is legally mandated, integrate with Microsoft Purview retention policies. Tag relevant data with a litigation hold label in Purview, which prevents deletion regardless of the retention policies configured above. See [Purview retention documentation](https://learn.microsoft.com/en-us/purview/retention) for configuration details.
 
 **Continuous export to OneLake for cold storage:**
 
@@ -525,16 +525,16 @@ with (intervalInMinutes=60, forcedLatency=5m)
 
 The following organizations have deployed Microsoft Fabric Real-Time Intelligence for anomaly detection and surveillance workloads at scale.
 
-| Organization | Use Case | Outcome | Source |
-|---|---|---|---|
-| IWG (5,500+ locations, 120 countries) | Real-time fraud detection across global workspace operations | Detection latency reduced from weeks to seconds | [Customer Story](https://www.microsoft.com/en/customers/story/23070-international-workplace-group-iwg-microsoft-fabric) |
-| Microsoft SQL Telemetry | Real-time telemetry processing at petabyte scale | 10+ PB platform, ~5 PB Silver zone in compressed Parquet | [Fabric Blog](https://blog.fabric.microsoft.com/en-us/blog/sql-telemetry-intelligence-how-we-built-a-petabyte-scale-data-platform-with-fabric) |
+| Organization                          | Use Case                                                     | Outcome                                                  | Source                                                                                                                                         |
+| ------------------------------------- | ------------------------------------------------------------ | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| IWG (5,500+ locations, 120 countries) | Real-time fraud detection across global workspace operations | Detection latency reduced from weeks to seconds          | [Customer Story](https://www.microsoft.com/en/customers/story/23070-international-workplace-group-iwg-microsoft-fabric)                        |
+| Microsoft SQL Telemetry               | Real-time telemetry processing at petabyte scale             | 10+ PB platform, ~5 PB Silver zone in compressed Parquet | [Fabric Blog](https://blog.fabric.microsoft.com/en-us/blog/sql-telemetry-intelligence-how-we-built-a-petabyte-scale-data-platform-with-fabric) |
 
 > "We can now stop fraudulent activities immediately, thanks to Fabric and Real-Time Intelligence. Previously, reports could lag a week to a month."
 > — Johan Eckerstein, CIO, IWG
 
 !!! info "Applicability to antitrust surveillance"
-    While these production deployments focus on fraud detection and telemetry, the underlying patterns — high-velocity event ingestion, KQL-based anomaly queries, automated alerting — are directly applicable to antitrust surveillance. The CSA-in-a-Box RTI adapter implements these same patterns with domain-specific KQL queries and schemas.
+While these production deployments focus on fraud detection and telemetry, the underlying patterns — high-velocity event ingestion, KQL-based anomaly queries, automated alerting — are directly applicable to antitrust surveillance. The CSA-in-a-Box RTI adapter implements these same patterns with domain-specific KQL queries and schemas.
 
 ---
 
