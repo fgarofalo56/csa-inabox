@@ -90,7 +90,7 @@ class TestTracer:
         assert cfg.enabled is False
 
     @pytest.mark.skipif(
-        not importlib.util.find_spec("opentelemetry.sdk"),
+        not importlib.util.find_spec("opentelemetry") or not importlib.util.find_spec("opentelemetry.sdk"),
         reason="opentelemetry-sdk not installed",
     )
     def test_configure_tracing_with_real_sdk(

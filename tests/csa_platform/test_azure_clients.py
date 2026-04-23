@@ -339,10 +339,14 @@ class TestGetCosmosClient:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(
-    not importlib.util.find_spec("azure.search.documents"),
-    reason="azure-search-documents not installed",
-)
+try:
+    import azure.search.documents  # noqa: F401
+    _HAS_SEARCH = True
+except (ImportError, ModuleNotFoundError, AttributeError):
+    _HAS_SEARCH = False
+
+
+@pytest.mark.skipif(not _HAS_SEARCH, reason="azure-search-documents not installed")
 class TestGetSearchClient:
     """Tests for get_search_client."""
 
