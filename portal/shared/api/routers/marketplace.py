@@ -212,7 +212,7 @@ async def create_product(
     try:
         return await svc.create_product(product_data)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
 @router.put(
@@ -243,7 +243,7 @@ async def update_product(
     try:
         updated = await svc.update_product(product_id, updates)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     if not updated:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Product '{product_id}' not found.")
@@ -430,7 +430,7 @@ async def approve_access_request(
     try:
         result = await svc.approve_access_request(request_id, user_email)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     if not result:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Access request '{request_id}' not found.")
@@ -481,7 +481,7 @@ async def deny_access_request(
     try:
         result = await svc.deny_access_request(request_id, user_email, review_notes)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     if not result:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Access request '{request_id}' not found.")

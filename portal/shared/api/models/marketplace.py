@@ -25,7 +25,6 @@ from pydantic import BaseModel, Field
 
 from .source import ClassificationLevel, OwnerInfo, SchemaDefinition
 
-
 # ── ARCH-0001 Phase 2: Typed sub-models ────────────────────────────────────
 # Replaces Phase 1's untyped ``dict[str, Any]`` with validated Pydantic
 # models.  These mirror the richer platform models from

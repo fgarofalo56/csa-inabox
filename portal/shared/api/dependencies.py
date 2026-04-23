@@ -100,8 +100,8 @@ def all_stores() -> list[AsyncStoreBackend]:
 
 __all__ = [
     "all_stores",
-    "get_access_store",
     "get_access_requests_store",
+    "get_access_store",
     "get_pipelines_store",
     "get_products_store",
     "get_quality_store",
