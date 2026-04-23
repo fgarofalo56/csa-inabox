@@ -163,6 +163,61 @@ Microsoft Fabric represents the next generation of Microsoft's unified analytics
 
 ---
 
+## Published White Papers & Official Reports
+
+These are downloadable, published documents from Microsoft, government agencies, and industry analysts — not blog posts or web documentation pages.
+
+### Microsoft Security White Papers
+
+| Title | Publisher | Date | Download |
+|---|---|---|---|
+| **Microsoft Digital Defense Report 2025** | Microsoft Security | Oct 2025 | [Download PDF](https://aka.ms/Microsoft-Digital-Defense-Report-2025) |
+| **Microsoft Digital Defense Report 2024** | Microsoft Security | Oct 2024 | [Download PDF](https://go.microsoft.com/fwlink/?linkid=2290930) |
+| **Azure Synapse Analytics Security White Paper** | Microsoft | Ongoing | [Read (multi-part)](https://learn.microsoft.com/azure/synapse-analytics/guidance/security-white-paper-introduction) |
+| **Azure Security Benchmark v3** | Microsoft | 2024 | [Overview + Excel Download](https://learn.microsoft.com/security/benchmark/azure/overview-v3) |
+| **Microsoft Cloud Security Benchmark v2** | Microsoft | 2025 | [Overview + 420 Policy Mappings](https://learn.microsoft.com/security/benchmark/azure/overview) |
+| **Zero Trust Architecture** | Microsoft | Ongoing | [Implementation Guide](https://learn.microsoft.com/security/zero-trust/) |
+
+### Microsoft Analytics & Data Platform White Papers
+
+| Title | Publisher | Date | Download |
+|---|---|---|---|
+| **Lakehouse Reference Architecture (PDF)** | Databricks / Microsoft | 2024 | [A3 PDF Download](https://learn.microsoft.com/azure/databricks/lakehouse-architecture/reference) |
+| **IDEAS Journey to Modern Data Platform** | Microsoft (internal case study) | 2025 | [Read: 420 PiB migration to Fabric](https://learn.microsoft.com/fabric/fundamentals/ideas-data-platform-integration) |
+| **Fabric + Data Lake Unified Platform Architecture** | Microsoft CAF | 2024 | [Reference Architecture](https://learn.microsoft.com/azure/cloud-adoption-framework/data/architecture-fabric-data-lake-unify-data-platform) |
+| **Real-Time Lakehouse Data Processing** | Microsoft Architecture Center | 2024 | [Architecture Guide](https://learn.microsoft.com/azure/architecture/example-scenario/data/real-time-lakehouse-data-processing) |
+
+### Antitrust & Competition Official Reports
+
+| Title | Publisher | Date | Download |
+|---|---|---|---|
+| **Hart-Scott-Rodino Annual Report FY 2024** | FTC & DOJ Antitrust Division | Sept 2025 | [Press Release + PDF](https://www.ftc.gov/news-events/news/press-releases/2025/09/ftc-doj-issue-fiscal-year-2024-hart-scott-rodino-annual-report) |
+| **Big Data: A Tool for Inclusion or Exclusion?** | Federal Trade Commission | Jan 2016 | [Download PDF](https://www.ftc.gov/system/files/documents/reports/big-data-tool-inclusion-or-exclusion-understanding-issues/160106big-data-rpt.pdf) |
+| **Criminal Enforcement Fine and Jail Charts** | DOJ Antitrust Division | Updated Dec 2025 | [View Charts](https://www.justice.gov/atr/criminal-enforcement-fine-and-jail-charts) |
+| **Division Operations & Accomplishments** | DOJ Antitrust Division | 2024 | [Workload Statistics](https://www.justice.gov/atr/division-operations) |
+
+### Government Compliance & FedRAMP
+
+| Title | Publisher | Date | Link |
+|---|---|---|---|
+| **Azure FedRAMP High Authorization** | Microsoft / GSA | 2024 | [FedRAMP Documentation](https://learn.microsoft.com/azure/compliance/offerings/offering-fedramp) |
+| **Azure Government Compliance Overview** | Microsoft | 2024 | [DoD IL2/4/5 + FedRAMP High](https://learn.microsoft.com/azure/azure-government/documentation-government-plan-compliance) |
+| **Azure Services in FedRAMP Audit Scope** | Microsoft | 2024 | [Service Coverage List](https://learn.microsoft.com/azure/azure-government/compliance/azure-services-in-fedramp-auditscope) |
+| **CSPM with Defender for Cloud** | Microsoft | 2024 | [Posture Management Guide](https://learn.microsoft.com/azure/defender-for-cloud/concept-cloud-security-posture-management) |
+
+### Industry Analyst Recognition
+
+| Report | Analyst | Year | Summary |
+|---|---|---|---|
+| **Magic Quadrant: Strategic Cloud Platform Services** | Gartner | Oct 2024 | [Microsoft named Leader](https://azure.microsoft.com/en-us/blog/microsoft-named-a-leader-in-2024-gartner-magic-quadrant-for-strategic-cloud-platform-services/) — highest Ability to Execute |
+| **Magic Quadrant: Data Science & ML Platforms** | Gartner | 2024 | [Microsoft Leader 5 years running](https://azure.microsoft.com/en-us/blog/microsoft-is-a-leader-in-the-2024-gartner-magic-quadrant-for-data-science-and-machine-learning-platforms/) |
+| **Magic Quadrant: Cloud Database Management Systems** | Gartner | 2024 | [Databricks named Leader](https://www.databricks.com/blog/databricks-named-leader-2024-gartner-magic-quadrant-cloud-database-management-systems) |
+
+!!! tip "Accessing Gartner & Forrester Reports"
+    Full analyst reports are behind paywalls. The links above are vendor summaries with key findings. For full reports, contact Microsoft or Databricks sales teams — they typically provide copies where they are featured as Leaders.
+
+---
+
 ## Additional Reading
 
 ### Books and Publications
