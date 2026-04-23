@@ -14,6 +14,7 @@ Covers:
 from __future__ import annotations
 
 import importlib
+import importlib.util
 from collections.abc import Iterator
 from typing import Any
 
@@ -88,6 +89,10 @@ class TestTracer:
         cfg = configure_tracing(app)
         assert cfg.enabled is False
 
+    @pytest.mark.skipif(
+        not importlib.util.find_spec("opentelemetry.sdk"),
+        reason="opentelemetry-sdk not installed",
+    )
     def test_configure_tracing_with_real_sdk(
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
