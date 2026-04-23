@@ -13,16 +13,16 @@ This use case applies the CSA-in-a-Box medallion architecture to USPS public dat
 
 ## Data Sources
 
-| Source | Description | Volume / Coverage | Update Frequency | Access Method |
-|---|---|---|---|---|
-| **USPS Web Tools APIs** | Address validation (Verify API), city/state lookup, ZIP code lookup, package tracking (TrackV2), and domestic rate calculation (RateV4) | 160M+ delivery points, 41K+ ZIP codes | On-demand | XML REST API (free User ID required) |
-| **Service Performance Reports** | Quarterly on-time delivery rates by product class (First-Class, Priority, Marketing Mail) and postal district | All 67 postal districts, 7 product classes | Quarterly | PDF / spreadsheet download |
-| **Census ZCTA Boundaries** | ZIP Code Tabulation Areas from TIGER/Line shapefiles with demographic overlays from the American Community Survey | 33,000+ ZCTAs, national coverage | Annual (decennial base) | Shapefile / REST API |
-| **USPS Facts & Figures** | Annual operational statistics: total mail volume, revenue by product, facility counts, employee headcount, vehicle fleet size | Historical data back to 2000 | Annual | Web / downloadable datasets |
-| **OpenAddresses** | Community-sourced address point data with latitude/longitude coordinates for geocoding and delivery point validation | 500M+ address points globally, US focus | Continuous community updates | Bulk download (CSV/GeoJSON) |
+| Source                          | Description                                                                                                                             | Volume / Coverage                          | Update Frequency             | Access Method                        |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ | ---------------------------- | ------------------------------------ |
+| **USPS Web Tools APIs**         | Address validation (Verify API), city/state lookup, ZIP code lookup, package tracking (TrackV2), and domestic rate calculation (RateV4) | 160M+ delivery points, 41K+ ZIP codes      | On-demand                    | XML REST API (free User ID required) |
+| **Service Performance Reports** | Quarterly on-time delivery rates by product class (First-Class, Priority, Marketing Mail) and postal district                           | All 67 postal districts, 7 product classes | Quarterly                    | PDF / spreadsheet download           |
+| **Census ZCTA Boundaries**      | ZIP Code Tabulation Areas from TIGER/Line shapefiles with demographic overlays from the American Community Survey                       | 33,000+ ZCTAs, national coverage           | Annual (decennial base)      | Shapefile / REST API                 |
+| **USPS Facts & Figures**        | Annual operational statistics: total mail volume, revenue by product, facility counts, employee headcount, vehicle fleet size           | Historical data back to 2000               | Annual                       | Web / downloadable datasets          |
+| **OpenAddresses**               | Community-sourced address point data with latitude/longitude coordinates for geocoding and delivery point validation                    | 500M+ address points globally, US focus    | Continuous community updates | Bulk download (CSV/GeoJSON)          |
 
 !!! info "API Registration"
-    The USPS Web Tools APIs require a free User ID obtained through the [USPS Web Tools Registration](https://www.usps.com/business/web-tools-apis/). Rate limits are approximately 5 requests per second for individual operations; the batch Address Validation API supports up to 5 addresses per call. Census TIGER/Line data is freely available via the [TIGERweb REST API](https://tigerweb.geo.census.gov/arcgis/rest/services).
+The USPS Web Tools APIs require a free User ID obtained through the [USPS Web Tools Registration](https://www.usps.com/business/web-tools-apis/). Rate limits are approximately 5 requests per second for individual operations; the batch Address Validation API supports up to 5 addresses per call. Census TIGER/Line data is freely available via the [TIGERweb REST API](https://tigerweb.geo.census.gov/arcgis/rest/services).
 
 ---
 
@@ -84,7 +84,7 @@ Data Factory pipelines handle three ingestion patterns:
 All raw data lands in ADLS Gen2 under a `bronze/usps/` partition structure organized by source and ingestion date.
 
 !!! tip "Batch Address Validation"
-    The USPS Verify API supports batching up to 5 addresses per request. For bulk validation workloads, the `fetch_usps_data.py` script in `examples/usps/data/open-data/` implements automatic batching with configurable rate limiting (default 0.3s delay between calls).
+The USPS Verify API supports batching up to 5 addresses per request. For bulk validation workloads, the `fetch_usps_data.py` script in `examples/usps/data/open-data/` implements automatic batching with configurable rate limiting (default 0.3s delay between calls).
 
 ### 2. Bronze Layer — Raw Data Preservation
 
@@ -92,11 +92,11 @@ Bronze dbt models (`brz_delivery_performance`, `brz_facility_operations`, `brz_m
 
 Key bronze tables:
 
-| Model | Source | Grain | Partition Strategy |
-|---|---|---|---|
-| `brz_delivery_performance` | Synthetic delivery scans | One row per delivery event | `product_class`, `acceptance_year` |
-| `brz_facility_operations` | USPS Facts & Figures | One row per facility-month | `facility_type` |
-| `brz_mail_volume` | USPS Facts & Figures | One row per product-class-day | `product_class` |
+| Model                      | Source                   | Grain                         | Partition Strategy                 |
+| -------------------------- | ------------------------ | ----------------------------- | ---------------------------------- |
+| `brz_delivery_performance` | Synthetic delivery scans | One row per delivery event    | `product_class`, `acceptance_year` |
+| `brz_facility_operations`  | USPS Facts & Figures     | One row per facility-month    | `facility_type`                    |
+| `brz_mail_volume`          | USPS Facts & Figures     | One row per product-class-day | `product_class`                    |
 
 ### 3. Silver Layer — Cleansing and Conforming
 
@@ -112,12 +112,12 @@ Silver models apply address standardization, product class normalization, on-tim
 
 The `gld_route_optimization` model scores 230,000+ carrier routes on a 0–100 efficiency scale using four weighted factors:
 
-| Factor | Weight | Scoring Logic |
-|---|---|---|
-| Volume density (stops/day) | 30% | ≥100 stops = 100 pts, ≥75 = 85, ≥50 = 70, ≥25 = 50, ≥10 = 30, <10 = 15 |
-| On-time delivery rate | 30% | Direct percentage (capped at 100) |
-| First-attempt delivery rate | 20% | ≤1.05 avg attempts = 100, ≤1.10 = 80, ≤1.20 = 60, ≤1.30 = 40, >1.30 = 20 |
-| Delivery speed vs. standard | 20% | ≤1 day = 100, ≤2 = 85, ≤3 = 70, ≤5 = 50, >5 = 25 |
+| Factor                      | Weight | Scoring Logic                                                            |
+| --------------------------- | ------ | ------------------------------------------------------------------------ |
+| Volume density (stops/day)  | 30%    | ≥100 stops = 100 pts, ≥75 = 85, ≥50 = 70, ≥25 = 50, ≥10 = 30, <10 = 15   |
+| On-time delivery rate       | 30%    | Direct percentage (capped at 100)                                        |
+| First-attempt delivery rate | 20%    | ≤1.05 avg attempts = 100, ≤1.10 = 80, ≤1.20 = 60, ≤1.30 = 40, >1.30 = 20 |
+| Delivery speed vs. standard | 20%    | ≤1 day = 100, ≤2 = 85, ≤3 = 70, ≤5 = 50, >5 = 25                         |
 
 Routes are classified into optimization categories (`WELL_OPTIMIZED`, `ADEQUATE`, `NEEDS_IMPROVEMENT`, `HIGH_OPTIMIZATION_POTENTIAL`) with specific action recommendations:
 
@@ -341,31 +341,38 @@ dbt tests enforce data integrity at each layer:
 ```yaml
 # From examples/usps/domains/dbt/models/schema.yml
 models:
-  - name: slv_delivery_performance
-    columns:
-      - name: delivery_sk
-        tests:
-          - unique
-          - not_null
-      - name: origin_zip
-        tests:
-          - not_null
-          - dbt_utils.length_equal_to:
-              length: 5
-      - name: product_class
-        tests:
-          - accepted_values:
-              values: ['FIRST_CLASS', 'PRIORITY', 'PRIORITY_EXPRESS',
-                       'PARCEL_SELECT', 'MEDIA_MAIL', 'MARKETING_MAIL',
-                       'PERIODICALS']
-      - name: is_on_time
-        tests:
-          - not_null:
-              where: "delivery_status = 'DELIVERED'"
+    - name: slv_delivery_performance
+      columns:
+          - name: delivery_sk
+            tests:
+                - unique
+                - not_null
+          - name: origin_zip
+            tests:
+                - not_null
+                - dbt_utils.length_equal_to:
+                      length: 5
+          - name: product_class
+            tests:
+                - accepted_values:
+                      values:
+                          [
+                              "FIRST_CLASS",
+                              "PRIORITY",
+                              "PRIORITY_EXPRESS",
+                              "PARCEL_SELECT",
+                              "MEDIA_MAIL",
+                              "MARKETING_MAIL",
+                              "PERIODICALS",
+                          ]
+          - name: is_on_time
+            tests:
+                - not_null:
+                      where: "delivery_status = 'DELIVERED'"
 ```
 
 !!! warning "Synthetic Data"
-    The `examples/usps/` implementation uses synthetic delivery records generated by `examples/usps/data/generators/generate_usps_data.py`. Volume counts and performance rates approximate real-world distributions but are not actual USPS operational data. Service performance baselines are derived from publicly reported quarterly figures.
+The `examples/usps/` implementation uses synthetic delivery records generated by `examples/usps/data/generators/generate_usps_data.py`. Volume counts and performance rates approximate real-world distributions but are not actual USPS operational data. Service performance baselines are derived from publicly reported quarterly figures.
 
 ---
 
@@ -373,42 +380,42 @@ models:
 
 The example includes environment-specific parameter files for both commercial and government Azure regions:
 
-| File | Target Environment | Notes |
-|---|---|---|
-| `examples/usps/deploy/params.dev.json` | Commercial Azure (dev) | Standard ADLS + Databricks deployment |
-| `examples/usps/deploy/params.gov.json` | Azure Government | FedRAMP-compliant endpoints, Gov cloud region mappings |
-| `examples/usps/deploy/teardown.sh` | Cleanup | Removes all deployed resources |
+| File                                   | Target Environment     | Notes                                                  |
+| -------------------------------------- | ---------------------- | ------------------------------------------------------ |
+| `examples/usps/deploy/params.dev.json` | Commercial Azure (dev) | Standard ADLS + Databricks deployment                  |
+| `examples/usps/deploy/params.gov.json` | Azure Government       | FedRAMP-compliant endpoints, Gov cloud region mappings |
+| `examples/usps/deploy/teardown.sh`     | Cleanup                | Removes all deployed resources                         |
 
 !!! note "Government Cloud"
-    For federal agency deployments, the `params.gov.json` configuration targets Azure Government regions with FedRAMP High-compliant service endpoints. USPS operational data, while largely public, may require FISMA controls when combined with route-level carrier performance or individual tracking records.
+For federal agency deployments, the `params.gov.json` configuration targets Azure Government regions with FedRAMP High-compliant service endpoints. USPS operational data, while largely public, may require FISMA controls when combined with route-level carrier performance or individual tracking records.
 
 ---
 
 ## Cross-References
 
-| Resource | Description |
-|---|---|
-| [`examples/usps/`](../../examples/usps/) | Complete example implementation — dbt models, data generators, API fetcher, deployment configs |
-| [`examples/usps/ARCHITECTURE.md`](../../examples/usps/ARCHITECTURE.md) | Detailed architecture document with security, partitioning, and monitoring specifications |
-| [`examples/usps/notebooks/`](../../examples/usps/notebooks/) | Jupyter notebooks for delivery optimization and volume forecasting analysis |
-| [`examples/usps/contracts/`](../../examples/usps/contracts/) | Data contracts for delivery analytics, mail volume, and facility operations |
-| [NOAA Climate Analytics](noaa-climate-analytics.md) | Related use case demonstrating similar medallion architecture with environmental data |
-| [EPA Environmental Analytics](epa-environmental-analytics.md) | Related federal agency analytics use case |
+| Resource                                                               | Description                                                                                    |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| [`examples/usps/`](../../examples/usps/)                               | Complete example implementation — dbt models, data generators, API fetcher, deployment configs |
+| [`examples/usps/ARCHITECTURE.md`](../../examples/usps/ARCHITECTURE.md) | Detailed architecture document with security, partitioning, and monitoring specifications      |
+| [`examples/usps/notebooks/`](../../examples/usps/notebooks/)           | Jupyter notebooks for delivery optimization and volume forecasting analysis                    |
+| [`examples/usps/contracts/`](../../examples/usps/contracts/)           | Data contracts for delivery analytics, mail volume, and facility operations                    |
+| [NOAA Climate Analytics](noaa-climate-analytics.md)                    | Related use case demonstrating similar medallion architecture with environmental data          |
+| [EPA Environmental Analytics](epa-environmental-analytics.md)          | Related federal agency analytics use case                                                      |
 
 ---
 
 ## Sources
 
-| Resource | URL |
-|---|---|
-| USPS Web Tools API Registration | <https://www.usps.com/business/web-tools-apis/> |
-| USPS Web Tools API Technical Documentation | <https://www.usps.com/business/web-tools-apis/documentation-updates.htm> |
-| USPS Address Validation API (Verify) | <https://www.usps.com/business/web-tools-apis/address-information-api.htm> |
-| USPS Package Tracking API (TrackV2) | <https://www.usps.com/business/web-tools-apis/track-and-confirm-api.htm> |
-| USPS Service Performance Reports | <https://about.usps.com/what/performance/service-performance/> |
-| USPS Facts & Figures | <https://facts.usps.com/> |
-| Census TIGER/Line Shapefiles (ZCTA) | <https://www.census.gov/geographies/mapping-files/time-series/geo/tiger-line-file.html> |
-| TIGERweb REST API | <https://tigerweb.geo.census.gov/arcgis/rest/services> |
-| Census Geocoder | <https://geocoding.geo.census.gov/geocoder/> |
-| OpenAddresses Project | <https://openaddresses.io/> |
-| American Community Survey (ACS) | <https://www.census.gov/programs-surveys/acs> |
+| Resource                                   | URL                                                                                     |
+| ------------------------------------------ | --------------------------------------------------------------------------------------- |
+| USPS Web Tools API Registration            | <https://www.usps.com/business/web-tools-apis/>                                         |
+| USPS Web Tools API Technical Documentation | <https://www.usps.com/business/web-tools-apis/documentation-updates.htm>                |
+| USPS Address Validation API (Verify)       | <https://www.usps.com/business/web-tools-apis/address-information-api.htm>              |
+| USPS Package Tracking API (TrackV2)        | <https://www.usps.com/business/web-tools-apis/track-and-confirm-api.htm>                |
+| USPS Service Performance Reports           | <https://about.usps.com/what/performance/service-performance/>                          |
+| USPS Facts & Figures                       | <https://facts.usps.com/>                                                               |
+| Census TIGER/Line Shapefiles (ZCTA)        | <https://www.census.gov/geographies/mapping-files/time-series/geo/tiger-line-file.html> |
+| TIGERweb REST API                          | <https://tigerweb.geo.census.gov/arcgis/rest/services>                                  |
+| Census Geocoder                            | <https://geocoding.geo.census.gov/geocoder/>                                            |
+| OpenAddresses Project                      | <https://openaddresses.io/>                                                             |
+| American Community Survey (ACS)            | <https://www.census.gov/programs-surveys/acs>                                           |

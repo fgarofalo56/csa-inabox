@@ -98,21 +98,21 @@ Each domain (DOJ, finance, inventory, sales) gets its own Fabric Lakehouse withi
 
 The following table maps existing CSA-in-a-Box implementation patterns to their Fabric equivalents. The medallion architecture, dbt transformations, and governance patterns transfer with minimal rework.
 
-| CSA-in-a-Box Pattern | Current Implementation | Fabric Equivalent |
-|---|---|---|
-| Medallion architecture | Databricks Delta Lake | Fabric Lakehouse (Delta Parquet on OneLake) |
-| Data transformation | dbt on Databricks | dbt-fabric adapter on Fabric Data Warehouse, or Spark notebooks |
-| Data contracts | YAML-based contract definitions | Purview data products + OneLake Catalog entries |
-| Data governance | Manual Purview integration via APIs | Native Purview integration (automatic catalog, lineage, DLP) |
-| Storage | ADLS Gen2 with hierarchical namespace | OneLake (built on ADLS Gen2, Delta Parquet default) |
-| Compute | Databricks interactive + job clusters | Fabric capacity (Spark pools, SQL engine, KQL engine) |
-| Orchestration | Azure Data Factory / Databricks Workflows | Fabric Data Factory (native pipelines) |
-| Visualization | Power BI with DirectQuery to Databricks | Power BI with Direct Lake (no import, no DirectQuery) |
-| Real-time ingestion | Event Hubs → Databricks Structured Streaming | Event Hubs → Fabric Eventstream → KQL Database |
-| Security | Unity Catalog + custom RBAC | Fabric workspace roles + OneLake data access roles + RLS/CLS |
+| CSA-in-a-Box Pattern   | Current Implementation                       | Fabric Equivalent                                               |
+| ---------------------- | -------------------------------------------- | --------------------------------------------------------------- |
+| Medallion architecture | Databricks Delta Lake                        | Fabric Lakehouse (Delta Parquet on OneLake)                     |
+| Data transformation    | dbt on Databricks                            | dbt-fabric adapter on Fabric Data Warehouse, or Spark notebooks |
+| Data contracts         | YAML-based contract definitions              | Purview data products + OneLake Catalog entries                 |
+| Data governance        | Manual Purview integration via APIs          | Native Purview integration (automatic catalog, lineage, DLP)    |
+| Storage                | ADLS Gen2 with hierarchical namespace        | OneLake (built on ADLS Gen2, Delta Parquet default)             |
+| Compute                | Databricks interactive + job clusters        | Fabric capacity (Spark pools, SQL engine, KQL engine)           |
+| Orchestration          | Azure Data Factory / Databricks Workflows    | Fabric Data Factory (native pipelines)                          |
+| Visualization          | Power BI with DirectQuery to Databricks      | Power BI with Direct Lake (no import, no DirectQuery)           |
+| Real-time ingestion    | Event Hubs → Databricks Structured Streaming | Event Hubs → Fabric Eventstream → KQL Database                  |
+| Security               | Unity Catalog + custom RBAC                  | Fabric workspace roles + OneLake data access roles + RLS/CLS    |
 
 !!! tip "CSA-in-a-Box + Fabric"
-    CSA-in-a-Box domains (DOJ, finance, inventory, sales) use dbt with Delta Lake on Databricks today. The medallion architecture, data contracts, and governance patterns transfer directly to Fabric — OneLake uses Delta Parquet natively, and the `dbt-fabric` adapter runs dbt models against Fabric Data Warehouse with no model SQL changes for standard transformations.
+CSA-in-a-Box domains (DOJ, finance, inventory, sales) use dbt with Delta Lake on Databricks today. The medallion architecture, data contracts, and governance patterns transfer directly to Fabric — OneLake uses Delta Parquet natively, and the `dbt-fabric` adapter runs dbt models against Fabric Data Warehouse with no model SQL changes for standard transformations.
 
 ### What changes
 
@@ -167,7 +167,7 @@ curl -X POST "https://api.fabric.microsoft.com/v1/workspaces" \
 4. Under **Advanced**, assign the workspace to your Fabric capacity
 
 !!! info "Capacity Sizing"
-    For development and testing, an F2 capacity is sufficient. Production workloads with concurrent Spark jobs and Power BI queries typically require F64 or higher. Fabric capacities can be paused when not in use to control cost.
+For development and testing, an F2 capacity is sufficient. Production workloads with concurrent Spark jobs and Power BI queries typically require F64 or higher. Fabric capacities can be paused when not in use to control cost.
 
 ### Step 2 — Create a Lakehouse
 
@@ -268,7 +268,7 @@ for shortcut in shortcuts:
 ```
 
 !!! info "Shortcut vs. Copy"
-    Shortcuts are metadata pointers — no data is copied, no egress charges are incurred (within the same Azure region), and updates to the source are immediately visible through the shortcut. Use shortcuts for the Bronze layer to avoid duplicating raw data. Silver and Gold layers are typically materialized as managed Delta tables in the Lakehouse.
+Shortcuts are metadata pointers — no data is copied, no egress charges are incurred (within the same Azure region), and updates to the source are immediately visible through the shortcut. Use shortcuts for the Bronze layer to avoid duplicating raw data. Silver and Gold layers are typically materialized as managed Delta tables in the Lakehouse.
 
 ### Step 4 — Run dbt on Fabric
 
@@ -285,21 +285,21 @@ pip install dbt-fabric
 ```yaml
 # ~/.dbt/profiles.yml (or CI/CD environment config)
 csa_analytics:
-  target: fabric
-  outputs:
-    fabric:
-      type: fabric
-      driver: "ODBC Driver 18 for SQL Server"
-      server: "<workspace-guid>.datawarehouse.fabric.microsoft.com"
-      database: "doj_antitrust"
-      port: 1433
-      schema: "dbo"
-      authentication: serviceprincipal
-      tenant_id: "{{ env_var('AZURE_TENANT_ID') }}"
-      client_id: "{{ env_var('AZURE_CLIENT_ID') }}"
-      client_secret: "{{ env_var('AZURE_CLIENT_SECRET') }}"
-      threads: 4
-      retries: 2
+    target: fabric
+    outputs:
+        fabric:
+            type: fabric
+            driver: "ODBC Driver 18 for SQL Server"
+            server: "<workspace-guid>.datawarehouse.fabric.microsoft.com"
+            database: "doj_antitrust"
+            port: 1433
+            schema: "dbo"
+            authentication: serviceprincipal
+            tenant_id: "{{ env_var('AZURE_TENANT_ID') }}"
+            client_id: "{{ env_var('AZURE_CLIENT_ID') }}"
+            client_secret: "{{ env_var('AZURE_CLIENT_SECRET') }}"
+            threads: 4
+            retries: 2
 ```
 
 **Run the dbt pipeline:**
@@ -319,7 +319,7 @@ dbt test --target fabric
 ```
 
 !!! warning "dbt-fabric Adapter Differences"
-    The `dbt-fabric` adapter supports most dbt Core features, but there are differences from `dbt-databricks`:
+The `dbt-fabric` adapter supports most dbt Core features, but there are differences from `dbt-databricks`:
 
     - **Materializations**: `table`, `view`, and `incremental` are supported. `ephemeral` models work as CTEs.
     - **Incremental strategies**: `append` and `delete+insert` are supported. `merge` requires Fabric Data Warehouse (not Lakehouse SQL endpoint).
@@ -355,14 +355,14 @@ curl -X PATCH "https://api.purview.azure.com/catalog/api/atlas/v2/entity/guid/<e
 
 **What you get automatically with Purview + Fabric:**
 
-| Capability | Manual Setup Required? | Notes |
-|---|---|---|
-| Data catalog entries | No | All Lakehouse tables auto-registered |
-| Column-level lineage | No | Tracked through Spark notebooks and SQL pipelines |
-| Sensitivity labels | Yes | Define label policies in Purview, apply to items |
-| DLP policies | Yes | Configure in Microsoft 365 Compliance Center |
-| Access audit logging | No | All data access logged to unified audit log |
-| Data quality rules | Yes | Define in Purview data quality (preview) |
+| Capability           | Manual Setup Required? | Notes                                             |
+| -------------------- | ---------------------- | ------------------------------------------------- |
+| Data catalog entries | No                     | All Lakehouse tables auto-registered              |
+| Column-level lineage | No                     | Tracked through Spark notebooks and SQL pipelines |
+| Sensitivity labels   | Yes                    | Define label policies in Purview, apply to items  |
+| DLP policies         | Yes                    | Configure in Microsoft 365 Compliance Center      |
+| Access audit logging | No                     | All data access logged to unified audit log       |
+| Data quality rules   | Yes                    | Define in Purview data quality (preview)          |
 
 ### Step 6 — OneLake Security (Row/Column-Level)
 
@@ -424,7 +424,7 @@ cursor.execute(
 ```
 
 !!! warning "Direct Lake and RLS"
-    Row-level security defined on the Fabric Data Warehouse SQL endpoint is enforced when Power BI uses DirectQuery mode. For Direct Lake mode, RLS must be defined in the Power BI semantic model using DAX expressions. Ensure your security policy covers both access paths.
+Row-level security defined on the Fabric Data Warehouse SQL endpoint is enforced when Power BI uses DirectQuery mode. For Direct Lake mode, RLS must be defined in the Power BI semantic model using DAX expressions. Ensure your security policy covers both access paths.
 
 ---
 
@@ -432,15 +432,15 @@ cursor.execute(
 
 The following table summarizes publicly documented Fabric deployments at enterprise scale. All figures are sourced from Microsoft customer stories or independent validations.
 
-| Organization | Scale | Outcome | Source |
-|---|---|---|---|
-| Microsoft IDEAS | 420 PiB across 600+ teams | 50% efficiency improvement from consolidation to OneLake | [Microsoft Learn](https://learn.microsoft.com/en-us/fabric/fundamentals/ideas-data-platform-integration), [Customer Story](https://www.microsoft.com/en/customers/story/19755-microsoft-microsoft-copilot) |
-| Edith Cowan University | 2,000 staff, 3.5× user growth | 50% platform cost reduction, 70% faster report development | [Customer Story](https://www.microsoft.com/en/customers/story/26158-edith-cowan-university-microsoft-fabric) |
-| Dentsu | Global media analytics, D365 integration | 55% faster data replication, near real-time campaign metrics | [Customer Story](https://www.microsoft.com/en/customers/story/25667-dentsu-microsoft-fabric) |
-| OBOS BBL | 600+ notebooks and pipelines migrated | 30% faster processing, 20% lower operational cost | [Fabric Blog](https://blog.fabric.microsoft.com/en-US/blog/two-years-on-how-fabric-redefines-the-modernization-path-for-synapse-users/) |
+| Organization           | Scale                                    | Outcome                                                      | Source                                                                                                                                                                                                     |
+| ---------------------- | ---------------------------------------- | ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Microsoft IDEAS        | 420 PiB across 600+ teams                | 50% efficiency improvement from consolidation to OneLake     | [Microsoft Learn](https://learn.microsoft.com/en-us/fabric/fundamentals/ideas-data-platform-integration), [Customer Story](https://www.microsoft.com/en/customers/story/19755-microsoft-microsoft-copilot) |
+| Edith Cowan University | 2,000 staff, 3.5× user growth            | 50% platform cost reduction, 70% faster report development   | [Customer Story](https://www.microsoft.com/en/customers/story/26158-edith-cowan-university-microsoft-fabric)                                                                                               |
+| Dentsu                 | Global media analytics, D365 integration | 55% faster data replication, near real-time campaign metrics | [Customer Story](https://www.microsoft.com/en/customers/story/25667-dentsu-microsoft-fabric)                                                                                                               |
+| OBOS BBL               | 600+ notebooks and pipelines migrated    | 30% faster processing, 20% lower operational cost            | [Fabric Blog](https://blog.fabric.microsoft.com/en-US/blog/two-years-on-how-fabric-redefines-the-modernization-path-for-synapse-users/)                                                                    |
 
 !!! info "Independent Validation"
-    Enterprise Strategy Group (ESG) independently validated Fabric Data Warehouse query performance at up to 75% faster than Azure Synapse dedicated SQL pools at comparable price points. The validation covered TPC-DS derived workloads across multiple concurrency levels. See [ESG Technical Validation](https://blog.fabric.microsoft.com/en-us/blog/a-turning-point-for-enterprise-data-warehousing/) for methodology and results.
+Enterprise Strategy Group (ESG) independently validated Fabric Data Warehouse query performance at up to 75% faster than Azure Synapse dedicated SQL pools at comparable price points. The validation covered TPC-DS derived workloads across multiple concurrency levels. See [ESG Technical Validation](https://blog.fabric.microsoft.com/en-us/blog/a-turning-point-for-enterprise-data-warehousing/) for methodology and results.
 
 ---
 
@@ -465,18 +465,18 @@ Federal and state government agencies have specific compliance requirements that
 - Conditional Access policies, MFA, and Privileged Identity Management (PIM) apply to Fabric workspace access.
 
 !!! warning "Azure Government vs. Azure Commercial"
-    FedRAMP High in Azure Commercial and FedRAMP High in Azure Government are distinct authorization boundaries. Government workloads requiring US-sovereign data handling, US-persons operational access, or specific DoD Impact Level controls must validate Azure Government availability separately. The FedRAMP High P-ATO in Azure Commercial does not automatically satisfy Azure Government requirements.
+FedRAMP High in Azure Commercial and FedRAMP High in Azure Government are distinct authorization boundaries. Government workloads requiring US-sovereign data handling, US-persons operational access, or specific DoD Impact Level controls must validate Azure Government availability separately. The FedRAMP High P-ATO in Azure Commercial does not automatically satisfy Azure Government requirements.
 
 ### Recommended Pre-Deployment Checklist
 
-| Item | Action |
-|---|---|
-| FedRAMP scope | Verify each Fabric component (Lakehouse, Warehouse, Spark, Power BI) is in the FedRAMP audit scope for your authorization boundary |
-| Data classification | Map data sensitivity levels to Purview sensitivity labels before ingestion |
-| Network isolation | Configure Private Link for Fabric workspace if network isolation is required |
-| Audit logging | Confirm unified audit log exports to your SIEM (Sentinel, Splunk) |
-| Capacity region | Provision Fabric capacity in a compliant Azure region |
-| Service principal governance | Register Fabric service principals in your agency's identity governance system |
+| Item                         | Action                                                                                                                             |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| FedRAMP scope                | Verify each Fabric component (Lakehouse, Warehouse, Spark, Power BI) is in the FedRAMP audit scope for your authorization boundary |
+| Data classification          | Map data sensitivity levels to Purview sensitivity labels before ingestion                                                         |
+| Network isolation            | Configure Private Link for Fabric workspace if network isolation is required                                                       |
+| Audit logging                | Confirm unified audit log exports to your SIEM (Sentinel, Splunk)                                                                  |
+| Capacity region              | Provision Fabric capacity in a compliant Azure region                                                                              |
+| Service principal governance | Register Fabric service principals in your agency's identity governance system                                                     |
 
 ---
 

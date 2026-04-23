@@ -8,10 +8,10 @@ description: End-to-end guide for building tribal health population analytics on
 This use case implements a population health analytics platform for Indian Health Service (IHS) and tribal health programs. The architecture ingests synthetic clinical, demographic, and public health data through a medallion pipeline on Azure Government, producing GPRA measure dashboards, chronic disease surveillance, and behavioral health utilization reports — all governed by tribal data sovereignty policies and HIPAA Safe Harbor de-identification.
 
 !!! info "Reference Implementation"
-    The complete working code for this domain lives in [`examples/tribal-health/`](../../examples/tribal-health/). This page explains the architecture, data sources, and step-by-step build process.
+The complete working code for this domain lives in [`examples/tribal-health/`](../../examples/tribal-health/). This page explains the architecture, data sources, and step-by-step build process.
 
 !!! warning "Synthetic Data Only"
-    **ALL data in this implementation is fully synthetic.** No real Protected Health Information (PHI), Personally Identifiable Information (PII), or actual tribal health records are used anywhere in this project. The synthetic generators produce statistically representative distributions based on published IHS and CDC aggregate statistics. Never substitute real patient data without completing a full HIPAA Security Risk Assessment, executing a Business Associate Agreement (BAA) with Microsoft, and obtaining tribal IRB approval.
+**ALL data in this implementation is fully synthetic.** No real Protected Health Information (PHI), Personally Identifiable Information (PII), or actual tribal health records are used anywhere in this project. The synthetic generators produce statistically representative distributions based on published IHS and CDC aggregate statistics. Never substitute real patient data without completing a full HIPAA Security Risk Assessment, executing a Business Associate Agreement (BAA) with Microsoft, and obtaining tribal IRB approval.
 
 ---
 
@@ -66,15 +66,15 @@ graph LR
 
 All sources listed below are either public reference datasets or fully synthetic generators included in the repository. No authenticated connections to IHS or tribal systems are required.
 
-| Source | Type | Contents | Update Cadence |
-|--------|------|----------|----------------|
-| IHS National Data Warehouse (NDW) | Synthetic generator | Patient demographics, enrollment, service unit assignments | Quarterly |
-| RPMS Extracts | Synthetic CSV seeds | Encounters, diagnoses (ICD-10), procedures (CPT), labs | Monthly |
-| CDC Social Vulnerability Index (SVI) | Public download | Census-tract vulnerability scores for tribal areas | Annual |
-| CDC BRFSS | Public download | Behavioral risk factor prevalence estimates | Annual |
-| CDC Vital Statistics | Public download | Birth/death rates, infant mortality, life expectancy | Annual |
-| CMS HEDIS / GPRA Measures | Reference specifications | Clinical quality measure definitions and benchmarks | Annual |
-| Tribal Epidemiology Centers | Synthetic generator | Regional disease surveillance, outbreak reporting | Quarterly |
+| Source                               | Type                     | Contents                                                   | Update Cadence |
+| ------------------------------------ | ------------------------ | ---------------------------------------------------------- | -------------- |
+| IHS National Data Warehouse (NDW)    | Synthetic generator      | Patient demographics, enrollment, service unit assignments | Quarterly      |
+| RPMS Extracts                        | Synthetic CSV seeds      | Encounters, diagnoses (ICD-10), procedures (CPT), labs     | Monthly        |
+| CDC Social Vulnerability Index (SVI) | Public download          | Census-tract vulnerability scores for tribal areas         | Annual         |
+| CDC BRFSS                            | Public download          | Behavioral risk factor prevalence estimates                | Annual         |
+| CDC Vital Statistics                 | Public download          | Birth/death rates, infant mortality, life expectancy       | Annual         |
+| CMS HEDIS / GPRA Measures            | Reference specifications | Clinical quality measure definitions and benchmarks        | Annual         |
+| Tribal Epidemiology Centers          | Synthetic generator      | Regional disease surveillance, outbreak reporting          | Quarterly      |
 
 ### Synthetic Data Generation
 
@@ -116,18 +116,18 @@ The `params.gov.json` parameter file configures:
 
 The deployment enforces HIPAA administrative, physical, and technical safeguards:
 
-| Safeguard | Implementation | Azure Service |
-|-----------|---------------|---------------|
-| Encryption at rest | AES-256 with customer-managed keys | Key Vault + ADLS Gen2 |
-| Encryption in transit | TLS 1.2+ enforced on all endpoints | Application Gateway / Front Door |
-| Access control | Azure AD with Conditional Access, MFA | Azure Active Directory |
-| Audit logging | All data-plane operations logged | Monitor Diagnostic Settings |
-| Network isolation | Private endpoints, no public IPs | Private Link + NSGs |
-| Data Loss Prevention | Sensitivity labels on PHI columns | Microsoft Purview |
-| BAA coverage | Microsoft BAA covers Azure Government services | Azure Compliance Manager |
+| Safeguard             | Implementation                                 | Azure Service                    |
+| --------------------- | ---------------------------------------------- | -------------------------------- |
+| Encryption at rest    | AES-256 with customer-managed keys             | Key Vault + ADLS Gen2            |
+| Encryption in transit | TLS 1.2+ enforced on all endpoints             | Application Gateway / Front Door |
+| Access control        | Azure AD with Conditional Access, MFA          | Azure Active Directory           |
+| Audit logging         | All data-plane operations logged               | Monitor Diagnostic Settings      |
+| Network isolation     | Private endpoints, no public IPs               | Private Link + NSGs              |
+| Data Loss Prevention  | Sensitivity labels on PHI columns              | Microsoft Purview                |
+| BAA coverage          | Microsoft BAA covers Azure Government services | Azure Compliance Manager         |
 
 !!! note "Business Associate Agreement"
-    Microsoft's BAA covers Azure Government services listed in the [HIPAA/HITRUST compliance documentation](https://learn.microsoft.com/en-us/azure/compliance/offerings/offering-hipaa-us). Verify your specific services are covered before processing any real PHI.
+Microsoft's BAA covers Azure Government services listed in the [HIPAA/HITRUST compliance documentation](https://learn.microsoft.com/en-us/azure/compliance/offerings/offering-hipaa-us). Verify your specific services are covered before processing any real PHI.
 
 ### 3. Tribal Data Sovereignty
 
@@ -167,23 +167,23 @@ SET ROW FILTER tribal_rls_filter ON (service_unit);
 
 #### Access Tiers
 
-| Role | Scope | Data Level | Purpose |
-|------|-------|------------|---------|
-| Tribal Health Director | Single tribe | Patient-level (de-identified) | Clinical program management |
-| IHS Area Office | Area tribes | Aggregate by service unit | Regional oversight |
-| Tribal Epidemiology Center | Affiliated tribes | Aggregate with cell suppression | Surveillance and research |
-| Federal Reporting | All areas | De-identified aggregate | GPRA/Congress reporting |
+| Role                       | Scope             | Data Level                      | Purpose                     |
+| -------------------------- | ----------------- | ------------------------------- | --------------------------- |
+| Tribal Health Director     | Single tribe      | Patient-level (de-identified)   | Clinical program management |
+| IHS Area Office            | Area tribes       | Aggregate by service unit       | Regional oversight          |
+| Tribal Epidemiology Center | Affiliated tribes | Aggregate with cell suppression | Surveillance and research   |
+| Federal Reporting          | All areas         | De-identified aggregate         | GPRA/Congress reporting     |
 
 ### 4. HL7 FHIR Alignment (Silver Layer)
 
 Silver models standardize raw extracts into structures aligned with HL7 FHIR R4 resource types. This is not a full FHIR server — it is a dimensional model whose columns and semantics map to FHIR resources for interoperability.
 
-| dbt Silver Model | FHIR R4 Resource | Key Fields |
-|-----------------|------------------|------------|
-| `slv_patient_demographics` | Patient | `patient_id`, `gender`, `age_group`, `tribal_affiliation`, `eligibility_status` |
-| `slv_encounters` | Encounter | `encounter_id`, `patient_id`, `encounter_type`, `primary_dx_icd10`, `encounter_date` |
-| `slv_facilities` | Organization | `facility_id`, `facility_name`, `service_unit`, `facility_type` |
-| (future) `slv_conditions` | Condition | `condition_id`, `patient_id`, `icd10_code`, `onset_date`, `clinical_status` |
+| dbt Silver Model           | FHIR R4 Resource | Key Fields                                                                           |
+| -------------------------- | ---------------- | ------------------------------------------------------------------------------------ |
+| `slv_patient_demographics` | Patient          | `patient_id`, `gender`, `age_group`, `tribal_affiliation`, `eligibility_status`      |
+| `slv_encounters`           | Encounter        | `encounter_id`, `patient_id`, `encounter_type`, `primary_dx_icd10`, `encounter_date` |
+| `slv_facilities`           | Organization     | `facility_id`, `facility_name`, `service_unit`, `facility_type`                      |
+| (future) `slv_conditions`  | Condition        | `condition_id`, `patient_id`, `icd10_code`, `onset_date`, `clinical_status`          |
 
 #### Silver Patient Dimension (FHIR-Aligned)
 
@@ -286,14 +286,14 @@ The `gld_maternal_child_health` model tracks prenatal care adequacy, birth outco
 
 The Government Performance and Results Act (GPRA) measures are the primary clinical quality framework for IHS. Gold models map directly to GPRA measure specifications:
 
-| GPRA Measure | Gold Model | Key Metric | FY2024 Target |
-|-------------|------------|------------|---------------|
-| Diabetes: A1C < 9.0% | `gld_diabetes_prevalence` | `a1c_poor_control_pct` (inverse) | ≤ 20% poor control |
-| Diabetes: Eye Exam | `gld_diabetes_prevalence` | `retinopathy_screening_pct` | ≥ 55% |
-| Diabetes: Kidney | `gld_diabetes_prevalence` | `nephropathy_screening_pct` | ≥ 30% |
-| Depression Screening | `gld_behavioral_health` | `depression_screening_pct` | ≥ 55% |
-| Prenatal in 1st Trimester | `gld_maternal_child_health` | `early_prenatal_pct` | ≥ 65% |
-| Childhood Immunization | `gld_maternal_child_health` | `childhood_immunization_pct` | ≥ 40% |
+| GPRA Measure              | Gold Model                  | Key Metric                       | FY2024 Target      |
+| ------------------------- | --------------------------- | -------------------------------- | ------------------ |
+| Diabetes: A1C < 9.0%      | `gld_diabetes_prevalence`   | `a1c_poor_control_pct` (inverse) | ≤ 20% poor control |
+| Diabetes: Eye Exam        | `gld_diabetes_prevalence`   | `retinopathy_screening_pct`      | ≥ 55%              |
+| Diabetes: Kidney          | `gld_diabetes_prevalence`   | `nephropathy_screening_pct`      | ≥ 30%              |
+| Depression Screening      | `gld_behavioral_health`     | `depression_screening_pct`       | ≥ 55%              |
+| Prenatal in 1st Trimester | `gld_maternal_child_health` | `early_prenatal_pct`             | ≥ 65%              |
+| Childhood Immunization    | `gld_maternal_child_health` | `childhood_immunization_pct`     | ≥ 40%              |
 
 ### 7. De-Identified Reporting and Cell Suppression
 
@@ -332,14 +332,14 @@ This implementation follows tribal data sovereignty principles aligned with the 
 
 ### Technical Enforcement
 
-| Principle | Technical Control |
-|-----------|-------------------|
-| Tribal ownership | `tribal_affiliation` column in all tables; RLS filters by Azure AD claim |
-| Consent-based sharing | Data sharing agreements codified as RLS policy exceptions |
-| Minimum necessary | Role-based access tiers (tribal → area → federal) with decreasing granularity |
-| Audit trail | All queries logged in Azure Monitor; tribal authorities can audit access to their data |
-| Right to restrict | Tribal authority can request removal of their data from aggregate federal datasets |
-| Cultural sensitivity | Categories and terminology reviewed with tribal health boards |
+| Principle             | Technical Control                                                                      |
+| --------------------- | -------------------------------------------------------------------------------------- |
+| Tribal ownership      | `tribal_affiliation` column in all tables; RLS filters by Azure AD claim               |
+| Consent-based sharing | Data sharing agreements codified as RLS policy exceptions                              |
+| Minimum necessary     | Role-based access tiers (tribal → area → federal) with decreasing granularity          |
+| Audit trail           | All queries logged in Azure Monitor; tribal authorities can audit access to their data |
+| Right to restrict     | Tribal authority can request removal of their data from aggregate federal datasets     |
+| Cultural sensitivity  | Categories and terminology reviewed with tribal health boards                          |
 
 ### Data Sharing Agreements
 
@@ -382,13 +382,13 @@ Power BI Desktop roles mirror the database-level RLS policies:
 
 ### Dashboard Pages
 
-| Page | Audience | Content |
-|------|----------|---------|
-| Tribal Health Summary | Tribal Health Director | KPIs, GPRA scorecard, trend sparklines |
-| Diabetes Deep Dive | Clinical staff | Prevalence maps, A1C distributions, complication rates |
-| Behavioral Health | BH program managers | SUD/MH split, provider ratios, crisis volume |
-| Maternal-Child Health | MCH coordinators | Prenatal adequacy, immunization rates, birth outcomes |
-| Federal GPRA Report | IHS Area Office | Cross-tribe aggregates (de-identified), target vs. actual |
+| Page                  | Audience               | Content                                                   |
+| --------------------- | ---------------------- | --------------------------------------------------------- |
+| Tribal Health Summary | Tribal Health Director | KPIs, GPRA scorecard, trend sparklines                    |
+| Diabetes Deep Dive    | Clinical staff         | Prevalence maps, A1C distributions, complication rates    |
+| Behavioral Health     | BH program managers    | SUD/MH split, provider ratios, crisis volume              |
+| Maternal-Child Health | MCH coordinators       | Prenatal adequacy, immunization rates, birth outcomes     |
+| Federal GPRA Report   | IHS Area Office        | Cross-tribe aggregates (de-identified), target vs. actual |
 
 ---
 
@@ -404,13 +404,13 @@ Power BI Desktop roles mirror the database-level RLS policies:
 
 ## Sources
 
-| Reference | URL |
-|-----------|-----|
-| IHS GPRA Measures | <https://www.ihs.gov/crs/> |
-| CARE Principles for Indigenous Data Governance | <https://www.gida-global.org/care> |
-| HL7 FHIR R4 Patient Resource | <https://hl7.org/fhir/R4/patient.html> |
-| HIPAA Safe Harbor De-Identification | <https://www.hhs.gov/hipaa/for-professionals/privacy/special-topics/de-identification/> |
-| 42 CFR Part 2 (SUD Confidentiality) | <https://www.ecfr.gov/current/title-42/chapter-I/subchapter-A/part-2> |
-| Azure Government FedRAMP High | <https://learn.microsoft.com/en-us/azure/azure-government/compliance/azure-services-in-fedramp-auditscope> |
-| CDC Social Vulnerability Index | <https://www.atsdr.cdc.gov/placeandhealth/svi/> |
-| Microsoft HIPAA/HITRUST Compliance | <https://learn.microsoft.com/en-us/azure/compliance/offerings/offering-hipaa-us> |
+| Reference                                      | URL                                                                                                        |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| IHS GPRA Measures                              | <https://www.ihs.gov/crs/>                                                                                 |
+| CARE Principles for Indigenous Data Governance | <https://www.gida-global.org/care>                                                                         |
+| HL7 FHIR R4 Patient Resource                   | <https://hl7.org/fhir/R4/patient.html>                                                                     |
+| HIPAA Safe Harbor De-Identification            | <https://www.hhs.gov/hipaa/for-professionals/privacy/special-topics/de-identification/>                    |
+| 42 CFR Part 2 (SUD Confidentiality)            | <https://www.ecfr.gov/current/title-42/chapter-I/subchapter-A/part-2>                                      |
+| Azure Government FedRAMP High                  | <https://learn.microsoft.com/en-us/azure/azure-government/compliance/azure-services-in-fedramp-auditscope> |
+| CDC Social Vulnerability Index                 | <https://www.atsdr.cdc.gov/placeandhealth/svi/>                                                            |
+| Microsoft HIPAA/HITRUST Compliance             | <https://learn.microsoft.com/en-us/azure/compliance/offerings/offering-hipaa-us>                           |

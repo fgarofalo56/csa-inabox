@@ -15,18 +15,18 @@ Azure Government is a separate instance of Microsoft Azure designed exclusively 
 
 ### Key Differentiators
 
-| Capability | Azure Government | Azure Commercial |
-|---|---|---|
-| **Physical isolation** | Dedicated datacenters, U.S. only | Global regions |
-| **Personnel** | Screened U.S. persons only | Standard Microsoft hiring |
-| **FedRAMP** | FedRAMP High baseline | FedRAMP High (select services) |
-| **DoD Impact Levels** | IL2, IL4, IL5, IL6 | IL2 only |
-| **CJIS** | CJIS-compliant | Not available |
-| **ITAR** | ITAR-compliant | Not available |
-| **IRS 1075** | Compliant | Not available |
+| Capability             | Azure Government                 | Azure Commercial               |
+| ---------------------- | -------------------------------- | ------------------------------ |
+| **Physical isolation** | Dedicated datacenters, U.S. only | Global regions                 |
+| **Personnel**          | Screened U.S. persons only       | Standard Microsoft hiring      |
+| **FedRAMP**            | FedRAMP High baseline            | FedRAMP High (select services) |
+| **DoD Impact Levels**  | IL2, IL4, IL5, IL6               | IL2 only                       |
+| **CJIS**               | CJIS-compliant                   | Not available                  |
+| **ITAR**               | ITAR-compliant                   | Not available                  |
+| **IRS 1075**           | Compliant                        | Not available                  |
 
 !!! warning "Service Availability"
-    Not all Azure services are available in Azure Government. Always verify service availability before architecting solutions. See the [Gov Service Matrix](../GOV_SERVICE_MATRIX.md) in this documentation for a detailed comparison.
+Not all Azure services are available in Azure Government. Always verify service availability before architecting solutions. See the [Gov Service Matrix](../GOV_SERVICE_MATRIX.md) in this documentation for a detailed comparison.
 
 ### Impact Level Summary
 
@@ -51,17 +51,17 @@ Government analytics platforms must comply with multiple overlapping frameworks.
 
 ### Framework Matrix
 
-| Framework | Scope | Analytics Relevance | CSA-in-a-Box Mapping |
-|---|---|---|---|
-| **FedRAMP High** | All federal systems | Baseline for any federal analytics | Foundation for all patterns |
-| **NIST 800-53 Rev 5** | Security controls | Access control, audit, encryption | [NIST 800-53 Mapping](../compliance/nist-800-53-rev5.md) |
-| **CMMC 2.0 Level 2** | Defense contractors | CUI protection in data pipelines | [CMMC 2.0 Mapping](../compliance/cmmc-2.0-l2.md) |
-| **HIPAA** | Health data | PHI in analytics pipelines | [HIPAA Mapping](../compliance/hipaa-security-rule.md) |
-| **CJIS** | Criminal justice data | Law enforcement analytics | Network isolation, encryption |
-| **IRS 1075** | Tax information | FTI in analytics platforms | Dedicated enclaves |
+| Framework             | Scope                 | Analytics Relevance                | CSA-in-a-Box Mapping                                     |
+| --------------------- | --------------------- | ---------------------------------- | -------------------------------------------------------- |
+| **FedRAMP High**      | All federal systems   | Baseline for any federal analytics | Foundation for all patterns                              |
+| **NIST 800-53 Rev 5** | Security controls     | Access control, audit, encryption  | [NIST 800-53 Mapping](../compliance/nist-800-53-rev5.md) |
+| **CMMC 2.0 Level 2**  | Defense contractors   | CUI protection in data pipelines   | [CMMC 2.0 Mapping](../compliance/cmmc-2.0-l2.md)         |
+| **HIPAA**             | Health data           | PHI in analytics pipelines         | [HIPAA Mapping](../compliance/hipaa-security-rule.md)    |
+| **CJIS**              | Criminal justice data | Law enforcement analytics          | Network isolation, encryption                            |
+| **IRS 1075**          | Tax information       | FTI in analytics platforms         | Dedicated enclaves                                       |
 
 !!! tip "Compliance as Code"
-    CSA-in-a-Box compliance mappings are version-controlled markdown documents that map platform capabilities to specific control requirements. This enables compliance-as-code workflows where control implementation evidence is maintained alongside infrastructure code.
+CSA-in-a-Box compliance mappings are version-controlled markdown documents that map platform capabilities to specific control requirements. This enables compliance-as-code workflows where control implementation evidence is maintained alongside infrastructure code.
 
 ---
 
@@ -134,14 +134,14 @@ Microsoft Purview provides unified data governance across on-premises, multi-clo
 
 ### Core Capabilities
 
-| Capability | Government Analytics Use |
-|---|---|
-| **Data Catalog** | Discover and classify datasets across agencies |
-| **Data Map** | Automated scanning and classification of sensitive data |
-| **Lineage** | Track data from source through transformations to reports |
-| **Access Policies** | Enforce least-privilege access to data assets |
-| **Sensitivity Labels** | Apply CUI, FOUO, and custom classification labels |
-| **Glossary** | Standardize business terminology across domains |
+| Capability             | Government Analytics Use                                  |
+| ---------------------- | --------------------------------------------------------- |
+| **Data Catalog**       | Discover and classify datasets across agencies            |
+| **Data Map**           | Automated scanning and classification of sensitive data   |
+| **Lineage**            | Track data from source through transformations to reports |
+| **Access Policies**    | Enforce least-privilege access to data assets             |
+| **Sensitivity Labels** | Apply CUI, FOUO, and custom classification labels         |
+| **Glossary**           | Standardize business terminology across domains           |
 
 ### Integration with CSA-in-a-Box
 
@@ -153,7 +153,7 @@ Purview integrates with every layer of the CSA-in-a-Box architecture:
 - **Serving** — Enforce access policies on Power BI datasets and API endpoints
 
 !!! info "Purview in Azure Government"
-    Microsoft Purview is available in Azure Government regions. Verify the latest feature parity at [Azure Government services by region](https://azure.microsoft.com/en-us/explore/global-infrastructure/government/by-region/).
+Microsoft Purview is available in Azure Government regions. Verify the latest feature parity at [Azure Government services by region](https://azure.microsoft.com/en-us/explore/global-infrastructure/government/by-region/).
 
 ---
 
@@ -161,11 +161,11 @@ Purview integrates with every layer of the CSA-in-a-Box architecture:
 
 ### Encryption
 
-| Layer | At Rest | In Transit |
-|---|---|---|
-| **Storage (ADLS Gen2)** | AES-256, customer-managed keys via Key Vault | TLS 1.2+ |
-| **Compute (Databricks)** | Encrypted cluster storage | TLS 1.2+ |
-| **Catalog (Purview)** | Platform-managed encryption | TLS 1.2+ |
+| Layer                    | At Rest                                      | In Transit |
+| ------------------------ | -------------------------------------------- | ---------- |
+| **Storage (ADLS Gen2)**  | AES-256, customer-managed keys via Key Vault | TLS 1.2+   |
+| **Compute (Databricks)** | Encrypted cluster storage                    | TLS 1.2+   |
+| **Catalog (Purview)**    | Platform-managed encryption                  | TLS 1.2+   |
 
 ### Network Isolation
 

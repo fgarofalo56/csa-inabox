@@ -55,17 +55,17 @@ flowchart LR
 
 ## Data Sources
 
-| Source | Agency | Description | Volume | Update Frequency | API / Access |
-|---|---|---|---|---|---|
-| **FARS** | NHTSA | Fatality Analysis Reporting System — every fatal motor vehicle crash in the U.S. | ~6.4M crash records (1975–present) | Annual + preliminary quarterly | [CrashAPI](https://crashviewer.nhtsa.dot.gov/CrashAPI) |
-| **NBI** | FHWA | National Bridge Inventory — structural condition of every bridge >20ft | 620,000+ bridges | Annual | [data.transportation.gov](https://data.transportation.gov) |
-| **HPMS** | FHWA | Highway Performance Monitoring System — pavement condition, traffic volume, lane miles | All federal-aid highways | Annual | [HPMS](https://www.fhwa.dot.gov/policyinformation/hpms.cfm) |
-| **NTD** | FTA | National Transit Database — ridership, financial, safety data for transit agencies | 900+ agencies, ~2,200 modes | Monthly + Annual | [NTD](https://www.transit.dot.gov/ntd) |
-| **ATADS** | FAA | Air Traffic Activity Data System — tower operations, instrument operations | 500+ airports | Monthly | [ATADS](https://aspm.faa.gov/opsnet/sys/opsnet-s-main.asp) |
-| **BTS** | DOT | Bureau of Transportation Statistics — cross-modal performance metrics | National | Monthly + Annual | [BTS](https://www.bts.gov/topics/national-transportation-statistics) |
+| Source    | Agency | Description                                                                            | Volume                             | Update Frequency               | API / Access                                                         |
+| --------- | ------ | -------------------------------------------------------------------------------------- | ---------------------------------- | ------------------------------ | -------------------------------------------------------------------- |
+| **FARS**  | NHTSA  | Fatality Analysis Reporting System — every fatal motor vehicle crash in the U.S.       | ~6.4M crash records (1975–present) | Annual + preliminary quarterly | [CrashAPI](https://crashviewer.nhtsa.dot.gov/CrashAPI)               |
+| **NBI**   | FHWA   | National Bridge Inventory — structural condition of every bridge >20ft                 | 620,000+ bridges                   | Annual                         | [data.transportation.gov](https://data.transportation.gov)           |
+| **HPMS**  | FHWA   | Highway Performance Monitoring System — pavement condition, traffic volume, lane miles | All federal-aid highways           | Annual                         | [HPMS](https://www.fhwa.dot.gov/policyinformation/hpms.cfm)          |
+| **NTD**   | FTA    | National Transit Database — ridership, financial, safety data for transit agencies     | 900+ agencies, ~2,200 modes        | Monthly + Annual               | [NTD](https://www.transit.dot.gov/ntd)                               |
+| **ATADS** | FAA    | Air Traffic Activity Data System — tower operations, instrument operations             | 500+ airports                      | Monthly                        | [ATADS](https://aspm.faa.gov/opsnet/sys/opsnet-s-main.asp)           |
+| **BTS**   | DOT    | Bureau of Transportation Statistics — cross-modal performance metrics                  | National                           | Monthly + Annual               | [BTS](https://www.bts.gov/topics/national-transportation-statistics) |
 
 !!! info "GTFS Real-Time"
-    Over 1,000 U.S. transit agencies publish GTFS-realtime feeds (vehicle positions, trip updates, service alerts). These are ingested via Event Hub for near-real-time transit monitoring. The [MobilityData GTFS-RT catalog](https://gtfs.org/resources/gtfs-realtime/) lists available feeds.
+Over 1,000 U.S. transit agencies publish GTFS-realtime feeds (vehicle positions, trip updates, service alerts). These are ingested via Event Hub for near-real-time transit monitoring. The [MobilityData GTFS-RT catalog](https://gtfs.org/resources/gtfs-realtime/) lists available feeds.
 
 ---
 
@@ -144,7 +144,7 @@ ORDER BY severity_weighted_score DESC;
 ```
 
 !!! tip "Geospatial Extension"
-    For sub-county corridor-level analysis, pair grid-cell hotspots with road network geometry from HPMS. See the [Geoanalytics patterns](../patterns/geoanalytics.md) for Azure Maps and H3 hex-grid integration.
+For sub-county corridor-level analysis, pair grid-cell hotspots with road network geometry from HPMS. See the [Geoanalytics patterns](../patterns/geoanalytics.md) for Azure Maps and H3 hex-grid integration.
 
 ---
 
@@ -162,13 +162,13 @@ The silver model `slv_highway_conditions` normalizes NBI condition ratings (0–
 
 The gold model `gld_infrastructure_priority` (see `examples/dot/domains/dbt/models/gold/gld_infrastructure_priority.sql`) produces a weighted priority score combining:
 
-| Factor | Weight | Source Field |
-|---|---|---|
-| Structural condition | 30% | Deck + superstructure + substructure ratings |
-| Functional obsolescence | 20% | Functional classification vs. current demand |
-| Average daily traffic | 20% | ADT from HPMS overlay |
-| Detour length | 15% | NBI field `detour_kilos_019` |
-| Age since last rehab | 15% | `year_reconstructed_106` vs. current year |
+| Factor                  | Weight | Source Field                                 |
+| ----------------------- | ------ | -------------------------------------------- |
+| Structural condition    | 30%    | Deck + superstructure + substructure ratings |
+| Functional obsolescence | 20%    | Functional classification vs. current demand |
+| Average daily traffic   | 20%    | ADT from HPMS overlay                        |
+| Detour length           | 15%    | NBI field `detour_kilos_019`                 |
+| Age since last rehab    | 15%    | `year_reconstructed_106` vs. current year    |
 
 The output ranks every bridge within its state and nationally, enabling DOTs to allocate Highway Bridge Program (HBP) funding to the highest-risk structures.
 
@@ -241,7 +241,7 @@ AirportOperations
 Power BI dashboards surface airport-level KPIs: operations per hour, average delay minutes, on-time departure percentage, and capacity utilization. Drill-through pages link airport-level metrics to carrier-level and runway-level detail.
 
 !!! note "Dedicated FAA Page"
-    For ASPM, OPSNET, wildlife strike analysis, SWIM real-time integration, and NAS-wide performance metrics, see [FAA Aviation Safety & Operations Analytics](faa-aviation-analytics.md).
+For ASPM, OPSNET, wildlife strike analysis, SWIM real-time integration, and NAS-wide performance metrics, see [FAA Aviation Safety & Operations Analytics](faa-aviation-analytics.md).
 
 ---
 
@@ -274,11 +274,11 @@ Bridge condition trajectories are modeled using Markov chain transition matrices
 
 The `examples/dot/contracts/` directory contains data contract definitions (YAML) for each domain:
 
-| Contract | Purpose |
-|---|---|
-| `crash-analytics.yaml` | Schema, SLAs, and quality checks for crash data pipeline |
-| `highway-conditions.yaml` | Bridge condition and highway performance data contract |
-| `transit-performance.yaml` | Transit ridership and agency performance contract |
+| Contract                   | Purpose                                                  |
+| -------------------------- | -------------------------------------------------------- |
+| `crash-analytics.yaml`     | Schema, SLAs, and quality checks for crash data pipeline |
+| `highway-conditions.yaml`  | Bridge condition and highway performance data contract   |
+| `transit-performance.yaml` | Transit ridership and agency performance contract        |
 
 These contracts enforce schema validation, freshness checks, and data quality thresholds at the silver layer boundary.
 
@@ -292,7 +292,7 @@ The `examples/dot/deploy/` directory includes parameterized deployment configura
 - `params.gov.json` — Azure Government Cloud (IL4/IL5 compliant)
 
 !!! warning "Azure Government"
-    Not all Azure services are available in Azure Government regions. Verify service availability against the [Gov Service Matrix](../GOV_SERVICE_MATRIX.md) before deploying. ADX and Event Hub are available in Gov; confirm Synapse Serverless and Azure ML availability for your target IL.
+Not all Azure services are available in Azure Government regions. Verify service availability against the [Gov Service Matrix](../GOV_SERVICE_MATRIX.md) before deploying. ADX and Event Hub are available in Gov; confirm Synapse Serverless and Azure ML availability for your target IL.
 
 ---
 
@@ -309,16 +309,16 @@ The `examples/dot/deploy/` directory includes parameterized deployment configura
 
 ## Sources
 
-| Resource | URL |
-|---|---|
-| NHTSA FARS CrashAPI | <https://crashviewer.nhtsa.dot.gov/CrashAPI> |
-| NHTSA FARS Encyclopedia | <https://www-fars.nhtsa.dot.gov/Main/index.aspx> |
-| data.transportation.gov (SODA) | <https://data.transportation.gov> |
-| FHWA National Bridge Inventory | <https://www.fhwa.dot.gov/bridge/nbi.cfm> |
-| FHWA HPMS | <https://www.fhwa.dot.gov/policyinformation/hpms.cfm> |
-| FTA National Transit Database | <https://www.transit.dot.gov/ntd> |
-| FAA ATADS / OPSNET | <https://aspm.faa.gov/opsnet/sys/opsnet-s-main.asp> |
-| FAA ASPM | <https://aspm.faa.gov> |
+| Resource                               | URL                                                             |
+| -------------------------------------- | --------------------------------------------------------------- |
+| NHTSA FARS CrashAPI                    | <https://crashviewer.nhtsa.dot.gov/CrashAPI>                    |
+| NHTSA FARS Encyclopedia                | <https://www-fars.nhtsa.dot.gov/Main/index.aspx>                |
+| data.transportation.gov (SODA)         | <https://data.transportation.gov>                               |
+| FHWA National Bridge Inventory         | <https://www.fhwa.dot.gov/bridge/nbi.cfm>                       |
+| FHWA HPMS                              | <https://www.fhwa.dot.gov/policyinformation/hpms.cfm>           |
+| FTA National Transit Database          | <https://www.transit.dot.gov/ntd>                               |
+| FAA ATADS / OPSNET                     | <https://aspm.faa.gov/opsnet/sys/opsnet-s-main.asp>             |
+| FAA ASPM                               | <https://aspm.faa.gov>                                          |
 | BTS National Transportation Statistics | <https://www.bts.gov/topics/national-transportation-statistics> |
-| GTFS Realtime Specification | <https://gtfs.org/realtime/> |
-| MobilityData GTFS-RT Catalog | <https://gtfs.org/resources/gtfs-realtime/> |
+| GTFS Realtime Specification            | <https://gtfs.org/realtime/>                                    |
+| MobilityData GTFS-RT Catalog           | <https://gtfs.org/resources/gtfs-realtime/>                     |

@@ -13,20 +13,20 @@ This use case brings NASA data into the CSA-in-a-Box medallion architecture on A
 
 ## Data Sources
 
-| Source | Description | Format | Refresh | Endpoint |
-|---|---|---|---|---|
-| **EOSDIS** (Earth Observing System Data and Information System) | Satellite imagery and derived products from 40+ missions (Terra, Aqua, Landsat, ICESat-2). Over 40 PB archived. | HDF5, GeoTIFF, NetCDF | Continuous | `https://earthdata.nasa.gov/` |
-| **NASA POWER API** (Prediction of Worldwide Energy Resources) | Solar radiation, temperature, precipitation, wind speed — modeled for any lat/lon at daily/monthly/climatology temporal resolution. | JSON, CSV, NetCDF | Daily | `https://power.larc.nasa.gov/api/temporal/daily/point` |
-| **NEO API** (Near Earth Object Web Service) | Asteroid and comet close-approach data sourced from JPL CNEOS. Includes estimated diameter, relative velocity, miss distance, hazard classification. | JSON | Daily | `https://api.nasa.gov/neo/rest/v1/feed` |
-| **FIRMS** (Fire Information for Resource Management System) | Near-real-time active fire and thermal anomaly detections from MODIS and VIIRS instruments. ~375 m resolution, updated every few hours. | CSV, GeoJSON, WMS | ~3 hours | `https://firms.modaps.eosdis.nasa.gov/api/area/csv/` |
-| **Giovanni** | Interactive visualization and analysis for atmospheric, ocean, and land surface Earth science parameters. | NetCDF, PNG | Varies | `https://giovanni.gsfc.nasa.gov/giovanni/` |
-| **NASA Exoplanet Archive** | Confirmed exoplanets with orbital parameters, stellar properties, and discovery metadata. Managed by Caltech/IPAC. | CSV, VOTable | Weekly | `https://exoplanetarchive.ipac.caltech.edu/TAP/sync` |
-| **NASA Open Data Portal** | 40,000+ datasets across all NASA centers — mission telemetry, climate indicators, software catalogs, patents. | CSV, JSON, API | Varies | `https://data.nasa.gov/` |
-| **APOD API** (Astronomy Picture of the Day) | Daily curated image/video with expert explanation. Useful for public engagement layers. | JSON | Daily | `https://api.nasa.gov/planetary/apod` |
-| **Mars Rover Photos API** | Surface imagery from Curiosity, Opportunity, Spirit, and Perseverance rovers. Indexed by sol, camera, and Earth date. | JSON (image URLs) | As received | `https://api.nasa.gov/mars-photos/api/v1/rovers/` |
+| Source                                                          | Description                                                                                                                                          | Format                | Refresh     | Endpoint                                               |
+| --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- | ----------- | ------------------------------------------------------ |
+| **EOSDIS** (Earth Observing System Data and Information System) | Satellite imagery and derived products from 40+ missions (Terra, Aqua, Landsat, ICESat-2). Over 40 PB archived.                                      | HDF5, GeoTIFF, NetCDF | Continuous  | `https://earthdata.nasa.gov/`                          |
+| **NASA POWER API** (Prediction of Worldwide Energy Resources)   | Solar radiation, temperature, precipitation, wind speed — modeled for any lat/lon at daily/monthly/climatology temporal resolution.                  | JSON, CSV, NetCDF     | Daily       | `https://power.larc.nasa.gov/api/temporal/daily/point` |
+| **NEO API** (Near Earth Object Web Service)                     | Asteroid and comet close-approach data sourced from JPL CNEOS. Includes estimated diameter, relative velocity, miss distance, hazard classification. | JSON                  | Daily       | `https://api.nasa.gov/neo/rest/v1/feed`                |
+| **FIRMS** (Fire Information for Resource Management System)     | Near-real-time active fire and thermal anomaly detections from MODIS and VIIRS instruments. ~375 m resolution, updated every few hours.              | CSV, GeoJSON, WMS     | ~3 hours    | `https://firms.modaps.eosdis.nasa.gov/api/area/csv/`   |
+| **Giovanni**                                                    | Interactive visualization and analysis for atmospheric, ocean, and land surface Earth science parameters.                                            | NetCDF, PNG           | Varies      | `https://giovanni.gsfc.nasa.gov/giovanni/`             |
+| **NASA Exoplanet Archive**                                      | Confirmed exoplanets with orbital parameters, stellar properties, and discovery metadata. Managed by Caltech/IPAC.                                   | CSV, VOTable          | Weekly      | `https://exoplanetarchive.ipac.caltech.edu/TAP/sync`   |
+| **NASA Open Data Portal**                                       | 40,000+ datasets across all NASA centers — mission telemetry, climate indicators, software catalogs, patents.                                        | CSV, JSON, API        | Varies      | `https://data.nasa.gov/`                               |
+| **APOD API** (Astronomy Picture of the Day)                     | Daily curated image/video with expert explanation. Useful for public engagement layers.                                                              | JSON                  | Daily       | `https://api.nasa.gov/planetary/apod`                  |
+| **Mars Rover Photos API**                                       | Surface imagery from Curiosity, Opportunity, Spirit, and Perseverance rovers. Indexed by sol, camera, and Earth date.                                | JSON (image URLs)     | As received | `https://api.nasa.gov/mars-photos/api/v1/rovers/`      |
 
 !!! info "API Key"
-    All `api.nasa.gov` endpoints accept the demo key `DEMO_KEY` (30 req/hr, 50 req/day). For production pipelines, register a free key at [api.nasa.gov](https://api.nasa.gov/) — rate limit increases to 1,000 req/hr.
+All `api.nasa.gov` endpoints accept the demo key `DEMO_KEY` (30 req/hr, 50 req/day). For production pipelines, register a free key at [api.nasa.gov](https://api.nasa.gov/) — rate limit increases to 1,000 req/hr.
 
 ---
 
@@ -88,16 +88,16 @@ Register for a free API key at [api.nasa.gov](https://api.nasa.gov/). Store the 
 
 Configure ADF linked services for each NASA endpoint:
 
-| Linked Service | Base URL | Auth | Notes |
-|---|---|---|---|
-| `ls_nasa_power` | `https://power.larc.nasa.gov/api/` | None (open) | No API key required |
-| `ls_nasa_neo` | `https://api.nasa.gov/neo/rest/v1/` | Query param `api_key` | Key Vault reference |
-| `ls_nasa_firms` | `https://firms.modaps.eosdis.nasa.gov/api/` | Query param `MAP_KEY` | Separate FIRMS key from [FIRMS](https://firms.modaps.eosdis.nasa.gov/map/#d:24hrs;@0.0,0.0,2.0z) |
-| `ls_nasa_exoplanet` | `https://exoplanetarchive.ipac.caltech.edu/` | None (open) | TAP/sync endpoint |
-| `ls_nasa_opendata` | `https://data.nasa.gov/resource/` | App token (optional) | Socrata API |
+| Linked Service      | Base URL                                     | Auth                  | Notes                                                                                            |
+| ------------------- | -------------------------------------------- | --------------------- | ------------------------------------------------------------------------------------------------ |
+| `ls_nasa_power`     | `https://power.larc.nasa.gov/api/`           | None (open)           | No API key required                                                                              |
+| `ls_nasa_neo`       | `https://api.nasa.gov/neo/rest/v1/`          | Query param `api_key` | Key Vault reference                                                                              |
+| `ls_nasa_firms`     | `https://firms.modaps.eosdis.nasa.gov/api/`  | Query param `MAP_KEY` | Separate FIRMS key from [FIRMS](https://firms.modaps.eosdis.nasa.gov/map/#d:24hrs;@0.0,0.0,2.0z) |
+| `ls_nasa_exoplanet` | `https://exoplanetarchive.ipac.caltech.edu/` | None (open)           | TAP/sync endpoint                                                                                |
+| `ls_nasa_opendata`  | `https://data.nasa.gov/resource/`            | App token (optional)  | Socrata API                                                                                      |
 
 !!! tip "EOSDIS Earthdata Login"
-    EOSDIS bulk downloads require a free [Earthdata Login](https://urs.earthdata.nasa.gov/). Configure OAuth2 bearer token flow in ADF or use the `earthaccess` Python library in Databricks.
+EOSDIS bulk downloads require a free [Earthdata Login](https://urs.earthdata.nasa.gov/). Configure OAuth2 bearer token flow in ADF or use the `earthaccess` Python library in Databricks.
 
 ---
 
@@ -245,7 +245,7 @@ def publish_to_event_hub(detections: list[dict], conn_str: str, hub_name: str):
 ```
 
 !!! warning "FIRMS Rate Limits"
-    FIRMS transaction API limits vary by data source. VIIRS NRT supports requests for up to 10 days of data per call. For large area requests, partition by region or use the bulk download files updated every few hours.
+FIRMS transaction API limits vary by data source. VIIRS NRT supports requests for up to 10 days of data per call. For large area requests, partition by region or use the bulk download files updated every few hours.
 
 ---
 
@@ -318,20 +318,20 @@ where acquired_at_utc > (select max(acquired_at_utc) from {{ this }})
 
 **Additional Silver models:**
 
-| Model | Source | Key Transformations |
-|---|---|---|
-| `stg_power_daily_weather` | POWER API Bronze | Pivot parameter columns, cast types, add coordinate hash, filter fill values (-999) |
-| `stg_neo_close_approaches` | NEO API Bronze | Flatten nested `close_approach_data`, convert AU/km distances, flag `is_potentially_hazardous` |
-| `stg_exoplanets` | Exoplanet Archive | Standardize discovery method taxonomy, compute habitable zone flag from stellar flux |
+| Model                      | Source            | Key Transformations                                                                            |
+| -------------------------- | ----------------- | ---------------------------------------------------------------------------------------------- |
+| `stg_power_daily_weather`  | POWER API Bronze  | Pivot parameter columns, cast types, add coordinate hash, filter fill values (-999)            |
+| `stg_neo_close_approaches` | NEO API Bronze    | Flatten nested `close_approach_data`, convert AU/km distances, flag `is_potentially_hazardous` |
+| `stg_exoplanets`           | Exoplanet Archive | Standardize discovery method taxonomy, compute habitable zone flag from stellar flux           |
 
 #### Silver → Gold Aggregations
 
-| Gold Table | Logic | Grain |
-|---|---|---|
-| `gold_climate_trends` | 30-year rolling averages of temperature, precipitation, solar irradiance from POWER data | Monthly × 1° grid cell |
-| `gold_fire_risk_index` | Composite score: FRP intensity + detection density + drought index (PRECTOTCORR) + wind speed | Daily × county/region |
-| `gold_neo_threat_assessment` | Close approaches within 0.05 AU, estimated diameter, relative velocity, Torino-scale proxy | Per object per approach |
-| `gold_solar_potential` | Annual GHI (Global Horizontal Irradiance) from ALLSKY_SFC_SW_DWN, capacity factor estimates | Annual × 0.5° grid |
+| Gold Table                   | Logic                                                                                         | Grain                   |
+| ---------------------------- | --------------------------------------------------------------------------------------------- | ----------------------- |
+| `gold_climate_trends`        | 30-year rolling averages of temperature, precipitation, solar irradiance from POWER data      | Monthly × 1° grid cell  |
+| `gold_fire_risk_index`       | Composite score: FRP intensity + detection density + drought index (PRECTOTCORR) + wind speed | Daily × county/region   |
+| `gold_neo_threat_assessment` | Close approaches within 0.05 AU, estimated diameter, relative velocity, Torino-scale proxy    | Per object per approach |
+| `gold_solar_potential`       | Annual GHI (Global Horizontal Irradiance) from ALLSKY_SFC_SW_DWN, capacity factor estimates   | Annual × 0.5° grid      |
 
 ---
 
@@ -400,15 +400,15 @@ def fetch_neo_approaches(
 
 **Torino Scale proxy categorization** (simplified for dashboarding):
 
-| Category | Criteria | Dashboard Color |
-|---|---|---|
-| **No Hazard (0)** | Miss distance > 0.05 AU | Green |
-| **Normal (1)** | Miss distance 0.01–0.05 AU, diameter < 50 m | Yellow |
-| **Meriting Attention (2-4)** | Miss distance < 0.01 AU or `is_potentially_hazardous = true` | Orange |
-| **Threatening (5-7)** | Hypothetical — close approach < 1 lunar distance, diameter > 100 m | Red |
+| Category                     | Criteria                                                           | Dashboard Color |
+| ---------------------------- | ------------------------------------------------------------------ | --------------- |
+| **No Hazard (0)**            | Miss distance > 0.05 AU                                            | Green           |
+| **Normal (1)**               | Miss distance 0.01–0.05 AU, diameter < 50 m                        | Yellow          |
+| **Meriting Attention (2-4)** | Miss distance < 0.01 AU or `is_potentially_hazardous = true`       | Orange          |
+| **Threatening (5-7)**        | Hypothetical — close approach < 1 lunar distance, diameter > 100 m | Red             |
 
 !!! note "Torino Scale"
-    The actual Torino Scale incorporates collision probability, which is not available from the NEO feed API. The categorization above is a simplified proxy for dashboarding. For authoritative risk assessments, reference [JPL Sentry](https://cneos.jpl.nasa.gov/sentry/).
+The actual Torino Scale incorporates collision probability, which is not available from the NEO feed API. The categorization above is a simplified proxy for dashboarding. For authoritative risk assessments, reference [JPL Sentry](https://cneos.jpl.nasa.gov/sentry/).
 
 ---
 
@@ -461,13 +461,13 @@ raw_fire_detections
 
 #### Power BI Dashboard Layout
 
-| Page | Visuals | Data Source |
-|---|---|---|
-| **Climate Overview** | Global temperature anomaly map, precipitation trend lines, solar irradiance heatmap | `gold_climate_trends` |
-| **Fire Watch** | Real-time fire detection map (ArcGIS visual), FRP time series, fire risk index by region | `raw_fire_detections` (ADX), `gold_fire_risk_index` |
-| **NEO Tracker** | Close approach timeline, diameter vs. miss distance scatter, threat category donut | `gold_neo_threat_assessment` |
-| **Solar Potential** | GHI map overlay, capacity factor by region, top sites table | `gold_solar_potential` |
-| **Exoplanet Catalog** | Discovery timeline, habitable zone filter, method distribution | `stg_exoplanets` |
+| Page                  | Visuals                                                                                  | Data Source                                         |
+| --------------------- | ---------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| **Climate Overview**  | Global temperature anomaly map, precipitation trend lines, solar irradiance heatmap      | `gold_climate_trends`                               |
+| **Fire Watch**        | Real-time fire detection map (ArcGIS visual), FRP time series, fire risk index by region | `raw_fire_detections` (ADX), `gold_fire_risk_index` |
+| **NEO Tracker**       | Close approach timeline, diameter vs. miss distance scatter, threat category donut       | `gold_neo_threat_assessment`                        |
+| **Solar Potential**   | GHI map overlay, capacity factor by region, top sites table                              | `gold_solar_potential`                              |
+| **Exoplanet Catalog** | Discovery timeline, habitable zone filter, method distribution                           | `stg_exoplanets`                                    |
 
 ---
 
@@ -505,27 +505,27 @@ POWER API includes space-weather-adjacent parameters (solar irradiance variation
 
 ## Cross-References
 
-| Related Use Case | Integration Point |
-|---|---|
-| [Government Data Analytics](./government-data-analytics.md) | NOAA climate data synergy, EPA air quality cross-reference, federal compliance frameworks |
+| Related Use Case                                                                           | Integration Point                                                                          |
+| ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
+| [Government Data Analytics](./government-data-analytics.md)                                | NOAA climate data synergy, EPA air quality cross-reference, federal compliance frameworks  |
 | [Real-Time Intelligence & Anomaly Detection](./realtime-intelligence-anomaly-detection.md) | Event Hub streaming patterns, ADX real-time queries, anomaly detection for fire/NEO events |
 
 !!! tip "Geospatial Analytics"
-    For spatial joins (fire detections × county boundaries, NEO ground tracks), consider Azure Maps or PostGIS on Azure Database for PostgreSQL. FIRMS coordinates can be enriched with reverse geocoding at ingestion time.
+For spatial joins (fire detections × county boundaries, NEO ground tracks), consider Azure Maps or PostGIS on Azure Database for PostgreSQL. FIRMS coordinates can be enriched with reverse geocoding at ingestion time.
 
 ---
 
 ## Sources
 
-| Resource | URL |
-|---|---|
-| NASA API Portal | [https://api.nasa.gov/](https://api.nasa.gov/) |
-| NASA Earthdata (EOSDIS) | [https://earthdata.nasa.gov/](https://earthdata.nasa.gov/) |
-| NASA POWER API Documentation | [https://power.larc.nasa.gov/docs/](https://power.larc.nasa.gov/docs/) |
-| FIRMS Active Fire Data | [https://firms.modaps.eosdis.nasa.gov/](https://firms.modaps.eosdis.nasa.gov/) |
-| NASA NEO API Documentation | [https://api.nasa.gov/ — Asteroids NeoWs](https://api.nasa.gov/) |
-| NASA Exoplanet Archive | [https://exoplanetarchive.ipac.caltech.edu/](https://exoplanetarchive.ipac.caltech.edu/) |
-| NASA Open Data Portal | [https://data.nasa.gov/](https://data.nasa.gov/) |
-| Giovanni Earth Science Data | [https://giovanni.gsfc.nasa.gov/giovanni/](https://giovanni.gsfc.nasa.gov/giovanni/) |
-| JPL CNEOS Sentry (NEO Risk) | [https://cneos.jpl.nasa.gov/sentry/](https://cneos.jpl.nasa.gov/sentry/) |
-| NOAA Space Weather Prediction Center | [https://www.swpc.noaa.gov/](https://www.swpc.noaa.gov/) |
+| Resource                             | URL                                                                                      |
+| ------------------------------------ | ---------------------------------------------------------------------------------------- |
+| NASA API Portal                      | [https://api.nasa.gov/](https://api.nasa.gov/)                                           |
+| NASA Earthdata (EOSDIS)              | [https://earthdata.nasa.gov/](https://earthdata.nasa.gov/)                               |
+| NASA POWER API Documentation         | [https://power.larc.nasa.gov/docs/](https://power.larc.nasa.gov/docs/)                   |
+| FIRMS Active Fire Data               | [https://firms.modaps.eosdis.nasa.gov/](https://firms.modaps.eosdis.nasa.gov/)           |
+| NASA NEO API Documentation           | [https://api.nasa.gov/ — Asteroids NeoWs](https://api.nasa.gov/)                         |
+| NASA Exoplanet Archive               | [https://exoplanetarchive.ipac.caltech.edu/](https://exoplanetarchive.ipac.caltech.edu/) |
+| NASA Open Data Portal                | [https://data.nasa.gov/](https://data.nasa.gov/)                                         |
+| Giovanni Earth Science Data          | [https://giovanni.gsfc.nasa.gov/giovanni/](https://giovanni.gsfc.nasa.gov/giovanni/)     |
+| JPL CNEOS Sentry (NEO Risk)          | [https://cneos.jpl.nasa.gov/sentry/](https://cneos.jpl.nasa.gov/sentry/)                 |
+| NOAA Space Weather Prediction Center | [https://www.swpc.noaa.gov/](https://www.swpc.noaa.gov/)                                 |

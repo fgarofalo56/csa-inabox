@@ -8,10 +8,10 @@ description: End-to-end guide for building tribal casino and gaming operations a
 This use case covers the ingestion, transformation, and analysis of tribal casino gaming operations data — slot machine telemetry, table game events, player tracking, F&B point-of-sale, hotel PMS, and loyalty programs — using Azure Cloud Scale Analytics patterns. The implementation combines real-time slot and table game event streaming with batch ingestion from operational systems to produce floor performance dashboards, player lifetime value models, comp optimization analysis, and regulatory compliance reports for NIGC and Title 31 AML requirements.
 
 !!! info "Reference Implementation"
-    The complete working code for this domain lives in [`examples/casino-analytics/`](../../examples/casino-analytics/). This page explains the architecture, data sources, and step-by-step build process.
+The complete working code for this domain lives in [`examples/casino-analytics/`](../../examples/casino-analytics/). This page explains the architecture, data sources, and step-by-step build process.
 
 !!! warning "Synthetic Data Only"
-    **ALL data in this implementation is fully synthetic.** No real player data, gaming results, or financial transactions are used. Player names, loyalty IDs, transaction amounts, and all other personally identifiable information are generated using Faker and random distributions. This dataset is designed for architectural demonstration only and must not be used for actual gaming operations or regulatory filings.
+**ALL data in this implementation is fully synthetic.** No real player data, gaming results, or financial transactions are used. Player names, loyalty IDs, transaction amounts, and all other personally identifiable information are generated using Faker and random distributions. This dataset is designed for architectural demonstration only and must not be used for actual gaming operations or regulatory filings.
 
 ---
 
@@ -78,15 +78,15 @@ graph LR
 
 All data sources listed below are **synthetically generated** for demonstration purposes.
 
-| Source | Protocol / Format | Frequency | Volume (Synthetic) | Key Fields |
-|---|---|---|---|---|
-| Slot Machine Telemetry | SAS/G2S → JSON | Sub-second | ~50M events/day | `machine_id`, `denomination`, `coin_in`, `coin_out`, `jackpot`, `game_cycle_ms` |
-| Table Game Events | RFID Chip Tracking → JSON | Per-hand/round | ~5M events/day | `table_id`, `game_type`, `buy_in`, `cash_out`, `avg_bet`, `hands_played` |
-| Player Tracking | Card-In/Card-Out CSV | Session-level | ~200K sessions/day | `player_id`, `card_in_ts`, `card_out_ts`, `machine_id`, `theo_win`, `actual_win` |
-| F&B Point-of-Sale | POS Export CSV | Batch (hourly) | ~80K transactions/day | `check_id`, `player_id`, `outlet`, `items`, `total`, `comp_amount`, `payment_type` |
-| Hotel PMS | PMS Export CSV | Batch (daily) | ~5K reservations/day | `reservation_id`, `player_id`, `room_type`, `rate`, `nights`, `comp_flag`, `amenities` |
-| Loyalty Program | CRM Extract CSV | Batch (daily) | ~500K member records | `player_id`, `tier`, `points_balance`, `lifetime_theo`, `lifetime_actual`, `signup_date` |
-| Video Floor Analytics | Azure Video Analyzer | Continuous | ~200 camera feeds | `camera_id`, `zone`, `person_count`, `density_pct`, `timestamp` |
+| Source                 | Protocol / Format         | Frequency      | Volume (Synthetic)    | Key Fields                                                                               |
+| ---------------------- | ------------------------- | -------------- | --------------------- | ---------------------------------------------------------------------------------------- |
+| Slot Machine Telemetry | SAS/G2S → JSON            | Sub-second     | ~50M events/day       | `machine_id`, `denomination`, `coin_in`, `coin_out`, `jackpot`, `game_cycle_ms`          |
+| Table Game Events      | RFID Chip Tracking → JSON | Per-hand/round | ~5M events/day        | `table_id`, `game_type`, `buy_in`, `cash_out`, `avg_bet`, `hands_played`                 |
+| Player Tracking        | Card-In/Card-Out CSV      | Session-level  | ~200K sessions/day    | `player_id`, `card_in_ts`, `card_out_ts`, `machine_id`, `theo_win`, `actual_win`         |
+| F&B Point-of-Sale      | POS Export CSV            | Batch (hourly) | ~80K transactions/day | `check_id`, `player_id`, `outlet`, `items`, `total`, `comp_amount`, `payment_type`       |
+| Hotel PMS              | PMS Export CSV            | Batch (daily)  | ~5K reservations/day  | `reservation_id`, `player_id`, `room_type`, `rate`, `nights`, `comp_flag`, `amenities`   |
+| Loyalty Program        | CRM Extract CSV           | Batch (daily)  | ~500K member records  | `player_id`, `tier`, `points_balance`, `lifetime_theo`, `lifetime_actual`, `signup_date` |
+| Video Floor Analytics  | Azure Video Analyzer      | Continuous     | ~200 camera feeds     | `camera_id`, `zone`, `person_count`, `density_pct`, `timestamp`                          |
 
 ---
 
@@ -122,9 +122,9 @@ def generate_slot_event() -> dict:
     """Generate a single synthetic slot machine event."""
     machine_id = random.choice(MACHINE_IDS)
     denomination = random.choice(DENOMINATIONS)
-    credits_wagered = random.choice([1, 2, 3, 5, 10, 20]) 
+    credits_wagered = random.choice([1, 2, 3, 5, 10, 20])
     coin_in = denomination * credits_wagered
-    
+
     # House edge simulation: ~8-12% hold depending on game type
     hold_pct = random.uniform(0.06, 0.14)
     if random.random() < 0.35:  # ~35% of spins pay something
@@ -401,12 +401,12 @@ select
     p.loyalty_tier,
     count(distinct p.player_id)                         as player_count,
     round(avg(p.lifetime_theo_win), 2)                  as avg_theo_win,
-    round(sum(p.lifetime_fb_comps + 
+    round(sum(p.lifetime_fb_comps +
         p.comp_room_nights * p.avg_daily_rate), 2)      as total_comp_cost,
     round(sum(p.lifetime_coin_in - p.lifetime_coin_out), 2)  as total_gaming_revenue,
     round(
         sum(p.lifetime_coin_in - p.lifetime_coin_out) /
-        nullif(sum(p.lifetime_fb_comps + 
+        nullif(sum(p.lifetime_fb_comps +
             p.comp_room_nights * p.avg_daily_rate), 0),
         2
     )                                                    as comp_roi_ratio,
@@ -554,29 +554,29 @@ FloorDensityEvents
 
 ## Regulatory Compliance Reference
 
-| Regulation | Authority | Requirement | Implementation |
-|---|---|---|---|
-| **Title 31 / BSA** | FinCEN | CTR filing for cash transactions ≥ $10,000 per gaming day | `gld_aml_ctr_candidates` model with daily aggregation |
-| **Title 31 / BSA** | FinCEN | SAR filing for suspicious structuring patterns | Structuring detection logic (multiple transactions near threshold) |
-| **NIGC Regulations** | NIGC | Monthly/quarterly revenue reporting by game category | `gld_nigc_revenue_report` model |
-| **NIGC MICS** | NIGC | Minimum Internal Control Standards for slot/table operations | Audit trail via Bronze-layer raw event retention |
-| **Tribal-State Compact** | State Gaming Commission | Compact-specific revenue sharing and reporting | Configurable per-compact reporting templates |
+| Regulation               | Authority               | Requirement                                                  | Implementation                                                     |
+| ------------------------ | ----------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------ |
+| **Title 31 / BSA**       | FinCEN                  | CTR filing for cash transactions ≥ $10,000 per gaming day    | `gld_aml_ctr_candidates` model with daily aggregation              |
+| **Title 31 / BSA**       | FinCEN                  | SAR filing for suspicious structuring patterns               | Structuring detection logic (multiple transactions near threshold) |
+| **NIGC Regulations**     | NIGC                    | Monthly/quarterly revenue reporting by game category         | `gld_nigc_revenue_report` model                                    |
+| **NIGC MICS**            | NIGC                    | Minimum Internal Control Standards for slot/table operations | Audit trail via Bronze-layer raw event retention                   |
+| **Tribal-State Compact** | State Gaming Commission | Compact-specific revenue sharing and reporting               | Configurable per-compact reporting templates                       |
 
 !!! note "Tribal Sovereignty"
-    Tribal gaming operations are regulated under the Indian Gaming Regulatory Act (IGRA). Specific reporting requirements vary by tribal-state compact. The models provided here implement common Title 31 and NIGC requirements; compact-specific customizations should be configured per deployment.
+Tribal gaming operations are regulated under the Indian Gaming Regulatory Act (IGRA). Specific reporting requirements vary by tribal-state compact. The models provided here implement common Title 31 and NIGC requirements; compact-specific customizations should be configured per deployment.
 
 ---
 
 ## Power BI Dashboard Layers
 
-| Dashboard | Refresh | Key Metrics | Audience |
-|---|---|---|---|
-| **Real-Time Floor Monitor** | Sub-minute (ADX Direct Query) | Active machines, coin-in/out by zone, jackpot alerts | Floor managers, surveillance |
-| **Player Value & Segmentation** | Daily | Player 360 scores, tier distribution, churn risk | Marketing, player development |
-| **Comp ROI Analysis** | Weekly | Comp cost vs. incremental revenue by tier | Finance, marketing directors |
-| **AML Compliance** | Daily | CTR candidates, structuring alerts, SAR queue | Compliance officers |
-| **NIGC Revenue Summary** | Monthly | Gross gaming revenue, hold %, machine counts | Tribal gaming commission, NIGC |
-| **Floor Density** | Near real-time (ADX) | Zone occupancy, peak hours, staffing recommendations | Operations, security |
+| Dashboard                       | Refresh                       | Key Metrics                                          | Audience                       |
+| ------------------------------- | ----------------------------- | ---------------------------------------------------- | ------------------------------ |
+| **Real-Time Floor Monitor**     | Sub-minute (ADX Direct Query) | Active machines, coin-in/out by zone, jackpot alerts | Floor managers, surveillance   |
+| **Player Value & Segmentation** | Daily                         | Player 360 scores, tier distribution, churn risk     | Marketing, player development  |
+| **Comp ROI Analysis**           | Weekly                        | Comp cost vs. incremental revenue by tier            | Finance, marketing directors   |
+| **AML Compliance**              | Daily                         | CTR candidates, structuring alerts, SAR queue        | Compliance officers            |
+| **NIGC Revenue Summary**        | Monthly                       | Gross gaming revenue, hold %, machine counts         | Tribal gaming commission, NIGC |
+| **Floor Density**               | Near real-time (ADX)          | Zone occupancy, peak hours, staffing recommendations | Operations, security           |
 
 ---
 

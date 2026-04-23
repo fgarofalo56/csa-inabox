@@ -8,7 +8,7 @@ description: End-to-end guide for building Department of Commerce economic analy
 This use case covers the ingestion, transformation, and analysis of data from multiple Department of Commerce bureaus — Census Bureau, Bureau of Economic Analysis (BEA), National Institute of Standards and Technology (NIST), and International Trade Administration (ITA) — using Azure Cloud Scale Analytics patterns. The implementation produces regional economic resilience indices, bilateral trade pattern analysis, small business growth predictions, and demographic insight dashboards from authoritative federal economic data.
 
 !!! info "Reference Implementation"
-    The complete working code for this domain lives in [`examples/commerce/`](../../examples/commerce/). This page explains the architecture, data sources, and step-by-step build process.
+The complete working code for this domain lives in [`examples/commerce/`](../../examples/commerce/). This page explains the architecture, data sources, and step-by-step build process.
 
 ---
 
@@ -63,17 +63,17 @@ graph LR
 
 ## Data Sources
 
-| Source | Bureau | API Endpoint | Key Variables | Refresh Cadence |
-|--------|--------|-------------|---------------|-----------------|
-| American Community Survey (ACS) 5-Year | Census Bureau | `https://api.census.gov/data/{year}/acs/acs5` | Population, median income, poverty rate, unemployment, education, housing | Annual (December) |
-| Decennial Census | Census Bureau | `https://api.census.gov/data/{year}/dec/dhc` | Total population, demographics, housing units | Every 10 years |
-| Regional GDP by Industry | BEA | `https://apps.bea.gov/api/data` (Regional, SQGDP2) | GDP by NAICS sector, personal income, compensation | Quarterly |
-| International Trade (HS) | Census Bureau | `https://api.census.gov/data/timeseries/intltrade/imports/hs` | Bilateral trade values, commodity codes, quantities, tariffs | Monthly |
-| NIST Manufacturing Extension | NIST | Program data via bulk download | Manufacturing competitiveness, MEP client outcomes | Annual |
-| Trade Policy Data | ITA | `https://api.trade.gov/gateway/v1/` | Tariff schedules, trade agreements, market intelligence | Varies |
+| Source                                 | Bureau        | API Endpoint                                                  | Key Variables                                                             | Refresh Cadence   |
+| -------------------------------------- | ------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------- | ----------------- |
+| American Community Survey (ACS) 5-Year | Census Bureau | `https://api.census.gov/data/{year}/acs/acs5`                 | Population, median income, poverty rate, unemployment, education, housing | Annual (December) |
+| Decennial Census                       | Census Bureau | `https://api.census.gov/data/{year}/dec/dhc`                  | Total population, demographics, housing units                             | Every 10 years    |
+| Regional GDP by Industry               | BEA           | `https://apps.bea.gov/api/data` (Regional, SQGDP2)            | GDP by NAICS sector, personal income, compensation                        | Quarterly         |
+| International Trade (HS)               | Census Bureau | `https://api.census.gov/data/timeseries/intltrade/imports/hs` | Bilateral trade values, commodity codes, quantities, tariffs              | Monthly           |
+| NIST Manufacturing Extension           | NIST          | Program data via bulk download                                | Manufacturing competitiveness, MEP client outcomes                        | Annual            |
+| Trade Policy Data                      | ITA           | `https://api.trade.gov/gateway/v1/`                           | Tariff schedules, trade agreements, market intelligence                   | Varies            |
 
 !!! note "API Key Requirements"
-    Census Bureau APIs require a free API key from [api.census.gov/data/key_signup.html](https://api.census.gov/data/key_signup.html). BEA APIs require a separate key from [apps.bea.gov/API/signup/](https://apps.bea.gov/API/signup/). Both are free for government and research use.
+Census Bureau APIs require a free API key from [api.census.gov/data/key_signup.html](https://api.census.gov/data/key_signup.html). BEA APIs require a separate key from [apps.bea.gov/API/signup/](https://apps.bea.gov/API/signup/). Both are free for government and research use.
 
 ---
 
@@ -180,11 +180,11 @@ def fetch_gdp_data(years: list[int], bea_api_key: str) -> list[dict]:
 
 The `gld_economic_resilience` gold model computes a composite resilience index for each state-year by combining three dimensions:
 
-| Component | Method | Weight | Interpretation |
-|-----------|--------|--------|----------------|
-| Employment Diversity Index | Shannon Entropy: H = −Σ(pᵢ · ln(pᵢ)) / ln(N) | 40% | Higher diversity → more resilient to single-industry shocks |
-| Herfindahl-Hirschman Index (HHI) | HHI = Σ(sᵢ²) where sᵢ is industry GDP share | 35% | Lower concentration → more resilient |
-| GDP Stability Score | 100 − Coefficient of Variation over lookback window | 25% | Lower volatility → more stable economy |
+| Component                        | Method                                              | Weight | Interpretation                                              |
+| -------------------------------- | --------------------------------------------------- | ------ | ----------------------------------------------------------- |
+| Employment Diversity Index       | Shannon Entropy: H = −Σ(pᵢ · ln(pᵢ)) / ln(N)        | 40%    | Higher diversity → more resilient to single-industry shocks |
+| Herfindahl-Hirschman Index (HHI) | HHI = Σ(sᵢ²) where sᵢ is industry GDP share         | 35%    | Lower concentration → more resilient                        |
+| GDP Stability Score              | 100 − Coefficient of Variation over lookback window | 25%    | Lower volatility → more stable economy                      |
 
 ```sql
 -- Excerpt from gld_economic_resilience.sql: composite score calculation
@@ -217,7 +217,7 @@ ORDER BY year DESC, resilience_score DESC
 ```
 
 !!! tip "Configurable Weights"
-    Component weights are defined in `dbt_project.yml` via dbt variables (`employment_diversity_weight`, `hhi_weight`, `gdp_stability_weight`). Adjust these to reflect regional policy priorities.
+Component weights are defined in `dbt_project.yml` via dbt variables (`employment_diversity_weight`, `hhi_weight`, `gdp_stability_weight`). Adjust these to reflect regional policy priorities.
 
 ### Step 4: International Trade Pattern Analysis
 
@@ -252,14 +252,14 @@ GROUP BY partner_country_code, partner_country_name, year
 
 The `gld_business_growth` gold model combines Census demographics with GDP indicators to score each state's business growth climate. The composite score uses z-score normalization across six weighted factors:
 
-| Factor | Weight | Source |
-|--------|--------|--------|
-| GDP growth rate (YoY) | 25% | BEA Regional GDP |
-| Education level (% bachelor's+) | 20% | Census ACS |
-| Income growth rate | 20% | Census ACS |
-| Low unemployment (inverted) | 15% | Census ACS |
-| Population growth rate | 10% | Census ACS |
-| Industry diversity (active sectors) | 10% | BEA Regional GDP |
+| Factor                              | Weight | Source           |
+| ----------------------------------- | ------ | ---------------- |
+| GDP growth rate (YoY)               | 25%    | BEA Regional GDP |
+| Education level (% bachelor's+)     | 20%    | Census ACS       |
+| Income growth rate                  | 20%    | Census ACS       |
+| Low unemployment (inverted)         | 15%    | Census ACS       |
+| Population growth rate              | 10%    | Census ACS       |
+| Industry diversity (active sectors) | 10%    | BEA Regional GDP |
 
 Output categories: `HIGH_GROWTH`, `MODERATE_GROWTH`, `STABLE`, `SLOW_GROWTH`, `DECLINING`.
 
@@ -318,17 +318,17 @@ graph TD
 This implementation is designed for deployment on **Azure Government** (IL4/IL5) or **Azure Government Secret** regions to meet federal data handling requirements.
 
 !!! warning "FISMA Requirements"
-    Commerce Bureau data pipelines handling CUI (Controlled Unclassified Information) must operate within a FISMA Moderate boundary. Ensure all Azure services are deployed in `usgovvirginia` or `usgovarizona` regions.
+Commerce Bureau data pipelines handling CUI (Controlled Unclassified Information) must operate within a FISMA Moderate boundary. Ensure all Azure services are deployed in `usgovvirginia` or `usgovarizona` regions.
 
-| Control Area | Implementation | Azure Service |
-|-------------|----------------|---------------|
-| Access Control (AC) | Azure AD with RBAC, Managed Identities for service-to-service | Azure AD / Entra ID |
-| Audit & Accountability (AU) | Diagnostic settings on all services, Log Analytics workspace | Azure Monitor |
-| Data Encryption at Rest | ADLS Gen2 with customer-managed keys in Key Vault | Azure Key Vault |
-| Data Encryption in Transit | TLS 1.2+ enforced, Private Endpoints for all data services | Azure Private Link |
-| API Key Management | Census/BEA API keys stored in Key Vault, referenced via ADF linked services | Azure Key Vault |
-| Network Isolation | VNet integration for ADF, Synapse, and compute resources | Azure VNet + NSGs |
-| Boundary Protection (SC) | No public endpoints; all traffic routed through private endpoints | Azure Private DNS |
+| Control Area                | Implementation                                                              | Azure Service       |
+| --------------------------- | --------------------------------------------------------------------------- | ------------------- |
+| Access Control (AC)         | Azure AD with RBAC, Managed Identities for service-to-service               | Azure AD / Entra ID |
+| Audit & Accountability (AU) | Diagnostic settings on all services, Log Analytics workspace                | Azure Monitor       |
+| Data Encryption at Rest     | ADLS Gen2 with customer-managed keys in Key Vault                           | Azure Key Vault     |
+| Data Encryption in Transit  | TLS 1.2+ enforced, Private Endpoints for all data services                  | Azure Private Link  |
+| API Key Management          | Census/BEA API keys stored in Key Vault, referenced via ADF linked services | Azure Key Vault     |
+| Network Isolation           | VNet integration for ADF, Synapse, and compute resources                    | Azure VNet + NSGs   |
+| Boundary Protection (SC)    | No public endpoints; all traffic routed through private endpoints           | Azure Private DNS   |
 
 Deployment parameters for government regions are in [`examples/commerce/deploy/params.gov.json`](../../examples/commerce/deploy/params.gov.json).
 
@@ -347,24 +347,24 @@ az deployment group create \
 
 Data contracts define the schema expectations between pipeline stages. The commerce domain defines three contracts:
 
-| Contract | File | Purpose |
-|----------|------|---------|
-| Census Demographics | `contracts/census-demographics.yaml` | ACS variable schema, FIPS validation, nullability rules |
-| Economic Indicators | `contracts/economic-indicators.yaml` | GDP fields, unit scales, temporal grain constraints |
-| Trade Data | `contracts/trade-data.yaml` | HS code format, trade value bounds, country code validation |
+| Contract            | File                                 | Purpose                                                     |
+| ------------------- | ------------------------------------ | ----------------------------------------------------------- |
+| Census Demographics | `contracts/census-demographics.yaml` | ACS variable schema, FIPS validation, nullability rules     |
+| Economic Indicators | `contracts/economic-indicators.yaml` | GDP fields, unit scales, temporal grain constraints         |
+| Trade Data          | `contracts/trade-data.yaml`          | HS code format, trade value bounds, country code validation |
 
 ---
 
 ## Sources and API References
 
-| Resource | URL |
-|----------|-----|
-| Census Bureau API Documentation | [https://www.census.gov/data/developers.html](https://www.census.gov/data/developers.html) |
-| Census API Key Signup | [https://api.census.gov/data/key_signup.html](https://api.census.gov/data/key_signup.html) |
-| ACS 5-Year Variables | [https://api.census.gov/data/2022/acs/acs5/variables.html](https://api.census.gov/data/2022/acs/acs5/variables.html) |
-| Census International Trade API | [https://api.census.gov/data/timeseries/intltrade.html](https://api.census.gov/data/timeseries/intltrade.html) |
-| BEA API Documentation | [https://apps.bea.gov/API/signup/](https://apps.bea.gov/API/signup/) |
-| BEA Regional GDP Tables | [https://apps.bea.gov/iTable/?ReqID=70](https://apps.bea.gov/iTable/?ReqID=70) |
-| NIST Manufacturing Extension Partnership | [https://www.nist.gov/mep](https://www.nist.gov/mep) |
-| ITA Trade Data API | [https://api.trade.gov/](https://api.trade.gov/) |
-| Azure Government Regions | [https://learn.microsoft.com/azure/azure-government/](https://learn.microsoft.com/azure/azure-government/) |
+| Resource                                 | URL                                                                                                                  |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Census Bureau API Documentation          | [https://www.census.gov/data/developers.html](https://www.census.gov/data/developers.html)                           |
+| Census API Key Signup                    | [https://api.census.gov/data/key_signup.html](https://api.census.gov/data/key_signup.html)                           |
+| ACS 5-Year Variables                     | [https://api.census.gov/data/2022/acs/acs5/variables.html](https://api.census.gov/data/2022/acs/acs5/variables.html) |
+| Census International Trade API           | [https://api.census.gov/data/timeseries/intltrade.html](https://api.census.gov/data/timeseries/intltrade.html)       |
+| BEA API Documentation                    | [https://apps.bea.gov/API/signup/](https://apps.bea.gov/API/signup/)                                                 |
+| BEA Regional GDP Tables                  | [https://apps.bea.gov/iTable/?ReqID=70](https://apps.bea.gov/iTable/?ReqID=70)                                       |
+| NIST Manufacturing Extension Partnership | [https://www.nist.gov/mep](https://www.nist.gov/mep)                                                                 |
+| ITA Trade Data API                       | [https://api.trade.gov/](https://api.trade.gov/)                                                                     |
+| Azure Government Regions                 | [https://learn.microsoft.com/azure/azure-government/](https://learn.microsoft.com/azure/azure-government/)           |
