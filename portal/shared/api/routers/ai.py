@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """AI service endpoints — RAG chat, embeddings, semantic search.
 
 These endpoints expose the AI integration layer (csa_platform.ai_integration)
@@ -56,10 +55,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
     """
     start = time.perf_counter()
     try:
-        # Lazy import to avoid startup failures if AI services aren't configured.
-        # from csa_platform.ai_integration.rag.service import RAGService
-        # rag = RAGService()
-        # result = await rag.chat(request.query, collection=request.collection, ...)
+        # TODO(prod): delegate to RAGService.chat() when AI services are configured.
 
         answer = (
             f"Based on the data mesh knowledge base, here is information "
@@ -104,9 +100,7 @@ async def embed_texts(request: EmbedRequest) -> EmbedResponse:
     The current implementation returns placeholder vectors.
     """
     try:
-        # from csa_platform.ai_integration.rag.pipeline import EmbeddingGenerator
-        # generator = EmbeddingGenerator(model=request.model)
-        # embeddings = await generator.embed_texts(request.texts)
+        # TODO(prod): delegate to EmbeddingGenerator.embed_texts() for real vectors.
 
         dims = 1536
         embeddings = [[0.0] * dims for _ in request.texts]
@@ -141,9 +135,7 @@ async def semantic_search(request: SearchRequest) -> SearchResponse:
     """
     start = time.perf_counter()
     try:
-        # from csa_platform.ai_integration.rag.service import RAGService
-        # rag = RAGService()
-        # results = await rag.search(request.query, top_k=request.top_k, ...)
+        # TODO(prod): delegate to RAGService.search() for real vector search.
 
         results = [
             SearchResult(

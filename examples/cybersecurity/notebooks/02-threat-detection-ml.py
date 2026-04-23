@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Databricks notebook source
 # MAGIC %md
 # MAGIC # 02 — Threat Detection with Machine Learning
@@ -16,14 +15,16 @@
 
 # COMMAND ----------
 
+import warnings
+
 import numpy as np
 import pandas as pd
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
 from sklearn.ensemble import IsolationForest
-from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.metrics import classification_report, precision_recall_curve
-import warnings
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+
 warnings.filterwarnings("ignore")
 
 # COMMAND ----------

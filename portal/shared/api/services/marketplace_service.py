@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Marketplace business logic — extracted from routers for testability and reuse.
 
 Follows the same service pattern as :mod:`provisioning.py`: the router

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Databricks notebook source
 # MAGIC %md
 # MAGIC # 01 — Sentinel Alert Exploration
@@ -16,10 +15,9 @@
 # COMMAND ----------
 
 import json
+
 from pyspark.sql import functions as F
-from pyspark.sql.types import (
-    StructType, StructField, StringType, ArrayType, TimestampType
-)
+from pyspark.sql.types import ArrayType, StringType, StructField, StructType, TimestampType
 
 # Configuration
 BRONZE_PATH = "/mnt/datalake/bronze/sentinel-alerts/"

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Databricks notebook source
 # MAGIC %md
 # MAGIC # 03 — KQL Threat Hunting Queries
@@ -14,10 +13,11 @@
 
 # COMMAND ----------
 
+from datetime import timedelta
+
+import pandas as pd
 from azure.identity import DefaultAzureCredential
 from azure.monitor.query import LogsQueryClient
-from datetime import timedelta
-import pandas as pd
 
 # Configuration
 WORKSPACE_ID = spark.conf.get("spark.cybersecurity.workspace_id", "<your-workspace-id>")

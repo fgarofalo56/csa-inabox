@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """AI service request/response models for the CSA-in-a-Box portal.
 
 Defines the API contract for RAG-powered chat, text embeddings,
@@ -8,7 +7,6 @@ semantic search, and AI service health checks.
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
-
 
 # ── Sub-models ──────────────────────────────────────────────────────────────
 
