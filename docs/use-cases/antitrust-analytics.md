@@ -244,17 +244,12 @@ The `domains/doj_antitrust/` directory in this repository is a complete, working
 
 | Publication | Publisher | Description |
 |---|---|---|
-| [Hart-Scott-Rodino Annual Report FY 2024](https://www.ftc.gov/news-events/news/press-releases/2025/09/ftc-doj-issue-fiscal-year-2024-hart-scott-rodino-annual-report) | FTC & DOJ (Sept 2025) | 47th annual HSR report — merger filing activity Oct 2023–Sept 2024 |
-| [Big Data: A Tool for Inclusion or Exclusion?](https://www.ftc.gov/system/files/documents/reports/big-data-tool-inclusion-or-exclusion-understanding-issues/160106big-data-rpt.pdf) | FTC (Jan 2016) | FTC study on big data analytics in enforcement — benefits, risks, and consumer protection |
-| [Criminal Enforcement Fine and Jail Charts](https://www.justice.gov/atr/criminal-enforcement-fine-and-jail-charts) | DOJ Antitrust Division (Dec 2025) | Historical criminal enforcement fine and jail trend data |
-| [Division Operations & Accomplishments](https://www.justice.gov/atr/division-operations) | DOJ Antitrust Division (2024) | Workload statistics, enforcement trends, prosecution outcomes |
 | [Microsoft Digital Defense Report 2025](https://aka.ms/Microsoft-Digital-Defense-Report-2025) | Microsoft Security (Oct 2025) | Annual threat landscape analysis — relevant to securing enforcement data platforms |
 | [Azure Synapse Security White Paper](https://learn.microsoft.com/azure/synapse-analytics/guidance/security-white-paper-introduction) | Microsoft | Multi-part white paper on securing analytics workloads — data protection, access control, network security |
 
 ### Government Data Sources
 
 - [DOJ Antitrust Division](https://www.justice.gov/atr) — Official division homepage with press releases, case filings, and policy documents
-- [Hart-Scott-Rodino Annual Reports](https://www.ftc.gov/legal-library/browse/reports) — Joint FTC/DOJ merger filing statistics
 - [Federal Judicial Center Integrated Database](https://www.fjc.gov/research/idb) — Federal court case data
 - [U.S. Sentencing Commission Datafiles](https://www.ussc.gov/research/datafiles/commission-datafiles) — Individual-level sentencing data
 
@@ -263,3 +258,209 @@ The `domains/doj_antitrust/` directory in this repository is a complete, working
 - [Analytics End-to-End with Azure](https://learn.microsoft.com/en-us/azure/architecture/example-scenario/dataplate2e/data-platform-end-to-end) — Microsoft reference architecture
 - [Cloud-Scale Analytics](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/) — Cloud Adoption Framework analytics scenario
 - [Azure FedRAMP High Authorization](https://learn.microsoft.com/azure/compliance/offerings/offering-fedramp) — Compliance documentation for government analytics workloads
+
+---
+
+## Ingesting Government Antitrust Data with Azure
+
+The DOJ and FTC publish structured enforcement data in PDF reports, HTML tables, and downloadable datasets. This section shows how to build automated pipelines that ingest these sources into a lakehouse using Azure services.
+
+### Source-to-Lakehouse Pipeline Overview
+
+```mermaid
+flowchart LR
+    subgraph Sources["Government Sources"]
+        HSR["HSR Annual Reports<br/>(PDF)"]
+        CHARTS["Criminal Enforcement<br/>Charts (HTML)"]
+        OPS["Division Operations<br/>(HTML tables)"]
+        FJC["FJC Integrated DB<br/>(CSV/SAS)"]
+    end
+
+    subgraph Ingest["Azure Ingestion"]
+        ADF["Azure Data Factory"]
+        DOC["Document Intelligence"]
+        FUNC["Azure Functions<br/>(web scraping)"]
+    end
+
+    subgraph Lake["Lakehouse"]
+        BRZ["Bronze<br/>(raw extracts)"]
+        SLV["Silver<br/>(cleaned)"]
+        GLD["Gold<br/>(analytics-ready)"]
+    end
+
+    HSR --> DOC --> BRZ
+    CHARTS --> FUNC --> BRZ
+    OPS --> FUNC --> BRZ
+    FJC --> ADF --> BRZ
+    BRZ --> SLV --> GLD
+```
+
+### 1. HSR Annual Reports → Azure Document Intelligence
+
+The [Hart-Scott-Rodino Annual Reports](https://www.ftc.gov/legal-library/browse/reports) are published as PDFs with tables containing merger filing statistics. Azure Document Intelligence (formerly Form Recognizer) extracts structured data from these documents.
+
+**Azure services:** Document Intelligence + Azure Functions + ADLS Gen2
+
+```python
+# Azure Function: Extract tables from HSR Annual Report PDF
+from azure.ai.formrecognizer import DocumentAnalysisClient
+from azure.identity import DefaultAzureCredential
+
+def extract_hsr_tables(pdf_url: str) -> list[dict]:
+    """Extract merger filing tables from HSR Annual Report PDF."""
+    client = DocumentAnalysisClient(
+        endpoint="https://<your-resource>.cognitiveservices.azure.com/",
+        credential=DefaultAzureCredential(),
+    )
+
+    # prebuilt-layout extracts tables, key-value pairs, and text
+    poller = client.begin_analyze_document_from_url(
+        "prebuilt-layout", pdf_url
+    )
+    result = poller.result()
+
+    tables = []
+    for table in result.tables:
+        rows = []
+        for cell in table.cells:
+            while len(rows) <= cell.row_index:
+                rows.append({})
+            # Use first row as headers
+            if cell.row_index == 0:
+                continue
+            header = table.cells[cell.column_index].content
+            rows[cell.row_index][header] = cell.content
+        tables.append({"row_count": table.row_count, "data": rows[1:]})
+
+    return tables
+```
+
+**Pipeline steps:**
+
+1. **Download** — Azure Function fetches PDF from `ftc.gov` on a scheduled trigger (annually)
+2. **Extract** — Document Intelligence extracts tables into structured JSON
+3. **Land** — Write raw JSON to `bronze/hsr_annual_reports/` in ADLS Gen2
+4. **Transform** — dbt model cleans and types the extracted data into silver
+5. **Serve** — Gold-layer `gld_merger_review_summary` aggregates across fiscal years
+
+### 2. Criminal Enforcement Charts → Web Scraping + Azure Functions
+
+The [DOJ Criminal Enforcement Fine and Jail Charts](https://www.justice.gov/atr/criminal-enforcement-fine-and-jail-charts) publish historical fine amounts and jail sentences as HTML pages with embedded data.
+
+**Azure services:** Azure Functions (timer-triggered) + ADLS Gen2
+
+```python
+# Azure Function: Scrape DOJ criminal enforcement trend data
+import httpx
+from bs4 import BeautifulSoup
+import json, datetime
+
+def scrape_criminal_enforcement() -> list[dict]:
+    """Scrape fine and jail trend data from DOJ ATR charts page."""
+    url = "https://www.justice.gov/atr/criminal-enforcement-fine-and-jail-charts"
+    resp = httpx.get(url, follow_redirects=True, timeout=30)
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    records = []
+    for table in soup.find_all("table"):
+        headers = [th.get_text(strip=True) for th in table.find_all("th")]
+        for row in table.find_all("tr")[1:]:
+            cells = [td.get_text(strip=True) for td in row.find_all("td")]
+            if len(cells) == len(headers):
+                records.append(dict(zip(headers, cells)))
+
+    return records
+
+def upload_to_bronze(records: list[dict]):
+    """Write scraped data to ADLS bronze layer as JSON."""
+    from azure.storage.filedatalake import DataLakeServiceClient
+    from azure.identity import DefaultAzureCredential
+
+    client = DataLakeServiceClient(
+        account_url="https://<storage>.dfs.core.windows.net",
+        credential=DefaultAzureCredential(),
+    )
+    fs = client.get_file_system_client("bronze")
+    today = datetime.date.today().isoformat()
+    file = fs.get_file_client(f"doj/criminal_enforcement/{today}.json")
+    file.upload_data(json.dumps(records, indent=2), overwrite=True)
+```
+
+**Scheduling:** Deploy as a timer-triggered Azure Function that runs quarterly (DOJ updates charts ~annually, but quarterly checks catch updates early).
+
+### 3. Division Operations Data → ADF + Databricks
+
+The [Division Operations & Accomplishments](https://www.justice.gov/atr/division-operations) page publishes workload statistics in HTML tables that change format occasionally.
+
+**Azure services:** Azure Data Factory (Web Activity) + Databricks notebook
+
+```python
+# Databricks notebook: Parse DOJ Division Operations HTML
+import requests
+from bs4 import BeautifulSoup
+import pandas as pd
+
+url = "https://www.justice.gov/atr/division-operations"
+resp = requests.get(url, timeout=30)
+soup = BeautifulSoup(resp.text, "html.parser")
+
+# Extract all tables from the page
+dfs = pd.read_html(resp.text)
+
+# Each table covers a different metric (cases filed, investigations, etc.)
+for i, df in enumerate(dfs):
+    table_name = f"division_operations_table_{i}"
+    spark_df = spark.createDataFrame(df)
+    spark_df.write.format("delta").mode("overwrite").saveAsTable(
+        f"bronze.doj.{table_name}"
+    )
+    print(f"Wrote {len(df)} rows to bronze.doj.{table_name}")
+```
+
+**ADF orchestration:** A Data Factory pipeline uses a Web Activity to check the page's `Last-Modified` header, then triggers the Databricks notebook only when the page has been updated.
+
+### 4. FTC Big Data Report → Document Intelligence
+
+The [FTC Big Data Report](https://www.ftc.gov/system/files/documents/reports/big-data-tool-inclusion-or-exclusion-understanding-issues/160106big-data-rpt.pdf) is a 62-page policy document. While not tabular data, Azure AI services can extract key findings and build a searchable knowledge base.
+
+**Azure services:** Document Intelligence + Azure AI Search + Azure OpenAI
+
+```python
+# Index FTC report into Azure AI Search for RAG queries
+from azure.search.documents import SearchClient
+from azure.search.documents.indexes import SearchIndexClient
+from azure.ai.formrecognizer import DocumentAnalysisClient
+
+def index_ftc_report(pdf_url: str):
+    """Extract text from FTC report and index for semantic search."""
+    # 1. Extract full text with Document Intelligence
+    doc_client = DocumentAnalysisClient(...)
+    poller = doc_client.begin_analyze_document_from_url(
+        "prebuilt-read", pdf_url
+    )
+    result = poller.result()
+
+    # 2. Chunk into paragraphs
+    chunks = []
+    for page in result.pages:
+        for line in page.lines:
+            chunks.append({
+                "id": f"ftc-bigdata-p{page.page_number}-{line.spans[0].offset}",
+                "content": line.content,
+                "page": page.page_number,
+                "source": "FTC Big Data Report (2016)",
+            })
+
+    # 3. Upload to Azure AI Search
+    search_client = SearchClient(
+        endpoint="https://<search>.search.windows.net",
+        index_name="antitrust-knowledge-base",
+        credential=DefaultAzureCredential(),
+    )
+    search_client.upload_documents(chunks)
+```
+
+This enables natural-language queries like *"What did the FTC recommend about predictive analytics in enforcement?"* through the CSA-in-a-Box Copilot.
+
+!!! tip "End-to-End Pattern"
+    The DOJ domain in this repository (`domains/doj/`) demonstrates the downstream dbt models that consume these bronze-layer extracts. See the [step-by-step domain build](doj-antitrust-deep-dive.md) for the complete Bronze → Silver → Gold transformation pipeline.

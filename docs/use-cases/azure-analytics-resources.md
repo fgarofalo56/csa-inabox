@@ -187,14 +187,9 @@ These are downloadable, published documents from Microsoft, government agencies,
 | **Fabric + Data Lake Unified Platform Architecture** | Microsoft CAF | 2024 | [Reference Architecture](https://learn.microsoft.com/azure/cloud-adoption-framework/data/architecture-fabric-data-lake-unify-data-platform) |
 | **Real-Time Lakehouse Data Processing** | Microsoft Architecture Center | 2024 | [Architecture Guide](https://learn.microsoft.com/azure/architecture/example-scenario/data/real-time-lakehouse-data-processing) |
 
-### Antitrust & Competition Official Reports
+### Ingesting Government Antitrust Data
 
-| Title | Publisher | Date | Download |
-|---|---|---|---|
-| **Hart-Scott-Rodino Annual Report FY 2024** | FTC & DOJ Antitrust Division | Sept 2025 | [Press Release + PDF](https://www.ftc.gov/news-events/news/press-releases/2025/09/ftc-doj-issue-fiscal-year-2024-hart-scott-rodino-annual-report) |
-| **Big Data: A Tool for Inclusion or Exclusion?** | Federal Trade Commission | Jan 2016 | [Download PDF](https://www.ftc.gov/system/files/documents/reports/big-data-tool-inclusion-or-exclusion-understanding-issues/160106big-data-rpt.pdf) |
-| **Criminal Enforcement Fine and Jail Charts** | DOJ Antitrust Division | Updated Dec 2025 | [View Charts](https://www.justice.gov/atr/criminal-enforcement-fine-and-jail-charts) |
-| **Division Operations & Accomplishments** | DOJ Antitrust Division | 2024 | [Workload Statistics](https://www.justice.gov/atr/division-operations) |
+For practical guidance on ingesting DOJ and FTC publications (HSR Annual Reports, Criminal Enforcement Charts, Division Operations data, FTC policy reports) using Azure Document Intelligence, Azure Functions, and Azure AI Search, see the **[Ingesting Government Antitrust Data with Azure](antitrust-analytics.md#ingesting-government-antitrust-data-with-azure)** section of the Antitrust Analytics use case.
 
 ### Government Compliance & FedRAMP
 
