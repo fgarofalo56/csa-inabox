@@ -173,11 +173,31 @@ nav:
       - Platform Research Report: research/CSA-Platform-Research-Report.md
   - Use Cases:
       - Overview: use-cases/index.md
-      - Antitrust Analytics on Azure: use-cases/antitrust-analytics.md
-      - "DOJ Antitrust: Step-by-Step Domain Build": use-cases/doj-antitrust-deep-dive.md
-      - Government Data Analytics on Azure: use-cases/government-data-analytics.md
-      - Unified Analytics on Microsoft Fabric: use-cases/fabric-unified-analytics.md
-      - "Real-Time Intelligence: Anomaly Detection": use-cases/realtime-intelligence-anomaly-detection.md
-      - "AI Document Analytics & eDiscovery": use-cases/ai-document-analytics-ediscovery.md
+      - Government & Public Sector:
+          - Antitrust Analytics on Azure: use-cases/antitrust-analytics.md
+          - "DOJ Antitrust: Step-by-Step Domain Build": use-cases/doj-antitrust-deep-dive.md
+          - Government Data Analytics on Azure: use-cases/government-data-analytics.md
+          - DOT Transportation Analytics: use-cases/dot-transportation-analytics.md
+          - FAA Aviation Analytics: use-cases/faa-aviation-analytics.md
+          - EPA Environmental Analytics: use-cases/epa-environmental-analytics.md
+          - NOAA Climate & Ocean Analytics: use-cases/noaa-climate-analytics.md
+          - NASA Earth Science Analytics: use-cases/nasa-earth-science-analytics.md
+          - Interior Natural Resources: use-cases/interior-natural-resources-analytics.md
+          - USDA Agricultural Analytics: use-cases/usda-agriculture-analytics.md
+          - USPS Postal Operations: use-cases/usps-postal-analytics.md
+          - Commerce Economic Analytics: use-cases/commerce-economic-analytics.md
+      - Legal & Regulatory:
+          - "AI Document Analytics & eDiscovery": use-cases/ai-document-analytics-ediscovery.md
+      - Healthcare:
+          - "IHS & Tribal Health Analytics": use-cases/tribal-health-analytics.md
+      - Financial Services & Gaming:
+          - "Real-Time Intelligence: Anomaly Detection": use-cases/realtime-intelligence-anomaly-detection.md
+          - Casino & Gaming Analytics: use-cases/casino-gaming-analytics.md
+      - Cybersecurity:
+          - Federal Cybersecurity & Threat Analytics: use-cases/cybersecurity-threat-analytics.md
+      - Microsoft Fabric:
+          - Unified Analytics on Fabric: use-cases/fabric-unified-analytics.md
+      - Multi-Cloud:
+          - Data Virtualization with Azure: use-cases/multi-cloud-data-virtualization.md
       - "Azure Analytics: White Papers & Resources": use-cases/azure-analytics-resources.md
   - AI Copilot: chat.md
