@@ -161,6 +161,28 @@ Microsoft Fabric represents the next generation of Microsoft's unified analytics
 !!! info "Fabric in Azure Government"
     Microsoft Fabric availability in Azure Government regions is evolving. Check the [Azure Government services by region](https://azure.microsoft.com/en-us/explore/global-infrastructure/government/by-region/) page for current availability.
 
+### Fabric Customer Stories & Validated Outcomes
+
+Published case studies demonstrating Fabric at enterprise scale:
+
+| Organization | Scale | Outcome | Source |
+|---|---|---|---|
+| Microsoft IDEAS | 420 PiB, 600+ teams | 50% efficiency improvement, unified data estate | [Microsoft Learn](https://learn.microsoft.com/fabric/fundamentals/ideas-data-platform-integration) |
+| Edith Cowan University (ECU) | University-wide analytics | 50% cost reduction, 70% faster report development | [Microsoft Customer Story](https://customers.microsoft.com/en-us/story/1805898191816396285-edith-cowan-university-azure-en-australia) |
+| Dentsu | Global marketing analytics | 55% faster data replication | [Microsoft Customer Story](https://customers.microsoft.com/en-us/story/1764350088220596590-dentsu-media-entertainment-microsoft-fabric) |
+| IWG (Regus) | Fraud detection | Detection latency from weeks to seconds | [Microsoft Customer Story](https://customers.microsoft.com/en-us/story/1782829210862498379-iwg-real-estate-microsoft-fabric) |
+| OBOS BBL (Norwegian Basketball) | Sports analytics | Real-time game analytics on Fabric RTI | [Microsoft Customer Story](https://customers.microsoft.com/en-us/story/1829067673498011027-obos-bbl-other-microsoft-fabric-en-norway) |
+
+### eDiscovery & Legal Technology Benchmarks
+
+Industry benchmarks for document review and eDiscovery workloads — useful context for sizing Fabric-based legal analytics platforms:
+
+| Vendor | Finding | Source |
+|---|---|---|
+| HaystackID | DOJ Second Request: 18 TB across 17+ data stores, 106 days average | [HaystackID Second Request Guide](https://haystackid.com/second-request/) |
+| OpenText | Average contested merger Second Request cost: ~$4.3M | [OpenText eDiscovery Resources](https://www.opentext.com/products/ediscovery) |
+| FTI Consulting | Structured analytics reduces review populations by 50–70% | [FTI Technology Resources](https://www.ftitechnology.com/resources) |
+
 ---
 
 ## Published White Papers & Official Reports
