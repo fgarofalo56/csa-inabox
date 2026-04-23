@@ -1,0 +1,98 @@
+version: 2
+
+models:
+  - name: brz_antitrust_cases
+    description: "Bronze layer antitrust cases with minimal transformations"
+    columns:
+      - name: case_id
+        description: "Unique case identifier"
+        tests:
+          - not_null
+          - unique
+      - name: case_type
+        description: "Type of case (CIVIL/CRIMINAL)"
+        tests:
+          - accepted_values:
+              values: ['CIVIL', 'CRIMINAL']
+      - name: violation_type
+        description: "Type of antitrust violation"
+        tests:
+          - accepted_values:
+              values: ['PRICE_FIXING', 'BID_RIGGING', 'MARKET_ALLOCATION', 'MONOPOLIZATION',
+                      'ATTEMPTED_MONOPOLIZATION', 'TYING', 'EXCLUSIVE_DEALING', 'MERGER_CHALLENGE', 'CONSPIRACY']
+      - name: status
+        description: "Current case status"
+        tests:
+          - accepted_values:
+              values: ['OPEN', 'SETTLED', 'DISMISSED', 'CONVICTED']
+      - name: _dbt_loaded_at
+        description: "Timestamp when record was loaded by dbt"
+
+  - name: brz_hsr_filings
+    description: "Bronze layer HSR filing records"
+    columns:
+      - name: filing_id
+        description: "Unique HSR filing identifier"
+        tests:
+          - not_null
+          - unique
+      - name: review_status
+        description: "Review outcome status"
+        tests:
+          - accepted_values:
+              values: ['GRANTED_ET', 'SECOND_REQUEST', 'CHALLENGED', 'ABANDONED', 'CONSENTED', 'RESTRUCTURED']
+      - name: _dbt_loaded_at
+        description: "Timestamp when record was loaded by dbt"
+
+  - name: brz_criminal_enforcement
+    description: "Bronze layer criminal enforcement records"
+    columns:
+      - name: enforcement_id
+        description: "Unique enforcement action identifier"
+        tests:
+          - not_null
+          - unique
+      - name: offense_type
+        description: "Type of criminal offense"
+        tests:
+          - accepted_values:
+              values: ['PRICE_FIXING', 'BID_RIGGING', 'MARKET_ALLOCATION', 'OBSTRUCTION', 'MONOPOLIZATION', 'CONSPIRACY']
+      - name: _dbt_loaded_at
+        description: "Timestamp when record was loaded by dbt"
+
+  - name: brz_civil_actions
+    description: "Bronze layer civil action records"
+    columns:
+      - name: action_id
+        description: "Unique civil action identifier"
+        tests:
+          - not_null
+          - unique
+      - name: action_type
+        description: "Type of civil action"
+        tests:
+          - accepted_values:
+              values: ['MERGER_CHALLENGE', 'CONDUCT_CASE', 'CONSENT_DECREE', 'MODIFIED_DECREE']
+      - name: relief_sought
+        description: "Type of relief sought"
+        tests:
+          - accepted_values:
+              values: ['INJUNCTION', 'DIVESTITURE', 'BEHAVIORAL', 'STRUCTURAL']
+      - name: _dbt_loaded_at
+        description: "Timestamp when record was loaded by dbt"
+
+  - name: brz_merger_reviews
+    description: "Bronze layer merger review records"
+    columns:
+      - name: review_id
+        description: "Unique merger review identifier"
+        tests:
+          - not_null
+          - unique
+      - name: review_outcome
+        description: "Final review outcome"
+        tests:
+          - accepted_values:
+              values: ['APPROVED', 'SECOND_REQUEST', 'CHALLENGED', 'CONSENT_DECREE', 'ABANDONED', 'RESTRUCTURED']
+      - name: _dbt_loaded_at
+        description: "Timestamp when record was loaded by dbt"

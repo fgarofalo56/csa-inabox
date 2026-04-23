@@ -1,0 +1,146 @@
+version: 2
+
+models:
+  - name: slv_antitrust_cases
+    description: >
+      Silver layer antitrust cases with data quality validations.
+      Flag-don't-drop pattern — every row flows through, invalid rows
+      are flagged with is_valid = FALSE.
+    columns:
+      - name: case_sk
+        description: "Surrogate key for case"
+        tests:
+          - not_null
+          - unique
+      - name: case_id
+        description: "Unique case identifier"
+        tests:
+          - not_null
+          - unique
+      - name: case_name
+        description: "Official case name"
+      - name: case_type
+        description: "Type of case (CIVIL/CRIMINAL)"
+        tests:
+          - accepted_values:
+              values: ['CIVIL', 'CRIMINAL']
+      - name: filing_date
+        description: "Date case was filed"
+        tests:
+          - not_null
+      - name: industry_sector
+        description: "Primary industry sector affected"
+      - name: violation_type
+        description: "Type of antitrust violation"
+      - name: status
+        description: "Current case status"
+      - name: is_valid
+        description: "Data quality flag indicating if record passed validation"
+        tests:
+          - not_null
+      - name: validation_errors
+        description: "Semicolon-separated list of validation failures"
+
+  - name: slv_hsr_filings
+    description: >
+      Silver layer HSR filing records with data quality validations.
+      Flag-don't-drop pattern preserves all rows for audit trail.
+    columns:
+      - name: filing_sk
+        description: "Surrogate key for filing"
+        tests:
+          - not_null
+          - unique
+      - name: filing_id
+        description: "Unique HSR filing identifier"
+        tests:
+          - not_null
+          - unique
+      - name: fiscal_year
+        description: "DOJ fiscal year"
+      - name: transaction_value
+        description: "Transaction value in USD"
+      - name: review_status
+        description: "Review outcome status"
+      - name: is_valid
+        description: "Data quality flag indicating if record passed validation"
+        tests:
+          - not_null
+
+  - name: slv_criminal_enforcement
+    description: >
+      Silver layer criminal enforcement with data quality validations.
+      Flag-don't-drop pattern preserves all rows for audit trail.
+    columns:
+      - name: enforcement_sk
+        description: "Surrogate key for enforcement action"
+        tests:
+          - not_null
+          - unique
+      - name: enforcement_id
+        description: "Unique enforcement action identifier"
+        tests:
+          - not_null
+          - unique
+      - name: case_id
+        description: "FK to slv_antitrust_cases"
+      - name: fine_amount
+        description: "Fine amount imposed"
+      - name: jail_days_imposed
+        description: "Jail time imposed in days"
+      - name: is_valid
+        description: "Data quality flag indicating if record passed validation"
+        tests:
+          - not_null
+
+  - name: slv_civil_actions
+    description: >
+      Silver layer civil actions with data quality validations.
+      Flag-don't-drop pattern preserves all rows for audit trail.
+    columns:
+      - name: action_sk
+        description: "Surrogate key for civil action"
+        tests:
+          - not_null
+          - unique
+      - name: action_id
+        description: "Unique civil action identifier"
+        tests:
+          - not_null
+          - unique
+      - name: case_id
+        description: "FK to slv_antitrust_cases"
+      - name: action_type
+        description: "Type of civil action"
+      - name: relief_sought
+        description: "Type of relief sought"
+      - name: is_valid
+        description: "Data quality flag indicating if record passed validation"
+        tests:
+          - not_null
+
+  - name: slv_merger_reviews
+    description: >
+      Silver layer merger reviews with data quality validations.
+      Flag-don't-drop pattern preserves all rows for audit trail.
+    columns:
+      - name: review_sk
+        description: "Surrogate key for merger review"
+        tests:
+          - not_null
+          - unique
+      - name: review_id
+        description: "Unique merger review identifier"
+        tests:
+          - not_null
+          - unique
+      - name: transaction_value
+        description: "Transaction value in USD"
+      - name: hhi_pre_merger
+        description: "Herfindahl-Hirschman Index before merger"
+      - name: hhi_post_merger
+        description: "Herfindahl-Hirschman Index after merger"
+      - name: is_valid
+        description: "Data quality flag indicating if record passed validation"
+        tests:
+          - not_null

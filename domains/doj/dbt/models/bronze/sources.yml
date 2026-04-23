@@ -1,0 +1,209 @@
+version: 2
+
+sources:
+  - name: raw_doj
+    description: "Raw DOJ Antitrust Division data ingested from source systems"
+    schema: raw
+    loaded_at_field: _ingested_at
+    freshness:
+      warn_after: {count: "{{ var('freshness_warn_hours') }}", period: hour}
+      error_after: {count: "{{ var('freshness_error_hours') }}", period: hour}
+
+    tables:
+      - name: raw_antitrust_cases
+        description: "Raw antitrust case records from DOJ case management system"
+        columns:
+          - name: case_id
+            description: "Unique case identifier"
+            tests:
+              - not_null
+              - unique
+          - name: case_name
+            description: "Official case name"
+          - name: case_type
+            description: "Type of case"
+            tests:
+              - accepted_values:
+                  values: ['CIVIL', 'CRIMINAL']
+          - name: filing_date
+            description: "Date case was filed"
+          - name: court_district
+            description: "Federal court district"
+          - name: industry_sector
+            description: "Primary industry sector affected"
+          - name: violation_type
+            description: "Type of antitrust violation alleged"
+            tests:
+              - accepted_values:
+                  values: ['PRICE_FIXING', 'BID_RIGGING', 'MARKET_ALLOCATION', 'MONOPOLIZATION',
+                          'ATTEMPTED_MONOPOLIZATION', 'TYING', 'EXCLUSIVE_DEALING', 'MERGER_CHALLENGE', 'CONSPIRACY']
+          - name: status
+            description: "Current case status"
+            tests:
+              - accepted_values:
+                  values: ['OPEN', 'SETTLED', 'DISMISSED', 'CONVICTED']
+          - name: defendant_name
+            description: "Primary defendant name"
+          - name: defendant_type
+            description: "Type of defendant"
+            tests:
+              - accepted_values:
+                  values: ['CORPORATION', 'INDIVIDUAL']
+          - name: resolution_date
+            description: "Date case was resolved (if applicable)"
+          - name: _ingested_at
+            description: "Ingestion timestamp"
+
+      - name: raw_hsr_filings
+        description: "Raw Hart-Scott-Rodino filing records"
+        columns:
+          - name: filing_id
+            description: "Unique HSR filing identifier"
+            tests:
+              - not_null
+              - unique
+          - name: fiscal_year
+            description: "DOJ fiscal year (starts October 1)"
+          - name: transaction_id
+            description: "Unique transaction identifier"
+          - name: acquiring_party
+            description: "Name of acquiring entity"
+          - name: target_party
+            description: "Name of target entity"
+          - name: transaction_value
+            description: "Transaction value in USD"
+          - name: filing_date
+            description: "Date HSR filing was submitted"
+          - name: industry_naics_code
+            description: "NAICS industry code"
+          - name: industry_description
+            description: "Industry description"
+          - name: filing_fee
+            description: "HSR filing fee paid"
+          - name: review_status
+            description: "Review outcome"
+            tests:
+              - accepted_values:
+                  values: ['GRANTED_ET', 'SECOND_REQUEST', 'CHALLENGED', 'ABANDONED', 'CONSENTED', 'RESTRUCTURED']
+          - name: review_days
+            description: "Total days under review"
+          - name: _ingested_at
+            description: "Ingestion timestamp"
+
+      - name: raw_criminal_enforcement
+        description: "Raw criminal enforcement action records"
+        columns:
+          - name: enforcement_id
+            description: "Unique enforcement action identifier"
+            tests:
+              - not_null
+              - unique
+          - name: case_id
+            description: "FK to raw_antitrust_cases"
+          - name: fiscal_year
+            description: "DOJ fiscal year"
+          - name: defendant_name
+            description: "Defendant name"
+          - name: defendant_type
+            description: "Type of defendant"
+            tests:
+              - accepted_values:
+                  values: ['CORPORATION', 'INDIVIDUAL']
+          - name: offense_type
+            description: "Type of criminal offense"
+            tests:
+              - accepted_values:
+                  values: ['PRICE_FIXING', 'BID_RIGGING', 'MARKET_ALLOCATION', 'OBSTRUCTION', 'MONOPOLIZATION', 'CONSPIRACY']
+          - name: fine_amount
+            description: "Fine amount imposed (USD)"
+          - name: jail_days_imposed
+            description: "Jail time imposed in days"
+          - name: restitution_amount
+            description: "Restitution amount ordered (USD)"
+          - name: plea_type
+            description: "Type of plea or conviction"
+            tests:
+              - accepted_values:
+                  values: ['GUILTY_PLEA', 'TRIAL_CONVICTION', 'ACQUITTED', 'DISMISSED']
+          - name: sentencing_date
+            description: "Date of sentencing"
+          - name: _ingested_at
+            description: "Ingestion timestamp"
+
+      - name: raw_civil_actions
+        description: "Raw civil enforcement action records"
+        columns:
+          - name: action_id
+            description: "Unique civil action identifier"
+            tests:
+              - not_null
+              - unique
+          - name: case_id
+            description: "FK to raw_antitrust_cases"
+          - name: fiscal_year
+            description: "DOJ fiscal year"
+          - name: action_type
+            description: "Type of civil action"
+            tests:
+              - accepted_values:
+                  values: ['MERGER_CHALLENGE', 'CONDUCT_CASE', 'CONSENT_DECREE', 'MODIFIED_DECREE']
+          - name: filing_date
+            description: "Date civil action was filed"
+          - name: parties_involved
+            description: "Names of parties involved"
+          - name: industry_sector
+            description: "Primary industry sector"
+          - name: relief_sought
+            description: "Type of relief sought"
+            tests:
+              - accepted_values:
+                  values: ['INJUNCTION', 'DIVESTITURE', 'BEHAVIORAL', 'STRUCTURAL']
+          - name: outcome
+            description: "Action outcome"
+            tests:
+              - accepted_values:
+                  values: ['SETTLED', 'LITIGATED', 'ABANDONED']
+          - name: resolution_date
+            description: "Date action was resolved"
+          - name: _ingested_at
+            description: "Ingestion timestamp"
+
+      - name: raw_merger_reviews
+        description: "Raw merger review analysis records"
+        columns:
+          - name: review_id
+            description: "Unique merger review identifier"
+            tests:
+              - not_null
+              - unique
+          - name: fiscal_year
+            description: "DOJ fiscal year"
+          - name: transaction_id
+            description: "FK to transaction in HSR filings"
+          - name: acquiring_party
+            description: "Name of acquiring party"
+          - name: target_party
+            description: "Name of target party"
+          - name: transaction_value
+            description: "Transaction value in USD"
+          - name: industry_sector
+            description: "Primary industry sector"
+          - name: review_outcome
+            description: "Final review outcome"
+            tests:
+              - accepted_values:
+                  values: ['APPROVED', 'SECOND_REQUEST', 'CHALLENGED', 'CONSENT_DECREE', 'ABANDONED', 'RESTRUCTURED']
+          - name: hhi_pre_merger
+            description: "Herfindahl-Hirschman Index before merger"
+          - name: hhi_post_merger
+            description: "Herfindahl-Hirschman Index after merger"
+          - name: hhi_delta
+            description: "Change in HHI"
+          - name: market_definition
+            description: "Relevant market definition"
+          - name: review_start_date
+            description: "Date review began"
+          - name: review_end_date
+            description: "Date review concluded"
+          - name: _ingested_at
+            description: "Ingestion timestamp"

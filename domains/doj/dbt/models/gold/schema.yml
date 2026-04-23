@@ -1,0 +1,136 @@
+version: 2
+
+models:
+  - name: dim_industries
+    description: "Industry dimension table for antitrust analysis"
+    columns:
+      - name: industry_sk
+        description: "Surrogate key for industry"
+        tests:
+          - not_null
+          - unique
+      - name: industry_sector
+        description: "Industry sector name"
+        tests:
+          - not_null
+          - unique
+      - name: industry_code
+        description: "Short industry code"
+      - name: industry_description
+        description: "Detailed industry description"
+      - name: is_highly_regulated
+        description: "Flag indicating if industry is highly regulated"
+
+  - name: dim_violation_types
+    description: "Violation type dimension table with statutory references"
+    columns:
+      - name: violation_sk
+        description: "Surrogate key for violation type"
+        tests:
+          - not_null
+          - unique
+      - name: violation_type
+        description: "Type of antitrust violation"
+        tests:
+          - not_null
+          - unique
+      - name: statutory_basis
+        description: "Statutory basis for violation"
+      - name: legal_standard
+        description: "Legal standard applied (Per Se, Rule of Reason, etc.)"
+      - name: is_criminal_violation
+        description: "Flag indicating if violation can be prosecuted criminally"
+      - name: enforcement_priority
+        description: "DOJ enforcement priority level"
+
+  - name: fact_enforcement_actions
+    description: "Unified fact table combining cases, criminal enforcement, and civil actions"
+    columns:
+      - name: enforcement_fact_sk
+        description: "Surrogate key for enforcement fact"
+        tests:
+          - not_null
+          - unique
+      - name: case_sk
+        description: "FK to case dimension"
+        tests:
+          - not_null
+      - name: industry_sk
+        description: "FK to industry dimension"
+      - name: violation_sk
+        description: "FK to violation dimension"
+      - name: case_id
+        description: "Unique case identifier"
+        tests:
+          - not_null
+          - unique
+      - name: fiscal_year
+        description: "DOJ fiscal year"
+        tests:
+          - not_null
+      - name: total_criminal_fines
+        description: "Total criminal fines imposed"
+      - name: total_jail_days
+        description: "Total jail days imposed"
+      - name: is_significant_fine
+        description: "Flag indicating fine above threshold"
+
+  - name: gld_antitrust_trends
+    description: "Year-over-year antitrust enforcement trends analysis"
+    columns:
+      - name: fiscal_year
+        description: "DOJ fiscal year"
+        tests:
+          - not_null
+          - unique
+      - name: total_cases
+        description: "Total cases filed in fiscal year"
+        tests:
+          - not_null
+      - name: success_rate_pct
+        description: "Percentage of successful cases"
+      - name: cases_yoy_change_pct
+        description: "Year-over-year change in case volume"
+      - name: fines_yoy_change_pct
+        description: "Year-over-year change in fine amounts"
+
+  - name: gld_merger_review_summary
+    description: "Comprehensive merger review statistics by fiscal year"
+    columns:
+      - name: fiscal_year
+        description: "DOJ fiscal year"
+        tests:
+          - not_null
+          - unique
+      - name: total_hsr_filings
+        description: "Total HSR filings received"
+        tests:
+          - not_null
+      - name: early_termination_rate_pct
+        description: "Percentage of filings granted early termination"
+      - name: second_request_rate_pct
+        description: "Percentage of filings receiving second request"
+      - name: challenge_rate_pct
+        description: "Percentage of reviews resulting in challenge"
+      - name: avg_hhi_increase
+        description: "Average HHI increase from mergers"
+
+  - name: gld_penalty_analysis
+    description: "Penalty analysis by violation type, industry, and defendant type"
+    columns:
+      - name: analysis_type
+        description: "Type of analysis (VIOLATION_TYPE, INDUSTRY, DEFENDANT_TYPE)"
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['VIOLATION_TYPE', 'INDUSTRY', 'DEFENDANT_TYPE']
+      - name: category
+        description: "Category being analyzed"
+        tests:
+          - not_null
+      - name: cases_with_penalties
+        description: "Number of cases with penalties imposed"
+      - name: penalty_amount
+        description: "Total penalty amount"
+      - name: avg_penalty_per_case
+        description: "Average penalty per case"

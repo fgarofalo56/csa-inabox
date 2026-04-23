@@ -1,0 +1,131 @@
+# Data product contract -- doj.merger_review_summary
+#
+# Gold-layer merger review summary with HHI analysis and outcome trends.
+
+apiVersion: csa.microsoft.com/v1
+kind: DataProductContract
+
+metadata:
+  name: doj.merger_review_summary
+  domain: doj
+  owner: doj-data-engineering@contoso.com
+  version: "1.0.0"
+  description: >
+    Comprehensive merger review summary statistics by fiscal year.
+    Includes HSR filing volumes, review outcomes, timeline analysis,
+    and market concentration (HHI) metrics. Supports policy analysis
+    of merger enforcement trends and market competition assessment.
+    Data derived from Hart-Scott-Rodino filings and detailed merger reviews.
+
+schema:
+  primary_key: [fiscal_year]
+  columns:
+    - name: fiscal_year
+      type: int
+      nullable: false
+      description: DOJ fiscal year (starts October 1).
+    - name: total_hsr_filings
+      type: int
+      nullable: false
+      description: Total HSR filings received.
+    - name: early_termination_granted
+      type: int
+      nullable: false
+      description: Number of filings granted early termination.
+    - name: second_requests_issued
+      type: int
+      nullable: false
+      description: Number of second requests issued.
+    - name: transactions_challenged
+      type: int
+      nullable: false
+      description: Number of transactions challenged.
+    - name: total_transaction_value
+      type: decimal(18,2)
+      nullable: false
+      description: Total value of all transactions filed (USD).
+    - name: avg_transaction_value
+      type: decimal(18,2)
+      nullable: false
+      description: Average transaction value (USD).
+    - name: total_filing_fees
+      type: decimal(18,2)
+      nullable: false
+      description: Total HSR filing fees collected (USD).
+    - name: approved_reviews
+      type: int
+      nullable: false
+      description: Number of detailed reviews resulting in approval.
+    - name: challenged_reviews
+      type: int
+      nullable: false
+      description: Number of detailed reviews resulting in challenge.
+    - name: consent_decree_reviews
+      type: int
+      nullable: false
+      description: Number of reviews resolved via consent decree.
+    - name: unconcentrated_markets
+      type: int
+      nullable: false
+      description: Number of mergers in unconcentrated markets (HHI < 1500).
+    - name: highly_concentrated_markets
+      type: int
+      nullable: false
+      description: Number of mergers in highly concentrated markets (HHI > 2500).
+    - name: avg_hhi_increase
+      type: decimal(10,2)
+      nullable: true
+      description: Average HHI increase from mergers.
+    - name: significant_concentration_increases
+      type: int
+      nullable: false
+      description: Number of mergers with HHI increase > 200 points.
+    - name: early_termination_rate_pct
+      type: decimal(5,2)
+      nullable: false
+      description: Percentage of filings granted early termination.
+    - name: second_request_rate_pct
+      type: decimal(5,2)
+      nullable: false
+      description: Percentage of filings receiving second request.
+    - name: challenge_rate_pct
+      type: decimal(5,2)
+      nullable: false
+      description: Percentage of detailed reviews resulting in challenge.
+
+sla:
+  freshness_minutes: 720
+  valid_row_ratio: 1.0
+  supported_until: "2027-04-10"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: fiscal_year
+  - rule: expect_column_values_to_be_unique
+    column: fiscal_year
+  - rule: expect_column_values_to_be_between
+    column: fiscal_year
+    min_value: 2020
+    max_value: 2030
+  - rule: expect_column_values_to_be_between
+    column: total_hsr_filings
+    min_value: 0
+  - rule: expect_column_values_to_be_between
+    column: early_termination_rate_pct
+    min_value: 0
+    max_value: 100
+  - rule: expect_column_values_to_be_between
+    column: second_request_rate_pct
+    min_value: 0
+    max_value: 100
+  - rule: expect_column_values_to_be_between
+    column: challenge_rate_pct
+    min_value: 0
+    max_value: 100
+  - rule: expect_column_values_to_be_between
+    column: total_transaction_value
+    min_value: 0
+  - rule: expect_column_values_to_be_between
+    column: avg_hhi_increase
+    min_value: 0
+    max_value: 10000
