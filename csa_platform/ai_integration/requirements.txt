@@ -5,7 +5,7 @@
 # Python dependencies for RAG, enrichment, and model serving patterns.
 
 # Azure OpenAI and embeddings
-openai>=1.35.0,<2.0.0
+openai>=1.35.0,<3.0.0
 
 # Azure AI Language (NER, PII detection, sentiment)
 azure-ai-textanalytics>=5.3.0,<6.0.0
