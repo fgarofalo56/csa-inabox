@@ -240,10 +240,20 @@ The `domains/doj_antitrust/` directory in this repository is a complete, working
 
 ## Published Resources
 
-### Government Sources
+### Official Reports & White Papers
+
+| Publication | Publisher | Description |
+|---|---|---|
+| [Hart-Scott-Rodino Annual Report FY 2024](https://www.ftc.gov/news-events/news/press-releases/2025/09/ftc-doj-issue-fiscal-year-2024-hart-scott-rodino-annual-report) | FTC & DOJ (Sept 2025) | 47th annual HSR report — merger filing activity Oct 2023–Sept 2024 |
+| [Big Data: A Tool for Inclusion or Exclusion?](https://www.ftc.gov/system/files/documents/reports/big-data-tool-inclusion-or-exclusion-understanding-issues/160106big-data-rpt.pdf) | FTC (Jan 2016) | FTC study on big data analytics in enforcement — benefits, risks, and consumer protection |
+| [Criminal Enforcement Fine and Jail Charts](https://www.justice.gov/atr/criminal-enforcement-fine-and-jail-charts) | DOJ Antitrust Division (Dec 2025) | Historical criminal enforcement fine and jail trend data |
+| [Division Operations & Accomplishments](https://www.justice.gov/atr/division-operations) | DOJ Antitrust Division (2024) | Workload statistics, enforcement trends, prosecution outcomes |
+| [Microsoft Digital Defense Report 2025](https://aka.ms/Microsoft-Digital-Defense-Report-2025) | Microsoft Security (Oct 2025) | Annual threat landscape analysis — relevant to securing enforcement data platforms |
+| [Azure Synapse Security White Paper](https://learn.microsoft.com/azure/synapse-analytics/guidance/security-white-paper-introduction) | Microsoft | Multi-part white paper on securing analytics workloads — data protection, access control, network security |
+
+### Government Data Sources
 
 - [DOJ Antitrust Division](https://www.justice.gov/atr) — Official division homepage with press releases, case filings, and policy documents
-- [Criminal Enforcement Fine and Jail Charts](https://www.justice.gov/atr/criminal-enforcement-fine-and-jail-charts) — Historical enforcement statistics
 - [Hart-Scott-Rodino Annual Reports](https://www.ftc.gov/legal-library/browse/reports) — Joint FTC/DOJ merger filing statistics
 - [Federal Judicial Center Integrated Database](https://www.fjc.gov/research/idb) — Federal court case data
 - [U.S. Sentencing Commission Datafiles](https://www.ussc.gov/research/datafiles/commission-datafiles) — Individual-level sentencing data
@@ -252,3 +262,4 @@ The `domains/doj_antitrust/` directory in this repository is a complete, working
 
 - [Analytics End-to-End with Azure](https://learn.microsoft.com/en-us/azure/architecture/example-scenario/dataplate2e/data-platform-end-to-end) — Microsoft reference architecture
 - [Cloud-Scale Analytics](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/) — Cloud Adoption Framework analytics scenario
+- [Azure FedRAMP High Authorization](https://learn.microsoft.com/azure/compliance/offerings/offering-fedramp) — Compliance documentation for government analytics workloads
