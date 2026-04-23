@@ -1,0 +1,151 @@
+filing_id,fiscal_year,transaction_id,acquiring_party,target_party,transaction_value,filing_date,industry_naics_code,industry_description,filing_fee,review_status,review_days,_ingested_at
+1,2023,TX001,MegaCorp Industries,TechStart LLC,150000000,2023-01-15,541511,Computer Systems Design Services,125000,GRANTED_ET,30,2025-01-15T10:15:30
+2,2023,TX002,HealthSystem Partners,Regional Medical Group,85000000,2023-02-08,622110,General Medical and Surgical Hospitals,45000,SECOND_REQUEST,180,2025-01-16T14:22:11
+3,2023,TX003,Energy Dynamics Corp,Solar Solutions Inc,320000000,2023-03-12,221114,Solar Electric Power Generation,280000,GRANTED_ET,25,2025-01-17T09:45:22
+4,2023,TX004,Global Pharmaceuticals,BioTech Innovations,2100000000,2023-04-20,325412,Pharmaceutical Preparation Manufacturing,400000,CHALLENGED,365,2025-01-18T16:33:45
+5,2023,TX005,Financial Holdings LLC,Community Bank Corp,67000000,2023-05-18,522110,Commercial Banking,30000,GRANTED_ET,28,2025-01-19T11:18:56
+6,2023,TX006,AgriCorp International,Local Farm Co-op,45000000,2023-06-25,111140,Wheat Farming,30000,GRANTED_ET,22,2025-01-20T13:40:33
+7,2023,TX007,Manufacturing Giant,Industrial Parts Inc,180000000,2023-07-30,332710,Machine Shops,125000,SECOND_REQUEST,120,2025-01-21T08:55:17
+8,2023,TX008,Transport Holdings,Regional Logistics,95000000,2023-08-15,484110,General Freight Trucking Local,45000,GRANTED_ET,35,2025-01-22T15:27:44
+9,2023,TX009,Real Estate Development,Property Management Group,76000000,2023-09-22,531210,Offices of Real Estate Agents and Brokers,45000,ABANDONED,45,2025-01-23T12:08:29
+10,2024,TX010,RetailChain Corp,E-commerce Startup,890000000,2024-01-10,454110,Electronic Shopping and Mail-Order Houses,400000,CONSENTED,240,2025-01-24T17:41:58
+11,2024,TX011,Defense Contractor Inc,Aerospace Components Ltd,340000000,2024-02-18,336411,Aircraft Manufacturing,280000,GRANTED_ET,30,2025-01-25T14:33:21
+12,2024,TX012,TeleCommunications Corp,Wireless Provider Inc,1200000000,2024-03-25,517312,Wireless Telecommunications Carriers,400000,SECOND_REQUEST,210,2025-01-26T10:22:15
+13,2024,TX013,Chemical Industries,Specialty Materials Co,155000000,2024-04-12,325199,All Other Basic Organic Chemical Manufacturing,125000,GRANTED_ET,27,2025-01-27T16:19:42
+14,2024,TX014,Media Conglomerate,Streaming Platform Inc,675000000,2024-05-20,515210,Cable and Other Subscription Programming,400000,RESTRUCTURED,180,2025-01-28T11:45:33
+15,2024,TX015,Insurance Holdings,Regional Insurance Co,98000000,2024-06-14,524113,Direct Life Insurance Carriers,45000,GRANTED_ET,33,2025-01-29T13:52:17
+16,2010,TX016,TechGiant Corp,StartupSoft Inc,120000000,2010-02-14,541511,Computer Systems Design Services,125000,GRANTED_ET,30,2025-01-30T09:33:22
+17,2010,TX017,HealthSystem Inc,Rural Clinic Network,58000000,2010-04-08,622110,General Medical and Surgical Hospitals,30000,GRANTED_ET,25,2025-01-31T11:47:15
+18,2010,TX018,Oil & Gas Corp,Shale Exploration LLC,780000000,2010-06-22,211111,Crude Petroleum and Natural Gas Extraction,400000,SECOND_REQUEST,150,2025-02-01T15:18:44
+19,2010,TX019,PharmaCorp Holdings,Research Labs Inc,2800000000,2010-08-15,325412,Pharmaceutical Preparation Manufacturing,400000,CHALLENGED,300,2025-02-02T13:29:57
+20,2010,TX020,Banking Consortium,Local Credit Union,42000000,2010-10-30,522110,Commercial Banking,30000,GRANTED_ET,28,2025-02-03T10:41:33
+21,2011,TX021,AgriTech Systems,Farm Equipment Co,95000000,2011-01-18,333111,Farm Machinery and Equipment Manufacturing,45000,GRANTED_ET,30,2025-02-04T14:55:28
+22,2011,TX022,Manufacturing Corp,Steel Processing Inc,230000000,2011-03-24,331110,Iron and Steel Mills and Ferroalloy Manufacturing,280000,GRANTED_ET,35,2025-02-05T12:22:15
+23,2011,TX023,Logistics Networks,Transport Solutions LLC,87000000,2011-05-16,484110,General Freight Trucking Local,45000,GRANTED_ET,30,2025-02-06T16:44:37
+24,2011,TX024,Property Holdings,Commercial Real Estate Corp,65000000,2011-07-12,531210,Offices of Real Estate Agents and Brokers,45000,ABANDONED,50,2025-02-07T08:17:29
+25,2011,TX025,Retail Conglomerate,Department Store Chain,420000000,2011-09-28,452111,Department Stores,400000,GRANTED_ET,30,2025-02-08T11:35:51
+26,2012,TX026,Defense Systems Inc,Military Contractor LLC,155000000,2012-02-05,336411,Aircraft Manufacturing,125000,GRANTED_ET,35,2025-02-09T13:48:14
+27,2012,TX027,BioPharma Holdings,Generic Drug Manufacturer,1800000000,2012-04-12,325412,Pharmaceutical Preparation Manufacturing,400000,SECOND_REQUEST,180,2025-02-10T15:26:33
+28,2012,TX028,Technology Solutions,Software Development Inc,98000000,2012-06-20,541511,Computer Systems Design Services,45000,GRANTED_ET,30,2025-02-11T09:19:45
+29,2012,TX029,Construction Alliance,Building Materials Corp,134000000,2012-08-14,327310,Cement Manufacturing,125000,GRANTED_ET,32,2025-02-12T12:37:28
+30,2012,TX030,Healthcare Networks,Physician Practice Group,76000000,2012-10-26,621111,Offices of Physicians,45000,GRANTED_ET,28,2025-02-13T14:52:17
+31,2013,TX031,Telecom Solutions,Cable Provider Inc,890000000,2013-01-15,517110,Wired Telecommunications Carriers,400000,CONSENTED,240,2025-02-14T16:33:42
+32,2013,TX032,Energy Corp,Renewable Power LLC,445000000,2013-03-22,221114,Solar Electric Power Generation,400000,GRANTED_ET,30,2025-02-15T08:44:26
+33,2013,TX033,Agricultural Systems,Seed Company Inc,112000000,2013-05-18,111140,Wheat Farming,125000,GRANTED_ET,30,2025-02-16T11:28:39
+34,2013,TX034,Manufacturing Holdings,Industrial Equipment Corp,267000000,2013-07-24,333249,Other Industrial Machinery Manufacturing,280000,GRANTED_ET,35,2025-02-17T13:15:52
+35,2013,TX035,Transportation Corp,Shipping Services LLC,98000000,2013-09-30,488510,Freight Transportation Arrangement,45000,GRANTED_ET,30,2025-02-18T15:41:15
+36,2014,TX036,Real Estate Trust,Property Development Inc,189000000,2014-02-12,531210,Offices of Real Estate Agents and Brokers,125000,GRANTED_ET,35,2025-02-19T10:33:48
+37,2014,TX037,Retail Systems,Online Marketplace Corp,567000000,2014-04-18,454110,Electronic Shopping and Mail-Order Houses,400000,GRANTED_ET,30,2025-02-20T12:27:31
+38,2014,TX038,Defense Technologies,Cybersecurity Firm LLC,234000000,2014-06-25,541512,Computer Systems Design Services,280000,GRANTED_ET,32,2025-02-21T14:19:24
+39,2014,TX039,Pharmaceutical Alliance,Biotechnology Inc,3200000000,2014-08-31,325412,Pharmaceutical Preparation Manufacturing,400000,SECOND_REQUEST,220,2025-02-22T16:42:17
+40,2014,TX040,Tech Innovations,Mobile App Developer,145000000,2014-11-07,541511,Computer Systems Design Services,125000,GRANTED_ET,30,2025-02-23T08:36:52
+41,2015,TX041,Construction Group,Infrastructure Corp,198000000,2015-01-20,237110,Water and Sewer Line and Related Structures Construction,125000,GRANTED_ET,35,2025-02-24T11:54:35
+42,2015,TX042,Healthcare Solutions,Medical Device Inc,876000000,2015-03-28,334510,Electromedical and Electrotherapeutic Apparatus Manufacturing,400000,GRANTED_ET,30,2025-02-25T13:47:28
+43,2015,TX043,Telecom Holdings,Wireless Technology LLC,445000000,2015-06-14,517312,Wireless Telecommunications Carriers,400000,GRANTED_ET,30,2025-02-26T15:23:41
+44,2015,TX044,Energy Solutions,Natural Gas Corp,789000000,2015-08-22,211111,Crude Petroleum and Natural Gas Extraction,400000,GRANTED_ET,35,2025-02-27T09:38:17
+45,2015,TX045,Agricultural Holdings,Food Processing Inc,234000000,2015-10-29,311611,Animal Slaughtering and Processing,280000,GRANTED_ET,30,2025-02-28T12:16:43
+46,2016,TX046,Manufacturing Corp,Automotive Parts LLC,345000000,2016-02-15,336350,Motor Vehicle Transmission and Power Train Parts Manufacturing,280000,GRANTED_ET,32,2025-03-01T14:52:26
+47,2016,TX047,Transportation Holdings,Airline Services Inc,1200000000,2016-04-23,481111,Scheduled Passenger Air Transportation,400000,SECOND_REQUEST,180,2025-03-02T16:34:59
+48,2016,TX048,Real Estate Group,Hotel Chain Corp,567000000,2016-06-30,721110,Hotels and Motels,400000,GRANTED_ET,30,2025-03-03T08:41:32
+49,2016,TX049,Retail Networks,Fashion Retailer Inc,234000000,2016-09-08,448110,Men's Clothing Stores,280000,GRANTED_ET,30,2025-03-04T11:29:45
+50,2016,TX050,Defense Corp,Military Systems LLC,445000000,2016-11-15,336411,Aircraft Manufacturing,400000,GRANTED_ET,35,2025-03-05T13:48:18
+51,2017,TX051,Pharmaceutical Group,Drug Discovery Inc,2100000000,2017-01-22,325412,Pharmaceutical Preparation Manufacturing,400000,CHALLENGED,350,2025-03-06T15:27:51
+52,2017,TX052,Technology Corp,AI Research LLC,789000000,2017-03-31,541511,Computer Systems Design Services,400000,GRANTED_ET,30,2025-03-07T10:15:24
+53,2017,TX053,Construction Alliance,Commercial Builder Inc,167000000,2017-06-08,236220,Commercial and Institutional Building Construction,125000,GRANTED_ET,35,2025-03-08T12:33:47
+54,2017,TX054,Healthcare Holdings,Laboratory Services Corp,345000000,2017-08-16,621511,Medical Laboratories,280000,GRANTED_ET,30,2025-03-09T14:56:33
+55,2017,TX055,Telecom Solutions,Internet Provider Inc,567000000,2017-10-24,517311,Wired Telecommunications Carriers,400000,GRANTED_ET,30,2025-03-10T16:42:16
+56,2018,TX056,Energy Holdings,Oil Refinery Corp,1800000000,2018-01-12,324110,Petroleum Refineries,400000,SECOND_REQUEST,200,2025-03-11T08:37:29
+57,2018,TX057,Agricultural Corp,Livestock Operations Inc,234000000,2018-03-21,112111,Beef Cattle Ranching and Farming,280000,GRANTED_ET,30,2025-03-12T11:51:42
+58,2018,TX058,Manufacturing Systems,Chemical Production LLC,445000000,2018-05-29,325199,All Other Basic Organic Chemical Manufacturing,400000,GRANTED_ET,32,2025-03-13T13:25:55
+59,2018,TX059,Transportation Group,Freight Rail Corp,789000000,2018-08-07,482111,Line-Haul Railroads,400000,GRANTED_ET,35,2025-03-14T15:14:38
+60,2018,TX060,Real Estate Holdings,Office Buildings Inc,345000000,2018-10-15,531120,Lessors of Nonresidential Buildings,280000,GRANTED_ET,30,2025-03-15T09:48:21
+61,2019,TX061,Retail Corporation,E-commerce Platform LLC,1200000000,2019-01-23,454110,Electronic Shopping and Mail-Order Houses,400000,CONSENTED,250,2025-03-16T12:36:44
+62,2019,TX062,Defense Solutions,Aerospace Engineering Inc,567000000,2019-04-02,336411,Aircraft Manufacturing,400000,GRANTED_ET,30,2025-03-17T14:29:17
+63,2019,TX063,Pharmaceutical Holdings,Clinical Research Corp,234000000,2019-06-11,541712,Research and Development in the Physical Engineering and Life Sciences,280000,GRANTED_ET,30,2025-03-18T16:53:30
+64,2019,TX064,Technology Alliance,Cloud Services Inc,789000000,2019-08-19,518210,Data Processing Hosting and Related Services,400000,GRANTED_ET,32,2025-03-19T08:42:53
+65,2019,TX065,Construction Holdings,Heavy Equipment Corp,345000000,2019-10-27,333120,Construction Machinery Manufacturing,280000,GRANTED_ET,35,2025-03-20T11:17:26
+66,2020,TX066,Healthcare Corporation,Telemedicine Platform Inc,567000000,2020-02-04,621111,Offices of Physicians,400000,GRANTED_ET,30,2025-03-21T13:58:49
+67,2020,TX067,Telecom Group,5G Network LLC,1800000000,2020-04-14,517312,Wireless Telecommunications Carriers,400000,SECOND_REQUEST,190,2025-03-22T15:34:12
+68,2020,TX068,Energy Corporation,Wind Farm Inc,445000000,2020-06-22,221115,Wind Electric Power Generation,400000,GRANTED_ET,30,2025-03-23T10:27:35
+69,2020,TX069,Agricultural Holdings,Organic Foods Corp,234000000,2020-08-30,311422,Specialty Canning,280000,GRANTED_ET,32,2025-03-24T12:45:58
+70,2020,TX070,Manufacturing Group,Robotics Systems LLC,789000000,2020-11-08,333249,Other Industrial Machinery Manufacturing,400000,GRANTED_ET,35,2025-03-25T14:38:21
+71,2021,TX071,Transportation Holdings,Electric Vehicle Inc,1200000000,2021-01-16,336111,Automobile Manufacturing,400000,SECOND_REQUEST,180,2025-03-26T16:52:44
+72,2021,TX072,Real Estate Corp,Data Center Properties LLC,567000000,2021-03-26,531120,Lessors of Nonresidential Buildings,400000,GRANTED_ET,30,2025-03-27T08:46:17
+73,2021,TX073,Retail Holdings,Digital Marketplace Inc,345000000,2021-06-05,454110,Electronic Shopping and Mail-Order Houses,280000,GRANTED_ET,30,2025-03-28T11:33:50
+74,2021,TX074,Defense Technologies,Satellite Systems Corp,789000000,2021-08-14,334220,Radio and Television Broadcasting and Wireless Communications Equipment Manufacturing,400000,GRANTED_ET,32,2025-03-29T13:27:23
+75,2021,TX075,Pharmaceutical Corp,Gene Therapy Inc,2800000000,2021-10-23,325412,Pharmaceutical Preparation Manufacturing,400000,CHALLENGED,320,2025-03-30T15:41:46
+76,2022,TX076,Technology Holdings,Quantum Computing LLC,1800000000,2022-01-31,334413,Semiconductor and Related Device Manufacturing,400000,SECOND_REQUEST,210,2025-03-31T09:35:29
+77,2022,TX077,Construction Group,Smart Building Inc,345000000,2022-04-11,236220,Commercial and Institutional Building Construction,280000,GRANTED_ET,35,2025-04-01T12:18:52
+78,2022,TX078,Healthcare Holdings,Digital Health Platform Corp,567000000,2022-06-19,541511,Computer Systems Design Services,400000,GRANTED_ET,30,2025-04-02T14:54:15
+79,2022,TX079,Telecom Corporation,Fiber Optic Networks Inc,789000000,2022-08-28,517311,Wired Telecommunications Carriers,400000,GRANTED_ET,32,2025-04-03T16:37:38
+80,2022,TX080,Energy Holdings,Battery Technology LLC,445000000,2022-11-06,335911,Storage Battery Manufacturing,400000,GRANTED_ET,30,2025-04-04T08:29:21
+81,2023,TX081,Agricultural Corporation,Precision Farming Inc,234000000,2023-01-15,333111,Farm Machinery and Equipment Manufacturing,280000,GRANTED_ET,30,2025-04-05T11:42:44
+82,2023,TX082,Manufacturing Holdings,3D Printing Systems Corp,567000000,2023-03-25,333249,Other Industrial Machinery Manufacturing,400000,GRANTED_ET,35,2025-04-06T13:56:17
+83,2023,TX083,Transportation Corp,Autonomous Vehicle LLC,1200000000,2023-06-04,541511,Computer Systems Design Services,400000,SECOND_REQUEST,200,2025-04-07T15:23:50
+84,2023,TX084,Real Estate Group,PropTech Solutions Inc,345000000,2023-08-13,531210,Offices of Real Estate Agents and Brokers,280000,GRANTED_ET,30,2025-04-08T10:47:23
+85,2023,TX085,Retail Corporation,Social Commerce Platform,789000000,2023-10-22,454110,Electronic Shopping and Mail-Order Houses,400000,GRANTED_ET,32,2025-04-09T12:35:46
+86,2024,TX086,Defense Holdings,Cybersecurity Operations Inc,567000000,2024-01-01,541512,Computer Systems Design Services,400000,GRANTED_ET,30,2025-04-10T14:28:19
+87,2024,TX087,Pharmaceutical Group,mRNA Technology Corp,2100000000,2024-03-10,325412,Pharmaceutical Preparation Manufacturing,400000,RESTRUCTURED,270,2025-04-11T16:19:42
+88,2024,TX088,Technology Corporation,Edge Computing LLC,789000000,2024-05-19,518210,Data Processing Hosting and Related Services,400000,GRANTED_ET,30,2025-04-12T08:13:55
+89,2024,TX089,Construction Holdings,Green Building Systems Inc,345000000,2024-07-28,236220,Commercial and Institutional Building Construction,280000,GRANTED_ET,35,2025-04-13T11:57:38
+90,2024,TX090,Healthcare Corporation,AI Diagnostics Platform,567000000,2024-10-06,541511,Computer Systems Design Services,400000,GRANTED_ET,30,2025-04-14T13:44:21
+91,2010,TX091,Biotech Holdings,Vaccine Research Inc,890000000,2010-03-18,325412,Pharmaceutical Preparation Manufacturing,400000,GRANTED_ET,30,2025-01-16T15:31:54
+92,2010,TX092,Tech Consortium,Software Solutions LLC,167000000,2010-05-26,541511,Computer Systems Design Services,125000,GRANTED_ET,30,2025-01-17T09:25:17
+93,2010,TX093,Energy Alliance,Coal Mining Corp,445000000,2010-07-15,212111,Bituminous Coal and Lignite Surface Mining,400000,GRANTED_ET,35,2025-01-18T12:18:40
+94,2010,TX094,Agricultural Group,Grain Processing Inc,234000000,2010-09-23,311211,Flour Milling,280000,GRANTED_ET,30,2025-01-19T14:42:23
+95,2010,TX095,Manufacturing Alliance,Steel Production LLC,567000000,2010-11-30,331110,Iron and Steel Mills and Ferroalloy Manufacturing,400000,GRANTED_ET,32,2025-01-20T16:55:46
+96,2011,TX096,Transport Corporation,Cargo Services Inc,345000000,2011-02-07,488510,Freight Transportation Arrangement,280000,GRANTED_ET,35,2025-01-21T08:37:29
+97,2011,TX097,Real Estate Holdings,Shopping Center Corp,789000000,2011-04-16,531120,Lessors of Nonresidential Buildings,400000,GRANTED_ET,30,2025-01-22T11:24:52
+98,2011,TX098,Retail Group,Grocery Chain Inc,567000000,2011-06-25,445110,Supermarkets and Other Grocery Stores,400000,GRANTED_ET,30,2025-01-23T13:48:15
+99,2011,TX099,Defense Corporation,Military Vehicles LLC,234000000,2011-08-14,336992,Military Armored Vehicle Tank and Tank Component Manufacturing,280000,GRANTED_ET,35,2025-01-24T15:36:38
+100,2011,TX100,Pharmaceutical Holdings,Drug Manufacturing Corp,1200000000,2011-10-23,325412,Pharmaceutical Preparation Manufacturing,400000,SECOND_REQUEST,160,2025-01-25T10:29:51
+101,2012,TX101,Technology Group,Database Systems Inc,345000000,2012-01-12,518210,Data Processing Hosting and Related Services,280000,GRANTED_ET,30,2025-01-26T12:53:24
+102,2012,TX102,Construction Corporation,Highway Builder LLC,567000000,2012-03-21,237310,Highway Street and Bridge Construction,400000,GRANTED_ET,35,2025-01-27T14:47:17
+103,2012,TX103,Healthcare Holdings,Medical Equipment Inc,789000000,2012-05-30,334510,Electromedical and Electrotherapeutic Apparatus Manufacturing,400000,GRANTED_ET,30,2025-01-28T16:34:50
+104,2012,TX104,Telecom Alliance,Satellite Communications Corp,445000000,2012-08-08,517410,Satellite Telecommunications,400000,GRANTED_ET,32,2025-01-29T08:28:23
+105,2012,TX105,Energy Holdings,Nuclear Power Inc,2800000000,2012-10-16,221113,Nuclear Electric Power Generation,400000,CHALLENGED,300,2025-01-30T11:41:46
+106,2013,TX106,Agricultural Corporation,Dairy Operations LLC,234000000,2013-01-05,112120,Dairy Cattle and Milk Production,280000,GRANTED_ET,30,2025-01-31T13:26:19
+107,2013,TX107,Manufacturing Group,Aerospace Components Inc,567000000,2013-03-15,336411,Aircraft Manufacturing,400000,GRANTED_ET,35,2025-02-01T15:19:42
+108,2013,TX108,Transportation Holdings,Maritime Shipping Corp,789000000,2013-05-24,483111,Deep Sea Freight Transportation,400000,GRANTED_ET,30,2025-02-02T09:54:25
+109,2013,TX109,Real Estate Corporation,Industrial Parks Inc,345000000,2013-08-02,531120,Lessors of Nonresidential Buildings,280000,GRANTED_ET,32,2025-02-03T12:37:48
+110,2013,TX110,Retail Holdings,Electronics Chain LLC,567000000,2013-10-11,443142,Electronics Stores,400000,GRANTED_ET,30,2025-02-04T14:52:31
+111,2014,TX111,Defense Group,Naval Systems Corp,789000000,2014-01-20,336611,Ship Building and Repairing,400000,GRANTED_ET,35,2025-02-05T16:45:54
+112,2014,TX112,Pharmaceutical Corporation,Specialty Drugs Inc,1800000000,2014-03-30,325412,Pharmaceutical Preparation Manufacturing,400000,SECOND_REQUEST,180,2025-02-06T08:39:17
+113,2014,TX113,Technology Holdings,Artificial Intelligence LLC,445000000,2014-06-08,541511,Computer Systems Design Services,400000,GRANTED_ET,30,2025-02-07T11:23:50
+114,2014,TX114,Construction Alliance,Residential Builder Inc,234000000,2014-08-17,236115,New Single-Family Housing Construction,280000,GRANTED_ET,35,2025-02-08T13:17:23
+115,2014,TX115,Healthcare Group,Pharmaceutical Distribution Corp,567000000,2014-10-26,424210,Drugs and Druggists' Sundries Merchant Wholesalers,400000,GRANTED_ET,30,2025-02-09T15:41:46
+116,2015,TX116,Telecom Corporation,Cable Television Inc,789000000,2015-02-04,515210,Cable and Other Subscription Programming,400000,GRANTED_ET,32,2025-02-10T10:35:29
+117,2015,TX117,Energy Alliance,Hydroelectric Power LLC,345000000,2015-04-15,221111,Hydroelectric Power Generation,280000,GRANTED_ET,30,2025-02-11T12:28:52
+118,2015,TX118,Agricultural Holdings,Fertilizer Production Inc,567000000,2015-06-24,325314,Fertilizer Manufacturing,400000,GRANTED_ET,35,2025-02-12T14:53:15
+119,2015,TX119,Manufacturing Corporation,Plastics Production Corp,234000000,2015-09-02,326111,Plastics Bag and Pouch Manufacturing,280000,GRANTED_ET,30,2025-02-13T16:37:38
+120,2015,TX120,Transportation Group,Public Transit Systems Inc,789000000,2015-11-11,485111,Mixed Mode Transit Systems,400000,GRANTED_ET,32,2025-02-14T08:31:51
+121,2016,TX121,Real Estate Holdings,Warehouse Properties LLC,345000000,2016-01-19,531130,Lessors of Miniwarehouses and Self-Storage Units,280000,GRANTED_ET,35,2025-02-15T11:45:24
+122,2016,TX122,Retail Corporation,Pharmacy Chain Inc,567000000,2016-03-29,446110,Pharmacies and Drug Stores,400000,GRANTED_ET,30,2025-02-16T13:58:47
+123,2016,TX123,Defense Holdings,Intelligence Systems Corp,789000000,2016-06-07,541512,Computer Systems Design Services,400000,GRANTED_ET,32,2025-02-17T15:42:30
+124,2016,TX124,Pharmaceutical Group,Biologics Manufacturing Inc,2100000000,2016-08-16,325412,Pharmaceutical Preparation Manufacturing,400000,RESTRUCTURED,220,2025-02-18T09:26:53
+125,2016,TX125,Technology Corporation,Semiconductor Fab LLC,1200000000,2016-10-25,334413,Semiconductor and Related Device Manufacturing,400000,SECOND_REQUEST,190,2025-02-19T12:14:16
+126,2017,TX126,Construction Group,Infrastructure Development Inc,345000000,2017-01-03,237110,Water and Sewer Line and Related Structures Construction,280000,GRANTED_ET,35,2025-02-20T14:37:39
+127,2017,TX127,Healthcare Corporation,Medical Research Institute,567000000,2017-03-14,541712,Research and Development in the Physical Engineering and Life Sciences,400000,GRANTED_ET,30,2025-02-21T16:51:22
+128,2017,TX128,Telecom Holdings,Internet Infrastructure Inc,789000000,2017-05-23,518210,Data Processing Hosting and Related Services,400000,GRANTED_ET,32,2025-02-22T08:45:45
+129,2017,TX129,Energy Corporation,Geothermal Power LLC,234000000,2017-08-01,221116,Geothermal Electric Power Generation,280000,GRANTED_ET,30,2025-02-23T11:38:28
+130,2017,TX130,Agricultural Group,Food Safety Testing Inc,345000000,2017-10-10,541380,Testing Laboratories,280000,GRANTED_ET,35,2025-02-24T13:22:51
+131,2018,TX131,Manufacturing Holdings,Advanced Materials Corp,567000000,2018-01-18,325211,Plastics Material and Resin Manufacturing,400000,GRANTED_ET,30,2025-02-25T15:47:14
+132,2018,TX132,Transportation Corporation,Smart Logistics Inc,789000000,2018-03-29,484110,General Freight Trucking Local,400000,GRANTED_ET,32,2025-02-26T10:33:37
+133,2018,TX133,Real Estate Group,Mixed-Use Development LLC,234000000,2018-06-07,531210,Offices of Real Estate Agents and Brokers,280000,GRANTED_ET,35,2025-02-27T12:56:20
+134,2018,TX134,Retail Holdings,Luxury Goods Chain Inc,567000000,2018-08-16,448110,Men's Clothing Stores,400000,GRANTED_ET,30,2025-02-28T14:48:43
+135,2018,TX135,Defense Corporation,Space Systems LLC,1200000000,2018-10-25,336414,Guided Missile and Space Vehicle Manufacturing,400000,SECOND_REQUEST,200,2025-03-01T16:35:16
+136,2019,TX136,Pharmaceutical Holdings,Personalized Medicine Inc,1800000000,2019-02-02,325412,Pharmaceutical Preparation Manufacturing,400000,CHALLENGED,310,2025-03-02T08:27:39
+137,2019,TX137,Technology Group,Blockchain Solutions Corp,445000000,2019-04-13,541511,Computer Systems Design Services,400000,GRANTED_ET,30,2025-03-03T11:49:22
+138,2019,TX138,Construction Alliance,Green Technology Builder,234000000,2019-06-22,236220,Commercial and Institutional Building Construction,280000,GRANTED_ET,35,2025-03-04T13:42:45
+139,2019,TX139,Healthcare Holdings,Telehealth Platform Inc,567000000,2019-08-31,621111,Offices of Physicians,400000,GRANTED_ET,30,2025-03-05T15:28:38
+140,2019,TX140,Telecom Corporation,5G Equipment Manufacturing,789000000,2019-11-09,334220,Radio and Television Broadcasting and Wireless Communications Equipment Manufacturing,400000,GRANTED_ET,32,2025-03-06T09:54:21
+141,2020,TX141,Energy Holdings,Carbon Capture Technology Inc,345000000,2020-01-18,541712,Research and Development in the Physical Engineering and Life Sciences,280000,GRANTED_ET,35,2025-03-07T12:17:54
+142,2020,TX142,Agricultural Corporation,Vertical Farming Systems LLC,234000000,2020-03-28,111419,Other Food Crops Grown Under Cover,280000,GRANTED_ET,30,2025-03-08T14:39:17
+143,2020,TX143,Manufacturing Group,Electric Motor Production Inc,567000000,2020-06-06,335312,Motor and Generator Manufacturing,400000,GRANTED_ET,32,2025-03-09T16:23:50
+144,2020,TX144,Transportation Holdings,Drone Delivery Services Corp,234000000,2020-08-15,481219,Other Nonscheduled Air Transportation,280000,GRANTED_ET,30,2025-03-10T08:17:23
+145,2020,TX145,Real Estate Corporation,Virtual Reality Properties Inc,345000000,2020-10-24,541511,Computer Systems Design Services,280000,GRANTED_ET,35,2025-03-11T11:41:46
+146,2021,TX146,Retail Group,Omnichannel Commerce Platform,789000000,2021-01-02,454110,Electronic Shopping and Mail-Order Houses,400000,GRANTED_ET,30,2025-03-12T13:55:29
+147,2021,TX147,Defense Holdings,Quantum Encryption Corp,567000000,2021-03-13,541512,Computer Systems Design Services,400000,GRANTED_ET,32,2025-03-13T15:48:52
+148,2021,TX148,Pharmaceutical Corporation,Precision Oncology Inc,2800000000,2021-05-22,325412,Pharmaceutical Preparation Manufacturing,400000,CHALLENGED,340,2025-03-14T10:32:35
+149,2021,TX149,Technology Holdings,Neural Interface Systems LLC,1200000000,2021-08-01,334510,Electromedical and Electrotherapeutic Apparatus Manufacturing,400000,SECOND_REQUEST,220,2025-03-15T12:26:18
+150,2021,TX150,Construction Corporation,Modular Building Systems Inc,345000000,2021-10-10,236220,Commercial and Institutional Building Construction,280000,GRANTED_ET,35,2025-03-16T14:19:41
