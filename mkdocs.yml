@@ -114,6 +114,17 @@ nav:
       - Log Schema: LOG_SCHEMA.md
       - Environment Protection: ENVIRONMENT_PROTECTION.md
       - Gov Service Matrix: GOV_SERVICE_MATRIX.md
+  - Best Practices:
+      - Overview: best-practices/index.md
+      - Medallion Architecture: best-practices/medallion-architecture.md
+      - Data Engineering: best-practices/data-engineering.md
+      - Data Governance: best-practices/data-governance.md
+      - Security & Compliance: best-practices/security-compliance.md
+      - Infrastructure as Code & CI/CD: best-practices/iac-cicd.md
+      - Cost Optimization: best-practices/cost-optimization.md
+      - Monitoring & Observability: best-practices/monitoring-observability.md
+      - Performance Tuning: best-practices/performance-tuning.md
+      - Disaster Recovery: best-practices/disaster-recovery.md
   - ADRs:
       - Overview: adr/README.md
       - "0001: ADF + dbt over Airflow": adr/0001-adf-dbt-over-airflow.md
