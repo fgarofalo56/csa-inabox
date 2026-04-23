@@ -6,7 +6,6 @@ for interactive graph queries and traversals.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 from dataclasses import dataclass, field
@@ -77,10 +76,10 @@ class CosmosGremlinStore:
             try:
                 from gremlin_python.driver import client as gremlin_client
                 from gremlin_python.driver import serializer
-            except ImportError:
+            except ImportError as err:
                 raise ImportError(
                     "gremlinpython required. Install: pip install gremlinpython"
-                )
+                ) from err
 
             self._client = gremlin_client.Client(
                 url=self._endpoint,
@@ -108,8 +107,9 @@ class CosmosGremlinStore:
         Returns:
             Dict with counts of loaded vertices and edges.
         """
-        import pandas as pd
         from pathlib import Path
+
+        import pandas as pd
 
         output_path = Path(output_dir)
         stats = {"vertices": 0, "edges": 0}
@@ -251,7 +251,7 @@ class CosmosGremlinStore:
     def get_entity_context(
         self,
         entity_name: str,
-        include_community: bool = True,
+        include_community: bool = True,  # noqa: ARG002
     ) -> dict[str, Any]:
         """Get full context for an entity (for RAG retrieval).
 

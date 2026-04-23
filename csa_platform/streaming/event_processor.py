@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """csa_platform.streaming.event_processor — Generic Event Hubs processor with checkpointing.
 
 This module provides a generic event processor that reads from Azure Event Hubs,
@@ -11,9 +10,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional, Protocol, Union
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any, Protocol
 
 from azure.eventhub import EventData
 from azure.eventhub.aio import EventHubConsumerClient
@@ -34,17 +33,17 @@ class EventSchema:
     timestamp: datetime
     event_type: str
     source: str
-    payload: Dict[str, Any]
-    raw_data: Optional[bytes] = None
-    partition_key: Optional[str] = None
-    sequence_number: Optional[int] = None
-    offset: Optional[str] = None
+    payload: dict[str, Any]
+    raw_data: bytes | None = None
+    partition_key: str | None = None
+    sequence_number: int | None = None
+    offset: str | None = None
 
 
 class EventCallback(Protocol):
     """Protocol for event processing callbacks."""
 
-    async def __call__(self, events: List[EventSchema]) -> None:
+    async def __call__(self, events: list[EventSchema]) -> None:
         """Process a batch of events.
 
         Args:
@@ -59,7 +58,7 @@ class EventProcessorConfig:
     connection_string: str
     eventhub_name: str
     consumer_group: str = "$Default"
-    checkpoint_store_connection_string: Optional[str] = None
+    checkpoint_store_connection_string: str | None = None
     checkpoint_container_name: str = "checkpoints"
     batch_size: int = 10
     max_wait_time: int = 30
@@ -98,9 +97,9 @@ class EventProcessor:
         self.config = config
         self._running = False
         self._shutdown_event = asyncio.Event()
-        self._consumer_client: Optional[EventHubConsumerClient] = None
-        self._checkpoint_store: Optional[BlobCheckpointStore] = None
-        self._callbacks: List[EventCallback] = []
+        self._consumer_client: EventHubConsumerClient | None = None
+        self._checkpoint_store: BlobCheckpointStore | None = None
+        self._callbacks: list[EventCallback] = []
 
     def add_callback(self, callback: EventCallback) -> None:
         """Add an event processing callback.
@@ -165,11 +164,11 @@ class EventProcessor:
                     try:
                         timestamp = datetime.fromisoformat(timestamp_raw.replace('Z', '+00:00'))
                     except ValueError:
-                        timestamp = datetime.utcnow()
+                        timestamp = datetime.now(tz=timezone.utc)
                 else:
-                    timestamp = datetime.utcnow()
+                    timestamp = datetime.now(tz=timezone.utc)
             else:
-                timestamp = datetime.utcnow()
+                timestamp = datetime.now(tz=timezone.utc)
 
             event_type = payload.get(self.config.event_type_field, "unknown")
             source = payload.get(self.config.source_field, "unknown")
@@ -191,7 +190,7 @@ class EventProcessor:
             # Return a minimal event schema for unparseable events
             return EventSchema(
                 id=f"event_{event_data.sequence_number}",
-                timestamp=datetime.utcnow(),
+                timestamp=datetime.now(tz=timezone.utc),
                 event_type="parse_error",
                 source="unknown",
                 payload={"error": str(e)},
@@ -201,7 +200,7 @@ class EventProcessor:
                 offset=event_data.offset
             )
 
-    async def _process_events_batch(self, partition_context, events: List[EventData]) -> None:
+    async def _process_events_batch(self, partition_context, events: list[EventData]) -> None:
         """Process a batch of events through registered callbacks.
 
         Args:
@@ -310,10 +309,9 @@ class EventProcessor:
 
 if __name__ == "__main__":
     import os
-    from typing import List
 
     # Example callback for testing
-    async def example_callback(events: List[EventSchema]) -> None:
+    async def example_callback(events: list[EventSchema]) -> None:
         """Example callback that logs events."""
         for event in events:
             print(f"Processed event: {event.event_type} from {event.source} at {event.timestamp}")

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """csa_platform.streaming.serving_layer — Serving layer for Lambda architecture.
 
 This module implements the serving layer of the Lambda architecture,
@@ -11,13 +10,12 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Union
+from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from azure.cosmos.aio import CosmosClient as AsyncCosmosClient
-from azure.kusto.data import KustoClient, KustoConnectionStringBuilder
-from azure.kusto.data.exceptions import KustoServiceError
 from azure.identity.aio import DefaultAzureCredential
+from azure.kusto.data import KustoClient, KustoConnectionStringBuilder
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +25,8 @@ class QueryConfig:
     """Configuration for serving layer queries."""
     start_time: datetime
     end_time: datetime
-    event_types: Optional[List[str]] = None
-    sources: Optional[List[str]] = None
+    event_types: list[str] | None = None
+    sources: list[str] | None = None
     aggregation_level: str = "raw"  # "raw", "minute", "hour", "day"
     include_real_time: bool = True
     include_batch: bool = True
@@ -39,23 +37,23 @@ class QueryConfig:
 class QueryResult:
     """Result from serving layer query."""
     query_config: QueryConfig
-    speed_layer_results: List[Dict[str, Any]]
-    batch_layer_results: List[Dict[str, Any]]
-    merged_results: List[Dict[str, Any]]
-    metadata: Dict[str, Any]
+    speed_layer_results: list[dict[str, Any]]
+    batch_layer_results: list[dict[str, Any]]
+    merged_results: list[dict[str, Any]]
+    metadata: dict[str, Any]
 
 
 @dataclass
 class ServingLayerConfig:
     """Configuration for the ServingLayer."""
     # Azure Data Explorer settings (for analytical queries)
-    adx_cluster_url: Optional[str] = None
+    adx_cluster_url: str | None = None
     adx_database_name: str = "streaming"
     adx_realtime_table: str = "realtime_events"
     adx_batch_table: str = "batch_aggregated"
 
     # Cosmos DB settings (for operational queries)
-    cosmos_endpoint: Optional[str] = None
+    cosmos_endpoint: str | None = None
     cosmos_database_name: str = "streaming"
     cosmos_container_name: str = "realtime"
 
@@ -83,8 +81,8 @@ class ServingLayer:
             config: Configuration for the serving layer
         """
         self.config = config
-        self._adx_client: Optional[KustoClient] = None
-        self._cosmos_client: Optional[AsyncCosmosClient] = None
+        self._adx_client: KustoClient | None = None
+        self._cosmos_client: AsyncCosmosClient | None = None
 
     async def initialize(self) -> None:
         """Initialize connections to serving layer storage systems."""
@@ -105,7 +103,7 @@ class ServingLayer:
 
         logger.info("Serving layer initialized")
 
-    async def query_recent(self, config: QueryConfig) -> List[Dict[str, Any]]:
+    async def query_recent(self, config: QueryConfig) -> list[dict[str, Any]]:
         """Query recent data from the speed layer (real-time processing).
 
         Args:
@@ -171,7 +169,7 @@ class ServingLayer:
             logger.error(f"Failed to query recent data: {e}")
             return []
 
-    async def query_historical(self, config: QueryConfig) -> List[Dict[str, Any]]:
+    async def query_historical(self, config: QueryConfig) -> list[dict[str, Any]]:
         """Query historical data from the batch layer.
 
         Args:
@@ -252,10 +250,10 @@ class ServingLayer:
 
     def _merge_results(
         self,
-        speed_results: List[Dict[str, Any]],
-        batch_results: List[Dict[str, Any]],
+        speed_results: list[dict[str, Any]],
+        batch_results: list[dict[str, Any]],
         overlap_window: timedelta
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Merge speed and batch layer results, handling overlap and deduplication.
 
         Args:
@@ -267,7 +265,7 @@ class ServingLayer:
             Merged and deduplicated results
         """
         # Calculate cutoff time for preferring speed layer over batch layer
-        cutoff_time = datetime.utcnow() - overlap_window
+        cutoff_time = datetime.now(tz=timezone.utc) - overlap_window
 
         # Separate results by layer preference
         batch_only = []
@@ -277,15 +275,14 @@ class ServingLayer:
         batch_timestamps = set()
         for record in batch_results:
             timestamp = record.get('timestamp')
-            if timestamp and isinstance(timestamp, datetime):
-                if timestamp < cutoff_time:
+            if timestamp and isinstance(timestamp, datetime) and timestamp < cutoff_time:
                     batch_only.append(record)
                     batch_timestamps.add(timestamp)
 
         # Process speed results (prefer for recent data)
         for record in speed_results:
             timestamp = record.get('timestamp')
-            if timestamp and isinstance(timestamp, datetime):
+            if timestamp and isinstance(timestamp, datetime):  # noqa: SIM102
                 if timestamp >= cutoff_time or timestamp not in batch_timestamps:
                     speed_only.append(record)
 
@@ -293,7 +290,7 @@ class ServingLayer:
         merged = batch_only + speed_only
 
         # Sort by timestamp
-        merged.sort(key=lambda x: x.get('timestamp', datetime.min))
+        merged.sort(key=lambda x: x.get('timestamp', datetime.min.replace(tzinfo=timezone.utc)))
 
         logger.debug(
             f"Merged {len(batch_only)} batch records and "
@@ -346,7 +343,7 @@ class ServingLayer:
             "batch_layer_count": len(batch_results),
             "merged_count": len(merged_results),
             "overlap_window_minutes": config.overlap_window.total_seconds() / 60,
-            "query_time": datetime.utcnow().isoformat()
+            "query_time": datetime.now(tz=timezone.utc).isoformat()
         }
 
         return QueryResult(
@@ -359,11 +356,11 @@ class ServingLayer:
 
     async def query_operational(
         self,
-        event_id: Optional[str] = None,
-        event_type: Optional[str] = None,
-        source: Optional[str] = None,
+        event_id: str | None = None,
+        event_type: str | None = None,
+        source: str | None = None,
         limit: int = 100
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Query operational data from Cosmos DB for low-latency lookups.
 
         Args:
@@ -428,7 +425,7 @@ class ServingLayer:
         start_time: datetime,
         end_time: datetime,
         granularity: str = "hour"
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Get aggregation summary across time range.
 
         Args:
@@ -501,8 +498,8 @@ if __name__ == "__main__":
 
         # Example query
         query_config = QueryConfig(
-            start_time=datetime.utcnow() - timedelta(hours=1),
-            end_time=datetime.utcnow(),
+            start_time=datetime.now(tz=timezone.utc) - timedelta(hours=1),
+            end_time=datetime.now(tz=timezone.utc),
             event_types=["temperature", "humidity"],
             aggregation_level="minute"
         )
@@ -516,8 +513,8 @@ if __name__ == "__main__":
 
         # Get aggregation summary
         summary = await serving_layer.get_aggregation_summary(
-            start_time=datetime.utcnow() - timedelta(hours=2),
-            end_time=datetime.utcnow(),
+            start_time=datetime.now(tz=timezone.utc) - timedelta(hours=2),
+            end_time=datetime.now(tz=timezone.utc),
             granularity="hour"
         )
 

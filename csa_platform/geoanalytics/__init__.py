@@ -13,8 +13,8 @@ from .postgis_store import PostGISStore
 __all__ = [
     "GeoProcessor",
     "H3Indexer",
-    "SpatialJoiner",
     "PostGISStore",
+    "SpatialJoiner",
 ]
 
 __version__ = "0.1.0"

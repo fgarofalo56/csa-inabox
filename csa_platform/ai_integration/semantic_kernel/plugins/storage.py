@@ -5,16 +5,14 @@ This plugin provides semantic kernel functions for interacting with Azure Data L
 including listing containers, browsing files, and reading file metadata.
 """
 
-import logging
 import json
-from typing import Optional, List, Dict, Any
-from datetime import datetime
+import logging
 
-from semantic_kernel.functions import kernel_function
-from azure.identity import DefaultAzureCredential
-from azure.storage.blob import BlobServiceClient, ContainerClient, BlobClient
-from azure.storage.filedatalake import DataLakeServiceClient
 import pandas as pd
+from azure.identity import DefaultAzureCredential
+from azure.storage.blob import BlobServiceClient
+from azure.storage.filedatalake import DataLakeServiceClient
+from semantic_kernel.functions import kernel_function
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +22,8 @@ class StoragePlugin:
 
     def __init__(
         self,
-        storage_account_url: Optional[str] = None,
-        credential: Optional[DefaultAzureCredential] = None
+        storage_account_url: str | None = None,
+        credential: DefaultAzureCredential | None = None
     ):
         """
         Initialize the Storage Plugin.
@@ -36,11 +34,11 @@ class StoragePlugin:
         """
         self.storage_account_url = storage_account_url
         self.credential = credential or DefaultAzureCredential()
-        self._blob_service_client: Optional[BlobServiceClient] = None
-        self._datalake_service_client: Optional[DataLakeServiceClient] = None
+        self._blob_service_client: BlobServiceClient | None = None
+        self._datalake_service_client: DataLakeServiceClient | None = None
 
     @property
-    def blob_service_client(self) -> Optional[BlobServiceClient]:
+    def blob_service_client(self) -> BlobServiceClient | None:
         """Get or create Blob service client."""
         if self._blob_service_client is None and self.storage_account_url:
             try:
@@ -49,12 +47,12 @@ class StoragePlugin:
                     credential=self.credential
                 )
             except Exception as e:
-                logger.error(f"Failed to create Blob service client: {str(e)}")
+                logger.error(f"Failed to create Blob service client: {e!s}")
                 return None
         return self._blob_service_client
 
     @property
-    def datalake_service_client(self) -> Optional[DataLakeServiceClient]:
+    def datalake_service_client(self) -> DataLakeServiceClient | None:
         """Get or create Data Lake service client."""
         if self._datalake_service_client is None and self.storage_account_url:
             try:
@@ -63,7 +61,7 @@ class StoragePlugin:
                     credential=self.credential
                 )
             except Exception as e:
-                logger.error(f"Failed to create Data Lake service client: {str(e)}")
+                logger.error(f"Failed to create Data Lake service client: {e!s}")
                 return None
         return self._datalake_service_client
 
@@ -107,7 +105,7 @@ class StoragePlugin:
             return json.dumps(result, indent=2)
 
         except Exception as e:
-            error_msg = f"Failed to list containers: {str(e)}"
+            error_msg = f"Failed to list containers: {e!s}"
             logger.error(error_msg)
             return f"Error: {error_msg}"
 
@@ -170,7 +168,7 @@ class StoragePlugin:
             return json.dumps(result, indent=2)
 
         except Exception as e:
-            error_msg = f"Failed to list files in container '{container}': {str(e)}"
+            error_msg = f"Failed to list files in container '{container}': {e!s}"
             logger.error(error_msg)
             return f"Error: {error_msg}"
 
@@ -235,7 +233,7 @@ class StoragePlugin:
                             "total_rows": len(df),
                             "total_columns": len(df.columns)
                         }
-                    except:
+                    except Exception:
                         result = {
                             "file_type": "text",
                             "file_size": file_size,
@@ -252,7 +250,7 @@ class StoragePlugin:
                             "preview_info": "JSON content",
                             "data": json_data
                         }
-                    except:
+                    except Exception:
                         result = {
                             "file_type": "text",
                             "file_size": file_size,
@@ -285,7 +283,7 @@ class StoragePlugin:
             return json.dumps(result, indent=2)
 
         except Exception as e:
-            error_msg = f"Failed to read file preview {container}/{path}: {str(e)}"
+            error_msg = f"Failed to read file preview {container}/{path}: {e!s}"
             logger.error(error_msg)
             return f"Error: {error_msg}"
 
@@ -356,13 +354,13 @@ class StoragePlugin:
             try:
                 tags = blob_client.get_blob_tags()
                 metadata["tags"] = dict(tags)
-            except:
+            except Exception:
                 metadata["tags"] = {}
 
             return json.dumps(metadata, indent=2)
 
         except Exception as e:
-            error_msg = f"Failed to get file metadata {container}/{path}: {str(e)}"
+            error_msg = f"Failed to get file metadata {container}/{path}: {e!s}"
             logger.error(error_msg)
             return f"Error: {error_msg}"
 
@@ -423,6 +421,6 @@ class StoragePlugin:
             return json.dumps(result, indent=2)
 
         except Exception as e:
-            error_msg = f"Failed to search files in container '{container}': {str(e)}"
+            error_msg = f"Failed to search files in container '{container}': {e!s}"
             logger.error(error_msg)
             return f"Error: {error_msg}"

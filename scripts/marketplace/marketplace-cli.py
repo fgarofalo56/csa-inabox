@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 CSA-in-a-Box Data Marketplace CLI
 
@@ -18,7 +17,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 from pathlib import Path
@@ -28,13 +26,12 @@ import httpx
 import yaml
 from rich.console import Console
 from rich.table import Table
-from rich import print as rprint
 
 # Add the project root to Python path for imports
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from csa_platform.data_marketplace.contract_validator import validate_contract, ValidationResult
+from csa_platform.data_marketplace.contract_validator import validate_contract  # noqa: E402
 
 console = Console()
 
@@ -209,7 +206,7 @@ def format_product_details(product: dict[str, Any]) -> None:
     # Owner information
     owner = product.get('owner', {})
     if owner:
-        console.print(f"\n[bold]Owner:[/bold]")
+        console.print("\n[bold]Owner:[/bold]")
         console.print(f"  Name: {owner.get('name', 'Unknown')}")
         console.print(f"  Email: {owner.get('email', 'Unknown')}")
         console.print(f"  Team: {owner.get('team', 'Unknown')}")
@@ -220,7 +217,7 @@ def format_product_details(product: dict[str, Any]) -> None:
     availability = product.get('availability', 0.0)
     freshness_hours = product.get('freshness_hours', 0.0)
 
-    console.print(f"\n[bold]Quality Metrics:[/bold]")
+    console.print("\n[bold]Quality Metrics:[/bold]")
     console.print(f"  Quality Score: {quality_score:.1%}")
     console.print(f"  Completeness: {completeness:.1%}")
     console.print(f"  Availability: {availability:.1%}")
@@ -229,7 +226,7 @@ def format_product_details(product: dict[str, Any]) -> None:
     # SLA information
     sla = product.get('sla', {})
     if sla:
-        console.print(f"\n[bold]Service Level Agreement:[/bold]")
+        console.print("\n[bold]Service Level Agreement:[/bold]")
         console.print(f"  Freshness SLA: {sla.get('freshness_minutes', 0)} minutes")
         console.print(f"  Availability SLA: {sla.get('availability_percent', 0.0):.1f}%")
         console.print(f"  Valid Row Ratio: {sla.get('valid_row_ratio', 0.0):.1%}")
@@ -239,7 +236,7 @@ def format_product_details(product: dict[str, Any]) -> None:
     # Schema information
     schema_info = product.get('schema_info', {})
     if schema_info:
-        console.print(f"\n[bold]Schema:[/bold]")
+        console.print("\n[bold]Schema:[/bold]")
         console.print(f"  Format: {schema_info.get('format', 'unknown')}")
         console.print(f"  Location: {schema_info.get('location', 'unknown')}")
 
@@ -262,14 +259,14 @@ def format_product_details(product: dict[str, Any]) -> None:
     # Tags
     tags = product.get('tags', {})
     if tags:
-        console.print(f"\n[bold]Tags:[/bold]")
+        console.print("\n[bold]Tags:[/bold]")
         for key, value in tags.items():
             console.print(f"  {key}: {value}")
 
     # Sample queries
     sample_queries = product.get('sample_queries', [])
     if sample_queries:
-        console.print(f"\n[bold]Sample Queries:[/bold]")
+        console.print("\n[bold]Sample Queries:[/bold]")
         for i, query in enumerate(sample_queries[:3], 1):  # Show first 3 queries
             console.print(f"  {i}. {query}")
         if len(sample_queries) > 3:
@@ -288,13 +285,13 @@ def format_product_details(product: dict[str, Any]) -> None:
         transformations = lineage.get('transformations', [])
 
         if upstream or downstream or transformations:
-            console.print(f"\n[bold]Lineage:[/bold]")
+            console.print("\n[bold]Lineage:[/bold]")
             if upstream:
                 console.print(f"  Upstream: {', '.join(upstream)}")
             if downstream:
                 console.print(f"  Downstream: {', '.join(downstream)}")
             if transformations:
-                console.print(f"  Transformations:")
+                console.print("  Transformations:")
                 for transform in transformations:
                     console.print(f"    • {transform}")
 
@@ -335,7 +332,7 @@ def format_quality_history(history: list[dict[str, Any]]) -> None:
 def load_contract(file_path: str) -> dict[str, Any] | None:
     """Load a contract YAML file."""
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
+        with open(file_path, encoding='utf-8') as f:
             return yaml.safe_load(f)
     except FileNotFoundError:
         console.print(f"[red]Contract file not found: {file_path}[/red]")

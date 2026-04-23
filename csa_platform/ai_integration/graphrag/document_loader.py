@@ -11,7 +11,6 @@ import glob
 import json
 import logging
 import os
-import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
@@ -562,7 +561,7 @@ class DocumentLoader:
                         )
                     )
             return documents
-        elif isinstance(data, dict):
+        if isinstance(data, dict):
             title = data.get("title", data.get("name", file_path.stem))
             content = data.get("content", data.get("text", json.dumps(data, indent=2)))
             return [

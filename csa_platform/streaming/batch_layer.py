@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """csa_platform.streaming.batch_layer — Batch processing layer for Lambda architecture.
 
 This module implements the batch layer (cold path) of the Lambda architecture,
@@ -10,15 +9,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import shutil
 from dataclasses import dataclass
-from datetime import datetime, timedelta
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import pandas as pd
 from azure.identity.aio import DefaultAzureCredential
-from azure.storage.blob.aio import BlobServiceClient
 from azure.storage.filedatalake.aio import DataLakeServiceClient
 
 from csa_platform.streaming.event_processor import EventSchema
@@ -44,7 +40,7 @@ class BatchLayerConfig:
 
     # Delta/Parquet settings
     output_format: str = "parquet"  # "parquet" or "delta"
-    partition_columns: List[str] = None
+    partition_columns: list[str] = None
     compression: str = "snappy"
 
     def __post_init__(self):
@@ -58,9 +54,9 @@ class BatchProcessingResult:
     start_time: datetime
     end_time: datetime
     processed_events: int
-    output_files: List[str]
-    aggregation_results: Dict[str, Any]
-    errors: List[str]
+    output_files: list[str]
+    aggregation_results: dict[str, Any]
+    errors: list[str]
 
 
 class BatchLayer:
@@ -82,7 +78,7 @@ class BatchLayer:
             config: Configuration for the batch layer
         """
         self.config = config
-        self._adls_client: Optional[DataLakeServiceClient] = None
+        self._adls_client: DataLakeServiceClient | None = None
         self._filesystem_client = None
 
     async def initialize(self) -> None:
@@ -112,7 +108,7 @@ class BatchLayer:
             await self._filesystem_client.create_directory(path)
             logger.info(f"Created directory: {path}")
 
-    async def _list_files_in_path(self, path: str, file_extension: str = ".avro") -> List[str]:
+    async def _list_files_in_path(self, path: str, file_extension: str = ".avro") -> list[str]:
         """List files in ADLS path with specific extension."""
         files = []
         try:
@@ -128,10 +124,9 @@ class BatchLayer:
         """Download file content from ADLS."""
         file_client = self._filesystem_client.get_file_client(file_path)
         download = await file_client.download_file()
-        content = await download.readall()
-        return content
+        return await download.readall()
 
-    async def _get_last_checkpoint(self) -> Optional[datetime]:
+    async def _get_last_checkpoint(self) -> datetime | None:
         """Get the last processing checkpoint."""
         checkpoint_file = f"{self.config.checkpoint_path}/last_processed.txt"
         try:
@@ -150,7 +145,7 @@ class BatchLayer:
         content = timestamp.isoformat().encode('utf-8')
         await file_client.upload_data(content, overwrite=True)
 
-    def _parse_avro_events(self, avro_content: bytes) -> List[EventSchema]:
+    def _parse_avro_events(self, avro_content: bytes) -> list[EventSchema]:
         """Parse Avro content from Event Hubs Capture into EventSchema objects.
 
         Note: This is a simplified implementation. In production, you'd use
@@ -174,7 +169,7 @@ class BatchLayer:
                         event = EventSchema(
                             id=event_data.get('id', f"batch_{len(events)}"),
                             timestamp=datetime.fromisoformat(
-                                event_data.get('timestamp', datetime.utcnow().isoformat())
+                                event_data.get('timestamp', datetime.now(tz=timezone.utc).isoformat())
                             ),
                             event_type=event_data.get('event_type', 'unknown'),
                             source=event_data.get('source', 'unknown'),
@@ -190,7 +185,7 @@ class BatchLayer:
 
         return events
 
-    def _process_events_dataframe(self, events: List[EventSchema]) -> pd.DataFrame:
+    def _process_events_dataframe(self, events: list[EventSchema]) -> pd.DataFrame:
         """Process events using pandas for correctness and completeness."""
         if not events:
             return pd.DataFrame()
@@ -217,14 +212,14 @@ class BatchLayer:
         df['timestamp'] = pd.to_datetime(df['timestamp'])  # Ensure proper timestamp format
 
         # Add computed columns
-        df['processing_time'] = datetime.utcnow()
+        df['processing_time'] = datetime.now(tz=timezone.utc)
         df['year'] = df['timestamp'].dt.year
         df['month'] = df['timestamp'].dt.month
         df['day'] = df['timestamp'].dt.day
 
         return df
 
-    def _compute_aggregations(self, df: pd.DataFrame) -> Dict[str, Any]:
+    def _compute_aggregations(self, df: pd.DataFrame) -> dict[str, Any]:
         """Compute aggregations on the processed DataFrame."""
         if df.empty:
             return {}
@@ -258,8 +253,8 @@ class BatchLayer:
         self,
         df: pd.DataFrame,
         output_path: str,
-        partition_cols: List[str]
-    ) -> List[str]:
+        partition_cols: list[str]
+    ) -> list[str]:
         """Write DataFrame as partitioned Parquet files."""
         output_files = []
 
@@ -272,12 +267,12 @@ class BatchLayer:
         for partition_values, group_df in grouped:
             # Create partition path
             if isinstance(partition_values, tuple):
-                partition_parts = [f"{col}={val}" for col, val in zip(partition_cols, partition_values)]
+                partition_parts = [f"{col}={val}" for col, val in zip(partition_cols, partition_values, strict=False)]
             else:
                 partition_parts = [f"{partition_cols[0]}={partition_values}"]
 
             partition_path = f"{output_path}/{'/'.join(partition_parts)}"
-            filename = f"data_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.parquet"
+            filename = f"data_{datetime.now(tz=timezone.utc).strftime('%Y%m%d_%H%M%S')}.parquet"
             full_path = f"{partition_path}/{filename}"
 
             # Convert DataFrame to Parquet bytes
@@ -298,8 +293,8 @@ class BatchLayer:
 
     async def reprocess_batch(
         self,
-        start_time: Optional[datetime] = None,
-        end_time: Optional[datetime] = None
+        start_time: datetime | None = None,
+        end_time: datetime | None = None
     ) -> BatchProcessingResult:
         """Reprocess a batch of events for correctness.
 
@@ -313,7 +308,7 @@ class BatchLayer:
         if not self._adls_client:
             await self.initialize()
 
-        processing_start = datetime.utcnow()
+        processing_start = datetime.now(tz=timezone.utc)
         errors = []
         processed_events = 0
         output_files = []
@@ -322,10 +317,10 @@ class BatchLayer:
         if start_time is None:
             start_time = await self._get_last_checkpoint()
             if start_time is None:
-                start_time = datetime.utcnow() - self.config.reprocess_window
+                start_time = datetime.now(tz=timezone.utc) - self.config.reprocess_window
 
         if end_time is None:
-            end_time = datetime.utcnow()
+            end_time = datetime.now(tz=timezone.utc)
 
         logger.info(f"Starting batch reprocessing from {start_time} to {end_time}")
 
@@ -346,7 +341,7 @@ class BatchLayer:
                         day = int(path_parts[-2])
                         hour = int(path_parts[-1])
 
-                        file_time = datetime(year, month, day, hour)
+                        file_time = datetime(year, month, day, hour, tzinfo=timezone.utc)
                         if start_time <= file_time <= end_time:
                             relevant_files.append(file_path)
                 except Exception as e:
@@ -403,14 +398,14 @@ class BatchLayer:
 
         return BatchProcessingResult(
             start_time=processing_start,
-            end_time=datetime.utcnow(),
+            end_time=datetime.now(tz=timezone.utc),
             processed_events=processed_events,
             output_files=output_files,
             aggregation_results=aggregation_results,
             errors=errors
         )
 
-    async def merge_with_serving(self, batch_results: List[str]) -> None:
+    async def merge_with_serving(self, batch_results: list[str]) -> None:
         """Merge batch processing results with serving layer.
 
         Args:
@@ -461,7 +456,7 @@ class BatchLayer:
                 combined_df = combined_df.sort_values('timestamp')
 
                 # Write compacted file
-                compacted_filename = f"compacted_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.parquet"
+                compacted_filename = f"compacted_{datetime.now(tz=timezone.utc).strftime('%Y%m%d_%H%M%S')}.parquet"
                 compacted_path = f"{partition_path}/{compacted_filename}"
 
                 parquet_buffer = combined_df.to_parquet(

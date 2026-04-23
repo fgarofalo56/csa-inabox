@@ -147,7 +147,7 @@ class PurviewSyncService:
             return SyncResult(success=True, warnings=["No lineage defined"])
 
         schema_info = product.get("schema_info") or {}
-        product_qn = schema_info.get("location", f"marketplace://{product['domain']}/{product['name']}")
+        _product_qn = schema_info.get("location", f"marketplace://{product['domain']}/{product['name']}")
 
         process_entity = {
             "entity": {

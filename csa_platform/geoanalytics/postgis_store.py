@@ -9,15 +9,14 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 import geopandas as gpd
 import pandas as pd
 from azure.identity import DefaultAzureCredential
-from geoalchemy2 import Geometry, Geography
-from sqlalchemy import create_engine, text, MetaData, Table, Column, Integer, String, Float, DateTime
+from geoalchemy2 import Geography, Geometry
+from sqlalchemy import Column, Float, Integer, MetaData, String, Table, create_engine, text
 from sqlalchemy.engine import Engine
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 
 logger = logging.getLogger(__name__)
@@ -29,8 +28,8 @@ class PostGISConfig:
 
     host: str
     database: str
-    username: Optional[str] = None
-    password: Optional[str] = None
+    username: str | None = None
+    password: str | None = None
     port: int = 5432
     sslmode: str = "require"
     use_azure_identity: bool = False
@@ -49,7 +48,7 @@ class PostGISStore:
             config: PostGIS configuration object
         """
         self.config = config
-        self._engine: Optional[Engine] = None
+        self._engine: Engine | None = None
         self._session_factory = None
 
     def _get_connection_string(self) -> str:
@@ -72,7 +71,7 @@ class PostGISStore:
             f"/{self.config.database}?sslmode={self.config.sslmode}"
         )
 
-        return conn_str
+        return conn_str  # noqa: RET504
 
     def _get_engine(self) -> Engine:
         """Get SQLAlchemy engine with connection pooling."""
@@ -126,7 +125,7 @@ class PostGISStore:
         table_name: str,
         schema: str = "public",
         if_exists: str = "replace",
-        geometry_type: str = "geometry",
+        geometry_type: str = "geometry",  # noqa: ARG002
         srid: int = 4326,
         create_spatial_index: bool = True,
         **kwargs
@@ -185,9 +184,9 @@ class PostGISStore:
         table_name: str,
         schema: str = "public",
         geometry_col: str = "geometry",
-        where_clause: Optional[str] = None,
-        columns: Optional[List[str]] = None,
-        limit: Optional[int] = None,
+        where_clause: str | None = None,
+        columns: list[str] | None = None,
+        limit: int | None = None,
         **kwargs
     ) -> gpd.GeoDataFrame:
         """Read GeoDataFrame from PostGIS table.
@@ -241,7 +240,7 @@ class PostGISStore:
         self,
         sql: str,
         geometry_col: str = "geometry",
-        params: Optional[Dict[str, Any]] = None
+        params: dict[str, Any] | None = None
     ) -> gpd.GeoDataFrame:
         """Execute spatial SQL query and return GeoDataFrame.
 
@@ -307,7 +306,7 @@ class PostGISStore:
             logger.error(f"Failed to create spatial index: {e}")
             raise
 
-    def analyze_table_stats(self, table_name: str, schema: str = "public") -> Dict[str, Any]:
+    def analyze_table_stats(self, table_name: str, schema: str = "public") -> dict[str, Any]:
         """Get table statistics including spatial extents.
 
         Args:
@@ -344,8 +343,7 @@ class PostGISStore:
                         "extent_area": float(row[2]) if row[2] else 0,
                         "table_size": row[3]
                     }
-                else:
-                    return {}
+                return {}
 
         except Exception as e:
             logger.error(f"Failed to analyze table stats: {e}")
@@ -354,9 +352,9 @@ class PostGISStore:
     def execute_spatial_function(
         self,
         function_name: str,
-        params: List[Any],
+        params: list[Any],
         return_geometry: bool = True
-    ) -> Union[gpd.GeoDataFrame, pd.DataFrame]:
+    ) -> gpd.GeoDataFrame | pd.DataFrame:
         """Execute PostGIS spatial function.
 
         Args:
@@ -373,18 +371,16 @@ class PostGISStore:
 
         try:
             if return_geometry:
-                gdf = gpd.read_postgis(
+                return gpd.read_postgis(
                     sql=sql,
                     con=engine,
                     geom_col="result",
                     params=params
                 )
-                return gdf
-            else:
-                with engine.connect() as conn:
-                    result = conn.execute(text(sql), params)
-                    data = result.fetchall()
-                    return pd.DataFrame(data, columns=["result"])
+            with engine.connect() as conn:
+                result = conn.execute(text(sql), params)
+                data = result.fetchall()
+                return pd.DataFrame(data, columns=["result"])
 
         except Exception as e:
             logger.error(f"Failed to execute spatial function {function_name}: {e}")
@@ -397,7 +393,7 @@ class PostGISStore:
         schema: str = "public",
         geometry_type: str = "geometry",
         srid: int = 4326,
-        primary_key: Optional[str] = None
+        primary_key: str | None = None
     ) -> None:
         """Create table structure matching GeoDataFrame schema.
 
@@ -472,7 +468,7 @@ class PostGISStore:
             logger.error(f"Failed to drop table: {e}")
             raise
 
-    def list_tables(self, schema: str = "public") -> List[str]:
+    def list_tables(self, schema: str = "public") -> list[str]:
         """List tables in schema.
 
         Args:

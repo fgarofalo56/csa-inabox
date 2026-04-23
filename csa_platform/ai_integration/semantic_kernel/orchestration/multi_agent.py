@@ -6,7 +6,7 @@ for analytics and data governance tasks using Semantic Kernel's agent framework.
 """
 
 import logging
-from typing import List, Optional, Dict, Any
+from typing import Any
 
 from semantic_kernel import Kernel
 from semantic_kernel.agents import ChatCompletionAgent
@@ -17,18 +17,18 @@ from semantic_kernel.contents import ChatHistory
 from ..kernel_factory import CSAKernelFactory
 from ..plugins.data_query import DataQueryPlugin
 from ..plugins.governance import GovernancePlugin
-from ..plugins.storage import StoragePlugin
 from ..plugins.purview import PurviewPlugin
+from ..plugins.storage import StoragePlugin
 
 logger = logging.getLogger(__name__)
 
 
 def create_data_analyst_agent(
-    kernel: Optional[Kernel] = None,
+    kernel: Kernel | None = None,
     name: str = "DataAnalyst",
-    synapse_endpoint: Optional[str] = None,
-    adx_cluster_uri: Optional[str] = None,
-    storage_account_url: Optional[str] = None
+    synapse_endpoint: str | None = None,
+    adx_cluster_uri: str | None = None,
+    storage_account_url: str | None = None
 ) -> ChatCompletionAgent:
     """
     Create a data analyst agent with data query and storage plugins.
@@ -93,14 +93,14 @@ def create_data_analyst_agent(
         return agent
 
     except Exception as e:
-        logger.error(f"Failed to create Data Analyst agent: {str(e)}")
+        logger.error(f"Failed to create Data Analyst agent: {e!s}")
         raise
 
 
 def create_governance_agent(
-    kernel: Optional[Kernel] = None,
+    kernel: Kernel | None = None,
     name: str = "GovernanceAgent",
-    purview_endpoint: Optional[str] = None
+    purview_endpoint: str | None = None
 ) -> ChatCompletionAgent:
     """
     Create a governance agent with governance and Purview plugins.
@@ -162,15 +162,15 @@ def create_governance_agent(
         return agent
 
     except Exception as e:
-        logger.error(f"Failed to create Governance agent: {str(e)}")
+        logger.error(f"Failed to create Governance agent: {e!s}")
         raise
 
 
 def create_quality_agent(
-    kernel: Optional[Kernel] = None,
+    kernel: Kernel | None = None,
     name: str = "QualityAgent",
-    purview_endpoint: Optional[str] = None,
-    storage_account_url: Optional[str] = None
+    purview_endpoint: str | None = None,
+    storage_account_url: str | None = None
 ) -> ChatCompletionAgent:
     """
     Create a quality assessment agent focused on data quality evaluation.
@@ -237,17 +237,17 @@ def create_quality_agent(
         return agent
 
     except Exception as e:
-        logger.error(f"Failed to create Quality agent: {str(e)}")
+        logger.error(f"Failed to create Quality agent: {e!s}")
         raise
 
 
 def create_analyst_team(
-    kernel: Optional[Kernel] = None,
-    synapse_endpoint: Optional[str] = None,
-    adx_cluster_uri: Optional[str] = None,
-    storage_account_url: Optional[str] = None,
-    purview_endpoint: Optional[str] = None,
-    custom_agents: Optional[List[ChatCompletionAgent]] = None
+    kernel: Kernel | None = None,
+    synapse_endpoint: str | None = None,
+    adx_cluster_uri: str | None = None,
+    storage_account_url: str | None = None,
+    purview_endpoint: str | None = None,
+    custom_agents: list[ChatCompletionAgent] | None = None
 ) -> GroupChatOrchestration:
     """
     Create a team of analyst agents with group chat orchestration.
@@ -318,7 +318,7 @@ def create_analyst_team(
         return orchestration
 
     except Exception as e:
-        logger.error(f"Failed to create analyst team: {str(e)}")
+        logger.error(f"Failed to create analyst team: {e!s}")
         raise
 
 
@@ -326,7 +326,7 @@ async def run_analyst_consultation(
     orchestration: GroupChatOrchestration,
     question: str,
     max_rounds: int = 10
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Run a consultation session with the analyst team.
 
@@ -363,11 +363,11 @@ async def run_analyst_consultation(
         return conversation
 
     except Exception as e:
-        logger.error(f"Analyst consultation failed: {str(e)}")
+        logger.error(f"Analyst consultation failed: {e!s}")
         raise
 
 
-def get_agent_capabilities(agent: ChatCompletionAgent) -> Dict[str, Any]:
+def get_agent_capabilities(agent: ChatCompletionAgent) -> dict[str, Any]:
     """
     Get information about an agent's capabilities and available functions.
 
@@ -417,5 +417,5 @@ def get_agent_capabilities(agent: ChatCompletionAgent) -> Dict[str, Any]:
         return capabilities
 
     except Exception as e:
-        logger.error(f"Failed to get agent capabilities: {str(e)}")
+        logger.error(f"Failed to get agent capabilities: {e!s}")
         return {"error": str(e)}

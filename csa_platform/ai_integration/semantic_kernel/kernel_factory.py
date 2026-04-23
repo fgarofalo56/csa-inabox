@@ -5,13 +5,12 @@ This module provides factory methods for creating properly configured Semantic K
 instances with Azure OpenAI services for the CSA Analytics Platform.
 """
 
-import os
 import logging
-from typing import Optional
+import os
 
+from azure.identity import DefaultAzureCredential
 from semantic_kernel import Kernel
 from semantic_kernel.connectors.ai.open_ai import AzureChatCompletion, AzureTextEmbedding
-from azure.identity import DefaultAzureCredential
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +21,7 @@ class CSAKernelFactory:
     @staticmethod
     def create_kernel(
         deployment_name: str = "gpt-5-4",
-        endpoint: Optional[str] = None,
+        endpoint: str | None = None,
         embedding_deployment: str = "text-embedding-3-large",
         api_version: str = "2024-02-01",
     ) -> Kernel:
@@ -87,7 +86,7 @@ class CSAKernelFactory:
             return kernel
 
         except Exception as e:
-            logger.error(f"Failed to create kernel: {str(e)}")
+            logger.error(f"Failed to create kernel: {e!s}")
             raise
 
     @staticmethod
@@ -155,6 +154,6 @@ class CSAKernelFactory:
             else:
                 validation["warnings"].append("Azure credentials may not be properly configured")
         except Exception as e:
-            validation["warnings"].append(f"Azure credential check failed: {str(e)}")
+            validation["warnings"].append(f"Azure credential check failed: {e!s}")
 
         return validation

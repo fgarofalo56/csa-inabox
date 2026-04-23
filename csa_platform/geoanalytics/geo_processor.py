@@ -14,18 +14,15 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 from urllib.parse import urlparse
 
 import geopandas as gpd
 import h3
-import numpy as np
 import pandas as pd
 from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobServiceClient
-from pyproj import CRS, Transformer
 from shapely.geometry import Point, Polygon
-from shapely.ops import transform
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +34,7 @@ class GeoProcessingConfig:
     default_crs: str = "EPSG:4326"  # WGS84
     h3_resolution: int = 8  # Default H3 resolution
     buffer_distance_meters: float = 1000.0
-    azure_storage_account: Optional[str] = None
+    azure_storage_account: str | None = None
     azure_container: str = "geoanalytics"
 
 
@@ -64,7 +61,7 @@ class H3Indexer:
         """
         return h3.latlng_to_cell(lat, lng, self.resolution)
 
-    def geometry_to_h3(self, geometry: Any) -> List[str]:
+    def geometry_to_h3(self, geometry: Any) -> list[str]:
         """Convert geometry to H3 indices that intersect it.
 
         Args:
@@ -78,7 +75,7 @@ class H3Indexer:
             if geometry.geom_type == 'Point':
                 lat, lng = geometry.y, geometry.x
                 return [self.point_to_h3(lat, lng)]
-            elif hasattr(geometry, 'exterior'):
+            if hasattr(geometry, 'exterior'):
                 # Convert to GeoJSON-like format for h3.polyfill
                 coords = list(geometry.exterior.coords)
                 geojson = {
@@ -165,7 +162,7 @@ class SpatialJoiner:
 class GeoProcessor:
     """Main geospatial processing class with data loading, transformation, and analysis capabilities."""
 
-    def __init__(self, config: Optional[GeoProcessingConfig] = None):
+    def __init__(self, config: GeoProcessingConfig | None = None):
         """Initialize GeoProcessor with configuration.
 
         Args:
@@ -173,7 +170,7 @@ class GeoProcessor:
         """
         self.config = config or GeoProcessingConfig()
         self.h3_indexer = H3Indexer(self.config.h3_resolution)
-        self._blob_client: Optional[BlobServiceClient] = None
+        self._blob_client: BlobServiceClient | None = None
 
     def _get_blob_client(self) -> BlobServiceClient:
         """Get Azure Blob Storage client with managed identity."""
@@ -189,8 +186,8 @@ class GeoProcessor:
 
     def load_geodata(
         self,
-        path: Union[str, Path],
-        file_format: Optional[str] = None,
+        path: str | Path,
+        file_format: str | None = None,
         **kwargs
     ) -> gpd.GeoDataFrame:
         """Load geospatial data from various sources.
@@ -218,9 +215,7 @@ class GeoProcessor:
         try:
             if file_format == "geoparquet":
                 gdf = gpd.read_parquet(path_str, **kwargs)
-            elif file_format == "geojson":
-                gdf = gpd.read_file(path_str, **kwargs)
-            elif file_format == "shapefile":
+            elif file_format == "geojson" or file_format == "shapefile":
                 gdf = gpd.read_file(path_str, **kwargs)
             elif file_format == "csv":
                 # Assume CSV has lat/lng columns
@@ -242,7 +237,7 @@ class GeoProcessor:
             logger.error(f"Failed to load geodata from {path_str}: {e}")
             raise
 
-    def _load_from_azure(self, abfss_path: str, file_format: Optional[str], **kwargs) -> gpd.GeoDataFrame:
+    def _load_from_azure(self, abfss_path: str, file_format: str | None, **kwargs) -> gpd.GeoDataFrame:
         """Load geodata from Azure Data Lake using abfss:// paths."""
         # Parse abfss://container@account/path
         parsed = urlparse(abfss_path)
@@ -251,7 +246,7 @@ class GeoProcessor:
 
         if '@' in container_and_account:
             container, account_with_suffix = container_and_account.split('@')
-            account = account_with_suffix.split('.')[0]
+            _account = account_with_suffix.split('.')[0]
         else:
             raise ValueError(f"Invalid abfss path format: {abfss_path}")
 
@@ -277,14 +272,13 @@ class GeoProcessor:
         path_lower = path.lower()
         if path_lower.endswith(('.geojson', '.json')):
             return "geojson"
-        elif path_lower.endswith('.parquet'):
+        if path_lower.endswith('.parquet'):
             return "geoparquet"
-        elif path_lower.endswith('.shp'):
+        if path_lower.endswith('.shp'):
             return "shapefile"
-        elif path_lower.endswith('.csv'):
+        if path_lower.endswith('.csv'):
             return "csv"
-        else:
-            return "auto"
+        return "auto"
 
     def _csv_to_geodataframe(self, df: pd.DataFrame) -> gpd.GeoDataFrame:
         """Convert CSV with lat/lng columns to GeoDataFrame."""
@@ -314,7 +308,7 @@ class GeoProcessor:
     def to_geoparquet(
         self,
         gdf: gpd.GeoDataFrame,
-        path: Union[str, Path],
+        path: str | Path,
         **kwargs
     ) -> None:
         """Save GeoDataFrame as GeoParquet.
@@ -327,7 +321,7 @@ class GeoProcessor:
         logger.info(f"Saving {len(gdf)} features to {path}")
         gdf.to_parquet(str(path), **kwargs)
 
-    def transform_crs(self, gdf: gpd.GeoDataFrame, target_crs: Union[str, int]) -> gpd.GeoDataFrame:
+    def transform_crs(self, gdf: gpd.GeoDataFrame, target_crs: str | int) -> gpd.GeoDataFrame:
         """Transform GeoDataFrame to different coordinate reference system.
 
         Args:
@@ -346,7 +340,7 @@ class GeoProcessor:
     def buffer_geometries(
         self,
         gdf: gpd.GeoDataFrame,
-        distance: Optional[float] = None,
+        distance: float | None = None,
         units: str = "meters"
     ) -> gpd.GeoDataFrame:
         """Create buffer around geometries.
@@ -460,7 +454,7 @@ class GeoProcessor:
     def create_h3_grid(
         self,
         gdf: gpd.GeoDataFrame,
-        resolution: Optional[int] = None
+        resolution: int | None = None
     ) -> gpd.GeoDataFrame:
         """Create H3 hexagonal grid covering the GeoDataFrame extent.
 

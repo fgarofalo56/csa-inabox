@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """csa_platform.streaming.speed_layer — Real-time processing layer for Lambda architecture.
 
 This module implements the speed layer (hot path) of the Lambda architecture,
@@ -13,16 +12,16 @@ import json
 import logging
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Set, Union
+from datetime import datetime, timedelta, timezone
+from typing import Any
 
-from azure.cosmos import CosmosClient, PartitionKey
+from azure.cosmos import PartitionKey
 from azure.cosmos.aio import CosmosClient as AsyncCosmosClient
+from azure.identity.aio import DefaultAzureCredential
 from azure.kusto.data import KustoClient, KustoConnectionStringBuilder
 from azure.kusto.data.exceptions import KustoServiceError
-from azure.identity.aio import DefaultAzureCredential
 
-from csa_platform.streaming.event_processor import EventCallback, EventSchema
+from csa_platform.streaming.event_processor import EventSchema
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +31,7 @@ class WindowConfig:
     """Configuration for windowing operations."""
     window_type: str  # "sliding" or "tumbling"
     window_size: timedelta
-    slide_interval: Optional[timedelta] = None  # For sliding windows
+    slide_interval: timedelta | None = None  # For sliding windows
     grace_period: timedelta = timedelta(minutes=1)
     max_out_of_order: timedelta = timedelta(minutes=5)
 
@@ -41,13 +40,13 @@ class WindowConfig:
 class SpeedLayerConfig:
     """Configuration for the SpeedLayer."""
     # Cosmos DB settings
-    cosmos_endpoint: Optional[str] = None
+    cosmos_endpoint: str | None = None
     cosmos_database_name: str = "streaming"
     cosmos_container_name: str = "realtime"
     cosmos_partition_key: str = "/event_type"
 
     # Azure Data Explorer settings
-    adx_cluster_url: Optional[str] = None
+    adx_cluster_url: str | None = None
     adx_database_name: str = "streaming"
     adx_table_name: str = "realtime_events"
 
@@ -88,11 +87,11 @@ class AggregationResult:
     window_end: datetime
     window_type: str
     event_count: int
-    event_types: Dict[str, int]
-    sources: Dict[str, int]
+    event_types: dict[str, int]
+    sources: dict[str, int]
     min_timestamp: datetime
     max_timestamp: datetime
-    aggregations: Dict[str, Any]
+    aggregations: dict[str, Any]
 
 
 class TimeWindow:
@@ -102,8 +101,8 @@ class TimeWindow:
         self.start = start
         self.end = end
         self.window_type = window_type
-        self.events: List[EventSchema] = []
-        self.last_update = datetime.utcnow()
+        self.events: list[EventSchema] = []
+        self.last_update = datetime.now(tz=timezone.utc)
 
     def add_event(self, event: EventSchema) -> bool:
         """Add event to window if it falls within the time range.
@@ -113,7 +112,7 @@ class TimeWindow:
         """
         if self.start <= event.timestamp < self.end:
             self.events.append(event)
-            self.last_update = datetime.utcnow()
+            self.last_update = datetime.now(tz=timezone.utc)
             return True
         return False
 
@@ -132,9 +131,9 @@ class TimeWindow:
                 aggregations={}
             )
 
-        event_types: Dict[str, int] = defaultdict(int)
-        sources: Dict[str, int] = defaultdict(int)
-        numeric_values: Dict[str, List[float]] = defaultdict(list)
+        event_types: dict[str, int] = defaultdict(int)
+        sources: dict[str, int] = defaultdict(int)
+        numeric_values: dict[str, list[float]] = defaultdict(list)
 
         for event in self.events:
             event_types[event.event_type] += 1
@@ -186,12 +185,12 @@ class SpeedLayer:
             config: Configuration for the speed layer
         """
         self.config = config
-        self._cosmos_client: Optional[AsyncCosmosClient] = None
-        self._kusto_client: Optional[KustoClient] = None
-        self._sliding_windows: Dict[str, TimeWindow] = {}
-        self._tumbling_windows: Dict[str, TimeWindow] = {}
+        self._cosmos_client: AsyncCosmosClient | None = None
+        self._kusto_client: KustoClient | None = None
+        self._sliding_windows: dict[str, TimeWindow] = {}
+        self._tumbling_windows: dict[str, TimeWindow] = {}
         self._event_buffer: deque = deque(maxlen=config.max_memory_events)
-        self._last_flush = datetime.utcnow()
+        self._last_flush = datetime.now(tz=timezone.utc)
         self._running = False
 
     async def initialize(self) -> None:
@@ -246,7 +245,7 @@ class SpeedLayer:
             return
 
         # Define table schema
-        create_table_command = f"""
+        create_table_command = """
         .create table ['iot_events'] (
             id: string,
             timestamp: datetime,
@@ -271,15 +270,15 @@ class SpeedLayer:
         """Generate a unique key for a time window."""
         return f"{window_type}_{event.event_type}_{window_start.isoformat()}"
 
-    def _create_sliding_windows(self, event: EventSchema) -> List[TimeWindow]:
+    def _create_sliding_windows(self, event: EventSchema) -> list[TimeWindow]:
         """Create sliding windows for an event."""
         windows = []
-        current_time = datetime.utcnow()
+        current_time = datetime.now(tz=timezone.utc)
         window_config = self.config.sliding_window
 
         # Calculate how many windows this event should be in
         slide_interval = window_config.slide_interval or window_config.window_size
-        window_start = event.timestamp - (event.timestamp - datetime.min) % slide_interval
+        window_start = event.timestamp - (event.timestamp - datetime.min.replace(tzinfo=timezone.utc)) % slide_interval
 
         # Create overlapping windows
         for i in range(int(window_config.window_size / slide_interval)):
@@ -302,7 +301,7 @@ class SpeedLayer:
         window_config = self.config.tumbling_window
 
         # Calculate tumbling window boundaries
-        window_start = event.timestamp - (event.timestamp - datetime.min) % window_config.window_size
+        window_start = event.timestamp - (event.timestamp - datetime.min.replace(tzinfo=timezone.utc)) % window_config.window_size
         window_end = window_start + window_config.window_size
 
         window_key = self._get_window_key(event, window_start, "tumbling")
@@ -314,7 +313,7 @@ class SpeedLayer:
 
     def _cleanup_old_windows(self) -> None:
         """Remove windows that are beyond the grace period."""
-        current_time = datetime.utcnow()
+        current_time = datetime.now(tz=timezone.utc)
 
         # Cleanup sliding windows
         expired_sliding = [
@@ -335,7 +334,7 @@ class SpeedLayer:
         if expired_sliding or expired_tumbling:
             logger.debug(f"Cleaned up {len(expired_sliding)} sliding and {len(expired_tumbling)} tumbling windows")
 
-    async def process_realtime(self, events: List[EventSchema]) -> None:
+    async def process_realtime(self, events: list[EventSchema]) -> None:
         """Process events in real-time through the speed layer.
 
         Args:
@@ -363,17 +362,17 @@ class SpeedLayer:
         # Write to hot storage if buffer is full or time elapsed
         should_flush = (
             len(self._event_buffer) >= self.config.batch_size or
-            datetime.utcnow() - self._last_flush >= self.config.flush_interval
+            datetime.now(tz=timezone.utc) - self._last_flush >= self.config.flush_interval
         )
 
         if should_flush:
             await self.write_hot_store(list(self._event_buffer))
             self._event_buffer.clear()
-            self._last_flush = datetime.utcnow()
+            self._last_flush = datetime.now(tz=timezone.utc)
 
         logger.debug(f"Processed {len(events)} events through speed layer")
 
-    async def aggregate_window(self, window_type: str = "both") -> List[AggregationResult]:
+    async def aggregate_window(self, window_type: str = "both") -> list[AggregationResult]:
         """Compute aggregations for current windows.
 
         Args:
@@ -396,7 +395,7 @@ class SpeedLayer:
 
         return results
 
-    async def write_hot_store(self, events: List[EventSchema]) -> None:
+    async def write_hot_store(self, events: list[EventSchema]) -> None:
         """Write events to hot storage systems (Cosmos DB and Azure Data Explorer).
 
         Args:
@@ -413,7 +412,7 @@ class SpeedLayer:
         if self._kusto_client:
             await self._write_to_adx(events)
 
-    async def _write_to_cosmos(self, events: List[EventSchema]) -> None:
+    async def _write_to_cosmos(self, events: list[EventSchema]) -> None:
         """Write events to Cosmos DB."""
         try:
             database = self._cosmos_client.get_database_client(self.config.cosmos_database_name)
@@ -428,7 +427,7 @@ class SpeedLayer:
                     "event_type": event.event_type,
                     "source": event.source,
                     "payload": event.payload,
-                    "processed_at": datetime.utcnow().isoformat(),
+                    "processed_at": datetime.now(tz=timezone.utc).isoformat(),
                     "_ts": int(event.timestamp.timestamp())
                 }
                 documents.append(doc)
@@ -442,7 +441,7 @@ class SpeedLayer:
         except Exception as e:
             logger.error(f"Failed to write to Cosmos DB: {e}", exc_info=True)
 
-    async def _write_to_adx(self, events: List[EventSchema]) -> None:
+    async def _write_to_adx(self, events: list[EventSchema]) -> None:
         """Write events to Azure Data Explorer."""
         try:
             # Convert events to ADX ingest format
@@ -457,7 +456,7 @@ class SpeedLayer:
                     None,  # window_start (null for raw events)
                     None,  # window_end (null for raw events)
                     "raw",  # window_type
-                    datetime.utcnow()
+                    datetime.now(tz=timezone.utc)
                 ]
                 data_rows.append(row)
 
@@ -491,7 +490,7 @@ class SpeedLayerCallback:
     def __init__(self, speed_layer: SpeedLayer):
         self.speed_layer = speed_layer
 
-    async def __call__(self, events: List[EventSchema]) -> None:
+    async def __call__(self, events: list[EventSchema]) -> None:
         """Process events through the speed layer."""
         await self.speed_layer.process_realtime(events)
 
@@ -515,14 +514,14 @@ if __name__ == "__main__":
         sample_events = [
             EventSchema(
                 id="test-1",
-                timestamp=datetime.utcnow(),
+                timestamp=datetime.now(tz=timezone.utc),
                 event_type="temperature",
                 source="sensor-01",
                 payload={"value": 23.5, "unit": "C", "location": "office"}
             ),
             EventSchema(
                 id="test-2",
-                timestamp=datetime.utcnow(),
+                timestamp=datetime.now(tz=timezone.utc),
                 event_type="temperature",
                 source="sensor-02",
                 payload={"value": 25.1, "unit": "C", "location": "warehouse"}

@@ -5,30 +5,29 @@ This module provides a memory store implementation using Azure AI Search
 for storing and retrieving conversation history, facts, and semantic memories.
 """
 
-import logging
 import json
+import logging
 import uuid
-from typing import Dict, List, Optional, Any, AsyncIterator
-from datetime import datetime
+from datetime import datetime, timezone
+from typing import Any
 
+from azure.core.credentials import AzureKeyCredential
+from azure.identity import DefaultAzureCredential
 from azure.search.documents import SearchClient
 from azure.search.documents.indexes import SearchIndexClient
 from azure.search.documents.indexes.models import (
-    SearchIndex,
+    HnswAlgorithmConfiguration,
+    SearchableField,
     SearchField,
     SearchFieldDataType,
+    SearchIndex,
     SimpleField,
-    SearchableField,
     VectorSearch,
+    VectorSearchAlgorithmKind,
     VectorSearchProfile,
-    HnswAlgorithmConfiguration,
-    VectorSearchAlgorithmKind
 )
 from azure.search.documents.models import VectorizedQuery
-from azure.identity import DefaultAzureCredential
-from azure.core.credentials import AzureKeyCredential
-
-from semantic_kernel.memory import MemoryStore, MemoryRecord
+from semantic_kernel.memory import MemoryRecord, MemoryStore
 from semantic_kernel.utils.experimental_decorator import experimental_class
 
 logger = logging.getLogger(__name__)
@@ -41,8 +40,8 @@ class AISearchMemoryStore(MemoryStore):
     def __init__(
         self,
         search_endpoint: str,
-        api_key: Optional[str] = None,
-        credential: Optional[DefaultAzureCredential] = None,
+        api_key: str | None = None,
+        credential: DefaultAzureCredential | None = None,
         index_name: str = "sk-memory",
         vector_dimensions: int = 1536
     ):
@@ -182,7 +181,7 @@ class AISearchMemoryStore(MemoryStore):
             logger.info(f"Successfully created index: {self.index_name}")
 
         except Exception as e:
-            logger.error(f"Failed to create/verify index: {str(e)}")
+            logger.error(f"Failed to create/verify index: {e!s}")
             raise
 
     async def create_collection_async(self, collection_name: str) -> None:
@@ -221,7 +220,7 @@ class AISearchMemoryStore(MemoryStore):
                 logger.info(f"Deleted {len(documents_to_delete)} documents from collection '{collection_name}'")
 
         except Exception as e:
-            logger.error(f"Failed to delete collection '{collection_name}': {str(e)}")
+            logger.error(f"Failed to delete collection '{collection_name}': {e!s}")
             raise
 
     async def does_collection_exist_async(self, collection_name: str) -> bool:
@@ -248,10 +247,10 @@ class AISearchMemoryStore(MemoryStore):
             return False
 
         except Exception as e:
-            logger.error(f"Failed to check collection existence '{collection_name}': {str(e)}")
+            logger.error(f"Failed to check collection existence '{collection_name}': {e!s}")
             return False
 
-    async def get_collections_async(self) -> List[str]:
+    async def get_collections_async(self) -> list[str]:
         """
         Get all collection names.
 
@@ -276,7 +275,7 @@ class AISearchMemoryStore(MemoryStore):
             return collections
 
         except Exception as e:
-            logger.error(f"Failed to get collections: {str(e)}")
+            logger.error(f"Failed to get collections: {e!s}")
             return []
 
     async def upsert_async(self, collection_name: str, record: MemoryRecord) -> str:
@@ -301,7 +300,7 @@ class AISearchMemoryStore(MemoryStore):
                 "text": record._text or "",
                 "description": record._description or "",
                 "collection": collection_name,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(tz=timezone.utc).isoformat(),
                 "metadata": json.dumps(record._additional_metadata) if record._additional_metadata else "{}",
                 "embedding": record._embedding.tolist() if record._embedding is not None else None
             }
@@ -313,16 +312,15 @@ class AISearchMemoryStore(MemoryStore):
             if result and len(result) > 0 and result[0].succeeded:
                 logger.info(f"Successfully upserted record: {record_id}")
                 return record_id
-            else:
-                error_msg = f"Failed to upsert record: {result[0].error_message if result else 'Unknown error'}"
-                logger.error(error_msg)
-                raise Exception(error_msg)
+            error_msg = f"Failed to upsert record: {result[0].error_message if result else 'Unknown error'}"
+            logger.error(error_msg)
+            raise Exception(error_msg)
 
         except Exception as e:
-            logger.error(f"Failed to upsert record: {str(e)}")
+            logger.error(f"Failed to upsert record: {e!s}")
             raise
 
-    async def get_async(self, collection_name: str, key: str) -> Optional[MemoryRecord]:
+    async def get_async(self, collection_name: str, key: str) -> MemoryRecord | None:
         """
         Get a memory record by ID.
 
@@ -339,16 +337,15 @@ class AISearchMemoryStore(MemoryStore):
 
             if result and result.get('collection') == collection_name:
                 return self._convert_to_memory_record(result)
-            else:
-                return None
+            return None
 
         except Exception as e:
             if "not found" in str(e).lower():
                 return None
-            logger.error(f"Failed to get record '{key}': {str(e)}")
+            logger.error(f"Failed to get record '{key}': {e!s}")
             raise
 
-    async def remove_async(self, collection_name: str, key: str) -> None:
+    async def remove_async(self, collection_name: str, key: str) -> None:  # noqa: ARG002
         """
         Remove a memory record by ID.
 
@@ -367,10 +364,10 @@ class AISearchMemoryStore(MemoryStore):
                 logger.error(error_msg)
 
         except Exception as e:
-            logger.error(f"Failed to remove record '{key}': {str(e)}")
+            logger.error(f"Failed to remove record '{key}': {e!s}")
             raise
 
-    async def get_batch_async(self, collection_name: str, keys: List[str]) -> List[MemoryRecord]:
+    async def get_batch_async(self, collection_name: str, keys: list[str]) -> list[MemoryRecord]:
         """
         Get multiple memory records by IDs.
 
@@ -403,17 +400,17 @@ class AISearchMemoryStore(MemoryStore):
             return records
 
         except Exception as e:
-            logger.error(f"Failed to get batch records: {str(e)}")
+            logger.error(f"Failed to get batch records: {e!s}")
             raise
 
     async def get_nearest_matches_async(
         self,
         collection_name: str,
-        embedding: List[float],
+        embedding: list[float],
         limit: int,
         min_relevance_score: float = 0.0,
         with_embeddings: bool = False
-    ) -> List[tuple]:
+    ) -> list[tuple]:
         """
         Get nearest matches using vector search.
 
@@ -458,16 +455,16 @@ class AISearchMemoryStore(MemoryStore):
             return matches
 
         except Exception as e:
-            logger.error(f"Failed to get nearest matches: {str(e)}")
+            logger.error(f"Failed to get nearest matches: {e!s}")
             raise
 
     async def get_nearest_match_async(
         self,
         collection_name: str,
-        embedding: List[float],
+        embedding: list[float],
         min_relevance_score: float = 0.0,
         with_embedding: bool = False
-    ) -> Optional[tuple]:
+    ) -> tuple | None:
         """
         Get the nearest match using vector search.
 
@@ -492,10 +489,10 @@ class AISearchMemoryStore(MemoryStore):
             return matches[0] if matches else None
 
         except Exception as e:
-            logger.error(f"Failed to get nearest match: {str(e)}")
+            logger.error(f"Failed to get nearest match: {e!s}")
             raise
 
-    def _convert_to_memory_record(self, search_result: Dict[str, Any], include_embedding: bool = False) -> Optional[MemoryRecord]:
+    def _convert_to_memory_record(self, search_result: dict[str, Any], include_embedding: bool = False) -> MemoryRecord | None:
         """
         Convert AI Search result to MemoryRecord.
 
@@ -522,7 +519,7 @@ class AISearchMemoryStore(MemoryStore):
                 embedding = search_result['embedding']
 
             # Create MemoryRecord
-            record = MemoryRecord(
+            return MemoryRecord(
                 id=search_result.get('id', ''),
                 text=search_result.get('text', ''),
                 description=search_result.get('description', ''),
@@ -531,10 +528,8 @@ class AISearchMemoryStore(MemoryStore):
                 timestamp=search_result.get('timestamp')
             )
 
-            return record
-
         except Exception as e:
-            logger.error(f"Failed to convert search result to MemoryRecord: {str(e)}")
+            logger.error(f"Failed to convert search result to MemoryRecord: {e!s}")
             return None
 
     async def search_async(
@@ -543,7 +538,7 @@ class AISearchMemoryStore(MemoryStore):
         query: str,
         limit: int = 10,
         min_relevance_score: float = 0.0
-    ) -> List[tuple]:
+    ) -> list[tuple]:
         """
         Perform text search in the collection.
 
@@ -578,5 +573,5 @@ class AISearchMemoryStore(MemoryStore):
             return matches
 
         except Exception as e:
-            logger.error(f"Failed to search: {str(e)}")
+            logger.error(f"Failed to search: {e!s}")
             raise

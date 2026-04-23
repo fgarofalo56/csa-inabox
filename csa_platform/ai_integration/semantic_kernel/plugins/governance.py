@@ -5,16 +5,14 @@ This plugin provides semantic kernel functions for data governance operations
 including Purview catalog search, glossary management, and data contract validation.
 """
 
-import logging
 import json
-import yaml
-from typing import Optional, List, Dict, Any
+import logging
 
-from semantic_kernel.functions import kernel_function
+import yaml
 from azure.identity import DefaultAzureCredential
 from azure.purview.catalog import PurviewCatalogClient
 from azure.purview.scanning import PurviewScanningClient
-import requests
+from semantic_kernel.functions import kernel_function
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +22,8 @@ class GovernancePlugin:
 
     def __init__(
         self,
-        purview_endpoint: Optional[str] = None,
-        credential: Optional[DefaultAzureCredential] = None
+        purview_endpoint: str | None = None,
+        credential: DefaultAzureCredential | None = None
     ):
         """
         Initialize the Governance Plugin.
@@ -36,11 +34,11 @@ class GovernancePlugin:
         """
         self.purview_endpoint = purview_endpoint
         self.credential = credential or DefaultAzureCredential()
-        self._catalog_client: Optional[PurviewCatalogClient] = None
-        self._scanning_client: Optional[PurviewScanningClient] = None
+        self._catalog_client: PurviewCatalogClient | None = None
+        self._scanning_client: PurviewScanningClient | None = None
 
     @property
-    def catalog_client(self) -> Optional[PurviewCatalogClient]:
+    def catalog_client(self) -> PurviewCatalogClient | None:
         """Get or create Purview catalog client."""
         if self._catalog_client is None and self.purview_endpoint:
             try:
@@ -49,12 +47,12 @@ class GovernancePlugin:
                     credential=self.credential
                 )
             except Exception as e:
-                logger.error(f"Failed to create Purview catalog client: {str(e)}")
+                logger.error(f"Failed to create Purview catalog client: {e!s}")
                 return None
         return self._catalog_client
 
     @property
-    def scanning_client(self) -> Optional[PurviewScanningClient]:
+    def scanning_client(self) -> PurviewScanningClient | None:
         """Get or create Purview scanning client."""
         if self._scanning_client is None and self.purview_endpoint:
             try:
@@ -63,7 +61,7 @@ class GovernancePlugin:
                     credential=self.credential
                 )
             except Exception as e:
-                logger.error(f"Failed to create Purview scanning client: {str(e)}")
+                logger.error(f"Failed to create Purview scanning client: {e!s}")
                 return None
         return self._scanning_client
 
@@ -123,7 +121,7 @@ class GovernancePlugin:
             return json.dumps(result, indent=2)
 
         except Exception as e:
-            error_msg = f"Catalog search failed: {str(e)}"
+            error_msg = f"Catalog search failed: {e!s}"
             logger.error(error_msg)
             return f"Error: {error_msg}"
 
@@ -151,7 +149,7 @@ class GovernancePlugin:
             glossary_response = self.catalog_client.glossary.list_terms()
 
             if not glossary_response:
-                return f"No glossary terms found or glossary not accessible."
+                return "No glossary terms found or glossary not accessible."
 
             matching_terms = []
             for glossary_term in glossary_response:
@@ -178,7 +176,7 @@ class GovernancePlugin:
             return json.dumps(result, indent=2)
 
         except Exception as e:
-            error_msg = f"Glossary term lookup failed: {str(e)}"
+            error_msg = f"Glossary term lookup failed: {e!s}"
             logger.error(error_msg)
             return f"Error: {error_msg}"
 
@@ -208,7 +206,7 @@ class GovernancePlugin:
                     type_name="DataSet",  # Generic type, may need adjustment
                     attr_qualified_name=asset
                 )
-            except:
+            except Exception:
                 # Try getting by GUID if qualified name fails
                 asset_response = self.catalog_client.entity.get_by_guid(asset)
 
@@ -241,7 +239,7 @@ class GovernancePlugin:
             return json.dumps(result, indent=2)
 
         except Exception as e:
-            error_msg = f"Classification check failed: {str(e)}"
+            error_msg = f"Classification check failed: {e!s}"
             logger.error(error_msg)
             return f"Error: {error_msg}"
 
@@ -266,7 +264,7 @@ class GovernancePlugin:
             try:
                 contract = yaml.safe_load(contract_yaml)
             except yaml.YAMLError as e:
-                return f"Error: Invalid YAML format: {str(e)}"
+                return f"Error: Invalid YAML format: {e!s}"
 
             validation_results = {
                 "valid": True,
@@ -342,7 +340,7 @@ class GovernancePlugin:
             return json.dumps(validation_results, indent=2)
 
         except Exception as e:
-            error_msg = f"Contract validation failed: {str(e)}"
+            error_msg = f"Contract validation failed: {e!s}"
             logger.error(error_msg)
             return f"Error: {error_msg}"
 
@@ -374,7 +372,7 @@ class GovernancePlugin:
                     attr_qualified_name=asset
                 )
                 asset_guid = asset_response['entity']['guid']
-            except:
+            except Exception:
                 # Try using the asset parameter as GUID directly
                 asset_guid = asset
 
@@ -425,6 +423,6 @@ class GovernancePlugin:
             return json.dumps(result, indent=2)
 
         except Exception as e:
-            error_msg = f"Lineage lookup failed: {str(e)}"
+            error_msg = f"Lineage lookup failed: {e!s}"
             logger.error(error_msg)
             return f"Error: {error_msg}"

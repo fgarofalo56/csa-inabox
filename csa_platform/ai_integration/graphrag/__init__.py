@@ -5,13 +5,13 @@ retrieval using Microsoft GraphRAG + Azure Cosmos DB Gremlin API.
 """
 
 from csa_platform.ai_integration.graphrag.document_loader import DocumentLoader
-from csa_platform.ai_integration.graphrag.index_builder import GraphRAGIndexBuilder
 from csa_platform.ai_integration.graphrag.graph_store import CosmosGremlinStore
+from csa_platform.ai_integration.graphrag.index_builder import GraphRAGIndexBuilder
 from csa_platform.ai_integration.graphrag.search import GraphRAGSearch
 
 __all__ = [
+    "CosmosGremlinStore",
     "DocumentLoader",
     "GraphRAGIndexBuilder",
-    "CosmosGremlinStore",
     "GraphRAGSearch",
 ]

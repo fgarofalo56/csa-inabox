@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """CSA Platform MCP Server implementation.
 
 Provides resources, tools, and prompts for the CSA-in-a-Box platform
@@ -31,11 +30,11 @@ def create_server() -> Any:
     """
     try:
         from mcp.server import Server
-        from mcp.types import Resource, Tool, TextContent, Prompt, PromptMessage
-    except ImportError:
+        from mcp.types import Prompt, PromptMessage, Resource, TextContent, Tool
+    except ImportError as err:
         raise ImportError(
             "MCP SDK required. Install: pip install mcp"
-        )
+        ) from err
 
     server = Server("csa-platform")
 
@@ -469,7 +468,7 @@ async def _tool_validate_contract(contract_yaml: str) -> dict[str, Any]:
 
 
 async def _tool_search_catalog(
-    query: str, filters: dict | None = None, limit: int = 10
+    query: str, filters: dict | None = None, limit: int = 10  # noqa: ARG001
 ) -> dict[str, Any]:
     """Search Purview catalog."""
     purview_endpoint = os.getenv("PURVIEW_ENDPOINT")
@@ -511,7 +510,7 @@ async def _tool_list_pipelines(
 # ─── Prompt Builders ───────────────────────────────────────────────
 
 def _prompt_analyze_data(args: dict[str, str]) -> list:
-    from mcp.types import TextContent, PromptMessage
+    from mcp.types import PromptMessage, TextContent
 
     dataset = args.get("dataset", "unknown")
     question = args.get("question", "Provide a summary analysis")
@@ -538,7 +537,7 @@ def _prompt_analyze_data(args: dict[str, str]) -> list:
 
 
 def _prompt_governance_review(args: dict[str, str]) -> list:
-    from mcp.types import TextContent, PromptMessage
+    from mcp.types import PromptMessage, TextContent
 
     product = args.get("product", "unknown")
 
@@ -564,7 +563,7 @@ def _prompt_governance_review(args: dict[str, str]) -> list:
 
 
 def _prompt_troubleshoot_pipeline(args: dict[str, str]) -> list:
-    from mcp.types import TextContent, PromptMessage
+    from mcp.types import PromptMessage, TextContent
 
     pipeline = args.get("pipeline", "unknown")
     error = args.get("error", "No error details provided")

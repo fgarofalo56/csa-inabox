@@ -5,15 +5,13 @@ This plugin provides semantic kernel functions for comprehensive Microsoft Purvi
 including asset search, detailed metadata retrieval, and data quality assessments.
 """
 
-import logging
 import json
-from typing import Optional, List, Dict, Any
+import logging
 
-from semantic_kernel.functions import kernel_function
 from azure.identity import DefaultAzureCredential
-from azure.purview.catalog import PurviewCatalogClient
 from azure.purview.account import PurviewAccountClient
-import requests
+from azure.purview.catalog import PurviewCatalogClient
+from semantic_kernel.functions import kernel_function
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +21,8 @@ class PurviewPlugin:
 
     def __init__(
         self,
-        purview_endpoint: Optional[str] = None,
-        credential: Optional[DefaultAzureCredential] = None
+        purview_endpoint: str | None = None,
+        credential: DefaultAzureCredential | None = None
     ):
         """
         Initialize the Purview Plugin.
@@ -35,11 +33,11 @@ class PurviewPlugin:
         """
         self.purview_endpoint = purview_endpoint
         self.credential = credential or DefaultAzureCredential()
-        self._catalog_client: Optional[PurviewCatalogClient] = None
-        self._account_client: Optional[PurviewAccountClient] = None
+        self._catalog_client: PurviewCatalogClient | None = None
+        self._account_client: PurviewAccountClient | None = None
 
     @property
-    def catalog_client(self) -> Optional[PurviewCatalogClient]:
+    def catalog_client(self) -> PurviewCatalogClient | None:
         """Get or create Purview catalog client."""
         if self._catalog_client is None and self.purview_endpoint:
             try:
@@ -48,12 +46,12 @@ class PurviewPlugin:
                     credential=self.credential
                 )
             except Exception as e:
-                logger.error(f"Failed to create Purview catalog client: {str(e)}")
+                logger.error(f"Failed to create Purview catalog client: {e!s}")
                 return None
         return self._catalog_client
 
     @property
-    def account_client(self) -> Optional[PurviewAccountClient]:
+    def account_client(self) -> PurviewAccountClient | None:
         """Get or create Purview account client."""
         if self._account_client is None and self.purview_endpoint:
             try:
@@ -62,7 +60,7 @@ class PurviewPlugin:
                     credential=self.credential
                 )
             except Exception as e:
-                logger.error(f"Failed to create Purview account client: {str(e)}")
+                logger.error(f"Failed to create Purview account client: {e!s}")
                 return None
         return self._account_client
 
@@ -133,7 +131,7 @@ class PurviewPlugin:
             return json.dumps(result, indent=2)
 
         except Exception as e:
-            error_msg = f"Asset search failed: {str(e)}"
+            error_msg = f"Asset search failed: {e!s}"
             logger.error(error_msg)
             return f"Error: {error_msg}"
 
@@ -163,7 +161,7 @@ class PurviewPlugin:
                     type_name="DataSet",  # Generic type, may need adjustment based on actual asset type
                     attr_qualified_name=qualified_name
                 )
-            except Exception as e:
+            except Exception:
                 # Try different common entity types
                 for entity_type in ["azure_sql_table", "adls_gen2_folder", "adls_gen2_file", "DataSet"]:
                     try:
@@ -172,7 +170,7 @@ class PurviewPlugin:
                             attr_qualified_name=qualified_name
                         )
                         break
-                    except:
+                    except Exception:
                         continue
                 else:
                     return f"Asset with qualified name '{qualified_name}' not found."
@@ -247,7 +245,7 @@ class PurviewPlugin:
             return json.dumps(result, indent=2)
 
         except Exception as e:
-            error_msg = f"Failed to get asset details: {str(e)}"
+            error_msg = f"Failed to get asset details: {e!s}"
             logger.error(error_msg)
             return f"Error: {error_msg}"
 
@@ -255,7 +253,7 @@ class PurviewPlugin:
         description="Browse glossary terms with optional parent filter",
         name="list_glossary_terms"
     )
-    def list_glossary_terms(self, parent: Optional[str] = None, limit: int = 50) -> str:
+    def list_glossary_terms(self, parent: str | None = None, limit: int = 50) -> str:
         """
         Browse glossary terms with optional parent filter.
 
@@ -318,7 +316,7 @@ class PurviewPlugin:
             return json.dumps(result, indent=2)
 
         except Exception as e:
-            error_msg = f"Failed to list glossary terms: {str(e)}"
+            error_msg = f"Failed to list glossary terms: {e!s}"
             logger.error(error_msg)
             return f"Error: {error_msg}"
 
@@ -463,7 +461,7 @@ class PurviewPlugin:
             return json.dumps(result, indent=2)
 
         except Exception as e:
-            error_msg = f"Failed to get quality score: {str(e)}"
+            error_msg = f"Failed to get quality score: {e!s}"
             logger.error(error_msg)
             return f"Error: {error_msg}"
 
@@ -471,20 +469,19 @@ class PurviewPlugin:
         """Convert quality score to letter grade."""
         if score >= 90:
             return "A"
-        elif score >= 80:
+        if score >= 80:
             return "B"
-        elif score >= 70:
+        if score >= 70:
             return "C"
-        elif score >= 60:
+        if score >= 60:
             return "D"
-        else:
-            return "F"
+        return "F"
 
     @kernel_function(
         description="Get collections and their contents",
         name="list_collections"
     )
-    def list_collections(self, collection_name: Optional[str] = None) -> str:
+    def list_collections(self, collection_name: str | None = None) -> str:
         """
         Get collections and their contents.
 
@@ -532,6 +529,6 @@ class PurviewPlugin:
             return json.dumps(result, indent=2)
 
         except Exception as e:
-            error_msg = f"Failed to list collections: {str(e)}"
+            error_msg = f"Failed to list collections: {e!s}"
             logger.error(error_msg)
             return f"Error: {error_msg}"

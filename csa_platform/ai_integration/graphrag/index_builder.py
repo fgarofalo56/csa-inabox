@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """GraphRAG index builder for CSA-in-a-Box.
 
 Orchestrates the Microsoft GraphRAG indexing pipeline to build a knowledge
@@ -7,7 +6,6 @@ graph from documents stored in Azure Blob Storage or local directories.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import subprocess
@@ -209,7 +207,7 @@ class GraphRAGIndexBuilder:
             logger.info("GraphRAG indexing completed successfully")
 
         except subprocess.TimeoutExpired:
-            raise RuntimeError("GraphRAG indexing timed out after 1 hour")
+            raise RuntimeError("GraphRAG indexing timed out after 1 hour") from None
 
         # Parse output statistics
         return self._parse_index_output(workspace)
@@ -224,12 +222,12 @@ class GraphRAGIndexBuilder:
         Preferred for programmatic use and better error handling.
         """
         try:
-            from graphrag.index.run import run_pipeline
             from graphrag.config.create_graphrag_config import create_graphrag_config
-        except ImportError:
+            from graphrag.index.run import run_pipeline
+        except ImportError as err:
             raise ImportError(
                 "graphrag package required. Install: pip install graphrag"
-            )
+            ) from err
 
         workspace = Path(workspace_dir)
         settings_path = workspace / "settings.yaml"

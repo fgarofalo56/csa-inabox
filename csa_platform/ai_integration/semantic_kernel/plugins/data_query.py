@@ -6,14 +6,13 @@ including SQL via Synapse Serverless and KQL via Azure Data Explorer.
 """
 
 import logging
-from typing import Optional, List, Dict, Any
 
-from semantic_kernel.functions import kernel_function
-from azure.identity import DefaultAzureCredential
-from azure.kusto.data import KustoClient, KustoConnectionStringBuilder, ClientRequestProperties
-from azure.kusto.data.exceptions import KustoServiceError
-import pyodbc
 import pandas as pd
+import pyodbc
+from azure.identity import DefaultAzureCredential
+from azure.kusto.data import ClientRequestProperties, KustoClient, KustoConnectionStringBuilder
+from azure.kusto.data.exceptions import KustoServiceError
+from semantic_kernel.functions import kernel_function
 
 logger = logging.getLogger(__name__)
 
@@ -23,9 +22,9 @@ class DataQueryPlugin:
 
     def __init__(
         self,
-        synapse_endpoint: Optional[str] = None,
-        adx_cluster_uri: Optional[str] = None,
-        credential: Optional[DefaultAzureCredential] = None
+        synapse_endpoint: str | None = None,
+        adx_cluster_uri: str | None = None,
+        credential: DefaultAzureCredential | None = None
     ):
         """
         Initialize the Data Query Plugin.
@@ -38,10 +37,10 @@ class DataQueryPlugin:
         self.synapse_endpoint = synapse_endpoint
         self.adx_cluster_uri = adx_cluster_uri
         self.credential = credential or DefaultAzureCredential()
-        self._kusto_client: Optional[KustoClient] = None
+        self._kusto_client: KustoClient | None = None
 
     @property
-    def kusto_client(self) -> Optional[KustoClient]:
+    def kusto_client(self) -> KustoClient | None:
         """Get or create Kusto client."""
         if self._kusto_client is None and self.adx_cluster_uri:
             try:
@@ -51,7 +50,7 @@ class DataQueryPlugin:
                 )
                 self._kusto_client = KustoClient(kcsb)
             except Exception as e:
-                logger.error(f"Failed to create Kusto client: {str(e)}")
+                logger.error(f"Failed to create Kusto client: {e!s}")
                 return None
         return self._kusto_client
 
@@ -112,7 +111,7 @@ class DataQueryPlugin:
                 return str(result)
 
         except Exception as e:
-            error_msg = f"SQL query execution failed: {str(e)}"
+            error_msg = f"SQL query execution failed: {e!s}"
             logger.error(error_msg)
             return f"Error: {error_msg}"
 
@@ -170,11 +169,11 @@ class DataQueryPlugin:
             return str(result)
 
         except KustoServiceError as e:
-            error_msg = f"KQL query execution failed: {str(e)}"
+            error_msg = f"KQL query execution failed: {e!s}"
             logger.error(error_msg)
             return f"Error: {error_msg}"
         except Exception as e:
-            error_msg = f"Unexpected error during KQL query: {str(e)}"
+            error_msg = f"Unexpected error during KQL query: {e!s}"
             logger.error(error_msg)
             return f"Error: {error_msg}"
 
@@ -209,18 +208,17 @@ class DataQueryPlugin:
                 """
                 return self.query_sql(query, database)
 
-            elif source_type.lower() == "kql":
+            if source_type.lower() == "kql":
                 if not self.kusto_client:
                     return "Error: Kusto client not configured"
 
                 query = ".show tables"
                 return self.query_kql(query, "", database)
 
-            else:
-                return f"Error: Unsupported source type: {source_type}"
+            return f"Error: Unsupported source type: {source_type}"
 
         except Exception as e:
-            error_msg = f"Failed to list tables: {str(e)}"
+            error_msg = f"Failed to list tables: {e!s}"
             logger.error(error_msg)
             return f"Error: {error_msg}"
 
@@ -268,18 +266,17 @@ class DataQueryPlugin:
                 """
                 return self.query_sql(query, database)
 
-            elif source_type.lower() == "kql":
+            if source_type.lower() == "kql":
                 if not self.kusto_client:
                     return "Error: Kusto client not configured"
 
                 query = f".show table {table} schema as json"
                 return self.query_kql(query, "", database)
 
-            else:
-                return f"Error: Unsupported source type: {source_type}"
+            return f"Error: Unsupported source type: {source_type}"
 
         except Exception as e:
-            error_msg = f"Failed to describe table {table}: {str(e)}"
+            error_msg = f"Failed to describe table {table}: {e!s}"
             logger.error(error_msg)
             return f"Error: {error_msg}"
 
@@ -305,14 +302,13 @@ class DataQueryPlugin:
                 query = f"SELECT TOP {rows} * FROM {table}"
                 return self.query_sql(query, database)
 
-            elif source_type.lower() == "kql":
+            if source_type.lower() == "kql":
                 query = f"{table} | take {rows}"
                 return self.query_kql(query, "", database)
 
-            else:
-                return f"Error: Unsupported source type: {source_type}"
+            return f"Error: Unsupported source type: {source_type}"
 
         except Exception as e:
-            error_msg = f"Failed to sample table {table}: {str(e)}"
+            error_msg = f"Failed to sample table {table}: {e!s}"
             logger.error(error_msg)
             return f"Error: {error_msg}"

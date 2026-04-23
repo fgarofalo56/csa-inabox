@@ -9,11 +9,11 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import yaml
-from pydantic import ValidationError, BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 
 @dataclass
@@ -125,7 +125,7 @@ def validate_contract(path: str) -> ValidationResult:
 
     # Load and parse YAML
     try:
-        with open(path, 'r', encoding='utf-8') as f:
+        with open(path, encoding='utf-8') as f:
             content = f.read()
 
         if not content.strip():
@@ -181,8 +181,8 @@ def validate_contract(path: str) -> ValidationResult:
     # Validate supported_until date is in the future
     if contract.sla.supported_until:
         try:
-            support_date = datetime.strptime(contract.sla.supported_until, '%Y-%m-%d')
-            if support_date.date() <= datetime.now().date():
+            support_date = datetime.strptime(contract.sla.supported_until, '%Y-%m-%d').replace(tzinfo=timezone.utc)
+            if support_date.date() <= datetime.now(tz=timezone.utc).date():
                 warnings.append("Support date is in the past or today")
         except ValueError:
             errors.append(f"Invalid supported_until date format: {contract.sla.supported_until}")
@@ -234,8 +234,7 @@ def validate_contract(path: str) -> ValidationResult:
     # Return result
     if errors:
         return ValidationResult.failure(errors, warnings)
-    else:
-        return ValidationResult.success(warnings)
+    return ValidationResult.success(warnings)
 
 
 def validate_contract_dict(data: dict[str, Any]) -> ValidationResult:
@@ -274,5 +273,4 @@ def validate_contract_dict(data: dict[str, Any]) -> ValidationResult:
 
     if errors:
         return ValidationResult.failure(errors, warnings)
-    else:
-        return ValidationResult.success(warnings)
+    return ValidationResult.success(warnings)

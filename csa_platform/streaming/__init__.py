@@ -57,6 +57,7 @@ Public surface::
 
 from __future__ import annotations
 
+from csa_platform.streaming.batch_layer import BatchLayer
 from csa_platform.streaming.breach_publisher import (
     BreachPublisher,
     CosmosBreachPublisher,
@@ -65,6 +66,7 @@ from csa_platform.streaming.breach_publisher import (
     NoopBreachPublisher,
 )
 from csa_platform.streaming.dbt_integration import generate_sources_yaml
+from csa_platform.streaming.event_processor import EventProcessor, EventSchema
 from csa_platform.streaming.models import (
     BronzeFormat,
     GoldStreamContract,
@@ -86,15 +88,13 @@ from csa_platform.streaming.schema_registry import (
     SchemaRegistryError,
     ValidationIssue,
 )
+from csa_platform.streaming.serving_layer import ServingLayer
 from csa_platform.streaming.slo import SLOBreach, SLOMonitor
 from csa_platform.streaming.sources_fabric import (
     FabricRTINotAvailableError,
     FabricRTISource,
 )
-from csa_platform.streaming.event_processor import EventProcessor, EventSchema
 from csa_platform.streaming.speed_layer import SpeedLayer
-from csa_platform.streaming.batch_layer import BatchLayer
-from csa_platform.streaming.serving_layer import ServingLayer
 
 __all__ = [
     "AzureSchemaRegistry",

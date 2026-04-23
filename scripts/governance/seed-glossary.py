@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """Seed Purview business glossary from a YAML file.
 
 Reads hierarchical glossary terms from a YAML file and creates them in
@@ -85,7 +84,7 @@ class PurviewGlossarySeeder:
         status: str = "Approved",
         parent_guid: str | None = None,
         contacts: list[dict] | None = None,
-        related_terms: list[str] | None = None,
+        related_terms: list[str] | None = None,  # noqa: ARG002
         classifications: list[str] | None = None,
     ) -> str | None:
         """Create a single glossary term, return its GUID."""

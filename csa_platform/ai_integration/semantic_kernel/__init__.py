@@ -6,29 +6,29 @@ including factories, plugins, orchestration, and memory stores for AI-driven ana
 """
 
 from .kernel_factory import CSAKernelFactory
-from .plugins.data_query import DataQueryPlugin
-from .plugins.governance import GovernancePlugin
-from .plugins.storage import StoragePlugin
-from .plugins.purview import PurviewPlugin
+from .memory.ai_search_memory import AISearchMemoryStore
 from .orchestration.multi_agent import (
+    create_analyst_team,
     create_data_analyst_agent,
     create_governance_agent,
     create_quality_agent,
-    create_analyst_team
 )
-from .memory.ai_search_memory import AISearchMemoryStore
+from .plugins.data_query import DataQueryPlugin
+from .plugins.governance import GovernancePlugin
+from .plugins.purview import PurviewPlugin
+from .plugins.storage import StoragePlugin
 
 __all__ = [
+    "AISearchMemoryStore",
     "CSAKernelFactory",
     "DataQueryPlugin",
     "GovernancePlugin",
-    "StoragePlugin",
     "PurviewPlugin",
+    "StoragePlugin",
+    "create_analyst_team",
     "create_data_analyst_agent",
     "create_governance_agent",
-    "create_quality_agent",
-    "create_analyst_team",
-    "AISearchMemoryStore"
+    "create_quality_agent"
 ]
 
 __version__ = "1.0.0"
