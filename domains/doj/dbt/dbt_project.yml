@@ -1,0 +1,52 @@
+name: 'csa_doj'
+version: '1.0.0'
+config-version: 2
+require-dbt-version: [">=1.7.0", "<2.0.0"]
+
+profile: 'csa_analytics'
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+macro-paths: ["../../shared/dbt/macros"]
+
+vars:
+  bronze_database: "bronze"
+  silver_database: "silver"
+  gold_database: "gold"
+  file_format: "delta"
+  incremental_strategy: "merge"
+  freshness_warn_hours: 24
+  freshness_error_hours: 48
+  email_regex: '^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+
+  # Antitrust-specific variables
+  fiscal_year_start_month: 10  # DOJ fiscal year starts October 1
+  criminal_fine_threshold: 1000000  # $1M threshold for significant fines
+  hhi_concentration_threshold: 2500  # HHI threshold for highly concentrated markets
+
+  # Penalty trend rates
+  avg_corporate_fine_growth: 0.15
+  avg_individual_fine_growth: 0.08
+
+models:
+  csa_doj:
+    bronze:
+      +materialized: incremental
+      +file_format: delta
+      +schema: bronze
+      +tags: ['bronze', 'doj', 'antitrust']
+    silver:
+      +materialized: incremental
+      +file_format: delta
+      +schema: silver
+      +tags: ['silver', 'doj', 'antitrust']
+      +incremental_strategy: merge
+    gold:
+      +materialized: table
+      +file_format: delta
+      +schema: gold
+      +tags: ['gold', 'doj', 'antitrust']
+
+seeds:
+  csa_doj:
+    +schema: raw

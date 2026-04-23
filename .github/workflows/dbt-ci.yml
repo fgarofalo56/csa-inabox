@@ -71,6 +71,7 @@ jobs:
           # Canonical list — keeps matrix order stable and makes missing
           # projects obvious. New projects must be added here.
           declare -a EXPECTED=(
+            "domains/doj/dbt"
             "domains/finance/dbt"
             "domains/inventory/dbt"
             "domains/sales/dbt"

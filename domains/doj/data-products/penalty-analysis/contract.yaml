@@ -1,0 +1,124 @@
+# Data product contract -- doj.penalty_analysis
+#
+# Gold-layer penalty analysis by violation type, industry, and time period.
+
+apiVersion: csa.microsoft.com/v1
+kind: DataProductContract
+
+metadata:
+  name: doj.penalty_analysis
+  domain: doj
+  owner: doj-data-engineering@contoso.com
+  version: "1.0.0"
+  description: >
+    Comprehensive penalty analysis providing insights into criminal fines,
+    jail sentences, and restitution amounts across different violation types,
+    industries, and defendant types. Supports enforcement policy evaluation
+    and deterrence effectiveness analysis. Includes statistical distributions
+    and comparative metrics for benchmarking penalty trends.
+
+schema:
+  primary_key: [analysis_type, category]
+  columns:
+    - name: analysis_type
+      type: string
+      nullable: false
+      description: Type of analysis performed.
+      allowed_values:
+        - VIOLATION_TYPE
+        - INDUSTRY
+        - DEFENDANT_TYPE
+    - name: category
+      type: string
+      nullable: false
+      description: Category being analyzed (violation type, industry code, or defendant type).
+    - name: industry_code
+      type: string
+      nullable: true
+      description: Industry code (only populated for INDUSTRY analysis).
+    - name: defendant_type
+      type: string
+      nullable: true
+      description: Defendant type (only populated for DEFENDANT_TYPE analysis).
+      allowed_values:
+        - CORPORATION
+        - INDIVIDUAL
+    - name: fiscal_year
+      type: int
+      nullable: true
+      description: Fiscal year (for time-series analysis).
+    - name: cases_with_penalties
+      type: int
+      nullable: false
+      description: Number of cases with penalties imposed.
+    - name: penalty_amount
+      type: decimal(18,2)
+      nullable: true
+      description: Total penalty amount (fines) for the category.
+    - name: avg_penalty_per_case
+      type: decimal(18,2)
+      nullable: true
+      description: Average penalty amount per case.
+    - name: total_jail_days
+      type: int
+      nullable: true
+      description: Total jail days imposed across all cases in category.
+    - name: avg_jail_days_per_case
+      type: decimal(10,2)
+      nullable: true
+      description: Average jail days per case.
+    - name: total_defendants
+      type: int
+      nullable: true
+      description: Total number of defendants across all cases.
+    - name: additional_info
+      type: string
+      nullable: true
+      description: Additional contextual information specific to analysis type.
+    - name: priority_level
+      type: string
+      nullable: true
+      description: Enforcement priority level (for violation type analysis).
+      allowed_values:
+        - HIGH
+        - MEDIUM
+        - LOW
+    - name: significant_fine_cases
+      type: int
+      nullable: true
+      description: Number of cases with fines above significant threshold.
+
+sla:
+  freshness_minutes: 720
+  valid_row_ratio: 1.0
+  supported_until: "2027-04-10"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: analysis_type
+  - rule: expect_column_values_to_be_in_set
+    column: analysis_type
+    value_set: [VIOLATION_TYPE, INDUSTRY, DEFENDANT_TYPE]
+  - rule: expect_column_values_to_not_be_null
+    column: category
+  - rule: expect_column_values_to_be_between
+    column: cases_with_penalties
+    min_value: 0
+  - rule: expect_column_values_to_be_between
+    column: penalty_amount
+    min_value: 0
+  - rule: expect_column_values_to_be_between
+    column: avg_penalty_per_case
+    min_value: 0
+  - rule: expect_column_values_to_be_between
+    column: total_jail_days
+    min_value: 0
+  - rule: expect_column_values_to_be_between
+    column: avg_jail_days_per_case
+    min_value: 0
+  - rule: expect_column_values_to_be_between
+    column: total_defendants
+    min_value: 0
+  - rule: expect_column_values_to_be_between
+    column: significant_fine_cases
+    min_value: 0

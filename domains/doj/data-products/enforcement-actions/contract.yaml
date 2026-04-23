@@ -1,0 +1,128 @@
+# Data product contract -- doj.enforcement_actions
+#
+# Gold-layer enforcement actions fact table combining cases with penalty data.
+
+apiVersion: csa.microsoft.com/v1
+kind: DataProductContract
+
+metadata:
+  name: doj.enforcement_actions
+  domain: doj
+  owner: doj-data-engineering@contoso.com
+  version: "1.0.0"
+  description: >
+    Unified enforcement actions fact table combining antitrust cases
+    with criminal enforcement penalties and civil action outcomes.
+    Provides comprehensive view of DOJ enforcement activity including
+    fines, jail sentences, restitution, and case resolution metrics.
+    Used for enforcement trend analysis and policy evaluation.
+
+schema:
+  primary_key: [case_id]
+  columns:
+    - name: enforcement_fact_sk
+      type: string
+      nullable: false
+      description: Surrogate key for enforcement fact record.
+    - name: case_sk
+      type: string
+      nullable: false
+      description: Foreign key to case dimension.
+    - name: industry_sk
+      type: string
+      nullable: true
+      description: Foreign key to industry dimension.
+    - name: violation_sk
+      type: string
+      nullable: true
+      description: Foreign key to violation type dimension.
+    - name: case_id
+      type: long
+      nullable: false
+      description: Unique case identifier.
+    - name: case_name
+      type: string
+      nullable: false
+      description: Official case name.
+    - name: case_type
+      type: string
+      nullable: false
+      description: Type of case (CIVIL or CRIMINAL).
+      allowed_values:
+        - CIVIL
+        - CRIMINAL
+    - name: filing_date
+      type: date
+      nullable: false
+      description: Date case was filed.
+    - name: fiscal_year
+      type: int
+      nullable: false
+      description: DOJ fiscal year (starts October 1).
+    - name: total_criminal_fines
+      type: decimal(18,2)
+      nullable: false
+      description: Total criminal fines imposed (USD).
+    - name: total_jail_days
+      type: int
+      nullable: false
+      description: Total jail days imposed across all defendants.
+    - name: total_restitution
+      type: decimal(18,2)
+      nullable: false
+      description: Total restitution ordered (USD).
+    - name: criminal_defendants
+      type: int
+      nullable: false
+      description: Number of criminal defendants in the case.
+    - name: civil_actions_count
+      type: int
+      nullable: false
+      description: Number of civil actions associated with the case.
+    - name: is_significant_fine
+      type: boolean
+      nullable: false
+      description: Flag indicating fine above significant threshold.
+    - name: enforcement_outcome_type
+      type: string
+      nullable: false
+      description: Categorized enforcement outcome.
+      allowed_values:
+        - CRIMINAL_SUCCESS
+        - CIVIL_SETTLEMENT
+        - DISMISSED
+        - PENDING
+        - OTHER
+    - name: days_to_resolution
+      type: int
+      nullable: true
+      description: Number of days from filing to resolution.
+
+sla:
+  freshness_minutes: 360
+  valid_row_ratio: 1.0
+  supported_until: "2027-04-10"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: case_id
+  - rule: expect_column_values_to_be_unique
+    column: case_id
+  - rule: expect_column_values_to_not_be_null
+    column: fiscal_year
+  - rule: expect_column_values_to_be_between
+    column: fiscal_year
+    min_value: 2020
+    max_value: 2030
+  - rule: expect_column_values_to_be_between
+    column: total_criminal_fines
+    min_value: 0
+  - rule: expect_column_values_to_be_between
+    column: total_jail_days
+    min_value: 0
+  - rule: expect_column_values_to_be_between
+    column: total_restitution
+    min_value: 0
+  - rule: expect_column_values_to_be_in_set
+    column: enforcement_outcome_type
+    value_set: [CRIMINAL_SUCCESS, CIVIL_SETTLEMENT, DISMISSED, PENDING, OTHER]

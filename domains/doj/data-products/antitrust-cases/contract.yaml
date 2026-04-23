@@ -1,0 +1,123 @@
+# Data product contract -- doj.antitrust_cases
+#
+# Silver-layer antitrust case records with data quality validations.
+
+apiVersion: csa.microsoft.com/v1
+kind: DataProductContract
+
+metadata:
+  name: doj.antitrust_cases
+  domain: doj
+  owner: doj-data-engineering@contoso.com
+  version: "1.0.0"
+  description: >
+    Conformed antitrust case records from the DOJ Antitrust Division.
+    Includes both civil and criminal cases with comprehensive validation
+    flags following the flag-don't-drop pattern. Records cover all
+    antitrust violation types including price-fixing, monopolization,
+    merger challenges, and other Sherman Act violations.
+
+schema:
+  primary_key: [case_id]
+  columns:
+    - name: case_sk
+      type: string
+      nullable: false
+      description: Surrogate key for case record.
+    - name: case_id
+      type: long
+      nullable: false
+      description: Unique case identifier from DOJ case management system.
+    - name: case_name
+      type: string
+      nullable: false
+      description: Official case name (e.g., "United States v. ABC Corp").
+    - name: case_type
+      type: string
+      nullable: false
+      description: Type of case (CIVIL or CRIMINAL).
+      allowed_values:
+        - CIVIL
+        - CRIMINAL
+    - name: filing_date
+      type: date
+      nullable: false
+      description: Date the case was filed in federal court.
+    - name: court_district
+      type: string
+      nullable: true
+      description: Federal court district where case was filed.
+    - name: industry_sector
+      type: string
+      nullable: true
+      description: Primary industry sector affected by the alleged violation.
+    - name: violation_type
+      type: string
+      nullable: true
+      description: Type of antitrust violation alleged.
+      allowed_values:
+        - PRICE_FIXING
+        - BID_RIGGING
+        - MARKET_ALLOCATION
+        - MONOPOLIZATION
+        - ATTEMPTED_MONOPOLIZATION
+        - TYING
+        - EXCLUSIVE_DEALING
+        - MERGER_CHALLENGE
+        - CONSPIRACY
+    - name: status
+      type: string
+      nullable: false
+      description: Current status of the case.
+      allowed_values:
+        - OPEN
+        - SETTLED
+        - DISMISSED
+        - CONVICTED
+    - name: defendant_name
+      type: string
+      nullable: false
+      description: Name of primary defendant.
+    - name: defendant_type
+      type: string
+      nullable: false
+      description: Type of defendant (CORPORATION or INDIVIDUAL).
+      allowed_values:
+        - CORPORATION
+        - INDIVIDUAL
+    - name: resolution_date
+      type: date
+      nullable: true
+      description: Date case was resolved (if resolved).
+    - name: is_valid
+      type: boolean
+      nullable: false
+      description: Data quality flag indicating if record passed validation checks.
+    - name: validation_errors
+      type: string
+      nullable: true
+      description: Description of any validation errors found.
+
+sla:
+  freshness_minutes: 240
+  valid_row_ratio: 0.95
+  supported_until: "2027-04-10"
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: case_id
+  - rule: expect_column_values_to_be_unique
+    column: case_id
+  - rule: expect_column_values_to_not_be_null
+    column: case_name
+  - rule: expect_column_values_to_be_in_set
+    column: case_type
+    value_set: [CIVIL, CRIMINAL]
+  - rule: expect_column_values_to_be_in_set
+    column: status
+    value_set: [OPEN, SETTLED, DISMISSED, CONVICTED]
+  - rule: expect_column_values_to_be_in_set
+    column: defendant_type
+    value_set: [CORPORATION, INDIVIDUAL]
+  - rule: expect_column_values_to_not_be_null
+    column: is_valid

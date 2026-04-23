@@ -171,4 +171,10 @@ nav:
       - Great Expectations: tutorials/great-expectations.md
   - Research:
       - Platform Research Report: research/CSA-Platform-Research-Report.md
+  - Use Cases:
+      - Overview: use-cases/index.md
+      - Antitrust Analytics on Azure: use-cases/antitrust-analytics.md
+      - "DOJ Antitrust: Step-by-Step Domain Build": use-cases/doj-antitrust-deep-dive.md
+      - Government Data Analytics on Azure: use-cases/government-data-analytics.md
+      - "Azure Analytics: White Papers & Resources": use-cases/azure-analytics-resources.md
   - AI Copilot: chat.md
