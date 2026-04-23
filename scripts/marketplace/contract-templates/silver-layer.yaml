@@ -1,0 +1,107 @@
+# CSA-in-a-Box Silver Layer Data Product Contract
+# Pre-configured for Silver layer data products with standard quality requirements
+# Fill in the required fields and run:
+#   python marketplace-cli.py validate --contract silver-layer.yaml
+#   python marketplace-cli.py register --contract silver-layer.yaml
+
+name: ""          # required: Data product name (e.g., "Customer Silver Cleansed")
+domain: ""        # required: finance, healthcare, environmental, manufacturing, human-resources, marketing, supply-chain, operations, engineering, research
+description: ""   # required: What this data product provides (minimum 10 characters)
+version: "1.0.0"  # required: Semantic version
+
+# Owner information (required)
+owner:
+  name: ""        # required: Full name of the product owner
+  email: ""       # required: Valid email address
+  team: ""        # required: Team or department name
+
+# Schema definition (required) - Silver layer supports multiple formats
+schema:
+  format: delta   # Silver layer standard: Delta or Parquet
+  location: "abfss://silver@<storage>.dfs.core.windows.net/<domain>/<product>/"
+  columns: []     # Define your cleansed and standardized columns here
+  partition_by: [] # Consider partitioning by date or source system
+
+# Example Silver layer columns (cleansed, standardized, deduplicated):
+# columns:
+#   - name: "source_system_id"
+#     type: "string"
+#     description: "Identifier from source system"
+#     nullable: false
+#   - name: "unified_id"
+#     type: "string"
+#     description: "Unified identifier across systems"
+#     nullable: false
+#   - name: "data_source"
+#     type: "string"
+#     description: "Source system name"
+#     nullable: false
+#   - name: "ingestion_timestamp"
+#     type: "timestamp"
+#     description: "When record was ingested"
+#     nullable: false
+#   - name: "quality_score"
+#     type: "double"
+#     description: "Data quality score (0.0-1.0)"
+#     nullable: true
+
+# Service Level Agreement - Silver layer has balanced requirements
+sla:
+  freshness_minutes: 240     # 4 hours max for Silver layer
+  availability_percent: 99.5 # Good availability for processed data
+  valid_row_ratio: 0.90      # Standard data quality for Silver layer
+  supported_until: ""        # Optional: YYYY-MM-DD format
+
+# Data classification - Silver layer contains processed data
+classification: internal  # Silver layer typically internal or confidential
+
+# Tags for Silver layer products
+tags:
+  layer: "silver"
+  quality_tier: "standard"
+  processed: "true"
+  # Add processing-specific tags:
+  # deduplication: "applied"
+  # standardization: "complete"
+  # refresh_frequency: "hourly"
+
+# Documentation URL (recommended for Silver layer)
+documentation_url: ""
+
+# Sample queries - Silver layer provides cleansed data examples
+sample_queries: []
+# Example processing queries:
+# sample_queries:
+#   - "SELECT * FROM silver_table WHERE quality_score >= 0.8"
+#   - "SELECT data_source, COUNT(*) FROM silver_table GROUP BY data_source"
+#   - "SELECT * FROM silver_table WHERE ingestion_timestamp >= CURRENT_TIMESTAMP() - INTERVAL 1 HOUR"
+
+# Quality thresholds - Silver layer has standard requirements
+quality_thresholds:
+  completeness: 0.85    # Good completeness after cleansing
+  accuracy: 0.80        # Standard accuracy for Silver layer
+  timeliness: 0.85      # Regular timeliness requirements
+  consistency: 0.80     # Consistency after standardization
+
+# Data lineage - Silver layer processes Bronze data
+lineage:
+  upstream: []      # Bronze layer tables, raw data sources
+  downstream: []    # Gold layer, analytics, reports
+  transformations: []
+
+# Example Silver layer lineage:
+# lineage:
+#   upstream:
+#     - "bronze_raw_customers"
+#     - "bronze_raw_orders"
+#     - "external_reference_data"
+#   downstream:
+#     - "gold_customer_360"
+#     - "analytics_workspace"
+#     - "reporting_layer"
+#   transformations:
+#     - "Data cleansing: standardize_phone_numbers"
+#     - "Data cleansing: normalize_addresses"
+#     - "Deduplication: customer_merge_logic"
+#     - "Data quality: completeness_checks"
+#     - "ADF pipeline: silver_data_processing"

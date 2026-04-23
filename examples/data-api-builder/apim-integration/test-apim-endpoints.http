@@ -1,0 +1,160 @@
+### ==========================================================================
+### CSA-in-a-Box — APIM Gateway Endpoint Tests
+### VS Code REST Client format (humao.rest-client extension)
+### ==========================================================================
+
+### Variables
+@apimUrl = https://csa-datamesh-apim-gw-dev-XXXXXX.azure-api.us
+@subscriptionKey = your-subscription-key-here
+@accessToken = your-jwt-access-token-here
+
+### ==========================================================================
+### DAB — Data API Builder (REST + GraphQL)
+### ==========================================================================
+
+### GET Data Products via DAB REST
+GET {{apimUrl}}/dab/api/DataProducts
+Ocp-Apim-Subscription-Key: {{subscriptionKey}}
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+
+###
+
+### GET single Data Product by ID
+GET {{apimUrl}}/dab/api/DataProducts/id/1
+Ocp-Apim-Subscription-Key: {{subscriptionKey}}
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+
+###
+
+### DAB GraphQL query
+POST {{apimUrl}}/dab/graphql
+Ocp-Apim-Subscription-Key: {{subscriptionKey}}
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+    "query": "{ dataProducts(first: 10) { items { id name domain qualityScore } } }"
+}
+
+### ==========================================================================
+### AI Services
+### ==========================================================================
+
+### Chat completion
+POST {{apimUrl}}/ai/api/v1/ai/chat
+Ocp-Apim-Subscription-Key: {{subscriptionKey}}
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+    "messages": [
+        { "role": "user", "content": "What data products are available in the finance domain?" }
+    ],
+    "max_tokens": 500
+}
+
+###
+
+### Generate embeddings
+POST {{apimUrl}}/ai/api/v1/ai/embed
+Ocp-Apim-Subscription-Key: {{subscriptionKey}}
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+    "text": "quarterly revenue report financial data",
+    "model": "text-embedding-ada-002"
+}
+
+### ==========================================================================
+### Marketplace
+### ==========================================================================
+
+### List all data products in marketplace
+GET {{apimUrl}}/marketplace/api/v1/marketplace/products
+Ocp-Apim-Subscription-Key: {{subscriptionKey}}
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+
+###
+
+### Search products by domain
+GET {{apimUrl}}/marketplace/api/v1/marketplace/products?domain=finance&search=revenue
+Ocp-Apim-Subscription-Key: {{subscriptionKey}}
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+
+###
+
+### List domains
+GET {{apimUrl}}/marketplace/api/v1/marketplace/domains
+Ocp-Apim-Subscription-Key: {{subscriptionKey}}
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+
+###
+
+### Request access to a data product
+POST {{apimUrl}}/marketplace/api/v1/marketplace/access-requests
+Ocp-Apim-Subscription-Key: {{subscriptionKey}}
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+    "productId": "prod-001",
+    "justification": "Need finance data for quarterly report automation",
+    "requestedRole": "reader"
+}
+
+### ==========================================================================
+### Portal Core API
+### ==========================================================================
+
+### Get current user profile
+GET {{apimUrl}}/portal/api/v1/users/me
+Ocp-Apim-Subscription-Key: {{subscriptionKey}}
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+
+###
+
+### List governance policies
+GET {{apimUrl}}/portal/api/v1/governance/policies
+Ocp-Apim-Subscription-Key: {{subscriptionKey}}
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+
+### ==========================================================================
+### Error Cases — Testing auth and rate limits
+### ==========================================================================
+
+### Missing subscription key (expect 401)
+GET {{apimUrl}}/dab/api/DataProducts
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+
+###
+
+### Missing JWT (expect 401)
+GET {{apimUrl}}/dab/api/DataProducts
+Ocp-Apim-Subscription-Key: {{subscriptionKey}}
+Accept: application/json
+
+###
+
+### Invalid JWT (expect 401)
+GET {{apimUrl}}/dab/api/DataProducts
+Ocp-Apim-Subscription-Key: {{subscriptionKey}}
+Authorization: Bearer invalid-token-here
+Accept: application/json
+
+###
+
+### Rate limit test — run rapidly to trigger 429
+# @name rateLimitTest
+GET {{apimUrl}}/ai/api/v1/ai/chat
+Ocp-Apim-Subscription-Key: {{subscriptionKey}}
+Authorization: Bearer {{accessToken}}
+Accept: application/json

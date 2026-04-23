@@ -1,0 +1,92 @@
+### =============================================================================
+### Data API Builder — REST API Examples
+### CSA-in-a-Box | Use with VS Code REST Client extension
+### =============================================================================
+
+@baseUrl = http://localhost:5000/api
+
+### ─── GET: All Data Products ────────────────────────────────────────────────
+GET {{baseUrl}}/products
+Content-Type: application/json
+
+### ─── GET: Products filtered by domain ──────────────────────────────────────
+GET {{baseUrl}}/products?$filter=domain eq 'finance'
+Content-Type: application/json
+
+### ─── GET: Products sorted by quality (descending) ──────────────────────────
+GET {{baseUrl}}/products?$orderby=quality_score desc
+Content-Type: application/json
+
+### ─── GET: Combined filter + sort + pagination ──────────────────────────────
+GET {{baseUrl}}/products?$filter=status eq 'active'&$orderby=quality_score desc&$first=10
+Content-Type: application/json
+
+### ─── GET: Search by name (contains) ────────────────────────────────────────
+GET {{baseUrl}}/products?$filter=contains(name, 'Revenue')
+Content-Type: application/json
+
+### ─── GET: Single product by ID ─────────────────────────────────────────────
+GET {{baseUrl}}/products/id/1
+Content-Type: application/json
+
+### ─── POST: Create a new data product ───────────────────────────────────────
+POST {{baseUrl}}/products
+Content-Type: application/json
+X-MS-API-ROLE: authenticated
+
+{
+  "name": "Customer Segments",
+  "description": "Customer segmentation based on purchase behavior and demographics",
+  "domain": "marketing",
+  "owner_name": "Dan Wilson",
+  "owner_email": "dan@contoso.com",
+  "owner_team": "Marketing Insights",
+  "classification": "internal",
+  "quality_score": 82.5,
+  "freshness_hours": 24,
+  "completeness": 90.0,
+  "status": "draft",
+  "version": 1
+}
+
+### ─── PUT: Update an existing product ───────────────────────────────────────
+PUT {{baseUrl}}/products/id/1
+Content-Type: application/json
+X-MS-API-ROLE: authenticated
+
+{
+  "quality_score": 93.0,
+  "freshness_hours": 12,
+  "version": 3
+}
+
+### ─── DELETE: Remove a product ──────────────────────────────────────────────
+DELETE {{baseUrl}}/products/id/99
+Content-Type: application/json
+X-MS-API-ROLE: admin
+
+### ─── GET: All domains ──────────────────────────────────────────────────────
+GET {{baseUrl}}/domains
+Content-Type: application/json
+
+### ─── GET: Quality metrics for product 1 ────────────────────────────────────
+GET {{baseUrl}}/quality-metrics?$filter=product_id eq 1&$orderby=date desc
+Content-Type: application/json
+
+### ─── GET: Access grants (authenticated — sees own) ─────────────────────────
+GET {{baseUrl}}/access-grants
+Content-Type: application/json
+X-MS-API-ROLE: authenticated
+
+### ─── GET: Domain stats (stored procedure) ──────────────────────────────────
+GET {{baseUrl}}/domain-stats
+Content-Type: application/json
+
+### ─── GET: Quality trend (stored procedure) ─────────────────────────────────
+GET {{baseUrl}}/quality-trend?product_id=1&days=30
+Content-Type: application/json
+
+### ─── GET: Data lineage ─────────────────────────────────────────────────────
+GET {{baseUrl}}/lineage
+Content-Type: application/json
+X-MS-API-ROLE: authenticated

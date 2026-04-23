@@ -1,0 +1,96 @@
+<!--
+  CSA-in-a-Box — Global APIM Policy
+  Applied to ALL APIs as the base policy. Individual API policies inherit this
+  and can override specific sections using <base /> element.
+-->
+<policies>
+    <inbound>
+        <!-- CORS: allow configured origins -->
+        <cors allow-credentials="true">
+            <allowed-origins>
+                <origin>{{allowed-origins}}</origin>
+            </allowed-origins>
+            <allowed-methods preflight-result-max-age="300">
+                <method>GET</method>
+                <method>POST</method>
+                <method>PUT</method>
+                <method>PATCH</method>
+                <method>DELETE</method>
+                <method>OPTIONS</method>
+            </allowed-methods>
+            <allowed-headers>
+                <header>Authorization</header>
+                <header>Content-Type</header>
+                <header>Accept</header>
+                <header>X-Request-ID</header>
+                <header>Ocp-Apim-Subscription-Key</header>
+            </allowed-headers>
+            <expose-headers>
+                <header>X-Request-ID</header>
+                <header>X-RateLimit-Remaining</header>
+            </expose-headers>
+        </cors>
+
+        <!-- Rate limiting per subscription -->
+        <rate-limit-by-key
+            calls="{{rate-limit-calls}}"
+            renewal-period="{{rate-limit-period}}"
+            counter-key="@(context.Subscription.Id)"
+            increment-condition="@(context.Response.StatusCode >= 200 &amp;&amp; context.Response.StatusCode < 400)" />
+
+        <!-- JWT validation: Azure AD token -->
+        <validate-jwt header-name="Authorization" failed-validation-httpcode="401" failed-validation-error-message="Unauthorized. Valid Azure AD token required.">
+            <openid-config url="{{jwt-issuer}}/.well-known/openid-configuration" />
+            <audiences>
+                <audience>{{jwt-audience}}</audience>
+            </audiences>
+            <issuers>
+                <issuer>{{jwt-issuer}}</issuer>
+            </issuers>
+            <required-claims>
+                <claim name="sub" match="all" />
+            </required-claims>
+        </validate-jwt>
+
+        <!-- Inject request ID for distributed tracing -->
+        <set-header name="X-Request-ID" exists-action="skip">
+            <value>@(Guid.NewGuid().ToString())</value>
+        </set-header>
+
+        <!-- Forward client IP to backend -->
+        <set-header name="X-Forwarded-For" exists-action="override">
+            <value>@(context.Request.IpAddress)</value>
+        </set-header>
+    </inbound>
+
+    <backend>
+        <forward-request timeout="30" />
+    </backend>
+
+    <outbound>
+        <!-- Remove server identification headers -->
+        <set-header name="Server" exists-action="delete" />
+        <set-header name="X-Powered-By" exists-action="delete" />
+        <set-header name="X-AspNet-Version" exists-action="delete" />
+
+        <!-- Security headers -->
+        <set-header name="X-Content-Type-Options" exists-action="override">
+            <value>nosniff</value>
+        </set-header>
+        <set-header name="X-Frame-Options" exists-action="override">
+            <value>DENY</value>
+        </set-header>
+        <set-header name="Strict-Transport-Security" exists-action="override">
+            <value>max-age=31536000; includeSubDomains</value>
+        </set-header>
+
+        <!-- Echo request ID in response -->
+        <set-header name="X-Request-ID" exists-action="override">
+            <value>@(context.Request.Headers.GetValueOrDefault("X-Request-ID","unknown"))</value>
+        </set-header>
+    </outbound>
+
+    <on-error>
+        <base />
+    </on-error>
+</policies>

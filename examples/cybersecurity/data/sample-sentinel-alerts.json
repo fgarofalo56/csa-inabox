@@ -1,0 +1,165 @@
+[
+  {
+    "AlertId": "alert-001",
+    "AlertName": "Suspicious PowerShell Activity",
+    "Severity": "High",
+    "Status": "New",
+    "Tactics": ["Execution", "Defense Evasion"],
+    "Techniques": ["T1059.001"],
+    "ProviderName": "Microsoft Defender for Endpoint",
+    "TimeGenerated": "2026-04-15T08:23:41Z",
+    "Description": "Obfuscated PowerShell commands detected on WORKSTATION-42. Base64-encoded payload with bypass flags indicates potential malicious script execution.",
+    "Entities": [
+      {"Type": "Host", "HostName": "WORKSTATION-42"},
+      {"Type": "Account", "Name": "jsmith"}
+    ],
+    "RemediationSteps": ["Isolate affected host", "Review PowerShell transcription logs", "Check for persistence mechanisms"]
+  },
+  {
+    "AlertId": "alert-002",
+    "AlertName": "Brute Force Attack Detected",
+    "Severity": "Medium",
+    "Status": "New",
+    "Tactics": ["Credential Access"],
+    "Techniques": ["T1110.001"],
+    "ProviderName": "Azure Active Directory Identity Protection",
+    "TimeGenerated": "2026-04-15T09:14:22Z",
+    "Description": "Multiple failed sign-in attempts (47 in 5 minutes) detected for user account admin@agency.gov from IP 198.51.100.23.",
+    "Entities": [
+      {"Type": "Account", "Name": "admin@agency.gov"},
+      {"Type": "IP", "Address": "198.51.100.23"}
+    ],
+    "RemediationSteps": ["Block source IP", "Reset user credentials", "Enable MFA if not already active"]
+  },
+  {
+    "AlertId": "alert-003",
+    "AlertName": "Lateral Movement via Remote Desktop",
+    "Severity": "High",
+    "Status": "InProgress",
+    "Tactics": ["Lateral Movement"],
+    "Techniques": ["T1021.001"],
+    "ProviderName": "Microsoft Defender for Endpoint",
+    "TimeGenerated": "2026-04-15T10:02:55Z",
+    "Description": "RDP connection from WORKSTATION-42 to SERVER-DB-01 using credentials not typically associated with this host pair. Possible lateral movement following initial compromise.",
+    "Entities": [
+      {"Type": "Host", "HostName": "WORKSTATION-42"},
+      {"Type": "Host", "HostName": "SERVER-DB-01"},
+      {"Type": "Account", "Name": "svc-backup"}
+    ],
+    "RemediationSteps": ["Verify legitimacy of RDP session", "Review svc-backup account usage", "Check for credential dumping on source host"]
+  },
+  {
+    "AlertId": "alert-004",
+    "AlertName": "Large Data Exfiltration Detected",
+    "Severity": "Critical",
+    "Status": "New",
+    "Tactics": ["Exfiltration"],
+    "Techniques": ["T1048.003"],
+    "ProviderName": "Microsoft Cloud App Security",
+    "TimeGenerated": "2026-04-15T11:45:10Z",
+    "Description": "Unusual outbound data transfer of 4.7 GB to external IP 203.0.113.50 over HTTPS from SERVER-DB-01 within a 30-minute window.",
+    "Entities": [
+      {"Type": "Host", "HostName": "SERVER-DB-01"},
+      {"Type": "IP", "Address": "203.0.113.50"}
+    ],
+    "RemediationSteps": ["Block destination IP immediately", "Capture network traffic for forensics", "Determine data classification of exfiltrated content"]
+  },
+  {
+    "AlertId": "alert-005",
+    "AlertName": "Privilege Escalation via Token Manipulation",
+    "Severity": "High",
+    "Status": "New",
+    "Tactics": ["Privilege Escalation"],
+    "Techniques": ["T1134.001"],
+    "ProviderName": "Microsoft Defender for Endpoint",
+    "TimeGenerated": "2026-04-15T12:30:08Z",
+    "Description": "Process on WORKSTATION-15 observed duplicating access tokens from a SYSTEM-level process to elevate privileges for user-context process.",
+    "Entities": [
+      {"Type": "Host", "HostName": "WORKSTATION-15"},
+      {"Type": "Account", "Name": "mjohnson"},
+      {"Type": "Process", "Name": "svchost.exe"}
+    ],
+    "RemediationSteps": ["Isolate workstation", "Audit running processes", "Check for rootkit indicators"]
+  },
+  {
+    "AlertId": "alert-006",
+    "AlertName": "Suspicious Sign-In from Anomalous Location",
+    "Severity": "Medium",
+    "Status": "New",
+    "Tactics": ["Initial Access"],
+    "Techniques": ["T1078.004"],
+    "ProviderName": "Azure Active Directory Identity Protection",
+    "TimeGenerated": "2026-04-15T13:12:33Z",
+    "Description": "Sign-in for kwilliams@agency.gov from IP 192.0.2.100 geolocated to a country not in the agency's travel policy. Previous sign-in was from Washington, DC 2 hours ago.",
+    "Entities": [
+      {"Type": "Account", "Name": "kwilliams@agency.gov"},
+      {"Type": "IP", "Address": "192.0.2.100"}
+    ],
+    "RemediationSteps": ["Contact user to verify travel", "Conditionally block access pending verification", "Review recent mailbox activity"]
+  },
+  {
+    "AlertId": "alert-007",
+    "AlertName": "Malware Detection — Cobalt Strike Beacon",
+    "Severity": "Critical",
+    "Status": "New",
+    "Tactics": ["Command and Control"],
+    "Techniques": ["T1071.001"],
+    "ProviderName": "Microsoft Defender for Endpoint",
+    "TimeGenerated": "2026-04-15T14:05:47Z",
+    "Description": "Known Cobalt Strike beacon DLL detected in memory on SERVER-WEB-03. Process is communicating with C2 server at 198.51.100.99 over HTTPS on port 443.",
+    "Entities": [
+      {"Type": "Host", "HostName": "SERVER-WEB-03"},
+      {"Type": "IP", "Address": "198.51.100.99"},
+      {"Type": "File", "Name": "msedge_update.dll"}
+    ],
+    "RemediationSteps": ["Isolate server immediately", "Block C2 IP at firewall", "Initiate incident response procedure", "Preserve memory dump for forensics"]
+  },
+  {
+    "AlertId": "alert-008",
+    "AlertName": "DNS Tunneling Activity Detected",
+    "Severity": "High",
+    "Status": "New",
+    "Tactics": ["Command and Control", "Exfiltration"],
+    "Techniques": ["T1071.004", "T1048.001"],
+    "ProviderName": "Azure Firewall",
+    "TimeGenerated": "2026-04-15T15:22:19Z",
+    "Description": "Anomalous DNS query pattern from WORKSTATION-28: 6,200 unique subdomain queries to suspicious-domain.example in 1 hour, consistent with DNS tunneling for data exfiltration.",
+    "Entities": [
+      {"Type": "Host", "HostName": "WORKSTATION-28"},
+      {"Type": "DNS", "DomainName": "suspicious-domain.example"}
+    ],
+    "RemediationSteps": ["Block domain at DNS resolver", "Isolate workstation", "Analyze DNS query payloads for encoded data"]
+  },
+  {
+    "AlertId": "alert-009",
+    "AlertName": "Ransomware Behavior Indicator",
+    "Severity": "Critical",
+    "Status": "New",
+    "Tactics": ["Impact"],
+    "Techniques": ["T1486"],
+    "ProviderName": "Microsoft Defender for Endpoint",
+    "TimeGenerated": "2026-04-15T16:48:30Z",
+    "Description": "Rapid file encryption activity detected on FILE-SERVER-01. Over 2,000 files modified with .locked extension in 10 minutes. Shadow copies deletion attempted.",
+    "Entities": [
+      {"Type": "Host", "HostName": "FILE-SERVER-01"},
+      {"Type": "Process", "Name": "update_service.exe"}
+    ],
+    "RemediationSteps": ["Disconnect server from network immediately", "Do NOT pay ransom", "Activate incident response plan", "Restore from offline backups"]
+  },
+  {
+    "AlertId": "alert-010",
+    "AlertName": "Insider Threat — Unusual Data Access Pattern",
+    "Severity": "Medium",
+    "Status": "New",
+    "Tactics": ["Collection"],
+    "Techniques": ["T1530"],
+    "ProviderName": "Microsoft Defender for Cloud Apps",
+    "TimeGenerated": "2026-04-15T17:35:12Z",
+    "Description": "User rthompson@agency.gov accessed 340 sensitive documents in SharePoint within 45 minutes, significantly exceeding baseline of 12 documents per day. User has submitted resignation.",
+    "Entities": [
+      {"Type": "Account", "Name": "rthompson@agency.gov"},
+      {"Type": "CloudApplication", "Name": "SharePoint Online"}
+    ],
+    "RemediationSteps": ["Alert HR and legal teams", "Review DLP policy triggers", "Restrict user permissions pending investigation", "Preserve audit logs"]
+  }
+]

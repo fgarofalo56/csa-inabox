@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Data Mesh Portal — GraphQL Explorer</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tailwindcss@2/dist/tailwind.min.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body data-page="explorer">
+
+  <!-- Navigation -->
+  <nav class="nav">
+    <div class="container nav-inner">
+      <a href="index.html" class="nav-brand">Data Mesh Portal</a>
+      <ul class="nav-links">
+        <li><a href="index.html">Dashboard</a></li>
+        <li><a href="products.html">Products</a></li>
+        <li><a href="explorer.html" class="active">GraphQL Explorer</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <!-- Main Content -->
+  <main class="container" style="padding-top:2rem; padding-bottom:4rem;">
+    <h1 style="font-size:1.75rem; font-weight:700; margin-bottom:0.5rem;">GraphQL Explorer</h1>
+    <p style="color:var(--text-secondary); margin-bottom:1.5rem;">
+      Write and execute GraphQL queries against the Data API Builder endpoint.
+    </p>
+
+    <!-- Toolbar -->
+    <div style="display:flex; gap:1rem; align-items:center; margin-bottom:1rem;">
+      <select id="example-queries" class="select" style="max-width:280px;">
+        <option value="">Load example query...</option>
+      </select>
+      <button id="execute-btn" class="btn btn-primary">Execute Query</button>
+    </div>
+
+    <!-- Editor + Results -->
+    <div class="editor-panel">
+      <div>
+        <label style="display:block; color:var(--text-secondary); font-size:0.75rem; text-transform:uppercase; margin-bottom:0.5rem;">
+          Query
+        </label>
+        <textarea id="query-editor" placeholder="Enter your GraphQL query...">{
+  dataProducts(first: 10) {
+    items {
+      id
+      name
+      domain
+      quality_score
+      status
+    }
+  }
+}</textarea>
+      </div>
+      <div>
+        <label style="display:block; color:var(--text-secondary); font-size:0.75rem; text-transform:uppercase; margin-bottom:0.5rem;">
+          Results
+        </label>
+        <div class="results-panel">
+          <pre id="results-panel" style="color:var(--text-secondary);">Click "Execute Query" to run your query.</pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- Reference -->
+    <div class="card" style="margin-top:2rem;">
+      <h3 style="font-weight:600; margin-bottom:0.75rem; color:var(--accent-cyan);">Available Types</h3>
+      <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:1rem; font-size:0.875rem;">
+        <div>
+          <strong>DataProduct</strong>
+          <div style="color:var(--text-secondary);">id, name, description, domain, owner_name, owner_team, classification, quality_score, freshness_hours, completeness, availability, status, version</div>
+        </div>
+        <div>
+          <strong>QualityMetric</strong>
+          <div style="color:var(--text-secondary);">id, product_id, date, quality_score, completeness, freshness_hours, row_count, accuracy, consistency</div>
+        </div>
+        <div>
+          <strong>Domain</strong>
+          <div style="color:var(--text-secondary);">id, name, description, owner_team, product_count</div>
+        </div>
+        <div>
+          <strong>AccessGrant</strong>
+          <div style="color:var(--text-secondary);">id, product_id, requester_email, access_level, status, justification, granted_at, expires_at</div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

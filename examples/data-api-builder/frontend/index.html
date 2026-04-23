@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Data Mesh Portal — Dashboard</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tailwindcss@2/dist/tailwind.min.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body data-page="dashboard">
+
+  <!-- Navigation -->
+  <nav class="nav">
+    <div class="container nav-inner">
+      <a href="index.html" class="nav-brand">Data Mesh Portal</a>
+      <ul class="nav-links">
+        <li><a href="index.html" class="active">Dashboard</a></li>
+        <li><a href="products.html">Products</a></li>
+        <li><a href="explorer.html">GraphQL Explorer</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <!-- Main Content -->
+  <main class="container" style="padding-top:2rem; padding-bottom:4rem;">
+    <h1 style="font-size:1.75rem; font-weight:700; margin-bottom:0.5rem;">
+      Data Mesh Dashboard
+    </h1>
+    <p style="color:var(--text-secondary); margin-bottom:1.5rem;">
+      Overview of data products across all domains.
+    </p>
+
+    <!-- Stats Cards -->
+    <div id="stats-grid" class="stats-grid">
+      <div class="card stat-card">
+        <div class="stat-value">—</div>
+        <div class="stat-label">Total Products</div>
+      </div>
+      <div class="card stat-card">
+        <div class="stat-value">—</div>
+        <div class="stat-label">Avg Quality Score</div>
+      </div>
+      <div class="card stat-card">
+        <div class="stat-value">—</div>
+        <div class="stat-label">Active Domains</div>
+      </div>
+      <div class="card stat-card">
+        <div class="stat-value">—</div>
+        <div class="stat-label">Pending Requests</div>
+      </div>
+    </div>
+
+    <!-- Quick Links -->
+    <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:1rem; margin-top:2rem;">
+      <a href="products.html" class="card" style="text-decoration:none;">
+        <h3 style="color:var(--accent-cyan); font-weight:600; margin-bottom:0.5rem;">Browse Products</h3>
+        <p style="color:var(--text-secondary); font-size:0.875rem;">
+          Search, filter, and explore data products across all domains.
+        </p>
+      </a>
+      <a href="explorer.html" class="card" style="text-decoration:none;">
+        <h3 style="color:var(--accent-emerald); font-weight:600; margin-bottom:0.5rem;">GraphQL Explorer</h3>
+        <p style="color:var(--text-secondary); font-size:0.875rem;">
+          Write and execute GraphQL queries against the Data API Builder endpoint.
+        </p>
+      </a>
+    </div>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

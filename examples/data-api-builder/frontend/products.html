@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Data Mesh Portal — Products</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tailwindcss@2/dist/tailwind.min.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body data-page="products">
+
+  <!-- Navigation -->
+  <nav class="nav">
+    <div class="container nav-inner">
+      <a href="index.html" class="nav-brand">Data Mesh Portal</a>
+      <ul class="nav-links">
+        <li><a href="index.html">Dashboard</a></li>
+        <li><a href="products.html" class="active">Products</a></li>
+        <li><a href="explorer.html">GraphQL Explorer</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <!-- Main Content -->
+  <main class="container" style="padding-top:2rem; padding-bottom:4rem;">
+    <h1 style="font-size:1.75rem; font-weight:700; margin-bottom:1.5rem;">Data Product Catalog</h1>
+
+    <!-- Filters -->
+    <div style="display:flex; gap:1rem; margin-bottom:1.5rem; flex-wrap:wrap;">
+      <input id="search-input" type="text" class="input" placeholder="Search products..." style="max-width:300px;" />
+      <select id="domain-filter" class="select" style="max-width:200px;">
+        <option value="">All Domains</option>
+      </select>
+    </div>
+
+    <!-- Products Table -->
+    <div class="card table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Domain</th>
+            <th>Owner Team</th>
+            <th>Quality</th>
+            <th>Status</th>
+            <th>Classification</th>
+          </tr>
+        </thead>
+        <tbody id="products-table-body">
+          <tr><td colspan="6" style="text-align:center; color:var(--text-secondary);">Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Detail Panel (shown on row click) -->
+    <div id="product-detail" class="card" style="margin-top:1.5rem; display:none;">
+      <h2 id="detail-name" style="font-size:1.25rem; font-weight:600; color:var(--accent-cyan); margin-bottom:1rem;"></h2>
+      <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:1rem;">
+        <div>
+          <div style="color:var(--text-secondary); font-size:0.75rem; text-transform:uppercase;">Description</div>
+          <div id="detail-description"></div>
+        </div>
+        <div>
+          <div style="color:var(--text-secondary); font-size:0.75rem; text-transform:uppercase;">Owner</div>
+          <div id="detail-owner"></div>
+        </div>
+        <div>
+          <div style="color:var(--text-secondary); font-size:0.75rem; text-transform:uppercase;">Quality Score</div>
+          <div id="detail-quality" style="font-size:1.5rem; font-weight:700; color:var(--accent-emerald);"></div>
+        </div>
+        <div>
+          <div style="color:var(--text-secondary); font-size:0.75rem; text-transform:uppercase;">Freshness</div>
+          <div id="detail-freshness"></div>
+        </div>
+        <div>
+          <div style="color:var(--text-secondary); font-size:0.75rem; text-transform:uppercase;">Completeness</div>
+          <div id="detail-completeness"></div>
+        </div>
+        <div>
+          <div style="color:var(--text-secondary); font-size:0.75rem; text-transform:uppercase;">Version</div>
+          <div id="detail-version"></div>
+        </div>
+      </div>
+
+      <!-- Quality History -->
+      <h3 style="margin-top:1.5rem; font-weight:600; margin-bottom:0.5rem;">Quality History (30 days)</h3>
+      <div id="quality-history" class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Date</th><th>Score</th><th>Completeness</th><th>Accuracy</th><th>Row Count</th></tr>
+          </thead>
+          <tbody id="quality-history-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+
+  <script src="app.js"></script>
+  <script>
+    async function showProductDetail(id) {
+      try {
+        const res = await api.fetchProduct(id);
+        const p = res.value?.[0] || res;
+        document.getElementById('product-detail').style.display = 'block';
+        document.getElementById('detail-name').textContent = p.name;
+        document.getElementById('detail-description').textContent = p.description || '—';
+        document.getElementById('detail-owner').textContent = `${p.owner_name} (${p.owner_team})`;
+        document.getElementById('detail-quality').textContent = p.quality_score?.toFixed(1) || '—';
+        document.getElementById('detail-freshness').textContent = p.freshness_hours ? `${p.freshness_hours}h` : '—';
+        document.getElementById('detail-completeness').textContent = p.completeness ? `${p.completeness}%` : '—';
+        document.getElementById('detail-version').textContent = `v${p.version}`;
+
+        // Load quality history
+        const trend = await api.fetchQualityTrend(id);
+        const tbody = document.getElementById('quality-history-body');
+        const items = trend.value || [];
+        tbody.innerHTML = items.map(q => `
+          <tr>
+            <td>${q.date}</td>
+            <td>${q.quality_score?.toFixed(1)}</td>
+            <td>${q.completeness?.toFixed(1)}%</td>
+            <td>${q.accuracy?.toFixed(1)}%</td>
+            <td>${q.row_count?.toLocaleString()}</td>
+          </tr>
+        `).join('');
+      } catch { /* toast already shown */ }
+    }
+  </script>
+</body>
+</html>

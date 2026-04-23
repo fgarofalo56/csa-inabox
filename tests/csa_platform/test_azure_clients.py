@@ -23,6 +23,7 @@ test to keep tests independent.
 from __future__ import annotations
 
 import importlib
+import importlib.util
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -338,6 +339,14 @@ class TestGetCosmosClient:
 # ---------------------------------------------------------------------------
 
 
+try:
+    import azure.search.documents  # noqa: F401
+    _HAS_SEARCH = True
+except (ImportError, ModuleNotFoundError, AttributeError):
+    _HAS_SEARCH = False
+
+
+@pytest.mark.skipif(not _HAS_SEARCH, reason="azure-search-documents not installed")
 class TestGetSearchClient:
     """Tests for get_search_client."""
 

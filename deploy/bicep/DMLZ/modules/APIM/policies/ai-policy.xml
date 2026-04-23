@@ -1,0 +1,74 @@
+<!--
+  CSA-in-a-Box — AI Services Policy
+  Stricter per-user rate limits for AI endpoints, token budget headers,
+  and content safety metadata in responses.
+-->
+<policies>
+    <inbound>
+        <base />
+
+        <!-- Extract user identity from JWT for per-user rate limiting -->
+        <set-variable name="userId" value="@(context.Request.Headers.GetValueOrDefault("Authorization","anonymous").GetHashCode().ToString())" />
+
+        <!-- Stricter per-user rate limits for AI endpoints -->
+        <!-- Chat endpoints: 10 calls/minute -->
+        <choose>
+            <when condition="@(context.Request.Url.Path.Contains("/chat"))">
+                <rate-limit-by-key
+                    calls="10"
+                    renewal-period="60"
+                    counter-key="@((string)context.Variables["userId"])"
+                    increment-condition="@(context.Response.StatusCode >= 200)" />
+            </when>
+            <!-- Embedding endpoints: 100 calls/minute -->
+            <when condition="@(context.Request.Url.Path.Contains("/embed"))">
+                <rate-limit-by-key
+                    calls="100"
+                    renewal-period="60"
+                    counter-key="@((string)context.Variables["userId"])"
+                    increment-condition="@(context.Response.StatusCode >= 200)" />
+            </when>
+            <!-- Default AI rate limit -->
+            <otherwise>
+                <rate-limit-by-key
+                    calls="30"
+                    renewal-period="60"
+                    counter-key="@((string)context.Variables["userId"])"
+                    increment-condition="@(context.Response.StatusCode >= 200)" />
+            </otherwise>
+        </choose>
+
+        <!-- Set token budget header for backend to enforce limits -->
+        <set-header name="X-Token-Budget" exists-action="override">
+            <value>4096</value>
+        </set-header>
+
+        <!-- Forward user context to backend -->
+        <set-header name="X-User-ID" exists-action="override">
+            <value>@((string)context.Variables["userId"])</value>
+        </set-header>
+    </inbound>
+
+    <backend>
+        <set-backend-service backend-id="ai-backend" />
+        <forward-request timeout="120" />
+    </backend>
+
+    <outbound>
+        <base />
+
+        <!-- Add content safety score placeholder (populated by backend) -->
+        <set-header name="X-Content-Safety-Score" exists-action="skip">
+            <value>not-evaluated</value>
+        </set-header>
+
+        <!-- Strip internal debugging headers from responses -->
+        <set-header name="X-Debug-Trace" exists-action="delete" />
+        <set-header name="X-Internal-Request-Id" exists-action="delete" />
+        <set-header name="X-Backend-Timing" exists-action="delete" />
+    </outbound>
+
+    <on-error>
+        <base />
+    </on-error>
+</policies>

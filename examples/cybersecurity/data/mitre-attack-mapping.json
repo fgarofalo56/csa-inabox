@@ -1,0 +1,168 @@
+{
+  "version": "ATT&CK v14.1",
+  "lastUpdated": "2026-04-15",
+  "techniques": [
+    {
+      "id": "T1059.001",
+      "name": "PowerShell",
+      "tactic": "Execution",
+      "platform": ["Windows"],
+      "detection": "Monitor for obfuscated commands, encoded payloads, and bypass flags in PowerShell transcription logs",
+      "severity_weight": 0.8,
+      "data_sources": ["Command: Command Execution", "Script: Script Execution", "Process: Process Creation"]
+    },
+    {
+      "id": "T1110.001",
+      "name": "Password Guessing",
+      "tactic": "Credential Access",
+      "platform": ["Windows", "Azure AD", "Linux"],
+      "detection": "Monitor for multiple failed authentication attempts from a single source in a short time window",
+      "severity_weight": 0.6,
+      "data_sources": ["User Account: User Account Authentication", "Application Log: Application Log Content"]
+    },
+    {
+      "id": "T1021.001",
+      "name": "Remote Desktop Protocol",
+      "tactic": "Lateral Movement",
+      "platform": ["Windows"],
+      "detection": "Monitor for RDP connections from unusual source hosts or using service accounts",
+      "severity_weight": 0.7,
+      "data_sources": ["Logon Session: Logon Session Creation", "Network Traffic: Network Connection Creation"]
+    },
+    {
+      "id": "T1048.003",
+      "name": "Exfiltration Over Unencrypted Non-C2 Protocol",
+      "tactic": "Exfiltration",
+      "platform": ["Windows", "Linux", "macOS"],
+      "detection": "Monitor for large outbound data transfers to external IPs, especially outside business hours",
+      "severity_weight": 0.9,
+      "data_sources": ["Network Traffic: Network Traffic Flow", "Network Traffic: Network Traffic Content"]
+    },
+    {
+      "id": "T1134.001",
+      "name": "Token Impersonation/Theft",
+      "tactic": "Privilege Escalation",
+      "platform": ["Windows"],
+      "detection": "Monitor for API calls associated with token manipulation such as DuplicateToken and ImpersonateLoggedOnUser",
+      "severity_weight": 0.85,
+      "data_sources": ["Command: Command Execution", "Process: OS API Execution"]
+    },
+    {
+      "id": "T1078.004",
+      "name": "Cloud Accounts",
+      "tactic": "Initial Access",
+      "platform": ["Azure AD", "Office 365", "SaaS"],
+      "detection": "Monitor for sign-ins from anomalous locations, impossible travel, and unfamiliar devices",
+      "severity_weight": 0.7,
+      "data_sources": ["Logon Session: Logon Session Creation", "User Account: User Account Authentication"]
+    },
+    {
+      "id": "T1071.001",
+      "name": "Web Protocols",
+      "tactic": "Command and Control",
+      "platform": ["Windows", "Linux", "macOS"],
+      "detection": "Monitor for beaconing patterns in HTTP/HTTPS traffic and known C2 framework signatures",
+      "severity_weight": 0.9,
+      "data_sources": ["Network Traffic: Network Traffic Flow", "Network Traffic: Network Traffic Content"]
+    },
+    {
+      "id": "T1071.004",
+      "name": "DNS",
+      "tactic": "Command and Control",
+      "platform": ["Windows", "Linux", "macOS"],
+      "detection": "Monitor for unusually high DNS query volumes, long subdomain names, and queries to newly registered domains",
+      "severity_weight": 0.85,
+      "data_sources": ["Network Traffic: Network Traffic Flow", "Network Traffic: Network Traffic Content"]
+    },
+    {
+      "id": "T1048.001",
+      "name": "Exfiltration Over Symmetric Encrypted Non-C2 Protocol",
+      "tactic": "Exfiltration",
+      "platform": ["Windows", "Linux", "macOS"],
+      "detection": "Monitor for DNS TXT record queries with high entropy content indicating encoded data",
+      "severity_weight": 0.9,
+      "data_sources": ["Network Traffic: Network Traffic Flow", "Network Traffic: Network Traffic Content"]
+    },
+    {
+      "id": "T1486",
+      "name": "Data Encrypted for Impact",
+      "tactic": "Impact",
+      "platform": ["Windows", "Linux", "macOS"],
+      "detection": "Monitor for rapid file modification events, known ransomware extensions, and shadow copy deletion",
+      "severity_weight": 1.0,
+      "data_sources": ["File: File Modification", "File: File Creation", "Command: Command Execution"]
+    },
+    {
+      "id": "T1530",
+      "name": "Data from Cloud Storage",
+      "tactic": "Collection",
+      "platform": ["Azure AD", "Office 365", "SaaS"],
+      "detection": "Monitor for bulk download or access patterns to cloud storage significantly exceeding user baseline",
+      "severity_weight": 0.7,
+      "data_sources": ["Cloud Storage: Cloud Storage Access", "Application Log: Application Log Content"]
+    },
+    {
+      "id": "T1547.001",
+      "name": "Registry Run Keys / Startup Folder",
+      "tactic": "Persistence",
+      "platform": ["Windows"],
+      "detection": "Monitor for modifications to Run and RunOnce registry keys and Startup folder entries",
+      "severity_weight": 0.75,
+      "data_sources": ["Windows Registry: Windows Registry Key Modification", "File: File Creation"]
+    },
+    {
+      "id": "T1003.001",
+      "name": "LSASS Memory",
+      "tactic": "Credential Access",
+      "platform": ["Windows"],
+      "detection": "Monitor for processes accessing lsass.exe memory, especially using tools like Mimikatz or procdump",
+      "severity_weight": 0.95,
+      "data_sources": ["Process: OS API Execution", "Process: Process Access"]
+    },
+    {
+      "id": "T1055.001",
+      "name": "Dynamic-link Library Injection",
+      "tactic": "Defense Evasion",
+      "platform": ["Windows"],
+      "detection": "Monitor for processes loading DLLs from unusual paths or with WriteProcessMemory API calls",
+      "severity_weight": 0.85,
+      "data_sources": ["Module: Module Load", "Process: OS API Execution"]
+    },
+    {
+      "id": "T1027",
+      "name": "Obfuscated Files or Information",
+      "tactic": "Defense Evasion",
+      "platform": ["Windows", "Linux", "macOS"],
+      "detection": "Monitor for files with high entropy, encoded content, or packed executables",
+      "severity_weight": 0.7,
+      "data_sources": ["File: File Creation", "File: File Metadata"]
+    },
+    {
+      "id": "T1190",
+      "name": "Exploit Public-Facing Application",
+      "tactic": "Initial Access",
+      "platform": ["Windows", "Linux", "Azure"],
+      "detection": "Monitor WAF logs, web server error logs, and known CVE exploitation signatures",
+      "severity_weight": 0.9,
+      "data_sources": ["Application Log: Application Log Content", "Network Traffic: Network Traffic Content"]
+    },
+    {
+      "id": "T1562.001",
+      "name": "Disable or Modify Tools",
+      "tactic": "Defense Evasion",
+      "platform": ["Windows", "Linux", "macOS"],
+      "detection": "Monitor for security tool processes being stopped, uninstalled, or configuration changes",
+      "severity_weight": 0.9,
+      "data_sources": ["Command: Command Execution", "Process: Process Termination", "Windows Registry: Windows Registry Key Modification"]
+    },
+    {
+      "id": "T1136.001",
+      "name": "Local Account",
+      "tactic": "Persistence",
+      "platform": ["Windows", "Linux", "macOS"],
+      "detection": "Monitor for new local account creation events, especially outside of standard provisioning workflows",
+      "severity_weight": 0.75,
+      "data_sources": ["User Account: User Account Creation", "Command: Command Execution"]
+    }
+  ]
+}

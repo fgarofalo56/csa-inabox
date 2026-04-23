@@ -1,0 +1,16 @@
+apiVersion: v2
+name: csa-atlas
+description: >
+  Apache Atlas standalone chart for data catalog and metadata management.
+  Replaces Microsoft Purview in Azure Government deployments with limited features.
+type: application
+version: 1.0.0
+appVersion: "2.3.0"
+keywords:
+  - data-catalog
+  - metadata
+  - atlas
+  - azure-government
+maintainers:
+  - name: CSA-in-a-Box Team
+    email: csa-team@contoso.com

@@ -44,7 +44,7 @@ from .observability import (
 )
 from .observability.metrics import install_metrics
 from .observability.rate_limit import install_rate_limiting
-from .routers import access, marketplace, pipelines, sources, stats
+from .routers import access, ai, marketplace, pipelines, sources, stats
 from .routers.stats import domains_router
 from .services.auth import get_current_user
 
@@ -397,6 +397,7 @@ app.include_router(pipelines.router, prefix="/api/v1/pipelines", tags=["Pipeline
 app.include_router(marketplace.router, prefix="/api/v1/marketplace", tags=["Marketplace"])
 app.include_router(access.router, prefix="/api/v1/access", tags=["Access Requests"])
 app.include_router(stats.router, prefix="/api/v1/stats", tags=["Statistics"])
+app.include_router(ai.router, prefix="/api/v1/ai", tags=["AI Services"])
 app.include_router(domains_router, prefix="/api/v1/domains", tags=["Statistics"])
 
 # ── BFF auth router (conditionally mounted) — CSA-0020 Phase 2 ──────────────

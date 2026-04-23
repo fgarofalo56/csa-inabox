@@ -5,27 +5,51 @@ Endpoints
 ---------
 GET    /api/v1/marketplace/products                        — list data products
 GET    /api/v1/marketplace/products/{product_id}            — get data product
+POST   /api/v1/marketplace/products                        — register data product
+PUT    /api/v1/marketplace/products/{product_id}           — update data product
+DELETE /api/v1/marketplace/products/{product_id}           — delete data product
+POST   /api/v1/marketplace/products/{product_id}/quality   — trigger quality assessment
 GET    /api/v1/marketplace/products/{product_id}/quality    — quality history
 GET    /api/v1/marketplace/domains                          — list domains
 GET    /api/v1/marketplace/stats                            — marketplace stats
+POST   /api/v1/marketplace/access-requests                  — create access request
+GET    /api/v1/marketplace/access-requests                  — list access requests
+GET    /api/v1/marketplace/access-requests/{request_id}     — get access request
+PUT    /api/v1/marketplace/access-requests/{request_id}/approve — approve request
+PUT    /api/v1/marketplace/access-requests/{request_id}/deny — deny request
+
+Thin HTTP layer — all business logic lives in
+:class:`~portal.shared.api.services.marketplace_service.MarketplaceService`.
 """
 
 from __future__ import annotations
 
-import logging
-import random as _rng
-from datetime import datetime, timedelta, timezone
+from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from ..dependencies import get_products_store, get_quality_store
-from ..models.marketplace import DataProduct, LineageInfo, QualityMetric, SLADefinition
-from ..models.source import ClassificationLevel
+from ..dependencies import get_access_requests_store, get_products_store, get_quality_store
+from ..models.marketplace import (
+    AccessRequest,
+    AccessRequestCreate,
+    AccessRequestStatus,
+    DataProduct,
+    DataProductCreate,
+    QualityMetric,
+)
 from ..persistence_async import AsyncStoreBackend
-from ..services.auth import DomainScope, get_domain_scope
+from ..services.auth import DomainScope, get_current_user, get_domain_scope
+from ..services.marketplace_service import MarketplaceService
 
-logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _build_service(
+    products: AsyncStoreBackend,
+    quality: AsyncStoreBackend,
+    access: AsyncStoreBackend,
+) -> MarketplaceService:
+    return MarketplaceService(products, quality, access)
 
 
 async def seed_demo_products() -> None:
@@ -33,167 +57,8 @@ async def seed_demo_products() -> None:
 
     Called once at application startup from the lifespan handler.
     """
-    async_products = get_products_store()
-    async_quality = get_quality_store()
-    if await async_products.count() > 0:
-        return
-
-    _rng.seed(42)
-
-    now = datetime.now(timezone.utc)
-    demos = [
-        DataProduct(
-            id="dp-001",
-            name="Employee Master Data",
-            description="Curated, PII-masked employee records refreshed daily. "
-            "Includes org hierarchy, location, and role information.",
-            domain="human-resources",
-            owner={"name": "Jane Smith", "email": "jane.smith@contoso.com", "team": "People Analytics"},
-            classification=ClassificationLevel.CONFIDENTIAL,
-            quality_score=0.945,
-            freshness_hours=6.2,
-            completeness=0.97,
-            availability=0.998,
-            tags={"pii": "masked", "refresh": "daily"},
-            created_at=datetime(2025, 7, 1, tzinfo=timezone.utc),
-            updated_at=now - timedelta(hours=6),
-            sample_queries=[
-                "SELECT * FROM hr.employee_master WHERE department = 'Engineering'",
-                "SELECT location, COUNT(*) FROM hr.employee_master GROUP BY location",
-            ],
-            documentation_url="https://wiki.contoso.com/data/hr-employee-master",
-            version="2.1.0",
-            status="active",
-            sla=SLADefinition(
-                freshness_minutes=360,
-                availability_percent=99.8,
-                valid_row_ratio=0.97,
-            ),
-            lineage=LineageInfo(
-                upstream=["workday-hris-raw", "org-hierarchy-raw"],
-                downstream=["workforce-analytics", "headcount-reporting"],
-                transformations=[
-                    "dbt model: hr_employee_cleansed",
-                    "dbt model: hr_employee_master",
-                ],
-            ),
-        ),
-        DataProduct(
-            id="dp-002",
-            name="Manufacturing Sensor Analytics",
-            description="Aggregated sensor telemetry from the manufacturing floor. "
-            "5-minute roll-ups for temperature, pressure, and vibration.",
-            domain="manufacturing",
-            owner={"name": "Bob Chen", "email": "bob.chen@contoso.com", "team": "Manufacturing IT"},
-            classification=ClassificationLevel.INTERNAL,
-            quality_score=0.912,
-            freshness_hours=0.1,
-            completeness=0.99,
-            availability=0.995,
-            tags={"real-time": "true", "iot": "true"},
-            created_at=datetime(2025, 10, 1, tzinfo=timezone.utc),
-            updated_at=now - timedelta(minutes=5),
-            version="1.3.0",
-            status="active",
-            sla=SLADefinition(
-                freshness_minutes=10,
-                availability_percent=99.5,
-                valid_row_ratio=0.99,
-            ),
-            lineage=LineageInfo(
-                upstream=["iot-hub-raw-telemetry"],
-                downstream=["predictive-maintenance-model", "oee-dashboard"],
-                transformations=[
-                    "ADF pipeline: sensor_5min_aggregation",
-                    "dbt model: sensor_analytics_gold",
-                ],
-            ),
-        ),
-        DataProduct(
-            id="dp-003",
-            name="Financial General Ledger",
-            description="Weekly GL snapshot for financial reporting. SOX-compliant with full audit trail.",
-            domain="finance",
-            owner={"name": "Alice Park", "email": "alice.park@contoso.com", "team": "Financial Reporting"},
-            classification=ClassificationLevel.RESTRICTED,
-            quality_score=0.981,
-            freshness_hours=168.0,
-            completeness=1.0,
-            availability=0.999,
-            tags={"compliance": "sox", "audit": "true"},
-            created_at=datetime(2025, 4, 15, tzinfo=timezone.utc),
-            updated_at=now - timedelta(days=3),
-            version="3.0.0",
-            status="active",
-            sla=SLADefinition(
-                freshness_minutes=10080,
-                availability_percent=99.9,
-                valid_row_ratio=1.0,
-            ),
-            lineage=LineageInfo(
-                upstream=["sap-erp-gl-extract", "manual-journal-entries"],
-                downstream=["external-financial-reporting", "management-accounts"],
-                transformations=[
-                    "dbt model: gl_staging",
-                    "dbt model: gl_validated",
-                    "dbt model: gl_snapshot_weekly",
-                ],
-            ),
-        ),
-        DataProduct(
-            id="dp-004",
-            name="Customer 360 Profile",
-            description="Unified customer view combining CRM, web analytics, and transaction data. Updated via CDC.",
-            domain="marketing",
-            owner={"name": "Carlos Diaz", "email": "carlos.diaz@contoso.com", "team": "Customer Insights"},
-            classification=ClassificationLevel.CONFIDENTIAL,
-            quality_score=0.873,
-            freshness_hours=1.5,
-            completeness=0.93,
-            availability=0.992,
-            tags={"cdp": "true"},
-            created_at=datetime(2025, 11, 20, tzinfo=timezone.utc),
-            updated_at=now - timedelta(hours=2),
-        ),
-        DataProduct(
-            id="dp-005",
-            name="Supply Chain Inventory",
-            description="Real-time inventory levels across all warehouses and distribution centers.",
-            domain="supply-chain",
-            owner={"name": "Diana Torres", "email": "diana.torres@contoso.com", "team": "Supply Chain Ops"},
-            classification=ClassificationLevel.INTERNAL,
-            quality_score=0.928,
-            freshness_hours=0.5,
-            completeness=0.96,
-            availability=0.997,
-            tags={"warehouse": "all"},
-            created_at=datetime(2026, 1, 5, tzinfo=timezone.utc),
-            updated_at=now - timedelta(minutes=30),
-        ),
-    ]
-    for dp in demos:
-        await async_products.add(dp.model_dump())
-
-    # Seed quality history for each product (last 30 days)
-    for dp in demos:
-        history: list[dict] = []
-        for days_ago in range(30):
-            date = (now - timedelta(days=days_ago)).strftime("%Y-%m-%d")
-            # Clamp the perturbed metric back into the [0.0, 1.0] ratio
-            # range so QualityMetric's Field(ge, le) validation passes
-            # even at the extremes (CSA-0003).
-            score = max(0.0, min(1.0, dp.quality_score + _rng.uniform(-0.03, 0.02)))
-            comp = max(0.0, min(1.0, dp.completeness + _rng.uniform(-0.03, 0.01)))
-            history.append(
-                QualityMetric(
-                    date=date,
-                    quality_score=score,
-                    completeness=comp,
-                    freshness_hours=max(0.0, dp.freshness_hours + _rng.uniform(-1, 2)),
-                    row_count=_rng.randint(100_000, 5_000_000),
-                ).model_dump(),
-            )
-        await async_quality.add({"product_id": dp.id, "history": history})
+    svc = MarketplaceService(get_products_store(), get_quality_store(), get_access_requests_store())
+    await svc.seed_demo_products()
 
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
@@ -212,28 +77,20 @@ async def list_products(
     offset: int = Query(0, ge=0),
     scope: DomainScope = Depends(get_domain_scope),
     store: AsyncStoreBackend = Depends(get_products_store),
+    quality_store: AsyncStoreBackend = Depends(get_quality_store),
+    access_store: AsyncStoreBackend = Depends(get_access_requests_store),
 ) -> list[DataProduct]:
     """Browse the data marketplace with optional filters."""
-    results = [DataProduct.model_validate(item) for item in await store.load()]
-
-    # Domain scoping: non-admin users only see their domain's products.
-    # When a non-admin has no domain claim (e.g. demo mode), return empty
-    # rather than leaking data across all domains (SEC-0005).
-    if not scope.is_admin:
-        if not scope.user_domain:
-            return []
-        results = [p for p in results if p.domain == scope.user_domain]
-
-    if domain:
-        results = [p for p in results if p.domain == domain]
-    if min_quality is not None:
-        results = [p for p in results if p.quality_score >= min_quality]
-    if search:
-        q = search.lower()
-        results = [p for p in results if q in p.name.lower() or q in p.description.lower()]
-
-    results.sort(key=lambda p: p.quality_score, reverse=True)
-    return results[offset : offset + limit]
+    svc = _build_service(store, quality_store, access_store)
+    return await svc.list_products(
+        domain=domain,
+        min_quality=min_quality,
+        search=search,
+        limit=limit,
+        offset=offset,
+        scope_domain=scope.user_domain,
+        is_admin=scope.is_admin,
+    )
 
 
 @router.get(
@@ -247,13 +104,12 @@ async def get_product(
     store: AsyncStoreBackend = Depends(get_products_store),
 ) -> DataProduct:
     """Return detailed data product information."""
-    stored_product = await store.get(product_id)
-    if not stored_product:
+    svc = _build_service(store, get_quality_store(), get_access_requests_store())
+    product = await svc.get_product(product_id)
+    if not product:
         raise HTTPException(status_code=404, detail=f"Product '{product_id}' not found.")
-    product = DataProduct.model_validate(stored_product)
 
     # Domain scoping: non-admin users can only access their domain's products.
-    # A non-admin with no domain claim is denied regardless of the product domain.
     if not scope.is_admin and (not scope.user_domain or product.domain != scope.user_domain):
         raise HTTPException(status_code=403, detail="You do not have access to this product.")
 
@@ -277,24 +133,17 @@ async def get_quality_history(
     Non-admin users may only view quality history for products in their
     domain (SEC-0007).
     """
-    stored = await store.get(product_id)
-    if not stored:
+    # Check product exists and enforce domain scoping
+    svc = _build_service(store, quality_store, get_access_requests_store())
+    product = await svc.get_product(product_id)
+    if not product:
         raise HTTPException(status_code=404, detail=f"Product '{product_id}' not found.")
 
-    product = DataProduct.model_validate(stored)
-
-    # Domain scoping: enforce for non-admin callers (SEC-0007).
     if not scope.is_admin and (not scope.user_domain or product.domain != scope.user_domain):
         raise HTTPException(status_code=403, detail="You do not have access to this product.")
 
-    # Find quality history for this product
-    all_quality_data = await quality_store.load()
-    for item in all_quality_data:
-        if item.get("product_id") == product_id:
-            history = item.get("history", [])
-            return [QualityMetric.model_validate(h) for h in history[:days]]
-
-    return []
+    history = await svc.get_quality_history(product_id, days=days)
+    return history if history is not None else []
 
 
 @router.get(
@@ -307,19 +156,13 @@ async def list_domains(
 ) -> list[dict]:
     """Return data domains with their product counts.
 
-    CSA-0024: non-admin callers see only their own domain. Admins
-    retain platform-wide visibility.
+    CSA-0024: non-admin callers see only their own domain.
     """
-    domains: dict[str, int] = {}
-    products = [DataProduct.model_validate(item) for item in await store.load()]
-    if not scope.is_admin:
-        if not scope.user_domain:
-            return []
-        products = [p for p in products if p.domain == scope.user_domain]
-    for product in products:
-        domains[product.domain] = domains.get(product.domain, 0) + 1
-
-    return [{"name": domain, "product_count": count} for domain, count in sorted(domains.items())]
+    svc = _build_service(store, get_quality_store(), get_access_requests_store())
+    return await svc.get_domain_overview(
+        scope_domain=scope.user_domain,
+        is_admin=scope.is_admin,
+    )
 
 
 @router.get(
@@ -333,29 +176,313 @@ async def marketplace_stats(
     """Return aggregate marketplace statistics.
 
     CSA-0024: non-admin callers see only their own domain's aggregates.
-    Admins retain platform-wide totals.
     """
-    products = [DataProduct.model_validate(item) for item in await store.load()]
-    if not scope.is_admin:
-        if not scope.user_domain:
-            products = []
-        else:
-            products = [p for p in products if p.domain == scope.user_domain]
-    return {
-        "total_products": len(products),
-        "total_domains": len({p.domain for p in products}),
-        "avg_quality_score": round(
-            sum(p.quality_score for p in products) / len(products) if products else 0,
-            3,  # 0.0-1.0 ratio — 3 decimals for dashboard precision (CSA-0003)
-        ),
-        "products_by_domain": dict(sorted(_count_by_key(products, lambda p: p.domain).items())),
-    }
+    svc = _build_service(store, get_quality_store(), get_access_requests_store())
+    return await svc.get_platform_stats(
+        scope_domain=scope.user_domain,
+        is_admin=scope.is_admin,
+    )
 
 
-def _count_by_key(items: list, key_fn) -> dict[str, int]:
-    """Count items by a key function."""
-    counts: dict[str, int] = {}
-    for item in items:
-        k = key_fn(item)
-        counts[k] = counts.get(k, 0) + 1
-    return counts
+# ── Write Endpoints ─────────────────────────────────────────────────────────
+
+
+@router.post(
+    "/products",
+    response_model=DataProduct,
+    status_code=status.HTTP_201_CREATED,
+    summary="Register a new data product",
+)
+async def create_product(
+    product_data: DataProductCreate,
+    scope: DomainScope = Depends(get_domain_scope),
+    store: AsyncStoreBackend = Depends(get_products_store),
+) -> DataProduct:
+    """Register a new data product in the marketplace.
+
+    Domain scoping: non-admin users can only create products in their own domain.
+    """
+    if not scope.is_admin and (not scope.user_domain or product_data.domain != scope.user_domain):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have access to this domain.",
+        )
+
+    svc = _build_service(store, get_quality_store(), get_access_requests_store())
+    try:
+        return await svc.create_product(product_data)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+
+@router.put(
+    "/products/{product_id}",
+    response_model=DataProduct,
+    summary="Update a data product",
+)
+async def update_product(
+    product_id: str,
+    updates: dict[str, Any],
+    scope: DomainScope = Depends(get_domain_scope),
+    store: AsyncStoreBackend = Depends(get_products_store),
+) -> DataProduct:
+    """Update an existing data product.
+
+    Only the domain owner or admin can update a product.
+    """
+    svc = _build_service(store, get_quality_store(), get_access_requests_store())
+
+    # Check product exists for domain scoping
+    product = await svc.get_product(product_id)
+    if not product:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Product '{product_id}' not found.")
+
+    if not scope.is_admin and (not scope.user_domain or product.domain != scope.user_domain):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You do not have access to this domain.")
+
+    try:
+        updated = await svc.update_product(product_id, updates)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    if not updated:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Product '{product_id}' not found.")
+    return updated
+
+
+@router.delete(
+    "/products/{product_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a data product",
+)
+async def delete_product(
+    product_id: str,
+    user: dict[str, Any] = Depends(get_current_user),
+    store: AsyncStoreBackend = Depends(get_products_store),
+) -> None:
+    """Delete a data product (admin only)."""
+    roles = user.get("roles", [])
+    if "Admin" not in roles:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin role required for this operation.",
+        )
+
+    svc = _build_service(store, get_quality_store(), get_access_requests_store())
+    if not await svc.delete_product(product_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Product '{product_id}' not found.")
+
+
+@router.post(
+    "/products/{product_id}/quality",
+    response_model=DataProduct,
+    summary="Trigger quality assessment",
+)
+async def trigger_quality_assessment(
+    product_id: str,
+    scope: DomainScope = Depends(get_domain_scope),
+    store: AsyncStoreBackend = Depends(get_products_store),
+    quality_store: AsyncStoreBackend = Depends(get_quality_store),
+) -> DataProduct:
+    """Trigger a quality assessment for a data product.
+
+    In demo mode, generates realistic quality scores.
+    """
+    svc = _build_service(store, quality_store, get_access_requests_store())
+
+    # Check product exists for domain scoping
+    product = await svc.get_product(product_id)
+    if not product:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Product '{product_id}' not found.")
+
+    if not scope.is_admin and (not scope.user_domain or product.domain != scope.user_domain):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You do not have access to this domain.")
+
+    result = await svc.trigger_quality_assessment(product_id)
+    if not result:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Product '{product_id}' not found.")
+    return result
+
+
+@router.post(
+    "/access-requests",
+    response_model=AccessRequest,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create an access request",
+)
+async def create_access_request(
+    request_data: AccessRequestCreate,
+    user: dict[str, Any] = Depends(get_current_user),
+    store: AsyncStoreBackend = Depends(get_access_requests_store),
+    products_store: AsyncStoreBackend = Depends(get_products_store),
+) -> AccessRequest:
+    """Create a new access request for a data product."""
+    requester_email = user.get("email", user.get("sub", "unknown@example.com"))
+    svc = _build_service(products_store, get_quality_store(), store)
+    result = await svc.create_access_request(request_data, requester_email)
+    if not result:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Data product '{request_data.data_product_id}' not found.",
+        )
+    return result
+
+
+@router.get(
+    "/access-requests",
+    response_model=list[AccessRequest],
+    summary="List access requests",
+)
+async def list_access_requests(
+    status_filter: AccessRequestStatus | None = Query(None, alias="status"),
+    product_id: str | None = None,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    user: dict[str, Any] = Depends(get_current_user),
+    store: AsyncStoreBackend = Depends(get_access_requests_store),
+) -> list[AccessRequest]:
+    """List access requests.
+
+    Admin users see all requests. Regular users see only their own.
+    """
+    roles = user.get("roles", [])
+    is_admin = "Admin" in roles
+    requester_email = None
+    if not is_admin:
+        requester_email = user.get("email", user.get("sub", "unknown@example.com"))
+
+    svc = _build_service(get_products_store(), get_quality_store(), store)
+    return await svc.list_access_requests(
+        status_filter=status_filter,
+        product_id=product_id,
+        requester_email=requester_email,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get(
+    "/access-requests/{request_id}",
+    response_model=AccessRequest,
+    summary="Get access request details",
+)
+async def get_access_request(
+    request_id: str,
+    user: dict[str, Any] = Depends(get_current_user),
+    store: AsyncStoreBackend = Depends(get_access_requests_store),
+) -> AccessRequest:
+    """Get details of a specific access request."""
+    svc = _build_service(get_products_store(), get_quality_store(), store)
+    access_request = await svc.get_access_request(request_id)
+    if not access_request:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Access request '{request_id}' not found.")
+
+    roles = user.get("roles", [])
+    is_admin = "Admin" in roles
+    user_email = user.get("email", user.get("sub", "unknown@example.com"))
+
+    if not is_admin and access_request.requester_email != user_email:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only view your own access requests.")
+
+    return access_request
+
+
+@router.put(
+    "/access-requests/{request_id}/approve",
+    response_model=AccessRequest,
+    summary="Approve access request",
+)
+async def approve_access_request(
+    request_id: str,
+    user: dict[str, Any] = Depends(get_current_user),
+    store: AsyncStoreBackend = Depends(get_access_requests_store),
+    products_store: AsyncStoreBackend = Depends(get_products_store),
+) -> AccessRequest:
+    """Approve an access request.
+
+    Only product owners or admins can approve requests.
+    """
+    svc = _build_service(products_store, get_quality_store(), store)
+
+    # Check request exists
+    access_request = await svc.get_access_request(request_id)
+    if not access_request:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Access request '{request_id}' not found.")
+
+    # Check product exists and verify ownership
+    product = await svc.get_product(access_request.data_product_id)
+    if not product:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Data product '{access_request.data_product_id}' not found.",
+        )
+
+    roles = user.get("roles", [])
+    is_admin = "Admin" in roles
+    user_email = user.get("email", user.get("sub", "unknown@example.com"))
+
+    if not is_admin and product.owner.email != user_email:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the product owner or admin can approve access requests.",
+        )
+
+    try:
+        result = await svc.approve_access_request(request_id, user_email)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    if not result:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Access request '{request_id}' not found.")
+    return result
+
+
+@router.put(
+    "/access-requests/{request_id}/deny",
+    response_model=AccessRequest,
+    summary="Deny access request",
+)
+async def deny_access_request(
+    request_id: str,
+    review_notes: str | None = None,
+    user: dict[str, Any] = Depends(get_current_user),
+    store: AsyncStoreBackend = Depends(get_access_requests_store),
+    products_store: AsyncStoreBackend = Depends(get_products_store),
+) -> AccessRequest:
+    """Deny an access request.
+
+    Only product owners or admins can deny requests.
+    """
+    svc = _build_service(products_store, get_quality_store(), store)
+
+    # Check request exists
+    access_request = await svc.get_access_request(request_id)
+    if not access_request:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Access request '{request_id}' not found.")
+
+    # Check product exists and verify ownership
+    product = await svc.get_product(access_request.data_product_id)
+    if not product:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Data product '{access_request.data_product_id}' not found.",
+        )
+
+    roles = user.get("roles", [])
+    is_admin = "Admin" in roles
+    user_email = user.get("email", user.get("sub", "unknown@example.com"))
+
+    if not is_admin and product.owner.email != user_email:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the product owner or admin can deny access requests.",
+        )
+
+    try:
+        result = await svc.deny_access_request(request_id, user_email, review_notes)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    if not result:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Access request '{request_id}' not found.")
+    return result

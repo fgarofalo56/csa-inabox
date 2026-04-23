@@ -1,0 +1,74 @@
+# OpenSearch — Standalone Search & Analytics
+# Replaces Azure AI Search for full-text and vector search.
+
+image:
+  repository: opensearchproject/opensearch
+  tag: "2.12.0"
+  pullPolicy: IfNotPresent
+
+replicas: 3
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 2Gi
+  limits:
+    cpu: 2000m
+    memory: 4Gi
+
+service:
+  type: ClusterIP
+  httpPort: 9200
+  transportPort: 9600
+
+persistence:
+  enabled: true
+  size: 30Gi
+  storageClass: managed-csi
+  accessMode: ReadWriteOnce
+
+# OpenSearch configuration
+config:
+  cluster.name: csa-opensearch
+  network.host: "0.0.0.0"
+  discovery.type: zen
+  discovery.seed_hosts: ""           # Auto-generated from StatefulSet
+  cluster.initial_master_nodes: ""   # Auto-generated from StatefulSet
+  plugins.security.disabled: "false"
+  # JVM heap — set to 50% of container memory limit
+  OPENSEARCH_JAVA_OPTS: "-Xms1g -Xmx1g"
+
+# OpenSearch Dashboards sidecar
+dashboards:
+  enabled: true
+  image:
+    repository: opensearchproject/opensearch-dashboards
+    tag: "2.12.0"
+  replicas: 1
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  service:
+    type: ClusterIP
+    port: 5601
+  config:
+    opensearch.hosts: '["https://opensearch:9200"]'
+    opensearch.ssl.verificationMode: "none"
+
+probes:
+  readiness:
+    path: /_cluster/health
+    initialDelaySeconds: 30
+    periodSeconds: 10
+  liveness:
+    tcpSocket: 9200
+    initialDelaySeconds: 60
+    periodSeconds: 30
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

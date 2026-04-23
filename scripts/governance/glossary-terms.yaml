@@ -1,0 +1,261 @@
+# CSA-in-a-Box Business Glossary Terms
+# Used by scripts/governance/seed-glossary.py to populate Purview
+#
+# Structure:
+#   categories:        Top-level groupings (become parent terms)
+#     terms:           Terms within a category
+#       subTerms:      Child terms (third level)
+#   terms:             Standalone terms (no category)
+
+glossaryName: CSA Business Glossary
+version: "1.0.0"
+
+categories:
+  - name: Data Engineering
+    definition: >
+      Concepts and patterns used in data engineering within the Cloud Scale
+      Analytics platform.
+    terms:
+      - name: Bronze Layer
+        definition: >
+          The raw ingestion layer of the medallion architecture. Data is stored
+          as-is from source systems with minimal transformation. Append-only,
+          immutable, and partitioned by ingestion date.
+        abbreviation: BRZ
+        relatedTerms: [Silver Layer, Gold Layer, Medallion Architecture]
+
+      - name: Silver Layer
+        definition: >
+          The cleansed and conformed layer. Data is deduplicated, validated,
+          schema-enforced, and enriched with surrogate keys. Serves as the
+          single source of truth for downstream analytics.
+        abbreviation: SLV
+        relatedTerms: [Bronze Layer, Gold Layer, Medallion Architecture]
+
+      - name: Gold Layer
+        definition: >
+          The business-ready aggregation layer. Data is modeled for specific
+          use cases (star schema, denormalized views, feature stores). Subject
+          to SLAs and quality certification.
+        abbreviation: GLD
+        relatedTerms: [Bronze Layer, Silver Layer, Medallion Architecture]
+
+      - name: Medallion Architecture
+        definition: >
+          A data design pattern that organizes data into Bronze (raw), Silver
+          (cleansed), and Gold (aggregated) layers. Each layer adds quality
+          and structure progressively.
+        relatedTerms: [Bronze Layer, Silver Layer, Gold Layer]
+
+      - name: Data Lake
+        definition: >
+          A centralized storage repository (ADLS Gen2) that holds structured,
+          semi-structured, and unstructured data at any scale. Supports Delta
+          Lake, Parquet, and other open formats.
+
+      - name: Data Lakehouse
+        definition: >
+          An architecture combining the low-cost storage of a data lake with
+          the data management features of a data warehouse. Implemented via
+          Delta Lake on ADLS Gen2 with Databricks or Synapse compute.
+        relatedTerms: [Data Lake, Medallion Architecture]
+
+      - name: Data Mesh
+        definition: >
+          An organizational approach where domain teams own their data products
+          end-to-end. Federated governance with centralized standards.
+        relatedTerms: [Data Contract, Data Product]
+
+      - name: Data Product
+        definition: >
+          A self-contained, quality-certified dataset published by a domain
+          team for consumption by other domains. Includes schema, SLA,
+          documentation, and access policies.
+        relatedTerms: [Data Contract, Data Mesh]
+
+  - name: Data Governance
+    definition: >
+      Policies, processes, and tools that ensure data is managed as a
+      strategic enterprise asset.
+    terms:
+      - name: Data Contract
+        definition: >
+          A formal agreement between data producers and consumers defining
+          schema, quality rules, SLAs, and access policies. Stored as YAML
+          in the repository and enforced by the pipeline enforcer.
+        relatedTerms: [Data Quality, Data Product]
+        contacts:
+          - type: Expert
+            email: governance@contoso.com
+
+      - name: Data Quality
+        definition: >
+          The degree to which data meets the requirements of its intended use.
+          Measured across completeness, accuracy, timeliness, and consistency
+          dimensions.
+        relatedTerms: [Completeness Score, Accuracy Score, Timeliness Score]
+
+      - name: Data Lineage
+        definition: >
+          The end-to-end record of data origin, movement, and transformation
+          across pipelines and systems. Captured automatically for ADF and
+          Synapse; via OpenLineage for Databricks.
+        relatedTerms: [Data Quality, Data Contract]
+
+      - name: Data Classification
+        definition: >
+          The process of categorizing data based on its content (PII, PHI,
+          financial) and sensitivity level. Performed by Purview scan rules
+          using pattern matching and machine learning.
+        relatedTerms: [Sensitivity Label]
+
+      - name: Sensitivity Label
+        definition: >
+          A Microsoft Information Protection label (Public, Internal,
+          Confidential, Restricted) applied to data assets based on their
+          classification. Drives access policies and encryption.
+        relatedTerms: [Data Classification]
+
+      - name: Data Steward
+        definition: >
+          A role responsible for the quality, metadata, and governance of data
+          within a specific domain. Manages glossary terms, approves access
+          requests, and monitors quality scores.
+
+      - name: Data Catalog
+        definition: >
+          A searchable inventory of all data assets in the organization.
+          Implemented via Microsoft Purview. Contains technical metadata,
+          business glossary terms, classifications, and lineage.
+
+  - name: Finance Domain
+    definition: Financial data concepts and metrics.
+    terms:
+      - name: Revenue
+        definition: >
+          Total income generated from the sale of goods or services related
+          to the primary operations of the business.
+        abbreviation: REV
+        contacts:
+          - type: Expert
+            email: finance-analytics@contoso.com
+        subTerms:
+          - name: Gross Revenue
+            definition: >
+              Total revenue before any deductions for returns, discounts,
+              or allowances.
+            abbreviation: GREV
+          - name: Net Revenue
+            definition: >
+              Revenue after subtracting returns, refunds, discounts, and
+              sales allowances. The primary top-line financial metric.
+            abbreviation: NREV
+
+      - name: Cost of Goods Sold
+        definition: >
+          The direct costs attributable to the production of goods sold.
+          Includes materials, labor, and manufacturing overhead.
+        abbreviation: COGS
+
+      - name: Customer Lifetime Value
+        definition: >
+          The total projected revenue a customer will generate over their
+          entire relationship with the business. Calculated using historical
+          purchase data, retention rates, and margin.
+        abbreviation: CLV
+        relatedTerms: [Revenue, Customer Segment]
+
+      - name: Customer Segment
+        definition: >
+          A categorization of customers based on behavior and value.
+          Standard segments are active, at_risk, churned, and never_purchased.
+        relatedTerms: [Customer Lifetime Value]
+
+  - name: Healthcare Domain
+    definition: Healthcare and clinical data concepts.
+    terms:
+      - name: Protected Health Information
+        definition: >
+          Any individually identifiable health information held or transmitted
+          by a covered entity or its business associates. Subject to HIPAA
+          regulations.
+        abbreviation: PHI
+        classifications: [CSA_PHI_MRN]
+
+      - name: Medical Record Number
+        definition: >
+          A unique identifier assigned to a patient by a healthcare facility.
+          Classified as PHI under HIPAA.
+        abbreviation: MRN
+        classifications: [CSA_PHI_MRN]
+
+      - name: Diagnosis Code
+        definition: >
+          An alphanumeric code from the ICD-10 classification system that
+          identifies a patient's diagnosis. Used for billing, analytics,
+          and population health management.
+        abbreviation: ICD
+
+  - name: Environmental Domain
+    definition: Environmental and geospatial data concepts.
+    terms:
+      - name: Weather Observation
+        definition: >
+          A record of atmospheric conditions at a specific location and time.
+          Sourced from NOAA, weather stations, or IoT sensors.
+
+      - name: Air Quality Index
+        definition: >
+          A standardized indicator of air pollution levels. Ranges from 0
+          (good) to 500 (hazardous). Sourced from EPA monitoring stations.
+        abbreviation: AQI
+
+      - name: GeoParquet
+        definition: >
+          A standardized encoding for geospatial data in Apache Parquet
+          format. Stores geometry columns alongside tabular attributes.
+
+  - name: Transportation Domain
+    definition: Transportation and logistics data concepts.
+    terms:
+      - name: Vehicle Telemetry
+        definition: >
+          Real-time data collected from vehicle sensors including GPS
+          position, speed, fuel level, engine diagnostics, and driver
+          behavior metrics.
+
+      - name: Route Optimization
+        definition: >
+          The process of determining the most efficient path for
+          transportation considering distance, time, fuel, and constraints.
+
+  - name: Quality Metrics
+    definition: Metrics used to measure data quality dimensions.
+    terms:
+      - name: Completeness Score
+        definition: >
+          The percentage of non-null values in required columns. Measured
+          as (non-null count / total row count) for each required column,
+          then averaged across all required columns.
+        relatedTerms: [Data Quality, Accuracy Score, Timeliness Score]
+
+      - name: Accuracy Score
+        definition: >
+          The percentage of values that pass business validation rules.
+          Includes range checks, format validation, referential integrity,
+          and domain-specific constraints.
+        relatedTerms: [Data Quality, Completeness Score]
+
+      - name: Timeliness Score
+        definition: >
+          A measure of whether data arrived within its defined SLA window.
+          1.0 if within SLA, 0.0 if stale, with linear decay between the
+          SLA threshold and a grace period.
+        relatedTerms: [Data Quality, Completeness Score]
+
+      - name: Consistency Score
+        definition: >
+          The percentage of values that conform to expected formats,
+          ranges, and cross-column constraints. Measures internal
+          coherence of the dataset.
+        relatedTerms: [Data Quality, Accuracy Score]

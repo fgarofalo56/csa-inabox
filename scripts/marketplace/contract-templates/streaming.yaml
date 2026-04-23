@@ -1,0 +1,112 @@
+# CSA-in-a-Box Streaming Data Product Contract
+# Pre-configured for real-time streaming data products with low-latency SLA
+# Fill in the required fields and run:
+#   python marketplace-cli.py validate --contract streaming.yaml
+#   python marketplace-cli.py register --contract streaming.yaml
+
+name: ""          # required: Data product name (e.g., "IoT Sensor Telemetry Stream")
+domain: ""        # required: finance, healthcare, environmental, manufacturing, human-resources, marketing, supply-chain, operations, engineering, research
+description: ""   # required: What this streaming data provides (minimum 10 characters)
+version: "1.0.0"  # required: Semantic version
+
+# Owner information (required)
+owner:
+  name: ""        # required: Full name of the product owner
+  email: ""       # required: Valid email address
+  team: ""        # required: Team or department name
+
+# Schema definition (required) - Streaming supports multiple formats
+schema:
+  format: parquet # Streaming data often stored as Parquet for performance
+  location: "abfss://streaming@<storage>.dfs.core.windows.net/<domain>/<product>/"
+  columns: []     # Define your streaming event schema here
+  partition_by: [] # Consider partitioning by timestamp (year/month/day/hour)
+
+# Example streaming columns (event-based, time-series data):
+# columns:
+#   - name: "event_id"
+#     type: "string"
+#     description: "Unique event identifier"
+#     nullable: false
+#   - name: "event_timestamp"
+#     type: "timestamp"
+#     description: "When the event occurred"
+#     nullable: false
+#   - name: "device_id"
+#     type: "string"
+#     description: "Source device identifier"
+#     nullable: false
+#   - name: "event_type"
+#     type: "string"
+#     description: "Type of event (sensor_reading, alert, status)"
+#     nullable: false
+#   - name: "value"
+#     type: "double"
+#     description: "Numeric value associated with event"
+#     nullable: true
+#   - name: "metadata"
+#     type: "string"
+#     description: "Additional event metadata as JSON"
+#     nullable: true
+
+# Service Level Agreement - Streaming has very strict latency requirements
+sla:
+  freshness_minutes: 5       # Very low latency for streaming (1-30 minutes typical)
+  availability_percent: 99.9 # High availability for real-time systems
+  valid_row_ratio: 0.95      # High quality despite real-time constraints
+  supported_until: ""        # Optional: YYYY-MM-DD format
+
+# Data classification - Streaming data varies by domain
+classification: internal  # internal, confidential for sensitive telemetry
+
+# Tags for streaming products
+tags:
+  layer: "streaming"
+  latency: "real-time"
+  event_driven: "true"
+  # Add streaming-specific tags:
+  # window_size: "5min"
+  # retention_days: "30"
+  # throughput: "1000_events_sec"
+
+# Documentation URL (critical for streaming data understanding)
+documentation_url: ""
+
+# Sample queries - Streaming data examples with time windows
+sample_queries: []
+# Example streaming queries:
+# sample_queries:
+#   - "SELECT * FROM streaming_table WHERE event_timestamp >= CURRENT_TIMESTAMP() - INTERVAL 1 HOUR"
+#   - "SELECT device_id, AVG(value) FROM streaming_table WHERE event_timestamp >= CURRENT_TIMESTAMP() - INTERVAL 5 MINUTES GROUP BY device_id"
+#   - "SELECT event_type, COUNT(*) FROM streaming_table WHERE event_timestamp >= CURRENT_TIMESTAMP() - INTERVAL 1 DAY GROUP BY event_type"
+
+# Quality thresholds - Streaming balances speed vs quality
+quality_thresholds:
+  completeness: 0.85    # Slightly relaxed for real-time constraints
+  accuracy: 0.90        # High accuracy despite speed requirements
+  timeliness: 0.98      # Very high timeliness - this is critical for streaming
+  consistency: 0.85     # Good consistency across event streams
+
+# Data lineage - Streaming typically has direct sources
+lineage:
+  upstream: []      # IoT devices, message queues, APIs, sensors
+  downstream: []    # Real-time dashboards, alerts, stream processors
+  transformations: []
+
+# Example streaming lineage:
+# lineage:
+#   upstream:
+#     - "iot_device_sensors"
+#     - "event_hub_telemetry"
+#     - "api_webhook_events"
+#   downstream:
+#     - "real_time_dashboard"
+#     - "anomaly_detection_model"
+#     - "automated_alert_system"
+#     - "time_series_analytics"
+#   transformations:
+#     - "Stream processing: event_enrichment"
+#     - "Stream processing: anomaly_detection"
+#     - "Stream aggregation: 5min_rolling_averages"
+#     - "Data validation: schema_enforcement"
+#     - "Azure Stream Analytics: real_time_processing"

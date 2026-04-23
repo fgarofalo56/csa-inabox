@@ -1,0 +1,16 @@
+apiVersion: v2
+name: csa-opensearch
+description: >
+  OpenSearch standalone chart for search and analytics.
+  Replaces Azure AI Search in Azure Government deployments.
+type: application
+version: 1.0.0
+appVersion: "2.12.0"
+keywords:
+  - search
+  - analytics
+  - opensearch
+  - azure-government
+maintainers:
+  - name: CSA-in-a-Box Team
+    email: csa-team@contoso.com

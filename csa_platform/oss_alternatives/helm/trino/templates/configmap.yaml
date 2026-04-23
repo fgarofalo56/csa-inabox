@@ -1,0 +1,43 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-trino-config
+  labels:
+    app.kubernetes.io/name: {{ .Chart.Name }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+data:
+  coordinator-config.properties: |
+    coordinator=true
+    node-scheduler.include-coordinator={{ .Values.coordinator.config.node_scheduler_include_coordinator | default "false" }}
+    http-server.http.port=8080
+    discovery.uri=http://{{ .Release.Name }}-trino:{{ .Values.service.port }}
+    query.max-memory={{ .Values.coordinator.config.query_max_memory | default "4GB" }}
+    query.max-memory-per-node={{ .Values.coordinator.config.query_max_memory_per_node | default "1GB" }}
+  worker-config.properties: |
+    coordinator=false
+    http-server.http.port=8080
+    discovery.uri=http://{{ .Release.Name }}-trino:{{ .Values.service.port }}
+    query.max-memory={{ .Values.coordinator.config.query_max_memory | default "4GB" }}
+    query.max-memory-per-node={{ .Values.coordinator.config.query_max_memory_per_node | default "1GB" }}
+  node.properties: |
+    node.environment=production
+    node.data-dir=/data/trino
+  coordinator-jvm.config: |
+    {{- .Values.coordinator.jvmConfig | nindent 4 }}
+  worker-jvm.config: |
+    {{- .Values.worker.jvmConfig | nindent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-trino-catalogs
+  labels:
+    app.kubernetes.io/name: {{ .Chart.Name }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+data:
+  {{- range $name, $props := .Values.catalogs }}
+  {{ $name }}.properties: |
+    {{- range $key, $value := $props }}
+    {{ $key }}={{ $value }}
+    {{- end }}
+  {{- end }}

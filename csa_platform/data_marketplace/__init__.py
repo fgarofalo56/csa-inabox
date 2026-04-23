@@ -1,11 +1,21 @@
-"""CSA-in-a-Box Data Marketplace — DEPRECATED (ARCH-0001 Phase 4).
+"""CSA-in-a-Box Data Marketplace.
 
-The standalone marketplace API and models have been consolidated into the
-portal package:
+The marketplace API endpoints and models live in the portal package:
 
 - Models: ``portal.shared.api.models.marketplace``
 - Router: ``portal.shared.api.routers.marketplace``
 
-This package is retained as a namespace placeholder with the Bicep deploy
-template (``deploy/marketplace.bicep``) and README only.
+This package provides supporting services:
+
+- ``purview_sync``: Sync data products to Microsoft Purview
+- ``notifications``: Publish marketplace events to Event Grid
+- ``contract_validator``: Validate data product contracts
+- ``deploy/marketplace.bicep``: Infrastructure deployment
+
+See also: ``scripts/marketplace/`` for CLI tools and contract templates.
 """
+
+from csa_platform.data_marketplace.notifications import NotificationService
+from csa_platform.data_marketplace.purview_sync import PurviewSyncService
+
+__all__ = ["NotificationService", "PurviewSyncService"]

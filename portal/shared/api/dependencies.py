@@ -63,6 +63,14 @@ def get_runs_store() -> AsyncStoreBackend:
     return _runs_store
 
 
+def get_access_requests_store() -> AsyncStoreBackend:
+    """Return the async store for access requests.
+
+    Alias for get_access_store for consistency with marketplace endpoints.
+    """
+    return _access_store
+
+
 def get_access_store() -> AsyncStoreBackend:
     """Return the async store for access requests."""
     return _access_store
@@ -92,6 +100,7 @@ def all_stores() -> list[AsyncStoreBackend]:
 
 __all__ = [
     "all_stores",
+    "get_access_requests_store",
     "get_access_store",
     "get_pipelines_store",
     "get_products_store",
