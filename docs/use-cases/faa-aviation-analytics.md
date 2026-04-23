@@ -56,19 +56,19 @@ flowchart LR
 
 ## Data Sources
 
-| Source | Full Name | Description | Volume | Update Freq | Access |
-|---|---|---|---|---|---|
-| **ATADS** | Air Traffic Activity Data System | Tower operations counts (takeoffs, landings, overflights) at towered airports | 500+ airports | Monthly | [OPSNET](https://aspm.faa.gov/opsnet/sys/opsnet-s-main.asp) |
-| **ASPM** | Aviation System Performance Metrics | Flight-level on-time performance, delay causes, taxi times | All ASPM airports (~77) | Daily | [ASPM](https://aspm.faa.gov) |
-| **OPSNET** | Operations Network | Facility-level air traffic activity, delays, equipment outages | All ATC facilities | Monthly | [OPSNET](https://aspm.faa.gov/opsnet/sys/opsnet-s-main.asp) |
-| **Wildlife Strike DB** | FAA Wildlife Strike Database | Bird and wildlife strikes reported by pilots, airports, airlines | ~17,000 strikes/year | Continuous | [Wildlife Strikes](https://wildlife.faa.gov) |
-| **SDR** | Service Difficulty Reports | Mechanical failures and component malfunctions reported by repair stations | ~80,000 reports/year | Continuous | [SDR](https://av-info.faa.gov/sdrx/) |
-| **AIDS** | Accident/Incident Data System | FAA-recorded aviation accidents and incidents | ~1,700 accidents/year | Continuous | [Aviation Safety](https://www.asias.faa.gov) |
-| **SWIM** | System Wide Information Management | Real-time NAS data feeds (STDDS, TFMS, TBFM) | Continuous stream | Real-time | [SWIM](https://www.faa.gov/air_traffic/technology/swim) |
-| **ASDI/TFMS** | Traffic Flow Management System | Flight track positions, flight plans, departure/arrival events | All IFR flights | Real-time | Via SWIM |
+| Source                 | Full Name                           | Description                                                                   | Volume                  | Update Freq | Access                                                      |
+| ---------------------- | ----------------------------------- | ----------------------------------------------------------------------------- | ----------------------- | ----------- | ----------------------------------------------------------- |
+| **ATADS**              | Air Traffic Activity Data System    | Tower operations counts (takeoffs, landings, overflights) at towered airports | 500+ airports           | Monthly     | [OPSNET](https://aspm.faa.gov/opsnet/sys/opsnet-s-main.asp) |
+| **ASPM**               | Aviation System Performance Metrics | Flight-level on-time performance, delay causes, taxi times                    | All ASPM airports (~77) | Daily       | [ASPM](https://aspm.faa.gov)                                |
+| **OPSNET**             | Operations Network                  | Facility-level air traffic activity, delays, equipment outages                | All ATC facilities      | Monthly     | [OPSNET](https://aspm.faa.gov/opsnet/sys/opsnet-s-main.asp) |
+| **Wildlife Strike DB** | FAA Wildlife Strike Database        | Bird and wildlife strikes reported by pilots, airports, airlines              | ~17,000 strikes/year    | Continuous  | [Wildlife Strikes](https://wildlife.faa.gov)                |
+| **SDR**                | Service Difficulty Reports          | Mechanical failures and component malfunctions reported by repair stations    | ~80,000 reports/year    | Continuous  | [SDR](https://av-info.faa.gov/sdrx/)                        |
+| **AIDS**               | Accident/Incident Data System       | FAA-recorded aviation accidents and incidents                                 | ~1,700 accidents/year   | Continuous  | [Aviation Safety](https://www.asias.faa.gov)                |
+| **SWIM**               | System Wide Information Management  | Real-time NAS data feeds (STDDS, TFMS, TBFM)                                  | Continuous stream       | Real-time   | [SWIM](https://www.faa.gov/air_traffic/technology/swim)     |
+| **ASDI/TFMS**          | Traffic Flow Management System      | Flight track positions, flight plans, departure/arrival events                | All IFR flights         | Real-time   | Via SWIM                                                    |
 
 !!! info "SWIM Access"
-    SWIM data feeds require a connection agreement with FAA. The SWIM Cloud Distribution Service (SCDS) provides cloud-native access. See [SWIM SCDS](https://www.faa.gov/air_traffic/technology/swim/scds) for onboarding.
+SWIM data feeds require a connection agreement with FAA. The SWIM Cloud Distribution Service (SCDS) provides cloud-native access. See [SWIM SCDS](https://www.faa.gov/air_traffic/technology/swim/scds) for onboarding.
 
 ---
 
@@ -78,14 +78,14 @@ flowchart LR
 
 ADF pipelines ingest historical data on scheduled cadences:
 
-| Pipeline | Source | Schedule | Format | Landing Path |
-|---|---|---|---|---|
-| `pl_faa_atads` | ATADS monthly reports | 1st of month | CSV | `bronze/faa/atads/{year}/{month}/` |
-| `pl_faa_aspm` | ASPM daily summaries | Daily 06:00 UTC | CSV | `bronze/faa/aspm/{date}/` |
-| `pl_faa_opsnet` | OPSNET facility data | Monthly | CSV | `bronze/faa/opsnet/{year}/{month}/` |
-| `pl_faa_wildlife` | Wildlife strike exports | Weekly | CSV | `bronze/faa/wildlife_strikes/{date}/` |
-| `pl_faa_sdr` | Service difficulty reports | Weekly | XML→JSON | `bronze/faa/sdr/{date}/` |
-| `pl_faa_aids` | Accident/incident records | Monthly | CSV | `bronze/faa/aids/{year}/{month}/` |
+| Pipeline          | Source                     | Schedule        | Format   | Landing Path                          |
+| ----------------- | -------------------------- | --------------- | -------- | ------------------------------------- |
+| `pl_faa_atads`    | ATADS monthly reports      | 1st of month    | CSV      | `bronze/faa/atads/{year}/{month}/`    |
+| `pl_faa_aspm`     | ASPM daily summaries       | Daily 06:00 UTC | CSV      | `bronze/faa/aspm/{date}/`             |
+| `pl_faa_opsnet`   | OPSNET facility data       | Monthly         | CSV      | `bronze/faa/opsnet/{year}/{month}/`   |
+| `pl_faa_wildlife` | Wildlife strike exports    | Weekly          | CSV      | `bronze/faa/wildlife_strikes/{date}/` |
+| `pl_faa_sdr`      | Service difficulty reports | Weekly          | XML→JSON | `bronze/faa/sdr/{date}/`              |
+| `pl_faa_aids`     | Accident/incident records  | Monthly         | CSV      | `bronze/faa/aids/{year}/{month}/`     |
 
 ### Real-Time Sources (Event Hub)
 
@@ -98,11 +98,11 @@ Retention:           7 days
 Consumer Groups:     $Default, cg-adx-ingest, cg-alert-processor
 ```
 
-| Feed | Event Hub | Message Format | Throughput |
-|---|---|---|---|
-| STDDS (departure/arrival) | `eh-swim-stdds` | XML | ~2,000 msgs/min |
-| TFMS (flow management) | `eh-swim-tfms` | XML | ~500 msgs/min |
-| TBFM (time-based flow) | `eh-swim-tbfm` | XML | ~300 msgs/min |
+| Feed                      | Event Hub       | Message Format | Throughput      |
+| ------------------------- | --------------- | -------------- | --------------- |
+| STDDS (departure/arrival) | `eh-swim-stdds` | XML            | ~2,000 msgs/min |
+| TFMS (flow management)    | `eh-swim-tfms`  | XML            | ~500 msgs/min   |
+| TBFM (time-based flow)    | `eh-swim-tbfm`  | XML            | ~300 msgs/min   |
 
 ADX ingests directly from Event Hub consumer group `cg-adx-ingest` for real-time query access.
 
@@ -114,20 +114,20 @@ ADX ingests directly from Event Hub consumer group `cg-adx-ingest` for real-time
 
 Consolidates ASPM and ATADS into a unified operations fact table:
 
-| Column | Type | Description |
-|---|---|---|
-| `airport_code` | `VARCHAR(4)` | ICAO airport identifier |
-| `operation_date` | `DATE` | Date of operations |
-| `hour_local` | `INT` | Local hour (0–23) |
-| `departures` | `INT` | Departure count |
-| `arrivals` | `INT` | Arrival count |
-| `total_operations` | `INT` | departures + arrivals + overflights |
-| `avg_departure_delay_min` | `DECIMAL(6,1)` | Average departure delay in minutes |
-| `avg_arrival_delay_min` | `DECIMAL(6,1)` | Average arrival delay in minutes |
-| `avg_taxi_out_min` | `DECIMAL(5,1)` | Average taxi-out time |
-| `avg_taxi_in_min` | `DECIMAL(5,1)` | Average taxi-in time |
-| `delay_cause_weather_pct` | `DECIMAL(5,2)` | Percentage of delays attributed to weather |
-| `delay_cause_volume_pct` | `DECIMAL(5,2)` | Percentage of delays attributed to volume |
+| Column                      | Type           | Description                                  |
+| --------------------------- | -------------- | -------------------------------------------- |
+| `airport_code`              | `VARCHAR(4)`   | ICAO airport identifier                      |
+| `operation_date`            | `DATE`         | Date of operations                           |
+| `hour_local`                | `INT`          | Local hour (0–23)                            |
+| `departures`                | `INT`          | Departure count                              |
+| `arrivals`                  | `INT`          | Arrival count                                |
+| `total_operations`          | `INT`          | departures + arrivals + overflights          |
+| `avg_departure_delay_min`   | `DECIMAL(6,1)` | Average departure delay in minutes           |
+| `avg_arrival_delay_min`     | `DECIMAL(6,1)` | Average arrival delay in minutes             |
+| `avg_taxi_out_min`          | `DECIMAL(5,1)` | Average taxi-out time                        |
+| `avg_taxi_in_min`           | `DECIMAL(5,1)` | Average taxi-in time                         |
+| `delay_cause_weather_pct`   | `DECIMAL(5,2)` | Percentage of delays attributed to weather   |
+| `delay_cause_volume_pct`    | `DECIMAL(5,2)` | Percentage of delays attributed to volume    |
 | `delay_cause_equipment_pct` | `DECIMAL(5,2)` | Percentage of delays attributed to equipment |
 
 ### Delays (`slv_delay_events`)
@@ -344,12 +344,12 @@ Forecasts are generated at the airport-hour level for 12-month planning horizons
 
 The capacity model identifies airports approaching operational limits:
 
-| Metric | Threshold | Action |
-|---|---|---|
-| Peak hour utilization > 95% | Capacity constrained | Evaluate new runway / procedural changes |
-| Hours above 85% > 8/day | Sustained congestion | Evaluate flow management strategies |
-| YoY operations growth > 5% | Rapid growth | Forward capacity assessment needed |
-| Delay minutes per operation > 20 | Chronic delays | Root cause analysis required |
+| Metric                           | Threshold            | Action                                   |
+| -------------------------------- | -------------------- | ---------------------------------------- |
+| Peak hour utilization > 95%      | Capacity constrained | Evaluate new runway / procedural changes |
+| Hours above 85% > 8/day          | Sustained congestion | Evaluate flow management strategies      |
+| YoY operations growth > 5%       | Rapid growth         | Forward capacity assessment needed       |
+| Delay minutes per operation > 20 | Chronic delays       | Root cause analysis required             |
 
 ---
 
@@ -390,7 +390,7 @@ Power BI dashboards are organized into four tiers:
 ## Security and Compliance
 
 !!! warning "Sensitive Data Handling"
-    Some FAA data products contain Sensitive Security Information (SSI) or Security Sensitive Unclassified (SSU) data. Ensure proper handling per [49 CFR Part 1520](https://www.ecfr.gov/current/title-49/subtitle-B/chapter-XII/subchapter-C/part-1520). SWIM data access requires an approved connection agreement.
+Some FAA data products contain Sensitive Security Information (SSI) or Security Sensitive Unclassified (SSU) data. Ensure proper handling per [49 CFR Part 1520](https://www.ecfr.gov/current/title-49/subtitle-B/chapter-XII/subchapter-C/part-1520). SWIM data access requires an approved connection agreement.
 
 For deployments to Azure Government (IL4/IL5), apply the configurations in `examples/dot/deploy/params.gov.json`. See [Government Data Analytics](government-data-analytics.md) for compliance framework details.
 
@@ -408,15 +408,15 @@ For deployments to Azure Government (IL4/IL5), apply the configurations in `exam
 
 ## Sources
 
-| Resource | URL |
-|---|---|
-| FAA ATADS / OPSNET | <https://aspm.faa.gov/opsnet/sys/opsnet-s-main.asp> |
-| FAA ASPM | <https://aspm.faa.gov> |
-| FAA SWIM Program | <https://www.faa.gov/air_traffic/technology/swim> |
-| FAA SWIM Cloud Distribution Service | <https://www.faa.gov/air_traffic/technology/swim/scds> |
-| FAA Wildlife Strike Database | <https://wildlife.faa.gov> |
-| FAA Service Difficulty Reports | <https://av-info.faa.gov/sdrx/> |
-| Aviation Safety Information Analysis and Sharing (ASIAS) | <https://www.asias.faa.gov> |
-| FAA Operations & Performance Data | <https://www.faa.gov/data_research/aviation_data_statistics> |
-| BTS Airline On-Time Statistics | <https://www.transtats.bts.gov/OT_Delay/OT_DelayCause1.asp> |
-| 49 CFR Part 1520 — SSI | <https://www.ecfr.gov/current/title-49/subtitle-B/chapter-XII/subchapter-C/part-1520> |
+| Resource                                                 | URL                                                                                   |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| FAA ATADS / OPSNET                                       | <https://aspm.faa.gov/opsnet/sys/opsnet-s-main.asp>                                   |
+| FAA ASPM                                                 | <https://aspm.faa.gov>                                                                |
+| FAA SWIM Program                                         | <https://www.faa.gov/air_traffic/technology/swim>                                     |
+| FAA SWIM Cloud Distribution Service                      | <https://www.faa.gov/air_traffic/technology/swim/scds>                                |
+| FAA Wildlife Strike Database                             | <https://wildlife.faa.gov>                                                            |
+| FAA Service Difficulty Reports                           | <https://av-info.faa.gov/sdrx/>                                                       |
+| Aviation Safety Information Analysis and Sharing (ASIAS) | <https://www.asias.faa.gov>                                                           |
+| FAA Operations & Performance Data                        | <https://www.faa.gov/data_research/aviation_data_statistics>                          |
+| BTS Airline On-Time Statistics                           | <https://www.transtats.bts.gov/OT_Delay/OT_DelayCause1.asp>                           |
+| 49 CFR Part 1520 — SSI                                   | <https://www.ecfr.gov/current/title-49/subtitle-B/chapter-XII/subchapter-C/part-1520> |

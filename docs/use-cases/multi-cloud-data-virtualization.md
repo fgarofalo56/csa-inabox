@@ -20,20 +20,20 @@ The traditional answer — copy everything into one place — creates more probl
 **Data virtualization** is the alternative: query data where it lives. Instead of moving bytes, you move queries. A virtualization layer presents a unified semantic model over physically distributed data, and the compute travels to the data — not the other way around.
 
 !!! info "What Data Virtualization Is Not"
-    Data virtualization is not a replacement for a data warehouse. It is a complementary pattern. Some data should be materialized (copied, transformed, stored) for performance. Other data should be virtualized (queried in place) for freshness, cost, or compliance. The art is knowing which is which.
+Data virtualization is not a replacement for a data warehouse. It is a complementary pattern. Some data should be materialized (copied, transformed, stored) for performance. Other data should be virtualized (queried in place) for freshness, cost, or compliance. The art is knowing which is which.
 
 ### Why Azure Is Uniquely Positioned as the Core
 
 Azure is the only cloud platform that provides the complete stack required to serve as the core of a multi-cloud data virtualization architecture. No other cloud comes close to this combination:
 
-| Capability | Azure Service | What It Does |
-|---|---|---|
-| Multi-cloud management plane | **Azure Arc** | Extends Azure governance, policy, and monitoring to any infrastructure — AWS, GCP, on-prem, edge |
-| Zero-copy cross-cloud data access | **Microsoft Fabric OneLake Shortcuts** | Creates virtual references to S3, GCS, and ADLS data — no data movement |
-| Serverless cross-cloud SQL | **Synapse Analytics Serverless SQL** | Queries Parquet, Delta, CSV across any storage using T-SQL via OPENROWSET |
-| Real-time BI across clouds | **Power BI DirectQuery + Composite Models** | Queries multiple sources live in a single report without importing data |
-| Unified multi-cloud governance | **Microsoft Purview** | Scans, catalogs, classifies, and tracks lineage across AWS, GCP, on-prem, and SaaS |
-| Cross-cloud data integration | **Azure Data Factory** | 100+ connectors with Mapping Data Flows for in-place transformation |
+| Capability                        | Azure Service                               | What It Does                                                                                     |
+| --------------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Multi-cloud management plane      | **Azure Arc**                               | Extends Azure governance, policy, and monitoring to any infrastructure — AWS, GCP, on-prem, edge |
+| Zero-copy cross-cloud data access | **Microsoft Fabric OneLake Shortcuts**      | Creates virtual references to S3, GCS, and ADLS data — no data movement                          |
+| Serverless cross-cloud SQL        | **Synapse Analytics Serverless SQL**        | Queries Parquet, Delta, CSV across any storage using T-SQL via OPENROWSET                        |
+| Real-time BI across clouds        | **Power BI DirectQuery + Composite Models** | Queries multiple sources live in a single report without importing data                          |
+| Unified multi-cloud governance    | **Microsoft Purview**                       | Scans, catalogs, classifies, and tracks lineage across AWS, GCP, on-prem, and SaaS               |
+| Cross-cloud data integration      | **Azure Data Factory**                      | 100+ connectors with Mapping Data Flows for in-place transformation                              |
 
 AWS and GCP each have strong analytics services — but they are designed to work within their own ecosystems. Azure is designed to work across all of them.
 
@@ -115,18 +115,18 @@ graph TB
 
 This is not a marketing claim. It is an architectural reality based on what each cloud platform actually offers today.
 
-| Capability | Azure | AWS | GCP |
-|---|---|---|---|
-| **Multi-cloud management plane** | Azure Arc — projects Azure Resource Manager to any infra (AWS EC2, GCP VMs, on-prem servers, edge) | None. AWS Systems Manager is AWS-only. | Anthos — Kubernetes-focused, limited data service support |
-| **Cross-cloud data shortcuts** | OneLake shortcuts to S3, GCS, ADLS, Dataverse — zero-copy, metadata-only references | None. Lake Formation is S3-only. | BigQuery Omni runs on AWS/Azure but queries GCS natively only |
-| **Serverless cross-cloud SQL** | Synapse serverless SQL pools — OPENROWSET queries Parquet/Delta/CSV in S3, GCS, ADLS, HTTP endpoints | Athena — S3 only, no native cross-cloud | BigQuery — GCS only for external tables, limited cross-cloud |
-| **Unified multi-cloud governance** | Microsoft Purview — scans AWS S3, RDS, Redshift, GCS, BigQuery, Snowflake, Oracle, SAP, Salesforce, on-prem SQL | AWS Glue Data Catalog — AWS services only | Dataplex — GCP services only |
-| **Hybrid identity** | Microsoft Entra ID + Arc — single identity plane across all clouds and on-prem | IAM — AWS-scoped, federate via SAML/OIDC only | Cloud Identity — GCP-scoped |
-| **BI with live cross-cloud queries** | Power BI DirectQuery + composite models — 100+ native connectors, query any source live | QuickSight — limited DirectQuery, primarily SPICE import | Looker — strong modeling but limited live connectivity |
-| **Data integration connectors** | ADF — 100+ built-in connectors including SAP, Salesforce, Oracle, Dynamics, mainframes | Glue — fewer connectors, AWS-focused | Dataflow — GCP ecosystem focused |
+| Capability                           | Azure                                                                                                           | AWS                                                      | GCP                                                           |
+| ------------------------------------ | --------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- | ------------------------------------------------------------- |
+| **Multi-cloud management plane**     | Azure Arc — projects Azure Resource Manager to any infra (AWS EC2, GCP VMs, on-prem servers, edge)              | None. AWS Systems Manager is AWS-only.                   | Anthos — Kubernetes-focused, limited data service support     |
+| **Cross-cloud data shortcuts**       | OneLake shortcuts to S3, GCS, ADLS, Dataverse — zero-copy, metadata-only references                             | None. Lake Formation is S3-only.                         | BigQuery Omni runs on AWS/Azure but queries GCS natively only |
+| **Serverless cross-cloud SQL**       | Synapse serverless SQL pools — OPENROWSET queries Parquet/Delta/CSV in S3, GCS, ADLS, HTTP endpoints            | Athena — S3 only, no native cross-cloud                  | BigQuery — GCS only for external tables, limited cross-cloud  |
+| **Unified multi-cloud governance**   | Microsoft Purview — scans AWS S3, RDS, Redshift, GCS, BigQuery, Snowflake, Oracle, SAP, Salesforce, on-prem SQL | AWS Glue Data Catalog — AWS services only                | Dataplex — GCP services only                                  |
+| **Hybrid identity**                  | Microsoft Entra ID + Arc — single identity plane across all clouds and on-prem                                  | IAM — AWS-scoped, federate via SAML/OIDC only            | Cloud Identity — GCP-scoped                                   |
+| **BI with live cross-cloud queries** | Power BI DirectQuery + composite models — 100+ native connectors, query any source live                         | QuickSight — limited DirectQuery, primarily SPICE import | Looker — strong modeling but limited live connectivity        |
+| **Data integration connectors**      | ADF — 100+ built-in connectors including SAP, Salesforce, Oracle, Dynamics, mainframes                          | Glue — fewer connectors, AWS-focused                     | Dataflow — GCP ecosystem focused                              |
 
 !!! tip "The Key Differentiator"
-    Azure Arc + Purview + OneLake shortcuts is a combination no other cloud can replicate. It gives you a single management plane, a single governance catalog, and zero-copy data access — across every cloud and on-premises environment — from one control point.
+Azure Arc + Purview + OneLake shortcuts is a combination no other cloud can replicate. It gives you a single management plane, a single governance catalog, and zero-copy data access — across every cloud and on-premises environment — from one control point.
 
 ---
 
@@ -206,7 +206,7 @@ ORDER BY lifetime_value DESC;
 ```
 
 !!! warning "Shortcut Performance Depends on Source Latency"
-    OneLake shortcuts query the source storage at runtime. If your Fabric workspace is in East US and your S3 bucket is in eu-west-1, every query pays ~100-150ms of cross-region latency per request. **Co-locate your Fabric capacity region with your source data region when possible.** For high-frequency queries, consider materializing the data instead.
+OneLake shortcuts query the source storage at runtime. If your Fabric workspace is in East US and your S3 bucket is in eu-west-1, every query pays ~100-150ms of cross-region latency per request. **Co-locate your Fabric capacity region with your source data region when possible.** For high-frequency queries, consider materializing the data instead.
 
 **When to use OneLake shortcuts:**
 
@@ -282,7 +282,7 @@ SELECT * FROM dbo.aws_sales WHERE currency = 'USD';
 ```
 
 !!! danger "OPENROWSET File Limit"
-    OPENROWSET has a limit of approximately **10,000 files per query**. If your S3 bucket has heavily partitioned data with many small files, you will hit this limit. **Partition wisely** — use date-based partitioning with fewer, larger files rather than thousands of micro-files.
+OPENROWSET has a limit of approximately **10,000 files per query**. If your S3 bucket has heavily partitioned data with many small files, you will hit this limit. **Partition wisely** — use date-based partitioning with fewer, larger files rather than thousands of micro-files.
 
 **When to use Synapse serverless:**
 
@@ -338,7 +338,7 @@ Azure Data Factory connects to 100+ data sources via linked services. Mapping Da
 ```
 
 !!! warning "Mapping Data Flow Cost"
-    Mapping Data Flows spin up dedicated Spark clusters. An 8-core MemoryOptimized cluster costs approximately **$0.96/hour**. For small datasets, consider Copy Activity (no Spark) instead. Reserve Data Flows for transformations that genuinely require Spark.
+Mapping Data Flows spin up dedicated Spark clusters. An 8-core MemoryOptimized cluster costs approximately **$0.96/hour**. For small datasets, consider Copy Activity (no Spark) instead. Reserve Data Flows for transformations that genuinely require Spark.
 
 ---
 
@@ -364,10 +364,10 @@ graph LR
 4. **Build reports** that combine real-time on-prem operational data with historical cloud analytics.
 
 !!! tip "Aggregation Tables for DirectQuery Performance"
-    DirectQuery performance is bounded by source query speed. Create **aggregation tables** in Power BI that pre-summarize DirectQuery data at higher grain levels. Power BI automatically routes queries to aggregations when possible, falling back to DirectQuery for detail-level queries.
+DirectQuery performance is bounded by source query speed. Create **aggregation tables** in Power BI that pre-summarize DirectQuery data at higher grain levels. Power BI automatically routes queries to aggregations when possible, falling back to DirectQuery for detail-level queries.
 
 !!! danger "DirectQuery Anti-Pattern"
-    Do not use DirectQuery against sources with >5 second query response times. Users will experience unacceptable report load times. If the source is slow, import the data or create a materialized view closer to the consumer.
+Do not use DirectQuery against sources with >5 second query response times. Users will experience unacceptable report load times. If the source is slow, import the data or create a materialized view closer to the consumer.
 
 ---
 
@@ -421,13 +421,13 @@ Data virtualization without governance is just federation of chaos. Microsoft Pu
 
 Purview natively scans:
 
-| Source Type | Examples | Scan Method |
-|---|---|---|
-| AWS | S3, RDS (SQL Server, PostgreSQL, MySQL), Redshift, DynamoDB | Purview connectors via Self-Hosted IR or managed VNet |
-| GCP | GCS, BigQuery, Cloud SQL | Purview connectors |
-| On-premises | SQL Server, Oracle, SAP HANA, Teradata, file shares | Self-Hosted Integration Runtime |
-| SaaS | Salesforce, SAP S/4HANA, Dynamics 365, Power BI | Native connectors |
-| Azure | ADLS, Synapse, Fabric, SQL Database, Cosmos DB | Native (auto-discovery) |
+| Source Type | Examples                                                    | Scan Method                                           |
+| ----------- | ----------------------------------------------------------- | ----------------------------------------------------- |
+| AWS         | S3, RDS (SQL Server, PostgreSQL, MySQL), Redshift, DynamoDB | Purview connectors via Self-Hosted IR or managed VNet |
+| GCP         | GCS, BigQuery, Cloud SQL                                    | Purview connectors                                    |
+| On-premises | SQL Server, Oracle, SAP HANA, Teradata, file shares         | Self-Hosted Integration Runtime                       |
+| SaaS        | Salesforce, SAP S/4HANA, Dynamics 365, Power BI             | Native connectors                                     |
+| Azure       | ADLS, Synapse, Fabric, SQL Database, Cosmos DB              | Native (auto-discovery)                               |
 
 ### Unified Data Catalog
 
@@ -458,7 +458,7 @@ This lineage is visualized in the Purview portal, showing exactly how data flows
 5. **Review in catalog**: Assets appear in the Purview catalog with auto-detected classifications and suggested glossary mappings.
 
 !!! info "Purview Scans Metadata, Not Data"
-    Purview scanning reads metadata and samples data for classification. It does not copy or ingest your data. Scanning an S3 bucket does not incur AWS egress charges beyond the small metadata reads.
+Purview scanning reads metadata and samples data for classification. It does not copy or ingest your data. Scanning an S3 bucket does not incur AWS egress charges beyond the small metadata reads.
 
 ---
 
@@ -530,12 +530,12 @@ Salesforce and on-prem SQL Server cannot be accessed via storage shortcuts. Use 
 
 ### Step 4: Build the Bronze Layer
 
-| Source | Bronze Method | Refresh Frequency |
-|---|---|---|
-| AWS RDS → S3 | OneLake shortcut (virtual) | Real-time (reads S3 at query time) |
-| GCP BigQuery → GCS | OneLake shortcut (virtual) | Real-time (reads GCS at query time) |
-| On-prem SQL Server | ADF copy to ADLS (physical) | Every 4 hours |
-| Salesforce | ADF copy to ADLS (physical) | Daily |
+| Source             | Bronze Method               | Refresh Frequency                   |
+| ------------------ | --------------------------- | ----------------------------------- |
+| AWS RDS → S3       | OneLake shortcut (virtual)  | Real-time (reads S3 at query time)  |
+| GCP BigQuery → GCS | OneLake shortcut (virtual)  | Real-time (reads GCS at query time) |
+| On-prem SQL Server | ADF copy to ADLS (physical) | Every 4 hours                       |
+| Salesforce         | ADF copy to ADLS (physical) | Daily                               |
 
 ### Step 5: dbt Silver Layer — Unified Customer 360
 
@@ -660,12 +660,12 @@ This lineage is visible in the Purview portal. When a schema change occurs in th
 
 Before federating, classify every dataset:
 
-| Classification | Action | Rationale |
-|---|---|---|
-| **Can move, should move** | ADF copy to ADLS | Performance-critical, frequently joined |
-| **Can move, prefer not to** | OneLake shortcut | Large, infrequently queried |
-| **Cannot move** | OneLake shortcut or Synapse serverless | Data residency, compliance, sovereignty |
-| **Must stay at source** | DirectQuery or API | Real-time operational data |
+| Classification              | Action                                 | Rationale                               |
+| --------------------------- | -------------------------------------- | --------------------------------------- |
+| **Can move, should move**   | ADF copy to ADLS                       | Performance-critical, frequently joined |
+| **Can move, prefer not to** | OneLake shortcut                       | Large, infrequently queried             |
+| **Cannot move**             | OneLake shortcut or Synapse serverless | Data residency, compliance, sovereignty |
+| **Must stay at source**     | DirectQuery or API                     | Real-time operational data              |
 
 ### 2. Network Architecture
 
@@ -677,17 +677,17 @@ Multi-cloud virtualization is only as fast as the network between clouds.
 - **GCP to Azure**: Google Cloud Interconnect + Azure ExpressRoute, or VPN.
 
 !!! danger "Without Dedicated Interconnect"
-    Cross-cloud queries over the public internet introduce 50-200ms of latency per request and expose data in transit (even with TLS) to public routing. For production workloads, always use dedicated interconnect.
+Cross-cloud queries over the public internet introduce 50-200ms of latency per request and expose data in transit (even with TLS) to public routing. For production workloads, always use dedicated interconnect.
 
 ### 3. Cost Optimization
 
 Shortcuts and serverless queries are "free" in compute — but egress from the source cloud is not.
 
-| Source Cloud | Egress Cost | 1 TB/day Cost |
-|---|---|---|
-| AWS (to internet/other cloud) | $0.09/GB | ~$2,700/month |
-| GCP (to internet/other cloud) | $0.12/GB | ~$3,600/month |
-| Azure (to internet) | $0.087/GB | ~$2,610/month |
+| Source Cloud                  | Egress Cost | 1 TB/day Cost |
+| ----------------------------- | ----------- | ------------- |
+| AWS (to internet/other cloud) | $0.09/GB    | ~$2,700/month |
+| GCP (to internet/other cloud) | $0.12/GB    | ~$3,600/month |
+| Azure (to internet)           | $0.087/GB   | ~$2,610/month |
 
 **Decision rule**: If a dataset is queried more than 3x per day and is <100 GB, it is almost always cheaper to copy it (ADF) than to virtualize it (shortcut), because egress costs compound with every query.
 
@@ -730,44 +730,44 @@ Federated sources change independently. Protect yourself:
 ## Lessons Learned
 
 !!! warning "Virtualization Is Not Free"
-    Every query against a shortcut or external table incurs egress from the source cloud. A dashboard with 50 users refreshing 5 times per day against a 10 GB shortcut generates 2.5 TB/month of egress. At AWS rates, that's **$225/month** — for a single dataset. Multiply by dozens of datasets and the math can exceed the cost of just copying the data. **Always model egress costs before choosing virtualization over replication.**
+Every query against a shortcut or external table incurs egress from the source cloud. A dashboard with 50 users refreshing 5 times per day against a 10 GB shortcut generates 2.5 TB/month of egress. At AWS rates, that's **$225/month** — for a single dataset. Multiply by dozens of datasets and the math can exceed the cost of just copying the data. **Always model egress costs before choosing virtualization over replication.**
 
 !!! warning "Governance Before Federation"
-    If you don't know what PII exists in your AWS RDS tables today, federating those tables into a cross-cloud analytics model does not solve the problem — it amplifies it. Now that PII is queryable from Power BI by anyone with report access. **Run Purview classification scans BEFORE creating shortcuts or external tables.**
+If you don't know what PII exists in your AWS RDS tables today, federating those tables into a cross-cloud analytics model does not solve the problem — it amplifies it. Now that PII is queryable from Power BI by anyone with report access. **Run Purview classification scans BEFORE creating shortcuts or external tables.**
 
 !!! info "Start with Gold, Not Bronze"
-    The instinct is to virtualize everything — create shortcuts to every source and build up. Instead, start from the consumer: what Gold-layer datasets do stakeholders actually need? Then work backward to determine which sources feed those datasets. Many source datasets are irrelevant to the analytics layer and don't need federation at all.
+The instinct is to virtualize everything — create shortcuts to every source and build up. Instead, start from the consumer: what Gold-layer datasets do stakeholders actually need? Then work backward to determine which sources feed those datasets. Many source datasets are irrelevant to the analytics layer and don't need federation at all.
 
 !!! info "Latency Is Architecture"
-    200ms of cross-cloud latency is invisible in a batch pipeline that runs at 2 AM. It is very visible in a Power BI DirectQuery report where every slicer click triggers a cross-cloud round trip. **Design your architecture around latency tolerance**: batch workloads can virtualize freely; interactive workloads should materialize or use aggregation tables.
+200ms of cross-cloud latency is invisible in a batch pipeline that runs at 2 AM. It is very visible in a Power BI DirectQuery report where every slicer click triggers a cross-cloud round trip. **Design your architecture around latency tolerance**: batch workloads can virtualize freely; interactive workloads should materialize or use aggregation tables.
 
 !!! warning "Test Failover Scenarios"
-    If your Gold layer depends on an OneLake shortcut to S3, and AWS us-east-1 has an outage, your Gold layer is broken. Your Power BI dashboards are broken. Your executive reporting is broken. **Identify single-cloud dependencies in your virtual layer and plan for degraded operation** — cached snapshots, fallback views, or delayed refresh tolerances.
+If your Gold layer depends on an OneLake shortcut to S3, and AWS us-east-1 has an outage, your Gold layer is broken. Your Power BI dashboards are broken. Your executive reporting is broken. **Identify single-cloud dependencies in your virtual layer and plan for degraded operation** — cached snapshots, fallback views, or delayed refresh tolerances.
 
 !!! warning "Identity Is the Hardest Part"
-    The data plumbing (shortcuts, pipelines, queries) is the easy part. The hard part is: which Azure identity should be authorized to read from AWS S3? How do you map AWS IAM roles to Azure RBAC? How do you audit access across clouds? **Invest in cross-cloud identity architecture early.** Use Azure Key Vault for credential management and Microsoft Entra ID Workload Identity Federation where possible to avoid long-lived secrets.
+The data plumbing (shortcuts, pipelines, queries) is the easy part. The hard part is: which Azure identity should be authorized to read from AWS S3? How do you map AWS IAM roles to Azure RBAC? How do you audit access across clouds? **Invest in cross-cloud identity architecture early.** Use Azure Key Vault for credential management and Microsoft Entra ID Workload Identity Federation where possible to avoid long-lived secrets.
 
 ---
 
 ## Gotchas & Anti-Patterns
 
 !!! danger "Don't Virtualize Transactional Workloads"
-    Data virtualization is for analytics (OLAP), not transactions (OLTP). Never use OneLake shortcuts or Synapse serverless as the backend for a transactional application. The latency, consistency guarantees, and concurrency model are wrong.
+Data virtualization is for analytics (OLAP), not transactions (OLTP). Never use OneLake shortcuts or Synapse serverless as the backend for a transactional application. The latency, consistency guarantees, and concurrency model are wrong.
 
 !!! danger "Don't Skip Network Planning"
-    Cross-cloud data virtualization over the public internet is slow (variable latency), expensive (full egress pricing), and insecure (public routing). Budget for ExpressRoute, Direct Connect, or Cloud Interconnect before committing to the architecture.
+Cross-cloud data virtualization over the public internet is slow (variable latency), expensive (full egress pricing), and insecure (public routing). Budget for ExpressRoute, Direct Connect, or Cloud Interconnect before committing to the architecture.
 
 !!! danger "Don't Ignore Egress Costs"
-    AWS charges $0.09/GB for data leaving. GCP charges $0.12/GB. If you query a 50 GB dataset via a shortcut 10 times per day, that is 500 GB/day × 30 days × $0.09/GB = **$1,350/month** in AWS egress alone. Compare this to storing a copy in ADLS (~$1/TB/month for cool tier). The math often favors replication for high-frequency queries.
+AWS charges $0.09/GB for data leaving. GCP charges $0.12/GB. If you query a 50 GB dataset via a shortcut 10 times per day, that is 500 GB/day × 30 days × $0.09/GB = **$1,350/month** in AWS egress alone. Compare this to storing a copy in ADLS (~$1/TB/month for cool tier). The math often favors replication for high-frequency queries.
 
 !!! danger "Don't Use DirectQuery for Everything"
-    DirectQuery is powerful but not a silver bullet. Every report interaction generates a live query against the source. If the source is slow, the report is slow. If the source is down, the report is down. **Import data when freshness tolerance allows it.** Use composite models to blend DirectQuery and Import.
+DirectQuery is powerful but not a silver bullet. Every report interaction generates a live query against the source. If the source is slow, the report is slow. If the source is down, the report is down. **Import data when freshness tolerance allows it.** Use composite models to blend DirectQuery and Import.
 
 !!! danger "Don't Skip Data Contracts"
-    Federated data without contracts is "garbage in from everywhere." Define explicit contracts for each source: expected schema, freshness SLA, quality thresholds, owner contact. Use dbt tests, Great Expectations, or Fabric data quality rules to enforce contracts programmatically.
+Federated data without contracts is "garbage in from everywhere." Define explicit contracts for each source: expected schema, freshness SLA, quality thresholds, owner contact. Use dbt tests, Great Expectations, or Fabric data quality rules to enforce contracts programmatically.
 
 !!! danger "Don't Assume Source Schemas Are Stable"
-    The AWS team will add a column to the RDS table. The GCP team will change a BigQuery field from STRING to INT64. The Salesforce admin will add a custom field. **Implement schema drift detection** at every integration point. ADF has built-in drift handling; dbt has source freshness and schema tests.
+The AWS team will add a column to the RDS table. The GCP team will change a BigQuery field from STRING to INT64. The Salesforce admin will add a custom field. **Implement schema drift detection** at every integration point. ADF has built-in drift handling; dbt has source freshness and schema tests.
 
 ---
 
@@ -775,26 +775,26 @@ Federated sources change independently. Protect yourself:
 
 ### Virtualization vs. Replication Cost Comparison
 
-| Scenario | Virtualize (Shortcut) | Replicate (ADF Copy) | Winner |
-|---|---|---|---|
-| 100 GB dataset, queried 1x/week | Egress: ~$0.36/month | Storage: ~$0.10/month + ADF: ~$0.25/run | **Virtualize** — minimal egress |
-| 100 GB dataset, queried 10x/day | Egress: ~$2,700/month | Storage: ~$0.10/month + ADF: ~$0.25/run | **Replicate** — egress dominates |
-| 1 TB dataset, queried 1x/day | Egress: ~$2,700/month | Storage: ~$1/month + ADF: ~$2.50/run | **Replicate** — storage is cheap |
-| 10 TB dataset, queried 1x/month | Egress: ~$900/month | Storage: ~$10/month + ADF: ~$25/run | **Virtualize** — low frequency |
-| 10 TB dataset, residency-restricted | N/A — must virtualize | N/A — cannot copy | **Virtualize** — compliance requires it |
+| Scenario                            | Virtualize (Shortcut) | Replicate (ADF Copy)                    | Winner                                  |
+| ----------------------------------- | --------------------- | --------------------------------------- | --------------------------------------- |
+| 100 GB dataset, queried 1x/week     | Egress: ~$0.36/month  | Storage: ~$0.10/month + ADF: ~$0.25/run | **Virtualize** — minimal egress         |
+| 100 GB dataset, queried 10x/day     | Egress: ~$2,700/month | Storage: ~$0.10/month + ADF: ~$0.25/run | **Replicate** — egress dominates        |
+| 1 TB dataset, queried 1x/day        | Egress: ~$2,700/month | Storage: ~$1/month + ADF: ~$2.50/run    | **Replicate** — storage is cheap        |
+| 10 TB dataset, queried 1x/month     | Egress: ~$900/month   | Storage: ~$10/month + ADF: ~$25/run     | **Virtualize** — low frequency          |
+| 10 TB dataset, residency-restricted | N/A — must virtualize | N/A — cannot copy                       | **Virtualize** — compliance requires it |
 
 ### Cross-Cloud Egress Pricing
 
-| From → To | Per GB | 1 TB | 10 TB |
-|---|---|---|---|
-| AWS → Azure/Internet | $0.09 | $90 | $900 |
-| GCP → Azure/Internet | $0.12 | $120 | $1,200 |
-| Azure → AWS/Internet | $0.087 | $87 | $870 |
-| AWS → AWS (cross-region) | $0.02 | $20 | $200 |
-| Any cloud → Same region | Free | Free | Free |
+| From → To                | Per GB | 1 TB | 10 TB  |
+| ------------------------ | ------ | ---- | ------ |
+| AWS → Azure/Internet     | $0.09  | $90  | $900   |
+| GCP → Azure/Internet     | $0.12  | $120 | $1,200 |
+| Azure → AWS/Internet     | $0.087 | $87  | $870   |
+| AWS → AWS (cross-region) | $0.02  | $20  | $200   |
+| Any cloud → Same region  | Free   | Free | Free   |
 
 !!! tip "Negotiate Committed Use Discounts"
-    All three clouds offer egress discounts for committed volumes. AWS offers Data Transfer Out tiered pricing starting at $0.085/GB for the first 10 TB. GCP offers committed use discounts. Azure offers bandwidth pricing tiers. If you know your egress volume, negotiate.
+All three clouds offer egress discounts for committed volumes. AWS offers Data Transfer Out tiered pricing starting at $0.085/GB for the first 10 TB. GCP offers committed use discounts. Azure offers bandwidth pricing tiers. If you know your egress volume, negotiate.
 
 ### Decision Tree: Virtualize vs. Replicate
 
@@ -825,13 +825,13 @@ dbt models in CSA-in-a-Box can reference both virtual (shortcut) and physical (A
 ```yaml
 # models/sources.yml
 sources:
-  - name: bronze
-    schema: dbo
-    tables:
-      - name: aws_customers        # OneLake shortcut to S3
-      - name: gcp_transactions     # OneLake shortcut to GCS
-      - name: onprem_products      # ADF copy to ADLS
-      - name: salesforce_accounts  # ADF copy to ADLS
+    - name: bronze
+      schema: dbo
+      tables:
+          - name: aws_customers # OneLake shortcut to S3
+          - name: gcp_transactions # OneLake shortcut to GCS
+          - name: onprem_products # ADF copy to ADLS
+          - name: salesforce_accounts # ADF copy to ADLS
 ```
 
 ### Data Contracts for Cross-Cloud Data Products
@@ -841,25 +841,25 @@ Each federated source should have an explicit data contract:
 ```yaml
 # contracts/aws_customers.yml
 contract:
-  name: aws_customers
-  owner: aws-data-team@company.com
-  source: AWS RDS PostgreSQL (us-east-1)
-  access_method: OneLake shortcut via S3 export
-  freshness_sla: 24 hours
-  schema:
-    - name: customer_id
-      type: BIGINT
-      nullable: false
-      tests: [unique, not_null]
-    - name: email
-      type: VARCHAR
-      nullable: false
-      tests: [not_null]
-      classification: PII
-    - name: region
-      type: VARCHAR
-      nullable: false
-      tests: [accepted_values: ['us-east-1', 'eu-west-1', 'ap-southeast-1']]
+    name: aws_customers
+    owner: aws-data-team@company.com
+    source: AWS RDS PostgreSQL (us-east-1)
+    access_method: OneLake shortcut via S3 export
+    freshness_sla: 24 hours
+    schema:
+        - name: customer_id
+          type: BIGINT
+          nullable: false
+          tests: [unique, not_null]
+        - name: email
+          type: VARCHAR
+          nullable: false
+          tests: [not_null]
+          classification: PII
+        - name: region
+          type: VARCHAR
+          nullable: false
+          tests: [accepted_values: ["us-east-1", "eu-west-1", "ap-southeast-1"]]
 ```
 
 ### Purview Governance Overlay
@@ -875,26 +875,26 @@ Purview acts as the governance overlay for all CSA-in-a-Box data products:
 
 ## Sources
 
-| Topic | Documentation |
-|---|---|
-| OneLake shortcuts | [Create OneLake shortcuts](https://learn.microsoft.com/en-us/fabric/onelake/onelake-shortcuts) |
-| OneLake S3 shortcut | [Amazon S3 shortcut](https://learn.microsoft.com/en-us/fabric/onelake/create-s3-shortcut) |
-| OneLake GCS shortcut | [Google Cloud Storage shortcut](https://learn.microsoft.com/en-us/fabric/onelake/create-gcs-shortcut) |
-| Synapse serverless SQL | [Synapse serverless SQL pool](https://learn.microsoft.com/en-us/azure/synapse-analytics/sql/on-demand-workspace-overview) |
-| OPENROWSET syntax | [OPENROWSET (Transact-SQL)](https://learn.microsoft.com/en-us/azure/synapse-analytics/sql/develop-openrowset) |
-| External tables in Synapse | [Create external table](https://learn.microsoft.com/en-us/azure/synapse-analytics/sql/develop-tables-external-tables) |
-| Azure Data Factory | [Azure Data Factory documentation](https://learn.microsoft.com/en-us/azure/data-factory/) |
-| ADF Mapping Data Flows | [Mapping data flows](https://learn.microsoft.com/en-us/azure/data-factory/concepts-data-flow-overview) |
-| Azure Arc overview | [Azure Arc overview](https://learn.microsoft.com/en-us/azure/azure-arc/overview) |
-| Arc-enabled SQL Server | [SQL Server on Azure Arc](https://learn.microsoft.com/en-us/sql/sql-server/azure-arc/overview) |
-| Arc-enabled data services | [Azure Arc-enabled data services](https://learn.microsoft.com/en-us/azure/azure-arc/data/overview) |
-| Microsoft Purview | [Microsoft Purview documentation](https://learn.microsoft.com/en-us/purview/) |
-| Purview multi-cloud scanning | [Supported data sources in Purview](https://learn.microsoft.com/en-us/purview/microsoft-purview-connector-overview) |
-| Power BI composite models | [Composite models in Power BI](https://learn.microsoft.com/en-us/power-bi/transform-model/desktop-composite-models) |
-| Power BI DirectQuery | [DirectQuery in Power BI](https://learn.microsoft.com/en-us/power-bi/connect-data/desktop-directquery-about) |
-| Microsoft Fabric | [Microsoft Fabric documentation](https://learn.microsoft.com/en-us/fabric/) |
-| Azure ExpressRoute | [ExpressRoute documentation](https://learn.microsoft.com/en-us/azure/expressroute/) |
-| Azure Key Vault | [Key Vault documentation](https://learn.microsoft.com/en-us/azure/key-vault/) |
-| Entra Workload Identity | [Workload Identity Federation](https://learn.microsoft.com/en-us/entra/workload-id/workload-identity-federation) |
-| AWS data transfer pricing | [AWS Data Transfer pricing](https://aws.amazon.com/ec2/pricing/on-demand/#Data_Transfer) |
-| GCP egress pricing | [GCP Network pricing](https://cloud.google.com/vpc/network-pricing) |
+| Topic                        | Documentation                                                                                                             |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| OneLake shortcuts            | [Create OneLake shortcuts](https://learn.microsoft.com/en-us/fabric/onelake/onelake-shortcuts)                            |
+| OneLake S3 shortcut          | [Amazon S3 shortcut](https://learn.microsoft.com/en-us/fabric/onelake/create-s3-shortcut)                                 |
+| OneLake GCS shortcut         | [Google Cloud Storage shortcut](https://learn.microsoft.com/en-us/fabric/onelake/create-gcs-shortcut)                     |
+| Synapse serverless SQL       | [Synapse serverless SQL pool](https://learn.microsoft.com/en-us/azure/synapse-analytics/sql/on-demand-workspace-overview) |
+| OPENROWSET syntax            | [OPENROWSET (Transact-SQL)](https://learn.microsoft.com/en-us/azure/synapse-analytics/sql/develop-openrowset)             |
+| External tables in Synapse   | [Create external table](https://learn.microsoft.com/en-us/azure/synapse-analytics/sql/develop-tables-external-tables)     |
+| Azure Data Factory           | [Azure Data Factory documentation](https://learn.microsoft.com/en-us/azure/data-factory/)                                 |
+| ADF Mapping Data Flows       | [Mapping data flows](https://learn.microsoft.com/en-us/azure/data-factory/concepts-data-flow-overview)                    |
+| Azure Arc overview           | [Azure Arc overview](https://learn.microsoft.com/en-us/azure/azure-arc/overview)                                          |
+| Arc-enabled SQL Server       | [SQL Server on Azure Arc](https://learn.microsoft.com/en-us/sql/sql-server/azure-arc/overview)                            |
+| Arc-enabled data services    | [Azure Arc-enabled data services](https://learn.microsoft.com/en-us/azure/azure-arc/data/overview)                        |
+| Microsoft Purview            | [Microsoft Purview documentation](https://learn.microsoft.com/en-us/purview/)                                             |
+| Purview multi-cloud scanning | [Supported data sources in Purview](https://learn.microsoft.com/en-us/purview/microsoft-purview-connector-overview)       |
+| Power BI composite models    | [Composite models in Power BI](https://learn.microsoft.com/en-us/power-bi/transform-model/desktop-composite-models)       |
+| Power BI DirectQuery         | [DirectQuery in Power BI](https://learn.microsoft.com/en-us/power-bi/connect-data/desktop-directquery-about)              |
+| Microsoft Fabric             | [Microsoft Fabric documentation](https://learn.microsoft.com/en-us/fabric/)                                               |
+| Azure ExpressRoute           | [ExpressRoute documentation](https://learn.microsoft.com/en-us/azure/expressroute/)                                       |
+| Azure Key Vault              | [Key Vault documentation](https://learn.microsoft.com/en-us/azure/key-vault/)                                             |
+| Entra Workload Identity      | [Workload Identity Federation](https://learn.microsoft.com/en-us/entra/workload-id/workload-identity-federation)          |
+| AWS data transfer pricing    | [AWS Data Transfer pricing](https://aws.amazon.com/ec2/pricing/on-demand/#Data_Transfer)                                  |
+| GCP egress pricing           | [GCP Network pricing](https://cloud.google.com/vpc/network-pricing)                                                       |

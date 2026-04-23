@@ -26,7 +26,7 @@ Investigative document review sits at the intersection of data engineering, info
 **Defensibility.** The methodology used for document review must withstand scrutiny. Courts have increasingly accepted technology-assisted review (TAR) and predictive coding, but the producing party must be able to explain and defend the approach, including any AI or analytics applied to the corpus.
 
 !!! warning "Legal Coordination Required"
-    Document analytics pipelines for investigative workloads must be designed in coordination with legal counsel. The technical architecture decisions described here — data residency, access controls, audit logging, AI governance — have direct legal implications. Engage your legal team before deploying.
+Document analytics pipelines for investigative workloads must be designed in coordination with legal counsel. The technical architecture decisions described here — data residency, access controls, audit logging, AI governance — have direct legal implications. Engage your legal team before deploying.
 
 ---
 
@@ -139,7 +139,7 @@ print(f"Ingested {manifest_df.count()} files into bronze tier.")
 ```
 
 !!! tip "Hash Everything at Ingestion"
-    Computing SHA-256 hashes at ingestion time creates a tamper-evident baseline. Any subsequent modification to a file can be detected by comparing the current hash against the ingestion manifest. This is a fundamental chain-of-custody control.
+Computing SHA-256 hashes at ingestion time creates a tamper-evident baseline. Any subsequent modification to a file can be detected by comparing the current hash against the ingestion manifest. This is a fundamental chain-of-custody control.
 
 For email archives (PST, MBOX), use a preprocessing step to extract individual messages before loading into the bronze tier:
 
@@ -254,7 +254,7 @@ for row in extraction_stats:
 ```
 
 !!! info "Handling Extraction Failures"
-    Documents that fail text extraction (corrupted files, unsupported formats, password-protected archives) are flagged with `extraction_status = 'failed'` rather than silently dropped. These must be routed to manual processing — in an investigative context, you cannot simply ignore documents that resist automated extraction.
+Documents that fail text extraction (corrupted files, unsupported formats, password-protected archives) are flagged with `extraction_status = 'failed'` rather than silently dropped. These must be routed to manual processing — in an investigative context, you cannot simply ignore documents that resist automated extraction.
 
 ---
 
@@ -366,7 +366,7 @@ df_privilege.filter(F.col("privilege_flag")).select(
 ```
 
 !!! warning "Privilege Review is Not Fully Automatable"
-    Keyword-based and NLP-based privilege screening are pre-filters, not replacements for attorney review. The output of this step is a prioritized review queue — documents with a high likelihood of privilege are surfaced first, but final privilege determinations must be made by qualified attorneys.
+Keyword-based and NLP-based privilege screening are pre-filters, not replacements for attorney review. The output of this step is a prioritized review queue — documents with a high likelihood of privilege are surfaced first, but final privilege determinations must be made by qualified attorneys.
 
 ---
 
@@ -418,16 +418,16 @@ New-DlpComplianceRule -Policy "Investigation Data Protection" `
 
 Configure audit logging for the Fabric workspace:
 
-| Audit Category | What Is Captured | Retention |
-|---|---|---|
-| Data access | Every read/query against Lakehouse tables | 1 year (standard) or 10 years (Audit Premium) |
-| Data modification | All writes, updates, deletes in Delta tables | 1 year / 10 years |
-| Sharing & export | Any attempt to share or export workspace artifacts | 1 year / 10 years |
-| Copilot interactions | All prompts submitted and responses generated | 1 year / 10 years |
-| Admin actions | Workspace configuration changes, permission grants | 1 year / 10 years |
+| Audit Category       | What Is Captured                                   | Retention                                     |
+| -------------------- | -------------------------------------------------- | --------------------------------------------- |
+| Data access          | Every read/query against Lakehouse tables          | 1 year (standard) or 10 years (Audit Premium) |
+| Data modification    | All writes, updates, deletes in Delta tables       | 1 year / 10 years                             |
+| Sharing & export     | Any attempt to share or export workspace artifacts | 1 year / 10 years                             |
+| Copilot interactions | All prompts submitted and responses generated      | 1 year / 10 years                             |
+| Admin actions        | Workspace configuration changes, permission grants | 1 year / 10 years                             |
 
 !!! tip "Audit Premium for Investigations"
-    Standard Microsoft 365 audit logs retain data for 1 year. For investigative workloads where chain-of-custody must be maintained for the duration of litigation (potentially years), enable Audit Premium with 10-year retention. This is configured at the tenant level and requires E5 or E5 Compliance licensing.
+Standard Microsoft 365 audit logs retain data for 1 year. For investigative workloads where chain-of-custody must be maintained for the duration of litigation (potentially years), enable Audit Premium with 10-year retention. This is configured at the tenant level and requires E5 or E5 Compliance licensing.
 
 ---
 
@@ -547,7 +547,7 @@ for i in range(0, len(rows), batch_size):
 ```
 
 !!! info "Content Truncation"
-    Azure AI Search has a 32,766 character limit per string field. For documents exceeding this limit, consider chunking the content into multiple index entries with a shared document ID, or storing the full text in OneLake and indexing only the first N characters plus extracted entities.
+Azure AI Search has a 32,766 character limit per string field. For documents exceeding this limit, consider chunking the content into multiple index entries with a shared document ID, or storing the full text in OneLake and indexing only the first N characters plus extracted entities.
 
 ---
 
@@ -557,18 +557,18 @@ With the document corpus indexed and enriched, Copilot in Fabric enables investi
 
 **Example investigator queries:**
 
-| Query | What It Does |
-|---|---|
+| Query                                                                                         | What It Does                                                    |
+| --------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
 | "Find all communications between Company A and Company B executives about pricing in Q3 2024" | Semantic search filtered by entity co-occurrence and date range |
-| "Show documents mentioning market allocation in the telecommunications sector" | Keyword + semantic search across the corpus |
-| "Summarize the key terms discussed in the merger agreement attachments" | Retrieval-augmented summarization over relevant document subset |
-| "Which custodians have the most documents mentioning competitive intelligence?" | Aggregation query against entity and custodian metadata |
-| "List all documents flagged for privilege review that mention outside counsel" | Filtered query combining privilege flags and entity matching |
+| "Show documents mentioning market allocation in the telecommunications sector"                | Keyword + semantic search across the corpus                     |
+| "Summarize the key terms discussed in the merger agreement attachments"                       | Retrieval-augmented summarization over relevant document subset |
+| "Which custodians have the most documents mentioning competitive intelligence?"               | Aggregation query against entity and custodian metadata         |
+| "List all documents flagged for privilege review that mention outside counsel"                | Filtered query combining privilege flags and entity matching    |
 
 Copilot queries execute against the Lakehouse tables and Azure AI Search index. The underlying data access is governed by workspace permissions and sensitivity labels — Copilot cannot surface content that the querying user does not have permission to view.
 
 !!! warning "Copilot Governance"
-    Microsoft Purview provides governance controls for Copilot interactions in Fabric:
+Microsoft Purview provides governance controls for Copilot interactions in Fabric:
 
     - **Audit**: All Copilot prompts and responses are logged in Purview Audit
     - **eDiscovery**: AI-generated content is discoverable and preservable
@@ -604,12 +604,12 @@ AND date:2024-07-01..2024-09-30
 
 **Export** produces documents in standard formats accepted by opposing counsel and regulators:
 
-| Export Format | Use Case |
-|---|---|
-| PST | Email productions |
-| Native files | Document productions with original metadata |
-| PDF + load file | Processed productions with Bates numbering |
-| CSV manifest | Chain-of-custody documentation |
+| Export Format   | Use Case                                    |
+| --------------- | ------------------------------------------- |
+| PST             | Email productions                           |
+| Native files    | Document productions with original metadata |
+| PDF + load file | Processed productions with Bates numbering  |
+| CSV manifest    | Chain-of-custody documentation              |
 
 ```mermaid
 flowchart LR
@@ -625,7 +625,7 @@ flowchart LR
 ```
 
 !!! tip "Defensibility Documentation"
-    For each production, generate a methodology memo documenting:
+For each production, generate a methodology memo documenting:
 
     - Data sources collected and collection methods
     - Processing steps applied (text extraction, deduplication, NLP)
@@ -642,24 +642,24 @@ flowchart LR
 
 The following figures are drawn from published third-party sources and provide context for the scale and cost of investigative document review. These are not Microsoft claims.
 
-| Metric | Value | Source |
-|---|---|---|
-| Document volume (DOJ Second Request) | 18 TB across 17+ data store types | [HaystackID](https://haystackid.com/antitrust-investigation-services/) |
-| Average cost (contested merger Second Request) | ~$4.3 million, up to $9 million | [OpenText](https://blogs.opentext.com/beating-the-bad-odds-of-an-antitrust-investigation/) |
-| Timeline (DOJ Second Request) | ~106 days average | [HaystackID](https://haystackid.com/antitrust-investigation-services/) |
-| Review cost reduction with TAR | 50-80% vs. linear manual review | Industry consensus (various EDRM studies) |
+| Metric                                         | Value                             | Source                                                                                     |
+| ---------------------------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------ |
+| Document volume (DOJ Second Request)           | 18 TB across 17+ data store types | [HaystackID](https://haystackid.com/antitrust-investigation-services/)                     |
+| Average cost (contested merger Second Request) | ~$4.3 million, up to $9 million   | [OpenText](https://blogs.opentext.com/beating-the-bad-odds-of-an-antitrust-investigation/) |
+| Timeline (DOJ Second Request)                  | ~106 days average                 | [HaystackID](https://haystackid.com/antitrust-investigation-services/)                     |
+| Review cost reduction with TAR                 | 50-80% vs. linear manual review   | Industry consensus (various EDRM studies)                                                  |
 
 !!! info "Technology-Assisted Review"
-    TAR, predictive coding, and advanced analytics are routinely accepted by the DOJ and FTC for Second Request compliance. The seminal case *Da Silva Moore v. Publicis Groupe* (2012) established judicial acceptance of TAR, and subsequent rulings have reinforced that TAR can be more accurate than exhaustive manual review. See [FTI Technology](https://ftitechnology.com/solutions/second-requests) and [TransPerfect Legal](https://www.transperfectlegal.com/practice-groups/second-requests-mergers-acquisition) for industry context.
+TAR, predictive coding, and advanced analytics are routinely accepted by the DOJ and FTC for Second Request compliance. The seminal case _Da Silva Moore v. Publicis Groupe_ (2012) established judicial acceptance of TAR, and subsequent rulings have reinforced that TAR can be more accurate than exhaustive manual review. See [FTI Technology](https://ftitechnology.com/solutions/second-requests) and [TransPerfect Legal](https://www.transperfectlegal.com/practice-groups/second-requests-mergers-acquisition) for industry context.
 
 ---
 
 ## Evidence: Production Deployments
 
-| Organization | Use Case | Source |
-|---|---|---|
+| Organization         | Use Case                                                        | Source                                                                                                                                                      |
+| -------------------- | --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Microsoft (internal) | Enterprise data governance transformation with Purview + Fabric | [Microsoft Inside Track](https://www.microsoft.com/insidetrack/blog/transforming-data-governance-at-microsoft-with-microsoft-purview-and-microsoft-fabric/) |
-| Microsoft (internal) | Purview Unified Catalog for estate-wide data governance | [Microsoft Inside Track](https://www.microsoft.com/insidetrack/blog/powering-data-governance-at-microsoft-with-purview-unified-catalog/) |
+| Microsoft (internal) | Purview Unified Catalog for estate-wide data governance         | [Microsoft Inside Track](https://www.microsoft.com/insidetrack/blog/powering-data-governance-at-microsoft-with-purview-unified-catalog/)                    |
 
 ---
 
@@ -680,7 +680,7 @@ The following figures are drawn from published third-party sources and provide c
 - Storage in OneLake (per-GB, relatively low cost)
 
 !!! tip "Pause Capacity After Processing"
-    Fabric capacity can be paused when not actively running Spark jobs. During review phases — when investigators are querying the indexed data through Copilot or Power BI — the compute requirements are significantly lower. Schedule capacity scaling based on the investigation phase.
+Fabric capacity can be paused when not actively running Spark jobs. During review phases — when investigators are querying the indexed data through Copilot or Power BI — the compute requirements are significantly lower. Schedule capacity scaling based on the investigation phase.
 
 ---
 

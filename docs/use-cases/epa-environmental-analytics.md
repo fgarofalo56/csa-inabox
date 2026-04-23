@@ -8,7 +8,7 @@ description: End-to-end guide for building EPA environmental monitoring analytic
 This use case covers the ingestion, transformation, and analysis of data from multiple EPA programs — AirNow, AQS, SDWIS, TRI, ECHO, EJScreen, and Superfund — using Azure Cloud Scale Analytics patterns. The implementation combines real-time AQI sensor streaming with batch ingestion from regulatory databases to produce air quality trend analysis, compliance scorecards, and environmental justice overlays.
 
 !!! info "Reference Implementation"
-    The complete working code for this domain lives in [`examples/epa/`](../../examples/epa/). This page explains the architecture, data sources, and step-by-step build process.
+The complete working code for this domain lives in [`examples/epa/`](../../examples/epa/). This page explains the architecture, data sources, and step-by-step build process.
 
 ---
 
@@ -73,18 +73,18 @@ graph LR
 
 ## Data Sources
 
-| Source | API / URL | Update Frequency | Description |
-|---|---|---|---|
-| **AirNow** | `https://www.airnowapi.org/aq` | Real-time (1–5 min) | Current AQI observations and forecasts for 500+ metropolitan areas across all 50 states. Requires API key registration. |
-| **AQS** (Air Quality System) | `https://aqs.epa.gov/data/api` | Daily (quality-assured data lags 6–12 months) | Historical air quality monitoring data — sample-level, daily, and annual summaries. Email/key authentication. |
-| **SDWIS** (Safe Drinking Water) | `https://enviro.epa.gov/enviro/efservice/WATER_SYSTEM` | Monthly | Public water system inventory, violations, enforcement actions. Covers 25,000+ systems. |
-| **TRI** (Toxics Release Inventory) | `https://enviro.epa.gov/tri/` | Annual (18-month reporting lag) | Chemical release reports from 20,000+ industrial facilities. 650+ reportable chemicals with release media breakdown. |
-| **ECHO** (Enforcement & Compliance) | `https://echodata.epa.gov/echo` | Monthly | Integrated compliance data across CAA, CWA, RCRA, and SDWIS. No authentication required. Paginate at 10,000 records. |
-| **EJScreen** | `https://gaftp.epa.gov/EJScreen/` | Annual | Environmental justice screening data at Census tract level — demographic indicators, pollution burden indices. |
-| **Superfund / CERCLIS** | `https://enviro.epa.gov/enviro/efservice/SEMS` | Quarterly | 1,300+ National Priorities List sites with contaminant, remediation, and community health data. |
+| Source                              | API / URL                                              | Update Frequency                              | Description                                                                                                             |
+| ----------------------------------- | ------------------------------------------------------ | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| **AirNow**                          | `https://www.airnowapi.org/aq`                         | Real-time (1–5 min)                           | Current AQI observations and forecasts for 500+ metropolitan areas across all 50 states. Requires API key registration. |
+| **AQS** (Air Quality System)        | `https://aqs.epa.gov/data/api`                         | Daily (quality-assured data lags 6–12 months) | Historical air quality monitoring data — sample-level, daily, and annual summaries. Email/key authentication.           |
+| **SDWIS** (Safe Drinking Water)     | `https://enviro.epa.gov/enviro/efservice/WATER_SYSTEM` | Monthly                                       | Public water system inventory, violations, enforcement actions. Covers 25,000+ systems.                                 |
+| **TRI** (Toxics Release Inventory)  | `https://enviro.epa.gov/tri/`                          | Annual (18-month reporting lag)               | Chemical release reports from 20,000+ industrial facilities. 650+ reportable chemicals with release media breakdown.    |
+| **ECHO** (Enforcement & Compliance) | `https://echodata.epa.gov/echo`                        | Monthly                                       | Integrated compliance data across CAA, CWA, RCRA, and SDWIS. No authentication required. Paginate at 10,000 records.    |
+| **EJScreen**                        | `https://gaftp.epa.gov/EJScreen/`                      | Annual                                        | Environmental justice screening data at Census tract level — demographic indicators, pollution burden indices.          |
+| **Superfund / CERCLIS**             | `https://enviro.epa.gov/enviro/efservice/SEMS`         | Quarterly                                     | 1,300+ National Priorities List sites with contaminant, remediation, and community health data.                         |
 
 !!! tip "API Key Registration"
-    AirNow API keys are free and issued at [docs.airnowapi.org](https://docs.airnowapi.org/). Rate limit is 500 requests/hour per key. AQS uses a separate email/key pair registered at [aqs.epa.gov/data/api](https://aqs.epa.gov/data/api). All other sources are unauthenticated.
+AirNow API keys are free and issued at [docs.airnowapi.org](https://docs.airnowapi.org/). Rate limit is 500 requests/hour per key. AQS uses a separate email/key pair registered at [aqs.epa.gov/data/api](https://aqs.epa.gov/data/api). All other sources are unauthenticated.
 
 ---
 
@@ -170,7 +170,7 @@ def main(timer: func.TimerRequest) -> None:
 Configure an ADF pipeline with a REST linked service pointing to `https://aqs.epa.gov/data/api`. Use a ForEach activity to iterate over state codes and date ranges, pulling daily summary data into the Bronze landing zone.
 
 !!! warning "AQS Rate Limits"
-    AQS enforces strict rate limits. Use ADF's retry and back-off policies. Batch requests by state and year to stay within limits. Quality-assured AQS data lags AirNow by 6–12 months.
+AQS enforces strict rate limits. Use ADF's retry and back-off policies. Batch requests by state and year to stay within limits. Quality-assured AQS data lags AirNow by 6–12 months.
 
 ---
 
@@ -338,7 +338,7 @@ Azure Data Explorer receives AQI events from Event Hub via streaming ingestion. 
 ```
 
 !!! tip "ADX Retention and Caching"
-    Set a hot cache window of 30 days for real-time dashboards and a retention policy of 365 days for historical trend queries. Older data rolls to cold storage automatically.
+Set a hot cache window of 30 days for real-time dashboards and a retention policy of 365 days for historical trend queries. Older data rolls to cold storage automatically.
 
 ---
 
@@ -427,7 +427,7 @@ Connect Power BI to three sources:
 3. **Azure ML endpoint** — Next-day AQI prediction overlay on the air quality map
 
 !!! info "Row-Level Security"
-    For multi-agency deployments, apply Power BI RLS filters on `state_code` to limit regional office views to their jurisdiction.
+For multi-agency deployments, apply Power BI RLS filters on `state_code` to limit regional office views to their jurisdiction.
 
 ---
 
@@ -435,15 +435,15 @@ Connect Power BI to three sources:
 
 EPA cloud deployments on Azure must address federal security and compliance frameworks.
 
-| Framework | Requirement | Azure Implementation |
-|---|---|---|
-| **FedRAMP** | Moderate or High baseline for federal systems | Deploy to Azure Government (FedRAMP High authorized). Commercial Azure supports FedRAMP Moderate for non-sensitive workloads. |
-| **FISMA** | NIST SP 800-53 control families | Align to NIST controls via Azure Policy initiatives. Use Defender for Cloud regulatory compliance dashboard. |
-| **FOIA** | Public data products must be openly accessible | AQI, TRI, and EJScreen outputs are public domain. Serve via unauthenticated API endpoints or open data portals. |
-| **CUI** | Enforcement-sensitive data may require CUI marking | ECHO enforcement strategy details and pending actions — coordinate with ISSO for CUI determination. |
+| Framework   | Requirement                                        | Azure Implementation                                                                                                          |
+| ----------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| **FedRAMP** | Moderate or High baseline for federal systems      | Deploy to Azure Government (FedRAMP High authorized). Commercial Azure supports FedRAMP Moderate for non-sensitive workloads. |
+| **FISMA**   | NIST SP 800-53 control families                    | Align to NIST controls via Azure Policy initiatives. Use Defender for Cloud regulatory compliance dashboard.                  |
+| **FOIA**    | Public data products must be openly accessible     | AQI, TRI, and EJScreen outputs are public domain. Serve via unauthenticated API endpoints or open data portals.               |
+| **CUI**     | Enforcement-sensitive data may require CUI marking | ECHO enforcement strategy details and pending actions — coordinate with ISSO for CUI determination.                           |
 
 !!! warning "Azure Government vs. Commercial"
-    If the deployment handles CUI or enforcement-sensitive data, use Azure Government regions (`usgovvirginia`, `usgovarizona`). Public environmental data (AQI, TRI) can run on commercial Azure with appropriate access controls.
+If the deployment handles CUI or enforcement-sensitive data, use Azure Government regions (`usgovvirginia`, `usgovarizona`). Public environmental data (AQI, TRI) can run on commercial Azure with appropriate access controls.
 
 **Key security controls:**
 
@@ -467,14 +467,14 @@ EPA cloud deployments on Azure must address federal security and compliance fram
 
 ## Sources
 
-| Resource | URL |
-|---|---|
-| AirNow API Documentation | [https://docs.airnowapi.org/](https://docs.airnowapi.org/) |
-| AQS API Reference | [https://aqs.epa.gov/aqsweb/documents/data_api.html](https://aqs.epa.gov/aqsweb/documents/data_api.html) |
-| EPA Envirofacts (SDWIS, TRI, Superfund) | [https://enviro.epa.gov/](https://enviro.epa.gov/) |
-| ECHO Facility Search | [https://echo.epa.gov/](https://echo.epa.gov/) |
-| EJScreen Tool | [https://www.epa.gov/ejscreen](https://www.epa.gov/ejscreen) |
-| TRI Explorer | [https://www.epa.gov/toxics-release-inventory-tri-program](https://www.epa.gov/toxics-release-inventory-tri-program) |
-| EPA Open Data Portal | [https://www.epa.gov/data](https://www.epa.gov/data) |
-| Azure Government Compliance | [https://learn.microsoft.com/en-us/azure/compliance/](https://learn.microsoft.com/en-us/azure/compliance/) |
-| NIST SP 800-53 Controls | [https://csrc.nist.gov/publications/detail/sp/800-53/rev-5/final](https://csrc.nist.gov/publications/detail/sp/800-53/rev-5/final) |
+| Resource                                | URL                                                                                                                                |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| AirNow API Documentation                | [https://docs.airnowapi.org/](https://docs.airnowapi.org/)                                                                         |
+| AQS API Reference                       | [https://aqs.epa.gov/aqsweb/documents/data_api.html](https://aqs.epa.gov/aqsweb/documents/data_api.html)                           |
+| EPA Envirofacts (SDWIS, TRI, Superfund) | [https://enviro.epa.gov/](https://enviro.epa.gov/)                                                                                 |
+| ECHO Facility Search                    | [https://echo.epa.gov/](https://echo.epa.gov/)                                                                                     |
+| EJScreen Tool                           | [https://www.epa.gov/ejscreen](https://www.epa.gov/ejscreen)                                                                       |
+| TRI Explorer                            | [https://www.epa.gov/toxics-release-inventory-tri-program](https://www.epa.gov/toxics-release-inventory-tri-program)               |
+| EPA Open Data Portal                    | [https://www.epa.gov/data](https://www.epa.gov/data)                                                                               |
+| Azure Government Compliance             | [https://learn.microsoft.com/en-us/azure/compliance/](https://learn.microsoft.com/en-us/azure/compliance/)                         |
+| NIST SP 800-53 Controls                 | [https://csrc.nist.gov/publications/detail/sp/800-53/rev-5/final](https://csrc.nist.gov/publications/detail/sp/800-53/rev-5/final) |

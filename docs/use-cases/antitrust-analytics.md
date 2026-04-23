@@ -43,14 +43,14 @@ Criminal enforcement targets per se violations of the Sherman Act — price-fixi
 
 The three primary federal antitrust statutes create the analytical framework for enforcement data:
 
-| Statute | Year | Scope | Key Provisions |
-|---|---|---|---|
-| **Sherman Act** | 1890 | Criminal & Civil | Section 1: agreements in restraint of trade; Section 2: monopolization |
-| **Clayton Act** | 1914 | Civil | Section 7: mergers that substantially lessen competition; Section 3: tying arrangements |
-| **FTC Act** | 1914 | Civil (FTC only) | Section 5: unfair methods of competition; unfair or deceptive acts |
+| Statute         | Year | Scope            | Key Provisions                                                                          |
+| --------------- | ---- | ---------------- | --------------------------------------------------------------------------------------- |
+| **Sherman Act** | 1890 | Criminal & Civil | Section 1: agreements in restraint of trade; Section 2: monopolization                  |
+| **Clayton Act** | 1914 | Civil            | Section 7: mergers that substantially lessen competition; Section 3: tying arrangements |
+| **FTC Act**     | 1914 | Civil (FTC only) | Section 5: unfair methods of competition; unfair or deceptive acts                      |
 
 !!! info "Criminal vs. Civil"
-    Only the Sherman Act carries criminal penalties. Clayton Act and FTC Act violations are civil matters. The DOJ has exclusive authority over criminal antitrust enforcement; the FTC shares civil merger review authority under the HSR Act.
+Only the Sherman Act carries criminal penalties. Clayton Act and FTC Act violations are civil matters. The DOJ has exclusive authority over criminal antitrust enforcement; the FTC shares civil merger review authority under the HSR Act.
 
 ### Common Violation Categories
 
@@ -79,16 +79,16 @@ graph TD
 
 Antitrust analytics draws from several authoritative public data sources. Each maps to a distinct ingestion pattern in the CSA-in-a-Box medallion architecture.
 
-| Source | Publisher | Data Type | Update Frequency | URL |
-|---|---|---|---|---|
-| **HSR Annual Reports** | FTC & DOJ (joint) | Merger filings, second requests, enforcement actions | Annual | [ftc.gov/legal-library](https://www.ftc.gov/legal-library/browse/reports) |
-| **Criminal Enforcement Charts** | DOJ Antitrust Division | Fines, jail sentences, cases by year | Periodic | [justice.gov/atr](https://www.justice.gov/atr/criminal-enforcement-fine-and-jail-charts) |
-| **DOJ Antitrust Division** | DOJ | Press releases, case filings, policy documents | Ongoing | [justice.gov/atr](https://www.justice.gov/atr) |
-| **FJC Integrated Database** | Federal Judicial Center | Federal court case filings and terminations | Quarterly | [fjc.gov/research/idb](https://www.fjc.gov/research/idb) |
-| **USSC Datafiles** | U.S. Sentencing Commission | Individual sentencing records | Annual | [ussc.gov/research/datafiles](https://www.ussc.gov/research/datafiles/commission-datafiles) |
+| Source                          | Publisher                  | Data Type                                            | Update Frequency | URL                                                                                         |
+| ------------------------------- | -------------------------- | ---------------------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------- |
+| **HSR Annual Reports**          | FTC & DOJ (joint)          | Merger filings, second requests, enforcement actions | Annual           | [ftc.gov/legal-library](https://www.ftc.gov/legal-library/browse/reports)                   |
+| **Criminal Enforcement Charts** | DOJ Antitrust Division     | Fines, jail sentences, cases by year                 | Periodic         | [justice.gov/atr](https://www.justice.gov/atr/criminal-enforcement-fine-and-jail-charts)    |
+| **DOJ Antitrust Division**      | DOJ                        | Press releases, case filings, policy documents       | Ongoing          | [justice.gov/atr](https://www.justice.gov/atr)                                              |
+| **FJC Integrated Database**     | Federal Judicial Center    | Federal court case filings and terminations          | Quarterly        | [fjc.gov/research/idb](https://www.fjc.gov/research/idb)                                    |
+| **USSC Datafiles**              | U.S. Sentencing Commission | Individual sentencing records                        | Annual           | [ussc.gov/research/datafiles](https://www.ussc.gov/research/datafiles/commission-datafiles) |
 
 !!! tip "Data Freshness"
-    Most antitrust data sources update on annual or quarterly cycles. Design your ingestion pipelines with appropriate scheduling — daily polling is unnecessary and may trigger rate limiting on government sites.
+Most antitrust data sources update on annual or quarterly cycles. Design your ingestion pipelines with appropriate scheduling — daily polling is unnecessary and may trigger rate limiting on government sites.
 
 ---
 
@@ -150,15 +150,15 @@ graph LR
 
 ### Azure Services Used
 
-| Service | Role |
-|---|---|
-| **Azure Data Factory** | Orchestration and ingestion from public data sources |
-| **Azure Data Lake Storage Gen2** | Medallion layer storage (Bronze/Silver/Gold) |
-| **Azure Databricks** | dbt transformations and analytical notebooks |
-| **Delta Lake** | Table format for ACID transactions and time travel |
-| **Microsoft Purview** | Data catalog, lineage, and governance |
-| **Power BI** | Dashboards and self-service analytics |
-| **Azure Key Vault** | Secrets management for service connections |
+| Service                          | Role                                                 |
+| -------------------------------- | ---------------------------------------------------- |
+| **Azure Data Factory**           | Orchestration and ingestion from public data sources |
+| **Azure Data Lake Storage Gen2** | Medallion layer storage (Bronze/Silver/Gold)         |
+| **Azure Databricks**             | dbt transformations and analytical notebooks         |
+| **Delta Lake**                   | Table format for ACID transactions and time travel   |
+| **Microsoft Purview**            | Data catalog, lineage, and governance                |
+| **Power BI**                     | Dashboards and self-service analytics                |
+| **Azure Key Vault**              | Secrets management for service connections           |
 
 ---
 
@@ -223,18 +223,18 @@ GROUP BY fiscal_year, violation_category
 
 The `domains/doj_antitrust/` directory in this repository is a complete, working implementation of the antitrust analytics use case. It demonstrates every layer of the CSA-in-a-Box pattern:
 
-| Layer | Implementation |
-|---|---|
-| **Seed data** | Public enforcement statistics loaded as dbt seeds |
-| **Bronze models** | Raw ingestion with source metadata and load timestamps |
-| **Silver models** | Cleaned, typed, and deduplicated staging models |
-| **Gold models** | Business-ready fact and dimension tables |
-| **Data quality** | Flag-don't-drop pattern for enforcement data integrity |
+| Layer              | Implementation                                             |
+| ------------------ | ---------------------------------------------------------- |
+| **Seed data**      | Public enforcement statistics loaded as dbt seeds          |
+| **Bronze models**  | Raw ingestion with source metadata and load timestamps     |
+| **Silver models**  | Cleaned, typed, and deduplicated staging models            |
+| **Gold models**    | Business-ready fact and dimension tables                   |
+| **Data quality**   | Flag-don't-drop pattern for enforcement data integrity     |
 | **Data contracts** | YAML-based data product contracts for downstream consumers |
-| **Analytics** | Databricks notebooks with enforcement trend analysis |
+| **Analytics**      | Databricks notebooks with enforcement trend analysis       |
 
 !!! tip "Try It Yourself"
-    See the [DOJ Antitrust: Step-by-Step Domain Build](doj-antitrust-deep-dive.md) for a complete walkthrough of how this domain was constructed.
+See the [DOJ Antitrust: Step-by-Step Domain Build](doj-antitrust-deep-dive.md) for a complete walkthrough of how this domain was constructed.
 
 ---
 
@@ -242,10 +242,10 @@ The `domains/doj_antitrust/` directory in this repository is a complete, working
 
 ### Official Reports & White Papers
 
-| Publication | Publisher | Description |
-|---|---|---|
-| [Microsoft Digital Defense Report 2025](https://aka.ms/Microsoft-Digital-Defense-Report-2025) | Microsoft Security (Oct 2025) | Annual threat landscape analysis — relevant to securing enforcement data platforms |
-| [Azure Synapse Security White Paper](https://learn.microsoft.com/azure/synapse-analytics/guidance/security-white-paper-introduction) | Microsoft | Multi-part white paper on securing analytics workloads — data protection, access control, network security |
+| Publication                                                                                                                          | Publisher                     | Description                                                                                                |
+| ------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| [Microsoft Digital Defense Report 2025](https://aka.ms/Microsoft-Digital-Defense-Report-2025)                                        | Microsoft Security (Oct 2025) | Annual threat landscape analysis — relevant to securing enforcement data platforms                         |
+| [Azure Synapse Security White Paper](https://learn.microsoft.com/azure/synapse-analytics/guidance/security-white-paper-introduction) | Microsoft                     | Multi-part white paper on securing analytics workloads — data protection, access control, network security |
 
 ### Government Data Sources
 
@@ -460,7 +460,7 @@ def index_ftc_report(pdf_url: str):
     search_client.upload_documents(chunks)
 ```
 
-This enables natural-language queries like *"What did the FTC recommend about predictive analytics in enforcement?"* through the CSA-in-a-Box Copilot.
+This enables natural-language queries like _"What did the FTC recommend about predictive analytics in enforcement?"_ through the CSA-in-a-Box Copilot.
 
 !!! tip "End-to-End Pattern"
-    The DOJ domain in this repository (`domains/doj/`) demonstrates the downstream dbt models that consume these bronze-layer extracts. See the [step-by-step domain build](doj-antitrust-deep-dive.md) for the complete Bronze → Silver → Gold transformation pipeline.
+The DOJ domain in this repository (`domains/doj/`) demonstrates the downstream dbt models that consume these bronze-layer extracts. See the [step-by-step domain build](doj-antitrust-deep-dive.md) for the complete Bronze → Silver → Gold transformation pipeline.

@@ -13,19 +13,19 @@ This use case applies the CSA-in-a-Box medallion architecture to NOAA's public d
 
 ## Data Sources
 
-| Source | Description | Volume / Coverage | Update Frequency | Access Method |
-|---|---|---|---|---|
-| **GHCN-Daily** | Global Historical Climatology Network — daily temperature, precipitation, snowfall from 100,000+ stations worldwide | ~30 GB compressed, records from 1763–present | Daily | FTP / HTTPS bulk download |
-| **CDO API** | Climate Data Online — NOAA's REST API for historical climate summaries, normals, and station metadata | Covers all GHCN + COOP + ASOS stations | On-demand | REST API (token required) |
-| **CO-OPS** | Center for Operational Oceanographic Products and Services — tide predictions, water levels, currents from 200+ coastal stations | 6-minute intervals per station | Real-time (6 min) | REST API / SOAP |
-| **NDBC** | National Data Buoy Center — wave height, wind speed, sea surface temperature from 900+ ocean buoys and coastal stations | Hourly+ per buoy | Real-time (hourly) | HTTPS / RSS |
-| **Storm Events DB** | Severe weather events with damage estimates, fatalities, narrative descriptions | ~1.5M events, 1950–present | Monthly bulk update | CSV bulk download |
-| **ERDDAP** | Environmental Research Division Data Access Program — gridded oceanographic and atmospheric datasets (SST, chlorophyll, salinity) | Multi-TB, global coverage | Varies by dataset | OPeNDAP / REST |
-| **ISD** | Integrated Surface Database — hourly weather observations from 35,000+ stations globally | ~600 GB, 1901–present | Daily | FTP / HTTPS |
-| **GOES-16/17** | Geostationary satellite imagery — visible, infrared, water vapor bands at 0.5–2 km resolution | ~1 TB/day per satellite | 1–15 min scan intervals | AWS S3 (NOAA Open Data) |
+| Source              | Description                                                                                                                       | Volume / Coverage                            | Update Frequency        | Access Method             |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- | ----------------------- | ------------------------- |
+| **GHCN-Daily**      | Global Historical Climatology Network — daily temperature, precipitation, snowfall from 100,000+ stations worldwide               | ~30 GB compressed, records from 1763–present | Daily                   | FTP / HTTPS bulk download |
+| **CDO API**         | Climate Data Online — NOAA's REST API for historical climate summaries, normals, and station metadata                             | Covers all GHCN + COOP + ASOS stations       | On-demand               | REST API (token required) |
+| **CO-OPS**          | Center for Operational Oceanographic Products and Services — tide predictions, water levels, currents from 200+ coastal stations  | 6-minute intervals per station               | Real-time (6 min)       | REST API / SOAP           |
+| **NDBC**            | National Data Buoy Center — wave height, wind speed, sea surface temperature from 900+ ocean buoys and coastal stations           | Hourly+ per buoy                             | Real-time (hourly)      | HTTPS / RSS               |
+| **Storm Events DB** | Severe weather events with damage estimates, fatalities, narrative descriptions                                                   | ~1.5M events, 1950–present                   | Monthly bulk update     | CSV bulk download         |
+| **ERDDAP**          | Environmental Research Division Data Access Program — gridded oceanographic and atmospheric datasets (SST, chlorophyll, salinity) | Multi-TB, global coverage                    | Varies by dataset       | OPeNDAP / REST            |
+| **ISD**             | Integrated Surface Database — hourly weather observations from 35,000+ stations globally                                          | ~600 GB, 1901–present                        | Daily                   | FTP / HTTPS               |
+| **GOES-16/17**      | Geostationary satellite imagery — visible, infrared, water vapor bands at 0.5–2 km resolution                                     | ~1 TB/day per satellite                      | 1–15 min scan intervals | AWS S3 (NOAA Open Data)   |
 
 !!! info "Data Access"
-    All NOAA datasets listed above are publicly available at no cost. The CDO API requires a free token from [ncdc.noaa.gov/cdo-web/token](https://www.ncdc.noaa.gov/cdo-web/token). GOES-16/17 imagery is hosted on AWS S3 as part of the [NOAA Open Data Dissemination (NODD)](https://www.noaa.gov/information-technology/open-data-dissemination) program and can be accessed cross-cloud via Azure Data Factory.
+All NOAA datasets listed above are publicly available at no cost. The CDO API requires a free token from [ncdc.noaa.gov/cdo-web/token](https://www.ncdc.noaa.gov/cdo-web/token). GOES-16/17 imagery is hosted on AWS S3 as part of the [NOAA Open Data Dissemination (NODD)](https://www.noaa.gov/information-technology/open-data-dissemination) program and can be accessed cross-cloud via Azure Data Factory.
 
 ---
 
@@ -84,7 +84,7 @@ graph LR
 ```
 
 !!! tip "Why two ingestion paths?"
-    Historical datasets like GHCN-Daily and ISD are bulk files updated daily — ADF's copy activities handle these efficiently. CO-OPS and NDBC stations emit readings every 6–60 minutes; Event Hubs captures these as a continuous stream for sub-minute ingestion into ADX, where KQL queries power real-time dashboards. The medallion layers in dbt process both paths on a unified schedule.
+Historical datasets like GHCN-Daily and ISD are bulk files updated daily — ADF's copy activities handle these efficiently. CO-OPS and NDBC stations emit readings every 6–60 minutes; Event Hubs captures these as a continuous stream for sub-minute ingestion into ADX, where KQL queries power real-time dashboards. The medallion layers in dbt process both paths on a unified schedule.
 
 ---
 
@@ -102,7 +102,7 @@ GHCN-Daily data is distributed as fixed-width text files partitioned by station.
 - **Schema handling:** Fixed-width parsing via ADF mapping data flows or downstream dbt
 
 !!! warning "Volume considerations"
-    A full GHCN-Daily backfill is approximately 30 GB compressed. ISD adds another 600 GB. Run initial backfills during off-peak hours and use ADF's parallelism controls to limit concurrent copy activities to avoid throttling NOAA's servers.
+A full GHCN-Daily backfill is approximately 30 GB compressed. ISD adds another 600 GB. Run initial backfills during off-peak hours and use ADF's parallelism controls to limit concurrent copy activities to avoid throttling NOAA's servers.
 
 ---
 
@@ -315,15 +315,15 @@ CO-OPS tide readings and NDBC buoy data flow through silver into gold models tha
 
 **Gold layer outputs:**
 
-| Gold Table | Inputs | Purpose |
-|---|---|---|
-| `flood_risk_scores` | CO-OPS water levels + tide predictions + storm surge models | Per-station flood probability at 6-hour intervals |
-| `sea_level_trends` | CO-OPS monthly mean sea level, 30+ year baselines | Long-term sea level rise rates by coast |
-| `marine_conditions` | NDBC buoy observations (wave, wind, SST) | Current and forecast marine safety indices |
-| `marine_ecosystem_indices` | ERDDAP SST + chlorophyll-a + NDBC observations | Composite ocean health indicators by region |
+| Gold Table                 | Inputs                                                      | Purpose                                           |
+| -------------------------- | ----------------------------------------------------------- | ------------------------------------------------- |
+| `flood_risk_scores`        | CO-OPS water levels + tide predictions + storm surge models | Per-station flood probability at 6-hour intervals |
+| `sea_level_trends`         | CO-OPS monthly mean sea level, 30+ year baselines           | Long-term sea level rise rates by coast           |
+| `marine_conditions`        | NDBC buoy observations (wave, wind, SST)                    | Current and forecast marine safety indices        |
+| `marine_ecosystem_indices` | ERDDAP SST + chlorophyll-a + NDBC observations              | Composite ocean health indicators by region       |
 
 !!! note "Datum alignment"
-    CO-OPS provides water levels relative to multiple tidal datums (MLLW, NAVD88, MSL). The silver layer standardizes all readings to NAVD88 for consistency with elevation models and FEMA flood maps. The original datum is preserved as a metadata column.
+CO-OPS provides water levels relative to multiple tidal datums (MLLW, NAVD88, MSL). The silver layer standardizes all readings to NAVD88 for consistency with elevation models and FEMA flood maps. The original datum is preserved as a metadata column.
 
 ---
 
@@ -393,7 +393,7 @@ StormEvents
 GOES-16 (East) and GOES-17 (West) geostationary satellites produce full-disk imagery every 10–15 minutes across 16 spectral bands. JPSS polar-orbiting satellites (NOAA-20, NOAA-21) add higher-resolution passes twice daily.
 
 !!! warning "Compute and storage requirements"
-    GOES-16/17 each generate approximately 1 TB/day of raw imagery. Processing satellite data at scale requires GPU-accelerated workloads (e.g., Azure Machine Learning compute clusters) and is significantly more resource-intensive than tabular weather data. Start with specific bands and regions of interest rather than ingesting full-disk imagery.
+GOES-16/17 each generate approximately 1 TB/day of raw imagery. Processing satellite data at scale requires GPU-accelerated workloads (e.g., Azure Machine Learning compute clusters) and is significantly more resource-intensive than tabular weather data. Start with specific bands and regions of interest rather than ingesting full-disk imagery.
 
 **Recommended approach:**
 
@@ -414,14 +414,14 @@ GOES-16 (East) and GOES-17 (West) geostationary satellites produce full-disk ima
 
 ## Sources and API References
 
-| Resource | URL |
-|---|---|
-| GHCN-Daily documentation | [ncei.noaa.gov/products/land-based-station/global-historical-climatology-network-daily](https://www.ncei.noaa.gov/products/land-based-station/global-historical-climatology-network-daily) |
-| Climate Data Online (CDO) API | [ncdc.noaa.gov/cdo-web/webservices/v2](https://www.ncdc.noaa.gov/cdo-web/webservices/v2) |
-| CO-OPS API | [api.tidesandcurrents.noaa.gov/api/prod/](https://api.tidesandcurrents.noaa.gov/api/prod/) |
-| NDBC data access | [ndbc.noaa.gov/data/](https://www.ndbc.noaa.gov/data/) |
-| Storm Events Database | [ncdc.noaa.gov/stormevents/](https://www.ncdc.noaa.gov/stormevents/) |
-| ERDDAP | [coastwatch.pfeg.noaa.gov/erddap/](https://coastwatch.pfeg.noaa.gov/erddap/) |
-| Integrated Surface Database (ISD) | [ncei.noaa.gov/products/land-based-station/integrated-surface-database](https://www.ncei.noaa.gov/products/land-based-station/integrated-surface-database) |
-| GOES-16/17 on AWS | [registry.opendata.aws/noaa-goes/](https://registry.opendata.aws/noaa-goes/) |
-| NOAA Open Data Dissemination | [noaa.gov/information-technology/open-data-dissemination](https://www.noaa.gov/information-technology/open-data-dissemination) |
+| Resource                          | URL                                                                                                                                                                                        |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| GHCN-Daily documentation          | [ncei.noaa.gov/products/land-based-station/global-historical-climatology-network-daily](https://www.ncei.noaa.gov/products/land-based-station/global-historical-climatology-network-daily) |
+| Climate Data Online (CDO) API     | [ncdc.noaa.gov/cdo-web/webservices/v2](https://www.ncdc.noaa.gov/cdo-web/webservices/v2)                                                                                                   |
+| CO-OPS API                        | [api.tidesandcurrents.noaa.gov/api/prod/](https://api.tidesandcurrents.noaa.gov/api/prod/)                                                                                                 |
+| NDBC data access                  | [ndbc.noaa.gov/data/](https://www.ndbc.noaa.gov/data/)                                                                                                                                     |
+| Storm Events Database             | [ncdc.noaa.gov/stormevents/](https://www.ncdc.noaa.gov/stormevents/)                                                                                                                       |
+| ERDDAP                            | [coastwatch.pfeg.noaa.gov/erddap/](https://coastwatch.pfeg.noaa.gov/erddap/)                                                                                                               |
+| Integrated Surface Database (ISD) | [ncei.noaa.gov/products/land-based-station/integrated-surface-database](https://www.ncei.noaa.gov/products/land-based-station/integrated-surface-database)                                 |
+| GOES-16/17 on AWS                 | [registry.opendata.aws/noaa-goes/](https://registry.opendata.aws/noaa-goes/)                                                                                                               |
+| NOAA Open Data Dissemination      | [noaa.gov/information-technology/open-data-dissemination](https://www.noaa.gov/information-technology/open-data-dissemination)                                                             |
