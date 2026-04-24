@@ -1,15 +1,21 @@
-# Data product contract — IoT telemetry stream
+# Data product contract -- iot-streaming.iot_telemetry_bronze
 #
-# Defines the schema, freshness SLO, and ownership for the bronze IoT
-# telemetry feed produced by Event Hub Capture and consumed by the
+# Defines the schema, freshness SLA, and quality rules for the bronze
+# IoT telemetry feed produced by Event Hub Capture and consumed by the
 # `iot` dbt source in domains/dbt/models/schema.yml.
 
-apiVersion: csa.platform/v1
+apiVersion: csa.microsoft.com/v1
 kind: DataProductContract
+
 metadata:
-  name: iot-telemetry-bronze
+  name: iot-streaming.iot_telemetry_bronze
   domain: iot-streaming
   owner: streaming-platform-team@example.com
+  version: "1.0.0"
+  description: >
+    Bronze IoT telemetry events landed by Event Hub Capture as Parquet
+    in ADLS Gen2. One row per sensor observation. Consumed by the
+    Stream Analytics anomaly job and the silver dbt models.
   pii: false
   classification: internal
   tags:
@@ -17,70 +23,71 @@ metadata:
     - streaming
     - eventhub-capture
 
-spec:
-  source:
-    type: eventhub-capture
-    namespace: iot-${ENVIRONMENT}-eh
-    eventHub: telemetry
-    captureFormat: parquet
-    landingPath: abfss://iot@${STORAGE_ACCOUNT}.dfs.core.windows.net/bronze/telemetry
+schema:
+  primary_key: [device_id, event_time, metric_type]
+  columns:
+    - name: device_id
+      type: string
+      nullable: false
+      description: Globally unique device identifier (UUID).
+    - name: event_time
+      type: timestamp
+      nullable: false
+      description: Event timestamp emitted by the sensor (UTC, ISO-8601).
+    - name: ingested_at
+      type: timestamp
+      nullable: false
+      description: Server-side enqueue timestamp from Event Hub.
+    - name: metric_type
+      type: string
+      nullable: false
+      description: "Metric class: temperature_c, humidity_pct, pressure_hpa, battery_pct."
+    - name: metric_value
+      type: double
+      nullable: false
+      description: Numeric reading for the metric.
+    - name: site_id
+      type: string
+      nullable: true
+      description: Optional physical site grouping.
+    - name: firmware_version
+      type: string
+      nullable: true
+      description: Firmware version reported by the device, when available.
 
-  schema:
-    fields:
-      - name: device_id
-        type: string
-        required: true
-        description: Globally unique device identifier (UUID)
-      - name: event_time
-        type: timestamp
-        required: true
-        description: Event timestamp emitted by the sensor (UTC, ISO-8601)
-      - name: ingested_at
-        type: timestamp
-        required: true
-        description: Server-side enqueue timestamp from Event Hub
-      - name: metric_type
-        type: string
-        required: true
-        allowedValues:
-          - temperature_c
-          - humidity_pct
-          - pressure_hpa
-          - battery_pct
-      - name: metric_value
-        type: double
-        required: true
-      - name: site_id
-        type: string
-        required: false
-        description: Optional physical site grouping
-      - name: firmware_version
-        type: string
-        required: false
+sla:
+  # Bronze records must land within 5 minutes of event_time at p95.
+  freshness_minutes: 5
+  # At least 99.9% of rows must pass schema validation.
+  valid_row_ratio: 0.999
+  # Schema is backward-compatible; breaking changes require a major version bump.
+  support_window_days: 365
 
-  slos:
-    freshness:
-      target: 5m
-      description: Bronze records must land within 5 minutes of event_time at p95.
-    completeness:
-      target: 0.999
-      description: At least 99.9% of devices report at the expected cadence per hour.
-    schemaStability:
-      target: backward-compatible
-      description: Breaking schema changes require a major version bump and 30-day notice.
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: device_id
+  - rule: expect_column_values_to_not_be_null
+    column: event_time
+  - rule: expect_column_values_to_not_be_null
+    column: metric_type
+  - rule: expect_column_values_to_be_in_set
+    column: metric_type
+    value_set: [temperature_c, humidity_pct, pressure_hpa, battery_pct]
+  - rule: expect_column_values_to_not_be_null
+    column: metric_value
 
-  retention:
-    bronze: 30d
-    silver: 90d
-    gold: 730d
+retention:
+  bronze: 30d
+  silver: 90d
+  gold: 730d
 
-  consumers:
-    - name: stream-analytics-anomaly-job
-      type: stream-analytics
-      criticality: high
-    - name: dbt-silver-telemetry-cleaned
-      type: dbt-model
-      criticality: medium
-    - name: powerbi-device-health-daily
-      type: powerbi-dataset
-      criticality: medium
+consumers:
+  - name: stream-analytics-anomaly-job
+    type: stream-analytics
+    criticality: high
+  - name: dbt-silver-telemetry-cleaned
+    type: dbt-model
+    criticality: medium
+  - name: powerbi-device-health-daily
+    type: powerbi-dataset
+    criticality: medium
