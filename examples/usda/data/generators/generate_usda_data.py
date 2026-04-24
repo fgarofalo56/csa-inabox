@@ -630,6 +630,12 @@ Examples:
         action='store_true',
         help='Enable verbose logging'
     )
+    parser.add_argument(
+        '--seed',
+        type=int,
+        default=42,
+        help='Random seed for reproducible generation (default: 42).',
+    )
 
     return parser.parse_args()
 
@@ -637,6 +643,17 @@ Examples:
 def main():
     """Main function."""
     args = parse_arguments()
+
+    # Seed both stdlib random and numpy so every downstream sampler is
+    # deterministic. Imported here to avoid hard numpy dependency at
+    # module load time when only --help is requested.
+    import random as _random
+    _random.seed(args.seed)
+    try:
+        import numpy as _np
+        _np.random.seed(args.seed)
+    except ImportError:
+        pass
 
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)

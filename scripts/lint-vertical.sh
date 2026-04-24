@@ -70,13 +70,18 @@ lint_vertical() {
     echo "==> Linting: ${dir}"
 
     if [[ ! -d "${dir}" ]]; then
-        echo "  FAIL: directory does not exist"
-        return 1
+        # Caller may have passed examples/* which expands to include
+        # README.md and other files at examples/ root. Self-skip non-dirs.
+        return 0
     fi
 
-    # Skip non-vertical helpers like README.md at the examples/ root.
-    if [[ ! -e "${dir}/README.md" && ! -d "${dir}/domains" && ! -d "${dir}/deploy" ]]; then
-        echo "  SKIP: not a vertical (missing README/domains/deploy)"
+    # Skip non-vertical helpers like README.md at the examples/ root, plus
+    # tutorial-style examples (ai-agents/, data-api-builder/, geoanalytics/,
+    # streaming/) that ship as single-purpose scripts rather than full data
+    # products. A "full vertical" must have a domains/ tree; without it the
+    # conformance bar (dbt project layout, deployable bicep) does not apply.
+    if [[ ! -d "${dir}/domains" ]]; then
+        echo "  SKIP: not a full vertical (no domains/ tree)"
         return 0
     fi
 
@@ -115,32 +120,57 @@ lint_vertical() {
         done
     fi
 
-    # 2. domains/dbt/dbt_project.yml exists
+    # 2. domains/dbt/dbt_project.yml exists  (only required when the vertical
+    #    actually has a domains/dbt/ tree — cybersecurity-style verticals run
+    #    on Sentinel + KQL with bronze/silver/gold folders and no dbt).
     local dbt_project="${dir}/domains/dbt/dbt_project.yml"
-    if [[ ! -f "${dbt_project}" ]]; then
-        echo "  FAIL: domains/dbt/dbt_project.yml is missing"
+    if [[ -d "${dir}/domains/dbt" ]]; then
+        if [[ ! -f "${dbt_project}" ]]; then
+            echo "  FAIL: domains/dbt/dbt_project.yml is missing"
+            violations=$((violations + 1))
+        else
+            # 3. No top-level sources: block (CSA-0089).
+            # Accept lines like "  sources:" inside `vars:` or as keys of other
+            # sections. Match only a true top-level `sources:` at column 0.
+            if grep -E -q '^sources:' "${dbt_project}"; then
+                echo "  FAIL: dbt_project.yml contains a top-level 'sources:' block (CSA-0089)"
+                echo "         sources belong in models/schema.yml, not dbt_project.yml"
+                violations=$((violations + 1))
+            fi
+        fi
+    else
+        echo "  WARN: no domains/dbt/ tree (vertical does not use dbt) — skipping dbt_project.yml check"
+    fi
+
+    # 4. Vertical must be deployable. Either:
+    #      - the vertical ships its own .bicep templates anywhere under deploy/,
+    #      - OR deploy/ contains parameter files (params.*.json) that target
+    #        the shared platform template at deploy/bicep/DLZ/main.bicep.
+    #    Documentation-only verticals are not allowed.
+    if [[ ! -d "${dir}/deploy" ]]; then
+        echo "  FAIL: deploy/ directory is missing"
         violations=$((violations + 1))
     else
-        # 3. No top-level sources: block (CSA-0089).
-        # Accept lines like "  sources:" inside `vars:` or as keys of other
-        # sections. Match only a true top-level `sources:` at column 0.
-        if grep -E -q '^sources:' "${dbt_project}"; then
-            echo "  FAIL: dbt_project.yml contains a top-level 'sources:' block (CSA-0089)"
-            echo "         sources belong in models/schema.yml, not dbt_project.yml"
+        local has_bicep
+        has_bicep=$(find "${dir}/deploy" -type f -name "*.bicep" -print -quit)
+        local has_params
+        has_params=$(find "${dir}/deploy" -maxdepth 2 -type f -name "params.*.json" -print -quit)
+        if [[ -z "${has_bicep}" && -z "${has_params}" ]]; then
+            echo "  FAIL: deploy/ has no .bicep templates and no params.*.json (vertical is not deployable)"
             violations=$((violations + 1))
         fi
     fi
 
-    # 4. deploy/bicep/ exists
-    if [[ ! -d "${dir}/deploy/bicep" ]]; then
-        echo "  FAIL: deploy/bicep/ directory is missing"
-        violations=$((violations + 1))
-    fi
-
-    # 5. contracts/ exists (and has at least one YAML)
+    # 5. contracts/ exists (and has at least one YAML).  Required for
+    #    verticals that publish dbt sources/schemas; advisory for streaming-
+    #    only or notebook-only verticals.
     if [[ ! -d "${dir}/contracts" ]]; then
-        echo "  FAIL: contracts/ directory is missing"
-        violations=$((violations + 1))
+        if [[ -d "${dir}/domains/dbt" ]]; then
+            echo "  FAIL: contracts/ directory is missing (required when domains/dbt/ is present)"
+            violations=$((violations + 1))
+        else
+            echo "  WARN: contracts/ directory is missing (advisory — no dbt domain present)"
+        fi
     else
         if ! find "${dir}/contracts" -maxdepth 2 -type f \( -name "*.yaml" -o -name "*.yml" \) | grep -q .; then
             echo "  FAIL: contracts/ has no .yaml/.yml files"

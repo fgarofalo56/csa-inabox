@@ -441,3 +441,27 @@ Key guarantees:
 ## 📜 License
 
 This project is part of [CSA-in-a-Box](../../README.md) and follows the repository-level license.
+
+## Directory Structure
+
+```text
+cybersecurity/
+├── contracts/                # Data product contracts (schemas, SLOs, owners)
+│   └── sentinel-alerts.yaml
+├── data/                     # Sample data + synthetic generators
+│   ├── cisa-kev-sample.json
+│   ├── mitre-attack-mapping.json
+│   └── sample-sentinel-alerts.json
+├── deploy/                   # Deployment parameters / Bicep templates
+│   ├── analytics-rules.bicep
+│   └── sentinel-workspace.bicep
+├── domains/                  # dbt models (bronze / silver / gold) and seeds
+│   ├── bronze/
+│   ├── gold/
+│   └── silver/
+├── notebooks/                # Synapse / Fabric / Databricks notebooks
+│   ├── 01-alert-exploration.py
+│   ├── 02-threat-detection-ml.py
+│   └── 03-kql-threat-hunting.py
+└── README.md                 # This file
+```

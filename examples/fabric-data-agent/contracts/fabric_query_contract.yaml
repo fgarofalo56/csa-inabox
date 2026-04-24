@@ -1,58 +1,91 @@
-# CSA contract — Fabric Data Agent query
+# CSA data contract -- fabric-data-agent.fabric_query
 #
-# Describes the read-class query surface exposed by the agent.  Used by
-# reviewers, SREs, and automated CI checks to verify the agent cannot
-# exceed its scope (no writes, row cap, citation mandatory).
-contract_name: fabric_data_agent_query
-version: "1.0.0"
-owner: csa-fabric-reference
-description: |
-  The Fabric Data Agent answers natural-language questions over a
-  registered set of Fabric Lakehouse tables.  The agent is strictly
-  read-class: any SQL statement that is not a bare SELECT/WITH is
-  rejected by the retriever before execution.
+# Describes the read-class query surface exposed by the Fabric Data Agent.
+# Used by reviewers, SREs, and automated CI checks to verify the agent
+# cannot exceed its scope (no writes, row cap, citation mandatory).
 
-classification: unrestricted
+apiVersion: csa.microsoft.com/v1
+kind: DataProductContract
 
-request_schema:
-  fields:
+metadata:
+  name: fabric-data-agent.fabric_query
+  domain: fabric-data-agent
+  owner: csa-fabric-reference@example.com
+  version: "1.0.0"
+  description: >
+    The Fabric Data Agent answers natural-language questions over a
+    registered set of Fabric Lakehouse tables. The agent is strictly
+    read-class: any SQL statement that is not a bare SELECT/WITH is
+    rejected by the retriever before execution.
+  classification: unrestricted
+  pii: false
+
+# Combined request + response schema. The validator only requires
+# `columns[*].name` and `columns[*].type` for each column. Request fields
+# are flagged with description prefixes for clarity.
+schema:
+  primary_key: [request_id]
+  columns:
+    # ---- request side ----
     - name: question
       type: string
       nullable: false
-      description: Natural-language question posed by the user.
+      description: "[REQUEST] Natural-language question posed by the user."
     - name: table_alias
       type: string
       nullable: false
-      description: Registered alias in the agent's ``table_registry``.
-
-response_schema:
-  fields:
+      description: "[REQUEST] Registered alias in the agent's `table_registry`."
+    # ---- response side ----
     - name: answer
       type: string
       nullable: false
-      description: Grounded natural-language answer with citation block.
-    - name: citation.source_type
+      description: "[RESPONSE] Grounded natural-language answer with citation block."
+    - name: citation_source_type
       type: string
       nullable: false
-      enum: [lakehouse_sql, semantic_model]
-    - name: citation.table_or_model
+      description: "[RESPONSE] Allowed values [lakehouse_sql, semantic_model]."
+    - name: citation_table_or_model
       type: string
       nullable: false
-    - name: citation.columns
+      description: "[RESPONSE] Fully-qualified Fabric resource cited by the agent."
+    - name: citation_columns
       type: array
       nullable: false
-    - name: citation.sql
+      description: "[RESPONSE] Columns referenced by the executed SQL."
+    - name: citation_sql
       type: string
       nullable: false
-      description: Executed read-class SQL (auditable).
+      description: "[RESPONSE] Executed read-class SQL (auditable)."
     - name: row_count
       type: integer
       nullable: false
-      min: 0
+      description: "[RESPONSE] Number of rows returned (0..max_rows_per_query)."
     - name: error
       type: string
       nullable: true
-      description: Populated when the agent refused the request.
+      description: "[RESPONSE] Populated when the agent refused the request."
+
+sla:
+  # Synchronous request/response surface; freshness is bounded by Fabric
+  # Lakehouse refresh cadence rather than this contract.
+  freshness_minutes: 0
+  valid_row_ratio: 1.0
+  support_window_days: 180
+  p99_latency_ms: 5000
+  availability_percent: 99.0
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: question
+  - rule: expect_column_values_to_not_be_null
+    column: table_alias
+  - rule: expect_column_values_to_be_in_set
+    column: citation_source_type
+    value_set: [lakehouse_sql, semantic_model]
+  - rule: expect_column_values_to_be_between
+    column: row_count
+    min_value: 0
+    max_value: 500
 
 safety:
   read_only: true
@@ -77,8 +110,8 @@ observability:
   log_fields:
     - question
     - table_alias
-    - citation.table_or_model
-    - citation.sql
+    - citation_table_or_model
+    - citation_sql
     - row_count
     - error
   retention_days: 90

@@ -50,7 +50,7 @@ resource bruteForceRule 'Microsoft.SecurityInsights/alertRules@2023-02-01-previe
       {
         entityType: 'IP'
         fieldMappings: [
-          { identifier: 'Address'; columnName: 'IPAddress' }
+          { identifier: 'Address', columnName: 'IPAddress' }
         ]
       }
     ]
@@ -89,13 +89,13 @@ resource powershellRule 'Microsoft.SecurityInsights/alertRules@2023-02-01-previe
       {
         entityType: 'Host'
         fieldMappings: [
-          { identifier: 'HostName'; columnName: 'Computer' }
+          { identifier: 'HostName', columnName: 'Computer' }
         ]
       }
       {
         entityType: 'Account'
         fieldMappings: [
-          { identifier: 'Name'; columnName: 'Account' }
+          { identifier: 'Name', columnName: 'Account' }
         ]
       }
     ]
@@ -138,13 +138,13 @@ resource lateralMovementRule 'Microsoft.SecurityInsights/alertRules@2023-02-01-p
       {
         entityType: 'Host'
         fieldMappings: [
-          { identifier: 'HostName'; columnName: 'Computer' }
+          { identifier: 'HostName', columnName: 'Computer' }
         ]
       }
       {
         entityType: 'IP'
         fieldMappings: [
-          { identifier: 'Address'; columnName: 'IpAddress' }
+          { identifier: 'Address', columnName: 'IpAddress' }
         ]
       }
     ]
@@ -186,7 +186,7 @@ resource exfiltrationRule 'Microsoft.SecurityInsights/alertRules@2023-02-01-prev
       {
         entityType: 'IP'
         fieldMappings: [
-          { identifier: 'Address'; columnName: 'SrcIP_s' }
+          { identifier: 'Address', columnName: 'SrcIP_s' }
         ]
       }
     ]
@@ -229,7 +229,7 @@ resource maliciousIpRule 'Microsoft.SecurityInsights/alertRules@2023-02-01-previ
       {
         entityType: 'IP'
         fieldMappings: [
-          { identifier: 'Address'; columnName: 'DestIP_s' }
+          { identifier: 'Address', columnName: 'DestIP_s' }
         ]
       }
     ]

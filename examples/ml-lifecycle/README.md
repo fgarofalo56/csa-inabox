@@ -290,3 +290,10 @@ az group delete --name csa-mllife-rg --yes --no-wait
 
 - [`contracts/loan_training_features.yaml`](./contracts/loan_training_features.yaml) — training feature schema + AUC contract.
 - [`contracts/loan_prediction_contract.yaml`](./contracts/loan_prediction_contract.yaml) — prediction response + drift SLOs.
+
+## Related Documentation
+
+- [`ARCHITECTURE.md`](./ARCHITECTURE.md) — full Mermaid architecture for training, registration, and online inference.
+- [`docs/decisions/rag-vs-finetune-vs-agents.md`](../../docs/decisions/rag-vs-finetune-vs-agents.md) — when to reach for an MLflow lifecycle vs. a RAG or agent pattern.
+- [`docs/tutorials/06-ai-analytics-foundry/README.md`](../../docs/tutorials/06-ai-analytics-foundry/README.md) — companion tutorial that walks through the same loop end-to-end.
+- [`csa_platform/ai_integration/README.md`](../../csa_platform/ai_integration/README.md) — platform AI integration capabilities.

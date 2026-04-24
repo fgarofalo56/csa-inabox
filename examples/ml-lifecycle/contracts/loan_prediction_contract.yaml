@@ -1,33 +1,57 @@
-# CSA data contract — loan-default prediction response
+# CSA data contract -- ml-lifecycle.loan_prediction_response
 #
 # Contract for the response payload returned by
 #   examples/ml-lifecycle/training/score.run(...)
 # and by the Azure ML managed online endpoint.
-contract_name: loan_prediction_response
-version: "1.0.0"
-owner: csa-ml-lifecycle
-description: Prediction response — one record per input row.
 
-classification: unrestricted
-pii: false
+apiVersion: csa.microsoft.com/v1
+kind: DataProductContract
+
+metadata:
+  name: ml-lifecycle.loan_prediction_response
+  domain: ml-lifecycle
+  owner: csa-ml-lifecycle@example.com
+  version: "1.0.0"
+  description: >
+    Prediction response from the loan-default model -- one record per
+    input row. Returned by training/score.run(...) and by the Azure ML
+    managed online endpoint.
+  classification: unrestricted
+  pii: false
 
 schema:
-  fields:
+  primary_key: [request_id, row_index]
+  columns:
     - name: probability_default
       type: number
       nullable: false
-      min: 0.0
-      max: 1.0
-      description: Sigmoid output of the logistic regression.
+      description: Sigmoid output of the logistic regression. Range [0.0, 1.0].
     - name: prediction
       type: integer
       nullable: false
-      enum: [0, 1]
-      description: Hard classification at the 0.5 threshold.
+      description: Hard classification at the 0.5 threshold. Allowed values [0, 1].
 
 sla:
+  # Endpoint freshness is meaningless (synchronous request/response); we use
+  # latency and availability targets instead. Keep freshness for validator
+  # compatibility but mark it as not-applicable in practice.
+  freshness_minutes: 0
+  valid_row_ratio: 0.995
+  support_window_days: 180
+  # Online-serving specific targets:
   p99_latency_ms: 350
   availability_percent: 99.5
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: probability_default
+  - rule: expect_column_values_to_be_between
+    column: probability_default
+    min_value: 0.0
+    max_value: 1.0
+  - rule: expect_column_values_to_be_in_set
+    column: prediction
+    value_set: [0, 1]
 
 monitoring:
   drift_detector: examples/ml-lifecycle/monitoring/drift_detection.py

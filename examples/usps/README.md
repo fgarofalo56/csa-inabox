@@ -525,3 +525,28 @@ bash examples/usps/deploy/teardown.sh --yes
 ```
 
 See [`docs/QUICKSTART.md#teardown`](../../docs/QUICKSTART.md#teardown) for the platform-wide teardown flow.
+
+## Directory Structure
+
+```text
+usps/
+├── contracts/                # Data product contracts (schemas, SLOs, owners)
+│   ├── delivery-analytics.yaml
+│   ├── facility-operations.yaml
+│   └── mail-volume.yaml
+├── data/                     # Sample data + synthetic generators
+│   ├── generators/
+│   └── open-data/
+├── deploy/                   # Deployment parameters / Bicep templates
+│   ├── params.dev.json
+│   ├── params.gov.json
+│   └── teardown.sh
+├── domains/                  # dbt models (bronze / silver / gold) and seeds
+│   └── dbt/
+├── notebooks/                # Synapse / Fabric / Databricks notebooks
+│   ├── delivery_optimization.py
+│   └── volume_forecasting.py
+├── reports/                  # Power BI report templates and pbix sources
+├── ARCHITECTURE.md           # Mermaid + prose architecture diagrams
+└── README.md                 # This file
+```
