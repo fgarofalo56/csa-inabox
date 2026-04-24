@@ -100,6 +100,11 @@ pip-delete-this-directory.txt
 # ---------------------------
 node_modules/
 **/node_modules/
+# Defensive: any nested venv inside source tree (e.g. csa_platform/functions/*/.venv)
+**/functions/**/.venv/
+# Build artifacts (zips, deploy bundles) inside source tree
+**/temp/deploy.zip
+**/temp/**/*.zip
 npm-debug.log*
 yarn-error.log*
 
@@ -142,6 +147,10 @@ azurite-debug.log
 .pytest_cache/
 .tox/
 .coverage
+.ruff_cache/
+**/.ruff_cache/
+**/.pytest_cache/
+**/.mypy_cache/
 .coverage.*
 htmlcov/
 .mypy_cache/
