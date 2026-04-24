@@ -2,7 +2,6 @@
 
 [templates](../../../templates/) / [data-product](../) / **scaffold**
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers / Domain Owners
 
 ## Table of Contents
 

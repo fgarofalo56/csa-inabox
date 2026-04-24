@@ -68,7 +68,7 @@ All requests pass through a layered security model:
 
 1. **TLS 1.2+** — enforced at the gateway level
 2. **Subscription key** — identifies the consuming application/product
-3. **JWT validation** — Azure AD token validated against configured issuer and audience
+3. **JWT validation** — Microsoft Entra ID token validated against configured issuer and audience
 4. **Role-based access** — JWT roles mapped to backend authorization (e.g., DAB's X-MS-API-ROLE)
 5. **Rate limiting** — per-subscription and per-user limits prevent abuse
 
@@ -76,7 +76,7 @@ All requests pass through a layered security model:
 sequenceDiagram
     participant Client
     participant APIM
-    participant AzureAD as Azure AD
+    participant AzureAD as Microsoft Entra ID
     participant Backend
 
     Client->>AzureAD: 1. Authenticate (OAuth2)
@@ -108,7 +108,7 @@ The global policy (`policies/global-policy.xml`) applies cross-cutting concerns:
 
 - **CORS** — configurable origins via named value `{{allowed-origins}}`
 - **Rate limiting** — per-subscription, configurable via `{{rate-limit-calls}}` / `{{rate-limit-period}}`
-- **JWT validation** — Azure AD OpenID Connect discovery
+- **JWT validation** — Microsoft Entra ID (OpenID Connect) discovery
 - **Request tracing** — `X-Request-ID` header injection
 - **Security headers** — `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, HSTS
 
@@ -245,7 +245,7 @@ ApiManagementGatewayLogs
 
 - Azure CLI with `apim` extension
 - Bicep CLI v0.20+
-- Azure AD app registration for JWT validation
+- Microsoft Entra ID app registration for JWT validation
 - Backend services deployed (DAB, Portal FastAPI)
 
 ### Deploy with Bicep
@@ -267,7 +267,7 @@ az deployment group create \
 ### Post-Deployment Steps
 
 1. Import DAB OpenAPI spec (see `examples/data-api-builder/apim-integration/import-dab-api.sh`)
-2. Configure Azure AD app registration with correct redirect URIs
+2. Configure Microsoft Entra ID app registration with correct redirect URIs
 3. Update named values with actual JWT issuer/audience
 4. Apply API-specific policies via Azure Portal or CLI
 5. Test endpoints (see `examples/data-api-builder/apim-integration/test-apim-endpoints.http`)
@@ -284,7 +284,7 @@ az deployment group create \
 ### Common Issues
 
 **401 Unauthorized — JWT validation failed**
-- Verify the `jwt-issuer` and `jwt-audience` named values match your Azure AD app registration
+- Verify the `jwt-issuer` and `jwt-audience` named values match your Microsoft Entra ID app registration
 - Check that the token hasn't expired
 - Ensure the token was issued for the correct audience
 

@@ -2,7 +2,6 @@
 
 [tests](../../tests/) / **load**
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** QA Engineers / Developers
 
 > [!TIP]
 > **TL;DR** — Regression-detection harnesses for four platform targets: Azure Function HTTP triggers (k6), dbt model execution (pytest benchmark), Databricks notebooks (Jobs API), and ADF pipelines (REST API). These are on-demand tests requiring live environments, not part of the default CI run.

@@ -47,7 +47,7 @@ HIPAA's implementation-specification model.
 ## Top-5 strengths for healthcare customer conversations
 
 1. **§164.312(a)(1) / (a)(2)(iv) Access Control + Encryption/Decryption** —
-   Azure AD RBAC enforced (`enableRbacAuthorization=true` on Key Vault),
+   Microsoft Entra ID RBAC enforced (`enableRbacAuthorization=true` on Key Vault),
    `allowSharedKeyAccess=false` on storage (AAD-only ePHI access),
    AES-256 at rest with optional CMK, FIPS 140-2 L2 HSM Key Vault.
    This is the **strongest Technical Safeguard posture** a typical

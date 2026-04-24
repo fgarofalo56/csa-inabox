@@ -2,7 +2,6 @@
 
 > [**Examples**](../README.md) > [**EPA**](README.md) > **Architecture**
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Architects / Data Engineers
 
 > [!TIP]
 > **TL;DR** — Environmental monitoring architecture with real-time AQI sensor streaming (Event Hub to ADX) and batch ingestion from AQS, SDWIS, TRI, ECHO, and EJScreen. Features ML-based AQI prediction and environmental justice scoring.

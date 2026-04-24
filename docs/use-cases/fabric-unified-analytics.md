@@ -461,7 +461,7 @@ Federal and state government agencies have specific compliance requirements that
 
 ### Identity and Access
 
-- Fabric uses Entra ID (Azure AD) for authentication. Government tenants using Entra ID for Government are supported.
+- Fabric uses Entra ID (Microsoft Entra ID) for authentication. Government tenants using Entra ID for Government are supported.
 - Conditional Access policies, MFA, and Privileged Identity Management (PIM) apply to Fabric workspace access.
 
 !!! warning "Azure Government vs. Azure Commercial"
@@ -510,4 +510,4 @@ Use this checklist when migrating a CSA-in-a-Box domain from Databricks to Fabri
 - [OneLake Documentation](https://learn.microsoft.com/en-us/fabric/onelake/onelake-overview)
 - [dbt-fabric Adapter](https://github.com/microsoft/dbt-fabric)
 - [Fabric REST API Reference](https://learn.microsoft.com/en-us/rest/api/fabric/core/items)
-- [Purview + Fabric Integration](https://learn.microsoft.com/en-us/purview/microsoft-purview-and-microsoft-fabric)
+- [Microsoft Purview Data Governance Overview](https://learn.microsoft.com/en-us/purview/data-governance-overview)

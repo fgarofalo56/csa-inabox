@@ -93,7 +93,6 @@ nav:
   - Home: index.md
   - Getting Started:
       - Quickstart: QUICKSTART.md
-      - Getting Started Guide: GETTING_STARTED.md
       - Developer Pathways: DEVELOPER_PATHWAYS.md
   - Architecture:
       - Overview: ARCHITECTURE.md

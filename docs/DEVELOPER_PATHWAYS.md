@@ -2,7 +2,6 @@
 
 # Developer Pathways
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** All Developers
 
 !!! note
     **Quick Summary**: Role-based navigation guide for the CSA-in-a-Box codebase — find your area of focus (governance, pipelines, infra, portal, AI/ML, Functions, monitoring), jump to the relevant code, and get started with key commands and directory maps.

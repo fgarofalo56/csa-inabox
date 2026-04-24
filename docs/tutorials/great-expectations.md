@@ -2,7 +2,6 @@
 
 # Great Expectations Tutorial (CSA-0074)
 
-> **Last Updated:** 2026-04-20 | **Status:** Active | **Audience:** Data Engineering, Platform Engineering
 
 !!! tip
     **TL;DR** - Stand up a Great Expectations 1.x project, write an

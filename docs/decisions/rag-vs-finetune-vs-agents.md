@@ -1,6 +1,5 @@
 # RAG vs. Fine-Tuning vs. Agents
 
-> **Last Updated:** 2026-04-19 | **Status:** Active | **Audience:** AI / Platform Engineers
 
 ## TL;DR
 

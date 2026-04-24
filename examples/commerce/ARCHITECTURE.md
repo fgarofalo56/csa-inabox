@@ -2,7 +2,6 @@
 
 > [**Examples**](../README.md) > [**Commerce**](README.md) > **Architecture**
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Architects / Data Engineers
 
 > [!TIP]
 > **TL;DR** — Domain-driven architecture ingesting Census, BEA, ITA, and NIST data through a medallion pipeline. Features batch processing for quarterly GDP releases, API gateway with Redis caching, and FISMA-compliant security.

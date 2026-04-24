@@ -2,7 +2,6 @@
 
 > [**Examples**](../README.md) > **USDA**
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers
 
 > [!TIP]
 > **TL;DR** — Agricultural analytics platform providing crop yield forecasting, SNAP enrollment analysis, and food safety risk scoring using official USDA data sources with NASS QuickStats API integration.

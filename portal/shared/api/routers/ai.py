@@ -1,20 +1,40 @@
 """AI service endpoints — RAG chat, embeddings, semantic search.
 
-These endpoints expose the AI integration layer (csa_platform.ai_integration)
-as REST APIs, enabling consumption through APIM and the portal frontend.
+These endpoints expose the AI integration layer
+(``csa_platform.ai_integration.rag``) as REST APIs, enabling
+consumption through APIM and the portal frontend.
+
+Wiring policy
+-------------
+Each handler attempts to instantiate :class:`RAGService` from
+environment-driven settings (see ``csa_platform.ai_integration.rag.config``).
+
+* If construction succeeds (Azure OpenAI + AI Search settings present
+  and importable), the request is delegated to the real service.
+* If construction fails for any reason — missing optional dependency,
+  unset env var, network error — the handler falls back to a clearly
+  labelled **demo response** with ``model="demo-stub"`` so the caller
+  can tell at a glance that the platform is not configured. The
+  fallback exists so the portal stays runnable in local-only / docs
+  builds; it is never silent.
+
+This replaces the previous hard-coded fakes (which carried
+``TODO(prod)`` markers and shipped misleading source URLs).
 
 Endpoints
 ---------
 POST   /api/v1/ai/chat      — RAG-powered conversational AI
-POST   /api/v1/ai/embed      — generate text embeddings
-POST   /api/v1/ai/search     — semantic search across indexed data products
-GET    /api/v1/ai/status     — AI services health check
+POST   /api/v1/ai/embed     — generate text embeddings
+POST   /api/v1/ai/search    — semantic search across indexed data products
+GET    /api/v1/ai/status    — AI services health check
 """
 
 from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime, timezone
+from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
@@ -35,6 +55,48 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+# ── Service factory ─────────────────────────────────────────────────────────
+
+
+def _try_get_rag_service() -> Any | None:
+    """Return a configured :class:`RAGService` or ``None``.
+
+    Failures (missing dependency, unset env var, missing SDK creds) are
+    logged at INFO level — they are *expected* in local/dev environments
+    where the portal runs without Azure connectivity. We never raise
+    from this helper; callers fall back to the demo response path.
+    """
+    try:
+        # Imported lazily so the portal can boot without the AI extras.
+        from csa_platform.ai_integration.rag.service import RAGService  # type: ignore
+
+        return RAGService.from_settings()
+    except Exception as exc:  # pragma: no cover - depends on environment
+        logger.info(
+            "ai_router.rag_service_unavailable",
+            extra={"reason": type(exc).__name__, "detail": str(exc)},
+        )
+        return None
+
+
+def _try_get_embedder() -> Any | None:
+    """Return a configured embedder, or ``None`` for demo fallback."""
+    try:
+        from csa_platform.ai_integration.rag.config import get_settings  # type: ignore
+        from csa_platform.ai_integration.rag.indexer import (  # type: ignore
+            EmbeddingGenerator,
+        )
+
+        settings = get_settings()
+        return EmbeddingGenerator(settings=settings.azure_openai)
+    except Exception as exc:  # pragma: no cover
+        logger.info(
+            "ai_router.embedder_unavailable",
+            extra={"reason": type(exc).__name__, "detail": str(exc)},
+        )
+        return None
+
+
 # ── Endpoints ───────────────────────────────────────────────────────────────
 
 
@@ -47,39 +109,58 @@ router = APIRouter()
 async def chat(request: ChatRequest) -> ChatResponse:
     """RAG-powered conversational AI.
 
-    Searches the vector store for relevant context, then generates
-    a grounded response using Azure OpenAI.
-
-    In production this delegates to ``RAGService.chat()``.  The current
-    implementation returns a demo response showing the API contract.
+    Delegates to :meth:`RAGService.query` when configured. Returns a
+    clearly labelled demo response (``model="demo-stub"``) when the
+    AI stack is not configured — this makes local dev painless without
+    misleading consumers about whether the platform is wired up.
     """
     start = time.perf_counter()
-    try:
-        # TODO(prod): delegate to RAGService.chat() when AI services are configured.
+    service = _try_get_rag_service()
 
-        answer = (
-            f"Based on the data mesh knowledge base, here is information "
-            f"about: {request.query}"
+    if service is None:
+        latency = (time.perf_counter() - start) * 1000
+        return ChatResponse(
+            answer=(
+                "[demo-stub] The portal AI stack is not configured in this "
+                "environment. Configure RAG settings (see "
+                "csa_platform.ai_integration.rag.config.RAGSettings and "
+                ".env.example) to enable real responses. "
+                f"Echoed query: {request.query}"
+            ),
+            sources=[],
+            model="demo-stub",
+            usage=TokenUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
+            latency_ms=round(latency, 2),
         )
+
+    try:
+        async with service as svc:  # uses RAGService.__aenter__
+            answer_response = await svc.query(
+                question=request.query,
+                k=request.max_results,
+                system_prompt=request.system_prompt,
+            )
         sources = [
             SourceReference(
-                title="Data Mesh Principles",
-                url="https://docs.microsoft.com/azure/cloud-adoption-framework/",
-                chunk="Domain-oriented decentralized data ownership and architecture...",
-                score=0.95,
-            ),
+                title=getattr(c, "source", "unknown"),
+                url=(c.metadata or {}).get("url") if hasattr(c, "metadata") else None,
+                chunk=(getattr(c, "metadata", {}) or {}).get("snippet", "")[:500]
+                or getattr(c, "source", ""),
+                score=float(min(max(getattr(c, "score", 0.0), 0.0), 1.0)),
+            )
+            for c in (answer_response.sources or [])
         ]
+        usage_obj = getattr(answer_response, "usage", None)
         usage = TokenUsage(
-            prompt_tokens=150,
-            completion_tokens=200,
-            total_tokens=350,
+            prompt_tokens=int(getattr(usage_obj, "prompt_tokens", 0) or 0),
+            completion_tokens=int(getattr(usage_obj, "completion_tokens", 0) or 0),
+            total_tokens=int(getattr(usage_obj, "total_tokens", 0) or 0),
         )
         latency = (time.perf_counter() - start) * 1000
-
         return ChatResponse(
-            answer=answer,
+            answer=answer_response.answer,
             sources=sources,
-            model="gpt-4o",
+            model=getattr(answer_response, "model", "azure-openai"),
             usage=usage,
             latency_ms=round(latency, 2),
         )
@@ -96,18 +177,32 @@ async def chat(request: ChatRequest) -> ChatResponse:
 async def embed_texts(request: EmbedRequest) -> EmbedResponse:
     """Generate text embeddings using Azure OpenAI.
 
-    In production this delegates to ``EmbeddingGenerator.embed_texts()``.
-    The current implementation returns placeholder vectors.
+    Delegates to ``EmbeddingGenerator.embed_texts_async`` when configured.
+    Falls back to zero-vector placeholders (with ``model="demo-stub"``) if
+    the embedder cannot be constructed in the current environment.
     """
-    try:
-        # TODO(prod): delegate to EmbeddingGenerator.embed_texts() for real vectors.
+    embedder = _try_get_embedder()
 
+    if embedder is None:
         dims = 1536
         embeddings = [[0.0] * dims for _ in request.texts]
-        token_count = len(request.texts) * 10
-
         return EmbedResponse(
             embeddings=embeddings,
+            model="demo-stub",
+            dimensions=dims,
+            usage=TokenUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
+        )
+
+    try:
+        # Prefer async if available; fall back to sync.
+        if hasattr(embedder, "embed_texts_async"):
+            vectors = await embedder.embed_texts_async(request.texts)
+        else:
+            vectors = embedder.embed_texts(request.texts)
+        dims = len(vectors[0]) if vectors and vectors[0] else 0
+        token_count = sum(len(t.split()) for t in request.texts)
+        return EmbedResponse(
+            embeddings=vectors,
             model=request.model,
             dimensions=dims,
             usage=TokenUsage(
@@ -129,30 +224,43 @@ async def embed_texts(request: EmbedRequest) -> EmbedResponse:
 async def semantic_search(request: SearchRequest) -> SearchResponse:
     """Semantic search across indexed data products.
 
-    In production this delegates to the vector store search via
-    ``RAGService.search()``.  The current implementation returns
-    demo results showing the API contract.
+    Embeds the query, then delegates to the configured retriever.
+    Falls back to an empty result set with ``query`` echoed and a
+    log line at INFO level if the AI stack is not configured.
     """
     start = time.perf_counter()
-    try:
-        # TODO(prod): delegate to RAGService.search() for real vector search.
+    service = _try_get_rag_service()
 
+    if service is None:
+        latency = (time.perf_counter() - start) * 1000
+        return SearchResponse(
+            results=[],
+            query=request.query,
+            total=0,
+            latency_ms=round(latency, 2),
+        )
+
+    try:
+        async with service as svc:
+            embeddings = await svc.embedder.embed_texts_async([request.query])
+            raw = await svc.retriever.search_async(
+                query_vector=embeddings[0],
+                query_text=request.query,
+                top_k=request.top_k,
+                score_threshold=request.min_score,
+                filters=None,
+                use_semantic_reranker=False,
+            )
         results = [
             SearchResult(
-                id="dp-001",
-                content="Employee Master Data - curated PII-masked records",
-                metadata={"domain": "human-resources"},
-                score=0.92,
-            ),
-            SearchResult(
-                id="dp-003",
-                content="Financial General Ledger - SOX-compliant GL snapshots",
-                metadata={"domain": "finance"},
-                score=0.85,
-            ),
+                id=getattr(r, "id", ""),
+                content=getattr(r, "text", ""),
+                metadata=dict(getattr(r, "metadata", {}) or {}),
+                score=float(min(max(getattr(r, "score", 0.0), 0.0), 1.0)),
+            )
+            for r in raw
         ]
         latency = (time.perf_counter() - start) * 1000
-
         return SearchResponse(
             results=results,
             query=request.query,
@@ -170,22 +278,33 @@ async def semantic_search(request: SearchRequest) -> SearchResponse:
     summary="AI services health check",
 )
 async def ai_status() -> AIServiceStatus:
-    """Health check for AI services.
+    """Report AI service health.
 
-    Reports the current status of embedding model, chat model,
-    and vector store connectivity.
+    Returns ``healthy`` when :class:`RAGService` can be constructed
+    from the current environment, ``unavailable`` otherwise. This is
+    intentionally cheap (no remote probe) — wire a deeper readiness
+    probe into APIM if you need round-trip Azure OpenAI / AI Search
+    health.
     """
-    from datetime import datetime, timezone
-
-    # In production, probe actual service connectivity:
-    # - Azure OpenAI endpoint reachability
-    # - Vector store (Cosmos DB / AI Search) connection
-    # - Model deployment availability
-
+    service = _try_get_rag_service()
+    if service is None:
+        return AIServiceStatus(
+            status="unavailable",
+            embedding_model="not-configured",
+            chat_model="not-configured",
+            vector_store="disconnected",
+            last_check=datetime.now(timezone.utc).isoformat(),
+        )
+    try:
+        embed_model = service.settings.azure_openai.embedding_deployment
+        chat_model = service.settings.azure_openai.chat_deployment
+    except Exception:
+        embed_model = "unknown"
+        chat_model = "unknown"
     return AIServiceStatus(
         status="healthy",
-        embedding_model="text-embedding-3-small",
-        chat_model="gpt-4o",
+        embedding_model=str(embed_model),
+        chat_model=str(chat_model),
         vector_store="connected",
         last_check=datetime.now(timezone.utc).isoformat(),
     )

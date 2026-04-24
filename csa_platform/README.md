@@ -1,6 +1,5 @@
 # Platform Components — Fabric-in-a-Box
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Platform Engineers
 
 > [!NOTE]
 > **TL;DR:** This directory contains 10 core platform components that replicate Microsoft Fabric functionality using Azure PaaS services and open-source tooling, designed for Azure Government where Fabric is not yet available.

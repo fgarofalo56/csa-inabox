@@ -1,6 +1,5 @@
 # Monitoring — Alerts and Dashboards
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** DevOps Engineers
 
 This directory contains the operational monitoring infrastructure for CSA-in-a-Box,
 including Azure Monitor alert rules (Bicep) and Grafana dashboard definitions.

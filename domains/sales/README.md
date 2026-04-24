@@ -2,7 +2,6 @@
 
 [domains](../README.md) / **sales**
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers / Domain Owners
 
 This is a sample business domain showing the **Data Mesh** pattern for CSA-in-a-Box. Copy this structure to onboard new domains.
 

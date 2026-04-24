@@ -2,7 +2,6 @@
 
 # Incident Response Runbook — Security Events
 
-> **Last Updated:** 2026-04-20 | **Last Drilled:** _not yet drilled — see Drill Log below (CSA-0085)_ | **Status:** Active | **Audience:** Operations
 
 !!! note
     **Quick Summary**: Step-by-step incident response procedures for CSA-in-a-Box security events, including severity classification (P1-P4), containment steps, investigation KQL queries, common scenarios (exposed keys, token leaks, policy violations, pipeline tampering), evidence preservation, and communication templates.

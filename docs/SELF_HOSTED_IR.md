@@ -2,7 +2,6 @@
 
 # Self-Hosted Integration Runtime (SHIR)
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** DevOps Engineers
 
 !!! note
     **Quick Summary**: Deploy a highly available, auto-scaling Self-Hosted Integration Runtime on Windows Server VMSS — bridges on-premises and private network data sources to Azure Data Factory via HTTPS/443 with internal load balancing, system-managed identity, auto-scale 1–10 nodes, and full monitoring/security/DR operations runbook.

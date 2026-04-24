@@ -2,7 +2,6 @@
 
 # Platform Functions — Consolidated Azure Functions namespace
 
-> **Last Updated:** 2026-04-19 | **Status:** Active | **Audience:** Platform Engineers
 
 > **Note (2026-04-19):** This directory consolidates the former
 > `csa_platform/shared_services/` (v1-style Azure Functions app with

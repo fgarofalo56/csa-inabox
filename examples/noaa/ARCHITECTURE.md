@@ -2,7 +2,6 @@
 
 > [**Examples**](../README.md) > [**NOAA**](README.md) > **Architecture**
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Architects / Data Engineers
 
 > [!TIP]
 > **TL;DR** — Climate analytics architecture with real-time weather station and ocean buoy streaming alongside batch GHCN/Storm Events/CO-OPS ingestion. Features QC flag processing, gap-filling interpolation, and marine ecosystem health scoring.

@@ -1,6 +1,5 @@
 # CSA-in-a-Box — Example Vertical Cookiecutter Template
 
-> **Last Updated:** 2026-04-20 | **Status:** Active | **Audience:** Data Engineers
 
 This [Cookiecutter](https://cookiecutter.readthedocs.io/) template scaffolds a
 new analytics vertical that conforms to the CSA-in-a-Box vertical structure —

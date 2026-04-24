@@ -2,7 +2,6 @@
 
 # Data Activator — Event-Driven Alerting Engine
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Platform Engineers
 
 > [!NOTE]
 > **TL;DR:** CSA-in-a-Box equivalent of Fabric Data Activator — delivers real-time alerting and action-triggering using Event Grid, Azure Functions, and Logic Apps (all GA in Azure Government). Includes a Pydantic-validated rules engine with windowed aggregations and anomaly detection.

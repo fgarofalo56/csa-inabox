@@ -2,7 +2,6 @@
 
 # Platform Governance — Consolidated
 
-> **Last Updated:** 2026-04-19 | **Status:** Active | **Audience:** Platform Engineers, Data Stewards, Security Teams
 
 > **Note (2026-04-19):** This tree is the result of consolidating
 > `csa_platform/purview_governance/` (Python automation) + top-level
@@ -264,7 +263,7 @@ python -m csa_platform.governance.purview.purview_automation \
 ## 📦 PyPI Extraction Plan
 
 This tree was previously two separate packages. The long-term
-extraction targets are unchanged (see `REPO_SPLIT.md`):
+extraction targets are:
 
 - `csa-governance` (PyPI): the Python toolchain — `common/`,
   `contracts/`, `dataquality/`, `compliance/`, and the Purview
@@ -274,6 +273,9 @@ extraction targets are unchanged (see `REPO_SPLIT.md`):
 
 Consolidating here simplifies extraction: one tree to split, one
 namespace to import from.
+
+> **Status:** Aspirational. No extraction work is currently in
+> flight. Treat this as a future-state note, not a roadmap commitment.
 
 ---
 
@@ -286,4 +288,3 @@ namespace to import from.
 - [Platform Functions](../functions/README.md) — Consolidated Azure Functions library
 - [Log Schema](../../docs/LOG_SCHEMA.md) — Structured logging format
 - [Compliance Overview](compliance/compliance-overview.md)
-- [Repo Split Plan](../../REPO_SPLIT.md)

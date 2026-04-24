@@ -2,7 +2,6 @@
 
 > [**Examples**](../README.md) > [**DOT**](README.md) > **Architecture**
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Architects / Data Engineers
 
 > [!TIP]
 > **TL;DR** — Multi-modal transportation analytics architecture combining batch FARS/NBI/NTD data with real-time GTFS transit feeds. Features hot/warm/cold processing paths, ADX for sub-second transit queries, and safety hotspot detection.

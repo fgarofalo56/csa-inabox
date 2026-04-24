@@ -2,7 +2,6 @@
 
 > [**Examples**](../README.md) > [**USPS**](README.md) > **Architecture**
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Architects / Data Engineers
 
 > [!TIP]
 > **TL;DR** — Postal operations architecture analyzing delivery performance, facility utilization, and mail volume across 34,000+ post offices. Features geographic standardization with Census ZCTAs and seasonal volume forecasting.

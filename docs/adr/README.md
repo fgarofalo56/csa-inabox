@@ -2,7 +2,6 @@
 
 # Architecture Decision Records (ADRs)
 
-> **Last Updated:** 2026-04-19 | **Status:** Active | **Audience:**
 > Architects, platform engineers, auditors, federal customers preparing
 > ATO packages
 

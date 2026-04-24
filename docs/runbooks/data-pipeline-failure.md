@@ -2,7 +2,6 @@
 
 # Data Pipeline Failure Runbook (CSA-0059)
 
-> **Last Updated:** 2026-04-20 | **Last Drilled:** _not yet drilled — see Drill Log below_ | **Status:** Active | **Audience:** Operations, Data Engineering
 
 !!! note
     **Quick Summary**: First-response procedure for ADF / Synapse pipeline failures — triage by trigger vs. activity scope, classify severity, apply the right retry / backfill strategy, and escalate. Covers trigger mis-fires, activity-level failures (Copy, Databricks, Dataflow), transient vs. deterministic errors, and the backfill-by-watermark pattern.

@@ -2,7 +2,6 @@
 
 [domains](../../README.md) / [shared](../README.md) / **contracts**
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers
 
 > [!NOTE]
 > This directory is intentionally empty. Data contracts in CSA-in-a-Box

@@ -2,7 +2,6 @@
 
 [governance](../../governance/) / **compliance-overview.md**
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Security / Compliance
 
 > [!TIP]
 > **TL;DR** — CSA-in-a-Box enforces data residency via Azure Policy, encrypts all data at rest (AES-256) and in transit (TLS 1.2+), uses Microsoft Entra ID with managed identities for authentication, logs all access to Log Analytics, and follows a zero-trust network architecture with private endpoints throughout.

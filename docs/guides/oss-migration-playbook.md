@@ -2,7 +2,6 @@
 
 # OSS Migration Playbook
 
-> **Last Updated:** 2026-04-22 | **Status:** Active | **Audience:** Platform Engineers, Data Engineers
 
 > [!NOTE]
 > **TL;DR:** Step-by-step migration guide for moving from Azure PaaS services to open-source alternatives on AKS. Covers entity mapping, pipeline conversion, SQL dialect translation, dashboard recreation, and index schema migration.

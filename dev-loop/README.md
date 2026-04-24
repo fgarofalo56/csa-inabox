@@ -5,7 +5,6 @@
 > will live under `apps/copilot/`). This is a Ralph-loop CI/CD orchestrator
 > for project development automation; it contains no LLM/agent runtime.
 
-> **Last Updated:** 2026-04-18 | **Status:** Active | **Audience:** Developers
 
 ## Table of Contents
 

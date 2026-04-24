@@ -106,7 +106,7 @@ graph LR
 
 ### 1. Deploy Sentinel Workspace
 
-The Bicep template provisions a Log Analytics workspace, enables the Microsoft Sentinel solution, configures data connectors for Azure Activity, Azure AD, and Microsoft 365 Defender, and sets up a Data Collection Rule for selective Windows Security Event forwarding.
+The Bicep template provisions a Log Analytics workspace, enables the Microsoft Sentinel solution, configures data connectors for Azure Activity, Microsoft Entra ID, and Microsoft 365 Defender, and sets up a Data Collection Rule for selective Windows Security Event forwarding.
 
 ```bicep
 // sentinel-workspace.bicep — key resource definitions
@@ -436,14 +436,14 @@ The analytics pipeline supports Zero Trust Architecture principles by providing 
 
 | Zero Trust Pillar | Data Source                                        | Analytics Output                                                     |
 | ----------------- | -------------------------------------------------- | -------------------------------------------------------------------- |
-| **Identity**      | Azure AD Sign-In Logs, Security Events (4624/4625) | Impossible travel detection, brute force alerts, MFA gap analysis    |
+| **Identity**      | Microsoft Entra ID Sign-In Logs, Security Events (4624/4625) | Impossible travel detection, brute force alerts, MFA gap analysis    |
 | **Device**        | Defender for Endpoint, Security Events (7045)      | Endpoint compliance scoring, unauthorized software detection         |
 | **Network**       | NSG Flow Logs, DNS logs                            | Lateral movement detection, C2 beaconing, data exfiltration tracking |
 | **Workload**      | Azure Activity Log, Defender for Cloud             | Resource misconfiguration alerts, privilege escalation detection     |
 | **Data**          | DLP alerts, Azure Information Protection           | Sensitive data access anomalies, unauthorized sharing patterns       |
 
 !!! tip "Conditional Access Integration"
-Anomaly scores from the Isolation Forest model can feed Azure AD Conditional Access policies via custom risk signals, enabling automated session revocation when user behavior deviates from baseline.
+Anomaly scores from the Isolation Forest model can feed Microsoft Entra ID Conditional Access policies via custom risk signals, enabling automated session revocation when user behavior deviates from baseline.
 
 ---
 

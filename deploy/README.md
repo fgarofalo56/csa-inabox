@@ -1,6 +1,5 @@
 # Deployment — Infrastructure as Code
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** DevOps Engineers
 
 > [!TIP]
 > **TL;DR** — All Azure Bicep IaC templates for the CSA-in-a-Box platform. Deploys across four subscriptions following the Azure Cloud Adoption Framework landing zone model.

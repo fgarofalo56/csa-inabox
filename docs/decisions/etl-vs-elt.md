@@ -1,6 +1,5 @@
 # ETL vs. ELT
 
-> **Last Updated:** 2026-04-19 | **Status:** Active | **Audience:** Data Engineers + Security Architects
 
 ## TL;DR
 

@@ -2,7 +2,6 @@
 
 # OSS Stack Monitoring Guide
 
-> **Last Updated:** 2026-04-22 | **Status:** Active | **Audience:** Platform Engineers, SREs
 
 > [!NOTE]
 > **TL;DR:** Deploy Prometheus + Grafana via kube-prometheus-stack to monitor the OSS data platform on AKS. Includes per-service exporters, key metrics, alerting rules, and a sample Grafana dashboard.

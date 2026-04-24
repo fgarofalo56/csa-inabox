@@ -2,7 +2,6 @@
 
 > **Estimated Time:** 5-6 hours
 > **Difficulty:** Advanced
-> **Last Updated:** 2026-04-22
 
 Build a complete Lambda Architecture on your CSA-in-a-Box platform for processing real-time earthquake data alongside batch historical analysis. You will configure Azure Event Hubs for ingestion, build a speed layer with Stream Analytics, a batch layer with scheduled ADLS reprocessing, and a serving layer with Azure Data Explorer — then query merged views that combine real-time and historical results.
 

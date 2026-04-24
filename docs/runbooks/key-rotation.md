@@ -2,7 +2,6 @@
 
 # Key Rotation Runbook (CSA-0059)
 
-> **Last Updated:** 2026-04-20 | **Last Drilled:** _not yet drilled — see Drill Log below_ | **Status:** Active | **Audience:** Operations, Security, Platform Engineering
 
 !!! note
     **Quick Summary**: Scheduled + emergency rotation procedures for every credential class in CSA-in-a-Box — Key Vault secrets, Storage account access keys, MSAL / Entra ID token-signing keys, SQL and Cosmos master keys, Databricks PATs, and ADF linked-service credentials. Covers cadence, automation (secret rotation Function), manual steps for each class, and verification queries.

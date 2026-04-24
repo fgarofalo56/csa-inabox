@@ -2,7 +2,6 @@
 
 > **Estimated Time:** 3-4 hours (plus ArcGIS installation time)
 > **Difficulty:** Advanced
-> **Last Updated:** 2026-04-22
 
 > **BYOL (Bring Your Own License):** This tutorial requires a valid Esri ArcGIS Enterprise license. CSA-in-a-Box provisions the Azure infrastructure, but you must supply your own Esri license files. If you do not have an Esri license, see [Tutorial 03: GeoAnalytics with Open-Source Tools](../03-geoanalytics-oss/) for a fully open-source alternative.
 

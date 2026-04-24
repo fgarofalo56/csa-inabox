@@ -2,7 +2,6 @@
 
 > [**Examples**](../README.md) > **NOAA**
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers
 
 > [!TIP]
 > **TL;DR** — Climate and environmental analytics with real-time weather station streaming, 100K+ GHCN stations, ocean buoy telemetry, and storm event correlation. Provides multi-decadal climate trend analysis and severe weather early warning.

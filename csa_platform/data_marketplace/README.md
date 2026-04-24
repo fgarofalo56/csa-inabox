@@ -2,7 +2,6 @@
 
 # Data Marketplace — Product Discovery, Access, and Quality
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Platform Engineers
 
 > [!NOTE]
 > **TL;DR:** A FastAPI + Cosmos DB self-service data marketplace where domain teams register data products and consumers discover, request access, and monitor quality. Includes Purview integration, access request workflows, and weighted quality scoring.

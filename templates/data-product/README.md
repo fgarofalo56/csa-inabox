@@ -1,6 +1,5 @@
 # Data Product Template
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Developers
 
 Use this template to create a new data product domain in the CSA-in-a-Box Data Mesh platform.
 

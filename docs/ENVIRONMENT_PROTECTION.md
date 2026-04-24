@@ -2,7 +2,6 @@
 
 # GitHub Environment Protection Rules
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Security / Compliance
 
 !!! note
     **Quick Summary**: Setup procedure for GitHub Environment protection rules across dev/test/prod — required reviewers, branch restrictions, wait timers, environment secrets, and branch protection for `main`. Run through every step before the first production deploy.

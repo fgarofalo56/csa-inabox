@@ -153,7 +153,7 @@ Purview integrates with every layer of the CSA-in-a-Box architecture:
 - **Serving** — Enforce access policies on Power BI datasets and API endpoints
 
 !!! info "Purview in Azure Government"
-Microsoft Purview is available in Azure Government regions. Verify the latest feature parity at [Azure Government services by region](https://azure.microsoft.com/en-us/explore/global-infrastructure/government/by-region/).
+Microsoft Purview is available in Azure Government regions. Verify the latest feature parity at [Azure global infrastructure geographies](https://azure.microsoft.com/en-us/explore/global-infrastructure/geographies/#geographies).
 
 ---
 

@@ -1,6 +1,5 @@
 # Architecture Decision Trees
 
-> **Last Updated:** 2026-04-19 | **Status:** Active | **Audience:** Architects + Engineering Leads
 
 Scenario-driven decision trees for the recurring architecture questions on CSA-in-a-Box. Each tree is a branching flowchart that leads to a specific recommendation with rationale, tradeoffs (cost / latency / compliance / skill match), anti-patterns, and a linked working example.
 

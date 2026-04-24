@@ -2,7 +2,6 @@
 
 > [**Examples**](../README.md) > **Commerce**
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers
 
 > [!TIP]
 > **TL;DR** — Economic analytics platform analyzing Census demographics, BEA GDP/trade data, and business formation statistics. Provides regional economic resilience scoring, international trade pattern analysis, and small business growth prediction.

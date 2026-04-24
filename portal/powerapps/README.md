@@ -2,7 +2,6 @@
 
 # PowerApps + Logic Apps Portal
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Frontend Developers
 
 > [!NOTE]
 > **TL;DR:** Low-code data onboarding portal built on Microsoft Power Platform — Canvas App for source registration wizard, Model-Driven App for governance dashboard, Power Automate flows for approvals and monitoring. Supports GCC/GCC High/DoD. Deploy in ~30 minutes.

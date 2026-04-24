@@ -10,7 +10,6 @@
 
 # Semantic Model Pattern — Power BI Semantic Models over Databricks SQL
 
-> **Last Updated:** 2026-04-19 | **Status:** Active | **Audience:** Platform Engineers
 
 > [!NOTE]
 > **TL;DR:** Replicates Fabric's Direct Lake mode using Databricks SQL Warehouse + ADLS Gen2 Delta tables + Power BI DirectQuery. Includes setup guide, performance tuning, RLS configuration, and a feature comparison with native Fabric Direct Lake.

@@ -2,7 +2,6 @@
 
 > **Estimated Time:** 75-90 minutes
 > **Difficulty:** Intermediate-Advanced
-> **Last Updated:** 2026-04-22
 
 Build a Retrieval-Augmented Generation (RAG) pipeline using Azure AI Search and Azure OpenAI. You will create a search index with vector fields, build an embedding pipeline, implement hybrid search (vector + keyword + semantic reranking), and deploy a RAG chatbot that answers questions from your data catalog.
 

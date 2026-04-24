@@ -2,7 +2,6 @@
 
 > [**Examples**](../README.md) > **DOT**
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers
 
 > [!TIP]
 > **TL;DR** — Transportation analytics covering highway safety (FARS crash data), infrastructure condition (620K+ bridges from NBI), and transit performance (900+ agencies from NTD). Includes geospatial hotspot analysis and bridge priority scoring.

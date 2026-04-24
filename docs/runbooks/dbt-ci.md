@@ -2,7 +2,6 @@
 
 # dbt CI Runbook (CSA-0089)
 
-> **Last Updated:** 2026-04-20 | **Status:** Active | **Audience:** Data Engineering, Platform Engineering
 
 !!! note
     **Quick Summary**: The `dbt-ci` GitHub Actions workflow runs

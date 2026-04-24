@@ -2,7 +2,6 @@
 
 [csa_platform](../../../../README.md) / [functions](../../README.md) / [aiEnrichment](../README.md) / **functions**
 
-> **Last Updated:** 2026-04-14 | **Status:** Active | **Audience:** Data Engineers
 
 ## 🔌 HTTP Trigger
 

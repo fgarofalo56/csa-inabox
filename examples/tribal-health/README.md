@@ -2,7 +2,6 @@
 
 > [**Examples**](../README.md) > **Tribal Health**
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers
 
 > [!TIP]
 > **TL;DR** — Population health analytics for IHS and tribal health programs, deployed exclusively in Azure Government. All data is synthetic. Features diabetes tracking, behavioral health resource allocation, and tribal data sovereignty.

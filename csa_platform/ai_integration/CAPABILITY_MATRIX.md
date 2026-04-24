@@ -1,6 +1,5 @@
 # Azure OpenAI Capability Matrix
 
-> **Last Updated:** 2026-04-22 | **API Version:** 2024-06-01 | **Status:** Active
 
 ## Overview
 
@@ -85,8 +84,8 @@ This matrix documents which Azure OpenAI features are implemented, available but
 | Method | Status | Use Case | Module |
 |--------|--------|----------|--------|
 | API Key | Implemented | Dev/local | rag/pipeline.py |
-| Azure AD (sync) | Implemented | Production | rag/pipeline.py |
-| Azure AD (async) | Implemented | Async apps | rag/service.py |
+| Microsoft Entra ID (sync) | Implemented | Production | rag/pipeline.py |
+| Microsoft Entra ID (async) | Implemented | Async apps | rag/service.py |
 | Managed Identity | Implemented | Azure-hosted | DefaultAzureCredential |
 
 ## Model Deployments

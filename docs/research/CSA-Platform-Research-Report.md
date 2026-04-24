@@ -2,7 +2,6 @@
 
 # CSA-in-a-Box: Comprehensive Platform Research Report
 
-> **Last Updated:** 2026-04-15 | **Status:** Reference | **Audience:** Architects / Leadership
 
 !!! note
     **Quick Summary**: Deep research report for building a complete Cloud-Scale Analytics / Data Mesh / Data Fabric platform in Azure as an open-source alternative to Microsoft Fabric — covers CSA architecture (DMLZ + DLZ + Medallion), Data Mesh domain ownership, Data Fabric metadata layer, component mapping from Fabric to Azure PaaS, 50+ required Azure services, 4-subscription deployment strategy with VNet address spaces and RBAC, Well-Architected best practices, zero-trust networking, data classification, FinOps, DR/BCDR, and IaC reference templates.

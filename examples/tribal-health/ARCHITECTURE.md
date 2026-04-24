@@ -2,7 +2,6 @@
 
 > [**Examples**](../README.md) > [**Tribal Health**](README.md) > **Architecture**
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Architects / Data Engineers
 
 > [!TIP]
 > **TL;DR** — Azure Government-exclusive architecture with HIPAA compliance, FedRAMP High controls, and tribal data sovereignty at every layer. Features per-tribe RLS isolation, consent-based data sharing, and HL7 FHIR resource mappings.

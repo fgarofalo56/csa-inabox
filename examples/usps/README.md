@@ -2,7 +2,6 @@
 
 > [**Examples**](../README.md) > **USPS**
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers
 
 > [!TIP]
 > **TL;DR** — Postal operations analytics for delivery performance, route optimization, and facility capacity planning across 34,000+ post offices and 230,000+ routes with seasonal volume prediction.

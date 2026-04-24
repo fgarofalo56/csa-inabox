@@ -2,7 +2,6 @@
 
 [tests](../../tests/) / **integration**
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** QA Engineers / Developers
 
 > [!TIP]
 > **TL;DR** — Three test suites validate the full CSA-in-a-Box platform: `test_e2e_platform.py` (10-step pipeline from Bronze to Gold using DuckDB), `test_e2e_contracts.py` (contract YAML validation), and `test_e2e_streaming.py` (streaming pipeline checks). Run `make test-e2e` for offline tests or `make test-e2e-live` for Azure-connected tests.

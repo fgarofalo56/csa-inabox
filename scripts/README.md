@@ -1,6 +1,5 @@
 # Scripts — Operational Automation
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** DevOps Engineers, Data Engineers
 
 This directory contains operational scripts for deploying, seeding, monitoring, and
 managing the CSA-in-a-Box platform.

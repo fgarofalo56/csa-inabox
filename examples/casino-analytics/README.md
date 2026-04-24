@@ -2,7 +2,6 @@
 
 > [**Examples**](../README.md) > **Casino Analytics**
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers
 
 > [!TIP]
 > **TL;DR** — Casino operations analytics with real-time slot telemetry streaming, player engagement scoring, floor optimization, and Title 31 AML compliance. All data is fully synthetic. Includes Event Hub to ADX streaming and NIGC regulatory reporting.

@@ -2,7 +2,6 @@
 
 # Multi-Region Disaster Recovery Runbook
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Operations
 
 !!! note
     **Quick Summary**: Authoritative DR runbook for CSA-in-a-Box covering RPO/RTO targets by service tier, primary/secondary region pairing, step-by-step failover procedures (Cosmos DB, Storage, ADF, Databricks, DNS), quarterly drill cadence, failback procedures, and known gaps.

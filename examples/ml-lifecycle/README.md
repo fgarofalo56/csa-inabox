@@ -2,7 +2,6 @@
 
 > [**Examples**](../README.md) > **ML Lifecycle**
 
-> **Last Updated:** 2026-04-20 | **Status:** Active | **Audience:** ML Engineers, Data Scientists, Platform Engineers
 
 > **TL;DR** — End-to-end, reproducible Azure ML pipeline: deterministic synthetic data → dbt feature engineering → scikit-learn training with AUC >= 0.70 → managed online endpoint → data-drift monitoring. Works offline for tests; documented for Azure-side deployment.
 

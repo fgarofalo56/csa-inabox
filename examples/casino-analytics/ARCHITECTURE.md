@@ -2,7 +2,6 @@
 
 > [**Examples**](../README.md) > [**Casino Analytics**](README.md) > **Architecture**
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Architects / Data Engineers
 
 > [!TIP]
 > **TL;DR** — Real-time streaming architecture combining slot telemetry (15K events/sec), video analytics for floor density, and batch player analytics through a medallion pipeline. Supports Title 31 AML compliance, NIGC MICS reporting, and both Azure Commercial and Azure Government deployments.

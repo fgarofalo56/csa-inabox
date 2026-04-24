@@ -2,7 +2,6 @@
 
 > [**Examples**](../README.md) > [**{{ cookiecutter.vertical_name }}**](README.md) > **Architecture**
 
-> **Last Updated:** 2026-04-20 | **Status:** Scaffolded | **Audience:** Architects / Data Engineers
 
 > [!TIP]
 > **TL;DR** — {{ cookiecutter.description }}

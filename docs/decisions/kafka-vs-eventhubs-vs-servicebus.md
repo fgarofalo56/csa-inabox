@@ -1,6 +1,5 @@
 # Kafka vs. Event Hubs vs. Service Bus
 
-> **Last Updated:** 2026-04-19 | **Status:** Active | **Audience:** Platform Architects + SREs
 
 ## TL;DR
 

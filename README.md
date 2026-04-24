@@ -4,7 +4,6 @@
 ![Azure](https://img.shields.io/badge/platform-Azure-0078D4?logo=microsoftazure)
 ![IaC](https://img.shields.io/badge/IaC-Bicep-orange)
 ![License](https://img.shields.io/badge/license-MIT-blue)
-![Last Updated](https://img.shields.io/badge/updated-2026--04--15-informational)
 
 [![Documentation](https://img.shields.io/badge/docs-fgarofalo56.github.io%2Fcsa--inabox-blue?logo=materialformkdocs)](https://fgarofalo56.github.io/csa-inabox/)
 
@@ -289,6 +288,96 @@ All environment-specific values are externalized to parameter files:
 
 ---
 
+## 📊 Feature Status Matrix
+
+> [!IMPORTANT]
+> **Read this before evaluating CSA-in-a-Box for a real workload.**
+> This is a reference platform under active development, not a
+> shrink-wrapped product. The matrix below is the *only* authoritative
+> statement of which capabilities are production-grade vs. demo /
+> stub / planned. Any older doc claiming "95% complete" or
+> "production ready" is out of date and being retired.
+
+**Status legend**
+
+| Status | Meaning |
+|---|---|
+| **GA** | Wired end-to-end, has tests, used in at least one vertical example, safe to deploy to a non-prod subscription. |
+| **Beta** | Implemented and tested but missing documentation, surface coverage, or production hardening. Expect rough edges. |
+| **Stub** | Skeleton, demo response, or scaffolding only. **Do not rely on output.** Often carries `TODO(prod)` markers in source. |
+| **Planned** | Referenced in docs/ADRs but no implementation. Aspirational. |
+
+### Infrastructure-as-Code (Bicep)
+
+| Capability | Status | Notes |
+|---|---|---|
+| ALZ foundation modules (`deploy/bicep/landing-zone-alz/`) | GA | Resource group, logging, policy, network, CRML |
+| DLZ modules (storage, synapse, databricks, ADF, eventhubs, cosmos, ADX, ML, functions, monitoring) | GA | ~20 modules, parameter templates committed |
+| DMLZ modules (purview, ACR, KV, OpenAI, APIM, eventhub, governance, network) | GA | Used by `make deploy-dev` |
+| Azure Government variants (`deploy/bicep/gov/`) | Beta | Modules exist; full Gov tenant deployment not regularly exercised |
+| Multi-region / multi-tenant parameter sets | Beta | Templates present; no automated cross-region failover test |
+
+### Python Platform (`csa_platform/`)
+
+| Module | Status | Notes |
+|---|---|---|
+| `governance/` (contracts, dataquality, purview, common, finops, rbac) | GA | Most mature module; covered by 80% gate; only one packaged for PyPI extraction |
+| `functions/` (validation, aiEnrichment, eventProcessing, secretRotation) | GA | Azure Functions apps with tests under `tests/functions/` |
+| `ai_integration/rag/` | Beta | Real RAG pipeline + service; has tests; **not** yet wired into the portal router |
+| `ai_integration/graphrag/` | Stub | ~1,500 LOC across 4 modules; **zero tests** |
+| `ai_integration/semantic_kernel/` | Stub | Plugins + kernel factory; **zero tests** |
+| `ai_integration/mcp_server/` | Stub | 600 LOC server; **zero tests** |
+| `ai_integration/model_serving/` | Stub | No tests |
+| `data_activator/` | Beta | Bicep + Logic Apps deploy; runtime rules limited |
+| `data_marketplace/` | Beta | Catalog API present; full publish→discover→access pipeline incomplete |
+| `metadata_framework/` | Beta | Generator + schema; no end-to-end vertical consumer |
+| `streaming/` | Beta | Schema registry returns a *stub* `ResolvedSchema`; breach publisher tested |
+| `multi_synapse/` | Beta | Cost allocator + workspace manager; SDK clients carry `TODO` typing |
+| `semantic_model/` | Beta | Endpoint configurator carries `TODO` typing |
+| `unity_catalog_pattern/` | Beta | Pattern wraps Synapse Serverless / OneLake config — **not** real Databricks Unity Catalog |
+| `oss_alternatives/` | Stub | README lists Atlas/Ranger/Superset/Trino/NiFi/Kafka/OpenSearch; only **Airflow + Atlas + Superset** Helm charts ship |
+| `geoanalytics/` | Beta | PostGIS + H3; only one example uses it |
+
+### Portal
+
+| Surface | Status | Notes |
+|---|---|---|
+| FastAPI backend (`portal/shared/api/`) | GA | Routers for sources, pipelines, marketplace, access, monitoring |
+| **Portal AI router** (`/api/v1/ai/{chat,embed,search}`) | **Stub → GA** *in progress* | Now delegates to `csa_platform.ai_integration.rag.RAGService` when configured; falls back to a clearly-labelled demo response otherwise. See `portal/shared/api/routers/ai.py`. |
+| React/Next.js frontend (`portal/react-webapp/`) | Beta | Builds and runs; visual polish incomplete |
+| Kubernetes / Helm chart (`portal/kubernetes/`) | Beta | Helm chart lints; not regularly deployed in CI |
+| PowerApps frontend (`portal/powerapps/`) | Stub | Skeleton only — do not advertise as a real implementation |
+| CLI (`cli/`) | Beta | Click commands for sources, pipelines, marketplace, stats |
+
+### Copilot (`apps/copilot/`)
+
+| Component | Status | Notes |
+|---|---|---|
+| PydanticAI agent + grounding | Beta | ~25k LOC; works in CLI/web/API surfaces |
+| Eval harness | Beta | Default scorer is a *deterministic stub*; real LLM scoring requires Azure creds |
+| Skills + broker | Beta | Approval flow has stub auto-approver |
+| MCP / web / cli_daemon / API surfaces | Beta | All four wire to the same agent |
+| Azure Function variant (`azure-functions/copilot-chat/`) | Beta | Parallel implementation; in-process rate limiting will fail under multi-instance scale-out |
+
+### Verticals (`examples/`)
+
+| Vertical | Status | File count |
+|---|---|---|
+| usda, noaa, epa, commerce, dot, interior, casino-analytics, tribal-health, usps, ml-lifecycle, iot-streaming, cybersecurity, fabric-data-agent, data-api-builder | Beta–GA | 19–56 files each (contracts, deploy, domains, notebooks, data, teardown.sh) |
+| `examples/streaming/`, `examples/geoanalytics/` | Stub | 2 files each — README + one script. Treat as snippets, not verticals. |
+| `examples/ai-agents/` | Stub | 4 files; sub-agents are skeletons |
+
+### Compliance
+
+| Framework | Status | Artifact |
+|---|---|---|
+| NIST 800-53 Rev 5 (FedRAMP High) mapping | Beta | `docs/compliance/` — control list, no automated evidence collection |
+| CMMC 2.0 L2 mapping | Beta | `docs/compliance/` |
+| HIPAA Security Rule mapping | Beta | `docs/compliance/hipaa-security-rule.md` |
+| Continuous compliance evidence pipeline | Planned | Discussed in ADRs; not built |
+
+---
+
 ## ✨ Data Platform Components
 
 ### 🗄️ Data Lakehouse (Delta Lake)
@@ -371,8 +460,7 @@ This project is licensed under the MIT License -- see the [LICENSE](LICENSE) fil
 | Document | Description |
 |---|---|
 | [**CSA-in-a-Box Documentation**](https://fgarofalo56.github.io/csa-inabox/) | Full documentation site — architecture, guides, ADRs, runbooks, compliance, and AI Copilot |
-| [Getting Started](docs/GETTING_STARTED.md) | Prerequisites and deployment walkthrough |
-| [Quick Start](docs/QUICKSTART.md) | 60-minute hands-on tutorial |
+| [Quick Start](docs/QUICKSTART.md) | Prerequisites + 60-minute hands-on deployment walkthrough (canonical onboarding doc) |
 | [Architecture](docs/ARCHITECTURE.md) | Comprehensive architecture reference |
 | [Contributing](CONTRIBUTING.md) | Development guidelines and PR process |
 | [Changelog](CHANGELOG.md) | All notable changes to the project |

@@ -81,7 +81,7 @@ Antitrust analytics draws from several authoritative public data sources. Each m
 
 | Source                          | Publisher                  | Data Type                                            | Update Frequency | URL                                                                                         |
 | ------------------------------- | -------------------------- | ---------------------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------- |
-| **HSR Annual Reports**          | FTC & DOJ (joint)          | Merger filings, second requests, enforcement actions | Annual           | [ftc.gov/legal-library](https://www.ftc.gov/legal-library/browse/reports)                   |
+| **HSR Annual Reports**          | FTC & DOJ (joint)          | Merger filings, second requests, enforcement actions | Annual           | [ftc.gov/policy/reports](https://www.ftc.gov/policy/reports)                   |
 | **Criminal Enforcement Charts** | DOJ Antitrust Division     | Fines, jail sentences, cases by year                 | Periodic         | [justice.gov/atr](https://www.justice.gov/atr/criminal-enforcement-fine-and-jail-charts)    |
 | **DOJ Antitrust Division**      | DOJ                        | Press releases, case filings, policy documents       | Ongoing          | [justice.gov/atr](https://www.justice.gov/atr)                                              |
 | **FJC Integrated Database**     | Federal Judicial Center    | Federal court case filings and terminations          | Quarterly        | [fjc.gov/research/idb](https://www.fjc.gov/research/idb)                                    |
@@ -297,7 +297,7 @@ flowchart LR
 
 ### 1. HSR Annual Reports → Azure Document Intelligence
 
-The [Hart-Scott-Rodino Annual Reports](https://www.ftc.gov/legal-library/browse/reports) are published as PDFs with tables containing merger filing statistics. Azure Document Intelligence (formerly Form Recognizer) extracts structured data from these documents.
+The [Hart-Scott-Rodino Annual Reports](https://www.ftc.gov/policy/reports) are published as PDFs with tables containing merger filing statistics. Azure Document Intelligence (formerly Form Recognizer) extracts structured data from these documents.
 
 **Azure services:** Document Intelligence + Azure Functions + ADLS Gen2
 

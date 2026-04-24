@@ -2,7 +2,6 @@
 
 # Multi-Synapse — Migration Playbook
 
-> **Last Updated:** 2026-04-20 | **Status:** Active | **Audience:** Platform Engineers, Data Architects
 > **Scope:** CSA-0139 / AQ-0034 — legacy posture change for `csa_platform/multi_synapse/`.
 
 > [!IMPORTANT]

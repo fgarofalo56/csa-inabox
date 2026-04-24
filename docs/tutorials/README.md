@@ -64,7 +64,7 @@ All paths begin with **01 - Foundation Platform**, which deploys the core Azure 
 |----------|------|-------------|
 | [02 - Governance & Compliance](./02-data-governance/README.md) | 2-3 hours | Configure Microsoft Purview for data cataloging, deploy Azure Policy guardrails, set up sensitivity labels, and implement row-level security. |
 
-**Prerequisites:** Path A complete, Microsoft Purview access, Azure AD P1+
+**Prerequisites:** Path A complete, Microsoft Purview access, Microsoft Entra ID P1+
 
 ---
 

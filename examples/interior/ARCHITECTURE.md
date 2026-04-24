@@ -2,7 +2,6 @@
 
 > [**Examples**](../README.md) > [**Interior**](README.md) > **Architecture**
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Architects / Data Engineers
 
 > [!TIP]
 > **TL;DR** — Hybrid batch + streaming architecture for natural resource data. Real-time earthquake alerts via Event Hub, batch USGS/NPS/BLM ingestion, and Gold-layer models for seismic risk, park capacity forecasting, and wildfire risk scoring.
