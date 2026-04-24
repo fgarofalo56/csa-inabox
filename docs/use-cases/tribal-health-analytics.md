@@ -120,7 +120,7 @@ The deployment enforces HIPAA administrative, physical, and technical safeguards
 | --------------------- | ---------------------------------------------- | -------------------------------- |
 | Encryption at rest    | AES-256 with customer-managed keys             | Key Vault + ADLS Gen2            |
 | Encryption in transit | TLS 1.2+ enforced on all endpoints             | Application Gateway / Front Door |
-| Access control        | Azure AD with Conditional Access, MFA          | Azure Active Directory           |
+| Access control        | Microsoft Entra ID with Conditional Access, MFA          | Azure Active Directory           |
 | Audit logging         | All data-plane operations logged               | Monitor Diagnostic Settings      |
 | Network isolation     | Private endpoints, no public IPs               | Private Link + NSGs              |
 | Data Loss Prevention  | Sensitivity labels on PHI columns              | Microsoft Purview                |
@@ -144,7 +144,7 @@ Every table in the Silver and Gold layers includes a `tribal_affiliation` column
 CREATE FUNCTION tribal_rls_filter(tribal_affiliation STRING)
 RETURNS BOOLEAN
 AS (
-    -- Current user's tribal authority claim from Azure AD
+    -- Current user's tribal authority claim from Microsoft Entra ID
     tribal_affiliation = CURRENT_USER_ATTRIBUTE('tribal_authority')
     -- IHS Area Office users see their area's tribes
     OR CURRENT_USER_ATTRIBUTE('ihs_area_office') = GET_AREA_FOR_TRIBE(tribal_affiliation)
@@ -334,7 +334,7 @@ This implementation follows tribal data sovereignty principles aligned with the 
 
 | Principle             | Technical Control                                                                      |
 | --------------------- | -------------------------------------------------------------------------------------- |
-| Tribal ownership      | `tribal_affiliation` column in all tables; RLS filters by Azure AD claim               |
+| Tribal ownership      | `tribal_affiliation` column in all tables; RLS filters by Microsoft Entra ID claim               |
 | Consent-based sharing | Data sharing agreements codified as RLS policy exceptions                              |
 | Minimum necessary     | Role-based access tiers (tribal → area → federal) with decreasing granularity          |
 | Audit trail           | All queries logged in Azure Monitor; tribal authorities can audit access to their data |
@@ -376,9 +376,9 @@ AS (
 Power BI Desktop roles mirror the database-level RLS policies:
 
 1. **Create roles** in Power BI Desktop → Modeling → Manage Roles
-2. **Define DAX filter**: `[tribal_affiliation] = USERPRINCIPALNAME()` (mapped via Azure AD group claims)
+2. **Define DAX filter**: `[tribal_affiliation] = USERPRINCIPALNAME()` (mapped via Microsoft Entra ID group claims)
 3. **Publish** to Power BI Service on Azure Government (`app.powerbigov.us`)
-4. **Assign** Azure AD security groups to roles
+4. **Assign** Microsoft Entra ID security groups to roles
 
 ### Dashboard Pages
 
@@ -412,5 +412,5 @@ Power BI Desktop roles mirror the database-level RLS policies:
 | HIPAA Safe Harbor De-Identification            | <https://www.hhs.gov/hipaa/for-professionals/privacy/special-topics/de-identification/>                    |
 | 42 CFR Part 2 (SUD Confidentiality)            | <https://www.ecfr.gov/current/title-42/chapter-I/subchapter-A/part-2>                                      |
 | Azure Government FedRAMP High                  | <https://learn.microsoft.com/en-us/azure/azure-government/compliance/azure-services-in-fedramp-auditscope> |
-| CDC Social Vulnerability Index                 | <https://www.atsdr.cdc.gov/placeandhealth/svi/>                                                            |
+| CDC Social Vulnerability Index                 | <https://www.atsdr.cdc.gov/place-health/php/svi/index.html>                                                            |
 | Microsoft HIPAA/HITRUST Compliance             | <https://learn.microsoft.com/en-us/azure/compliance/offerings/offering-hipaa-us>                           |

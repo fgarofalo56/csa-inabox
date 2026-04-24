@@ -58,17 +58,17 @@ flowchart LR
 
 | Source                 | Full Name                           | Description                                                                   | Volume                  | Update Freq | Access                                                      |
 | ---------------------- | ----------------------------------- | ----------------------------------------------------------------------------- | ----------------------- | ----------- | ----------------------------------------------------------- |
-| **ATADS**              | Air Traffic Activity Data System    | Tower operations counts (takeoffs, landings, overflights) at towered airports | 500+ airports           | Monthly     | [OPSNET](https://aspm.faa.gov/opsnet/sys/opsnet-s-main.asp) |
+| **ATADS**              | Air Traffic Activity Data System    | Tower operations counts (takeoffs, landings, overflights) at towered airports | 500+ airports           | Monthly     | [OPSNET](https://aspm.faa.gov/opsnet/sys/Main.asp) |
 | **ASPM**               | Aviation System Performance Metrics | Flight-level on-time performance, delay causes, taxi times                    | All ASPM airports (~77) | Daily       | [ASPM](https://aspm.faa.gov)                                |
 | **OPSNET**             | Operations Network                  | Facility-level air traffic activity, delays, equipment outages                | All ATC facilities      | Monthly     | [OPSNET](https://aspm.faa.gov/opsnet/sys/opsnet-s-main.asp) |
 | **Wildlife Strike DB** | FAA Wildlife Strike Database        | Bird and wildlife strikes reported by pilots, airports, airlines              | ~17,000 strikes/year    | Continuous  | [Wildlife Strikes](https://wildlife.faa.gov)                |
-| **SDR**                | Service Difficulty Reports          | Mechanical failures and component malfunctions reported by repair stations    | ~80,000 reports/year    | Continuous  | [SDR](https://av-info.faa.gov/sdrx/)                        |
+| **SDR**                | Service Difficulty Reports          | Mechanical failures and component malfunctions reported by repair stations    | ~80,000 reports/year    | Continuous  | [SDR](https://sdrs.faa.gov/)                        |
 | **AIDS**               | Accident/Incident Data System       | FAA-recorded aviation accidents and incidents                                 | ~1,700 accidents/year   | Continuous  | [Aviation Safety](https://www.asias.faa.gov)                |
 | **SWIM**               | System Wide Information Management  | Real-time NAS data feeds (STDDS, TFMS, TBFM)                                  | Continuous stream       | Real-time   | [SWIM](https://www.faa.gov/air_traffic/technology/swim)     |
 | **ASDI/TFMS**          | Traffic Flow Management System      | Flight track positions, flight plans, departure/arrival events                | All IFR flights         | Real-time   | Via SWIM                                                    |
 
 !!! info "SWIM Access"
-SWIM data feeds require a connection agreement with FAA. The SWIM Cloud Distribution Service (SCDS) provides cloud-native access. See [SWIM SCDS](https://www.faa.gov/air_traffic/technology/swim/scds) for onboarding.
+SWIM data feeds require a connection agreement with FAA. The SWIM Cloud Distribution Service (SCDS) provides cloud-native access. See [SWIM](https://www.faa.gov/air_traffic/technology/swim) for onboarding.
 
 ---
 
@@ -413,9 +413,9 @@ For deployments to Azure Government (IL4/IL5), apply the configurations in `exam
 | FAA ATADS / OPSNET                                       | <https://aspm.faa.gov/opsnet/sys/opsnet-s-main.asp>                                   |
 | FAA ASPM                                                 | <https://aspm.faa.gov>                                                                |
 | FAA SWIM Program                                         | <https://www.faa.gov/air_traffic/technology/swim>                                     |
-| FAA SWIM Cloud Distribution Service                      | <https://www.faa.gov/air_traffic/technology/swim/scds>                                |
+| FAA SWIM Cloud Distribution Service                      | <https://www.faa.gov/air_traffic/technology/swim>                                |
 | FAA Wildlife Strike Database                             | <https://wildlife.faa.gov>                                                            |
-| FAA Service Difficulty Reports                           | <https://av-info.faa.gov/sdrx/>                                                       |
+| FAA Service Difficulty Reports                           | <https://sdrs.faa.gov/>                                                       |
 | Aviation Safety Information Analysis and Sharing (ASIAS) | <https://www.asias.faa.gov>                                                           |
 | FAA Operations & Performance Data                        | <https://www.faa.gov/data_research/aviation_data_statistics>                          |
 | BTS Airline On-Time Statistics                           | <https://www.transtats.bts.gov/OT_Delay/OT_DelayCause1.asp>                           |
