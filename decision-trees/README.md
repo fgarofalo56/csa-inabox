@@ -1,6 +1,5 @@
 # Decision Trees — Machine-Readable Source of Truth
 
-> **Last Updated:** 2026-04-19 | **Status:** Active | **Audience:** Architects, Copilot skill authors, tooling
 
 This directory is the **YAML source of truth** for every scenario-driven architecture decision in CSA-in-a-Box. Human-readable narratives with Mermaid diagrams live in [`docs/decisions/`](../docs/decisions/) and are kept in sync with these YAMLs.
 

@@ -2,7 +2,6 @@
 
 [deploy](../../README.md) / [bicep](../README.md) / **gov**
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** DevOps Engineers
 
 > [!TIP]
 > **TL;DR** — Parallel deployment templates for Azure Government (MAG). Provides Fabric-equivalent capabilities using FedRAMP High-authorized PaaS services available in Gov today.

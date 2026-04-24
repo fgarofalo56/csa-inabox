@@ -2,7 +2,6 @@
 
 # Multi-Region Deployment Guide
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Platform Engineers
 
 !!! note
     **Quick Summary**: Active-active multi-region deployment for CSA-in-a-Box — service capability matrix (native replication vs stamp-per-region), data replication patterns (RA-GZRS, Cosmos multi-master, Event Hubs Geo-DR), failover procedures, RPO/RTO targets, step-by-step deployment, chaos testing, monitoring, and cost implications (+40-80% overhead).

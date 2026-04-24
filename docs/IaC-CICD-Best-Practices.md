@@ -2,7 +2,6 @@
 
 # Infrastructure-as-Code & CI/CD Best Practices for CSA-in-a-Box
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** DevOps Engineers
 
 !!! note
     **Quick Summary**: Comprehensive guide for deploying a Cloud-Scale Analytics platform across 4 Azure subscriptions using Bicep and GitHub Actions — covers Bicep module organization, `.bicepparam` files, Deployment Stacks, what-if validation, OIDC auth, reusable workflows, matrix deployments, PSRule/Checkov/gitleaks security scanning, ALZ accelerators (AVM migration), progressive ring-based deployments, feature flags, policy-as-code, and a phased implementation plan with tool matrix.

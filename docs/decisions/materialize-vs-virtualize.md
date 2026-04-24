@@ -1,6 +1,5 @@
 # Materialize vs. Virtualize
 
-> **Last Updated:** 2026-04-19 | **Status:** Active | **Audience:** Data Platform + BI Leads
 
 ## TL;DR
 

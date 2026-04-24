@@ -2,7 +2,6 @@
 
 > **Estimated Time:** 75-90 minutes
 > **Difficulty:** Advanced
-> **Last Updated:** 2026-04-22
 
 Build intelligent AI agents using Semantic Kernel and Azure OpenAI on the CSA-in-a-Box platform. You will create single-agent chatbots, multi-agent teams with specialized roles (DataAnalyst, QualityReviewer, GovernanceOfficer), and connect them to external tools via MCP.
 

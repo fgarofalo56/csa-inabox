@@ -2,7 +2,6 @@
 
 > [**Examples**](../README.md) > **EPA**
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers
 
 > [!TIP]
 > **TL;DR** — Environmental monitoring platform with real-time AQI streaming from 4,000+ stations, water safety tracking for 25,000+ systems, toxic release analysis, and environmental justice scoring with ML-based air quality prediction.

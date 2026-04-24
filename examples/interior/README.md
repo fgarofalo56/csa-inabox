@@ -2,7 +2,6 @@
 
 > [**Examples**](../README.md) > **Interior**
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers
 
 > [!TIP]
 > **TL;DR** — Natural resources analytics covering USGS seismic monitoring, NPS visitor management (300M+ visitors/year), wildfire risk prediction, and water resource optimization with real-time earthquake alerting.

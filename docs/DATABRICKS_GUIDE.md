@@ -2,7 +2,6 @@
 
 # Databricks Guide
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers
 
 !!! note
     **Quick Summary**: Setting up and operating Databricks within CSA-in-a-Box — workspace configuration, cluster sizing (dev vs prod), notebook orchestration (3 patterns), dbt integration with Unity Catalog, and troubleshooting common issues.

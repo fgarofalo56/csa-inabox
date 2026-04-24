@@ -27,7 +27,6 @@
 >
 > This README continues below for customers still operating Synapse.
 
-> **Last Updated:** 2026-04-20 | **Status:** Legacy / Migration-Only | **Audience:** Platform Engineers
 
 > [!NOTE]
 > **TL;DR:** Deploys per-organization Synapse workspaces with isolated compute and storage over shared network infrastructure, supporting cross-workspace query federation, pre-built RBAC templates, and cost allocation by organization tag.

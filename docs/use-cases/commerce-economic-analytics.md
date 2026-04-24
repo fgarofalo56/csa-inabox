@@ -322,7 +322,7 @@ Commerce Bureau data pipelines handling CUI (Controlled Unclassified Information
 
 | Control Area                | Implementation                                                              | Azure Service       |
 | --------------------------- | --------------------------------------------------------------------------- | ------------------- |
-| Access Control (AC)         | Azure AD with RBAC, Managed Identities for service-to-service               | Azure AD / Entra ID |
+| Access Control (AC)         | Microsoft Entra ID with RBAC, Managed Identities for service-to-service               | Microsoft Entra ID / Entra ID |
 | Audit & Accountability (AU) | Diagnostic settings on all services, Log Analytics workspace                | Azure Monitor       |
 | Data Encryption at Rest     | ADLS Gen2 with customer-managed keys in Key Vault                           | Azure Key Vault     |
 | Data Encryption in Transit  | TLS 1.2+ enforced, Private Endpoints for all data services                  | Azure Private Link  |

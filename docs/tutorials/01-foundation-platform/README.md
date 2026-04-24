@@ -2,7 +2,6 @@
 
 > **Estimated Time:** 3-4 hours
 > **Difficulty:** Intermediate
-> **Last Updated:** 2026-04-22
 
 Deploy the complete CSA-in-a-Box foundation: Azure Landing Zone (ALZ), Data Management Landing Zone (DMLZ), and Data Landing Zone (DLZ). By the end, you will have a fully functional data platform with storage, Databricks, Synapse, and Data Factory — and you will run a real end-to-end dbt pipeline using USDA open data through Bronze → Silver → Gold.
 
@@ -635,7 +634,7 @@ DBX_URL=$(az databricks workspace list \
 echo "Open Databricks at: https://$DBX_URL"
 ```
 
-Open the URL in your browser and sign in with your Azure AD credentials.
+Open the URL in your browser and sign in with your Microsoft Entra ID credentials.
 
 ### 8b. Create a Personal Access Token
 
@@ -1061,7 +1060,7 @@ WHEAT             2023     1,812,000,000
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `Login failed` in Synapse | Azure AD not configured | Add your user as Synapse Administrator in IAM |
+| `Login failed` in Synapse | Microsoft Entra ID not configured | Add your user as Synapse Administrator in IAM |
 | `External table not accessible` | Managed identity lacks storage access | Verify Synapse RBAC from Step 7b |
 | `File not found` in OPENROWSET | Wrong path or data not in Gold | Verify Gold container contents: `az storage blob list --container-name gold --account-name csadlsdev --auth-mode login` |
 | Delta format not supported | Older Synapse runtime | Ensure you're using the built-in serverless pool (supports Delta natively) |
@@ -1079,7 +1078,7 @@ If you have Power BI Desktop, you can connect directly to Synapse serverless SQL
 3. Server: paste `$SYN_ENDPOINT` value from Step 11a
 4. Database: `usda_analytics`
 5. Data Connectivity mode: **DirectQuery** (recommended) or Import
-6. Sign in with your Azure AD credentials
+6. Sign in with your Microsoft Entra ID credentials
 7. Select the Gold-layer views/tables and build your report
 
 ### Option B: Connect to Databricks

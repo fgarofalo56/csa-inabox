@@ -2,7 +2,6 @@
 
 # Deployment Rollback Runbook
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Operations
 
 !!! note
     **Quick Summary**: Step-by-step rollback procedures for failed CSA-in-a-Box deployments — Bicep landing zone redeployment from git tags, ADF pipeline restore, dbt model full-refresh, Cosmos DB point-in-time restore, and storage account blob/container recovery via soft-delete and versioning.

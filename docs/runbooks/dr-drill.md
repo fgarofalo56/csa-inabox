@@ -2,7 +2,6 @@
 
 # DR Drill Runbook (CSA-0073)
 
-> **Last Updated:** 2026-04-19 | **Status:** Active | **Audience:** Operations, Platform Engineering
 
 !!! note
     **Quick Summary**: Quarterly disaster-recovery drill that exercises

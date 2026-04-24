@@ -1,6 +1,5 @@
 # Fabric vs. Databricks vs. Synapse
 
-> **Last Updated:** 2026-04-19 | **Status:** Active | **Audience:** Architects + Engineering Leads
 
 ## TL;DR
 

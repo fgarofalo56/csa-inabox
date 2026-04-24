@@ -2,7 +2,6 @@
 
 # AI Integration — Data Landing Zone AI Enrichment
 
-> **Last Updated:** 2026-04-20 | **Status:** Library primitives complete, product surface partial | **Audience:** Platform Engineers
 
 > [!NOTE]
 > **TL;DR:** Provides patterns for integrating Azure AI services (OpenAI, AI Search, ML, Document Intelligence) with CSA-in-a-Box data landing zones for enrichment, classification, RAG, embeddings, and model serving — all GA in Azure Government.

@@ -1,6 +1,5 @@
 # Open-Source Ecosystem Guide
 
-> **Last Updated:** 2026-04-22 | **Status:** Active | **Audience:** Platform Engineers, Architects
 
 This guide covers the open-source alternatives and integrations available
 in CSA-in-a-Box for scenarios where Azure PaaS services are unavailable

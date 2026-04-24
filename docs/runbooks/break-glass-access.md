@@ -2,7 +2,6 @@
 
 # Break-Glass Access Runbook (CSA-0059)
 
-> **Last Updated:** 2026-04-20 | **Last Drilled:** _not yet drilled — see Drill Log below_ | **Status:** Active | **Audience:** Security, Platform Engineering, Executive On-Call
 
 !!! note
     **Quick Summary**: Emergency administrative access procedure for CSA-in-a-Box — when the primary identity / PIM / normal RBAC path is unavailable (locked-out tenant admin, region outage, active security incident requiring overriding PIM). Covers activation preconditions, the two-person control requirement, PIM / Privileged Access activation, audit trail, deactivation, and mandatory post-incident review.

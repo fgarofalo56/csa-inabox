@@ -2,7 +2,6 @@
 
 # Cost Management Guide
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** FinOps / Administrators
 
 !!! note
     **Quick Summary**: FinOps practices for CSA-in-a-Box covering cost estimation (Bicep + Terraform paths), budget guardrails per environment, CI/CD cost comments, required tagging strategy, optimization tips (reserved instances, auto-pause, storage tiering, right-sizing), and a FinOps maturity roadmap (Crawl → Walk → Run).

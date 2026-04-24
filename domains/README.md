@@ -6,7 +6,6 @@
 > publishes a `contract.yaml`, CI validates, Purview registers, the
 > portal marketplace surfaces.
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers
 
 > [!TIP]
 > **TL;DR** — Data Mesh implementation with domain-owned data models, pipelines, and contracts. Each domain follows the medallion architecture (Bronze → Silver → Gold) using dbt on Delta Lake.

@@ -1,6 +1,5 @@
 # Batch vs. Streaming Ingestion
 
-> **Last Updated:** 2026-04-19 | **Status:** Active | **Audience:** Data Engineers
 
 ## TL;DR
 

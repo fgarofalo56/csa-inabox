@@ -1,6 +1,5 @@
 # Delta vs. Iceberg vs. Parquet
 
-> **Last Updated:** 2026-04-19 | **Status:** Active | **Audience:** Data Platform Architects
 
 ## TL;DR
 

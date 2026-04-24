@@ -212,7 +212,7 @@ Use **system-assigned or user-assigned Managed Identities** for every service-to
 | Synapse                 | System-assigned MI | ADLS, Key Vault             |
 | App Service / Functions | System-assigned MI | Key Vault, SQL, ADLS        |
 
-### Azure AD Group-Based RBAC
+### Microsoft Entra ID Group-Based RBAC
 
 Assign roles to **Entra ID security groups**, not individual users. This ensures consistent access, simplifies auditing, and enables bulk changes.
 

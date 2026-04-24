@@ -2,7 +2,6 @@
 
 # Metadata-Driven Pipeline Framework
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Platform Engineers
 
 > [!NOTE]
 > **TL;DR:** The core engine that auto-generates ADF pipelines from YAML/JSON metadata definitions. Supports 14+ source types, 4 ingestion modes (full/incremental/CDC/streaming), auto-provisions landing zones with RBAC and Purview registration, and provides a CLI for validation, generation, and deployment.

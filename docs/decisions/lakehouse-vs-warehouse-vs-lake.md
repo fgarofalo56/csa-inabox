@@ -1,6 +1,5 @@
 # Lakehouse vs. Warehouse vs. Data Lake
 
-> **Last Updated:** 2026-04-19 | **Status:** Active | **Audience:** Architects + Data Engineering Leads
 
 ## TL;DR
 

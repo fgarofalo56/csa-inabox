@@ -1,6 +1,5 @@
 # Tests
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** All Developers
 
 > [!NOTE]
 > **TL;DR:** Centralized test directory covering governance contracts, data quality, platform services, Purview integration, Azure Functions, end-to-end workflows, and load testing.

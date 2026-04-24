@@ -2,7 +2,6 @@
 
 # React Web App — Data Onboarding Portal
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Frontend Developers
 
 > [!NOTE]
 > **TL;DR:** Full-featured Next.js 14 (App Router) portal with Tailwind CSS, MSAL auth, React Query, and multi-step source registration wizard. The most customizable portal implementation — deployable to App Service, Container Apps, or Static Web Apps.

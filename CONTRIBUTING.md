@@ -1,6 +1,5 @@
 # Contributing to CSA-in-a-Box
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Contributors
 
 > [!NOTE]
 > **Quick Summary**: This guide covers development setup, repository rules, code style conventions (Bicep, PowerShell, Python), the PR process, branch naming, and how to report issues. Follow the checklist below for a smooth contribution experience.

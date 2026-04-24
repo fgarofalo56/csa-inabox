@@ -2,7 +2,6 @@
 
 # CSA-in-a-Box: Production Checklist
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Release Engineers
 
 !!! note
     **Quick Summary**: Comprehensive pre-production readiness checklist covering environment promotion, infrastructure hardening, security, data platform validation, observability, disaster recovery, governance, operational readiness, cost management, and compliance — with sign-off table for stakeholder approval.

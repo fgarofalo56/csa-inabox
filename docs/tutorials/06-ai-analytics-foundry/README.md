@@ -2,7 +2,6 @@
 
 > **Estimated Time:** 75-90 minutes
 > **Difficulty:** Intermediate-Advanced
-> **Last Updated:** 2026-04-22
 
 Deploy Azure AI Foundry and Azure OpenAI on top of your CSA-in-a-Box foundation platform. By the end you will have a working AI chatbot that understands your data products, queries the Gold layer using natural language, and runs on Azure Container Apps.
 

@@ -9,7 +9,6 @@
 
 # Unity Catalog Pattern — ADLS Gen2 + Databricks Unity Catalog
 
-> **Last Updated:** 2026-04-19 | **Status:** Active | **Audience:** Platform Engineers
 
 > [!NOTE]
 > **TL;DR:** Replicates Microsoft Fabric's OneLake using ADLS Gen2 (with HNS) + Delta Lake + Databricks Unity Catalog. Provides unified data lake abstraction with Bronze/Silver/Gold medallion architecture, cross-domain "shortcut" patterns via managed identity, and a layered security model.

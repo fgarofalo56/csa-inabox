@@ -2,7 +2,6 @@
 
 > [**Examples**](../README.md) > **Cybersecurity**
 
-> **Last Updated:** 2026-04-22 | **Status:** Active | **Audience:** Security Engineers, Data Engineers, SOC Analysts
 
 > [!TIP]
 > **TL;DR** — Azure Sentinel-based threat detection and MITRE ATT&CK correlation platform for federal agencies. Ingests security alerts, network flows, and vulnerability data through a medallion architecture to produce actionable threat intelligence, compliance posture reporting, and automated threat hunting dashboards.

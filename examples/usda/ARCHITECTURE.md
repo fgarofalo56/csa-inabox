@@ -2,7 +2,6 @@
 
 > [**Examples**](../README.md) > [**USDA**](README.md) > **Architecture**
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Architects / Data Engineers
 
 > [!TIP]
 > **TL;DR** — Agricultural analytics architecture ingesting NASS crop statistics, FNS SNAP data, and FSIS inspection records through a medallion pipeline. Features crop yield forecasting with ML integration and API-first data product delivery.

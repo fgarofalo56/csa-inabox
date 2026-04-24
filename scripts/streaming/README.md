@@ -2,7 +2,6 @@
 
 [scripts](../../scripts/) / **streaming**
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Developers
 
 > [!TIP]
 > **TL;DR** — Real-time event processing using Azure Event Hub, Stream Analytics (ASAQL), and ADX. Includes an event producer (`produce_events.py`), four windowed query patterns (tumbling, sliding, session, reference JOIN), and full deployment/testing/monitoring guidance.

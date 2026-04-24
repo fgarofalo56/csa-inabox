@@ -2,7 +2,6 @@
 
 > **Estimated Time:** 75-90 minutes
 > **Difficulty:** Advanced
-> **Last Updated:** 2026-04-22
 
 Build a GraphRAG knowledge graph that extracts entities and relationships from your data catalog, indexes them in Cosmos DB (Gremlin), and enables advanced queries like impact analysis and lineage traversal. You will combine graph-based reasoning with vector search for a hybrid retrieval system.
 

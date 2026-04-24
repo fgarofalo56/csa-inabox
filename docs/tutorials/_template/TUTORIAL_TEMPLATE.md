@@ -2,7 +2,6 @@
 
 > **Estimated Time:** X hours
 > **Difficulty:** Beginner | Intermediate | Advanced
-> **Last Updated:** YYYY-MM-DD
 
 ## Prerequisites
 

@@ -2,7 +2,6 @@
 
 # CSA-in-a-Box Metadata Framework - Implementation Complete
 
-> **Last Updated:** 2026-04-15 | **Status:** Complete | **Audience:** Platform Engineers
 
 > [!NOTE]
 > **TL;DR:** The metadata-driven pipeline framework is fully implemented with 14+ source types, 5 ADF pipeline templates, a CLI for validation/generation/provisioning, medallion architecture DLZ provisioning, and comprehensive RBAC + Purview integration. Ready for production use.

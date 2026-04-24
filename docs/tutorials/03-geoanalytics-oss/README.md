@@ -2,7 +2,6 @@
 
 > **Estimated Time:** 4-5 hours
 > **Difficulty:** Intermediate-Advanced
-> **Last Updated:** 2026-04-22
 
 Build a complete geospatial analytics pipeline using open-source tools on your CSA-in-a-Box platform. You will deploy PostgreSQL with PostGIS, ingest geospatial data, run spatial queries, process GeoParquet with geopandas, apply H3 hexagonal indexing, and execute distributed spatial analysis with Apache Sedona on Databricks.
 

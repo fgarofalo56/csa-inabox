@@ -2,7 +2,6 @@
 
 # Open-Source Alternatives for Azure Government
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Platform Engineers
 
 > [!NOTE]
 > **TL;DR:** Provides open-source alternatives (Atlas, Ranger, Superset, Trino, NiFi, etc.) deployable on AKS for Azure Government scenarios where PaaS services have limited availability. Supports both full OSS and hybrid Azure+OSS deployment models.

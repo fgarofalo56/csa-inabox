@@ -2,7 +2,6 @@
 
 # Kubernetes Portal Deployment
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Frontend Developers
 
 > [!NOTE]
 > **TL;DR:** Production-grade AKS deployment of the data onboarding portal with Helm charts, HPA auto-scaling (2-10 pods), NGINX ingress with TLS, Redis session cache, Prometheus/Grafana monitoring, ArgoCD GitOps, and FIPS 140-2 compliance for Azure Government.

@@ -2,7 +2,6 @@
 
 # CSA-in-a-Box — Shared Backend API
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Frontend Developers
 
 > [!NOTE]
 > **TL;DR:** FastAPI shared backend providing common API surface for all four portal frontends — sources, pipelines, marketplace, access requests, and stats. Supports Microsoft Entra ID JWT auth (Commercial + Gov), demo mode for local development, and Docker deployment.

@@ -2,7 +2,6 @@
 
 # CSA-in-a-Box: Quick Start Guide
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** New Users
 
 !!! note
     **Quick Summary**: Get a working Cloud-Scale Analytics platform deployed and flowing data in 60-90 minutes — deploy infrastructure (ALZ → DMLZ → DLZ), load seed data, run the dbt medallion pipeline across 4 domains, set up streaming, bootstrap Purview, deploy the portal, and try vertical examples (USDA, Gov).

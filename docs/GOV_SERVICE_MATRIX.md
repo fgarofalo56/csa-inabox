@@ -2,7 +2,6 @@
 
 # Azure Government Service Availability Matrix
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Security / Compliance
 
 !!! note
     **Quick Summary**: Comprehensive matrix of Azure service availability across Commercial vs Government regions (FedRAMP High, IL4, IL5, IL6), including endpoint URL differences, API version caveats, Bicep configuration for Gov, compliance requirements by vertical, and open-source alternatives for Government gaps.

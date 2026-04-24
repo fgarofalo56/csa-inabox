@@ -2,7 +2,6 @@
 
 # Azure Data Factory Setup Guide
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Data Engineers
 
 !!! note
     **Quick Summary**: Deploy and manage ADF pipeline artifacts for the CSA-in-a-Box platform, including linked services, datasets, pipelines, triggers, and CI/CD integration with Purview lineage.

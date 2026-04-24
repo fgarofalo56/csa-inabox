@@ -2,7 +2,6 @@
 
 # Troubleshooting Guide
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Operations
 
 !!! note
     **Quick Summary**: Comprehensive troubleshooting guide covering Bicep deployment failures, dbt issues, data quality problems, Azure Functions, ADF pipelines, Stream Analytics, Databricks, Purview, Great Expectations, Key Vault, Cosmos DB, and CI/CD workflow issues.

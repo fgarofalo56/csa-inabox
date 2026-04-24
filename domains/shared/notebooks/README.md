@@ -2,7 +2,6 @@
 
 # Shared Notebooks
 
-> **Last Updated:** 2026-04-20 | **Status:** Active | **Audience:**
 > Data engineers, ML engineers, platform operators
 
 > [!IMPORTANT]

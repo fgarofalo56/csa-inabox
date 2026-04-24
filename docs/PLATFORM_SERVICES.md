@@ -2,7 +2,6 @@
 
 # Platform Services Guide
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Architects
 
 !!! note
     **Quick Summary**: Detailed guide to 10 platform services that deliver Fabric-parity capabilities on Azure PaaS — OneLake pattern, Data Activator, Direct Lake, Data Marketplace, Governance Framework, Multi-Synapse *(legacy — see CSA-0139)*, Metadata Framework, AI Integration, Shared Services, and OSS alternatives. Intended for Azure Government (where Fabric is forecast, not GA) and for Commercial workloads that need a composable IaC stack as a stepping stone toward a future Fabric migration.

@@ -958,7 +958,7 @@ az containerapp exec \
 ## Next Steps
 
 1. **Add your own entities** — Follow Step 3.4 to expose your domain's tables
-2. **Enable Azure AD authentication** — Replace `StaticWebApps` provider with `AzureAD` in `dab-config.json`
+2. **Enable Microsoft Entra ID authentication** — Replace `StaticWebApps` provider with `AzureAD` in `dab-config.json`
 3. **Set up CI/CD** — Add GitHub Actions to deploy config changes automatically
 4. **Connect Power BI** — Use the REST endpoint as a Power BI data source
 5. **Add data lineage** — Populate the `DataLineage` table to track transformations

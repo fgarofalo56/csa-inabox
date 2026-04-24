@@ -1,6 +1,5 @@
 # Data Onboarding Portal
 
-> **Last Updated:** 2026-04-15 | **Status:** Active | **Audience:** Frontend Developers
 
 > [!NOTE]
 > **TL;DR:** Four portal implementations — PowerApps, React/Next.js, Kubernetes, and CLI (`cli/` at the repo root) — all sharing the same FastAPI backend for self-service data source registration, pipeline monitoring, marketplace discovery, and access request workflows.
