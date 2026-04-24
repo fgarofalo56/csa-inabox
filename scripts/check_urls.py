@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import concurrent.futures
-import sys
-import urllib.request
-import urllib.error
 import ssl
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 UA = (
@@ -16,15 +17,18 @@ UA = (
 )
 
 ctx = ssl.create_default_context()
-ctx.check_hostname = False
-ctx.verify_mode = ssl.CERT_NONE  # some gov sites have intermediate-cert issues from Win
+
 
 def probe(url: str) -> tuple[str, int, str]:
     """Return (url, http_status, note). status=-1 on connection error, -2 on timeout."""
+    # Reject any scheme other than http(s) before opening (mitigates bandit B310).
+    scheme = urllib.parse.urlparse(url).scheme.lower()
+    if scheme not in ("http", "https"):
+        return (url, -3, f"unsupported scheme: {scheme}")
     for method in ("HEAD", "GET"):
         try:
             req = urllib.request.Request(url, method=method, headers={"User-Agent": UA, "Accept": "*/*"})
-            with urllib.request.urlopen(req, timeout=15, context=ctx) as resp:
+            with urllib.request.urlopen(req, timeout=15, context=ctx) as resp:  # nosec B310 — scheme validated above
                 code = resp.getcode()
                 final = resp.geturl()
                 note = f"-> {final}" if final != url else ""

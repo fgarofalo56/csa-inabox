@@ -19,7 +19,6 @@ from csa_platform.ai_integration.graphrag.document_loader import (
     DocumentLoader,
 )
 
-
 # ── Document dataclass ────────────────────────────────────────────────────
 
 
@@ -39,7 +38,7 @@ class TestDocument:
 # ── DocumentLoader ────────────────────────────────────────────────────────
 
 
-@pytest.fixture()
+@pytest.fixture
 def loader(monkeypatch: pytest.MonkeyPatch) -> DocumentLoader:
     """Loader with credential acquisition stubbed out (no Azure calls)."""
 

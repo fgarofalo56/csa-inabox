@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 """Re-probe with full browser headers; classify real-vs-anti-bot blocks."""
 from __future__ import annotations
-import sys, ssl, urllib.request, urllib.error, concurrent.futures
+
+import concurrent.futures
+import ssl
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 HEADERS = {
@@ -16,14 +22,16 @@ HEADERS = {
 }
 
 ctx = ssl.create_default_context()
-ctx.check_hostname = False
-ctx.verify_mode = ssl.CERT_NONE
 
 
 def probe(url: str) -> tuple[str, int, str]:
+    # Reject any scheme other than http(s) before opening (mitigates bandit B310).
+    scheme = urllib.parse.urlparse(url).scheme.lower()
+    if scheme not in ("http", "https"):
+        return (url, -3, f"unsupported scheme: {scheme}")
     try:
         req = urllib.request.Request(url, method="GET", headers=HEADERS)
-        with urllib.request.urlopen(req, timeout=20, context=ctx) as resp:
+        with urllib.request.urlopen(req, timeout=20, context=ctx) as resp:  # nosec B310 — scheme validated above
             return (url, resp.getcode(), resp.geturl() if resp.geturl() != url else "")
     except urllib.error.HTTPError as e:
         return (url, e.code, str(e.reason)[:60])
