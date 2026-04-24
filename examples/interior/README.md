@@ -546,3 +546,29 @@ bash examples/interior/deploy/teardown.sh --yes
 ```
 
 See [`docs/QUICKSTART.md#teardown`](../../docs/QUICKSTART.md#teardown) for the platform-wide teardown flow.
+
+## Directory Structure
+
+```text
+interior/
+├── contracts/                # Data product contracts (schemas, SLOs, owners)
+│   ├── earthquake-events.yaml
+│   ├── earthquake-monitoring.yaml
+│   ├── natural-resources.yaml
+│   └── park-visitors.yaml
+├── data/                     # Sample data + synthetic generators
+│   ├── generators/
+│   └── open-data/
+├── deploy/                   # Deployment parameters / Bicep templates
+│   ├── params.dev.json
+│   ├── params.gov.json
+│   └── teardown.sh
+├── domains/                  # dbt models (bronze / silver / gold) and seeds
+│   └── dbt/
+├── notebooks/                # Synapse / Fabric / Databricks notebooks
+│   ├── geological_hazard_analysis.py
+│   └── park_capacity_forecasting.py
+├── reports/                  # Power BI report templates and pbix sources
+├── ARCHITECTURE.md           # Mermaid + prose architecture diagrams
+└── README.md                 # This file
+```

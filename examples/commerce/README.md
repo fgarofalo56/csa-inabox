@@ -592,3 +592,28 @@ bash examples/commerce/deploy/teardown.sh --yes
 ```
 
 See [`docs/QUICKSTART.md#teardown`](../../docs/QUICKSTART.md#teardown) for the platform-wide teardown flow.
+
+## Directory Structure
+
+```text
+commerce/
+├── contracts/                # Data product contracts (schemas, SLOs, owners)
+│   ├── census-demographics.yaml
+│   ├── economic-indicators.yaml
+│   └── trade-data.yaml
+├── data/                     # Sample data + synthetic generators
+│   ├── generators/
+│   └── open-data/
+├── deploy/                   # Deployment parameters / Bicep templates
+│   ├── params.dev.json
+│   ├── params.gov.json
+│   └── teardown.sh
+├── domains/                  # dbt models (bronze / silver / gold) and seeds
+│   └── dbt/
+├── notebooks/                # Synapse / Fabric / Databricks notebooks
+│   ├── economic_analysis.py
+│   └── trade_pattern_prediction.py
+├── reports/                  # Power BI report templates and pbix sources
+├── ARCHITECTURE.md           # Mermaid + prose architecture diagrams
+└── README.md                 # This file
+```

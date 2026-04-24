@@ -614,3 +614,29 @@ bash examples/noaa/deploy/teardown.sh --yes
 ```
 
 See [`docs/QUICKSTART.md#teardown`](../../docs/QUICKSTART.md#teardown) for the platform-wide teardown flow.
+
+## Directory Structure
+
+```text
+noaa/
+├── contracts/                # Data product contracts (schemas, SLOs, owners)
+│   ├── climate-trends.yaml
+│   ├── ocean-buoys.yaml
+│   ├── ocean-monitoring.yaml
+│   └── storm-events.yaml
+├── data/                     # Sample data + synthetic generators
+│   ├── generators/
+│   └── open-data/
+├── deploy/                   # Deployment parameters / Bicep templates
+│   ├── params.dev.json
+│   ├── params.gov.json
+│   └── teardown.sh
+├── domains/                  # dbt models (bronze / silver / gold) and seeds
+│   └── dbt/
+├── notebooks/                # Synapse / Fabric / Databricks notebooks
+│   ├── climate_trend_analysis.py
+│   └── severe_weather_prediction.py
+├── reports/                  # Power BI report templates and pbix sources
+├── ARCHITECTURE.md           # Mermaid + prose architecture diagrams
+└── README.md                 # This file
+```

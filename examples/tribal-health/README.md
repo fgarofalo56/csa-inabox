@@ -691,3 +691,30 @@ bash examples/tribal-health/deploy/teardown.sh --yes
 ```
 
 See [`docs/QUICKSTART.md#teardown`](../../docs/QUICKSTART.md#teardown) for the platform-wide teardown flow.
+
+## Directory Structure
+
+```text
+tribal-health/
+├── contracts/                # Data product contracts (schemas, SLOs, owners)
+│   ├── clinical-encounters.yaml
+│   ├── encounters.yaml
+│   ├── healthcare-facilities.yaml
+│   ├── patient-demographics.yaml
+│   └── population-health.yaml
+├── data/                     # Sample data + synthetic generators
+│   ├── generators/
+│   └── open-data/
+├── deploy/                   # Deployment parameters / Bicep templates
+│   ├── params.dev.json
+│   ├── params.gov.json
+│   └── teardown.sh
+├── domains/                  # dbt models (bronze / silver / gold) and seeds
+│   └── dbt/
+├── notebooks/                # Synapse / Fabric / Databricks notebooks
+│   ├── chronic_disease_prediction.py
+│   └── population_health_dashboard.py
+├── reports/                  # Power BI report templates and pbix sources
+├── ARCHITECTURE.md           # Mermaid + prose architecture diagrams
+└── README.md                 # This file
+```

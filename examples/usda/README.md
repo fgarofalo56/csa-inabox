@@ -540,3 +540,30 @@ bash examples/usda/deploy/teardown.sh --yes
 ```
 
 See [`docs/QUICKSTART.md#teardown`](../../docs/QUICKSTART.md#teardown) for the platform-wide teardown flow.
+
+## Directory Structure
+
+```text
+usda/
+├── contracts/                # Data product contracts (schemas, SLOs, owners)
+│   ├── crop-yields.yaml
+│   ├── food-safety-risk.yaml
+│   └── snap-enrollment.yaml
+├── data/                     # Sample data + synthetic generators
+│   ├── generators/
+│   └── open-data/
+├── deploy/                   # Deployment parameters / Bicep templates
+│   ├── params.dev.json
+│   ├── params.gov.json
+│   └── teardown.sh
+├── domains/                  # dbt models (bronze / silver / gold) and seeds
+│   └── dbt/
+├── notebooks/                # Synapse / Fabric / Databricks notebooks
+│   ├── crop_yield_analysis.py
+│   └── snap_demographics.py
+├── reports/                  # Power BI report templates and pbix sources
+│   └── usda_dashboard.kql
+├── ARCHITECTURE.md           # Mermaid + prose architecture diagrams
+├── IMPLEMENTATION_SUMMARY.md  # Build-out summary and status
+└── README.md                 # This file
+```

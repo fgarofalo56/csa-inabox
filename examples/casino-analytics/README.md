@@ -791,3 +791,35 @@ bash examples/casino-analytics/deploy/teardown.sh --yes
 ```
 
 See [`docs/QUICKSTART.md#teardown`](../../docs/QUICKSTART.md#teardown) for the platform-wide teardown flow.
+
+## Directory Structure
+
+```text
+casino-analytics/
+├── contracts/                # Data product contracts (schemas, SLOs, owners)
+│   ├── fnb-transactions.yaml
+│   ├── player-analytics.yaml
+│   └── slot-events.yaml
+├── data/                     # Sample data + synthetic generators
+│   ├── generators/
+│   └── open-data/
+├── deploy/                   # Deployment parameters / Bicep templates
+│   ├── params.dev.json
+│   ├── params.gov.json
+│   └── teardown.sh
+├── domains/                  # dbt models (bronze / silver / gold) and seeds
+│   └── dbt/
+├── notebooks/                # Synapse / Fabric / Databricks notebooks
+│   ├── floor_optimization.py
+│   └── player_value_analysis.py
+├── reports/                  # Power BI report templates and pbix sources
+├── streaming/                # Stream Analytics jobs and KQL queries
+│   ├── kql_queries.kql
+│   ├── slot_event_producer.py
+│   └── stream_analytics_job.json
+├── video/                    # Demo recordings and storyboards
+│   ├── custom_vision_setup.py
+│   └── video_analyzer_config.yaml
+├── ARCHITECTURE.md           # Mermaid + prose architecture diagrams
+└── README.md                 # This file
+```

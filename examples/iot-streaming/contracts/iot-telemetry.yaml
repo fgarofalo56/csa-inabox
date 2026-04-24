@@ -1,0 +1,86 @@
+# Data product contract — IoT telemetry stream
+#
+# Defines the schema, freshness SLO, and ownership for the bronze IoT
+# telemetry feed produced by Event Hub Capture and consumed by the
+# `iot` dbt source in domains/dbt/models/schema.yml.
+
+apiVersion: csa.platform/v1
+kind: DataProductContract
+metadata:
+  name: iot-telemetry-bronze
+  domain: iot-streaming
+  owner: streaming-platform-team@example.com
+  pii: false
+  classification: internal
+  tags:
+    - bronze
+    - streaming
+    - eventhub-capture
+
+spec:
+  source:
+    type: eventhub-capture
+    namespace: iot-${ENVIRONMENT}-eh
+    eventHub: telemetry
+    captureFormat: parquet
+    landingPath: abfss://iot@${STORAGE_ACCOUNT}.dfs.core.windows.net/bronze/telemetry
+
+  schema:
+    fields:
+      - name: device_id
+        type: string
+        required: true
+        description: Globally unique device identifier (UUID)
+      - name: event_time
+        type: timestamp
+        required: true
+        description: Event timestamp emitted by the sensor (UTC, ISO-8601)
+      - name: ingested_at
+        type: timestamp
+        required: true
+        description: Server-side enqueue timestamp from Event Hub
+      - name: metric_type
+        type: string
+        required: true
+        allowedValues:
+          - temperature_c
+          - humidity_pct
+          - pressure_hpa
+          - battery_pct
+      - name: metric_value
+        type: double
+        required: true
+      - name: site_id
+        type: string
+        required: false
+        description: Optional physical site grouping
+      - name: firmware_version
+        type: string
+        required: false
+
+  slos:
+    freshness:
+      target: 5m
+      description: Bronze records must land within 5 minutes of event_time at p95.
+    completeness:
+      target: 0.999
+      description: At least 99.9% of devices report at the expected cadence per hour.
+    schemaStability:
+      target: backward-compatible
+      description: Breaking schema changes require a major version bump and 30-day notice.
+
+  retention:
+    bronze: 30d
+    silver: 90d
+    gold: 730d
+
+  consumers:
+    - name: stream-analytics-anomaly-job
+      type: stream-analytics
+      criticality: high
+    - name: dbt-silver-telemetry-cleaned
+      type: dbt-model
+      criticality: medium
+    - name: powerbi-device-health-daily
+      type: powerbi-dataset
+      criticality: medium
