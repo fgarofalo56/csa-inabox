@@ -129,9 +129,18 @@ resource vmss001 'Microsoft.Compute/virtualMachineScaleSets@2020-12-01' = {
     }
     singlePlacementGroup: true
     upgradePolicy: {
-      mode: 'Manual'
+      // CKV_AZURE_95 -- automatic OS upgrades on the DNS forwarder so it
+      // tracks the latest patched Ubuntu image without manual rolls.
+      mode: 'Automatic'
+      automaticOSUpgradePolicy: {
+        enableAutomaticOSUpgrade: true
+      }
     }
     virtualMachineProfile: {
+      // CKV_AZURE_97 -- encryption-at-host (data + temp + cache disks).
+      securityProfile: {
+        encryptionAtHost: true
+      }
       networkProfile: {
         networkInterfaceConfigurations: [
           {

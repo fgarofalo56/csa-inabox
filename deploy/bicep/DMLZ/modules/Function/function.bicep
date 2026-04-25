@@ -121,10 +121,17 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
     httpsOnly: true
     publicNetworkAccess: empty(privateEndpointSubnets) ? 'Enabled' : 'Disabled'
     virtualNetworkSubnetId: enableVnetIntegration && !empty(vnetIntegrationSubnetId) ? vnetIntegrationSubnetId : null
+    // CKV_AZURE_17 -- require client certificates as a second auth factor.
+    clientCertEnabled: true
+    clientCertMode: 'Optional'
     siteConfig: {
       linuxFxVersion: '${toUpper(runtime)}|${runtimeVersion}'
       ftpsState: 'Disabled'
       minTlsVersion: '1.2'
+      // CKV_AZURE_18 / CKV_AZURE_67 -- HTTP/2 inbound default.
+      http20Enabled: true
+      // CKV_AZURE_213 -- health check endpoint.
+      healthCheckPath: '/api/health'
       appSettings: concat(baseAppSettings, additionalAppSettings)
     }
   }

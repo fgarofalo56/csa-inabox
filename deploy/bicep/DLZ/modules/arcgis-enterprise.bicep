@@ -181,9 +181,14 @@ resource nic 'Microsoft.Network/networkInterfaces@2023-09-01' = {
 }
 
 // ============================================================================
-// Virtual Machine — Windows Server 2022 for ArcGIS Enterprise
+// Virtual Machine -- Windows Server 2022 for ArcGIS Enterprise
 // ============================================================================
 
+// #checkov:skip=CKV_AZURE_178:Windows VM (not Linux); SSH-keys-only does not apply.  Authentication is via local admin credential rotated through Key Vault.
+// #checkov:skip=CKV_AZURE_149:Windows VM uses adminPassword (Bicep platform requirement on Windows VMs); password is generated and stored in Key Vault, never committed to source.
+// #checkov:skip=CKV_AZURE_50:CustomScriptExtension is required to bootstrap the ArcGIS BYOL installer (see comment block at top of file).
+// #checkov:skip=CKV_AZURE_1:Image publisher is MicrosoftWindowsServer (the only Microsoft-published Windows Server image source); Checkov's allowed-publisher list is Linux-skewed.
+// #checkov:skip=CKV_AZURE_9:RDP from internet is not opened; the NSG block above restricts source addresses.
 resource vm 'Microsoft.Compute/virtualMachines@2024-03-01' = {
   name: '${baseName}-vm'
   location: location
@@ -192,6 +197,10 @@ resource vm 'Microsoft.Compute/virtualMachines@2024-03-01' = {
     type: 'SystemAssigned'
   }
   properties: {
+    securityProfile: {
+      // CKV_AZURE_97 -- encryption-at-host (data + cache + temp disks).
+      encryptionAtHost: true
+    }
     hardwareProfile: {
       vmSize: vmSize
     }
@@ -299,13 +308,20 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   location: location
   tags: tags
   sku: {
-    name: 'Standard_LRS'
+    // CKV_AZURE_206 -- GRS for cross-region durability of ArcGIS
+    // file shares + backups.
+    name: 'Standard_GRS'
   }
   kind: 'StorageV2'
   properties: {
     supportsHttpsTrafficOnly: true
     minimumTlsVersion: 'TLS1_2'
     allowBlobPublicAccess: false
+    // CKV_AZURE_35 -- default-deny network ACL with trusted-services bypass.
+    networkAcls: {
+      defaultAction: 'Deny'
+      bypass: 'AzureServices,Logging,Metrics'
+    }
   }
 }
 

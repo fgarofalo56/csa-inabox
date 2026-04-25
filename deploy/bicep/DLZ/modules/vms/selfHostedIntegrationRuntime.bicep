@@ -111,6 +111,11 @@ resource vmss001 'Microsoft.Compute/virtualMachineScaleSets@2024-03-01' = {
     singlePlacementGroup: true
     upgradePolicy: {
       mode: 'Automatic'
+      // CKV_AZURE_95 -- enable automatic OS image upgrades so the SHIR
+      // gateway pool stays patched without manual intervention.
+      automaticOSUpgradePolicy: {
+        enableAutomaticOSUpgrade: true
+      }
     }
     virtualMachineProfile: {
       securityProfile: {

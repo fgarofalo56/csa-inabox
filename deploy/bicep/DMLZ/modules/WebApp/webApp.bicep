@@ -124,6 +124,8 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
       minTlsVersion: '1.2'
       alwaysOn: true
       http20Enabled: true
+      // CKV_AZURE_213 -- health check endpoint.
+      healthCheckPath: '/health'
       appSettings: concat(baseAppSettings, additionalAppSettings)
       cors: !empty(corsAllowedOrigins) ? {
         allowedOrigins: corsAllowedOrigins

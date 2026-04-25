@@ -92,6 +92,8 @@ var apimDisplayName = 'CSA-in-a-Box Data Mesh Gateway (${toUpper(environment)})'
 
 // ─── APIM Service ───────────────────────────────────────────────────────────
 
+// #checkov:skip=CKV_AZURE_107:VNet integration requires Premium SKU + dedicated subnet (~$3k/mo); the developer-tier APIM uses publicNetworkAccess parameter to gate public exposure.  Premium APIM with internal VNet is documented in the gov runbook.
+// #checkov:skip=CKV_AZURE_174:Public network access is parameterized (publicNetworkAccessEnabled).  Production deployments set this to false; lab keeps it true so the catalog UI is reachable from a workstation.
 resource apim 'Microsoft.ApiManagement/service@2023-09-01-preview' = {
   name: '${apimName}-${uniqueSuffix}'
   location: location
