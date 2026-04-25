@@ -196,9 +196,7 @@ class CostAllocator:
                         "Bandwidth",
                     ],
                 },
-            )
-            if False
-            else None,  # Filter optionally
+            ),
         )
 
         query_def = QueryDefinition(

@@ -56,8 +56,8 @@ jobs:
     timeout-minutes: 60
     environment: ${{ needs.pre-flight.outputs.environment }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: azure/login@v2
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -68,7 +68,7 @@ jobs:
           # ... az cosmosdb failover-priority-change ...
           echo "TODO: wire to scripts/drill/cosmos-failover.sh"
       - name: Verify failback
-        run: echo "TODO: wire verification"
+        run: "echo 'TODO: wire verification'"
 
   storage-failover:
     needs: pre-flight
@@ -77,14 +77,14 @@ jobs:
     timeout-minutes: 60
     environment: ${{ needs.pre-flight.outputs.environment }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: azure/login@v2
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID_SCRATCH }}
       - name: Initiate storage account failover
-        run: echo "TODO: wire to scripts/drill/storage-failover.sh"
+        run: "echo 'TODO: wire to scripts/drill/storage-failover.sh'"
       - name: Verify failback
         run: echo "TODO"
 
@@ -95,14 +95,14 @@ jobs:
     timeout-minutes: 60
     environment: ${{ needs.pre-flight.outputs.environment }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: azure/login@v2
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID_SCRATCH }}
       - name: Purge-protected soft-deleted secret restore test
-        run: echo "TODO: wire to scripts/drill/keyvault-restore.sh"
+        run: "echo 'TODO: wire to scripts/drill/keyvault-restore.sh'"
 
   bicep-rollback:
     needs: pre-flight
@@ -111,14 +111,14 @@ jobs:
     timeout-minutes: 60
     environment: ${{ needs.pre-flight.outputs.environment }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: azure/login@v2
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID_SCRATCH }}
       - name: Deploy previous main.bicep and what-if diff
-        run: echo "TODO: wire to scripts/drill/bicep-rollback.sh"
+        run: "echo 'TODO: wire to scripts/drill/bicep-rollback.sh'"
 
   report:
     needs: [pre-flight, cosmos-failover, storage-failover, keyvault-restore, bicep-rollback]
@@ -135,4 +135,4 @@ jobs:
           echo "bicep-rollback:    ${{ needs.bicep-rollback.result }}"
       - name: Post to ops channel
         if: always()
-        run: echo "TODO: Teams webhook POST with result summary"
+        run: "echo 'TODO: Teams webhook POST with result summary'"

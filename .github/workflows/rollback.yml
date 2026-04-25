@@ -195,7 +195,10 @@ jobs:
   # ---------------------------------------------------------------------------
   post-rollback:
     name: Post-Rollback Verification
-    needs: [rollback-alz, rollback-dmlz, rollback-dlz]
+    # Includes preflight in needs so we can reference needs.preflight.outputs.sha
+    # in the summary step (was previously broken: actionlint flagged 'preflight
+    # not defined' because needs only listed the rollback-* jobs).
+    needs: [preflight, rollback-alz, rollback-dmlz, rollback-dlz]
     if: ${{ always() && !inputs.dry_run }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
