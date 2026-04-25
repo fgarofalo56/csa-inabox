@@ -39,7 +39,7 @@ function StatCard({
 }
 
 function DomainCard({ domain }: { domain: DomainOverview }) {
-  const statusColors = {
+  const statusColors: Record<string, string> = {
     healthy: 'bg-green-100 text-green-800',
     warning: 'bg-yellow-100 text-yellow-800',
     critical: 'bg-red-100 text-red-800',

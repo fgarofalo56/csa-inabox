@@ -50,7 +50,7 @@ export default function StepIngestion({ register, watch, errors }: StepIngestion
           <input
             id="ingestion-schedule"
             {...register('ingestion.schedule_cron', {
-              validate: (value: string) => {
+              validate: (value: string | undefined) => {
                 if ((ingestionMode === 'incremental' || ingestionMode === 'full') && !value) {
                   return 'Schedule is required for this ingestion mode';
                 }
@@ -73,7 +73,7 @@ export default function StepIngestion({ register, watch, errors }: StepIngestion
             id="ingestion-batch-size"
             {...register('ingestion.batch_size', {
               valueAsNumber: true,
-              validate: (value: number) => {
+              validate: (value: number | undefined) => {
                 if (value != null && value !== 0 && value < 1) {
                   return 'Batch size must be greater than 0';
                 }

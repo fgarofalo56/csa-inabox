@@ -46,7 +46,7 @@ export default function StepSchema({ register, watch, setValue }: StepSchemaProp
             <input
               id="schema-table-name"
               {...register('schema_definition.table_name', {
-                validate: (value: string) => {
+                validate: (value: string | undefined) => {
                   if (!autoDetect && !value) return 'Table name is required when auto-detect is off';
                   return true;
                 },
