@@ -56,9 +56,9 @@ try:  # pragma: no cover — trivial import guard
 
     _PROM_AVAILABLE = True
 except ImportError:  # pragma: no cover
-    REGISTRY = None  # type: ignore[assignment]
-    Counter = None  # type: ignore[assignment, misc]
-    Histogram = None  # type: ignore[assignment, misc]
+    REGISTRY = None  # type: ignore[assignment, unused-ignore]
+    Counter = None  # type: ignore[assignment, misc, unused-ignore]
+    Histogram = None  # type: ignore[assignment, misc, unused-ignore]
     _PROM_AVAILABLE = False
 
 

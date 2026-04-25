@@ -26,10 +26,9 @@ jobs:
   evals:
     name: Copilot Evals (dry-run + gate)
     runs-on: ubuntu-latest
-    # 15 min was tight: pip install -e .[dev,copilot] alone can take 10+ min on
-    # cold runners because the dev extra pulls great_expectations and a few
-    # other heavyweights. Bumped to 25 to absorb that variance.
-    timeout-minutes: 25
+    # Slim install (~90s) leaves plenty of headroom for the eval harness
+    # itself.  See the ``copilot-evals`` extra in pyproject.toml.
+    timeout-minutes: 15
     env:
       # Force the deterministic scorer so CI is fully reproducible.
       COPILOT_EVALS_DETERMINISTIC: "true"
@@ -48,9 +47,12 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev,copilot]"
-          # jsonschema for strict schema validation (used by evals).
-          pip install "jsonschema>=4.22,<5.0"
+          # Use the slim ``copilot-evals`` extra (no pydantic-ai, no cloud
+          # LLM providers).  The full ``copilot`` extra triggered 25-min
+          # timeouts because pydantic-ai-slim pulls in 17 cloud-provider
+          # extras (cohere, anthropic, vertexai, mistral, ag-ui, ...).
+          # The eval harness uses DryRunAgent + a lazy openai import only.
+          pip install -e ".[dev,copilot-evals]"
 
       - name: Lint new code (ruff)
         run: |
