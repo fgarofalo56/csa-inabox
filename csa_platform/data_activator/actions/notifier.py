@@ -42,7 +42,7 @@ logger = get_logger(__name__)
 try:
     import requests
 except ImportError:
-    requests = None
+    requests = None  # type: ignore[assignment, unused-ignore]
 
 
 # ---------------------------------------------------------------------------

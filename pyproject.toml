@@ -194,6 +194,12 @@ copilot-evals = [
     # ImportError -> 0.5 score).  Bring it in so the CI build exercises
     # the real branch instead of the fallback.
     "openai>=1.0.0,<3.0.0",
+    # CSA-0008 -- ``azure-identity`` is unconditionally imported by
+    # ``csa_platform.common.azure_clients`` (re-exported by
+    # ``csa_platform.common``), which the eval harness pulls in via
+    # ``csa_platform.common.logging``.  Without this entry, importing
+    # the harness fails with ModuleNotFoundError before any test runs.
+    "azure-identity>=1.17.0,<2.0.0",
 ]
 copilot = [
     # CSA Copilot (CSA-0008) Phases 0-1 — corpus indexer + grounded Q&A.
