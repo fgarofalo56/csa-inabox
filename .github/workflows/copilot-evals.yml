@@ -26,7 +26,10 @@ jobs:
   evals:
     name: Copilot Evals (dry-run + gate)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 15 min was tight: pip install -e .[dev,copilot] alone can take 10+ min on
+    # cold runners because the dev extra pulls great_expectations and a few
+    # other heavyweights. Bumped to 25 to absorb that variance.
+    timeout-minutes: 25
     env:
       # Force the deterministic scorer so CI is fully reproducible.
       COPILOT_EVALS_DETERMINISTIC: "true"
