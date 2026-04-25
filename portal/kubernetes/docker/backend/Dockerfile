@@ -1,6 +1,8 @@
 # ─── Stage 1: Dependencies ───────────────────────────────────────────────────
 # python:3.12-slim (pinned 2026-04-17)
-FROM python:3.12-slim@sha256:ac212230555ffb7ec17c214fb4cf036ced11b30b5b460994376b0725c7f6c151 AS builder
+# python:3.12-slim multi-arch index (refreshed 2026-04-25 to clear stale CVEs
+# in libexpat1, krb5, sqlite, openssl, etc.)
+FROM python:3.12-slim@sha256:46cb7cc2877e60fbd5e21a9ae6115c30ace7a077b9f8772da879e4590c18c2e3 AS builder
 
 WORKDIR /app
 
@@ -30,7 +32,7 @@ RUN if [ -f requirements.txt ] && [ -s requirements.txt ]; then \
 
 # ─── Stage 2: Runtime ───────────────────────────────────────────────────────
 # python:3.12-slim (pinned 2026-04-17)
-FROM python:3.12-slim@sha256:ac212230555ffb7ec17c214fb4cf036ced11b30b5b460994376b0725c7f6c151 AS production
+FROM python:3.12-slim@sha256:46cb7cc2877e60fbd5e21a9ae6115c30ace7a077b9f8772da879e4590c18c2e3 AS production
 
 WORKDIR /app
 

@@ -1,6 +1,7 @@
 # ─── Stage 1: Build ──────────────────────────────────────────────────────────
 # node:20-alpine (pinned 2026-04-17)
-FROM node:20-alpine@sha256:f4c96a28c0b2d8981664e03f461c2677152cd9a756012ffa8e2c6727427c2bda AS builder
+# node:20-alpine multi-arch index (refreshed 2026-04-25)
+FROM node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293 AS builder
 
 WORKDIR /app
 
@@ -21,7 +22,9 @@ RUN npm run build
 
 # ─── Stage 2: Serve ─────────────────────────────────────────────────────────
 # nginx:1.27-alpine (pinned 2026-04-17)
-FROM nginx:1.27-alpine@sha256:0608b4ccda75be0ba50f3cf28998b60d31fe0ad147cd834acb1451ba0da84c8b AS production
+# nginx:1.27-alpine multi-arch index (refreshed 2026-04-25; previous pin
+# was a single-arch digest which produced 'exec format error' on amd64 runners)
+FROM nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10 AS production
 
 # Remove default nginx config
 RUN rm /etc/nginx/conf.d/default.conf
