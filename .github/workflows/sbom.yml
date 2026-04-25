@@ -72,13 +72,14 @@ jobs:
             exit 1
           }
 
-      # anchore/sbom-action is Syft-under-the-hood; it scans the
-      # `requirements/*.lock` file (recognized as `python-requirements`)
-      # and emits CycloneDX JSON.
+      # anchore/sbom-action wraps Syft. The `path:` input is interpreted as
+      # a directory; pointing it at a single file makes Syft try `dir:` and
+      # `oci-dir:` schemes which both fail. Use `file:` instead so Syft scans
+      # the lock file as `python-requirements`.
       - name: Generate CycloneDX SBOM
         uses: anchore/sbom-action@f325610c9f50a54015d37c8d16cb3b0e2c8f4de0 # v0.18.0
         with:
-          path: requirements/${{ matrix.extra }}.lock
+          file: requirements/${{ matrix.extra }}.lock
           format: cyclonedx-json
           artifact-name: sbom-python-${{ matrix.extra }}-cyclonedx.json
           output-file: sbom-python-${{ matrix.extra }}-cyclonedx.json
@@ -88,7 +89,7 @@ jobs:
       - name: Generate SPDX SBOM
         uses: anchore/sbom-action@f325610c9f50a54015d37c8d16cb3b0e2c8f4de0 # v0.18.0
         with:
-          path: requirements/${{ matrix.extra }}.lock
+          file: requirements/${{ matrix.extra }}.lock
           format: spdx-json
           artifact-name: sbom-python-${{ matrix.extra }}-spdx.json
           output-file: sbom-python-${{ matrix.extra }}-spdx.json
@@ -123,7 +124,9 @@ jobs:
             context: .
           - component: portal-frontend
             dockerfile: portal/kubernetes/docker/frontend/Dockerfile
-            context: portal/react-webapp
+            # Same context fix as Trivy: the frontend Dockerfile uses
+            # repo-root-relative COPY paths.
+            context: .
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4

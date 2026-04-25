@@ -291,9 +291,18 @@ def validate_rows_against_contract(
     return violations
 
 
-def find_contracts(repo_root: Path) -> list[Path]:
-    """Recursively find every ``contract.yaml`` under ``domains/*/data-products/``."""
-    return sorted((repo_root / "domains").glob("*/data-products/**/contract.yaml"))
+def find_contracts(repo_root: Path, *, include_examples: bool = False) -> list[Path]:
+    """Recursively find every ``contract.yaml`` under ``domains/*/data-products/``.
+
+    When ``include_examples=True``, also includes ``examples/*/contracts/*.yaml``
+    so the CLI can validate the per-vertical reference contracts that ship with
+    the example tutorials.
+    """
+    found = list((repo_root / "domains").glob("*/data-products/**/contract.yaml"))
+    if include_examples:
+        found.extend((repo_root / "examples").glob("*/contracts/*.yaml"))
+        found.extend((repo_root / "examples").glob("*/contracts/*.yml"))
+    return sorted(found)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -310,8 +319,17 @@ def main(argv: list[str] | None = None) -> int:
         help="Exit non-zero if any contract is invalid (for CI use)",
     )
     parser.add_argument(
-        "contract_paths",
-        nargs="*",
+        "--include-examples",
+        action="store_true",
+        help=(
+            "Also validate examples/*/contracts/*.yaml. Off by default because "
+            "the example contracts are tutorial scaffolding and historically "
+            "diverged from the canonical schema; the in-repo Validate Data "
+            "Contracts workflow is the gate that enforces them."
+        ),
+    )
+    parser.add_argument(
+        "contract_paths",        nargs="*",
         help="Specific contract file(s) to validate.  When empty, walks the repo.",
     )
     args = parser.parse_args(argv)
@@ -322,7 +340,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.contract_paths:
         contract_files = [Path(p) for p in args.contract_paths]
     else:
-        contract_files = find_contracts(repo_root)
+        contract_files = find_contracts(repo_root, include_examples=args.include_examples)
 
     if not contract_files:
         logger.info("contracts.none_found", repo_root=str(repo_root))

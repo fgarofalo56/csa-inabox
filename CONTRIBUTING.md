@@ -152,6 +152,42 @@ graph LR
 - [ ] Ensure CI checks pass
 - [ ] Get at least one approval before merging
 
+### Required Status Checks and `--admin` Merge Override
+
+The `main` branch has 11 required status checks (Python Lint, Python
+Tests on 3.10/3.11/3.12, Bicep Lint, IaC Security Scan, Validate &
+Scan, Vertical Conformance, Validate Data Contracts, dbt Compile, dbt
+Integration, jest, Repo Hygiene, Secret Scan, PowerShell Lint,
+Validate Cookiecutter Template, Trivy, CodeQL Analysis). All must be
+green before a PR can be merged.
+
+GitHub admins can technically bypass this with `gh pr merge --admin`.
+**This is reserved for the following narrow scenarios** and every use
+must be documented in the PR description:
+
+1. **Pre-existing red checks unrelated to the PR** -- e.g., a brownfield
+   bicep CVE that has been failing on `main` for weeks and is being
+   tracked in a separate issue. Verify with
+   `gh run list --branch main --workflow <name>` that the failure
+   predates the PR.
+2. **Self-approval blocks** -- GitHub forbids approving your own PR.
+   For solo-maintainer hotfixes that are otherwise green, `--admin`
+   may stand in for the second reviewer. Do NOT use this to bypass
+   actual code review on substantive changes.
+3. **CI infrastructure outages** -- e.g., GitHub Actions runners are
+   down and you need to merge a documented hotfix. Re-run the checks
+   on `main` once the outage clears.
+
+**Do NOT use `--admin`** to bypass:
+
+- A failing test that is actually caused by your changes
+- A new lint violation introduced by your PR
+- A security scan finding in code you added
+- A reviewer's blocking change-request
+
+If you find yourself reaching for `--admin` for any other reason, stop
+and fix the underlying problem instead.
+
 ---
 
 ## 🏷️ Branch Naming

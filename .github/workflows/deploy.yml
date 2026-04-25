@@ -225,11 +225,13 @@ jobs:
           python -m csa_platform.governance.contracts.contract_validator --ci --repo-root .
 
       - name: Check Gold layer tables
-        if: ${{ secrets.DBT_DATABRICKS_HOST != '' }}
+        # Promote secret to env at job-level via env var so we can test it in if:
+        # (the `secrets` context is not allowed in step-level if conditions).
         env:
           DBT_DATABRICKS_HOST: ${{ secrets.DBT_DATABRICKS_HOST }}
           DBT_DATABRICKS_HTTP_PATH: ${{ secrets.DBT_DATABRICKS_HTTP_PATH }}
           DBT_DATABRICKS_TOKEN: ${{ secrets.DBT_DATABRICKS_TOKEN }}
+        if: env.DBT_DATABRICKS_HOST != ''
         run: |
           echo "=== Gold Layer Smoke Test ==="
           pip install databricks-sql-connector --quiet
