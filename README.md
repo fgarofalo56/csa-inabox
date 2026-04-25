@@ -324,7 +324,7 @@ All environment-specific values are externalized to parameter files:
 | `governance/` (contracts, dataquality, purview, common, finops, rbac) | GA | Most mature module; covered by 80% gate; only one packaged for PyPI extraction |
 | `functions/` (validation, aiEnrichment, eventProcessing, secretRotation) | GA | Azure Functions apps with tests under `tests/functions/` |
 | `ai_integration/rag/` | Beta | Real RAG pipeline + service; has tests; **not** yet wired into the portal router |
-| `ai_integration/graphrag/` | Stub | ~1,500 LOC across 4 modules; **zero tests** |
+| `ai_integration/graphrag/` | Beta | ~1,500 LOC across 4 modules; 200 LOC of unit tests cover document loader + graph store |
 | `ai_integration/semantic_kernel/` | Removed | Was a Stub; deleted 2026-04-24 — see [SEMANTIC_KERNEL_REMOVED.md](./csa_platform/ai_integration/SEMANTIC_KERNEL_REMOVED.md) |
 | `ai_integration/mcp_server/` | Stub | 600 LOC server; **zero tests** |
 | `ai_integration/model_serving/` | Stub | No tests |

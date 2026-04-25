@@ -173,6 +173,28 @@ postgres = [
     # managed-identity code path.
     "azure-identity>=1.17.0,<2.0.0",
 ]
+copilot-evals = [
+    # CSA-0008 — Minimal install for the deterministic eval harness
+    # (apps/copilot/evals/) used by the Copilot Evals workflow.  Excludes
+    # pydantic-ai entirely (not imported by evals) and all cloud LLM
+    # providers; the harness uses ``DryRunAgent`` and an ``openai`` lazy
+    # import for the optional LLM-judge scorer (degrades to 0.5 when
+    # absent).  Install time on a cold runner: ~90s vs ~20+ min for the
+    # full ``copilot`` extra.
+    "pydantic>=2.7.0,<3.0.0",
+    "pydantic-settings>=2.3.0,<3.0.0",
+    "structlog>=24.1.0,<26.0.0",
+    "PyYAML>=6.0,<7.0",
+    "jsonschema>=4.22,<5.0",
+    # OTel telemetry module degrades to no-op without these but the
+    # eval harness exercises the span code path; keep them in.
+    "opentelemetry-api>=1.25,<2.0",
+    "opentelemetry-sdk>=1.25,<2.0",
+    # ``openai`` is a soft-dep inside ``LLMJudgeScorer`` (try/except
+    # ImportError -> 0.5 score).  Bring it in so the CI build exercises
+    # the real branch instead of the fallback.
+    "openai>=1.0.0,<3.0.0",
+]
 copilot = [
     # CSA Copilot (CSA-0008) Phases 0-1 — corpus indexer + grounded Q&A.
     # Agent framework (approved via AQ-0003).
@@ -561,6 +583,23 @@ module = [
     "openai.*",
     "cachetools.*",
     "duckdb.*",
+    # Soft optional dependencies imported lazily inside try/except
+    # ImportError blocks.  Mypy reports import-not-found / import-untyped
+    # for each, but the module degrades gracefully at runtime when they
+    # are absent.  Listed here so a normal ``mypy`` invocation under
+    # CI does not fail just because the dev venv has not installed them.
+    "opentelemetry",
+    "opentelemetry.*",
+    "prometheus_client",
+    "docx",
+    "pyarrow",
+    "pyarrow.*",
+    # ``requests`` ships type stubs as a separate ``types-requests``
+    # package on PyPI.  We pin types-requests in the dev extra; this
+    # entry covers environments where it is unavailable (e.g. minimal
+    # docker images that re-install at runtime).
+    "requests",
+    "requests.*",
 ]
 ignore_missing_imports = true
 
