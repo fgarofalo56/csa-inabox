@@ -6,6 +6,7 @@ FROM node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb836
 WORKDIR /app
 
 # Copy package files for dependency caching
+# Copy package files for dependency caching
 COPY portal/react-webapp/package.json portal/react-webapp/package-lock.json* ./
 
 # Install dependencies
@@ -13,6 +14,12 @@ RUN npm ci --prefer-offline --no-audit
 
 # Copy source code
 COPY portal/react-webapp/ ./
+
+# Frontend imports types from portal/shared/contracts/types via
+# ../../../shared/contracts/types. Inside the container the WORKDIR is
+# /app and only portal/react-webapp was copied, so we need to make the
+# shared directory available at /shared/contracts/ to match that path.
+COPY portal/shared/ /shared/
 
 # CSA-0040: Static export controlled by STATIC_EXPORT env var consumed by
 # next.config.js (`output: process.env.STATIC_EXPORT === 'true' ? 'export' : undefined`).
