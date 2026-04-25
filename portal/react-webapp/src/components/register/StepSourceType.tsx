@@ -30,7 +30,9 @@ interface StepSourceTypeProps {
 }
 
 export default function StepSourceType({ selectedType, onSelect }: StepSourceTypeProps) {
-  const categories = [...new Set(SOURCE_TYPES.map((s) => s.category))];
+  // Array.from() instead of [...new Set(...)] because tsconfig.json targets
+  // es5 (the spread-Set form requires --downlevelIteration or es2015+).
+  const categories = Array.from(new Set(SOURCE_TYPES.map((s) => s.category)));
 
   return (
     <div className="space-y-6">
