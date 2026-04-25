@@ -36,6 +36,32 @@ repos:
         files: '\.bicep$'
         pass_filenames: true
 
+      # Vertical conformance lint -- the same script the
+      # Vertical Conformance / Lint Verticals CI job runs.
+      # Catches missing Directory Structure sections, missing deploy/
+      # templates, missing contracts/, etc., before they reach CI.
+      - id: lint-verticals
+        name: Lint Verticals
+        entry: bash scripts/lint-vertical.sh
+        language: system
+        # Re-run when any vertical README, deploy template, contract,
+        # dbt project, or generator changes.
+        files: '^examples/[^/]+/(README\.md|deploy/.*|contracts/.*|domains/dbt/.*|data/generators/.*)$'
+        pass_filenames: false
+        # The script discovers verticals itself when called with the glob.
+        args: ['examples/']
+
+      # Data contract validator -- the same checker the
+      # Validate Data Contracts CI job runs. Stops broken-schema
+      # contracts (missing apiVersion/kind/metadata/sla/quality_rules)
+      # from sneaking in.
+      - id: validate-contracts
+        name: Validate Data Contracts
+        entry: python scripts/precommit_validate_contracts.py
+        language: system
+        files: '^(examples/[^/]+/contracts/.*\.ya?ml|domains/.*/data-products/.*/contract\.yaml)$'
+        pass_filenames: false
+
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.15.0
     hooks:

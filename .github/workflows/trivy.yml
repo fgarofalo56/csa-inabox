@@ -190,7 +190,13 @@ jobs:
             context: .
           - component: portal-frontend
             dockerfile: portal/kubernetes/docker/frontend/Dockerfile
-            context: portal/react-webapp
+            # Frontend Dockerfile uses repo-root-relative COPY paths
+            # (`COPY portal/react-webapp/...`, `COPY portal/kubernetes/docker/frontend/nginx.conf`),
+            # so the build context must be the repo root, not portal/react-webapp.
+            # Previously this was set to portal/react-webapp which made the
+            # COPY paths resolve to portal/react-webapp/portal/react-webapp/... and
+            # the build failed before Trivy could scan the image.
+            context: .
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4

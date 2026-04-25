@@ -127,4 +127,4 @@ This matrix documents which Azure OpenAI features are implemented, available but
 
 - [AI Integration README](./README.md)
 - [RAG Pipeline Guide](../../docs/tutorials/08-rag-vector-search/README.md)
-- [Semantic Kernel Agents](../../docs/tutorials/07-semantic-kernel-agents/README.md)
+- [Semantic Kernel Agents](../../docs/tutorials/07-agents-foundry-sk/README.md)

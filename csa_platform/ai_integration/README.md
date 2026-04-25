@@ -51,7 +51,7 @@ Legend: ✅ production-ready · ⚠️ partial / in flight · 🛑 planned, find
 ### Design Decisions
 
 - **RAG over Fine-Tuning**: Domain knowledge is injected via retrieval-augmented generation rather than fine-tuning, enabling dynamic updates without retraining.
-- **Semantic Kernel over Assistants API**: Agent orchestration uses Semantic Kernel for full control over plugin composition and multi-agent workflows.
+- **Semantic Kernel over Assistants API**: Tutorial code under `examples/ai-agents/` shows agent orchestration with Semantic Kernel for plugin composition and multi-agent workflows. (The previous `csa_platform.ai_integration.semantic_kernel` subpackage was removed on 2026-04-24 -- see [SEMANTIC_KERNEL_REMOVED.md](./SEMANTIC_KERNEL_REMOVED.md).)
 - **Custom RAG over On Your Data**: Purpose-built pipeline (chunking → embedding → retrieval → reranking → generation) provides more control than the built-in Azure OpenAI On Your Data feature.
 
 ## Table of Contents

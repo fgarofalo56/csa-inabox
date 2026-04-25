@@ -30,7 +30,13 @@ pydantic-settings>=2.3.0,<3.0.0
 pyyaml>=6.0,<7.0
 
 # Semantic Kernel for multi-agent orchestration
-semantic-kernel[azure]>=1.41.0,<2.0.0
+# Semantic Kernel was previously listed here as a runtime dependency for
+# csa_platform.ai_integration.semantic_kernel. That subpackage was removed on
+# 2026-04-24 (see csa_platform/ai_integration/SEMANTIC_KERNEL_REMOVED.md) so
+# the dependency is gone too. The examples/ai-agents tutorial code has its
+# own pip install instructions; do not re-add semantic-kernel here unless a
+# new platform module needs it.
+# semantic-kernel[azure]>=1.41.0,<2.0.0
 
 # MCP SDK for Model Context Protocol server
 mcp>=1.0.0,<2.0.0

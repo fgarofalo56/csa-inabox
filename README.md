@@ -325,7 +325,7 @@ All environment-specific values are externalized to parameter files:
 | `functions/` (validation, aiEnrichment, eventProcessing, secretRotation) | GA | Azure Functions apps with tests under `tests/functions/` |
 | `ai_integration/rag/` | Beta | Real RAG pipeline + service; has tests; **not** yet wired into the portal router |
 | `ai_integration/graphrag/` | Stub | ~1,500 LOC across 4 modules; **zero tests** |
-| `ai_integration/semantic_kernel/` | Stub | Plugins + kernel factory; **zero tests** |
+| `ai_integration/semantic_kernel/` | Removed | Was a Stub; deleted 2026-04-24 — see [SEMANTIC_KERNEL_REMOVED.md](./csa_platform/ai_integration/SEMANTIC_KERNEL_REMOVED.md) |
 | `ai_integration/mcp_server/` | Stub | 600 LOC server; **zero tests** |
 | `ai_integration/model_serving/` | Stub | No tests |
 | `data_activator/` | Beta | Bicep + Logic Apps deploy; runtime rules limited |
