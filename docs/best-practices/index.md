@@ -1,37 +1,37 @@
----
-title: "Best Practices"
-description: "Engineering best practices for operating, securing, and optimizing the CSA-in-a-Box analytics platform."
----
-
 # Best Practices
 
-This section captures proven engineering practices for building and operating the CSA-in-a-Box platform. Each page distills guidance from real deployments into actionable recommendations with concrete examples.
+Nine field-tested guides for running cloud-scale analytics + AI on Azure. Each one is independent — read the ones relevant to your role.
 
-The audience spans multiple roles: **platform engineers** responsible for infrastructure and CI/CD, **data engineers** building pipelines and models, **DevOps teams** managing deployments and monitoring, and **security teams** enforcing compliance and access controls. Each page calls out which roles benefit most from its content.
+| Guide | When to read | Length |
+|-------|--------------|--------|
+| [Medallion Architecture](medallion-architecture.md) | Designing your bronze/silver/gold lakehouse | 664 lines |
+| [Data Engineering](data-engineering.md) | Authoring ADF + dbt + Spark pipelines | 800 lines |
+| [Data Governance](data-governance.md) | Setting up Purview, contracts, lineage, classification | 573 lines |
+| [Security & Compliance](security-compliance.md) | Hardening identities, secrets, network, encryption | 654 lines |
+| [Infrastructure as Code & CI/CD](iac-cicd.md) | Bicep, what-if, GitHub Actions, environment promotion | 657 lines |
+| [Cost Optimization](cost-optimization.md) | Tagging, reserved capacity, auto-pause, FinOps | 518 lines |
+| [Monitoring & Observability](monitoring-observability.md) | Log Analytics, Workbooks, OTel, SLI/SLO | 520 lines |
+| [Performance Tuning](performance-tuning.md) | Spark configs, Synapse SQL pools, AI Search shards | 705 lines |
+| [Disaster Recovery](disaster-recovery.md) | RPO/RTO targets, geo-replication, runbook drills | 521 lines |
 
-## Quick Reference
+## How to use these
 
-| Area                       | Page                                                      | Key Topics                                                                                         | Audience                                   |
-| -------------------------- | --------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ------------------------------------------ |
-| Medallion Architecture     | [Medallion Architecture](medallion-architecture.md)       | Naming conventions, partitioning strategies, schema evolution, quality gates                       | Data Engineers, Platform Engineers         |
-| Data Engineering           | [Data Engineering](data-engineering.md)                   | dbt patterns, ADF pipeline design, Spark best practices, testing, data contracts                   | Data Engineers                             |
-| Data Governance            | [Data Governance](data-governance.md)                     | Purview integration, lineage tracking, classification policies, domain ownership                   | Data Engineers, Security Teams             |
-| Security & Compliance      | [Security & Compliance](security-compliance.md)           | Network isolation, identity and access, encryption at rest and in transit, FedRAMP/CMMC alignment  | Security Teams, Platform Engineers         |
-| IaC & CI/CD                | [IaC & CI/CD](iac-cicd.md)                                | Bicep module patterns, GitHub Actions workflows, PSRule and Checkov validation, secrets management | Platform Engineers, DevOps                 |
-| Cost Optimization          | [Cost Optimization](cost-optimization.md)                 | Compute scaling, storage tiering, egress reduction, Fabric capacity management                     | Platform Engineers, DevOps                 |
-| Monitoring & Observability | [Monitoring & Observability](monitoring-observability.md) | Azure Monitor configuration, alert design, SLO definitions, operational dashboards                 | DevOps, Platform Engineers                 |
-| Performance Tuning         | [Performance Tuning](performance-tuning.md)               | Delta table optimization, Spark configuration, query tuning, caching strategies                    | Data Engineers, Platform Engineers         |
-| Disaster Recovery          | [Disaster Recovery](disaster-recovery.md)                 | Multi-region deployment, RTO/RPO targets, DR drill procedures, failover automation                 | Platform Engineers, DevOps, Security Teams |
+Each guide follows the same structure:
 
-!!! tip "How to Use This Section"
+```
+1. The problem (1-2 paragraphs)
+2. The opinionated answer (this is what we do)
+3. The reasoning (why — usually links to an ADR)
+4. The mechanics (commands, code, configs)
+5. The trade-offs (what we gave up to make this choice)
+6. The escape hatches (when this advice does NOT apply)
+```
 
-    Start with this overview to identify the areas most relevant to your role and current work. Then dive into specific pages for detailed guidance, configuration examples, and checklists.
+If a guide ever reads as "do X because everyone does X," that's a bug — open an issue.
 
-    Each page follows a consistent structure: context and rationale, concrete recommendations, configuration snippets, and common pitfalls to avoid. Pages cross-reference each other where topics overlap — for example, Security & Compliance links to IaC & CI/CD for policy-as-code patterns.
+## Related
 
-## Related Sections
-
-- **[Guides](../guides/index.md)** — Step-by-step walkthroughs for common platform tasks
-- **[Architecture Decision Records](../adr/index.md)** — Context and reasoning behind key design choices
-- **[Compliance](../compliance/index.md)** — Control mappings, audit artifacts, and regulatory alignment details
-- **[Runbooks](../runbooks/index.md)** — Operational procedures for incident response and routine maintenance
+- [ADRs](../adr/README.md) — the 22 specific decisions these best-practices are built on
+- [Reference Architectures](../reference-architecture/index.md) — how the pieces fit together
+- [Patterns](../patterns/index.md) — implementation patterns for specific scenarios
+- [Decision Trees](../decisions/README.md) — quick "which option do I pick" guides
