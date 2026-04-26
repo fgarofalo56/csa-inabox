@@ -315,7 +315,7 @@ class DocumentLoader:
             pass  # Container may already exist
 
         container_client = blob_service.get_container_client(container_name)
-        manifest = {"files": [], "total_size": 0, "count": 0}
+        manifest: dict[str, Any] = {"files": [], "total_size": 0, "count": 0}
 
         for i, doc in enumerate(documents):
             # GraphRAG wants flat .txt files
@@ -372,7 +372,7 @@ class DocumentLoader:
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        manifest = {"files": [], "total_size": 0, "count": 0}
+        manifest: dict[str, Any] = {"files": [], "total_size": 0, "count": 0}
 
         for i, doc in enumerate(documents):
             safe_name = doc.title.replace("/", "_").replace("\\", "_")
@@ -432,7 +432,7 @@ class DocumentLoader:
         )
 
         with open(file_path, "rb") as f:
-            poller = client.begin_analyze_document(
+            poller = client.begin_analyze_document(  # type: ignore[call-overload]
                 "prebuilt-read",
                 analyze_request=AnalyzeDocumentRequest(bytes_source=f.read()),
             )

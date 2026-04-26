@@ -86,8 +86,8 @@ def _load_yaml_schema(schema_path: str) -> dict[str, Any]:
         raw = yaml.safe_load(f)
 
     if isinstance(raw, dict) and "schema" in raw:
-        return raw["schema"]  # type: ignore[no-any-return]
-    return raw  # type: ignore[no-any-return]
+        return raw["schema"]  # type: ignore[no-any-return, unused-ignore]
+    return raw  # type: ignore[no-any-return, unused-ignore]
 
 
 def _validate_against_contract(data: dict[str, Any], contract: dict[str, Any]) -> list[dict[str, str]]:
@@ -159,7 +159,7 @@ def _validate_data(data: Any, schema: dict[str, Any]) -> list[dict[str, str]]:
             {
                 "path": path,
                 "message": error.message,
-                "validator": error.validator,  # type: ignore[arg-type]
+                "validator": error.validator,  # type: ignore[arg-type, unused-ignore]
             }
         )
 

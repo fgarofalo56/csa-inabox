@@ -75,7 +75,7 @@ def _sample_tables() -> list[DeltaTableInfo]:
 
 
 @pytest.fixture
-def generator():
+def generator() -> None:
     """Return a SemanticModelGenerator with mocked client."""
     gen = SemanticModelGenerator(
         workspace_url="https://adb-123.azuredatabricks.net",
@@ -93,34 +93,34 @@ def generator():
 class TestTypeMapping:
     """Test Databricks to Power BI type mapping."""
 
-    def test_string_maps_to_string(self, generator):
+    def test_string_maps_to_string(self, generator) -> None:
         assert generator._map_type("string") == "String"
 
-    def test_int_maps_to_int64(self, generator):
+    def test_int_maps_to_int64(self, generator) -> None:
         assert generator._map_type("int") == "Int64"
 
-    def test_bigint_maps_to_int64(self, generator):
+    def test_bigint_maps_to_int64(self, generator) -> None:
         assert generator._map_type("bigint") == "Int64"
 
-    def test_float_maps_to_double(self, generator):
+    def test_float_maps_to_double(self, generator) -> None:
         assert generator._map_type("float") == "Double"
 
-    def test_double_maps_to_double(self, generator):
+    def test_double_maps_to_double(self, generator) -> None:
         assert generator._map_type("double") == "Double"
 
-    def test_decimal_parameterized_maps_to_decimal(self, generator):
+    def test_decimal_parameterized_maps_to_decimal(self, generator) -> None:
         assert generator._map_type("decimal(18,2)") == "Decimal"
 
-    def test_boolean_maps_to_boolean(self, generator):
+    def test_boolean_maps_to_boolean(self, generator) -> None:
         assert generator._map_type("boolean") == "Boolean"
 
-    def test_date_maps_to_datetime(self, generator):
+    def test_date_maps_to_datetime(self, generator) -> None:
         assert generator._map_type("date") == "DateTime"
 
-    def test_timestamp_maps_to_datetime(self, generator):
+    def test_timestamp_maps_to_datetime(self, generator) -> None:
         assert generator._map_type("timestamp") == "DateTime"
 
-    def test_unknown_type_defaults_to_string(self, generator):
+    def test_unknown_type_defaults_to_string(self, generator) -> None:
         assert generator._map_type("array<string>") == "String"
         assert generator._map_type("struct<a:int>") == "String"
 
@@ -133,7 +133,7 @@ class TestTypeMapping:
 class TestGenerateDaxMeasures:
     """Test DAX measure template generation."""
 
-    def test_numeric_aggregation_measures(self, generator):
+    def test_numeric_aggregation_measures(self, generator) -> None:
         tables = _sample_tables()
         measures = generator.generate_dax_measures(tables)
 
@@ -141,21 +141,21 @@ class TestGenerateDaxMeasures:
         assert "Total amount" in measure_names
         assert "Avg amount" in measure_names
 
-    def test_cost_column_generates_measures(self, generator):
+    def test_cost_column_generates_measures(self, generator) -> None:
         tables = _sample_tables()
         measures = generator.generate_dax_measures(tables)
 
         cost_measures = [m for m in measures if "cost" in m.name.lower()]
         assert len(cost_measures) >= 2  # Total cost + Avg cost
 
-    def test_id_column_generates_count_measures(self, generator):
+    def test_id_column_generates_count_measures(self, generator) -> None:
         tables = _sample_tables()
         measures = generator.generate_dax_measures(tables)
 
         count_measures = [m for m in measures if "Count" in m.name or "Distinct" in m.name]
         assert len(count_measures) >= 2
 
-    def test_dax_expression_format(self, generator):
+    def test_dax_expression_format(self, generator) -> None:
         tables = _sample_tables()
         measures = generator.generate_dax_measures(tables)
 
@@ -164,7 +164,7 @@ class TestGenerateDaxMeasures:
         assert "'revenue'" in sum_measure.expression
         assert "[amount]" in sum_measure.expression
 
-    def test_empty_tables_no_measures(self, generator):
+    def test_empty_tables_no_measures(self, generator) -> None:
         measures = generator.generate_dax_measures([])
         assert measures == []
 
@@ -177,19 +177,19 @@ class TestGenerateDaxMeasures:
 class TestGenerateModelYaml:
     """Test semantic model YAML definition generation."""
 
-    def test_model_name_default(self, generator):
+    def test_model_name_default(self, generator) -> None:
         tables = _sample_tables()
         model = generator.generate_model_yaml(tables)
 
         assert model.name == "finance-gold-model"
 
-    def test_model_tables_count(self, generator):
+    def test_model_tables_count(self, generator) -> None:
         tables = _sample_tables()
         model = generator.generate_model_yaml(tables)
 
         assert len(model.tables) == 2
 
-    def test_partition_columns_excluded(self, generator):
+    def test_partition_columns_excluded(self, generator) -> None:
         tables = _sample_tables()
         model = generator.generate_model_yaml(tables)
 
@@ -197,7 +197,7 @@ class TestGenerateModelYaml:
         col_names = [c["name"] for c in revenue_table["columns"]]
         assert "_partition_key" not in col_names
 
-    def test_hidden_columns_flagged(self, generator):
+    def test_hidden_columns_flagged(self, generator) -> None:
         """Columns starting with _ should be marked as hidden."""
         tables = [
             DeltaTableInfo(
@@ -219,18 +219,18 @@ class TestGenerateModelYaml:
         assert internal["isHidden"] is True
         assert visible["isHidden"] is False
 
-    def test_empty_tables_returns_empty_model(self, generator):
+    def test_empty_tables_returns_empty_model(self, generator) -> None:
         model = generator.generate_model_yaml([], model_name="empty")
         assert model.name == "empty"
         assert model.tables == []
 
-    def test_connection_includes_endpoint_id(self, generator):
+    def test_connection_includes_endpoint_id(self, generator) -> None:
         tables = _sample_tables()
         model = generator.generate_model_yaml(tables, sql_endpoint_id="ep-001")
 
         assert "ep-001" in model.connection["httpPath"]
 
-    def test_direct_lake_partition_mode(self, generator):
+    def test_direct_lake_partition_mode(self, generator) -> None:
         tables = _sample_tables()
         model = generator.generate_model_yaml(tables)
 
@@ -246,7 +246,7 @@ class TestGenerateModelYaml:
 class TestExportPbip:
     """Test export to YAML and JSON files."""
 
-    def test_export_creates_yaml_and_json(self, generator, tmp_path):
+    def test_export_creates_yaml_and_json(self, generator, tmp_path) -> None:
         tables = _sample_tables()
         model = generator.generate_model_yaml(tables)
         measures = generator.generate_dax_measures(tables)
@@ -258,7 +258,7 @@ class TestExportPbip:
         assert Path(files["yaml"]).exists()
         assert Path(files["json"]).exists()
 
-    def test_exported_yaml_is_valid(self, generator, tmp_path):
+    def test_exported_yaml_is_valid(self, generator, tmp_path) -> None:
         tables = _sample_tables()
         model = generator.generate_model_yaml(tables, model_name="test-model")
 
@@ -270,7 +270,7 @@ class TestExportPbip:
         assert data["name"] == "test-model"
         assert len(data["tables"]) == 2
 
-    def test_exported_json_is_valid(self, generator, tmp_path):
+    def test_exported_json_is_valid(self, generator, tmp_path) -> None:
         tables = _sample_tables()
         model = generator.generate_model_yaml(tables, model_name="test-model")
         measures = generator.generate_dax_measures(tables)

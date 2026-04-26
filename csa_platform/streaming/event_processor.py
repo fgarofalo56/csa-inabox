@@ -316,7 +316,7 @@ if __name__ == "__main__":
         for event in events:
             print(f"Processed event: {event.event_type} from {event.source} at {event.timestamp}")
 
-    async def main():
+    async def main() -> None:
         # Example configuration - replace with actual values
         config = EventProcessorConfig(
             connection_string=os.environ.get("EVENTHUB_CONNECTION_STRING", ""),

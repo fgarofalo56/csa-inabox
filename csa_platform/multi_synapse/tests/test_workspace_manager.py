@@ -80,7 +80,7 @@ def mock_synapse_client():
 
 
 @pytest.fixture
-def manager(mock_credential, mock_synapse_client):
+def manager(mock_credential, mock_synapse_client) -> None:
     """Return a SynapseWorkspaceManager with injected mocks."""
     mgr = SynapseWorkspaceManager(
         subscription_id="sub-1",
@@ -98,7 +98,7 @@ def manager(mock_credential, mock_synapse_client):
 class TestCreateWorkspace:
     """Test SynapseWorkspaceManager.create_workspace."""
 
-    def test_create_workspace_returns_expected_dict(self, manager, mock_synapse_client):
+    def test_create_workspace_returns_expected_dict(self, manager, mock_synapse_client) -> None:
         config = WorkspaceConfig(
             name="synapse-usda",
             resource_group="csa-platform",
@@ -115,7 +115,7 @@ class TestCreateWorkspace:
         assert result["state"] == "Succeeded"
         assert result["managed_vnet"] is True
 
-    def test_create_workspace_govcloud_storage_url(self, manager, mock_synapse_client):
+    def test_create_workspace_govcloud_storage_url(self, manager, mock_synapse_client) -> None:
         """GovCloud locations should use .dfs.core.usgovcloudapi.net."""
         config = WorkspaceConfig(
             name="ws-gov",
@@ -132,7 +132,7 @@ class TestCreateWorkspace:
         mock_synapse_client.workspaces.begin_create_or_update.assert_called_once()
         assert result["name"] == "ws-1"
 
-    def test_create_workspace_calls_begin_create_or_update(self, manager, mock_synapse_client):
+    def test_create_workspace_calls_begin_create_or_update(self, manager, mock_synapse_client) -> None:
         config = WorkspaceConfig(
             name="ws-comm",
             resource_group="rg",
@@ -147,7 +147,7 @@ class TestCreateWorkspace:
         assert call_kwargs["resource_group_name"] == "rg"
         assert call_kwargs["workspace_name"] == "ws-comm"
 
-    def test_create_workspace_without_managed_vnet_passes_none(self, manager, mock_synapse_client):
+    def test_create_workspace_without_managed_vnet_passes_none(self, manager, mock_synapse_client) -> None:
         config = WorkspaceConfig(
             name="ws-no-vnet",
             resource_group="rg",
@@ -165,7 +165,7 @@ class TestCreateWorkspace:
         assert call_kwargs["managed_virtual_network"] is None
         assert call_kwargs["managed_virtual_network_settings"] is None
 
-    def test_create_workspace_with_tags(self, manager, mock_synapse_client):
+    def test_create_workspace_with_tags(self, manager, mock_synapse_client) -> None:
         config = WorkspaceConfig(
             name="ws-tagged",
             resource_group="rg",
@@ -189,7 +189,7 @@ class TestCreateWorkspace:
 class TestListWorkspaces:
     """Test SynapseWorkspaceManager.list_workspaces."""
 
-    def test_list_workspaces_returns_workspace_info_objects(self, manager, mock_synapse_client):
+    def test_list_workspaces_returns_workspace_info_objects(self, manager, mock_synapse_client) -> None:
         ws1 = SimpleNamespace(
             name="ws-a",
             location="usgovvirginia",
@@ -217,7 +217,7 @@ class TestListWorkspaces:
         assert results[1].managed_vnet is False
         assert results[1].state == "Creating"
 
-    def test_list_workspaces_empty(self, manager, mock_synapse_client):
+    def test_list_workspaces_empty(self, manager, mock_synapse_client) -> None:
         mock_synapse_client.workspaces.list_by_resource_group.return_value = []
         results = manager.list_workspaces("empty-rg")
         assert results == []
@@ -231,7 +231,7 @@ class TestListWorkspaces:
 class TestConfigureFirewall:
     """Test SynapseWorkspaceManager.configure_firewall."""
 
-    def test_configure_firewall_creates_azure_services_rule(self, manager, mock_synapse_client):
+    def test_configure_firewall_creates_azure_services_rule(self, manager, mock_synapse_client) -> None:
         results = manager.configure_firewall(
             resource_group="rg",
             workspace_name="ws-1",
@@ -244,7 +244,7 @@ class TestConfigureFirewall:
         assert results[0]["range"] == "0.0.0.0/0"
         assert results[0]["status"] == "created"
 
-    def test_configure_firewall_with_ip_ranges(self, manager, mock_synapse_client):
+    def test_configure_firewall_with_ip_ranges(self, manager, mock_synapse_client) -> None:
         results = manager.configure_firewall(
             resource_group="rg",
             workspace_name="ws-1",
@@ -257,7 +257,7 @@ class TestConfigureFirewall:
         assert results[0]["range"] == "10.0.0.0/8"
         assert results[1]["name"] == "AllowedRange_1"
 
-    def test_configure_firewall_calls_api_per_range(self, manager, mock_synapse_client):
+    def test_configure_firewall_calls_api_per_range(self, manager, mock_synapse_client) -> None:
         manager.configure_firewall(
             resource_group="rg",
             workspace_name="ws-1",
@@ -277,7 +277,7 @@ class TestConfigureFirewall:
 class TestAssignRbac:
     """Test SynapseWorkspaceManager.assign_rbac."""
 
-    def test_assign_rbac_success(self, manager, mock_synapse_client, mock_credential):
+    def test_assign_rbac_success(self, manager, mock_synapse_client, mock_credential) -> None:
         mock_auth_client = MagicMock()
         role_def = SimpleNamespace(id="/role-def-id")
         mock_auth_client.role_definitions.list.return_value = [role_def]
@@ -300,7 +300,7 @@ class TestAssignRbac:
         assert "scope" in result
         assert "assignment_id" in result
 
-    def test_assign_rbac_role_not_found_raises(self, manager, mock_synapse_client, mock_credential):
+    def test_assign_rbac_role_not_found_raises(self, manager, mock_synapse_client, mock_credential) -> None:
         mock_auth_client = MagicMock()
         mock_auth_client.role_definitions.list.return_value = []
 

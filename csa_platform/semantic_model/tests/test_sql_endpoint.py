@@ -67,7 +67,7 @@ def mock_workspace_client():
 
 
 @pytest.fixture
-def manager(mock_workspace_client):
+def manager(mock_workspace_client) -> None:
     """Return a DatabricksSQLEndpointManager with injected mock."""
     mgr = DatabricksSQLEndpointManager(
         workspace_url="https://adb-123.azuredatabricks.net",
@@ -85,7 +85,7 @@ def manager(mock_workspace_client):
 class TestCreateEndpoint:
     """Test DatabricksSQLEndpointManager.create_endpoint."""
 
-    def test_create_returns_endpoint_info(self, manager):
+    def test_create_returns_endpoint_info(self, manager) -> None:
         config = EndpointConfig(
             name="csa-direct-lake",
             cluster_size="Small",
@@ -99,7 +99,7 @@ class TestCreateEndpoint:
         assert info.name == "csa-direct-lake"
         assert info.state == "RUNNING"
 
-    def test_create_passes_config_to_sdk(self, manager, mock_workspace_client):
+    def test_create_passes_config_to_sdk(self, manager, mock_workspace_client) -> None:
         config = EndpointConfig(
             name="my-warehouse",
             cluster_size="Medium",
@@ -119,7 +119,7 @@ class TestCreateEndpoint:
         assert call_kwargs["auto_stop_mins"] == 15
         assert call_kwargs["enable_serverless_compute"] is True
 
-    def test_create_without_tags(self, manager, mock_workspace_client):
+    def test_create_without_tags(self, manager, mock_workspace_client) -> None:
         config = EndpointConfig(name="no-tags", tags={})
         manager.create_endpoint(config)
 
@@ -135,7 +135,7 @@ class TestCreateEndpoint:
 class TestConfigureWarehouse:
     """Test DatabricksSQLEndpointManager.configure_warehouse."""
 
-    def test_configure_updates_size(self, manager, mock_workspace_client):
+    def test_configure_updates_size(self, manager, mock_workspace_client) -> None:
         mock_workspace_client.warehouses.get.return_value = _mock_warehouse(cluster_size="Medium")
 
         info = manager.configure_warehouse(
@@ -147,7 +147,7 @@ class TestConfigureWarehouse:
         edit_kwargs = mock_workspace_client.warehouses.edit.call_args.kwargs
         assert edit_kwargs["cluster_size"] == "Large"
 
-    def test_configure_preserves_name(self, manager, mock_workspace_client):
+    def test_configure_preserves_name(self, manager, mock_workspace_client) -> None:
         manager.configure_warehouse(
             endpoint_id="warehouse-001",
             auto_stop_mins=60,
@@ -166,7 +166,7 @@ class TestConfigureWarehouse:
 class TestSetPermissions:
     """Test DatabricksSQLEndpointManager.set_permissions."""
 
-    def test_grant_user_permission(self, manager, mock_workspace_client):
+    def test_grant_user_permission(self, manager, mock_workspace_client) -> None:
         grants = [
             PermissionGrant(
                 principal="analyst@contoso.com",
@@ -182,7 +182,7 @@ class TestSetPermissions:
         assert results[0]["principal"] == "analyst@contoso.com"
         mock_workspace_client.permissions.update.assert_called_once()
 
-    def test_grant_group_permission(self, manager, mock_workspace_client):
+    def test_grant_group_permission(self, manager, mock_workspace_client) -> None:
         grants = [
             PermissionGrant(
                 principal="data-analysts",
@@ -196,7 +196,7 @@ class TestSetPermissions:
         assert results[0]["status"] == "granted"
         assert results[0]["permission"] == "CAN_MANAGE"
 
-    def test_grant_service_principal_permission(self, manager, mock_workspace_client):
+    def test_grant_service_principal_permission(self, manager, mock_workspace_client) -> None:
         grants = [
             PermissionGrant(
                 principal="sp-etl-pipeline",
@@ -208,7 +208,7 @@ class TestSetPermissions:
         results = manager.set_permissions("warehouse-001", grants)
         assert results[0]["status"] == "granted"
 
-    def test_grant_error_handled(self, manager, mock_workspace_client):
+    def test_grant_error_handled(self, manager, mock_workspace_client) -> None:
         mock_workspace_client.permissions.update.side_effect = RuntimeError("API error")
 
         grants = [
@@ -219,7 +219,7 @@ class TestSetPermissions:
         assert results[0]["status"] == "error"
         assert "API error" in results[0]["error"]
 
-    def test_multiple_grants(self, manager, mock_workspace_client):
+    def test_multiple_grants(self, manager, mock_workspace_client) -> None:
         grants = [
             PermissionGrant(principal="user-a", permission="CAN_USE"),
             PermissionGrant(principal="user-b", principal_type="group", permission="CAN_MANAGE"),
@@ -238,7 +238,7 @@ class TestSetPermissions:
 class TestGetConnectionString:
     """Test connection string generation for Power BI."""
 
-    def test_connection_string_defaults(self, manager):
+    def test_connection_string_defaults(self, manager) -> None:
         conn = manager.get_connection_string("warehouse-001")
 
         assert conn["host"] == "adb-123.azuredatabricks.net"
@@ -249,7 +249,7 @@ class TestGetConnectionString:
         assert "jdbc:databricks://" in conn["jdbc_url"]
         assert "warehouse-001" in conn["jdbc_url"]
 
-    def test_connection_string_custom_catalog_schema(self, manager):
+    def test_connection_string_custom_catalog_schema(self, manager) -> None:
         conn = manager.get_connection_string(
             "warehouse-001",
             catalog="finance",
@@ -261,14 +261,14 @@ class TestGetConnectionString:
         assert "ConnCatalog=finance" in conn["jdbc_url"]
         assert "ConnSchema=gold" in conn["jdbc_url"]
 
-    def test_odbc_dsn_generated(self, manager):
+    def test_odbc_dsn_generated(self, manager) -> None:
         conn = manager.get_connection_string("warehouse-001")
 
         assert "Simba Spark ODBC Driver" in conn["odbc_dsn"]
         assert "Port=443" in conn["odbc_dsn"]
         assert "SSL=1" in conn["odbc_dsn"]
 
-    def test_warehouse_info_included(self, manager):
+    def test_warehouse_info_included(self, manager) -> None:
         conn = manager.get_connection_string("warehouse-001")
         assert conn["warehouse_name"] == "csa-direct-lake"
         assert conn["warehouse_id"] == "warehouse-001"

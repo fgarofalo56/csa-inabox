@@ -18,6 +18,8 @@ Prerequisites:
 
 from __future__ import annotations
 
+from typing import Any
+
 import logging
 import os
 from dataclasses import dataclass, field
@@ -51,7 +53,7 @@ class PurviewSyncService:
         credential: DefaultAzureCredential | None = None,
     ) -> None:
         self._endpoint = (
-            purview_endpoint or os.getenv("PURVIEW_ENDPOINT", "")
+            (purview_endpoint or os.getenv("PURVIEW_ENDPOINT") or "")
         ).rstrip("/")
         self._credential = credential or DefaultAzureCredential()
         self._token: str | None = None
@@ -72,7 +74,7 @@ class PurviewSyncService:
             "Content-Type": "application/json",
         }
 
-    async def sync_product(self, product: dict) -> SyncResult:
+    async def sync_product(self, product: dict[str, Any]) -> SyncResult:
         """Sync a data product to Purview as a catalog entity.
 
         Creates or updates a Purview entity with the product's metadata,
@@ -104,7 +106,7 @@ class PurviewSyncService:
         }
 
         # Add custom attributes for marketplace metadata
-        entity["entity"]["attributes"].update(
+        entity["entity"]["attributes"].update(  # type: ignore[union-attr, attr-defined, unused-ignore]
             {
                 "userProperties": {
                     "marketplace_id": product.get("id", ""),
@@ -136,7 +138,7 @@ class PurviewSyncService:
             logger.error("Purview sync error: %s", exc)
             return SyncResult(success=False, errors=[str(exc)])
 
-    async def sync_lineage(self, product: dict) -> SyncResult:
+    async def sync_lineage(self, product: dict[str, Any]) -> SyncResult:
         """Register lineage relationships in Purview.
 
         Creates lineage edges between the product and its upstream/downstream
@@ -193,7 +195,7 @@ class PurviewSyncService:
             logger.error("Lineage sync error: %s", exc)
             return SyncResult(success=False, errors=[str(exc)])
 
-    async def sync_quality(self, product: dict) -> SyncResult:
+    async def sync_quality(self, product: dict[str, Any]) -> SyncResult:
         """Push quality metrics to Purview as entity attributes."""
         quality = product.get("quality_dimensions")
         if not quality:
@@ -249,7 +251,7 @@ class PurviewSyncService:
             return SyncResult(success=False, errors=[str(exc)])
 
 
-def _extract_owner_email(product: dict) -> str:
+def _extract_owner_email(product: dict[str, Any]) -> str:
     """Extract owner email from product's owner field."""
     owner = product.get("owner", {})
     if isinstance(owner, dict):
@@ -257,7 +259,7 @@ def _extract_owner_email(product: dict) -> str:
     return "unknown@contoso.com"
 
 
-def _build_classifications(product: dict) -> list[dict]:
+def _build_classifications(product: dict[str, Any]) -> list[dict[str, Any]]:
     """Build Purview classification list from product metadata."""
     classification = product.get("classification", "internal")
     mapping = {

@@ -36,7 +36,7 @@ except ImportError:
 try:
     import requests
 except ImportError:
-    requests = None  # type: ignore[assignment]
+    requests = None  # type: ignore[assignment, unused-ignore]
 
 configure_structlog(service="alert-processor")
 logger = get_logger(__name__)
@@ -50,7 +50,7 @@ _PLATFORM_DIR = Path(__file__).resolve().parents[3] / "csa_platform"
 
 if "csa_platform" not in sys.modules:
     _pkg = types.ModuleType("csa_platform")
-    _pkg.__path__ = [str(_PLATFORM_DIR)]  # type: ignore[attr-defined]
+    _pkg.__path__ = [str(_PLATFORM_DIR)]  # type: ignore[attr-defined, unused-ignore]
     _pkg.__package__ = "csa_platform"
     sys.modules["csa_platform"] = _pkg
 
@@ -59,7 +59,7 @@ _da_dir = _PLATFORM_DIR / "data_activator"
 _da_name = "csa_platform.data_activator"
 if _da_name not in sys.modules and _da_dir.exists():
     _sub = types.ModuleType(_da_name)
-    _sub.__path__ = [str(_da_dir)]  # type: ignore[attr-defined]
+    _sub.__path__ = [str(_da_dir)]  # type: ignore[attr-defined, unused-ignore]
     _sub.__package__ = _da_name
     sys.modules[_da_name] = _sub
     _csa.data_activator = _sub

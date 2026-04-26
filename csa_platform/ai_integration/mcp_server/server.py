@@ -30,7 +30,8 @@ def create_server() -> Any:
     """
     try:
         from mcp.server import Server
-        from mcp.types import Prompt, PromptMessage, Resource, TextContent, Tool
+        from mcp.types import Prompt, PromptArgument, PromptMessage, Resource, TextContent, Tool
+        from pydantic import AnyUrl
     except ImportError as err:
         raise ImportError(
             "MCP SDK required. Install: pip install mcp"
@@ -40,43 +41,43 @@ def create_server() -> Any:
 
     # ─── Resources ───────────────────────────────────────────────
 
-    @server.list_resources()
+    @server.list_resources()  # type: ignore[misc, no-untyped-call]
     async def list_resources() -> list[Resource]:
         """List available CSA platform resources."""
         return [
             Resource(
-                uri="csa://catalog/domains",
+                uri=AnyUrl("csa://catalog/domains"),
                 name="Data Domains",
                 description="List of data domains in the CSA platform (finance, healthcare, environmental, etc.)",
                 mimeType="application/json",
             ),
             Resource(
-                uri="csa://governance/glossary",
+                uri=AnyUrl("csa://governance/glossary"),
                 name="Business Glossary",
                 description="Business glossary terms and definitions from Purview",
                 mimeType="application/json",
             ),
             Resource(
-                uri="csa://governance/policies",
+                uri=AnyUrl("csa://governance/policies"),
                 name="Governance Policies",
                 description="Active data governance policies and rules",
                 mimeType="application/json",
             ),
             Resource(
-                uri="csa://quality/summary",
+                uri=AnyUrl("csa://quality/summary"),
                 name="Quality Summary",
                 description="Data quality scores across all data products",
                 mimeType="application/json",
             ),
             Resource(
-                uri="csa://platform/status",
+                uri=AnyUrl("csa://platform/status"),
                 name="Platform Status",
                 description="Current platform deployment and health status",
                 mimeType="application/json",
             ),
         ]
 
-    @server.read_resource()
+    @server.read_resource()  # type: ignore[misc, no-untyped-call]
     async def read_resource(uri: str) -> str:
         """Read a CSA platform resource."""
         handlers = {
@@ -106,7 +107,7 @@ def create_server() -> Any:
 
     # ─── Tools ───────────────────────────────────────────────────
 
-    @server.list_tools()
+    @server.list_tools()  # type: ignore[misc, no-untyped-call]
     async def list_tools() -> list[Tool]:
         """List available CSA platform tools."""
         return [
@@ -235,7 +236,7 @@ def create_server() -> Any:
             ),
         ]
 
-    @server.call_tool()
+    @server.call_tool()  # type: ignore[misc]
     async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         """Execute a CSA platform tool."""
         tool_handlers = {
@@ -252,7 +253,7 @@ def create_server() -> Any:
             return [TextContent(type="text", text=f"Unknown tool: {name}")]
 
         try:
-            result = await handler(**arguments)
+            result = await handler(**arguments)  # type: ignore[operator]
             return [TextContent(type="text", text=json.dumps(result, indent=2))]
         except Exception as e:
             logger.exception("Tool %s failed", name)
@@ -260,7 +261,7 @@ def create_server() -> Any:
 
     # ─── Prompts ─────────────────────────────────────────────────
 
-    @server.list_prompts()
+    @server.list_prompts()  # type: ignore[misc, no-untyped-call]
     async def list_prompts() -> list[Prompt]:
         """List available prompt templates."""
         return [
@@ -268,28 +269,28 @@ def create_server() -> Any:
                 name="analyze-data",
                 description="Template for data analysis requests on CSA platform data products",
                 arguments=[
-                    {"name": "dataset", "description": "Dataset to analyze", "required": True},
-                    {"name": "question", "description": "Analysis question", "required": True},
+                    PromptArgument(name="dataset", description="Dataset to analyze", required=True),
+                    PromptArgument(name="question", description="Analysis question", required=True),
                 ],
             ),
             Prompt(
                 name="governance-review",
                 description="Template for reviewing data governance compliance of a data product",
                 arguments=[
-                    {"name": "product", "description": "Data product to review", "required": True},
+                    PromptArgument(name="product", description="Data product to review", required=True),
                 ],
             ),
             Prompt(
                 name="troubleshoot-pipeline",
                 description="Template for diagnosing pipeline failures",
                 arguments=[
-                    {"name": "pipeline", "description": "Pipeline name", "required": True},
-                    {"name": "error", "description": "Error message or symptoms", "required": False},
+                    PromptArgument(name="pipeline", description="Pipeline name", required=True),
+                    PromptArgument(name="error", description="Error message or symptoms", required=False),
                 ],
             ),
         ]
 
-    @server.get_prompt()
+    @server.get_prompt()  # type: ignore[misc, no-untyped-call]
     async def get_prompt(name: str, arguments: dict[str, str]) -> list[PromptMessage]:
         """Get a prompt template with arguments filled in."""
         prompts = {
@@ -468,7 +469,7 @@ async def _tool_validate_contract(contract_yaml: str) -> dict[str, Any]:
 
 
 async def _tool_search_catalog(
-    query: str, filters: dict | None = None, limit: int = 10  # noqa: ARG001
+    query: str, filters: dict[str, Any] | None = None, limit: int = 10  # noqa: ARG001
 ) -> dict[str, Any]:
     """Search Purview catalog."""
     purview_endpoint = os.getenv("PURVIEW_ENDPOINT")
@@ -509,7 +510,7 @@ async def _tool_list_pipelines(
 
 # ─── Prompt Builders ───────────────────────────────────────────────
 
-def _prompt_analyze_data(args: dict[str, str]) -> list:
+def _prompt_analyze_data(args: dict[str, str]) -> list[Any]:
     from mcp.types import PromptMessage, TextContent
 
     dataset = args.get("dataset", "unknown")
@@ -536,7 +537,7 @@ def _prompt_analyze_data(args: dict[str, str]) -> list:
     ]
 
 
-def _prompt_governance_review(args: dict[str, str]) -> list:
+def _prompt_governance_review(args: dict[str, str]) -> list[Any]:
     from mcp.types import PromptMessage, TextContent
 
     product = args.get("product", "unknown")
@@ -562,7 +563,7 @@ def _prompt_governance_review(args: dict[str, str]) -> list:
     ]
 
 
-def _prompt_troubleshoot_pipeline(args: dict[str, str]) -> list:
+def _prompt_troubleshoot_pipeline(args: dict[str, str]) -> list[Any]:
     from mcp.types import PromptMessage, TextContent
 
     pipeline = args.get("pipeline", "unknown")

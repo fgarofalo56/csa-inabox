@@ -10,7 +10,10 @@ import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -55,11 +58,11 @@ class GraphRAGSearch:
         self._community_level = community_level
 
         # Lazy-loaded components
-        self._entities = None
-        self._relationships = None
-        self._reports = None
-        self._text_units = None
-        self._communities = None
+        self._entities: pd.DataFrame | None = None
+        self._relationships: pd.DataFrame | None = None
+        self._reports: pd.DataFrame | None = None
+        self._text_units: pd.DataFrame | None = None
+        self._communities: pd.DataFrame | None = None
 
     def _load_index_data(self) -> None:
         """Load GraphRAG index Parquet files."""
