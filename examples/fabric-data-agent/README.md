@@ -153,7 +153,7 @@ Before exposing this to real users:
 - [ ] AOAI endpoint behind Private Endpoint, Key Vault references for the key
 - [ ] `FABRIC_TABLE_ALLOW_LIST` config narrowed to only the tables the agent should see
 - [ ] Row cap (`MAX_RESULT_ROWS`) set conservatively (default 1,000; tune per table)
-- [ ] Rate limiter in front (see [ADR 0021](../../adr/0021-two-rate-limiters-not-duplicates.md))
+- [ ] Rate limiter in front (see [ADR 0021](../../docs/adr/0021-two-rate-limiters-not-duplicates.md))
 - [ ] Application Insights logging enabled with the `request_id` correlation key
 - [ ] Output content filter on the AOAI deployment (Azure AI Content Safety)
 - [ ] Eval suite per quarter using `apps/copilot/evals/` framework as a template
@@ -173,10 +173,10 @@ The agent's read-only guard, generator, and orchestrator are **fully portable** 
 
 ## Related docs
 
-- [Tutorial 06 — AI Analytics with Azure AI Foundry](../../tutorials/06-ai-analytics-foundry/README.md)
-- [Tutorial 09 — GraphRAG Knowledge Graphs](../../tutorials/09-graphrag-knowledge/README.md)
-- [Patterns — LLMOps & Evaluation](../../patterns/llmops-evaluation.md)
-- [ADR 0010 — Fabric as Strategic Target](../../adr/0010-fabric-strategic-target.md)
-- [ADR 0017 — RAG Service Layer](../../adr/0017-rag-service-layer.md)
-- [Use Case — Unified Analytics on Fabric](../../use-cases/fabric-unified-analytics.md)
-- [Compliance — FedRAMP Moderate](../../compliance/fedramp-moderate.md)
+- [Tutorial 06 — AI Analytics with Azure AI Foundry](../../docs/tutorials/06-ai-analytics-foundry/README.md)
+- [Tutorial 09 — GraphRAG Knowledge Graphs](../../docs/tutorials/09-graphrag-knowledge/README.md)
+- [Patterns — LLMOps & Evaluation](../../docs/patterns/llmops-evaluation.md)
+- [ADR 0010 — Fabric as Strategic Target](../../docs/adr/0010-fabric-strategic-target.md)
+- [ADR 0017 — RAG Service Layer](../../docs/adr/0017-rag-service-layer.md)
+- [Use Case — Unified Analytics on Fabric](../../docs/use-cases/fabric-unified-analytics.md)
+- [Compliance — FedRAMP Moderate](../../docs/compliance/fedramp-moderate.md)
