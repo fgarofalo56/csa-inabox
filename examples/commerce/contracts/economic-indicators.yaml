@@ -4,7 +4,7 @@
 # economic indicators data product. It declares the schema, SLAs, and
 # quality rules for economic resilience, trade, and business analytics.
 
-apiVersion: csa.commerce.gov/v1
+apiVersion: csa.microsoft.com/v1
 kind: DataProductContract
 
 metadata:

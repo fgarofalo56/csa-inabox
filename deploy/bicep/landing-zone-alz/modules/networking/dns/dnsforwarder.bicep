@@ -134,6 +134,7 @@ resource vmss001 'Microsoft.Compute/virtualMachineScaleSets@2020-12-01' = {
       mode: 'Automatic'
       automaticOSUpgradePolicy: {
         enableAutomaticOSUpgrade: true
+        disableAutomaticRollback: false
       }
     }
     virtualMachineProfile: {

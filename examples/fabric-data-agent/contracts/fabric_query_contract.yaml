@@ -26,6 +26,11 @@ metadata:
 schema:
   primary_key: [request_id]
   columns:
+    # ---- correlation key ----
+    - name: request_id
+      type: string
+      nullable: false
+      description: "[KEY] Stable identifier for one question/answer round-trip."
     # ---- request side ----
     - name: question
       type: string
@@ -49,9 +54,9 @@ schema:
       nullable: false
       description: "[RESPONSE] Fully-qualified Fabric resource cited by the agent."
     - name: citation_columns
-      type: array
+      type: string
       nullable: false
-      description: "[RESPONSE] Columns referenced by the executed SQL."
+      description: "[RESPONSE] JSON-encoded list of columns referenced by the executed SQL (e.g. '[\"col_a\",\"col_b\"]')."
     - name: citation_sql
       type: string
       nullable: false

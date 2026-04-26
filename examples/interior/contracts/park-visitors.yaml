@@ -4,7 +4,7 @@
 # park visitor data product. It declares the schema, SLAs, and
 # quality rules for National Park Service visitor statistics.
 
-apiVersion: csa.interior.gov/v1
+apiVersion: csa.microsoft.com/v1
 kind: DataProductContract
 
 metadata:

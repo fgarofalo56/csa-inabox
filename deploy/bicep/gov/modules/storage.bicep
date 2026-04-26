@@ -12,7 +12,7 @@ param tags object = {}
 
 @allowed(['Standard_LRS', 'Standard_GRS', 'Standard_RAGRS', 'Standard_ZRS'])
 @description('Storage SKU.')
-param sku string = 'Standard_LRS'
+param sku string = 'Standard_GRS'
 
 @description('Storage account kind.')
 param kind string = 'StorageV2'

@@ -178,6 +178,11 @@ resource vmss 'Microsoft.Compute/virtualMachineScaleSets@2024-03-01' = {
     overprovision: true
     upgradePolicy: {
       mode: 'Automatic'
+      // CKV_AZURE_95 -- enable automatic OS image upgrades on the scale set.
+      automaticOSUpgradePolicy: {
+        enableAutomaticOSUpgrade: true
+        disableAutomaticRollback: false
+      }
     }
     automaticRepairsPolicy: {
       enabled: true

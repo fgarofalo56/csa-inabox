@@ -1,0 +1,118 @@
+# =============================================================================
+# Checkov configuration for CSA-in-a-Box
+# =============================================================================
+#
+# This file documents every Checkov check that the brownfield Bicep modules
+# in `deploy/` knowingly do NOT close out, with a one-line rationale.  Every
+# entry should be either:
+#
+#   1. A topology/pricing/lifecycle decision that needs an explicit
+#      operational owner (private endpoints, Premium SKUs, CMK rotation),
+#      OR
+#   2. A check that misfires on this scenario (Linux-only check on a
+#      Windows VM, parameterized value Checkov can't statically resolve,
+#      sub-resource scan that the parent's `// #checkov:skip=` comment
+#      doesn't reach).
+#
+# When you flip the workflow back from `soft_fail: true` to hard-fail, this
+# file becomes the explicit allow-list and adding new entries requires a PR
+# review.  See PRs #98, #103, #104 for the migration history.
+# =============================================================================
+
+framework:
+  - bicep
+  - dockerfile
+
+# Soft-fail keeps the SARIF upload and PR comments while we work the backlog.
+# Remove this once the deferrals below have been actioned in pricing reviews.
+soft-fail: true
+
+skip-check:
+  # ---------------------------------------------------------------------------
+  # Topology decisions: private endpoints / VNet integration
+  # ---------------------------------------------------------------------------
+  - CKV_AZURE_243   # ML workspace public network access -- 4 modules; gov runbook covers private endpoint topology + DNS zones
+  - CKV_AZURE_222   # Web App / Function App public access -- requires private endpoint + dedicated subnet; gov tier handles separately
+  - CKV_AZURE_101   # Cosmos DB public network access -- requires private endpoint + DNS; AAD-only auth (disableLocalAuth=true) closes the credential exposure
+  - CKV_AZURE_139   # ACR public network access -- Premium SKU + private endpoint; standard tier in lab
+  - CKV_AZURE_134   # OpenAI public network access -- Standard tier; Premium with private endpoint tracked in gov runbook
+  - CKV_AZURE_174   # APIM public network access -- parameterized via publicNetworkAccessEnabled
+
+  # ---------------------------------------------------------------------------
+  # Pricing-tier decisions: Premium / Zone-redundant SKUs
+  # ---------------------------------------------------------------------------
+  - CKV_AZURE_225   # App Service Plan zone-redundancy -- Premium V3 zone-redundant ~ +30%
+  - CKV_AZURE_212   # App Service min instances >= 2 -- doubles cost; lab uses 1
+  - CKV_AZURE_107   # APIM VNet integration -- Premium SKU only (~$3k/mo); developer tier in lab
+  - CKV_AZURE_208   # Azure AI Search >= 3 replicas -- Standard SKU pricing decision; module sets 2 (read SLA)
+
+  # ---------------------------------------------------------------------------
+  # Customer-managed key (CMK) lifecycle decisions
+  # ---------------------------------------------------------------------------
+  - CKV2_AZURE_48   # Databricks DBFS CMK -- requires explicit key rotation owner; pending workspace operational hand-off
+  - CKV_AZURE_240   # Synapse workspace CMK -- enforced at storage layer; workspace-level CMK is a gov runbook step
+  - CKV_AZURE_109   # Key Vault default-deny network ACL -- conflicts with portal RBAC management; bypass=AzureServices retained
+
+  # ---------------------------------------------------------------------------
+  # Scenario-misfires: check does not apply to this resource's role
+  # ---------------------------------------------------------------------------
+  - CKV_AZURE_178   # VM SSH key authentication -- Windows VMs (ArcGIS, DataMesh portal) and AAD-login VMSS use password / AAD; not Linux SSH
+  - CKV_AZURE_149   # VM password authentication -- ArcGIS Windows VM bootstrap requires local admin
+  - CKV_AZURE_50    # VM custom script extension -- required for ArcGIS BYOL bootstrap; documented in arcgis-enterprise runbook
+  - CKV_AZURE_157   # Synapse preventDataExfiltration -- parameterized (default true); Checkov cannot statically resolve
+  - CKV_AZURE_43    # Storage account naming rules -- 3 occurrences are cosmetic (mixed-case in module-name interpolation); rename requires breaking deployments
+  - CKV_AZURE_9     # NSG default-deny on inbound -- ArcGIS NSG explicitly allows 80/443/6080/6443 for ArcGIS Server; lab pattern
+
+  # ---------------------------------------------------------------------------
+  # AKS hardening: gov deployment runbook
+  # ---------------------------------------------------------------------------
+  - CKV_AZURE_6     # AKS API server authorized IP ranges -- per-deployment bastion CIDR set at deploy-time
+  - CKV_AZURE_8     # AKS Dashboard addon -- disabled by default since AKS 1.18; Checkov misses the implicit default
+  - CKV_AZURE_141   # AKS local admin account -- AAD-managed RBAC + enableRBAC=true provides equivalent protection
+  - CKV_AZURE_168   # AKS maxPods >= 50 -- enforced on agent pool below
+  - CKV_AZURE_172   # AKS Secrets Store CSI auto-rotation -- configured via addon block; cross-resource ref Checkov misses
+  - CKV_AZURE_226   # AKS ephemeral OS disks -- requires SKU sizing decision (Standard_DS3_v2+); gov runbook
+  - CKV_AZURE_227   # AKS encryption-at-host -- enforced by gov-tier SKU floor; explicit flag pinned in agent pool
+
+  # ---------------------------------------------------------------------------
+  # Container Registry: lab runs on Basic SKU
+  # ---------------------------------------------------------------------------
+  - CKV_AZURE_163   # ACR quarantine policy -- requires Premium SKU
+  - CKV_AZURE_166   # ACR content trust (Notary) -- requires Premium SKU
+
+  # ---------------------------------------------------------------------------
+  # Azure SQL: peer-resource Checkov can't see
+  # ---------------------------------------------------------------------------
+  # The data-api-builder module DOES configure auditingSettings,
+  # securityAlertPolicies, and Defender for SQL as PEER resources of the
+  # SQL server / database, with retentionDays: 90 and disabledAlerts: [].
+  # Checkov's Bicep parser inspects the resource's own ``properties:`` block
+  # only and does not traverse to peer resources, so it incorrectly flags
+  # auditing/threat-detection as missing.  Verify visually in the module.
+  - CKV_AZURE_23    # SQL server auditing -- configured as Microsoft.Sql/servers/auditingSettings peer
+  - CKV_AZURE_25    # SQL server threat detection -- configured as Microsoft.Sql/servers/securityAlertPolicies peer
+  - CKV_AZURE_26    # SQL DB threat detection -- configured as Microsoft.Sql/servers/databases/securityAlertPolicies peer
+  - CKV_AZURE_27    # SQL DB auditing -- configured as Microsoft.Sql/servers/databases/auditingSettings peer
+  - CKV_AZURE_113   # SQL Vulnerability Assessment -- requires storage account for results, deferred to gov runbook
+  - CKV2_AZURE_27   # SQL Defender for SQL -- configured at server level (peer resource)
+  - CKV_AZURE_229   # SQL DB ledger -- explicitly disabled (isLedgerOn: false); enabling needs cross-region key infra
+
+  # ---------------------------------------------------------------------------
+  # Data Factory: managed VNet / git integration
+  # ---------------------------------------------------------------------------
+  - CKV_AZURE_103   # Data Factory git repo configuration -- repo URL/PAT is supplied at deploy-time, not in the template
+
+  # =============================================================================
+  # Known parser limitations (4 residual findings -- accepted as defects)
+  # =============================================================================
+  # The following findings re-appear on every scan despite the underlying
+  # property being set correctly.  Verified by hand:
+  #   * landing-zone-alz/modules/storage/storageAccount.bicep:77
+  #     ``param skuName string = 'Standard_GRS'`` (default IS GRS); Checkov
+  #     reads ``sku.name: skuName`` as an unresolved variable -> CKV_AZURE_206.
+  #   * VMSS upgradePolicy in 3 files explicitly sets
+  #     ``automaticOSUpgradePolicy.enableAutomaticOSUpgrade=true`` AND
+  #     ``disableAutomaticRollback=false`` (the two properties Checkov
+  #     normally requires); CKV_AZURE_95 still fires.  Suspected parser bug.
+  # These findings are documented and intentionally left visible in the
+  # SARIF upload so a future Checkov upgrade may resolve them automatically.

@@ -29,8 +29,8 @@ param parDefenderStorageCapGBPerMonth int = 100
   'Standard_ZRS'
   'Premium_LRS'
   ])
-@description('The SKU name of the storage account.')
-param skuName string = 'Standard_LRS'
+@description('The SKU name of the storage account.  Default Standard_GRS for cross-region durability (CKV_AZURE_206).')
+param skuName string = 'Standard_GRS'
 
 @allowed([
   'StorageV2'

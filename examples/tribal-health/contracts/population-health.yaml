@@ -2,8 +2,8 @@
 # Classification: CUI // SP-HLTH (Controlled Unclassified Information — Health)
 # Compliance: HIPAA, FedRAMP High, Tribal Data Sovereignty, 42 CFR Part 2 (SUD)
 
-apiVersion: v1
-kind: DataContract
+apiVersion: csa.microsoft.com/v1
+kind: DataProductContract
 metadata:
   name: population-health
   version: "1.0.0"

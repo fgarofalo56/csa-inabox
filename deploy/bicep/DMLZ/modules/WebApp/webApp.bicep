@@ -116,6 +116,10 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
   properties: {
     serverFarmId: appServicePlan.id
     httpsOnly: true
+    // CKV_AZURE_17 -- require client certificate at the platform layer; the
+    // app can opt out per-route via clientCertExclusionPaths.
+    clientCertEnabled: true
+    clientCertMode: 'Optional'
     publicNetworkAccess: !empty(subnetId) ? 'Disabled' : 'Enabled'
     virtualNetworkSubnetId: enableVnetIntegration && !empty(vnetIntegrationSubnetId) ? vnetIntegrationSubnetId : null
     siteConfig: {

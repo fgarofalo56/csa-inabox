@@ -43,8 +43,14 @@ _CONTRACT_KIND = "DataProductContract"
 _TYPE_VALIDATORS: dict[str, Any] = {
     "string": lambda v: isinstance(v, str),
     "long": lambda v: isinstance(v, int) and not isinstance(v, bool),
+    # ``bigint`` is the Spark / Synapse / SQL spelling of ``long``.  Treat as alias.
+    "bigint": lambda v: isinstance(v, int) and not isinstance(v, bool),
     "int": lambda v: isinstance(v, int) and not isinstance(v, bool),
+    # ``integer`` is the SQL / dbt spelling of ``int``.  Treat as alias.
+    "integer": lambda v: isinstance(v, int) and not isinstance(v, bool),
     "double": lambda v: isinstance(v, int | float) and not isinstance(v, bool),
+    # ``number`` is the JSON-Schema / OpenAPI spelling of ``double``.  Treat as alias.
+    "number": lambda v: isinstance(v, int | float) and not isinstance(v, bool),
     "float": lambda v: isinstance(v, int | float) and not isinstance(v, bool),
     "boolean": lambda v: isinstance(v, bool),
     "date": lambda v: isinstance(v, str) and bool(re.match(r"^\d{4}-\d{2}-\d{2}$", v)),
@@ -320,12 +326,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--include-examples",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help=(
-            "Also validate examples/*/contracts/*.yaml. Off by default because "
-            "the example contracts are tutorial scaffolding and historically "
-            "diverged from the canonical schema; the in-repo Validate Data "
-            "Contracts workflow is the gate that enforces them."
+            "Validate examples/*/contracts/*.yaml in addition to in-repo "
+            "contracts.  Default: enabled.  Pass --no-include-examples to "
+            "validate only domains/*/data-products/**/contract.yaml."
         ),
     )
     parser.add_argument(

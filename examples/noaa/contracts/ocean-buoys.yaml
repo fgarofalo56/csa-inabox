@@ -4,7 +4,7 @@
 # data product. It declares the schema, SLAs, and quality rules
 # for ocean observation analytics and maritime weather monitoring.
 
-apiVersion: csa.noaa.gov/v1
+apiVersion: csa.microsoft.com/v1
 kind: DataProductContract
 
 metadata:

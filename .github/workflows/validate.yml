@@ -117,17 +117,15 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
 
       - name: Run Checkov
-        # NOTE: Checkov runs in advisory mode (soft_fail: true) because the
-        # vendored deploy/bicep/ tree (DLZ / DMLZ / gov accelerators) was
-        # imported with ~98 pre-existing findings and ~14 parsing errors
-        # that Checkov's Bicep frontend cannot handle. Findings are still
-        # uploaded as SARIF and visible in the GitHub Security tab; new
-        # bicep files added under net-new paths should be remediated
-        # rather than skipped. Tracking issue: harden brownfield bicep to
-        # remove this advisory mode.
+        # Checkov runs in advisory mode (soft_fail: true) while the brownfield
+        # backlog is worked down.  See ``.checkov.yaml`` at the repo root for
+        # the explicit skip-list with one-line rationale per check ID; PR #103
+        # closed 33 findings and PR #104 closed another ~50.  When the residual
+        # parser-limitation findings clear we will flip soft_fail off.
         uses: bridgecrewio/checkov-action@de2bfaecd21d58ef232e0d2a3391c33c32c460d7 # v12
         with:
           directory: deploy/
+          config_file: .checkov.yaml
           framework: bicep,arm
           soft_fail: true
           output_format: sarif

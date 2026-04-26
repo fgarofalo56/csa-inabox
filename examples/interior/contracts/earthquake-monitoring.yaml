@@ -4,7 +4,7 @@
 # earthquake monitoring data product. It declares the schema, SLAs, and
 # quality rules for USGS earthquake event analytics.
 
-apiVersion: csa.interior.gov/v1
+apiVersion: csa.microsoft.com/v1
 kind: DataProductContract
 
 metadata:

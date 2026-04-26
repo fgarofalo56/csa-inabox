@@ -5,7 +5,7 @@
 # quality rules for patient enrollment and eligibility analytics.
 # Classification: CUI // SP-HLTH — HIPAA protected
 
-apiVersion: csa.ihs.gov/v1
+apiVersion: csa.microsoft.com/v1
 kind: DataProductContract
 
 metadata:

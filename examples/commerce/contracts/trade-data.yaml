@@ -4,7 +4,7 @@
 # international trade data product. It declares the schema, SLAs, and
 # quality rules for import/export trade flow analytics.
 
-apiVersion: csa.commerce.gov/v1
+apiVersion: csa.microsoft.com/v1
 kind: DataProductContract
 
 metadata:

@@ -4,7 +4,7 @@
 # data product. It declares the schema, SLAs, and quality rules
 # for FSIS inspection analytics and establishment risk scoring.
 
-apiVersion: csa.usda.gov/v1
+apiVersion: csa.microsoft.com/v1
 kind: DataProductContract
 
 metadata:

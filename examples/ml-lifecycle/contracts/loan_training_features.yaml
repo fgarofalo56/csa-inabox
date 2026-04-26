@@ -23,6 +23,10 @@ metadata:
 schema:
   primary_key: [application_id]
   columns:
+    - name: application_id
+      type: string
+      nullable: false
+      description: Stable identifier for the loan application (PK across train/serve).
     - name: applicant_age
       type: integer
       nullable: false
