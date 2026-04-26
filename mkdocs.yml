@@ -45,6 +45,11 @@ plugins:
   - search
   - minify:
       minify_html: true
+  - include-markdown:
+      rewrite_relative_urls: true
+
+hooks:
+  - docs/hooks/rewrite_example_links.py
 
 markdown_extensions:
   - admonition
@@ -178,7 +183,37 @@ nav:
       - Security Incident: runbooks/security-incident.md
       - Tenant Onboarding: runbooks/tenant-onboarding.md
   - Tutorials:
-      - Great Expectations: tutorials/great-expectations.md
+      - Overview: tutorials/README.md
+      - "01 – Foundation Platform": tutorials/01-foundation-platform/README.md
+      - "02 – Data Governance with Purview": tutorials/02-data-governance/README.md
+      - "03 – GeoAnalytics (OSS)": tutorials/03-geoanalytics-oss/README.md
+      - "04 – GeoAnalytics with ArcGIS Enterprise": tutorials/04-geoanalytics-arcgis/README.md
+      - "05 – Real-Time Streaming (Lambda)": tutorials/05-streaming-lambda/README.md
+      - "06 – AI Analytics with Azure AI Foundry": tutorials/06-ai-analytics-foundry/README.md
+      - "07 – AI Agents with Semantic Kernel": tutorials/07-agents-foundry-sk/README.md
+      - "08 – RAG with Azure AI Search": tutorials/08-rag-vector-search/README.md
+      - "09 – GraphRAG Knowledge Graphs": tutorials/09-graphrag-knowledge/README.md
+      - "10 – Data Marketplace": tutorials/10-data-marketplace/README.md
+      - "11 – Data API Builder": tutorials/11-data-api-builder/README.md
+      - "Great Expectations (legacy)": tutorials/great-expectations.md
+  - End-to-End Examples:
+      - Overview: examples/index.md
+      - "AI Agents": examples/ai-agents.md
+      - "Casino Analytics (Tribal)": examples/casino-analytics.md
+      - "Commerce Economic Analytics": examples/commerce.md
+      - "Cybersecurity (MITRE ATT&CK)": examples/cybersecurity.md
+      - "Data API Builder": examples/data-api-builder.md
+      - "DOT Transportation": examples/dot.md
+      - "EPA Environmental": examples/epa.md
+      - "GeoAnalytics": examples/geoanalytics.md
+      - "Interior Natural Resources": examples/interior.md
+      - "IoT Streaming": examples/iot-streaming.md
+      - "ML Lifecycle (Loan Default)": examples/ml-lifecycle.md
+      - "NOAA Climate & Ocean": examples/noaa.md
+      - "Streaming": examples/streaming.md
+      - "Tribal Health": examples/tribal-health.md
+      - "USDA Agriculture": examples/usda.md
+      - "USPS Postal Operations": examples/usps.md
   - Research:
       - Platform Research Report: research/CSA-Platform-Research-Report.md
   - Use Cases:
