@@ -31,7 +31,7 @@ class MockHttpRequest:
 class MockHttpResponse:
     """Helper to parse azure.functions.HttpResponse-like objects."""
 
-    def __init__(self, response):
+    def __init__(self, response) -> None:
         self.status_code = response.status_code
         self.body = json.loads(response.get_body()) if response.get_body() else {}
 
@@ -44,7 +44,7 @@ class MockHttpResponse:
 class TestDetectPII:
     """Test the detect_pii function and internal helpers."""
 
-    def test_detect_ssn(self):
+    def test_detect_ssn(self) -> None:
         from csa_platform.functions.validation.detect_pii import _detect_pii_in_text
 
         detections = _detect_pii_in_text("My SSN is 123-45-6789")
@@ -52,7 +52,7 @@ class TestDetectPII:
         assert len(ssn_detections) >= 1
         assert ssn_detections[0].confidence >= 0.9
 
-    def test_detect_email(self):
+    def test_detect_email(self) -> None:
         from csa_platform.functions.validation.detect_pii import _detect_pii_in_text
 
         detections = _detect_pii_in_text("Contact john@example.com for details")
@@ -60,61 +60,61 @@ class TestDetectPII:
         assert len(email_detections) == 1
         assert email_detections[0].confidence >= 0.9
 
-    def test_detect_phone(self):
+    def test_detect_phone(self) -> None:
         from csa_platform.functions.validation.detect_pii import _detect_pii_in_text
 
         detections = _detect_pii_in_text("Call me at 555-123-4567")
         phone_detections = [d for d in detections if d.category == "phone"]
         assert len(phone_detections) >= 1
 
-    def test_detect_credit_card_visa(self):
+    def test_detect_credit_card_visa(self) -> None:
         from csa_platform.functions.validation.detect_pii import _detect_pii_in_text
 
         detections = _detect_pii_in_text("Card: 4111111111111111")
         cc_detections = [d for d in detections if d.category == "credit_card"]
         assert len(cc_detections) >= 1
 
-    def test_detect_credit_card_mastercard(self):
+    def test_detect_credit_card_mastercard(self) -> None:
         from csa_platform.functions.validation.detect_pii import _detect_pii_in_text
 
         detections = _detect_pii_in_text("Card: 5111111111111118")
         cc_detections = [d for d in detections if d.category == "credit_card"]
         assert len(cc_detections) >= 1
 
-    def test_masking_ssn(self):
+    def test_masking_ssn(self) -> None:
         from csa_platform.functions.validation.detect_pii import _mask_value
 
         masked = _mask_value("123-45-6789", "ssn")
         assert masked == "***-**-6789"
 
-    def test_masking_email(self):
+    def test_masking_email(self) -> None:
         from csa_platform.functions.validation.detect_pii import _mask_value
 
         masked = _mask_value("john@example.com", "email")
         assert "***@example.com" in masked
         assert "john" not in masked
 
-    def test_masking_credit_card(self):
+    def test_masking_credit_card(self) -> None:
         from csa_platform.functions.validation.detect_pii import _mask_value
 
         masked = _mask_value("4111111111111111", "credit_card")
         assert masked.endswith("1111")
         assert "****" in masked
 
-    def test_category_filtering(self):
+    def test_category_filtering(self) -> None:
         from csa_platform.functions.validation.detect_pii import _detect_pii_in_text
 
         text = "SSN: 123-45-6789, Email: test@example.com"
         detections = _detect_pii_in_text(text, categories={"ssn"})
         assert all(d.category == "ssn" for d in detections)
 
-    def test_no_pii_in_clean_text(self):
+    def test_no_pii_in_clean_text(self) -> None:
         from csa_platform.functions.validation.detect_pii import _detect_pii_in_text
 
         detections = _detect_pii_in_text("The weather is nice today.")
         assert len(detections) == 0
 
-    def test_multiple_pii_in_single_text(self):
+    def test_multiple_pii_in_single_text(self) -> None:
         from csa_platform.functions.validation.detect_pii import _detect_pii_in_text
 
         text = "SSN 123-45-6789, email test@example.com, card 4111111111111111"
@@ -133,7 +133,7 @@ class TestDetectPII:
 class TestValidateQuality:
     """Test quality validation rule evaluators."""
 
-    def test_completeness_all_present(self):
+    def test_completeness_all_present(self) -> None:
         from csa_platform.functions.validation.validate_quality import _check_completeness
 
         data = [
@@ -144,7 +144,7 @@ class TestValidateQuality:
         assert result["score"] == 1.0
         assert len(result["violations"]) == 0
 
-    def test_completeness_with_nulls(self):
+    def test_completeness_with_nulls(self) -> None:
         from csa_platform.functions.validation.validate_quality import _check_completeness
 
         data = [
@@ -156,14 +156,14 @@ class TestValidateQuality:
         assert result["score"] < 1.0
         assert len(result["violations"]) > 0
 
-    def test_range_all_valid(self):
+    def test_range_all_valid(self) -> None:
         from csa_platform.functions.validation.validate_quality import _check_range
 
         data = [{"age": 25}, {"age": 30}, {"age": 45}]
         result = _check_range(data, {"field": "age", "min": 0, "max": 150})
         assert result["score"] == 1.0
 
-    def test_range_with_violations(self):
+    def test_range_with_violations(self) -> None:
         from csa_platform.functions.validation.validate_quality import _check_range
 
         data = [{"age": 25}, {"age": -5}, {"age": 200}]
@@ -172,7 +172,7 @@ class TestValidateQuality:
         assert len(result["violations"]) == 1
         assert result["violations"][0]["violation_count"] == 2
 
-    def test_regex_valid_emails(self):
+    def test_regex_valid_emails(self) -> None:
         from csa_platform.functions.validation.validate_quality import _check_regex
 
         data = [
@@ -182,7 +182,7 @@ class TestValidateQuality:
         result = _check_regex(data, {"field": "email", "pattern": r"^[\w.+-]+@[\w-]+\.[\w.]+$"})
         assert result["score"] == 1.0
 
-    def test_regex_with_invalid(self):
+    def test_regex_with_invalid(self) -> None:
         from csa_platform.functions.validation.validate_quality import _check_regex
 
         data = [
@@ -192,14 +192,14 @@ class TestValidateQuality:
         result = _check_regex(data, {"field": "email", "pattern": r"^[\w.+-]+@[\w-]+\.[\w.]+$"})
         assert result["score"] < 1.0
 
-    def test_uniqueness_all_unique(self):
+    def test_uniqueness_all_unique(self) -> None:
         from csa_platform.functions.validation.validate_quality import _check_uniqueness
 
         data = [{"id": 1}, {"id": 2}, {"id": 3}]
         result = _check_uniqueness(data, {"field": "id"})
         assert result["score"] == 1.0
 
-    def test_uniqueness_with_duplicates(self):
+    def test_uniqueness_with_duplicates(self) -> None:
         from csa_platform.functions.validation.validate_quality import _check_uniqueness
 
         data = [{"id": 1}, {"id": 2}, {"id": 1}]
@@ -207,14 +207,14 @@ class TestValidateQuality:
         assert result["score"] < 1.0
         assert len(result["violations"]) == 1
 
-    def test_referential_valid(self):
+    def test_referential_valid(self) -> None:
         from csa_platform.functions.validation.validate_quality import _check_referential
 
         data = [{"status": "active"}, {"status": "inactive"}]
         result = _check_referential(data, {"field": "status", "allowed_values": ["active", "inactive"]})
         assert result["score"] == 1.0
 
-    def test_referential_with_invalid(self):
+    def test_referential_with_invalid(self) -> None:
         from csa_platform.functions.validation.validate_quality import _check_referential
 
         data = [{"status": "active"}, {"status": "deleted"}]
@@ -230,7 +230,7 @@ class TestValidateQuality:
 class TestValidateSchema:
     """Test JSON Schema and YAML contract validation."""
 
-    def test_json_schema_valid(self):
+    def test_json_schema_valid(self) -> None:
         from csa_platform.functions.validation.validate_schema import _validate_data
 
         schema = {
@@ -244,7 +244,7 @@ class TestValidateSchema:
         errors = _validate_data({"name": "Alice", "age": 30}, schema)
         assert len(errors) == 0
 
-    def test_json_schema_invalid(self):
+    def test_json_schema_invalid(self) -> None:
         from csa_platform.functions.validation.validate_schema import _validate_data
 
         schema = {
@@ -259,7 +259,7 @@ class TestValidateSchema:
         assert len(errors) == 1
         assert errors[0]["validator"] == "required"
 
-    def test_json_schema_type_mismatch(self):
+    def test_json_schema_type_mismatch(self) -> None:
         from csa_platform.functions.validation.validate_schema import _validate_data
 
         schema = {
@@ -270,7 +270,7 @@ class TestValidateSchema:
         assert len(errors) == 1
         assert errors[0]["validator"] == "type"
 
-    def test_yaml_contract_valid(self):
+    def test_yaml_contract_valid(self) -> None:
         from csa_platform.functions.validation.validate_schema import _validate_against_contract
 
         contract = {
@@ -284,7 +284,7 @@ class TestValidateSchema:
         errors = _validate_against_contract({"id": 1, "status": "active"}, contract)
         assert len(errors) == 0
 
-    def test_yaml_contract_missing_required(self):
+    def test_yaml_contract_missing_required(self) -> None:
         from csa_platform.functions.validation.validate_schema import _validate_against_contract
 
         contract = {
@@ -298,7 +298,7 @@ class TestValidateSchema:
         assert len(errors) == 1
         assert "Required column" in errors[0]["message"]
 
-    def test_yaml_contract_invalid_enum(self):
+    def test_yaml_contract_invalid_enum(self) -> None:
         from csa_platform.functions.validation.validate_schema import _validate_against_contract
 
         contract = {
@@ -321,7 +321,7 @@ class TestValidateSchema:
 class TestSendTeamsAlert:
     """Test Teams alert card building and webhook posting."""
 
-    def test_build_adaptive_card_structure(self):
+    def test_build_adaptive_card_structure(self) -> None:
         from csa_platform.functions.validation.send_teams_alert import _build_adaptive_card
 
         card = _build_adaptive_card(
@@ -343,7 +343,7 @@ class TestSendTeamsAlert:
         assert body[0]["type"] == "TextBlock"  # Title
         assert "Pipeline Failed" in body[0]["text"]
 
-    def test_build_card_with_actions(self):
+    def test_build_card_with_actions(self) -> None:
         from csa_platform.functions.validation.send_teams_alert import _build_adaptive_card
 
         card = _build_adaptive_card(
@@ -358,7 +358,7 @@ class TestSendTeamsAlert:
         assert content["actions"][0]["type"] == "Action.OpenUrl"
         assert content["actions"][0]["url"] == "https://dashboard.example.com"
 
-    def test_severity_styles(self):
+    def test_severity_styles(self) -> None:
         from csa_platform.functions.validation.send_teams_alert import _SEVERITY_CONFIG
 
         assert "critical" in _SEVERITY_CONFIG
@@ -369,7 +369,7 @@ class TestSendTeamsAlert:
         assert _SEVERITY_CONFIG["critical"]["color"] == "Attention"
         assert _SEVERITY_CONFIG["info"]["color"] == "Accent"
 
-    def test_build_card_dict_facts(self):
+    def test_build_card_dict_facts(self) -> None:
         from csa_platform.functions.validation.send_teams_alert import _build_adaptive_card
 
         card = _build_adaptive_card(
@@ -384,7 +384,7 @@ class TestSendTeamsAlert:
         assert len(fact_set) == 1
         assert len(fact_set[0]["facts"]) == 2
 
-    def test_build_card_list_facts(self):
+    def test_build_card_list_facts(self) -> None:
         from csa_platform.functions.validation.send_teams_alert import _build_adaptive_card
 
         card = _build_adaptive_card(
@@ -399,7 +399,7 @@ class TestSendTeamsAlert:
         assert len(fact_set) == 1
 
     @patch("requests.post")
-    def test_webhook_delivery(self, mock_post):
+    def test_webhook_delivery(self, mock_post) -> None:
         """Test that the card is posted to the webhook URL."""
         from csa_platform.functions.validation.send_teams_alert import _build_adaptive_card
 

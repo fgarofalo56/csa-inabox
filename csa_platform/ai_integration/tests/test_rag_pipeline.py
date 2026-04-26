@@ -28,7 +28,7 @@ from csa_platform.ai_integration.rag.pipeline import (
 class TestDocumentChunker:
     """Test the document chunking engine."""
 
-    def test_basic_sentence_chunking(self):
+    def test_basic_sentence_chunking(self) -> None:
         chunker = DocumentChunker(chunk_size=100, chunk_overlap=20, min_chunk_length=10)
         text = (
             "The quick brown fox jumped over the lazy dog. "
@@ -41,28 +41,28 @@ class TestDocumentChunker:
         assert all(isinstance(c, Chunk) for c in chunks)
         assert all(c.source == "test.txt" for c in chunks)
 
-    def test_chunk_ids_are_deterministic(self):
+    def test_chunk_ids_are_deterministic(self) -> None:
         chunker = DocumentChunker(chunk_size=50, chunk_overlap=10, min_chunk_length=5)
         text = "Hello world. This is a test. Another sentence here."
         chunks_a = chunker.chunk_text(text, source="file.txt")
         chunks_b = chunker.chunk_text(text, source="file.txt")
         assert [c.id for c in chunks_a] == [c.id for c in chunks_b]
 
-    def test_chunk_ids_differ_for_different_sources(self):
+    def test_chunk_ids_differ_for_different_sources(self) -> None:
         chunker = DocumentChunker(chunk_size=50, chunk_overlap=10, min_chunk_length=5)
         text = "Hello world. This is a test."
         chunks_a = chunker.chunk_text(text, source="file_a.txt")
         chunks_b = chunker.chunk_text(text, source="file_b.txt")
         assert chunks_a[0].id != chunks_b[0].id
 
-    def test_minimum_chunk_length_filtering(self):
+    def test_minimum_chunk_length_filtering(self) -> None:
         chunker = DocumentChunker(chunk_size=100, chunk_overlap=10, min_chunk_length=50)
         text = "Hi. OK. This is a much longer sentence that should pass the minimum length filter."
         chunks = chunker.chunk_text(text, source="test.txt")
         for chunk in chunks:
             assert len(chunk.text) >= 50
 
-    def test_paragraph_strategy(self):
+    def test_paragraph_strategy(self) -> None:
         chunker = DocumentChunker(
             chunk_size=200,
             chunk_overlap=20,
@@ -73,7 +73,7 @@ class TestDocumentChunker:
         chunks = chunker.chunk_text(text, source="test.txt")
         assert len(chunks) >= 1
 
-    def test_token_strategy(self):
+    def test_token_strategy(self) -> None:
         chunker = DocumentChunker(
             chunk_size=5,
             chunk_overlap=2,
@@ -84,11 +84,11 @@ class TestDocumentChunker:
         chunks = chunker.chunk_text(text, source="test.txt")
         assert len(chunks) >= 1
 
-    def test_overlap_less_than_chunk_size(self):
+    def test_overlap_less_than_chunk_size(self) -> None:
         with pytest.raises(ValueError, match="chunk_overlap must be less than chunk_size"):
             DocumentChunker(chunk_size=50, chunk_overlap=50)
 
-    def test_metadata_passed_through(self):
+    def test_metadata_passed_through(self) -> None:
         chunker = DocumentChunker(chunk_size=200, chunk_overlap=20, min_chunk_length=10)
         text = "Some text content that is long enough to produce a chunk."
         metadata = {"department": "finance", "year": "2024"}
@@ -96,7 +96,7 @@ class TestDocumentChunker:
         assert len(chunks) >= 1
         assert chunks[0].metadata["department"] == "finance"
 
-    def test_empty_text_produces_no_chunks(self):
+    def test_empty_text_produces_no_chunks(self) -> None:
         chunker = DocumentChunker(chunk_size=100, chunk_overlap=10, min_chunk_length=10)
         chunks = chunker.chunk_text("", source="test.txt")
         assert len(chunks) == 0
@@ -111,7 +111,7 @@ class TestRAGPipeline:
     """Test the RAG pipeline query flow with mocked dependencies."""
 
     @pytest.fixture
-    def mock_pipeline(self):
+    def mock_pipeline(self) -> tuple[RAGPipeline, MagicMock, MagicMock]:
         """Create a RAG pipeline with mocked embedder and vector store."""
         chunker = DocumentChunker(chunk_size=512, chunk_overlap=64, min_chunk_length=50)
         embedder = MagicMock(spec=EmbeddingGenerator)
@@ -137,10 +137,10 @@ class TestRAGPipeline:
             score_threshold=0.7,
         )
         # Patch the pipeline's chat client getter to return our mock
-        pipeline._get_chat_client = MagicMock(return_value=mock_chat_client)
+        pipeline._get_chat_client = MagicMock(return_value=mock_chat_client)  # type: ignore[method-assign]
         return pipeline, embedder, vector_store
 
-    def test_query_returns_answer(self, mock_pipeline):
+    def test_query_returns_answer(self, mock_pipeline: tuple[RAGPipeline, MagicMock, MagicMock]) -> None:
         pipeline, embedder, vector_store = mock_pipeline
 
         vector_store.search.return_value = [
@@ -158,7 +158,7 @@ class TestRAGPipeline:
         assert len(result["sources"]) == 2
         embedder.embed_single.assert_called_once_with("What are the crop yield trends?")
 
-    def test_query_no_results_returns_message(self, mock_pipeline):
+    def test_query_no_results_returns_message(self, mock_pipeline: tuple[RAGPipeline, MagicMock, MagicMock]) -> None:
         pipeline, _embedder, vector_store = mock_pipeline
         vector_store.search.return_value = []
 
@@ -167,7 +167,7 @@ class TestRAGPipeline:
         assert "No relevant context" in result["answer"]
         assert result["sources"] == []
 
-    def test_query_passes_filters(self, mock_pipeline):
+    def test_query_passes_filters(self, mock_pipeline: tuple[RAGPipeline, MagicMock, MagicMock]) -> None:
         pipeline, _embedder, vector_store = mock_pipeline
         vector_store.search.return_value = []
 
@@ -178,7 +178,7 @@ class TestRAGPipeline:
             len(call_kwargs.args) > 4 and call_kwargs.args[4] == "source eq 'usda'"
         )
 
-    def test_ingest_text(self, mock_pipeline):
+    def test_ingest_text(self, mock_pipeline: tuple[RAGPipeline, MagicMock, MagicMock]) -> None:
         pipeline, embedder, vector_store = mock_pipeline
         vector_store.upsert_documents.return_value = 1
 
@@ -200,7 +200,7 @@ class TestRAGPipeline:
 class TestEntityExtractor:
     """Test entity extraction with mocked Azure AI Language client."""
 
-    def test_extract_entities(self):
+    def test_extract_entities(self) -> None:
         from csa_platform.ai_integration.enrichment.entity_extractor import (
             EntityExtractor,
         )
@@ -232,7 +232,7 @@ class TestEntityExtractor:
         assert len(results[0].entities) == 1
         assert results[0].entities[0].category == "Organization"
 
-    def test_extract_entities_error_handling(self):
+    def test_extract_entities_error_handling(self) -> None:
         from azure.core.exceptions import HttpResponseError
 
         from csa_platform.ai_integration.enrichment.entity_extractor import EntityExtractor
@@ -252,7 +252,7 @@ class TestEntityExtractor:
 class TestDocumentClassifier:
     """Test document classification with mocked Azure OpenAI client."""
 
-    def test_classify_single(self):
+    def test_classify_single(self) -> None:
         from csa_platform.ai_integration.enrichment.document_classifier import (
             DocumentClassifier,
         )
@@ -278,7 +278,7 @@ class TestDocumentClassifier:
 class TestTextSummarizer:
     """Test text summarization with mocked Azure OpenAI client."""
 
-    def test_summarize(self):
+    def test_summarize(self) -> None:
         from csa_platform.ai_integration.enrichment.text_summarizer import (
             TextSummarizer,
         )

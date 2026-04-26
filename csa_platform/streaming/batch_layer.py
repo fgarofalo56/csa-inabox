@@ -43,7 +43,7 @@ class BatchLayerConfig:
     partition_columns: list[str] = None
     compression: str = "snappy"
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.partition_columns is None:
             self.partition_columns = ["event_type", "date"]
 
@@ -492,7 +492,7 @@ class BatchLayer:
 if __name__ == "__main__":
     import os
 
-    async def main():
+    async def main() -> None:
         """Example usage of BatchLayer."""
         config = BatchLayerConfig(
             adls_account_url=os.environ.get("ADLS_ACCOUNT_URL", "https://storage.dfs.core.windows.net"),

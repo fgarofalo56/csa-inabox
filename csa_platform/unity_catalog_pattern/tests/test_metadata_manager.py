@@ -66,22 +66,22 @@ def seeded_manager(manager: MetadataManager) -> MetadataManager:
 class TestCatalogOperations:
     """Test catalog registration and retrieval."""
 
-    def test_register_catalog(self, manager):
+    def test_register_catalog(self, manager) -> None:
         entry = manager.register_catalog("finance", owner="team-a")
         assert isinstance(entry, CatalogEntry)
         assert entry.name == "finance"
         assert entry.owner == "team-a"
 
-    def test_get_catalog(self, manager):
+    def test_get_catalog(self, manager) -> None:
         manager.register_catalog("health", owner="team-b")
         result = manager.get_catalog("health")
         assert result is not None
         assert result.name == "health"
 
-    def test_get_nonexistent_catalog_returns_none(self, manager):
+    def test_get_nonexistent_catalog_returns_none(self, manager) -> None:
         assert manager.get_catalog("nonexistent") is None
 
-    def test_upsert_catalog_overwrites(self, manager):
+    def test_upsert_catalog_overwrites(self, manager) -> None:
         manager.register_catalog("finance", owner="old-team")
         manager.register_catalog("finance", owner="new-team")
         result = manager.get_catalog("finance")
@@ -96,30 +96,30 @@ class TestCatalogOperations:
 class TestSchemaOperations:
     """Test schema registration and parent validation."""
 
-    def test_register_schema(self, manager):
+    def test_register_schema(self, manager) -> None:
         manager.register_catalog("finance")
         entry = manager.register_schema("finance", "gold", description="Curated")
         assert isinstance(entry, SchemaEntry)
         assert entry.catalog_name == "finance"
         assert entry.name == "gold"
 
-    def test_register_schema_inherits_catalog_owner(self, manager):
+    def test_register_schema_inherits_catalog_owner(self, manager) -> None:
         manager.register_catalog("finance", owner="finance-team@contoso.com")
         entry = manager.register_schema("finance", "gold")
         assert entry.owner == "finance-team@contoso.com"
 
-    def test_register_schema_without_catalog_raises(self, manager):
+    def test_register_schema_without_catalog_raises(self, manager) -> None:
         with pytest.raises(ValueError, match="Catalog not found"):
             manager.register_schema("nonexistent", "gold")
 
-    def test_get_schema(self, manager):
+    def test_get_schema(self, manager) -> None:
         manager.register_catalog("finance")
         manager.register_schema("finance", "silver")
         result = manager.get_schema("finance", "silver")
         assert result is not None
         assert result.name == "silver"
 
-    def test_get_nonexistent_schema_returns_none(self, manager):
+    def test_get_nonexistent_schema_returns_none(self, manager) -> None:
         assert manager.get_schema("finance", "bronze") is None
 
 
@@ -131,14 +131,14 @@ class TestSchemaOperations:
 class TestTableOperations:
     """Test table registration, retrieval, listing, deletion."""
 
-    def test_register_table(self, seeded_manager):
+    def test_register_table(self, seeded_manager) -> None:
         table = seeded_manager.get_table_metadata("finance", "gold", "revenue")
         assert table is not None
         assert table.full_name == "finance.gold.revenue"
         assert table.schema_version == 1
         assert len(table.columns) == 2
 
-    def test_register_table_without_schema_raises(self, manager):
+    def test_register_table_without_schema_raises(self, manager) -> None:
         manager.register_catalog("finance")
         with pytest.raises(ValueError, match="Schema not found"):
             manager.register_table(
@@ -148,21 +148,21 @@ class TestTableOperations:
                 location="abfss://gold@dl.dfs.core.windows.net/bad/",
             )
 
-    def test_list_tables_by_catalog(self, seeded_manager):
+    def test_list_tables_by_catalog(self, seeded_manager) -> None:
         tables = seeded_manager.list_tables(catalog="finance")
         assert len(tables) == 1
         assert tables[0].name == "revenue"
 
-    def test_list_tables_empty_catalog(self, seeded_manager):
+    def test_list_tables_empty_catalog(self, seeded_manager) -> None:
         tables = seeded_manager.list_tables(catalog="nonexistent")
         assert tables == []
 
-    def test_delete_table(self, seeded_manager):
+    def test_delete_table(self, seeded_manager) -> None:
         deleted = seeded_manager.delete_table("finance", "gold", "revenue")
         assert deleted is True
         assert seeded_manager.get_table_metadata("finance", "gold", "revenue") is None
 
-    def test_delete_nonexistent_table_returns_false(self, seeded_manager):
+    def test_delete_nonexistent_table_returns_false(self, seeded_manager) -> None:
         deleted = seeded_manager.delete_table("finance", "gold", "nonexistent")
         assert deleted is False
 
@@ -181,7 +181,7 @@ class TestSchemaVersioning:
     The tests below verify the *actual* runtime behavior.
     """
 
-    def test_update_table_preserves_version_due_to_assignment_order(self, seeded_manager):
+    def test_update_table_preserves_version_due_to_assignment_order(self, seeded_manager) -> None:
         """Current impl assigns columns before comparing, so version stays at 1."""
         new_columns = [
             {"name": "fiscal_year", "type": "int"},
@@ -200,7 +200,7 @@ class TestSchemaVersioning:
         assert updated.schema_version == 1
         assert len(updated.columns) == 3
 
-    def test_initial_registration_creates_v1(self, seeded_manager):
+    def test_initial_registration_creates_v1(self, seeded_manager) -> None:
         table = seeded_manager.get_table_metadata("finance", "gold", "revenue")
         assert table.schema_version == 1
         assert len(table.versions) == 1
@@ -215,16 +215,16 @@ class TestSchemaVersioning:
 class TestSearchTables:
     """Test table search by name, description, and tags."""
 
-    def test_search_by_name(self, seeded_manager):
+    def test_search_by_name(self, seeded_manager) -> None:
         results = seeded_manager.search_tables("revenue")
         assert len(results) == 1
         assert results[0].name == "revenue"
 
-    def test_search_by_tag(self, seeded_manager):
+    def test_search_by_tag(self, seeded_manager) -> None:
         results = seeded_manager.search_tables("curated")
         assert len(results) == 1
 
-    def test_search_by_description(self, seeded_manager):
+    def test_search_by_description(self, seeded_manager) -> None:
         seeded_manager.register_table(
             catalog="finance",
             schema_name="gold",
@@ -237,11 +237,11 @@ class TestSearchTables:
         assert len(results) == 1
         assert results[0].name == "expenses"
 
-    def test_search_scoped_to_catalog(self, seeded_manager):
+    def test_search_scoped_to_catalog(self, seeded_manager) -> None:
         results = seeded_manager.search_tables("revenue", catalog="health")
         assert results == []
 
-    def test_search_no_match(self, seeded_manager):
+    def test_search_no_match(self, seeded_manager) -> None:
         results = seeded_manager.search_tables("nonexistent_xyz")
         assert results == []
 
@@ -254,7 +254,7 @@ class TestSearchTables:
 class TestInMemoryMetadataStore:
     """Direct tests on the store layer."""
 
-    def test_list_tables_filters_by_schema(self):
+    def test_list_tables_filters_by_schema(self) -> None:
         store = InMemoryMetadataStore()
         store.upsert_catalog(CatalogEntry(name="c"))
         store.upsert_schema(SchemaEntry(catalog_name="c", name="s1"))

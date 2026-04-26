@@ -72,59 +72,59 @@ def engine() -> RuleEngine:
 class TestThresholdEvaluation:
     """Test basic threshold condition operators."""
 
-    def test_gt_fires_when_above_threshold(self, engine):
+    def test_gt_fires_when_above_threshold(self, engine) -> None:
         engine.add_rule(_make_rule(operator=ConditionOperator.GT, threshold=100.0))
         alerts = engine.evaluate({"value": 150.0})
         assert len(alerts) == 1
         assert alerts[0].actual_value == 150.0
 
-    def test_gt_does_not_fire_when_below(self, engine):
+    def test_gt_does_not_fire_when_below(self, engine) -> None:
         engine.add_rule(_make_rule(operator=ConditionOperator.GT, threshold=100.0))
         alerts = engine.evaluate({"value": 50.0})
         assert len(alerts) == 0
 
-    def test_lt_fires_when_below_threshold(self, engine):
+    def test_lt_fires_when_below_threshold(self, engine) -> None:
         engine.add_rule(_make_rule(operator=ConditionOperator.LT, threshold=10.0))
         alerts = engine.evaluate({"value": 5.0})
         assert len(alerts) == 1
 
-    def test_gte_fires_on_equal(self, engine):
+    def test_gte_fires_on_equal(self, engine) -> None:
         engine.add_rule(_make_rule(operator=ConditionOperator.GTE, threshold=100.0))
         alerts = engine.evaluate({"value": 100.0})
         assert len(alerts) == 1
 
-    def test_lte_fires_on_equal(self, engine):
+    def test_lte_fires_on_equal(self, engine) -> None:
         engine.add_rule(_make_rule(operator=ConditionOperator.LTE, threshold=50.0))
         alerts = engine.evaluate({"value": 50.0})
         assert len(alerts) == 1
 
-    def test_eq_fires_on_exact_match(self, engine):
+    def test_eq_fires_on_exact_match(self, engine) -> None:
         engine.add_rule(_make_rule(operator=ConditionOperator.EQ, threshold=42.0))
         alerts = engine.evaluate({"value": 42.0})
         assert len(alerts) == 1
 
-    def test_neq_fires_on_mismatch(self, engine):
+    def test_neq_fires_on_mismatch(self, engine) -> None:
         engine.add_rule(_make_rule(operator=ConditionOperator.NEQ, threshold=42.0))
         alerts = engine.evaluate({"value": 43.0})
         assert len(alerts) == 1
 
-    def test_between_fires_when_in_range(self, engine):
+    def test_between_fires_when_in_range(self, engine) -> None:
         engine.add_rule(_make_rule(operator=ConditionOperator.BETWEEN, threshold=[10.0, 50.0]))
         alerts = engine.evaluate({"value": 25.0})
         assert len(alerts) == 1
 
-    def test_between_does_not_fire_when_outside(self, engine):
+    def test_between_does_not_fire_when_outside(self, engine) -> None:
         engine.add_rule(_make_rule(operator=ConditionOperator.BETWEEN, threshold=[10.0, 50.0]))
         alerts = engine.evaluate({"value": 75.0})
         assert len(alerts) == 0
 
-    def test_nested_field_resolution(self, engine):
+    def test_nested_field_resolution(self, engine) -> None:
         engine.add_rule(_make_rule(field="data.temperature", operator=ConditionOperator.GT, threshold=100.0))
         alerts = engine.evaluate({"data": {"temperature": 120.0}})
         assert len(alerts) == 1
         assert alerts[0].actual_value == 120.0
 
-    def test_missing_field_does_not_fire(self, engine):
+    def test_missing_field_does_not_fire(self, engine) -> None:
         engine.add_rule(_make_rule(field="missing_field"))
         alerts = engine.evaluate({"other_field": 999.0})
         assert len(alerts) == 0
@@ -138,7 +138,7 @@ class TestThresholdEvaluation:
 class TestAnomalyDetection:
     """Test z-score anomaly detection."""
 
-    def test_anomaly_detected_with_outlier(self, engine):
+    def test_anomaly_detected_with_outlier(self, engine) -> None:
         rule = _make_rule(
             name="anomaly-rule",
             operator=ConditionOperator.ANOMALY,
@@ -156,7 +156,7 @@ class TestAnomalyDetection:
         alerts = engine.evaluate({"value": 200.0})  # Far from mean ~100
         assert len(alerts) == 1
 
-    def test_anomaly_not_detected_with_normal(self, engine):
+    def test_anomaly_not_detected_with_normal(self, engine) -> None:
         rule = _make_rule(
             name="anomaly-rule",
             operator=ConditionOperator.ANOMALY,
@@ -173,7 +173,7 @@ class TestAnomalyDetection:
         alerts = engine.evaluate({"value": 100.3})
         assert len(alerts) == 0
 
-    def test_anomaly_requires_minimum_data_points(self, engine):
+    def test_anomaly_requires_minimum_data_points(self, engine) -> None:
         rule = _make_rule(
             name="anomaly-rule",
             operator=ConditionOperator.ANOMALY,
@@ -199,7 +199,7 @@ class TestAnomalyDetection:
 class TestFreshnessChecking:
     """Test data freshness rules (time-based thresholds)."""
 
-    def test_stale_data_triggers_alert(self, engine):
+    def test_stale_data_triggers_alert(self, engine) -> None:
         """Simulates a freshness check using GT on minutes_since_update."""
         rule = _make_rule(
             name="freshness-rule",
@@ -213,7 +213,7 @@ class TestFreshnessChecking:
         assert len(alerts) == 1
         assert alerts[0].rule_name == "freshness-rule"
 
-    def test_fresh_data_no_alert(self, engine):
+    def test_fresh_data_no_alert(self, engine) -> None:
         rule = _make_rule(
             name="freshness-rule",
             field="minutes_since_update",
@@ -234,7 +234,7 @@ class TestFreshnessChecking:
 class TestBatchEvaluation:
     """Test evaluating multiple events against multiple rules."""
 
-    def test_batch_evaluation(self, engine):
+    def test_batch_evaluation(self, engine) -> None:
         engine.add_rule(
             _make_rule(name="high-temp", field="temperature", operator=ConditionOperator.GT, threshold=100.0)
         )
@@ -256,7 +256,7 @@ class TestBatchEvaluation:
         # Event 1: high-temp fires; Event 2: low-pressure fires; Event 3: both fire
         assert len(alerts) >= 3
 
-    def test_disabled_rule_skipped(self, engine):
+    def test_disabled_rule_skipped(self, engine) -> None:
         engine.add_rule(_make_rule(name="disabled", enabled=False))
         alerts = engine.evaluate({"value": 999.0})
         assert len(alerts) == 0
@@ -270,7 +270,7 @@ class TestBatchEvaluation:
 class TestRuleManagement:
     """Test adding, removing, and listing rules."""
 
-    def test_add_and_list_rules(self, engine):
+    def test_add_and_list_rules(self, engine) -> None:
         engine.add_rule(_make_rule(name="rule-1"))
         engine.add_rule(_make_rule(name="rule-2"))
 
@@ -278,12 +278,12 @@ class TestRuleManagement:
         assert len(rules) == 2
         assert rules[0]["name"] == "rule-1"
 
-    def test_remove_rule(self, engine):
+    def test_remove_rule(self, engine) -> None:
         engine.add_rule(_make_rule(name="rule-to-remove"))
         assert engine.remove_rule("rule-to-remove") is True
         assert len(engine.list_rules()) == 0
 
-    def test_remove_nonexistent_rule(self, engine):
+    def test_remove_nonexistent_rule(self, engine) -> None:
         assert engine.remove_rule("nonexistent") is False
 
 
@@ -295,7 +295,7 @@ class TestRuleManagement:
 class TestAlertMetadata:
     """Test that fired alerts contain correct metadata."""
 
-    def test_fired_alert_has_correct_fields(self, engine):
+    def test_fired_alert_has_correct_fields(self, engine) -> None:
         engine.add_rule(
             _make_rule(
                 name="test-alert",

@@ -76,7 +76,7 @@ class FakeResp:
 
         if self.status_code >= 400:
             err = requests.HTTPError(f"{self.status_code}")
-            err.response = self  # type: ignore[attr-defined]
+            err.response = self  # type: ignore[attr-defined, unused-ignore]
             raise err
 
 
@@ -85,7 +85,7 @@ def _http_error(status_code: int) -> Any:
 
     resp = FakeResp(status_code=status_code)
     err = requests.HTTPError(f"http {status_code}")
-    err.response = resp  # type: ignore[attr-defined]
+    err.response = resp  # type: ignore[attr-defined, unused-ignore]
     return err
 
 

@@ -85,7 +85,7 @@ def _make_entries() -> list[CostEntry]:
 
 
 @pytest.fixture
-def allocator():
+def allocator() -> None:
     """Return a CostAllocator with a mocked client."""
     alloc = CostAllocator(
         subscription_id="sub-1",
@@ -103,7 +103,7 @@ def allocator():
 class TestGetCostsByTag:
     """Test CostAllocator.get_costs_by_tag."""
 
-    def test_parses_api_rows_into_cost_entries(self, allocator):
+    def test_parses_api_rows_into_cost_entries(self, allocator) -> None:
         mock_result = SimpleNamespace(
             columns=[
                 SimpleNamespace(name="ResourceGroupName"),
@@ -131,7 +131,7 @@ class TestGetCostsByTag:
         assert entries[0].tags == {"org": "USDA"}
         assert entries[1].meter_category == "Storage"
 
-    def test_empty_api_result_returns_empty_list(self, allocator):
+    def test_empty_api_result_returns_empty_list(self, allocator) -> None:
         mock_result = SimpleNamespace(columns=[], rows=[])
         allocator._client.query.usage.return_value = mock_result
 
@@ -147,7 +147,7 @@ class TestGetCostsByTag:
 class TestAllocateToOrgs:
     """Test the three allocation strategies: proportional, equal, none."""
 
-    def test_proportional_allocation(self, allocator):
+    def test_proportional_allocation(self, allocator) -> None:
         entries = _make_entries()
         report = allocator.allocate_to_orgs(entries, "org", shared_cost_strategy="proportional")
 
@@ -166,7 +166,7 @@ class TestAllocateToOrgs:
         assert dod.shared_cost_allocation == pytest.approx(30 * 200 / 350, rel=1e-3)
         assert usda.total_cost == pytest.approx(150 + usda.shared_cost_allocation, rel=1e-3)
 
-    def test_equal_allocation(self, allocator):
+    def test_equal_allocation(self, allocator) -> None:
         entries = _make_entries()
         report = allocator.allocate_to_orgs(entries, "org", shared_cost_strategy="equal")
 
@@ -177,7 +177,7 @@ class TestAllocateToOrgs:
         assert usda.shared_cost_allocation == pytest.approx(per_org)
         assert dod.shared_cost_allocation == pytest.approx(per_org)
 
-    def test_none_allocation(self, allocator):
+    def test_none_allocation(self, allocator) -> None:
         entries = _make_entries()
         report = allocator.allocate_to_orgs(entries, "org", shared_cost_strategy="none")
 
@@ -186,7 +186,7 @@ class TestAllocateToOrgs:
 
         assert report.shared_cost == pytest.approx(30.0)
 
-    def test_meter_category_classification(self, allocator):
+    def test_meter_category_classification(self, allocator) -> None:
         """Verify costs are bucketed by compute/storage/network/other."""
         entries = _make_entries()
         report = allocator.allocate_to_orgs(entries, "org", shared_cost_strategy="none")
@@ -195,12 +195,12 @@ class TestAllocateToOrgs:
         assert usda.compute_cost == pytest.approx(100.0)
         assert usda.storage_cost == pytest.approx(50.0)
 
-    def test_empty_entries_produces_empty_report(self, allocator):
+    def test_empty_entries_produces_empty_report(self, allocator) -> None:
         report = allocator.allocate_to_orgs([], "org")
         assert report.total_cost == 0.0
         assert len(report.org_summaries) == 0
 
-    def test_report_sorted_by_cost_descending(self, allocator):
+    def test_report_sorted_by_cost_descending(self, allocator) -> None:
         entries = _make_entries()
         report = allocator.allocate_to_orgs(entries, "org", shared_cost_strategy="none")
 
@@ -216,7 +216,7 @@ class TestAllocateToOrgs:
 class TestGenerateReport:
     """Test text report generation."""
 
-    def test_report_contains_header_and_org_lines(self, allocator):
+    def test_report_contains_header_and_org_lines(self, allocator) -> None:
         entries = _make_entries()
         report = allocator.allocate_to_orgs(entries, "org")
         text = allocator.generate_report(report)
@@ -236,7 +236,7 @@ class TestGenerateReport:
 class TestExportCsv:
     """Test CSV export of allocation reports."""
 
-    def test_csv_contains_all_orgs(self, allocator):
+    def test_csv_contains_all_orgs(self, allocator) -> None:
         entries = _make_entries()
         report = allocator.allocate_to_orgs(entries, "org")
         csv_content = allocator.export_csv(report)
@@ -249,7 +249,7 @@ class TestExportCsv:
         assert "USDA" in org_names
         assert "DOD" in org_names
 
-    def test_csv_has_expected_columns(self, allocator):
+    def test_csv_has_expected_columns(self, allocator) -> None:
         entries = _make_entries()
         report = allocator.allocate_to_orgs(entries, "org")
         csv_content = allocator.export_csv(report)
@@ -270,7 +270,7 @@ class TestExportCsv:
         }
         assert expected_cols.issubset(row.keys())
 
-    def test_csv_export_to_file(self, allocator, tmp_path):
+    def test_csv_export_to_file(self, allocator, tmp_path) -> None:
         entries = _make_entries()
         report = allocator.allocate_to_orgs(entries, "org")
         output_file = str(tmp_path / "cost_report.csv")

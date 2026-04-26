@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 import yaml
-from jsonschema import ValidationError, validate  # type: ignore[import-untyped]
+from jsonschema import ValidationError, validate  # type: ignore[import-untyped, unused-ignore]
 
 from csa_platform.common.logging import configure_structlog, get_logger
 
@@ -251,7 +251,7 @@ class PipelineGenerator:
 
     def _detect_database_schema(self, source_config: dict[str, Any]) -> SourceDetectionResult:
         """Detect schema by querying INFORMATION_SCHEMA from a relational database."""
-        import pyodbc  # type: ignore[import-not-found]
+        import pyodbc  # type: ignore[import-not-found, unused-ignore]
 
         conn_str = source_config.get("connection_string", "")
         schema_name = source_config.get("schema", "dbo")
@@ -861,7 +861,7 @@ class PipelineGenerator:
 
             # Prefer confluent-kafka (faster, C-based); fall back to kafka-python
             try:
-                from confluent_kafka import Consumer, KafkaError  # type: ignore[import-not-found]
+                from confluent_kafka import Consumer, KafkaError  # type: ignore[import-not-found, unused-ignore]
 
                 conf = {
                     "bootstrap.servers": bootstrap_servers,
@@ -905,7 +905,7 @@ class PipelineGenerator:
                 try:
                     import json as _json
 
-                    from kafka import KafkaConsumer  # type: ignore[import-not-found]
+                    from kafka import KafkaConsumer  # type: ignore[import-not-found, unused-ignore]
 
                     consumer_kp = KafkaConsumer(
                         topic,

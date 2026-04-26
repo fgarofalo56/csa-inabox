@@ -498,7 +498,7 @@ class SpeedLayerCallback:
 if __name__ == "__main__":
     import os
 
-    async def main():
+    async def main() -> None:
         """Example usage of SpeedLayer."""
         config = SpeedLayerConfig(
             cosmos_endpoint=os.environ.get("COSMOS_ENDPOINT"),

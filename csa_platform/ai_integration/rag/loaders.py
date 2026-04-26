@@ -39,7 +39,7 @@ logger = get_logger(__name__)
 def _load_pdf_pypdf(path: Path) -> list[tuple[str, str | None]]:
     """Extract page text with ``pypdf``.  Raises if the dep is missing."""
     try:
-        from pypdf import PdfReader  # type: ignore[import-not-found]
+        from pypdf import PdfReader  # type: ignore[import-not-found, unused-ignore]
     except ImportError as exc:  # pragma: no cover — guard exercised at boot
         msg = (
             "PDF ingestion requires the 'pypdf' package. Install with "

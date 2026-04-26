@@ -17,8 +17,11 @@ framework_root = Path(__file__).parent
 sys.path.insert(0, str(framework_root))
 
 try:
-    from generator.dlz_provisioner import DLZProvisioner, DLZProvisioningError  # type: ignore[import-not-found]
-    from generator.pipeline_generator import (  # type: ignore[import-not-found]
+    from generator.dlz_provisioner import (  # type: ignore[import-not-found, unused-ignore]
+        DLZProvisioner,
+        DLZProvisioningError,
+    )
+    from generator.pipeline_generator import (  # type: ignore[import-not-found, unused-ignore]
         PipelineGenerationError,
         PipelineGenerator,
     )

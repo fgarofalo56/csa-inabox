@@ -42,7 +42,7 @@ from csa_platform.common.logging import configure_structlog, get_logger
 try:
     import requests
 except ImportError:
-    requests = None  # type: ignore[assignment]
+    requests = None  # type: ignore[assignment, unused-ignore]
 
 configure_structlog(service="send-teams-alert")
 logger = get_logger(__name__)

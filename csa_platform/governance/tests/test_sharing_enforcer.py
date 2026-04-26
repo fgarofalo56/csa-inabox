@@ -22,7 +22,7 @@ if _data_sharing not in sys.path:
 # ---------------------------------------------------------------------------
 
 import pytest
-from sharing_enforcer import (  # type: ignore[import-not-found]
+from sharing_enforcer import (  # type: ignore[import-not-found, unused-ignore]
     SharingEnforcer,
     load_agreement,
 )

@@ -485,7 +485,7 @@ class ServingLayer:
 if __name__ == "__main__":
     import os
 
-    async def main():
+    async def main() -> None:
         """Example usage of ServingLayer."""
         config = ServingLayerConfig(
             adx_cluster_url=os.environ.get("ADX_CLUSTER_URL"),

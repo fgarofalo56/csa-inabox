@@ -76,7 +76,7 @@ class TestCosmosGremlinStoreConstruction:
         def fake_import(name: str, *args: object, **kwargs: object) -> object:
             if name.startswith("gremlin_python"):
                 raise ImportError("simulated")
-            return real_import(name, *args, **kwargs)
+            return real_import(name, *args, **kwargs)  # type: ignore[arg-type]
 
         monkeypatch.setattr(builtins, "__import__", fake_import)
         with pytest.raises(ImportError, match="gremlinpython"):

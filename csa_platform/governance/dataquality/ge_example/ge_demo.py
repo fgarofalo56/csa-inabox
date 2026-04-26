@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    import pandas as pd  # type: ignore[import-untyped]
+    import pandas as pd  # type: ignore[import-untyped, unused-ignore]
 
 # Module-level paths so tests can import them without constructing the demo.
 MODULE_DIR = Path(__file__).resolve().parent
@@ -144,11 +144,11 @@ def _build_suite(context: Any, suite_name: str = SUITE_NAME) -> Any:
     # code review and avoids ``getattr`` by string (which would silently
     # succeed on typos and fail at evaluation time).
     factories: dict[str, type] = {
-        "expect_table_row_count_to_be_between": gxe.ExpectTableRowCountToBeBetween,
-        "expect_column_to_exist": gxe.ExpectColumnToExist,
-        "expect_column_values_to_not_be_null": gxe.ExpectColumnValuesToNotBeNull,
-        "expect_column_values_to_be_in_set": gxe.ExpectColumnValuesToBeInSet,
-        "expect_column_values_to_be_between": gxe.ExpectColumnValuesToBeBetween,
+        "expect_table_row_count_to_be_between": gxe.ExpectTableRowCountToBeBetween,  # type: ignore[attr-defined, unused-ignore]
+        "expect_column_to_exist": gxe.ExpectColumnToExist,  # type: ignore[attr-defined, unused-ignore]
+        "expect_column_values_to_not_be_null": gxe.ExpectColumnValuesToNotBeNull,  # type: ignore[attr-defined, unused-ignore]
+        "expect_column_values_to_be_in_set": gxe.ExpectColumnValuesToBeInSet,  # type: ignore[attr-defined, unused-ignore]
+        "expect_column_values_to_be_between": gxe.ExpectColumnValuesToBeBetween,  # type: ignore[attr-defined, unused-ignore]
     }
 
     for exp in suite_json["expectations"]:
