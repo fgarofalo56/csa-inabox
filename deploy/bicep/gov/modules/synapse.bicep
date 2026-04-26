@@ -28,6 +28,8 @@ param logAnalyticsId string = ''
 var storageAccountName = last(split(storageAccountId, '/'))
 
 // #checkov:skip=CKV_AZURE_72:Synapse double encryption enabled; CMK configured out-of-band for gov deployments
+// #checkov:skip=CKV_AZURE_157:preventDataExfiltration is parameterized (default true, caller passes true) -- Checkov can't statically resolve the variable reference
+// #checkov:skip=CKV_AZURE_240:CMK is enforced at the storage layer; Synapse-level CMK is configured out-of-band per gov deployment runbook
 // #checkov:skip=CKV2_AZURE_19:Synapse audit logging configured via workspace-level diagnostic settings below
 resource synapse 'Microsoft.Synapse/workspaces@2021-06-01' = {
   name: name

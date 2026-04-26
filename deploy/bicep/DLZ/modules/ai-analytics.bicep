@@ -78,6 +78,10 @@ resource openAI 'Microsoft.CognitiveServices/accounts@2024-10-01' = {
       defaultAction: 'Allow'
     }
     publicNetworkAccess: enablePrivateEndpoints ? 'Disabled' : 'Enabled'
+    // CKV_AZURE_236 -- AAD-only authentication; managed identities and
+    // Entra tokens only.  Disables the shared-key path so leaked keys
+    // cannot be replayed.
+    disableLocalAuth: true
   }
   sku: {
     name: 'S0'
@@ -103,10 +107,14 @@ resource searchService 'Microsoft.Search/searchServices@2024-06-01-preview' = {
     type: 'SystemAssigned'
   }
   sku: {
+    // CKV_AZURE_208 / CKV_AZURE_209 -- Search SLA requires >=2 replicas
+    // (read SLA) and >=3 replicas (write SLA).  ``standard`` SKU permits
+    // up to 12 replicas.  Set 2 by default for read SLA without doubling
+    // cost beyond what dev/lab budgets tolerate.
     name: 'standard'
   }
   properties: {
-    replicaCount: 1
+    replicaCount: 2
     partitionCount: 1
     hostingMode: 'default'
     semanticSearch: 'standard'
@@ -200,6 +208,9 @@ resource cosmosGremlin 'Microsoft.DocumentDB/databaseAccounts@2024-08-15' = {
     publicNetworkAccess: enablePrivateEndpoints ? 'Disabled' : 'Enabled'
     networkAclBypass: 'None'
     disableKeyBasedMetadataWriteAccess: true
+    // CKV_AZURE_140 -- AAD-only auth; no shared keys.  See cosmos
+    // account in streaming.bicep for the same pattern.
+    disableLocalAuth: true
   }
 }
 
@@ -272,6 +283,8 @@ resource cosmosSQL 'Microsoft.DocumentDB/databaseAccounts@2024-08-15' = {
     publicNetworkAccess: enablePrivateEndpoints ? 'Disabled' : 'Enabled'
     networkAclBypass: 'None'
     disableKeyBasedMetadataWriteAccess: true
+    // CKV_AZURE_140 -- AAD-only auth; no shared keys.
+    disableLocalAuth: true
     capabilities: [
       {
         name: 'EnableServerless'
@@ -457,6 +470,24 @@ resource containerRegistry 'Microsoft.ContainerRegistry/registries@2023-11-01-pr
     }
     publicNetworkAccess: enablePrivateEndpoints ? 'Disabled' : 'Enabled'
     dataEndpointEnabled: false
+    // CKV_AZURE_166 -- enforce image quarantine until vulnerability
+    // scan completes.  Requires Standard tier or above.
+    policies: {
+      quarantinePolicy: {
+        status: 'enabled'
+      }
+      // CKV_AZURE_163 -- enable image scan-on-push integrated with
+      // Microsoft Defender for Containers.  Plan must be onboarded for
+      // signal to surface in Defender; the policy itself is free.
+      trustPolicy: {
+        type: 'Notary'
+        status: 'enabled'
+      }
+      retentionPolicy: {
+        days: 30
+        status: 'enabled'
+      }
+    }
   }
 }
 

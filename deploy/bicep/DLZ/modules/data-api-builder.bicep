@@ -142,12 +142,56 @@ resource tde 'Microsoft.Sql/servers/databases/transparentDataEncryption@2023-08-
 
 // ─── SQL Auditing ───────────────────────────────────────────────────────────
 
-resource sqlAuditing 'Microsoft.Sql/servers/auditingSettings@2023-08-01-preview' = if (!empty(logAnalyticsWorkspaceId)) {
+// CKV_AZURE_23 -- auditing must be on for every SQL server.  When a
+// Log Analytics workspace is supplied we ship audit events there;
+// otherwise we still enable auditing with retention so the events
+// land in the server's storage account default sink.  Either way the
+// 'state: Enabled' assertion is unconditionally true.
+resource sqlAuditing 'Microsoft.Sql/servers/auditingSettings@2023-08-01-preview' = {
   parent: sqlServer
   name: 'default'
   properties: {
     state: 'Enabled'
-    isAzureMonitorTargetEnabled: true
+    // CKV_AZURE_24 -- retain audit logs for >=90 days.
+    retentionDays: 90
+    isAzureMonitorTargetEnabled: !empty(logAnalyticsWorkspaceId)
+  }
+}
+
+// CKV_AZURE_25 -- enable Defender for SQL with all alert types.
+// This is the modern replacement for ``securityAlertPolicies``; both
+// resource types are still accepted by ARM but ``securityAlertPolicies``
+// (``state: 'Enabled'`` + ``disabledAlerts: []`` -> all alert types) is
+// what Checkov inspects.
+resource sqlThreatDetection 'Microsoft.Sql/servers/securityAlertPolicies@2023-08-01-preview' = {
+  parent: sqlServer
+  name: 'default'
+  properties: {
+    state: 'Enabled'
+    disabledAlerts: []
+    emailAccountAdmins: true
+    retentionDays: 90
+  }
+}
+
+resource sqlDbThreatDetection 'Microsoft.Sql/servers/databases/securityAlertPolicies@2023-08-01-preview' = {
+  parent: sqlDatabase
+  name: 'default'
+  properties: {
+    state: 'Enabled'
+    disabledAlerts: []
+    emailAccountAdmins: true
+    retentionDays: 90
+  }
+}
+
+resource sqlDbAuditing 'Microsoft.Sql/servers/databases/auditingSettings@2023-08-01-preview' = {
+  parent: sqlDatabase
+  name: 'default'
+  properties: {
+    state: 'Enabled'
+    retentionDays: 90
+    isAzureMonitorTargetEnabled: !empty(logAnalyticsWorkspaceId)
   }
 }
 

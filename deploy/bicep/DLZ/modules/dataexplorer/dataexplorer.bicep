@@ -107,6 +107,9 @@ resource kustoCluster 'Microsoft.Kusto/clusters@2023-08-15' = {
     publicNetworkAccess: publicNetworkAccess
     enablePurge: false
     enableDoubleEncryption: true
+    // CKV_AZURE_74 -- enable disk encryption on Kusto data disks.
+    // Available on all SKUs, no extra cost.
+    enableDiskEncryption: true
     engineType: 'V3'
     restrictOutboundNetworkAccess: 'Enabled'
     keyVaultProperties: parEnableCmk ? {

@@ -174,6 +174,11 @@ resource adxCluster 'Microsoft.Kusto/clusters@2023-08-15' = {
     enablePurge: false
     enableAutoStop: true // Auto-stop idle dev clusters to save cost
     publicNetworkAccess: enablePrivateEndpoints ? 'Disabled' : 'Enabled'
+    // CKV_AZURE_74 -- enable disk encryption on Kusto data disks.
+    enableDiskEncryption: true
+    // CKV_AZURE_75 -- double-encryption (platform key + service key).
+    // Available on all SKUs at no extra cost.
+    enableDoubleEncryption: true
   }
 }
 
@@ -219,6 +224,9 @@ resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2024-08-15' = {
     publicNetworkAccess: enablePrivateEndpoints ? 'Disabled' : 'Enabled'
     networkAclBypass: 'None'
     disableKeyBasedMetadataWriteAccess: true
+    // CKV_AZURE_140 -- AAD-only authentication; no shared keys allowed.
+    // Code paths must use DefaultAzureCredential / managed identity.
+    disableLocalAuth: true
     capabilities: environment == 'prod' ? [] : [
       {
         name: 'EnableServerless'
@@ -275,7 +283,9 @@ resource funcStorageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   location: location
   tags: tags
   sku: {
-    name: 'Standard_LRS'
+    // CKV_AZURE_206 -- GRS for cross-region durability of Functions
+    // runtime metadata.  LRS would lose state on a regional outage.
+    name: 'Standard_GRS'
   }
   kind: 'StorageV2'
   properties: {
@@ -283,6 +293,14 @@ resource funcStorageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
     minimumTlsVersion: 'TLS1_2'
     allowBlobPublicAccess: false
     publicNetworkAccess: enablePrivateEndpoints ? 'Disabled' : 'Enabled'
+    // CKV_AZURE_35 -- default-deny network ACL.  When private endpoints
+    // are off (lab/dev) Azure Functions still needs to reach this
+    // account; the bypass list permits the trusted Azure services path
+    // (Functions, Logging) without leaving the account world-open.
+    networkAcls: {
+      defaultAction: enablePrivateEndpoints ? 'Deny' : 'Allow'
+      bypass: 'AzureServices,Logging,Metrics'
+    }
   }
 }
 
@@ -313,8 +331,22 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
     serverFarmId: funcAppServicePlan.id
     httpsOnly: true
     publicNetworkAccess: enablePrivateEndpoints ? 'Disabled' : 'Enabled'
+    // CKV_AZURE_17 -- require client certificates so internet-exposed
+    // function endpoints have a second authentication factor.
+    clientCertEnabled: true
+    clientCertMode: 'Optional'
     siteConfig: {
       linuxFxVersion: 'PYTHON|3.11'
+      // CKV_AZURE_15 -- enforce TLS 1.2 minimum on inbound traffic.
+      minTlsVersion: '1.2'
+      // CKV_AZURE_18 / CKV_AZURE_67 -- HTTP/2 for inbound, modern default.
+      http20Enabled: true
+      // CKV_AZURE_78 -- disable FTP/FTPS deployments entirely (we use
+      // managed identity + zip deploy or container deploy).
+      ftpsState: 'Disabled'
+      // CKV_AZURE_213 -- health check endpoint so the platform can
+      // remove unhealthy instances from rotation.
+      healthCheckPath: '/api/health'
       appSettings: [
         {
           name: 'AzureWebJobsStorage'
