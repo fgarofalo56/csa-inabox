@@ -18,11 +18,10 @@ Prerequisites:
 
 from __future__ import annotations
 
-from typing import Any
-
 import logging
 import os
 from dataclasses import dataclass, field
+from typing import Any
 
 import httpx
 from azure.identity import DefaultAzureCredential
@@ -53,7 +52,7 @@ class PurviewSyncService:
         credential: DefaultAzureCredential | None = None,
     ) -> None:
         self._endpoint = (
-            (purview_endpoint or os.getenv("PURVIEW_ENDPOINT") or "")
+            purview_endpoint or os.getenv("PURVIEW_ENDPOINT") or ""
         ).rstrip("/")
         self._credential = credential or DefaultAzureCredential()
         self._token: str | None = None

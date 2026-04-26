@@ -16,14 +16,13 @@ Usage:
 
 from __future__ import annotations
 
-from typing import Any
-
 import logging
 import os
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Any
 
 import httpx
 from azure.identity import DefaultAzureCredential
@@ -72,7 +71,7 @@ class NotificationService:
         credential: DefaultAzureCredential | None = None,
     ) -> None:
         self._endpoint = (
-            (topic_endpoint or os.getenv("EVENT_GRID_TOPIC_ENDPOINT") or "")
+            topic_endpoint or os.getenv("EVENT_GRID_TOPIC_ENDPOINT") or ""
         ).rstrip("/")
         self._credential = credential or DefaultAzureCredential()
         self._enabled = bool(self._endpoint)
