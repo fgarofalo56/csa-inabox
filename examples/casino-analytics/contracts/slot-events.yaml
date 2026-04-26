@@ -4,7 +4,7 @@
 # slot events data product. It declares the schema, SLAs, and quality
 # rules for slot machine telemetry and gaming floor analytics.
 
-apiVersion: csa.nigc.gov/v1
+apiVersion: csa.microsoft.com/v1
 kind: DataProductContract
 
 metadata:

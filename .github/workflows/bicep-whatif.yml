@@ -78,11 +78,12 @@ jobs:
 
       - name: Bicep Build
         if: matrix.changed == 'true'
-        uses: azure/CLI@9f7ce6f37c31b777ec6c6b6d1dfe7db79f497956 # v2
-        with:
-          inlineScript: |
-            az bicep build --file "${{ matrix.path }}/${{ matrix.main }}" --stdout > /dev/null 2>&1
-            echo "✅ ${{ matrix.zone }}: Bicep build succeeded" >> $GITHUB_STEP_SUMMARY
+        # Use the runner-native ``az`` CLI instead of the azure/CLI Docker action.
+        # The Docker pull intermittently fails (BCP error tail in workflow logs),
+        # and azure/CLI@v2 is on Node 20 (deprecated September 2026).
+        run: |
+          az bicep build --file "${{ matrix.path }}/${{ matrix.main }}" --stdout > /dev/null
+          echo "✅ ${{ matrix.zone }}: Bicep build succeeded" >> $GITHUB_STEP_SUMMARY
 
   whatif:
     name: What-If (${{ matrix.zone }})
@@ -124,30 +125,29 @@ jobs:
       - name: Run What-If
         if: matrix.changed == 'true'
         id: whatif
-        uses: azure/CLI@9f7ce6f37c31b777ec6c6b6d1dfe7db79f497956 # v2
-        with:
-          inlineScript: |
-            set +e
-            RESULT=$(az deployment sub what-if \
-              --location "${{ env.AZURE_LOCATION }}" \
-              --template-file "${{ matrix.path }}/${{ matrix.main }}" \
-              --parameters "${{ matrix.path }}/${{ matrix.params }}" \
-              --no-pretty-print 2>&1)
-            EXIT_CODE=$?
-            set -e
+        # Runner-native az; see Bicep Build step for rationale.
+        run: |
+          set +e
+          RESULT=$(az deployment sub what-if \
+            --location "${{ env.AZURE_LOCATION }}" \
+            --template-file "${{ matrix.path }}/${{ matrix.main }}" \
+            --parameters "${{ matrix.path }}/${{ matrix.params }}" \
+            --no-pretty-print 2>&1)
+          EXIT_CODE=$?
+          set -e
 
-            # Truncate if too large for PR comment (GitHub limit ~65535 chars)
-            if [ ${#RESULT} -gt 60000 ]; then
-              RESULT="${RESULT:0:60000}
-            ... (output truncated, see workflow logs for full details)"
-            fi
+          # Truncate if too large for PR comment (GitHub limit ~65535 chars)
+          if [ ${#RESULT} -gt 60000 ]; then
+            RESULT="${RESULT:0:60000}
+          ... (output truncated, see workflow logs for full details)"
+          fi
 
-            # Escape for multiline output
-            EOF=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
-            echo "whatif_result<<$EOF" >> $GITHUB_OUTPUT
-            echo "$RESULT" >> $GITHUB_OUTPUT
-            echo "$EOF" >> $GITHUB_OUTPUT
-            echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+          # Escape for multiline output
+          EOF=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
+          echo "whatif_result<<$EOF" >> $GITHUB_OUTPUT
+          echo "$RESULT" >> $GITHUB_OUTPUT
+          echo "$EOF" >> $GITHUB_OUTPUT
+          echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
 
       - name: Post PR Comment
         if: matrix.changed == 'true' && always()

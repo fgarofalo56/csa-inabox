@@ -4,7 +4,7 @@
 # food & beverage transactions data product. It declares the schema,
 # SLAs, and quality rules for F&B revenue and comp analytics.
 
-apiVersion: csa.nigc.gov/v1
+apiVersion: csa.microsoft.com/v1
 kind: DataProductContract
 
 metadata:

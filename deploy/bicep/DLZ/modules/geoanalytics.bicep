@@ -158,7 +158,8 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   location: location
   tags: tags
   sku: {
-    name: environment == 'prod' ? 'Standard_GRS' : 'Standard_LRS'
+    // CKV_AZURE_206 -- always GRS regardless of environment for cross-region durability.
+    name: 'Standard_GRS'
   }
   kind: 'StorageV2'
   identity: {
@@ -170,12 +171,12 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
     minimumTlsVersion: 'TLS1_2'
     allowBlobPublicAccess: false
     publicNetworkAccess: enablePrivateEndpoints ? 'Disabled' : 'Enabled'
-    networkAcls: enablePrivateEndpoints ? {
+    // CKV_AZURE_35 -- default-deny network ACL with trusted-services bypass
+    // (always default-deny; bypass list keeps Azure data-plane services able
+    // to reach the account when private endpoints are off in dev).
+    networkAcls: {
       defaultAction: 'Deny'
-      bypass: 'AzureServices'
-    } : {
-      defaultAction: 'Allow'
-      bypass: 'AzureServices'
+      bypass: 'AzureServices,Logging,Metrics'
     }
   }
 }

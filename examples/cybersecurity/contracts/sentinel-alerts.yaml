@@ -66,17 +66,17 @@ schema:
       description: Combined risk score from severity and MITRE weight (0-4)
 
     - name: host_entities
-      type: array
+      type: string
       nullable: true
       description: Array of affected host entities
 
     - name: account_entities
-      type: array
+      type: string
       nullable: true
       description: Array of affected account entities (PII)
 
     - name: ip_entities
-      type: array
+      type: string
       nullable: true
       description: Array of related IP address entities
 
@@ -92,39 +92,17 @@ sla:
     description: Gold layer queries respond within 5s at p95
 
 quality_rules:
-  - rule_name: alert_id_not_null
-    rule_type: not_null
+  - rule: expect_column_values_to_not_be_null
     column: alert_id
-    severity: error
-    description: Every alert must have a unique identifier
-
-  - rule_name: severity_range
-    rule_type: range
+  - rule: expect_column_values_to_be_between
     column: severity_level
-    parameters:
-      min: 1
-      max: 4
-    severity: error
-    description: Severity must be 1-4
-
-  - rule_name: time_generated_not_null
-    rule_type: not_null
+    min_value: 1
+    max_value: 4
+  - rule: expect_column_values_to_not_be_null
     column: time_generated
-    severity: error
-    description: Alert timestamp is mandatory
-
-  - rule_name: mitre_technique_format
-    rule_type: regex
+  - rule: expect_column_values_to_match_regex
     column: technique_id
-    parameters:
-      pattern: "^T\\d{4}(\\.\\d{3})?$"
-    severity: warning
-    description: Technique IDs must follow MITRE ATT&CK format
-
-  - rule_name: completeness_threshold
-    rule_type: completeness
+    pattern: "^T\\d{4}(\\.\\d{3})?$"
+  - rule: expect_column_values_to_not_be_null
     column: alert_id
-    parameters:
-      min_percentage: 99.5
-    severity: error
-    description: No more than 0.5% alert loss during ingestion
+    mostly: 0.995

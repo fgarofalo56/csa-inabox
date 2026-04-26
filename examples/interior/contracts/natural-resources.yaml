@@ -4,7 +4,7 @@
 # natural resources data product. It declares the schema, SLAs, and
 # quality rules for seismic risk, park capacity, and wildfire analytics.
 
-apiVersion: csa.interior.gov/v1
+apiVersion: csa.microsoft.com/v1
 kind: DataProductContract
 
 metadata:
@@ -22,6 +22,15 @@ metadata:
 schema:
   primary_key: [record_type, region_id, year]
   columns:
+    # Composite-key columns
+    - name: record_type
+      type: string
+      nullable: false
+      description: Discriminator for which sub-domain produced the row (e.g. SEISMIC, MINERAL, WATER).
+    - name: region_id
+      type: string
+      nullable: false
+      description: Stable identifier for the seismic region or analysis area.
     # Seismic Risk columns
     - name: region_name
       type: string

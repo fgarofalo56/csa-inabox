@@ -298,7 +298,8 @@ resource funcStorageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
     // account; the bypass list permits the trusted Azure services path
     // (Functions, Logging) without leaving the account world-open.
     networkAcls: {
-      defaultAction: enablePrivateEndpoints ? 'Deny' : 'Allow'
+      // CKV_AZURE_35 -- always default-deny; bypass keeps Functions runtime + Logging.
+      defaultAction: 'Deny'
       bypass: 'AzureServices,Logging,Metrics'
     }
   }

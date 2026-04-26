@@ -115,6 +115,7 @@ resource vmss001 'Microsoft.Compute/virtualMachineScaleSets@2024-03-01' = {
       // gateway pool stays patched without manual intervention.
       automaticOSUpgradePolicy: {
         enableAutomaticOSUpgrade: true
+        disableAutomaticRollback: false
       }
     }
     virtualMachineProfile: {

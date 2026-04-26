@@ -1,8 +1,8 @@
 # Player Analytics Data Contract — Casino Analytics Platform
 # Compliance: NIGC MICS, Title 31 BSA/AML, Tribal Gaming Commission
 
-apiVersion: v1
-kind: DataContract
+apiVersion: csa.microsoft.com/v1
+kind: DataProductContract
 metadata:
   name: player-analytics
   version: "1.0.0"

@@ -1,5 +1,5 @@
-apiVersion: datacontract/v1
-kind: DataProduct
+apiVersion: csa.microsoft.com/v1
+kind: DataProductContract
 metadata:
   name: delivery-analytics
   domain: postal-operations

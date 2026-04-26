@@ -22,6 +22,14 @@ metadata:
 schema:
   primary_key: [request_id, row_index]
   columns:
+    - name: request_id
+      type: string
+      nullable: false
+      description: Stable identifier for one batch-prediction request (echoed in the response).
+    - name: row_index
+      type: integer
+      nullable: false
+      description: Zero-based offset of the row within the request batch.
     - name: probability_default
       type: number
       nullable: false
