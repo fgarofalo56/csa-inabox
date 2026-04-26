@@ -6,9 +6,15 @@
   var REPO_URL = "https://github.com/fgarofalo56/csa-inabox";
 
   // Hardcoded configuration — no runtime override allowed (SEC-COPILOT)
+  // Backend lives in:
+  //   tenant : limitlessdata.ai (d1fc0498-f208-4b49-8376-beb9293acdf6)
+  //   sub    : FedCiv ATU FFL - DLZ (363ef5d1-0e77-4594-a530-f51af23dbf8c)
+  //   rg     : rg-dlz-aiml-stack-dev
+  //   region : eastus
+  // See azure-functions/copilot-chat/DEPLOYMENT.md for full provenance.
   var CONFIG = {
     apiEndpoint:
-      "https://func-csa-inabox-copilot.azurewebsites.net/api/chat",
+      "https://func-csa-inabox-copilot-fg.azurewebsites.net/api/chat",
     maxHistory: 10,
     rateLimitMs: 3000,
     maxMessageLength: 2000,
