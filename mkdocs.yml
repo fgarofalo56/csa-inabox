@@ -96,128 +96,150 @@ extra_javascript:
 
 nav:
   - Home: index.md
-  - Getting Started:
+
+  # ============================================================
+  # 1. GET STARTED — first 30 minutes for any new visitor
+  # ============================================================
+  - Get Started:
+      - Welcome: index.md
+      - Getting Started (30-min tour): GETTING_STARTED.md
       - Quickstart: QUICKSTART.md
       - Developer Pathways: DEVELOPER_PATHWAYS.md
+      - Production Checklist: PRODUCTION_CHECKLIST.md
+      - AI Copilot (chat with the docs): chat.md
+
+  # ============================================================
+  # 2. ARCHITECTURE — how the platform is designed and why
+  # ============================================================
   - Architecture:
       - Overview: ARCHITECTURE.md
       - Platform Services: PLATFORM_SERVICES.md
+      - Reference Architectures:
+          - Index: reference-architecture/index.md
+          - Hub-Spoke Topology for Analytics: reference-architecture/hub-spoke-topology.md
+          - Data Flow (Medallion): reference-architecture/data-flow-medallion.md
+          - Identity & Secrets Flow: reference-architecture/identity-secrets-flow.md
+          - Fabric vs Synapse vs Databricks: reference-architecture/fabric-vs-synapse-vs-databricks.md
+      - Decision Trees:
+          - Overview: decisions/README.md
+          - Batch vs Streaming: decisions/batch-vs-streaming.md
+          - Delta vs Iceberg vs Parquet: decisions/delta-vs-iceberg-vs-parquet.md
+          - ETL vs ELT: decisions/etl-vs-elt.md
+          - Fabric vs Databricks vs Synapse: decisions/fabric-vs-databricks-vs-synapse.md
+          - Kafka vs Event Hubs vs Service Bus: decisions/kafka-vs-eventhubs-vs-servicebus.md
+          - Lakehouse vs Warehouse vs Lake: decisions/lakehouse-vs-warehouse-vs-lake.md
+          - Materialize vs Virtualize: decisions/materialize-vs-virtualize.md
+          - RAG vs Fine-Tune vs Agents: decisions/rag-vs-finetune-vs-agents.md
+      - Best Practices:
+          - Overview: best-practices/index.md
+          - Medallion Architecture: best-practices/medallion-architecture.md
+          - Data Engineering: best-practices/data-engineering.md
+          - Data Governance: best-practices/data-governance.md
+          - Security & Compliance: best-practices/security-compliance.md
+          - Infrastructure as Code & CI/CD: best-practices/iac-cicd.md
+          - Cost Optimization: best-practices/cost-optimization.md
+          - Monitoring & Observability: best-practices/monitoring-observability.md
+          - Performance Tuning: best-practices/performance-tuning.md
+          - Disaster Recovery: best-practices/disaster-recovery.md
+      - ADRs:
+          - Overview: adr/README.md
+          - "0001: ADF + dbt over Airflow": adr/0001-adf-dbt-over-airflow.md
+          - "0002: Databricks over OSS Spark": adr/0002-databricks-over-oss-spark.md
+          - "0003: Delta Lake over Iceberg": adr/0003-delta-lake-over-iceberg-and-parquet.md
+          - "0004: Bicep over Terraform": adr/0004-bicep-over-terraform.md
+          - "0005: Event Hubs over Kafka": adr/0005-event-hubs-over-kafka.md
+          - "0006: Purview over Atlas": adr/0006-purview-over-atlas.md
+          - "0007: Azure OpenAI over Self-Hosted": adr/0007-azure-openai-over-self-hosted-llm.md
+          - "0008: dbt Core over dbt Cloud": adr/0008-dbt-core-over-dbt-cloud.md
+          - "0009: SQLite to Postgres": adr/0009-sqlite-to-postgres-portal-db.md
+          - "0010: Fabric Strategic Target": adr/0010-fabric-strategic-target.md
+          - "0011: Multi-Cloud Scope": adr/0011-multi-cloud-scope.md
+          - "0012: Data Mesh Federation": adr/0012-data-mesh-federation.md
+          - "0013: dbt as Canonical Transform": adr/0013-dbt-as-canonical-transformation.md
+          - "0014: MSAL BFF Auth Pattern": adr/0014-msal-bff-auth-pattern.md
+          - "0015: Postgres Portal Persistence": adr/0015-postgres-portal-persistence.md
+          - "0016: Async Store Backend": adr/0016-async-store-backend.md
+          - "0017: RAG Service Layer": adr/0017-rag-service-layer.md
+          - "0018: Fabric RTI Adapter": adr/0018-fabric-rti-adapter.md
+          - "0019: BFF Reverse Proxy": adr/0019-bff-reverse-proxy.md
+          - "0020: Portal Observability": adr/0020-portal-observability-and-rate-limiting.md
+          - "0021: Two Rate Limiters": adr/0021-two-rate-limiters-not-duplicates.md
+          - "0022: Copilot Surfaces vs Docs Widget": adr/0022-copilot-surfaces-vs-docs-widget.md
       - Multi-Region: MULTI_REGION.md
       - Multi-Tenant: MULTI_TENANT.md
       - Disaster Recovery: DR.md
-  - Guides:
-      - ADF Setup: ADF_SETUP.md
-      - Databricks: DATABRICKS_GUIDE.md
-      - Self-Hosted IR: SELF_HOSTED_IR.md
-      - IaC & CI/CD Best Practices: IaC-CICD-Best-Practices.md
-      - Cost Management: COST_MANAGEMENT.md
-      - Production Checklist: PRODUCTION_CHECKLIST.md
-      - Rollback: ROLLBACK.md
-      - Troubleshooting: TROUBLESHOOTING.md
-      - Supply Chain Security: SUPPLY_CHAIN.md
-      - Log Schema: LOG_SCHEMA.md
-      - Environment Protection: ENVIRONMENT_PROTECTION.md
-      - Gov Service Matrix: GOV_SERVICE_MATRIX.md
-  - Best Practices:
-      - Overview: best-practices/index.md
-      - Medallion Architecture: best-practices/medallion-architecture.md
-      - Data Engineering: best-practices/data-engineering.md
-      - Data Governance: best-practices/data-governance.md
-      - Security & Compliance: best-practices/security-compliance.md
-      - Infrastructure as Code & CI/CD: best-practices/iac-cicd.md
-      - Cost Optimization: best-practices/cost-optimization.md
-      - Monitoring & Observability: best-practices/monitoring-observability.md
-      - Performance Tuning: best-practices/performance-tuning.md
-      - Disaster Recovery: best-practices/disaster-recovery.md
-  - ADRs:
-      - Overview: adr/README.md
-      - "0001: ADF + dbt over Airflow": adr/0001-adf-dbt-over-airflow.md
-      - "0002: Databricks over OSS Spark": adr/0002-databricks-over-oss-spark.md
-      - "0003: Delta Lake over Iceberg": adr/0003-delta-lake-over-iceberg-and-parquet.md
-      - "0004: Bicep over Terraform": adr/0004-bicep-over-terraform.md
-      - "0005: Event Hubs over Kafka": adr/0005-event-hubs-over-kafka.md
-      - "0006: Purview over Atlas": adr/0006-purview-over-atlas.md
-      - "0007: Azure OpenAI over Self-Hosted": adr/0007-azure-openai-over-self-hosted-llm.md
-      - "0008: dbt Core over dbt Cloud": adr/0008-dbt-core-over-dbt-cloud.md
-      - "0009: SQLite to Postgres": adr/0009-sqlite-to-postgres-portal-db.md
-      - "0010: Fabric Strategic Target": adr/0010-fabric-strategic-target.md
-      - "0011: Multi-Cloud Scope": adr/0011-multi-cloud-scope.md
-      - "0012: Data Mesh Federation": adr/0012-data-mesh-federation.md
-      - "0013: dbt as Canonical Transform": adr/0013-dbt-as-canonical-transformation.md
-      - "0014: MSAL BFF Auth Pattern": adr/0014-msal-bff-auth-pattern.md
-      - "0015: Postgres Portal Persistence": adr/0015-postgres-portal-persistence.md
-      - "0016: Async Store Backend": adr/0016-async-store-backend.md
-      - "0017: RAG Service Layer": adr/0017-rag-service-layer.md
-      - "0018: Fabric RTI Adapter": adr/0018-fabric-rti-adapter.md
-      - "0019: BFF Reverse Proxy": adr/0019-bff-reverse-proxy.md
-      - "0020: Portal Observability": adr/0020-portal-observability-and-rate-limiting.md
-  - Compliance:
-      - Overview: compliance/README.md
-      - NIST 800-53 Rev 5: compliance/nist-800-53-rev5.md
-      - CMMC 2.0 Level 2: compliance/cmmc-2.0-l2.md
-      - HIPAA Security Rule: compliance/hipaa-security-rule.md
-  - Decision Trees:
-      - Overview: decisions/README.md
-      - Batch vs Streaming: decisions/batch-vs-streaming.md
-      - Delta vs Iceberg vs Parquet: decisions/delta-vs-iceberg-vs-parquet.md
-      - ETL vs ELT: decisions/etl-vs-elt.md
-      - Fabric vs Databricks vs Synapse: decisions/fabric-vs-databricks-vs-synapse.md
-      - Kafka vs Event Hubs vs Service Bus: decisions/kafka-vs-eventhubs-vs-servicebus.md
-      - Lakehouse vs Warehouse vs Lake: decisions/lakehouse-vs-warehouse-vs-lake.md
-      - Materialize vs Virtualize: decisions/materialize-vs-virtualize.md
-      - RAG vs Fine-Tune vs Agents: decisions/rag-vs-finetune-vs-agents.md
-  - Migrations:
-      - Overview: migrations/README.md
-      - AWS to Azure: migrations/aws-to-azure.md
-      - GCP to Azure: migrations/gcp-to-azure.md
-      - Snowflake to Azure: migrations/snowflake.md
-      - Palantir Foundry: migrations/palantir-foundry.md
-      - IoT Hub + Entra: migrations/iot-hub-entra.md
-  - Runbooks:
-      - Data Pipeline Failure: runbooks/data-pipeline-failure.md
-      - Break-Glass Access: runbooks/break-glass-access.md
-      - DR Drill: runbooks/dr-drill.md
-      - dbt CI: runbooks/dbt-ci.md
-      - Dead Letter Queue: runbooks/dead-letter.md
-      - Key Rotation: runbooks/key-rotation.md
-      - Security Incident: runbooks/security-incident.md
-      - Tenant Onboarding: runbooks/tenant-onboarding.md
-  - Tutorials:
-      - Overview: tutorials/README.md
-      - "01 – Foundation Platform": tutorials/01-foundation-platform/README.md
-      - "02 – Data Governance with Purview": tutorials/02-data-governance/README.md
-      - "03 – GeoAnalytics (OSS)": tutorials/03-geoanalytics-oss/README.md
-      - "04 – GeoAnalytics with ArcGIS Enterprise": tutorials/04-geoanalytics-arcgis/README.md
-      - "05 – Real-Time Streaming (Lambda)": tutorials/05-streaming-lambda/README.md
-      - "06 – AI Analytics with Azure AI Foundry": tutorials/06-ai-analytics-foundry/README.md
-      - "07 – AI Agents with Semantic Kernel": tutorials/07-agents-foundry-sk/README.md
-      - "08 – RAG with Azure AI Search": tutorials/08-rag-vector-search/README.md
-      - "09 – GraphRAG Knowledge Graphs": tutorials/09-graphrag-knowledge/README.md
-      - "10 – Data Marketplace": tutorials/10-data-marketplace/README.md
-      - "11 – Data API Builder": tutorials/11-data-api-builder/README.md
-      - "Great Expectations (legacy)": tutorials/great-expectations.md
-  - End-to-End Examples:
-      - Overview: examples/index.md
-      - "AI Agents": examples/ai-agents.md
-      - "Casino Analytics (Tribal)": examples/casino-analytics.md
-      - "Commerce Economic Analytics": examples/commerce.md
-      - "Cybersecurity (MITRE ATT&CK)": examples/cybersecurity.md
-      - "Data API Builder": examples/data-api-builder.md
-      - "DOT Transportation": examples/dot.md
-      - "EPA Environmental": examples/epa.md
-      - "GeoAnalytics": examples/geoanalytics.md
-      - "Interior Natural Resources": examples/interior.md
-      - "IoT Streaming": examples/iot-streaming.md
-      - "ML Lifecycle (Loan Default)": examples/ml-lifecycle.md
-      - "NOAA Climate & Ocean": examples/noaa.md
-      - "Streaming": examples/streaming.md
-      - "Tribal Health": examples/tribal-health.md
-      - "USDA Agriculture": examples/usda.md
-      - "USPS Postal Operations": examples/usps.md
-  - Research:
-      - Platform Research Report: research/CSA-Platform-Research-Report.md
-  - Use Cases:
+
+  # ============================================================
+  # 3. BUILD — hands-on tutorials, examples, patterns
+  # ============================================================
+  - Build:
+      - Tutorials:
+          - Overview: tutorials/README.md
+          - "01 – Foundation Platform": tutorials/01-foundation-platform/README.md
+          - "02 – Data Governance with Purview": tutorials/02-data-governance/README.md
+          - "03 – GeoAnalytics (OSS)": tutorials/03-geoanalytics-oss/README.md
+          - "04 – GeoAnalytics with ArcGIS Enterprise": tutorials/04-geoanalytics-arcgis/README.md
+          - "05 – Real-Time Streaming (Lambda)": tutorials/05-streaming-lambda/README.md
+          - "06 – AI Analytics with Azure AI Foundry": tutorials/06-ai-analytics-foundry/README.md
+          - "07 – AI Agents with Semantic Kernel": tutorials/07-agents-foundry-sk/README.md
+          - "08 – RAG with Azure AI Search": tutorials/08-rag-vector-search/README.md
+          - "09 – GraphRAG Knowledge Graphs": tutorials/09-graphrag-knowledge/README.md
+          - "10 – Data Marketplace": tutorials/10-data-marketplace/README.md
+          - "11 – Data API Builder": tutorials/11-data-api-builder/README.md
+          - "Great Expectations (legacy)": tutorials/great-expectations.md
+      - End-to-End Examples:
+          - Overview: examples/index.md
+          - "AI Agents": examples/ai-agents.md
+          - "Casino Analytics (Tribal)": examples/casino-analytics.md
+          - "Commerce Economic Analytics": examples/commerce.md
+          - "Cybersecurity (MITRE ATT&CK)": examples/cybersecurity.md
+          - "Data API Builder": examples/data-api-builder.md
+          - "DOT Transportation": examples/dot.md
+          - "EPA Environmental": examples/epa.md
+          - "Fabric Data Agent": examples/fabric-data-agent.md
+          - "GeoAnalytics": examples/geoanalytics.md
+          - "Interior Natural Resources": examples/interior.md
+          - "IoT Streaming": examples/iot-streaming.md
+          - "ML Lifecycle (Loan Default)": examples/ml-lifecycle.md
+          - "NOAA Climate & Ocean": examples/noaa.md
+          - "Streaming": examples/streaming.md
+          - "Tribal Health": examples/tribal-health.md
+          - "USDA Agriculture": examples/usda.md
+          - "USPS Postal Operations": examples/usps.md
+      - Patterns:
+          - Overview: patterns/index.md
+          - Cosmos DB Patterns: patterns/cosmos-db-patterns.md
+          - AKS & Container Apps for Data: patterns/aks-container-apps-for-data.md
+          - LLMOps & Evaluation: patterns/llmops-evaluation.md
+          - Networking & DNS Strategy: patterns/networking-dns-strategy.md
+          - Observability with OpenTelemetry: patterns/observability-otel.md
+          - Streaming & CDC: patterns/streaming-cdc.md
+          - Power BI & Fabric Roadmap: patterns/power-bi-fabric-roadmap.md
+      - Guides:
+          - ADF Setup: ADF_SETUP.md
+          - Databricks: DATABRICKS_GUIDE.md
+          - Self-Hosted IR: SELF_HOSTED_IR.md
+          - IaC & CI/CD: IaC-CICD-Best-Practices.md
+          - APIM Data-Mesh Gateway: guides/apim-data-mesh-gateway.md
+          - OSS Ecosystem: guides/oss-ecosystem.md
+          - OSS Migration Playbook: guides/oss-migration-playbook.md
+          - OSS Monitoring: guides/oss-monitoring.md
+
+  # ============================================================
+  # 4. USE CASES & WHITE PAPERS — by sector / scenario
+  # ============================================================
+  - Use Cases & White Papers:
       - Overview: use-cases/index.md
+      - White Papers & Resources: use-cases/azure-analytics-resources.md
+      - Platform Research Report: research/CSA-Platform-Research-Report.md
+      - Industries:
+          - Overview: industries/index.md
+          - Financial Services: industries/financial-services.md
+          - Manufacturing: industries/manufacturing.md
+          - Retail & CPG: industries/retail-cpg.md
+          - Energy & Utilities: industries/energy-utilities.md
+          - Telecommunications: industries/telco.md
+          - Life Sciences & Genomics: industries/life-sciences.md
       - Government & Public Sector:
           - Antitrust Analytics on Azure: use-cases/antitrust-analytics.md
           - "DOJ Antitrust: Step-by-Step Domain Build": use-cases/doj-antitrust-deep-dive.md
@@ -244,5 +266,50 @@ nav:
           - Unified Analytics on Fabric: use-cases/fabric-unified-analytics.md
       - Multi-Cloud:
           - Data Virtualization with Azure: use-cases/multi-cloud-data-virtualization.md
-      - "Azure Analytics: White Papers & Resources": use-cases/azure-analytics-resources.md
-  - AI Copilot: chat.md
+      - Research Index: research/index.md
+
+  # ============================================================
+  # 5. OPERATE — Day-2 ops, runbooks, compliance, migrations
+  # ============================================================
+  - Operate:
+      - Runbooks:
+          - Data Pipeline Failure: runbooks/data-pipeline-failure.md
+          - Break-Glass Access: runbooks/break-glass-access.md
+          - DR Drill: runbooks/dr-drill.md
+          - dbt CI: runbooks/dbt-ci.md
+          - Dead Letter Queue: runbooks/dead-letter.md
+          - Key Rotation: runbooks/key-rotation.md
+          - Security Incident: runbooks/security-incident.md
+          - Tenant Onboarding: runbooks/tenant-onboarding.md
+      - Compliance:
+          - Overview: compliance/README.md
+          - NIST 800-53 Rev 5: compliance/nist-800-53-rev5.md
+          - FedRAMP Moderate: compliance/fedramp-moderate.md
+          - CMMC 2.0 Level 2: compliance/cmmc-2.0-l2.md
+          - HIPAA Security Rule: compliance/hipaa-security-rule.md
+          - SOC 2 Type II: compliance/soc2-type2.md
+          - PCI-DSS v4.0: compliance/pci-dss-v4.md
+          - GDPR & EU Data Boundary: compliance/gdpr-privacy.md
+      - Migrations:
+          - Overview: migrations/README.md
+          - AWS to Azure: migrations/aws-to-azure.md
+          - GCP to Azure: migrations/gcp-to-azure.md
+          - Snowflake to Azure: migrations/snowflake.md
+          - Databricks to Fabric: migrations/databricks-to-fabric.md
+          - Teradata to Synapse/Fabric: migrations/teradata.md
+          - Hadoop / Hive to Azure: migrations/hadoop-hive.md
+          - Informatica to ADF/Fabric: migrations/informatica.md
+          - Palantir Foundry: migrations/palantir-foundry.md
+          - IoT Hub + Entra: migrations/iot-hub-entra.md
+      - Cost Management: COST_MANAGEMENT.md
+      - Rollback: ROLLBACK.md
+      - Troubleshooting: TROUBLESHOOTING.md
+      - Supply Chain Security: SUPPLY_CHAIN.md
+
+  # ============================================================
+  # 6. REFERENCE — lookup material, schemas, matrices
+  # ============================================================
+  - Reference:
+      - Log Schema: LOG_SCHEMA.md
+      - Environment Protection: ENVIRONMENT_PROTECTION.md
+      - Government Service Matrix: GOV_SERVICE_MATRIX.md
