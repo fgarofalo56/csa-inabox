@@ -3,7 +3,7 @@
 # Pinned to Nov 2024 versions known to work together. Bump intentionally.
 
 # Semantic Kernel + Azure
-semantic-kernel[azure]==1.16.0
+semantic-kernel[azure]==1.39.4
 azure-identity==1.19.0
 azure-ai-projects==1.0.0b3
 azure-keyvault-secrets==4.9.0
