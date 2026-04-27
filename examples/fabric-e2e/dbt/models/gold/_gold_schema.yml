@@ -1,0 +1,71 @@
+version: 2
+
+models:
+  - name: dim_customer
+    description: SCD2 customer dimension. See contracts/dim_customer.yaml.
+    columns:
+      - name: customer_key
+        description: Surrogate key
+        tests: [not_null, unique]
+      - name: customer_id
+        description: Natural key
+        tests: [not_null]
+      - name: is_current
+        tests: [not_null]
+
+  - name: dim_product
+    description: SCD2 product dimension.
+    columns:
+      - name: product_key
+        tests: [not_null, unique]
+      - name: product_id
+        tests: [not_null]
+      - name: list_price
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100000
+
+  - name: dim_date
+    description: Static date dimension. Marked as date table in semantic model.
+    columns:
+      - name: date_key
+        tests: [not_null, unique]
+      - name: date
+        tests: [not_null, unique]
+      - name: year
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 1900
+              max_value: 2099
+
+  - name: fact_sales
+    description: Order-line grain sales fact. See contracts/fact_sales.yaml.
+    columns:
+      - name: sales_key
+        tests: [not_null, unique]
+      - name: customer_key
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_customer')
+              field: customer_key
+      - name: product_key
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_product')
+              field: product_key
+      - name: order_date_key
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_date')
+              field: date_key
+      - name: quantity
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 1

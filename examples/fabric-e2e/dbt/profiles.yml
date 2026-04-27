@@ -1,0 +1,26 @@
+# dbt-fabric profile.
+#
+# In CI we use dbt-duckdb (offline, fast) so 'dbt compile' succeeds without
+# Fabric creds. For real Fabric runs, swap to the dbt-fabric block.
+
+fabric_e2e:
+  target: ci
+  outputs:
+    ci:
+      type: duckdb
+      path: ":memory:"
+
+    fabric:
+      type: fabric
+      driver: 'ODBC Driver 18 for SQL Server'
+      server: "{{ env_var('FABRIC_SQL_ENDPOINT') }}"
+      port: 1433
+      database: "{{ env_var('FABRIC_LAKEHOUSE_NAME', 'lh_retail_sales_gold') }}"
+      authentication: ActiveDirectoryServicePrincipal
+      tenant_id: "{{ env_var('AZURE_TENANT_ID') }}"
+      client_id: "{{ env_var('AZURE_CLIENT_ID') }}"
+      client_secret: "{{ env_var('AZURE_CLIENT_SECRET') }}"
+      schema: dbo
+      threads: 4
+      encrypt: true
+      trust_cert: false

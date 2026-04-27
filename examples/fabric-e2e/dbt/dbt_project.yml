@@ -1,0 +1,35 @@
+name: 'fabric_e2e'
+version: '1.0.0'
+config-version: 2
+
+profile: 'fabric_e2e'
+
+model-paths:    ["models"]
+analysis-paths: ["analyses"]
+test-paths:     ["tests"]
+seed-paths:     ["seeds"]
+macro-paths:    ["macros"]
+
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+models:
+  fabric_e2e:
+    bronze:
+      +materialized: view
+      +schema: bronze
+    silver:
+      +materialized: incremental
+      +schema: silver
+      +on_schema_change: append_new_columns
+    gold:
+      +materialized: incremental
+      +schema: gold
+      +on_schema_change: append_new_columns
+
+seeds:
+  fabric_e2e:
+    +schema: bronze
+    +quote_columns: false

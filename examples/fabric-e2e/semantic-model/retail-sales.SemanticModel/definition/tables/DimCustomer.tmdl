@@ -1,0 +1,96 @@
+/// Customer dimension (SCD Type 2 from gold.dim_customer)
+table DimCustomer
+	lineageTag: c1d04a3e-1111-4111-8111-111111111111
+
+	column customer_key
+		dataType: int64
+		isKey
+		formatString: 0
+		summarizeBy: none
+		sourceColumn: customer_key
+		description: 'Surrogate key for SCD2 versioning'
+		annotation SummarizationSetBy = Automatic
+
+	column customer_id
+		dataType: string
+		summarizeBy: none
+		sourceColumn: customer_id
+		description: 'Natural key from source system'
+		annotation SummarizationSetBy = Automatic
+
+	column customer_name
+		dataType: string
+		summarizeBy: none
+		sourceColumn: customer_name
+		annotation SummarizationSetBy = Automatic
+
+	column customer_segment
+		dataType: string
+		summarizeBy: none
+		sourceColumn: customer_segment
+		annotation SummarizationSetBy = Automatic
+
+	column country
+		dataType: string
+		summarizeBy: none
+		sourceColumn: country
+		dataCategory: Country
+		annotation SummarizationSetBy = Automatic
+
+	column region
+		dataType: string
+		summarizeBy: none
+		sourceColumn: region
+		annotation SummarizationSetBy = Automatic
+
+	column valid_from
+		dataType: dateTime
+		formatString: General Date
+		summarizeBy: none
+		sourceColumn: valid_from
+		isHidden
+		annotation SummarizationSetBy = Automatic
+
+	column valid_to
+		dataType: dateTime
+		formatString: General Date
+		summarizeBy: none
+		sourceColumn: valid_to
+		isHidden
+		annotation SummarizationSetBy = Automatic
+
+	column is_current
+		dataType: boolean
+		formatString: """TRUE"";""TRUE"";""FALSE"""
+		summarizeBy: none
+		sourceColumn: is_current
+		isHidden
+		annotation SummarizationSetBy = Automatic
+
+	measure 'Customer Count' =
+			DISTINCTCOUNT( DimCustomer[customer_id] )
+		formatString: #,##0
+		displayFolder: Counts
+		description: 'Distinct customer count, ignores SCD2 versioning.'
+
+	measure 'Active Customer Count' =
+			CALCULATE(
+			    DISTINCTCOUNT( DimCustomer[customer_id] ),
+			    DimCustomer[is_current] = TRUE()
+			)
+		formatString: #,##0
+		displayFolder: Counts
+		description: 'Customers with current SCD2 version active.'
+
+	hierarchy 'Geography'
+		level Region
+			column: region
+		level Country
+			column: country
+
+	partition DimCustomer-Lakehouse = entity
+		mode: directLake
+		source
+			entityName: dim_customer
+			schemaName: dbo
+			expressionSource: 'OneLake Lakehouse'

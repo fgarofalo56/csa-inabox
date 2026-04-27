@@ -200,6 +200,7 @@ nav:
           - "DOT Transportation": examples/dot.md
           - "EPA Environmental": examples/epa.md
           - "Fabric Data Agent": examples/fabric-data-agent.md
+          - "Fabric E2E (Retail Sales)": examples/fabric-e2e.md
           - "GeoAnalytics": examples/geoanalytics.md
           - "Interior Natural Resources": examples/interior.md
           - "IoT Streaming": examples/iot-streaming.md

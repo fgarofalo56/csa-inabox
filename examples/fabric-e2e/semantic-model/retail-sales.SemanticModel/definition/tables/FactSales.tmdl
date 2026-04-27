@@ -1,0 +1,174 @@
+/// Sales fact table. One row per order line item.
+table FactSales
+	lineageTag: c1d04a3e-4444-4444-8444-444444444444
+
+	column sales_key
+		dataType: int64
+		isKey
+		formatString: 0
+		summarizeBy: none
+		sourceColumn: sales_key
+		isHidden
+		annotation SummarizationSetBy = Automatic
+
+	column customer_key
+		dataType: int64
+		formatString: 0
+		summarizeBy: none
+		sourceColumn: customer_key
+		isHidden
+		annotation SummarizationSetBy = Automatic
+
+	column product_key
+		dataType: int64
+		formatString: 0
+		summarizeBy: none
+		sourceColumn: product_key
+		isHidden
+		annotation SummarizationSetBy = Automatic
+
+	column order_date_key
+		dataType: int64
+		formatString: 0
+		summarizeBy: none
+		sourceColumn: order_date_key
+		isHidden
+		annotation SummarizationSetBy = Automatic
+
+	column ship_date_key
+		dataType: int64
+		formatString: 0
+		summarizeBy: none
+		sourceColumn: ship_date_key
+		isHidden
+		annotation SummarizationSetBy = Automatic
+
+	column order_id
+		dataType: string
+		summarizeBy: none
+		sourceColumn: order_id
+		annotation SummarizationSetBy = Automatic
+
+	column quantity
+		dataType: int64
+		formatString: #,0
+		summarizeBy: sum
+		sourceColumn: quantity
+		annotation SummarizationSetBy = User
+
+	column unit_price
+		dataType: decimal
+		formatString: \$#,0.00
+		summarizeBy: none
+		sourceColumn: unit_price
+		annotation PBI_FormatHint = {"isCurrency":true}
+		annotation SummarizationSetBy = User
+
+	column discount_pct
+		dataType: decimal
+		formatString: 0.0%;-0.0%;0.0%
+		summarizeBy: none
+		sourceColumn: discount_pct
+		annotation SummarizationSetBy = User
+
+	column extended_amount
+		dataType: decimal
+		formatString: \$#,0.00
+		summarizeBy: sum
+		sourceColumn: extended_amount
+		annotation PBI_FormatHint = {"isCurrency":true}
+		annotation SummarizationSetBy = User
+
+	column cost_amount
+		dataType: decimal
+		formatString: \$#,0.00
+		summarizeBy: sum
+		sourceColumn: cost_amount
+		annotation PBI_FormatHint = {"isCurrency":true}
+		annotation SummarizationSetBy = User
+
+	column margin_amount
+		dataType: decimal
+		formatString: \$#,0.00
+		summarizeBy: sum
+		sourceColumn: margin_amount
+		annotation PBI_FormatHint = {"isCurrency":true}
+		annotation SummarizationSetBy = User
+
+	// =====================================================================
+	// Core measures
+	// =====================================================================
+
+	measure 'Total Sales' =
+			SUM( FactSales[extended_amount] )
+		formatString: \$#,0
+		displayFolder: 'Core Metrics'
+		description: 'Sum of extended_amount across the current filter context.'
+
+	measure 'Total Cost' =
+			SUM( FactSales[cost_amount] )
+		formatString: \$#,0
+		displayFolder: 'Core Metrics'
+
+	measure 'Total Margin' =
+			SUM( FactSales[margin_amount] )
+		formatString: \$#,0
+		displayFolder: 'Core Metrics'
+
+	measure 'Margin %' =
+			DIVIDE( [Total Margin], [Total Sales], 0 )
+		formatString: 0.0%
+		displayFolder: 'Core Metrics'
+
+	measure 'Order Count' =
+			DISTINCTCOUNT( FactSales[order_id] )
+		formatString: #,0
+		displayFolder: 'Counts'
+
+	measure 'Units Sold' =
+			SUM( FactSales[quantity] )
+		formatString: #,0
+		displayFolder: 'Counts'
+
+	measure 'Average Order Value' =
+			DIVIDE( [Total Sales], [Order Count], 0 )
+		formatString: \$#,0
+		displayFolder: 'Core Metrics'
+
+	// =====================================================================
+	// Time intelligence (uses DimDate as date table)
+	// =====================================================================
+
+	measure 'Sales YTD' =
+			TOTALYTD( [Total Sales], DimDate[Date] )
+		formatString: \$#,0
+		displayFolder: 'Time Intelligence'
+
+	measure 'Sales Prior Year' =
+			CALCULATE( [Total Sales], SAMEPERIODLASTYEAR( DimDate[Date] ) )
+		formatString: \$#,0
+		displayFolder: 'Time Intelligence'
+
+	measure 'Sales YoY %' =
+			DIVIDE(
+			    [Total Sales] - [Sales Prior Year],
+			    [Sales Prior Year],
+			    0
+			)
+		formatString: 0.0%
+		displayFolder: 'Time Intelligence'
+
+	measure 'Sales 90D Rolling' =
+			CALCULATE(
+			    [Total Sales],
+			    DATESINPERIOD( DimDate[Date], MAX( DimDate[Date] ), -90, DAY )
+			)
+		formatString: \$#,0
+		displayFolder: 'Time Intelligence'
+
+	partition FactSales-Lakehouse = entity
+		mode: directLake
+		source
+			entityName: fact_sales
+			schemaName: dbo
+			expressionSource: 'OneLake Lakehouse'

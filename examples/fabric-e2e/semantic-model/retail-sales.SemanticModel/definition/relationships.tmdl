@@ -1,0 +1,21 @@
+/// Active relationship: FactSales → DimCustomer on customer_key
+relationship Customer_to_Sales
+	fromColumn: FactSales.customer_key
+	toColumn: DimCustomer.customer_key
+
+/// Active relationship: FactSales → DimProduct on product_key
+relationship Product_to_Sales
+	fromColumn: FactSales.product_key
+	toColumn: DimProduct.product_key
+
+/// Active relationship: FactSales → DimDate via order_date_key
+relationship OrderDate_to_Sales
+	fromColumn: FactSales.order_date_key
+	toColumn: DimDate.date_key
+
+/// Inactive relationship: FactSales → DimDate via ship_date_key (role-playing)
+/// Activated explicitly with USERELATIONSHIP() in measures that need ship-date analysis.
+relationship ShipDate_to_Sales
+	fromColumn: FactSales.ship_date_key
+	toColumn: DimDate.date_key
+	isActive: false

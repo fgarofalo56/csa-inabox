@@ -1,0 +1,35 @@
+apiVersion: csa.microsoft.com/v1
+kind: DataProductContract
+metadata:
+  name: retail.gold.dim_date
+  domain: retail
+  version: 1.0.0
+  owner: data-platform-team@example.com
+  classification: unrestricted
+  description: Static date dimension (1900-01-01 to 2099-12-31). Marked as date table for time intelligence in the semantic model.
+
+schema:
+  primary_key: [date_key]
+  columns:
+    - { name: date_key, type: bigint, nullable: false, description: "YYYYMMDD integer surrogate key" }
+    - { name: date, type: date, nullable: false }
+    - { name: year, type: int, nullable: false }
+    - { name: quarter, type: int, nullable: false }
+    - { name: month, type: int, nullable: false }
+    - { name: month_name, type: string, nullable: false }
+    - { name: day_of_week, type: int, nullable: false }
+    - { name: is_weekend, type: boolean, nullable: false }
+    - { name: is_holiday, type: boolean, nullable: false }
+
+quality_rules:
+  - { rule: expect_column_values_to_not_be_null, column: date_key }
+  - { rule: expect_column_values_to_be_unique, column: date_key }
+  - { rule: expect_column_values_to_not_be_null, column: date }
+  - { rule: expect_column_values_to_be_between, column: year, min_value: 1900, max_value: 2099 }
+  - { rule: expect_column_values_to_be_between, column: quarter, min_value: 1, max_value: 4 }
+  - { rule: expect_column_values_to_be_between, column: month, min_value: 1, max_value: 12 }
+  - { rule: expect_column_values_to_be_between, column: day_of_week, min_value: 0, max_value: 6 }
+
+sla:
+  freshness_minutes: 0   # static; no refresh
+  valid_row_ratio: 1.0
