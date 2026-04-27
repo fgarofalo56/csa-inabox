@@ -62,6 +62,24 @@ repos:
         files: '^(examples/[^/]+/contracts/.*\.ya?ml|domains/.*/data-products/.*/contract\.yaml)$'
         pass_filenames: false
 
+      # Build mkdocs in --strict mode so any nav / link / build warning
+      # fails the commit. Baseline is now 0 warnings; keep it that way.
+      - id: mkdocs-strict
+        name: mkdocs build --strict
+        entry: bash -c 'mkdocs build --strict --quiet'
+        language: system
+        files: '^(mkdocs\.yml|docs/.*|examples/.*/README\.md)$'
+        pass_filenames: false
+
+      # Compile every Bicep module so syntax breakage is caught at
+      # commit time, not in CI 5 minutes later.
+      - id: bicep-build
+        name: Bicep build (compile check)
+        entry: bash scripts/precommit_bicep_build.sh
+        language: system
+        files: '\.bicep$'
+        pass_filenames: true
+
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.15.0
     hooks:

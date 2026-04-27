@@ -170,7 +170,7 @@ necessary.
 
 ## References
 
-- Vision §3 — governance-first data mesh — [`docs/VISION.md`](../VISION.md)
+- Vision §3 — governance-first data mesh — [`docs/VISION.md`](../../README.md)
 - ADR-0006 Purview-primary catalog —
   [`./0006-purview-over-atlas.md`](./0006-purview-over-atlas.md)
 - ADR-0008 dbt Core —
@@ -192,5 +192,5 @@ necessary.
   domain CODEOWNERS + classification caps), **CA-2** (assessments via
   `validate-contracts` CI gate), **CM-3** (change control via
   contract-gated merges). Mapped in
-  [`governance/compliance/nist-800-53-rev5.yaml`](../../governance/compliance/nist-800-53-rev5.yaml).
+  [`governance/compliance/nist-800-53-rev5.yaml`](../../csa_platform/governance/compliance/nist-800-53-rev5.yaml).
 - Finding: **CSA-0128** / approved ballot item **E3** / **AQ-0027**.

@@ -1,6 +1,6 @@
 # CMMC 2.0 Level 2 — CSA-in-a-Box Practice Coverage
 
-**Manifest:** [`governance/compliance/cmmc-2.0-l2.yaml`](../../governance/compliance/cmmc-2.0-l2.yaml)
+**Manifest:** [`governance/compliance/cmmc-2.0-l2.yaml`](../../csa_platform/governance/compliance/cmmc-2.0-l2.yaml)
 **Baseline target:** CMMC 2.0 Level 2 (110 practices, NIST 800-171 r2 lineage)
 **Last reviewed:** 2026-04-18
 **Source of truth:** https://dodcio.defense.gov/CMMC/Model/

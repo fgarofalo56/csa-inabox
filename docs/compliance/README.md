@@ -4,7 +4,7 @@
 > foundation for customer ATO / audit / procurement conversations.
 
 This directory is the human-readable companion to the machine-readable
-manifests in [`governance/compliance/`](../../governance/compliance/).
+manifests in [`governance/compliance/`](../../csa_platform/governance/compliance/).
 
 ---
 
@@ -16,9 +16,9 @@ questions:
 
 | Framework | Manifest | Narrative | Scope |
 |---|---|---|---|
-| NIST SP 800-53 Rev 5 | [`nist-800-53-rev5.yaml`](../../governance/compliance/nist-800-53-rev5.yaml) | [`nist-800-53-rev5.md`](./nist-800-53-rev5.md) | Moderate + High baselines (federal ATO) |
-| CMMC 2.0 Level 2 | [`cmmc-2.0-l2.yaml`](../../governance/compliance/cmmc-2.0-l2.yaml) | [`cmmc-2.0-l2.md`](./cmmc-2.0-l2.md) | 110 practices (DoD contractors) |
-| HIPAA Security Rule | [`hipaa-security-rule.yaml`](../../governance/compliance/hipaa-security-rule.yaml) | [`hipaa-security-rule.md`](./hipaa-security-rule.md) | §164.308 / 310 / 312 / 314 / 316 |
+| NIST SP 800-53 Rev 5 | [`nist-800-53-rev5.yaml`](../../csa_platform/governance/compliance/nist-800-53-rev5.yaml) | [`nist-800-53-rev5.md`](./nist-800-53-rev5.md) | Moderate + High baselines (federal ATO) |
+| CMMC 2.0 Level 2 | [`cmmc-2.0-l2.yaml`](../../csa_platform/governance/compliance/cmmc-2.0-l2.yaml) | [`cmmc-2.0-l2.md`](./cmmc-2.0-l2.md) | 110 practices (DoD contractors) |
+| HIPAA Security Rule | [`hipaa-security-rule.yaml`](../../csa_platform/governance/compliance/hipaa-security-rule.yaml) | [`hipaa-security-rule.md`](./hipaa-security-rule.md) | §164.308 / 310 / 312 / 314 / 316 |
 
 ---
 
@@ -131,11 +131,11 @@ Phase 2 is out of scope for this ticket. Planned scope:
 
 | File | Purpose |
 |---|---|
-| [`governance/compliance/compliance-overview.md`](../../governance/compliance/compliance-overview.md) | Prose overview — data residency, encryption, audit trail. Edited separately under CSA-0064. |
-| [`governance/compliance/nist-800-53-rev5.yaml`](../../governance/compliance/nist-800-53-rev5.yaml) | Machine-readable NIST 800-53 Rev 5 control map. |
-| [`governance/compliance/cmmc-2.0-l2.yaml`](../../governance/compliance/cmmc-2.0-l2.yaml) | Machine-readable CMMC 2.0 L2 practice map. |
-| [`governance/compliance/hipaa-security-rule.yaml`](../../governance/compliance/hipaa-security-rule.yaml) | Machine-readable HIPAA Security Rule map. |
-| [`governance/compliance/validate.py`](../../governance/compliance/validate.py) | Schema + evidence-path validator. |
+| [`governance/compliance/compliance-overview.md`](../../csa_platform/governance/compliance/compliance-overview.md) | Prose overview — data residency, encryption, audit trail. Edited separately under CSA-0064. |
+| [`governance/compliance/nist-800-53-rev5.yaml`](../../csa_platform/governance/compliance/nist-800-53-rev5.yaml) | Machine-readable NIST 800-53 Rev 5 control map. |
+| [`governance/compliance/cmmc-2.0-l2.yaml`](../../csa_platform/governance/compliance/cmmc-2.0-l2.yaml) | Machine-readable CMMC 2.0 L2 practice map. |
+| [`governance/compliance/hipaa-security-rule.yaml`](../../csa_platform/governance/compliance/hipaa-security-rule.yaml) | Machine-readable HIPAA Security Rule map. |
+| [`governance/compliance/validate.py`](../../csa_platform/governance/compliance/validate.py) | Schema + evidence-path validator. |
 | This directory | Narrative companions + index. |
 
 ---

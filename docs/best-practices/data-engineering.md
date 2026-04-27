@@ -21,7 +21,7 @@ CSA-in-a-Box uses a modern data engineering stack built on three pillars:
 | **Azure Data Factory (ADF)** | Orchestration & ingestion | Cloud-native ETL, 90+ connectors           |
 | **Apache Spark**             | Large-scale processing    | Distributed compute for big data workloads |
 
-Together these tools implement the [medallion architecture](../architecture/medallion-architecture.md) — ingesting raw data, transforming it through bronze → silver → gold layers, and serving analytics-ready datasets.
+Together these tools implement the [medallion architecture](../reference-architecture/data-flow-medallion.md) — ingesting raw data, transforming it through bronze → silver → gold layers, and serving analytics-ready datasets.
 
 ```mermaid
 flowchart LR
@@ -794,7 +794,7 @@ Without freshness monitoring, stale source data flows silently through the pipel
 
 ## Cross-References
 
-- [Medallion Architecture](../architecture/medallion-architecture.md) — Bronze/Silver/Gold layer design
-- [Data Governance](../governance/data-governance.md) — Classification, access control, lineage
-- [Monitoring & Observability](../operations/monitoring.md) — Pipeline alerting, data quality dashboards
-- [Security Best Practices](./security.md) — Managed Identity, key vault integration
+- [Medallion Architecture](../reference-architecture/data-flow-medallion.md) — Bronze/Silver/Gold layer design
+- [Data Governance](../../csa_platform/governance/README.md) — Classification, access control, lineage
+- [Monitoring & Observability](monitoring-observability.md) — Pipeline alerting, data quality dashboards
+- [Security Best Practices](security-compliance.md) — Managed Identity, key vault integration

@@ -394,7 +394,7 @@ Power BI Desktop roles mirror the database-level RLS policies:
 
 ## Cross-References
 
-- [HIPAA Compliance Mapping](../HIPAA_COMPLIANCE.md) — full safeguard-to-implementation mapping
+- [HIPAA Compliance Mapping](../compliance/hipaa-security-rule.md) — full safeguard-to-implementation mapping
 - [Azure Government Service Matrix](../GOV_SERVICE_MATRIX.md) — FedRAMP High service availability
 - [Architecture Overview](../ARCHITECTURE.md) — platform-wide medallion architecture
 - [Data Factory Setup](../ADF_SETUP.md) — pipeline configuration and managed VNET integration

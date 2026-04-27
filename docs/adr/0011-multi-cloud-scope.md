@@ -153,7 +153,7 @@ We will know this decision is right if:
 
 ## References
 
-- Vision §1 (multi-cloud capability statement) — [`docs/VISION.md`](../VISION.md)
+- Vision §1 (multi-cloud capability statement) — [`docs/VISION.md`](../../README.md)
 - Fabric primacy rewrite (CSA-0063) and ADR-0010 —
   [`./0010-fabric-strategic-target.md`](./0010-fabric-strategic-target.md)
 - Purview catalog strategy — [`./0006-purview-over-atlas.md`](./0006-purview-over-atlas.md)
@@ -165,5 +165,5 @@ We will know this decision is right if:
   cross-cloud scans), **AC-4** (information-flow enforcement across the
   S3/GCS shortcut boundary), **CM-7** (least-functionality — read-only
   federation). Mapped in
-  [`governance/compliance/nist-800-53-rev5.yaml`](../../governance/compliance/nist-800-53-rev5.yaml).
+  [`governance/compliance/nist-800-53-rev5.yaml`](../../csa_platform/governance/compliance/nist-800-53-rev5.yaml).
 - Finding: **CSA-0140** / approved ballot item **E11** / **AQ-0035**.

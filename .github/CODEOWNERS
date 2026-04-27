@@ -1,104 +1,35 @@
-# CSA-in-a-Box Code Owners
-# These owners are automatically requested for review on pull requests.
+# CODEOWNERS for csa-inabox
+# Each line: pattern  @owner1 @owner2
+# Last matching pattern wins.
+#
+# Default — every PR pings the repo owner unless overridden below.
 
-# Default
-* @platform-team
+*                                       @fgarofalo56
 
-# Platform Infrastructure
-/deploy/                             @platform-team @infra-team
-/deploy/bicep/                       @platform-team
-/deploy/scripts/                     @platform-team
+# Documentation (docs site + repo-root markdown)
+/docs/                                  @fgarofalo56
+*.md                                    @fgarofalo56
+mkdocs.yml                              @fgarofalo56
 
-# Shared Modules
-/deploy/bicep/shared/                @platform-team @security-team
+# Architecture decisions — extra scrutiny
+/docs/adr/                              @fgarofalo56
 
-# Landing Zones
-/deploy/bicep/DLZ/                   @platform-team
-/deploy/bicep/DMLZ/                  @platform-team @governance-team
-/deploy/bicep/LandingZone\ -\ ALZ/   @platform-team @network-team
+# IaC — Bicep modules
+/deploy/                                @fgarofalo56
 
-# Governance (consolidated under csa_platform/governance — CSA-0126)
-/csa_platform/governance/                @data-governance-team
-/csa_platform/governance/purview/        @data-governance-team @data-stewards
-/csa_platform/governance/rbac/           @security-team
-/csa_platform/governance/network/        @network-team @security-team
-/csa_platform/governance/compliance/     @security-team @data-governance-team
-/csa_platform/governance/keyvault/       @security-team @platform-team
+# CI/CD workflows + supply chain
+/.github/                               @fgarofalo56
+/.pre-commit-config.yaml                @fgarofalo56
+/scripts/                               @fgarofalo56
 
-# Portal
-/portal/                             @portal-team
-/portal/shared/                      @portal-team
-/portal/react-webapp/                @portal-team
-/portal/kubernetes/                  @portal-team @infra-team
+# Platform code
+/csa_platform/                          @fgarofalo56
+/portal/                                @fgarofalo56
+/azure-functions/                       @fgarofalo56
+/apps/                                  @fgarofalo56
 
-# Platform Services
-/csa_platform/                       @platform-team
-
-# ---------------------------------------------------------------------------
-# Data-mesh federation (CSA-0128 / AQ-0027 / ADR-0012)
-# Each domain has its own owner set; central platform team owns
-# csa_platform/, deploy/, portal/shared/api/, and .github/. Domain PRs
-# require domain-owner approval; platform PRs require platform-team
-# approval.
-# TODO: replace placeholder *-domain-team handles with the real GitHub
-# team handles before go-live; keep the per-domain section structure.
-# ---------------------------------------------------------------------------
-
-# Domain: Shared (cross-domain models, dbt macros, data product contracts)
-/domains/shared/                     @data-engineering
-/domains/shared/dbt/                 @data-engineering
-/domains/shared/pipelines/           @data-engineering
-/domains/shared/notebooks/           @data-engineering @data-science
-
-# Domain: Sales
-/domains/sales/                      @sales-domain-team
-
-# Domain: Finance
-/domains/finance/                    @finance-domain-team @data-governance-team
-
-# Domain: Inventory
-/domains/inventory/                  @inventory-domain-team
-
-# Domain: DLZ (Data Landing Zone — storage layout / landing contracts)
-/domains/dlz/                        @data-engineering @platform-team
-
-# Domain: Spark (PySpark + GeoAnalytics utilities, cross-domain)
-/domains/spark/                      @data-engineering @data-science
-
-# Shared Functions (consolidated 2026-04-19, CSA-0127)
-/csa_platform/functions/             @platform-team
-/csa_platform/functions/aiEnrichment/ @ai-team @platform-team
-/csa_platform/functions/eventProcessing/ @data-engineering @platform-team
-/csa_platform/functions/secretRotation/ @platform-team
-/csa_platform/functions/validation/  @platform-team
-/csa_platform/functions/common/      @platform-team
-
-# Examples
-/examples/                           @solutions-team
-/domains/                            @solutions-team
-
-# Monitoring
-/monitoring/                         @platform-team @infra-team
-
-# Scripts
-/scripts/deploy/                     @infra-team
-
-# CI/CD
-/.github/                            @platform-team
-/.github/workflows/                  @platform-team @devops-team
-
-# Dev Loop
-/dev-loop/                           @platform-team
-
-# Documentation
-/docs/                               @platform-team
-/templates/                          @platform-team @data-engineering
+# Examples — vertical-specific
+/examples/                              @fgarofalo56
 
 # Tests
-/tests/                              @platform-team
-
-# Security-sensitive files
-*.env                                @security-team
-**/secrets/                          @security-team
-**/credentials*                      @security-team
-**/auth.py                           @security-team
+/tests/                                 @fgarofalo56

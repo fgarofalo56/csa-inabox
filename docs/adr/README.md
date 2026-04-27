@@ -97,7 +97,7 @@ without superseding.
 - **Architecture reference** (current-stack narrative):
   [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md).
 - **Compliance control matrices**:
-  [`governance/compliance/`](../../governance/compliance/) —
+  [`governance/compliance/`](../../csa_platform/governance/compliance/) —
   `nist-800-53-rev5.yaml`, `hipaa-security-rule.yaml`,
   `cmmc-2.0-l2.yaml`.
 

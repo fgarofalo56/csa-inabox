@@ -144,7 +144,7 @@ ORDER BY severity_weighted_score DESC;
 ```
 
 !!! tip "Geospatial Extension"
-For sub-county corridor-level analysis, pair grid-cell hotspots with road network geometry from HPMS. See the [Geoanalytics patterns](../patterns/geoanalytics.md) for Azure Maps and H3 hex-grid integration.
+For sub-county corridor-level analysis, pair grid-cell hotspots with road network geometry from HPMS. See the Geoanalytics patterns (planned) for Azure Maps and H3 hex-grid integration.
 
 ---
 

@@ -295,4 +295,4 @@ the procedure stays current with Azure platform changes.
 - [Break-Glass Access](./break-glass-access.md) — Emergency admin for a tenant
 - [Gov Service Matrix](../GOV_SERVICE_MATRIX.md) — Gov feature availability
 - [IaC/CI-CD Best Practices](../IaC-CICD-Best-Practices.md) — OIDC federated credentials, deploy stacks
-- [Compliance](../COMPLIANCE.md) — ATO / regulatory dependency chain
+- [Compliance](../compliance/README.md) — ATO / regulatory dependency chain

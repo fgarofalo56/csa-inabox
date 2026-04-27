@@ -378,7 +378,7 @@ Two parameter files are provided: `params.dev.json` for commercial Azure and `pa
 
 - **Reference implementation** — [`examples/usda/`](../../examples/usda/) contains all dbt models, ingestion scripts, data contracts, seed data, and deployment parameters
 - **Architecture deep-dive** — [`examples/usda/ARCHITECTURE.md`](../../examples/usda/ARCHITECTURE.md) covers security, DR, cost optimization, and future ML integration
-- **Geoanalytics** — Combine with [spatial analysis patterns](../../docs/use-cases/index.md) for county-level crop yield mapping and precision agriculture overlays
+- **Geoanalytics** — Combine with [spatial analysis patterns](index.md) for county-level crop yield mapping and precision agriculture overlays
 - **Related verticals** — [EPA Environmental Analytics](epa-environmental-analytics.md) and [NOAA Climate Analytics](noaa-climate-analytics.md) share geographic and environmental data that correlates with agricultural outcomes
 
 ---

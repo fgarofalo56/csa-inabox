@@ -22,7 +22,7 @@ Effective observability for data platforms rests on three pillars: **metrics**, 
 | Traces  | End-to-end request/pipeline flow | Application Insights     |
 
 !!! tip "Cross-reference"
-For the canonical log event schema used across all CSA-in-a-Box pipelines, see [LOG_SCHEMA.md](../reference/LOG_SCHEMA.md).
+For the canonical log event schema used across all CSA-in-a-Box pipelines, see [LOG_SCHEMA.md](../LOG_SCHEMA.md).
 
 ---
 

@@ -1,7 +1,7 @@
 # Dead-Letter Queue (DLQ) Operator Runbook
 
 > **Scope:** Canonical DLQ pattern for every ingest pipeline in CSA-in-a-Box.
-> **Finding:** [CSA-0138](../../audit/findings/CSA-0138.md)  ·  **Decision:** [AQ-0033 / Ballot E9](../decisions/AQ-0033.md)
+> **Finding:** CSA-0138  ·  **Decision:** AQ-0033 / Ballot E9
 > **Module:** [`deploy/bicep/shared/modules/deadletter/deadletter.bicep`](../../deploy/bicep/shared/modules/deadletter/deadletter.bicep)
 
 ---
@@ -231,9 +231,9 @@ Teams own the row for their pipeline. Update on deployment.
 
 ## Related
 
-- **Finding:** [CSA-0138 — No standard DLQ pattern](../../audit/findings/CSA-0138.md)
-- **Decision:** [AQ-0033 / Ballot item E9](../decisions/AQ-0033.md)
-- **ADR:** [ADR-0005 — Event Hubs over Kafka](../adr/ADR-0005-event-hubs-over-kafka.md) (context for streaming DLQ semantics)
+- **Finding:** CSA-0138 — No standard DLQ pattern
+- **Decision:** AQ-0033 / Ballot item E9
+- **ADR:** [ADR-0005 — Event Hubs over Kafka](../adr/0005-event-hubs-over-kafka.md) (context for streaming DLQ semantics)
 - **Audit logger:** [CSA-0016 tamper-evident audit log](../../src/csa_platform/audit/) (drop-event emission)
 - **Bicep module:** [`deploy/bicep/shared/modules/deadletter/deadletter.bicep`](../../deploy/bicep/shared/modules/deadletter/deadletter.bicep)
 - **Alerts:** Alert rule `csa-alert-dlq-size-<pipelineName>` fires to the pipeline's action group.

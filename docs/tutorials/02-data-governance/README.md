@@ -80,7 +80,7 @@ echo "API status: $HTTP_STATUS"  # Should be 200
 If you get `403`, you need Collection Admin role on the root collection.
 If you get a connection error, check private endpoint DNS resolution.
 
-> 📖 **Detailed reference:** [docs/governance/PURVIEW_SETUP.md](../../docs/governance/PURVIEW_SETUP.md)
+> 📖 **Detailed reference:** [docs/governance/PURVIEW_SETUP.md](../../governance/PURVIEW_SETUP.md)
 
 ---
 
@@ -157,7 +157,7 @@ Staging
 Transportation
 ```
 
-> 📖 **Detailed reference:** [docs/governance/PURVIEW_SETUP.md — Step 1](../../docs/governance/PURVIEW_SETUP.md#step-1-design-the-collection-hierarchy)
+> 📖 **Detailed reference:** [docs/governance/PURVIEW_SETUP.md — Step 1](../../governance/PURVIEW_SETUP.md#step-1-design-the-collection-hierarchy)
 
 ---
 
@@ -249,7 +249,7 @@ curl -s "$PURVIEW_ENDPOINT/scan/datasources/$SOURCE_NAME/scans/initial-scan/runs
 
 Wait for `"status": "Succeeded"` before proceeding.
 
-> 📖 **Detailed reference:** [docs/governance/PURVIEW_SETUP.md — Step 2-3](../../docs/governance/PURVIEW_SETUP.md#step-2-register-data-sources), [docs/governance/METADATA_MANAGEMENT.md](../../docs/governance/METADATA_MANAGEMENT.md)
+> 📖 **Detailed reference:** [docs/governance/PURVIEW_SETUP.md — Step 2-3](../../governance/PURVIEW_SETUP.md#step-2-register-data-sources), [docs/governance/METADATA_MANAGEMENT.md](../../governance/METADATA_MANAGEMENT.md)
 
 ---
 
@@ -312,7 +312,7 @@ curl -s -X POST \
 echo "Linked CLV term to gold customer table"
 ```
 
-> 📖 **Detailed reference:** [docs/governance/DATA_CATALOGING.md](../../docs/governance/DATA_CATALOGING.md)
+> 📖 **Detailed reference:** [docs/governance/DATA_CATALOGING.md](../../governance/DATA_CATALOGING.md)
 
 ---
 
@@ -400,7 +400,7 @@ curl -s -X POST \
   -d '{ "scanLevel": "Full" }'
 ```
 
-> 📖 **Detailed reference:** [docs/governance/DATA_CATALOGING.md — Custom Classifications](../../docs/governance/DATA_CATALOGING.md#custom-classifications)
+> 📖 **Detailed reference:** [docs/governance/DATA_CATALOGING.md — Custom Classifications](../../governance/DATA_CATALOGING.md#custom-classifications)
 
 ---
 
@@ -484,7 +484,7 @@ curl -s -X POST \
   | jq '.["@search.count"] as $count | "\($count) process entities found"'
 ```
 
-> 📖 **Detailed reference:** [docs/governance/DATA_LINEAGE.md](../../docs/governance/DATA_LINEAGE.md)
+> 📖 **Detailed reference:** [docs/governance/DATA_LINEAGE.md](../../governance/DATA_LINEAGE.md)
 
 ---
 
@@ -549,7 +549,7 @@ curl -s -X PUT \
 Set up alerts for quality failures using Azure Monitor (see quality-rules.yaml
 alerting section).
 
-> 📖 **Detailed reference:** [docs/governance/DATA_QUALITY.md](../../docs/governance/DATA_QUALITY.md)
+> 📖 **Detailed reference:** [docs/governance/DATA_QUALITY.md](../../governance/DATA_QUALITY.md)
 
 ---
 
@@ -598,7 +598,7 @@ Grant your team appropriate roles on collections via Purview Studio:
 - **Data Curator** → Data stewards
 - **Data Reader** → Analysts
 
-> 📖 **Detailed reference:** [docs/governance/DATA_ACCESS.md](../../docs/governance/DATA_ACCESS.md)
+> 📖 **Detailed reference:** [docs/governance/DATA_ACCESS.md](../../governance/DATA_ACCESS.md)
 
 ---
 
@@ -694,9 +694,9 @@ You now have a fully governed data platform. Here are suggested next steps:
 1. **Automate with CI/CD** — Run `bootstrap-purview.sh` and classification
    updates in your deployment pipeline
 2. **Set up approval workflows** — Use Logic Apps for sensitive data access
-   requests (see [DATA_ACCESS.md](../../docs/governance/DATA_ACCESS.md))
+   requests (see [DATA_ACCESS.md](../../governance/DATA_ACCESS.md))
 3. **Configure sensitivity labels** — Connect MIP for auto-labeling
-   (see [DATA_CATALOGING.md](../../docs/governance/DATA_CATALOGING.md))
+   (see [DATA_CATALOGING.md](../../governance/DATA_CATALOGING.md))
 4. **Monitor quality trends** — Build Power BI dashboards from quality scores
 5. **Onboard domain teams** — Train data stewards on glossary management and
    asset certification
@@ -707,12 +707,12 @@ You now have a fully governed data platform. Here are suggested next steps:
 
 | Document | Purpose |
 |---|---|
-| [PURVIEW_SETUP.md](../../docs/governance/PURVIEW_SETUP.md) | Initial setup, network, permissions |
-| [METADATA_MANAGEMENT.md](../../docs/governance/METADATA_MANAGEMENT.md) | Scanning, custom metadata |
-| [DATA_CATALOGING.md](../../docs/governance/DATA_CATALOGING.md) | Glossary, classifications, labels |
-| [DATA_LINEAGE.md](../../docs/governance/DATA_LINEAGE.md) | ADF, Databricks, dbt lineage |
-| [DATA_QUALITY.md](../../docs/governance/DATA_QUALITY.md) | Great Expectations, scoring |
-| [DATA_ACCESS.md](../../docs/governance/DATA_ACCESS.md) | Policies, RBAC, audit |
+| [PURVIEW_SETUP.md](../../governance/PURVIEW_SETUP.md) | Initial setup, network, permissions |
+| [METADATA_MANAGEMENT.md](../../governance/METADATA_MANAGEMENT.md) | Scanning, custom metadata |
+| [DATA_CATALOGING.md](../../governance/DATA_CATALOGING.md) | Glossary, classifications, labels |
+| [DATA_LINEAGE.md](../../governance/DATA_LINEAGE.md) | ADF, Databricks, dbt lineage |
+| [DATA_QUALITY.md](../../governance/DATA_QUALITY.md) | Great Expectations, scoring |
+| [DATA_ACCESS.md](../../governance/DATA_ACCESS.md) | Policies, RBAC, audit |
 
 ---
 

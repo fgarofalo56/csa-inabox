@@ -486,7 +486,7 @@ All deployments enforce:
 - [GOV_SERVICE_MATRIX.md](GOV_SERVICE_MATRIX.md) — Azure Government compatibility
 - **Fabric migration path** — See the
   [`fabric-vs-databricks-vs-synapse` decision tree](../decision-trees/fabric-vs-databricks-vs-synapse/),
-  [ADR-0010 (positioning)](adr/ADR-0010-positioning.md), and the
+  [ADR-0010 (positioning)](adr/0010-fabric-strategic-target.md), and the
   Palantir migration playbook in [`migrations/`](migrations/) for guidance on
   when to stay on CSA-in-a-Box, when to adopt Microsoft Fabric, and how
   components compose into a Fabric migration.

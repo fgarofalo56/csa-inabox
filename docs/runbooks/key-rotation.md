@@ -44,7 +44,7 @@
 Covers scheduled and emergency rotation for every credential surface on
 the platform. For *compromise response*, start in §5 and return to the
 per-credential procedure. For *ATO / compliance* rotation schedules,
-see [`docs/COMPLIANCE.md`](../COMPLIANCE.md).
+see [`docs/COMPLIANCE.md`](../compliance/README.md).
 
 Out of scope: user AAD passwords (governed by Entra ID policy), FIDO2 /
 certificate re-enrollment (owned by IT endpoint management).
@@ -296,4 +296,4 @@ For emergency rotations, preserve:
 - [Tenant Onboarding](./tenant-onboarding.md) — New-tenant key setup
 - [Break-Glass Access](./break-glass-access.md) — Emergency admin flow
 - [DR Drill](./dr-drill.md) — Key Vault restore scenario
-- [COMPLIANCE](../COMPLIANCE.md) — Rotation cadence & regulatory requirements
+- [COMPLIANCE](../compliance/README.md) — Rotation cadence & regulatory requirements
