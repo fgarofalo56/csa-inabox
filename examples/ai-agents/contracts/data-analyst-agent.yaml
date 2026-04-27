@@ -1,0 +1,121 @@
+# yaml-language-server: $schema=../../../csa_platform/governance/contracts/schema/data-product-contract-v1.json
+apiVersion: csa.microsoft.com/v1
+kind: DataProductContract
+metadata:
+  name: ai-agent.data-analyst
+  domain: ai-agents
+  version: 1.0.0
+  owner: data-platform-team@example.com
+  classification: unrestricted
+  description: >-
+    Single-agent natural-language interface to the data catalog and quality
+    framework. Read-only over Purview catalog and gold tables.
+
+schema:
+  primary_key: [request_id]
+  columns:
+    - name: request_id
+      type: string
+      description: Globally unique invocation ID (UUID v4)
+      nullable: false
+    - name: timestamp
+      type: timestamp
+      description: When the request was received (UTC, ISO 8601)
+      nullable: false
+    - name: user_id_hash
+      type: string
+      description: SHA-256 of the user's UPN — never the raw UPN
+      nullable: false
+    - name: question
+      type: string
+      description: Natural language question from the user
+      nullable: false
+    - name: answer
+      type: string
+      description: Final answer from the agent
+      nullable: false
+    - name: cited_data_products
+      type: array<string>
+      description: Fully-qualified data product names cited in answer
+      nullable: false
+    - name: tools_called
+      type: array<string>
+      description: Names of tools the agent invoked
+      nullable: false
+    - name: tokens_in
+      type: int
+      nullable: false
+    - name: tokens_out
+      type: int
+      nullable: false
+    - name: cost_usd_estimate
+      type: double
+      nullable: false
+    - name: refused
+      type: boolean
+      description: True if AOAI returned a content-safety refusal
+      nullable: false
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: request_id
+  - rule: expect_column_values_to_not_be_null
+    column: timestamp
+  - rule: expect_column_values_to_not_be_null
+    column: user_id_hash
+  - rule: expect_column_values_to_not_be_null
+    column: question
+  - rule: expect_column_values_to_be_unique
+    column: request_id
+  - rule: expect_column_value_lengths_to_be_between
+    column: question
+    min_value: 1
+    max_value: 4000
+  - rule: expect_column_values_to_be_between
+    column: tokens_in
+    min_value: 0
+    max_value: 16000
+  - rule: expect_column_values_to_be_between
+    column: tokens_out
+    min_value: 0
+    max_value: 4000
+  - rule: expect_column_values_to_be_between
+    column: cost_usd_estimate
+    min_value: 0
+    max_value: 0.1
+  - rule: expect_column_values_to_be_in_set
+    column: refused
+    value_set: [true, false]
+
+sla:
+  freshness_minutes: 0    # synchronous; freshness N/A
+  availability_pct: 99.5
+  response_time_p95_ms: 8000
+  response_time_p99_ms: 15000
+
+policy:
+  read_only: true
+  allowed_tools:
+    - search_catalog
+    - assess_quality
+    - get_lineage
+  denied_tools:
+    - write_catalog
+    - delete_data_product
+    - exec_sql
+  max_response_tokens: 1500
+  content_safety_severity_max: Medium
+  pii_redaction: enabled
+
+lineage:
+  upstream:
+    - resource: csa_platform.governance.purview
+      kind: catalog
+    - resource: csa_platform.governance.dataquality
+      kind: quality_framework
+    - resource: azure.openai
+      kind: llm
+      deployment: gpt-4o-mini
+  downstream:
+    - resource: appinsights.csa-platform
+      kind: telemetry

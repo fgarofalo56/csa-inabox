@@ -1,0 +1,17 @@
+{
+  "analyzers": {
+    "core": {
+      "enabled": true,
+      "verbose": false,
+      "rules": {
+        "no-hardcoded-env-urls": { "level": "warning" },
+        "no-unused-params": { "level": "warning" },
+        "no-unused-vars": { "level": "warning" },
+        "prefer-interpolation": { "level": "warning" },
+        "secure-parameter-default": { "level": "error" },
+        "secure-params-in-nested-deploy": { "level": "error" },
+        "no-loc-expr-outside-params": { "level": "warning" }
+      }
+    }
+  }
+}

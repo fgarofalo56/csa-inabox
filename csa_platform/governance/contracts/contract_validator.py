@@ -57,6 +57,11 @@ _TYPE_VALIDATORS: dict[str, Any] = {
     "timestamp": lambda v: isinstance(v, str) and bool(re.match(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}", v)),
 }
 
+# Generic container types — element type is parsed from `array<elem>` or
+# `map<k,v>` syntax. Validators below check container shape; the element
+# validator is looked up dynamically from _TYPE_VALIDATORS.
+_CONTAINER_TYPES = ("array", "map")
+
 
 class ContractValidationError(Exception):
     """Raised when a contract is structurally invalid."""
@@ -205,8 +210,8 @@ def validate_contract_structure(contract: Contract) -> list[str]:
             )
 
     for col in contract.columns:
-        base_type = col.type.split("(")[0]  # handle decimal(18,2)
-        if base_type not in _TYPE_VALIDATORS and base_type != "decimal":
+        base_type = col.type.split("(")[0].split("<")[0]  # handle decimal(18,2) and array<string>
+        if base_type not in _TYPE_VALIDATORS and base_type not in _CONTAINER_TYPES and base_type != "decimal":
             errors.append(
                 f"{contract.name}: column {col.name!r} has unsupported type {col.type!r}",
             )
@@ -240,10 +245,25 @@ def _validate_value(value: Any, col: Column) -> str | None:
             return None
         return f"column {col.name!r} is not nullable but value is null"
 
-    base_type = col.type.split("(")[0]
+    base_type = col.type.split("(")[0].split("<")[0]
     if base_type == "decimal":
         if not isinstance(value, int | float) or isinstance(value, bool):
             return f"column {col.name!r} expects decimal, got {type(value).__name__}"
+    elif base_type == "array":
+        if not isinstance(value, list):
+            return f"column {col.name!r} expects array, got {type(value).__name__}"
+        # Best-effort element check when type is `array<elem>` and elem is a known scalar
+        elem_type = col.type[len("array<"):-1] if col.type.endswith(">") else ""
+        elem_validator = _TYPE_VALIDATORS.get(elem_type.split("(")[0])
+        if elem_validator:
+            for i, item in enumerate(value):
+                if item is None:
+                    continue
+                if not elem_validator(item):
+                    return f"column {col.name!r}[{i}] expects {elem_type}, got {type(item).__name__}"
+    elif base_type == "map":
+        if not isinstance(value, dict):
+            return f"column {col.name!r} expects map, got {type(value).__name__}"
     else:
         validator = _TYPE_VALIDATORS.get(base_type)
         if validator is None:

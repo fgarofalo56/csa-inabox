@@ -1,0 +1,125 @@
+# yaml-language-server: $schema=../../../csa_platform/governance/contracts/schema/data-product-contract-v1.json
+apiVersion: csa.microsoft.com/v1
+kind: DataProductContract
+metadata:
+  name: ai-agent.governance-review
+  domain: ai-agents
+  version: 1.0.0
+  owner: data-platform-team@example.com
+  classification: internal
+  description: >-
+    Multi-agent data-product review. Three specialist agents (DataAnalyst,
+    QualityReviewer, GovernanceOfficer) collaborate to render a publication
+    verdict. Output is auditable: full transcript persisted.
+
+schema:
+  primary_key: [review_id]
+  columns:
+    - name: review_id
+      type: string
+      nullable: false
+    - name: timestamp
+      type: timestamp
+      nullable: false
+    - name: data_product_under_review
+      type: string
+      description: Fully-qualified product name being reviewed
+      nullable: false
+    - name: requested_by_hash
+      type: string
+      nullable: false
+    - name: verdict
+      type: string
+      description: APPROVED | APPROVED_WITH_CONDITIONS | REJECTED | INCONCLUSIVE
+      nullable: false
+    - name: conditions
+      type: array<string>
+      description: Conditions to satisfy before publication (if applicable)
+      nullable: false
+    - name: rejection_reasons
+      type: array<string>
+      description: Specific reasons if REJECTED
+      nullable: false
+    - name: transcript
+      type: string
+      description: Full agent dialogue (JSON-serialized array of turns)
+      nullable: false
+    - name: turn_count
+      type: int
+      nullable: false
+    - name: tokens_in_total
+      type: int
+      nullable: false
+    - name: tokens_out_total
+      type: int
+      nullable: false
+    - name: cost_usd_estimate
+      type: double
+      nullable: false
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: review_id
+  - rule: expect_column_values_to_be_unique
+    column: review_id
+  - rule: expect_column_values_to_not_be_null
+    column: data_product_under_review
+  - rule: expect_column_values_to_not_be_null
+    column: verdict
+  - rule: expect_column_values_to_be_in_set
+    column: verdict
+    value_set:
+      - APPROVED
+      - APPROVED_WITH_CONDITIONS
+      - REJECTED
+      - INCONCLUSIVE
+  - rule: expect_column_values_to_be_between
+    column: turn_count
+    min_value: 1
+    max_value: 12
+  - rule: expect_column_values_to_be_between
+    column: tokens_in_total
+    min_value: 0
+    max_value: 200000
+  - rule: expect_column_values_to_be_between
+    column: tokens_out_total
+    min_value: 0
+    max_value: 50000
+  - rule: expect_column_values_to_be_between
+    column: cost_usd_estimate
+    min_value: 0
+    max_value: 1.0
+
+sla:
+  freshness_minutes: 0
+  availability_pct: 99.0
+  response_time_p95_ms: 60000   # multi-agent reviews are slower
+  response_time_p99_ms: 120000
+
+policy:
+  read_only: true
+  human_in_loop_required: true
+  human_in_loop_for_verdicts: [APPROVED, APPROVED_WITH_CONDITIONS]
+  allowed_tools:
+    - search_catalog
+    - get_lineage
+    - assess_quality
+    - validate_contract
+  denied_tools:
+    - write_catalog
+    - publish_data_product
+    - exec_sql
+  max_turns: 12
+  content_safety_severity_max: Medium
+
+lineage:
+  upstream:
+    - resource: csa_platform.governance.purview
+    - resource: csa_platform.governance.dataquality
+    - resource: csa_platform.governance.contracts
+    - resource: azure.openai
+      deployment: gpt-4o-mini
+  downstream:
+    - resource: csa_platform.governance.publication_pipeline
+      kind: gate
+    - resource: appinsights.csa-platform

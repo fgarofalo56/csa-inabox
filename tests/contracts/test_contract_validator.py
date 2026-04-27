@@ -130,6 +130,72 @@ def test_validate_structure_accepts_decimal_with_precision() -> None:
     assert validate_contract_structure(contract) == []
 
 
+def test_validate_structure_accepts_array_and_map_types() -> None:
+    contract = _make_contract(
+        columns=[
+            Column(name="id", type="string", nullable=False),
+            Column(name="tags", type="array<string>", nullable=False),
+            Column(name="counts", type="array<int>", nullable=False),
+            Column(name="attrs", type="map<string,string>", nullable=False),
+        ],
+        primary_key=["id"],
+    )
+    assert validate_contract_structure(contract) == []
+
+
+def test_validate_rows_accepts_array_payloads() -> None:
+    from csa_platform.governance.contracts.contract_validator import (
+        validate_rows_against_contract,
+    )
+
+    contract = _make_contract(
+        columns=[
+            Column(name="id", type="string", nullable=False),
+            Column(name="tags", type="array<string>", nullable=False),
+        ],
+        primary_key=["id"],
+    )
+    assert validate_rows_against_contract(
+        contract, [{"id": "a", "tags": ["x", "y"]}, {"id": "b", "tags": []}]
+    ) == []
+
+
+def test_validate_rows_rejects_array_with_wrong_element_type() -> None:
+    from csa_platform.governance.contracts.contract_validator import (
+        validate_rows_against_contract,
+    )
+
+    contract = _make_contract(
+        columns=[
+            Column(name="id", type="string", nullable=False),
+            Column(name="counts", type="array<int>", nullable=False),
+        ],
+        primary_key=["id"],
+    )
+    violations = validate_rows_against_contract(
+        contract, [{"id": "a", "counts": [1, 2, "oops"]}]
+    )
+    assert violations and "'counts'[2]" in violations[0]
+
+
+def test_validate_rows_rejects_array_field_with_non_list_value() -> None:
+    from csa_platform.governance.contracts.contract_validator import (
+        validate_rows_against_contract,
+    )
+
+    contract = _make_contract(
+        columns=[
+            Column(name="id", type="string", nullable=False),
+            Column(name="tags", type="array<string>", nullable=False),
+        ],
+        primary_key=["id"],
+    )
+    violations = validate_rows_against_contract(
+        contract, [{"id": "a", "tags": "oops-not-a-list"}]
+    )
+    assert violations and "expects array" in violations[0]
+
+
 def test_validate_structure_catches_allowed_values_on_non_string() -> None:
     contract = _make_contract(
         columns=[
