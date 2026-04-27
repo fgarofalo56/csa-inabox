@@ -1,6 +1,6 @@
 [project]
 name = "csa-inabox"
-version = "0.2.0"
+version = "0.3.0"
 description = "Cloud-Scale Analytics in-a-Box — Azure-native reference implementation of the Microsoft 'Unify your data platform' CAF guidance, providing Fabric-parity capabilities on Azure PaaS for Government (pre-Fabric-GA) and regulated Commercial workloads."
 requires-python = ">=3.10"
 license = "MIT"

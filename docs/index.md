@@ -104,3 +104,4 @@ graph TB
     GOLD --> API
     GOLD --> COPILOT
 ```
+<!-- release v0.3.0 -->
