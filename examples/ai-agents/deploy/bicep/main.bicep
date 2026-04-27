@@ -174,7 +174,7 @@ resource acaEnv 'Microsoft.App/managedEnvironments@2024-03-01' = {
       destination: 'log-analytics'
       logAnalyticsConfiguration: {
         customerId: law.properties.customerId
-        sharedKey: listKeys(law.id, '2023-09-01').primarySharedKey
+        sharedKey: law.listKeys().primarySharedKey
       }
     }
     workloadProfiles: [
