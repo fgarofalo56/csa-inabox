@@ -126,8 +126,10 @@ def test_named_verticals_exist() -> None:
     section = matrix[matrix.index("### Verticals") : matrix.index("### Compliance")]
     # Two patterns: comma-separated bare names ("usda, noaa, epa, ...")
     # and backtick-wrapped paths (`examples/streaming/`).
+    # NOTE: pattern uses a flat character class (no nested quantifier) to
+    # avoid catastrophic backtracking — see CodeQL alert py/redos #292.
     bare_names = re.search(
-        r"\| (?P<names>(?:[a-z][a-z0-9-]+(?:, )?)+) \| Beta", section
+        r"\| (?P<names>[a-z][a-z0-9, -]+[a-z0-9]) \| Beta", section
     )
     assert bare_names, "couldn't find comma-separated vertical list row"
     names = [n.strip() for n in bare_names.group("names").split(",")]

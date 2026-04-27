@@ -10,7 +10,8 @@ RUN tdnf update -y && tdnf install -y ca-certificates && tdnf clean all
 
 # Python deps
 COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip \
+# Pin pip >= 26.0 to clear CVE-2025-8869 + CVE-2026-1703 in the base image's pip 25.0.1.
+RUN pip install --no-cache-dir --upgrade 'pip>=26.0' \
  && pip install --no-cache-dir -r requirements.txt
 
 # App
