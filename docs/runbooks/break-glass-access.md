@@ -270,4 +270,4 @@ also counts as a drill.
 - [Key Rotation](./key-rotation.md) — Emergency rotation after activation
 - [Tenant Onboarding](./tenant-onboarding.md) — Creation of tenant break-glass accounts
 - [DR Drill](./dr-drill.md) — DR scenarios that may require break-glass
-- [Compliance](../COMPLIANCE.md) — Audit requirements for break-glass use
+- [Compliance](../compliance/README.md) — Audit requirements for break-glass use

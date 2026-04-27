@@ -1,6 +1,6 @@
 # NIST SP 800-53 Rev 5 — CSA-in-a-Box Control Coverage
 
-**Manifest:** [`governance/compliance/nist-800-53-rev5.yaml`](../../governance/compliance/nist-800-53-rev5.yaml)
+**Manifest:** [`governance/compliance/nist-800-53-rev5.yaml`](../../csa_platform/governance/compliance/nist-800-53-rev5.yaml)
 **Baseline target:** Moderate (with High-baseline controls enumerated)
 **Last reviewed:** 2026-04-18
 **Source of truth:** https://csrc.nist.gov/publications/detail/sp/800-53/rev-5/final
@@ -122,11 +122,11 @@ python governance/compliance/validate.py
 
 ### For auditors / 3PAO
 
-Read [`nist-800-53-rev5.yaml`](../../governance/compliance/nist-800-53-rev5.yaml)
+Read [`nist-800-53-rev5.yaml`](../../csa_platform/governance/compliance/nist-800-53-rev5.yaml)
 directly. Every control entry is self-contained: status, evidence paths
 (with line numbers), inheritance, gaps, and responsible party. Evidence
 paths are relative to repo root and verified by
-[`validate.py`](../../governance/compliance/validate.py).
+[`validate.py`](../../csa_platform/governance/compliance/validate.py).
 
 ### For engineers implementing remediation
 

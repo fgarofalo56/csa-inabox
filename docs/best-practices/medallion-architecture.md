@@ -658,7 +658,7 @@ models:
 
 ## Cross-References
 
-- **Architecture Decision Records** — see [`docs/adr/`](../adr/index.md) for decisions on lakehouse platform, partitioning strategy, and SCD approach
+- **Architecture Decision Records** — see [`docs/adr/`](../adr/README.md) for decisions on lakehouse platform, partitioning strategy, and SCD approach
 - **Data Governance Best Practices** — see [`docs/best-practices/data-governance.md`](data-governance.md) for classification, access control, and lineage requirements
 - **Data Engineering Guide** — see [`docs/best-practices/data-engineering.md`](data-engineering.md) for pipeline orchestration, idempotency, and monitoring patterns
-- **dbt Style Guide** — see [`docs/best-practices/dbt-style-guide.md`](dbt-style-guide.md) for SQL formatting, naming conventions, and project structure
+- **dbt Style Guide** — see `docs/best-practices/dbt-style-guide.md` (planned) for SQL formatting, naming conventions, and project structure

@@ -935,7 +935,7 @@ Wave 4 (Phase 2 — Government):
 
 All new Bicep modules (`geoanalytics.bicep`, `streaming.bicep`, `ai-analytics.bicep`, `arcgis-enterprise.bicep`) will receive Azure Government variants in Phase 2 after the commercial versions are tested and validated. Each tutorial will include a note:
 
-> **Azure Government:** This tutorial targets Azure Commercial. Azure Government deployment is coming in Phase 2. See [Government Cloud Roadmap](../docs/GOV_CLOUD_ROADMAP.md) for status.
+> **Azure Government:** This tutorial targets Azure Commercial. Azure Government deployment is coming in Phase 2. See Government Cloud Roadmap (planned) for status.
 
 Phase 2 work includes:
 - MAG-specific Bicep parameter files

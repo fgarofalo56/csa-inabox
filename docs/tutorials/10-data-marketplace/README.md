@@ -325,5 +325,5 @@ curl "http://localhost:8000/api/v1/marketplace/products/dp-environmental-air-qua
 ## Related Documentation
 
 - [Data Marketplace README](../../../csa_platform/data_marketplace/README.md)
-- [Quality Scoring](../../../docs/governance/DATA_QUALITY.md)
-- [Access Policies](../../../docs/governance/DATA_ACCESS.md)
+- [Quality Scoring](../../governance/DATA_QUALITY.md)
+- [Access Policies](../../governance/DATA_ACCESS.md)

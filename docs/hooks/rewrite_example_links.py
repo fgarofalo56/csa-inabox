@@ -39,6 +39,27 @@ _REPO_TREES = (
     "tools/",
 )
 
+# Repo-root files that source READMEs / docs commonly link back to.
+# These resolve to root-level paths with NO directory prefix, so the
+# tree-prefix check above misses them.
+_REPO_ROOT_FILES = (
+    "README.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "SUPPORT.md",
+    "LICENSE",
+    "LICENSE.md",
+    "CHANGELOG.md",
+    "CODE_OF_CONDUCT.md",
+    ".env.example",
+    "CODEBASE_INVENTORY.txt",
+    "VISION.md",
+    "COMPLIANCE.md",
+    "HIPAA_COMPLIANCE.md",
+    "pyproject.toml",
+    "mkdocs.yml",
+)
+
 
 def _resolve_against_source(href: str, page_src_path: str) -> str | None:
     """Resolve `href` against the page's *source* repo location.
@@ -78,8 +99,12 @@ def _resolve_against_source(href: str, page_src_path: str) -> str | None:
 
 
 def _should_rewrite(resolved: str) -> bool:
-    """Only rewrite paths into known repo trees outside `docs/`."""
-    return any(resolved.startswith(tree) for tree in _REPO_TREES)
+    """Rewrite paths into known repo trees outside `docs/` OR repo-root files."""
+    if any(resolved.startswith(tree) for tree in _REPO_TREES):
+        return True
+    if resolved in _REPO_ROOT_FILES:
+        return True
+    return False
 
 
 def on_page_markdown(markdown: str, page, config, files):  # noqa: ANN001 (mkdocs API)
