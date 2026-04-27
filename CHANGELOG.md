@@ -10,6 +10,31 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.3.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.2.0...csa-inabox-v0.3.0) (2026-04-27)
+
+
+### Features
+
+* **ai-agents:** real impl — IaC + 3 contracts + 62-test eval suite (PR-C) ([#112](https://github.com/fgarofalo56/csa-inabox/issues/112)) ([c13c1c8](https://github.com/fgarofalo56/csa-inabox/commit/c13c1c80bfb393df12326bbeee57a5c3565302ff))
+* **bicep:** add aifoundry.bicep + azureml.bicep shared modules (PR-D) ([#115](https://github.com/fgarofalo56/csa-inabox/issues/115)) ([63a9874](https://github.com/fgarofalo56/csa-inabox/commit/63a98749a51d0789a3cee04a6dffa454f5b21dbc))
+* **copilot-evals:** expand goldens 37 → 75 + run all 3 sets in CI (PR-E) ([#116](https://github.com/fgarofalo56/csa-inabox/issues/116)) ([3504a06](https://github.com/fgarofalo56/csa-inabox/commit/3504a0668e787240926abf45065c385236994cf2))
+* **fabric-e2e:** real end-to-end Fabric example with TMDL semantic model (PR-F) ([#117](https://github.com/fgarofalo56/csa-inabox/issues/117)) ([9592ae0](https://github.com/fgarofalo56/csa-inabox/commit/9592ae00072e184340b4066561c48c26e14fef79))
+
+
+### Documentation
+
+* collapse 15 flat tabs into 6 grouped + fill 34 missing/stub pages ([#110](https://github.com/fgarofalo56/csa-inabox/issues/110)) ([fd2113c](https://github.com/fgarofalo56/csa-inabox/commit/fd2113ca03bc8c085012dee570eff5051ddf5e94))
+* **nav:** expose all 11 tutorials + 16 e2e example READMEs in Pages nav ([#109](https://github.com/fgarofalo56/csa-inabox/issues/109)) ([2fad3c8](https://github.com/fgarofalo56/csa-inabox/commit/2fad3c8c8c61075d4f08da033ff58024a17e1511))
+
+
+### Miscellaneous
+
+* **ai-agents:** bump pytest 8.3.4 → 9.0.3 + pytest-asyncio 0.24.0 → 1.3.0 ([#118](https://github.com/fgarofalo56/csa-inabox/issues/118)) ([03482ac](https://github.com/fgarofalo56/csa-inabox/commit/03482aca18c929923a1cfb313e5fe2fe6736b3d7))
+* **copilot-chat:** point widget at func-csa-inabox-copilot-fg in FedCiv DLZ + add DEPLOYMENT.md provenance ([#108](https://github.com/fgarofalo56/csa-inabox/issues/108)) ([72aa1ad](https://github.com/fgarofalo56/csa-inabox/commit/72aa1adcaf8e8917812c9751d74ea64c989d3a85))
+* **deps:** bump @azure/msal-browser ^5.7.0 -&gt; ^5.8.0 (closes [#95](https://github.com/fgarofalo56/csa-inabox/issues/95)) ([#106](https://github.com/fgarofalo56/csa-inabox/issues/106)) ([37ff153](https://github.com/fgarofalo56/csa-inabox/commit/37ff153de8d77c3d72642d4c8ab5a55298d81767))
+* **deps:** Bump semantic-kernel in /examples/ai-agents ([#114](https://github.com/fgarofalo56/csa-inabox/issues/114)) ([f50d9cc](https://github.com/fgarofalo56/csa-inabox/commit/f50d9cce2f10a3756571d9dc0aa37e3e197ec902))
+* **docs:** zero-warning mkdocs build + SECURITY/SUPPORT/CODEOWNERS + strict gates ([#111](https://github.com/fgarofalo56/csa-inabox/issues/111)) ([f30379e](https://github.com/fgarofalo56/csa-inabox/commit/f30379e257b096e04f2141ad78157e5c115c4155))
+
 ## [0.2.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.1.0...csa-inabox-v0.2.0) (2026-04-26)
 
 
