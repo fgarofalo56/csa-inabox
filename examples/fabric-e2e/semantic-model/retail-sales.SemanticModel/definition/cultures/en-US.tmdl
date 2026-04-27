@@ -1,0 +1,36 @@
+cultureInfo en-US
+	linguisticMetadata = {
+	  "Version": "1.0.0",
+	  "Language": "en-US",
+	  "DynamicImprovement": "HighConfidence",
+	  "Entities": {
+	    "FactSales": {
+	      "Definition": { "Binding": { "ConceptualEntity": "FactSales" }},
+	      "State": "Generated",
+	      "Terms": [
+	        { "sales": { "State": "Generated" }},
+	        { "orders": { "State": "Generated" }},
+	        { "transactions": { "State": "Generated" }}
+	      ]
+	    },
+	    "DimCustomer": {
+	      "Definition": { "Binding": { "ConceptualEntity": "DimCustomer" }},
+	      "State": "Generated",
+	      "Terms": [
+	        { "customer": { "State": "Generated" }},
+	        { "customers": { "State": "Generated" }},
+	        { "client": { "State": "Generated" }}
+	      ]
+	    },
+	    "DimProduct": {
+	      "Definition": { "Binding": { "ConceptualEntity": "DimProduct" }},
+	      "State": "Generated",
+	      "Terms": [
+	        { "product": { "State": "Generated" }},
+	        { "products": { "State": "Generated" }},
+	        { "item": { "State": "Generated" }}
+	      ]
+	    }
+	  }
+	}
+		contentType: json

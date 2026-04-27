@@ -1,0 +1,33 @@
+apiVersion: csa.microsoft.com/v1
+kind: DataProductContract
+metadata:
+  name: retail.gold.dim_customer
+  domain: retail
+  version: 1.0.0
+  owner: data-platform-team@example.com
+  classification: internal
+  description: SCD Type 2 customer dimension for the retail-sales star schema.
+
+schema:
+  primary_key: [customer_key]
+  columns:
+    - { name: customer_key, type: bigint, nullable: false, description: Surrogate key }
+    - { name: customer_id, type: string, nullable: false, description: Natural key from source ERP }
+    - { name: customer_name, type: string, nullable: false }
+    - { name: customer_segment, type: string, nullable: false }
+    - { name: country, type: string, nullable: false }
+    - { name: region, type: string, nullable: false }
+    - { name: valid_from, type: timestamp, nullable: false }
+    - { name: valid_to, type: timestamp, nullable: true }
+    - { name: is_current, type: boolean, nullable: false }
+
+quality_rules:
+  - { rule: expect_column_values_to_not_be_null, column: customer_key }
+  - { rule: expect_column_values_to_be_unique, column: customer_key }
+  - { rule: expect_column_values_to_not_be_null, column: customer_id }
+  - { rule: expect_column_values_to_not_be_null, column: valid_from }
+  - { rule: expect_column_values_to_be_in_set, column: is_current, value_set: [true, false] }
+
+sla:
+  freshness_minutes: 1440   # 24h refresh
+  valid_row_ratio: 0.99

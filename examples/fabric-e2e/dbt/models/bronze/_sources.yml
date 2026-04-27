@@ -1,0 +1,22 @@
+version: 2
+
+sources:
+  - name: bronze
+    description: "Raw landed data from source systems."
+    schema: bronze
+    tables:
+      - name: customers_raw
+        description: "Customer master from ERP."
+        columns:
+          - name: customer_id
+            tests: [not_null]
+      - name: products_raw
+        description: "Product catalog from PIM."
+        columns:
+          - name: product_id
+            tests: [not_null]
+      - name: sales_raw
+        description: "Sales order line items."
+        columns:
+          - name: order_id
+            tests: [not_null]

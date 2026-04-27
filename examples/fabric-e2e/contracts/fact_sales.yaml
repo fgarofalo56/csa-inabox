@@ -1,0 +1,40 @@
+apiVersion: csa.microsoft.com/v1
+kind: DataProductContract
+metadata:
+  name: retail.gold.fact_sales
+  domain: retail
+  version: 1.0.0
+  owner: data-platform-team@example.com
+  classification: internal
+  description: One row per order line item. Fully conformed to the retail-sales star schema.
+
+schema:
+  primary_key: [sales_key]
+  columns:
+    - { name: sales_key, type: bigint, nullable: false }
+    - { name: customer_key, type: bigint, nullable: false, description: "FK to dim_customer" }
+    - { name: product_key, type: bigint, nullable: false, description: "FK to dim_product" }
+    - { name: order_date_key, type: bigint, nullable: false, description: "FK to dim_date (order date)" }
+    - { name: ship_date_key, type: bigint, nullable: false, description: "FK to dim_date (ship date — role-playing)" }
+    - { name: order_id, type: string, nullable: false }
+    - { name: quantity, type: int, nullable: false }
+    - { name: unit_price, type: decimal(18,2), nullable: false }
+    - { name: discount_pct, type: decimal(5,4), nullable: false }
+    - { name: extended_amount, type: decimal(18,2), nullable: false }
+    - { name: cost_amount, type: decimal(18,2), nullable: false }
+    - { name: margin_amount, type: decimal(18,2), nullable: false }
+
+quality_rules:
+  - { rule: expect_column_values_to_not_be_null, column: sales_key }
+  - { rule: expect_column_values_to_be_unique, column: sales_key }
+  - { rule: expect_column_values_to_not_be_null, column: customer_key }
+  - { rule: expect_column_values_to_not_be_null, column: product_key }
+  - { rule: expect_column_values_to_not_be_null, column: order_date_key }
+  - { rule: expect_column_values_to_not_be_null, column: order_id }
+  - { rule: expect_column_values_to_be_between, column: quantity, min_value: 1, max_value: 10000 }
+  - { rule: expect_column_values_to_be_between, column: unit_price, min_value: 0, max_value: 100000 }
+  - { rule: expect_column_values_to_be_between, column: discount_pct, min_value: 0, max_value: 1 }
+
+sla:
+  freshness_minutes: 60   # hourly batch
+  valid_row_ratio: 0.995

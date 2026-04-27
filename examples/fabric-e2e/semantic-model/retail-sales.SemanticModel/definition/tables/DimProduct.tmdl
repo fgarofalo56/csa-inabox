@@ -1,0 +1,93 @@
+/// Product dimension (SCD Type 2 from gold.dim_product)
+table DimProduct
+	lineageTag: c1d04a3e-2222-4222-8222-222222222222
+
+	column product_key
+		dataType: int64
+		isKey
+		formatString: 0
+		summarizeBy: none
+		sourceColumn: product_key
+		annotation SummarizationSetBy = Automatic
+
+	column product_id
+		dataType: string
+		summarizeBy: none
+		sourceColumn: product_id
+		annotation SummarizationSetBy = Automatic
+
+	column product_name
+		dataType: string
+		summarizeBy: none
+		sourceColumn: product_name
+		annotation SummarizationSetBy = Automatic
+
+	column category
+		dataType: string
+		summarizeBy: none
+		sourceColumn: category
+		annotation SummarizationSetBy = Automatic
+
+	column subcategory
+		dataType: string
+		summarizeBy: none
+		sourceColumn: subcategory
+		annotation SummarizationSetBy = Automatic
+
+	column list_price
+		dataType: decimal
+		formatString: \$#,0.00;-\$#,0.00;\$#,0.00
+		summarizeBy: none
+		sourceColumn: list_price
+		annotation PBI_FormatHint = {"isCurrency":true}
+		annotation SummarizationSetBy = Automatic
+
+	column valid_from
+		dataType: dateTime
+		formatString: General Date
+		summarizeBy: none
+		sourceColumn: valid_from
+		isHidden
+		annotation SummarizationSetBy = Automatic
+
+	column valid_to
+		dataType: dateTime
+		formatString: General Date
+		summarizeBy: none
+		sourceColumn: valid_to
+		isHidden
+		annotation SummarizationSetBy = Automatic
+
+	column is_current
+		dataType: boolean
+		formatString: """TRUE"";""TRUE"";""FALSE"""
+		summarizeBy: none
+		sourceColumn: is_current
+		isHidden
+		annotation SummarizationSetBy = Automatic
+
+	measure 'Product Count' =
+			DISTINCTCOUNT( DimProduct[product_id] )
+		formatString: #,##0
+		displayFolder: Counts
+
+	measure 'Average List Price' =
+			AVERAGE( DimProduct[list_price] )
+		formatString: \$#,0.00
+		displayFolder: Pricing
+		description: 'Mean list price across active products.'
+
+	hierarchy 'Product Hierarchy'
+		level Category
+			column: category
+		level Subcategory
+			column: subcategory
+		level Product
+			column: product_name
+
+	partition DimProduct-Lakehouse = entity
+		mode: directLake
+		source
+			entityName: dim_product
+			schemaName: dbo
+			expressionSource: 'OneLake Lakehouse'

@@ -1,0 +1,33 @@
+apiVersion: csa.microsoft.com/v1
+kind: DataProductContract
+metadata:
+  name: retail.gold.dim_product
+  domain: retail
+  version: 1.0.0
+  owner: data-platform-team@example.com
+  classification: internal
+  description: SCD Type 2 product dimension.
+
+schema:
+  primary_key: [product_key]
+  columns:
+    - { name: product_key, type: bigint, nullable: false }
+    - { name: product_id, type: string, nullable: false }
+    - { name: product_name, type: string, nullable: false }
+    - { name: category, type: string, nullable: false }
+    - { name: subcategory, type: string, nullable: false }
+    - { name: list_price, type: decimal(18,2), nullable: false }
+    - { name: valid_from, type: timestamp, nullable: false }
+    - { name: valid_to, type: timestamp, nullable: true }
+    - { name: is_current, type: boolean, nullable: false }
+
+quality_rules:
+  - { rule: expect_column_values_to_not_be_null, column: product_key }
+  - { rule: expect_column_values_to_be_unique, column: product_key }
+  - { rule: expect_column_values_to_not_be_null, column: product_id }
+  - { rule: expect_column_values_to_be_between, column: list_price, min_value: 0, max_value: 100000 }
+  - { rule: expect_column_values_to_be_in_set, column: is_current, value_set: [true, false] }
+
+sla:
+  freshness_minutes: 1440
+  valid_row_ratio: 0.99

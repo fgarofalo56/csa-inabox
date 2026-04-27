@@ -1,0 +1,87 @@
+/// Date dimension. Marked as date table for time intelligence DAX.
+table DimDate
+	lineageTag: c1d04a3e-3333-4333-8333-333333333333
+	dataCategory: Time
+
+	column date_key
+		dataType: int64
+		isKey
+		formatString: 0
+		summarizeBy: none
+		sourceColumn: date_key
+		annotation SummarizationSetBy = Automatic
+
+	column 'Date'
+		dataType: dateTime
+		formatString: Short Date
+		summarizeBy: none
+		sourceColumn: date
+		dataCategory: PaddedDateTableDates
+		isUnique
+		annotation SummarizationSetBy = Automatic
+
+	column 'Year'
+		dataType: int64
+		formatString: 0
+		summarizeBy: none
+		sourceColumn: year
+		annotation SummarizationSetBy = Automatic
+
+	column 'Quarter'
+		dataType: int64
+		formatString: 0
+		summarizeBy: none
+		sourceColumn: quarter
+		annotation SummarizationSetBy = Automatic
+
+	column 'Month'
+		dataType: int64
+		formatString: 0
+		summarizeBy: none
+		sourceColumn: month
+		annotation SummarizationSetBy = Automatic
+
+	column 'Month Name'
+		dataType: string
+		summarizeBy: none
+		sourceColumn: month_name
+		sortByColumn: 'Month'
+		annotation SummarizationSetBy = Automatic
+
+	column 'Day of Week'
+		dataType: int64
+		formatString: 0
+		summarizeBy: none
+		sourceColumn: day_of_week
+		annotation SummarizationSetBy = Automatic
+
+	column 'Is Weekend'
+		dataType: boolean
+		formatString: """TRUE"";""TRUE"";""FALSE"""
+		summarizeBy: none
+		sourceColumn: is_weekend
+		annotation SummarizationSetBy = Automatic
+
+	column 'Is Holiday'
+		dataType: boolean
+		formatString: """TRUE"";""TRUE"";""FALSE"""
+		summarizeBy: none
+		sourceColumn: is_holiday
+		annotation SummarizationSetBy = Automatic
+
+	hierarchy 'Calendar'
+		level Year
+			column: 'Year'
+		level Quarter
+			column: 'Quarter'
+		level Month
+			column: 'Month Name'
+		level Date
+			column: 'Date'
+
+	partition DimDate-Lakehouse = entity
+		mode: directLake
+		source
+			entityName: dim_date
+			schemaName: dbo
+			expressionSource: 'OneLake Lakehouse'

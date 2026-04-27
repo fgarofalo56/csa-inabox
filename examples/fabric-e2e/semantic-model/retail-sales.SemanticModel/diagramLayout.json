@@ -1,0 +1,23 @@
+{
+  "version": "1.1.0",
+  "diagrams": [
+    {
+      "ordinal": 0,
+      "scrollPosition": { "x": 0, "y": 0 },
+      "nodes": [
+        { "location": { "x": 50,  "y": 50 },  "nodeIndex": "DimCustomer", "size": { "width": 200, "height": 250 }, "zIndex": 0 },
+        { "location": { "x": 50,  "y": 350 }, "nodeIndex": "DimProduct",  "size": { "width": 200, "height": 250 }, "zIndex": 0 },
+        { "location": { "x": 600, "y": 50 },  "nodeIndex": "DimDate",     "size": { "width": 200, "height": 250 }, "zIndex": 0 },
+        { "location": { "x": 350, "y": 200 }, "nodeIndex": "FactSales",   "size": { "width": 200, "height": 350 }, "zIndex": 0 }
+      ],
+      "name": "All tables",
+      "zoomValue": 100,
+      "pinKeyFieldsToTop": false,
+      "showExtraHeaderInfo": false,
+      "hideKeyFieldsWhenCollapsed": false,
+      "tablesLocked": false
+    }
+  ],
+  "selectedDiagram": "All tables",
+  "defaultDiagram": "All tables"
+}
