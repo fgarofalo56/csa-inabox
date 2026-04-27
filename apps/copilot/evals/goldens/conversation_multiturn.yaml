@@ -74,3 +74,110 @@ goldens:
       citation_accuracy: 0.60
       answer_relevance: 0.60
     tags: [multiturn, cost]
+
+  # =====================================================================
+  # Conversation: compliance deep-dive (PR #110 content)
+  # =====================================================================
+  - id: multiturn-compliance-fedramp-overview
+    conversation_id: conv-compliance-001
+    question: "Does CSA-in-a-Box support FedRAMP?"
+    expected_citations:
+      - docs/compliance/fedramp-moderate.md
+    expected_phrases:
+      - "FedRAMP"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.50
+      citation_accuracy: 0.60
+      answer_relevance: 0.55
+    tags: [multiturn, compliance, fedramp]
+
+  - id: multiturn-compliance-fedramp-which-controls
+    conversation_id: conv-compliance-001
+    question: "Which control families does it actually address?"
+    expected_citations:
+      - docs/compliance/fedramp-moderate.md
+    expected_phrases:
+      - "control"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.55
+      citation_accuracy: 0.65
+      answer_relevance: 0.55
+    tags: [multiturn, compliance, fedramp, followup]
+
+  - id: multiturn-compliance-fedramp-evidence
+    conversation_id: conv-compliance-001
+    question: "How do I produce evidence for an audit?"
+    expected_citations:
+      - docs/compliance/fedramp-moderate.md
+    expected_phrases:
+      - "evidence"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.50
+      citation_accuracy: 0.60
+      answer_relevance: 0.55
+    tags: [multiturn, compliance, audit, followup]
+
+  # =====================================================================
+  # Conversation: networking + DNS deep-dive
+  # =====================================================================
+  - id: multiturn-networking-overview
+    conversation_id: conv-networking-001
+    question: "What's CSA's networking topology?"
+    expected_citations:
+      - docs/reference-architecture/hub-spoke-topology.md
+    expected_phrases:
+      - "hub"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.50
+      citation_accuracy: 0.60
+      answer_relevance: 0.55
+    tags: [multiturn, networking]
+
+  - id: multiturn-networking-dns-strategy
+    conversation_id: conv-networking-001
+    question: "How does Private DNS fit in there?"
+    expected_citations:
+      - docs/patterns/networking-dns-strategy.md
+    expected_phrases:
+      - "Private DNS"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.55
+      citation_accuracy: 0.60
+      answer_relevance: 0.55
+    tags: [multiturn, networking, dns, followup]
+
+  # =====================================================================
+  # Conversation: AI agents — pattern selection then deep-dive
+  # =====================================================================
+  - id: multiturn-agents-which-pattern
+    conversation_id: conv-agents-001
+    question: "I want to build a data quality reviewer. Which agent pattern?"
+    expected_citations:
+      - examples/ai-agents/README.md
+    expected_phrases:
+      - "agent"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.50
+      citation_accuracy: 0.55
+      answer_relevance: 0.55
+    tags: [multiturn, ai-agents]
+
+  - id: multiturn-agents-deploy
+    conversation_id: conv-agents-001
+    question: "How do I deploy that to Azure?"
+    expected_citations:
+      - examples/ai-agents/ARCHITECTURE.md
+    expected_phrases:
+      - "Container Apps"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.50
+      citation_accuracy: 0.55
+      answer_relevance: 0.55
+    tags: [multiturn, ai-agents, deploy, followup]

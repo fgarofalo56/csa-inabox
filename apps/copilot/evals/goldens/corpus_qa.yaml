@@ -300,3 +300,344 @@ goldens:
       citation_accuracy: 0.60
       answer_relevance: 0.60
     tags: [onboarding]
+
+  # ===========================================================================
+  # Coverage for content added in PR #110 (compliance, patterns, industries,
+  # reference-architectures, migrations) — extends seed from 21 → 41 cases.
+  # ===========================================================================
+
+  - id: compliance-fedramp-moderate
+    skill: grounded-corpus-qa
+    question: "Which control families does CSA-in-a-Box address for FedRAMP Moderate?"
+    expected_citations:
+      - docs/compliance/fedramp-moderate.md
+    expected_phrases:
+      - "FedRAMP"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.55
+      citation_accuracy: 0.65
+      answer_relevance: 0.60
+    tags: [compliance, fedramp]
+
+  - id: compliance-soc2-monitoring
+    skill: grounded-corpus-qa
+    question: "How does the platform support SOC 2 CC7 monitoring requirements?"
+    expected_citations:
+      - docs/compliance/soc2-type2.md
+    expected_phrases:
+      - "SOC"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.55
+      citation_accuracy: 0.65
+      answer_relevance: 0.60
+    tags: [compliance, soc2]
+
+  - id: compliance-pci-scope-min
+    skill: grounded-corpus-qa
+    question: "How can I minimize PCI-DSS scope when handling cardholder data?"
+    expected_citations:
+      - docs/compliance/pci-dss-v4.md
+    expected_phrases:
+      - "scope"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.55
+      citation_accuracy: 0.65
+      answer_relevance: 0.60
+    tags: [compliance, pci]
+
+  - id: compliance-gdpr-erasure
+    skill: grounded-corpus-qa
+    question: "What's the recommended pattern for GDPR right-to-erasure on a lakehouse?"
+    expected_citations:
+      - docs/compliance/gdpr-privacy.md
+    expected_phrases:
+      - "erasure"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.55
+      citation_accuracy: 0.65
+      answer_relevance: 0.60
+    tags: [compliance, gdpr, privacy]
+
+  - id: pattern-cosmos-partition-key
+    skill: grounded-corpus-qa
+    question: "How should I choose a partition key for a Cosmos DB container?"
+    expected_citations:
+      - docs/patterns/cosmos-db-patterns.md
+    expected_phrases:
+      - "partition key"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.55
+      citation_accuracy: 0.65
+      answer_relevance: 0.60
+    tags: [patterns, cosmos]
+
+  - id: pattern-aks-vs-aca
+    skill: grounded-corpus-qa
+    question: "When should I use AKS vs Container Apps for data workloads?"
+    expected_citations:
+      - docs/patterns/aks-container-apps-for-data.md
+    expected_phrases:
+      - "Container Apps"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.55
+      citation_accuracy: 0.65
+      answer_relevance: 0.60
+    tags: [patterns, kubernetes]
+
+  - id: pattern-llmops-eval
+    skill: grounded-corpus-qa
+    question: "What does an LLMOps eval framework look like in CSA?"
+    expected_citations:
+      - docs/patterns/llmops-evaluation.md
+    expected_phrases:
+      - "eval"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.55
+      citation_accuracy: 0.65
+      answer_relevance: 0.60
+    tags: [patterns, llmops, ai]
+
+  - id: pattern-private-dns-strategy
+    skill: grounded-corpus-qa
+    question: "Should each spoke have its own Private DNS zones?"
+    expected_citations:
+      - docs/patterns/networking-dns-strategy.md
+    expected_phrases:
+      - "Private DNS"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.55
+      citation_accuracy: 0.65
+      answer_relevance: 0.60
+    tags: [patterns, networking, dns]
+
+  - id: pattern-otel-trace-context
+    skill: grounded-corpus-qa
+    question: "How do I propagate trace context end-to-end across CSA services?"
+    expected_citations:
+      - docs/patterns/observability-otel.md
+    expected_phrases:
+      - "trace"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.55
+      citation_accuracy: 0.65
+      answer_relevance: 0.60
+    tags: [patterns, observability]
+
+  - id: pattern-streaming-cdc-debezium
+    skill: grounded-corpus-qa
+    question: "How do I get CDC out of PostgreSQL into Event Hubs?"
+    expected_citations:
+      - docs/patterns/streaming-cdc.md
+    expected_phrases:
+      - "Debezium"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.55
+      citation_accuracy: 0.65
+      answer_relevance: 0.60
+    tags: [patterns, streaming, cdc]
+
+  - id: pattern-power-bi-direct-lake
+    skill: grounded-corpus-qa
+    question: "When should I migrate Power BI Import models to Direct Lake?"
+    expected_citations:
+      - docs/patterns/power-bi-fabric-roadmap.md
+    expected_phrases:
+      - "Direct Lake"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.55
+      citation_accuracy: 0.65
+      answer_relevance: 0.60
+    tags: [patterns, powerbi, fabric]
+
+  - id: industry-fsi-fraud
+    skill: grounded-corpus-qa
+    question: "How does CSA support real-time fraud detection in financial services?"
+    expected_citations:
+      - docs/industries/financial-services.md
+    expected_phrases:
+      - "fraud"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.55
+      citation_accuracy: 0.65
+      answer_relevance: 0.60
+    tags: [industries, fsi]
+
+  - id: industry-mfg-digital-twin
+    skill: grounded-corpus-qa
+    question: "What's the digital-twin pattern for manufacturing on CSA?"
+    expected_citations:
+      - docs/industries/manufacturing.md
+    expected_phrases:
+      - "digital twin"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.55
+      citation_accuracy: 0.65
+      answer_relevance: 0.60
+    tags: [industries, manufacturing]
+
+  - id: industry-energy-grid
+    skill: grounded-corpus-qa
+    question: "How does CSA handle smart-grid AMI ingestion?"
+    expected_citations:
+      - docs/industries/energy-utilities.md
+    expected_phrases:
+      - "AMI"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.55
+      citation_accuracy: 0.65
+      answer_relevance: 0.60
+    tags: [industries, energy]
+
+  - id: industry-life-sciences-gxp
+    skill: grounded-corpus-qa
+    question: "What GxP considerations apply to life-sciences workloads on CSA?"
+    expected_citations:
+      - docs/industries/life-sciences.md
+    expected_phrases:
+      - "GxP"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.55
+      citation_accuracy: 0.65
+      answer_relevance: 0.60
+    tags: [industries, life-sciences]
+
+  - id: refarch-hub-spoke
+    skill: grounded-corpus-qa
+    question: "What's the recommended hub-spoke topology for CSA?"
+    expected_citations:
+      - docs/reference-architecture/hub-spoke-topology.md
+    expected_phrases:
+      - "hub"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.55
+      citation_accuracy: 0.65
+      answer_relevance: 0.60
+    tags: [reference-architecture, networking]
+
+  - id: refarch-medallion-rules
+    skill: grounded-corpus-qa
+    question: "What are the rules for the bronze, silver, and gold layers?"
+    expected_citations:
+      - docs/reference-architecture/data-flow-medallion.md
+    expected_phrases:
+      - "bronze"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.55
+      citation_accuracy: 0.65
+      answer_relevance: 0.60
+    tags: [reference-architecture, medallion]
+
+  - id: refarch-fabric-vs-synapse
+    skill: grounded-corpus-qa
+    question: "When should I use Fabric vs Synapse vs Databricks?"
+    expected_citations:
+      - docs/reference-architecture/fabric-vs-synapse-vs-databricks.md
+    expected_phrases:
+      - "Fabric"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.55
+      citation_accuracy: 0.65
+      answer_relevance: 0.60
+    tags: [reference-architecture, fabric, synapse, databricks]
+
+  - id: migration-databricks-to-fabric
+    skill: grounded-corpus-qa
+    question: "How do I migrate a Databricks workspace to Fabric?"
+    expected_citations:
+      - docs/migrations/databricks-to-fabric.md
+    expected_phrases:
+      - "Databricks"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.55
+      citation_accuracy: 0.65
+      answer_relevance: 0.60
+    tags: [migrations, fabric, databricks]
+
+  - id: migration-teradata-mapping
+    skill: grounded-corpus-qa
+    question: "How are Teradata workload classes mapped to Synapse / Fabric?"
+    expected_citations:
+      - docs/migrations/teradata.md
+    expected_phrases:
+      - "Teradata"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.55
+      citation_accuracy: 0.65
+      answer_relevance: 0.60
+    tags: [migrations, teradata]
+
+  - id: getting-started-30min
+    skill: grounded-corpus-qa
+    question: "How do I get started with CSA-in-a-Box in 30 minutes?"
+    expected_citations:
+      - docs/GETTING_STARTED.md
+    expected_phrases:
+      - "minute"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.50
+      citation_accuracy: 0.60
+      answer_relevance: 0.60
+    tags: [onboarding, getting-started]
+
+  - id: chat-widget-architecture
+    skill: grounded-corpus-qa
+    question: "How does the docs-site Copilot chat widget work?"
+    expected_citations:
+      - docs/chat.md
+    expected_phrases:
+      - "widget"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.50
+      citation_accuracy: 0.60
+      answer_relevance: 0.55
+    tags: [copilot, docs-site]
+
+  - id: ai-agents-pattern-selection
+    skill: grounded-corpus-qa
+    question: "When should I use a single agent vs multi-agent pattern?"
+    expected_citations:
+      - examples/ai-agents/README.md
+    expected_phrases:
+      - "agent"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.50
+      citation_accuracy: 0.60
+      answer_relevance: 0.55
+    tags: [ai-agents, semantic-kernel]
+
+  - id: bicep-aifoundry-module
+    skill: grounded-corpus-qa
+    question: "Where is the Bicep module for Azure AI Foundry?"
+    expected_citations:
+      - deploy/bicep/shared/modules/AI_README.md
+    expected_phrases:
+      - "Foundry"
+    must_refuse: false
+    thresholds:
+      groundedness: 0.50
+      citation_accuracy: 0.55
+      answer_relevance: 0.55
+    tags: [bicep, ai, foundry]
