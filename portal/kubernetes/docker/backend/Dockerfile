@@ -14,6 +14,9 @@ RUN apt-get update && \
 # Copy requirements and install Python dependencies
 COPY portal/shared/requirements.txt ./requirements.txt
 
+# Pin pip >= 26.0 to clear CVE-2025-8869 + CVE-2026-1703 in the base image's pip 25.0.1.
+RUN pip install --no-cache-dir --upgrade 'pip>=26.0'
+
 # If requirements.txt doesn't exist yet, install core deps directly
 RUN if [ -f requirements.txt ] && [ -s requirements.txt ]; then \
         pip install --no-cache-dir --prefix=/install -r requirements.txt; \
