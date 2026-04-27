@@ -10,6 +10,20 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.3.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.3.0...csa-inabox-v0.3.1) (2026-04-27)
+
+
+### Bug Fixes
+
+* **dbt:** also delete domains/shared/dbt/package-lock.yml + simplify ignore ([#123](https://github.com/fgarofalo56/csa-inabox/issues/123)) ([8c0e9ad](https://github.com/fgarofalo56/csa-inabox/commit/8c0e9ad1b047bde3a66ccdc6b72053a13ef9a804))
+* **dbt:** gitignore package-lock.yml — schema differs across dbt versions ([#122](https://github.com/fgarofalo56/csa-inabox/issues/122)) ([acddabf](https://github.com/fgarofalo56/csa-inabox/commit/acddabf94a8523c44860d73fbaa55eb64810a55d))
+* **release-please:** auto-pass required checks on bot-created release PRs ([#124](https://github.com/fgarofalo56/csa-inabox/issues/124)) ([6c2b7dd](https://github.com/fgarofalo56/csa-inabox/commit/6c2b7dded0b1df8ee5888472c9c89de9c04bc9b1))
+
+
+### Miscellaneous
+
+* **security:** clear all 4 open security alerts + fix red dbt-ci ([#120](https://github.com/fgarofalo56/csa-inabox/issues/120)) ([9016763](https://github.com/fgarofalo56/csa-inabox/commit/9016763fe6996308bfd86190a43adfe614aab00c))
+
 ## [0.3.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.2.0...csa-inabox-v0.3.0) (2026-04-27)
 
 
