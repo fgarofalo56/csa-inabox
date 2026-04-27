@@ -19,9 +19,10 @@ apps/copilot/evals/
   goldens_schema.py        # JSON-schema loader + validator
   goldens/
     _schema.json           # JSON-schema for golden YAMLs
-    corpus_qa.yaml         # 20+ in-corpus goldens
-    refusal.yaml           # 10+ off-corpus (must-refuse) goldens
-    conversation_multiturn.yaml  # 5+ multi-turn goldens
+    corpus_qa.yaml           # 45 in-corpus goldens (was 21)
+    refusal.yaml             # 18 off-corpus must-refuse goldens (was 11)
+    conversation_multiturn.yaml  # 12 multi-turn goldens (was 5)
+                                 # Total: 75 cases
   baselines/
     README.md              # how to capture + commit baselines
     baseline_v0.1.0.json   # committed initial baseline

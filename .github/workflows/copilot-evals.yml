@@ -78,7 +78,7 @@ jobs:
             apps/copilot/telemetry/tests/ \
             -v --strict-markers
 
-      - name: Run eval harness (dry-run)
+      - name: Run eval harness (dry-run) — corpus_qa
         run: |
           python -m apps.copilot.evals run \
             --goldens apps/copilot/evals/goldens/corpus_qa.yaml \
@@ -86,7 +86,23 @@ jobs:
             --dry-run \
             --concurrency 4
 
-      - name: Regression gate
+      - name: Run eval harness (dry-run) — multi-turn conversations
+        run: |
+          python -m apps.copilot.evals run \
+            --goldens apps/copilot/evals/goldens/conversation_multiturn.yaml \
+            --output evals_out_multiturn.json \
+            --dry-run \
+            --concurrency 4
+
+      - name: Run eval harness (dry-run) — refusal cases
+        run: |
+          python -m apps.copilot.evals run \
+            --goldens apps/copilot/evals/goldens/refusal.yaml \
+            --output evals_out_refusal.json \
+            --dry-run \
+            --concurrency 4
+
+      - name: Regression gate (corpus_qa baseline only — others lack baseline yet)
         run: |
           python -m apps.copilot.evals gate \
             --current evals_out.json \
@@ -94,12 +110,15 @@ jobs:
             --max-score-regression 0.02 \
             --max-latency-p95-regression-pct 10
 
-      - name: Upload eval report
+      - name: Upload eval reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: copilot-eval-report
-          path: evals_out.json
+          path: |
+            evals_out.json
+            evals_out_multiturn.json
+            evals_out_refusal.json
           retention-days: 30
 
       - name: Post sticky PR comment with score deltas
