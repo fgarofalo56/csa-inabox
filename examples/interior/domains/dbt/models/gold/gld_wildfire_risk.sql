@@ -200,8 +200,10 @@ combined AS (
     LEFT JOIN vegetation_dryness v ON d.state_code = v.state_code AND d.year = v.year
     LEFT JOIN weather_risk w ON d.state_code = w.state_code
     LEFT JOIN state_fire_history f ON d.state_code = f.state_code
-    -- Only include wildfire-relevant states
-    WHERE d.state_code IN ({{ var('wildfire_states') | map('quote') | join(', ') }})
+    -- Only include wildfire-relevant states.
+    -- Note: Jinja2 has no built-in 'quote' filter (that's Ansible-only),
+    -- so we render the SQL string list with an explicit loop.
+    WHERE d.state_code IN ({% for s in var('wildfire_states') %}'{{ s }}'{% if not loop.last %}, {% endif %}{% endfor %})
 ),
 
 -- Step 7: Add risk categories and recommendations

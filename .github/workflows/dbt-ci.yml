@@ -257,7 +257,7 @@ jobs:
           project_count=$(echo "$PROJECTS_JSON" | jq 'length')
 
           {
-            echo "body<<'__DBT_CI_BODY__'"
+            echo "body<<__DBT_CI_BODY__"
             echo "### dbt CI — $status_icon"
             echo ""
             echo "$status_line"
