@@ -1,0 +1,27 @@
+# AI Agent examples — runtime dependencies
+#
+# Pinned to Nov 2024 versions known to work together. Bump intentionally.
+
+# Semantic Kernel + Azure
+semantic-kernel[azure]==1.16.0
+azure-identity==1.19.0
+azure-ai-projects==1.0.0b3
+azure-keyvault-secrets==4.9.0
+
+# HTTP server (hosted-agent)
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+pydantic==2.10.2
+
+# Observability
+azure-monitor-opentelemetry==1.6.4
+opentelemetry-api==1.28.2
+opentelemetry-sdk==1.28.2
+opentelemetry-instrumentation-fastapi==0.49b2
+opentelemetry-instrumentation-requests==0.49b2
+structlog==24.4.0
+
+# Eval / test (only needed for tests/, but small enough to ship in image)
+pytest==8.3.4
+pytest-asyncio==0.24.0
+pyyaml==6.0.2

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "env": { "value": "dev" },
+    "location": { "value": "eastus2" },
+    "containerImage": { "value": "mcr.microsoft.com/k8se/quickstart:latest" },
+    "aoaiSku": { "value": "S0" },
+    "aoaiModelName": { "value": "gpt-4o-mini" },
+    "aoaiModelVersion": { "value": "2024-07-18" }
+  }
+}

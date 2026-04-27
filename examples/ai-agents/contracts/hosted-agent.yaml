@@ -1,0 +1,122 @@
+# yaml-language-server: $schema=../../../csa_platform/governance/contracts/schema/data-product-contract-v1.json
+apiVersion: csa.microsoft.com/v1
+kind: DataProductContract
+metadata:
+  name: ai-agent.hosted
+  domain: ai-agents
+  version: 1.0.0
+  owner: data-platform-team@example.com
+  classification: internal
+  description: >-
+    Containerized agent deployed to Azure Container Apps (or Foundry Agent
+    Service). HTTP API surface; same business contract as data-analyst-agent
+    but production-shaped (workload identity, KV refs, App Insights tracing).
+
+schema:
+  primary_key: [request_id]
+  columns:
+    - name: request_id
+      type: string
+      nullable: false
+    - name: timestamp
+      type: timestamp
+      nullable: false
+    - name: caller_principal_id
+      type: string
+      description: Entra object ID of caller (extracted from JWT)
+      nullable: false
+    - name: question
+      type: string
+      nullable: false
+    - name: answer
+      type: string
+      nullable: false
+    - name: cited_data_products
+      type: array<string>
+      nullable: false
+    - name: tools_called
+      type: array<string>
+      nullable: false
+    - name: tokens_in
+      type: int
+      nullable: false
+    - name: tokens_out
+      type: int
+      nullable: false
+    - name: cost_usd_estimate
+      type: double
+      nullable: false
+    - name: refused
+      type: boolean
+      nullable: false
+    - name: latency_ms
+      type: int
+      nullable: false
+    - name: container_revision
+      type: string
+      description: ACA revision serving the request, for canary rollout tracking
+      nullable: false
+
+quality_rules:
+  - rule: expect_column_values_to_not_be_null
+    column: request_id
+  - rule: expect_column_values_to_be_unique
+    column: request_id
+  - rule: expect_column_values_to_not_be_null
+    column: caller_principal_id
+  - rule: expect_column_values_to_not_be_null
+    column: question
+  - rule: expect_column_value_lengths_to_be_between
+    column: question
+    min_value: 1
+    max_value: 4000
+  - rule: expect_column_values_to_be_between
+    column: latency_ms
+    min_value: 0
+    max_value: 30000
+  - rule: expect_column_values_to_be_between
+    column: tokens_in
+    min_value: 0
+    max_value: 16000
+  - rule: expect_column_values_to_be_between
+    column: tokens_out
+    min_value: 0
+    max_value: 4000
+  - rule: expect_column_values_to_be_between
+    column: cost_usd_estimate
+    min_value: 0
+    max_value: 0.1
+  - rule: expect_column_values_to_be_in_set
+    column: refused
+    value_set: [true, false]
+
+sla:
+  freshness_minutes: 0
+  availability_pct: 99.9
+  response_time_p95_ms: 8000
+  response_time_p99_ms: 15000
+
+policy:
+  read_only: true
+  authn_required: jwt-entra
+  authz_required: role-based
+  allowed_callers:
+    - principal_kind: ServicePrincipal
+      ad_groups: [csa-platform-agent-callers]
+  rate_limit_rpm_per_caller: 60
+  rate_limit_rpm_global: 600
+  content_safety_severity_max: Medium
+  pii_redaction: enabled
+  egress_allow_list:
+    - "*.openai.azure.com"
+    - "*.search.windows.net"
+    - "*.purview.azure.com"
+
+lineage:
+  upstream:
+    - resource: csa_platform.governance.purview
+    - resource: azure.openai
+      deployment: gpt-4o-mini
+    - resource: keyvault.csa-platform
+  downstream:
+    - resource: appinsights.csa-platform
