@@ -1,6 +1,5 @@
 # Open-Source Ecosystem Guide
 
-
 This guide covers the open-source alternatives and integrations available
 in CSA-in-a-Box for scenarios where Azure PaaS services are unavailable
 (e.g., Azure Government) or where teams prefer OSS tooling.
@@ -19,16 +18,16 @@ graph TD
 
 ## Service Mapping
 
-| Capability | Azure PaaS | OSS Alternative | Deployment |
-|---|---|---|---|
-| Data Catalog | Microsoft Purview | Apache Atlas | Helm on AKS |
-| Fine-grained ACL | Purview Policies | Apache Ranger | Helm on AKS |
-| Data Integration | Azure Data Factory | Apache NiFi | Helm on AKS |
-| SQL Analytics | Synapse Serverless | Trino (Starburst) | Helm on AKS |
-| Dashboards | Power BI | Apache Superset | Helm on AKS |
-| Orchestration | ADF Pipelines | Apache Airflow | Helm on AKS |
-| Streaming | Event Hubs + ASA | Apache Kafka + Flink | Helm on AKS |
-| Search | Azure AI Search | OpenSearch | Helm on AKS |
+| Capability       | Azure PaaS         | OSS Alternative      | Deployment  |
+| ---------------- | ------------------ | -------------------- | ----------- |
+| Data Catalog     | Microsoft Purview  | Apache Atlas         | Helm on AKS |
+| Fine-grained ACL | Purview Policies   | Apache Ranger        | Helm on AKS |
+| Data Integration | Azure Data Factory | Apache NiFi          | Helm on AKS |
+| SQL Analytics    | Synapse Serverless | Trino (Starburst)    | Helm on AKS |
+| Dashboards       | Power BI           | Apache Superset      | Helm on AKS |
+| Orchestration    | ADF Pipelines      | Apache Airflow       | Helm on AKS |
+| Streaming        | Event Hubs + ASA   | Apache Kafka + Flink | Helm on AKS |
+| Search           | Azure AI Search    | OpenSearch           | Helm on AKS |
 
 ## Deployment Model
 
@@ -67,19 +66,19 @@ helm install superset ./helm/superset -n csa-platform \
 ```yaml
 # helm/atlas/values.yaml highlights
 atlas:
-  replicaCount: 1
-  image:
-    repository: apache/atlas
-    tag: "2.3.0"
-  persistence:
-    enabled: true
-    size: 50Gi
-  solr:
-    enabled: true
-  kafka:
-    enabled: true
-  env:
-    ATLAS_SERVER_OPTS: "-Xmx2g"
+    replicaCount: 1
+    image:
+        repository: apache/atlas
+        tag: "2.3.0"
+    persistence:
+        enabled: true
+        size: 50Gi
+    solr:
+        enabled: true
+    kafka:
+        enabled: true
+    env:
+        ATLAS_SERVER_OPTS: "-Xmx2g"
 ```
 
 ### Apache NiFi (Data Integration)
@@ -87,19 +86,19 @@ atlas:
 ```yaml
 # helm/nifi/values.yaml highlights
 nifi:
-  replicaCount: 1
-  image:
-    repository: apache/nifi
-    tag: "2.0.0"
-  persistence:
-    enabled: true
-    size: 100Gi
-  service:
-    type: LoadBalancer
-    port: 8443
-  auth:
-    singleUser:
-      username: admin
+    replicaCount: 1
+    image:
+        repository: apache/nifi
+        tag: "2.0.0"
+    persistence:
+        enabled: true
+        size: 100Gi
+    service:
+        type: LoadBalancer
+        port: 8443
+    auth:
+        singleUser:
+            username: admin
 ```
 
 ### Trino (SQL Analytics)
@@ -107,21 +106,21 @@ nifi:
 ```yaml
 # helm/trino/values.yaml highlights
 trino:
-  coordinator:
-    resources:
-      requests: { cpu: "2", memory: "4Gi" }
-  worker:
-    replicas: 2
-    resources:
-      requests: { cpu: "2", memory: "8Gi" }
-  catalogs:
-    adls: |
-      connector.name=delta-lake
-      hive.metastore=glue
-      delta.register-table-procedure.enabled=true
-    postgresql: |
-      connector.name=postgresql
-      connection-url=jdbc:postgresql://host:5432/db
+    coordinator:
+        resources:
+            requests: { cpu: "2", memory: "4Gi" }
+    worker:
+        replicas: 2
+        resources:
+            requests: { cpu: "2", memory: "8Gi" }
+    catalogs:
+        adls: |
+            connector.name=delta-lake
+            hive.metastore=glue
+            delta.register-table-procedure.enabled=true
+        postgresql: |
+            connector.name=postgresql
+            connection-url=jdbc:postgresql://host:5432/db
 ```
 
 ## Integration with CSA Platform
@@ -151,14 +150,14 @@ for entity in atlas_entities:
 
 ### NiFi ↔ ADF Equivalence
 
-| ADF Concept | NiFi Equivalent |
-|---|---|
-| Pipeline | Process Group |
-| Activity | Processor |
-| Dataset | Connection |
-| Linked Service | Controller Service |
-| Trigger | CRON-driven scheduling |
-| Integration Runtime | NiFi cluster node |
+| ADF Concept         | NiFi Equivalent        |
+| ------------------- | ---------------------- |
+| Pipeline            | Process Group          |
+| Activity            | Processor              |
+| Dataset             | Connection             |
+| Linked Service      | Controller Service     |
+| Trigger             | CRON-driven scheduling |
+| Integration Runtime | NiFi cluster node      |
 
 ## Phase 2: Azure Government (Coming Soon)
 
@@ -170,6 +169,7 @@ for entity in atlas_entities:
 > for Gov cloud scenarios.
 
 Planned additions:
+
 - Azure Government-specific Bicep parameters
 - FedRAMP moderate baseline compliance mapping
 - IL4/IL5 network isolation patterns

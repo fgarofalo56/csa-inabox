@@ -2,7 +2,6 @@
 
 # OSS Migration Playbook
 
-
 > [!NOTE]
 > **TL;DR:** Step-by-step migration guide for moving from Azure PaaS services to open-source alternatives on AKS. Covers entity mapping, pipeline conversion, SQL dialect translation, dashboard recreation, and index schema migration.
 
@@ -23,14 +22,14 @@ This playbook provides detailed migration procedures for each Azure-to-OSS servi
 
 ## Migration Overview
 
-| Azure Service | OSS Alternative | Complexity | Estimated Effort |
-|---|---|---|---|
-| Microsoft Purview | Apache Atlas | High | 2-4 weeks |
-| Azure Data Factory | Apache NiFi | Medium | 1-3 weeks |
-| Synapse Serverless | Trino | Medium | 1-2 weeks |
-| Power BI | Apache Superset | Medium | 2-3 weeks |
-| Azure AI Search | OpenSearch | High | 2-4 weeks |
-| ADF Orchestration | Apache Airflow | Medium | 1-2 weeks |
+| Azure Service      | OSS Alternative | Complexity | Estimated Effort |
+| ------------------ | --------------- | ---------- | ---------------- |
+| Microsoft Purview  | Apache Atlas    | High       | 2-4 weeks        |
+| Azure Data Factory | Apache NiFi     | Medium     | 1-3 weeks        |
+| Synapse Serverless | Trino           | Medium     | 1-2 weeks        |
+| Power BI           | Apache Superset | Medium     | 2-3 weeks        |
+| Azure AI Search    | OpenSearch      | High       | 2-4 weeks        |
+| ADF Orchestration  | Apache Airflow  | Medium     | 1-2 weeks        |
 
 ### Prerequisites
 
@@ -45,12 +44,12 @@ This playbook provides detailed migration procedures for each Azure-to-OSS servi
 
 ### Entity Type Mapping
 
-| Purview Entity | Atlas Entity | Notes |
-|---|---|---|
-| `azure_datalake_gen2_resource_set` | `hdfs_path` | Map ADLS paths to HDFS-style paths |
-| `azure_sql_table` | `rdbms_table` | Use RDBMS model for relational sources |
-| `azure_sql_column` | `rdbms_column` | Column-level lineage preserved |
-| `purview_custom_type` | Atlas `typedef` | Recreate custom types via REST API |
+| Purview Entity                     | Atlas Entity    | Notes                                  |
+| ---------------------------------- | --------------- | -------------------------------------- |
+| `azure_datalake_gen2_resource_set` | `hdfs_path`     | Map ADLS paths to HDFS-style paths     |
+| `azure_sql_table`                  | `rdbms_table`   | Use RDBMS model for relational sources |
+| `azure_sql_column`                 | `rdbms_column`  | Column-level lineage preserved         |
+| `purview_custom_type`              | Atlas `typedef` | Recreate custom types via REST API     |
 
 ### Glossary Migration
 
@@ -93,11 +92,11 @@ for term in glossary.get("terms", []):
 
 ### Classification Translation
 
-| Purview Classification | Atlas Classification | Tag |
-|---|---|---|
-| `MICROSOFT.PERSONAL.NAME` | `PII_Name` | Custom tag |
-| `MICROSOFT.PERSONAL.EMAIL` | `PII_Email` | Custom tag |
-| `MICROSOFT.FINANCIAL.CREDIT_CARD_NUMBER` | `PCI_CreditCard` | Custom tag |
+| Purview Classification                   | Atlas Classification | Tag        |
+| ---------------------------------------- | -------------------- | ---------- |
+| `MICROSOFT.PERSONAL.NAME`                | `PII_Name`           | Custom tag |
+| `MICROSOFT.PERSONAL.EMAIL`               | `PII_Email`          | Custom tag |
+| `MICROSOFT.FINANCIAL.CREDIT_CARD_NUMBER` | `PCI_CreditCard`     | Custom tag |
 
 ```python
 # Create Atlas classification types
@@ -162,31 +161,41 @@ requests.post(
 
 ### Pipeline Conversion Patterns
 
-| ADF Activity | NiFi Processor | Notes |
-|---|---|---|
-| Copy Data | `GetAzureBlobStorage` → `PutAzureBlobStorage` | Use ADLS processors for Gen2 |
-| Data Flow | `ExecuteSQL` + `ConvertRecord` | Break into processor chain |
-| Lookup | `LookupRecord` / `ExecuteSQL` | Cache lookup results |
-| ForEach | `SplitJson` / `SplitRecord` | NiFi handles per-record natively |
-| If Condition | `RouteOnAttribute` | Expression Language for conditions |
-| Web Activity | `InvokeHTTP` | Full HTTP client support |
-| Stored Procedure | `ExecuteSQL` | Direct JDBC execution |
+| ADF Activity     | NiFi Processor                                | Notes                              |
+| ---------------- | --------------------------------------------- | ---------------------------------- |
+| Copy Data        | `GetAzureBlobStorage` → `PutAzureBlobStorage` | Use ADLS processors for Gen2       |
+| Data Flow        | `ExecuteSQL` + `ConvertRecord`                | Break into processor chain         |
+| Lookup           | `LookupRecord` / `ExecuteSQL`                 | Cache lookup results               |
+| ForEach          | `SplitJson` / `SplitRecord`                   | NiFi handles per-record natively   |
+| If Condition     | `RouteOnAttribute`                            | Expression Language for conditions |
+| Web Activity     | `InvokeHTTP`                                  | Full HTTP client support           |
+| Stored Procedure | `ExecuteSQL`                                  | Direct JDBC execution              |
 
 ### Example: Copy Pipeline Conversion
 
 **ADF Pipeline (JSON):**
+
 ```json
 {
-  "name": "CopyRawToStaging",
-  "activities": [{
-    "type": "Copy",
-    "source": { "type": "DelimitedTextSource", "storeSettings": { "type": "AzureBlobFSReadSettings" }},
-    "sink": { "type": "ParquetSink", "storeSettings": { "type": "AzureBlobFSWriteSettings" }}
-  }]
+    "name": "CopyRawToStaging",
+    "activities": [
+        {
+            "type": "Copy",
+            "source": {
+                "type": "DelimitedTextSource",
+                "storeSettings": { "type": "AzureBlobFSReadSettings" }
+            },
+            "sink": {
+                "type": "ParquetSink",
+                "storeSettings": { "type": "AzureBlobFSWriteSettings" }
+            }
+        }
+    ]
 }
 ```
 
 **NiFi Equivalent Flow:**
+
 ```xml
 <!-- NiFi template snippet -->
 <processor>
@@ -215,6 +224,7 @@ requests.post(
 ### Parameter Migration
 
 ADF linked services → NiFi Controller Services:
+
 ```
 ADF AzureBlobFS Linked Service → NiFi ADLSCredentialsControllerService
 ADF AzureSqlDatabase            → NiFi DBCPConnectionPool
@@ -227,21 +237,22 @@ ADF AzureKeyVault               → NiFi AzureKeyVaultClientService
 
 ### SQL Dialect Differences
 
-| Synapse Serverless | Trino | Notes |
-|---|---|---|
-| `OPENROWSET(...)` | Direct catalog query | Configure catalog in Trino |
-| `TOP N` | `LIMIT N` | Standard SQL |
-| `CONVERT(type, expr)` | `CAST(expr AS type)` | ANSI SQL |
-| `ISNULL(a, b)` | `COALESCE(a, b)` | Standard SQL |
-| `GETDATE()` | `current_timestamp` | ANSI SQL |
-| `DATEADD(day, 1, d)` | `d + interval '1' day` | Interval arithmetic |
-| `DATEDIFF(day, a, b)` | `date_diff('day', a, b)` | Trino function |
-| `FORMAT_DATETIME(...)` | `format_datetime(...)` | Similar syntax |
-| Delta Lake via OPENROWSET | Delta Lake connector | Native connector |
+| Synapse Serverless        | Trino                    | Notes                      |
+| ------------------------- | ------------------------ | -------------------------- |
+| `OPENROWSET(...)`         | Direct catalog query     | Configure catalog in Trino |
+| `TOP N`                   | `LIMIT N`                | Standard SQL               |
+| `CONVERT(type, expr)`     | `CAST(expr AS type)`     | ANSI SQL                   |
+| `ISNULL(a, b)`            | `COALESCE(a, b)`         | Standard SQL               |
+| `GETDATE()`               | `current_timestamp`      | ANSI SQL                   |
+| `DATEADD(day, 1, d)`      | `d + interval '1' day`   | Interval arithmetic        |
+| `DATEDIFF(day, a, b)`     | `date_diff('day', a, b)` | Trino function             |
+| `FORMAT_DATETIME(...)`    | `format_datetime(...)`   | Similar syntax             |
+| Delta Lake via OPENROWSET | Delta Lake connector     | Native connector           |
 
 ### Synapse → Trino Query Translation
 
 **Synapse Serverless:**
+
 ```sql
 SELECT TOP 100
     customer_id,
@@ -255,6 +266,7 @@ WHERE order_date >= DATEADD(DAY, -30, GETDATE())
 ```
 
 **Trino Equivalent:**
+
 ```sql
 SELECT
     customer_id,
@@ -336,16 +348,16 @@ session.post(f"{superset_url}/api/v1/database/", json={
 
 ### Chart Type Mapping
 
-| Power BI Visual | Superset Chart | Notes |
-|---|---|---|
-| Bar Chart | Bar Chart (ECharts) | Nearly identical |
-| Line Chart | Line Chart (ECharts) | Time-series native |
-| Table | Table | Pivot support included |
-| Card (KPI) | Big Number | Single metric display |
-| Map | deck.gl Scatter | Requires Mapbox token |
-| Treemap | Treemap (ECharts) | Direct equivalent |
-| Gauge | Gauge Chart | Similar look |
-| Slicer | Dashboard Filter | Native filter bar |
+| Power BI Visual | Superset Chart       | Notes                  |
+| --------------- | -------------------- | ---------------------- |
+| Bar Chart       | Bar Chart (ECharts)  | Nearly identical       |
+| Line Chart      | Line Chart (ECharts) | Time-series native     |
+| Table           | Table                | Pivot support included |
+| Card (KPI)      | Big Number           | Single metric display  |
+| Map             | deck.gl Scatter      | Requires Mapbox token  |
+| Treemap         | Treemap (ECharts)    | Direct equivalent      |
+| Gauge           | Gauge Chart          | Similar look           |
+| Slicer          | Dashboard Filter     | Native filter bar      |
 
 ---
 
@@ -353,17 +365,17 @@ session.post(f"{superset_url}/api/v1/database/", json={
 
 ### Index Schema Mapping
 
-| Azure AI Search | OpenSearch | Notes |
-|---|---|---|
-| `Edm.String` | `text` / `keyword` | `text` for full-text, `keyword` for exact |
-| `Edm.Int32` | `integer` | Direct mapping |
-| `Edm.Int64` | `long` | Direct mapping |
-| `Edm.Double` | `double` | Direct mapping |
-| `Edm.Boolean` | `boolean` | Direct mapping |
-| `Edm.DateTimeOffset` | `date` | ISO 8601 format |
-| `Edm.GeographyPoint` | `geo_point` | Lat/lon support |
-| `Collection(Edm.Single)` | `knn_vector` | For vector search |
-| `Edm.ComplexType` | `object` | Nested objects |
+| Azure AI Search          | OpenSearch         | Notes                                     |
+| ------------------------ | ------------------ | ----------------------------------------- |
+| `Edm.String`             | `text` / `keyword` | `text` for full-text, `keyword` for exact |
+| `Edm.Int32`              | `integer`          | Direct mapping                            |
+| `Edm.Int64`              | `long`             | Direct mapping                            |
+| `Edm.Double`             | `double`           | Direct mapping                            |
+| `Edm.Boolean`            | `boolean`          | Direct mapping                            |
+| `Edm.DateTimeOffset`     | `date`             | ISO 8601 format                           |
+| `Edm.GeographyPoint`     | `geo_point`        | Lat/lon support                           |
+| `Collection(Edm.Single)` | `knn_vector`       | For vector search                         |
+| `Edm.ComplexType`        | `object`           | Nested objects                            |
 
 ### Index Migration Script
 
@@ -454,38 +466,44 @@ requests.put(
 ### Query Translation
 
 **Azure AI Search:**
+
 ```json
 {
-  "search": "cloud analytics",
-  "filter": "category eq 'Data'",
-  "orderby": "score desc",
-  "top": 10,
-  "select": "title,description,category"
+    "search": "cloud analytics",
+    "filter": "category eq 'Data'",
+    "orderby": "score desc",
+    "top": 10,
+    "select": "title,description,category"
 }
 ```
 
 **OpenSearch Equivalent:**
+
 ```json
 {
-  "query": {
-    "bool": {
-      "must": [
-        { "multi_match": { "query": "cloud analytics", "fields": ["title^2", "description"] } }
-      ],
-      "filter": [
-        { "term": { "category.keyword": "Data" } }
-      ]
-    }
-  },
-  "sort": [{ "_score": "desc" }],
-  "size": 10,
-  "_source": ["title", "description", "category"]
+    "query": {
+        "bool": {
+            "must": [
+                {
+                    "multi_match": {
+                        "query": "cloud analytics",
+                        "fields": ["title^2", "description"]
+                    }
+                }
+            ],
+            "filter": [{ "term": { "category.keyword": "Data" } }]
+        }
+    },
+    "sort": [{ "_score": "desc" }],
+    "size": 10,
+    "_source": ["title", "description", "category"]
 }
 ```
 
 ### Vector Search Translation
 
 **Azure AI Search (vector):**
+
 ```json
 {
   "vectorQueries": [{
@@ -498,17 +516,18 @@ requests.put(
 ```
 
 **OpenSearch (knn):**
+
 ```json
 {
-  "size": 10,
-  "query": {
-    "knn": {
-      "contentVector": {
-        "vector": [0.1, 0.2, "..."],
-        "k": 10
-      }
+    "size": 10,
+    "query": {
+        "knn": {
+            "contentVector": {
+                "vector": [0.1, 0.2, "..."],
+                "k": 10
+            }
+        }
     }
-  }
 }
 ```
 
@@ -518,13 +537,13 @@ requests.put(
 
 ### Trigger / Schedule Mapping
 
-| ADF Trigger | Airflow Equivalent | Example |
-|---|---|---|
-| Schedule Trigger | `schedule` param | `schedule="0 6 * * *"` |
-| Tumbling Window | `schedule` + `data_interval` | Use catchup=True |
-| Event Trigger (Blob) | `S3KeySensor` / custom sensor | Azure sensor for ADLS |
-| Manual Trigger | `trigger_dagrun` API | `airflow dags trigger` |
-| Pipeline dependency | `ExternalTaskSensor` | Cross-DAG dependency |
+| ADF Trigger          | Airflow Equivalent            | Example                |
+| -------------------- | ----------------------------- | ---------------------- |
+| Schedule Trigger     | `schedule` param              | `schedule="0 6 * * *"` |
+| Tumbling Window      | `schedule` + `data_interval`  | Use catchup=True       |
+| Event Trigger (Blob) | `S3KeySensor` / custom sensor | Azure sensor for ADLS  |
+| Manual Trigger       | `trigger_dagrun` API          | `airflow dags trigger` |
+| Pipeline dependency  | `ExternalTaskSensor`          | Cross-DAG dependency   |
 
 ### DAG Pattern Examples
 
