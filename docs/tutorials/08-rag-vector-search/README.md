@@ -105,11 +105,11 @@ Search endpoint: https://csa-search-dev.search.windows.net
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `ServiceNameNotAvailable` | Name taken | Use a different name (globally unique) |
-| `QuotaExceeded` | Too many search services | Delete unused services or use a different subscription |
-| Semantic search unavailable | Wrong SKU or region | Use `standard` SKU or higher; check region support |
+| Symptom                     | Cause                    | Fix                                                    |
+| --------------------------- | ------------------------ | ------------------------------------------------------ |
+| `ServiceNameNotAvailable`   | Name taken               | Use a different name (globally unique)                 |
+| `QuotaExceeded`             | Too many search services | Delete unused services or use a different subscription |
+| Semantic search unavailable | Wrong SKU or region      | Use `standard` SKU or higher; check region support     |
 
 ---
 
@@ -240,23 +240,32 @@ Index 'csa-data-catalog' created/updated successfully
 
 ```json
 {
-  "name": "csa-data-catalog",
-  "fields": [
-    { "name": "id", "type": "Edm.String", "key": true },
-    { "name": "title", "type": "Edm.String", "searchable": true },
-    { "name": "content", "type": "Edm.String", "searchable": true },
-    { "name": "source", "type": "Edm.String", "filterable": true },
-    { "name": "category", "type": "Edm.String", "filterable": true },
-    { "name": "last_updated", "type": "Edm.DateTimeOffset", "sortable": true },
-    { "name": "content_vector", "type": "Collection(Edm.Single)", "dimensions": 3072, "searchable": true }
-  ],
-  "vectorSearch": {
-    "algorithms": [{ "name": "hnsw-config", "kind": "hnsw" }],
-    "profiles": [{ "name": "vector-profile", "algorithm": "hnsw-config" }]
-  },
-  "semantic": {
-    "configurations": [{ "name": "semantic-config" }]
-  }
+    "name": "csa-data-catalog",
+    "fields": [
+        { "name": "id", "type": "Edm.String", "key": true },
+        { "name": "title", "type": "Edm.String", "searchable": true },
+        { "name": "content", "type": "Edm.String", "searchable": true },
+        { "name": "source", "type": "Edm.String", "filterable": true },
+        { "name": "category", "type": "Edm.String", "filterable": true },
+        {
+            "name": "last_updated",
+            "type": "Edm.DateTimeOffset",
+            "sortable": true
+        },
+        {
+            "name": "content_vector",
+            "type": "Collection(Edm.Single)",
+            "dimensions": 3072,
+            "searchable": true
+        }
+    ],
+    "vectorSearch": {
+        "algorithms": [{ "name": "hnsw-config", "kind": "hnsw" }],
+        "profiles": [{ "name": "vector-profile", "algorithm": "hnsw-config" }]
+    },
+    "semantic": {
+        "configurations": [{ "name": "semantic-config" }]
+    }
 }
 ```
 
@@ -387,11 +396,11 @@ Total chunks indexed: 47
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `RateLimitError` on embeddings | Too many concurrent calls | Add `time.sleep(0.5)` between batches |
-| `InvalidRequestError` | Text too long for embedding | Reduce `chunk_size` to 500-800 tokens |
-| `IndexNotFoundError` | Index not created | Run Step 3 first |
+| Symptom                        | Cause                       | Fix                                   |
+| ------------------------------ | --------------------------- | ------------------------------------- |
+| `RateLimitError` on embeddings | Too many concurrent calls   | Add `time.sleep(0.5)` between batches |
+| `InvalidRequestError`          | Text too long for embedding | Reduce `chunk_size` to 500-800 tokens |
+| `IndexNotFoundError`           | Index not created           | Run Step 3 first                      |
 
 ---
 
@@ -752,15 +761,15 @@ Query: How does the medallion architecture work?
 
 ## Troubleshooting (Summary)
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `IndexNotFoundError` | Index not created | Run `create_index.py` first |
-| Empty search results | No documents indexed | Run `load_catalog.py` to populate the index |
-| `RateLimitError` on embeddings | TPM quota | Add delays or reduce batch size |
-| Poor search relevance | Chunk size too large | Reduce to 500-800 characters with 200 overlap |
-| `AuthenticationError` | Wrong search key | Re-export `SEARCH_KEY` from `az search admin-key show` |
-| Cosmos connection timeout | Firewall rules | Allow Azure services in Cosmos DB networking settings |
-| Semantic ranker not working | SKU too low | Need `standard` or higher SKU for semantic search |
+| Symptom                        | Cause                | Fix                                                    |
+| ------------------------------ | -------------------- | ------------------------------------------------------ |
+| `IndexNotFoundError`           | Index not created    | Run `create_index.py` first                            |
+| Empty search results           | No documents indexed | Run `load_catalog.py` to populate the index            |
+| `RateLimitError` on embeddings | TPM quota            | Add delays or reduce batch size                        |
+| Poor search relevance          | Chunk size too large | Reduce to 500-800 characters with 200 overlap          |
+| `AuthenticationError`          | Wrong search key     | Re-export `SEARCH_KEY` from `az search admin-key show` |
+| Cosmos connection timeout      | Firewall rules       | Allow Azure services in Cosmos DB networking settings  |
+| Semantic ranker not working    | SKU too low          | Need `standard` or higher SKU for semantic search      |
 
 ---
 

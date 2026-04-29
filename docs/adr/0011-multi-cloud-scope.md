@@ -40,9 +40,9 @@ a scope that is honest about what ships in v1 versus what is roadmap.
 ## Considered Options
 
 1. **Full multi-cloud** — OneLake shortcuts + Purview cross-cloud scans
-   + Unity Catalog federation + Trino or Denodo cross-cloud compute.
-   Complete vision but 12–18 months of effort; most of the near-term
-   federal-customer value is already covered by the first two items.
+    - Unity Catalog federation + Trino or Denodo cross-cloud compute.
+      Complete vision but 12–18 months of effort; most of the near-term
+      federal-customer value is already covered by the first two items.
 2. **Scoped multi-cloud (CHOSEN)** — OneLake shortcuts to S3 and GCS
    (read-only federation, no transformation) + Purview cross-cloud scans
    of Snowflake, BigQuery, and Redshift (catalog + classification; no
@@ -109,6 +109,7 @@ promoted from roadmap to committed scope.
 ## Pros and Cons of the Options
 
 ### Option 1 — Full multi-cloud
+
 - Pros: Complete vision story; cross-cloud compute and governance both
   covered; maximum optionality for customers.
 - Cons: 12–18 months of effort; requires standing up Unity Catalog
@@ -116,6 +117,7 @@ promoted from roadmap to committed scope.
   cross-cloud compute connectors vary in Gov availability.
 
 ### Option 2 — Scoped multi-cloud (OneLake shortcuts + Purview scans)
+
 - Pros: Ships today on Gov-available capability; governance-first
   matches Purview primacy (ADR-0006); composes forward; covers the
   dominant federal-customer ask (read + catalog) without overcommit.
@@ -123,6 +125,7 @@ promoted from roadmap to committed scope.
   write-back is out of scope.
 
 ### Option 3 — Single-cloud-only + migration playbooks
+
 - Pros: Simplest scope; fully consistent with Azure-native posture;
   migration playbooks already exist.
 - Cons: Cuts off the "multi-cloud governance plane" customer pattern;
@@ -131,6 +134,7 @@ promoted from roadmap to committed scope.
   contracts.
 
 ### Option 4 — OSS escape hatch only
+
 - Pros: No net-new Microsoft-stack work; positions OSS-on-K8s as the
   multi-cloud answer.
 - Cons: Shifts operational burden to the customer; contradicts the

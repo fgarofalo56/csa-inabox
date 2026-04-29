@@ -1,6 +1,5 @@
 # Kafka vs. Event Hubs vs. Service Bus
 
-
 ## TL;DR
 
 Default to **Event Hubs (Standard)** — it speaks Kafka API and captures to ADLS. Use **Event Hubs Premium / Dedicated** for >1 GB/sec. Self-host **Kafka** only when full Kafka ecosystem (Connect, Streams, Schema Registry) is mandated. Use **Service Bus** for ordered, transactional message queuing.
@@ -43,7 +42,8 @@ flowchart TD
 **Why:** Managed, Kafka-API compatible, Capture-to-ADLS.
 **Tradeoffs:** Cost — TU-based, predictable; Latency — low ms; Compliance — Commercial + Gov IL4/IL5; Skill — Kafka API drop-in.
 **Anti-patterns:**
-- >1 GB/sec sustained.
+
+- > 1 GB/sec sustained.
 - Queue-style semantics (sessions, transactions).
 
 **Linked example:** [`examples/iot-streaming/`](../../examples/iot-streaming/)
@@ -54,6 +54,7 @@ flowchart TD
 **Why:** Isolated tenancy, customer-managed keys, VNet injection.
 **Tradeoffs:** Cost — reserved ($$$); Latency — isolated; Compliance — same as Standard; Skill — no code change.
 **Anti-patterns:**
+
 - Bursty / intermittent — auto-inflate Standard is cheaper.
 
 **Linked example:** [`examples/iot-streaming/`](../../examples/iot-streaming/)
@@ -64,6 +65,7 @@ flowchart TD
 **Why:** Vendor-neutral, full feature parity.
 **Tradeoffs:** Cost — AKS + ops staff ($$$$); Latency — tuned brokers match Event Hubs; Compliance — depends on AKS; Skill — Kafka SRE.
 **Anti-patterns:**
+
 - Event Hubs Kafka API covers your case — you are paying for ops.
 
 **Linked example:** [`examples/iot-streaming/`](../../examples/iot-streaming/)
@@ -74,6 +76,7 @@ flowchart TD
 **Why:** FIFO, sessions, dead-letter, transactions.
 **Tradeoffs:** Cost — per-op pricing; Latency — low ms; Compliance — full Commercial + Gov; Skill — familiar enterprise pattern.
 **Anti-patterns:**
+
 - High-volume telemetry — Event Hubs is far cheaper.
 
 **Linked example:** [`examples/commerce/`](../../examples/commerce/)

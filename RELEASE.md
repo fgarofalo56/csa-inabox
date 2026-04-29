@@ -7,19 +7,19 @@ versioning and CHANGELOG maintenance.
 ## How it works
 
 1. PRs to `main` use Conventional Commits in their titles + body:
-   - `feat: ...` → minor bump (pre-1.0: minor; post-1.0: minor)
-   - `fix: ...` → patch bump
-   - `feat!: ...` or `BREAKING CHANGE:` in body → major bump (post-1.0)
-     or minor bump (pre-1.0 per `bump-minor-pre-major: true`)
-   - `docs:`, `chore:`, `refactor:`, `test:`, `ci:`, `perf:` → no bump,
-     shown in CHANGELOG
+    - `feat: ...` → minor bump (pre-1.0: minor; post-1.0: minor)
+    - `fix: ...` → patch bump
+    - `feat!: ...` or `BREAKING CHANGE:` in body → major bump (post-1.0)
+      or minor bump (pre-1.0 per `bump-minor-pre-major: true`)
+    - `docs:`, `chore:`, `refactor:`, `test:`, `ci:`, `perf:` → no bump,
+      shown in CHANGELOG
 2. On push to `main`, `release-please` opens (or updates) a release PR
    that accumulates unreleased changes.
 3. Merging the release PR:
-   - Bumps `pyproject.toml` version
-   - Updates `CHANGELOG.md`
-   - Creates a git tag (`v0.1.0`, `v0.1.1`, ...)
-   - Creates a GitHub Release with generated notes
+    - Bumps `pyproject.toml` version
+    - Updates `CHANGELOG.md`
+    - Creates a git tag (`v0.1.0`, `v0.1.1`, ...)
+    - Creates a GitHub Release with generated notes
 4. Post-release, any deploy workflows keyed on tag push fire normally.
 
 ## Configuration

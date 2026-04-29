@@ -397,11 +397,11 @@ The crop production data product has been reviewed and APPROVED.
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `ImportError: semantic_kernel` | Not installed | Run `pip install semantic-kernel[azure]` |
-| Agent returns empty response | Token limit reached | Reduce `max_rounds` or shorten instructions |
-| `ServiceNotFoundError` | Wrong service_id | Ensure `service_id="gpt54"` matches kernel setup |
+| Symptom                        | Cause               | Fix                                              |
+| ------------------------------ | ------------------- | ------------------------------------------------ |
+| `ImportError: semantic_kernel` | Not installed       | Run `pip install semantic-kernel[azure]`         |
+| Agent returns empty response   | Token limit reached | Reduce `max_rounds` or shorten instructions      |
+| `ServiceNotFoundError`         | Wrong service_id    | Ensure `service_id="gpt54"` matches kernel setup |
 
 ---
 
@@ -500,11 +500,11 @@ CatalogAgent: Available tools: ['search_catalog', 'get_table_info', 'list_domain
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| MCP connection timeout | Server not running | Verify `mcp_server.py` exists and is executable |
-| `PluginNotFoundError` | Plugin not registered | Call `kernel.add_plugin()` before creating agent |
-| Tool calls fail silently | Missing environment vars | Set all required env vars before starting |
+| Symptom                  | Cause                    | Fix                                              |
+| ------------------------ | ------------------------ | ------------------------------------------------ |
+| MCP connection timeout   | Server not running       | Verify `mcp_server.py` exists and is executable  |
+| `PluginNotFoundError`    | Plugin not registered    | Call `kernel.add_plugin()` before creating agent |
+| Tool calls fail silently | Missing environment vars | Set all required env vars before starting        |
 
 ---
 
@@ -646,15 +646,15 @@ Functions: ['list_gold_tables', 'get_table_schema', 'suggest_sql_query']
 
 ## Troubleshooting (Summary)
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `ImportError: semantic_kernel` | Package not installed | `pip install semantic-kernel[azure]` |
-| `AuthenticationError` from OpenAI | Wrong credentials | Verify `AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_API_KEY` |
-| Agent loops without progress | Instructions too vague | Make agent instructions more specific and action-oriented |
-| `RateLimitError` | Too many requests | Reduce `max_rounds` or add delays between agent calls |
-| Plugin functions not called | Function descriptions unclear | Improve `description` parameter in `@kernel_function` |
-| MCP server connection refused | Server not started | Start the MCP server process before connecting |
-| `TimeoutError` in orchestration | Agents taking too long | Reduce `max_tokens` or simplify the task |
+| Symptom                           | Cause                         | Fix                                                       |
+| --------------------------------- | ----------------------------- | --------------------------------------------------------- |
+| `ImportError: semantic_kernel`    | Package not installed         | `pip install semantic-kernel[azure]`                      |
+| `AuthenticationError` from OpenAI | Wrong credentials             | Verify `AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_API_KEY` |
+| Agent loops without progress      | Instructions too vague        | Make agent instructions more specific and action-oriented |
+| `RateLimitError`                  | Too many requests             | Reduce `max_rounds` or add delays between agent calls     |
+| Plugin functions not called       | Function descriptions unclear | Improve `description` parameter in `@kernel_function`     |
+| MCP server connection refused     | Server not started            | Start the MCP server process before connecting            |
+| `TimeoutError` in orchestration   | Agents taking too long        | Reduce `max_tokens` or simplify the task                  |
 
 ---
 

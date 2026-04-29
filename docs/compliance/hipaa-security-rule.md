@@ -21,26 +21,26 @@ organization or Azure platform layers respectively.
 Each standard is tagged `(R)` = Required or `(A)` = Addressable per
 HIPAA's implementation-specification model.
 
-| Safeguard category | Standards | CSA-in-a-Box role |
-|---|---|---|
-| Administrative (§164.308) | 20 | Partially — workforce / training inherited; access-control + backup implemented |
-| Physical (§164.310) | 12 | Almost entirely inherited from Azure datacenter |
-| Technical (§164.312) | 11 | Primary strength — most controls IMPLEMENTED |
-| Organizational (§164.314) | 5 | BAA inherited from Microsoft Azure |
-| Documentation (§164.316) | 5 | Partially — manifest + this file satisfy several |
+| Safeguard category        | Standards | CSA-in-a-Box role                                                               |
+| ------------------------- | --------- | ------------------------------------------------------------------------------- |
+| Administrative (§164.308) | 20        | Partially — workforce / training inherited; access-control + backup implemented |
+| Physical (§164.310)       | 12        | Almost entirely inherited from Azure datacenter                                 |
+| Technical (§164.312)      | 11        | Primary strength — most controls IMPLEMENTED                                    |
+| Organizational (§164.314) | 5         | BAA inherited from Microsoft Azure                                              |
+| Documentation (§164.316)  | 5         | Partially — manifest + this file satisfy several                                |
 
 ---
 
 ## Stats (approximate)
 
-| Status | Count |
-|---|---|
-| IMPLEMENTED | ~17 |
-| PARTIALLY_IMPLEMENTED | ~15 |
-| INHERITED | ~22 |
-| NOT_APPLICABLE | ~3 |
-| PLANNED | ~6 |
-| **Total** | **63 standards + implementation specs** |
+| Status                | Count                                   |
+| --------------------- | --------------------------------------- |
+| IMPLEMENTED           | ~17                                     |
+| PARTIALLY_IMPLEMENTED | ~15                                     |
+| INHERITED             | ~22                                     |
+| NOT_APPLICABLE        | ~3                                      |
+| PLANNED               | ~6                                      |
+| **Total**             | **63 standards + implementation specs** |
 
 ---
 
@@ -126,7 +126,7 @@ HIPAA's implementation-specification model.
    reference artifacts in your SRA document.
 
 2. **Find gaps to remediate** — any entry where `status:
-   PARTIALLY_IMPLEMENTED` or `PLANNED` is your backlog. Most include
+PARTIALLY_IMPLEMENTED` or `PLANNED` is your backlog. Most include
    a `gaps:` description.
 
 3. **Identify inherited controls** — any entry where `status: INHERITED`

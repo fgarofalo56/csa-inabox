@@ -70,23 +70,27 @@ re-pointed at a self-hosted endpoint (Option 2) if a tenant requires it.
 ## Pros and Cons of the Options
 
 ### Option 1 — Azure OpenAI Service
+
 - Pros: FedRAMP High; Private Endpoints; Entra ID auth; content filtering;
   frontier-class models; OpenAI SDK-compatible.
 - Cons: Per-token cost; model deprecation churn; quota management.
 
 ### Option 2 — Self-hosted open-weights on Azure ML / AKS
+
 - Pros: No per-token cost at scale; full control over model version and
   weights; model fine-tuning is fully in-tenant.
 - Cons: Customer-owned GPU fleet; patching, autoscaling, and observability
   are customer responsibilities; capability gap vs. frontier models.
 
 ### Option 3 — Third-party LLM APIs (Anthropic, Google)
+
 - Pros: Model diversity; strong capabilities; some have competitive
   non-training guarantees.
 - Cons: Separate FedRAMP authorizations; different auth models; additional
   vendor procurement.
 
 ### Option 4 — On-device small models
+
 - Pros: Zero infra cost; offline-capable; trivial data residency.
 - Cons: Quality floor too low for production RAG and text-to-SQL on
   non-trivial schemas.
@@ -94,6 +98,7 @@ re-pointed at a self-hosted endpoint (Option 2) if a tenant requires it.
 ## Validation
 
 We will know this decision is right if:
+
 - RAG + text-to-SQL use cases meet accuracy targets using Azure OpenAI
   models without needing a self-hosted fallback.
 - Per-tenant monthly inference cost stays within the FinOps envelope set

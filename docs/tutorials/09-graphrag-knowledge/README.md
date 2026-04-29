@@ -138,9 +138,9 @@ az storage container create \
 
 ```json
 {
-  "name": "csa-cosmos-graph-dev",
-  "properties": { "provisioningState": "Succeeded" },
-  "capabilities": [{ "name": "EnableGremlin" }]
+    "name": "csa-cosmos-graph-dev",
+    "properties": { "provisioningState": "Succeeded" },
+    "capabilities": [{ "name": "EnableGremlin" }]
 }
 ```
 
@@ -148,11 +148,11 @@ az storage container create \
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `AccountNameAlreadyExists` | Cosmos DB name taken | Use a more unique prefix |
-| Gremlin API not available | Region limitation | Try `eastus`, `westus2`, or `westeurope` |
-| Script permission denied | Not executable | Run `chmod +x` on the script |
+| Symptom                    | Cause                | Fix                                      |
+| -------------------------- | -------------------- | ---------------------------------------- |
+| `AccountNameAlreadyExists` | Cosmos DB name taken | Use a more unique prefix                 |
+| Gremlin API not available  | Region limitation    | Try `eastus`, `westus2`, or `westeurope` |
+| Script permission denied   | Not executable       | Run `chmod +x` on the script             |
 
 ---
 
@@ -246,53 +246,53 @@ Edit the generated `settings.yaml`:
 
 ```yaml
 llm:
-  api_key: ${AOAI_KEY}
-  type: azure_openai_chat
-  model: gpt-5.4
-  deployment_name: gpt-54
-  api_base: ${AOAI_ENDPOINT}
-  api_version: "2025-04-01-preview"
-  max_retries: 3
-  tokens_per_minute: 30000
-  requests_per_minute: 30
-
-embeddings:
-  llm:
     api_key: ${AOAI_KEY}
-    type: azure_openai_embedding
-    model: text-embedding-3-large
-    deployment_name: text-embedding-3-large
+    type: azure_openai_chat
+    model: gpt-5.4
+    deployment_name: gpt-54
     api_base: ${AOAI_ENDPOINT}
     api_version: "2025-04-01-preview"
+    max_retries: 3
+    tokens_per_minute: 30000
+    requests_per_minute: 30
+
+embeddings:
+    llm:
+        api_key: ${AOAI_KEY}
+        type: azure_openai_embedding
+        model: text-embedding-3-large
+        deployment_name: text-embedding-3-large
+        api_base: ${AOAI_ENDPOINT}
+        api_version: "2025-04-01-preview"
 
 chunks:
-  size: 1200
-  overlap: 200
+    size: 1200
+    overlap: 200
 
 entity_extraction:
-  max_gleanings: 1
-  entity_types:
-    - service
-    - data_product
-    - pipeline
-    - table
-    - column
-    - team
-    - technology
-    - policy
+    max_gleanings: 1
+    entity_types:
+        - service
+        - data_product
+        - pipeline
+        - table
+        - column
+        - team
+        - technology
+        - policy
 
 community_reports:
-  max_length: 2000
+    max_length: 2000
 
 storage:
-  type: blob
-  connection_string: ${GRAPHRAG_STORAGE_CONNECTION}
-  container_name: graphrag
+    type: blob
+    connection_string: ${GRAPHRAG_STORAGE_CONNECTION}
+    container_name: graphrag
 
 input:
-  type: file
-  file_type: text
-  base_dir: input
+    type: file
+    file_type: text
+    base_dir: input
 ```
 
 ### 3c. Set Storage Connection
@@ -354,12 +354,12 @@ Indexing complete!
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `RateLimitError` | Too many LLM calls | Reduce `tokens_per_minute` and `requests_per_minute` |
-| `BlobStorageError` | Wrong connection string | Re-export `GRAPHRAG_STORAGE_CONNECTION` |
-| Indexing takes > 1 hour | Too many documents | Reduce input docs or increase TPM quota |
-| `EntityExtractionError` | Model capacity | Use a higher `sku-capacity` for gpt-5.4 |
+| Symptom                 | Cause                   | Fix                                                  |
+| ----------------------- | ----------------------- | ---------------------------------------------------- |
+| `RateLimitError`        | Too many LLM calls      | Reduce `tokens_per_minute` and `requests_per_minute` |
+| `BlobStorageError`      | Wrong connection string | Re-export `GRAPHRAG_STORAGE_CONNECTION`              |
+| Indexing takes > 1 hour | Too many documents      | Reduce input docs or increase TPM quota              |
+| `EntityExtractionError` | Model capacity          | Use a higher `sku-capacity` for gpt-5.4              |
 
 ---
 
@@ -791,15 +791,15 @@ Edges: 567
 
 ## Troubleshooting (Summary)
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `graphrag` command not found | Not installed | `pip install graphrag` |
-| `RateLimitError` during indexing | TPM quota | Reduce `tokens_per_minute` in settings.yaml |
-| Cosmos DB Gremlin timeout | Query too complex | Add `.limit()` to Gremlin queries |
-| Empty graph | Indexing failed silently | Check `output/logs/` for errors |
-| `GremlinConnectionError` | Wrong endpoint | Ensure endpoint uses `wss://` protocol |
-| No communities detected | Too few documents | Add more input documents (minimum 5-10 recommended) |
-| `ParquetReadError` | Indexing incomplete | Re-run `graphrag index` from scratch |
+| Symptom                          | Cause                    | Fix                                                 |
+| -------------------------------- | ------------------------ | --------------------------------------------------- |
+| `graphrag` command not found     | Not installed            | `pip install graphrag`                              |
+| `RateLimitError` during indexing | TPM quota                | Reduce `tokens_per_minute` in settings.yaml         |
+| Cosmos DB Gremlin timeout        | Query too complex        | Add `.limit()` to Gremlin queries                   |
+| Empty graph                      | Indexing failed silently | Check `output/logs/` for errors                     |
+| `GremlinConnectionError`         | Wrong endpoint           | Ensure endpoint uses `wss://` protocol              |
+| No communities detected          | Too few documents        | Add more input documents (minimum 5-10 recommended) |
+| `ParquetReadError`               | Indexing incomplete      | Re-run `graphrag index` from scratch                |
 
 ---
 

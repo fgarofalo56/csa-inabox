@@ -1,6 +1,5 @@
 # Batch vs. Streaming Ingestion
 
-
 ## TL;DR
 
 <1 second SLA or >1k events/sec sustained: **True streaming** (Event Hubs + ADX / Structured Streaming). <5 minute SLA with bursty volume: **Micro-batch** (Delta Live Tables). Hourly/daily file-drop or DB pull: **Batch** (ADF + dbt).
@@ -39,6 +38,7 @@ flowchart TD
 **Why:** Sub-second end-to-end.
 **Tradeoffs:** Cost — always-on ($$$); Latency — sub-second; Compliance — Event Hubs + ADX GA in Gov IL4 (IL5 with qualifying SKUs); Skill — stream-processing patterns.
 **Anti-patterns:**
+
 - Reports consumed once a day.
 - Streaming into a warehouse with no hot-path landing (ADX).
 
@@ -50,6 +50,7 @@ flowchart TD
 **Why:** Right balance for "within 5 minutes" SLAs without always-on cluster costs.
 **Tradeoffs:** Cost — cluster per trigger; Latency — 1-5 min; Compliance — same as Databricks (Commercial + Gov); Skill — Delta Live Tables reduces burden.
 **Anti-patterns:**
+
 - Sub-second SLA needs — trigger interval dominates.
 
 **Linked example:** [`examples/noaa/`](../../examples/noaa/)
@@ -60,6 +61,7 @@ flowchart TD
 **Why:** Cheapest and most mature.
 **Tradeoffs:** Cost — lowest; Latency — minutes to hours; Compliance — full via ADF + self-hosted IR; Skill — lowest ramp.
 **Anti-patterns:**
+
 - Forcing batch when business needs <5 minutes — you will rebuild anyway.
 - No bronze-layer raw copy.
 

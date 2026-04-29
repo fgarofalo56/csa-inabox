@@ -1,6 +1,5 @@
 # Materialize vs. Virtualize
 
-
 ## TL;DR
 
 High-volume, latency-sensitive queries: **Materialize** (Gold tables, MVs, Direct Lake). Ad-hoc, <1 min freshness: **Virtualize** (serverless SQL, external tables). Mixed: **Hybrid** — materialize the hot 20%.
@@ -36,6 +35,7 @@ flowchart TD
 **Why:** Pre-compute expensive joins; sub-second serving.
 **Tradeoffs:** Cost — refresh + storage; Latency — sub-second; Compliance — inherits gold RBAC; Skill — dbt/SQL.
 **Anti-patterns:**
+
 - Refresh cadence slower than data change — stale consumers.
 - Dozens of niche rollups — prune or costs creep.
 
@@ -47,6 +47,7 @@ flowchart TD
 **Why:** No refresh lag, no duplicate storage.
 **Tradeoffs:** Cost — per-query ($/TB scanned); Latency — seconds; Compliance — source RBAC only; Skill — SQL-first.
 **Anti-patterns:**
+
 - High-volume BI dashboards — expensive repeated scans.
 - Cross-region or hybrid networks — latency compounds.
 
@@ -58,6 +59,7 @@ flowchart TD
 **Why:** Materialize the 20% of queries driving 80% of traffic; virtualize the tail.
 **Tradeoffs:** Balanced cost; sub-second hot paths + seconds cold; governance maturity required.
 **Anti-patterns:**
+
 - Implicit hot/cold split with no documentation.
 
 **Linked example:** [`examples/noaa/`](../../examples/noaa/)

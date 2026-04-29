@@ -73,24 +73,28 @@ the Purview connector.
 ## Pros and Cons of the Options
 
 ### Option 1 — Microsoft Purview
+
 - Pros: Gov-GA PaaS; MIP integration; native Azure scanners; Unity Catalog
   federation; Entra-ID RBAC; Fabric-ready.
 - Cons: Weaker custom-type ergonomics; scanner-unit cost; ecosystem
   tightly coupled to Microsoft.
 
 ### Option 2 — Apache Atlas
+
 - Pros: Open-source; extensible type system; field-proven at scale at
   Hortonworks-era customers.
 - Cons: Customer-run Solr/HBase; no managed Azure offering; no MIP
   integration; contributor pool aging.
 
 ### Option 3 — DataHub (Acryl)
+
 - Pros: Modern architecture; strong plugin ecosystem; vibrant community;
   SaaS option via Acryl.
 - Cons: Smaller Azure ecosystem; no MIP story; third-party SaaS
   procurement adds FedRAMP burden.
 
 ### Option 4 — Collibra
+
 - Pros: Best-in-class business glossary and stewardship workflows.
 - Cons: Third-party SaaS; no Gov-GA deployment; significant licensing
   cost; not Azure-native.
@@ -98,6 +102,7 @@ the Purview connector.
 ## Validation
 
 We will know this decision is right if:
+
 - Purview lineage covers ADF + dbt + Unity Catalog flows in every vertical
   example within one sprint of onboarding.
 - MIP labels applied in Purview appear on downstream Power BI datasets

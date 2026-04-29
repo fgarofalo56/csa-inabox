@@ -79,10 +79,10 @@ Expected output after a successful scan:
 
 ```json
 {
-  "status": "Succeeded",
-  "startTime": "2025-01-12T02:00:15Z",
-  "endTime": "2025-01-12T02:45:32Z",
-  "assetsDiscovered": 1247
+    "status": "Succeeded",
+    "startTime": "2025-01-12T02:00:15Z",
+    "endTime": "2025-01-12T02:45:32Z",
+    "assetsDiscovered": 1247
 }
 ```
 
@@ -245,11 +245,11 @@ curl -s -X POST \
 Define custom type definitions to capture domain-specific metadata.
 CSA-in-a-Box uses three custom attributes across all data assets:
 
-| Attribute | Type | Values | Purpose |
-|---|---|---|---|
-| `data_domain` | string | finance, healthcare, environmental, transport | Which business domain owns the data |
-| `quality_tier` | enum | bronze, silver, gold | Medallion layer / quality level |
-| `sla_hours` | int | 1–168 | Max hours before data is considered stale |
+| Attribute      | Type   | Values                                        | Purpose                                   |
+| -------------- | ------ | --------------------------------------------- | ----------------------------------------- |
+| `data_domain`  | string | finance, healthcare, environmental, transport | Which business domain owns the data       |
+| `quality_tier` | enum   | bronze, silver, gold                          | Medallion layer / quality level           |
+| `sla_hours`    | int    | 1–168                                         | Max hours before data is considered stale |
 
 ```bash
 # Create a business metadata type definition

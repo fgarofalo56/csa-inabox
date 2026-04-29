@@ -53,7 +53,7 @@ It serves three roles in the 2026 Azure data-platform landscape:
 1. **Azure Government gap-filler.** Microsoft Fabric is forecast — not GA — in
    Azure Government as of April 2026. This repo ships the Fabric-parity stack
    (lakehouse, mesh, streaming, AI/ML, governance) on Azure PaaS services that
-   *are* available in Gov (IL4/IL5) today.
+   _are_ available in Gov (IL4/IL5) today.
 2. **CAF "Unify your data platform" reference.** The CAF Cloud-Scale Analytics
    scenario was deprecated in April 2026 in favor of Fabric-first guidance. For
    teams who still need an end-to-end Bicep reference that is not yet a Fabric
@@ -64,18 +64,18 @@ It serves three roles in the 2026 Azure data-platform landscape:
 
 Capability coverage:
 
-| Capability | Description | Microsoft Fabric equivalent |
-|---|---|---|
-| **Data Lakehouse** | Delta Lake on ADLS Gen2 with medallion architecture (Bronze/Silver/Gold) | OneLake + Lakehouse |
-| **Data Mesh** | Domain-oriented data ownership with self-serve infrastructure | Workspaces + Domains |
-| **Data Fabric** | Unified metadata layer with automated governance via Azure Purview | OneLake Catalog + Purview integration |
-| **Data Engineering** | Apache Spark on Synapse/Databricks with dbt transformations | Fabric Data Engineering (Spark) |
-| **Data Integration** | Azure Data Factory / Synapse Pipelines for ETL/ELT | Fabric Data Factory |
-| **Data Warehousing** | Synapse Dedicated SQL Pools and Serverless SQL | Fabric Warehouse |
-| **Real-Time Analytics** | Azure Data Explorer + Event Hubs streaming | Real-Time Intelligence (Eventhouse / KQL DB) |
-| **AI/ML** | Azure Machine Learning + Azure OpenAI integration | Fabric Data Science + Copilot |
-| **Data Governance** | Microsoft Purview for cataloging, classification, and lineage | OneLake Catalog (Purview-powered) |
-| **Observability** | Log Analytics + Azure Monitor + custom KQL dashboards | Fabric Monitoring Hub |
+| Capability              | Description                                                              | Microsoft Fabric equivalent                  |
+| ----------------------- | ------------------------------------------------------------------------ | -------------------------------------------- |
+| **Data Lakehouse**      | Delta Lake on ADLS Gen2 with medallion architecture (Bronze/Silver/Gold) | OneLake + Lakehouse                          |
+| **Data Mesh**           | Domain-oriented data ownership with self-serve infrastructure            | Workspaces + Domains                         |
+| **Data Fabric**         | Unified metadata layer with automated governance via Azure Purview       | OneLake Catalog + Purview integration        |
+| **Data Engineering**    | Apache Spark on Synapse/Databricks with dbt transformations              | Fabric Data Engineering (Spark)              |
+| **Data Integration**    | Azure Data Factory / Synapse Pipelines for ETL/ELT                       | Fabric Data Factory                          |
+| **Data Warehousing**    | Synapse Dedicated SQL Pools and Serverless SQL                           | Fabric Warehouse                             |
+| **Real-Time Analytics** | Azure Data Explorer + Event Hubs streaming                               | Real-Time Intelligence (Eventhouse / KQL DB) |
+| **AI/ML**               | Azure Machine Learning + Azure OpenAI integration                        | Fabric Data Science + Copilot                |
+| **Data Governance**     | Microsoft Purview for cataloging, classification, and lineage            | OneLake Catalog (Purview-powered)            |
+| **Observability**       | Log Analytics + Azure Monitor + custom KQL dashboards                    | Fabric Monitoring Hub                        |
 
 ---
 
@@ -85,14 +85,14 @@ CSA-in-a-Box is **not** a blanket substitute for Microsoft Fabric. For most
 Azure Commercial greenfield workloads where Fabric is GA in the region,
 Fabric is the right answer. Use this decision table to pick the right tool:
 
-| Use Microsoft Fabric if… | Use CSA-in-a-Box if… |
-|---|---|
-| Workload is on Azure Commercial and Fabric is GA in your region | Workload is on Azure Government (IL4/IL5) — Fabric is forecast, not GA |
-| Team prefers a unified SaaS control plane over composed Bicep modules | Team requires Bicep/Terraform IaC, controlled deployments, explicit Azure Policy enforcement |
-| Simplicity and managed OneLake are higher priority than control | Composability and Azure PaaS primitives (ADLS Gen2, Databricks, Synapse, Purview, Power BI) are higher priority than a single pane of glass |
-| Preview features are an asset (Data Activator, Fabric Copilot) | Production-stable services and a conservative roll-out pace are required |
-| Commercial-only workloads OR you are starting greenfield with Fabric | Federal / regulated / tribal workloads subject to FedRAMP High, CMMC 2.0 L2, or HIPAA (see `csa_platform/csa_platform/governance/compliance/`) |
-| F-SKU reserved capacity cost model fits your procurement | Consumption-based Azure metering + reserved instances fit your procurement |
+| Use Microsoft Fabric if…                                              | Use CSA-in-a-Box if…                                                                                                                           |
+| --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Workload is on Azure Commercial and Fabric is GA in your region       | Workload is on Azure Government (IL4/IL5) — Fabric is forecast, not GA                                                                         |
+| Team prefers a unified SaaS control plane over composed Bicep modules | Team requires Bicep/Terraform IaC, controlled deployments, explicit Azure Policy enforcement                                                   |
+| Simplicity and managed OneLake are higher priority than control       | Composability and Azure PaaS primitives (ADLS Gen2, Databricks, Synapse, Purview, Power BI) are higher priority than a single pane of glass    |
+| Preview features are an asset (Data Activator, Fabric Copilot)        | Production-stable services and a conservative roll-out pace are required                                                                       |
+| Commercial-only workloads OR you are starting greenfield with Fabric  | Federal / regulated / tribal workloads subject to FedRAMP High, CMMC 2.0 L2, or HIPAA (see `csa_platform/csa_platform/governance/compliance/`) |
+| F-SKU reserved capacity cost model fits your procurement              | Consumption-based Azure metering + reserved instances fit your procurement                                                                     |
 
 For the detailed selection logic, see the
 [`fabric-vs-databricks-vs-synapse` decision tree](decision-trees/fabric-vs-databricks-vs-synapse/),
@@ -154,12 +154,12 @@ graph TB
 
 ## 🏗️ Subscription Layout (4 Subscriptions)
 
-| Subscription | Purpose | Key Resources |
-|---|---|---|
-| **Management** | Platform governance, logging, monitoring | Log Analytics, Azure Monitor, Policy Assignments |
-| **Connectivity** | Hub networking, DNS, firewall | Hub VNet, Azure Firewall, Private DNS Zones, VPN Gateway |
-| **Data Management (DMLZ)** | Shared data services, governance | Purview, Container Registry, Shared Key Vault |
-| **Data Landing Zone (DLZ)** | Domain data workloads | ADLS Gen2, Synapse, Databricks, ADF, Domain Key Vault |
+| Subscription                | Purpose                                  | Key Resources                                            |
+| --------------------------- | ---------------------------------------- | -------------------------------------------------------- |
+| **Management**              | Platform governance, logging, monitoring | Log Analytics, Azure Monitor, Policy Assignments         |
+| **Connectivity**            | Hub networking, DNS, firewall            | Hub VNet, Azure Firewall, Private DNS Zones, VPN Gateway |
+| **Data Management (DMLZ)**  | Shared data services, governance         | Purview, Container Registry, Shared Key Vault            |
+| **Data Landing Zone (DLZ)** | Domain data workloads                    | ADLS Gen2, Synapse, Databricks, ADF, Domain Key Vault    |
 
 ---
 
@@ -214,13 +214,13 @@ graph TB
 
 ## 📎 Prerequisites
 
-| Tool | Minimum Version |
-|---|---|
-| Azure CLI | >= 2.50.0 |
-| Bicep CLI | >= 0.25 |
+| Tool       | Minimum Version               |
+| ---------- | ----------------------------- |
+| Azure CLI  | >= 2.50.0                     |
+| Bicep CLI  | >= 0.25                       |
 | PowerShell | >= 7.3 with Az module >= 11.0 |
-| Python | >= 3.10 (for scripts and dbt) |
-| Git | >= 2.40 |
+| Python     | >= 3.10 (for scripts and dbt) |
+| Git        | >= 2.40                       |
 
 > [!IMPORTANT]
 > You will need **4 Azure subscriptions** with Owner or Contributor access, and a **Microsoft Entra ID** account with Global Admin or Privileged Role Administrator permissions for initial setup.
@@ -246,12 +246,12 @@ extras named by the `EXTRAS` variable. The default covers backend-only
 development; add `portal`, `copilot`, or `platform` when you need those
 code paths (CSA-0062).
 
-| Command                                                     | Extras installed                                        |
-| ----------------------------------------------------------- | ------------------------------------------------------- |
-| `make setup`                                                | `dev,governance,functions` (default)                    |
-| `make setup EXTRAS=dev,portal`                              | Add FastAPI + portal dependencies                       |
-| `make setup EXTRAS=dev,portal,copilot`                      | Portal + Copilot RAG / eval / telemetry                 |
-| `make setup EXTRAS=dev,governance,functions,portal,copilot,platform` | Everything (kitchen-sink dev install)           |
+| Command                                                              | Extras installed                        |
+| -------------------------------------------------------------------- | --------------------------------------- |
+| `make setup`                                                         | `dev,governance,functions` (default)    |
+| `make setup EXTRAS=dev,portal`                                       | Add FastAPI + portal dependencies       |
+| `make setup EXTRAS=dev,portal,copilot`                               | Portal + Copilot RAG / eval / telemetry |
+| `make setup EXTRAS=dev,governance,functions,portal,copilot,platform` | Everything (kitchen-sink dev install)   |
 
 One-shot sample vertical bring-up (CSA-0052):
 
@@ -276,12 +276,12 @@ make portal-dev-stop      # kill any orphaned pids
 
 All environment-specific values are externalized to parameter files:
 
-| Parameter File | Purpose |
-|---|---|
+| Parameter File         | Purpose                                      |
+| ---------------------- | -------------------------------------------- |
 | `params.template.json` | Template with placeholder values (committed) |
-| `params.dev.json` | Development environment (not committed) |
-| `params.test.json` | Test environment (not committed) |
-| `params.prod.json` | Production environment (not committed) |
+| `params.dev.json`      | Development environment (not committed)      |
+| `params.test.json`     | Test environment (not committed)             |
+| `params.prod.json`     | Production environment (not committed)       |
 
 > [!CAUTION]
 > **Never commit parameter files with real subscription IDs, secrets, or environment-specific values.**
@@ -293,117 +293,122 @@ All environment-specific values are externalized to parameter files:
 > [!IMPORTANT]
 > **Read this before evaluating CSA-in-a-Box for a real workload.**
 > This is a reference platform under active development, not a
-> shrink-wrapped product. The matrix below is the *only* authoritative
+> shrink-wrapped product. The matrix below is the _only_ authoritative
 > statement of which capabilities are production-grade vs. demo /
 > stub / planned. Any older doc claiming "95% complete" or
 > "production ready" is out of date and being retired.
 
 **Status legend**
 
-| Status | Meaning |
-|---|---|
-| **GA** | Wired end-to-end, has tests, used in at least one vertical example, safe to deploy to a non-prod subscription. |
-| **Beta** | Implemented and tested but missing documentation, surface coverage, or production hardening. Expect rough edges. |
-| **Stub** | Skeleton, demo response, or scaffolding only. **Do not rely on output.** Often carries `TODO(prod)` markers in source. |
-| **Planned** | Referenced in docs/ADRs but no implementation. Aspirational. |
+| Status      | Meaning                                                                                                                |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------- |
+| **GA**      | Wired end-to-end, has tests, used in at least one vertical example, safe to deploy to a non-prod subscription.         |
+| **Beta**    | Implemented and tested but missing documentation, surface coverage, or production hardening. Expect rough edges.       |
+| **Stub**    | Skeleton, demo response, or scaffolding only. **Do not rely on output.** Often carries `TODO(prod)` markers in source. |
+| **Planned** | Referenced in docs/ADRs but no implementation. Aspirational.                                                           |
 
 ### Infrastructure-as-Code (Bicep)
 
-| Capability | Status | Notes |
-|---|---|---|
-| ALZ foundation modules (`deploy/bicep/landing-zone-alz/`) | GA | Resource group, logging, policy, network, CRML |
-| DLZ modules (storage, synapse, databricks, ADF, eventhubs, cosmos, ADX, ML, functions, monitoring) | GA | ~20 modules, parameter templates committed |
-| DMLZ modules (purview, ACR, KV, OpenAI, APIM, eventhub, governance, network) | GA | Used by `make deploy-dev` |
-| Azure Government variants (`deploy/bicep/gov/`) | Beta | Modules exist; full Gov tenant deployment not regularly exercised |
-| Multi-region / multi-tenant parameter sets | Beta | Templates present; no automated cross-region failover test |
+| Capability                                                                                         | Status | Notes                                                             |
+| -------------------------------------------------------------------------------------------------- | ------ | ----------------------------------------------------------------- |
+| ALZ foundation modules (`deploy/bicep/landing-zone-alz/`)                                          | GA     | Resource group, logging, policy, network, CRML                    |
+| DLZ modules (storage, synapse, databricks, ADF, eventhubs, cosmos, ADX, ML, functions, monitoring) | GA     | ~20 modules, parameter templates committed                        |
+| DMLZ modules (purview, ACR, KV, OpenAI, APIM, eventhub, governance, network)                       | GA     | Used by `make deploy-dev`                                         |
+| Azure Government variants (`deploy/bicep/gov/`)                                                    | Beta   | Modules exist; full Gov tenant deployment not regularly exercised |
+| Multi-region / multi-tenant parameter sets                                                         | Beta   | Templates present; no automated cross-region failover test        |
 
 ### Python Platform (`csa_platform/`)
 
-| Module | Status | Notes |
-|---|---|---|
-| `governance/` (contracts, dataquality, purview, common, finops, rbac) | GA | Most mature module; covered by 80% gate; only one packaged for PyPI extraction |
-| `functions/` (validation, aiEnrichment, eventProcessing, secretRotation) | GA | Azure Functions apps with tests under `tests/functions/` |
-| `ai_integration/rag/` | Beta | Real RAG pipeline + service; has tests; **not** yet wired into the portal router |
-| `ai_integration/graphrag/` | Beta | ~1,500 LOC across 4 modules; 200 LOC of unit tests cover document loader + graph store |
-| `ai_integration/semantic_kernel/` | Removed | Was a Stub; deleted 2026-04-24 — see [SEMANTIC_KERNEL_REMOVED.md](./csa_platform/ai_integration/SEMANTIC_KERNEL_REMOVED.md) |
-| `ai_integration/mcp_server/` | Stub | 600 LOC server; **zero tests** |
-| `ai_integration/model_serving/` | Stub | No tests |
-| `data_activator/` | Beta | Bicep + Logic Apps deploy; runtime rules limited |
-| `data_marketplace/` | Beta | Catalog API present; full publish→discover→access pipeline incomplete |
-| `metadata_framework/` | Beta | Generator + schema; no end-to-end vertical consumer |
-| `streaming/` | Beta | Schema registry returns a *stub* `ResolvedSchema`; breach publisher tested |
-| `multi_synapse/` | Beta | Cost allocator + workspace manager; SDK clients carry `TODO` typing |
-| `semantic_model/` | Beta | Endpoint configurator carries `TODO` typing |
-| `unity_catalog_pattern/` | Beta | Pattern wraps Synapse Serverless / OneLake config — **not** real Databricks Unity Catalog |
-| `oss_alternatives/` | Stub | README lists Atlas/Ranger/Superset/Trino/NiFi/Kafka/OpenSearch; only **Airflow + Atlas + Superset** Helm charts ship |
-| `geoanalytics/` | Beta | PostGIS + H3; only one example uses it |
+| Module                                                                   | Status  | Notes                                                                                                                       |
+| ------------------------------------------------------------------------ | ------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `governance/` (contracts, dataquality, purview, common, finops, rbac)    | GA      | Most mature module; covered by 80% gate; only one packaged for PyPI extraction                                              |
+| `functions/` (validation, aiEnrichment, eventProcessing, secretRotation) | GA      | Azure Functions apps with tests under `tests/functions/`                                                                    |
+| `ai_integration/rag/`                                                    | Beta    | Real RAG pipeline + service; has tests; **not** yet wired into the portal router                                            |
+| `ai_integration/graphrag/`                                               | Beta    | ~1,500 LOC across 4 modules; 200 LOC of unit tests cover document loader + graph store                                      |
+| `ai_integration/semantic_kernel/`                                        | Removed | Was a Stub; deleted 2026-04-24 — see [SEMANTIC_KERNEL_REMOVED.md](./csa_platform/ai_integration/SEMANTIC_KERNEL_REMOVED.md) |
+| `ai_integration/mcp_server/`                                             | Stub    | 600 LOC server; **zero tests**                                                                                              |
+| `ai_integration/model_serving/`                                          | Stub    | No tests                                                                                                                    |
+| `data_activator/`                                                        | Beta    | Bicep + Logic Apps deploy; runtime rules limited                                                                            |
+| `data_marketplace/`                                                      | Beta    | Catalog API present; full publish→discover→access pipeline incomplete                                                       |
+| `metadata_framework/`                                                    | Beta    | Generator + schema; no end-to-end vertical consumer                                                                         |
+| `streaming/`                                                             | Beta    | Schema registry returns a _stub_ `ResolvedSchema`; breach publisher tested                                                  |
+| `multi_synapse/`                                                         | Beta    | Cost allocator + workspace manager; SDK clients carry `TODO` typing                                                         |
+| `semantic_model/`                                                        | Beta    | Endpoint configurator carries `TODO` typing                                                                                 |
+| `unity_catalog_pattern/`                                                 | Beta    | Pattern wraps Synapse Serverless / OneLake config — **not** real Databricks Unity Catalog                                   |
+| `oss_alternatives/`                                                      | Stub    | README lists Atlas/Ranger/Superset/Trino/NiFi/Kafka/OpenSearch; only **Airflow + Atlas + Superset** Helm charts ship        |
+| `geoanalytics/`                                                          | Beta    | PostGIS + H3; only one example uses it                                                                                      |
 
 ### Portal
 
-| Surface | Status | Notes |
-|---|---|---|
-| FastAPI backend (`portal/shared/api/`) | GA | Routers for sources, pipelines, marketplace, access, monitoring |
-| **Portal AI router** (`/api/v1/ai/{chat,embed,search}`) | **Stub → GA** *in progress* | Now delegates to `csa_platform.ai_integration.rag.RAGService` when configured; falls back to a clearly-labelled demo response otherwise. See `portal/shared/api/routers/ai.py`. |
-| React/Next.js frontend (`portal/react-webapp/`) | Beta | Builds and runs; visual polish incomplete |
-| Kubernetes / Helm chart (`portal/kubernetes/`) | Beta | Helm chart lints; not regularly deployed in CI |
-| PowerApps frontend (`portal/powerapps/`) | Stub | Skeleton only — do not advertise as a real implementation |
-| CLI (`cli/`) | Beta | Click commands for sources, pipelines, marketplace, stats |
+| Surface                                                 | Status                      | Notes                                                                                                                                                                           |
+| ------------------------------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| FastAPI backend (`portal/shared/api/`)                  | GA                          | Routers for sources, pipelines, marketplace, access, monitoring                                                                                                                 |
+| **Portal AI router** (`/api/v1/ai/{chat,embed,search}`) | **Stub → GA** _in progress_ | Now delegates to `csa_platform.ai_integration.rag.RAGService` when configured; falls back to a clearly-labelled demo response otherwise. See `portal/shared/api/routers/ai.py`. |
+| React/Next.js frontend (`portal/react-webapp/`)         | Beta                        | Builds and runs; visual polish incomplete                                                                                                                                       |
+| Kubernetes / Helm chart (`portal/kubernetes/`)          | Beta                        | Helm chart lints; not regularly deployed in CI                                                                                                                                  |
+| PowerApps frontend (`portal/powerapps/`)                | Stub                        | Skeleton only — do not advertise as a real implementation                                                                                                                       |
+| CLI (`cli/`)                                            | Beta                        | Click commands for sources, pipelines, marketplace, stats                                                                                                                       |
 
 ### Copilot (`apps/copilot/`)
 
-| Component | Status | Notes |
-|---|---|---|
-| PydanticAI agent + grounding | Beta | ~25k LOC; works in CLI/web/API surfaces |
-| Eval harness | Beta | Default scorer is a *deterministic stub*; real LLM scoring requires Azure creds |
-| Skills + broker | Beta | Approval flow has stub auto-approver |
-| MCP / web / cli_daemon / API surfaces | Beta | All four wire to the same agent |
-| Azure Function variant (`azure-functions/copilot-chat/`) | Beta | Parallel implementation; in-process rate limiting will fail under multi-instance scale-out |
+| Component                                                | Status | Notes                                                                                      |
+| -------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------ |
+| PydanticAI agent + grounding                             | Beta   | ~25k LOC; works in CLI/web/API surfaces                                                    |
+| Eval harness                                             | Beta   | Default scorer is a _deterministic stub_; real LLM scoring requires Azure creds            |
+| Skills + broker                                          | Beta   | Approval flow has stub auto-approver                                                       |
+| MCP / web / cli_daemon / API surfaces                    | Beta   | All four wire to the same agent                                                            |
+| Azure Function variant (`azure-functions/copilot-chat/`) | Beta   | Parallel implementation; in-process rate limiting will fail under multi-instance scale-out |
 
 ### Verticals (`examples/`)
 
-| Vertical | Status | File count |
-|---|---|---|
+| Vertical                                                                                                                                                         | Status  | File count                                                                  |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- | --------------------------------------------------------------------------- |
 | usda, noaa, epa, commerce, dot, interior, casino-analytics, tribal-health, usps, ml-lifecycle, iot-streaming, cybersecurity, fabric-data-agent, data-api-builder | Beta–GA | 19–56 files each (contracts, deploy, domains, notebooks, data, teardown.sh) |
-| `examples/streaming/`, `examples/geoanalytics/` | Stub | 2 files each — README + one script. Treat as snippets, not verticals. |
-| `examples/ai-agents/` | Stub | 4 files; sub-agents are skeletons |
+| `examples/streaming/`, `examples/geoanalytics/`                                                                                                                  | Stub    | 2 files each — README + one script. Treat as snippets, not verticals.       |
+| `examples/ai-agents/`                                                                                                                                            | Stub    | 4 files; sub-agents are skeletons                                           |
 
 ### Compliance
 
-| Framework | Status | Artifact |
-|---|---|---|
-| NIST 800-53 Rev 5 (FedRAMP High) mapping | Beta | `docs/compliance/` — control list, no automated evidence collection |
-| CMMC 2.0 L2 mapping | Beta | `docs/compliance/` |
-| HIPAA Security Rule mapping | Beta | `docs/compliance/hipaa-security-rule.md` |
-| Continuous compliance evidence pipeline | Planned | Discussed in ADRs; not built |
+| Framework                                | Status  | Artifact                                                            |
+| ---------------------------------------- | ------- | ------------------------------------------------------------------- |
+| NIST 800-53 Rev 5 (FedRAMP High) mapping | Beta    | `docs/compliance/` — control list, no automated evidence collection |
+| CMMC 2.0 L2 mapping                      | Beta    | `docs/compliance/`                                                  |
+| HIPAA Security Rule mapping              | Beta    | `docs/compliance/hipaa-security-rule.md`                            |
+| Continuous compliance evidence pipeline  | Planned | Discussed in ADRs; not built                                        |
 
 ---
 
 ## ✨ Data Platform Components
 
 ### 🗄️ Data Lakehouse (Delta Lake)
+
 - ADLS Gen2 storage with hierarchical namespace
 - Medallion architecture: Raw (Bronze) -> Curated (Silver) -> Enriched (Gold)
 - Delta Lake format for ACID transactions and time travel
 
 ### 🏗️ Data Mesh Domains
+
 - Self-serve data infrastructure per domain
 - Domain-specific Synapse/Databricks workspaces
 - Data products registered in Purview catalog
 - Federated governance via Azure Policy
 
 ### 🔄 Data Integration
+
 - Azure Data Factory for batch ETL/ELT pipelines
 - Synapse Pipelines for integrated data flows
 - Event Hubs for real-time data streaming
 - Self-Hosted Integration Runtime for on-premises connectivity
 
 ### 🔒 Data Governance
+
 - Microsoft Purview for data cataloging and classification
 - Automated data lineage tracking
 - Sensitivity labeling and access policies
 - Data quality monitoring
 
 ### 📊 Observability
+
 - Log Analytics workspace with custom KQL queries
 - Diagnostic settings for all deployed resources
 - Azure Monitor alerts and dashboards
@@ -413,15 +418,15 @@ All environment-specific values are externalized to parameter files:
 
 ## 🔒 Security
 
-| Control | Description |
-|---|---|
-| **Zero-trust networking** | Private endpoints for all data services |
-| **Managed identities** | No passwords or keys in code |
-| **RBAC** | Role-based access control with least privilege |
-| **Encryption** | TLS 1.2 minimum, encryption at rest with platform keys |
-| **Key Vault** | Centralized secret management per domain |
-| **Azure Policy** | Compliance enforcement and drift detection |
-| **Defender for Cloud** | Threat detection and security posture |
+| Control                   | Description                                            |
+| ------------------------- | ------------------------------------------------------ |
+| **Zero-trust networking** | Private endpoints for all data services                |
+| **Managed identities**    | No passwords or keys in code                           |
+| **RBAC**                  | Role-based access control with least privilege         |
+| **Encryption**            | TLS 1.2 minimum, encryption at rest with platform keys |
+| **Key Vault**             | Centralized secret management per domain               |
+| **Azure Policy**          | Compliance enforcement and drift detection             |
+| **Defender for Cloud**    | Threat detection and security posture                  |
 
 ---
 
@@ -457,10 +462,10 @@ This project is licensed under the MIT License -- see the [LICENSE](LICENSE) fil
 
 ## 🔗 Related Documentation
 
-| Document | Description |
-|---|---|
+| Document                                                                    | Description                                                                                |
+| --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | [**CSA-in-a-Box Documentation**](https://fgarofalo56.github.io/csa-inabox/) | Full documentation site — architecture, guides, ADRs, runbooks, compliance, and AI Copilot |
-| [Quick Start](docs/QUICKSTART.md) | Prerequisites + 60-minute hands-on deployment walkthrough (canonical onboarding doc) |
-| [Architecture](docs/ARCHITECTURE.md) | Comprehensive architecture reference |
-| [Contributing](CONTRIBUTING.md) | Development guidelines and PR process |
-| [Changelog](CHANGELOG.md) | All notable changes to the project |
+| [Quick Start](docs/QUICKSTART.md)                                           | Prerequisites + 60-minute hands-on deployment walkthrough (canonical onboarding doc)       |
+| [Architecture](docs/ARCHITECTURE.md)                                        | Comprehensive architecture reference                                                       |
+| [Contributing](CONTRIBUTING.md)                                             | Development guidelines and PR process                                                      |
+| [Changelog](CHANGELOG.md)                                                   | All notable changes to the project                                                         |

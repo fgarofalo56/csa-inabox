@@ -44,11 +44,11 @@ Successfully installed psycopg2-binary-2.9.x sqlalchemy-2.x geoalchemy2-0.15.x
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `pip install` fails for geopandas | Missing C libraries | On Windows, use `conda install geopandas` or install via pre-built wheels |
-| `h3` installation error | Requires C compiler | Install Microsoft C++ Build Tools or use `conda install h3-py` |
-| `psycopg2-binary` fails | Missing PostgreSQL headers | Use the `-binary` variant (included above) which bundles libpq |
+| Symptom                           | Cause                      | Fix                                                                       |
+| --------------------------------- | -------------------------- | ------------------------------------------------------------------------- |
+| `pip install` fails for geopandas | Missing C libraries        | On Windows, use `conda install geopandas` or install via pre-built wheels |
+| `h3` installation error           | Requires C compiler        | Install Microsoft C++ Build Tools or use `conda install h3-py`            |
+| `psycopg2-binary` fails           | Missing PostgreSQL headers | Use the `-binary` variant (included above) which bundles libpq            |
 
 ---
 
@@ -144,14 +144,16 @@ cd ../../../..
 
 ```json
 {
-  "properties": {
-    "provisioningState": "Succeeded",
-    "outputs": {
-      "postgresServerName": { "value": "csa-pg-geo-dev" },
-      "postgresServerFqdn": { "value": "csa-pg-geo-dev.postgres.database.azure.com" },
-      "postgisDatabaseName": { "value": "geodb" }
+    "properties": {
+        "provisioningState": "Succeeded",
+        "outputs": {
+            "postgresServerName": { "value": "csa-pg-geo-dev" },
+            "postgresServerFqdn": {
+                "value": "csa-pg-geo-dev.postgres.database.azure.com"
+            },
+            "postgisDatabaseName": { "value": "geodb" }
+        }
     }
-  }
 }
 ```
 
@@ -159,11 +161,11 @@ cd ../../../..
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `PasswordNotComplex` | Admin password too simple | Use 12+ chars with uppercase, lowercase, numbers, symbols |
-| `QuotaExceeded` for PostgreSQL | Region vCPU limit reached | Request quota increase or use a smaller SKU (Burstable B1ms) |
-| Deployment hangs > 15 min | PostgreSQL provisioning delay | Wait up to 20 minutes; check portal for status |
+| Symptom                        | Cause                         | Fix                                                          |
+| ------------------------------ | ----------------------------- | ------------------------------------------------------------ |
+| `PasswordNotComplex`           | Admin password too simple     | Use 12+ chars with uppercase, lowercase, numbers, symbols    |
+| `QuotaExceeded` for PostgreSQL | Region vCPU limit reached     | Request quota increase or use a smaller SKU (Burstable B1ms) |
+| Deployment hangs > 15 min      | PostgreSQL provisioning delay | Wait up to 20 minutes; check portal for status               |
 
 ---
 
@@ -291,11 +293,11 @@ SQL
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `connection refused` | Firewall rule not set | Verify your IP with `curl ifconfig.me` and re-create the rule |
-| `extension "postgis" is not available` | PostGIS not enabled on server | Run `az postgres flexible-server parameter set --name azure.extensions --value postgis` |
-| `psql: command not found` | PostgreSQL client not installed | Install `postgresql-client` package for your OS |
+| Symptom                                | Cause                           | Fix                                                                                     |
+| -------------------------------------- | ------------------------------- | --------------------------------------------------------------------------------------- |
+| `connection refused`                   | Firewall rule not set           | Verify your IP with `curl ifconfig.me` and re-create the rule                           |
+| `extension "postgis" is not available` | PostGIS not enabled on server   | Run `az postgres flexible-server parameter set --name azure.extensions --value postgis` |
+| `psql: command not found`              | PostgreSQL client not installed | Install `postgresql-client` package for your OS                                         |
 
 ---
 
@@ -399,11 +401,11 @@ Finished[#############################################################]  100.000
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
+| Symptom                                | Cause                    | Fix                                                                               |
+| -------------------------------------- | ------------------------ | --------------------------------------------------------------------------------- |
 | `curl` returns HTML instead of GeoJSON | USGS API changed or down | Check [USGS API docs](https://earthquake.usgs.gov/fdsnws/event/1/) and update URL |
-| Shapefile read error | Incomplete download | Re-download and verify zip integrity with `unzip -t` |
-| Upload fails with auth error | RBAC not assigned | Verify Storage Blob Data Contributor role from Tutorial 01 Step 7 |
+| Shapefile read error                   | Incomplete download      | Re-download and verify zip integrity with `unzip -t`                              |
+| Upload fails with auth error           | RBAC not assigned        | Verify Storage Blob Data Contributor role from Tutorial 01 Step 7                 |
 
 ---
 
@@ -534,11 +536,11 @@ Loaded 3234 county boundaries
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `OperationalError: connection refused` | Firewall or wrong host | Re-check `$PG_SERVER` and firewall rules |
-| `UndefinedTable` | Schema/table not created | Re-run Step 2d to create the schema |
-| `to_postgis` fails with geometry error | CRS mismatch | Ensure `.to_crs(epsg=4326)` is called before loading |
+| Symptom                                | Cause                    | Fix                                                  |
+| -------------------------------------- | ------------------------ | ---------------------------------------------------- |
+| `OperationalError: connection refused` | Firewall or wrong host   | Re-check `$PG_SERVER` and firewall rules             |
+| `UndefinedTable`                       | Schema/table not created | Re-run Step 2d to create the schema                  |
+| `to_postgis` fails with geometry error | CRS mismatch             | Ensure `.to_crs(epsg=4326)` is called before loading |
 
 ---
 
@@ -673,11 +675,11 @@ GROUP BY c.geoid, c.name, c.state_name, c.geom;
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `ST_DWithin` returns no results | Units mismatch — geometry vs geography | Cast to `::geography` for meter-based distance |
-| Query very slow | Missing spatial index | Verify indexes exist with `\di geo.*` |
-| `operator does not exist: geometry <-> geometry` | PostGIS KNN operator requires index | Create GIST index on geometry column |
+| Symptom                                          | Cause                                  | Fix                                            |
+| ------------------------------------------------ | -------------------------------------- | ---------------------------------------------- |
+| `ST_DWithin` returns no results                  | Units mismatch — geometry vs geography | Cast to `::geography` for meter-based distance |
+| Query very slow                                  | Missing spatial index                  | Verify indexes exist with `\di geo.*`          |
+| `operator does not exist: geometry <-> geometry` | PostGIS KNN operator requires index    | Create GIST index on geometry column           |
 
 ---
 
@@ -814,11 +816,11 @@ az storage blob upload-batch \
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `to_parquet` fails with geometry error | Shapely version mismatch | Update: `pip install --upgrade shapely pyarrow` |
-| GeoParquet not preserving CRS | Old geopandas version | Requires geopandas >= 0.14 for GeoParquet CRS support |
-| Memory error on large datasets | Dataset too large for memory | Process in chunks with `chunksize` parameter |
+| Symptom                                | Cause                        | Fix                                                   |
+| -------------------------------------- | ---------------------------- | ----------------------------------------------------- |
+| `to_parquet` fails with geometry error | Shapely version mismatch     | Update: `pip install --upgrade shapely pyarrow`       |
+| GeoParquet not preserving CRS          | Old geopandas version        | Requires geopandas >= 0.14 for GeoParquet CRS support |
+| Memory error on large datasets         | Dataset too large for memory | Process in chunks with `chunksize` parameter          |
 
 ---
 
@@ -920,11 +922,11 @@ H3 Aggregation (Resolution 4):
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `h3.latlng_to_cell` not found | Old h3 version (v3 API) | Upgrade: `pip install h3>=4.0` (v4 API changed function names) |
-| H3 cells crossing antimeridian | Expected for Pacific data | Use `h3.cell_to_boundary(h, geo_json=True)` for GeoJSON-safe output |
-| Memory error with res10+ | Very fine resolution creates huge datasets | Use resolution 4-8 for aggregation |
+| Symptom                        | Cause                                      | Fix                                                                 |
+| ------------------------------ | ------------------------------------------ | ------------------------------------------------------------------- |
+| `h3.latlng_to_cell` not found  | Old h3 version (v3 API)                    | Upgrade: `pip install h3>=4.0` (v4 API changed function names)      |
+| H3 cells crossing antimeridian | Expected for Pacific data                  | Use `h3.cell_to_boundary(h, geo_json=True)` for GeoJSON-safe output |
+| Memory error with res10+       | Very fine resolution creates huge datasets | Use resolution 4-8 for aggregation                                  |
 
 ---
 
@@ -1073,11 +1075,11 @@ h3_result.show(truncate=False)
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `ClassNotFoundException: org.apache.sedona` | Sedona library not installed | Add Maven coordinates to cluster libraries |
-| `AnalysisException: GeoParquet` | Sedona too old for GeoParquet | Requires Sedona >= 1.5; update Maven coordinates |
-| OOM on spatial join | Buffer too large, too many points | Reduce buffer distance or partition data by region |
+| Symptom                                     | Cause                             | Fix                                                |
+| ------------------------------------------- | --------------------------------- | -------------------------------------------------- |
+| `ClassNotFoundException: org.apache.sedona` | Sedona library not installed      | Add Maven coordinates to cluster libraries         |
+| `AnalysisException: GeoParquet`             | Sedona too old for GeoParquet     | Requires Sedona >= 1.5; update Maven coordinates   |
+| OOM on spatial join                         | Buffer too large, too many points | Reduce buffer distance or partition data by region |
 
 ---
 
@@ -1162,6 +1164,7 @@ Saved visualization to data/geospatial/gold/earthquake_analysis.png
 ```
 
 A figure window opens showing two maps side-by-side:
+
 - Left: Choropleth map with counties colored by earthquake count
 - Right: H3 hexagonal grid overlaid on county boundaries
 
@@ -1169,11 +1172,11 @@ A figure window opens showing two maps side-by-side:
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `matplotlib` no display | Running headless (SSH/WSL) | Use `matplotlib.use('Agg')` before importing pyplot |
-| Map looks squished | Aspect ratio not set | Add `ax.set_aspect('equal')` or use projected CRS |
-| Missing counties in plot | NaN values in geometry | Filter with `gdf = gdf[gdf.geometry.notna()]` |
+| Symptom                  | Cause                      | Fix                                                 |
+| ------------------------ | -------------------------- | --------------------------------------------------- |
+| `matplotlib` no display  | Running headless (SSH/WSL) | Use `matplotlib.use('Agg')` before importing pyplot |
+| Map looks squished       | Aspect ratio not set       | Add `ax.set_aspect('equal')` or use projected CRS   |
+| Missing counties in plot | NaN values in geometry     | Filter with `gdf = gdf[gdf.geometry.notna()]`       |
 
 ---
 
@@ -1262,10 +1265,10 @@ geospatial/earthquake_analysis.png                 2345678
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| Upload fails with 403 | Token expired | Re-run `az login` |
-| Parquet file corrupt | Write interrupted | Delete and re-create from source |
+| Symptom                  | Cause                   | Fix                                                        |
+| ------------------------ | ----------------------- | ---------------------------------------------------------- |
+| Upload fails with 403    | Token expired           | Re-run `az login`                                          |
+| Parquet file corrupt     | Write interrupted       | Delete and re-create from source                           |
 | Missing geometry in Gold | Geometry column dropped | Verify using `gpd.read_parquet()` that geometry is present |
 
 ---

@@ -16,30 +16,30 @@ FastAPI routers were already synchronous and converting them was
 called out as a separate workstream:
 
 > Negative: the sync PostgresStore ties the router surface to blocking
-> I/O.  A future ADR will evaluate async conversion once router-side
-> `await` chains are already justified by other work.  — ADR-0015
+> I/O. A future ADR will evaluate async conversion once router-side
+> `await` chains are already justified by other work. — ADR-0015
 
-That separate workstream is now justified.  Three concrete forces
+That separate workstream is now justified. Three concrete forces
 push the portal into `async def` end-to-end:
 
 1. **Copilot streaming** — `apps/copilot` emits Server-Sent Events
-   over long-lived HTTP responses.  Every blocking `store.get(...)`
+   over long-lived HTTP responses. Every blocking `store.get(...)`
    on the router thread starves that stream because FastAPI holds
    the event loop while the sync call-site blocks in the
    thread-pool executor.
 2. **BFF concurrency** — `routers/auth_bff.py` already runs async
-   (ADR-0014).  Having the session store async while the persistence
+   (ADR-0014). Having the session store async while the persistence
    store is sync is a confusing dichotomy that regularly trips
    contributors.
 3. **Postgres connection efficiency** — SQLAlchemy 2.0's `AsyncEngine`
-   + `asyncpg` amortises the AAD token-fetch cost across the pool
-   in a way the sync `psycopg` path cannot (the sync engine blocks
-   the event loop on every new connection while the AAD token is
-   minted).
+    - `asyncpg` amortises the AAD token-fetch cost across the pool
+      in a way the sync `psycopg` path cannot (the sync engine blocks
+      the event loop on every new connection while the AAD token is
+      minted).
 
-The question this ADR answers is: *given the async conversion is now
+The question this ADR answers is: _given the async conversion is now
 required, do we rip out the sync layer, run a thread-pool bridge, or
-keep the sync layer as a transitional compat path?*
+keep the sync layer as a transitional compat path?_
 
 ## Decision Drivers
 
@@ -48,11 +48,11 @@ keep the sync layer as a transitional compat path?*
 - **Supply-chain hygiene** — no new mandatory deps on `aiosqlite` or
   `sqlalchemy[asyncio]` for SQLite-only deployments.
 - **Migration runway** — consumers that import `from
-  portal.shared.api.persistence import SqliteStore` outside the tree
+portal.shared.api.persistence import SqliteStore` outside the tree
   (there are none in this repo today, but the public surface hints at
   future re-use) get at least one minor release to migrate.
 - **FastAPI-native concurrency** — no `asyncio.run_in_executor` paper
-  bridges.  The routes must be genuinely async end-to-end.
+  bridges. The routes must be genuinely async end-to-end.
 - **Production-grade error surface** — typed exceptions
   (`StoreBackendError`, `StoreConnectionError`,
   `MigrationDigestMismatchError`, `MigrationPartialFailure`) + tenacity
@@ -70,12 +70,12 @@ keep the sync layer as a transitional compat path?*
    FastAPI `Depends`, and leave the sync layer in place — marked
    deprecated in docstrings — for one minor release.
 2. **Stay sync forever** — keep `SqliteStore` + `PostgresStore` +
-   router code synchronous.  Simpler in the short term; blocks
+   router code synchronous. Simpler in the short term; blocks
    Copilot streaming, creates ever-more awkward mixing with the
    already-async BFF path, and bottlenecks Postgres through the
    synchronous driver.
 3. **Thread-pool the sync store from async routes** — wrap each
-   sync call in `asyncio.to_thread` / `run_in_executor`.  Avoids
+   sync call in `asyncio.to_thread` / `run_in_executor`. Avoids
    adding async drivers but leaks threads under FastAPI concurrency,
    doubles latency on fast reads, and introduces a second class of
    bug (thread-local connection reuse collisions under load).
@@ -92,19 +92,19 @@ Concrete layout:
 
 - `portal/shared/api/persistence_async.py` — `AsyncStoreBackend`
   Protocol plus:
-  - `AsyncSqliteStore` — `aiosqlite`-backed; preserves WAL, PRAGMAs,
-    `BEGIN IMMEDIATE` semantics; `asyncio.Lock` replaces
-    `threading.RLock`.
-  - `AsyncPostgresStore` — `sqlalchemy.ext.asyncio.AsyncEngine` +
-    `asyncpg`; per-URL engine cache; managed-identity token injection
-    via `DefaultAzureCredential.aio`; password-callable bridge so
-    asyncpg picks up rotating tokens without pool restarts.
-  - `build_async_store_backend()` — dispatch on `DATABASE_URL`,
-    fails closed on unknown schemes (mirrors sync factory exactly).
-  - Typed exceptions + tenacity retries (3 attempts, jittered
-    exponential backoff) on transient driver errors.
-  - `close_async_engines()` — lifespan shutdown hook disposes the
-    engine pool + closes the AAD credential.
+    - `AsyncSqliteStore` — `aiosqlite`-backed; preserves WAL, PRAGMAs,
+      `BEGIN IMMEDIATE` semantics; `asyncio.Lock` replaces
+      `threading.RLock`.
+    - `AsyncPostgresStore` — `sqlalchemy.ext.asyncio.AsyncEngine` +
+      `asyncpg`; per-URL engine cache; managed-identity token injection
+      via `DefaultAzureCredential.aio`; password-callable bridge so
+      asyncpg picks up rotating tokens without pool restarts.
+    - `build_async_store_backend()` — dispatch on `DATABASE_URL`,
+      fails closed on unknown schemes (mirrors sync factory exactly).
+    - Typed exceptions + tenacity retries (3 attempts, jittered
+      exponential backoff) on transient driver errors.
+    - `close_async_engines()` — lifespan shutdown hook disposes the
+      engine pool + closes the AAD credential.
 - `portal/shared/api/dependencies.py` — singleton async store
   instances wired into FastAPI via `Depends` getters
   (`get_sources_store`, `get_pipelines_store`, `get_runs_store`,
@@ -112,18 +112,18 @@ Concrete layout:
 - `portal/shared/api/routers/{access,marketplace,pipelines,sources,stats}.py`
   — every route is `async def`; every persistence call is `await`;
   stores resolved via `Annotated[AsyncStoreBackend,
-  Depends(get_*_store)]`.
+Depends(get_*_store)]`.
 - `portal/shared/api/main.py` — lifespan calls async `seed_demo_*`
   coroutines on startup and `close_async_engines()` on shutdown.
 - `scripts/migrate_portal_persistence.py` — standalone CLI that
   walks every portal store (or a `--tables` subset), reads via the
   async SQLite/Postgres store, writes via `INSERT ... ON CONFLICT
-  DO NOTHING`, computes sha256 row digests, and emits a structured
-  report.  Dry-run mode available.  Exit codes document every
+DO NOTHING`, computes sha256 row digests, and emits a structured
+  report. Dry-run mode available. Exit codes document every
   failure class.
 - Sync layer (`persistence.py`, `persistence_postgres.py`,
   `persistence_factory.py`) retained with deprecated-in-docstring
-  markers.  To be removed in the next minor release (**CSA-0046 v3**)
+  markers. To be removed in the next minor release (**CSA-0046 v3**)
   after tenant teams have had one release to migrate.
 
 ## Consequences
@@ -139,20 +139,20 @@ Concrete layout:
 - Positive: explicit typed exceptions make test assertions crisp and
   let operators distinguish "database unreachable" from "row-level
   digest mismatch" in alerting.
-- Negative: dual layer doubles the store surface.  Mitigated by the
+- Negative: dual layer doubles the store surface. Mitigated by the
   deprecation timeline and by having the async and sync stores share
   the same physical table schema (both the SQLite and Postgres
   layouts are unchanged from ADR-0015).
 - Negative: `aiosqlite` + `sqlalchemy[asyncio]` + `asyncpg` now
   carry the full async stack; install size for the `postgres` extra
-  grows by ~4 MB.  Acceptable for production but the sync-SQLite-only
+  grows by ~4 MB. Acceptable for production but the sync-SQLite-only
   dev-loop (`pip install -e .[portal]`) remains slim because the
   async SQLite dep lives under the `postgres` extra too.
 - Negative: aiosqlite opens a background executor thread per
-  connection.  In the FastAPI process this is a non-issue (one
+  connection. In the FastAPI process this is a non-issue (one
   connection per store, reused for the life of the process), but
   tests that spin up fresh stores every test must close them
-  explicitly.  `conftest.py` uses the sync compat layer for that
+  explicitly. `conftest.py` uses the sync compat layer for that
   path to avoid a per-test `asyncio.run`.
 
 ## Pros and Cons of the Options
@@ -177,7 +177,7 @@ Concrete layout:
 - Cons: leaks executor threads under FastAPI concurrency; doubles
   latency for fast reads; breaks the `BEGIN IMMEDIATE` serialisation
   guarantee when the threaded wrapper deadlocks with
-  `_WRITE_LOCK`.  Rejected.
+  `_WRITE_LOCK`. Rejected.
 
 ### Option 4 — Delete sync layer
 
@@ -187,13 +187,13 @@ Concrete layout:
 
 ## Migration + deprecation timeline
 
-| Release | Action |
-|---------|--------|
-| CSA-0046 v2 (this ADR) | Async canonical.  Sync layer retained + deprecated docstrings.  Migration CLI shipped. |
-| CSA-0046 v3 (next minor) | Sync layer removed from `portal.shared.api.persistence` + `persistence_postgres`.  `build_store_backend` removed.  `dependencies.py` becomes the only public store entry-point. |
+| Release                  | Action                                                                                                                                                                        |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CSA-0046 v2 (this ADR)   | Async canonical. Sync layer retained + deprecated docstrings. Migration CLI shipped.                                                                                          |
+| CSA-0046 v3 (next minor) | Sync layer removed from `portal.shared.api.persistence` + `persistence_postgres`. `build_store_backend` removed. `dependencies.py` becomes the only public store entry-point. |
 
 Data migration between SQLite and Postgres is performed with
-`scripts/migrate_portal_persistence.py`.  The script is idempotent
+`scripts/migrate_portal_persistence.py`. The script is idempotent
 (`ON CONFLICT DO NOTHING`) and non-destructive (never writes to the
 source), so rollback is "drop the target tables and re-run" — the
 script documents this in its docstring.
@@ -220,13 +220,13 @@ We will know this decision is right if:
 
 - Decision tree: n/a.
 - Related code:
-  - `portal/shared/api/persistence_async.py`
-  - `portal/shared/api/dependencies.py`
-  - `portal/shared/api/routers/*.py`
-  - `portal/shared/api/main.py`
-  - `scripts/migrate_portal_persistence.py`
-  - `portal/shared/tests/test_async_persistence.py`
-  - `portal/shared/tests/test_migration_cli.py`
+    - `portal/shared/api/persistence_async.py`
+    - `portal/shared/api/dependencies.py`
+    - `portal/shared/api/routers/*.py`
+    - `portal/shared/api/main.py`
+    - `scripts/migrate_portal_persistence.py`
+    - `portal/shared/tests/test_async_persistence.py`
+    - `portal/shared/tests/test_migration_cli.py`
 - Framework controls: NIST 800-53 **AC-3** (access enforcement —
   async route scoping preserved verbatim), **AU-3** (content of audit
   records — audit emissions still run inside the request scope),

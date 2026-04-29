@@ -5,10 +5,10 @@
 > **Applies to:** `examples/iot-streaming/deploy/bicep/iot-hub.bicep`
 
 !!! important
-    **This is a breaking change.** Devices using SAS-key authentication (symmetric
-    keys, iothubowner, or any SAS connection string) will stop authenticating after
-    this template is redeployed. All device fleets must complete the migration
-    before the redeploy window.
+**This is a breaking change.** Devices using SAS-key authentication (symmetric
+keys, iothubowner, or any SAS connection string) will stop authenticating after
+this template is redeployed. All device fleets must complete the migration
+before the redeploy window.
 
 ---
 
@@ -41,21 +41,21 @@ The approved posture per CSA-0025 / AQ-0014 is **Entra-only**:
 
 ## What Changed in Bicep
 
-| Before (SAS) | After (CSA-0025) |
-|---|---|
-| `disableLocalAuth: false` on IoT Hub | `disableLocalAuth: true` |
-| No `authorizationPolicies` field (defaults to iothubowner + friends) | `authorizationPolicies: []` (explicitly empty) |
-| No `identity` on IoT Hub | `identity: { type: 'SystemAssigned' }` |
-| Routing endpoint `connectionString: sendRule.listKeys().primaryConnectionString` | Routing endpoint `authenticationType: 'identityBased'` + `endpointUri` + `entityPath` |
-| No `identity` on DPS | `identity: { type: 'SystemAssigned' }` |
-| DPS `iotHubs: [ { connectionString: 'HostName=...;SharedAccessKey=${iotHub.listKeys()...}' } ]` | DPS `iotHubs: []` (link established post-deploy via CLI) |
-| Key Vault secret `iothub-owner-primary-key` populated from `iotHub.listKeys()` | Secret REMOVED (no SAS key to materialize) |
+| Before (SAS)                                                                                    | After (CSA-0025)                                                                      |
+| ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `disableLocalAuth: false` on IoT Hub                                                            | `disableLocalAuth: true`                                                              |
+| No `authorizationPolicies` field (defaults to iothubowner + friends)                            | `authorizationPolicies: []` (explicitly empty)                                        |
+| No `identity` on IoT Hub                                                                        | `identity: { type: 'SystemAssigned' }`                                                |
+| Routing endpoint `connectionString: sendRule.listKeys().primaryConnectionString`                | Routing endpoint `authenticationType: 'identityBased'` + `endpointUri` + `entityPath` |
+| No `identity` on DPS                                                                            | `identity: { type: 'SystemAssigned' }`                                                |
+| DPS `iotHubs: [ { connectionString: 'HostName=...;SharedAccessKey=${iotHub.listKeys()...}' } ]` | DPS `iotHubs: []` (link established post-deploy via CLI)                              |
+| Key Vault secret `iothub-owner-primary-key` populated from `iotHub.listKeys()`                  | Secret REMOVED (no SAS key to materialize)                                            |
 
 Outputs:
 
-| Before | After |
-|---|---|
-| `iotHubHostName` | `iotHubHostName`, **new:** `iotHubResourceId`, `iotHubPrincipalId` |
+| Before                  | After                                                                              |
+| ----------------------- | ---------------------------------------------------------------------------------- |
+| `iotHubHostName`        | `iotHubHostName`, **new:** `iotHubResourceId`, `iotHubPrincipalId`                 |
 | `dpsName`, `dpsIdScope` | `dpsName`, `dpsResourceId`, `dpsIdScope`, **new:** `dpsEndpoint`, `dpsPrincipalId` |
 
 Two role assignments were added to the template:
@@ -203,18 +203,18 @@ az iot hub show -g "$RG" -n "$IOT_HUB" \
 ## Rollback (Not Recommended — Exits FedRAMP Path)
 
 !!! warning
-    Rolling back to SAS takes the deployment off the FedRAMP High / IL5
-    compliance path. Do not perform this in regulated or government
-    environments. Document the exception per your SSP.
+Rolling back to SAS takes the deployment off the FedRAMP High / IL5
+compliance path. Do not perform this in regulated or government
+environments. Document the exception per your SSP.
 
 If a workshop or legacy-device emergency absolutely requires SAS:
 
 1. Edit `examples/iot-streaming/deploy/bicep/iot-hub.bicep`:
-   - Flip `disableLocalAuth: true` → `false` on the IoT Hub.
-   - Restore `authorizationPolicies` (remove the `[]`) so default policies
-     are recreated.
-   - Re-add a `connectionString` entry to DPS `iotHubs` (use a
-     `@secure()` parameter — never re-add `listKeys()` inline).
+    - Flip `disableLocalAuth: true` → `false` on the IoT Hub.
+    - Restore `authorizationPolicies` (remove the `[]`) so default policies
+      are recreated.
+    - Re-add a `connectionString` entry to DPS `iotHubs` (use a
+      `@secure()` parameter — never re-add `listKeys()` inline).
 2. Redeploy. Existing devices will NOT automatically re-enroll with SAS —
    each device must be re-provisioned via DPS against the re-enabled hub.
 3. File a compliance exception referencing CSA-0025. Plan a re-migration
@@ -247,7 +247,7 @@ After deploying the updated Bicep:
 - **ADR-0006:** Purview-over-Atlas (identity/governance context)
 - **ADR-0010:** Fabric strategic target (identity-first platform strategy)
 - Azure docs:
-  - [IoT Hub: Authenticate using Entra ID](https://learn.microsoft.com/azure/iot-hub/authenticate-authorize-azure-ad)
-  - [Manage IoT Hub with managed identities](https://learn.microsoft.com/azure/iot-hub/iot-hub-managed-identity)
-  - [DPS: Disable local authentication paths](https://learn.microsoft.com/azure/iot-dps/concepts-control-access-dps-azure-ad)
-  - [IoT Hub routing: identity-based endpoints](https://learn.microsoft.com/azure/iot-hub/iot-hub-managed-identity#egress-connectivity-from-iot-hub-to-other-azure-resources)
+    - [IoT Hub: Authenticate using Entra ID](https://learn.microsoft.com/azure/iot-hub/authenticate-authorize-azure-ad)
+    - [Manage IoT Hub with managed identities](https://learn.microsoft.com/azure/iot-hub/iot-hub-managed-identity)
+    - [DPS: Disable local authentication paths](https://learn.microsoft.com/azure/iot-dps/concepts-control-access-dps-azure-ad)
+    - [IoT Hub routing: identity-based endpoints](https://learn.microsoft.com/azure/iot-hub/iot-hub-managed-identity#egress-connectivity-from-iot-hub-to-other-azure-resources)

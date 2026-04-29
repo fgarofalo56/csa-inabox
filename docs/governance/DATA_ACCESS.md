@@ -137,48 +137,50 @@ User requests access (Purview Studio or custom portal)
 
 ```json
 {
-  "definition": {
-    "triggers": {
-      "access_request": {
-        "type": "Request",
-        "inputs": {
-          "schema": {
-            "properties": {
-              "requester_email": { "type": "string" },
-              "asset_qualified_name": { "type": "string" },
-              "justification": { "type": "string" },
-              "classification_level": { "type": "string" }
-            }
-          }
-        }
-      }
-    },
-    "actions": {
-      "check_classification": {
-        "type": "Switch",
-        "expression": "@triggerBody()?['classification_level']",
-        "cases": {
-          "restricted": {
-            "actions": {
-              "send_approval": {
-                "type": "ApiConnection",
+    "definition": {
+        "triggers": {
+            "access_request": {
+                "type": "Request",
                 "inputs": {
-                  "host": { "connection": { "name": "office365" } },
-                  "method": "post",
-                  "path": "/approvalmail",
-                  "body": {
-                    "to": "data-governance-board@contoso.com",
-                    "subject": "Access Request: Restricted Data",
-                    "body": "Requester: @{triggerBody()?['requester_email']}\nAsset: @{triggerBody()?['asset_qualified_name']}\nJustification: @{triggerBody()?['justification']}"
-                  }
+                    "schema": {
+                        "properties": {
+                            "requester_email": { "type": "string" },
+                            "asset_qualified_name": { "type": "string" },
+                            "justification": { "type": "string" },
+                            "classification_level": { "type": "string" }
+                        }
+                    }
                 }
-              }
             }
-          }
+        },
+        "actions": {
+            "check_classification": {
+                "type": "Switch",
+                "expression": "@triggerBody()?['classification_level']",
+                "cases": {
+                    "restricted": {
+                        "actions": {
+                            "send_approval": {
+                                "type": "ApiConnection",
+                                "inputs": {
+                                    "host": {
+                                        "connection": { "name": "office365" }
+                                    },
+                                    "method": "post",
+                                    "path": "/approvalmail",
+                                    "body": {
+                                        "to": "data-governance-board@contoso.com",
+                                        "subject": "Access Request: Restricted Data",
+                                        "body": "Requester: @{triggerBody()?['requester_email']}\nAsset: @{triggerBody()?['asset_qualified_name']}\nJustification: @{triggerBody()?['justification']}"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
-      }
     }
-  }
 }
 ```
 
@@ -191,13 +193,13 @@ inherit to children.
 
 ### Collection RBAC Roles
 
-| Role | Permissions | Typical Assignment |
-|---|---|---|
-| Collection Admin | Full control on collection and children | Platform team |
-| Data Source Admin | Register/scan sources in collection | Data engineers |
-| Data Curator | Edit metadata, glossary terms, classifications | Data stewards |
-| Data Reader | Browse and search assets | All data consumers |
-| Policy Author | Create and manage access policies | Governance team |
+| Role              | Permissions                                    | Typical Assignment |
+| ----------------- | ---------------------------------------------- | ------------------ |
+| Collection Admin  | Full control on collection and children        | Platform team      |
+| Data Source Admin | Register/scan sources in collection            | Data engineers     |
+| Data Curator      | Edit metadata, glossary terms, classifications | Data stewards      |
+| Data Reader       | Browse and search assets                       | All data consumers |
+| Policy Author     | Create and manage access policies              | Governance team    |
 
 ### Assign Roles via REST API
 
@@ -264,19 +266,19 @@ owner: finance-team@contoso.com
 classification: Confidential
 
 access:
-  read:
-    - group: sg-finance-analysts
-      purpose: "Financial reporting and CLV analysis"
-    - group: sg-marketing-analytics
-      purpose: "Customer segmentation campaigns"
-      expires: "2025-06-30"
-  write:
-    - group: sg-data-engineering
-      purpose: "Pipeline output"
+    read:
+        - group: sg-finance-analysts
+          purpose: "Financial reporting and CLV analysis"
+        - group: sg-marketing-analytics
+          purpose: "Customer segmentation campaigns"
+          expires: "2025-06-30"
+    write:
+        - group: sg-data-engineering
+          purpose: "Pipeline output"
 
 sla:
-  freshness_hours: 4
-  quality_score_minimum: 0.90
+    freshness_hours: 4
+    quality_score_minimum: 0.90
 ```
 
 ### Sync Contract to Purview Policy

@@ -30,13 +30,13 @@ az account show --query "{Name:name, ID:id}" --output table
 
 ArcGIS Enterprise requires substantial compute. Estimated Azure costs:
 
-| Resource | SKU | Monthly Cost (Est.) |
-|----------|-----|---------------------|
-| ArcGIS VM | Standard_D8s_v5 (8 vCPU, 32 GB) | ~$280/month |
-| OS Disk | 256 GB Premium SSD | ~$38/month |
-| Data Disk | 512 GB Premium SSD | ~$73/month |
-| Public IP | Static | ~$4/month |
-| **Total** | | **~$395/month** |
+| Resource  | SKU                             | Monthly Cost (Est.) |
+| --------- | ------------------------------- | ------------------- |
+| ArcGIS VM | Standard_D8s_v5 (8 vCPU, 32 GB) | ~$280/month         |
+| OS Disk   | 256 GB Premium SSD              | ~$38/month          |
+| Data Disk | 512 GB Premium SSD              | ~$73/month          |
+| Public IP | Static                          | ~$4/month           |
+| **Total** |                                 | **~$395/month**     |
 
 > **Cost-Saving Tip:** Deallocate the VM when not in use with `az vm deallocate`. You only pay for disk storage while deallocated (~$111/month).
 
@@ -133,14 +133,16 @@ cd ../../../..
 
 ```json
 {
-  "properties": {
-    "provisioningState": "Succeeded",
-    "outputs": {
-      "vmName": { "value": "csa-vm-arcgis-dev" },
-      "publicIpFqdn": { "value": "csa-arcgis-dev.eastus.cloudapp.azure.com" },
-      "privateIpAddress": { "value": "10.1.2.10" }
+    "properties": {
+        "provisioningState": "Succeeded",
+        "outputs": {
+            "vmName": { "value": "csa-vm-arcgis-dev" },
+            "publicIpFqdn": {
+                "value": "csa-arcgis-dev.eastus.cloudapp.azure.com"
+            },
+            "privateIpAddress": { "value": "10.1.2.10" }
+        }
     }
-  }
 }
 ```
 
@@ -148,11 +150,11 @@ cd ../../../..
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `QuotaExceeded` for D8s_v5 | Not enough vCPU quota | Request quota increase or use `Standard_D4s_v5` (4 vCPU, minimum) |
-| Deployment fails with disk error | Premium SSD not available | Switch to `StandardSSD_LRS` for dev (performance impact) |
-| NSG blocks RDP | Restrictive corporate policies | Add your IP to NSG rules or use Azure Bastion |
+| Symptom                          | Cause                          | Fix                                                               |
+| -------------------------------- | ------------------------------ | ----------------------------------------------------------------- |
+| `QuotaExceeded` for D8s_v5       | Not enough vCPU quota          | Request quota increase or use `Standard_D4s_v5` (4 vCPU, minimum) |
+| Deployment fails with disk error | Premium SSD not available      | Switch to `StandardSSD_LRS` for dev (performance impact)          |
+| NSG blocks RDP                   | Restrictive corporate policies | Add your IP to NSG rules or use Azure Bastion                     |
 
 ---
 
@@ -203,10 +205,10 @@ Install-WindowsFeature Web-Server, Web-Mgmt-Tools, Web-Scripting-Tools,
 1. Log in to [my.esri.com](https://my.esri.com/) from the VM's browser
 2. Navigate to **Downloads** → **ArcGIS Enterprise**
 3. Download the following components to `D:\ArcGIS\Installer\`:
-   - ArcGIS Portal
-   - ArcGIS Server
-   - ArcGIS Data Store
-   - ArcGIS Web Adaptor (IIS)
+    - ArcGIS Portal
+    - ArcGIS Server
+    - ArcGIS Data Store
+    - ArcGIS Web Adaptor (IIS)
 
 Follow the Esri installation documentation:
 
@@ -234,12 +236,12 @@ https://localhost/server/admin/    → ArcGIS Server admin page
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| Installer fails with .NET error | Missing .NET Framework | Install .NET Framework 4.8 from Windows Features |
-| Portal won't start | Insufficient memory | Ensure VM has at least 16 GB RAM; D8s_v5 recommended |
-| Web Adaptor config fails | IIS not properly configured | Re-run `Install-WindowsFeature` commands from Step 2b |
-| License authorization fails | Wrong license file or expired | Contact Esri support or verify on my.esri.com |
+| Symptom                         | Cause                         | Fix                                                   |
+| ------------------------------- | ----------------------------- | ----------------------------------------------------- |
+| Installer fails with .NET error | Missing .NET Framework        | Install .NET Framework 4.8 from Windows Features      |
+| Portal won't start              | Insufficient memory           | Ensure VM has at least 16 GB RAM; D8s_v5 recommended  |
+| Web Adaptor config fails        | IIS not properly configured   | Re-run `Install-WindowsFeature` commands from Step 2b |
+| License authorization fails     | Wrong license file or expired | Contact Esri support or verify on my.esri.com         |
 
 ---
 
@@ -259,9 +261,9 @@ Open `https://<ARCGIS_IP>/portal/home/` in a browser and create the initial admi
 1. In Portal, go to **Organization** → **Settings** → **Servers**
 2. Click **Add Server**
 3. Enter:
-   - **Services URL:** `https://csa-arcgis-dev.eastus.cloudapp.azure.com/server`
-   - **Admin URL:** `https://csa-arcgis-dev.eastus.cloudapp.azure.com:6443/arcgis`
-   - **Username/Password:** ArcGIS Server admin credentials
+    - **Services URL:** `https://csa-arcgis-dev.eastus.cloudapp.azure.com/server`
+    - **Admin URL:** `https://csa-arcgis-dev.eastus.cloudapp.azure.com:6443/arcgis`
+    - **Username/Password:** ArcGIS Server admin credentials
 4. Set as **Hosting Server**
 
 ### 3c. Configure SSL Certificate (Recommended)
@@ -278,6 +280,7 @@ For production, replace the self-signed certificate:
 <summary><strong>Expected Output</strong></summary>
 
 After federation, the Portal home page shows:
+
 - **Organization:** Your org name
 - **Hosted Server:** Connected (green indicator)
 - **Data Store:** Relational + Tile Cache configured
@@ -304,14 +307,14 @@ Connect ArcGIS Server to the PostgreSQL/PostGIS database from Tutorial 03.
 2. Go to **Site** → **Data Stores**
 3. Click **Register Database**
 4. Configure:
-   - **Name:** `csa_geodb`
-   - **Type:** PostgreSQL
-   - **Connection Properties:**
-     - **Server:** `csa-pg-geo-dev.postgres.database.azure.com`
-     - **Port:** `5432`
-     - **Database:** `geodb`
-     - **Authentication:** Database (use csaadmin credentials)
-     - **SSL:** Required
+    - **Name:** `csa_geodb`
+    - **Type:** PostgreSQL
+    - **Connection Properties:**
+        - **Server:** `csa-pg-geo-dev.postgres.database.azure.com`
+        - **Port:** `5432`
+        - **Database:** `geodb`
+        - **Authentication:** Database (use csaadmin credentials)
+        - **SSL:** Required
 5. Click **Register**
 
 ### 4c. Enable Enterprise Geodatabase
@@ -340,11 +343,11 @@ Data Store registration: csa_geodb - Validated (green checkmark in Server Manage
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| Registration fails with connection error | PostgreSQL firewall blocking VM | Add the VM's private IP to PostgreSQL firewall rules |
-| `EnableEnterpriseGeodatabase` fails | Missing ArcGIS license level | Requires Standard or Advanced license with Geodatabase extension |
-| SSL error connecting to PostgreSQL | Certificate trust issue | Download Azure PostgreSQL CA cert and add to VM trust store |
+| Symptom                                  | Cause                           | Fix                                                              |
+| ---------------------------------------- | ------------------------------- | ---------------------------------------------------------------- |
+| Registration fails with connection error | PostgreSQL firewall blocking VM | Add the VM's private IP to PostgreSQL firewall rules             |
+| `EnableEnterpriseGeodatabase` fails      | Missing ArcGIS license level    | Requires Standard or Advanced license with Geodatabase extension |
+| SSL error connecting to PostgreSQL       | Certificate trust issue         | Download Azure PostgreSQL CA cert and add to VM trust store      |
 
 ---
 
@@ -360,9 +363,9 @@ Publish your CSA Gold-layer data as ArcGIS feature services.
 4. Add `geo.county_earthquake_summary` to a map
 5. Right-click the layer → **Sharing** → **Share As Web Layer**
 6. Configure:
-   - **Name:** `County Earthquake Summary`
-   - **Layer Type:** Feature
-   - **Server:** Your federated hosting server
+    - **Name:** `County Earthquake Summary`
+    - **Layer Type:** Feature
+    - **Server:** Your federated hosting server
 7. Click **Publish**
 
 ### 5b. Publish via REST API
@@ -394,13 +397,14 @@ curl -X POST \
 
 ```json
 {
-  "success": true,
-  "id": "abc123def456",
-  "folder": null
+    "success": true,
+    "id": "abc123def456",
+    "folder": null
 }
 ```
 
 Feature service available at:
+
 ```
 https://csa-arcgis-dev.eastus.cloudapp.azure.com/server/rest/services/CSA/EarthquakeAnalysis/FeatureServer/0
 ```
@@ -417,19 +421,19 @@ https://csa-arcgis-dev.eastus.cloudapp.azure.com/server/rest/services/CSA/Earthq
 2. Click **Add** → **Add Layer from URL**
 3. Paste your Feature Service URL
 4. Style the layer:
-   - **Drawing Style:** Counts and Amounts (Color)
-   - **Field:** `earthquake_count`
-   - **Color Ramp:** Yellow → Red
+    - **Drawing Style:** Counts and Amounts (Color)
+    - **Field:** `earthquake_count`
+    - **Color Ramp:** Yellow → Red
 5. Save the map as `CSA Earthquake Risk Map`
 
 ### 6b. Create a Dashboard
 
 1. In Portal, go to **Content** → **Create** → **Dashboard**
 2. Add widgets:
-   - **Map widget:** Link to `CSA Earthquake Risk Map`
-   - **Indicator:** Total earthquake count
-   - **Serial Chart:** Earthquakes by state
-   - **List:** Top 10 highest-risk counties
+    - **Map widget:** Link to `CSA Earthquake Risk Map`
+    - **Indicator:** Total earthquake count
+    - **Serial Chart:** Earthquakes by state
+    - **List:** Top 10 highest-risk counties
 3. Configure actions: Clicking a county on the map filters all widgets
 4. Save and share the dashboard
 
@@ -437,6 +441,7 @@ https://csa-arcgis-dev.eastus.cloudapp.azure.com/server/rest/services/CSA/Earthq
 <summary><strong>Expected Output</strong></summary>
 
 The dashboard displays:
+
 - Interactive map with county earthquake choropleth
 - KPI indicator showing total earthquake count
 - Bar chart of top states by earthquake frequency
@@ -457,9 +462,9 @@ In ArcGIS Server Manager:
 1. Go to **Site** → **Data Stores** → **Register Cloud Store**
 2. Select **Microsoft Azure Storage**
 3. Configure:
-   - **Name:** `csa_gold_layer`
-   - **Connection String:** Use storage account key or SAS token
-   - **Container:** `gold`
+    - **Name:** `csa_gold_layer`
+    - **Connection String:** Use storage account key or SAS token
+    - **Container:** `gold`
 
 ### 7b. Create a Scheduled Refresh
 

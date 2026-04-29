@@ -23,14 +23,14 @@ Phase 2 remediation.
 
 ## Stats (approximate — authoritative source is the YAML)
 
-| Status | Count |
-|---|---|
-| IMPLEMENTED | ~26 |
-| PARTIALLY_IMPLEMENTED | ~29 |
-| INHERITED | ~38 |
-| NOT_APPLICABLE | ~8 |
-| PLANNED | ~16 |
-| **Total** | **~117 controls** |
+| Status                | Count             |
+| --------------------- | ----------------- |
+| IMPLEMENTED           | ~26               |
+| PARTIALLY_IMPLEMENTED | ~29               |
+| INHERITED             | ~38               |
+| NOT_APPLICABLE        | ~8                |
+| PLANNED               | ~16               |
+| **Total**             | **~117 controls** |
 
 Run the validator for live counts:
 

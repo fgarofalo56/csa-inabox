@@ -4,14 +4,14 @@
 
 ## Decide first: target architecture
 
-| Source | Best Azure target |
-|--------|-------------------|
+| Source                                          | Best Azure target                                                                                        |
+| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
 | Informatica PowerCenter (on-prem ETL workflows) | **ADF** (orchestration) + **dbt** (transformations) + **Mapping Data Flows** (visual logic for analysts) |
-| IICS / Informatica Intelligent Cloud Services | **Fabric Data Pipelines** + **dbt-fabric** OR **ADF + dbt** |
-| Informatica Data Quality (IDQ) | **Microsoft Purview** + **Great Expectations** + **dbt tests** |
-| Informatica MDM | **Microsoft Purview** (lineage + classification) + **Azure SQL or Cosmos** (mastering) |
-| Informatica Enterprise Data Catalog | **Microsoft Purview** ([ADR 0006](../adr/0006-purview-over-atlas.md)) |
-| Informatica B2B / EDI | **Logic Apps** + **API Management** + **Azure Data Factory** for orchestration |
+| IICS / Informatica Intelligent Cloud Services   | **Fabric Data Pipelines** + **dbt-fabric** OR **ADF + dbt**                                              |
+| Informatica Data Quality (IDQ)                  | **Microsoft Purview** + **Great Expectations** + **dbt tests**                                           |
+| Informatica MDM                                 | **Microsoft Purview** (lineage + classification) + **Azure SQL or Cosmos** (mastering)                   |
+| Informatica Enterprise Data Catalog             | **Microsoft Purview** ([ADR 0006](../adr/0006-purview-over-atlas.md))                                    |
+| Informatica B2B / EDI                           | **Logic Apps** + **API Management** + **Azure Data Factory** for orchestration                           |
 
 **Key insight:** The modern pattern is **code-first (dbt) for transformations**, **declarative orchestration (ADF/Fabric Data Pipelines)** for movement, and **Purview** for catalog. Informatica's "all in one tool" model is replaced by **specialized best-in-class** services.
 
@@ -32,12 +32,12 @@ For each Informatica system:
 
 ### Migration tier
 
-| Tier | Description | Action |
-|------|-------------|--------|
-| **A** Direct re-implement | Simple SQL transformations | Convert to dbt models |
-| **B** Refactor | Complex mappings with multiple transformations | Decompose into multiple dbt models + ADF pipeline |
-| **C** Re-architect | DQ rules, MDM, B2B | Replace with Purview + GE + APIM |
-| **D** Decommission | Stale workflows no longer referenced | Don't migrate; archive lineage to Purview and delete |
+| Tier                      | Description                                    | Action                                               |
+| ------------------------- | ---------------------------------------------- | ---------------------------------------------------- |
+| **A** Direct re-implement | Simple SQL transformations                     | Convert to dbt models                                |
+| **B** Refactor            | Complex mappings with multiple transformations | Decompose into multiple dbt models + ADF pipeline    |
+| **C** Re-architect        | DQ rules, MDM, B2B                             | Replace with Purview + GE + APIM                     |
+| **D** Decommission        | Stale workflows no longer referenced           | Don't migrate; archive lineage to Purview and delete |
 
 Plan for **20-30% of mappings to be Tier D** — Informatica estates accumulate legacy workflows that consumers stopped using.
 
@@ -77,17 +77,17 @@ Application connection           Linked service
 
 ### Connection mapping
 
-| Informatica connection | ADF Linked Service |
-|------------------------|--------------------|
-| Oracle | Azure-SSIS Oracle, or Self-Hosted IR + ODBC |
-| SQL Server | Built-in |
-| DB2 | Self-Hosted IR + ODBC |
-| Teradata | Built-in (limited) or Self-Hosted IR + ODBC |
-| SAP | Built-in SAP CDC, SAP Table, SAP HANA, etc. |
-| Salesforce | Built-in |
-| Flat files (FTP/SFTP) | Built-in FTP/SFTP |
-| Cloud storage (S3/GCS) | Built-in |
-| Web services | Web activity / REST connector |
+| Informatica connection | ADF Linked Service                          |
+| ---------------------- | ------------------------------------------- |
+| Oracle                 | Azure-SSIS Oracle, or Self-Hosted IR + ODBC |
+| SQL Server             | Built-in                                    |
+| DB2                    | Self-Hosted IR + ODBC                       |
+| Teradata               | Built-in (limited) or Self-Hosted IR + ODBC |
+| SAP                    | Built-in SAP CDC, SAP Table, SAP HANA, etc. |
+| Salesforce             | Built-in                                    |
+| Flat files (FTP/SFTP)  | Built-in FTP/SFTP                           |
+| Cloud storage (S3/GCS) | Built-in                                    |
+| Web services           | Web activity / REST connector               |
 
 ## Phase 3 — Migration (12-36 weeks)
 
@@ -161,19 +161,20 @@ For each wave:
 
 ## Common pitfalls
 
-| Pitfall | Mitigation |
-|---------|------------|
-| **Trying to recreate Informatica's visual UX** | dbt + ADF UI is different (code-first); don't fight it. Train developers |
-| **Using ADF Mapping Data Flows for everything** | MDF is OK for analyst-friendly visual logic; use dbt for production transformations (better tested, version-controlled) |
-| **Leaving DQ rules unimplemented** | If IDQ caught a problem in source data, GE/dbt tests must catch the same. Inventory rules first |
-| **Underestimating MDM replacement** | MDM is 30-50% of project cost on Informatica MDM-heavy estates |
-| **Not training PowerCenter devs in modern stack** | Mid-career PowerCenter devs can become great dbt/Spark engineers in 3-6 months with investment |
-| **Sequencing by mapping count** | Sequence by business domain — keeps cutovers atomic |
-| **Forgetting B2B/EDI** | Often a separate platform; plan Logic Apps + APIM replacement explicitly |
+| Pitfall                                           | Mitigation                                                                                                              |
+| ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| **Trying to recreate Informatica's visual UX**    | dbt + ADF UI is different (code-first); don't fight it. Train developers                                                |
+| **Using ADF Mapping Data Flows for everything**   | MDF is OK for analyst-friendly visual logic; use dbt for production transformations (better tested, version-controlled) |
+| **Leaving DQ rules unimplemented**                | If IDQ caught a problem in source data, GE/dbt tests must catch the same. Inventory rules first                         |
+| **Underestimating MDM replacement**               | MDM is 30-50% of project cost on Informatica MDM-heavy estates                                                          |
+| **Not training PowerCenter devs in modern stack** | Mid-career PowerCenter devs can become great dbt/Spark engineers in 3-6 months with investment                          |
+| **Sequencing by mapping count**                   | Sequence by business domain — keeps cutovers atomic                                                                     |
+| **Forgetting B2B/EDI**                            | Often a separate platform; plan Logic Apps + APIM replacement explicitly                                                |
 
 ## Trade-offs
 
 ✅ **Why modernize off Informatica**
+
 - License cost is the biggest line item in many ETL budgets
 - Modern stack (dbt + git + ADF) is **code-first, version-controlled, testable** — vs Informatica's visual XML
 - Better cloud-native integration (no Self-Hosted IR for cloud sources)
@@ -181,6 +182,7 @@ For each wave:
 - AI / GenAI integration with the same data assets
 
 ⚠️ **Why be patient**
+
 - 12-36 month timeline for typical estate
 - PowerCenter developers need retraining
 - Some workflows (complex MDM, B2B/EDI) need real re-engineering

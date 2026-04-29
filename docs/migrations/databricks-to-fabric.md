@@ -46,24 +46,24 @@ For each existing Databricks workspace, catalog:
 
 Output: a spreadsheet (one row per workload) with **migration tier**:
 
-| Tier | Description | Action |
-|------|-------------|--------|
-| **A** Migrate now | Pure BI, dbt-native, Direct Lake would help | Move in Wave 1 |
-| **B** Migrate later | Mixed BI/ML, schedule allows | Move in Wave 2-3 |
-| **C** Hybrid | ML stays DBR, BI surfaces in Fabric via OneLake shortcut | Wave 1 (shortcut only) |
-| **D** Keep on Databricks | Heavy ML / multi-cloud / Photon-dependent | No move; possibly add OneLake shortcut for downstream BI |
+| Tier                     | Description                                              | Action                                                   |
+| ------------------------ | -------------------------------------------------------- | -------------------------------------------------------- |
+| **A** Migrate now        | Pure BI, dbt-native, Direct Lake would help              | Move in Wave 1                                           |
+| **B** Migrate later      | Mixed BI/ML, schedule allows                             | Move in Wave 2-3                                         |
+| **C** Hybrid             | ML stays DBR, BI surfaces in Fabric via OneLake shortcut | Wave 1 (shortcut only)                                   |
+| **D** Keep on Databricks | Heavy ML / multi-cloud / Photon-dependent                | No move; possibly add OneLake shortcut for downstream BI |
 
 ### Cost modeling
 
 Map current spend to Fabric capacity SKU. Rule of thumb:
 
-| Current DBR spend | Likely Fabric capacity |
-|-------------------|------------------------|
-| <$1,000/mo | F2 (~$260/mo) — but evaluate if F-SKU "always on" makes sense |
-| $1,000-5,000/mo | F8-F16 |
-| $5,000-20,000/mo | F32-F64 |
-| $20,000-100,000/mo | F128-F512 |
-| >$100,000/mo | F1024-F2048 + reserved capacity discount |
+| Current DBR spend  | Likely Fabric capacity                                        |
+| ------------------ | ------------------------------------------------------------- |
+| <$1,000/mo         | F2 (~$260/mo) — but evaluate if F-SKU "always on" makes sense |
+| $1,000-5,000/mo    | F8-F16                                                        |
+| $5,000-20,000/mo   | F32-F64                                                       |
+| $20,000-100,000/mo | F128-F512                                                     |
+| >$100,000/mo       | F1024-F2048 + reserved capacity discount                      |
 
 Fabric's **smoothing** (24-hour averaging of capacity usage) often makes a smaller SKU work than naive sizing suggests. Pilot with F-SKU one tier smaller than your initial estimate.
 
@@ -71,13 +71,13 @@ Fabric's **smoothing** (24-hour averaging of capacity usage) often makes a small
 
 ### Target architecture decisions
 
-| Question | Default answer |
-|----------|----------------|
-| OneLake or shortcut to existing ADLS? | **Shortcut** — keeps Delta files in place, avoids data movement, allows Databricks + Fabric to share storage |
-| Lakehouse or Warehouse? | **Lakehouse** for most cases; Warehouse only if you need T-SQL DW-style features (proc, identity, etc.) |
-| Notebooks (PySpark) → Fabric notebooks or dbt? | **dbt** for transformations, **Fabric notebooks** for ad-hoc + ML. Avoid migrating notebook spaghetti as-is |
-| Unity Catalog → Fabric workspace RBAC + Purview | Fabric workspace roles + Purview classifications. Unity Catalog has **no direct equivalent**; document the mapping carefully |
-| Power BI semantic models → Direct Lake or Import? | **Direct Lake** for any new semantic model >100MB; **Import** stays for existing models with complex DAX or aggregations |
+| Question                                          | Default answer                                                                                                               |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| OneLake or shortcut to existing ADLS?             | **Shortcut** — keeps Delta files in place, avoids data movement, allows Databricks + Fabric to share storage                 |
+| Lakehouse or Warehouse?                           | **Lakehouse** for most cases; Warehouse only if you need T-SQL DW-style features (proc, identity, etc.)                      |
+| Notebooks (PySpark) → Fabric notebooks or dbt?    | **dbt** for transformations, **Fabric notebooks** for ad-hoc + ML. Avoid migrating notebook spaghetti as-is                  |
+| Unity Catalog → Fabric workspace RBAC + Purview   | Fabric workspace roles + Purview classifications. Unity Catalog has **no direct equivalent**; document the mapping carefully |
+| Power BI semantic models → Direct Lake or Import? | **Direct Lake** for any new semantic model >100MB; **Import** stays for existing models with complex DAX or aggregations     |
 
 ### OneLake shortcut pattern (keeps DBR running)
 
@@ -110,11 +110,13 @@ This wave does **not** touch Databricks notebooks, jobs, or compute. It adds a p
 ### Wave 2 — Migrate transformations to dbt-fabric (or keep dbt-databricks)
 
 If you're already on dbt:
+
 - Add the `dbt-fabric` adapter
 - Most models transfer with **minor SQL dialect adjustments** (T-SQL flavor for Fabric Warehouse; Spark SQL flavor for Fabric Lakehouse Spark)
 - Run dbt against both targets in parallel; reconcile output
 
 If you have notebook-heavy transformations:
+
 - **Don't** lift-and-shift notebooks to Fabric — convert to dbt models or Fabric SQL pipelines
 - Notebook spaghetti is the source of much DBR cost; Fabric isn't going to magically fix that
 
@@ -147,25 +149,27 @@ For each workload migrated:
 
 ## Common pitfalls
 
-| Pitfall | Mitigation |
-|---------|------------|
-| **Trying to forklift notebooks** | Convert to dbt + Fabric SQL pipelines; don't migrate notebook spaghetti |
-| **Underestimating Unity Catalog migration** | UC has no direct Fabric equivalent; plan workspace role + Purview classification mapping early |
-| **Sizing F-capacity by current DBR DBU spend** | Smoothing changes the math; pilot with smaller capacity first |
-| **Migrating ML training to Fabric Spark** | Fabric Spark is forked-OSS, not Photon. Heavy ML training stays on Databricks for now |
+| Pitfall                                        | Mitigation                                                                                                    |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| **Trying to forklift notebooks**               | Convert to dbt + Fabric SQL pipelines; don't migrate notebook spaghetti                                       |
+| **Underestimating Unity Catalog migration**    | UC has no direct Fabric equivalent; plan workspace role + Purview classification mapping early                |
+| **Sizing F-capacity by current DBR DBU spend** | Smoothing changes the math; pilot with smaller capacity first                                                 |
+| **Migrating ML training to Fabric Spark**      | Fabric Spark is forked-OSS, not Photon. Heavy ML training stays on Databricks for now                         |
 | **Cutting over Power BI without parallel run** | Direct Lake behavior differs from Import in subtle ways (no aggregations table fallback). Always parallel-run |
-| **Ignoring Photon dependency** | Photon-dependent queries can be 5-10x slower without it; benchmark before assuming Fabric Spark is equivalent |
-| **Forgetting Gov customers** | Fabric is **pre-GA in Azure Government**. Hold those workloads on Databricks/Synapse until Gov GA |
+| **Ignoring Photon dependency**                 | Photon-dependent queries can be 5-10x slower without it; benchmark before assuming Fabric Spark is equivalent |
+| **Forgetting Gov customers**                   | Fabric is **pre-GA in Azure Government**. Hold those workloads on Databricks/Synapse until Gov GA             |
 
 ## Trade-offs
 
 ✅ **Why migrate**
+
 - Direct Lake is genuinely better than DBR + Power BI Import for semantic models
 - Capacity-based pricing is predictable; smoothing helps spiky workloads
 - One vendor for BI + lakehouse + RTI + Power BI = simpler ops
 - OneLake unifies storage even before you migrate transformations
 
 ⚠️ **Why hybrid (don't go all-in)**
+
 - Photon ML / Spark ML / GenAI training is best on Databricks
 - Multi-cloud requires Databricks
 - Mature MLflow + Unity Catalog is hard to replicate on Fabric today

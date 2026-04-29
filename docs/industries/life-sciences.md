@@ -4,29 +4,29 @@
 
 ## Top scenarios
 
-| Scenario | Pattern | Latency | Reference |
-|----------|---------|---------|-----------|
-| **Genomics pipelines** (variant calling, RNA-seq, assembly) | Spark + bioinformatics tools (DRAGEN, GATK, Nextflow) + Delta | hours-days | [Tutorial 03 — GeoAnalytics OSS](../tutorials/03-geoanalytics-oss/README.md) (similar Spark patterns) |
-| **Clinical trial analytics** | EDC ingest + dbt + ADaM/SDTM models + regulator submissions | daily | [Tutorial 02 — Data Governance](../tutorials/02-data-governance/README.md) |
-| **Real-world evidence (RWE)** | Claims + EHR + registry + de-identification + ML | weeks | [Use Case — IHS Tribal Health](../use-cases/tribal-health-analytics.md) (HIPAA patterns) |
-| **Drug discovery (cheminformatics, target ID)** | RDKit / molecular models + ML + GenAI | research / batch | [Tutorial 06 — AI Foundry](../tutorials/06-ai-analytics-foundry/README.md), [Tutorial 09 — GraphRAG](../tutorials/09-graphrag-knowledge/README.md) |
-| **Pharmacovigilance (adverse event signal)** | Multi-source ingest + NLP + statistical signal | daily | [Tutorial 08 — RAG](../tutorials/08-rag-vector-search/README.md) |
-| **Manufacturing (GxP biopharma)** | OT/IT + batch genealogy + 21 CFR Part 11 audit | minutes | [Industries — Manufacturing](manufacturing.md) |
-| **Medical affairs GenAI** (literature, KOL, MSL support) | RAG over publication / internal corpus | seconds | [Tutorial 08 — RAG](../tutorials/08-rag-vector-search/README.md), [Example — AI Agents](../examples/ai-agents.md) |
-| **Commercial analytics** (HCP/HCO 360, payer mix) | Claims / promo / EHR + ML | daily | [Industries — Retail & CPG](retail-cpg.md) (similar customer-360 patterns) |
+| Scenario                                                    | Pattern                                                       | Latency          | Reference                                                                                                                                          |
+| ----------------------------------------------------------- | ------------------------------------------------------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Genomics pipelines** (variant calling, RNA-seq, assembly) | Spark + bioinformatics tools (DRAGEN, GATK, Nextflow) + Delta | hours-days       | [Tutorial 03 — GeoAnalytics OSS](../tutorials/03-geoanalytics-oss/README.md) (similar Spark patterns)                                              |
+| **Clinical trial analytics**                                | EDC ingest + dbt + ADaM/SDTM models + regulator submissions   | daily            | [Tutorial 02 — Data Governance](../tutorials/02-data-governance/README.md)                                                                         |
+| **Real-world evidence (RWE)**                               | Claims + EHR + registry + de-identification + ML              | weeks            | [Use Case — IHS Tribal Health](../use-cases/tribal-health-analytics.md) (HIPAA patterns)                                                           |
+| **Drug discovery (cheminformatics, target ID)**             | RDKit / molecular models + ML + GenAI                         | research / batch | [Tutorial 06 — AI Foundry](../tutorials/06-ai-analytics-foundry/README.md), [Tutorial 09 — GraphRAG](../tutorials/09-graphrag-knowledge/README.md) |
+| **Pharmacovigilance (adverse event signal)**                | Multi-source ingest + NLP + statistical signal                | daily            | [Tutorial 08 — RAG](../tutorials/08-rag-vector-search/README.md)                                                                                   |
+| **Manufacturing (GxP biopharma)**                           | OT/IT + batch genealogy + 21 CFR Part 11 audit                | minutes          | [Industries — Manufacturing](manufacturing.md)                                                                                                     |
+| **Medical affairs GenAI** (literature, KOL, MSL support)    | RAG over publication / internal corpus                        | seconds          | [Tutorial 08 — RAG](../tutorials/08-rag-vector-search/README.md), [Example — AI Agents](../examples/ai-agents.md)                                  |
+| **Commercial analytics** (HCP/HCO 360, payer mix)           | Claims / promo / EHR + ML                                     | daily            | [Industries — Retail & CPG](retail-cpg.md) (similar customer-360 patterns)                                                                         |
 
 ## Regulatory landscape
 
-| Framework | Where in CSA-in-a-Box |
-|-----------|----------------------|
-| **HIPAA Security Rule** (PHI) | [Compliance — HIPAA](../compliance/hipaa-security-rule.md) |
-| **GDPR + EU Data Boundary** | [Compliance — GDPR](../compliance/gdpr-privacy.md) — EU subject genomic / clinical data is sensitive category (Art. 9) |
+| Framework                                                | Where in CSA-in-a-Box                                                                                                            |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| **HIPAA Security Rule** (PHI)                            | [Compliance — HIPAA](../compliance/hipaa-security-rule.md)                                                                       |
+| **GDPR + EU Data Boundary**                              | [Compliance — GDPR](../compliance/gdpr-privacy.md) — EU subject genomic / clinical data is sensitive category (Art. 9)           |
 | **21 CFR Part 11** (FDA electronic records / signatures) | Audit trail + access control + electronic signature design — uses [IaC + git](../IaC-CICD-Best-Practices.md) for change evidence |
-| **GxP** (GLP / GCP / GMP / GVP) | Validation lifecycle for systems used in regulated work; CSA validates platform; you validate your scientific applications |
-| **GAMP 5** | Risk-based system validation — categorize the platform appropriately |
-| **EU MDR / IVDR** (medical devices) | If your platform supports a medical device, additional QMS + clinical evaluation |
-| **HITRUST CSF** (US health) | Common control framework that maps HIPAA + NIST + ISO; popular B2B requirement |
-| **State medical privacy** (e.g., NY SHIELD, CA CMIA) | Tighter than HIPAA in places |
+| **GxP** (GLP / GCP / GMP / GVP)                          | Validation lifecycle for systems used in regulated work; CSA validates platform; you validate your scientific applications       |
+| **GAMP 5**                                               | Risk-based system validation — categorize the platform appropriately                                                             |
+| **EU MDR / IVDR** (medical devices)                      | If your platform supports a medical device, additional QMS + clinical evaluation                                                 |
+| **HITRUST CSF** (US health)                              | Common control framework that maps HIPAA + NIST + ISO; popular B2B requirement                                                   |
+| **State medical privacy** (e.g., NY SHIELD, CA CMIA)     | Tighter than HIPAA in places                                                                                                     |
 
 ## Reference architecture variations
 
@@ -50,6 +50,7 @@ flowchart LR
 ```
 
 Key points:
+
 - **PHI / DNA is sensitive-category** under GDPR Art. 9 — explicit basis required for EU subjects
 - **Cohort gold tables** are the most-shared artifact; DAB or Synapse Serverless makes them queryable for downstream researchers
 - **Bioinformatics tools are container-first**; AKS or Container Apps for orchestrating pipelines beyond what dbt covers
@@ -86,9 +87,9 @@ Key points:
 3. Read [Identity & Secrets Flow](../reference-architecture/identity-secrets-flow.md) (PHI access controls)
 4. Walk [Tutorial 02 — Data Governance](../tutorials/02-data-governance/README.md) — sensitive-data classification is foundational
 5. Pick a starter scenario:
-   - **Clinical analytics**: adapt [Example — Tribal Health](../examples/tribal-health.md) (HIPAA patterns + dbt clinical model)
-   - **Genomics**: adapt [Example — GeoAnalytics](../examples/geoanalytics.md) (Spark patterns) + add bioinformatics containers via AKS
-   - **Medical affairs GenAI**: walk [Tutorial 08 — RAG](../tutorials/08-rag-vector-search/README.md) end-to-end
+    - **Clinical analytics**: adapt [Example — Tribal Health](../examples/tribal-health.md) (HIPAA patterns + dbt clinical model)
+    - **Genomics**: adapt [Example — GeoAnalytics](../examples/geoanalytics.md) (Spark patterns) + add bioinformatics containers via AKS
+    - **Medical affairs GenAI**: walk [Tutorial 08 — RAG](../tutorials/08-rag-vector-search/README.md) end-to-end
 6. **Before** any HCP- or patient-facing GenAI: review [Patterns — LLMOps & Evaluation](../patterns/llmops-evaluation.md) and design your eval set with clinical SMEs
 
 ## Related

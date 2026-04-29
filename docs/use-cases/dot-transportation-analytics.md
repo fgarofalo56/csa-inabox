@@ -61,7 +61,7 @@ flowchart LR
 | **NBI**   | FHWA   | National Bridge Inventory — structural condition of every bridge >20ft                 | 620,000+ bridges                   | Annual                         | [data.transportation.gov](https://data.transportation.gov)           |
 | **HPMS**  | FHWA   | Highway Performance Monitoring System — pavement condition, traffic volume, lane miles | All federal-aid highways           | Annual                         | [HPMS](https://www.fhwa.dot.gov/policyinformation/hpms.cfm)          |
 | **NTD**   | FTA    | National Transit Database — ridership, financial, safety data for transit agencies     | 900+ agencies, ~2,200 modes        | Monthly + Annual               | [NTD](https://www.transit.dot.gov/ntd)                               |
-| **ATADS** | FAA    | Air Traffic Activity Data System — tower operations, instrument operations             | 500+ airports                      | Monthly                        | [ATADS](https://aspm.faa.gov/opsnet/sys/Main.asp)           |
+| **ATADS** | FAA    | Air Traffic Activity Data System — tower operations, instrument operations             | 500+ airports                      | Monthly                        | [ATADS](https://aspm.faa.gov/opsnet/sys/Main.asp)                    |
 | **BTS**   | DOT    | Bureau of Transportation Statistics — cross-modal performance metrics                  | National                           | Monthly + Annual               | [BTS](https://www.bts.gov/topics/national-transportation-statistics) |
 
 !!! info "GTFS Real-Time"
@@ -317,7 +317,7 @@ Not all Azure services are available in Azure Government regions. Verify service
 | FHWA National Bridge Inventory         | <https://www.fhwa.dot.gov/bridge/nbi.cfm>                       |
 | FHWA HPMS                              | <https://www.fhwa.dot.gov/policyinformation/hpms.cfm>           |
 | FTA National Transit Database          | <https://www.transit.dot.gov/ntd>                               |
-| FAA ATADS / OPSNET                     | <https://aspm.faa.gov/opsnet/sys/Main.asp>             |
+| FAA ATADS / OPSNET                     | <https://aspm.faa.gov/opsnet/sys/Main.asp>                      |
 | FAA ASPM                               | <https://aspm.faa.gov>                                          |
 | BTS National Transportation Statistics | <https://www.bts.gov/topics/national-transportation-statistics> |
 | GTFS Realtime Specification            | <https://gtfs.org/realtime/>                                    |

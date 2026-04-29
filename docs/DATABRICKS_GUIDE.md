@@ -2,9 +2,8 @@
 
 # Databricks Guide
 
-
 !!! note
-    **Quick Summary**: Setting up and operating Databricks within CSA-in-a-Box — workspace configuration, cluster sizing (dev vs prod), notebook orchestration (3 patterns), dbt integration with Unity Catalog, and troubleshooting common issues.
+**Quick Summary**: Setting up and operating Databricks within CSA-in-a-Box — workspace configuration, cluster sizing (dev vs prod), notebook orchestration (3 patterns), dbt integration with Unity Catalog, and troubleshooting common issues.
 
 This guide covers setting up and operating Databricks within the
 CSA-in-a-Box platform, including workspace configuration, notebook
@@ -13,20 +12,20 @@ orchestration, dbt integration, and Unity Catalog.
 ## 📑 Table of Contents
 
 - [⚙️ Workspace Setup](#️-workspace-setup)
-  - [Prerequisites](#prerequisites)
-  - [Cluster Configuration](#cluster-configuration)
-  - [Required Spark configuration](#required-spark-configuration)
+    - [Prerequisites](#prerequisites)
+    - [Cluster Configuration](#cluster-configuration)
+    - [Required Spark configuration](#required-spark-configuration)
 - [📁 Notebook Inventory](#-notebook-inventory)
-  - [Naming conventions](#naming-conventions)
+    - [Naming conventions](#naming-conventions)
 - [🔄 Notebook Orchestration](#-notebook-orchestration)
-  - [Pattern 1: dbutils.notebook.run() (simple)](#pattern-1-dbutilsnotebookrun-simple)
-  - [Pattern 2: ADF orchestration (production)](#pattern-2-adf-orchestration-production)
-  - [Pattern 3: Databricks Workflows (native)](#pattern-3-databricks-workflows-native)
+    - [Pattern 1: dbutils.notebook.run() (simple)](#pattern-1-dbutilsnotebookrun-simple)
+    - [Pattern 2: ADF orchestration (production)](#pattern-2-adf-orchestration-production)
+    - [Pattern 3: Databricks Workflows (native)](#pattern-3-databricks-workflows-native)
 - [🗄️ dbt on Databricks](#️-dbt-on-databricks)
-  - [Profile configuration](#profile-configuration)
-  - [Environment variables](#environment-variables)
-  - [Running dbt from a notebook](#running-dbt-from-a-notebook)
-  - [Running dbt locally](#running-dbt-locally)
+    - [Profile configuration](#profile-configuration)
+    - [Environment variables](#environment-variables)
+    - [Running dbt from a notebook](#running-dbt-from-a-notebook)
+    - [Running dbt locally](#running-dbt-locally)
 - [📊 Unity Catalog Setup](#-unity-catalog-setup)
 - [🔧 Troubleshooting](#-troubleshooting)
 
@@ -45,24 +44,24 @@ orchestration, dbt integration, and Unity Catalog.
 
 **Interactive cluster (development):**
 
-| Setting | Value | Notes |
-|---------|-------|-------|
-| Runtime | 14.3 LTS (Spark 3.5) | Use LTS for stability |
-| Node Type | Standard_DS3_v2 | 4 cores, 14 GB (dev) |
-| Min Workers | 1 | Auto-scale from 1 |
-| Max Workers | 4 | Cap for cost control |
-| Auto-termination | 30 minutes | Save costs |
-| Spark Config | See below | ADLS + OpenLineage |
+| Setting          | Value                | Notes                 |
+| ---------------- | -------------------- | --------------------- |
+| Runtime          | 14.3 LTS (Spark 3.5) | Use LTS for stability |
+| Node Type        | Standard_DS3_v2      | 4 cores, 14 GB (dev)  |
+| Min Workers      | 1                    | Auto-scale from 1     |
+| Max Workers      | 4                    | Cap for cost control  |
+| Auto-termination | 30 minutes           | Save costs            |
+| Spark Config     | See below            | ADLS + OpenLineage    |
 
 **Job cluster (production):**
 
-| Setting | Value | Notes |
-|---------|-------|-------|
-| Runtime | 14.3 LTS (Spark 3.5) | Match dev |
-| Node Type | Standard_DS4_v2 | 8 cores, 28 GB |
-| Min Workers | 2 | Higher baseline |
-| Max Workers | 8 | Scale for load |
-| Spot instances | Yes, 50% | Cost savings |
+| Setting        | Value                | Notes           |
+| -------------- | -------------------- | --------------- |
+| Runtime        | 14.3 LTS (Spark 3.5) | Match dev       |
+| Node Type      | Standard_DS4_v2      | 8 cores, 28 GB  |
+| Min Workers    | 2                    | Higher baseline |
+| Max Workers    | 8                    | Scale for load  |
+| Spot instances | Yes, 50%             | Cost savings    |
 
 ### Required Spark configuration
 
@@ -86,8 +85,8 @@ spark.extraListeners io.openlineage.spark.agent.OpenLineageSparkListener
 ```
 
 !!! important
-    Replace `<STORAGE>` with your ADLS account name and `<PURVIEW_ACCOUNT>`
-    with your Purview account name.
+Replace `<STORAGE>` with your ADLS account name and `<PURVIEW_ACCOUNT>`
+with your Purview account name.
 
 ---
 
@@ -95,14 +94,14 @@ spark.extraListeners io.openlineage.spark.agent.OpenLineageSparkListener
 
 All notebooks live under `domains/shared/notebooks/databricks/`:
 
-| Notebook | Purpose | Layer |
-|----------|---------|-------|
-| `bronze_to_silver_spark.py` | Schema enforcement, dedup, validation flags | Bronze → Silver |
-| `silver_to_gold_spark.py` | Business aggregations, star schema | Silver → Gold |
-| `delta_lake_optimization.py` | OPTIMIZE, VACUUM, Z-ORDER maintenance | All layers |
-| `data_quality_monitor.py` | Contract validation, SLA monitoring | Silver/Gold |
-| `unity_catalog_setup.py` | Catalog, schema, permissions setup | Infrastructure |
-| `orchestration/run_dbt.py` | Universal dbt runner | dbt |
+| Notebook                     | Purpose                                     | Layer           |
+| ---------------------------- | ------------------------------------------- | --------------- |
+| `bronze_to_silver_spark.py`  | Schema enforcement, dedup, validation flags | Bronze → Silver |
+| `silver_to_gold_spark.py`    | Business aggregations, star schema          | Silver → Gold   |
+| `delta_lake_optimization.py` | OPTIMIZE, VACUUM, Z-ORDER maintenance       | All layers      |
+| `data_quality_monitor.py`    | Contract validation, SLA monitoring         | Silver/Gold     |
+| `unity_catalog_setup.py`     | Catalog, schema, permissions setup          | Infrastructure  |
+| `orchestration/run_dbt.py`   | Universal dbt runner                        | dbt             |
 
 ### Naming conventions
 
@@ -177,10 +176,10 @@ Create a multi-task job in the Databricks UI:
 
 - [ ] Go to **Workflows** > **Create Job**
 - [ ] Add tasks in order:
-  - Task 1: `bronze_to_silver_spark` (notebook task)
-  - Task 2: `run_dbt` (depends on Task 1)
-  - Task 3: `data_quality_monitor` (depends on Task 2)
-  - Task 4: `delta_lake_optimization` (depends on Task 2, weekly schedule)
+    - Task 1: `bronze_to_silver_spark` (notebook task)
+    - Task 2: `run_dbt` (depends on Task 1)
+    - Task 3: `data_quality_monitor` (depends on Task 2)
+    - Task 4: `delta_lake_optimization` (depends on Task 2, weekly schedule)
 - [ ] Set the schedule to daily
 - [ ] Configure email/webhook alerts on failure
 
@@ -195,25 +194,25 @@ Databricks connection:
 
 ```yaml
 csa_analytics:
-  target: dev
-  outputs:
-    dev:
-      type: databricks
-      host: "{{ env_var('DBT_DATABRICKS_HOST') }}"
-      http_path: "{{ env_var('DBT_DATABRICKS_HTTP_PATH') }}"
-      token: "{{ env_var('DBT_DATABRICKS_TOKEN') }}"
-      catalog: csa_analytics
-      schema: dev
-      threads: 4
+    target: dev
+    outputs:
+        dev:
+            type: databricks
+            host: "{{ env_var('DBT_DATABRICKS_HOST') }}"
+            http_path: "{{ env_var('DBT_DATABRICKS_HTTP_PATH') }}"
+            token: "{{ env_var('DBT_DATABRICKS_TOKEN') }}"
+            catalog: csa_analytics
+            schema: dev
+            threads: 4
 
-    prod:
-      type: databricks
-      host: "{{ env_var('DBT_DATABRICKS_HOST') }}"
-      http_path: "{{ env_var('DBT_DATABRICKS_HTTP_PATH') }}"
-      token: "{{ env_var('DBT_DATABRICKS_TOKEN') }}"
-      catalog: csa_analytics
-      schema: prod
-      threads: 8
+        prod:
+            type: databricks
+            host: "{{ env_var('DBT_DATABRICKS_HOST') }}"
+            http_path: "{{ env_var('DBT_DATABRICKS_HTTP_PATH') }}"
+            token: "{{ env_var('DBT_DATABRICKS_TOKEN') }}"
+            catalog: csa_analytics
+            schema: prod
+            threads: 8
 ```
 
 ### Environment variables
@@ -290,7 +289,7 @@ dbutils.notebook.run(
 ### "Permission denied" on ADLS paths
 
 - [ ] Verify the cluster's managed identity has `Storage Blob Data Contributor`
-   on the ADLS storage account
+      on the ADLS storage account
 - [ ] Check the Spark config includes the correct OAuth settings
 - [ ] For Unity Catalog, verify the external location is registered
 

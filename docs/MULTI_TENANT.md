@@ -2,9 +2,8 @@
 
 # Multi-Tenant Deployment Guide
 
-
 !!! note
-    **Quick Summary**: Stamped multi-tenant deployment model for CSA-in-a-Box — resource naming conventions, three data isolation strategies (physical, logical, hybrid), tenant onboarding/offboarding procedures, cost attribution via tags, per-tenant IAM and monitoring, dbt multi-tenant configuration, and decommission runbook.
+**Quick Summary**: Stamped multi-tenant deployment model for CSA-in-a-Box — resource naming conventions, three data isolation strategies (physical, logical, hybrid), tenant onboarding/offboarding procedures, cost attribution via tags, per-tenant IAM and monitoring, dbt multi-tenant configuration, and decommission runbook.
 
 This guide covers deploying CSA-in-a-Box in a multi-tenant configuration
 where each tenant (customer, business unit, or organizational boundary)
@@ -13,18 +12,18 @@ standard deployment procedure in [GETTING_STARTED.md](GETTING_STARTED.md)
 and the disaster recovery runbook in [DR.md](DR.md).
 
 !!! important
-    **Scope:** the CSA-in-a-Box Data Landing Zone (DLZ). The Management,
-    Connectivity, and DMLZ landing zones are shared infrastructure and are
-    deployed once regardless of tenant count.
+**Scope:** the CSA-in-a-Box Data Landing Zone (DLZ). The Management,
+Connectivity, and DMLZ landing zones are shared infrastructure and are
+deployed once regardless of tenant count.
 
 ## 📑 Table of Contents
 
 - [🏗️ 1. Architecture Overview](#️-1-architecture-overview)
 - [📛 2. Resource Naming Convention](#-2-resource-naming-convention)
 - [🔒 3. Data Isolation Strategies](#-3-data-isolation-strategies)
-  - [3.1 Physical Isolation](#31-physical-isolation-recommended-for-regulated-workloads)
-  - [3.2 Logical Isolation](#32-logical-isolation-shared-infrastructure-row-level-filtering)
-  - [3.3 Hybrid](#33-hybrid-separate-storage-shared-compute)
+    - [3.1 Physical Isolation](#31-physical-isolation-recommended-for-regulated-workloads)
+    - [3.2 Logical Isolation](#32-logical-isolation-shared-infrastructure-row-level-filtering)
+    - [3.3 Hybrid](#33-hybrid-separate-storage-shared-compute)
 - [📦 4. Deployment Process](#-4-deployment-process)
 - [💰 5. Cost Attribution via Tags](#-5-cost-attribution-via-tags)
 - [🔑 6. Identity & Access Management per Tenant](#-6-identity--access-management-per-tenant)
@@ -93,24 +92,24 @@ tenant prefix, environment, service name, and region:
 {tenant_prefix}-{standard_prefix}-{environment}-{service}-{region}
 ```
 
-| Component | Example | Source |
-|---|---|---|
-| `tenant_prefix` | `ctso` | Short (3–5 char) tenant abbreviation |
-| `standard_prefix` | `dlz` | The `prefix` parameter in the Bicep template |
-| `environment` | `prod` | The `environment` parameter |
-| `service` | `cosmosdb`, `storage`, `dbw` | Per-module naming |
-| `region` | `eastus2` | Derived from `location` parameter |
+| Component         | Example                      | Source                                       |
+| ----------------- | ---------------------------- | -------------------------------------------- |
+| `tenant_prefix`   | `ctso`                       | Short (3–5 char) tenant abbreviation         |
+| `standard_prefix` | `dlz`                        | The `prefix` parameter in the Bicep template |
+| `environment`     | `prod`                       | The `environment` parameter                  |
+| `service`         | `cosmosdb`, `storage`, `dbw` | Per-module naming                            |
+| `region`          | `eastus2`                    | Derived from `location` parameter            |
 
 ### Examples
 
-| Resource Type | Single-Tenant Name | Multi-Tenant Name (Contoso) |
-|---|---|---|
+| Resource Type           | Single-Tenant Name             | Multi-Tenant Name (Contoso)         |
+| ----------------------- | ------------------------------ | ----------------------------------- |
 | Resource Group (Cosmos) | `rg-dlz-prod-cosmosdb-eastus2` | `rg-ctso-dlz-prod-cosmosdb-eastus2` |
-| Storage Account | `dlzprodst` | `ctsodlzprodst` |
-| Cosmos DB Account | `dlz-prod-cosmos-eastus2` | `ctso-dlz-prod-cosmos-eastus2` |
-| Databricks Workspace | `dlz-prod-dbw` | `ctso-dlz-prod-dbw` |
-| Event Hubs Namespace | `dlz-prod-ehns` | `ctso-dlz-prod-ehns` |
-| Data Factory | `dlz-prod-adf` | `ctso-dlz-prod-adf` |
+| Storage Account         | `dlzprodst`                    | `ctsodlzprodst`                     |
+| Cosmos DB Account       | `dlz-prod-cosmos-eastus2`      | `ctso-dlz-prod-cosmos-eastus2`      |
+| Databricks Workspace    | `dlz-prod-dbw`                 | `ctso-dlz-prod-dbw`                 |
+| Event Hubs Namespace    | `dlz-prod-ehns`                | `ctso-dlz-prod-ehns`                |
+| Data Factory            | `dlz-prod-adf`                 | `ctso-dlz-prod-adf`                 |
 
 The `prefix` parameter in the Bicep params file controls this. Setting
 `prefix` to `ctso-dlz` causes the `basename` variable
@@ -119,13 +118,10 @@ propagates through all resource group and resource names automatically.
 
 ### Naming constraints
 
-!!! warning
-    - **Storage accounts**: max 24 characters, lowercase alphanumeric only.
-      The Bicep module truncates and sanitizes names automatically.
-    - **Cosmos DB accounts**: max 44 characters, lowercase alphanumeric and
-      hyphens only.
-    - **ADX clusters**: max 22 characters, lowercase alphanumeric only.
-      Keep tenant prefixes short.
+!!! warning - **Storage accounts**: max 24 characters, lowercase alphanumeric only.
+The Bicep module truncates and sanitizes names automatically. - **Cosmos DB accounts**: max 44 characters, lowercase alphanumeric and
+hyphens only. - **ADX clusters**: max 22 characters, lowercase alphanumeric only.
+Keep tenant prefixes short.
 
 ---
 
@@ -140,6 +136,7 @@ Each tenant gets completely separate Azure resources. This is the default
 stamped model described in this guide.
 
 **Characteristics:**
+
 - Separate storage accounts, Cosmos DB accounts, compute clusters
 - No shared data plane — zero risk of cross-tenant data leakage
 - Independent scaling, backups, and failover per tenant
@@ -147,6 +144,7 @@ stamped model described in this guide.
 - Simplest compliance story — each tenant is a self-contained boundary
 
 **When to use:**
+
 - Government / FedRAMP / ITAR workloads
 - Tenants with strict data residency requirements
 - Tenants that require dedicated encryption keys (CMK per tenant)
@@ -158,17 +156,20 @@ All tenants share the same Azure resources. Data is partitioned by a
 `tenant_id` column and filtered at the query layer.
 
 **Characteristics:**
+
 - Single storage account, single Cosmos DB, shared Databricks
 - Data separated by partition key / folder structure / row-level filters
 - Lower cost (shared infrastructure amortized across tenants)
 - Higher operational complexity (RBAC, row-level security, auditing)
 
 **When to use:**
+
 - Internal business units within the same organization
 - Non-regulated workloads with low cross-tenant risk
 - Cost-sensitive deployments with many small tenants
 
 **Storage layout for logical isolation:**
+
 ```text
 raw/
 ├── tenant_id=contoso/
@@ -185,12 +186,14 @@ Tenants get dedicated storage and databases but share compute resources
 (Databricks, Data Factory, Synapse).
 
 **Characteristics:**
+
 - Data-at-rest isolation (separate storage accounts per tenant)
 - Shared compute reduces cost versus full physical isolation
 - Compute workloads use tenant-specific credentials / linked services
 - Moderate complexity — compute must be configured per-tenant
 
 **When to use:**
+
 - Tenants that need data isolation but not compute isolation
 - Cost-conscious deployments that still need strong data boundaries
 
@@ -284,14 +287,14 @@ az role assignment create \
 Every resource in a tenant stamp carries tags for cost tracking and
 chargeback:
 
-| Tag Key | Example Value | Purpose |
-|---|---|---|
-| `tenant-id` | `contoso` | Primary tenant identifier |
-| `tenant-prefix` | `ctso` | Short prefix used in resource names |
-| `cost-center` | `CONTOSO-TENANT-001` | Billing code for chargeback |
-| `environment` | `prod` | Environment tier |
-| `CostCenter` | `CSA-Platform` | Platform-level cost center (shared) |
-| `PrimaryContact` | `platform-team@contoso.com` | Tenant contact |
+| Tag Key          | Example Value               | Purpose                             |
+| ---------------- | --------------------------- | ----------------------------------- |
+| `tenant-id`      | `contoso`                   | Primary tenant identifier           |
+| `tenant-prefix`  | `ctso`                      | Short prefix used in resource names |
+| `cost-center`    | `CONTOSO-TENANT-001`        | Billing code for chargeback         |
+| `environment`    | `prod`                      | Environment tier                    |
+| `CostCenter`     | `CSA-Platform`              | Platform-level cost center (shared) |
+| `PrimaryContact` | `platform-team@contoso.com` | Tenant contact                      |
 
 ### Cost Management queries
 
@@ -299,8 +302,8 @@ chargeback:
 // Azure Resource Graph query — cost by tenant
 Resources
 | where tags['tenant-id'] != ''
-| summarize ResourceCount=count(), 
-            Services=make_set(type) 
+| summarize ResourceCount=count(),
+            Services=make_set(type)
   by TenantId=tostring(tags['tenant-id']),
      CostCenter=tostring(tags['cost-center'])
 | order by ResourceCount desc
@@ -326,12 +329,12 @@ az costmanagement export create \
 
 ### 6.1 Microsoft Entra ID Group Structure
 
-| Group Name | Role | Scope |
-|---|---|---|
-| `sg-{tenant}-dlz-admins` | Owner | Tenant subscription/RGs |
-| `sg-{tenant}-dlz-data-engineers` | Storage Blob Data Contributor, ADF Contributor | Tenant data resources |
-| `sg-{tenant}-dlz-data-scientists` | Databricks Contributor, AML Contributor | Tenant compute resources |
-| `sg-{tenant}-dlz-readers` | Reader, Storage Blob Data Reader | Tenant resources (read-only) |
+| Group Name                        | Role                                           | Scope                        |
+| --------------------------------- | ---------------------------------------------- | ---------------------------- |
+| `sg-{tenant}-dlz-admins`          | Owner                                          | Tenant subscription/RGs      |
+| `sg-{tenant}-dlz-data-engineers`  | Storage Blob Data Contributor, ADF Contributor | Tenant data resources        |
+| `sg-{tenant}-dlz-data-scientists` | Databricks Contributor, AML Contributor        | Tenant compute resources     |
+| `sg-{tenant}-dlz-readers`         | Reader, Storage Blob Data Reader               | Tenant resources (read-only) |
 
 ### 6.2 Cross-Tenant Access Controls
 
@@ -413,22 +416,22 @@ Resources
 ```yaml
 # domains/shared/dbt/profiles.yml
 csa_inabox:
-  target: "{{ env_var('DBT_TARGET', 'dev') }}"
-  outputs:
-    contoso_prod:
-      type: databricks
-      host: "{{ env_var('CONTOSO_DATABRICKS_HOST') }}"
-      http_path: "{{ env_var('CONTOSO_DATABRICKS_HTTP_PATH') }}"
-      schema: contoso_gold
-      catalog: contoso_catalog
-      token: "{{ env_var('CONTOSO_DATABRICKS_TOKEN') }}"
-    fabrikam_prod:
-      type: databricks
-      host: "{{ env_var('FABRIKAM_DATABRICKS_HOST') }}"
-      http_path: "{{ env_var('FABRIKAM_DATABRICKS_HTTP_PATH') }}"
-      schema: fabrikam_gold
-      catalog: fabrikam_catalog
-      token: "{{ env_var('FABRIKAM_DATABRICKS_TOKEN') }}"
+    target: "{{ env_var('DBT_TARGET', 'dev') }}"
+    outputs:
+        contoso_prod:
+            type: databricks
+            host: "{{ env_var('CONTOSO_DATABRICKS_HOST') }}"
+            http_path: "{{ env_var('CONTOSO_DATABRICKS_HTTP_PATH') }}"
+            schema: contoso_gold
+            catalog: contoso_catalog
+            token: "{{ env_var('CONTOSO_DATABRICKS_TOKEN') }}"
+        fabrikam_prod:
+            type: databricks
+            host: "{{ env_var('FABRIKAM_DATABRICKS_HOST') }}"
+            http_path: "{{ env_var('FABRIKAM_DATABRICKS_HTTP_PATH') }}"
+            schema: fabrikam_gold
+            catalog: fabrikam_catalog
+            token: "{{ env_var('FABRIKAM_DATABRICKS_TOKEN') }}"
 ```
 
 ### 8.2 Running dbt for a Specific Tenant
@@ -509,10 +512,10 @@ git commit -m "chore: decommission tenant contoso"
 ### 9.3 Data Retention
 
 !!! warning
-    After decommission, Cosmos DB data is retained for the soft-delete
-    period (90 days with purge protection). Storage account data is
-    available for 30 days via soft-delete. After these windows expire,
-    data is irrecoverable.
+After decommission, Cosmos DB data is retained for the soft-delete
+period (90 days with purge protection). Storage account data is
+available for 30 days via soft-delete. After these windows expire,
+data is irrecoverable.
 
 For regulated workloads, export data to a long-term archive storage
 account before decommissioning the tenant stamp.
@@ -531,15 +534,15 @@ account before decommissioning the tenant stamp.
 
 ## 📋 10. Quick Reference
 
-| Scenario | Guide |
-|---|---|
-| Onboard a new tenant | §4 above |
-| Deploy tenant stamp | §4.3 |
-| Cost report per tenant | §5 |
-| Set up tenant RBAC | §6 |
-| Run dbt for a tenant | §8 |
-| Offboard a tenant | §9 |
-| Disaster recovery | [DR.md](DR.md) |
+| Scenario                    | Guide                                                                     |
+| --------------------------- | ------------------------------------------------------------------------- |
+| Onboard a new tenant        | §4 above                                                                  |
+| Deploy tenant stamp         | §4.3                                                                      |
+| Cost report per tenant      | §5                                                                        |
+| Set up tenant RBAC          | §6                                                                        |
+| Run dbt for a tenant        | §8                                                                        |
+| Offboard a tenant           | §9                                                                        |
+| Disaster recovery           | [DR.md](DR.md)                                                            |
 | Multi-region + multi-tenant | [MULTI_REGION.md](MULTI_REGION.md) — deploy a stamp per tenant per region |
 
 ---

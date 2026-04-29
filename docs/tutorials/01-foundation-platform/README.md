@@ -112,11 +112,11 @@ Successfully installed pip-24.x
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `git: command not found` | Git not installed | Install from [git-scm.com](https://git-scm.com/) |
-| `python: command not found` | Python not on PATH | Use `python3` or add Python to PATH |
-| SSL errors during clone | Corporate proxy | Set `git config --global http.proxy http://proxy:port` |
+| Symptom                     | Cause              | Fix                                                    |
+| --------------------------- | ------------------ | ------------------------------------------------------ |
+| `git: command not found`    | Git not installed  | Install from [git-scm.com](https://git-scm.com/)       |
+| `python: command not found` | Python not on PATH | Use `python3` or add Python to PATH                    |
+| SSL errors during clone     | Corporate proxy    | Set `git config --global http.proxy http://proxy:port` |
 
 ---
 
@@ -173,13 +173,13 @@ az group create --name "$CSA_RG_DLZ"  --location "$CSA_LOCATION"
 
 ```json
 {
-  "id": "/subscriptions/.../resourceGroups/csa-rg-alz-dev",
-  "location": "eastus",
-  "name": "csa-rg-alz-dev",
-  "properties": {
-    "provisioningState": "Succeeded"
-  },
-  "type": "Microsoft.Resources/resourceGroups"
+    "id": "/subscriptions/.../resourceGroups/csa-rg-alz-dev",
+    "location": "eastus",
+    "name": "csa-rg-alz-dev",
+    "properties": {
+        "provisioningState": "Succeeded"
+    },
+    "type": "Microsoft.Resources/resourceGroups"
 }
 ```
 
@@ -189,10 +189,10 @@ az group create --name "$CSA_RG_DLZ"  --location "$CSA_LOCATION"
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `AuthorizationFailed` | Insufficient permissions | You need at least Contributor at the subscription level |
-| `SubscriptionNotFound` | Wrong subscription ID | Re-run `az account list` and copy the correct ID |
+| Symptom                       | Cause                      | Fix                                                                                                |
+| ----------------------------- | -------------------------- | -------------------------------------------------------------------------------------------------- |
+| `AuthorizationFailed`         | Insufficient permissions   | You need at least Contributor at the subscription level                                            |
+| `SubscriptionNotFound`        | Wrong subscription ID      | Re-run `az account list` and copy the correct ID                                                   |
 | Provider registration pending | Providers take 1-2 minutes | Wait and re-run; check with `az provider show -n Microsoft.Databricks --query "registrationState"` |
 
 ---
@@ -210,12 +210,12 @@ cat params.dev.json
 
 Edit `params.dev.json` to match your environment. Key parameters:
 
-| Parameter | Description | Example Value |
-|-----------|-------------|---------------|
-| `prefix` | Naming prefix | `csa` |
-| `environment` | Environment tag | `dev` |
-| `location` | Azure region | `eastus` |
-| `logAnalyticsRetentionDays` | Log retention | `90` |
+| Parameter                   | Description     | Example Value |
+| --------------------------- | --------------- | ------------- |
+| `prefix`                    | Naming prefix   | `csa`         |
+| `environment`               | Environment tag | `dev`         |
+| `location`                  | Azure region    | `eastus`      |
+| `logAnalyticsRetentionDays` | Log retention   | `90`          |
 
 Deploy:
 
@@ -260,11 +260,11 @@ cd ../../..
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `InvalidTemplate` | Bicep syntax error or outdated CLI | Run `az bicep upgrade` and retry |
-| `DeploymentFailed` with policy conflict | Existing policies conflict | Review the specific policy error and adjust `params.dev.json` |
-| Deployment hangs > 20 min | Region capacity issue | Cancel and retry in a different region |
+| Symptom                                 | Cause                              | Fix                                                           |
+| --------------------------------------- | ---------------------------------- | ------------------------------------------------------------- |
+| `InvalidTemplate`                       | Bicep syntax error or outdated CLI | Run `az bicep upgrade` and retry                              |
+| `DeploymentFailed` with policy conflict | Existing policies conflict         | Review the specific policy error and adjust `params.dev.json` |
+| Deployment hangs > 20 min               | Region capacity issue              | Cancel and retry in a different region                        |
 
 ---
 
@@ -281,13 +281,13 @@ cat params.dev.json
 
 Key parameters to customize in `params.dev.json`:
 
-| Parameter | Description | Example Value |
-|-----------|-------------|---------------|
-| `prefix` | Naming prefix | `csa` |
-| `environment` | Environment tag | `dev` |
-| `purviewAccountName` | Purview account name | `csa-purview-dev` |
-| `keyVaultName` | Key Vault name | `csa-kv-dmlz-dev` |
-| `containerRegistryName` | ACR name (globally unique, alphanumeric) | `csaacrdmlzdev` |
+| Parameter               | Description                              | Example Value     |
+| ----------------------- | ---------------------------------------- | ----------------- |
+| `prefix`                | Naming prefix                            | `csa`             |
+| `environment`           | Environment tag                          | `dev`             |
+| `purviewAccountName`    | Purview account name                     | `csa-purview-dev` |
+| `keyVaultName`          | Key Vault name                           | `csa-kv-dmlz-dev` |
+| `containerRegistryName` | ACR name (globally unique, alphanumeric) | `csaacrdmlzdev`   |
 
 Deploy:
 
@@ -326,11 +326,11 @@ cd ../../..
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `NameNotAvailable` for ACR | ACR name must be globally unique | Change `containerRegistryName` to a unique alphanumeric string |
-| Purview provisioning takes > 20 min | Normal for some regions | Wait up to 30 minutes; check in Azure Portal |
-| `KeyVaultAlreadyExists` | Name collision | Key Vault names are globally unique — use a different name |
+| Symptom                             | Cause                            | Fix                                                            |
+| ----------------------------------- | -------------------------------- | -------------------------------------------------------------- |
+| `NameNotAvailable` for ACR          | ACR name must be globally unique | Change `containerRegistryName` to a unique alphanumeric string |
+| Purview provisioning takes > 20 min | Normal for some regions          | Wait up to 30 minutes; check in Azure Portal                   |
+| `KeyVaultAlreadyExists`             | Name collision                   | Key Vault names are globally unique — use a different name     |
 
 ---
 
@@ -354,15 +354,15 @@ cat params.dev.json
 
 Key parameters in `params.dev.json`:
 
-| Parameter | Description | Example Value |
-|-----------|-------------|---------------|
-| `prefix` | Naming prefix | `csa` |
-| `environment` | Environment tag | `dev` |
-| `storageAccountName` | ADLS Gen2 name | `csadlsdev` |
-| `databricksWorkspaceName` | Databricks workspace | `csa-dbx-dev` |
-| `synapseWorkspaceName` | Synapse workspace | `csa-syn-dev` |
-| `dataFactoryName` | ADF name | `csa-adf-dev` |
-| `sqlAdminPassword` | Synapse SQL admin password | (set a strong password) |
+| Parameter                 | Description                | Example Value           |
+| ------------------------- | -------------------------- | ----------------------- |
+| `prefix`                  | Naming prefix              | `csa`                   |
+| `environment`             | Environment tag            | `dev`                   |
+| `storageAccountName`      | ADLS Gen2 name             | `csadlsdev`             |
+| `databricksWorkspaceName` | Databricks workspace       | `csa-dbx-dev`           |
+| `synapseWorkspaceName`    | Synapse workspace          | `csa-syn-dev`           |
+| `dataFactoryName`         | ADF name                   | `csa-adf-dev`           |
+| `sqlAdminPassword`        | Synapse SQL admin password | (set a strong password) |
 
 Deploy:
 
@@ -402,12 +402,12 @@ cd ../../..
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `StorageAccountAlreadyTaken` | Storage name must be globally unique | Change `storageAccountName` — lowercase alphanumeric only |
-| Databricks fails with quota error | Not enough cores in region | Request a quota increase or switch to a region with capacity |
-| Synapse deployment fails | SQL admin password doesn't meet complexity | Use 12+ chars with uppercase, lowercase, numbers, and symbols |
-| `LinkedServiceFailure` | Managed identity not yet propagated | Wait 2 minutes and re-deploy; identity propagation is eventually consistent |
+| Symptom                           | Cause                                      | Fix                                                                         |
+| --------------------------------- | ------------------------------------------ | --------------------------------------------------------------------------- |
+| `StorageAccountAlreadyTaken`      | Storage name must be globally unique       | Change `storageAccountName` — lowercase alphanumeric only                   |
+| Databricks fails with quota error | Not enough cores in region                 | Request a quota increase or switch to a region with capacity                |
+| Synapse deployment fails          | SQL admin password doesn't meet complexity | Use 12+ chars with uppercase, lowercase, numbers, and symbols               |
+| `LinkedServiceFailure`            | Managed identity not yet propagated        | Wait 2 minutes and re-deploy; identity propagation is eventually consistent |
 
 ---
 
@@ -519,11 +519,11 @@ Both peering directions should show `Connected`.
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `PeeringAlreadyExists` | Peering with that name exists | Delete with `az network vnet peering delete` and recreate |
-| Peering state `Initiated` not `Connected` | Only one direction created | Create peering in both directions |
-| Private endpoint DNS not resolving | DNS zone not linked to VNet | Create the private DNS zone link (Step 6c) |
+| Symptom                                   | Cause                         | Fix                                                       |
+| ----------------------------------------- | ----------------------------- | --------------------------------------------------------- |
+| `PeeringAlreadyExists`                    | Peering with that name exists | Delete with `az network vnet peering delete` and recreate |
+| Peering state `Initiated` not `Connected` | Only one direction created    | Create peering in both directions                         |
+| Private endpoint DNS not resolving        | DNS zone not linked to VNet   | Create the private DNS zone link (Step 6c)                |
 
 ---
 
@@ -602,9 +602,9 @@ az role assignment create \
 
 ```json
 {
-  "principalId": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
-  "roleDefinitionId": "/subscriptions/.../providers/Microsoft.Authorization/roleDefinitions/ba92f5b4-...",
-  "scope": "/subscriptions/.../storageAccounts/csadlsdev"
+    "principalId": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+    "roleDefinitionId": "/subscriptions/.../providers/Microsoft.Authorization/roleDefinitions/ba92f5b4-...",
+    "scope": "/subscriptions/.../storageAccounts/csadlsdev"
 }
 ```
 
@@ -612,11 +612,11 @@ az role assignment create \
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `PrincipalNotFound` | Managed identity not yet created | Wait 1-2 minutes after deployment for identity propagation |
-| `AuthorizationFailed` on role assignment | Need Owner or User Access Administrator | Ask your subscription Owner to grant the role |
-| Duplicate role assignment warning | Already assigned | Safe to ignore |
+| Symptom                                  | Cause                                   | Fix                                                        |
+| ---------------------------------------- | --------------------------------------- | ---------------------------------------------------------- |
+| `PrincipalNotFound`                      | Managed identity not yet created        | Wait 1-2 minutes after deployment for identity propagation |
+| `AuthorizationFailed` on role assignment | Need Owner or User Access Administrator | Ask your subscription Owner to grant the role              |
+| Duplicate role assignment warning        | Already assigned                        | Safe to ignore                                             |
 
 ---
 
@@ -658,11 +658,11 @@ In the Databricks UI:
 
 1. Go to **Compute** → **Create compute**
 2. Configure:
-   - **Cluster name:** `csa-tutorial-cluster`
-   - **Cluster mode:** Single Node (for cost savings in dev)
-   - **Databricks Runtime:** 14.3 LTS or later
-   - **Node type:** Standard_DS3_v2 (or equivalent, 4 cores / 14 GB)
-   - **Terminate after:** 30 minutes of inactivity
+    - **Cluster name:** `csa-tutorial-cluster`
+    - **Cluster mode:** Single Node (for cost savings in dev)
+    - **Databricks Runtime:** 14.3 LTS or later
+    - **Node type:** Standard_DS3_v2 (or equivalent, 4 cores / 14 GB)
+    - **Terminate after:** 30 minutes of inactivity
 3. Click **Create Compute**
 
 Alternatively, use the Databricks CLI:
@@ -698,7 +698,7 @@ Wait for the cluster to reach `RUNNING` state (2-5 minutes).
 
 ```json
 {
-  "cluster_id": "0422-123456-abcdef"
+    "cluster_id": "0422-123456-abcdef"
 }
 ```
 
@@ -708,11 +708,11 @@ The cluster appears in the Databricks Compute page with a green running indicato
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `CLOUD_PROVIDER_LAUNCH_FAILURE` | VM quota exhausted | Request quota increase for Standard_DS3_v2 in your region, or pick a smaller node type |
-| Cannot access workspace URL | Network/firewall blocking | Ensure your network allows HTTPS to `*.azuredatabricks.net` |
-| Token generation disabled | Workspace admin policy | Ask your Databricks admin to enable PAT tokens |
+| Symptom                         | Cause                     | Fix                                                                                    |
+| ------------------------------- | ------------------------- | -------------------------------------------------------------------------------------- |
+| `CLOUD_PROVIDER_LAUNCH_FAILURE` | VM quota exhausted        | Request quota increase for Standard_DS3_v2 in your region, or pick a smaller node type |
+| Cannot access workspace URL     | Network/firewall blocking | Ensure your network allows HTTPS to `*.azuredatabricks.net`                            |
+| Token generation disabled       | Workspace admin policy    | Ask your Databricks admin to enable PAT tokens                                         |
 
 ---
 
@@ -759,10 +759,10 @@ csa-adf-dev   Enabled   Succeeded
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| Linked service connection test fails | RBAC not yet propagated | Wait 2 minutes; verify role assignment in Step 7b |
-| `DataFactoryNotFound` | Deployment didn't complete | Re-run Step 5 deployment |
+| Symptom                              | Cause                      | Fix                                               |
+| ------------------------------------ | -------------------------- | ------------------------------------------------- |
+| Linked service connection test fails | RBAC not yet propagated    | Wait 2 minutes; verify role assignment in Step 7b |
+| `DataFactoryNotFound`                | Deployment didn't complete | Re-run Step 5 deployment                          |
 
 ---
 
@@ -958,13 +958,13 @@ cd ../../../..
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `dbt debug` fails with connection error | Wrong host, token, or http_path | Double-check `profiles.yml`; ensure cluster is running |
-| `Runtime Error: Catalog 'hive_metastore' does not exist` | Unity Catalog workspace without hive_metastore | Change catalog to your UC catalog name |
-| `PERMISSION_DENIED` on storage | Databricks can't access ADLS | Mount storage or configure Unity Catalog external locations |
-| `dbt seed` timeout | Large seed files | Increase `threads` or reduce seed data size |
-| No data in Gold tables | Model SQL has errors | Check `dbt run` output for specific model errors; fix SQL and re-run |
+| Symptom                                                  | Cause                                          | Fix                                                                  |
+| -------------------------------------------------------- | ---------------------------------------------- | -------------------------------------------------------------------- |
+| `dbt debug` fails with connection error                  | Wrong host, token, or http_path                | Double-check `profiles.yml`; ensure cluster is running               |
+| `Runtime Error: Catalog 'hive_metastore' does not exist` | Unity Catalog workspace without hive_metastore | Change catalog to your UC catalog name                               |
+| `PERMISSION_DENIED` on storage                           | Databricks can't access ADLS                   | Mount storage or configure Unity Catalog external locations          |
+| `dbt seed` timeout                                       | Large seed files                               | Increase `threads` or reduce seed data size                          |
+| No data in Gold tables                                   | Model SQL has errors                           | Check `dbt run` output for specific model errors; fix SQL and re-run |
 
 ---
 
@@ -1058,12 +1058,12 @@ WHEAT             2023     1,812,000,000
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `Login failed` in Synapse | Microsoft Entra ID not configured | Add your user as Synapse Administrator in IAM |
-| `External table not accessible` | Managed identity lacks storage access | Verify Synapse RBAC from Step 7b |
-| `File not found` in OPENROWSET | Wrong path or data not in Gold | Verify Gold container contents: `az storage blob list --container-name gold --account-name csadlsdev --auth-mode login` |
-| Delta format not supported | Older Synapse runtime | Ensure you're using the built-in serverless pool (supports Delta natively) |
+| Symptom                         | Cause                                 | Fix                                                                                                                     |
+| ------------------------------- | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `Login failed` in Synapse       | Microsoft Entra ID not configured     | Add your user as Synapse Administrator in IAM                                                                           |
+| `External table not accessible` | Managed identity lacks storage access | Verify Synapse RBAC from Step 7b                                                                                        |
+| `File not found` in OPENROWSET  | Wrong path or data not in Gold        | Verify Gold container contents: `az storage blob list --container-name gold --account-name csadlsdev --auth-mode login` |
+| Delta format not supported      | Older Synapse runtime                 | Ensure you're using the built-in serverless pool (supports Delta natively)                                              |
 
 ---
 

@@ -4,11 +4,11 @@
 
 CSA-in-a-Box ships continuously from `main`. There are no long-lived release branches; security fixes land on `main` and are picked up on next consumer pull.
 
-| Version | Supported |
-|---------|-----------|
-| `main` (HEAD) | ✅ |
-| Tagged releases (`v*`) | Best-effort for 90 days after newer tag |
-| Forks / customer copies | Customer-maintained |
+| Version                 | Supported                               |
+| ----------------------- | --------------------------------------- |
+| `main` (HEAD)           | ✅                                      |
+| Tagged releases (`v*`)  | Best-effort for 90 days after newer tag |
+| Forks / customer copies | Customer-maintained                     |
 
 ## Reporting a Vulnerability
 
@@ -20,6 +20,7 @@ Use one of:
 2. **Email** — `security@<maintainer-domain>` (replace with maintainer-of-record contact in your fork).
 
 Please include:
+
 - Affected file(s), commit SHA, or deployment artifact
 - Reproduction steps or PoC
 - Impact assessment (confidentiality / integrity / availability)
@@ -28,22 +29,24 @@ Please include:
 
 ## Response Targets
 
-| Severity | First response | Triage decision | Fix target |
-|----------|---------------|-----------------|------------|
-| Critical (RCE, auth bypass, secret exposure) | 1 business day | 3 business days | 7 days |
-| High (privilege escalation, data leak) | 2 business days | 5 business days | 30 days |
-| Medium (DoS, misconfiguration leading to harm) | 5 business days | 10 business days | 90 days |
-| Low (info disclosure with no PII, hardening) | 10 business days | next quarter | next quarter |
+| Severity                                       | First response   | Triage decision  | Fix target   |
+| ---------------------------------------------- | ---------------- | ---------------- | ------------ |
+| Critical (RCE, auth bypass, secret exposure)   | 1 business day   | 3 business days  | 7 days       |
+| High (privilege escalation, data leak)         | 2 business days  | 5 business days  | 30 days      |
+| Medium (DoS, misconfiguration leading to harm) | 5 business days  | 10 business days | 90 days      |
+| Low (info disclosure with no PII, hardening)   | 10 business days | next quarter     | next quarter |
 
 ## Scope
 
 **In scope:**
+
 - Source under `csa_platform/`, `apps/`, `portal/`, `azure-functions/`
 - IaC under `deploy/bicep/` (mis-defaults that produce insecure deployments)
 - CI/CD workflows under `.github/workflows/` (supply-chain)
 - Documented examples under `examples/` if a referenced default is exploitable
 
 **Out of scope:**
+
 - Issues that require already-compromised credentials or root on the host
 - Vulnerabilities in upstream dependencies — please report to the upstream project; we'll bump after upstream releases
 - Theoretical issues without a working PoC against a representative deployment

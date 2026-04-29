@@ -63,14 +63,14 @@ graph LR
 
 ## Data Sources
 
-| Source                     | Description                                                                                                                      | Volume / Coverage                                         | Update Frequency            | Access Method                                                     |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- | --------------------------- | ----------------------------------------------------------------- |
-| **USGS Earthquake API**    | ComCat earthquake catalog — origin time, magnitude, depth, felt reports, tsunami flags from the Advanced National Seismic System | 8,000+ sensors, ~20,000 events/year globally (M2.5+)      | Real-time (seconds)         | [REST API (GeoJSON)](https://earthquake.usgs.gov/fdsnws/event/1/) |
-| **USGS Water Services**    | National Water Information System (NWIS) — daily and instantaneous streamflow, gauge height, water temperature, dissolved oxygen | 13,000+ active stream gauges, 850,000+ historical sites   | Real-time (15 min) to daily | [REST API (JSON/RDB)](https://waterservices.usgs.gov/)       |
-| **NPS Visitor Statistics** | Monthly recreation visits, camping, lodging, and backcountry use across all NPS units                                            | 400+ park units, 300M+ recreation visits/year             | Monthly                     | [IRMA Stats](https://irma.nps.gov/Stats/)      |
-| **NIFC Wildfire Data**     | National Interagency Fire Center — active fire perimeters, prescribed burns, fire weather zones                                  | 50,000+ fires/year, GIS perimeter polygons                | Daily during fire season    | [ArcGIS REST / GeoJSON](https://data-nifc.opendata.arcgis.com/)   |
-| **FWS ECOS**               | Environmental Conservation Online System — threatened/endangered species listings, critical habitat designations, recovery plans | 1,600+ listed species, 800+ critical habitat designations | Quarterly                   | [ECOS REST API](https://ecos.fws.gov/ecp/)                        |
-| **BLM Public Data**        | Land status, mining claims, grazing allotments, oil & gas lease parcels, right-of-way grants                                     | 245M acres of public land, 63,000+ grazing permits        | Monthly                     | [BLM Geospatial Services](https://www.blm.gov/services/geospatial)              |
+| Source                     | Description                                                                                                                      | Volume / Coverage                                         | Update Frequency            | Access Method                                                      |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- | --------------------------- | ------------------------------------------------------------------ |
+| **USGS Earthquake API**    | ComCat earthquake catalog — origin time, magnitude, depth, felt reports, tsunami flags from the Advanced National Seismic System | 8,000+ sensors, ~20,000 events/year globally (M2.5+)      | Real-time (seconds)         | [REST API (GeoJSON)](https://earthquake.usgs.gov/fdsnws/event/1/)  |
+| **USGS Water Services**    | National Water Information System (NWIS) — daily and instantaneous streamflow, gauge height, water temperature, dissolved oxygen | 13,000+ active stream gauges, 850,000+ historical sites   | Real-time (15 min) to daily | [REST API (JSON/RDB)](https://waterservices.usgs.gov/)             |
+| **NPS Visitor Statistics** | Monthly recreation visits, camping, lodging, and backcountry use across all NPS units                                            | 400+ park units, 300M+ recreation visits/year             | Monthly                     | [IRMA Stats](https://irma.nps.gov/Stats/)                          |
+| **NIFC Wildfire Data**     | National Interagency Fire Center — active fire perimeters, prescribed burns, fire weather zones                                  | 50,000+ fires/year, GIS perimeter polygons                | Daily during fire season    | [ArcGIS REST / GeoJSON](https://data-nifc.opendata.arcgis.com/)    |
+| **FWS ECOS**               | Environmental Conservation Online System — threatened/endangered species listings, critical habitat designations, recovery plans | 1,600+ listed species, 800+ critical habitat designations | Quarterly                   | [ECOS REST API](https://ecos.fws.gov/ecp/)                         |
+| **BLM Public Data**        | Land status, mining claims, grazing allotments, oil & gas lease parcels, right-of-way grants                                     | 245M acres of public land, 63,000+ grazing permits        | Monthly                     | [BLM Geospatial Services](https://www.blm.gov/services/geospatial) |
 
 !!! info "Data Access"
 All Interior datasets listed above are publicly available at no cost. The USGS Earthquake API and Water Services require no authentication. The NPS Stats API is open but rate-limited. NIFC and BLM data are available through ArcGIS Open Data portals. FWS ECOS provides both a web interface and downloadable bulk files.
@@ -462,15 +462,15 @@ examples/interior/
 
 ## Sources
 
-| Resource                    | URL                                                                  |
-| --------------------------- | -------------------------------------------------------------------- |
-| USGS Earthquake Hazards API | <https://earthquake.usgs.gov/fdsnws/event/1/>                        |
-| USGS Water Services (NWIS)  | <https://waterservices.usgs.gov/>                               |
-| NPS Visitor Use Statistics  | <https://irma.nps.gov/Stats/>                         |
-| NPS Stats Portal            | <https://irma.nps.gov/Stats/>                                        |
-| NIFC Open Data              | <https://data-nifc.opendata.arcgis.com/>                             |
-| FWS ECOS                    | <https://ecos.fws.gov/ecp/>                                          |
-| FWS Critical Habitat Maps   | <https://ecos.fws.gov/ecp/report/table/critical-habitat.html> |
+| Resource                    | URL                                                                                                          |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| USGS Earthquake Hazards API | <https://earthquake.usgs.gov/fdsnws/event/1/>                                                                |
+| USGS Water Services (NWIS)  | <https://waterservices.usgs.gov/>                                                                            |
+| NPS Visitor Use Statistics  | <https://irma.nps.gov/Stats/>                                                                                |
+| NPS Stats Portal            | <https://irma.nps.gov/Stats/>                                                                                |
+| NIFC Open Data              | <https://data-nifc.opendata.arcgis.com/>                                                                     |
+| FWS ECOS                    | <https://ecos.fws.gov/ecp/>                                                                                  |
+| FWS Critical Habitat Maps   | <https://ecos.fws.gov/ecp/report/table/critical-habitat.html>                                                |
 | BLM Navigator (replaced)    | <https://www.blm.gov/services/geospatial> (BLM Navigator was retired; geospatial services consolidated here) |
-| BLM Geospatial Services     | <https://www.blm.gov/services/geospatial>                            |
-| USGS National Map           | <https://apps.nationalmap.gov/>                                      |
+| BLM Geospatial Services     | <https://www.blm.gov/services/geospatial>                                                                    |
+| USGS National Map           | <https://apps.nationalmap.gov/>                                                                              |

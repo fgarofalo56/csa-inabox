@@ -116,15 +116,15 @@ The `params.gov.json` parameter file configures:
 
 The deployment enforces HIPAA administrative, physical, and technical safeguards:
 
-| Safeguard             | Implementation                                 | Azure Service                    |
-| --------------------- | ---------------------------------------------- | -------------------------------- |
-| Encryption at rest    | AES-256 with customer-managed keys             | Key Vault + ADLS Gen2            |
-| Encryption in transit | TLS 1.2+ enforced on all endpoints             | Application Gateway / Front Door |
-| Access control        | Microsoft Entra ID with Conditional Access, MFA          | Azure Active Directory           |
-| Audit logging         | All data-plane operations logged               | Monitor Diagnostic Settings      |
-| Network isolation     | Private endpoints, no public IPs               | Private Link + NSGs              |
-| Data Loss Prevention  | Sensitivity labels on PHI columns              | Microsoft Purview                |
-| BAA coverage          | Microsoft BAA covers Azure Government services | Azure Compliance Manager         |
+| Safeguard             | Implementation                                  | Azure Service                    |
+| --------------------- | ----------------------------------------------- | -------------------------------- |
+| Encryption at rest    | AES-256 with customer-managed keys              | Key Vault + ADLS Gen2            |
+| Encryption in transit | TLS 1.2+ enforced on all endpoints              | Application Gateway / Front Door |
+| Access control        | Microsoft Entra ID with Conditional Access, MFA | Azure Active Directory           |
+| Audit logging         | All data-plane operations logged                | Monitor Diagnostic Settings      |
+| Network isolation     | Private endpoints, no public IPs                | Private Link + NSGs              |
+| Data Loss Prevention  | Sensitivity labels on PHI columns               | Microsoft Purview                |
+| BAA coverage          | Microsoft BAA covers Azure Government services  | Azure Compliance Manager         |
 
 !!! note "Business Associate Agreement"
 Microsoft's BAA covers Azure Government services listed in the [HIPAA/HITRUST compliance documentation](https://learn.microsoft.com/en-us/azure/compliance/offerings/offering-hipaa-us). Verify your specific services are covered before processing any real PHI.
@@ -334,7 +334,7 @@ This implementation follows tribal data sovereignty principles aligned with the 
 
 | Principle             | Technical Control                                                                      |
 | --------------------- | -------------------------------------------------------------------------------------- |
-| Tribal ownership      | `tribal_affiliation` column in all tables; RLS filters by Microsoft Entra ID claim               |
+| Tribal ownership      | `tribal_affiliation` column in all tables; RLS filters by Microsoft Entra ID claim     |
 | Consent-based sharing | Data sharing agreements codified as RLS policy exceptions                              |
 | Minimum necessary     | Role-based access tiers (tribal → area → federal) with decreasing granularity          |
 | Audit trail           | All queries logged in Azure Monitor; tribal authorities can audit access to their data |
@@ -412,5 +412,5 @@ Power BI Desktop roles mirror the database-level RLS policies:
 | HIPAA Safe Harbor De-Identification            | <https://www.hhs.gov/hipaa/for-professionals/privacy/special-topics/de-identification/>                    |
 | 42 CFR Part 2 (SUD Confidentiality)            | <https://www.ecfr.gov/current/title-42/chapter-I/subchapter-A/part-2>                                      |
 | Azure Government FedRAMP High                  | <https://learn.microsoft.com/en-us/azure/azure-government/compliance/azure-services-in-fedramp-auditscope> |
-| CDC Social Vulnerability Index                 | <https://www.atsdr.cdc.gov/place-health/php/svi/index.html>                                                            |
+| CDC Social Vulnerability Index                 | <https://www.atsdr.cdc.gov/place-health/php/svi/index.html>                                                |
 | Microsoft HIPAA/HITRUST Compliance             | <https://learn.microsoft.com/en-us/azure/compliance/offerings/offering-hipaa-us>                           |

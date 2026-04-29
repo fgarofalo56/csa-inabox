@@ -67,23 +67,27 @@ may remain as landed raw files (Parquet/JSON/CSV) until promotion.
 ## Pros and Cons of the Options
 
 ### Option 1 — Delta Lake
+
 - Pros: Databricks + Fabric native; ACID; Z-ORDER; open spec; Delta-RS;
   mature dbt adapter; Purview-aware.
 - Cons: Weaker non-Azure engine parity vs. Iceberg; OPTIMIZE overhead.
 
 ### Option 2 — Apache Iceberg
+
 - Pros: Engine-neutral; strong schema evolution; hidden partitioning;
   first-class in Snowflake/Trino/Athena.
 - Cons: Not native to Databricks (as of decision date); Fabric OneLake
   does not write Iceberg natively; Purview lineage is weaker.
 
 ### Option 3 — Apache Hudi
+
 - Pros: Strong CDC and upsert semantics; merge-on-read tables for low-latency
   ingestion.
 - Cons: Smaller Azure ecosystem; no Fabric native story; fewer engineers
   fluent in operations.
 
 ### Option 4 — Raw Parquet
+
 - Pros: Simplest; zero lock-in; every engine reads it.
 - Cons: No ACID; no time travel; compaction is manual; CDC requires custom
   patterns; stats live in an external metastore.
@@ -91,6 +95,7 @@ may remain as landed raw files (Parquet/JSON/CSV) until promotion.
 ## Validation
 
 We will know this decision is right if:
+
 - All Silver and Gold tables in vertical examples are Delta within one
   quarter of onboarding.
 - Purview lineage coverage for Delta tables exceeds 95% of the catalog.

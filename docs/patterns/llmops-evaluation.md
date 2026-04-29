@@ -71,25 +71,25 @@ Every PR that touches a prompt, retriever, or model selection runs:
 # .github/workflows/llm-evals.yml
 name: LLM Evals
 on:
-  pull_request:
-    paths: ['prompts/**', 'apps/copilot/**']
+    pull_request:
+        paths: ["prompts/**", "apps/copilot/**"]
 
 jobs:
-  eval:
-    steps:
-      - run: |
-          python -m apps.copilot.evals.runner \
-            --prompts prompts/triage/v2.txt \
-            --questions prompts/triage/eval/questions.jsonl \
-            --baseline reports/triage-baseline.json \
-            --threshold 0.85 \
-            --output reports/triage-pr.json
+    eval:
+        steps:
+            - run: |
+                  python -m apps.copilot.evals.runner \
+                    --prompts prompts/triage/v2.txt \
+                    --questions prompts/triage/eval/questions.jsonl \
+                    --baseline reports/triage-baseline.json \
+                    --threshold 0.85 \
+                    --output reports/triage-pr.json
 
-      - run: |
-          python -m apps.copilot.evals.compare \
-            --baseline reports/triage-baseline.json \
-            --candidate reports/triage-pr.json \
-            --max-regression 0.05  # fail if quality drops >5%
+            - run: |
+                  python -m apps.copilot.evals.compare \
+                    --baseline reports/triage-baseline.json \
+                    --candidate reports/triage-pr.json \
+                    --max-regression 0.05  # fail if quality drops >5%
 ```
 
 The baseline is committed to the repo and updated when a PR is merged with intentional improvements.
@@ -98,14 +98,14 @@ See [`apps/copilot/evals/`](https://github.com/fgarofalo56/csa-inabox/tree/main/
 
 ## Pattern: eval framework choice
 
-| Framework | Use for |
-|-----------|---------|
-| **Azure AI Evaluation** (Foundry) | Native Azure integration, GPT-as-judge metrics, RAI evaluation |
-| **Promptfoo** | Lightweight, YAML-based, great for local + CI iteration |
-| **DeepEval** | Python-native, pytest integration, robust assertions |
-| **RAGAS** | RAG-specific metrics (faithfulness, context precision/recall) |
-| **TruLens** | RAG + agent observability with feedback functions |
-| **Custom (in-platform)** | When metric is domain-specific and standardized frameworks miss it |
+| Framework                         | Use for                                                            |
+| --------------------------------- | ------------------------------------------------------------------ |
+| **Azure AI Evaluation** (Foundry) | Native Azure integration, GPT-as-judge metrics, RAI evaluation     |
+| **Promptfoo**                     | Lightweight, YAML-based, great for local + CI iteration            |
+| **DeepEval**                      | Python-native, pytest integration, robust assertions               |
+| **RAGAS**                         | RAG-specific metrics (faithfulness, context precision/recall)      |
+| **TruLens**                       | RAG + agent observability with feedback functions                  |
+| **Custom (in-platform)**          | When metric is domain-specific and standardized frameworks miss it |
 
 The platform ships a custom framework under `apps/copilot/evals/` because docs-Q&A has specific metrics (citation quality, refusal calibration). Most teams should use **Promptfoo + Azure AI Evaluation** as the starting combo.
 
@@ -142,13 +142,13 @@ For RAG / agent surfaces, also add **prompt injection detection** (Azure AI Cont
 
 For RAG systems, the retriever is half the quality story. Monitor:
 
-| Metric | Why | Healthy threshold |
-|--------|-----|-------------------|
-| **Recall@K** on eval set | "Does it find the right docs?" | >0.8 for K=5 |
-| **Citation precision** | "Of cited docs, how many were actually used?" | >0.7 |
-| **Empty retrieval rate** | "How often does it return nothing relevant?" | <5% |
-| **Latency p95** | UX | <300ms for retrieval |
-| **Index freshness** | Stale indexes degrade quality silently | Match SLA per corpus |
+| Metric                   | Why                                           | Healthy threshold    |
+| ------------------------ | --------------------------------------------- | -------------------- |
+| **Recall@K** on eval set | "Does it find the right docs?"                | >0.8 for K=5         |
+| **Citation precision**   | "Of cited docs, how many were actually used?" | >0.7                 |
+| **Empty retrieval rate** | "How often does it return nothing relevant?"  | <5%                  |
+| **Latency p95**          | UX                                            | <300ms for retrieval |
+| **Index freshness**      | Stale indexes degrade quality silently        | Match SLA per corpus |
 
 When recall drops, you usually need: **better embeddings**, **better chunking**, **hybrid search (vector + keyword)**, or **reranking**.
 
@@ -158,25 +158,26 @@ Every chat / agent invocation emits a structured trace to Application Insights:
 
 ```json
 {
-  "request_id": "req-abc123",
-  "user_id_hash": "...",
-  "input_tokens": 250,
-  "output_tokens": 180,
-  "model": "gpt-4o-mini",
-  "model_version": "2024-07-18",
-  "retrieved_doc_ids": ["doc-1", "doc-7"],
-  "retrieved_doc_count": 2,
-  "latency_ms": 1240,
-  "content_safety_input_severity": "safe",
-  "content_safety_output_severity": "safe",
-  "agent_iterations": 1,
-  "tools_called": ["search_docs"],
-  "outcome": "success",
-  "user_thumbs": null  // populated on feedback
+    "request_id": "req-abc123",
+    "user_id_hash": "...",
+    "input_tokens": 250,
+    "output_tokens": 180,
+    "model": "gpt-4o-mini",
+    "model_version": "2024-07-18",
+    "retrieved_doc_ids": ["doc-1", "doc-7"],
+    "retrieved_doc_count": 2,
+    "latency_ms": 1240,
+    "content_safety_input_severity": "safe",
+    "content_safety_output_severity": "safe",
+    "agent_iterations": 1,
+    "tools_called": ["search_docs"],
+    "outcome": "success",
+    "user_thumbs": null // populated on feedback
 }
 ```
 
 This telemetry powers:
+
 - Cost dashboards (token spend by feature / user)
 - Quality dashboards (thumbs up/down rate, refusal rate)
 - Drift detection (refusal-rate increase = something changed)
@@ -194,6 +195,7 @@ Weekly job re-runs your eval suite against a sample of **production traces** (no
 ```
 
 Drift causes:
+
 - Azure OpenAI model version updated
 - Corpus changed (silver/gold tables refreshed; index stale)
 - User input distribution shifted (new product, new market)
@@ -201,15 +203,15 @@ Drift causes:
 
 ## Anti-patterns
 
-| Anti-pattern | What to do instead |
-|--------------|--------------------|
-| Prompts in environment variables | Git, with PR review |
-| "It works for the demo" | Run eval suite of 50+ representative inputs |
-| One-shot eval at launch, never re-run | Eval-on-PR + weekly drift job |
-| Blind trust in AOAI defaults | Configure content filters explicitly per deployment |
-| No telemetry | Application Insights structured trace per request |
-| Tuning prompts blind | Track every change; A/B in production with feature flags |
-| Bigger model = better | Often a better retriever + smaller model wins |
+| Anti-pattern                          | What to do instead                                       |
+| ------------------------------------- | -------------------------------------------------------- |
+| Prompts in environment variables      | Git, with PR review                                      |
+| "It works for the demo"               | Run eval suite of 50+ representative inputs              |
+| One-shot eval at launch, never re-run | Eval-on-PR + weekly drift job                            |
+| Blind trust in AOAI defaults          | Configure content filters explicitly per deployment      |
+| No telemetry                          | Application Insights structured trace per request        |
+| Tuning prompts blind                  | Track every change; A/B in production with feature flags |
+| Bigger model = better                 | Often a better retriever + smaller model wins            |
 
 ## Related
 

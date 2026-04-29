@@ -9,12 +9,12 @@ Databricks notebooks, Synapse pipelines, dbt models, and streaming workloads.
 
 CSA-in-a-Box captures lineage at four levels:
 
-| Level | Example | Capture Method |
-|---|---|---|
-| Pipeline | ADF copy activity | Automatic (Purview–ADF integration) |
-| Notebook | Databricks PySpark | OpenLineage Spark integration |
-| SQL Transform | Synapse stored procedures | Automatic (Purview–Synapse integration) |
-| dbt Model | dbt manifest.json → Purview Atlas API | Custom `purview_automation.py` |
+| Level         | Example                               | Capture Method                          |
+| ------------- | ------------------------------------- | --------------------------------------- |
+| Pipeline      | ADF copy activity                     | Automatic (Purview–ADF integration)     |
+| Notebook      | Databricks PySpark                    | OpenLineage Spark integration           |
+| SQL Transform | Synapse stored procedures             | Automatic (Purview–Synapse integration) |
+| dbt Model     | dbt manifest.json → Purview Atlas API | Custom `purview_automation.py`          |
 
 ---
 
@@ -232,13 +232,13 @@ az role assignment create \
 
 ### Supported Activities
 
-| Activity Type | Lineage Support |
-|---|---|
-| Copy activity | ✅ Source → Sink |
-| Data Flow | ✅ Full column-level lineage |
-| Stored Procedure | ✅ If parseable SQL |
+| Activity Type    | Lineage Support                         |
+| ---------------- | --------------------------------------- |
+| Copy activity    | ✅ Source → Sink                        |
+| Data Flow        | ✅ Full column-level lineage            |
+| Stored Procedure | ✅ If parseable SQL                     |
 | Notebook (Spark) | ⚠️ Via OpenLineage (same as Databricks) |
-| SQL Script | ❌ Manual registration needed |
+| SQL Script       | ❌ Manual registration needed           |
 
 ---
 

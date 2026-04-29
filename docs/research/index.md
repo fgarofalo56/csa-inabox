@@ -4,8 +4,8 @@ Long-form research notes, white papers, and platform direction documents.
 
 ## Available
 
-| Document | Length | Purpose |
-|----------|--------|---------|
+| Document                                                    | Length      | Purpose                                                                                                                                         |
+| ----------------------------------------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | [Platform Research Report](CSA-Platform-Research-Report.md) | 1,269 lines | Strategic snapshot — service comparisons, market positioning, roadmap analysis, competitive landscape (Databricks, Snowflake, Palantir, Fabric) |
 
 ## Related

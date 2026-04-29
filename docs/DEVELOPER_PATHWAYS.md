@@ -2,9 +2,8 @@
 
 # Developer Pathways
 
-
 !!! note
-    **Quick Summary**: Role-based navigation guide for the CSA-in-a-Box codebase — find your area of focus (governance, pipelines, infra, portal, AI/ML, Functions, monitoring), jump to the relevant code, and get started with key commands and directory maps.
+**Quick Summary**: Role-based navigation guide for the CSA-in-a-Box codebase — find your area of focus (governance, pipelines, infra, portal, AI/ML, Functions, monitoring), jump to the relevant code, and get started with key commands and directory maps.
 
 This guide maps developer roles to the relevant parts of the codebase. Instead of trying to understand everything at once, focus on the area you'll be working in.
 
@@ -97,54 +96,66 @@ Three function apps: `aiEnrichment/`, `eventProcessing/`, `secretRotation/`. Eac
 ## 🚀 Quick Start by Role
 
 ### Data Engineer
+
 **Focus areas:** `domains/`, `tools/dbt/`, `scripts/seed/`, `scripts/streaming/`
 **Technologies needed:** Python, PySpark, dbt (SQL + Jinja), Delta Lake
 **Getting started:**
+
 - [ ] Run `make setup` (or `make setup-win` on Windows)
 - [ ] Explore `domains/shared/dbt/` for the core data models
 - [ ] Run `make test-dbt` to verify dbt compilation
 - [ ] Review `domains/finance/`, `domains/sales/`, `domains/inventory/` for domain examples
 
 ### Governance Developer
+
 **Focus areas:** `csa_platform/governance/`, `tests/`
 **Technologies needed:** Python, structlog, pytest
 **Getting started:**
+
 - [ ] Run `make setup`
 - [ ] Run `make test` — this validates governance code with 80% coverage gate
 - [ ] Key modules: `csa_platform/csa_platform/governance/contracts/` (data contracts), `csa_platform/csa_platform/governance/dataquality/` (quality rules)
 - [ ] Run `make typecheck` for strict mypy validation
 
 ### Platform / AI Engineer
+
 **Focus areas:** `csa_platform/ai_integration/`, `csa_platform/metadata_framework/`, `csa_platform/data_marketplace/`
 **Technologies needed:** Python, Azure OpenAI, Azure AI Search, FastAPI
 **Getting started:**
+
 - [ ] Run `pip install -e ".[platform]"` for platform dependencies
 - [ ] Explore `csa_platform/ai_integration/rag/` for the RAG pipeline
 - [ ] See `csa_platform/metadata_framework/generator/` for pipeline auto-generation
 - [ ] Run `make typecheck-platform` for type checking
 
 ### Infrastructure / DevOps Engineer
+
 **Focus areas:** `deploy/bicep/`, `monitoring/`, `.github/workflows/`, `portal/kubernetes/`
 **Technologies needed:** Bicep, Azure CLI, GitHub Actions, Helm
 **Getting started:**
+
 - [ ] Run `make lint-bicep` to validate Bicep templates
 - [ ] Review `deploy/bicep/DLZ/` (Data Landing Zone) and `deploy/bicep/DMLZ/` (Data Management Landing Zone)
 - [ ] Check `monitoring/alerts/` for operational alerting
 - [ ] See `.github/workflows/deploy.yml` for CI/CD pipeline
 
 ### Frontend Developer
+
 **Focus areas:** `portal/react-webapp/`, `portal/shared/`
 **Technologies needed:** TypeScript, React/Next.js, Tailwind CSS
 **Getting started:**
+
 - [ ] `cd portal/react-webapp && npm install && npm run dev`
 - [ ] Shared type definitions: `portal/shared/contracts/types.ts`
 - [ ] Component library: `portal/react-webapp/src/components/`
 - [ ] Auth config: `portal/react-webapp/src/services/authConfig.ts`
 
 ### Azure Functions Developer
+
 **Focus areas:** `csa_platform/functions/*/functions/` and `csa_platform/functions/validation/`
 **Technologies needed:** Python, Azure Functions SDK, Azure SDKs
 **Getting started:**
+
 - [ ] Run `pip install -e ".[functions]"`
 - [ ] Three function apps: `aiEnrichment/`, `eventProcessing/`, `secretRotation/`
 - [ ] Each has a `function_app.py` entry point
@@ -154,52 +165,52 @@ Three function apps: `aiEnrichment/`, `eventProcessing/`, `secretRotation/`. Eac
 
 ## 📁 Directory Map
 
-| Directory | Purpose | Owner Role |
-|-----------|---------|------------|
-| `deploy/bicep/` | Infrastructure as Code (Bicep) | DevOps |
-| `domains/` | Data domain models (finance, sales, inventory) | Data Engineer |
-| `examples/` | Reference implementations for gov agencies | Data Engineer |
-| `csa_platform/governance/` | Data governance framework (contracts, quality, RBAC) | Governance Dev |
-| `monitoring/` | Alerting and dashboards (Bicep + Grafana) | DevOps |
-| `csa_platform/` | Platform services (AI, metadata, marketplace) | Platform Engineer |
-| `portal/` | Web portal (React, K8s deployment) | Frontend Dev |
-| `scripts/` | Operational scripts (deploy, seed, monitor) | DevOps |
-| `templates/` | Data product templates | Data Engineer |
-| `tests/` | Test suite (unit, e2e, contracts, load) | All |
-| `tools/` | Development tools (dbt) | Data Engineer |
+| Directory                  | Purpose                                              | Owner Role        |
+| -------------------------- | ---------------------------------------------------- | ----------------- |
+| `deploy/bicep/`            | Infrastructure as Code (Bicep)                       | DevOps            |
+| `domains/`                 | Data domain models (finance, sales, inventory)       | Data Engineer     |
+| `examples/`                | Reference implementations for gov agencies           | Data Engineer     |
+| `csa_platform/governance/` | Data governance framework (contracts, quality, RBAC) | Governance Dev    |
+| `monitoring/`              | Alerting and dashboards (Bicep + Grafana)            | DevOps            |
+| `csa_platform/`            | Platform services (AI, metadata, marketplace)        | Platform Engineer |
+| `portal/`                  | Web portal (React, K8s deployment)                   | Frontend Dev      |
+| `scripts/`                 | Operational scripts (deploy, seed, monitor)          | DevOps            |
+| `templates/`               | Data product templates                               | Data Engineer     |
+| `tests/`                   | Test suite (unit, e2e, contracts, load)              | All               |
+| `tools/`                   | Development tools (dbt)                              | Data Engineer     |
 
 ---
 
 ## ⌨️ Common Tasks
 
-| Task | Command |
-|------|---------|
-| Set up dev environment | `make setup` / `make setup-win` |
-| Run all tests | `make test` |
-| Run linter | `make lint` |
-| Auto-fix lint issues | `make lint-fix` |
-| Type check governance | `make typecheck` |
-| Type check platform | `make typecheck-platform` |
-| Validate Bicep | `make lint-bicep` |
-| Run dbt tests | `make test-dbt` |
-| Deploy to dev (dry run) | `make deploy-dev` |
-| Load sample data | `make seed` |
-| Run security scan | `make security` |
+| Task                    | Command                         |
+| ----------------------- | ------------------------------- |
+| Set up dev environment  | `make setup` / `make setup-win` |
+| Run all tests           | `make test`                     |
+| Run linter              | `make lint`                     |
+| Auto-fix lint issues    | `make lint-fix`                 |
+| Type check governance   | `make typecheck`                |
+| Type check platform     | `make typecheck-platform`       |
+| Validate Bicep          | `make lint-bicep`               |
+| Run dbt tests           | `make test-dbt`                 |
+| Deploy to dev (dry run) | `make deploy-dev`               |
+| Load sample data        | `make seed`                     |
+| Run security scan       | `make security`                 |
 
 ---
 
 ## 📛 Directory Naming Conventions
 
 !!! warning
-    Directory names in this repo use **mixed conventions** for historical reasons. Do **not** rename existing directories, as doing so would break Python imports, Bicep module references, CI/CD paths, and dbt project references.
+Directory names in this repo use **mixed conventions** for historical reasons. Do **not** rename existing directories, as doing so would break Python imports, Bicep module references, CI/CD paths, and dbt project references.
 
 The naming styles present in the codebase are:
 
-| Style | Examples | Where |
-|-------|----------|-------|
-| `snake_case` | `ai_integration`, `data_marketplace`, `data_activator`, `metadata_framework` | Python packages under `csa_platform/governance/`, `csa_platform/` |
-| `camelCase` | `aiEnrichment`, `eventProcessing`, `secretRotation` | Azure Functions app subdirectories under `csa_platform/functions/` |
-| `lowercase` | `finops`, `rbac`, `purview` | Short single-word names |
+| Style        | Examples                                                                     | Where                                                              |
+| ------------ | ---------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `snake_case` | `ai_integration`, `data_marketplace`, `data_activator`, `metadata_framework` | Python packages under `csa_platform/governance/`, `csa_platform/`  |
+| `camelCase`  | `aiEnrichment`, `eventProcessing`, `secretRotation`                          | Azure Functions app subdirectories under `csa_platform/functions/` |
+| `lowercase`  | `finops`, `rbac`, `purview`                                                  | Short single-word names                                            |
 
 **Guidelines for new directories:**
 
@@ -214,6 +225,7 @@ The naming styles present in the codebase are:
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system architecture.
 
 **High-level structure:**
+
 - **Data Mesh pattern**: Each domain (finance, sales, inventory) owns its data models
 - **Medallion architecture**: Bronze (raw) → Silver (cleaned) → Gold (business-ready)
 - **Governance as code**: Data contracts, quality rules, and RBAC policies defined in YAML/JSON

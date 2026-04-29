@@ -1,6 +1,5 @@
 # RAG vs. Fine-Tuning vs. Agents
 
-
 ## TL;DR
 
 Default to **RAG** for domain Q&A over changing knowledge. **Fine-tune** only for style or narrow syntax on a stable corpus. Use **Agents** for bounded, tool-using workflows with human-in-the-loop on write actions.
@@ -44,6 +43,7 @@ flowchart TD
 **Why:** Grounded; updates at ingest cadence; auditable.
 **Tradeoffs:** Cost — embeddings + vector + LLM, scales linearly; Latency — seconds; Compliance — Azure OpenAI Commercial + Gov with data residency; Skill — Python + embedding SDKs + eval discipline.
 **Anti-patterns:**
+
 - One-shot transforms the base model already does (summarization, translation).
 - Skipping evals — retrieval quality caps answer quality.
 
@@ -55,6 +55,7 @@ flowchart TD
 **Why:** Lock in domain syntax or brand voice.
 **Tradeoffs:** Cost — training + custom inference ($$$); Latency — same as base; Compliance — training data residency must be proven; Skill — training data curation + eval.
 **Anti-patterns:**
+
 - Fine-tuning for fresh knowledge — use RAG.
 - <1,000 examples — hurts base without meaningful gain.
 
@@ -66,6 +67,7 @@ flowchart TD
 **Why:** Automates multi-step reasoning over curated tools.
 **Tradeoffs:** Cost — multiple LLM calls ($$$); Latency — seconds to minutes; Compliance — tool-use must be tamper-evident (CSA-0016); Skill — highest ramp.
 **Anti-patterns:**
+
 - Open-ended agent with production writes and no approval gate.
 - Building an agent when a single RAG + structured output would do.
 

@@ -4,28 +4,28 @@
 
 ## Top scenarios
 
-| Scenario | Pattern | Latency | Reference |
-|----------|---------|---------|-----------|
-| **Real-time fraud detection** | Streaming + ML scoring + write-back | sub-100ms | [Tutorial 05 — Streaming Lambda](../tutorials/05-streaming-lambda/README.md), [Use Case — Anomaly Detection](../use-cases/realtime-intelligence-anomaly-detection.md) |
-| **AML transaction monitoring** | Batch + graph + alert workflow | minutes-hours | [Example — ML Lifecycle](../examples/ml-lifecycle.md) (loan default → adapt for AML) |
-| **Customer 360** | Medallion gold + reverse-ETL + Power BI | minutes | [Reference Arch — Data Flow](../reference-architecture/data-flow-medallion.md) |
-| **Risk modeling (FRTB, IFRS 9)** | Spark + Monte Carlo + result persistence | overnight | [Tutorial 06 — AI Foundry](../tutorials/06-ai-analytics-foundry/README.md) |
-| **Regulatory reporting (BCBS 239, MiFID II)** | dbt models + audit trail + signing | daily | [Best Practices — Data Governance](../best-practices/data-governance.md) |
-| **Algorithmic trading research** | Tick data + backtesting + ML | research / batch | [Example — Streaming](../examples/streaming.md) (adapt) |
-| **Insurance claims AI triage** | RAG + agents + claims-system integration | seconds | [Tutorial 08 — RAG](../tutorials/08-rag-vector-search/README.md), [Tutorial 07 — Agents](../tutorials/07-agents-foundry-sk/README.md) |
-| **Customer GenAI (chat, doc Q&A)** | RAG + grounding + content safety | seconds | [Example — AI Agents](../examples/ai-agents.md), [Example — Fabric Data Agent](../examples/fabric-data-agent.md) |
+| Scenario                                      | Pattern                                  | Latency          | Reference                                                                                                                                                             |
+| --------------------------------------------- | ---------------------------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Real-time fraud detection**                 | Streaming + ML scoring + write-back      | sub-100ms        | [Tutorial 05 — Streaming Lambda](../tutorials/05-streaming-lambda/README.md), [Use Case — Anomaly Detection](../use-cases/realtime-intelligence-anomaly-detection.md) |
+| **AML transaction monitoring**                | Batch + graph + alert workflow           | minutes-hours    | [Example — ML Lifecycle](../examples/ml-lifecycle.md) (loan default → adapt for AML)                                                                                  |
+| **Customer 360**                              | Medallion gold + reverse-ETL + Power BI  | minutes          | [Reference Arch — Data Flow](../reference-architecture/data-flow-medallion.md)                                                                                        |
+| **Risk modeling (FRTB, IFRS 9)**              | Spark + Monte Carlo + result persistence | overnight        | [Tutorial 06 — AI Foundry](../tutorials/06-ai-analytics-foundry/README.md)                                                                                            |
+| **Regulatory reporting (BCBS 239, MiFID II)** | dbt models + audit trail + signing       | daily            | [Best Practices — Data Governance](../best-practices/data-governance.md)                                                                                              |
+| **Algorithmic trading research**              | Tick data + backtesting + ML             | research / batch | [Example — Streaming](../examples/streaming.md) (adapt)                                                                                                               |
+| **Insurance claims AI triage**                | RAG + agents + claims-system integration | seconds          | [Tutorial 08 — RAG](../tutorials/08-rag-vector-search/README.md), [Tutorial 07 — Agents](../tutorials/07-agents-foundry-sk/README.md)                                 |
+| **Customer GenAI (chat, doc Q&A)**            | RAG + grounding + content safety         | seconds          | [Example — AI Agents](../examples/ai-agents.md), [Example — Fabric Data Agent](../examples/fabric-data-agent.md)                                                      |
 
 ## Regulatory landscape
 
-| Framework | Where in CSA-in-a-Box |
-|-----------|----------------------|
-| **SOC 2 Type II** | [Compliance — SOC 2](../compliance/soc2-type2.md) |
-| **PCI-DSS v4.0** (if handling card data) | [Compliance — PCI-DSS](../compliance/pci-dss-v4.md) |
-| **GDPR / CCPA** | [Compliance — GDPR](../compliance/gdpr-privacy.md) |
-| **SOX** (public companies) | Same controls as SOC 2 + financial-reporting evidence |
-| **GLBA** (US banks) | [Compliance — NIST 800-53](../compliance/nist-800-53-rev5.md) covers most |
-| **Basel III / FRTB** (capital adequacy) | Out of scope for platform; the **risk model results** must be reproducible (use dbt + git) |
-| **MiFID II** (EU markets) | Transaction reporting + best-execution evidence — capture in bronze, report from gold |
+| Framework                                  | Where in CSA-in-a-Box                                                                                          |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| **SOC 2 Type II**                          | [Compliance — SOC 2](../compliance/soc2-type2.md)                                                              |
+| **PCI-DSS v4.0** (if handling card data)   | [Compliance — PCI-DSS](../compliance/pci-dss-v4.md)                                                            |
+| **GDPR / CCPA**                            | [Compliance — GDPR](../compliance/gdpr-privacy.md)                                                             |
+| **SOX** (public companies)                 | Same controls as SOC 2 + financial-reporting evidence                                                          |
+| **GLBA** (US banks)                        | [Compliance — NIST 800-53](../compliance/nist-800-53-rev5.md) covers most                                      |
+| **Basel III / FRTB** (capital adequacy)    | Out of scope for platform; the **risk model results** must be reproducible (use dbt + git)                     |
+| **MiFID II** (EU markets)                  | Transaction reporting + best-execution evidence — capture in bronze, report from gold                          |
 | **DORA** (EU operational resilience, 2025) | Heavy overlap with [DR.md](../DR.md) + [Runbooks](../runbooks/data-pipeline-failure.md); also third-party risk |
 
 ## Reference architecture variations

@@ -79,27 +79,27 @@ Then **all** private endpoints in **all** spokes register A records into the **s
 
 ## Pattern: required Private DNS zones (typical analytics platform)
 
-| Service | Zone |
-|---------|------|
-| Storage Blob | `privatelink.blob.core.windows.net` |
-| Storage DFS | `privatelink.dfs.core.windows.net` |
-| Storage File | `privatelink.file.core.windows.net` |
-| Storage Queue | `privatelink.queue.core.windows.net` |
-| Key Vault | `privatelink.vaultcore.azure.net` |
-| SQL DB | `privatelink.database.windows.net` |
-| Synapse SQL | `privatelink.sql.azuresynapse.net` |
-| Synapse Dev | `privatelink.dev.azuresynapse.net` |
-| Cosmos | `privatelink.documents.azure.com` |
-| Azure OpenAI / Cognitive Services | `privatelink.openai.azure.com`, `privatelink.cognitiveservices.azure.com` |
-| AI Search | `privatelink.search.windows.net` |
-| Container Registry | `privatelink.azurecr.io` |
-| AKS | `privatelink.<region>.azmk8s.io` |
-| Functions / App Service | `privatelink.azurewebsites.net` |
-| Event Hub | `privatelink.servicebus.windows.net` |
-| Event Grid | `privatelink.eventgrid.azure.net` |
-| Service Bus | `privatelink.servicebus.windows.net` |
-| Purview | `privatelink.purview.azure.com`, `privatelink.purviewstudio.azure.com` |
-| Azure Monitor | `privatelink.monitor.azure.com`, `privatelink.oms.opinsights.azure.com`, `privatelink.ods.opinsights.azure.com`, `privatelink.agentsvc.azure-automation.net` |
+| Service                           | Zone                                                                                                                                                         |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Storage Blob                      | `privatelink.blob.core.windows.net`                                                                                                                          |
+| Storage DFS                       | `privatelink.dfs.core.windows.net`                                                                                                                           |
+| Storage File                      | `privatelink.file.core.windows.net`                                                                                                                          |
+| Storage Queue                     | `privatelink.queue.core.windows.net`                                                                                                                         |
+| Key Vault                         | `privatelink.vaultcore.azure.net`                                                                                                                            |
+| SQL DB                            | `privatelink.database.windows.net`                                                                                                                           |
+| Synapse SQL                       | `privatelink.sql.azuresynapse.net`                                                                                                                           |
+| Synapse Dev                       | `privatelink.dev.azuresynapse.net`                                                                                                                           |
+| Cosmos                            | `privatelink.documents.azure.com`                                                                                                                            |
+| Azure OpenAI / Cognitive Services | `privatelink.openai.azure.com`, `privatelink.cognitiveservices.azure.com`                                                                                    |
+| AI Search                         | `privatelink.search.windows.net`                                                                                                                             |
+| Container Registry                | `privatelink.azurecr.io`                                                                                                                                     |
+| AKS                               | `privatelink.<region>.azmk8s.io`                                                                                                                             |
+| Functions / App Service           | `privatelink.azurewebsites.net`                                                                                                                              |
+| Event Hub                         | `privatelink.servicebus.windows.net`                                                                                                                         |
+| Event Grid                        | `privatelink.eventgrid.azure.net`                                                                                                                            |
+| Service Bus                       | `privatelink.servicebus.windows.net`                                                                                                                         |
+| Purview                           | `privatelink.purview.azure.com`, `privatelink.purviewstudio.azure.com`                                                                                       |
+| Azure Monitor                     | `privatelink.monitor.azure.com`, `privatelink.oms.opinsights.azure.com`, `privatelink.ods.opinsights.azure.com`, `privatelink.agentsvc.azure-automation.net` |
 
 Provision **all** of these in the hub subscription up front, even if not yet used. Adding them later means re-linking all spokes.
 
@@ -122,13 +122,13 @@ Conditional forwarders on the on-prem DNS server forward `*.blob.core.windows.ne
 
 Egress + east-west inspection should funnel through Azure Firewall:
 
-| Capability | Use for |
-|------------|---------|
-| **DNS Proxy** | All workload DNS resolution → AzFW → Private DNS Zones (consistent resolution) |
+| Capability            | Use for                                                                                         |
+| --------------------- | ----------------------------------------------------------------------------------------------- |
+| **DNS Proxy**         | All workload DNS resolution → AzFW → Private DNS Zones (consistent resolution)                  |
 | **FQDN-based egress** | Allow `*.openai.azure.com` outbound; deny `*.openai.com` (catches accidental public OpenAI use) |
-| **TLS Inspection** | For regulated workloads — inspect outbound TLS for DLP / threat |
-| **IDPS** | Built-in IDS/IPS, signatures auto-updated |
-| **URL filtering** | Block known-bad categories outbound |
+| **TLS Inspection**    | For regulated workloads — inspect outbound TLS for DLP / threat                                 |
+| **IDPS**              | Built-in IDS/IPS, signatures auto-updated                                                       |
+| **URL filtering**     | Block known-bad categories outbound                                                             |
 
 ## Pattern: forced tunneling for on-prem proxy
 
@@ -183,15 +183,15 @@ resource nsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
 
 ## Anti-patterns
 
-| Anti-pattern | What to do instead |
-|--------------|--------------------|
-| Per-spoke Private DNS zones | Single zone in hub, linked to all spokes |
-| Public IPs on data plane resources | Private endpoints + AzFW for required egress |
-| Custom DNS pointing at 8.8.8.8 in spokes | Point at AzFW DNS proxy (which uses Private DNS zones) |
-| `Allow Public Network Access` on Storage / KV / etc. | Set to `Disabled` once private endpoints are wired |
-| Service endpoints instead of private endpoints | PE is strictly better — VNet integration + private IP. Use SE only as fallback for services without PE |
-| Hub firewall as single point of failure | Zone-redundant deploy in single region; paired-region for DR |
-| Adding new Private DNS zones after spokes are populated | Provision all zones up front; re-linking is painful |
+| Anti-pattern                                            | What to do instead                                                                                     |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Per-spoke Private DNS zones                             | Single zone in hub, linked to all spokes                                                               |
+| Public IPs on data plane resources                      | Private endpoints + AzFW for required egress                                                           |
+| Custom DNS pointing at 8.8.8.8 in spokes                | Point at AzFW DNS proxy (which uses Private DNS zones)                                                 |
+| `Allow Public Network Access` on Storage / KV / etc.    | Set to `Disabled` once private endpoints are wired                                                     |
+| Service endpoints instead of private endpoints          | PE is strictly better — VNet integration + private IP. Use SE only as fallback for services without PE |
+| Hub firewall as single point of failure                 | Zone-redundant deploy in single region; paired-region for DR                                           |
+| Adding new Private DNS zones after spokes are populated | Provision all zones up front; re-linking is painful                                                    |
 
 ## Related
 

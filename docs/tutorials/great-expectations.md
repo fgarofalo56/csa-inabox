@@ -2,14 +2,13 @@
 
 # Great Expectations Tutorial (CSA-0074)
 
-
 !!! tip
-    **TL;DR** - Stand up a Great Expectations 1.x project, write an
-    expectation suite against ADLS Gen2 Bronze/Silver Delta tables, run a
-    checkpoint as a PR gate, and plug the result into the CSA-in-a-Box
-    governance runner (`csa_platform/governance/dataquality/ge_runner.py`).
-    A fully runnable example lives at
-    [`csa_platform/governance/dataquality/ge_example/`](../../csa_platform/governance/dataquality/ge_example/).
+**TL;DR** - Stand up a Great Expectations 1.x project, write an
+expectation suite against ADLS Gen2 Bronze/Silver Delta tables, run a
+checkpoint as a PR gate, and plug the result into the CSA-in-a-Box
+governance runner (`csa_platform/governance/dataquality/ge_runner.py`).
+A fully runnable example lives at
+[`csa_platform/governance/dataquality/ge_example/`](../../csa_platform/governance/dataquality/ge_example/).
 
 Great Expectations (GE) is the data-quality backbone of CSA-in-a-Box. The
 platform's governance runner already has a stable interface for executing
@@ -38,13 +37,13 @@ in eight numbered steps.
   Pandas - a concrete ADLS snippet is included at the end of each step).
 - Access to the CSA-in-a-Box repo. From the repo root:
 
-  ```bash
-  pip install -e ".[tutorials]"
-  ```
+    ```bash
+    pip install -e ".[tutorials]"
+    ```
 
-  The `tutorials` extra pins `great-expectations>=1.0.0`. GE is intentionally
-  not a core dependency of the repo - it is ~200 MB installed and only the
-  data-quality surface needs it.
+    The `tutorials` extra pins `great-expectations>=1.0.0`. GE is intentionally
+    not a core dependency of the repo - it is ~200 MB installed and only the
+    data-quality surface needs it.
 
 - The runnable companion example for this tutorial lives at
   [`csa_platform/governance/dataquality/ge_example/`](../../csa_platform/governance/dataquality/ge_example/).
@@ -57,34 +56,34 @@ in eight numbered steps.
 
 1. Create the project directory.
 
-   ```bash
-   mkdir -p csa_platform/governance/dataquality/ge_example
-   cd       csa_platform/governance/dataquality/ge_example
-   ```
+    ```bash
+    mkdir -p csa_platform/governance/dataquality/ge_example
+    cd       csa_platform/governance/dataquality/ge_example
+    ```
 
-   (The repo already contains this folder. Re-run the next step in a
-   scratch directory if you prefer to start from empty.)
+    (The repo already contains this folder. Re-run the next step in a
+    scratch directory if you prefer to start from empty.)
 
 2. Install GE via the `tutorials` extra.
 
-   ```bash
-   pip install -e ".[tutorials]"
-   python -c "import great_expectations as gx; print(gx.__version__)"
-   # -> 1.x.x
-   ```
+    ```bash
+    pip install -e ".[tutorials]"
+    python -c "import great_expectations as gx; print(gx.__version__)"
+    # -> 1.x.x
+    ```
 
 3. Point GE at the config shipped with the example.
 
-   ```python
-   import great_expectations as gx
+    ```python
+    import great_expectations as gx
 
-   context = gx.get_context(project_root_dir="csa_platform/governance/dataquality/ge_example")
-   print(type(context).__name__)   # -> FileDataContext
-   ```
+    context = gx.get_context(project_root_dir="csa_platform/governance/dataquality/ge_example")
+    print(type(context).__name__)   # -> FileDataContext
+    ```
 
-   Using the shipped `great_expectations.yml` rather than the default
-   `gx init` output keeps the CSA governance runner happy: stores,
-   checkpoints, and data_docs all land under predictable paths.
+    Using the shipped `great_expectations.yml` rather than the default
+    `gx init` output keeps the CSA governance runner happy: stores,
+    checkpoints, and data_docs all land under predictable paths.
 
 ---
 
@@ -290,12 +289,12 @@ To wire the tutorial's checkpoint into the runner:
    `csa_platform/great_expectations/checkpoints/`).
 3. From a Databricks notebook with an active `SparkSession`:
 
-   ```python
-   import great_expectations as gx
+    ```python
+    import great_expectations as gx
 
-   context = gx.get_context(project_root_dir="<repo>/csa_platform/governance/dataquality/ge_example")
-   result  = context.checkpoints.get("daily_quality").run(batch_parameters={"dataframe": df})
-   ```
+    context = gx.get_context(project_root_dir="<repo>/csa_platform/governance/dataquality/ge_example")
+    result  = context.checkpoints.get("daily_quality").run(batch_parameters={"dataframe": df})
+    ```
 
 The runner reports every suite outcome through the shared structlog
 surface (`csa_platform.governance.common.logging`) so checkpoint runs show
@@ -312,26 +311,26 @@ Add a single job to the existing governance workflow (or to a new
 name: Data Quality
 
 on:
-  pull_request:
-    paths:
-      - 'csa_platform/governance/dataquality/**'
-      - 'domains/**/models/**'
+    pull_request:
+        paths:
+            - "csa_platform/governance/dataquality/**"
+            - "domains/**/models/**"
 
 jobs:
-  checkpoint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Install tutorials extra
-        run: pip install -e ".[tutorials]"
-      - name: Run checkpoint
-        run: |
-          python csa_platform/governance/dataquality/ge_example/ge_demo.py
-      - name: Run suite tests
-        run: pytest csa_platform/governance/dataquality/ge_example/tests/ -v
+    checkpoint:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-python@v5
+              with:
+                  python-version: "3.12"
+            - name: Install tutorials extra
+              run: pip install -e ".[tutorials]"
+            - name: Run checkpoint
+              run: |
+                  python csa_platform/governance/dataquality/ge_example/ge_demo.py
+            - name: Run suite tests
+              run: pytest csa_platform/governance/dataquality/ge_example/tests/ -v
 ```
 
 The job fails the PR when any expectation fails. Data Docs are built

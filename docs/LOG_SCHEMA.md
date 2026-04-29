@@ -2,9 +2,8 @@
 
 # Log Schema
 
-
 !!! note
-    **Quick Summary**: Structured JSON logging schema for all CSA-in-a-Box Python services via structlog — baseline fields (service, timestamp, level, event, trace_id, correlation_id), per-trigger binding conventions (HTTP, Blob, Event Hub, Timer, CLI), and KQL queries for Log Analytics parsing.
+**Quick Summary**: Structured JSON logging schema for all CSA-in-a-Box Python services via structlog — baseline fields (service, timestamp, level, event, trace_id, correlation_id), per-trigger binding conventions (HTTP, Blob, Event Hub, Timer, CLI), and KQL queries for Log Analytics parsing.
 
 All Python services in CSA-in-a-Box emit structured JSON log lines via
 `governance.common.logging` (which wraps [structlog](https://www.structlog.org)).
@@ -17,15 +16,15 @@ it.
 - [📋 1. Baseline Fields](#-1-baseline-fields)
 - [⚙️ 2. Services and Their Canonical Events](#️-2-services-and-their-canonical-events)
 - [🔗 3. Trigger Bindings](#-3-trigger-bindings)
-  - [HTTP triggers](#http-triggers)
-  - [Blob triggers](#blob-triggers)
-  - [Event Hub (batch) triggers](#event-hub-batch-triggers)
-  - [Timer triggers](#timer-triggers)
-  - [CLI entry points](#cli-entry-points)
+    - [HTTP triggers](#http-triggers)
+    - [Blob triggers](#blob-triggers)
+    - [Event Hub (batch) triggers](#event-hub-batch-triggers)
+    - [Timer triggers](#timer-triggers)
+    - [CLI entry points](#cli-entry-points)
 - [📊 4. Log Analytics Parsing](#-4-log-analytics-parsing)
-  - [Follow a single request end-to-end](#follow-a-single-request-end-to-end)
-  - [Top error events per service in the last hour](#top-error-events-per-service-in-the-last-hour)
-  - [Batch throughput for the event processor](#batch-throughput-for-the-event-processor)
+    - [Follow a single request end-to-end](#follow-a-single-request-end-to-end)
+    - [Top error events per service in the last hour](#top-error-events-per-service-in-the-last-hour)
+    - [Batch throughput for the event processor](#batch-throughput-for-the-event-processor)
 - [💻 5. Local and Console Output](#-5-local-and-console-output)
 
 ---
@@ -34,14 +33,14 @@ it.
 
 Every log line contains these fields, always at the top level:
 
-| Field | Type | Example | Notes |
-|---|---|---|---|
-| `service` | string | `"csa-ai-enrichment"` | Set at process start via `configure_structlog(service=...)`. The source-of-truth mapping from service name to logical component is this table — add a row whenever a new service starts emitting logs. |
-| `timestamp` | string (ISO-8601, UTC) | `"2026-04-10T15:23:47.123456Z"` | Always UTC. Uses structlog's `TimeStamper(fmt="iso", utc=True)`. |
-| `level` | string | `"info"` | Lowercase: `debug`, `info`, `warning`, `error`, `critical`. |
-| `event` | string | `"request.received"` | The message id. Follow dotted-namespaced verbs (`request.received`, `enrichment.text_failed`, `batch.completed`). |
-| `trace_id` | string (32-hex) | `"0af7651916cd43dd8448eb211c80319c"` | W3C trace id. Added automatically inside `bind_trace_context(...)`. Same value across all log lines emitted for the same request / batch. |
-| `correlation_id` | string (UUID4) | `"8e1a3c74-…"` | Correlation id bound for the current unit of work. Same value across all log lines for the run, but may differ from trace_id when the caller supplies a business-level correlation id. |
+| Field            | Type                   | Example                              | Notes                                                                                                                                                                                                  |
+| ---------------- | ---------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `service`        | string                 | `"csa-ai-enrichment"`                | Set at process start via `configure_structlog(service=...)`. The source-of-truth mapping from service name to logical component is this table — add a row whenever a new service starts emitting logs. |
+| `timestamp`      | string (ISO-8601, UTC) | `"2026-04-10T15:23:47.123456Z"`      | Always UTC. Uses structlog's `TimeStamper(fmt="iso", utc=True)`.                                                                                                                                       |
+| `level`          | string                 | `"info"`                             | Lowercase: `debug`, `info`, `warning`, `error`, `critical`.                                                                                                                                            |
+| `event`          | string                 | `"request.received"`                 | The message id. Follow dotted-namespaced verbs (`request.received`, `enrichment.text_failed`, `batch.completed`).                                                                                      |
+| `trace_id`       | string (32-hex)        | `"0af7651916cd43dd8448eb211c80319c"` | W3C trace id. Added automatically inside `bind_trace_context(...)`. Same value across all log lines emitted for the same request / batch.                                                              |
+| `correlation_id` | string (UUID4)         | `"8e1a3c74-…"`                       | Correlation id bound for the current unit of work. Same value across all log lines for the run, but may differ from trace_id when the caller supplies a business-level correlation id.                 |
 
 Any additional key/value pairs come from the caller (via `logger.info("event", foo="bar")`) or from fields bound at trigger entry (`bind_trace_context(request_path=..., batch_size=...)`).
 
@@ -49,15 +48,15 @@ Any additional key/value pairs come from the caller (via `logger.info("event", f
 
 ## ⚙️ 2. Services and Their Canonical Events
 
-| Service | Emitting module | Canonical events |
-|---|---|---|
-| `csa-data-quality` | `csa_platform/csa_platform/governance/dataquality/run_quality_checks.py` | `data_quality.run_started`, `data_quality.run_completed`, `dbt.test_failed`, `volume.check_result`, `freshness.result`, `report.emitted` |
-| `csa-ai-enrichment` | `csa_platform/functions/aiEnrichment/functions/function_app.py` | `request.received`, `request.invalid_json`, `request.missing_field`, `request.payload_too_large`, `request.completed`, `blob.received`, `blob.unsupported_type`, `blob.completed`, `enrichment.text_failed`, `enrichment.document_failed`, `ai_client.import_failed` |
-| `csa-event-processing` | `csa_platform/functions/eventProcessing/functions/function_app.py` | `batch.received`, `batch.completed`, `event.invalid_json`, `event.processing_failed`, `replay.request_received`, `replay.invalid_json`, `replay.empty_payload`, `replay.completed`, `heartbeat`, `timer.past_due` |
+| Service                | Emitting module                                                          | Canonical events                                                                                                                                                                                                                                                     |
+| ---------------------- | ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `csa-data-quality`     | `csa_platform/csa_platform/governance/dataquality/run_quality_checks.py` | `data_quality.run_started`, `data_quality.run_completed`, `dbt.test_failed`, `volume.check_result`, `freshness.result`, `report.emitted`                                                                                                                             |
+| `csa-ai-enrichment`    | `csa_platform/functions/aiEnrichment/functions/function_app.py`          | `request.received`, `request.invalid_json`, `request.missing_field`, `request.payload_too_large`, `request.completed`, `blob.received`, `blob.unsupported_type`, `blob.completed`, `enrichment.text_failed`, `enrichment.document_failed`, `ai_client.import_failed` |
+| `csa-event-processing` | `csa_platform/functions/eventProcessing/functions/function_app.py`       | `batch.received`, `batch.completed`, `event.invalid_json`, `event.processing_failed`, `replay.request_received`, `replay.invalid_json`, `replay.empty_payload`, `replay.completed`, `heartbeat`, `timer.past_due`                                                    |
 
 !!! important
-    When a service adds a new event, add it here so operators have a single
-    index of what can appear in the log stream.
+When a service adds a new event, add it here so operators have a single
+index of what can appear in the log stream.
 
 ---
 

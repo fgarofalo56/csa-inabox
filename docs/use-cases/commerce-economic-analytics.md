@@ -320,15 +320,15 @@ This implementation is designed for deployment on **Azure Government** (IL4/IL5)
 !!! warning "FISMA Requirements"
 Commerce Bureau data pipelines handling CUI (Controlled Unclassified Information) must operate within a FISMA Moderate boundary. Ensure all Azure services are deployed in `usgovvirginia` or `usgovarizona` regions.
 
-| Control Area                | Implementation                                                              | Azure Service       |
-| --------------------------- | --------------------------------------------------------------------------- | ------------------- |
-| Access Control (AC)         | Microsoft Entra ID with RBAC, Managed Identities for service-to-service               | Microsoft Entra ID / Entra ID |
-| Audit & Accountability (AU) | Diagnostic settings on all services, Log Analytics workspace                | Azure Monitor       |
-| Data Encryption at Rest     | ADLS Gen2 with customer-managed keys in Key Vault                           | Azure Key Vault     |
-| Data Encryption in Transit  | TLS 1.2+ enforced, Private Endpoints for all data services                  | Azure Private Link  |
-| API Key Management          | Census/BEA API keys stored in Key Vault, referenced via ADF linked services | Azure Key Vault     |
-| Network Isolation           | VNet integration for ADF, Synapse, and compute resources                    | Azure VNet + NSGs   |
-| Boundary Protection (SC)    | No public endpoints; all traffic routed through private endpoints           | Azure Private DNS   |
+| Control Area                | Implementation                                                              | Azure Service                 |
+| --------------------------- | --------------------------------------------------------------------------- | ----------------------------- |
+| Access Control (AC)         | Microsoft Entra ID with RBAC, Managed Identities for service-to-service     | Microsoft Entra ID / Entra ID |
+| Audit & Accountability (AU) | Diagnostic settings on all services, Log Analytics workspace                | Azure Monitor                 |
+| Data Encryption at Rest     | ADLS Gen2 with customer-managed keys in Key Vault                           | Azure Key Vault               |
+| Data Encryption in Transit  | TLS 1.2+ enforced, Private Endpoints for all data services                  | Azure Private Link            |
+| API Key Management          | Census/BEA API keys stored in Key Vault, referenced via ADF linked services | Azure Key Vault               |
+| Network Isolation           | VNet integration for ADF, Synapse, and compute resources                    | Azure VNet + NSGs             |
+| Boundary Protection (SC)    | No public endpoints; all traffic routed through private endpoints           | Azure Private DNS             |
 
 Deployment parameters for government regions are in [`examples/commerce/deploy/params.gov.json`](../../examples/commerce/deploy/params.gov.json).
 

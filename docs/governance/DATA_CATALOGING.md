@@ -264,22 +264,22 @@ Define auto-labeling rules in the classification YAML files:
 ```yaml
 # In pii_classifications.yaml
 autoLabelingPolicies:
-  - name: pii-restricted-policy
-    targetLabel: "Restricted"
-    classificationNames:
-      - CSA_PII_SSN
-      - CSA_PHI_MRN
-      - MICROSOFT.PERSONAL.US.SOCIAL_SECURITY_NUMBER
-  - name: financial-confidential-policy
-    targetLabel: "Confidential"
-    classificationNames:
-      - CSA_FIN_ACCOUNT_NUMBER
-      - MICROSOFT.FINANCIAL.CREDIT_CARD_NUMBER
-  - name: internal-general-policy
-    targetLabel: "Internal"
-    classificationNames:
-      - MICROSOFT.PERSONAL.EMAIL
-      - MICROSOFT.PERSONAL.PHONE_NUMBER
+    - name: pii-restricted-policy
+      targetLabel: "Restricted"
+      classificationNames:
+          - CSA_PII_SSN
+          - CSA_PHI_MRN
+          - MICROSOFT.PERSONAL.US.SOCIAL_SECURITY_NUMBER
+    - name: financial-confidential-policy
+      targetLabel: "Confidential"
+      classificationNames:
+          - CSA_FIN_ACCOUNT_NUMBER
+          - MICROSOFT.FINANCIAL.CREDIT_CARD_NUMBER
+    - name: internal-general-policy
+      targetLabel: "Internal"
+      classificationNames:
+          - MICROSOFT.PERSONAL.EMAIL
+          - MICROSOFT.PERSONAL.PHONE_NUMBER
 ```
 
 Apply policies:
@@ -302,11 +302,11 @@ defines a promotion workflow:
 Discovered → Endorsed → Certified → Deprecated
 ```
 
-| Status | Meaning | Who can set |
-|---|---|---|
-| No endorsement | Raw discovered asset, uncurated | Automatic on scan |
-| **Endorsed** | Reviewed by domain team, metadata complete | Domain Data Steward |
-| **Certified** | Production-quality, SLA-bound, quality-tested | Data Governance Board |
+| Status         | Meaning                                          | Who can set           |
+| -------------- | ------------------------------------------------ | --------------------- |
+| No endorsement | Raw discovered asset, uncurated                  | Automatic on scan     |
+| **Endorsed**   | Reviewed by domain team, metadata complete       | Domain Data Steward   |
+| **Certified**  | Production-quality, SLA-bound, quality-tested    | Data Governance Board |
 | **Deprecated** | Scheduled for removal, replaced by another asset | Data Steward or Admin |
 
 ### Endorse an Asset

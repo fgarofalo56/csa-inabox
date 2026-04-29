@@ -71,22 +71,26 @@ migrations. Feature flags gate Postgres-only features (JSONB indexes,
 ## Pros and Cons of the Options
 
 ### Option 1 — SQLite dev → Postgres prod
+
 - Pros: Zero-install dev; managed Gov PaaS in prod; single ORM; Alembic
   migrations; matches cloud-native FedRAMP inheritance.
 - Cons: Feature disparity (JSONB, concurrency); requires dual-backend
   testing in CI.
 
 ### Option 2 — Postgres everywhere
+
 - Pros: Uniformity; no feature gaps; simpler migration testing.
 - Cons: Docker/Postgres required locally; higher contributor friction;
   slower cold starts on dev machines.
 
 ### Option 3 — Azure SQL Database
+
 - Pros: Microsoft-native; T-SQL features; strong Azure integration.
 - Cons: Weaker JSON support than Postgres; ORM ergonomics less favored
   in the Python community; no free local equivalent.
 
 ### Option 4 — Cosmos DB
+
 - Pros: Global distribution; schema-less; multi-region writes.
 - Cons: Wrong shape for the portal's relational data; no local-dev
   parity; cost profile is wrong for this workload.
@@ -94,6 +98,7 @@ migrations. Feature flags gate Postgres-only features (JSONB indexes,
 ## Validation
 
 We will know this decision is right if:
+
 - New contributors run the portal locally within 10 minutes of clone.
 - Alembic migrations apply cleanly on both SQLite and Postgres in CI.
 - If Postgres-only features become unavoidable (e.g. `ltree` for

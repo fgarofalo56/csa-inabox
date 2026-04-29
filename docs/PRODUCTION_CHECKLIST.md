@@ -2,9 +2,8 @@
 
 # CSA-in-a-Box: Production Checklist
 
-
 !!! note
-    **Quick Summary**: Comprehensive pre-production readiness checklist covering environment promotion, infrastructure hardening, security, data platform validation, observability, disaster recovery, governance, operational readiness, cost management, and compliance — with sign-off table for stakeholder approval.
+**Quick Summary**: Comprehensive pre-production readiness checklist covering environment promotion, infrastructure hardening, security, data platform validation, observability, disaster recovery, governance, operational readiness, cost management, and compliance — with sign-off table for stakeholder approval.
 
 Use this checklist when promoting CSA-in-a-Box from development to production.
 Each section includes actionable items with cross-references to detailed guides
@@ -92,11 +91,11 @@ where available.
 - [ ] Log Analytics workspace deployed with appropriate retention (90+ days)
 - [ ] Diagnostic settings enabled on: ADF, Databricks, Storage, Key Vault, Cosmos DB, Event Hub
 - [ ] Azure Monitor alerts configured:
-  - [ ] ADF pipeline failure alert (action group → email + Teams webhook)
-  - [ ] Databricks job failure alert
-  - [ ] Storage account throttling alert
-  - [ ] Key Vault access anomaly alert
-  - [ ] Contract SLA breach alert (freshness > threshold)
+    - [ ] ADF pipeline failure alert (action group → email + Teams webhook)
+    - [ ] Databricks job failure alert
+    - [ ] Storage account throttling alert
+    - [ ] Key Vault access anomaly alert
+    - [ ] Contract SLA breach alert (freshness > threshold)
 - [ ] Databricks job monitoring: cluster utilization, job duration trending
 - [ ] Data quality dashboard (Power BI or ADX) showing is_valid rates per domain
 - [ ] Event Hub: consumer group lag monitoring (for streaming pipeline)
@@ -109,9 +108,9 @@ where available.
 > See also: [DR.md](DR.md), [ROLLBACK.md](ROLLBACK.md)
 
 - [ ] RTO and RPO targets defined and documented per tier:
-  - Tier 1 (Gold analytics): RPO 1h, RTO 4h
-  - Tier 2 (Silver/Bronze): RPO 24h, RTO 8h
-  - Tier 3 (Raw/Seed): RPO 7d, RTO 24h
+    - Tier 1 (Gold analytics): RPO 1h, RTO 4h
+    - Tier 2 (Silver/Bronze): RPO 24h, RTO 8h
+    - Tier 3 (Raw/Seed): RPO 7d, RTO 24h
 - [ ] Storage: GRS or RA-GRS enabled for production ADLS accounts
 - [ ] Cosmos DB: multi-region writes configured (if streaming is Tier 1)
 - [ ] Key Vault: soft-delete + purge protection enabled
@@ -126,7 +125,7 @@ where available.
 ## 📋 7. Governance
 
 - [ ] Purview catalog bootstrapped (collections, glossary, scan sources)
-  - Run: `python scripts/purview/bootstrap_catalog.py`
+    - Run: `python scripts/purview/bootstrap_catalog.py`
 - [ ] Business glossary terms defined for all data products
 - [ ] Data classification rules applied (PII, Financial, Confidential)
 - [ ] ADF → Purview lineage integration enabled (purviewId in ADF resource)
@@ -142,11 +141,11 @@ where available.
 > See also: [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
 
 - [ ] Runbooks created for common failure scenarios:
-  - [ ] ADF pipeline failure (Bronze ingestion, Silver validation, Gold build)
-  - [ ] Databricks cluster auto-scaling failure
-  - [ ] Storage account connectivity issue
-  - [ ] Secret rotation failure
-  - [ ] Contract SLA breach response
+    - [ ] ADF pipeline failure (Bronze ingestion, Silver validation, Gold build)
+    - [ ] Databricks cluster auto-scaling failure
+    - [ ] Storage account connectivity issue
+    - [ ] Secret rotation failure
+    - [ ] Contract SLA breach response
 - [ ] On-call rotation defined (primary + secondary)
 - [ ] Escalation path documented (L1 → L2 → L3)
 - [ ] SLA dashboard accessible to stakeholders
@@ -161,12 +160,12 @@ where available.
 - [ ] Azure budgets created per subscription (dev, staging, production)
 - [ ] Cost alerts configured at 50%, 75%, 90% of monthly budget
 - [ ] Reserved capacity evaluated for:
-  - [ ] Cosmos DB (reserved RUs if consistent workload)
-  - [ ] Databricks (committed-use discounts)
-  - [ ] ADLS Gen2 (reserved capacity for hot tier)
+    - [ ] Cosmos DB (reserved RUs if consistent workload)
+    - [ ] Databricks (committed-use discounts)
+    - [ ] ADLS Gen2 (reserved capacity for hot tier)
 - [ ] Auto-pause policies configured:
-  - [ ] Synapse SQL pools: auto-pause after 30 min idle
-  - [ ] Databricks clusters: auto-terminate after 20 min idle
+    - [ ] Synapse SQL pools: auto-pause after 30 min idle
+    - [ ] Databricks clusters: auto-terminate after 20 min idle
 - [ ] Dev/staging resources tagged with `auto-shutdown: true`
 - [ ] Storage lifecycle policies: move Bronze data to Cool tier after 90 days
 - [ ] Resource tagging enforced via Azure Policy (CostCenter, Environment, Owner)
@@ -191,20 +190,20 @@ where available.
 
 ## ✍️ Sign-Off
 
-| Role | Name | Date | Signature |
-|------|------|------|-----------|
-| Data Engineering Lead | | | |
-| Security / InfoSec | | | |
-| Platform / SRE | | | |
-| Domain Owner (Shared) | | | |
-| Domain Owner (Finance) | | | |
-| Domain Owner (Inventory) | | | |
+| Role                     | Name | Date | Signature |
+| ------------------------ | ---- | ---- | --------- |
+| Data Engineering Lead    |      |      |           |
+| Security / InfoSec       |      |      |           |
+| Platform / SRE           |      |      |           |
+| Domain Owner (Shared)    |      |      |           |
+| Domain Owner (Finance)   |      |      |           |
+| Domain Owner (Inventory) |      |      |           |
 
 ---
 
 !!! note
-    This checklist complements the [Quick Start Guide](QUICKSTART.md) for development
-    and the [DR](DR.md) / [Rollback](ROLLBACK.md) guides for incident response.
+This checklist complements the [Quick Start Guide](QUICKSTART.md) for development
+and the [DR](DR.md) / [Rollback](ROLLBACK.md) guides for incident response.
 
 ---
 

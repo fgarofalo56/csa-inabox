@@ -100,23 +100,28 @@ async def chat(req: ChatRequest):
 ### TypeScript (React)
 
 ```ts
-import { WebTracerProvider } from '@opentelemetry/sdk-trace-web';
-import { AzureMonitorTraceExporter } from '@azure/monitor-opentelemetry-exporter';
-import { registerInstrumentations } from '@opentelemetry/instrumentation';
-import { FetchInstrumentation } from '@opentelemetry/instrumentation-fetch';
+import { WebTracerProvider } from "@opentelemetry/sdk-trace-web";
+import { AzureMonitorTraceExporter } from "@azure/monitor-opentelemetry-exporter";
+import { registerInstrumentations } from "@opentelemetry/instrumentation";
+import { FetchInstrumentation } from "@opentelemetry/instrumentation-fetch";
 
 const provider = new WebTracerProvider();
-provider.addSpanProcessor(new BatchSpanProcessor(new AzureMonitorTraceExporter({
-  connectionString: import.meta.env.VITE_APPINSIGHTS_CONNECTION_STRING
-})));
+provider.addSpanProcessor(
+    new BatchSpanProcessor(
+        new AzureMonitorTraceExporter({
+            connectionString: import.meta.env
+                .VITE_APPINSIGHTS_CONNECTION_STRING,
+        }),
+    ),
+);
 provider.register();
 
 registerInstrumentations({
-  instrumentations: [
-    new FetchInstrumentation({
-      propagateTraceHeaderCorsUrls: [/api\.mycompany\.com/],
-    }),
-  ],
+    instrumentations: [
+        new FetchInstrumentation({
+            propagateTraceHeaderCorsUrls: [/api\.mycompany\.com/],
+        }),
+    ],
 });
 ```
 
@@ -151,12 +156,12 @@ In App Insights you can join logs to traces by `trace_id`.
 
 Define what "working" means as numbers:
 
-| Service | SLI | SLO | Error budget |
-|---------|-----|-----|--------------|
-| Portal API | success rate (HTTP 2xx/3xx / total) | 99.9% over 30 days | 43 minutes / month |
-| Portal API | latency p95 | <500ms over 30 days | 5% of requests can exceed |
-| RAG service | retrieval recall@5 (eval) | >0.85 | 15% of queries can be sub-recall |
-| AOAI surface | refusal rate | <2% | spike = drift, not error budget |
+| Service      | SLI                                 | SLO                 | Error budget                     |
+| ------------ | ----------------------------------- | ------------------- | -------------------------------- |
+| Portal API   | success rate (HTTP 2xx/3xx / total) | 99.9% over 30 days  | 43 minutes / month               |
+| Portal API   | latency p95                         | <500ms over 30 days | 5% of requests can exceed        |
+| RAG service  | retrieval recall@5 (eval)           | >0.85               | 15% of queries can be sub-recall |
+| AOAI surface | refusal rate                        | <2%                 | spike = drift, not error budget  |
 
 When you blow your error budget, **engineering work shifts from features to reliability** until you're back inside budget. This forces honest conversations.
 
@@ -174,17 +179,18 @@ Workbook JSON lives under `deploy/bicep/shared/modules/workbooks/` (planned — 
 
 ## Pattern: alerts that don't page-fatigue
 
-| Alert | Threshold | Severity |
-|-------|-----------|----------|
-| Service down (ping >3 fails in 5min) | 0% success | Sev 1 page |
-| Error rate >5% over 5min | >5% | Sev 2 page |
-| Latency p95 >2x baseline for 10min | 2× baseline | Sev 3 ticket |
-| AOAI throttled >10% over 1hr | >10% throttle | Sev 3 ticket |
-| AOAI cost >2x daily baseline | 2× daily | Sev 3 ticket (cost control) |
-| Refusal rate >5% sustained 1hr | >5% | Sev 3 ticket (drift) |
-| Eval score regression in CI | >5% drop | block PR |
+| Alert                                | Threshold     | Severity                    |
+| ------------------------------------ | ------------- | --------------------------- |
+| Service down (ping >3 fails in 5min) | 0% success    | Sev 1 page                  |
+| Error rate >5% over 5min             | >5%           | Sev 2 page                  |
+| Latency p95 >2x baseline for 10min   | 2× baseline   | Sev 3 ticket                |
+| AOAI throttled >10% over 1hr         | >10% throttle | Sev 3 ticket                |
+| AOAI cost >2x daily baseline         | 2× daily      | Sev 3 ticket (cost control) |
+| Refusal rate >5% sustained 1hr       | >5%           | Sev 3 ticket (drift)        |
+| Eval score regression in CI          | >5% drop      | block PR                    |
 
 **Rules of thumb**:
+
 - Sev 1 wakes someone up. Reserve for "service is down."
 - Sev 2 ticks during business hours. "Significant degradation."
 - Sev 3 is a ticket for next-day investigation. "Something's off."
@@ -211,14 +217,14 @@ Click any span in App Insights → see the full waterfall + every log line assoc
 
 ## Anti-patterns
 
-| Anti-pattern | What to do |
-|--------------|-----------|
-| Each service has its own trace ID | Propagate `traceparent` end-to-end |
-| Logs as freeform text | JSON structured with trace_id + span_id |
-| Alert on everything | Alert on SLO violations only |
-| Workbooks built once, never updated | Treat as code; commit JSON; review with PRs |
-| App Insights connection string in code | Key Vault reference, MI auth |
-| OTel SDK + custom telemetry library | Pick one — OTel is the standard |
+| Anti-pattern                           | What to do                                  |
+| -------------------------------------- | ------------------------------------------- |
+| Each service has its own trace ID      | Propagate `traceparent` end-to-end          |
+| Logs as freeform text                  | JSON structured with trace_id + span_id     |
+| Alert on everything                    | Alert on SLO violations only                |
+| Workbooks built once, never updated    | Treat as code; commit JSON; review with PRs |
+| App Insights connection string in code | Key Vault reference, MI auth                |
+| OTel SDK + custom telemetry library    | Pick one — OTel is the standard             |
 
 ## Related
 

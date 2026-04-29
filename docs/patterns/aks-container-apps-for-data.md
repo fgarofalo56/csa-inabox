@@ -107,25 +107,25 @@ When ADF / Fabric Data Pipelines / dbt-airflow aren't a fit (bioinformatics, com
 apiVersion: argoproj.io/v1alpha1
 kind: Workflow
 metadata:
-  name: variant-calling-
+    name: variant-calling-
 spec:
-  entrypoint: variant-pipeline
-  templates:
-  - name: variant-pipeline
-    steps:
-    - - name: align
-        template: bwa
-    - - name: call-variants
-        template: gatk
-    - - name: annotate
-        template: vep
+    entrypoint: variant-pipeline
+    templates:
+        - name: variant-pipeline
+          steps:
+              - - name: align
+                  template: bwa
+              - - name: call-variants
+                  template: gatk
+              - - name: annotate
+                  template: vep
 
-  - name: bwa
-    container:
-      image: biocontainers/bwa:latest
-      command: [bwa, mem, ...]
-      resources:
-        requests: { memory: 16Gi, cpu: "8" }
+        - name: bwa
+          container:
+              image: biocontainers/bwa:latest
+              command: [bwa, mem, ...]
+              resources:
+                  requests: { memory: 16Gi, cpu: "8" }
 ```
 
 AKS + Argo gives you K8s-native DAG orchestration with bioinformatics container ecosystem.
@@ -140,6 +140,7 @@ Cost-optimization alternative to Databricks for Spark workloads:
 - Kubernetes-native scheduling
 
 Trade-offs:
+
 - You operate it (vs Databricks managing for you)
 - No Photon (Databricks-proprietary)
 - No managed Unity Catalog
@@ -176,37 +177,37 @@ Cheaper than running a Container App 24/7. Better than Functions when execution 
 
 ## When NOT to use containers
 
-| Workload | Better choice |
-|----------|---------------|
-| Spark jobs at scale | Databricks (managed) or Synapse Spark |
-| Functions / event handlers <10min | Azure Functions |
-| ML training | Azure ML compute clusters |
-| Stored procs / SQL transforms | Synapse / Fabric / Databricks SQL — not in containers |
-| Long-running stateful (>24h) | AKS only; stateful sets aren't a Container Apps fit |
+| Workload                          | Better choice                                         |
+| --------------------------------- | ----------------------------------------------------- |
+| Spark jobs at scale               | Databricks (managed) or Synapse Spark                 |
+| Functions / event handlers <10min | Azure Functions                                       |
+| ML training                       | Azure ML compute clusters                             |
+| Stored procs / SQL transforms     | Synapse / Fabric / Databricks SQL — not in containers |
+| Long-running stateful (>24h)      | AKS only; stateful sets aren't a Container Apps fit   |
 
 ## Cost comparison (rough, 2026)
 
-| Platform | $/cpu-hour | Notes |
-|----------|-----------|-------|
-| Container Instances | ~$0.045 | Simplest, no orchestration |
-| Container Apps (Consumption) | ~$0.04 + per-request | Free idle |
-| Container Apps (Dedicated) | ~$0.05 | Fixed capacity, no scale-to-zero penalty |
-| AKS (B2ms node) | ~$0.025 (with bin-packing) | You manage cluster ops |
-| AKS (Spot D4s_v5) | ~$0.01 (varies) | Eviction risk; great for batch |
-| AKS (GPU NC6s_v3) | ~$3.06 | Always rounded to full GPU |
+| Platform                     | $/cpu-hour                 | Notes                                    |
+| ---------------------------- | -------------------------- | ---------------------------------------- |
+| Container Instances          | ~$0.045                    | Simplest, no orchestration               |
+| Container Apps (Consumption) | ~$0.04 + per-request       | Free idle                                |
+| Container Apps (Dedicated)   | ~$0.05                     | Fixed capacity, no scale-to-zero penalty |
+| AKS (B2ms node)              | ~$0.025 (with bin-packing) | You manage cluster ops                   |
+| AKS (Spot D4s_v5)            | ~$0.01 (varies)            | Eviction risk; great for batch           |
+| AKS (GPU NC6s_v3)            | ~$3.06                     | Always rounded to full GPU               |
 
 AKS is cheaper per CPU when you bin-pack well; Container Apps wins on operational simplicity and scale-to-zero.
 
 ## Common pitfalls
 
-| Pitfall | Mitigation |
-|---------|------------|
-| Choosing AKS "for flexibility" without ops capacity | Container Apps unless you have a real reason |
-| Container Apps for long-stateful workloads | Use AKS StatefulSets |
-| Spark on K8s without Photon expectations met | If perf matters, Databricks is faster despite cost |
-| GPU on AKS without GPU node pool taint/toleration | Pods schedule on CPU nodes, training silently CPU-bound |
-| KEDA scaler with low min-replicas + cold-start sensitive workload | Keep min=1 to avoid cold starts on first event |
-| Not using node taints for spot pools | Critical workloads land on spot, get evicted, fail |
+| Pitfall                                                           | Mitigation                                              |
+| ----------------------------------------------------------------- | ------------------------------------------------------- |
+| Choosing AKS "for flexibility" without ops capacity               | Container Apps unless you have a real reason            |
+| Container Apps for long-stateful workloads                        | Use AKS StatefulSets                                    |
+| Spark on K8s without Photon expectations met                      | If perf matters, Databricks is faster despite cost      |
+| GPU on AKS without GPU node pool taint/toleration                 | Pods schedule on CPU nodes, training silently CPU-bound |
+| KEDA scaler with low min-replicas + cold-start sensitive workload | Keep min=1 to avoid cold starts on first event          |
+| Not using node taints for spot pools                              | Critical workloads land on spot, get evicted, fail      |
 
 ## Related
 

@@ -71,11 +71,13 @@ Terraform-authored module set that consumes the same parameter contracts.
 ## Pros and Cons of the Options
 
 ### Option 1 — Bicep
+
 - Pros: ARM-native; day-one API coverage; no state file; Gov parity; CAE
   aligned; low authoring friction for Azure engineers; `what-if` built in.
 - Cons: Azure-only; smaller ecosystem; less mature test tooling.
 
 ### Option 2 — Terraform
+
 - Pros: Multi-cloud; huge module registry; mature testing (terratest);
   mature policy-as-code (Sentinel / OPA).
 - Cons: Provider lag behind ARM; state-file custody (storage, locking,
@@ -83,17 +85,20 @@ Terraform-authored module set that consumes the same parameter contracts.
   adds complexity.
 
 ### Option 3 — Pulumi
+
 - Pros: Real programming languages; multi-cloud; strong type system.
 - Cons: Small Azure user base; extra runtime in the toolchain; state-file
   issues similar to Terraform.
 
 ### Option 4 — Azure CLI scripts
+
 - Pros: Zero tooling overhead.
 - Cons: No idempotency; no drift detection; not IaC in any meaningful sense.
 
 ## Validation
 
 We will know this decision is right if:
+
 - New vertical examples can stand up a landing zone in <90 minutes using
   only Bicep modules.
 - Azure preview features required for Purview / Unity Catalog / Fabric
