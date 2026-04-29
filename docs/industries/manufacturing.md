@@ -4,27 +4,27 @@
 
 ## Top scenarios
 
-| Scenario | Pattern | Latency | Reference |
-|----------|---------|---------|-----------|
-| **Predictive maintenance** | IoT → streaming + ML scoring + work-order integration | minutes | [Example — IoT Streaming](../examples/iot-streaming.md) |
-| **Digital twin** | Real-time state in Cosmos + historian in Delta + 3D visualization | seconds | [Reference Arch — Data Flow](../reference-architecture/data-flow-medallion.md) + Azure Digital Twins |
-| **OEE (Overall Equipment Effectiveness)** | Tag-data ingest + dbt aggregations + Power BI | minutes-hours | [Tutorial 05 — Streaming Lambda](../tutorials/05-streaming-lambda/README.md) |
-| **Quality / SPC (Statistical Process Control)** | Streaming + control-chart logic + alerting | seconds | [Use Case — Anomaly Detection](../use-cases/realtime-intelligence-anomaly-detection.md) |
-| **Supply chain visibility** | Multi-source ingest + graph + ML for ETA prediction | hours | [Tutorial 09 — GraphRAG](../tutorials/09-graphrag-knowledge/README.md) |
-| **Demand forecasting** | Historical sales + external signals + ML | daily | [Example — ML Lifecycle](../examples/ml-lifecycle.md) |
-| **Energy optimization** | Sub-meter ingest + ML + control system feedback | minutes | [Industries — Energy & Utilities](energy-utilities.md) |
-| **Computer vision QC** | Edge inference + cloud retraining + drift detection | sub-second | [Patterns — LLMOps](../patterns/llmops-evaluation.md) (transfer learning patterns) |
+| Scenario                                        | Pattern                                                           | Latency       | Reference                                                                                            |
+| ----------------------------------------------- | ----------------------------------------------------------------- | ------------- | ---------------------------------------------------------------------------------------------------- |
+| **Predictive maintenance**                      | IoT → streaming + ML scoring + work-order integration             | minutes       | [Example — IoT Streaming](../examples/iot-streaming.md)                                              |
+| **Digital twin**                                | Real-time state in Cosmos + historian in Delta + 3D visualization | seconds       | [Reference Arch — Data Flow](../reference-architecture/data-flow-medallion.md) + Azure Digital Twins |
+| **OEE (Overall Equipment Effectiveness)**       | Tag-data ingest + dbt aggregations + Power BI                     | minutes-hours | [Tutorial 05 — Streaming Lambda](../tutorials/05-streaming-lambda/README.md)                         |
+| **Quality / SPC (Statistical Process Control)** | Streaming + control-chart logic + alerting                        | seconds       | [Use Case — Anomaly Detection](../use-cases/realtime-intelligence-anomaly-detection.md)              |
+| **Supply chain visibility**                     | Multi-source ingest + graph + ML for ETA prediction               | hours         | [Tutorial 09 — GraphRAG](../tutorials/09-graphrag-knowledge/README.md)                               |
+| **Demand forecasting**                          | Historical sales + external signals + ML                          | daily         | [Example — ML Lifecycle](../examples/ml-lifecycle.md)                                                |
+| **Energy optimization**                         | Sub-meter ingest + ML + control system feedback                   | minutes       | [Industries — Energy & Utilities](energy-utilities.md)                                               |
+| **Computer vision QC**                          | Edge inference + cloud retraining + drift detection               | sub-second    | [Patterns — LLMOps](../patterns/llmops-evaluation.md) (transfer learning patterns)                   |
 
 ## Regulatory landscape
 
-| Framework | Relevance |
-|-----------|-----------|
-| **NIST CSF** | Generic cyber framework; widely adopted |
-| **IEC 62443** (OT cybersecurity) | Required for any OT/IT integration touching control systems |
-| **ITAR / EAR** (US export control) | Required for defense / dual-use; affects where data can be processed (US persons, US regions) |
-| **GDPR** (employee data, EU operations) | [Compliance — GDPR](../compliance/gdpr-privacy.md) |
-| **NIS2** (EU critical sectors) | Operational resilience for "essential entities" |
-| **C2M2** (energy + manufacturing) | DOE-sponsored cyber maturity model |
+| Framework                               | Relevance                                                                                     |
+| --------------------------------------- | --------------------------------------------------------------------------------------------- |
+| **NIST CSF**                            | Generic cyber framework; widely adopted                                                       |
+| **IEC 62443** (OT cybersecurity)        | Required for any OT/IT integration touching control systems                                   |
+| **ITAR / EAR** (US export control)      | Required for defense / dual-use; affects where data can be processed (US persons, US regions) |
+| **GDPR** (employee data, EU operations) | [Compliance — GDPR](../compliance/gdpr-privacy.md)                                            |
+| **NIS2** (EU critical sectors)          | Operational resilience for "essential entities"                                               |
+| **C2M2** (energy + manufacturing)       | DOE-sponsored cyber maturity model                                                            |
 
 ## Reference architecture variations
 
@@ -65,6 +65,7 @@ flowchart LR
 ```
 
 Key principles:
+
 - **Edge first**: latency-sensitive inference runs at the edge (Azure IoT Edge); cloud is for retraining + visualization + analytics
 - **One-way data flow** from OT to IT (network DMZ + diode pattern); never let cloud control plane talk back to PLCs without explicit safety review
 - **OPC UA is the standard** for tag data; use the Microsoft OPC UA Edge module

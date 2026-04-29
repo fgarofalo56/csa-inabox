@@ -333,6 +333,7 @@ python -m csa_platform.governance.purview.purview_automation \
 ```
 
 This processes all YAML files in the classifications directory:
+
 - `pii_classifications.yaml` — SSN, email, phone, address, name
 - `phi_classifications.yaml` — Medical record numbers, diagnosis codes
 - `financial_classifications.yaml` — Account numbers, credit cards
@@ -593,6 +594,7 @@ curl -s -X PUT \
 ### Assign collection roles
 
 Grant your team appropriate roles on collections via Purview Studio:
+
 - **Collection Admin** → Platform team
 - **Data Source Admin** → Data engineers
 - **Data Curator** → Data stewards
@@ -674,16 +676,16 @@ echo "=== Validation Complete ==="
 
 Open [https://web.purview.azure.com](https://web.purview.azure.com) and verify:
 
-| Check | Where | Expected |
-|---|---|---|
-| Collections visible | Data Map → Collections | 9+ collections in hierarchy |
-| Sources registered | Data Map → Sources | 5 registered sources |
-| Scan completed | Data Map → Sources → ADLS → Scans | Last run: Succeeded |
-| Assets discovered | Data Catalog → Browse | Tables, files visible |
-| Glossary populated | Data Catalog → Glossary | 30+ terms in categories |
-| Classifications applied | Any scanned asset → Schema tab | CSA_PII_SSN etc. |
-| Lineage visible | Any gold asset → Lineage tab | Upstream chain visible |
-| Quality metadata | Any asset → Properties | CSA_DataQuality scores |
+| Check                   | Where                             | Expected                    |
+| ----------------------- | --------------------------------- | --------------------------- |
+| Collections visible     | Data Map → Collections            | 9+ collections in hierarchy |
+| Sources registered      | Data Map → Sources                | 5 registered sources        |
+| Scan completed          | Data Map → Sources → ADLS → Scans | Last run: Succeeded         |
+| Assets discovered       | Data Catalog → Browse             | Tables, files visible       |
+| Glossary populated      | Data Catalog → Glossary           | 30+ terms in categories     |
+| Classifications applied | Any scanned asset → Schema tab    | CSA_PII_SSN etc.            |
+| Lineage visible         | Any gold asset → Lineage tab      | Upstream chain visible      |
+| Quality metadata        | Any asset → Properties            | CSA_DataQuality scores      |
 
 ---
 
@@ -705,24 +707,24 @@ You now have a fully governed data platform. Here are suggested next steps:
 
 ## Reference Documentation
 
-| Document | Purpose |
-|---|---|
-| [PURVIEW_SETUP.md](../../governance/PURVIEW_SETUP.md) | Initial setup, network, permissions |
-| [METADATA_MANAGEMENT.md](../../governance/METADATA_MANAGEMENT.md) | Scanning, custom metadata |
-| [DATA_CATALOGING.md](../../governance/DATA_CATALOGING.md) | Glossary, classifications, labels |
-| [DATA_LINEAGE.md](../../governance/DATA_LINEAGE.md) | ADF, Databricks, dbt lineage |
-| [DATA_QUALITY.md](../../governance/DATA_QUALITY.md) | Great Expectations, scoring |
-| [DATA_ACCESS.md](../../governance/DATA_ACCESS.md) | Policies, RBAC, audit |
+| Document                                                          | Purpose                             |
+| ----------------------------------------------------------------- | ----------------------------------- |
+| [PURVIEW_SETUP.md](../../governance/PURVIEW_SETUP.md)             | Initial setup, network, permissions |
+| [METADATA_MANAGEMENT.md](../../governance/METADATA_MANAGEMENT.md) | Scanning, custom metadata           |
+| [DATA_CATALOGING.md](../../governance/DATA_CATALOGING.md)         | Glossary, classifications, labels   |
+| [DATA_LINEAGE.md](../../governance/DATA_LINEAGE.md)               | ADF, Databricks, dbt lineage        |
+| [DATA_QUALITY.md](../../governance/DATA_QUALITY.md)               | Great Expectations, scoring         |
+| [DATA_ACCESS.md](../../governance/DATA_ACCESS.md)                 | Policies, RBAC, audit               |
 
 ---
 
 ## Troubleshooting
 
-| Problem | Solution |
-|---|---|
-| `403` on API calls | Ensure you have Collection Admin on root. Run `az login` to refresh token. |
-| Scan fails | Check managed identity has Storage Blob Data Reader. Check private endpoints. |
-| Glossary import fails | Ensure no duplicate term names. Check glossary GUID is valid. |
-| Classifications not detected | Re-scan after creating rules. Check `minimumPercentageMatch` threshold. |
-| Lineage not showing | ADF lineage takes 15-30 minutes after pipeline run. Check connection in ADF Studio. |
-| Access policy not enforced | Allow up to 2 hours for policy propagation. Check Data Use Management is enabled. |
+| Problem                      | Solution                                                                            |
+| ---------------------------- | ----------------------------------------------------------------------------------- |
+| `403` on API calls           | Ensure you have Collection Admin on root. Run `az login` to refresh token.          |
+| Scan fails                   | Check managed identity has Storage Blob Data Reader. Check private endpoints.       |
+| Glossary import fails        | Ensure no duplicate term names. Check glossary GUID is valid.                       |
+| Classifications not detected | Re-scan after creating rules. Check `minimumPercentageMatch` threshold.             |
+| Lineage not showing          | ADF lineage takes 15-30 minutes after pipeline run. Check connection in ADF Studio. |
+| Access policy not enforced   | Allow up to 2 hours for policy propagation. Check Data Use Management is enabled.   |

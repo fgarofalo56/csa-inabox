@@ -95,7 +95,7 @@ Chosen: **Option 4 — BFF reverse-proxy mounted behind
 - `portal/shared/api/services/token_cache.py` — `SealedTokenCache`
   subclass of `msal.SerializableTokenCache` with async `async_load` /
   `async_save` hooks. Sealing: `nonce ‖ HMAC-SHA256(key, nonce ‖
-  body) ‖ body`. Tamper → log `bff.token_cache.tamper_detected` at
+body) ‖ body`. Tamper → log `bff.token_cache.tamper_detected` at
   ERROR, purge the blob, return empty so MSAL re-acquires.
   `InMemoryTokenCacheBackend` for dev; `RedisTokenCacheBackend` for
   production, with key namespace `csa:bff:tcache:<sha256(session_id)>`.
@@ -129,7 +129,7 @@ on load logs `bff.token_cache.tamper_detected` + drops the blob, and
 MSAL falls back to the refresh-token path (which lives in the signed
 `csa_sid` session record — a separate trust boundary). This is not
 confidentiality; the body of the MSAL cache is not secret beyond the
-session it belongs to. It is *integrity* + *freshness* (via the
+session it belongs to. It is _integrity_ + _freshness_ (via the
 nonce) so cache replay and substitution are detectable.
 
 ### Why `SerializableTokenCache` (instead of custom in-session state)
@@ -144,11 +144,11 @@ internal format is never coupled to our wire encoding.
 
 ### Feature-flag behaviour
 
-| `AUTH_MODE` | `BFF_PROXY_ENABLED` | Result |
-| --- | --- | --- |
-| `spa` | any | Neither BFF nor proxy mounted — existing SPA deployment. |
-| `bff` | `false` (default) | BFF auth router mounted, direct `/auth/token` handoff still works — no behaviour change from Phase 2. |
-| `bff` | `true` | BFF auth + reverse proxy both mounted. SPA should `fetch('/api/...')` and rely on the cookie; `/auth/token` remains mounted for migration rollback. |
+| `AUTH_MODE` | `BFF_PROXY_ENABLED` | Result                                                                                                                                              |
+| ----------- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `spa`       | any                 | Neither BFF nor proxy mounted — existing SPA deployment.                                                                                            |
+| `bff`       | `false` (default)   | BFF auth router mounted, direct `/auth/token` handoff still works — no behaviour change from Phase 2.                                               |
+| `bff`       | `true`              | BFF auth + reverse proxy both mounted. SPA should `fetch('/api/...')` and rely on the cookie; `/auth/token` remains mounted for migration rollback. |
 
 Mis-combinations (`spa` + `BFF_PROXY_ENABLED=true`) are tolerated —
 the proxy isn't mounted because the `AUTH_MODE=bff` guard wraps both
@@ -186,8 +186,8 @@ routers — but the startup logs make the state obvious.
   `portal/shared/README.md`.
 - **Additional hop for API traffic** — one BFF → upstream intra-VNet
   trip per request. In the happy path this is ~1ms; on cache miss
-  + refresh-token fallback it is dominated by the Entra ID round
-  trip. Acceptable; observable via `upstream_ms`.
+    - refresh-token fallback it is dominated by the Entra ID round
+      trip. Acceptable; observable via `upstream_ms`.
 - **Redis becomes load-bearing for cache** — without Redis, cache
   persistence falls back to in-memory (dev behaviour). Production
   deployments must provision Azure Cache for Redis (the same
@@ -197,9 +197,9 @@ routers — but the startup logs make the state obvious.
 
 - The existing `/auth/token` endpoint is **not removed**. It remains
   available for migration rollback — flip `BFF_PROXY_ENABLED=false`
-  + revert the SPA to `authBff.bffFetchToken()` and the platform is
-  back on Phase 2 without a redeploy of the BFF image. Removal is
-  planned for the next major version, tracked separately.
+    - revert the SPA to `authBff.bffFetchToken()` and the platform is
+      back on Phase 2 without a redeploy of the BFF image. Removal is
+      planned for the next major version, tracked separately.
 
 ## Migration plan
 
@@ -232,7 +232,7 @@ Per environment, in order:
 We will know this decision is right if:
 
 - A portal XSS sandbox (`document.body.innerHTML = "<img src=x
-  onerror=navigator.sendBeacon('/x', ...)>"`) under `AUTH_MODE=bff`
+onerror=navigator.sendBeacon('/x', ...)>"`) under `AUTH_MODE=bff`
   with `BFF_PROXY_ENABLED=true` **cannot** exfiltrate a token — there
   is no token in JS runtime, `fetch('/auth/token')` is not called by
   the SPA, and the `csa_sid` cookie is httpOnly so no beacon can
@@ -246,8 +246,8 @@ We will know this decision is right if:
   in Log Analytics and the next `/api/...` call succeeds (MSAL
   re-acquires from the refresh token — no user-visible failure).
 - The test suite `pytest portal/shared/tests/test_api_proxy.py
-  portal/shared/tests/test_token_broker.py
-  portal/shared/tests/test_token_cache.py` passes in CI.
+portal/shared/tests/test_token_broker.py
+portal/shared/tests/test_token_cache.py` passes in CI.
 
 ## Alternatives considered
 
@@ -289,17 +289,17 @@ We will know this decision is right if:
 - ADR-0014 MSAL BFF auth pattern — predecessor; Phase 3 deferred
   work lands here.
 - Related code (landed with this ADR):
-  - `portal/shared/api/routers/api_proxy.py`
-  - `portal/shared/api/services/token_broker.py`
-  - `portal/shared/api/services/token_cache.py`
-  - `portal/shared/api/models/auth_bff.py` (`AcquiredToken`)
-  - `portal/shared/api/config.py` (new `BFF_PROXY_*`,
-    `BFF_UPSTREAM_API_*`, `BFF_TOKEN_CACHE_*` settings + validators)
-  - `portal/shared/api/main.py` (lifespan + conditional mount)
+    - `portal/shared/api/routers/api_proxy.py`
+    - `portal/shared/api/services/token_broker.py`
+    - `portal/shared/api/services/token_cache.py`
+    - `portal/shared/api/models/auth_bff.py` (`AcquiredToken`)
+    - `portal/shared/api/config.py` (new `BFF_PROXY_*`,
+      `BFF_UPSTREAM_API_*`, `BFF_TOKEN_CACHE_*` settings + validators)
+    - `portal/shared/api/main.py` (lifespan + conditional mount)
 - Test suites:
-  - `portal/shared/tests/test_api_proxy.py`
-  - `portal/shared/tests/test_token_broker.py`
-  - `portal/shared/tests/test_token_cache.py`
+    - `portal/shared/tests/test_api_proxy.py`
+    - `portal/shared/tests/test_token_broker.py`
+    - `portal/shared/tests/test_token_cache.py`
 - Framework controls: NIST 800-53 **AC-17(2)** (transport
   confidentiality — bearer tokens stay server-side), **SC-23**
   (session authenticity — BFF cookie + sealed cache), **SC-28(1)**

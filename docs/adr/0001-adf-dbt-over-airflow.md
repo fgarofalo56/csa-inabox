@@ -74,23 +74,27 @@ activity (see `domains/shared/pipelines/adf/pl_run_dbt_models.json`).
 ## Pros and Cons of the Options
 
 ### Option 1 — ADF + dbt Core
+
 - Pros: Managed PaaS; Gov-GA; Purview-native lineage; SQL transformation
   skill pool; SHIR for private-network ingress; metadata-driven pipelines.
 - Cons: UI-heavy complex branching; copy-activity cost at volume; Git
   integration is opt-in.
 
 ### Option 2 — Airflow on AKS
+
 - Pros: Open source; Python DAG expressiveness; huge operator ecosystem;
   provider-neutral.
 - Cons: Self-managed HA; customer owns patching + scheduler + worker
   scaling; not a Gov-PaaS offering; Purview integration requires custom code.
 
 ### Option 3 — Synapse Pipelines
+
 - Pros: Integrated with Synapse SQL/Spark; identical authoring model to ADF.
 - Cons: Functionally a subset of ADF; couples orchestration to a Synapse
   workspace; weaker story when Databricks is the compute tier.
 
 ### Option 4 — Logic Apps
+
 - Pros: Cheap; event-native; strong connector catalog.
 - Cons: Not a data-engineering orchestrator; no bulk copy; awkward for
   parameterized, metadata-driven pipeline generation.
@@ -98,6 +102,7 @@ activity (see `domains/shared/pipelines/adf/pl_run_dbt_models.json`).
 ## Validation
 
 We will know this decision is right if:
+
 - 90th-percentile vertical example onboards with zero custom Python
   operators in the orchestrator.
 - Purview shows end-to-end lineage for Bronze → Silver → Gold without

@@ -26,7 +26,7 @@ CSA-0046 identified this as unfit for staging or production:
   inherited from PVC storage classes.
 
 ADR 0009 already recorded the strategic choice (SQLite dev → Postgres
-prod).  This ADR records the *implementation* chosen after AQ-0016 was
+prod). This ADR records the _implementation_ chosen after AQ-0016 was
 approved: a `StoreBackend` Protocol with two concrete drivers, selected
 at runtime from `DATABASE_URL`, plus Alembic migrations so staging and
 production schema evolve via the same workflow.
@@ -34,12 +34,12 @@ production schema evolve via the same workflow.
 ## Decision Drivers
 
 - **Zero-install dev loop** — `pip install -e .[portal]` + `uvicorn`
-  must still work offline.  Postgres stays optional.
+  must still work offline. Postgres stays optional.
 - **Managed identity in production** — no passwords in the AKS secret
   or Key Vault; AAD tokens flow from `DefaultAzureCredential`.
 - **Router stability** — the existing sync router surface
   (`store.add(...)`, `store.update(...)`) should not require an async
-  rewrite.  Async is a separate workstream.
+  rewrite. Async is a separate workstream.
 - **One migration workflow** — Alembic applies cleanly to both SQLite
   (CI smoke) and Postgres (staging, prod).
 - **Supply-chain hygiene** — new deps are opt-in via a `postgres`
@@ -62,16 +62,17 @@ production schema evolve via the same workflow.
    Rejected as "wrong shape".
 4. **Direct `asyncpg` without SQLAlchemy** — saves one dep and a bit
    of runtime overhead; loses Alembic (which requires SQLAlchemy),
-   connection pooling, and dialect-aware DDL.  Rejected to preserve
+   connection pooling, and dialect-aware DDL. Rejected to preserve
    the migration story.
 5. **Azure SQL Database** — Microsoft-native, T-SQL, but weaker JSON
    story than Postgres JSONB and a different driver (pyodbc) from
-   everything else in the repo.  Rejected to keep ORM consistency.
+   everything else in the repo. Rejected to keep ORM consistency.
 
 ## Decision Outcome
 
-Chosen: **Option 1 — `StoreBackend` Protocol + SQLite (`SqliteStore`)
-+ Postgres (`PostgresStore`) + Alembic**.
+Chosen: \*\*Option 1 — `StoreBackend` Protocol + SQLite (`SqliteStore`)
+
+- Postgres (`PostgresStore`) + Alembic\*\*.
 
 Concrete layout:
 
@@ -79,7 +80,7 @@ Concrete layout:
   the historical sync `SqliteStore` (WAL-mode, per-store cached
   connection, `BEGIN IMMEDIATE` for RMW cycles).
 - `portal/shared/api/persistence_postgres.py` — `PostgresStore`
-  backed by SQLAlchemy 2.0 + `psycopg` v3.  Managed-identity token
+  backed by SQLAlchemy 2.0 + `psycopg` v3. Managed-identity token
   injection via the `do_connect` event; tokens cached with a 5-minute
   refresh margin against `https://ossrdbms-aad.database.windows.net/.default`.
   `asyncpg` is declared in the extra for future async engine use.
@@ -99,7 +100,7 @@ Concrete layout:
   `azure-identity`.
 
 Routers call `build_store_backend("sources.json", settings)` instead
-of `SqliteStore("sources.json")`.  The Protocol guarantees the method
+of `SqliteStore("sources.json")`. The Protocol guarantees the method
 surface is identical so no router logic changes.
 
 ## Consequences
@@ -115,16 +116,16 @@ surface is identical so no router logic changes.
   Postgres (staging / prod) via dialect-aware DDL.
 - Positive: the `postgres` extra keeps the dev-loop install slim —
   SQLAlchemy + asyncpg + psycopg stay out of SQLite-only deployments.
-- Negative: two drivers double the test matrix.  Integration tests
+- Negative: two drivers double the test matrix. Integration tests
   against real Postgres are required — SQLite-only CI will miss
   dialect-specific bugs (ON CONFLICT, JSONB type coercion).
 - Negative: the sync PostgresStore ties the router surface to
-  blocking I/O.  A future ADR will evaluate async conversion once
+  blocking I/O. A future ADR will evaluate async conversion once
   router-side `await` chains are already justified by other work.
 - Negative: the managed-identity path depends on `DefaultAzureCredential`
   resolving an identity; misconfigured AKS workload identity or
-  missing ``AZURE_CLIENT_ID`` envvar presents as a 3-5 second token
-  timeout at first connection.  Runbook documentation is required.
+  missing `AZURE_CLIENT_ID` envvar presents as a 3-5 second token
+  timeout at first connection. Runbook documentation is required.
 - Neutral: Alembic revisions live under `portal/shared/api/alembic/`
   rather than the repo root `alembic/`, keeping the portal's state
   store isolated from any future platform-wide migration tree.
@@ -132,6 +133,7 @@ surface is identical so no router logic changes.
 ## Pros and Cons of the Options
 
 ### Option 1 — Protocol + dual driver + Alembic
+
 - Pros: covers dev and prod with one code path, managed identity
   built in, Alembic migrations dialect-aware.
 - Cons: dual driver (psycopg for sync, asyncpg for future async)
@@ -139,21 +141,25 @@ surface is identical so no router logic changes.
   first-connection cliff.
 
 ### Option 2 — SQLite + PVC only
+
 - Pros: zero new dependencies; no driver matrix.
 - Cons: no HA, no PITR, no FedRAMP inheritance; rejected by
   AQ-0016.
 
 ### Option 3 — Cosmos DB
+
 - Pros: multi-region writes, schemaless, managed identity.
 - Cons: wrong shape for relational portal data; RU-s pricing is a
   ~10× overspend for ~10 MB of metadata.
 
 ### Option 4 — Direct asyncpg
+
 - Pros: saves SQLAlchemy + Alembic deps; lower latency.
 - Cons: no migration story; has to hand-roll connection pooling
   and DDL per dialect.
 
 ### Option 5 — Azure SQL Database
+
 - Pros: Microsoft-native, strong Azure integration.
 - Cons: pyodbc is an outlier in the repo; weaker JSON support than
   Postgres JSONB; no free local equivalent.
@@ -161,12 +167,12 @@ surface is identical so no router logic changes.
 ## Migration plan
 
 Data migration is **deferred** — this ADR delivers the dual-backend
-runtime only.  The production cutover runbook (to be authored as part
+runtime only. The production cutover runbook (to be authored as part
 of the CSA-0046 Phase 2 deployment task) will follow this checklist:
 
 1. **Pre-cutover**: in staging, run
    `alembic -c portal/shared/api/alembic.ini upgrade head` against
-   the Postgres Flexible Server.  Confirm all six tables exist and
+   the Postgres Flexible Server. Confirm all six tables exist and
    are empty.
 2. **Data export**: emit each SQLite store as JSON using
    `store.list()` on a staging portal with production-equivalent
@@ -174,15 +180,15 @@ of the CSA-0046 Phase 2 deployment task) will follow this checklist:
 3. **Data import**: re-insert via `PostgresStore.add()` — the
    SQLite and Postgres row layouts are identical (`id TEXT` +
    `data JSONB`) so no field-level transformation is needed.
-4. **Dual-write window (optional)**: none planned.  The portal is
+4. **Dual-write window (optional)**: none planned. The portal is
    not write-heavy; a 5-minute read-only window during cutover is
    acceptable.
 5. **Switch `DATABASE_URL`**: update the AKS/Container Apps
    environment variable to point at the Postgres Flexible Server;
-   restart the portal.  Managed identity picks up the bearer token
+   restart the portal. Managed identity picks up the bearer token
    on the first connection.
 6. **Verify**: portal health check (`/api/v1/health`) confirms the
-   store is reachable.  React frontend sanity checks exercise each
+   store is reachable. React frontend sanity checks exercise each
    router.
 7. **Archive the SQLite file** to the tenant's Azure Storage
    account with retention aligned to CP-9.
@@ -209,15 +215,15 @@ We will know this decision is right if:
 
 - Decision tree: n/a (runtime backend selection; see portal README).
 - Related code:
-  - `portal/shared/api/persistence.py`
-  - `portal/shared/api/persistence_postgres.py`
-  - `portal/shared/api/persistence_factory.py`
-  - `portal/shared/api/config.py`
-  - `portal/shared/api/main.py`
-  - `portal/shared/api/alembic/env.py`
-  - `portal/shared/api/alembic/versions/0001_initial_schema.py`
-  - Router wiring:
-    `portal/shared/api/routers/{sources,pipelines,access,marketplace}.py`
+    - `portal/shared/api/persistence.py`
+    - `portal/shared/api/persistence_postgres.py`
+    - `portal/shared/api/persistence_factory.py`
+    - `portal/shared/api/config.py`
+    - `portal/shared/api/main.py`
+    - `portal/shared/api/alembic/env.py`
+    - `portal/shared/api/alembic/versions/0001_initial_schema.py`
+    - Router wiring:
+      `portal/shared/api/routers/{sources,pipelines,access,marketplace}.py`
 - Framework controls: NIST 800-53 **CP-9** (PITR backups — Flexible
   Server PITR is FedRAMP-inheritable), **SC-28** (encryption at rest
   via CMK on the storage account hosting the Flexible Server),

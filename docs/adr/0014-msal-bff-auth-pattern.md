@@ -76,14 +76,14 @@ Applies immediately to every environment. SPA remains the default
 - `portal/react-webapp/src/middleware.ts` — Next.js Edge middleware
   generates a per-request 16-byte base64 CSP nonce and emits a strict
   Content-Security-Policy with:
-  - `default-src 'self'`
-  - `script-src 'self' 'nonce-<n>' 'strict-dynamic'`
-  - `style-src 'self' 'nonce-<n>'`
-  - `frame-ancestors 'none'`
-  - `require-trusted-types-for 'script'` + `trusted-types default`
-  - Allow-list for `login.microsoftonline.com`, `login.microsoftonline.us`,
-    `graph.microsoft.com`, `graph.microsoft.us`, and an optional
-    `NEXT_PUBLIC_BFF_API_ORIGIN` in `connect-src`.
+    - `default-src 'self'`
+    - `script-src 'self' 'nonce-<n>' 'strict-dynamic'`
+    - `style-src 'self' 'nonce-<n>'`
+    - `frame-ancestors 'none'`
+    - `require-trusted-types-for 'script'` + `trusted-types default`
+    - Allow-list for `login.microsoftonline.com`, `login.microsoftonline.us`,
+      `graph.microsoft.com`, `graph.microsoft.us`, and an optional
+      `NEXT_PUBLIC_BFF_API_ORIGIN` in `connect-src`.
 - `portal/react-webapp/src/pages/_document.tsx` — reads the middleware
   nonce via `getInitialProps` and stamps it onto `<Head>` and
   `<NextScript>` so every Next.js runtime chunk loads under the policy.
@@ -100,24 +100,24 @@ Applies immediately to every environment. SPA remains the default
 
 - `portal/shared/api/routers/auth_bff.py` — FastAPI router at `/auth/*`
   implementing:
-  - `GET /auth/login` — PKCE S256 challenge + state + nonce issued,
-    bundled into a signed short-lived cookie, 302 to Entra ID.
-  - `GET /auth/callback` — verifies signed pending-auth cookie,
-    checks `state`, runs
-    `msal.ConfidentialClientApplication.acquire_token_by_authorization_code`
-    with the bound PKCE verifier, persists a `SessionState` in the
-    configured `SessionStore`, sets an httpOnly signed `csa_sid`
-    cookie, 302 to `redirect_to`.
-  - `GET /auth/me` — returns the caller's profile from the session
-    (401 when the cookie is missing / tampered / expired). Touches
-    the session TTL for idle-extension.
-  - `POST /auth/logout` — revokes the server-side session and
-    deletes the cookie (204).
-  - `POST /auth/token` — server-side `acquire_token_silent` for a
-    named resource, returning a `Bearer` access token. Falls back
-    to `acquire_token_by_refresh_token` on cache miss. Used during
-    the migration window before the SPA routes every API call
-    through the BFF as a reverse proxy.
+    - `GET /auth/login` — PKCE S256 challenge + state + nonce issued,
+      bundled into a signed short-lived cookie, 302 to Entra ID.
+    - `GET /auth/callback` — verifies signed pending-auth cookie,
+      checks `state`, runs
+      `msal.ConfidentialClientApplication.acquire_token_by_authorization_code`
+      with the bound PKCE verifier, persists a `SessionState` in the
+      configured `SessionStore`, sets an httpOnly signed `csa_sid`
+      cookie, 302 to `redirect_to`.
+    - `GET /auth/me` — returns the caller's profile from the session
+      (401 when the cookie is missing / tampered / expired). Touches
+      the session TTL for idle-extension.
+    - `POST /auth/logout` — revokes the server-side session and
+      deletes the cookie (204).
+    - `POST /auth/token` — server-side `acquire_token_silent` for a
+      named resource, returning a `Bearer` access token. Falls back
+      to `acquire_token_by_refresh_token` on cache miss. Used during
+      the migration window before the SPA routes every API call
+      through the BFF as a reverse proxy.
 - `portal/shared/api/services/session_store.py` — `SessionStore`
   Protocol with `InMemorySessionStore` (dev/test) and
   `RedisSessionStore` (production, async redis). Factory picks one
@@ -154,19 +154,19 @@ redirect URI is registered.
   chunks) load their own dependencies without us enumerating every
   CDN up-front — including future upgrades.
 - **Trusted Types** blocks common XSS primitives (`element.innerHTML
-  = userInput`, `eval(x)`, `setTimeout(string)`) at the browser level.
+= userInput`, `eval(x)`, `setTimeout(string)`) at the browser level.
   A `default` policy is declared by name; per-site policies can be
   added later without a spec churn.
 
 ### Cookie settings
 
-| Setting          | Value                                  | Rationale                                              |
-| ---------------- | -------------------------------------- | ------------------------------------------------------ |
-| `HttpOnly`       | `true`                                 | JavaScript cannot read the cookie                       |
-| `Secure`         | `true` in staging/prod; off in local   | Required for `SameSite=None` and for HSTS coherence     |
-| `SameSite`       | `lax` default, `none` for split origin | Lax covers same-origin SPA; ops may relax for split origin |
-| `Path`           | `/`                                    | Session applies to every BFF route                      |
-| `Max-Age`        | 8h (configurable)                      | Matches typical SSO session; idle-extended on `/me`     |
+| Setting    | Value                                  | Rationale                                                  |
+| ---------- | -------------------------------------- | ---------------------------------------------------------- |
+| `HttpOnly` | `true`                                 | JavaScript cannot read the cookie                          |
+| `Secure`   | `true` in staging/prod; off in local   | Required for `SameSite=None` and for HSTS coherence        |
+| `SameSite` | `lax` default, `none` for split origin | Lax covers same-origin SPA; ops may relax for split origin |
+| `Path`     | `/`                                    | Session applies to every BFF route                         |
+| `Max-Age`  | 8h (configurable)                      | Matches typical SSO session; idle-extended on `/me`        |
 
 ## Consequences
 
@@ -215,7 +215,7 @@ Per environment:
 1. **Provision a confidential-client Entra ID app registration**
    separate from the SPA public client. Request the scopes in
    `BFF_SCOPES` (default `openid profile email offline_access
-   User.Read`). Add a web redirect URI pointing at the BFF's
+User.Read`). Add a web redirect URI pointing at the BFF's
    `/auth/callback`.
 2. **Store the client secret in Key Vault**; inject via managed
    identity into the App Service / Container Apps configuration.
@@ -245,15 +245,15 @@ We will know this decision is right if:
 - `curl -I https://portal.example.com/` returns a CSP header that
   refuses inline scripts, with a fresh nonce per response:
 
-  ```
-  HTTP/2 200
-  content-security-policy: default-src 'self'; script-src 'self' 'nonce-abc123==' 'strict-dynamic'; style-src 'self' 'nonce-abc123=='; img-src 'self' data: https:; connect-src 'self' https://login.microsoftonline.com https://login.microsoftonline.us https://graph.microsoft.com https://graph.microsoft.us https://bff.example.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'; require-trusted-types-for 'script'; trusted-types default
-  strict-transport-security: max-age=31536000; includeSubDomains; preload
-  x-content-type-options: nosniff
-  x-frame-options: DENY
-  referrer-policy: strict-origin-when-cross-origin
-  permissions-policy: camera=(), microphone=(), geolocation=(), payment=()
-  ```
+    ```
+    HTTP/2 200
+    content-security-policy: default-src 'self'; script-src 'self' 'nonce-abc123==' 'strict-dynamic'; style-src 'self' 'nonce-abc123=='; img-src 'self' data: https:; connect-src 'self' https://login.microsoftonline.com https://login.microsoftonline.us https://graph.microsoft.com https://graph.microsoft.us https://bff.example.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'; require-trusted-types-for 'script'; trusted-types default
+    strict-transport-security: max-age=31536000; includeSubDomains; preload
+    x-content-type-options: nosniff
+    x-frame-options: DENY
+    referrer-policy: strict-origin-when-cross-origin
+    permissions-policy: camera=(), microphone=(), geolocation=(), payment=()
+    ```
 
 - The BFF test suite (`pytest portal/shared/api -k auth_bff`) passes
   in CI, exercising state-tampering, happy-path token exchange,
@@ -310,21 +310,21 @@ If we need to revert at any layer:
 - ADR-0008 dbt Core over dbt Cloud — same "keep the control plane
   in the tenant" principle.
 - Related code (landed with this ADR):
-  - `portal/react-webapp/src/middleware.ts`
-  - `portal/react-webapp/src/services/csp.ts`
-  - `portal/react-webapp/src/services/authConfig.ts`
-  - `portal/react-webapp/src/services/authBff.ts`
-  - `portal/react-webapp/src/pages/_document.tsx`
-  - `portal/react-webapp/next.config.js`
-  - `portal/shared/api/routers/auth_bff.py`
-  - `portal/shared/api/services/session_store.py`
-  - `portal/shared/api/models/auth_bff.py`
-  - `portal/shared/api/config.py`
-  - `portal/shared/api/main.py`
+    - `portal/react-webapp/src/middleware.ts`
+    - `portal/react-webapp/src/services/csp.ts`
+    - `portal/react-webapp/src/services/authConfig.ts`
+    - `portal/react-webapp/src/services/authBff.ts`
+    - `portal/react-webapp/src/pages/_document.tsx`
+    - `portal/react-webapp/next.config.js`
+    - `portal/shared/api/routers/auth_bff.py`
+    - `portal/shared/api/services/session_store.py`
+    - `portal/shared/api/models/auth_bff.py`
+    - `portal/shared/api/config.py`
+    - `portal/shared/api/main.py`
 - Test suites:
-  - `portal/react-webapp/__tests__/middleware.test.ts`
-  - `portal/react-webapp/__tests__/pages/_app.test.tsx`
-  - `portal/shared/tests/test_auth_bff.py`
+    - `portal/react-webapp/__tests__/middleware.test.ts`
+    - `portal/react-webapp/__tests__/pages/_app.test.tsx`
+    - `portal/shared/tests/test_auth_bff.py`
 - Framework controls: NIST 800-53 **IA-2** (identification and
   authentication), **SC-8** (transmission confidentiality — Trusted
   Types + CSP are input-sink controls that complement transport

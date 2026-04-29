@@ -71,23 +71,27 @@ footprint and Fabric Spark planned as a migration target once Gov-GA lands.
 ## Pros and Cons of the Options
 
 ### Option 1 — Azure Databricks
+
 - Pros: Managed runtime; Photon; Unity Catalog; Gov-GA; strong Purview
   integration; Delta Lake-native; mature job scheduler.
 - Cons: DBU markup; SQL Warehouses are proprietary; workspace proliferation
   risk.
 
 ### Option 2 — OSS Spark on AKS
+
 - Pros: No DBU premium; full version control; portable everywhere.
 - Cons: Customer-owned HA, upgrades, autoscaling, and governance; no
   equivalent to Unity Catalog; no Photon.
 
 ### Option 3 — Synapse Spark Pools
+
 - Pros: Managed; integrated with Synapse SQL; Gov-GA; cheaper DBU-free
   pricing model.
 - Cons: Slower innovation; no Photon equivalent; Purview lineage is
   shallower; tighter coupling to a Synapse workspace.
 
 ### Option 4 — Fabric Spark
+
 - Pros: Strategic future target; OneLake-native; deep Purview + Fabric
   governance integration.
 - Cons: Gov-GA lags; not viable for current federal tenants.
@@ -95,6 +99,7 @@ footprint and Fabric Spark planned as a migration target once Gov-GA lands.
 ## Validation
 
 We will know this decision is right if:
+
 - Spark job cost per TB processed is within 25% of a well-tuned OSS Spark
   benchmark after cluster policies are applied.
 - Unity Catalog replaces legacy Hive-metastore + ACL code in all domains

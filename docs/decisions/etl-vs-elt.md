@@ -1,6 +1,5 @@
 # ETL vs. ELT
 
-
 ## TL;DR
 
 Default to **ELT** (land raw in bronze, transform with dbt + Databricks). Use **ETL** only when regulated data must be redacted before landing. Use a **hybrid** when redaction is narrow and the rest is ELT.
@@ -38,6 +37,7 @@ flowchart TD
 **Why:** Version-controlled SQL transforms, replay from bronze, lowest $/TB.
 **Tradeoffs:** Cost — cheapest; Latency — minutes; Compliance — requires bronze classification; Skill — SQL + dbt + Git.
 **Anti-patterns:**
+
 - Export-controlled data that cannot land.
 - Skipping bronze classification — ELT's whole point is preserving raw.
 
@@ -49,6 +49,7 @@ flowchart TD
 **Why:** Strong PII/PHI posture — raw sensitive data never lands.
 **Tradeoffs:** Cost — higher compute per run; Latency — depends on transform; Compliance — strongest; Skill — ADF designer or Spark.
 **Anti-patterns:**
+
 - "That's how we did it in SSIS."
 - Complex ML transforms in Mapping Data Flows — move to Databricks/dbt.
 
@@ -60,6 +61,7 @@ flowchart TD
 **Why:** Pragmatic Pareto — compliance + velocity.
 **Tradeoffs:** Slightly higher cost than pure ELT; near-ELT latency; satisfies HIPAA/PII + preserves replay.
 **Anti-patterns:**
+
 - Redaction leg creeps into full transform pipeline.
 
 **Linked example:** [`examples/tribal-health/`](../../examples/tribal-health/)

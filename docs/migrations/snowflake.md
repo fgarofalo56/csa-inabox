@@ -18,20 +18,20 @@ It is also honest where Snowflake is still stronger. Snowflake's account/databas
 
 ### Federal considerations — Snowflake vs csa-inabox
 
-| Consideration | Snowflake (Gov tenant, today) | csa-inabox (today) | Notes |
-|---|---|---|---|
-| FedRAMP Moderate | Authorized | Inherited (Azure Gov + Azure Commercial authorized services) | csa-inabox documents control coverage in `csa_platform/csa_platform/governance/compliance/nist-800-53-rev5.yaml` |
-| FedRAMP High | **Not authorized** (Moderate only as of 2026-04) | Inherited through Azure Gov High | **Material differentiator for federal tenants that require High** |
-| DoD IL4 | Limited (partner-dependent) | Covered in Azure Gov | Full parity on Azure Government for IL4 workloads |
-| DoD IL5 | **Gap** | Covered in Azure Gov (most services; Fabric IL5 parity forecast per Microsoft roadmap) | See `docs/GOV_SERVICE_MATRIX.md` |
-| DoD IL6 | Gap | **Gap** — out of scope for csa-inabox today | Neither platform; recommend bespoke tenant |
-| ITAR | Covered (Snowflake Gov region) | Covered by Azure Gov tenant defaults | Data-residency assured by Azure Gov tenant-binding |
-| CMMC 2.0 Level 2 | Controls available; customer-managed mappings | Controls mapped in `csa_platform/csa_platform/governance/compliance/cmmc-2.0-l2.yaml` + `docs/compliance/cmmc-2.0-l2.md` | DIB primes inherit directly |
-| HIPAA Security Rule | Covered with BAA | Covered; mapped in `csa_platform/csa_platform/governance/compliance/hipaa-security-rule.yaml` | See `examples/tribal-health/` for HHS / IHS worked example |
-| Data-residency binding | Snowflake region | Azure Government tenant-binding | Azure Gov is a physically separate cloud instance, not a logical region |
-| Storage format | Proprietary (Snowflake micro-partitions) | Delta Lake on Parquet (open) | Exit cost from Snowflake is material; exit cost from csa-inabox is weeks |
-| Compute pricing | Snowflake credits (per-warehouse, per-second after 1 minute minimum) | Azure consumption (Databricks DBUs, Fabric capacity, ADF activity runs) | Typical 40–50% cost reduction at comparable workload — see Section 7 |
-| Per-seat licensing | No, but reader accounts + BI Copilot cost structured separately | No; Power BI Premium or Fabric capacity covers consumers | Fabric capacity is workspace-level, not per-seat |
+| Consideration          | Snowflake (Gov tenant, today)                                        | csa-inabox (today)                                                                                                       | Notes                                                                                                            |
+| ---------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| FedRAMP Moderate       | Authorized                                                           | Inherited (Azure Gov + Azure Commercial authorized services)                                                             | csa-inabox documents control coverage in `csa_platform/csa_platform/governance/compliance/nist-800-53-rev5.yaml` |
+| FedRAMP High           | **Not authorized** (Moderate only as of 2026-04)                     | Inherited through Azure Gov High                                                                                         | **Material differentiator for federal tenants that require High**                                                |
+| DoD IL4                | Limited (partner-dependent)                                          | Covered in Azure Gov                                                                                                     | Full parity on Azure Government for IL4 workloads                                                                |
+| DoD IL5                | **Gap**                                                              | Covered in Azure Gov (most services; Fabric IL5 parity forecast per Microsoft roadmap)                                   | See `docs/GOV_SERVICE_MATRIX.md`                                                                                 |
+| DoD IL6                | Gap                                                                  | **Gap** — out of scope for csa-inabox today                                                                              | Neither platform; recommend bespoke tenant                                                                       |
+| ITAR                   | Covered (Snowflake Gov region)                                       | Covered by Azure Gov tenant defaults                                                                                     | Data-residency assured by Azure Gov tenant-binding                                                               |
+| CMMC 2.0 Level 2       | Controls available; customer-managed mappings                        | Controls mapped in `csa_platform/csa_platform/governance/compliance/cmmc-2.0-l2.yaml` + `docs/compliance/cmmc-2.0-l2.md` | DIB primes inherit directly                                                                                      |
+| HIPAA Security Rule    | Covered with BAA                                                     | Covered; mapped in `csa_platform/csa_platform/governance/compliance/hipaa-security-rule.yaml`                            | See `examples/tribal-health/` for HHS / IHS worked example                                                       |
+| Data-residency binding | Snowflake region                                                     | Azure Government tenant-binding                                                                                          | Azure Gov is a physically separate cloud instance, not a logical region                                          |
+| Storage format         | Proprietary (Snowflake micro-partitions)                             | Delta Lake on Parquet (open)                                                                                             | Exit cost from Snowflake is material; exit cost from csa-inabox is weeks                                         |
+| Compute pricing        | Snowflake credits (per-warehouse, per-second after 1 minute minimum) | Azure consumption (Databricks DBUs, Fabric capacity, ADF activity runs)                                                  | Typical 40–50% cost reduction at comparable workload — see Section 7                                             |
+| Per-seat licensing     | No, but reader accounts + BI Copilot cost structured separately      | No; Power BI Premium or Fabric capacity covers consumers                                                                 | Fabric capacity is workspace-level, not per-seat                                                                 |
 
 ---
 
@@ -39,28 +39,28 @@ It is also honest where Snowflake is still stronger. Snowflake's account/databas
 
 This is the load-bearing table. Every row cites a real file path in the csa-inabox repo or flags an honest gap.
 
-| Snowflake capability | csa-inabox equivalent | Mapping notes | Effort | Evidence (repo path) |
-|---|---|---|---|---|
-| **Snowflake virtual warehouses + micro-partitions** | Azure Databricks SQL Warehouses + Delta Lake | Warehouse sizes (XS–6XL) map to Databricks SQL Warehouse sizes (2X-Small–4X-Large). Micro-partition pruning maps to Delta Lake file pruning + Z-ordering. | M | `csa_platform/unity_catalog_pattern/README.md`, `domains/shared/dbt/dbt_project.yml`, ADR-0003 `docs/adr/0003-delta-lake-over-iceberg-and-parquet.md` |
-| **Snowpark Python** | Databricks Spark + PySpark + Koalas (pandas-on-Spark) | Snowpark DataFrame API translates to PySpark DataFrame API; Snowpark UDFs become PySpark UDFs or Databricks SQL UDFs. | M | `domains/shared/notebooks/`, `csa_platform/unity_catalog_pattern/`, ADR-0002 `docs/adr/0002-databricks-over-oss-spark.md` |
-| **Snowpark Container Services** | Azure Container Apps + Databricks Model Serving | Long-running container workloads split: general compute → Container Apps; model inference → Databricks Model Serving. | L | `csa_platform/ai_integration/model_serving/`, `csa_platform/oss_alternatives/helm/` |
-| **Tasks + Streams (CDC)** | ADF schedule triggers + Delta change-data-feed (CDF) + Databricks DLT | Streams become `SELECT ... FROM table CHANGES(...)` on Delta CDF; Tasks become ADF triggers or DLT pipeline schedules. | M | `domains/shared/pipelines/adf/`, `domains/shared/dbt/dbt_project.yml`, ADR-0001 `docs/adr/0001-adf-dbt-over-airflow.md` |
-| **Time Travel (data versioning)** | Delta Lake time travel (`VERSION AS OF` / `TIMESTAMP AS OF`) | Semantics are equivalent; retention is configurable via `delta.deletedFileRetentionDuration`. | XS | `csa_platform/unity_catalog_pattern/README.md`, ADR-0003 |
-| **Zero-Copy Cloning** | Delta Lake SHALLOW CLONE / DEEP CLONE | Snowflake zero-copy clones are metadata-only; Delta SHALLOW CLONE is the direct analog. | XS | ADR-0003 `docs/adr/0003-delta-lake-over-iceberg-and-parquet.md` |
-| **Cortex (LLM functions — `COMPLETE`, `SUMMARIZE`, `TRANSLATE`)** | Azure AI Foundry + Azure OpenAI invoked from dbt macros, notebooks, or Databricks SQL external models | Cortex inline SQL calls become Databricks SQL `ai_query()` calls or dbt macros wrapping Azure OpenAI. | M | `csa_platform/ai_integration/README.md`, `csa_platform/ai_integration/enrichment/`, ADR-0007 `docs/adr/0007-azure-openai-over-self-hosted-llm.md` |
-| **Cortex Search (hybrid vector + keyword)** | Azure AI Search + vector embeddings persisted on OneLake | The RAG pipeline in `csa_platform/ai_integration/rag/pipeline.py` is the reference implementation. | M | `csa_platform/ai_integration/rag/pipeline.py`, `csa_platform/ai_integration/rag/config.py` |
-| **Data Marketplace / Secure Data Sharing** | Purview data products + Delta Sharing + OneLake shortcuts | Outbound sharing uses Delta Sharing (open protocol); inbound uses OneLake shortcuts + Purview-registered data products. | L | `csa_platform/data_marketplace/`, `csa_platform/data_marketplace/api/`, `csa_platform/csa_platform/governance/purview/` |
-| **External tables on S3** | OneLake shortcuts + Databricks Lakehouse Federation | OneLake shortcuts preserve S3 as the source of truth during bridge phase; Lakehouse Federation queries remote warehouses directly. | S | `csa_platform/unity_catalog_pattern/onelake_config.yaml` |
-| **Dynamic Tables** | dbt incremental models + Databricks DLT (Delta Live Tables) | Lag-based dynamic refresh becomes dbt `incremental` with `unique_key` and `merge` strategy; heavier CDC pipelines move to DLT. | M | `domains/shared/dbt/dbt_project.yml`, `domains/finance/dbt/`, `domains/sales/dbt/` |
-| **Masking policies + dynamic data masking** | Purview sensitivity labels + Databricks Unity Catalog row/column security + Purview classifications | Column-level masking rules re-express as Unity Catalog `MASK` functions; role-based masking via Entra ID groups. | M | `csa_platform/csa_platform/governance/purview/classifications/pii_classifications.yaml`, `phi_classifications.yaml`, `government_classifications.yaml`, `financial_classifications.yaml` |
-| **Row access policies** | Unity Catalog row filters + Purview classification-driven access | Rewrite the policy function body as a Unity Catalog row filter; map `CURRENT_ROLE()` → Entra ID group membership. | M | `csa_platform/csa_platform/governance/purview/purview_automation.py` (classifications reused), `csa_platform/unity_catalog_pattern/unity_catalog/` |
-| **Snowpipe (batch + streaming ingest)** | Event Hubs + ADX continuous ingest + Databricks Autoloader | Batch Snowpipe → Databricks Autoloader on ADLS Gen2; streaming Snowpipe → Event Hubs + ADX/Databricks structured streaming. | M | ADR-0005 `docs/adr/0005-event-hubs-over-kafka.md`, `examples/iot-streaming/` |
-| **Resource monitors + warehouse auto-suspend** | Databricks SQL warehouse auto-stop + Azure Cost Management budgets + `scripts/deploy/teardown-platform.sh` | Auto-stop (1 min default) replaces auto-suspend; budgets replace resource monitors; teardown script kills workshop/dev spend cold. | XS | `scripts/deploy/teardown-platform.sh`, `docs/COST_MANAGEMENT.md` |
-| **SnowSQL CLI** | Databricks CLI + Azure CLI + dbt CLI | Interactive queries through Databricks SQL editor; scripts ported to `databricks sql` + dbt. | S | `scripts/deploy/deploy-platform.sh`, `.github/workflows/deploy.yml` |
-| **Snowflake Tasks graphs (DAG)** | dbt DAG + ADF pipeline dependencies | Task graphs become dbt `ref()` dependencies; cross-pipeline coordination becomes ADF pipeline triggers. | M | `domains/shared/dbt/`, `domains/shared/pipelines/adf/`, ADR-0001 |
-| **Access history + query history** | Purview audit + Azure Monitor + tamper-evident audit log (CSA-0016) | Query-level audit goes to Log Analytics via diagnostic settings; tamper-evident chain layered on top. | M | Audit logger (CSA-0016 implementation), Azure Monitor diagnostic settings in Bicep modules |
-| **Account/Database/Schema hierarchy** | Entra tenant / Databricks workspace / Unity Catalog catalog / schema | 1:1 mapping: Snowflake account → workspace + Unity Catalog, database → catalog, schema → schema. | S | `csa_platform/unity_catalog_pattern/unity_catalog/`, `csa_platform/multi_synapse/rbac_templates/` |
-| **Data Clean Rooms** | Delta Sharing + Purview data products + Azure Confidential Computing | More stitching than Snowflake; for most federal multi-tenant scenarios Delta Sharing + Purview is sufficient. | L | `csa_platform/data_marketplace/` (data product registry), Gap — purpose-built clean-room UX deferred |
+| Snowflake capability                                              | csa-inabox equivalent                                                                                      | Mapping notes                                                                                                                                             | Effort | Evidence (repo path)                                                                                                                                                                     |
+| ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Snowflake virtual warehouses + micro-partitions**               | Azure Databricks SQL Warehouses + Delta Lake                                                               | Warehouse sizes (XS–6XL) map to Databricks SQL Warehouse sizes (2X-Small–4X-Large). Micro-partition pruning maps to Delta Lake file pruning + Z-ordering. | M      | `csa_platform/unity_catalog_pattern/README.md`, `domains/shared/dbt/dbt_project.yml`, ADR-0003 `docs/adr/0003-delta-lake-over-iceberg-and-parquet.md`                                    |
+| **Snowpark Python**                                               | Databricks Spark + PySpark + Koalas (pandas-on-Spark)                                                      | Snowpark DataFrame API translates to PySpark DataFrame API; Snowpark UDFs become PySpark UDFs or Databricks SQL UDFs.                                     | M      | `domains/shared/notebooks/`, `csa_platform/unity_catalog_pattern/`, ADR-0002 `docs/adr/0002-databricks-over-oss-spark.md`                                                                |
+| **Snowpark Container Services**                                   | Azure Container Apps + Databricks Model Serving                                                            | Long-running container workloads split: general compute → Container Apps; model inference → Databricks Model Serving.                                     | L      | `csa_platform/ai_integration/model_serving/`, `csa_platform/oss_alternatives/helm/`                                                                                                      |
+| **Tasks + Streams (CDC)**                                         | ADF schedule triggers + Delta change-data-feed (CDF) + Databricks DLT                                      | Streams become `SELECT ... FROM table CHANGES(...)` on Delta CDF; Tasks become ADF triggers or DLT pipeline schedules.                                    | M      | `domains/shared/pipelines/adf/`, `domains/shared/dbt/dbt_project.yml`, ADR-0001 `docs/adr/0001-adf-dbt-over-airflow.md`                                                                  |
+| **Time Travel (data versioning)**                                 | Delta Lake time travel (`VERSION AS OF` / `TIMESTAMP AS OF`)                                               | Semantics are equivalent; retention is configurable via `delta.deletedFileRetentionDuration`.                                                             | XS     | `csa_platform/unity_catalog_pattern/README.md`, ADR-0003                                                                                                                                 |
+| **Zero-Copy Cloning**                                             | Delta Lake SHALLOW CLONE / DEEP CLONE                                                                      | Snowflake zero-copy clones are metadata-only; Delta SHALLOW CLONE is the direct analog.                                                                   | XS     | ADR-0003 `docs/adr/0003-delta-lake-over-iceberg-and-parquet.md`                                                                                                                          |
+| **Cortex (LLM functions — `COMPLETE`, `SUMMARIZE`, `TRANSLATE`)** | Azure AI Foundry + Azure OpenAI invoked from dbt macros, notebooks, or Databricks SQL external models      | Cortex inline SQL calls become Databricks SQL `ai_query()` calls or dbt macros wrapping Azure OpenAI.                                                     | M      | `csa_platform/ai_integration/README.md`, `csa_platform/ai_integration/enrichment/`, ADR-0007 `docs/adr/0007-azure-openai-over-self-hosted-llm.md`                                        |
+| **Cortex Search (hybrid vector + keyword)**                       | Azure AI Search + vector embeddings persisted on OneLake                                                   | The RAG pipeline in `csa_platform/ai_integration/rag/pipeline.py` is the reference implementation.                                                        | M      | `csa_platform/ai_integration/rag/pipeline.py`, `csa_platform/ai_integration/rag/config.py`                                                                                               |
+| **Data Marketplace / Secure Data Sharing**                        | Purview data products + Delta Sharing + OneLake shortcuts                                                  | Outbound sharing uses Delta Sharing (open protocol); inbound uses OneLake shortcuts + Purview-registered data products.                                   | L      | `csa_platform/data_marketplace/`, `csa_platform/data_marketplace/api/`, `csa_platform/csa_platform/governance/purview/`                                                                  |
+| **External tables on S3**                                         | OneLake shortcuts + Databricks Lakehouse Federation                                                        | OneLake shortcuts preserve S3 as the source of truth during bridge phase; Lakehouse Federation queries remote warehouses directly.                        | S      | `csa_platform/unity_catalog_pattern/onelake_config.yaml`                                                                                                                                 |
+| **Dynamic Tables**                                                | dbt incremental models + Databricks DLT (Delta Live Tables)                                                | Lag-based dynamic refresh becomes dbt `incremental` with `unique_key` and `merge` strategy; heavier CDC pipelines move to DLT.                            | M      | `domains/shared/dbt/dbt_project.yml`, `domains/finance/dbt/`, `domains/sales/dbt/`                                                                                                       |
+| **Masking policies + dynamic data masking**                       | Purview sensitivity labels + Databricks Unity Catalog row/column security + Purview classifications        | Column-level masking rules re-express as Unity Catalog `MASK` functions; role-based masking via Entra ID groups.                                          | M      | `csa_platform/csa_platform/governance/purview/classifications/pii_classifications.yaml`, `phi_classifications.yaml`, `government_classifications.yaml`, `financial_classifications.yaml` |
+| **Row access policies**                                           | Unity Catalog row filters + Purview classification-driven access                                           | Rewrite the policy function body as a Unity Catalog row filter; map `CURRENT_ROLE()` → Entra ID group membership.                                         | M      | `csa_platform/csa_platform/governance/purview/purview_automation.py` (classifications reused), `csa_platform/unity_catalog_pattern/unity_catalog/`                                       |
+| **Snowpipe (batch + streaming ingest)**                           | Event Hubs + ADX continuous ingest + Databricks Autoloader                                                 | Batch Snowpipe → Databricks Autoloader on ADLS Gen2; streaming Snowpipe → Event Hubs + ADX/Databricks structured streaming.                               | M      | ADR-0005 `docs/adr/0005-event-hubs-over-kafka.md`, `examples/iot-streaming/`                                                                                                             |
+| **Resource monitors + warehouse auto-suspend**                    | Databricks SQL warehouse auto-stop + Azure Cost Management budgets + `scripts/deploy/teardown-platform.sh` | Auto-stop (1 min default) replaces auto-suspend; budgets replace resource monitors; teardown script kills workshop/dev spend cold.                        | XS     | `scripts/deploy/teardown-platform.sh`, `docs/COST_MANAGEMENT.md`                                                                                                                         |
+| **SnowSQL CLI**                                                   | Databricks CLI + Azure CLI + dbt CLI                                                                       | Interactive queries through Databricks SQL editor; scripts ported to `databricks sql` + dbt.                                                              | S      | `scripts/deploy/deploy-platform.sh`, `.github/workflows/deploy.yml`                                                                                                                      |
+| **Snowflake Tasks graphs (DAG)**                                  | dbt DAG + ADF pipeline dependencies                                                                        | Task graphs become dbt `ref()` dependencies; cross-pipeline coordination becomes ADF pipeline triggers.                                                   | M      | `domains/shared/dbt/`, `domains/shared/pipelines/adf/`, ADR-0001                                                                                                                         |
+| **Access history + query history**                                | Purview audit + Azure Monitor + tamper-evident audit log (CSA-0016)                                        | Query-level audit goes to Log Analytics via diagnostic settings; tamper-evident chain layered on top.                                                     | M      | Audit logger (CSA-0016 implementation), Azure Monitor diagnostic settings in Bicep modules                                                                                               |
+| **Account/Database/Schema hierarchy**                             | Entra tenant / Databricks workspace / Unity Catalog catalog / schema                                       | 1:1 mapping: Snowflake account → workspace + Unity Catalog, database → catalog, schema → schema.                                                          | S      | `csa_platform/unity_catalog_pattern/unity_catalog/`, `csa_platform/multi_synapse/rbac_templates/`                                                                                        |
+| **Data Clean Rooms**                                              | Delta Sharing + Purview data products + Azure Confidential Computing                                       | More stitching than Snowflake; for most federal multi-tenant scenarios Delta Sharing + Purview is sufficient.                                             | L      | `csa_platform/data_marketplace/` (data product registry), Gap — purpose-built clean-room UX deferred                                                                                     |
 
 ### Gaps called out above
 
@@ -155,6 +155,7 @@ This is the shape of most Snowflake migrations. Pick one business-critical wareh
 ### 4.1 Starting state (Snowflake)
 
 **Account/database/schema:**
+
 - Account: `ACMEGOV.us-gov-west-1.snowflake-gov.com`
 - Database: `FINANCE_DB`
 - Schemas: `RAW`, `STAGING`, `MARTS`
@@ -165,17 +166,17 @@ This is the shape of most Snowflake migrations. Pick one business-critical wareh
 ```yaml
 # profiles.yml — before
 finance:
-  outputs:
-    prod:
-      type: snowflake
-      account: ACMEGOV.us-gov-west-1.snowflake-gov
-      user: DBT_SVC
-      password: "{{ env_var('SNOWFLAKE_PASSWORD') }}"
-      role: FINANCE_ENGINEER
-      database: FINANCE_DB
-      warehouse: FINANCE_WH
-      schema: MARTS
-      threads: 8
+    outputs:
+        prod:
+            type: snowflake
+            account: ACMEGOV.us-gov-west-1.snowflake-gov
+            user: DBT_SVC
+            password: "{{ env_var('SNOWFLAKE_PASSWORD') }}"
+            role: FINANCE_ENGINEER
+            database: FINANCE_DB
+            warehouse: FINANCE_WH
+            schema: MARTS
+            threads: 8
 ```
 
 Three models:
@@ -187,6 +188,7 @@ Three models:
 ### 4.2 Target state (csa-inabox / Databricks)
 
 **Workspace/catalog/schema:**
+
 - Databricks workspace: `adb-acmegov-finance` in Azure Gov
 - Unity Catalog: `finance_prod`
 - Schemas: `raw`, `staging`, `marts`
@@ -197,15 +199,15 @@ Three models:
 ```yaml
 # profiles.yml — after
 finance:
-  outputs:
-    prod:
-      type: databricks
-      host: adb-acmegov-finance.12.databricks.azure.us
-      http_path: /sql/1.0/warehouses/abc123
-      catalog: finance_prod
-      schema: marts
-      token: "{{ env_var('DATABRICKS_TOKEN') }}"
-      threads: 8
+    outputs:
+        prod:
+            type: databricks
+            host: adb-acmegov-finance.12.databricks.azure.us
+            http_path: /sql/1.0/warehouses/abc123
+            catalog: finance_prod
+            schema: marts
+            token: "{{ env_var('DATABRICKS_TOKEN') }}"
+            threads: 8
 ```
 
 Models translated:
@@ -241,40 +243,40 @@ WHERE i.updated_at > (SELECT MAX(updated_at) FROM {{ this }})
 
 ### 4.3 SQL syntax deltas (the ones that actually bite)
 
-| Snowflake | Databricks SQL | Notes |
-|---|---|---|
-| `CURRENT_TIMESTAMP()` | `CURRENT_TIMESTAMP()` | Same |
-| `DATEADD(day, 7, date_col)` | `DATE_ADD(date_col, 7)` or `date_col + INTERVAL 7 DAY` | Arg order differs |
-| `IFF(cond, a, b)` | `IF(cond, a, b)` | Function name |
-| `TRY_CAST` / `TRY_TO_NUMBER` | `TRY_CAST` | `TRY_CAST` exists on Databricks; specialized `TRY_TO_*` functions don't |
-| `ARRAY_AGG` / `OBJECT_CONSTRUCT` | `COLLECT_LIST` / `NAMED_STRUCT` or `TO_JSON(NAMED_STRUCT(...))` | Semantics equivalent |
-| `VARIANT` columns + `:field` path | `STRUCT`/`MAP` columns + `col.field` path | Nest-and-navigate differs |
-| `QUALIFY` | `QUALIFY` (supported in Databricks Runtime 13+) | Keep as-is |
-| `:` parameter binding in Snowflake Scripting | `IDENTIFIER()` function + Databricks notebook widgets | Scripting-heavy Snowflake SPs are the highest-friction port |
+| Snowflake                                    | Databricks SQL                                                  | Notes                                                                   |
+| -------------------------------------------- | --------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `CURRENT_TIMESTAMP()`                        | `CURRENT_TIMESTAMP()`                                           | Same                                                                    |
+| `DATEADD(day, 7, date_col)`                  | `DATE_ADD(date_col, 7)` or `date_col + INTERVAL 7 DAY`          | Arg order differs                                                       |
+| `IFF(cond, a, b)`                            | `IF(cond, a, b)`                                                | Function name                                                           |
+| `TRY_CAST` / `TRY_TO_NUMBER`                 | `TRY_CAST`                                                      | `TRY_CAST` exists on Databricks; specialized `TRY_TO_*` functions don't |
+| `ARRAY_AGG` / `OBJECT_CONSTRUCT`             | `COLLECT_LIST` / `NAMED_STRUCT` or `TO_JSON(NAMED_STRUCT(...))` | Semantics equivalent                                                    |
+| `VARIANT` columns + `:field` path            | `STRUCT`/`MAP` columns + `col.field` path                       | Nest-and-navigate differs                                               |
+| `QUALIFY`                                    | `QUALIFY` (supported in Databricks Runtime 13+)                 | Keep as-is                                                              |
+| `:` parameter binding in Snowflake Scripting | `IDENTIFIER()` function + Databricks notebook widgets           | Scripting-heavy Snowflake SPs are the highest-friction port             |
 
 ### 4.4 Permissions migration
 
 Snowflake roles → Entra ID groups + Unity Catalog grants.
 
-| Snowflake role | Target | Grant example |
-|---|---|---|
-| `FINANCE_ENGINEER` | Entra group `grp-finance-engineer` | `GRANT ALL PRIVILEGES ON SCHEMA finance_prod.marts TO \`grp-finance-engineer\`` |
-| `FINANCE_ANALYST` | Entra group `grp-finance-analyst` | `GRANT SELECT ON SCHEMA finance_prod.marts TO \`grp-finance-analyst\`` |
-| `SYSADMIN` | Workspace admin role + Unity Catalog metastore admin | Managed via Terraform/Bicep `unity_catalog/` module |
+| Snowflake role     | Target                                               | Grant example                                                                   |
+| ------------------ | ---------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `FINANCE_ENGINEER` | Entra group `grp-finance-engineer`                   | `GRANT ALL PRIVILEGES ON SCHEMA finance_prod.marts TO \`grp-finance-engineer\`` |
+| `FINANCE_ANALYST`  | Entra group `grp-finance-analyst`                    | `GRANT SELECT ON SCHEMA finance_prod.marts TO \`grp-finance-analyst\``          |
+| `SYSADMIN`         | Workspace admin role + Unity Catalog metastore admin | Managed via Terraform/Bicep `unity_catalog/` module                             |
 
 See `csa_platform/multi_synapse/rbac_templates/` for the RBAC template pattern reused across workspaces.
 
 ### 4.5 Warehouse sizing translation
 
-| Snowflake size | Credits/hour | Databricks SQL Warehouse size | DBU/hour (list) |
-|---|---|---|---|
-| X-Small | 1 | 2X-Small | 4 |
-| Small | 2 | X-Small | 6 |
-| Medium | 4 | Small | 12 |
-| Large | 8 | Medium | 24 |
-| X-Large | 16 | Large | 40 |
-| 2X-Large | 32 | X-Large | 80 |
-| 3X-Large–6X-Large | 64–512 | 2X–4X-Large | 144–320 |
+| Snowflake size    | Credits/hour | Databricks SQL Warehouse size | DBU/hour (list) |
+| ----------------- | ------------ | ----------------------------- | --------------- |
+| X-Small           | 1            | 2X-Small                      | 4               |
+| Small             | 2            | X-Small                       | 6               |
+| Medium            | 4            | Small                         | 12              |
+| Large             | 8            | Medium                        | 24              |
+| X-Large           | 16           | Large                         | 40              |
+| 2X-Large          | 32           | X-Large                       | 80              |
+| 3X-Large–6X-Large | 64–512       | 2X–4X-Large                   | 144–320         |
 
 Two notes: (1) Databricks serverless SQL is typically faster per-DBU because spin-up is <10s vs Snowflake's warm-from-cold 2–30s; (2) auto-stop at 60s (adjustable down to 10 minutes minimum on Databricks serverless — Databricks classic warehouses support 1-min auto-stop) is the primary cost knob.
 
@@ -389,12 +391,12 @@ Illustrative, not a bid. Every federal Snowflake tenant has its own credit mix, 
 
 - **Snowflake Gov today:** typically **$3M/year** all-in (credits + storage + Cortex + reader accounts + BI connector licenses).
 - **csa-inabox on Azure Government:** typically **$1.5M–$2.5M/year** at similar scale. Breakdown:
-  - Databricks SQL + jobs (DBUs): **$800K–$1.2M**
-  - Storage (OneLake + ADLS Gen2 + backups): **$150K–$300K**
-  - Power BI Premium per-user or Fabric capacity F64–F128: **$200K–$400K**
-  - Azure OpenAI / AI Foundry / AI Search: **$150K–$400K**
-  - Purview + Monitor + Key Vault + Private Endpoints + network: **$200K–$400K**
-  - Professional services — not included
+    - Databricks SQL + jobs (DBUs): **$800K–$1.2M**
+    - Storage (OneLake + ADLS Gen2 + backups): **$150K–$300K**
+    - Power BI Premium per-user or Fabric capacity F64–F128: **$200K–$400K**
+    - Azure OpenAI / AI Foundry / AI Search: **$150K–$400K**
+    - Purview + Monitor + Key Vault + Private Endpoints + network: **$200K–$400K**
+    - Professional services — not included
 
 Cost drivers:
 
@@ -408,13 +410,13 @@ The consumption model means costs track workload rather than seats, which materi
 
 ## 8. Gaps and roadmap
 
-| Gap | Description | Tracked finding | Planned remediation |
-|---|---|---|---|
-| **Data Clean Rooms turnkey UX** | Snowflake's clean-room UX is more integrated than the csa-inabox stitch. | N/A — documented pattern only | Delta Sharing + Purview data products + Confidential Computing stitches the capability; purpose-built UX not on roadmap |
-| **Snowpark Container Services single-vendor simplicity** | csa-inabox splits inference and general container hosting across Databricks Model Serving + Container Apps | N/A — architectural choice | The split trades day-one UX for long-run flexibility; no roadmap to collapse |
-| **CSA Copilot** (NL analysis surface analogous to Snowflake Cortex chat UX) | Not shipped | CSA-0008 (XL) | 6-phase MVP; see the Palantir playbook for context on scope |
-| **Decision-tree guidance** | See `docs/decisions/` — authored in parallel to this playbook | CSA-0010 (L) | Covered by batch-vs-streaming, fabric-vs-databricks-vs-synapse, lakehouse-vs-warehouse-vs-lake, etl-vs-elt |
-| **Framework control matrices** | NIST, CMMC, HIPAA delivered; PCI-DSS, SOC 2, GDPR still pending | CSA-0012 (XL) — in progress | Six YAMLs + narrative pages |
+| Gap                                                                         | Description                                                                                                | Tracked finding               | Planned remediation                                                                                                     |
+| --------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| **Data Clean Rooms turnkey UX**                                             | Snowflake's clean-room UX is more integrated than the csa-inabox stitch.                                   | N/A — documented pattern only | Delta Sharing + Purview data products + Confidential Computing stitches the capability; purpose-built UX not on roadmap |
+| **Snowpark Container Services single-vendor simplicity**                    | csa-inabox splits inference and general container hosting across Databricks Model Serving + Container Apps | N/A — architectural choice    | The split trades day-one UX for long-run flexibility; no roadmap to collapse                                            |
+| **CSA Copilot** (NL analysis surface analogous to Snowflake Cortex chat UX) | Not shipped                                                                                                | CSA-0008 (XL)                 | 6-phase MVP; see the Palantir playbook for context on scope                                                             |
+| **Decision-tree guidance**                                                  | See `docs/decisions/` — authored in parallel to this playbook                                              | CSA-0010 (L)                  | Covered by batch-vs-streaming, fabric-vs-databricks-vs-synapse, lakehouse-vs-warehouse-vs-lake, etl-vs-elt              |
+| **Framework control matrices**                                              | NIST, CMMC, HIPAA delivered; PCI-DSS, SOC 2, GDPR still pending                                            | CSA-0012 (XL) — in progress   | Six YAMLs + narrative pages                                                                                             |
 
 ---
 
@@ -451,33 +453,33 @@ Kept professional, not marketing.
 - **Migration index:** [docs/migrations/README.md](README.md)
 - **Companion playbook (Foundry):** [palantir-foundry.md](palantir-foundry.md)
 - **Decision trees:**
-  - `docs/decisions/fabric-vs-databricks-vs-synapse.md`
-  - `docs/decisions/batch-vs-streaming.md`
-  - `docs/decisions/delta-vs-iceberg-vs-parquet.md`
-  - `docs/decisions/etl-vs-elt.md`
-  - `docs/decisions/lakehouse-vs-warehouse-vs-lake.md`
-  - `docs/decisions/materialize-vs-virtualize.md`
+    - `docs/decisions/fabric-vs-databricks-vs-synapse.md`
+    - `docs/decisions/batch-vs-streaming.md`
+    - `docs/decisions/delta-vs-iceberg-vs-parquet.md`
+    - `docs/decisions/etl-vs-elt.md`
+    - `docs/decisions/lakehouse-vs-warehouse-vs-lake.md`
+    - `docs/decisions/materialize-vs-virtualize.md`
 - **ADRs:**
-  - `docs/adr/0001-adf-dbt-over-airflow.md`
-  - `docs/adr/0002-databricks-over-oss-spark.md`
-  - `docs/adr/0003-delta-lake-over-iceberg-and-parquet.md`
-  - `docs/adr/0004-bicep-over-terraform.md`
-  - `docs/adr/0005-event-hubs-over-kafka.md`
-  - `docs/adr/0007-azure-openai-over-self-hosted-llm.md`
-  - `docs/adr/0010-fabric-strategic-target.md`
+    - `docs/adr/0001-adf-dbt-over-airflow.md`
+    - `docs/adr/0002-databricks-over-oss-spark.md`
+    - `docs/adr/0003-delta-lake-over-iceberg-and-parquet.md`
+    - `docs/adr/0004-bicep-over-terraform.md`
+    - `docs/adr/0005-event-hubs-over-kafka.md`
+    - `docs/adr/0007-azure-openai-over-self-hosted-llm.md`
+    - `docs/adr/0010-fabric-strategic-target.md`
 - **Compliance matrices:**
-  - `docs/compliance/nist-800-53-rev5.md` / `csa_platform/csa_platform/governance/compliance/nist-800-53-rev5.yaml`
-  - `docs/compliance/cmmc-2.0-l2.md` / `csa_platform/csa_platform/governance/compliance/cmmc-2.0-l2.yaml`
-  - `docs/compliance/hipaa-security-rule.md` / `csa_platform/csa_platform/governance/compliance/hipaa-security-rule.yaml`
+    - `docs/compliance/nist-800-53-rev5.md` / `csa_platform/csa_platform/governance/compliance/nist-800-53-rev5.yaml`
+    - `docs/compliance/cmmc-2.0-l2.md` / `csa_platform/csa_platform/governance/compliance/cmmc-2.0-l2.yaml`
+    - `docs/compliance/hipaa-security-rule.md` / `csa_platform/csa_platform/governance/compliance/hipaa-security-rule.yaml`
 - **Platform modules most relevant:**
-  - `csa_platform/unity_catalog_pattern/` — OneLake + Unity Catalog foundation
-  - `csa_platform/semantic_model/` — Direct Lake semantic model for Power BI
-  - `csa_platform/ai_integration/` — Cortex replacement primitives
-  - `csa_platform/data_marketplace/` — data-product registry (Data Marketplace analogue)
-  - `csa_platform/csa_platform/governance/purview/` — catalog + classifications
-  - `csa_platform/multi_synapse/` — multi-workspace pattern
+    - `csa_platform/unity_catalog_pattern/` — OneLake + Unity Catalog foundation
+    - `csa_platform/semantic_model/` — Direct Lake semantic model for Power BI
+    - `csa_platform/ai_integration/` — Cortex replacement primitives
+    - `csa_platform/data_marketplace/` — data-product registry (Data Marketplace analogue)
+    - `csa_platform/csa_platform/governance/purview/` — catalog + classifications
+    - `csa_platform/multi_synapse/` — multi-workspace pattern
 - **Operational guides:**
-  - `docs/QUICKSTART.md`, `docs/ARCHITECTURE.md`, `docs/GOV_SERVICE_MATRIX.md`, `docs/COST_MANAGEMENT.md`, `docs/DATABRICKS_GUIDE.md`
+    - `docs/QUICKSTART.md`, `docs/ARCHITECTURE.md`, `docs/GOV_SERVICE_MATRIX.md`, `docs/COST_MANAGEMENT.md`, `docs/DATABRICKS_GUIDE.md`
 
 ---
 

@@ -43,24 +43,24 @@ flowchart TD
 
 ## Pattern: ingestion choice
 
-| Source | Recommended ingestion |
-|--------|----------------------|
-| Few high-rate streams | **Event Hubs Standard / Premium** + Capture |
-| Massive multi-tenant (>1M msg/s) | **Event Hubs Dedicated** |
-| Existing Kafka clients | **Event Hubs Kafka surface** (no client changes) |
-| MQTT IoT devices | **IoT Hub** → Event Hubs |
-| HTTP webhook | **Event Grid** or **Functions HTTP trigger** |
-| File drops (S3, GCS, SFTP) | **ADF copy** or **Logic Apps** — not really streaming, but often confused for it |
+| Source                           | Recommended ingestion                                                            |
+| -------------------------------- | -------------------------------------------------------------------------------- |
+| Few high-rate streams            | **Event Hubs Standard / Premium** + Capture                                      |
+| Massive multi-tenant (>1M msg/s) | **Event Hubs Dedicated**                                                         |
+| Existing Kafka clients           | **Event Hubs Kafka surface** (no client changes)                                 |
+| MQTT IoT devices                 | **IoT Hub** → Event Hubs                                                         |
+| HTTP webhook                     | **Event Grid** or **Functions HTTP trigger**                                     |
+| File drops (S3, GCS, SFTP)       | **ADF copy** or **Logic Apps** — not really streaming, but often confused for it |
 
 ## Pattern: processing choice
 
-| Need | Service |
-|------|---------|
-| **Stateless filter / enrich / route** | Functions (HTTP/Event trigger) or Container Apps (KEDA) |
-| **Tumbling / hopping window aggregations in SQL** | Stream Analytics or Fabric Eventstream |
-| **Stateful joins, late-data, watermarks, ML** | Databricks Structured Streaming or Delta Live Tables |
-| **Sub-second time-series queries** | Fabric Eventhouse / Azure Data Explorer (querying side, not processing) |
-| **Complex event processing (CEP)** | Stream Analytics with referenced data, or Flink (Confluent Cloud on Azure) |
+| Need                                              | Service                                                                    |
+| ------------------------------------------------- | -------------------------------------------------------------------------- |
+| **Stateless filter / enrich / route**             | Functions (HTTP/Event trigger) or Container Apps (KEDA)                    |
+| **Tumbling / hopping window aggregations in SQL** | Stream Analytics or Fabric Eventstream                                     |
+| **Stateful joins, late-data, watermarks, ML**     | Databricks Structured Streaming or Delta Live Tables                       |
+| **Sub-second time-series queries**                | Fabric Eventhouse / Azure Data Explorer (querying side, not processing)    |
+| **Complex event processing (CEP)**                | Stream Analytics with referenced data, or Flink (Confluent Cloud on Azure) |
 
 ## Pattern: CDC from operational databases
 
@@ -94,13 +94,13 @@ Run Debezium connectors as Container Apps:
 ```yaml
 # Container App for Debezium PostgreSQL connector
 env:
-  - DATABASE_HOSTNAME: pg-primary.privatelink.postgres.database.azure.com
-  - DATABASE_USER: debezium
-  - DATABASE_PASSWORD: !KeyVaultRef pg-debezium-pwd
-  - TABLE_INCLUDE_LIST: public.orders,public.customers
-  - TOPIC_PREFIX: pg-prod
-  - KAFKA_BOOTSTRAP_SERVERS: ehns-prod.servicebus.windows.net:9093
-  - KAFKA_SASL_MECHANISM: PLAIN
+    - DATABASE_HOSTNAME: pg-primary.privatelink.postgres.database.azure.com
+    - DATABASE_USER: debezium
+    - DATABASE_PASSWORD: !KeyVaultRef pg-debezium-pwd
+    - TABLE_INCLUDE_LIST: public.orders,public.customers
+    - TOPIC_PREFIX: pg-prod
+    - KAFKA_BOOTSTRAP_SERVERS: ehns-prod.servicebus.windows.net:9093
+    - KAFKA_SASL_MECHANISM: PLAIN
 ```
 
 Debezium publishes change events to Event Hubs (Kafka surface). Downstream consumers process from Event Hubs.
@@ -132,10 +132,10 @@ Bronze = Capture-output Parquet (immutable). Silver = Delta tables with watermar
 
 ## Pattern: at-least-once vs exactly-once
 
-| Need | Approach |
-|------|----------|
-| At-least-once (default) | Idempotent consumers; deduplicate on consumer side using natural keys |
-| Exactly-once on a single sink | Use a sink that supports it (Delta with merge keys, Cosmos with upsert) |
+| Need                               | Approach                                                                                                                         |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| At-least-once (default)            | Idempotent consumers; deduplicate on consumer side using natural keys                                                            |
+| Exactly-once on a single sink      | Use a sink that supports it (Delta with merge keys, Cosmos with upsert)                                                          |
 | Exactly-once across multiple sinks | Hard. Usually solved with **outbox pattern** (write event + sink record in one DB transaction; relay reads outbox and publishes) |
 
 Don't claim exactly-once unless you've designed for it explicitly. Most "exactly-once" production systems are "at-least-once with idempotent consumers."
@@ -155,28 +155,28 @@ Pick a watermark that matches your data's latency reality. Too tight = drop legi
 
 ## Cost guidance
 
-| Tier | When |
-|------|------|
-| Event Hubs Standard | Most workloads up to ~50 MB/s |
-| Event Hubs Premium | Better latency, dedicated bandwidth, geo-DR |
-| Event Hubs Dedicated | >1M msg/s sustained, predictable cost |
-| Stream Analytics | Per Streaming Unit (SU); minimum 1 SU = ~$80/mo |
-| Databricks Structured Streaming | Per DBU; minimum cluster usually $200+/mo |
-| Fabric RTI / Eventstream | Bundled in Fabric capacity (F-SKU) |
-| Azure Data Explorer | Per-cluster (D11_v2 starts ~$300/mo) |
-| Fabric Eventhouse | Bundled in Fabric capacity |
+| Tier                            | When                                            |
+| ------------------------------- | ----------------------------------------------- |
+| Event Hubs Standard             | Most workloads up to ~50 MB/s                   |
+| Event Hubs Premium              | Better latency, dedicated bandwidth, geo-DR     |
+| Event Hubs Dedicated            | >1M msg/s sustained, predictable cost           |
+| Stream Analytics                | Per Streaming Unit (SU); minimum 1 SU = ~$80/mo |
+| Databricks Structured Streaming | Per DBU; minimum cluster usually $200+/mo       |
+| Fabric RTI / Eventstream        | Bundled in Fabric capacity (F-SKU)              |
+| Azure Data Explorer             | Per-cluster (D11_v2 starts ~$300/mo)            |
+| Fabric Eventhouse               | Bundled in Fabric capacity                      |
 
 ## Anti-patterns
 
-| Anti-pattern | What to do |
-|--------------|-----------|
-| Polling DB every 5 seconds | Use CDC (change feed, Synapse Link, Debezium) |
-| Stream Analytics for stateful ML | Use Databricks; ASA SQL stateful is limited |
-| Trying to use Synapse SQL for sub-second time-series queries on TB-scale | Use ADX / Eventhouse |
-| Custom Kafka cluster on AKS for new workloads | Event Hubs Kafka surface — no clusters to operate |
-| Functions for high-volume stream processing | Container Apps with KEDA scales better and cheaper |
-| Bronze without Capture | You'll regret it the first time you need to replay |
-| Single Event Hub for all topics | Per-topic per-domain — easier ops, RBAC, retention |
+| Anti-pattern                                                             | What to do                                         |
+| ------------------------------------------------------------------------ | -------------------------------------------------- |
+| Polling DB every 5 seconds                                               | Use CDC (change feed, Synapse Link, Debezium)      |
+| Stream Analytics for stateful ML                                         | Use Databricks; ASA SQL stateful is limited        |
+| Trying to use Synapse SQL for sub-second time-series queries on TB-scale | Use ADX / Eventhouse                               |
+| Custom Kafka cluster on AKS for new workloads                            | Event Hubs Kafka surface — no clusters to operate  |
+| Functions for high-volume stream processing                              | Container Apps with KEDA scales better and cheaper |
+| Bronze without Capture                                                   | You'll regret it the first time you need to replay |
+| Single Event Hub for all topics                                          | Per-topic per-domain — easier ops, RBAC, retention |
 
 ## Related
 

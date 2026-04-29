@@ -84,9 +84,9 @@ az group create --name "$CSA_RG_AI" --location "$CSA_LOCATION"
 
 ```json
 {
-  "id": "/subscriptions/.../resourceGroups/csa-rg-ai-dev",
-  "location": "eastus",
-  "properties": { "provisioningState": "Succeeded" }
+    "id": "/subscriptions/.../resourceGroups/csa-rg-ai-dev",
+    "location": "eastus",
+    "properties": { "provisioningState": "Succeeded" }
 }
 ```
 
@@ -121,13 +121,17 @@ Deployment takes 5-10 minutes. It provisions Azure OpenAI, AI Foundry Hub, Key V
 
 ```json
 {
-  "properties": {
-    "provisioningState": "Succeeded",
-    "outputs": {
-      "openAiEndpoint": { "value": "https://csa-aoai-dev.openai.azure.com/" },
-      "aiFoundryHubId": { "value": "/subscriptions/.../workspaces/csa-aifoundry-hub-dev" }
+    "properties": {
+        "provisioningState": "Succeeded",
+        "outputs": {
+            "openAiEndpoint": {
+                "value": "https://csa-aoai-dev.openai.azure.com/"
+            },
+            "aiFoundryHubId": {
+                "value": "/subscriptions/.../workspaces/csa-aifoundry-hub-dev"
+            }
+        }
     }
-  }
 }
 ```
 
@@ -135,11 +139,11 @@ Deployment takes 5-10 minutes. It provisions Azure OpenAI, AI Foundry Hub, Key V
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
+| Symptom                     | Cause                | Fix                                                       |
+| --------------------------- | -------------------- | --------------------------------------------------------- |
 | `InvalidTemplateDeployment` | Bicep file not found | Verify path `deploy/bicep/dlz/modules/ai-analytics.bicep` |
-| `QuotaExceeded` for OpenAI | Region capacity | Try `eastus2`, `swedencentral`, or `canadaeast` |
-| `AuthorizationFailed` | Permissions | Need Contributor role on the resource group |
+| `QuotaExceeded` for OpenAI  | Region capacity      | Try `eastus2`, `swedencentral`, or `canadaeast`           |
+| `AuthorizationFailed`       | Permissions          | Need Contributor role on the resource group               |
 
 ---
 
@@ -198,11 +202,11 @@ Endpoint: https://csa-aoai-dev.openai.azure.com/
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
+| Symptom             | Cause             | Fix                                                                                                    |
+| ------------------- | ----------------- | ------------------------------------------------------------------------------------------------------ |
 | `ModelNotAvailable` | Region limitation | Check [model availability](https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models) |
-| `InsufficientQuota` | TPM exceeded | Reduce `sku-capacity` or request increase |
-| Deployment > 10 min | Normal | Wait up to 15 minutes |
+| `InsufficientQuota` | TPM exceeded      | Reduce `sku-capacity` or request increase                                                              |
+| Deployment > 10 min | Normal            | Wait up to 15 minutes                                                                                  |
 
 ---
 
@@ -263,11 +267,11 @@ azure_endpoint: https://csa-aoai-dev.openai.azure.com/
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `WorkspaceNotFound` | Hub missing | Run Step 4a first |
-| Connection fails | Endpoint format | Include trailing `/` in URL |
-| `HubIdInvalid` | Wrong resource ID | Verify with `az ml workspace show` |
+| Symptom             | Cause             | Fix                                |
+| ------------------- | ----------------- | ---------------------------------- |
+| `WorkspaceNotFound` | Hub missing       | Run Step 4a first                  |
+| Connection fails    | Endpoint format   | Include trailing `/` in URL        |
+| `HubIdInvalid`      | Wrong resource ID | Verify with `az ml workspace show` |
 
 ---
 
@@ -526,14 +530,14 @@ az containerapp create \
 
 ```json
 {
-  "properties": {
-    "configuration": {
-      "ingress": {
-        "fqdn": "csa-chatbot-dev.kindocean-abc123.eastus.azurecontainerapps.io"
-      }
-    },
-    "provisioningState": "Succeeded"
-  }
+    "properties": {
+        "configuration": {
+            "ingress": {
+                "fqdn": "csa-chatbot-dev.kindocean-abc123.eastus.azurecontainerapps.io"
+            }
+        },
+        "provisioningState": "Succeeded"
+    }
 }
 ```
 
@@ -567,7 +571,7 @@ curl -X POST "https://$CHATBOT_URL/chat" \
 
 ```json
 {
-  "reply": "The Gold layer contains curated crop production data including..."
+    "reply": "The Gold layer contains curated crop production data including..."
 }
 ```
 
@@ -583,7 +587,7 @@ curl "https://$CHATBOT_URL/health"
 <summary><strong>Expected Output</strong></summary>
 
 ```json
-{"status": "healthy"}
+{ "status": "healthy" }
 ```
 
 </details>
@@ -649,14 +653,14 @@ Succeeded
 
 ## Troubleshooting (Summary)
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `QuotaExceeded` on OpenAI | Region TPM limits | Change region or reduce `sku-capacity` |
-| Container App returns 502 | App crash on startup | Check logs: `az containerapp logs show --name $CSA_ACA_NAME --resource-group $CSA_RG_AI` |
-| `AuthenticationError` from OpenAI | Wrong key or endpoint | Verify env vars match `az cognitiveservices account show` output |
-| AI Foundry project not visible | Wrong subscription context | Run `az account set --subscription <id>` |
-| ACR image pull fails | Registry auth | Enable admin user or configure managed identity |
-| Slow first response | Cold start | Set `--min-replicas 1` to keep one instance warm |
+| Symptom                           | Cause                      | Fix                                                                                      |
+| --------------------------------- | -------------------------- | ---------------------------------------------------------------------------------------- |
+| `QuotaExceeded` on OpenAI         | Region TPM limits          | Change region or reduce `sku-capacity`                                                   |
+| Container App returns 502         | App crash on startup       | Check logs: `az containerapp logs show --name $CSA_ACA_NAME --resource-group $CSA_RG_AI` |
+| `AuthenticationError` from OpenAI | Wrong key or endpoint      | Verify env vars match `az cognitiveservices account show` output                         |
+| AI Foundry project not visible    | Wrong subscription context | Run `az account set --subscription <id>`                                                 |
+| ACR image pull fails              | Registry auth              | Enable admin user or configure managed identity                                          |
+| Slow first response               | Cold start                 | Set `--min-replicas 1` to keep one instance warm                                         |
 
 ---
 

@@ -195,13 +195,13 @@ via the portal.
 2. Click **+ New rule**
 3. Configure:
 
-| Rule Type | Example Configuration |
-|---|---|
-| Completeness | Column `customer_id` must not be null, threshold 99% |
-| Uniqueness | Column `order_sk` must be unique, threshold 100% |
-| Freshness | Table must have rows updated within 24 hours |
-| Range | Column `total_amount` must be between 0 and 10,000,000 |
-| Regex | Column `email` must match `^[a-zA-Z0-9+_.-]+@[a-zA-Z0-9.-]+$` |
+| Rule Type    | Example Configuration                                         |
+| ------------ | ------------------------------------------------------------- |
+| Completeness | Column `customer_id` must not be null, threshold 99%          |
+| Uniqueness   | Column `order_sk` must be unique, threshold 100%              |
+| Freshness    | Table must have rows updated within 24 hours                  |
+| Range        | Column `total_amount` must be between 0 and 10,000,000        |
+| Regex        | Column `email` must match `^[a-zA-Z0-9+_.-]+@[a-zA-Z0-9.-]+$` |
 
 ### Assign Rules to Assets
 
@@ -224,12 +224,12 @@ Quality Score = (w₁ × Completeness) + (w₂ × Accuracy) + (w₃ × Timelines
 
 Default weights:
 
-| Dimension | Weight | Description | How Measured |
-|---|---|---|---|
-| Completeness | 0.30 | % of non-null values in required columns | GE `expect_column_values_to_not_be_null` |
-| Accuracy | 0.30 | % of values passing business rules | GE custom expectations |
-| Timeliness | 0.20 | Whether data arrived within SLA | `_ingested_at` vs SLA threshold |
-| Consistency | 0.20 | % of values matching expected formats/ranges | GE range/regex expectations |
+| Dimension    | Weight | Description                                  | How Measured                             |
+| ------------ | ------ | -------------------------------------------- | ---------------------------------------- |
+| Completeness | 0.30   | % of non-null values in required columns     | GE `expect_column_values_to_not_be_null` |
+| Accuracy     | 0.30   | % of values passing business rules           | GE custom expectations                   |
+| Timeliness   | 0.20   | Whether data arrived within SLA              | `_ingested_at` vs SLA threshold          |
+| Consistency  | 0.20   | % of values matching expected formats/ranges | GE range/regex expectations              |
 
 ### Compute Quality Score
 
@@ -279,12 +279,12 @@ print(f"Quality Score: {score:.2%}")  # 97.30%
 
 ### Quality Tiers
 
-| Score Range | Tier | Action |
-|---|---|---|
-| ≥ 0.95 | 🟢 Excellent | Eligible for Certified endorsement |
-| 0.85–0.94 | 🟡 Good | Endorsed, minor improvements needed |
-| 0.70–0.84 | 🟠 Fair | Requires remediation plan |
-| < 0.70 | 🔴 Poor | Block downstream consumption, alert data steward |
+| Score Range | Tier         | Action                                           |
+| ----------- | ------------ | ------------------------------------------------ |
+| ≥ 0.95      | 🟢 Excellent | Eligible for Certified endorsement               |
+| 0.85–0.94   | 🟡 Good      | Endorsed, minor improvements needed              |
+| 0.70–0.84   | 🟠 Fair      | Requires remediation plan                        |
+| < 0.70      | 🔴 Poor      | Block downstream consumption, alert data steward |
 
 ---
 

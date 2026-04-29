@@ -75,6 +75,7 @@ transformation layer** for all Bronze → Silver → Gold work in
 csa-inabox.
 
 **In-scope for dbt (the only sanctioned path):**
+
 - Bronze → Silver (cleansing, validation, canonicalization,
   schema enforcement)
 - Silver → Gold (joins, aggregations, business logic, dimensional
@@ -85,6 +86,7 @@ csa-inabox.
 - Snapshot models for SCD2
 
 **Out-of-scope for dbt — Spark notebooks remain appropriate:**
+
 - Ad-hoc exploration and profiling
   (`domains/shared/notebooks/data_exploration.py`)
 - One-off Delta Lake `OPTIMIZE` / `VACUUM` / Z-ORDER operations
@@ -94,7 +96,7 @@ csa-inabox.
 - ML feature engineering and model training with MLflow
   (`databricks/ml/ml_pipeline_template.py`)
 - dbt orchestration from Databricks itself
-  (`databricks/orchestration/run_dbt.py` — this *invokes* dbt,
+  (`databricks/orchestration/run_dbt.py` — this _invokes_ dbt,
   it does not replicate it)
 - Data-quality report generation from contract YAML
   (`data_quality_report.py`, `data_quality_monitor.py`) — these
@@ -128,6 +130,7 @@ pull from them during the migration window. New medallion work
 ## Pros and Cons of the Options
 
 ### Option 1 — dbt-first (chosen)
+
 - Pros: Aligns with ADR-0001 / 0002 / 0003 / 0008; native Purview
   lineage; dbt tests reuse governance contracts; single path for
   contributors.
@@ -136,6 +139,7 @@ pull from them during the migration window. New medallion work
   short ramp-up for Spark-only contributors.
 
 ### Option 2 — Spark-first
+
 - Pros: Maximum flexibility; PySpark can express operations that
   dbt Jinja cannot express cleanly.
 - Cons: Loses dbt test framework, contract lineage, and
@@ -143,12 +147,14 @@ pull from them during the migration window. New medallion work
   re-implement dbt's dependency graph by hand.
 
 ### Option 3 — Both remain canonical
+
 - Pros: No migration cost.
 - Cons: Already producing drift (CSA-0130 was filed precisely
   because bug fixes land in one path and not the other); no audit
   story; no single source of truth.
 
 ### Option 4 — Rewrite in a third tool
+
 - Pros: Clean slate.
 - Cons: Re-opens ADR-0008; loses SQL-native lineage; community
   adapter gap; scope creep.
@@ -156,6 +162,7 @@ pull from them during the migration window. New medallion work
 ## Validation
 
 We will know this decision is right if:
+
 - Every Bronze → Silver → Gold flow in new verticals routes
   through dbt, with no new PySpark "alternative" notebooks
   introduced.

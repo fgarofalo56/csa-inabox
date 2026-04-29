@@ -1,9 +1,9 @@
 # ADR 0023 — Release-please PRs auto-pass required status checks
 
-* Status: Accepted
-* Date: 2026-04-27
-* Deciders: @fgarofalo56
-* Related: ADR 0021, ADR 0022; `.github/workflows/release-please.yml`;
+- Status: Accepted
+- Date: 2026-04-27
+- Deciders: @fgarofalo56
+- Related: ADR 0021, ADR 0022; `.github/workflows/release-please.yml`;
   `docs/runbooks/release-please.md`
 
 ## Context
@@ -21,7 +21,7 @@ Branch protection on `main` requires 11 status checks to pass before merge:
 `Python Lint`, `Python Tests (3.10/3.11/3.12)`, `PowerShell Lint`,
 `Secret Scan`, `Repo Hygiene`, `dbt Compile (shared/finance/inventory/sales)`.
 
-**The problem.** GitHub *intentionally* does not trigger downstream
+**The problem.** GitHub _intentionally_ does not trigger downstream
 workflows on PRs created by `GITHUB_TOKEN` (loop-prevention). Release-please
 uses `GITHUB_TOKEN`, so its PRs land with **zero status checks running** and
 permanently `BLOCKED` merge state. The first time we hit this (PR #107 for
@@ -46,23 +46,25 @@ secrets to manage.
 
 ## Alternatives considered
 
-| Option | Why not |
-|---|---|
-| **Personal Access Token** (`RELEASE_PLEASE_TOKEN`) | The canonical fix, but requires a long-lived user-scoped PAT in repo secrets — a credential we don't want to own and rotate. A GitHub App would solve this but is heavyweight for a single-maintainer repo. |
-| **`pull_request_target` event** on a separate workflow | Same limitation: events don't fire on `GITHUB_TOKEN`-created PRs. |
-| **Close + reopen the PR** via API from a GH-Actions actor | Same limitation. Verified empirically. |
-| **Drop the required-check list** for `release-please--*` branches | GitHub's branch-protection model is `required_status_checks` is global per branch — there's no per-branch-pattern override without rulesets, and rulesets at this scale would over-engineer the problem. |
-| **Touch a "trigger" file in the release PR** (via `extra-files`) | Doesn't help — the GITHUB_TOKEN restriction is at the event level, not the path-filter level. |
+| Option                                                            | Why not                                                                                                                                                                                                     |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Personal Access Token** (`RELEASE_PLEASE_TOKEN`)                | The canonical fix, but requires a long-lived user-scoped PAT in repo secrets — a credential we don't want to own and rotate. A GitHub App would solve this but is heavyweight for a single-maintainer repo. |
+| **`pull_request_target` event** on a separate workflow            | Same limitation: events don't fire on `GITHUB_TOKEN`-created PRs.                                                                                                                                           |
+| **Close + reopen the PR** via API from a GH-Actions actor         | Same limitation. Verified empirically.                                                                                                                                                                      |
+| **Drop the required-check list** for `release-please--*` branches | GitHub's branch-protection model is `required_status_checks` is global per branch — there's no per-branch-pattern override without rulesets, and rulesets at this scale would over-engineer the problem.    |
+| **Touch a "trigger" file in the release PR** (via `extra-files`)  | Doesn't help — the GITHUB_TOKEN restriction is at the event level, not the path-filter level.                                                                                                               |
 
 ## Consequences
 
 **Good:**
+
 - Release PRs auto-merge once approved → release cadence ~unblocked.
 - No PAT/App credentials to manage or rotate.
 - Allow-list is auditable (3 files) and the workflow refuses to bypass
   checks for any other diff.
 
 **Bad / risks:**
+
 - We are technically bypassing CI on these PRs. Mitigation: the diff is
   always a 3-file version bump that humans can validate in seconds, and the
   next push to `main` runs the full CI suite normally.

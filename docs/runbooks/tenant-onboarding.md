@@ -2,9 +2,8 @@
 
 # Tenant Onboarding Runbook (CSA-0059)
 
-
 !!! note
-    **Quick Summary**: End-to-end procedure to onboard a new tenant (new customer domain, new regulated workload) onto CSA-in-a-Box — create the Entra ID app registration, wire OIDC federated credentials, provision the DLZ (Data Landing Zone) via Bicep, assign RBAC from the governance matrix, seed the marketplace, and run the post-onboarding verification.
+**Quick Summary**: End-to-end procedure to onboard a new tenant (new customer domain, new regulated workload) onto CSA-in-a-Box — create the Entra ID app registration, wire OIDC federated credentials, provision the DLZ (Data Landing Zone) via Bicep, assign RBAC from the governance matrix, seed the marketplace, and run the post-onboarding verification.
 
 ## Before First Use — Customization Checklist
 
@@ -24,14 +23,14 @@
 - [🔒 2. Severity & SLA](#-2-severity--sla)
 - [🧭 3. Prerequisites](#-3-prerequisites)
 - [🚀 4. Onboarding Steps](#-4-onboarding-steps)
-  - [4.1 Collect tenant intake form](#41-collect-tenant-intake-form)
-  - [4.2 Register the domain / custom DNS](#42-register-the-domain--custom-dns)
-  - [4.3 Create the Entra ID app registration](#43-create-the-entra-id-app-registration)
-  - [4.4 Wire OIDC federated credentials for CI](#44-wire-oidc-federated-credentials-for-ci)
-  - [4.5 Provision the Data Landing Zone (DLZ)](#45-provision-the-data-landing-zone-dlz)
-  - [4.6 Assign RBAC from governance matrix](#46-assign-rbac-from-governance-matrix)
-  - [4.7 Seed the marketplace](#47-seed-the-marketplace)
-  - [4.8 Wire the Purview collection](#48-wire-the-purview-collection)
+    - [4.1 Collect tenant intake form](#41-collect-tenant-intake-form)
+    - [4.2 Register the domain / custom DNS](#42-register-the-domain--custom-dns)
+    - [4.3 Create the Entra ID app registration](#43-create-the-entra-id-app-registration)
+    - [4.4 Wire OIDC federated credentials for CI](#44-wire-oidc-federated-credentials-for-ci)
+    - [4.5 Provision the Data Landing Zone (DLZ)](#45-provision-the-data-landing-zone-dlz)
+    - [4.6 Assign RBAC from governance matrix](#46-assign-rbac-from-governance-matrix)
+    - [4.7 Seed the marketplace](#47-seed-the-marketplace)
+    - [4.8 Wire the Purview collection](#48-wire-the-purview-collection)
 - [🪖 5. Azure Government Variations](#-5-azure-government-variations)
 - [✅ 6. Post-Onboarding Verification](#-6-post-onboarding-verification)
 - [🧹 7. Offboarding](#-7-offboarding)
@@ -57,13 +56,13 @@ flow in the portal's marketplace UI instead).
 
 ## 🔒 2. Severity & SLA
 
-| Item                             | Target                                  |
-| -------------------------------- | --------------------------------------- |
-| Total onboarding time (standard) | 5 business days                         |
-| Total onboarding time (Gov / IL4)| 15 business days (ATO dependency chain) |
-| DLZ deploy time                  | 60-120 minutes (Bicep what-if + deploy) |
-| RBAC propagation time            | 15-60 minutes (AAD eventual consistency)|
-| Purview collection propagation   | 30-90 minutes                           |
+| Item                              | Target                                   |
+| --------------------------------- | ---------------------------------------- |
+| Total onboarding time (standard)  | 5 business days                          |
+| Total onboarding time (Gov / IL4) | 15 business days (ATO dependency chain)  |
+| DLZ deploy time                   | 60-120 minutes (Bicep what-if + deploy)  |
+| RBAC propagation time             | 15-60 minutes (AAD eventual consistency) |
+| Purview collection propagation    | 30-90 minutes                            |
 
 If you are not tracking to this SLA, escalate at day 3 to the Platform
 Team Lead.
@@ -72,7 +71,7 @@ Team Lead.
 
 ## 🧭 3. Prerequisites
 
-- [ ] Tenant intake form signed off (template: `docs/templates/tenant-intake.md` *if present; otherwise request from ops*).
+- [ ] Tenant intake form signed off (template: `docs/templates/tenant-intake.md` _if present; otherwise request from ops_).
 - [ ] Subscription IDs provisioned by the ALZ platform team (4
       subscriptions — data, integration, management, sandbox — or the
       subset agreed with the tenant).
@@ -124,9 +123,9 @@ az ad sp create --id "$APP_ID"
       permissions.
 - [ ] Request admin consent (must be a Privileged Role Administrator).
 - [ ] Store the app ID + tenant ID in Key Vault:
-      ```bash
-      az keyvault secret set --vault-name kv-csa-<env> --name "<tenant>-app-id" --value "$APP_ID"
-      ```
+      `bash
+az keyvault secret set --vault-name kv-csa-<env> --name "<tenant>-app-id" --value "$APP_ID"
+`
 
 ### 4.4 Wire OIDC federated credentials for CI
 
@@ -158,9 +157,9 @@ bash scripts/deploy/deploy-platform.sh --environment <env>
 ```
 
 - [ ] Confirm the DLZ deployed successfully:
-      ```bash
-      az deployment sub list --query '[?name==`csa-platform-<env>`][0]'
-      ```
+      ``bash
+az deployment sub list --query '[?name==`csa-platform-<env>`][0]'
+``
 - [ ] Confirm Policy assignments have evaluated — any non-compliant
       resources will fail ATO review.
 
@@ -174,10 +173,10 @@ portal — every role assignment must flow through IaC so it is auditable.
 - [ ] Fill in the tenant admin, data owner, data steward, data consumer
       groups from §4.1.
 - [ ] Run the contract apply step:
-      ```bash
-      python -m governance.contracts apply --tenant <tenant> --dry-run
-      python -m governance.contracts apply --tenant <tenant>
-      ```
+      `bash
+python -m governance.contracts apply --tenant <tenant> --dry-run
+python -m governance.contracts apply --tenant <tenant>
+`
 - [ ] Confirm assignments in Entra ID; note AAD eventual-consistency
       delay can be 15-60 minutes.
 
@@ -261,16 +260,16 @@ Audit cadence: verify every tenant's artifact chain once per quarter.
 ## 📎 9. Contact Information
 
 !!! warning
-    **Action Required:** Populate these before first production use.
+**Action Required:** Populate these before first production use.
 
-| Role                       | Contact                                      | Phone                        | Escalation                     |
-| -------------------------- | -------------------------------------------- | ---------------------------- | ------------------------------ |
-| Platform Team Lead         | *(set via your org's platform team)*         | *(see PagerDuty / OpsGenie)* | First responder                |
-| Security Officer           | *(set via your org's security team)*         | *(see PagerDuty / OpsGenie)* | Entra ID / app-reg approvals   |
-| ALZ / Subscription Owner   | *(set via your org's ALZ team)*              | *(office hours)*             | Subscription provisioning      |
-| Purview Admin              | *(set via your org's governance team)*       | *(office hours)*             | Purview collection setup       |
-| Customer Success           | *(set via your org's customer success DL)*   | *(office hours)*             | Tenant-facing communication    |
-| Azure Support              | [Case via Portal](https://portal.azure.com/#blade/Microsoft_Azure_Support/HelpAndSupportBlade) | N/A | Platform issues |
+| Role                     | Contact                                                                                        | Phone                        | Escalation                   |
+| ------------------------ | ---------------------------------------------------------------------------------------------- | ---------------------------- | ---------------------------- |
+| Platform Team Lead       | _(set via your org's platform team)_                                                           | _(see PagerDuty / OpsGenie)_ | First responder              |
+| Security Officer         | _(set via your org's security team)_                                                           | _(see PagerDuty / OpsGenie)_ | Entra ID / app-reg approvals |
+| ALZ / Subscription Owner | _(set via your org's ALZ team)_                                                                | _(office hours)_             | Subscription provisioning    |
+| Purview Admin            | _(set via your org's governance team)_                                                         | _(office hours)_             | Purview collection setup     |
+| Customer Success         | _(set via your org's customer success DL)_                                                     | _(office hours)_             | Tenant-facing communication  |
+| Azure Support            | [Case via Portal](https://portal.azure.com/#blade/Microsoft_Azure_Support/HelpAndSupportBlade) | N/A                          | Platform issues              |
 
 ---
 
@@ -279,12 +278,12 @@ Audit cadence: verify every tenant's artifact chain once per quarter.
 Tabletop this runbook once per quarter against a scratch tenant so
 the procedure stays current with Azure platform changes.
 
-| Quarter   | Date  | Type (tabletop / live) | Scenario exercised | Lead  | Gaps identified | Fixes tracked |
-| --------- | ----- | ---------------------- | ------------------ | ----- | --------------- | ------------- |
-| Q1 — Jan  | _TBD_ | _TBD_                  | _TBD_              | _TBD_ | _TBD_           | _TBD_         |
-| Q2 — Apr  | _TBD_ | _TBD_                  | _TBD_              | _TBD_ | _TBD_           | _TBD_         |
-| Q3 — Jul  | _TBD_ | _TBD_                  | _TBD_              | _TBD_ | _TBD_           | _TBD_         |
-| Q4 — Oct  | _TBD_ | _TBD_                  | _TBD_              | _TBD_ | _TBD_           | _TBD_         |
+| Quarter  | Date  | Type (tabletop / live) | Scenario exercised | Lead  | Gaps identified | Fixes tracked |
+| -------- | ----- | ---------------------- | ------------------ | ----- | --------------- | ------------- |
+| Q1 — Jan | _TBD_ | _TBD_                  | _TBD_              | _TBD_ | _TBD_           | _TBD_         |
+| Q2 — Apr | _TBD_ | _TBD_                  | _TBD_              | _TBD_ | _TBD_           | _TBD_         |
+| Q3 — Jul | _TBD_ | _TBD_                  | _TBD_              | _TBD_ | _TBD_           | _TBD_         |
+| Q4 — Oct | _TBD_ | _TBD_                  | _TBD_              | _TBD_ | _TBD_           | _TBD_         |
 
 ---
 

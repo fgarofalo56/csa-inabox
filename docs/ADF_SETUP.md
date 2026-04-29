@@ -2,9 +2,8 @@
 
 # Azure Data Factory Setup Guide
 
-
 !!! note
-    **Quick Summary**: Deploy and manage ADF pipeline artifacts for the CSA-in-a-Box platform, including linked services, datasets, pipelines, triggers, and CI/CD integration with Purview lineage.
+**Quick Summary**: Deploy and manage ADF pipeline artifacts for the CSA-in-a-Box platform, including linked services, datasets, pipelines, triggers, and CI/CD integration with Purview lineage.
 
 ## 📑 Table of Contents
 
@@ -106,11 +105,7 @@ make deploy-adf FACTORY_NAME=csadlzdevdf RESOURCE_GROUP=rg-csadlz-dev
 ```
 
 !!! important
-    **Deployment order** (handled automatically):
-    1. Linked Services (connections to ADLS, Databricks, Key Vault)
-    2. Datasets (parameterized data shapes)
-    3. Pipelines (orchestration logic)
-    4. Triggers (schedules — started automatically after creation)
+**Deployment order** (handled automatically): 1. Linked Services (connections to ADLS, Databricks, Key Vault) 2. Datasets (parameterized data shapes) 3. Pipelines (orchestration logic) 4. Triggers (schedules — started automatically after creation)
 
 ### Manual deployment (Azure Portal)
 
@@ -128,8 +123,9 @@ make deploy-adf FACTORY_NAME=csadlzdevdf RESOURCE_GROUP=rg-csadlz-dev
 Uses the ADF managed identity for authentication (no keys needed).
 
 **Required setup:**
+
 - [ ] Assign `Storage Blob Data Contributor` to the ADF managed identity on
-   the ADLS storage account
+      the ADLS storage account
 - [ ] The ADF Bicep module outputs `managedIdentityPrincipalId` for this purpose
 
 ### ls_databricks — Databricks Workspace
@@ -137,6 +133,7 @@ Uses the ADF managed identity for authentication (no keys needed).
 Uses Key Vault to retrieve the Databricks access token.
 
 **Required setup:**
+
 - [ ] Generate a personal access token (PAT) in Databricks
 - [ ] Store it in Key Vault as secret `databricks-token`
 - [ ] Update the linked service JSON if your workspace URL differs
@@ -145,9 +142,9 @@ Uses Key Vault to retrieve the Databricks access token.
 
 ## ⚙️ Trigger Configuration
 
-| Trigger | Schedule | Pipeline | Purpose |
-|---------|----------|----------|---------|
-| `tr_hourly_ingest` | Every hour | `pl_ingest_to_bronze` | Pick up new landing files |
+| Trigger              | Schedule        | Pipeline                     | Purpose                         |
+| -------------------- | --------------- | ---------------------------- | ------------------------------- |
+| `tr_hourly_ingest`   | Every hour      | `pl_ingest_to_bronze`        | Pick up new landing files       |
 | `tr_daily_medallion` | Daily 06:00 UTC | `pl_medallion_orchestration` | Full Bronze→Silver→Gold refresh |
 
 ### ⌨️ Managing triggers
@@ -172,29 +169,29 @@ az datafactory trigger start \
 
 ### pl_ingest_to_bronze
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `sourceContainer` | string | `landing` | Source ADLS container |
-| `sourceFolder` | string | — | Folder within the source container |
-| `targetContainer` | string | `bronze` | Target ADLS container |
-| `targetFolder` | string | — | Folder within the target container |
+| Parameter         | Type   | Default   | Description                        |
+| ----------------- | ------ | --------- | ---------------------------------- |
+| `sourceContainer` | string | `landing` | Source ADLS container              |
+| `sourceFolder`    | string | —         | Folder within the source container |
+| `targetContainer` | string | `bronze`  | Target ADLS container              |
+| `targetFolder`    | string | —         | Folder within the target container |
 
 ### pl_medallion_orchestration
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `environment` | string | `dev` | Target environment (dev/staging/prod) |
-| `fullRefresh` | bool | `false` | Force full rebuild (skip incremental) |
-| `alertWebhookUrl` | string | — | Teams webhook for failure alerts |
+| Parameter         | Type   | Default | Description                           |
+| ----------------- | ------ | ------- | ------------------------------------- |
+| `environment`     | string | `dev`   | Target environment (dev/staging/prod) |
+| `fullRefresh`     | bool   | `false` | Force full rebuild (skip incremental) |
+| `alertWebhookUrl` | string | —       | Teams webhook for failure alerts      |
 
 ### pl_run_dbt_models
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `dbtCommand` | string | `run` | dbt command: run, test, build, seed |
-| `dbtTarget` | string | `dev` | dbt profile target |
-| `dbtModels` | string | — | Model selector (e.g., `+gld_revenue`) |
-| `fullRefresh` | bool | `false` | Pass `--full-refresh` to dbt |
+| Parameter     | Type   | Default | Description                           |
+| ------------- | ------ | ------- | ------------------------------------- |
+| `dbtCommand`  | string | `run`   | dbt command: run, test, build, seed   |
+| `dbtTarget`   | string | `dev`   | dbt profile target                    |
+| `dbtModels`   | string | —       | Model selector (e.g., `+gld_revenue`) |
+| `fullRefresh` | bool   | `false` | Pass `--full-refresh` to dbt          |
 
 ---
 
@@ -207,9 +204,9 @@ infrastructure. After infrastructure is up, run the ADF deployment:
 # Add to deploy.yml after DLZ Bicep deployment
 - name: Deploy ADF pipelines
   run: |
-    ./scripts/deploy/deploy-adf.sh \
-      --factory-name ${{ env.FACTORY_NAME }} \
-      --resource-group ${{ env.RESOURCE_GROUP }}
+      ./scripts/deploy/deploy-adf.sh \
+        --factory-name ${{ env.FACTORY_NAME }} \
+        --resource-group ${{ env.RESOURCE_GROUP }}
 ```
 
 ---

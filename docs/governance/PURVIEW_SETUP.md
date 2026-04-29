@@ -9,14 +9,14 @@ central data governance hub.
 
 ## Prerequisites
 
-| Requirement | Details |
-|---|---|
-| Azure subscription | Owner or Contributor + User Access Administrator |
-| DMLZ deployment complete | `deploy/bicep/dmlz/main.bicep` deployed successfully |
-| Azure CLI ≥ 2.60 | `az --version` — includes `az purview` extension |
-| Purview CLI extension | `az extension add --name purview` |
-| Network connectivity | VPN or private endpoint access if public network disabled |
-| Python 3.11+ (optional) | For automation scripts |
+| Requirement              | Details                                                   |
+| ------------------------ | --------------------------------------------------------- |
+| Azure subscription       | Owner or Contributor + User Access Administrator          |
+| DMLZ deployment complete | `deploy/bicep/dmlz/main.bicep` deployed successfully      |
+| Azure CLI ≥ 2.60         | `az --version` — includes `az purview` extension          |
+| Purview CLI extension    | `az extension add --name purview`                         |
+| Network connectivity     | VPN or private endpoint access if public network disabled |
+| Python 3.11+ (optional)  | For automation scripts                                    |
 
 ### Verify Purview Deployment
 
@@ -315,13 +315,13 @@ az role assignment create \
 The DMLZ Bicep template deploys Purview with `publicNetworkAccess: Disabled` by
 default. Five private endpoints are required:
 
-| Endpoint Group | DNS Zone | Purpose |
-|---|---|---|
-| `account` | `privatelink.purview.azure.com` | Purview account API |
-| `portal` | `privatelink.purviewstudio.azure.com` | Purview Studio UI |
-| `blob` | `privatelink.blob.core.windows.net` | Managed storage (scan results) |
-| `queue` | `privatelink.queue.core.windows.net` | Managed storage (scan queue) |
-| `namespace` | `privatelink.servicebus.windows.net` | Managed Event Hub (Kafka) |
+| Endpoint Group | DNS Zone                              | Purpose                        |
+| -------------- | ------------------------------------- | ------------------------------ |
+| `account`      | `privatelink.purview.azure.com`       | Purview account API            |
+| `portal`       | `privatelink.purviewstudio.azure.com` | Purview Studio UI              |
+| `blob`         | `privatelink.blob.core.windows.net`   | Managed storage (scan results) |
+| `queue`        | `privatelink.queue.core.windows.net`  | Managed storage (scan queue)   |
+| `namespace`    | `privatelink.servicebus.windows.net`  | Managed Event Hub (Kafka)      |
 
 These are deployed via the `endpointConfigs` parameter in
 `deploy/bicep/dmlz/modules/Purview/purview.bicep`. Verify connectivity:
@@ -402,30 +402,30 @@ az network private-endpoint-connection approve \
 
 Run through these checks after setup:
 
-| # | Check | Command | Expected |
-|---|---|---|---|
-| 1 | Account exists | `az purview account show --name $PURVIEW_ACCOUNT -g $PURVIEW_RG` | Status: Succeeded |
-| 2 | Collections created | `curl $PURVIEW_ENDPOINT/account/collections?api-version=2019-11-01-preview` | 7+ collections |
-| 3 | Sources registered | `curl $PURVIEW_ENDPOINT/scan/datasources?api-version=2022-07-01-preview` | 5 sources |
-| 4 | MI has RBAC | `az role assignment list --assignee $PURVIEW_MI --all` | 4+ role assignments |
-| 5 | DNS resolves privately | `nslookup $PURVIEW_ACCOUNT.purview.azure.com` | 10.x.x.x |
-| 6 | API accessible | `curl -s -o /dev/null -w "%{http_code}" $PURVIEW_ENDPOINT/account/...` | 200 |
-| 7 | Studio accessible | Open `https://web.purview.azure.com` in browser | Dashboard loads |
+| #   | Check                  | Command                                                                     | Expected            |
+| --- | ---------------------- | --------------------------------------------------------------------------- | ------------------- |
+| 1   | Account exists         | `az purview account show --name $PURVIEW_ACCOUNT -g $PURVIEW_RG`            | Status: Succeeded   |
+| 2   | Collections created    | `curl $PURVIEW_ENDPOINT/account/collections?api-version=2019-11-01-preview` | 7+ collections      |
+| 3   | Sources registered     | `curl $PURVIEW_ENDPOINT/scan/datasources?api-version=2022-07-01-preview`    | 5 sources           |
+| 4   | MI has RBAC            | `az role assignment list --assignee $PURVIEW_MI --all`                      | 4+ role assignments |
+| 5   | DNS resolves privately | `nslookup $PURVIEW_ACCOUNT.purview.azure.com`                               | 10.x.x.x            |
+| 6   | API accessible         | `curl -s -o /dev/null -w "%{http_code}" $PURVIEW_ENDPOINT/account/...`      | 200                 |
+| 7   | Studio accessible      | Open `https://web.purview.azure.com` in browser                             | Dashboard loads     |
 
 ---
 
 ## Common Issues
 
-| Issue | Cause | Resolution |
-|---|---|---|
-| `403 Forbidden` on API calls | Missing Purview role assignment | Add user/SP as Collection Admin on root collection in Purview Studio |
-| DNS resolves to public IP | Private DNS zone not linked to VNet | `az network private-dns zone vnet-link create` to link the zone |
-| Scan fails with timeout | Source behind firewall, no managed PE | Create ingestion private endpoint (Step 4) |
-| `409 Conflict` creating collection | Collection name already exists | Use a unique `referenceName` (alphanumeric, no spaces) |
-| Managed identity can't scan SQL | MI not added as DB user | Run `CREATE USER [purview-name] FROM EXTERNAL PROVIDER` in SQL |
-| Kafka events not flowing | Event Hub namespace disabled or wrong role | Verify Event Hubs Data Owner on the namespace (see Bicep template) |
-| Studio shows blank page | Browser caching or private endpoint issue | Clear cache, verify `portal` private endpoint resolves |
-| Source shows "Disconnected" | Credential expired or access revoked | Re-check managed identity RBAC assignments |
+| Issue                              | Cause                                      | Resolution                                                           |
+| ---------------------------------- | ------------------------------------------ | -------------------------------------------------------------------- |
+| `403 Forbidden` on API calls       | Missing Purview role assignment            | Add user/SP as Collection Admin on root collection in Purview Studio |
+| DNS resolves to public IP          | Private DNS zone not linked to VNet        | `az network private-dns zone vnet-link create` to link the zone      |
+| Scan fails with timeout            | Source behind firewall, no managed PE      | Create ingestion private endpoint (Step 4)                           |
+| `409 Conflict` creating collection | Collection name already exists             | Use a unique `referenceName` (alphanumeric, no spaces)               |
+| Managed identity can't scan SQL    | MI not added as DB user                    | Run `CREATE USER [purview-name] FROM EXTERNAL PROVIDER` in SQL       |
+| Kafka events not flowing           | Event Hub namespace disabled or wrong role | Verify Event Hubs Data Owner on the namespace (see Bicep template)   |
+| Studio shows blank page            | Browser caching or private endpoint issue  | Clear cache, verify `portal` private endpoint resolves               |
+| Source shows "Disconnected"        | Credential expired or access revoked       | Re-check managed identity RBAC assignments                           |
 
 ---
 

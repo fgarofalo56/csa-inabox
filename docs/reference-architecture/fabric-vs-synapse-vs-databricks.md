@@ -48,34 +48,34 @@ flowchart TD
 
 ## Side-by-side
 
-| Dimension | Fabric | Synapse | Databricks |
-|-----------|--------|---------|------------|
-| **Deployment model** | SaaS (capacity SKU F2-F2048) | PaaS (workspaces + pools) | PaaS (workspaces + clusters) |
-| **Primary storage** | OneLake (single namespace) | ADLS Gen2 (you bring) | ADLS Gen2 (you bring) + Unity Catalog |
-| **Primary table format** | Delta Lake (auto-optimized) | Delta Lake or Parquet | Delta Lake (with Liquid Clustering) |
-| **SQL engine** | Lakehouse SQL endpoint, Warehouse | Serverless SQL, Dedicated SQL Pool | Databricks SQL warehouses |
-| **Spark engine** | Fabric Spark (forked from OSS) | Synapse Spark | Databricks Runtime (forked, optimized) |
-| **Streaming** | Real-Time Intelligence (Eventhouse / KQL) | Structured Streaming, ASA bridge | Structured Streaming, Delta Live Tables |
-| **BI integration** | Power BI Direct Lake (best in class) | Power BI Import/DirectQuery | Power BI Import/DirectQuery, Genie |
-| **Notebooks** | Yes (Fabric notebooks) | Yes (Synapse notebooks) | Yes (Databricks notebooks — original UX) |
-| **ML platform** | Fabric Data Science (preview) | Azure ML integration | MLflow native (best in class for ML) |
-| **Governance** | Built-in (OneLake catalog) + Purview | Purview integration | Unity Catalog + Purview |
-| **Cost model** | Capacity-based (F SKU $/hr, smoothed) | Per-pool (DWU) + per-query (serverless) | Per-cluster (DBU/hr) + storage |
-| **Auto-pause** | Capacity is always on (smoothed) | Yes — pause SQL pool, autoscale Spark | Yes — auto-terminate clusters |
-| **Multi-cloud** | Azure-only (AWS S3 read via shortcut) | Azure-only | AWS, Azure, GCP |
-| **Azure Government** | **Pre-GA**, no MAG production yet | GA | GA |
-| **Maturity (2026)** | GA but rapidly evolving | Mature, stable | Mature, stable |
-| **Best for** | New BI workloads, RTI/IoT, Direct Lake semantic models, Power BI-first orgs | Existing Synapse investments, mixed SQL/Spark, federal/Gov | Heavy ML/DL/GenAI, multi-cloud, Spark experts |
+| Dimension                | Fabric                                                                      | Synapse                                                    | Databricks                                    |
+| ------------------------ | --------------------------------------------------------------------------- | ---------------------------------------------------------- | --------------------------------------------- |
+| **Deployment model**     | SaaS (capacity SKU F2-F2048)                                                | PaaS (workspaces + pools)                                  | PaaS (workspaces + clusters)                  |
+| **Primary storage**      | OneLake (single namespace)                                                  | ADLS Gen2 (you bring)                                      | ADLS Gen2 (you bring) + Unity Catalog         |
+| **Primary table format** | Delta Lake (auto-optimized)                                                 | Delta Lake or Parquet                                      | Delta Lake (with Liquid Clustering)           |
+| **SQL engine**           | Lakehouse SQL endpoint, Warehouse                                           | Serverless SQL, Dedicated SQL Pool                         | Databricks SQL warehouses                     |
+| **Spark engine**         | Fabric Spark (forked from OSS)                                              | Synapse Spark                                              | Databricks Runtime (forked, optimized)        |
+| **Streaming**            | Real-Time Intelligence (Eventhouse / KQL)                                   | Structured Streaming, ASA bridge                           | Structured Streaming, Delta Live Tables       |
+| **BI integration**       | Power BI Direct Lake (best in class)                                        | Power BI Import/DirectQuery                                | Power BI Import/DirectQuery, Genie            |
+| **Notebooks**            | Yes (Fabric notebooks)                                                      | Yes (Synapse notebooks)                                    | Yes (Databricks notebooks — original UX)      |
+| **ML platform**          | Fabric Data Science (preview)                                               | Azure ML integration                                       | MLflow native (best in class for ML)          |
+| **Governance**           | Built-in (OneLake catalog) + Purview                                        | Purview integration                                        | Unity Catalog + Purview                       |
+| **Cost model**           | Capacity-based (F SKU $/hr, smoothed)                                       | Per-pool (DWU) + per-query (serverless)                    | Per-cluster (DBU/hr) + storage                |
+| **Auto-pause**           | Capacity is always on (smoothed)                                            | Yes — pause SQL pool, autoscale Spark                      | Yes — auto-terminate clusters                 |
+| **Multi-cloud**          | Azure-only (AWS S3 read via shortcut)                                       | Azure-only                                                 | AWS, Azure, GCP                               |
+| **Azure Government**     | **Pre-GA**, no MAG production yet                                           | GA                                                         | GA                                            |
+| **Maturity (2026)**      | GA but rapidly evolving                                                     | Mature, stable                                             | Mature, stable                                |
+| **Best for**             | New BI workloads, RTI/IoT, Direct Lake semantic models, Power BI-first orgs | Existing Synapse investments, mixed SQL/Spark, federal/Gov | Heavy ML/DL/GenAI, multi-cloud, Spark experts |
 
 ## Cost comparison (rough, 2026)
 
 For a typical **medium analytics workload** (~5 TB Delta, 20 dbt models, daily refresh, BI to 200 users):
 
-| Platform | Monthly cost (USD, dev) | Monthly cost (USD, prod) | Notes |
-|----------|------------------------|---------------------------|-------|
-| **Fabric** | $260 (F2 8h/day) | $5,200 (F64 24/7) | Capacity is shared across BI + Lakehouse + RTI; smoothing helps |
-| **Synapse** | $400 (Serverless + small Spark) | $4,800 (DW100c + Spark XS) | Serverless wins for spiky workloads; Dedicated wins for predictable |
-| **Databricks** | $500 (Standard, auto-terminate) | $6,500 (Premium SKU + Photon) | DBU pricing varies a LOT by SKU and Photon usage |
+| Platform       | Monthly cost (USD, dev)         | Monthly cost (USD, prod)      | Notes                                                               |
+| -------------- | ------------------------------- | ----------------------------- | ------------------------------------------------------------------- |
+| **Fabric**     | $260 (F2 8h/day)                | $5,200 (F64 24/7)             | Capacity is shared across BI + Lakehouse + RTI; smoothing helps     |
+| **Synapse**    | $400 (Serverless + small Spark) | $4,800 (DW100c + Spark XS)    | Serverless wins for spiky workloads; Dedicated wins for predictable |
+| **Databricks** | $500 (Standard, auto-terminate) | $6,500 (Premium SKU + Photon) | DBU pricing varies a LOT by SKU and Photon usage                    |
 
 These are **order-of-magnitude estimates**. Actual costs depend on query patterns, idle time, region, and reserved-capacity discounts. Always model with the real Azure Pricing Calculator before committing.
 
@@ -105,17 +105,17 @@ flowchart LR
 
 ## Workload-fit matrix
 
-| Workload | Best | Acceptable | Avoid |
-|----------|------|------------|-------|
-| Power BI dashboards (large semantic models) | Fabric Direct Lake | Synapse + Import | Databricks SQL alone |
-| Heavy Spark ML / GenAI training | Databricks | Synapse Spark | Fabric Spark (immature) |
-| Real-time IoT (sub-second) | Fabric RTI / Eventhouse | Stream Analytics | Synapse Spark Streaming |
-| Real-time analytics (seconds) | Fabric RTI, Databricks DLT | Synapse Spark Streaming | Synapse SQL |
-| Ad-hoc analyst SQL over Delta | Synapse Serverless, Databricks SQL | Fabric Lakehouse SQL | Fabric Warehouse (preview-feel) |
-| Federal / Gov workloads (today) | Synapse + Databricks | Synapse only | Fabric (pre-GA in MAG) |
-| Multi-cloud (AWS/GCP source) | Databricks | Fabric (S3 shortcuts) | Synapse |
-| Cost-sensitive POC | Synapse Serverless | Databricks Standard | Fabric F-SKU (capacity always on) |
-| Net-new BI-first org | Fabric | Synapse | Databricks-only |
+| Workload                                    | Best                               | Acceptable              | Avoid                             |
+| ------------------------------------------- | ---------------------------------- | ----------------------- | --------------------------------- |
+| Power BI dashboards (large semantic models) | Fabric Direct Lake                 | Synapse + Import        | Databricks SQL alone              |
+| Heavy Spark ML / GenAI training             | Databricks                         | Synapse Spark           | Fabric Spark (immature)           |
+| Real-time IoT (sub-second)                  | Fabric RTI / Eventhouse            | Stream Analytics        | Synapse Spark Streaming           |
+| Real-time analytics (seconds)               | Fabric RTI, Databricks DLT         | Synapse Spark Streaming | Synapse SQL                       |
+| Ad-hoc analyst SQL over Delta               | Synapse Serverless, Databricks SQL | Fabric Lakehouse SQL    | Fabric Warehouse (preview-feel)   |
+| Federal / Gov workloads (today)             | Synapse + Databricks               | Synapse only            | Fabric (pre-GA in MAG)            |
+| Multi-cloud (AWS/GCP source)                | Databricks                         | Fabric (S3 shortcuts)   | Synapse                           |
+| Cost-sensitive POC                          | Synapse Serverless                 | Databricks Standard     | Fabric F-SKU (capacity always on) |
+| Net-new BI-first org                        | Fabric                             | Synapse                 | Databricks-only                   |
 
 ## Migration sequencing (real-world)
 

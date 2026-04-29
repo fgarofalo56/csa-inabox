@@ -1,7 +1,7 @@
 # Dead-Letter Queue (DLQ) Operator Runbook
 
 > **Scope:** Canonical DLQ pattern for every ingest pipeline in CSA-in-a-Box.
-> **Finding:** CSA-0138  ·  **Decision:** AQ-0033 / Ballot E9
+> **Finding:** CSA-0138 · **Decision:** AQ-0033 / Ballot E9
 > **Module:** [`deploy/bicep/shared/modules/deadletter/deadletter.bicep`](../../deploy/bicep/shared/modules/deadletter/deadletter.bicep)
 
 ---
@@ -15,12 +15,12 @@ quarantine story.
 
 The approved pattern provisions, **per pipeline**:
 
-| Resource                                       | Purpose                                                                                      |
-| ---------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| Blob container `deadletter-<pipelineName>`     | Quarantines the raw poison message plus a sidecar metadata JSON.                             |
+| Resource                                        | Purpose                                                                                      |
+| ----------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| Blob container `deadletter-<pipelineName>`      | Quarantines the raw poison message plus a sidecar metadata JSON.                             |
 | Event Grid system topic + filtered subscription | Fires on `Microsoft.Storage.BlobCreated` scoped to the DLQ container — downstream triage.    |
-| Log Analytics diagnostic settings              | Captures `StorageRead` / `StorageWrite` + Transaction metrics for audit and replay evidence. |
-| Azure Monitor metric alert                     | Fires when container capacity exceeds `alertThresholdBytes` (default 1 GiB).                 |
+| Log Analytics diagnostic settings               | Captures `StorageRead` / `StorageWrite` + Transaction metrics for audit and replay evidence. |
+| Azure Monitor metric alert                      | Fires when container capacity exceeds `alertThresholdBytes` (default 1 GiB).                 |
 
 Every ingest Bicep template (ADF-based, Stream Analytics, Event Hubs consumer,
 Databricks Autoloader) should `module ... '../shared/modules/deadletter/deadletter.bicep'`
@@ -42,15 +42,15 @@ Each quarantined blob is paired with a sidecar `<blobname>.metadata.json`:
 
 ```json
 {
-  "pipeline": "iot-telemetry",
-  "source": "eventhubs://evh-csa-prod/iot-telemetry",
-  "timestamp": "2026-04-19T14:03:22Z",
-  "offset": "12345678",
-  "errorKind": "schema_mismatch",
-  "errorMessage": "Pydantic validation error: field 'device_id' required",
-  "attemptCount": 3,
-  "correlationId": "8f3a2b1c-...",
-  "auditEventId": "csa-audit-2026-04-19-..."
+    "pipeline": "iot-telemetry",
+    "source": "eventhubs://evh-csa-prod/iot-telemetry",
+    "timestamp": "2026-04-19T14:03:22Z",
+    "offset": "12345678",
+    "errorKind": "schema_mismatch",
+    "errorMessage": "Pydantic validation error: field 'device_id' required",
+    "attemptCount": 3,
+    "correlationId": "8f3a2b1c-...",
+    "auditEventId": "csa-audit-2026-04-19-..."
 }
 ```
 
@@ -119,20 +119,20 @@ cat /tmp/dlq-sample.metadata.json | jq .
 
 Match `errorKind` from the sidecar to one of:
 
-| errorKind           | Typical cause                                            | Disposition           |
-| ------------------- | -------------------------------------------------------- | --------------------- |
-| `schema_mismatch`   | Producer shipped a new field or changed a type           | Fix schema → replay   |
-| `encoding`          | Bad UTF-8 / corrupted binary                             | Drop with audit event |
-| `downstream_5xx`    | Transient Bronze write failure after retry budget        | Replay                |
-| `auth`              | Expired SAS, missing RBAC, managed-identity misconfig    | Fix identity → replay |
-| `poison_loop`       | Consumer crashes on the same record every attempt        | Drop + escalate       |
-| `other`             | Unknown — inspect raw payload and upstream logs          | Case-by-case          |
+| errorKind         | Typical cause                                         | Disposition           |
+| ----------------- | ----------------------------------------------------- | --------------------- |
+| `schema_mismatch` | Producer shipped a new field or changed a type        | Fix schema → replay   |
+| `encoding`        | Bad UTF-8 / corrupted binary                          | Drop with audit event |
+| `downstream_5xx`  | Transient Bronze write failure after retry budget     | Replay                |
+| `auth`            | Expired SAS, missing RBAC, managed-identity misconfig | Fix identity → replay |
+| `poison_loop`     | Consumer crashes on the same record every attempt     | Drop + escalate       |
+| `other`           | Unknown — inspect raw payload and upstream logs       | Case-by-case          |
 
 ### Step 5 — Decide disposition
 
-- **Replay** — if the underlying defect is fixed or transient. See *Replay*.
-- **Drop** — if the payload is unrecoverable. See *Drop*.
-- **Escalate** — if volume or pattern indicates an upstream incident. See *Escalation*.
+- **Replay** — if the underlying defect is fixed or transient. See _Replay_.
+- **Drop** — if the payload is unrecoverable. See _Drop_.
+- **Escalate** — if volume or pattern indicates an upstream incident. See _Escalation_.
 
 ---
 
@@ -180,7 +180,7 @@ When a payload is unrecoverable:
 1. Emit a **drop audit event** via the tamper-evident logger (CSA-0016) with
    `action = "dlq.drop"`, the `correlationId`, and the operator identity.
 2. Delete the blob and its sidecar from the DLQ container.
-3. Capture rationale in the per-pipeline triage log (see *Per-pipeline DLQ inventory*).
+3. Capture rationale in the per-pipeline triage log (see _Per-pipeline DLQ inventory_).
 
 ```bash
 az storage blob delete-batch \
@@ -219,13 +219,13 @@ Include in the P1 ticket:
 
 Teams own the row for their pipeline. Update on deployment.
 
-| Pipeline           | DLQ Container URI                                             | Owner       | Replay SLA  | Replay Procedure                                 |
-| ------------------ | ------------------------------------------------------------- | ----------- | ----------- | ------------------------------------------------ |
-| _template_         | `https://<storage>.blob.core.windows.net/deadletter-<name>`   | team-alias  | 24 h        | See "Databricks Autoloader pattern" above        |
-| `iot-telemetry`    | _(fill on first deploy)_                                      | _(team)_    | 4 h         | _(link to pipeline-specific replay notebook)_    |
-| `noaa-weather`     | _(fill on first deploy)_                                      | _(team)_    | 24 h        | _(link)_                                         |
-| `aqi-sensors`      | _(fill on first deploy)_                                      | _(team)_    | 1 h         | _(link)_                                         |
-| `casino-telemetry` | _(fill on first deploy)_                                      | _(team)_    | 15 min      | _(link)_                                         |
+| Pipeline           | DLQ Container URI                                           | Owner      | Replay SLA | Replay Procedure                              |
+| ------------------ | ----------------------------------------------------------- | ---------- | ---------- | --------------------------------------------- |
+| _template_         | `https://<storage>.blob.core.windows.net/deadletter-<name>` | team-alias | 24 h       | See "Databricks Autoloader pattern" above     |
+| `iot-telemetry`    | _(fill on first deploy)_                                    | _(team)_   | 4 h        | _(link to pipeline-specific replay notebook)_ |
+| `noaa-weather`     | _(fill on first deploy)_                                    | _(team)_   | 24 h       | _(link)_                                      |
+| `aqi-sensors`      | _(fill on first deploy)_                                    | _(team)_   | 1 h        | _(link)_                                      |
+| `casino-telemetry` | _(fill on first deploy)_                                    | _(team)_   | 15 min     | _(link)_                                      |
 
 ---
 

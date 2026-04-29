@@ -2,18 +2,17 @@
 
 # DR Drill Runbook (CSA-0073)
 
-
 !!! note
-    **Quick Summary**: Quarterly disaster-recovery drill that exercises
-    Cosmos failover, Storage failover, Key Vault restore, and Bicep
-    rollback against a scratch subscription. Automated via
-    [`.github/workflows/dr-drill.yml`](../../.github/workflows/dr-drill.yml)
-    on the first day of each quarter with on-demand `workflow_dispatch`.
+**Quick Summary**: Quarterly disaster-recovery drill that exercises
+Cosmos failover, Storage failover, Key Vault restore, and Bicep
+rollback against a scratch subscription. Automated via
+[`.github/workflows/dr-drill.yml`](../../.github/workflows/dr-drill.yml)
+on the first day of each quarter with on-demand `workflow_dispatch`.
 
 This runbook operationalises [`docs/DR.md`](../DR.md) §4 ("Failover
 Readiness — Quarterly Drill"). The parent DR document is the
 authoritative reference for RPO/RTO targets, region pairing, and the
-*real* failover procedure; this document covers how we rehearse that
+_real_ failover procedure; this document covers how we rehearse that
 procedure safely against a scratch subscription so the runbook stays
 honest instead of rotting between real incidents.
 
@@ -23,10 +22,10 @@ honest instead of rotting between real incidents.
 - [📅 2. Cadence](#-2-cadence)
 - [🔐 3. Required Azure Permissions](#-3-required-azure-permissions)
 - [🧪 4. Scenarios](#-4-scenarios)
-  - [4.1 cosmos-failover](#41-cosmos-failover)
-  - [4.2 storage-failover](#42-storage-failover)
-  - [4.3 keyvault-restore](#43-keyvault-restore)
-  - [4.4 bicep-rollback](#44-bicep-rollback)
+    - [4.1 cosmos-failover](#41-cosmos-failover)
+    - [4.2 storage-failover](#42-storage-failover)
+    - [4.3 keyvault-restore](#43-keyvault-restore)
+    - [4.4 bicep-rollback](#44-bicep-rollback)
 - [🚀 5. Triggering a Drill](#-5-triggering-a-drill)
 - [📊 6. Results & Reporting](#-6-results--reporting)
 - [📐 7. RPO / RTO Expectations](#-7-rpo--rto-expectations)
@@ -58,7 +57,7 @@ never mutate resources that real workloads depend on.
 
 - **Scheduled:** `cron: "0 10 1 1,4,7,10 *"` — 10:00 UTC on the 1st day
   of Jan, Apr, Jul, and Oct.
-- **On-demand:** via GitHub → Actions → `dr-drill` → *Run workflow*.
+- **On-demand:** via GitHub → Actions → `dr-drill` → _Run workflow_.
   Anyone with `write` access to the repository can trigger a drill.
 - **Ad hoc post-incident:** after any real DR event, re-run the
   relevant scenario within five business days to confirm the
@@ -71,13 +70,13 @@ never mutate resources that real workloads depend on.
 The drill workflow authenticates via OIDC federated credentials. The
 service principal behind `AZURE_CLIENT_ID` needs:
 
-| Scope | Role | Why |
-|---|---|---|
-| `subscriptions/$SCRATCH_SUB` | **Contributor** | Create + mutate resources during the drill |
-| `subscriptions/$SCRATCH_SUB` | **User Access Administrator** (optional) | Only if the drill provisions role assignments |
-| `subscriptions/$SCRATCH_SUB/providers/Microsoft.KeyVault` | **Key Vault Administrator** (RBAC model) or vault access-policy entry with `get / list / recover / purge` | Required by `keyvault-restore` |
-| `subscriptions/$SCRATCH_SUB/providers/Microsoft.DocumentDB` | **Cosmos DB Operator** | Required by `cosmos-failover` |
-| `subscriptions/$SCRATCH_SUB/providers/Microsoft.Storage` | **Storage Account Contributor** | Required by `storage-failover` |
+| Scope                                                       | Role                                                                                                      | Why                                           |
+| ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| `subscriptions/$SCRATCH_SUB`                                | **Contributor**                                                                                           | Create + mutate resources during the drill    |
+| `subscriptions/$SCRATCH_SUB`                                | **User Access Administrator** (optional)                                                                  | Only if the drill provisions role assignments |
+| `subscriptions/$SCRATCH_SUB/providers/Microsoft.KeyVault`   | **Key Vault Administrator** (RBAC model) or vault access-policy entry with `get / list / recover / purge` | Required by `keyvault-restore`                |
+| `subscriptions/$SCRATCH_SUB/providers/Microsoft.DocumentDB` | **Cosmos DB Operator**                                                                                    | Required by `cosmos-failover`                 |
+| `subscriptions/$SCRATCH_SUB/providers/Microsoft.Storage`    | **Storage Account Contributor**                                                                           | Required by `storage-failover`                |
 
 The scratch subscription ID is stored in the repository secret
 `AZURE_SUBSCRIPTION_ID_SCRATCH`. The tenant is the usual
@@ -85,10 +84,10 @@ The scratch subscription ID is stored in the repository secret
 subscription secret.
 
 !!! warning
-    Real storage-account failovers drop the account to LRS and the
-    replication seed can take hours to rebuild. That is fine on a
-    scratch account; do **not** run the storage-failover scenario
-    against staging or prod.
+Real storage-account failovers drop the account to LRS and the
+replication seed can take hours to rebuild. That is fine on a
+scratch account; do **not** run the storage-failover scenario
+against staging or prod.
 
 ---
 
@@ -104,6 +103,7 @@ Scenarios can be run individually via the `scenarios` input (see §5).
 using `az cosmosdb failover-priority-change`.
 
 **Expected behaviour:**
+
 1. Drill provisions (or reuses) a 2-region Cosmos account in the
    scratch subscription with `enableAutomaticFailover=true` and
    `enableMultipleWriteLocations=true`.
@@ -114,6 +114,7 @@ using `az cosmosdb failover-priority-change`.
 5. Swap priorities back (failback).
 
 **Verification:**
+
 - Read after failover must return the sentinel.
 - `az cosmosdb show` reflects the expected priority order post-failback.
 - End-to-end duration logged for RTO comparison.
@@ -130,6 +131,7 @@ account (`az storage account failover`) and the subsequent re-
 enablement of geo-replication.
 
 **Expected behaviour:**
+
 1. Drill provisions (or reuses) a scratch `Standard_RAGRS` storage
    account with a small test container + blob.
 2. Invoke `az storage account failover --yes`.
@@ -139,6 +141,7 @@ enablement of geo-replication.
    `geoReplicationStatus=Live`.
 
 **Verification:**
+
 - Blob content matches the pre-failover sentinel.
 - `az storage account show` reports the expected primary region.
 - Failback SKU update succeeds (seed time is logged, not asserted — it
@@ -154,6 +157,7 @@ left in LRS — operator reruns the SKU update manually.
 Key Vault with 90-day soft-delete retention.
 
 **Expected behaviour:**
+
 1. Drill creates a secret in a scratch Key Vault.
 2. Deletes the secret (soft delete).
 3. Lists deleted secrets and asserts the secret is present with the
@@ -162,6 +166,7 @@ Key Vault with 90-day soft-delete retention.
 5. Confirms the recovered secret value matches the original.
 
 **Verification:**
+
 - Recovered value byte-for-byte equals the original.
 - Key Vault emits audit events for `SecretDelete` and `SecretRecover`
   (cross-checked against the tamper-evident audit logger wired in
@@ -177,6 +182,7 @@ automatically at the end of the retention window.
 and that `az deployment group what-if` produces a clean diff.
 
 **Expected behaviour:**
+
 1. Drill checks out the `main.bicep` at `HEAD~1` (or a pinned "known
    good" tag).
 2. Runs `az deployment group what-if` against the scratch RG and
@@ -186,6 +192,7 @@ and that `az deployment group what-if` produces a clean diff.
    resource graph returns to the expected state.
 
 **Verification:**
+
 - `what-if` exits 0.
 - Deployment success is captured in `az deployment group show`.
 - Return-to-HEAD deployment is idempotent (`noChange` result).
@@ -270,12 +277,12 @@ These expectations must stay aligned with
 [`docs/DR.md`](../DR.md) §1. If they drift, update both files in the
 same PR.
 
-| Scenario | RPO (data-loss window) | RTO (recovery time) | Source of truth |
-|---|---|---|---|
-| `cosmos-failover` | < 15 min | < 30 min | DR.md §1 (Cosmos DB, Critical tier) |
-| `storage-failover` | < 1 h | < 1 h | DR.md §1 (Data Lake Storage Silver + Gold, Critical tier) |
-| `keyvault-restore` | N/A (recovery from soft-delete, not replication) | < 15 min | DR.md §1 (Key Vault, Critical tier) |
-| `bicep-rollback` | N/A (IaC redeploy, no runtime data) | < 30 min | `docs/ROLLBACK.md` |
+| Scenario           | RPO (data-loss window)                           | RTO (recovery time) | Source of truth                                           |
+| ------------------ | ------------------------------------------------ | ------------------- | --------------------------------------------------------- |
+| `cosmos-failover`  | < 15 min                                         | < 30 min            | DR.md §1 (Cosmos DB, Critical tier)                       |
+| `storage-failover` | < 1 h                                            | < 1 h               | DR.md §1 (Data Lake Storage Silver + Gold, Critical tier) |
+| `keyvault-restore` | N/A (recovery from soft-delete, not replication) | < 15 min            | DR.md §1 (Key Vault, Critical tier)                       |
+| `bicep-rollback`   | N/A (IaC redeploy, no runtime data)              | < 30 min            | `docs/ROLLBACK.md`                                        |
 
 If a drill's observed RTO exceeds the target by > 25%, treat it as a
 finding and open a follow-up task — do not silently accept drift.

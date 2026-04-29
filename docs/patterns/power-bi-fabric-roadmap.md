@@ -15,14 +15,15 @@ Most organizations have a sprawling Power BI estate built over 5-10 years that d
 
 ## Storage modes — pick the right one
 
-| Mode | When | Pros | Cons |
-|------|------|------|------|
-| **Import** | <100 GB model, batch refresh OK, complex DAX | Fastest queries; works without Fabric | Refresh latency; memory limits; long refresh windows |
-| **DirectQuery** | Real-time freshness required | Always current; no refresh | Per-query backend hits; aggregations needed for perf |
-| **Direct Lake** (Fabric only) | Modern lakehouse data, BI-first workloads | Import-tier performance + DQ-tier freshness; no refresh | Fabric-only; some complex DAX patterns don't work yet |
-| **Composite (DQ + Import)** | Mix of dimension (Import) + fact (DQ) | Best of both for some workloads | Complex; user-defined aggregations needed |
+| Mode                          | When                                         | Pros                                                    | Cons                                                  |
+| ----------------------------- | -------------------------------------------- | ------------------------------------------------------- | ----------------------------------------------------- |
+| **Import**                    | <100 GB model, batch refresh OK, complex DAX | Fastest queries; works without Fabric                   | Refresh latency; memory limits; long refresh windows  |
+| **DirectQuery**               | Real-time freshness required                 | Always current; no refresh                              | Per-query backend hits; aggregations needed for perf  |
+| **Direct Lake** (Fabric only) | Modern lakehouse data, BI-first workloads    | Import-tier performance + DQ-tier freshness; no refresh | Fabric-only; some complex DAX patterns don't work yet |
+| **Composite (DQ + Import)**   | Mix of dimension (Import) + fact (DQ)        | Best of both for some workloads                         | Complex; user-defined aggregations needed             |
 
 ### Default by 2026
+
 - **Net-new model**: **Direct Lake** if data is in OneLake / shortcut-able to OneLake
 - **Existing Import**: stay on Import until next major schema change, then evaluate Direct Lake
 - **DirectQuery**: avoid except for true real-time requirements
@@ -30,10 +31,12 @@ Most organizations have a sprawling Power BI estate built over 5-10 years that d
 ## Pattern: TMDL-first development
 
 Old workflow:
+
 - Open Power BI Desktop, edit semantic model in UI, publish PBIX
 - Source of truth is binary PBIX; no diffs, no PR review
 
 New workflow:
+
 - Semantic model defined in **TMDL** (`.tmdl` files) under git
 - Edited in Power BI Desktop OR Visual Studio Code with TMDL extension
 - Reviewed in PRs like any code
@@ -61,12 +64,12 @@ Diff a measure change in PR review. **Finally.**
 
 ## Pattern: medallion alignment
 
-| Lakehouse layer | Power BI artifact |
-|-----------------|-------------------|
-| Gold tables (star schema) | Direct Lake semantic model — 1:1 mapping |
-| Gold aggregates | Pre-built aggregation tables in semantic model |
-| Silver | Reference for ad-hoc Power BI Datamarts (rare in production) |
-| Bronze | Never queried by Power BI directly |
+| Lakehouse layer           | Power BI artifact                                            |
+| ------------------------- | ------------------------------------------------------------ |
+| Gold tables (star schema) | Direct Lake semantic model — 1:1 mapping                     |
+| Gold aggregates           | Pre-built aggregation tables in semantic model               |
+| Silver                    | Reference for ad-hoc Power BI Datamarts (rare in production) |
+| Bronze                    | Never queried by Power BI directly                           |
 
 Each gold table maps to one fact or dimension. Star schema in gold = fast Direct Lake performance.
 
@@ -140,26 +143,28 @@ gantt
 
 ## Anti-patterns
 
-| Anti-pattern | What to do |
-|--------------|-----------|
-| Edit PBIX, publish, no source control | TMDL in git |
-| One huge workspace for everything | LOB workspaces, dev/test/prod separation |
-| Direct Lake for non-star data | Build a star in gold first |
-| DirectQuery to operational DB | Build a Direct Lake semantic model on a gold mirror |
-| Copilot enabled on poorly-curated models | Curate first; Copilot only as good as the model |
-| Aggregations as an afterthought | Plan aggregations during model design |
-| Manual deployment portal-clicking | Fabric Deployment Pipelines + git PR reviews |
-| Trying to migrate every Excel report ever | Inventory; archive ones not used in 90 days |
+| Anti-pattern                              | What to do                                          |
+| ----------------------------------------- | --------------------------------------------------- |
+| Edit PBIX, publish, no source control     | TMDL in git                                         |
+| One huge workspace for everything         | LOB workspaces, dev/test/prod separation            |
+| Direct Lake for non-star data             | Build a star in gold first                          |
+| DirectQuery to operational DB             | Build a Direct Lake semantic model on a gold mirror |
+| Copilot enabled on poorly-curated models  | Curate first; Copilot only as good as the model     |
+| Aggregations as an afterthought           | Plan aggregations during model design               |
+| Manual deployment portal-clicking         | Fabric Deployment Pipelines + git PR reviews        |
+| Trying to migrate every Excel report ever | Inventory; archive ones not used in 90 days         |
 
 ## Trade-offs
 
 ✅ **Why modernize**
+
 - Direct Lake is genuinely better than Import for large models
 - TMDL + git is finally a real dev experience
 - Copilot value scales with curation investment
 - One platform (Fabric) for storage + semantic + BI = simpler ops
 
 ⚠️ **Why be patient**
+
 - Curation takes time; rushing produces bad Copilot experiences
 - Some DAX patterns don't yet work in Direct Lake
 - Capacity sizing for Fabric is a learning curve

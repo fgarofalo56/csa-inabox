@@ -17,14 +17,14 @@ pivot.
 
 Phase 1 coverage status:
 
-| Status | Approx count |
-|---|---|
-| IMPLEMENTED | ~41 |
-| PARTIALLY_IMPLEMENTED | ~15 |
-| INHERITED | ~36 |
-| NOT_APPLICABLE | ~9 |
-| PLANNED | ~9 |
-| **Total** | **110** |
+| Status                | Approx count |
+| --------------------- | ------------ |
+| IMPLEMENTED           | ~41          |
+| PARTIALLY_IMPLEMENTED | ~15          |
+| INHERITED             | ~36          |
+| NOT_APPLICABLE        | ~9           |
+| PLANNED               | ~9           |
+| **Total**             | **110**      |
 
 Run the validator for live counts:
 
@@ -112,9 +112,9 @@ an additional CMMC-assessment-friendly ID scheme.
 ## How to use this manifest in a CMMC assessment
 
 1. Generate assessment-objective evidence bundle from the YAML:
-   ```bash
-   python governance/compliance/validate.py
-   ```
+    ```bash
+    python governance/compliance/validate.py
+    ```
 2. For each practice, the YAML lists evidence paths with optional line
    ranges — these become your assessment objective evidence references.
 3. Practices marked `INHERITED` are accompanied by the upstream provider

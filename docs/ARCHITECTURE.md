@@ -2,9 +2,8 @@
 
 # CSA-in-a-Box Architecture
 
-
 !!! note
-    **Quick Summary**: Architecture reference for CSA-in-a-Box — the Azure-native reference implementation of the Microsoft "Unify your data platform" CAF guidance, built on Azure PaaS and open-source tooling. Positions Fabric as the primary control plane where GA, and CSA-in-a-Box as the Azure Government gap-filler (Fabric is forecast, not GA), the post-deprecation CAF CSA reference, and an incremental on-ramp to Fabric. Covers the DMLZ/DLZ landing zone pattern, medallion data flow (Bronze/Silver/Gold), streaming via Event Hubs + ADX, AI/ML integration, 9 vertical examples, and Azure Government compatibility.
+**Quick Summary**: Architecture reference for CSA-in-a-Box — the Azure-native reference implementation of the Microsoft "Unify your data platform" CAF guidance, built on Azure PaaS and open-source tooling. Positions Fabric as the primary control plane where GA, and CSA-in-a-Box as the Azure Government gap-filler (Fabric is forecast, not GA), the post-deprecation CAF CSA reference, and an incremental on-ramp to Fabric. Covers the DMLZ/DLZ landing zone pattern, medallion data flow (Bronze/Silver/Gold), streaming via Event Hubs + ADX, AI/ML integration, 9 vertical examples, and Azure Government compatibility.
 
 A comprehensive architecture reference for CSA-in-a-Box — an Azure-native
 reference implementation of the Microsoft "Unify your data platform" Cloud
@@ -16,28 +15,28 @@ scenarios that need composable IaC, and as an incremental on-ramp whose
 components compose cleanly into a future Fabric migration.
 
 !!! note
-    **CAF scenario update (CSA-0068).** The legacy "Cloud-Scale Analytics"
-    CAF scenario was **deprecated in April 2026** and replaced by
-    [Microsoft CAF — Unify your data platform](https://aka.ms/cafdata).
-    This document tracks the 2026 "Unify your data platform" guidance.
-    Historical references to the deprecated *Cloud-Scale Analytics* scenario
-    are retained for context and cross-referencing only — do not use
-    `https://learn.microsoft.com/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/`
-    as an authoritative source for new work.
+**CAF scenario update (CSA-0068).** The legacy "Cloud-Scale Analytics"
+CAF scenario was **deprecated in April 2026** and replaced by
+[Microsoft CAF — Unify your data platform](https://aka.ms/cafdata).
+This document tracks the 2026 "Unify your data platform" guidance.
+Historical references to the deprecated _Cloud-Scale Analytics_ scenario
+are retained for context and cross-referencing only — do not use
+`https://learn.microsoft.com/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/`
+as an authoritative source for new work.
 
 ## 📑 Table of Contents
 
 - [🏗️ High-Level Architecture](#️-high-level-architecture)
 - [🏗️ Architecture Layers](#️-architecture-layers)
-  - [1. Data Management Landing Zone (DMLZ)](#1-data-management-landing-zone-dmlz)
-  - [2. Data Landing Zone (DLZ)](#2-data-landing-zone-dlz)
-  - [3. Platform Services](#3-platform-services)
-  - [4. Consumer Layer](#4-consumer-layer)
-  - [5. Azure Government Parallel](#5-azure-government-parallel)
+    - [1. Data Management Landing Zone (DMLZ)](#1-data-management-landing-zone-dmlz)
+    - [2. Data Landing Zone (DLZ)](#2-data-landing-zone-dlz)
+    - [3. Platform Services](#3-platform-services)
+    - [4. Consumer Layer](#4-consumer-layer)
+    - [5. Azure Government Parallel](#5-azure-government-parallel)
 - [🔄 Data Flow](#-data-flow)
-  - [Batch Data Flow](#batch-data-flow)
-  - [Streaming Data Flow](#streaming-data-flow)
-  - [Data Governance Flow](#data-governance-flow)
+    - [Batch Data Flow](#batch-data-flow)
+    - [Streaming Data Flow](#streaming-data-flow)
+    - [Data Governance Flow](#data-governance-flow)
 - [💡 Vertical Examples](#-vertical-examples)
 - [📁 Repository Structure](#-repository-structure)
 - [⚙️ Primary Tech Choices](#️-primary-tech-choices)
@@ -200,13 +199,13 @@ concerns.
 
 **Components:**
 
-| Component | Service | Purpose |
-|-----------|---------|---------|
-| Data Catalog | Microsoft Purview | Asset discovery, classification, lineage tracking |
-| Secrets Management | Azure Key Vault | Connection strings, tokens, certificates |
-| Data Marketplace | Custom FastAPI + Purview | Self-service data product discovery and access requests |
-| Governance Framework | Purview + Custom | Sensitivity labels, automated classification, MDM |
-| API Gateway | API Management | Rate limiting, authentication, routing for all platform APIs |
+| Component            | Service                  | Purpose                                                      |
+| -------------------- | ------------------------ | ------------------------------------------------------------ |
+| Data Catalog         | Microsoft Purview        | Asset discovery, classification, lineage tracking            |
+| Secrets Management   | Azure Key Vault          | Connection strings, tokens, certificates                     |
+| Data Marketplace     | Custom FastAPI + Purview | Self-service data product discovery and access requests      |
+| Governance Framework | Purview + Custom         | Sensitivity labels, automated classification, MDM            |
+| API Gateway          | API Management           | Rate limiting, authentication, routing for all platform APIs |
 
 **Deployment:** `deploy/bicep/DMLZ/main.bicep`
 
@@ -220,11 +219,11 @@ DLZs based on data domain segmentation (e.g., Finance, Health, Environmental).
 
 The medallion architecture uses ADLS Gen2 containers mapped to quality tiers:
 
-| Layer | Container | Format | Purpose |
-|-------|-----------|--------|---------|
-| Bronze | `bronze/` | Parquet / JSON / Avro | Raw ingestion, append-only, immutable |
-| Silver | `silver/` | Delta Lake | Validated, deduplicated, typed, conformed |
-| Gold | `gold/` | Delta Lake | Business-ready aggregates, dimensions, facts |
+| Layer  | Container | Format                | Purpose                                      |
+| ------ | --------- | --------------------- | -------------------------------------------- |
+| Bronze | `bronze/` | Parquet / JSON / Avro | Raw ingestion, append-only, immutable        |
+| Silver | `silver/` | Delta Lake            | Validated, deduplicated, typed, conformed    |
+| Gold   | `gold/`   | Delta Lake            | Business-ready aggregates, dimensions, facts |
 
 This mirrors Microsoft Fabric's OneLake with Unity Catalog providing the unified
 metadata layer across all storage accounts.
@@ -276,18 +275,18 @@ metadata layer across all storage accounts.
 Platform services extend the base landing zones with Fabric-equivalent
 capabilities. Each component is independently deployable.
 
-| Service | Fabric Equivalent | Location |
-|---------|-------------------|----------|
-| Unity Catalog Pattern | OneLake (conceptual) | `csa_platform/unity_catalog_pattern/` |
-| Data Activator | Data Activator | `csa_platform/data_activator/` |
-| Semantic Model | Direct Lake (conceptual) | `csa_platform/semantic_model/` |
-| Data Marketplace | Data Sharing | `csa_platform/data_marketplace/` |
-| Metadata Framework | Metadata-driven ADF | `csa_platform/metadata_framework/` |
-| AI Integration | Copilot / AI | `csa_platform/ai_integration/` |
-| Shared Services | Shared Functions | `csa_platform/functions/` |
-| OSS Alternatives | N/A (Gov gaps) | `csa_platform/oss_alternatives/` |
-| Multi-Synapse | Multi-workspace | `csa_platform/multi_synapse/` (legacy — see `csa_platform/multi_synapse/README.md`; CSA-0139) |
-| Governance | Purview Integration | `csa_platform/csa_platform/governance/purview/` + top-level `csa_platform/governance/` |
+| Service               | Fabric Equivalent        | Location                                                                                      |
+| --------------------- | ------------------------ | --------------------------------------------------------------------------------------------- |
+| Unity Catalog Pattern | OneLake (conceptual)     | `csa_platform/unity_catalog_pattern/`                                                         |
+| Data Activator        | Data Activator           | `csa_platform/data_activator/`                                                                |
+| Semantic Model        | Direct Lake (conceptual) | `csa_platform/semantic_model/`                                                                |
+| Data Marketplace      | Data Sharing             | `csa_platform/data_marketplace/`                                                              |
+| Metadata Framework    | Metadata-driven ADF      | `csa_platform/metadata_framework/`                                                            |
+| AI Integration        | Copilot / AI             | `csa_platform/ai_integration/`                                                                |
+| Shared Services       | Shared Functions         | `csa_platform/functions/`                                                                     |
+| OSS Alternatives      | N/A (Gov gaps)           | `csa_platform/oss_alternatives/`                                                              |
+| Multi-Synapse         | Multi-workspace          | `csa_platform/multi_synapse/` (legacy — see `csa_platform/multi_synapse/README.md`; CSA-0139) |
+| Governance            | Purview Integration      | `csa_platform/csa_platform/governance/purview/` + top-level `csa_platform/governance/`        |
 
 See [PLATFORM_SERVICES.md](PLATFORM_SERVICES.md) for detailed deployment guides.
 
@@ -367,18 +366,18 @@ graph LR
 CSA-in-a-Box includes 9 vertical-specific implementations that demonstrate
 end-to-end patterns for real agencies and industries:
 
-| Vertical | Directory | Key Patterns |
-|----------|-----------|-------------|
-| USDA (NASS Agriculture) | `examples/usda/` | API ingestion, crop analytics, dbt medallion |
-| DOT (Transportation) | `examples/dot/` | Safety data, geospatial, FMCSA/NHTSA |
-| USPS (Postal Service) | `examples/usps/` | Address validation, delivery metrics |
-| NOAA (Weather/Climate) | `examples/noaa/` | Weather station streaming, climate analysis |
-| EPA (Environmental) | `examples/epa/` | AQI sensors, compliance monitoring |
-| Commerce (Census/BEA) | `examples/commerce/` | Census data, economic indicators |
-| Interior (USGS/BLM) | `examples/interior/` | Geospatial, land management |
-| Tribal Health (BIA/IHS) | `examples/tribal-health/` | HIPAA, tribal sovereignty, health analytics |
-| Casino Analytics | `examples/casino-analytics/` | Slot telemetry, revenue, Title 31 |
-| IoT Streaming | `examples/iot-streaming/` | Generic IoT, real-time, anomaly detection |
+| Vertical                | Directory                    | Key Patterns                                 |
+| ----------------------- | ---------------------------- | -------------------------------------------- |
+| USDA (NASS Agriculture) | `examples/usda/`             | API ingestion, crop analytics, dbt medallion |
+| DOT (Transportation)    | `examples/dot/`              | Safety data, geospatial, FMCSA/NHTSA         |
+| USPS (Postal Service)   | `examples/usps/`             | Address validation, delivery metrics         |
+| NOAA (Weather/Climate)  | `examples/noaa/`             | Weather station streaming, climate analysis  |
+| EPA (Environmental)     | `examples/epa/`              | AQI sensors, compliance monitoring           |
+| Commerce (Census/BEA)   | `examples/commerce/`         | Census data, economic indicators             |
+| Interior (USGS/BLM)     | `examples/interior/`         | Geospatial, land management                  |
+| Tribal Health (BIA/IHS) | `examples/tribal-health/`    | HIPAA, tribal sovereignty, health analytics  |
+| Casino Analytics        | `examples/casino-analytics/` | Slot telemetry, revenue, Title 31            |
+| IoT Streaming           | `examples/iot-streaming/`    | Generic IoT, real-time, anomaly detection    |
 
 Each vertical includes seed data generators, dbt models, deployment templates,
 and domain-specific documentation.
@@ -450,18 +449,18 @@ csa-inabox/
 
 This table is a **cheat sheet** of the default pick for each concern. For branching decisions with scenario-specific tradeoffs (cost, latency, compliance, skill match, anti-patterns), see the 8 decision trees at [`docs/decisions/`](decisions/) (machine-readable source of truth at [`decision-trees/`](../decision-trees/)).
 
-| Concern | Primary Choice | Alternative | Rationale |
-|---------|---------------|-------------|-----------|
-| Batch Orchestration | Azure Data Factory | Airflow on AKS | ADF is native, metadata-driven |
-| Streaming | Event Hubs + ADX | Kafka on AKS | Event Hubs has Kafka API compatibility |
-| Transformation | dbt Core + Databricks | Synapse Spark | dbt provides testability and lineage |
-| Storage | ADLS Gen2 (Delta) | Iceberg on ADLS | Delta has best Databricks integration |
-| Governance | Microsoft Purview | Apache Atlas | Purview integrates with Azure ecosystem |
-| ML / AI | Azure ML + OpenAI | MLflow + Ollama | Azure ML for managed, OSS for Gov |
-| Real-time Queries | Azure Data Explorer | ClickHouse on AKS | ADX is native, managed |
-| API Gateway | API Management | Kong on AKS | APIM integrates with Entra ID |
-| Secrets | Key Vault | HashiCorp Vault | Key Vault is native to Azure |
-| IaC | Bicep | Terraform | Bicep is Azure-native, Terraform for multi-cloud |
+| Concern             | Primary Choice        | Alternative       | Rationale                                        |
+| ------------------- | --------------------- | ----------------- | ------------------------------------------------ |
+| Batch Orchestration | Azure Data Factory    | Airflow on AKS    | ADF is native, metadata-driven                   |
+| Streaming           | Event Hubs + ADX      | Kafka on AKS      | Event Hubs has Kafka API compatibility           |
+| Transformation      | dbt Core + Databricks | Synapse Spark     | dbt provides testability and lineage             |
+| Storage             | ADLS Gen2 (Delta)     | Iceberg on ADLS   | Delta has best Databricks integration            |
+| Governance          | Microsoft Purview     | Apache Atlas      | Purview integrates with Azure ecosystem          |
+| ML / AI             | Azure ML + OpenAI     | MLflow + Ollama   | Azure ML for managed, OSS for Gov                |
+| Real-time Queries   | Azure Data Explorer   | ClickHouse on AKS | ADX is native, managed                           |
+| API Gateway         | API Management        | Kong on AKS       | APIM integrates with Entra ID                    |
+| Secrets             | Key Vault             | HashiCorp Vault   | Key Vault is native to Azure                     |
+| IaC                 | Bicep                 | Terraform         | Bicep is Azure-native, Terraform for multi-cloud |
 
 ---
 

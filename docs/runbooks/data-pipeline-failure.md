@@ -2,9 +2,8 @@
 
 # Data Pipeline Failure Runbook (CSA-0059)
 
-
 !!! note
-    **Quick Summary**: First-response procedure for ADF / Synapse pipeline failures — triage by trigger vs. activity scope, classify severity, apply the right retry / backfill strategy, and escalate. Covers trigger mis-fires, activity-level failures (Copy, Databricks, Dataflow), transient vs. deterministic errors, and the backfill-by-watermark pattern.
+**Quick Summary**: First-response procedure for ADF / Synapse pipeline failures — triage by trigger vs. activity scope, classify severity, apply the right retry / backfill strategy, and escalate. Covers trigger mis-fires, activity-level failures (Copy, Databricks, Dataflow), transient vs. deterministic errors, and the backfill-by-watermark pattern.
 
 ## Before First Use — Customization Checklist
 
@@ -15,7 +14,7 @@ first real on-call rotation:
       your Platform / Data Engineering leads.
 - [ ] Wire the Data Factory instance names in [§4.1](#41-identify-the-failed-run)
       to your real factories (dev / staging / prod).
-- [ ] Confirm which ADF pipelines are tagged as *critical* in your RBAC
+- [ ] Confirm which ADF pipelines are tagged as _critical_ in your RBAC
       matrix — those get P2 on first failure, not P3.
 - [ ] Confirm the ADF diagnostic-settings workspace ID used by the KQL
       queries below.
@@ -26,12 +25,12 @@ first real on-call rotation:
 - [🔒 2. Severity Classification](#-2-severity-classification)
 - [🚀 3. Initial Response](#-3-initial-response)
 - [🧪 4. Common Scenarios](#-4-common-scenarios)
-  - [4.1 Identify the failed run](#41-identify-the-failed-run)
-  - [4.2 Trigger did not fire](#42-trigger-did-not-fire)
-  - [4.3 Copy activity failure (source / sink)](#43-copy-activity-failure-source--sink)
-  - [4.4 Databricks notebook activity failure](#44-databricks-notebook-activity-failure)
-  - [4.5 Dataflow activity OOM / skew](#45-dataflow-activity-oom--skew)
-  - [4.6 Self-Hosted IR offline](#46-self-hosted-ir-offline)
+    - [4.1 Identify the failed run](#41-identify-the-failed-run)
+    - [4.2 Trigger did not fire](#42-trigger-did-not-fire)
+    - [4.3 Copy activity failure (source / sink)](#43-copy-activity-failure-source--sink)
+    - [4.4 Databricks notebook activity failure](#44-databricks-notebook-activity-failure)
+    - [4.5 Dataflow activity OOM / skew](#45-dataflow-activity-oom--skew)
+    - [4.6 Self-Hosted IR offline](#46-self-hosted-ir-offline)
 - [🔁 5. Retry vs. Backfill](#-5-retry-vs-backfill)
 - [📋 6. Evidence Preservation](#-6-evidence-preservation)
 - [📝 7. Communication Templates](#-7-communication-templates)
@@ -58,18 +57,19 @@ region outages (see `dr-drill.md`).
 
 ## 🔒 2. Severity Classification
 
-| Severity    | Description                                                                                               | Response Time | Escalation              |
-| ----------- | --------------------------------------------------------------------------------------------------------- | ------------- | ----------------------- |
-| P1 — Critical | Critical pipeline (governance-tagged `tier=critical`) failed in prod with customer-facing data impact | 1 hour        | Data Eng Lead + CISO    |
-| P2 — High   | Any pipeline feeding a Gold-layer product with SLA freshness breached                                     | 4 hours       | Data Eng Lead           |
-| P3 — Medium | Non-critical pipeline failed; backfill window still open                                                  | 24 hours      | On-call engineer        |
-| P4 — Low    | Retry succeeded automatically; post-mortem needed for the deterministic failure cause                     | 72 hours      | Team queue              |
+| Severity      | Description                                                                                           | Response Time | Escalation           |
+| ------------- | ----------------------------------------------------------------------------------------------------- | ------------- | -------------------- |
+| P1 — Critical | Critical pipeline (governance-tagged `tier=critical`) failed in prod with customer-facing data impact | 1 hour        | Data Eng Lead + CISO |
+| P2 — High     | Any pipeline feeding a Gold-layer product with SLA freshness breached                                 | 4 hours       | Data Eng Lead        |
+| P3 — Medium   | Non-critical pipeline failed; backfill window still open                                              | 24 hours      | On-call engineer     |
+| P4 — Low      | Retry succeeded automatically; post-mortem needed for the deterministic failure cause                 | 72 hours      | Team queue           |
 
 ---
 
 ## 🚀 3. Initial Response
 
 ### Step 1: Confirm the alert is real
+
 ```kql
 // Recent pipeline failures across the subscription
 ADFPipelineRun
@@ -80,29 +80,34 @@ ADFPipelineRun
 ```
 
 ### Step 2: Classify severity
+
 - [ ] Is the failed pipeline tagged `tier=critical` in the governance RBAC matrix?
 - [ ] Is the downstream product SLA breached (check `portal/api/v1/marketplace/products`)?
 - [ ] Has retry already succeeded? (see `Status` transitions in KQL below)
 
 ### Step 3: Contain
+
 - [ ] If the same pipeline has failed **3 times consecutively**, pause the
       trigger to stop alert storms:
-      ```bash
-      az datafactory trigger stop \
-        --factory-name <factory> \
-        --resource-group <rg> \
-        --name <trigger-name>
-      ```
+      `bash
+az datafactory trigger stop \
+  --factory-name <factory> \
+  --resource-group <rg> \
+  --name <trigger-name>
+`
 - [ ] Open an incident ticket linking the ADF run ID.
 
 ### Step 4: Investigate
+
 Use the scenario playbook in §4.
 
 ### Step 5: Recover
+
 Pick one of: automatic-retry-in-place, manual rerun of failed activities,
 or watermark backfill (see §5).
 
 ### Step 6: Post-Incident
+
 - [ ] File a follow-up task tagged `data-pipeline-followup` within one business day.
 - [ ] Update detection thresholds if a legitimate failure went to P3 when it should have been P2.
 
@@ -111,6 +116,7 @@ or watermark backfill (see §5).
 ## 🧪 4. Common Scenarios
 
 ### 4.1 Identify the failed run
+
 ```kql
 ADFActivityRun
 | where TimeGenerated > ago(24h)
@@ -125,15 +131,15 @@ ADFActivityRun
 **Symptom:** Expected pipeline run did not show up in `ADFPipelineRun`.
 
 - [ ] Check trigger state:
-      ```bash
-      az datafactory trigger show \
-        --factory-name <factory> --resource-group <rg> --name <trigger>
-      ```
+      `bash
+az datafactory trigger show \
+  --factory-name <factory> --resource-group <rg> --name <trigger>
+`
 - [ ] If `runtimeState != "Started"`, the trigger is stopped. Restart:
-      ```bash
-      az datafactory trigger start \
-        --factory-name <factory> --resource-group <rg> --name <trigger>
-      ```
+      `bash
+az datafactory trigger start \
+  --factory-name <factory> --resource-group <rg> --name <trigger>
+`
 - [ ] If trigger is started but no run occurred, check managed-identity
       permissions on the storage account or event source.
 - [ ] Run a manual rerun for the missed window (see §5).
@@ -142,9 +148,7 @@ ADFActivityRun
 
 **Symptom:** `ActivityType == "Copy"`, `ErrorCode` like `2xxx` or `UserErrorSourceDataContractMismatch`.
 
-- [ ] Check the error class:
-      - `UserError*` → deterministic, will not self-heal. Fix the source or schema.
-      - `SystemError*` → transient. Retry the activity in place once.
+- [ ] Check the error class: - `UserError*` → deterministic, will not self-heal. Fix the source or schema. - `SystemError*` → transient. Retry the activity in place once.
 - [ ] Validate the source dataset is reachable (firewall, managed-identity
       RBAC). Cross-check `DiagnosticsResourceHealth`.
 - [ ] For `UserErrorSourceDataContractMismatch`, review data contracts under
@@ -180,10 +184,10 @@ ADFActivityRun
 **Symptom:** `Integration runtime is not available or unhealthy`.
 
 - [ ] Check IR status:
-      ```bash
-      az datafactory integration-runtime show \
-        --factory-name <factory> --resource-group <rg> --name <ir-name>
-      ```
+      `bash
+az datafactory integration-runtime show \
+  --factory-name <factory> --resource-group <rg> --name <ir-name>
+`
 - [ ] See `docs/SELF_HOSTED_IR.md` for the full restart procedure. TL;DR:
       restart the Windows service on the VM hosting the IR, confirm
       outbound firewall rules for 443 are still intact, re-register with
@@ -193,15 +197,16 @@ ADFActivityRun
 
 ## 🔁 5. Retry vs. Backfill
 
-| Situation                                                              | Strategy                                                                 |
-| ---------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| Transient error, `ActivityRetryCount` not yet exhausted                | Let ADF retry automatically. Watch for third failure.                    |
-| Deterministic error, fix deployed                                      | Manual `Rerun from failed activity` in ADF Studio.                       |
-| Missed trigger window < 7 days old                                     | Watermark backfill: trigger `pipeline_param.startTime`/`endTime` for the missed window. |
-| Missed window ≥ 7 days                                                 | Open a data-correctness task; coordinate with the downstream consumer.   |
-| Bronze data corrupted (wrote bad data)                                 | Roll back bronze partition from ADLS versioning; rerun silver/gold.      |
+| Situation                                               | Strategy                                                                                |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Transient error, `ActivityRetryCount` not yet exhausted | Let ADF retry automatically. Watch for third failure.                                   |
+| Deterministic error, fix deployed                       | Manual `Rerun from failed activity` in ADF Studio.                                      |
+| Missed trigger window < 7 days old                      | Watermark backfill: trigger `pipeline_param.startTime`/`endTime` for the missed window. |
+| Missed window ≥ 7 days                                  | Open a data-correctness task; coordinate with the downstream consumer.                  |
+| Bronze data corrupted (wrote bad data)                  | Roll back bronze partition from ADLS versioning; rerun silver/gold.                     |
 
 Manual rerun command:
+
 ```bash
 az datafactory pipeline create-run \
   --factory-name <factory> \
@@ -251,15 +256,15 @@ Before remediation, capture:
 ## 📎 8. Contact Information
 
 !!! warning
-    **Action Required:** Populate these before first production use.
+**Action Required:** Populate these before first production use.
 
-| Role                 | Contact                                       | Phone                          | Escalation                  |
-| -------------------- | --------------------------------------------- | ------------------------------ | --------------------------- |
-| Data Eng On-Call     | *(set via your org's on-call roster)*         | *(see PagerDuty / OpsGenie)*   | First responder             |
-| Data Eng Lead        | *(set via your org's data eng DL)*            | *(see PagerDuty / OpsGenie)*   | P1/P2 escalation            |
-| Platform Team Lead   | *(set via your org's platform team)*          | *(see PagerDuty / OpsGenie)*   | Infra / IR failures         |
-| Upstream Source Owner| *(per-pipeline — see governance RBAC matrix)* | *(DL)*                         | Source data contract issues |
-| Azure Support        | [Case via Portal](https://portal.azure.com/#blade/Microsoft_Azure_Support/HelpAndSupportBlade) | N/A | ADF platform-level issues |
+| Role                  | Contact                                                                                        | Phone                        | Escalation                  |
+| --------------------- | ---------------------------------------------------------------------------------------------- | ---------------------------- | --------------------------- |
+| Data Eng On-Call      | _(set via your org's on-call roster)_                                                          | _(see PagerDuty / OpsGenie)_ | First responder             |
+| Data Eng Lead         | _(set via your org's data eng DL)_                                                             | _(see PagerDuty / OpsGenie)_ | P1/P2 escalation            |
+| Platform Team Lead    | _(set via your org's platform team)_                                                           | _(see PagerDuty / OpsGenie)_ | Infra / IR failures         |
+| Upstream Source Owner | _(per-pipeline — see governance RBAC matrix)_                                                  | _(DL)_                       | Source data contract issues |
+| Azure Support         | [Case via Portal](https://portal.azure.com/#blade/Microsoft_Azure_Support/HelpAndSupportBlade) | N/A                          | ADF platform-level issues   |
 
 ---
 
@@ -267,12 +272,12 @@ Before remediation, capture:
 
 Run this runbook in tabletop form quarterly. Add one row per drill.
 
-| Quarter   | Date  | Type (tabletop / live) | Scenario exercised | Lead  | Gaps identified | Fixes tracked |
-| --------- | ----- | ---------------------- | ------------------ | ----- | --------------- | ------------- |
-| Q1 — Jan  | _TBD_ | _TBD_                  | _TBD_              | _TBD_ | _TBD_           | _TBD_         |
-| Q2 — Apr  | _TBD_ | _TBD_                  | _TBD_              | _TBD_ | _TBD_           | _TBD_         |
-| Q3 — Jul  | _TBD_ | _TBD_                  | _TBD_              | _TBD_ | _TBD_           | _TBD_         |
-| Q4 — Oct  | _TBD_ | _TBD_                  | _TBD_              | _TBD_ | _TBD_           | _TBD_         |
+| Quarter  | Date  | Type (tabletop / live) | Scenario exercised | Lead  | Gaps identified | Fixes tracked |
+| -------- | ----- | ---------------------- | ------------------ | ----- | --------------- | ------------- |
+| Q1 — Jan | _TBD_ | _TBD_                  | _TBD_              | _TBD_ | _TBD_           | _TBD_         |
+| Q2 — Apr | _TBD_ | _TBD_                  | _TBD_              | _TBD_ | _TBD_           | _TBD_         |
+| Q3 — Jul | _TBD_ | _TBD_                  | _TBD_              | _TBD_ | _TBD_           | _TBD_         |
+| Q4 — Oct | _TBD_ | _TBD_                  | _TBD_              | _TBD_ | _TBD_           | _TBD_         |
 
 ---
 

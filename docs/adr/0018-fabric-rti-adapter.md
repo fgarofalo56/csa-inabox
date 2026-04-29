@@ -11,19 +11,19 @@ informed: all
 ## Context and Problem Statement
 
 ADR-0010 positions Microsoft Fabric as the strategic target for the
-CSA-in-a-Box analytics stack.  Fabric Real-Time Intelligence (RTI) is
+CSA-in-a-Box analytics stack. Fabric Real-Time Intelligence (RTI) is
 the Fabric equivalent of our current Event Hub + dbt + ADX pipeline —
 it unifies Eventstream ingestion, KQL-queryable Eventhouses, and
-Reflex-style alerting inside the Fabric SaaS boundary.  Commercial
+Reflex-style alerting inside the Fabric SaaS boundary. Commercial
 Fabric customers can consume RTI today (preview programme); **Fabric
 RTI is not yet GA in Azure Government** and does not have an ATO
 pathway that is acceptable for our federal customers.
 
 The streaming spine (CSA-0137) shipped with adapters for Event Hub,
-IoT Hub, and Kafka-via-EH.  Adding a Fabric RTI adapter at GA time
+IoT Hub, and Kafka-via-EH. Adding a Fabric RTI adapter at GA time
 would be a breaking change across every downstream (dbt jobs, SLO
 monitor, marketplace metadata) because the enum of supported source
-types would grow.  We need a surface that compiles today, ships with
+types would grow. We need a surface that compiles today, ships with
 tests, and surfaces a loud actionable error when RTI is not available
 in the operator's tenant — without pretending to route traffic through
 a service that isn't there.
@@ -34,7 +34,7 @@ a service that isn't there.
   Fabric must be expressible in the contract model today so migration
   is a configuration change, not a rewrite.
 - **Gov-GA gate** — federal tenants cannot adopt RTI until Microsoft
-  declares Fabric RTI Gov GA.  The adapter must refuse to run in
+  declares Fabric RTI Gov GA. The adapter must refuse to run in
   tenants that haven't opted in.
 - **Honest failure modes** — silent fallback to "just log and return
   empty stream" is worse than a loud error that points operators at
@@ -47,17 +47,17 @@ a service that isn't there.
 
 1. **Env-gated adapter surface with a raise-with-pointer when
    disabled (chosen)** — ship `FabricRTISource` as a full
-   `SourceAdapter` implementation today.  The constructor reads
+   `SourceAdapter` implementation today. The constructor reads
    `FABRIC_RTI_ENABLED=true` from the environment; if the flag is
    unset the constructor raises `FabricRTINotAvailableError` whose
-   message includes the path to this ADR.  When enabled, the adapter
+   message includes the path to this ADR. When enabled, the adapter
    performs REST-based ingestion via `httpx.AsyncClient` against the
    Fabric RTI eventstream API (see References).
 2. **Defer entirely — no surface until Gov GA** — matches ADR-0010's
    "don't build what Fabric will provide" principle but forces a
    breaking schema change across every downstream consumer at GA.
 3. **Shim that silently returns empty** — code compiles; tenants don't
-   see the gap; observability suffers.  Rejected as an anti-pattern.
+   see the gap; observability suffers. Rejected as an anti-pattern.
 4. **Route Fabric traffic through Event Hub today** — technically
    feasible (RTI ingests from Event Hub) but muddies the contract
    semantics: the source_type on the manifest would lie about the
@@ -66,16 +66,16 @@ a service that isn't there.
 ## Decision Outcome
 
 Chosen: **Option 1 — env-gated adapter surface.** Implemented in
-`csa_platform/streaming/sources_fabric.py`.  Key behaviours:
+`csa_platform/streaming/sources_fabric.py`. Key behaviours:
 
 - `SourceType` enum extended with `FABRIC_RTI = "fabric_rti"` — the
   contract manifest explicitly declares Fabric as the source.
 - `FabricRTISource.__init__` raises `FabricRTINotAvailableError`
-  when `FABRIC_RTI_ENABLED` is missing or not equal to `true`.  The
+  when `FABRIC_RTI_ENABLED` is missing or not equal to `true`. The
   error message includes a pointer to this ADR so operators finding
   it in logs know where to read the rationale.
 - When enabled, the adapter performs REST-based ingestion via
-  `httpx.AsyncClient`.  The endpoint defaults to
+  `httpx.AsyncClient`. The endpoint defaults to
   `https://{workspace}.fabric.microsoft.com/eventstreams/{entity}/events`
   but can be overridden with `FABRIC_RTI_ENDPOINT` for Gov-cloud
   preview tenants.
@@ -116,20 +116,24 @@ When Fabric RTI reaches Gov GA we flip the gate:
 ## Pros and Cons of the Options
 
 ### Option 1 — Env-gated adapter surface (chosen)
+
 - Pros: Truthful contract manifests; compiles today; tests today;
   one-line flip at GA.
 - Cons: Pre-GA REST shape may drift; ADR must be kept current.
 
 ### Option 2 — Defer until Gov GA
+
 - Pros: Zero pre-GA maintenance.
 - Cons: Breaking schema change at GA; downstream rewrites.
 
 ### Option 3 — Silent empty-stream shim
+
 - Pros: No error paths.
 - Cons: Observability black hole; operators ship Fabric configs that
   "work" but deliver no data.
 
 ### Option 4 — Route via Event Hub today
+
 - Pros: Delivers real data end-to-end.
 - Cons: Contract semantics lie; governance lineage misattributes the
   source; migration to RTI at GA still a breaking change.
@@ -170,6 +174,6 @@ We will know this decision is right if:
   pre-GA adapter surface documented here), **CM-6** (configuration
   settings — `FABRIC_RTI_ENABLED` is the documented baseline-breaking
   setting), **SA-8** (security engineering principles — explicit,
-  loud failure is preferred over silent degradation).  See
+  loud failure is preferred over silent degradation). See
   `governance/compliance/nist-800-53-rev5.yaml`.
 - Discussion: CSA-0137 follow-ons

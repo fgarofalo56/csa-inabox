@@ -2,9 +2,8 @@
 
 # Platform Services Guide
 
-
 !!! note
-    **Quick Summary**: Detailed guide to 10 platform services that deliver Fabric-parity capabilities on Azure PaaS — OneLake pattern, Data Activator, Direct Lake, Data Marketplace, Governance Framework, Multi-Synapse *(legacy — see CSA-0139)*, Metadata Framework, AI Integration, Shared Services, and OSS alternatives. Intended for Azure Government (where Fabric is forecast, not GA) and for Commercial workloads that need a composable IaC stack as a stepping stone toward a future Fabric migration.
+**Quick Summary**: Detailed guide to 10 platform services that deliver Fabric-parity capabilities on Azure PaaS — OneLake pattern, Data Activator, Direct Lake, Data Marketplace, Governance Framework, Multi-Synapse _(legacy — see CSA-0139)_, Metadata Framework, AI Integration, Shared Services, and OSS alternatives. Intended for Azure Government (where Fabric is forecast, not GA) and for Commercial workloads that need a composable IaC stack as a stepping stone toward a future Fabric migration.
 
 Platform services are the Fabric-parity capabilities that extend the base
 landing zones. Each service is independently deployable, has its own README
@@ -69,7 +68,7 @@ graph LR
 
 ## 1. 🗄️ Unity Catalog Pattern
 
-**Location:** `csa_platform/unity_catalog_pattern/` *(renamed from `onelake_pattern/` in CSA-0132; this pattern implements Databricks Unity Catalog with ADLS Gen2, not Microsoft OneLake.)*
+**Location:** `csa_platform/unity_catalog_pattern/` _(renamed from `onelake_pattern/` in CSA-0132; this pattern implements Databricks Unity Catalog with ADLS Gen2, not Microsoft OneLake.)_
 **Fabric Equivalent (conceptual):** OneLake — a future `csa_platform/fabric/` module (CSA-0129) will own the real OneLake integration.
 
 Implements a unified data lake using ADLS Gen2 with Databricks Unity Catalog
@@ -77,12 +76,14 @@ providing the shared metadata layer. All domain data lives in a single logical
 lake with physical separation via containers and folders.
 
 **What it does:**
+
 - Provides a standardized storage layout (Bronze / Silver / Gold) per domain
 - Configures Unity Catalog for cross-domain metadata and access control
 - Sets up storage lifecycle policies (hot → cool → archive)
 - Creates shared Delta Lake tables accessible across Databricks and Synapse
 
 **Deploy:**
+
 ```bash
 az deployment group create \
   --resource-group rg-datalake \
@@ -103,12 +104,14 @@ Event-driven alerting and automation triggered by data conditions. Replaces
 Fabric Data Activator using Event Grid, Logic Apps, and Azure Functions.
 
 **What it does:**
+
 - Monitors data lake events (new files, schema changes, quality violations)
 - Triggers alerts via Teams webhooks, email, or PagerDuty
 - Executes remediation workflows (re-run pipeline, quarantine bad data)
 - Provides configurable thresholds and notification routing
 
 **Deploy:**
+
 ```bash
 az deployment group create \
   --resource-group rg-platform \
@@ -122,7 +125,7 @@ az deployment group create \
 
 ## 3. 📊 Semantic Model
 
-**Location:** `csa_platform/semantic_model/` *(renamed from `direct_lake/` in CSA-0132; this pattern implements Power BI semantic models over Databricks SQL, not Microsoft Fabric Direct Lake.)*
+**Location:** `csa_platform/semantic_model/` _(renamed from `direct_lake/` in CSA-0132; this pattern implements Power BI semantic models over Databricks SQL, not Microsoft Fabric Direct Lake.)_
 **Fabric Equivalent (conceptual):** Direct Lake mode in Power BI — a future `csa_platform/fabric/` module (CSA-0129) will own the real Direct Lake integration.
 
 Enables Power BI to query Delta Lake files directly from ADLS Gen2 via
@@ -130,12 +133,14 @@ Databricks SQL endpoints, eliminating the need to import data into Power BI
 datasets.
 
 **What it does:**
+
 - Configures Databricks SQL Serverless endpoints for Power BI consumption
 - Provides DAX measures and M query templates for common patterns
 - Sets up row-level security passthrough from Entra ID to Unity Catalog
 - Optimizes Delta tables for Direct Lake performance (file size, Z-ordering)
 
 **Deploy:**
+
 ```bash
 # Databricks SQL endpoint is created via workspace configuration
 databricks sql-endpoints create \
@@ -157,6 +162,7 @@ A self-service portal for discovering, requesting access to, and consuming data
 products published across the organization.
 
 **What it does:**
+
 - Exposes a FastAPI-based catalog of data products with search and filtering
 - Integrates with Purview for asset metadata and lineage
 - Provides an access request and approval workflow (owner-based, time-bound)
@@ -165,11 +171,11 @@ products published across the organization.
 
 **Deploy:**
 !!! important
-    **CSA-0067 / CSA-0131.** The legacy marketplace under
-    `csa_platform/data_marketplace/` is deprecated. It does not ship a
-    `--init` CLI; the previously documented command never existed. Use
-    the actively-served marketplace in `portal.shared.api.routers.marketplace`
-    instead.
+**CSA-0067 / CSA-0131.** The legacy marketplace under
+`csa_platform/data_marketplace/` is deprecated. It does not ship a
+`--init` CLI; the previously documented command never existed. Use
+the actively-served marketplace in `portal.shared.api.routers.marketplace`
+instead.
 
 ```bash
 # Recommended — the portal seeds demo products on startup when
@@ -195,6 +201,7 @@ Extends Microsoft Purview with automated data governance workflows including
 classification, sensitivity labeling, and master data management.
 
 **What it does:**
+
 - Automatically classifies new assets using built-in and custom classifiers
 - Applies sensitivity labels (Public, Internal, Confidential, CUI, PHI)
 - Captures lineage from ADF, Databricks, dbt, and Synapse
@@ -202,6 +209,7 @@ classification, sensitivity labeling, and master data management.
 - Provides a master data management (MDM) framework for reference data
 
 **Deploy:**
+
 ```bash
 # Bootstrap Purview with glossary, classifications, and scan rules
 python scripts/purview/bootstrap_catalog.py \
@@ -215,7 +223,7 @@ python scripts/purview/bootstrap_catalog.py \
 
 ## 6. 🔄 Multi-Synapse
 
-**Location:** `csa_platform/multi_synapse/` *(legacy / migration-only — see `csa_platform/multi_synapse/README.md` and `csa_platform/multi_synapse/MIGRATION.md`; CSA-0139 / AQ-0034)*
+**Location:** `csa_platform/multi_synapse/` _(legacy / migration-only — see `csa_platform/multi_synapse/README.md` and `csa_platform/multi_synapse/MIGRATION.md`; CSA-0139 / AQ-0034)_
 **Fabric Equivalent:** Multi-workspace Synapse
 **Status:** Legacy. New work should target Databricks + Unity Catalog (ADR-0002) or Fabric where GA (ADR-0010). This module stays deployable for existing Synapse footprints only.
 
@@ -223,12 +231,14 @@ Provides a shared Synapse Analytics environment with per-organization or
 per-domain isolation using workspace-level RBAC and network segmentation.
 
 **What it does:**
+
 - Deploys multiple Synapse workspaces with shared managed VNet
 - Configures per-workspace SQL pools (dedicated and serverless)
 - Sets up cross-workspace linked services for shared data access
 - Implements workspace-level RBAC and audit logging
 
 **Deploy:**
+
 ```bash
 az deployment group create \
   --resource-group rg-synapse \
@@ -250,28 +260,30 @@ Register a source once and the framework creates copy activities, Bronze
 ingestion, scheduling, and error handling automatically.
 
 **What it does:**
+
 - Reads source registration YAML files with connection, schema, schedule metadata
 - Generates parameterized ADF pipeline JSON
 - Deploys pipelines via ARM/Bicep or ADF REST API
 - Supports incremental load watermarking and change data capture
 
 **Configuration:**
+
 ```yaml
 # Example source registration
 source:
-  name: usda_crop_data
-  type: rest_api
-  connection:
-    base_url: https://quickstats.nass.usda.gov/api/api_GET
-    auth_type: api_key
-    key_vault_secret: nass-api-key
-  schedule:
-    frequency: daily
-    time: "06:00"
-  destination:
-    container: bronze
-    folder: usda/crop_data
-    format: parquet
+    name: usda_crop_data
+    type: rest_api
+    connection:
+        base_url: https://quickstats.nass.usda.gov/api/api_GET
+        auth_type: api_key
+        key_vault_secret: nass-api-key
+    schedule:
+        frequency: daily
+        time: "06:00"
+    destination:
+        container: bronze
+        folder: usda/crop_data
+        format: parquet
 ```
 
 **Dependencies:** Azure Data Factory, Key Vault, ADLS Gen2
@@ -287,6 +299,7 @@ Provides domain-aware AI capabilities including document enrichment, entity
 extraction, text summarization, and RAG-based question answering.
 
 **What it does:**
+
 - **Document Classifier** — Categorizes incoming documents using Azure OpenAI
 - **Entity Extractor** — Extracts named entities (people, orgs, locations) from text
 - **Text Summarizer** — Generates concise summaries of data product descriptions
@@ -294,6 +307,7 @@ extraction, text summarization, and RAG-based question answering.
 - **Model Serving** — Deploys custom ML models as API endpoints
 
 **Deploy:**
+
 ```bash
 pip install -r csa_platform/ai_integration/requirements.txt
 
@@ -317,15 +331,16 @@ pipelines and platform services.
 
 **Available Functions:**
 
-| Function | Purpose |
-|----------|---------|
-| `detect_pii` | Scans text columns for PII using regex and AI classification |
-| `validate_schema` | Validates incoming data against registered JSON/Avro schemas |
-| `validate_quality` | Runs Great Expectations checkpoints and returns results |
-| `send_teams_alert` | Posts formatted alerts to Microsoft Teams via webhook |
+| Function            | Purpose                                                                                                                                                                                                                                   |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `detect_pii`        | Scans text columns for PII using regex and AI classification                                                                                                                                                                              |
+| `validate_schema`   | Validates incoming data against registered JSON/Avro schemas                                                                                                                                                                              |
+| `validate_quality`  | Runs Great Expectations checkpoints and returns results                                                                                                                                                                                   |
+| `send_teams_alert`  | Posts formatted alerts to Microsoft Teams via webhook                                                                                                                                                                                     |
 | Dead-letter pattern | Canonical per-pipeline DLQ (container + Event Grid + alert) — see [`deploy/bicep/shared/modules/deadletter/`](../deploy/bicep/shared/modules/deadletter/deadletter.bicep) + [runbooks/dead-letter.md](runbooks/dead-letter.md) (CSA-0138) |
 
 **Deploy:**
+
 ```bash
 cd csa_platform/functions/validation
 
@@ -352,14 +367,15 @@ restricted in Azure Government at certain impact levels.
 
 **Available Alternatives:**
 
-| Service Gap | OSS Replacement | Deployment |
-|-------------|----------------|-----------|
-| Entra ID B2C (not in Gov) | Keycloak | Helm chart on AKS |
-| AI Search (no IL5) | OpenSearch | Helm chart on AKS |
-| Azure ML (no IL5) | MLflow + Kubeflow | Helm chart on AKS |
-| Cognitive Services (limited) | Hugging Face Inference | Docker on AKS |
+| Service Gap                  | OSS Replacement        | Deployment        |
+| ---------------------------- | ---------------------- | ----------------- |
+| Entra ID B2C (not in Gov)    | Keycloak               | Helm chart on AKS |
+| AI Search (no IL5)           | OpenSearch             | Helm chart on AKS |
+| Azure ML (no IL5)            | MLflow + Kubeflow      | Helm chart on AKS |
+| Cognitive Services (limited) | Hugging Face Inference | Docker on AKS     |
 
 **Deploy:**
+
 ```bash
 # Example: deploy Keycloak on AKS
 helm install keycloak csa_platform/oss_alternatives/keycloak/chart \
@@ -375,18 +391,18 @@ helm install keycloak csa_platform/oss_alternatives/keycloak/chart \
 
 Deploy platform services in this recommended order:
 
-| Order | Service | Foundation |
-|-------|---------|-----------|
-| 1 | OneLake Pattern | Storage + metadata |
-| 2 | Shared Services | Reusable functions |
-| 3 | Governance Framework | Classification + lineage |
-| 4 | Metadata Framework | Auto-pipeline generation |
-| 5 | Data Marketplace | Discovery + access |
-| 6 | AI Integration | Enrichment + RAG |
-| 7 | Data Activator | Alerting + automation |
-| 8 | Direct Lake | Power BI consumption |
-| 9 | Multi-Synapse | Legacy — only if migrating an existing Synapse footprint (CSA-0139) |
-| 10 | OSS Alternatives | If Gov gaps exist |
+| Order | Service              | Foundation                                                          |
+| ----- | -------------------- | ------------------------------------------------------------------- |
+| 1     | OneLake Pattern      | Storage + metadata                                                  |
+| 2     | Shared Services      | Reusable functions                                                  |
+| 3     | Governance Framework | Classification + lineage                                            |
+| 4     | Metadata Framework   | Auto-pipeline generation                                            |
+| 5     | Data Marketplace     | Discovery + access                                                  |
+| 6     | AI Integration       | Enrichment + RAG                                                    |
+| 7     | Data Activator       | Alerting + automation                                               |
+| 8     | Direct Lake          | Power BI consumption                                                |
+| 9     | Multi-Synapse        | Legacy — only if migrating an existing Synapse footprint (CSA-0139) |
+| 10    | OSS Alternatives     | If Gov gaps exist                                                   |
 
 ---
 

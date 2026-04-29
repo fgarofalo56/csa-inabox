@@ -6,20 +6,20 @@
 
 Hadoop workloads decompose to multiple Azure targets:
 
-| Workload type | Best Azure target |
-|---------------|-------------------|
-| HDFS storage | **ADLS Gen2** (drop-in HDFS-compatible API) |
-| Hive metastore + Hive SQL | **Synapse Spark** with external tables OR **Fabric Lakehouse** OR **Databricks Unity Catalog** |
-| Spark batch jobs | **Synapse Spark** OR **Databricks** OR **Fabric Spark** |
-| Spark Streaming | **Databricks Structured Streaming** OR **Fabric RTI** |
-| HBase | **Cosmos DB** (Cassandra API) OR **Azure Managed HBase on AKS** (rare) |
-| Kafka on Hadoop | **Event Hubs** (Kafka-compatible) |
-| Oozie / Airflow workflows | **ADF** + **dbt** OR **Fabric Data Pipelines** |
-| YARN resource manager | Replaced by Synapse/DBR/Fabric job schedulers |
-| Sentry / Ranger access control | **Purview** + **Synapse RBAC** + **Unity Catalog** |
-| Atlas catalog | **Microsoft Purview** ([ADR 0006](../adr/0006-purview-over-atlas.md)) |
+| Workload type                  | Best Azure target                                                                              |
+| ------------------------------ | ---------------------------------------------------------------------------------------------- |
+| HDFS storage                   | **ADLS Gen2** (drop-in HDFS-compatible API)                                                    |
+| Hive metastore + Hive SQL      | **Synapse Spark** with external tables OR **Fabric Lakehouse** OR **Databricks Unity Catalog** |
+| Spark batch jobs               | **Synapse Spark** OR **Databricks** OR **Fabric Spark**                                        |
+| Spark Streaming                | **Databricks Structured Streaming** OR **Fabric RTI**                                          |
+| HBase                          | **Cosmos DB** (Cassandra API) OR **Azure Managed HBase on AKS** (rare)                         |
+| Kafka on Hadoop                | **Event Hubs** (Kafka-compatible)                                                              |
+| Oozie / Airflow workflows      | **ADF** + **dbt** OR **Fabric Data Pipelines**                                                 |
+| YARN resource manager          | Replaced by Synapse/DBR/Fabric job schedulers                                                  |
+| Sentry / Ranger access control | **Purview** + **Synapse RBAC** + **Unity Catalog**                                             |
+| Atlas catalog                  | **Microsoft Purview** ([ADR 0006](../adr/0006-purview-over-atlas.md))                          |
 
-**Key insight:** Modern Azure does not have a "Hadoop equivalent" — it has a *better-decomposed* set of services. The migration is fundamentally a **modernization**, not a re-platforming.
+**Key insight:** Modern Azure does not have a "Hadoop equivalent" — it has a _better-decomposed_ set of services. The migration is fundamentally a **modernization**, not a re-platforming.
 
 ## Phase 1 — Assessment (4-8 weeks)
 
@@ -39,12 +39,12 @@ For each cluster:
 
 ### Migration tier
 
-| Tier | Description | Action |
-|------|-------------|--------|
-| **A** Direct re-host | Spark jobs that read Parquet/Delta with no HDFS-specific code | Move to Synapse/Databricks Spark |
-| **B** Modernize | Hive SQL workloads | Convert to dbt + Spark SQL |
-| **C** Re-platform | HBase, Storm, Flume, custom YARN apps | Replace with Cosmos / Event Hubs / Functions |
-| **D** Decommission | Stale data, unused tables, abandoned jobs | Don't migrate; archive minimal evidence and delete |
+| Tier                 | Description                                                   | Action                                             |
+| -------------------- | ------------------------------------------------------------- | -------------------------------------------------- |
+| **A** Direct re-host | Spark jobs that read Parquet/Delta with no HDFS-specific code | Move to Synapse/Databricks Spark                   |
+| **B** Modernize      | Hive SQL workloads                                            | Convert to dbt + Spark SQL                         |
+| **C** Re-platform    | HBase, Storm, Flume, custom YARN apps                         | Replace with Cosmos / Event Hubs / Functions       |
+| **D** Decommission   | Stale data, unused tables, abandoned jobs                     | Don't migrate; archive minimal evidence and delete |
 
 Plan for **30-50% of HDFS data and 40-60% of jobs to be Tier D** — Hadoop estates accumulate enormous amounts of dead data.
 
@@ -59,23 +59,23 @@ Plan for **30-50% of HDFS data and 40-60% of jobs to be Tier D** — Hadoop esta
 
 ### Compute migration
 
-| Source | Target |
-|--------|--------|
+| Source             | Target                                                                                       |
+| ------------------ | -------------------------------------------------------------------------------------------- |
 | Cloudera CDP / CDH | Databricks (CDH was replaced by CDP; many Cloudera customers go to DBR for Spark continuity) |
-| Hortonworks HDP | Databricks (Cloudera acquired Hortonworks; HDP is end-of-life) |
-| EMR (AWS) | Databricks (multi-cloud) OR Synapse Spark |
-| HDInsight | Synapse Spark OR Fabric Spark |
-| On-prem | Databricks (most Spark-feature-equivalent) OR Synapse Spark |
+| Hortonworks HDP    | Databricks (Cloudera acquired Hortonworks; HDP is end-of-life)                               |
+| EMR (AWS)          | Databricks (multi-cloud) OR Synapse Spark                                                    |
+| HDInsight          | Synapse Spark OR Fabric Spark                                                                |
+| On-prem            | Databricks (most Spark-feature-equivalent) OR Synapse Spark                                  |
 
 ### Workflow migration
 
-| Oozie pattern | Replacement |
-|---------------|-------------|
+| Oozie pattern                | Replacement                                          |
+| ---------------------------- | ---------------------------------------------------- |
 | Coordinator (time-triggered) | ADF schedule trigger / Fabric Data Pipeline schedule |
-| Workflow (DAG) | ADF pipeline / Fabric Data Pipeline / Airflow on AKS |
-| Sub-workflow | ADF execute pipeline activity |
-| Decision node | ADF if condition / switch activity |
-| Email notification | ADF web activity to Logic Apps / Teams webhook |
+| Workflow (DAG)               | ADF pipeline / Fabric Data Pipeline / Airflow on AKS |
+| Sub-workflow                 | ADF execute pipeline activity                        |
+| Decision node                | ADF if condition / switch activity                   |
+| Email notification           | ADF web activity to Logic Apps / Teams webhook       |
 
 For modern data engineering: **dbt-core** orchestrated by ADF (or Airflow / Dagster) replaces most Oozie + Spark glue.
 
@@ -84,6 +84,7 @@ For modern data engineering: **dbt-core** orchestrated by ADF (or Airflow / Dags
 ### Bulk HDFS → ADLS
 
 For data <100 TB: **DistCp** to ADLS over ExpressRoute / VPN
+
 ```bash
 hadoop distcp \
   hdfs://oldcluster/user/warehouse/orders \
@@ -117,12 +118,12 @@ Most PySpark code runs unchanged on Databricks/Synapse. Watch for:
 
 ### Streaming
 
-| Source | Target |
-|--------|--------|
-| Spark Structured Streaming on YARN | **Databricks Structured Streaming** with Unity Catalog or **Fabric RTI** |
-| Storm topology | Stream Analytics (low-mid complexity) or Databricks (high complexity) |
-| Flume agents | Event Hubs ingestion or ADF copy with self-hosted IR |
-| Flink | **Confluent Cloud Flink on Azure** or rewrite in Databricks Structured Streaming |
+| Source                             | Target                                                                           |
+| ---------------------------------- | -------------------------------------------------------------------------------- |
+| Spark Structured Streaming on YARN | **Databricks Structured Streaming** with Unity Catalog or **Fabric RTI**         |
+| Storm topology                     | Stream Analytics (low-mid complexity) or Databricks (high complexity)            |
+| Flume agents                       | Event Hubs ingestion or ADF copy with self-hosted IR                             |
+| Flink                              | **Confluent Cloud Flink on Azure** or rewrite in Databricks Structured Streaming |
 
 ## Phase 4 — Cutover (per workload, 1-2 weeks)
 
@@ -151,25 +152,27 @@ Plan for **~2.5x your steady-state cost** during the 12-30 month window:
 
 ## Common pitfalls
 
-| Pitfall | Mitigation |
-|---------|------------|
-| **Trying to migrate HBase as-is** | Cosmos DB has different consistency and partition semantics; redesign access patterns |
-| **Lifting Oozie DAGs verbatim** | ADF / Fabric Data Pipelines have different triggers; redesign as dbt + scheduled runs |
-| **Keeping all HDFS data** | 30-50% is dead data; use this as a forced cleanup |
-| **Leaving Hive SQL workloads on Spark SQL forever** | Modernize to dbt; you'll thank yourself in 2 years |
-| **Underestimating Sentry / Ranger replacement** | Purview + Unity Catalog / Synapse RBAC needs explicit policy mapping |
-| **Custom Java UDFs that depended on Hadoop libs** | Often have pure-Spark equivalents; review one-by-one |
-| **Streaming workloads as an afterthought** | Streaming has the longest cutover tail; plan early |
+| Pitfall                                             | Mitigation                                                                            |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| **Trying to migrate HBase as-is**                   | Cosmos DB has different consistency and partition semantics; redesign access patterns |
+| **Lifting Oozie DAGs verbatim**                     | ADF / Fabric Data Pipelines have different triggers; redesign as dbt + scheduled runs |
+| **Keeping all HDFS data**                           | 30-50% is dead data; use this as a forced cleanup                                     |
+| **Leaving Hive SQL workloads on Spark SQL forever** | Modernize to dbt; you'll thank yourself in 2 years                                    |
+| **Underestimating Sentry / Ranger replacement**     | Purview + Unity Catalog / Synapse RBAC needs explicit policy mapping                  |
+| **Custom Java UDFs that depended on Hadoop libs**   | Often have pure-Spark equivalents; review one-by-one                                  |
+| **Streaming workloads as an afterthought**          | Streaming has the longest cutover tail; plan early                                    |
 
 ## Trade-offs
 
 ✅ **Why modernize off Hadoop**
+
 - Massive operational cost reduction (no YARN, HDFS, Zookeeper, HiveServer to operate)
 - Better cloud-native integration (storage / compute separation)
 - Newer formats (Delta) and engines (Photon, Direct Lake) are genuinely faster
 - Easier hiring — modern Spark / dbt talent vs Hadoop ops talent
 
 ⚠️ **Why be patient**
+
 - Hadoop estates have 7-15 years of business logic baked in
 - HBase / Storm / custom YARN apps need real re-engineering
 - Workflow modernization (Oozie → ADF/dbt) is bigger than people estimate

@@ -124,12 +124,13 @@ curl -X POST http://localhost:8000/api/v1/marketplace/products \
 ```
 
 **Expected Output:**
+
 ```json
 {
-  "id": "dp-environmental-air-quality",
-  "status": "endorsed",
-  "created_at": "2026-04-22T...",
-  "quality": {"overall_score": null, "gate_status": "PENDING"}
+    "id": "dp-environmental-air-quality",
+    "status": "endorsed",
+    "created_at": "2026-04-22T...",
+    "quality": { "overall_score": null, "gate_status": "PENDING" }
 }
 ```
 
@@ -146,25 +147,27 @@ curl -X POST http://localhost:8000/api/v1/marketplace/products/dp-environmental-
 ```
 
 The quality engine runs Great Expectations checks:
+
 - **Completeness**: % of non-null values across required columns
 - **Accuracy**: Business rule validation (AQI between 0-500, valid FIPS codes)
 - **Timeliness**: Time since last data refresh vs SLA
 - **Consistency**: Cross-table referential integrity checks
 
 **Expected Output:**
+
 ```json
 {
-  "overall_score": 91.2,
-  "completeness": 95.0,
-  "accuracy": 92.1,
-  "timeliness": 88.0,
-  "consistency": 89.5,
-  "gate_status": "PASS",
-  "details": {
-    "checks_passed": 14,
-    "checks_failed": 1,
-    "checks_warning": 2
-  }
+    "overall_score": 91.2,
+    "completeness": 95.0,
+    "accuracy": 92.1,
+    "timeliness": 88.0,
+    "consistency": 89.5,
+    "gate_status": "PASS",
+    "details": {
+        "checks_passed": 14,
+        "checks_failed": 1,
+        "checks_warning": 2
+    }
 }
 ```
 
@@ -184,18 +187,19 @@ curl "http://localhost:8000/api/v1/marketplace/products/dp-finance-revenue"
 ```
 
 **Expected Output:**
+
 ```json
 {
-  "results": [
-    {
-      "id": "dp-environmental-air-quality",
-      "name": "Air Quality Index",
-      "domain": "environmental",
-      "quality": {"overall_score": 91.2, "gate_status": "PASS"},
-      "status": "endorsed"
-    }
-  ],
-  "total": 1
+    "results": [
+        {
+            "id": "dp-environmental-air-quality",
+            "name": "Air Quality Index",
+            "domain": "environmental",
+            "quality": { "overall_score": 91.2, "gate_status": "PASS" },
+            "status": "endorsed"
+        }
+    ],
+    "total": 1
 }
 ```
 
@@ -218,12 +222,13 @@ curl -X POST http://localhost:8000/api/v1/marketplace/access-requests \
 ```
 
 **Expected Output:**
+
 ```json
 {
-  "request_id": "ar-001",
-  "status": "pending_approval",
-  "approver": "env@contoso.com",
-  "created_at": "2026-04-22T..."
+    "request_id": "ar-001",
+    "status": "pending_approval",
+    "approver": "env@contoso.com",
+    "created_at": "2026-04-22T..."
 }
 ```
 
@@ -241,6 +246,7 @@ curl -X PUT http://localhost:8000/api/v1/marketplace/access-requests/ar-001 \
 ```
 
 On approval, the system:
+
 1. Creates Azure RBAC role assignment for the requestor
 2. Adds reader access to the storage container
 3. Registers the access grant in Purview
@@ -291,17 +297,18 @@ curl "http://localhost:8000/api/v1/marketplace/products/dp-environmental-air-qua
 ```
 
 **Expected Output:**
+
 ```json
 {
-  "product_id": "dp-environmental-air-quality",
-  "health": {
-    "quality_trend": [91.2, 90.8, 92.1, 91.5],
-    "freshness_status": "on_time",
-    "last_refresh": "2026-04-22T06:00:00Z",
-    "consumers": 3,
-    "active_access_grants": 2,
-    "sla_compliance": 99.8
-  }
+    "product_id": "dp-environmental-air-quality",
+    "health": {
+        "quality_trend": [91.2, 90.8, 92.1, 91.5],
+        "freshness_status": "on_time",
+        "last_refresh": "2026-04-22T06:00:00Z",
+        "consumers": 3,
+        "active_access_grants": 2,
+        "sla_compliance": 99.8
+    }
 }
 ```
 
@@ -309,12 +316,12 @@ curl "http://localhost:8000/api/v1/marketplace/products/dp-environmental-air-qua
 
 ## Troubleshooting
 
-| Issue | Cause | Solution |
-|---|---|---|
-| `401 Unauthorized` | Missing or expired token | Run `az login` and retry |
-| Quality score `null` | Assessment not yet run | Trigger quality check (Step 3) |
-| Purview sync failed | Network/permission issue | Check Purview RBAC roles |
-| Access request stuck | No approver configured | Set product owner email |
+| Issue                | Cause                    | Solution                       |
+| -------------------- | ------------------------ | ------------------------------ |
+| `401 Unauthorized`   | Missing or expired token | Run `az login` and retry       |
+| Quality score `null` | Assessment not yet run   | Trigger quality check (Step 3) |
+| Purview sync failed  | Network/permission issue | Check Purview RBAC roles       |
+| Access request stuck | No approver configured   | Set product owner email        |
 
 ## What's Next
 

@@ -49,8 +49,8 @@ csa-rg-dlz-dev          eastus         Succeeded
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
+| Symptom      | Cause            | Fix          |
+| ------------ | ---------------- | ------------ |
 | `error: ...` | [Why it happens] | [How to fix] |
 
 ---
@@ -74,8 +74,8 @@ csa-rg-dlz-dev          eastus         Succeeded
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
+| Symptom      | Cause            | Fix          |
+| ------------ | ---------------- | ------------ |
 | `error: ...` | [Why it happens] | [How to fix] |
 
 ---

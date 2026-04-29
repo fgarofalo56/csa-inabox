@@ -1,6 +1,5 @@
 # Delta vs. Iceberg vs. Parquet
 
-
 ## TL;DR
 
 Default to **Delta Lake** for the Microsoft ecosystem (Fabric, Databricks, Synapse, Direct Lake, Purview). Pick **Apache Iceberg** when multi-engine portability (Trino, Snowflake, Athena) is a hard requirement. Use plain **Parquet** only for append-only bronze landing.
@@ -34,6 +33,7 @@ flowchart TD
 **Why:** First-class support everywhere in the stack; Photon; Liquid Clustering.
 **Tradeoffs:** Cost — same as Parquet + tiny log overhead; Latency — sub-second with Direct Lake; Compliance — Commercial + Gov; Skill — default in Databricks.
 **Anti-patterns:**
+
 - Multi-engine (Trino / Snowflake external / Athena) is equal-citizen requirement today.
 
 **Linked example:** [`examples/usda/`](../../examples/usda/)
@@ -44,6 +44,7 @@ flowchart TD
 **Why:** Broadest open-table-format engine support; spec-driven.
 **Tradeoffs:** Cost — similar to Delta; Latency — comparable; Compliance — ADLS posture identical, catalog choice matters; Skill — lower adoption in Microsoft shops.
 **Anti-patterns:**
+
 - Pure Databricks / Fabric shop with no real multi-engine need.
 
 **Linked example:** [`examples/commerce/`](../../examples/commerce/)
@@ -54,6 +55,7 @@ flowchart TD
 **Why:** Simplest, cheapest, zero dependencies.
 **Tradeoffs:** Cost — lowest; Latency — depends on partition layout; Compliance — ADLS posture; Skill — universal.
 **Anti-patterns:**
+
 - Silver / gold — loses ACID, schema evolution, time travel.
 - UPSERT / MERGE semantics — promote to Delta/Iceberg.
 

@@ -70,21 +70,25 @@ containerized runner so the CLI version is pinned per release.
 ## Pros and Cons of the Options
 
 ### Option 1 — dbt Core
+
 - Pros: Open-source; no SaaS boundary; embeddable; zero seat cost;
   container-friendly; portable across Databricks + Synapse + Fabric.
 - Cons: No hosted IDE; scheduler + metadata API are bring-your-own.
 
 ### Option 2 — dbt Cloud
+
 - Pros: Hosted IDE; scheduler; hosted docs; Semantic Layer; CI integration.
 - Cons: SaaS boundary (FedRAMP Moderate in Commercial; Gov story varies);
   per-seat pricing; vendor procurement.
 
 ### Option 3 — SQLMesh
+
 - Pros: State-aware planning (virtual environments); strong column-level
   lineage; Python-native models.
 - Cons: Smaller community; fewer adapters; adapter ecosystem lags dbt.
 
 ### Option 4 — Raw SQL + stored procedures
+
 - Pros: Zero framework cost.
 - Cons: No DAG, no tests, no docs, no lineage — rebuilds what dbt already
   solves.
@@ -92,6 +96,7 @@ containerized runner so the CLI version is pinned per release.
 ## Validation
 
 We will know this decision is right if:
+
 - All dbt projects run identically in ADF, GitHub Actions, and Databricks
   Workflows.
 - `manifest.json` + `run_results.json` are published to ADLS on every run

@@ -6,27 +6,27 @@ Field-tested migration playbooks from common on-prem and other-cloud platforms o
 
 ### From other clouds
 
-| Source | Target | Playbook |
-|--------|--------|----------|
+| Source                        | Target                         | Playbook                           |
+| ----------------------------- | ------------------------------ | ---------------------------------- |
 | AWS (Redshift, S3, Glue, EMR) | Synapse, ADLS, ADF, Databricks | [aws-to-azure.md](aws-to-azure.md) |
-| GCP (BigQuery, GCS, Dataflow) | Synapse/Fabric, ADLS, ADF | [gcp-to-azure.md](gcp-to-azure.md) |
+| GCP (BigQuery, GCS, Dataflow) | Synapse/Fabric, ADLS, ADF      | [gcp-to-azure.md](gcp-to-azure.md) |
 
 ### From specialty platforms
 
-| Source | Target | Playbook |
-|--------|--------|----------|
-| Snowflake | Fabric / Synapse + Databricks | [snowflake.md](snowflake.md) |
-| Databricks (other clouds or AWS) | Microsoft Fabric | [databricks-to-fabric.md](databricks-to-fabric.md) |
-| Palantir Foundry | Azure data mesh + Purview | [palantir-foundry.md](palantir-foundry.md) |
+| Source                           | Target                        | Playbook                                           |
+| -------------------------------- | ----------------------------- | -------------------------------------------------- |
+| Snowflake                        | Fabric / Synapse + Databricks | [snowflake.md](snowflake.md)                       |
+| Databricks (other clouds or AWS) | Microsoft Fabric              | [databricks-to-fabric.md](databricks-to-fabric.md) |
+| Palantir Foundry                 | Azure data mesh + Purview     | [palantir-foundry.md](palantir-foundry.md)         |
 
 ### From legacy / on-prem
 
-| Source | Target | Playbook |
-|--------|--------|----------|
-| Teradata | Synapse Dedicated SQL Pool / Fabric Warehouse | [teradata.md](teradata.md) |
-| Hadoop / Hive (Cloudera, HDInsight, on-prem) | Synapse Spark + Delta / Fabric Lakehouse | [hadoop-hive.md](hadoop-hive.md) |
-| Informatica PowerCenter / IICS | Azure Data Factory / Fabric Data Pipelines | [informatica.md](informatica.md) |
-| IoT Hub + ADAL → Entra | Entra ID + Event Grid + Functions | [iot-hub-entra.md](iot-hub-entra.md) |
+| Source                                       | Target                                        | Playbook                             |
+| -------------------------------------------- | --------------------------------------------- | ------------------------------------ |
+| Teradata                                     | Synapse Dedicated SQL Pool / Fabric Warehouse | [teradata.md](teradata.md)           |
+| Hadoop / Hive (Cloudera, HDInsight, on-prem) | Synapse Spark + Delta / Fabric Lakehouse      | [hadoop-hive.md](hadoop-hive.md)     |
+| Informatica PowerCenter / IICS               | Azure Data Factory / Fabric Data Pipelines    | [informatica.md](informatica.md)     |
+| IoT Hub + ADAL → Entra                       | Entra ID + Event Grid + Functions             | [iot-hub-entra.md](iot-hub-entra.md) |
 
 ## What every migration has in common
 
@@ -40,13 +40,13 @@ flowchart LR
     D --> E[5. Decommission<br/>4-8 weeks]
 ```
 
-| Phase | Goal | Output |
-|-------|------|--------|
-| **Assessment** | Inventory current state — workloads, data sizes, dependencies, cost | Migration backlog (CSV / Azure Migrate output), workload tier, target architecture options |
-| **Design** | Map source primitives to Azure primitives | Target architecture diagram, security model, network topology, sizing assumptions |
-| **Migration** | Move data + code in waves | Working pipelines, dbt models, dashboards on Azure for each wave |
-| **Cutover** | Stop writes to source, freeze, switch consumers | Read-only source, consumers on Azure |
-| **Decommission** | Verify, archive, delete | Source archived, contracts cancelled, runbooks updated |
+| Phase            | Goal                                                                | Output                                                                                     |
+| ---------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| **Assessment**   | Inventory current state — workloads, data sizes, dependencies, cost | Migration backlog (CSV / Azure Migrate output), workload tier, target architecture options |
+| **Design**       | Map source primitives to Azure primitives                           | Target architecture diagram, security model, network topology, sizing assumptions          |
+| **Migration**    | Move data + code in waves                                           | Working pipelines, dbt models, dashboards on Azure for each wave                           |
+| **Cutover**      | Stop writes to source, freeze, switch consumers                     | Read-only source, consumers on Azure                                                       |
+| **Decommission** | Verify, archive, delete                                             | Source archived, contracts cancelled, runbooks updated                                     |
 
 ## Sequencing rule
 

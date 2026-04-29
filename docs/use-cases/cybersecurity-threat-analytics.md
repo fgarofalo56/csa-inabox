@@ -434,13 +434,13 @@ print(f"CISA KEV: {len(df_kev)} total, {overdue_count} past remediation deadline
 
 The analytics pipeline supports Zero Trust Architecture principles by providing continuous verification signals across identity, device, network, and workload pillars.
 
-| Zero Trust Pillar | Data Source                                        | Analytics Output                                                     |
-| ----------------- | -------------------------------------------------- | -------------------------------------------------------------------- |
+| Zero Trust Pillar | Data Source                                                  | Analytics Output                                                     |
+| ----------------- | ------------------------------------------------------------ | -------------------------------------------------------------------- |
 | **Identity**      | Microsoft Entra ID Sign-In Logs, Security Events (4624/4625) | Impossible travel detection, brute force alerts, MFA gap analysis    |
-| **Device**        | Defender for Endpoint, Security Events (7045)      | Endpoint compliance scoring, unauthorized software detection         |
-| **Network**       | NSG Flow Logs, DNS logs                            | Lateral movement detection, C2 beaconing, data exfiltration tracking |
-| **Workload**      | Azure Activity Log, Defender for Cloud             | Resource misconfiguration alerts, privilege escalation detection     |
-| **Data**          | DLP alerts, Azure Information Protection           | Sensitive data access anomalies, unauthorized sharing patterns       |
+| **Device**        | Defender for Endpoint, Security Events (7045)                | Endpoint compliance scoring, unauthorized software detection         |
+| **Network**       | NSG Flow Logs, DNS logs                                      | Lateral movement detection, C2 beaconing, data exfiltration tracking |
+| **Workload**      | Azure Activity Log, Defender for Cloud                       | Resource misconfiguration alerts, privilege escalation detection     |
+| **Data**          | DLP alerts, Azure Information Protection                     | Sensitive data access anomalies, unauthorized sharing patterns       |
 
 !!! tip "Conditional Access Integration"
 Anomaly scores from the Isolation Forest model can feed Microsoft Entra ID Conditional Access policies via custom risk signals, enabling automated session revocation when user behavior deviates from baseline.

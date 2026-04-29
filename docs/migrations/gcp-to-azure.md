@@ -16,18 +16,18 @@ This playbook is honest. BigQuery's separation of storage and slot-based compute
 
 ### Federal considerations — GCP vs csa-inabox
 
-| Consideration | GCP (Assured Workloads for Government, today) | csa-inabox on Azure Gov | Notes |
-|---|---|---|---|
-| FedRAMP High | **Limited service coverage** via Assured Workloads for Government | Inherited through Azure Gov for most services | Biggest differentiator for federal tenants requiring High across the analytics estate |
-| DoD IL4 | Partial (narrow service list) | Broad coverage on Azure Gov | Check service-by-service |
-| DoD IL5 | **Limited** | Covered on Azure Gov for most services; Fabric IL5 parity forecast per Microsoft roadmap | See `docs/GOV_SERVICE_MATRIX.md` |
-| DoD IL6 | Not covered | **Gap** — out of scope for csa-inabox | Recommend bespoke tenant for IL6 |
-| ITAR | Covered in Assured Workloads ITAR | Covered in Azure Government | Parity where both covered |
-| CMMC 2.0 Level 2 | Customer-managed mappings; controls available | Controls mapped in `csa_platform/csa_platform/governance/compliance/cmmc-2.0-l2.yaml` | DIB primes inherit on csa-inabox |
-| HIPAA Security Rule | Covered with BAA | Covered; mapped in `csa_platform/csa_platform/governance/compliance/hipaa-security-rule.yaml` | See `examples/tribal-health/` |
-| Data-residency binding | Assured Workloads region | Azure Government tenant-binding | Azure Gov is a physically separate cloud |
-| Storage format | BigQuery managed (Capacitor columnar) + BigQuery-external Parquet | Delta Lake on ADLS Gen2 (open) | Exit cost delta is real |
-| Compute model | BigQuery slots (autoscaling + editions commitments) + Dataproc clusters | Databricks SQL (serverless + classic) + Databricks Jobs | Consumption parity at comparable workload |
+| Consideration          | GCP (Assured Workloads for Government, today)                           | csa-inabox on Azure Gov                                                                       | Notes                                                                                 |
+| ---------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| FedRAMP High           | **Limited service coverage** via Assured Workloads for Government       | Inherited through Azure Gov for most services                                                 | Biggest differentiator for federal tenants requiring High across the analytics estate |
+| DoD IL4                | Partial (narrow service list)                                           | Broad coverage on Azure Gov                                                                   | Check service-by-service                                                              |
+| DoD IL5                | **Limited**                                                             | Covered on Azure Gov for most services; Fabric IL5 parity forecast per Microsoft roadmap      | See `docs/GOV_SERVICE_MATRIX.md`                                                      |
+| DoD IL6                | Not covered                                                             | **Gap** — out of scope for csa-inabox                                                         | Recommend bespoke tenant for IL6                                                      |
+| ITAR                   | Covered in Assured Workloads ITAR                                       | Covered in Azure Government                                                                   | Parity where both covered                                                             |
+| CMMC 2.0 Level 2       | Customer-managed mappings; controls available                           | Controls mapped in `csa_platform/csa_platform/governance/compliance/cmmc-2.0-l2.yaml`         | DIB primes inherit on csa-inabox                                                      |
+| HIPAA Security Rule    | Covered with BAA                                                        | Covered; mapped in `csa_platform/csa_platform/governance/compliance/hipaa-security-rule.yaml` | See `examples/tribal-health/`                                                         |
+| Data-residency binding | Assured Workloads region                                                | Azure Government tenant-binding                                                               | Azure Gov is a physically separate cloud                                              |
+| Storage format         | BigQuery managed (Capacitor columnar) + BigQuery-external Parquet       | Delta Lake on ADLS Gen2 (open)                                                                | Exit cost delta is real                                                               |
+| Compute model          | BigQuery slots (autoscaling + editions commitments) + Dataproc clusters | Databricks SQL (serverless + classic) + Databricks Jobs                                       | Consumption parity at comparable workload                                             |
 
 ---
 
@@ -35,64 +35,64 @@ This playbook is honest. BigQuery's separation of storage and slot-based compute
 
 ### 2.1 BigQuery → csa-inabox
 
-| BigQuery capability | csa-inabox equivalent | Mapping notes | Effort | Evidence |
-|---|---|---|---|---|
-| **BigQuery slots (autoscaling + editions)** | Databricks SQL Warehouses (serverless + classic) | Slots → DBUs; Edition commitments → Databricks reserved-capacity discounts | M | `csa_platform/unity_catalog_pattern/README.md`, ADR-0002 `docs/adr/0002-databricks-over-oss-spark.md`, ADR-0010 `docs/adr/0010-fabric-strategic-target.md` |
-| **Partitioned + clustered tables** | Delta Lake partitioning + Z-ordering | Partition column = BigQuery partition; cluster keys = Z-order columns; Delta's stats-based pruning is analogous to BigQuery's block pruning | S | ADR-0003 `docs/adr/0003-delta-lake-over-iceberg-and-parquet.md` |
-| **BigQuery ML** (`CREATE MODEL`, `ML.PREDICT`) | Databricks MLflow + Azure ML + Databricks SQL `ai_query()` | Inline SQL ML training → MLflow training notebooks; `ML.PREDICT` → `ai_query()` for hosted models or MLflow-serving UDFs | L | `csa_platform/ai_integration/model_serving/`, `domains/spark/`, ADR-0007 `docs/adr/0007-azure-openai-over-self-hosted-llm.md` |
-| **BigQuery Omni** (multi-cloud query) | OneLake shortcuts (GCS/S3) + Databricks Lakehouse Federation | For Azure-side reads over GCS during bridge phase | M | `csa_platform/unity_catalog_pattern/onelake_config.yaml` |
-| **Authorized views** | Unity Catalog row filters + fine-grained `GRANT`s + Purview classification-driven access | Authorized view model translates to Unity Catalog security functions; dbt-generated views are still a common pattern | M | `csa_platform/unity_catalog_pattern/unity_catalog/`, `csa_platform/csa_platform/governance/purview/classifications/pii_classifications.yaml` |
-| **Scheduled queries** | dbt jobs + ADF schedule triggers + Databricks Workflows | Simple scheduled queries → Databricks Workflow schedules; cross-system orchestration → ADF | S | ADR-0001 `docs/adr/0001-adf-dbt-over-airflow.md`, `domains/shared/pipelines/adf/` |
-| **Materialized views** | dbt incremental models + Databricks materialized views + Delta Live Tables | Refresh-on-write MVs → DLT; refresh-on-schedule MVs → dbt incremental | M | `domains/shared/dbt/dbt_project.yml`, `domains/finance/dbt/`, `domains/sales/dbt/` |
-| **Table-valued functions + stored procs** | dbt macros + Databricks SQL UDFs + notebook jobs | SQL TVFs → dbt macros or SQL UDFs; imperative SPs → notebooks | M | `domains/shared/dbt/macros/` |
-| **Search indexes + vector search** | Azure AI Search + Databricks Vector Search + OneLake vector tables | Inline `SEARCH` SQL → AI Search query via UDF or RAG pipeline | M | `csa_platform/ai_integration/rag/pipeline.py`, `csa_platform/ai_integration/rag/config.py` |
-| **Row-level security** | Unity Catalog row filters | Policy function body → UC row filter function | M | `csa_platform/unity_catalog_pattern/unity_catalog/` |
-| **Column-level security (policy tags)** | Unity Catalog column masks + Purview classifications | Policy tags map to Purview classifications (PII/PHI/CUI); masking function is a UC column mask | M | `csa_platform/csa_platform/governance/purview/classifications/` (all four taxonomy files) |
-| **Data Transfer Service** | ADF + Fabric Data Factory + Databricks Auto Loader | DTS schedules → ADF pipelines; SaaS connectors → ADF native + self-hosted IR where needed | S | `domains/shared/pipelines/adf/`, `docs/SELF_HOSTED_IR.md`, `docs/ADF_SETUP.md` |
-| **Streaming inserts + Storage Write API** | Event Hubs + Databricks structured streaming + ADX continuous ingest | Direct streaming-insert → Event Hubs + Databricks structured streaming to Delta | M | ADR-0005 `docs/adr/0005-event-hubs-over-kafka.md`, `examples/iot-streaming/` |
-| **Datasets + projects (org hierarchy)** | Entra tenant / Databricks workspace / Unity Catalog catalog / schema | Project → subscription + workspace; dataset → catalog/schema | S | `csa_platform/multi_synapse/rbac_templates/`, `csa_platform/unity_catalog_pattern/unity_catalog/` |
-| **INFORMATION_SCHEMA** | Databricks `information_schema` + Unity Catalog system tables | Direct feature parity for catalog metadata queries | XS | `csa_platform/unity_catalog_pattern/` |
-| **Audit logs + Data Access logs** | Azure Monitor diagnostic settings + tamper-evident audit (CSA-0016) | Log Analytics receives Databricks + Unity Catalog audit; tamper-evident chain layered on top | M | Audit logger (CSA-0016 implementation), Azure Monitor diagnostic settings in Bicep modules |
-| **Analytics Hub / dataset exchange** | Delta Sharing + Purview data products + OneLake shortcuts | Outbound via Delta Sharing; inbound via OneLake shortcuts | L | `csa_platform/data_marketplace/`, `csa_platform/data_marketplace/api/` |
+| BigQuery capability                            | csa-inabox equivalent                                                                    | Mapping notes                                                                                                                               | Effort | Evidence                                                                                                                                                   |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **BigQuery slots (autoscaling + editions)**    | Databricks SQL Warehouses (serverless + classic)                                         | Slots → DBUs; Edition commitments → Databricks reserved-capacity discounts                                                                  | M      | `csa_platform/unity_catalog_pattern/README.md`, ADR-0002 `docs/adr/0002-databricks-over-oss-spark.md`, ADR-0010 `docs/adr/0010-fabric-strategic-target.md` |
+| **Partitioned + clustered tables**             | Delta Lake partitioning + Z-ordering                                                     | Partition column = BigQuery partition; cluster keys = Z-order columns; Delta's stats-based pruning is analogous to BigQuery's block pruning | S      | ADR-0003 `docs/adr/0003-delta-lake-over-iceberg-and-parquet.md`                                                                                            |
+| **BigQuery ML** (`CREATE MODEL`, `ML.PREDICT`) | Databricks MLflow + Azure ML + Databricks SQL `ai_query()`                               | Inline SQL ML training → MLflow training notebooks; `ML.PREDICT` → `ai_query()` for hosted models or MLflow-serving UDFs                    | L      | `csa_platform/ai_integration/model_serving/`, `domains/spark/`, ADR-0007 `docs/adr/0007-azure-openai-over-self-hosted-llm.md`                              |
+| **BigQuery Omni** (multi-cloud query)          | OneLake shortcuts (GCS/S3) + Databricks Lakehouse Federation                             | For Azure-side reads over GCS during bridge phase                                                                                           | M      | `csa_platform/unity_catalog_pattern/onelake_config.yaml`                                                                                                   |
+| **Authorized views**                           | Unity Catalog row filters + fine-grained `GRANT`s + Purview classification-driven access | Authorized view model translates to Unity Catalog security functions; dbt-generated views are still a common pattern                        | M      | `csa_platform/unity_catalog_pattern/unity_catalog/`, `csa_platform/csa_platform/governance/purview/classifications/pii_classifications.yaml`               |
+| **Scheduled queries**                          | dbt jobs + ADF schedule triggers + Databricks Workflows                                  | Simple scheduled queries → Databricks Workflow schedules; cross-system orchestration → ADF                                                  | S      | ADR-0001 `docs/adr/0001-adf-dbt-over-airflow.md`, `domains/shared/pipelines/adf/`                                                                          |
+| **Materialized views**                         | dbt incremental models + Databricks materialized views + Delta Live Tables               | Refresh-on-write MVs → DLT; refresh-on-schedule MVs → dbt incremental                                                                       | M      | `domains/shared/dbt/dbt_project.yml`, `domains/finance/dbt/`, `domains/sales/dbt/`                                                                         |
+| **Table-valued functions + stored procs**      | dbt macros + Databricks SQL UDFs + notebook jobs                                         | SQL TVFs → dbt macros or SQL UDFs; imperative SPs → notebooks                                                                               | M      | `domains/shared/dbt/macros/`                                                                                                                               |
+| **Search indexes + vector search**             | Azure AI Search + Databricks Vector Search + OneLake vector tables                       | Inline `SEARCH` SQL → AI Search query via UDF or RAG pipeline                                                                               | M      | `csa_platform/ai_integration/rag/pipeline.py`, `csa_platform/ai_integration/rag/config.py`                                                                 |
+| **Row-level security**                         | Unity Catalog row filters                                                                | Policy function body → UC row filter function                                                                                               | M      | `csa_platform/unity_catalog_pattern/unity_catalog/`                                                                                                        |
+| **Column-level security (policy tags)**        | Unity Catalog column masks + Purview classifications                                     | Policy tags map to Purview classifications (PII/PHI/CUI); masking function is a UC column mask                                              | M      | `csa_platform/csa_platform/governance/purview/classifications/` (all four taxonomy files)                                                                  |
+| **Data Transfer Service**                      | ADF + Fabric Data Factory + Databricks Auto Loader                                       | DTS schedules → ADF pipelines; SaaS connectors → ADF native + self-hosted IR where needed                                                   | S      | `domains/shared/pipelines/adf/`, `docs/SELF_HOSTED_IR.md`, `docs/ADF_SETUP.md`                                                                             |
+| **Streaming inserts + Storage Write API**      | Event Hubs + Databricks structured streaming + ADX continuous ingest                     | Direct streaming-insert → Event Hubs + Databricks structured streaming to Delta                                                             | M      | ADR-0005 `docs/adr/0005-event-hubs-over-kafka.md`, `examples/iot-streaming/`                                                                               |
+| **Datasets + projects (org hierarchy)**        | Entra tenant / Databricks workspace / Unity Catalog catalog / schema                     | Project → subscription + workspace; dataset → catalog/schema                                                                                | S      | `csa_platform/multi_synapse/rbac_templates/`, `csa_platform/unity_catalog_pattern/unity_catalog/`                                                          |
+| **INFORMATION_SCHEMA**                         | Databricks `information_schema` + Unity Catalog system tables                            | Direct feature parity for catalog metadata queries                                                                                          | XS     | `csa_platform/unity_catalog_pattern/`                                                                                                                      |
+| **Audit logs + Data Access logs**              | Azure Monitor diagnostic settings + tamper-evident audit (CSA-0016)                      | Log Analytics receives Databricks + Unity Catalog audit; tamper-evident chain layered on top                                                | M      | Audit logger (CSA-0016 implementation), Azure Monitor diagnostic settings in Bicep modules                                                                 |
+| **Analytics Hub / dataset exchange**           | Delta Sharing + Purview data products + OneLake shortcuts                                | Outbound via Delta Sharing; inbound via OneLake shortcuts                                                                                   | L      | `csa_platform/data_marketplace/`, `csa_platform/data_marketplace/api/`                                                                                     |
 
 ### 2.2 Dataproc → csa-inabox
 
-| Dataproc capability | csa-inabox equivalent | Mapping notes | Effort | Evidence |
-|---|---|---|---|---|
-| Managed Spark (on GCE) | Azure Databricks | 1:1 functional replacement with better runtime (Photon) | M | `csa_platform/unity_catalog_pattern/`, `domains/shared/notebooks/`, ADR-0002 |
-| Dataproc Serverless | Databricks Serverless SQL + Jobs | Job-shaped serverless mapping | S | ADR-0010 |
-| Presto / Trino on Dataproc | Databricks SQL | Query federation covered by Lakehouse Federation | M | `csa_platform/unity_catalog_pattern/` |
-| Flink on Dataproc | Azure Stream Analytics + Event Hubs + Databricks structured streaming | Stateful streaming → ASA for SQL-first, Databricks for code-first | M | ADR-0005, `examples/iot-streaming/stream-analytics/` |
-| Hive metastore (on Dataproc) | Unity Catalog (primary) + external Hive metastore supported | Bridge via external metastore; target is Unity Catalog | M | `csa_platform/unity_catalog_pattern/unity_catalog/` |
-| Dataproc Jupyter + component gateway | Databricks Workspace Notebooks + Git integration | 1:1 UX mapping | S | `domains/shared/notebooks/`, `domains/spark/` |
-| Dataproc autoscaling | Databricks cluster autoscaling + serverless | Serverless removes tuning burden entirely | XS | ADR-0002 |
-| Dataproc workflow templates | Databricks Workflows + ADF pipelines | Job-graph DAGs map to Workflows; cross-system → ADF | M | `domains/shared/pipelines/adf/` |
+| Dataproc capability                  | csa-inabox equivalent                                                 | Mapping notes                                                     | Effort | Evidence                                                                     |
+| ------------------------------------ | --------------------------------------------------------------------- | ----------------------------------------------------------------- | ------ | ---------------------------------------------------------------------------- |
+| Managed Spark (on GCE)               | Azure Databricks                                                      | 1:1 functional replacement with better runtime (Photon)           | M      | `csa_platform/unity_catalog_pattern/`, `domains/shared/notebooks/`, ADR-0002 |
+| Dataproc Serverless                  | Databricks Serverless SQL + Jobs                                      | Job-shaped serverless mapping                                     | S      | ADR-0010                                                                     |
+| Presto / Trino on Dataproc           | Databricks SQL                                                        | Query federation covered by Lakehouse Federation                  | M      | `csa_platform/unity_catalog_pattern/`                                        |
+| Flink on Dataproc                    | Azure Stream Analytics + Event Hubs + Databricks structured streaming | Stateful streaming → ASA for SQL-first, Databricks for code-first | M      | ADR-0005, `examples/iot-streaming/stream-analytics/`                         |
+| Hive metastore (on Dataproc)         | Unity Catalog (primary) + external Hive metastore supported           | Bridge via external metastore; target is Unity Catalog            | M      | `csa_platform/unity_catalog_pattern/unity_catalog/`                          |
+| Dataproc Jupyter + component gateway | Databricks Workspace Notebooks + Git integration                      | 1:1 UX mapping                                                    | S      | `domains/shared/notebooks/`, `domains/spark/`                                |
+| Dataproc autoscaling                 | Databricks cluster autoscaling + serverless                           | Serverless removes tuning burden entirely                         | XS     | ADR-0002                                                                     |
+| Dataproc workflow templates          | Databricks Workflows + ADF pipelines                                  | Job-graph DAGs map to Workflows; cross-system → ADF               | M      | `domains/shared/pipelines/adf/`                                              |
 
 ### 2.3 GCS → csa-inabox
 
-| GCS role | csa-inabox equivalent | Mapping notes | Effort | Evidence |
-|---|---|---|---|---|
-| Data lake buckets (raw/curated/archive) | ADLS Gen2 containers (bronze/silver/gold) + OneLake workspaces | Medallion mirrors the vertical examples | M | `examples/commerce/`, `examples/noaa/`, `csa_platform/unity_catalog_pattern/onelake_config.yaml` |
-| GCS as source-of-truth during migration | OneLake shortcuts (read-only) | Bridge pattern — GCS stays source while Azure warms up | XS | `csa_platform/unity_catalog_pattern/onelake_config.yaml` |
-| Object lifecycle policies | ADLS Gen2 lifecycle management | Hot → Cool → Archive translation is 1:1 | XS | Azure Storage policy via Bicep |
-| GCS Object Versioning | Soft delete + versioning on ADLS Gen2 | 1:1 for audit/recovery | XS | Azure Storage versioning |
-| GCS Retention Policy (WORM) | Immutable storage (time-based) on ADLS Gen2 | 1:1 compliance mapping | XS | Azure Storage immutability |
-| Signed URLs | Azure Storage SAS tokens | Direct analog | XS | Azure Storage SAS patterns in Bicep modules |
-| Pub/Sub GCS notifications → Cloud Functions | Event Grid `BlobCreated` → Logic Apps / Functions | Fan-out pattern is identical | S | `csa_platform/data_activator/functions/`, Event Grid in Bicep modules |
-| Dual-region / multi-region replication | ADLS Gen2 geo-replication + object replication | For DR: `docs/DR.md`, `docs/MULTI_REGION.md` | S | `docs/DR.md`, `docs/MULTI_REGION.md` |
+| GCS role                                    | csa-inabox equivalent                                          | Mapping notes                                          | Effort | Evidence                                                                                         |
+| ------------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------ | ------ | ------------------------------------------------------------------------------------------------ |
+| Data lake buckets (raw/curated/archive)     | ADLS Gen2 containers (bronze/silver/gold) + OneLake workspaces | Medallion mirrors the vertical examples                | M      | `examples/commerce/`, `examples/noaa/`, `csa_platform/unity_catalog_pattern/onelake_config.yaml` |
+| GCS as source-of-truth during migration     | OneLake shortcuts (read-only)                                  | Bridge pattern — GCS stays source while Azure warms up | XS     | `csa_platform/unity_catalog_pattern/onelake_config.yaml`                                         |
+| Object lifecycle policies                   | ADLS Gen2 lifecycle management                                 | Hot → Cool → Archive translation is 1:1                | XS     | Azure Storage policy via Bicep                                                                   |
+| GCS Object Versioning                       | Soft delete + versioning on ADLS Gen2                          | 1:1 for audit/recovery                                 | XS     | Azure Storage versioning                                                                         |
+| GCS Retention Policy (WORM)                 | Immutable storage (time-based) on ADLS Gen2                    | 1:1 compliance mapping                                 | XS     | Azure Storage immutability                                                                       |
+| Signed URLs                                 | Azure Storage SAS tokens                                       | Direct analog                                          | XS     | Azure Storage SAS patterns in Bicep modules                                                      |
+| Pub/Sub GCS notifications → Cloud Functions | Event Grid `BlobCreated` → Logic Apps / Functions              | Fan-out pattern is identical                           | S      | `csa_platform/data_activator/functions/`, Event Grid in Bicep modules                            |
+| Dual-region / multi-region replication      | ADLS Gen2 geo-replication + object replication                 | For DR: `docs/DR.md`, `docs/MULTI_REGION.md`           | S      | `docs/DR.md`, `docs/MULTI_REGION.md`                                                             |
 
 ### 2.4 Looker → csa-inabox
 
-| Looker capability | csa-inabox equivalent | Mapping notes | Effort | Evidence |
-|---|---|---|---|---|
-| LookML models + explores | Power BI semantic model (Direct Lake) + dbt semantic layer | LookML views → Power BI tables; explores → star-schema relationships; measures → DAX | L | `csa_platform/semantic_model/semantic_model_template.yaml`, `csa_platform/semantic_model/scripts/generate_semantic_model.py` |
-| LookML PDTs (persistent derived tables) | dbt incremental models + Delta materialized views | PDTs collapse into dbt's normal incremental model pattern | M | `domains/shared/dbt/`, `domains/finance/dbt/` |
-| Looks + Dashboards | Power BI reports + dashboards | Visual rebuild required; measures port cleanly once Power BI model is in place | L | `examples/commerce/reports/`, `csa_platform/semantic_model/` |
-| Looker Explore UI (ad-hoc) | Power BI Explore + Q&A + Copilot | Native; Copilot handles the "ask a question" surface for users coming from Looker Explore | S | `csa_platform/semantic_model/` |
-| Looker scheduled deliveries | Power BI subscriptions + Power Automate | 1:1 feature mapping | XS | `portal/powerapps/` (Power Automate patterns) |
-| Content validator + version control | Power BI Git integration + Tabular Editor + deployment pipelines | Power BI now has proper Git integration; validation via CI | S | `.github/workflows/deploy.yml`, `.github/workflows/deploy-portal.yml` |
-| Looker Action Hub | Data Activator + Event Grid + Power Automate | Actions fire into Azure Functions / Logic Apps for extensibility | M | `csa_platform/data_activator/rules/`, `csa_platform/data_activator/actions/` |
-| Looker embed | Power BI Embedded + Fabric embedded | Direct analog; license model differs | S | `portal/react-webapp/src/` |
+| Looker capability                       | csa-inabox equivalent                                            | Mapping notes                                                                             | Effort | Evidence                                                                                                                     |
+| --------------------------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| LookML models + explores                | Power BI semantic model (Direct Lake) + dbt semantic layer       | LookML views → Power BI tables; explores → star-schema relationships; measures → DAX      | L      | `csa_platform/semantic_model/semantic_model_template.yaml`, `csa_platform/semantic_model/scripts/generate_semantic_model.py` |
+| LookML PDTs (persistent derived tables) | dbt incremental models + Delta materialized views                | PDTs collapse into dbt's normal incremental model pattern                                 | M      | `domains/shared/dbt/`, `domains/finance/dbt/`                                                                                |
+| Looks + Dashboards                      | Power BI reports + dashboards                                    | Visual rebuild required; measures port cleanly once Power BI model is in place            | L      | `examples/commerce/reports/`, `csa_platform/semantic_model/`                                                                 |
+| Looker Explore UI (ad-hoc)              | Power BI Explore + Q&A + Copilot                                 | Native; Copilot handles the "ask a question" surface for users coming from Looker Explore | S      | `csa_platform/semantic_model/`                                                                                               |
+| Looker scheduled deliveries             | Power BI subscriptions + Power Automate                          | 1:1 feature mapping                                                                       | XS     | `portal/powerapps/` (Power Automate patterns)                                                                                |
+| Content validator + version control     | Power BI Git integration + Tabular Editor + deployment pipelines | Power BI now has proper Git integration; validation via CI                                | S      | `.github/workflows/deploy.yml`, `.github/workflows/deploy-portal.yml`                                                        |
+| Looker Action Hub                       | Data Activator + Event Grid + Power Automate                     | Actions fire into Azure Functions / Logic Apps for extensibility                          | M      | `csa_platform/data_activator/rules/`, `csa_platform/data_activator/actions/`                                                 |
+| Looker embed                            | Power BI Embedded + Fabric embedded                              | Direct analog; license model differs                                                      | S      | `portal/react-webapp/src/`                                                                                                   |
 
 ---
 
@@ -237,36 +237,36 @@ Schedule moves from BigQuery Scheduled Queries UI → Databricks Workflow schedu
 
 The ones that bite:
 
-| BigQuery StandardSQL | Databricks SQL | Notes |
-|---|---|---|
-| `DATE_SUB(CURRENT_DATE(), INTERVAL 3 DAY)` | `DATE_SUB(CURRENT_DATE(), 3)` | Arg order differs |
-| `SAFE_CAST(x AS INT64)` | `TRY_CAST(x AS BIGINT)` | Naming |
-| Backticks around fully-qualified names | Back-tick supported; unified three-part catalog.schema.table | Port direct |
-| `STRUCT<a INT64, b STRING>` | `STRUCT<a: BIGINT, b: STRING>` or `NAMED_STRUCT('a', a, 'b', b)` | Type-literal syntax differs |
-| Arrays via `UNNEST` | `LATERAL VIEW explode()` or `explode()` in SELECT | Different keyword; semantics equal |
-| `PARTITION BY ... CLUSTER BY ...` in DDL | `PARTITIONED BY (...)` + `ZORDER BY (...)` | Partitioning in DDL; Z-ordering in `OPTIMIZE` |
-| `EXPORT DATA OPTIONS ...` | `COPY INTO` / `df.write.format('delta').save(...)` | Export idiom differs |
-| `@@project_id`, `@@dataset_id` session vars | Unity Catalog `current_catalog()`, `current_schema()` | Session context functions |
-| BigQuery's implicit commas in `FROM a, b` cross-joins | Explicit `CROSS JOIN` required | Safer but edit-heavy |
+| BigQuery StandardSQL                                  | Databricks SQL                                                   | Notes                                         |
+| ----------------------------------------------------- | ---------------------------------------------------------------- | --------------------------------------------- |
+| `DATE_SUB(CURRENT_DATE(), INTERVAL 3 DAY)`            | `DATE_SUB(CURRENT_DATE(), 3)`                                    | Arg order differs                             |
+| `SAFE_CAST(x AS INT64)`                               | `TRY_CAST(x AS BIGINT)`                                          | Naming                                        |
+| Backticks around fully-qualified names                | Back-tick supported; unified three-part catalog.schema.table     | Port direct                                   |
+| `STRUCT<a INT64, b STRING>`                           | `STRUCT<a: BIGINT, b: STRING>` or `NAMED_STRUCT('a', a, 'b', b)` | Type-literal syntax differs                   |
+| Arrays via `UNNEST`                                   | `LATERAL VIEW explode()` or `explode()` in SELECT                | Different keyword; semantics equal            |
+| `PARTITION BY ... CLUSTER BY ...` in DDL              | `PARTITIONED BY (...)` + `ZORDER BY (...)`                       | Partitioning in DDL; Z-ordering in `OPTIMIZE` |
+| `EXPORT DATA OPTIONS ...`                             | `COPY INTO` / `df.write.format('delta').save(...)`               | Export idiom differs                          |
+| `@@project_id`, `@@dataset_id` session vars           | Unity Catalog `current_catalog()`, `current_schema()`            | Session context functions                     |
+| BigQuery's implicit commas in `FROM a, b` cross-joins | Explicit `CROSS JOIN` required                                   | Safer but edit-heavy                          |
 
 ### 4.4 IAM → managed identity translation
 
-| GCP | Azure |
-|---|---|
-| Service account `sa-finance-dbt@...` | User-assigned managed identity `umi-finance-dbt` |
-| `BigQuery Data Editor` on dataset | Unity Catalog `MODIFY` on schema + `USE CATALOG` / `USE SCHEMA` |
-| `BigQuery Job User` at project | Workspace access + SQL Warehouse `CAN_USE` |
-| Workload Identity federation (for CI) | Managed identity federated credentials for GitHub Actions OIDC |
-| GCS IAM (`roles/storage.objectViewer`) | RBAC `Storage Blob Data Reader` on container |
+| GCP                                    | Azure                                                           |
+| -------------------------------------- | --------------------------------------------------------------- |
+| Service account `sa-finance-dbt@...`   | User-assigned managed identity `umi-finance-dbt`                |
+| `BigQuery Data Editor` on dataset      | Unity Catalog `MODIFY` on schema + `USE CATALOG` / `USE SCHEMA` |
+| `BigQuery Job User` at project         | Workspace access + SQL Warehouse `CAN_USE`                      |
+| Workload Identity federation (for CI)  | Managed identity federated credentials for GitHub Actions OIDC  |
+| GCS IAM (`roles/storage.objectViewer`) | RBAC `Storage Blob Data Reader` on container                    |
 
 ### 4.5 Partition spec mapping
 
-| BigQuery | Databricks / Delta |
-|---|---|
-| `PARTITION BY sales_date` | `PARTITIONED BY (sales_date)` in DDL |
-| `CLUSTER BY region, product_id` | `OPTIMIZE table ZORDER BY (region, product_id)` run via post-hook |
-| `partition_expiration_days` table option | Delta `VACUUM` schedule + dbt model config or Databricks lifecycle |
-| `require_partition_filter` option | Equivalent via Unity Catalog constraints + dbt tests in `contract.yaml` |
+| BigQuery                                 | Databricks / Delta                                                      |
+| ---------------------------------------- | ----------------------------------------------------------------------- |
+| `PARTITION BY sales_date`                | `PARTITIONED BY (sales_date)` in DDL                                    |
+| `CLUSTER BY region, product_id`          | `OPTIMIZE table ZORDER BY (region, product_id)` run via post-hook       |
+| `partition_expiration_days` table option | Delta `VACUUM` schedule + dbt model config or Databricks lifecycle      |
+| `require_partition_filter` option        | Equivalent via Unity Catalog constraints + dbt tests in `contract.yaml` |
 
 ### 4.6 Contract + catalog registration
 
@@ -279,8 +279,8 @@ The Looker explore `finance.sales_explore` (which used `fact_sales_daily` as the
 - `fact_sales_daily` → fact
 - `dim_region`, `dim_product`, `dim_date` → dimensions
 - LookML measures → DAX measures:
-  - LookML `measure: units_sold { type: sum; sql: ${TABLE}.units_sold }` → DAX `Units Sold = SUM(fact_sales_daily[units_sold])`
-  - LookML `measure: gross_revenue { type: sum; sql: ${TABLE}.gross_amount }` → DAX `Gross Revenue = SUM(fact_sales_daily[gross_amount])`
+    - LookML `measure: units_sold { type: sum; sql: ${TABLE}.units_sold }` → DAX `Units Sold = SUM(fact_sales_daily[units_sold])`
+    - LookML `measure: gross_revenue { type: sum; sql: ${TABLE}.gross_amount }` → DAX `Gross Revenue = SUM(fact_sales_daily[gross_amount])`
 
 The semantic model is authored via `csa_platform/semantic_model/semantic_model_template.yaml` and deployed by `csa_platform/semantic_model/scripts/generate_semantic_model.py`.
 
@@ -404,14 +404,14 @@ Run `scripts/deploy/estimate-costs.sh` against the target landing-zone configura
 
 ## 8. Gaps and roadmap
 
-| Gap | Description | Tracked finding | Planned remediation |
-|---|---|---|---|
-| **BigQuery ML inline-SQL simplicity** | `CREATE MODEL` + `ML.PREDICT` inside a SELECT is simpler than Databricks + MLflow on day one | N/A — architectural choice | Databricks AI Functions + `ai_query()` closes most; MLflow is the longer-run win |
-| **Looker LookML-as-code discipline** | Power BI Git integration is newer than LookML's version-control maturity | N/A | Feature-gap closing quickly; see Power BI deployment pipelines in `.github/workflows/deploy-portal.yml` |
-| **BigQuery Omni cross-cloud query** | OneLake shortcuts + Lakehouse Federation covers the Azure-side read; true multi-cloud BigQuery-like UX not fully matched | N/A | Documented bridge; no roadmap to replicate exactly |
-| **IL6 coverage** | Out of scope for csa-inabox | N/A | Recommend bespoke Azure Top Secret tenant |
-| **CSA Copilot** | No agent loop / chat UX for NL analysis yet | CSA-0008 (XL) | 6-phase MVP |
-| **Framework control matrices** | NIST, CMMC, HIPAA delivered; PCI-DSS, SOC 2, GDPR still pending | CSA-0012 (XL) — in progress | Six YAMLs + narrative pages |
+| Gap                                   | Description                                                                                                              | Tracked finding             | Planned remediation                                                                                     |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | --------------------------- | ------------------------------------------------------------------------------------------------------- |
+| **BigQuery ML inline-SQL simplicity** | `CREATE MODEL` + `ML.PREDICT` inside a SELECT is simpler than Databricks + MLflow on day one                             | N/A — architectural choice  | Databricks AI Functions + `ai_query()` closes most; MLflow is the longer-run win                        |
+| **Looker LookML-as-code discipline**  | Power BI Git integration is newer than LookML's version-control maturity                                                 | N/A                         | Feature-gap closing quickly; see Power BI deployment pipelines in `.github/workflows/deploy-portal.yml` |
+| **BigQuery Omni cross-cloud query**   | OneLake shortcuts + Lakehouse Federation covers the Azure-side read; true multi-cloud BigQuery-like UX not fully matched | N/A                         | Documented bridge; no roadmap to replicate exactly                                                      |
+| **IL6 coverage**                      | Out of scope for csa-inabox                                                                                              | N/A                         | Recommend bespoke Azure Top Secret tenant                                                               |
+| **CSA Copilot**                       | No agent loop / chat UX for NL analysis yet                                                                              | CSA-0008 (XL)               | 6-phase MVP                                                                                             |
+| **Framework control matrices**        | NIST, CMMC, HIPAA delivered; PCI-DSS, SOC 2, GDPR still pending                                                          | CSA-0012 (XL) — in progress | Six YAMLs + narrative pages                                                                             |
 
 ---
 
@@ -448,37 +448,37 @@ Mixed-cloud is also rational. OneLake shortcuts + Lakehouse Federation + Delta S
 - **Migration index:** [docs/migrations/README.md](README.md)
 - **Companion playbooks:** [snowflake.md](snowflake.md), [aws-to-azure.md](aws-to-azure.md), [palantir-foundry.md](palantir-foundry.md)
 - **Decision trees:**
-  - `docs/decisions/fabric-vs-databricks-vs-synapse.md`
-  - `docs/decisions/batch-vs-streaming.md`
-  - `docs/decisions/delta-vs-iceberg-vs-parquet.md`
-  - `docs/decisions/etl-vs-elt.md`
-  - `docs/decisions/lakehouse-vs-warehouse-vs-lake.md`
-  - `docs/decisions/materialize-vs-virtualize.md`
-  - `docs/decisions/rag-vs-finetune-vs-agents.md`
+    - `docs/decisions/fabric-vs-databricks-vs-synapse.md`
+    - `docs/decisions/batch-vs-streaming.md`
+    - `docs/decisions/delta-vs-iceberg-vs-parquet.md`
+    - `docs/decisions/etl-vs-elt.md`
+    - `docs/decisions/lakehouse-vs-warehouse-vs-lake.md`
+    - `docs/decisions/materialize-vs-virtualize.md`
+    - `docs/decisions/rag-vs-finetune-vs-agents.md`
 - **ADRs:**
-  - `docs/adr/0001-adf-dbt-over-airflow.md`
-  - `docs/adr/0002-databricks-over-oss-spark.md`
-  - `docs/adr/0003-delta-lake-over-iceberg-and-parquet.md`
-  - `docs/adr/0004-bicep-over-terraform.md`
-  - `docs/adr/0005-event-hubs-over-kafka.md`
-  - `docs/adr/0006-purview-over-atlas.md`
-  - `docs/adr/0007-azure-openai-over-self-hosted-llm.md`
-  - `docs/adr/0010-fabric-strategic-target.md`
+    - `docs/adr/0001-adf-dbt-over-airflow.md`
+    - `docs/adr/0002-databricks-over-oss-spark.md`
+    - `docs/adr/0003-delta-lake-over-iceberg-and-parquet.md`
+    - `docs/adr/0004-bicep-over-terraform.md`
+    - `docs/adr/0005-event-hubs-over-kafka.md`
+    - `docs/adr/0006-purview-over-atlas.md`
+    - `docs/adr/0007-azure-openai-over-self-hosted-llm.md`
+    - `docs/adr/0010-fabric-strategic-target.md`
 - **Compliance matrices:**
-  - `docs/compliance/nist-800-53-rev5.md` / `csa_platform/csa_platform/governance/compliance/nist-800-53-rev5.yaml`
-  - `docs/compliance/cmmc-2.0-l2.md` / `csa_platform/csa_platform/governance/compliance/cmmc-2.0-l2.yaml`
-  - `docs/compliance/hipaa-security-rule.md` / `csa_platform/csa_platform/governance/compliance/hipaa-security-rule.yaml`
+    - `docs/compliance/nist-800-53-rev5.md` / `csa_platform/csa_platform/governance/compliance/nist-800-53-rev5.yaml`
+    - `docs/compliance/cmmc-2.0-l2.md` / `csa_platform/csa_platform/governance/compliance/cmmc-2.0-l2.yaml`
+    - `docs/compliance/hipaa-security-rule.md` / `csa_platform/csa_platform/governance/compliance/hipaa-security-rule.yaml`
 - **Platform modules:**
-  - `csa_platform/unity_catalog_pattern/` — OneLake + Unity Catalog + GCS shortcut pattern
-  - `csa_platform/semantic_model/` — Direct Lake semantic model (Looker replacement target)
-  - `csa_platform/csa_platform/governance/purview/` — catalog + classifications
-  - `csa_platform/ai_integration/` — BQML / Vertex replacement primitives
-  - `csa_platform/data_marketplace/` — data-product registry (Analytics Hub analogue)
-  - `csa_platform/multi_synapse/` — multi-workspace pattern
+    - `csa_platform/unity_catalog_pattern/` — OneLake + Unity Catalog + GCS shortcut pattern
+    - `csa_platform/semantic_model/` — Direct Lake semantic model (Looker replacement target)
+    - `csa_platform/csa_platform/governance/purview/` — catalog + classifications
+    - `csa_platform/ai_integration/` — BQML / Vertex replacement primitives
+    - `csa_platform/data_marketplace/` — data-product registry (Analytics Hub analogue)
+    - `csa_platform/multi_synapse/` — multi-workspace pattern
 - **Example verticals:**
-  - `examples/commerce/`, `examples/noaa/`, `examples/epa/`, `examples/interior/`, `examples/usda/`, `examples/iot-streaming/`, `examples/tribal-health/`
+    - `examples/commerce/`, `examples/noaa/`, `examples/epa/`, `examples/interior/`, `examples/usda/`, `examples/iot-streaming/`, `examples/tribal-health/`
 - **Operational guides:**
-  - `docs/QUICKSTART.md`, `docs/ARCHITECTURE.md`, `docs/GOV_SERVICE_MATRIX.md`, `docs/COST_MANAGEMENT.md`, `docs/DATABRICKS_GUIDE.md`
+    - `docs/QUICKSTART.md`, `docs/ARCHITECTURE.md`, `docs/GOV_SERVICE_MATRIX.md`, `docs/COST_MANAGEMENT.md`, `docs/DATABRICKS_GUIDE.md`
 
 ---
 

@@ -2,42 +2,41 @@
 
 # Cost Management Guide
 
-
 !!! note
-    **Quick Summary**: FinOps practices for CSA-in-a-Box covering cost estimation (Bicep + Terraform paths), budget guardrails per environment, CI/CD cost comments, required tagging strategy, optimization tips (reserved instances, auto-pause, storage tiering, right-sizing), and a FinOps maturity roadmap (Crawl → Walk → Run).
+**Quick Summary**: FinOps practices for CSA-in-a-Box covering cost estimation (Bicep + Terraform paths), budget guardrails per environment, CI/CD cost comments, required tagging strategy, optimization tips (reserved instances, auto-pause, storage tiering, right-sizing), and a FinOps maturity roadmap (Crawl → Walk → Run).
 
 This document covers cost estimation, budget guardrails, and FinOps practices for the CSA-in-a-Box platform.
 
 ## 📑 Table of Contents
 
 - [💰 Cost Estimation Approach](#-cost-estimation-approach)
-  - [Bicep Path (Primary)](#bicep-path-primary)
-  - [Terraform Path (Future)](#terraform-path-future)
+    - [Bicep Path (Primary)](#bicep-path-primary)
+    - [Terraform Path (Future)](#terraform-path-future)
 - [🔧 Running Cost Estimates Locally](#-running-cost-estimates-locally)
-  - [Prerequisites](#prerequisites)
-  - [Basic Usage](#basic-usage)
-  - [Understanding the Output](#understanding-the-output)
-  - [Exit Codes](#exit-codes)
+    - [Prerequisites](#prerequisites)
+    - [Basic Usage](#basic-usage)
+    - [Understanding the Output](#understanding-the-output)
+    - [Exit Codes](#exit-codes)
 - [🔄 CI/CD Integration](#-cicd-integration)
-  - [GitHub Actions — Cost Estimate Job](#github-actions--cost-estimate-job)
-  - [Adding Cost Estimates to Other Workflows](#adding-cost-estimates-to-other-workflows)
-  - [Infracost (Terraform Path)](#infracost-terraform-path)
+    - [GitHub Actions — Cost Estimate Job](#github-actions--cost-estimate-job)
+    - [Adding Cost Estimates to Other Workflows](#adding-cost-estimates-to-other-workflows)
+    - [Infracost (Terraform Path)](#infracost-terraform-path)
 - [🚨 Budget Thresholds and Alerts](#-budget-thresholds-and-alerts)
-  - [Policy Rules](#policy-rules)
-  - [Azure Cost Management Alerts](#azure-cost-management-alerts)
+    - [Policy Rules](#policy-rules)
+    - [Azure Cost Management Alerts](#azure-cost-management-alerts)
 - [🏷️ Tagging Strategy](#️-tagging-strategy)
-  - [Required Tags](#required-tags)
-  - [Enforcement](#enforcement)
+    - [Required Tags](#required-tags)
+    - [Enforcement](#enforcement)
 - [📉 Cost Optimization Tips](#-cost-optimization-tips)
-  - [Reserved Instances & Savings Plans](#reserved-instances--savings-plans)
-  - [Auto-Pause and Auto-Stop](#auto-pause-and-auto-stop)
-  - [Spot VMs and Low-Priority Compute](#spot-vms-and-low-priority-compute)
-  - [Storage Tiering](#storage-tiering)
-  - [Right-Sizing](#right-sizing)
+    - [Reserved Instances & Savings Plans](#reserved-instances--savings-plans)
+    - [Auto-Pause and Auto-Stop](#auto-pause-and-auto-stop)
+    - [Spot VMs and Low-Priority Compute](#spot-vms-and-low-priority-compute)
+    - [Storage Tiering](#storage-tiering)
+    - [Right-Sizing](#right-sizing)
 - [📊 FinOps Maturity Model](#-finops-maturity-model)
-  - [Stage 1: Crawl (Current)](#stage-1-crawl-current)
-  - [Stage 2: Walk](#stage-2-walk)
-  - [Stage 3: Run](#stage-3-run)
+    - [Stage 1: Crawl (Current)](#stage-1-crawl-current)
+    - [Stage 2: Walk](#stage-2-walk)
+    - [Stage 3: Run](#stage-3-run)
 - [📋 Resource-Specific Pricing Reference](#-resource-specific-pricing-reference)
 - [📚 Further Reading](#-further-reading)
 
@@ -59,16 +58,16 @@ The primary deployment path uses Azure Bicep templates under `deploy/bicep/`. Be
 **Script:** `scripts/deploy/estimate-costs.sh`
 
 !!! important
-    Bicep estimates are best-effort. The Azure Retail Prices API returns list prices — actual costs depend on EA/CSP agreements, reserved instances, and consumption-based meters.
+Bicep estimates are best-effort. The Azure Retail Prices API returns list prices — actual costs depend on EA/CSP agreements, reserved instances, and consumption-based meters.
 
 ### Terraform Path (Roadmap — not implemented)
 
 !!! warning
-    A parallel Terraform deployment is **on the roadmap**, not available today
-    (CSA-0015 / audit approval queue item AQ-0024). `deploy/terraform/` does
-    not exist in the repository. The `.infracost/terraform.yml` configuration
-    is a scaffold that will activate once Terraform modules ship. Until then,
-    use the Bicep path (above) for all cost analyses.
+A parallel Terraform deployment is **on the roadmap**, not available today
+(CSA-0015 / audit approval queue item AQ-0024). `deploy/terraform/` does
+not exist in the repository. The `.infracost/terraform.yml` configuration
+is a scaffold that will activate once Terraform modules ship. Until then,
+use the Bicep path (above) for all cost analyses.
 
 ---
 
@@ -112,23 +111,23 @@ The primary deployment path uses Azure Bicep templates under `deploy/bicep/`. Be
 
 The table output shows:
 
-| Column        | Description                                      |
-|---------------|--------------------------------------------------|
-| Resource Type | ARM resource type (e.g., `Storage/storageAccounts`) |
-| SKU           | Pricing SKU returned by the API                  |
-| Unit $        | Per-unit retail price                            |
-| Qty           | Number of instances in the template              |
+| Column        | Description                                             |
+| ------------- | ------------------------------------------------------- |
+| Resource Type | ARM resource type (e.g., `Storage/storageAccounts`)     |
+| SKU           | Pricing SKU returned by the API                         |
+| Unit $        | Per-unit retail price                                   |
+| Qty           | Number of instances in the template                     |
 | Monthly $     | Estimated monthly cost (unit price × hours/month × qty) |
 
 Resources without a pricing mapping or that cannot be found in the API are flagged as warnings.
 
 ### Exit Codes
 
-| Code | Meaning                                    |
-|------|--------------------------------------------|
-| 0    | Success, within budget (or no budget set)  |
-| 1    | Script error (missing file, failed build)  |
-| 2    | Over budget (table mode with `--budget`)   |
+| Code | Meaning                                   |
+| ---- | ----------------------------------------- |
+| 0    | Success, within budget (or no budget set) |
+| 1    | Script error (missing file, failed build) |
+| 2    | Over budget (table mode with `--budget`)  |
 
 ---
 
@@ -149,11 +148,11 @@ The cost estimate job uses the environment-specific budget from `.infracost/poli
 ```yaml
 - name: Run Cost Estimate
   run: |
-    chmod +x scripts/deploy/estimate-costs.sh
-    ./scripts/deploy/estimate-costs.sh deploy/bicep/DLZ/main.bicep \
-      --format json \
-      --environment ${{ vars.ENVIRONMENT || 'dev' }} \
-      --budget ${{ vars.COST_BUDGET || '5000' }}
+      chmod +x scripts/deploy/estimate-costs.sh
+      ./scripts/deploy/estimate-costs.sh deploy/bicep/DLZ/main.bicep \
+        --format json \
+        --environment ${{ vars.ENVIRONMENT || 'dev' }} \
+        --budget ${{ vars.COST_BUDGET || '5000' }}
 ```
 
 ### Infracost (Terraform Path)
@@ -164,20 +163,20 @@ When the Terraform modules are available:
 - name: Setup Infracost
   uses: infracost/actions/setup@v3
   with:
-    api-key: ${{ secrets.INFRACOST_API_KEY }}
+      api-key: ${{ secrets.INFRACOST_API_KEY }}
 
 - name: Run Infracost
   run: |
-    infracost breakdown \
-      --config-file .infracost/terraform.yml \
-      --format json \
-      --out-file /tmp/infracost.json
+      infracost breakdown \
+        --config-file .infracost/terraform.yml \
+        --format json \
+        --out-file /tmp/infracost.json
 
 - name: Post Infracost Comment
   uses: infracost/actions/comment@v1
   with:
-    path: /tmp/infracost.json
-    behavior: update
+      path: /tmp/infracost.json
+      behavior: update
 ```
 
 ---
@@ -187,22 +186,22 @@ When the Terraform modules are available:
 Budget thresholds are defined in `.infracost/policy.yml`:
 
 | Environment | Monthly Budget | Alert Threshold |
-|-------------|---------------|-----------------|
-| dev         | $5,000        | 80%             |
-| staging     | $10,000       | 80%             |
-| prod        | $25,000       | 75%             |
+| ----------- | -------------- | --------------- |
+| dev         | $5,000         | 80%             |
+| staging     | $10,000        | 80%             |
+| prod        | $25,000        | 75%             |
 
 ### Policy Rules
 
 The policy file also enforces cost guardrails:
 
-| Rule                     | Environment | Action | Description                                  |
-|--------------------------|-------------|--------|----------------------------------------------|
-| `no-premium-in-dev`      | dev         | warn   | Flag Premium SKUs in dev                     |
-| `no-multi-region-dev`    | dev         | warn   | Flag RA-GZRS storage in dev                  |
-| `enforce-serverless-dev` | dev         | warn   | Prefer serverless Cosmos DB in dev           |
-| `max-databricks-nodes-dev` | dev      | deny   | Limit Databricks cluster nodes to 4 in dev   |
-| `max-adx-sku-dev`        | dev         | warn   | Require Dev/Test ADX SKU in dev              |
+| Rule                       | Environment | Action | Description                                |
+| -------------------------- | ----------- | ------ | ------------------------------------------ |
+| `no-premium-in-dev`        | dev         | warn   | Flag Premium SKUs in dev                   |
+| `no-multi-region-dev`      | dev         | warn   | Flag RA-GZRS storage in dev                |
+| `enforce-serverless-dev`   | dev         | warn   | Prefer serverless Cosmos DB in dev         |
+| `max-databricks-nodes-dev` | dev         | deny   | Limit Databricks cluster nodes to 4 in dev |
+| `max-adx-sku-dev`          | dev         | warn   | Require Dev/Test ADX SKU in dev            |
 
 ### Azure Cost Management Alerts
 
@@ -235,14 +234,14 @@ All CSA-in-a-Box resources must include cost-attribution tags. These are enforce
 
 ### Required Tags
 
-| Tag             | Purpose                          | Example Values              |
-|-----------------|----------------------------------|-----------------------------|
-| `environment`   | Deployment environment           | `dev`, `staging`, `prod`    |
-| `CostCenter`    | Billing/chargeback code          | `CSA-Platform`, `DataEng`   |
-| `Owner`         | Team or project owner            | `Platform Team`             |
-| `Project`       | Project name                     | `Azure Demo ALZ & CSA`      |
-| `PrimaryContact`| Technical contact email          | `platform-team@contoso.com` |
-| `Toolkit`       | IaC tool used                    | `Bicep`, `Terraform`        |
+| Tag              | Purpose                 | Example Values              |
+| ---------------- | ----------------------- | --------------------------- |
+| `environment`    | Deployment environment  | `dev`, `staging`, `prod`    |
+| `CostCenter`     | Billing/chargeback code | `CSA-Platform`, `DataEng`   |
+| `Owner`          | Team or project owner   | `Platform Team`             |
+| `Project`        | Project name            | `Azure Demo ALZ & CSA`      |
+| `PrimaryContact` | Technical contact email | `platform-team@contoso.com` |
+| `Toolkit`        | IaC tool used           | `Bicep`, `Terraform`        |
 
 ### Enforcement
 
@@ -279,12 +278,12 @@ Azure Policy can further enforce tagging at the subscription or management group
 
 ### Reserved Instances & Savings Plans
 
-| Service       | Savings Opportunity                                    |
-|---------------|--------------------------------------------------------|
-| Databricks    | Pre-purchase DBU commit (1-year: ~25%, 3-year: ~40%)  |
-| Cosmos DB     | Reserved capacity for provisioned throughput           |
-| Data Explorer | Reserved capacity for cluster compute                  |
-| VMs (SHIR)    | Reserved Instances for always-on Integration Runtime   |
+| Service       | Savings Opportunity                                  |
+| ------------- | ---------------------------------------------------- |
+| Databricks    | Pre-purchase DBU commit (1-year: ~25%, 3-year: ~40%) |
+| Cosmos DB     | Reserved capacity for provisioned throughput         |
+| Data Explorer | Reserved capacity for cluster compute                |
+| VMs (SHIR)    | Reserved Instances for always-on Integration Runtime |
 
 ### Auto-Pause and Auto-Stop
 
@@ -297,6 +296,7 @@ enableAutoStop: true
 ```
 
 In dev/staging, always enable auto-pause for:
+
 - [ ] Synapse dedicated SQL pools
 - [ ] Databricks clusters (via cluster policies)
 - [ ] Data Explorer clusters (Dev SKU auto-stop)
@@ -309,32 +309,38 @@ In dev/staging, always enable auto-pause for:
 
 ### Storage Tiering
 
-| Tier    | Use Case                         | Relative Cost |
-|---------|----------------------------------|---------------|
-| Hot     | Frequently accessed data         | 1.0x          |
-| Cool    | Infrequent access (30+ days)     | ~0.5x         |
-| Archive | Rarely accessed (180+ days)      | ~0.1x         |
+| Tier    | Use Case                     | Relative Cost |
+| ------- | ---------------------------- | ------------- |
+| Hot     | Frequently accessed data     | 1.0x          |
+| Cool    | Infrequent access (30+ days) | ~0.5x         |
+| Archive | Rarely accessed (180+ days)  | ~0.1x         |
 
 Implement lifecycle management policies for each lake zone:
 
 ```json
 {
-    "rules": [{
-        "name": "archive-old-data",
-        "type": "Lifecycle",
-        "definition": {
-            "actions": {
-                "baseBlob": {
-                    "tierToCool": { "daysAfterModificationGreaterThan": 30 },
-                    "tierToArchive": { "daysAfterModificationGreaterThan": 180 }
+    "rules": [
+        {
+            "name": "archive-old-data",
+            "type": "Lifecycle",
+            "definition": {
+                "actions": {
+                    "baseBlob": {
+                        "tierToCool": {
+                            "daysAfterModificationGreaterThan": 30
+                        },
+                        "tierToArchive": {
+                            "daysAfterModificationGreaterThan": 180
+                        }
+                    }
+                },
+                "filters": {
+                    "blobTypes": ["blockBlob"],
+                    "prefixMatch": ["raw/", "enriched/"]
                 }
-            },
-            "filters": {
-                "blobTypes": ["blockBlob"],
-                "prefixMatch": ["raw/", "enriched/"]
             }
         }
-    }]
+    ]
 }
 ```
 
@@ -379,20 +385,20 @@ Implement lifecycle management policies for each lake zone:
 
 Quick reference for the CSA services tracked by `estimate-costs.sh`:
 
-| Service                | ARM Type                                      | Default SKU (Dev)              | Pricing Model          |
-|------------------------|-----------------------------------------------|-------------------------------|------------------------|
-| Storage Account        | `Microsoft.Storage/storageAccounts`            | Standard_LRS                  | Per GB stored + ops    |
-| Event Hubs             | `Microsoft.EventHub/namespaces`                | Standard (1 TU)               | Per TU/hour + events   |
-| Data Factory           | `Microsoft.DataFactory/factories`              | N/A (pay-per-pipeline)        | Per activity run       |
-| Databricks             | `Microsoft.Databricks/workspaces`              | Premium                       | Per DBU/hour           |
-| Data Explorer          | `Microsoft.Kusto/clusters`                     | Dev(No SLA)_Standard_E2a_v4   | Per cluster/hour       |
-| Key Vault              | `Microsoft.KeyVault/vaults`                    | Standard                      | Per operation          |
-| Cosmos DB              | `Microsoft.DocumentDB/databaseAccounts`        | Serverless                    | Per RU + storage       |
-| Azure Functions        | `Microsoft.Web/sites`                          | Consumption / EP1             | Per execution + GB-s   |
-| Stream Analytics       | `Microsoft.StreamAnalytics/streamingjobs`      | Standard (3 SU)               | Per SU/hour            |
-| Log Analytics          | `Microsoft.OperationalInsights/workspaces`     | Per GB                        | Per GB ingested        |
-| Machine Learning       | `Microsoft.MachineLearningServices/workspaces` | Basic                         | Per compute/hour       |
-| Synapse Analytics      | `Microsoft.Synapse/workspaces`                 | Serverless SQL Pool           | Per TB processed       |
+| Service           | ARM Type                                       | Default SKU (Dev)            | Pricing Model        |
+| ----------------- | ---------------------------------------------- | ---------------------------- | -------------------- |
+| Storage Account   | `Microsoft.Storage/storageAccounts`            | Standard_LRS                 | Per GB stored + ops  |
+| Event Hubs        | `Microsoft.EventHub/namespaces`                | Standard (1 TU)              | Per TU/hour + events |
+| Data Factory      | `Microsoft.DataFactory/factories`              | N/A (pay-per-pipeline)       | Per activity run     |
+| Databricks        | `Microsoft.Databricks/workspaces`              | Premium                      | Per DBU/hour         |
+| Data Explorer     | `Microsoft.Kusto/clusters`                     | Dev(No SLA)\_Standard_E2a_v4 | Per cluster/hour     |
+| Key Vault         | `Microsoft.KeyVault/vaults`                    | Standard                     | Per operation        |
+| Cosmos DB         | `Microsoft.DocumentDB/databaseAccounts`        | Serverless                   | Per RU + storage     |
+| Azure Functions   | `Microsoft.Web/sites`                          | Consumption / EP1            | Per execution + GB-s |
+| Stream Analytics  | `Microsoft.StreamAnalytics/streamingjobs`      | Standard (3 SU)              | Per SU/hour          |
+| Log Analytics     | `Microsoft.OperationalInsights/workspaces`     | Per GB                       | Per GB ingested      |
+| Machine Learning  | `Microsoft.MachineLearningServices/workspaces` | Basic                        | Per compute/hour     |
+| Synapse Analytics | `Microsoft.Synapse/workspaces`                 | Serverless SQL Pool          | Per TB processed     |
 
 ---
 

@@ -33,7 +33,7 @@ can reach incrementally without forcing a monorepo re-org.
   is visible to consumers there, not in domain Git trees.
 - **CI-enforceable** — domains that want to merge must pass the
   contract-validation CI gate; enforcement is automatic, not tribal.
-- **No re-org churn pre-1.0** — adopt mesh *semantics* without moving
+- **No re-org churn pre-1.0** — adopt mesh _semantics_ without moving
   code.
 
 ## Considered Options
@@ -79,7 +79,7 @@ Adopt a four-stage pipeline as the canonical mesh federation model:
 
 ## Boundary enforcement (minimum viable mesh)
 
-The code does not need to move, but the *responsibility* for each
+The code does not need to move, but the _responsibility_ for each
 domain must be legible. Three enforcement points:
 
 - **CODEOWNERS (per-domain)** — `.github/CODEOWNERS` lists a distinct
@@ -117,7 +117,7 @@ domain must be legible. Three enforcement points:
   still go through one `main`; a true mesh has independent domain
   releases. Tracked for future work.
 - Negative: **CODEOWNERS alone is advisory** — GitHub branch
-  protection must be configured to *require* code-owner review for
+  protection must be configured to _require_ code-owner review for
   the boundary to be enforced. Operational, not architectural.
 - Negative: **Bicep per-domain is deferred** — today domain infra
   still lives under central `deploy/bicep/`. Fine for v1; revisit

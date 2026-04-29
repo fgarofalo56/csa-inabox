@@ -86,22 +86,26 @@ has been selected so it maps forward into Fabric:
 ## Pros and Cons of the Options
 
 ### Option 1 — Fabric-parity on Azure PaaS
+
 - Pros: Federal-compatible now; forward-migratable; honest positioning;
   no lock-in cost of Fabric SaaS before value is proven.
 - Cons: Duplicated capability for customers who ultimately migrate to
   Fabric; dual-surface documentation burden.
 
 ### Option 2 — All-in on Fabric today
+
 - Pros: Simplest stack; Microsoft-native end-to-end.
 - Cons: Blocks all Gov tenants until Fabric Gov GA; feature gaps remain
   in several Fabric workloads.
 
 ### Option 3 — Pure open-source lakehouse
+
 - Pros: Maximum portability; no Microsoft vendor coupling.
 - Cons: Customer runs more infra; weaker governance story; Power BI /
   Fabric integration becomes a custom build.
 
 ### Option 4 — Wait for Fabric Gov GA
+
 - Pros: Zero throwaway work.
 - Cons: Stalls current federal onboardings; not an acceptable business
   position.
@@ -109,6 +113,7 @@ has been selected so it maps forward into Fabric:
 ## Validation
 
 We will know this decision is right if:
+
 - When Fabric reaches Gov GA, at least 80% of each vertical example
   (SQL, tables, governance, pipelines) migrates forward without rewrite.
 - Tenants who adopt Fabric early (Commercial) can bring their CSA-in-a-Box

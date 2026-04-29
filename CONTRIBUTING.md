@@ -1,6 +1,5 @@
 # Contributing to CSA-in-a-Box
 
-
 > [!NOTE]
 > **Quick Summary**: This guide covers development setup, repository rules, code style conventions (Bicep, PowerShell, Python), the PR process, branch naming, and how to report issues. Follow the checklist below for a smooth contribution experience.
 
@@ -50,28 +49,32 @@ The project uses ruff with a line length of 120 characters (not PEP 8's default 
 ### 📦 Installation
 
 1. Clone the repository:
-   ```bash
-   git clone <CLONE_URL>
-   cd csa-inabox
-   ```
+
+    ```bash
+    git clone <CLONE_URL>
+    cd csa-inabox
+    ```
 
 2. Set up Python environment (for scripts/dbt):
-   ```bash
-   make setup            # Linux/Mac
-   make setup-win        # Windows
-   ```
-   This creates a `.venv`, activates it, and installs all dev dependencies
-   from `pyproject.toml`. To activate the venv manually afterwards:
-   ```bash
-   source .venv/bin/activate  # Linux/Mac
-   .venv\Scripts\activate     # Windows
-   ```
+
+    ```bash
+    make setup            # Linux/Mac
+    make setup-win        # Windows
+    ```
+
+    This creates a `.venv`, activates it, and installs all dev dependencies
+    from `pyproject.toml`. To activate the venv manually afterwards:
+
+    ```bash
+    source .venv/bin/activate  # Linux/Mac
+    .venv\Scripts\activate     # Windows
+    ```
 
 3. Install pre-commit hooks:
-   ```bash
-   pre-commit install
-   ```
-   This enables automatic linting, formatting, and secret detection on every commit.
+    ```bash
+    pre-commit install
+    ```
+    This enables automatic linting, formatting, and secret detection on every commit.
 
 ---
 
@@ -107,6 +110,7 @@ The project uses ruff with a line length of 120 characters (not PEP 8's default 
 ## 💡 Code Style
 
 ### Bicep
+
 - Use camelCase for parameters and variables
 - Use PascalCase for resource symbolic names
 - Add `@description()` decorators to all parameters
@@ -114,6 +118,7 @@ The project uses ruff with a line length of 120 characters (not PEP 8's default 
 - Use modules for reusable components
 
 ### PowerShell
+
 - Use `Set-StrictMode -Version Latest` at the top
 - Use `$ErrorActionPreference = 'Stop'`
 - Wrap operations in `Try/Catch` blocks
@@ -121,6 +126,7 @@ The project uses ruff with a line length of 120 characters (not PEP 8's default 
 - Use approved verbs (Get-, Set-, New-, Remove-)
 
 ### Python
+
 - Follow PEP 8 with a line length of 120 characters (enforced by ruff)
 - Use type hints
 - Use `pathlib.Path` for file operations
@@ -192,12 +198,12 @@ and fix the underlying problem instead.
 
 ## 🏷️ Branch Naming
 
-| Prefix | Purpose | Example |
-|---|---|---|
-| `feature/` | New features | `feature/add-streaming-domain` |
-| `fix/` | Bug fixes | `fix/inventory-turnover-sql` |
-| `infra/` | Infrastructure changes | `infra/nsg-outbound-rules` |
-| `docs/` | Documentation updates | `docs/update-quickstart` |
+| Prefix     | Purpose                | Example                        |
+| ---------- | ---------------------- | ------------------------------ |
+| `feature/` | New features           | `feature/add-streaming-domain` |
+| `fix/`     | Bug fixes              | `fix/inventory-turnover-sql`   |
+| `infra/`   | Infrastructure changes | `infra/nsg-outbound-rules`     |
+| `docs/`    | Documentation updates  | `docs/update-quickstart`       |
 
 ---
 
@@ -214,7 +220,7 @@ Use GitHub Issues with the appropriate template. Include:
 
 ## 🔗 Related Documentation
 
-| Document | Description |
-|---|---|
-| [README](README.md) | Project overview and quick start |
+| Document                  | Description                        |
+| ------------------------- | ---------------------------------- |
+| [README](README.md)       | Project overview and quick start   |
 | [Changelog](CHANGELOG.md) | All notable changes to the project |

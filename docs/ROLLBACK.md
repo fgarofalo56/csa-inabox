@@ -2,9 +2,8 @@
 
 # Deployment Rollback Runbook
 
-
 !!! note
-    **Quick Summary**: Step-by-step rollback procedures for failed CSA-in-a-Box deployments — Bicep landing zone redeployment from git tags, ADF pipeline restore, dbt model full-refresh, Cosmos DB point-in-time restore, and storage account blob/container recovery via soft-delete and versioning.
+**Quick Summary**: Step-by-step rollback procedures for failed CSA-in-a-Box deployments — Bicep landing zone redeployment from git tags, ADF pipeline restore, dbt model full-refresh, Cosmos DB point-in-time restore, and storage account blob/container recovery via soft-delete and versioning.
 
 This runbook covers how to recover from a failed or bad deployment. It pairs
 with the `Rollback Deployment` GitHub Actions workflow
@@ -12,15 +11,15 @@ with the `Rollback Deployment` GitHub Actions workflow
 wired into the Bicep modules.
 
 !!! danger
-    **Before you start:** rollback is a high-risk, privileged operation. Always
-    run the rollback workflow in `dry_run: true` mode first, read the what-if
-    output, and only flip to a real rollback once the blast radius is clear.
+**Before you start:** rollback is a high-risk, privileged operation. Always
+run the rollback workflow in `dry_run: true` mode first, read the what-if
+output, and only flip to a real rollback once the blast radius is clear.
 
 ## 📑 Table of Contents
 
 - [🏷️ 1. Rollback Targets](#️-1-rollback-targets)
 - [📦 2. Landing Zone (Bicep) Rollback](#-2-landing-zone-bicep-rollback)
-  - [When a rollback is the wrong tool](#when-a-rollback-is-the-wrong-tool)
+    - [When a rollback is the wrong tool](#when-a-rollback-is-the-wrong-tool)
 - [🔧 3. ADF Pipeline Rollback](#-3-adf-pipeline-rollback)
 - [🗄️ 4. dbt Model Rollback](#️-4-dbt-model-rollback)
 - [🔄 5. Cosmos DB Point-in-Time Restore](#-5-cosmos-db-point-in-time-restore)
@@ -59,29 +58,27 @@ and you want to return the subscription to the previous good state.
 
 - [ ] In GitHub, go to **Actions → Rollback Deployment → Run workflow**.
 - [ ] Fill in the inputs:
-  - `environment`: `dev`, `test`, or `prod` — must match where the bad
-    deploy landed.
-  - `target`: `alz`, `dmlz`, `dlz`, or `all`.
-    - Prefer the narrowest target you can justify.
-  - `rollback_ref`: the `deploy/<env>-<sha>-<run>` tag from the last
-    known-good deploy, or any git ref / SHA that still contains the Bicep
-    templates.
-  - `confirm`: type exactly `ROLLBACK`. The preflight job will refuse to
-    continue otherwise.
-  - `dry_run`: **leave this `true` for the first run.** Review the what-if
-    output, then re-run with `dry_run: false`.
+    - `environment`: `dev`, `test`, or `prod` — must match where the bad
+      deploy landed.
+    - `target`: `alz`, `dmlz`, `dlz`, or `all`.
+        - Prefer the narrowest target you can justify.
+    - `rollback_ref`: the `deploy/<env>-<sha>-<run>` tag from the last
+      known-good deploy, or any git ref / SHA that still contains the Bicep
+      templates.
+    - `confirm`: type exactly `ROLLBACK`. The preflight job will refuse to
+      continue otherwise.
+    - `dry_run`: **leave this `true` for the first run.** Review the what-if
+      output, then re-run with `dry_run: false`.
 - [ ] The workflow runs a preflight, then redeploys the selected landing zones
-   at the rollback ref, then runs the post-rollback verification job.
+      at the rollback ref, then runs the post-rollback verification job.
 
 ### When a rollback is the wrong tool
 
-!!! warning
-    - **Schema-changing dbt deploys.** Bicep rollback will not undo Delta table
-      schema changes. Use dbt model rollback (section 4) first, *then* Bicep if
-      needed.
-    - **Resource deletions.** If the bad deploy deleted resources, plain Bicep
-      redeploy will not recreate data inside them. Use PITR (section 5) or
-      storage soft-delete (section 6) to restore data first, then redeploy.
+!!! warning - **Schema-changing dbt deploys.** Bicep rollback will not undo Delta table
+schema changes. Use dbt model rollback (section 4) first, _then_ Bicep if
+needed. - **Resource deletions.** If the bad deploy deleted resources, plain Bicep
+redeploy will not recreate data inside them. Use PITR (section 5) or
+storage soft-delete (section 6) to restore data first, then redeploy.
 
 ---
 
@@ -96,19 +93,19 @@ Azure.
 
 - [ ] `git checkout <good-ref> -- domains/shared/pipelines/adf/`
 - [ ] Import the pipeline JSON files into the ADF instance (via the ADF
-   Studio "Import ARM template" or your CI step).
+      Studio "Import ARM template" or your CI step).
 - [ ] Publish and re-trigger.
 
 !!! note
-    **Prevention:** Always run the `Bicep What-If` workflow on a PR that
-    touches ADF JSON so what-if rejects structurally invalid pipeline changes
-    before they land.
+**Prevention:** Always run the `Bicep What-If` workflow on a PR that
+touches ADF JSON so what-if rejects structurally invalid pipeline changes
+before they land.
 
 ---
 
 ## 🗄️ 4. dbt Model Rollback
 
-Rolling back a Delta model means running the *previous* version of the
+Rolling back a Delta model means running the _previous_ version of the
 model SQL so the new version's output gets overwritten by a fresh
 merge/insert.
 
@@ -135,8 +132,8 @@ merge/insert.
     ```
 
 !!! important
-    If the bad deploy added new columns or dropped columns, you may have to
-    drop the affected Delta tables by hand before the full-refresh.
+If the bad deploy added new columns or dropped columns, you may have to
+drop the affected Delta tables by hand before the full-refresh.
 
 ---
 
@@ -149,7 +146,7 @@ point-in-time restore window.
 **Procedure:**
 
 - [ ] Identify the timestamp just before the bad deploy from the
-   `Deploy Infrastructure` workflow run log.
+      `Deploy Infrastructure` workflow run log.
 - [ ] Restore to a new account (Cosmos cannot in-place restore):
 
     ```bash
@@ -162,9 +159,9 @@ point-in-time restore window.
     ```
 
 - [ ] Point the application at the restored account, validate, then rename
-   the original and the restored account to swap them.
+      the original and the restored account to swap them.
 - [ ] Update the Bicep parameter file so the next deploy references the
-   renamed account if you decide to keep the restored copy.
+      renamed account if you decide to keep the restored copy.
 
 ---
 

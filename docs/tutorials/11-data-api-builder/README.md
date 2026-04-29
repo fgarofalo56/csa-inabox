@@ -42,26 +42,26 @@ In a Data Mesh architecture each domain team owns and publishes its data
 products. DAB eliminates the need for each team to build custom APIs — they
 define a JSON configuration and DAB generates the API automatically:
 
-| Concern | Without DAB | With DAB |
-|---------|-------------|----------|
-| API creation | Weeks of FastAPI/Express code | 10-minute JSON config |
-| Schema changes | Code changes + redeploy | Edit config, restart |
-| Auth/permissions | Custom middleware | Declarative roles in config |
-| REST + GraphQL | Pick one or build both | Both generated automatically |
-| Relationships | Manual joins in code | Declared in config, resolved by DAB |
+| Concern          | Without DAB                   | With DAB                            |
+| ---------------- | ----------------------------- | ----------------------------------- |
+| API creation     | Weeks of FastAPI/Express code | 10-minute JSON config               |
+| Schema changes   | Code changes + redeploy       | Edit config, restart                |
+| Auth/permissions | Custom middleware             | Declarative roles in config         |
+| REST + GraphQL   | Pick one or build both        | Both generated automatically        |
+| Relationships    | Manual joins in code          | Declared in config, resolved by DAB |
 
 ---
 
 ## Prerequisites
 
-| Requirement | Details |
-|-------------|---------|
-| Azure subscription | Pay-as-you-go or Enterprise Agreement |
-| Azure CLI | v2.50+ (`az --version`) |
-| SQL Server | Azure SQL or SQL Server 2019+ (local dev) |
+| Requirement          | Details                                           |
+| -------------------- | ------------------------------------------------- |
+| Azure subscription   | Pay-as-you-go or Enterprise Agreement             |
+| Azure CLI            | v2.50+ (`az --version`)                           |
+| SQL Server           | Azure SQL or SQL Server 2019+ (local dev)         |
 | Data API Builder CLI | `dotnet tool install -g Microsoft.DataApiBuilder` |
-| VS Code | Recommended, with REST Client extension |
-| Node.js | 18+ (for SWA CLI, optional) |
+| VS Code              | Recommended, with REST Client extension           |
+| Node.js              | 18+ (for SWA CLI, optional)                       |
 
 ### Environment Setup
 
@@ -82,13 +82,13 @@ az group create --name rg-csa-dab-dev --location usgovvirginia
 
 The Bicep module at `deploy/bicep/DLZ/modules/data-api-builder.bicep` provisions:
 
-| Resource | Purpose |
-|----------|---------|
-| Azure SQL Server + Database | Stores data-product catalog |
-| Container App (DAB) | Hosts Data API Builder |
-| Static Web App | Hosts the frontend portal |
-| Managed Identity | Connects DAB to SQL securely |
-| Application Insights | Monitoring and diagnostics |
+| Resource                    | Purpose                      |
+| --------------------------- | ---------------------------- |
+| Azure SQL Server + Database | Stores data-product catalog  |
+| Container App (DAB)         | Hosts Data API Builder       |
+| Static Web App              | Hosts the frontend portal    |
+| Managed Identity            | Connects DAB to SQL securely |
+| Application Insights        | Monitoring and diagnostics   |
 
 ### Deploy
 
@@ -102,13 +102,13 @@ az deployment group create \
 
 ### Key Parameters
 
-| Parameter | Dev | Prod | Description |
-|-----------|-----|------|-------------|
-| `sqlSkuName` | Basic | S2 | Database performance tier |
-| `staticWebAppSku` | Free | Standard | SWA tier (Standard adds custom domains, auth) |
-| `publicNetworkAccessEnabled` | true | false | SQL public access (disable in prod) |
-| `enableResourceLock` | false | true | Prevent accidental deletion |
-| `containerCpu` / `containerMemory` | 0.25 / 0.5Gi | 1.0 / 2Gi | DAB container sizing |
+| Parameter                          | Dev          | Prod      | Description                                   |
+| ---------------------------------- | ------------ | --------- | --------------------------------------------- |
+| `sqlSkuName`                       | Basic        | S2        | Database performance tier                     |
+| `staticWebAppSku`                  | Free         | Standard  | SWA tier (Standard adds custom domains, auth) |
+| `publicNetworkAccessEnabled`       | true         | false     | SQL public access (disable in prod)           |
+| `enableResourceLock`               | false        | true      | Prevent accidental deletion                   |
+| `containerCpu` / `containerMemory` | 0.25 / 0.5Gi | 1.0 / 2Gi | DAB container sizing                          |
 
 ### Verify Deployment
 
@@ -207,6 +207,7 @@ sqlcmd -S <server>.database.windows.net \
 ### What Gets Created
 
 **Tables:**
+
 - `Domains` — organizational domains (finance, operations, marketing, hr)
 - `DataProducts` — the data products published by each domain
 - `QualityMetrics` — daily quality measurements per product
@@ -214,10 +215,12 @@ sqlcmd -S <server>.database.windows.net \
 - `DataLineage` — source-to-target transformation lineage
 
 **Stored Procedures:**
+
 - `sp_domain_stats` — aggregate statistics per domain
 - `sp_quality_trend` — quality score trend for a product over N days
 
 **Seed Data:**
+
 - 4 domains, 5 data products, 30 quality metric records, 3 access grants
 
 ### Verify
@@ -443,15 +446,15 @@ Response:
 
 ```json
 {
-  "value": [
-    {
-      "id": 1,
-      "name": "Revenue Summary",
-      "domain": "finance",
-      "quality_score": 92.5,
-      "status": "active"
-    }
-  ]
+    "value": [
+        {
+            "id": 1,
+            "name": "Revenue Summary",
+            "domain": "finance",
+            "quality_score": 92.5,
+            "status": "active"
+        }
+    ]
 }
 ```
 
@@ -555,17 +558,17 @@ DAB exposes a GraphQL endpoint at `/graphql` with full introspection support.
 
 ```graphql
 {
-  dataProducts(first: 10) {
-    items {
-      id
-      name
-      domain
-      quality_score
-      status
+    dataProducts(first: 10) {
+        items {
+            id
+            name
+            domain
+            quality_score
+            status
+        }
+        hasNextPage
+        endCursor
     }
-    hasNextPage
-    endCursor
-  }
 }
 ```
 
@@ -579,24 +582,24 @@ curl -X POST http://localhost:5000/graphql \
 
 ```graphql
 {
-  dataProduct_by_pk(id: 1) {
-    name
-    domain
-    quality_score
-    qualityMetrics {
-      items {
-        date
+    dataProduct_by_pk(id: 1) {
+        name
+        domain
         quality_score
-        completeness
-        accuracy
-      }
+        qualityMetrics {
+            items {
+                date
+                quality_score
+                completeness
+                accuracy
+            }
+        }
+        domain_info {
+            name
+            owner_team
+            product_count
+        }
     }
-    domain_info {
-      name
-      owner_team
-      product_count
-    }
-  }
 }
 ```
 
@@ -608,14 +611,16 @@ resolver code.
 
 ```graphql
 {
-  dataProducts(filter: { domain: { eq: "finance" }, status: { eq: "active" } }) {
-    items {
-      id
-      name
-      quality_score
-      owner_team
+    dataProducts(
+        filter: { domain: { eq: "finance" }, status: { eq: "active" } }
+    ) {
+        items {
+            id
+            name
+            quality_score
+            owner_team
+        }
     }
-  }
 }
 ```
 
@@ -623,24 +628,26 @@ resolver code.
 
 ```graphql
 mutation {
-  createDataProduct(item: {
-    name: "Customer Lifetime Value"
-    description: "Predicted CLV by customer segment"
-    domain: "marketing"
-    owner_name: "Dan Wilson"
-    owner_email: "dan@contoso.com"
-    owner_team: "Marketing Insights"
-    classification: "confidential"
-    quality_score: 85.0
-    freshness_hours: 48
-    completeness: 92.0
-    status: "draft"
-    version: 1
-  }) {
-    id
-    name
-    status
-  }
+    createDataProduct(
+        item: {
+            name: "Customer Lifetime Value"
+            description: "Predicted CLV by customer segment"
+            domain: "marketing"
+            owner_name: "Dan Wilson"
+            owner_email: "dan@contoso.com"
+            owner_team: "Marketing Insights"
+            classification: "confidential"
+            quality_score: 85.0
+            freshness_hours: 48
+            completeness: 92.0
+            status: "draft"
+            version: 1
+        }
+    ) {
+        id
+        name
+        status
+    }
 }
 ```
 
@@ -648,15 +655,12 @@ mutation {
 
 ```graphql
 mutation {
-  updateDataProduct(id: 1, item: {
-    quality_score: 94.2
-    version: 3
-  }) {
-    id
-    name
-    quality_score
-    version
-  }
+    updateDataProduct(id: 1, item: { quality_score: 94.2, version: 3 }) {
+        id
+        name
+        quality_score
+        version
+    }
 }
 ```
 
@@ -704,6 +708,7 @@ parallel requests to `/api/products` and `/api/domains`, then computes:
 ### 6.2 Product Catalog (`products.html`)
 
 Features:
+
 - **Search** — filters by product name using `contains(name, 'term')`
 - **Domain Filter** — dropdown populated from `/api/domains`
 - **Sortable** — products ordered by `quality_score desc`
@@ -715,6 +720,7 @@ calls.
 ### 6.3 GraphQL Explorer (`explorer.html`)
 
 A simple in-browser GraphQL editor with:
+
 - **Query textarea** with monospace font
 - **Example query dropdown** — pre-loaded queries for common operations
 - **Execute button** — sends POST to `/graphql` and renders JSON result
@@ -725,17 +731,22 @@ A simple in-browser GraphQL editor with:
 The `DabApiClient` class encapsulates all API interactions:
 
 ```javascript
-const api = new DabApiClient('/data-api');
+const api = new DabApiClient("/data-api");
 
 // REST calls
-const products = await api.fetchProducts({ domain: 'finance', orderBy: 'quality_score desc' });
-const product  = await api.fetchProduct(1);
-const domains  = await api.fetchDomains();
-const stats    = await api.fetchDomainStats();
-const trend    = await api.fetchQualityTrend(1, 30);
+const products = await api.fetchProducts({
+    domain: "finance",
+    orderBy: "quality_score desc",
+});
+const product = await api.fetchProduct(1);
+const domains = await api.fetchDomains();
+const stats = await api.fetchDomainStats();
+const trend = await api.fetchQualityTrend(1, 30);
 
 // GraphQL
-const result = await api.executeGraphQL('{ dataProducts { items { id name } } }');
+const result = await api.executeGraphQL(
+    "{ dataProducts { items { id name } } }",
+);
 ```
 
 ### Run Locally
@@ -870,14 +881,14 @@ az deployment group create \
 
 API Management enforces cross-domain policies centrally:
 
-| Policy | Purpose |
-|--------|---------|
-| Subscription keys | Track API consumers |
-| Rate limiting | Prevent abuse |
-| JWT validation | Authenticate consumers |
-| IP filtering | Restrict access (Azure Gov) |
-| Request/response logging | Audit trail |
-| CORS | Control browser access |
+| Policy                   | Purpose                     |
+| ------------------------ | --------------------------- |
+| Subscription keys        | Track API consumers         |
+| Rate limiting            | Prevent abuse               |
+| JWT validation           | Authenticate consumers      |
+| IP filtering             | Restrict access (Azure Gov) |
+| Request/response logging | Audit trail                 |
+| CORS                     | Control browser access      |
 
 Domain teams own their DAB configs (data products); the platform team owns
 APIM policies (governance).
@@ -914,22 +925,22 @@ curl "https://apim.contoso.com/data-products/domain-stats"
 
 ### DAB won't start
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `Connection refused` | SQL Server not reachable | Check firewall rules, verify connection string |
-| `Login failed` | Wrong credentials | Verify `SQL_CONNECTION_STRING` env var |
-| `Entity not found` | Table doesn't exist | Run `setup.sql` first |
+| Symptom                 | Cause                    | Fix                                            |
+| ----------------------- | ------------------------ | ---------------------------------------------- |
+| `Connection refused`    | SQL Server not reachable | Check firewall rules, verify connection string |
+| `Login failed`          | Wrong credentials        | Verify `SQL_CONNECTION_STRING` env var         |
+| `Entity not found`      | Table doesn't exist      | Run `setup.sql` first                          |
 | `CORS error` in browser | Origin not in allow list | Add your origin to `runtime.host.cors.origins` |
-| `401 Unauthorized` | Role not set | Add `X-MS-API-ROLE` header for local testing |
+| `401 Unauthorized`      | Role not set             | Add `X-MS-API-ROLE` header for local testing   |
 
 ### Common REST errors
 
-| HTTP Code | Meaning | Action |
-|-----------|---------|--------|
-| 400 | Bad filter syntax | Check `$filter` OData syntax |
-| 403 | Insufficient permissions | Verify role has the required action |
-| 404 | Entity or item not found | Check entity path and ID |
-| 409 | Conflict (duplicate) | Item with same key already exists |
+| HTTP Code | Meaning                  | Action                              |
+| --------- | ------------------------ | ----------------------------------- |
+| 400       | Bad filter syntax        | Check `$filter` OData syntax        |
+| 403       | Insufficient permissions | Verify role has the required action |
+| 404       | Entity or item not found | Check entity path and ID            |
+| 409       | Conflict (duplicate)     | Item with same key already exists   |
 
 ### GraphQL issues
 
@@ -969,11 +980,11 @@ az containerapp exec \
 
 ## Reference
 
-| Resource | Link |
-|----------|------|
-| Azure Data API Builder Docs | https://learn.microsoft.com/azure/data-api-builder/ |
-| DAB GitHub | https://github.com/Azure/data-api-builder |
-| DAB Configuration Reference | https://learn.microsoft.com/azure/data-api-builder/configuration-file |
-| OData Filter Syntax | https://learn.microsoft.com/azure/data-api-builder/rest#filter |
-| Example Code | [`examples/data-api-builder/`](../../../examples/data-api-builder/) |
-| Bicep Module | [`deploy/bicep/DLZ/modules/data-api-builder.bicep`](../../../deploy/bicep/DLZ/modules/data-api-builder.bicep) |
+| Resource                    | Link                                                                                                          |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Azure Data API Builder Docs | https://learn.microsoft.com/azure/data-api-builder/                                                           |
+| DAB GitHub                  | https://github.com/Azure/data-api-builder                                                                     |
+| DAB Configuration Reference | https://learn.microsoft.com/azure/data-api-builder/configuration-file                                         |
+| OData Filter Syntax         | https://learn.microsoft.com/azure/data-api-builder/rest#filter                                                |
+| Example Code                | [`examples/data-api-builder/`](../../../examples/data-api-builder/)                                           |
+| Bicep Module                | [`deploy/bicep/DLZ/modules/data-api-builder.bicep`](../../../deploy/bicep/DLZ/modules/data-api-builder.bicep) |

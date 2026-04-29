@@ -2,16 +2,15 @@
 
 # Break-Glass Access Runbook (CSA-0059)
 
-
 !!! note
-    **Quick Summary**: Emergency administrative access procedure for CSA-in-a-Box — when the primary identity / PIM / normal RBAC path is unavailable (locked-out tenant admin, region outage, active security incident requiring overriding PIM). Covers activation preconditions, the two-person control requirement, PIM / Privileged Access activation, audit trail, deactivation, and mandatory post-incident review.
+**Quick Summary**: Emergency administrative access procedure for CSA-in-a-Box — when the primary identity / PIM / normal RBAC path is unavailable (locked-out tenant admin, region outage, active security incident requiring overriding PIM). Covers activation preconditions, the two-person control requirement, PIM / Privileged Access activation, audit trail, deactivation, and mandatory post-incident review.
 
 !!! danger
-    **This is not a regular administrative tool.** Break-glass accounts
-    exist so that a genuine emergency does not become a platform outage.
-    Every activation produces audit evidence reviewable by Security
-    within one business day. Unauthorized or unnecessary use is a policy
-    violation regardless of intent.
+**This is not a regular administrative tool.** Break-glass accounts
+exist so that a genuine emergency does not become a platform outage.
+Every activation produces audit evidence reviewable by Security
+within one business day. Unauthorized or unnecessary use is a policy
+violation regardless of intent.
 
 ## Before First Use — Customization Checklist
 
@@ -110,9 +109,9 @@ The witness logs a timeline entry for every action:
    unless A is also unavailable).
 3. **Confirm the account is still a Global Administrator** (the
    baseline assignment; break-glass accounts have permanent GA):
-   ```bash
-   az rest --method get --url "https://graph.microsoft.com/v1.0/me/memberOf"
-   ```
+    ```bash
+    az rest --method get --url "https://graph.microsoft.com/v1.0/me/memberOf"
+    ```
 4. **Perform the timeboxed remediation.** Stay scoped — break-glass is
    not a blanket license. Every command must be in §5's safe-ops list
    or explicitly approved by the Incident Commander.
@@ -153,19 +152,19 @@ Use break-glass only for:
 ## 🔚 6. Deactivation Steps
 
 !!! important
-    Deactivation is not optional. A break-glass account left active is
-    a critical finding in every ATO audit.
+Deactivation is not optional. A break-glass account left active is
+a critical finding in every ATO audit.
 
 1. **Sign out** from every browser session.
 2. **Rotate the break-glass account's password** via a privileged
-   identity *other than* the break-glass account (use the CISO's
+   identity _other than_ the break-glass account (use the CISO's
    standing admin or the secondary break-glass account with another
    witness):
-   ```bash
-   # Executed by the CISO or secondary operator, not the one who signed in
-   az ad user update --id breakglass-a@<tenant>.onmicrosoft.com \
-     --password '<freshly-generated-password>' --force-change-password-next-sign-in false
-   ```
+    ```bash
+    # Executed by the CISO or secondary operator, not the one who signed in
+    az ad user update --id breakglass-a@<tenant>.onmicrosoft.com \
+      --password '<freshly-generated-password>' --force-change-password-next-sign-in false
+    ```
 3. **Re-seal the envelope** with the rotated password + a new envelope ID.
    Record the new ID in the ticket.
 4. **File the envelope** back in the safe.
@@ -207,9 +206,9 @@ AzureActivity
 ```
 
 !!! tip
-    Wire the first query into a Sentinel analytic rule that pages
-    Security **on every sign-in**. A break-glass sign-in is always
-    noteworthy, even during a declared incident.
+Wire the first query into a Sentinel analytic rule that pages
+Security **on every sign-in**. A break-glass sign-in is always
+noteworthy, even during a declared incident.
 
 ---
 
@@ -224,7 +223,7 @@ business days:
 - [ ] Attach the full command log + evidence captured during activation.
 - [ ] Attach the KQL query results for the window.
 - [ ] Review with CISO or delegate. Record the reviewer's sign-off.
-- [ ] If *any* command went beyond §5's safe ops, file a follow-up
+- [ ] If _any_ command went beyond §5's safe ops, file a follow-up
       finding. Recurring out-of-scope use is a governance failure, not
       an ops failure.
 - [ ] Update this runbook's Drill Log (§10) and the activation-log tracker.
@@ -236,16 +235,16 @@ business days:
 ## 📎 9. Contact Information
 
 !!! warning
-    **Action Required:** Populate these before first production use.
+**Action Required:** Populate these before first production use.
 
-| Role              | Contact                                       | Phone                        | Escalation                    |
-| ----------------- | --------------------------------------------- | ---------------------------- | ----------------------------- |
-| CISO              | *(set via your org's CISO)*                   | *(24/7 on-call)*             | Activation approval           |
-| Security Officer  | *(set via your org's security team DL)*       | *(24/7 on-call)*             | Witness + post-incident review|
-| Platform Team Lead| *(set via your org's platform team)*          | *(see PagerDuty / OpsGenie)* | Operator (preferred)          |
-| Incident Commander| *(named per incident)*                        | *(via IC channel)*           | Timebox + scope decisions     |
-| Legal Counsel     | *(set via your org's legal team)*             | *(office hours)*             | If incident has legal impact  |
-| Azure Support     | [Case via Portal](https://portal.azure.com/#blade/Microsoft_Azure_Support/HelpAndSupportBlade) | N/A | Platform-level outages |
+| Role               | Contact                                                                                        | Phone                        | Escalation                     |
+| ------------------ | ---------------------------------------------------------------------------------------------- | ---------------------------- | ------------------------------ |
+| CISO               | _(set via your org's CISO)_                                                                    | _(24/7 on-call)_             | Activation approval            |
+| Security Officer   | _(set via your org's security team DL)_                                                        | _(24/7 on-call)_             | Witness + post-incident review |
+| Platform Team Lead | _(set via your org's platform team)_                                                           | _(see PagerDuty / OpsGenie)_ | Operator (preferred)           |
+| Incident Commander | _(named per incident)_                                                                         | _(via IC channel)_           | Timebox + scope decisions      |
+| Legal Counsel      | _(set via your org's legal team)_                                                              | _(office hours)_             | If incident has legal impact   |
+| Azure Support      | [Case via Portal](https://portal.azure.com/#blade/Microsoft_Azure_Support/HelpAndSupportBlade) | N/A                          | Platform-level outages         |
 
 ---
 
@@ -255,12 +254,12 @@ Break-glass must be exercised **at least annually** via tabletop to keep
 the envelope procedures and two-person control fresh. A real activation
 also counts as a drill.
 
-| Quarter   | Date  | Type (tabletop / real activation) | Scenario exercised | Operator | Witness | Gaps identified | Fixes tracked |
-| --------- | ----- | --------------------------------- | ------------------ | -------- | ------- | --------------- | ------------- |
-| Q1 — Jan  | _TBD_ | _TBD_                             | _TBD_              | _TBD_    | _TBD_   | _TBD_           | _TBD_         |
-| Q2 — Apr  | _TBD_ | _TBD_                             | _TBD_              | _TBD_    | _TBD_   | _TBD_           | _TBD_         |
-| Q3 — Jul  | _TBD_ | _TBD_                             | _TBD_              | _TBD_    | _TBD_   | _TBD_           | _TBD_         |
-| Q4 — Oct  | _TBD_ | _TBD_                             | _TBD_              | _TBD_    | _TBD_   | _TBD_           | _TBD_         |
+| Quarter  | Date  | Type (tabletop / real activation) | Scenario exercised | Operator | Witness | Gaps identified | Fixes tracked |
+| -------- | ----- | --------------------------------- | ------------------ | -------- | ------- | --------------- | ------------- |
+| Q1 — Jan | _TBD_ | _TBD_                             | _TBD_              | _TBD_    | _TBD_   | _TBD_           | _TBD_         |
+| Q2 — Apr | _TBD_ | _TBD_                             | _TBD_              | _TBD_    | _TBD_   | _TBD_           | _TBD_         |
+| Q3 — Jul | _TBD_ | _TBD_                             | _TBD_              | _TBD_    | _TBD_   | _TBD_           | _TBD_         |
+| Q4 — Oct | _TBD_ | _TBD_                             | _TBD_              | _TBD_    | _TBD_   | _TBD_           | _TBD_         |
 
 ---
 

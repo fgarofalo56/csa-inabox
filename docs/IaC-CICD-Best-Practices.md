@@ -2,71 +2,70 @@
 
 # Infrastructure-as-Code & CI/CD Best Practices for CSA-in-a-Box
 
-
 !!! note
-    **Quick Summary**: Comprehensive guide for deploying a Cloud-Scale Analytics platform across 4 Azure subscriptions using Bicep and GitHub Actions — covers Bicep module organization, `.bicepparam` files, Deployment Stacks, what-if validation, OIDC auth, reusable workflows, matrix deployments, PSRule/Checkov/gitleaks security scanning, ALZ accelerators (AVM migration), progressive ring-based deployments, feature flags, policy-as-code, and a phased implementation plan with tool matrix.
+**Quick Summary**: Comprehensive guide for deploying a Cloud-Scale Analytics platform across 4 Azure subscriptions using Bicep and GitHub Actions — covers Bicep module organization, `.bicepparam` files, Deployment Stacks, what-if validation, OIDC auth, reusable workflows, matrix deployments, PSRule/Checkov/gitleaks security scanning, ALZ accelerators (AVM migration), progressive ring-based deployments, feature flags, policy-as-code, and a phased implementation plan with tool matrix.
 
 > **Research Report** | April 2026
 > Comprehensive guide for deploying a Cloud-Scale Analytics platform across 4 Azure subscriptions using Bicep and GitHub Actions.
 
 !!! important
-    This document describes the target-state architecture and recommended improvements. For current CI/CD workflows, see `.github/workflows/`. For current deployment instructions, see [QUICKSTART.md](QUICKSTART.md) or [GETTING_STARTED.md](GETTING_STARTED.md).
+This document describes the target-state architecture and recommended improvements. For current CI/CD workflows, see `.github/workflows/`. For current deployment instructions, see [QUICKSTART.md](QUICKSTART.md) or [GETTING_STARTED.md](GETTING_STARTED.md).
 
 !!! note
-    **CAF scenario update (CSA-0068).** The legacy "Cloud-Scale Analytics"
-    CAF scenario was **deprecated in April 2026** and replaced by
-    [Microsoft CAF — Unify your data platform](https://aka.ms/cafdata).
-    Links in this document to
-    `https://learn.microsoft.com/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/...`
-    are preserved for historical cross-reference only. For authoritative
-    2026 guidance on Fabric, data mesh, and landing zones, follow the
-    "Unify your data platform" link above.
+**CAF scenario update (CSA-0068).** The legacy "Cloud-Scale Analytics"
+CAF scenario was **deprecated in April 2026** and replaced by
+[Microsoft CAF — Unify your data platform](https://aka.ms/cafdata).
+Links in this document to
+`https://learn.microsoft.com/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/...`
+are preserved for historical cross-reference only. For authoritative
+2026 guidance on Fabric, data mesh, and landing zones, follow the
+"Unify your data platform" link above.
 
 ## 📑 Table of Contents
 
 - [🏗️ 1. Bicep Best Practices for Large-Scale Azure Deployments](#️-1-bicep-best-practices-for-large-scale-azure-deployments)
-  - [1.1 Module Organization and Naming Conventions](#11-module-organization-and-naming-conventions)
-  - [1.2 Parameter Files per Environment](#12-parameter-files-per-environment)
-  - [1.3 Bicep Module Registry (ACR)](#13-bicep-module-registry-azure-container-registry)
-  - [1.4 Deployment Stacks vs Standard Deployments](#14-deployment-stacks-vs-standard-deployments)
-  - [1.5 What-If Deployments and Validation](#15-what-if-deployments-and-validation)
-  - [1.6 Cross-Subscription and Cross-Resource-Group Deployments](#16-cross-subscription-and-cross-resource-group-deployments)
-  - [1.7 Conditional Deployment Patterns](#17-conditional-deployment-patterns)
-  - [1.8 User-Defined Types and Compile-Time Imports](#18-user-defined-types-and-compile-time-imports)
+    - [1.1 Module Organization and Naming Conventions](#11-module-organization-and-naming-conventions)
+    - [1.2 Parameter Files per Environment](#12-parameter-files-per-environment)
+    - [1.3 Bicep Module Registry (ACR)](#13-bicep-module-registry-azure-container-registry)
+    - [1.4 Deployment Stacks vs Standard Deployments](#14-deployment-stacks-vs-standard-deployments)
+    - [1.5 What-If Deployments and Validation](#15-what-if-deployments-and-validation)
+    - [1.6 Cross-Subscription and Cross-Resource-Group Deployments](#16-cross-subscription-and-cross-resource-group-deployments)
+    - [1.7 Conditional Deployment Patterns](#17-conditional-deployment-patterns)
+    - [1.8 User-Defined Types and Compile-Time Imports](#18-user-defined-types-and-compile-time-imports)
 - [🔄 2. GitHub Actions CI/CD for Azure IaC](#-2-github-actions-cicd-for-azure-iac)
-  - [2.1 Workflow Organization for Multi-Subscription Deploys](#21-workflow-organization-for-multi-subscription-deploys)
-  - [2.2 OIDC Authentication (Federated Credentials)](#22-oidc-authentication-federated-credentials)
-  - [2.3 Environment Protection Rules and Approvals](#23-environment-protection-rules-and-approvals)
-  - [2.4 Reusable Workflows and Composite Actions](#24-reusable-workflows-and-composite-actions)
-  - [2.5 Secret Management with GitHub Environments](#25-secret-management-with-github-environments)
-  - [2.6 Bicep Lint, Validate, What-If in PR Checks](#26-bicep-lint-validate-what-if-in-pr-checks)
-  - [2.7 Deployment Gates and Rollback Strategies](#27-deployment-gates-and-rollback-strategies)
-  - [2.8 Matrix Deployments for Multiple Subscriptions](#28-matrix-deployments-for-multiple-subscriptions)
+    - [2.1 Workflow Organization for Multi-Subscription Deploys](#21-workflow-organization-for-multi-subscription-deploys)
+    - [2.2 OIDC Authentication (Federated Credentials)](#22-oidc-authentication-federated-credentials)
+    - [2.3 Environment Protection Rules and Approvals](#23-environment-protection-rules-and-approvals)
+    - [2.4 Reusable Workflows and Composite Actions](#24-reusable-workflows-and-composite-actions)
+    - [2.5 Secret Management with GitHub Environments](#25-secret-management-with-github-environments)
+    - [2.6 Bicep Lint, Validate, What-If in PR Checks](#26-bicep-lint-validate-what-if-in-pr-checks)
+    - [2.7 Deployment Gates and Rollback Strategies](#27-deployment-gates-and-rollback-strategies)
+    - [2.8 Matrix Deployments for Multiple Subscriptions](#28-matrix-deployments-for-multiple-subscriptions)
 - [🧪 3. Testing Infrastructure-as-Code](#-3-testing-infrastructure-as-code)
-  - [3.1 Bicep Linting with Linter Rules](#31-bicep-linting-with-linter-rules)
-  - [3.2 PSRule for Azure (Policy Compliance Testing)](#32-psrule-for-azure-policy-compliance-testing)
-  - [3.3 Checkov (IaC Security Scanning)](#33-checkov-iac-security-scanning)
-  - [3.4 Additional Security Scanning Tools](#34-additional-security-scanning-tools)
-  - [3.5 Cost Estimation in CI Pipelines](#35-cost-estimation-in-ci-pipelines)
+    - [3.1 Bicep Linting with Linter Rules](#31-bicep-linting-with-linter-rules)
+    - [3.2 PSRule for Azure (Policy Compliance Testing)](#32-psrule-for-azure-policy-compliance-testing)
+    - [3.3 Checkov (IaC Security Scanning)](#33-checkov-iac-security-scanning)
+    - [3.4 Additional Security Scanning Tools](#34-additional-security-scanning-tools)
+    - [3.5 Cost Estimation in CI Pipelines](#35-cost-estimation-in-ci-pipelines)
 - [🏛️ 4. Azure Landing Zone Accelerators](#️-4-azure-landing-zone-accelerators)
-  - [4.1 ALZ-Bicep vs Azure Verified Modules (AVM)](#41-alz-bicep-vs-azure-verified-modules-avm)
-  - [4.2 Extending ALZ for Data Platforms](#42-extending-alz-for-data-platforms)
-  - [4.3 Custom Policy Definitions for Data Governance](#43-custom-policy-definitions-for-data-governance)
+    - [4.1 ALZ-Bicep vs Azure Verified Modules (AVM)](#41-alz-bicep-vs-azure-verified-modules-avm)
+    - [4.2 Extending ALZ for Data Platforms](#42-extending-alz-for-data-platforms)
+    - [4.3 Custom Policy Definitions for Data Governance](#43-custom-policy-definitions-for-data-governance)
 - [🌍 5. Multi-Environment Deployment Patterns](#-5-multi-environment-deployment-patterns)
-  - [5.1 Recommended: Progressive Deployment (Ring-Based)](#51-recommended-progressive-deployment-ring-based)
-  - [5.2 Feature Flags for Infrastructure](#52-feature-flags-for-infrastructure)
-  - [5.3 Blue-Green for Infrastructure](#53-blue-green-for-infrastructure)
-  - [5.4 Canary Deployments for Data Pipelines](#54-canary-deployments-for-data-pipelines)
+    - [5.1 Recommended: Progressive Deployment (Ring-Based)](#51-recommended-progressive-deployment-ring-based)
+    - [5.2 Feature Flags for Infrastructure](#52-feature-flags-for-infrastructure)
+    - [5.3 Blue-Green for Infrastructure](#53-blue-green-for-infrastructure)
+    - [5.4 Canary Deployments for Data Pipelines](#54-canary-deployments-for-data-pipelines)
 - [🔒 6. Secret Scanning and Security in CI/CD](#-6-secret-scanning-and-security-in-cicd)
-  - [6.1 Gitleaks Integration](#61-gitleaks-integration)
-  - [6.2 GitHub Advanced Security](#62-github-advanced-security)
-  - [6.3 Pre-Commit Hooks for Secret Detection](#63-pre-commit-hooks-for-secret-detection)
-  - [6.4 Policy-as-Code with Azure Policy](#64-policy-as-code-with-azure-policy)
+    - [6.1 Gitleaks Integration](#61-gitleaks-integration)
+    - [6.2 GitHub Advanced Security](#62-github-advanced-security)
+    - [6.3 Pre-Commit Hooks for Secret Detection](#63-pre-commit-hooks-for-secret-detection)
+    - [6.4 Policy-as-Code with Azure Policy](#64-policy-as-code-with-azure-policy)
 - [📋 7. Recommended Implementation Plan for CSA-in-a-Box](#-7-recommended-implementation-plan-for-csa-in-a-box)
-  - [7.1 Current State Assessment](#71-current-state-assessment)
-  - [7.2 Recommended Improvements (Priority Order)](#72-recommended-improvements-priority-order)
-  - [7.3 Tool Matrix Summary](#73-tool-matrix-summary)
-  - [7.4 CI/CD Pipeline Architecture (Target State)](#74-cicd-pipeline-architecture-target-state)
+    - [7.1 Current State Assessment](#71-current-state-assessment)
+    - [7.2 Recommended Improvements (Priority Order)](#72-recommended-improvements-priority-order)
+    - [7.3 Tool Matrix Summary](#73-tool-matrix-summary)
+    - [7.4 CI/CD Pipeline Architecture (Target State)](#74-cicd-pipeline-architecture-target-state)
 - [📎 Appendix A: Complete bicepconfig.json](#-appendix-a-complete-bicepconfinjson)
 - [🔑 Appendix B: GitHub Secrets Required](#-appendix-b-github-secrets-required)
 - [📚 Appendix C: Key Microsoft Documentation References](#-appendix-c-key-microsoft-documentation-references)
@@ -131,6 +130,7 @@ deploy/bicep/
 ```
 
 **Naming conventions:**
+
 - Use **lowerCamelCase** for symbolic names: `synapseWorkspace`, `dataLakeStorage`
 - Never use `name` in symbolic names (e.g., use `storageAccount` not `storageAccountName`)
 - Prefix resource names with shortcodes: `st` (storage), `kv` (key vault), `vnet` (virtual network)
@@ -191,6 +191,7 @@ param tags = {
 Publish reusable modules to an Azure Container Registry (ACR) for cross-team sharing:
 
 **Setup:**
+
 ```bash
 # Create registry
 az acr create --name csaIacModules --resource-group rg-shared --sku Standard
@@ -206,20 +207,22 @@ az bicep publish \
 ```
 
 **Configure aliases in `bicepconfig.json`:**
+
 ```json
 {
-  "moduleAliases": {
-    "br": {
-      "csaModules": {
-        "registry": "csaiacmodules.azurecr.io",
-        "modulePath": "bicep/modules"
-      }
+    "moduleAliases": {
+        "br": {
+            "csaModules": {
+                "registry": "csaiacmodules.azurecr.io",
+                "modulePath": "bicep/modules"
+            }
+        }
     }
-  }
 }
 ```
 
 Then consume modules with short aliases:
+
 ```bicep
 module vnet 'br/csaModules:networking/vnet:v1.0.0' = {
   name: 'deploy-vnet'
@@ -228,6 +231,7 @@ module vnet 'br/csaModules:networking/vnet:v1.0.0' = {
 ```
 
 **Versioning strategy:**
+
 - Use semantic versioning: `v1.0.0`, `v1.1.0`, `v2.0.0`
 - Publish with `--with-source` flag so consumers can F12 into the source in VS Code
 - Publish modules in CI after merge to main; tag with git SHA + semver
@@ -238,21 +242,23 @@ module vnet 'br/csaModules:networking/vnet:v1.0.0' = {
 
 Deployment Stacks are a superset of standard deployments that add lifecycle management:
 
-| Feature | Standard Deployment | Deployment Stack |
-|---------|-------------------|-----------------|
-| Deploy resources | Yes | Yes |
-| Track managed resources | No | Yes |
-| Prevent unauthorized changes (deny settings) | No | Yes (DenyDelete, DenyWriteAndDelete) |
-| Auto-cleanup on removal | No | Yes (deleteAll, deleteResources, detachAll) |
-| Cross-scope deployment | Yes | Yes |
+| Feature                                      | Standard Deployment | Deployment Stack                            |
+| -------------------------------------------- | ------------------- | ------------------------------------------- |
+| Deploy resources                             | Yes                 | Yes                                         |
+| Track managed resources                      | No                  | Yes                                         |
+| Prevent unauthorized changes (deny settings) | No                  | Yes (DenyDelete, DenyWriteAndDelete)        |
+| Auto-cleanup on removal                      | No                  | Yes (deleteAll, deleteResources, detachAll) |
+| Cross-scope deployment                       | Yes                 | Yes                                         |
 
 **When to use Deployment Stacks:**
+
 - Managing complete environments (dev/test/prod)
 - Protecting production resources from accidental deletion
 - Cleaning up test environments after sprints
 - Auditing which resources belong to which deployment
 
 **Example for CSA-in-a-Box:**
+
 ```bash
 # Create a subscription-scoped deployment stack for DMLZ
 az stack sub create \
@@ -267,23 +273,20 @@ az stack sub create \
 ```
 
 !!! warning
-    **Known limitations (as of early 2026):**
-    - Maximum 800 deployment stacks per scope
-    - Maximum 2,000 deny assignments per scope
-    - What-if is not yet supported with deployment stacks
-    - Microsoft Graph provider is not supported
-    - Deleting resource groups can bypass deny assignments
+**Known limitations (as of early 2026):** - Maximum 800 deployment stacks per scope - Maximum 2,000 deny assignments per scope - What-if is not yet supported with deployment stacks - Microsoft Graph provider is not supported - Deleting resource groups can bypass deny assignments
 
 ### 1.5 What-If Deployments and Validation
 
 What-if provides a preview of changes before deployment. It's critical for PR review workflows.
 
 **Validation levels (az CLI 2.76+):**
+
 - `Provider` (default): Full validation including RBAC permission checks
 - `ProviderNoRbac`: Full validation, read-only permission checks
 - `Template`: Static syntax/structure validation only (no Azure calls needed)
 
 **CI/CD integration pattern:**
+
 ```bash
 # In PR pipeline: run what-if and capture output
 az deployment sub what-if \
@@ -296,6 +299,7 @@ az deployment sub what-if \
 ```
 
 **`bicep snapshot` command** (new): Performs local-only comparison by generating a normalized JSON representation. Useful for catching logic changes without Azure connectivity:
+
 ```bash
 bicep snapshot main.bicep --output snapshot.json
 # Compare with previous snapshot to detect drift
@@ -333,7 +337,7 @@ module networkResources 'modules/networking.bicep' = {
 ```
 
 !!! important
-    The deploying identity needs appropriate RBAC on all target subscriptions. For management group scoped deployments, use `targetScope = 'managementGroup'` and deploy to child subscriptions.
+The deploying identity needs appropriate RBAC on all target subscriptions. For management group scoped deployments, use `targetScope = 'managementGroup'` and deploy to child subscriptions.
 
 ### 1.7 Conditional Deployment Patterns
 
@@ -415,6 +419,7 @@ type tagType = {
 </details>
 
 **Consuming shared types:**
+
 ```bicep
 // orchestration/dmlz/main.bicep
 import { environmentType, networkConfigType, tagType } from '../../_shared/types.bicep'
@@ -425,6 +430,7 @@ param tags tagType
 ```
 
 **Resource-derived types (Bicep CLI 0.34.1+):**
+
 ```bicep
 // Derive types directly from Azure resource schemas
 type storageAccountSku = resourceInput<'Microsoft.Storage/storageAccounts@2024-01-01'>.sku
@@ -446,13 +452,13 @@ Recommended structure using reusable workflows:
     ci.yml                          # PR validation
     cd-dev.yml                      # Deploy to dev (on merge)
     cd-prod.yml                     # Deploy to prod (manual)
-    
+
     # Reusable workflows
     _validate.yml                   # Bicep lint + build + what-if
     _deploy-subscription.yml        # Deploy to a single subscription
     _post-deploy-checks.yml         # Smoke tests
     _security-scan.yml              # Checkov + gitleaks
-    
+
   actions/
     # Composite actions
     bicep-validate/action.yml       # Lint + build
@@ -511,45 +517,47 @@ done
 ```
 
 **GitHub workflow usage:**
+
 ```yaml
 permissions:
-  id-token: write   # Required for OIDC
-  contents: read
+    id-token: write # Required for OIDC
+    contents: read
 
 steps:
-  - name: Azure Login (OIDC)
-    uses: azure/login@v2
-    with:
-      client-id: ${{ secrets.AZURE_CLIENT_ID }}
-      tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-      subscription-id: ${{ secrets.AZURE_MGMT_SUBSCRIPTION_ID }}
+    - name: Azure Login (OIDC)
+      uses: azure/login@v2
+      with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_MGMT_SUBSCRIPTION_ID }}
 ```
 
 ### 2.3 Environment Protection Rules and Approvals
 
 Configure GitHub Environments with protection rules:
 
-| Environment | Protection Rules | Secrets |
-|-------------|-----------------|---------|
-| `dev` | None (auto-deploy on merge) | Dev subscription IDs |
-| `test` | Wait timer (5 min) | Test subscription IDs |
-| `prod` | Required reviewers (2+), deployment branches (main only) | Prod subscription IDs |
+| Environment | Protection Rules                                         | Secrets               |
+| ----------- | -------------------------------------------------------- | --------------------- |
+| `dev`       | None (auto-deploy on merge)                              | Dev subscription IDs  |
+| `test`      | Wait timer (5 min)                                       | Test subscription IDs |
+| `prod`      | Required reviewers (2+), deployment branches (main only) | Prod subscription IDs |
 
 **Configuration in workflow:**
+
 ```yaml
 jobs:
-  deploy-prod:
-    environment:
-      name: prod
-      url: https://portal.azure.com/#@tenant/resource/subscriptions/${{ secrets.AZURE_DLZ_SUBSCRIPTION_ID }}
-    runs-on: ubuntu-latest
-    steps:
-      # This job won't run until reviewers approve
-      - uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          # Environment-specific secrets
-          subscription-id: ${{ secrets.AZURE_DLZ_SUBSCRIPTION_ID }}
+    deploy-prod:
+        environment:
+            name: prod
+            url: https://portal.azure.com/#@tenant/resource/subscriptions/${{ secrets.AZURE_DLZ_SUBSCRIPTION_ID }}
+        runs-on: ubuntu-latest
+        steps:
+            # This job won't run until reviewers approve
+            - uses: azure/login@v2
+              with:
+                  client-id: ${{ secrets.AZURE_CLIENT_ID }}
+                  # Environment-specific secrets
+                  subscription-id: ${{ secrets.AZURE_DLZ_SUBSCRIPTION_ID }}
 ```
 
 ### 2.4 Reusable Workflows and Composite Actions
@@ -562,85 +570,85 @@ jobs:
 name: Deploy to Subscription (Reusable)
 
 on:
-  workflow_call:
-    inputs:
-      environment:
-        required: true
-        type: string
-      template_file:
-        required: true
-        type: string
-      parameters_file:
-        required: true
-        type: string
-      subscription_name:
-        required: true
-        type: string
-        description: 'MGMT, CONN, DMLZ, or DLZ'
-      location:
-        required: false
-        type: string
-        default: 'eastus'
-      dry_run:
-        required: false
-        type: boolean
-        default: false
-    secrets:
-      AZURE_CLIENT_ID:
-        required: true
-      AZURE_TENANT_ID:
-        required: true
-      AZURE_SUBSCRIPTION_ID:
-        required: true
-    outputs:
-      deployment_name:
-        description: 'Name of the deployment'
-        value: ${{ jobs.deploy.outputs.deployment_name }}
+    workflow_call:
+        inputs:
+            environment:
+                required: true
+                type: string
+            template_file:
+                required: true
+                type: string
+            parameters_file:
+                required: true
+                type: string
+            subscription_name:
+                required: true
+                type: string
+                description: "MGMT, CONN, DMLZ, or DLZ"
+            location:
+                required: false
+                type: string
+                default: "eastus"
+            dry_run:
+                required: false
+                type: boolean
+                default: false
+        secrets:
+            AZURE_CLIENT_ID:
+                required: true
+            AZURE_TENANT_ID:
+                required: true
+            AZURE_SUBSCRIPTION_ID:
+                required: true
+        outputs:
+            deployment_name:
+                description: "Name of the deployment"
+                value: ${{ jobs.deploy.outputs.deployment_name }}
 
 jobs:
-  deploy:
-    name: Deploy ${{ inputs.subscription_name }}
-    runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
-    outputs:
-      deployment_name: ${{ steps.deploy.outputs.name }}
-    
-    permissions:
-      id-token: write
-      contents: read
+    deploy:
+        name: Deploy ${{ inputs.subscription_name }}
+        runs-on: ubuntu-latest
+        environment: ${{ inputs.environment }}
+        outputs:
+            deployment_name: ${{ steps.deploy.outputs.name }}
 
-    steps:
-      - uses: actions/checkout@v4
+        permissions:
+            id-token: write
+            contents: read
 
-      - name: Azure Login (OIDC)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        steps:
+            - uses: actions/checkout@v4
 
-      - name: Install Bicep
-        run: az bicep install
+            - name: Azure Login (OIDC)
+              uses: azure/login@v2
+              with:
+                  client-id: ${{ secrets.AZURE_CLIENT_ID }}
+                  tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+                  subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: What-If Preview
-        if: ${{ inputs.dry_run }}
-        run: |
-          az deployment sub what-if \
-            --location ${{ inputs.location }} \
-            --template-file ${{ inputs.template_file }} \
-            --parameters ${{ inputs.parameters_file }}
+            - name: Install Bicep
+              run: az bicep install
 
-      - name: Deploy
-        id: deploy
-        if: ${{ !inputs.dry_run }}
-        run: |
-          DEPLOYMENT_NAME="csa-${{ inputs.subscription_name }}-$(date +%Y%m%d-%H%M%S)"
-          az deployment sub create \
-            --name "$DEPLOYMENT_NAME" \
-            --location ${{ inputs.location }} \
-            --template-file ${{ inputs.template_file }} \
-            --parameters ${{ inputs.parameters_file }}
-          echo "name=$DEPLOYMENT_NAME" >> $GITHUB_OUTPUT
+            - name: What-If Preview
+              if: ${{ inputs.dry_run }}
+              run: |
+                  az deployment sub what-if \
+                    --location ${{ inputs.location }} \
+                    --template-file ${{ inputs.template_file }} \
+                    --parameters ${{ inputs.parameters_file }}
+
+            - name: Deploy
+              id: deploy
+              if: ${{ !inputs.dry_run }}
+              run: |
+                  DEPLOYMENT_NAME="csa-${{ inputs.subscription_name }}-$(date +%Y%m%d-%H%M%S)"
+                  az deployment sub create \
+                    --name "$DEPLOYMENT_NAME" \
+                    --location ${{ inputs.location }} \
+                    --template-file ${{ inputs.template_file }} \
+                    --parameters ${{ inputs.parameters_file }}
+                  echo "name=$DEPLOYMENT_NAME" >> $GITHUB_OUTPUT
 ```
 
 </details>
@@ -653,74 +661,75 @@ jobs:
 name: Deploy to Dev
 
 on:
-  push:
-    branches: [main]
-    paths: ['deploy/**']
+    push:
+        branches: [main]
+        paths: ["deploy/**"]
 
 jobs:
-  deploy-dmlz:
-    uses: ./.github/workflows/_deploy-subscription.yml
-    with:
-      environment: dev
-      template_file: deploy/bicep/orchestration/dmlz/main.bicep
-      parameters_file: deploy/bicep/orchestration/dmlz/params.dev.bicepparam
-      subscription_name: DMLZ
-    secrets:
-      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_DMLZ_SUBSCRIPTION_ID }}
+    deploy-dmlz:
+        uses: ./.github/workflows/_deploy-subscription.yml
+        with:
+            environment: dev
+            template_file: deploy/bicep/orchestration/dmlz/main.bicep
+            parameters_file: deploy/bicep/orchestration/dmlz/params.dev.bicepparam
+            subscription_name: DMLZ
+        secrets:
+            AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+            AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+            AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_DMLZ_SUBSCRIPTION_ID }}
 
-  deploy-dlz:
-    needs: deploy-dmlz
-    uses: ./.github/workflows/_deploy-subscription.yml
-    with:
-      environment: dev
-      template_file: deploy/bicep/orchestration/dlz/main.bicep
-      parameters_file: deploy/bicep/orchestration/dlz/params.dev.bicepparam
-      subscription_name: DLZ
-    secrets:
-      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_DLZ_SUBSCRIPTION_ID }}
+    deploy-dlz:
+        needs: deploy-dmlz
+        uses: ./.github/workflows/_deploy-subscription.yml
+        with:
+            environment: dev
+            template_file: deploy/bicep/orchestration/dlz/main.bicep
+            parameters_file: deploy/bicep/orchestration/dlz/params.dev.bicepparam
+            subscription_name: DLZ
+        secrets:
+            AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+            AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+            AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_DLZ_SUBSCRIPTION_ID }}
 ```
 
 </details>
 
 **Composite action for Bicep validation:**
+
 ```yaml
 # .github/actions/bicep-validate/action.yml
 name: Bicep Validate
 description: Lint, build, and optionally what-if a Bicep file
 
 inputs:
-  template_file:
-    required: true
-    description: Path to the Bicep file
-  parameters_file:
-    required: false
-    description: Path to the parameters file
+    template_file:
+        required: true
+        description: Path to the Bicep file
+    parameters_file:
+        required: false
+        description: Path to the parameters file
 
 runs:
-  using: composite
-  steps:
-    - name: Install Bicep CLI
-      shell: bash
-      run: az bicep install
+    using: composite
+    steps:
+        - name: Install Bicep CLI
+          shell: bash
+          run: az bicep install
 
-    - name: Lint
-      shell: bash
-      run: az bicep lint --file ${{ inputs.template_file }}
+        - name: Lint
+          shell: bash
+          run: az bicep lint --file ${{ inputs.template_file }}
 
-    - name: Build (compile check)
-      shell: bash
-      run: az bicep build --file ${{ inputs.template_file }}
+        - name: Build (compile check)
+          shell: bash
+          run: az bicep build --file ${{ inputs.template_file }}
 ```
 
 ### 2.5 Secret Management with GitHub Environments
 
 ```text
 GitHub Environments Configuration:
-  
+
   dev:
     Secrets:
       AZURE_CLIENT_ID            # Same across environments (single app registration)
@@ -760,111 +769,111 @@ GitHub Environments Configuration:
 name: PR Validation
 
 on:
-  pull_request:
-    branches: [main]
-    paths: ['deploy/**/*.bicep', 'deploy/**/*.bicepparam']
+    pull_request:
+        branches: [main]
+        paths: ["deploy/**/*.bicep", "deploy/**/*.bicepparam"]
 
 permissions:
-  id-token: write
-  contents: read
-  pull-requests: write
+    id-token: write
+    contents: read
+    pull-requests: write
 
 jobs:
-  lint-and-build:
-    name: Lint & Build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+    lint-and-build:
+        name: Lint & Build
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
 
-      - name: Install Bicep
-        run: az bicep install
+            - name: Install Bicep
+              run: az bicep install
 
-      - name: Lint all Bicep files
-        run: |
-          ERRORS=0
-          find deploy/ -name "*.bicep" | while read -r file; do
-            echo "::group::Linting $file"
-            if ! az bicep lint --file "$file" 2>&1; then
-              ERRORS=$((ERRORS + 1))
-            fi
-            echo "::endgroup::"
-          done
-          exit $ERRORS
+            - name: Lint all Bicep files
+              run: |
+                  ERRORS=0
+                  find deploy/ -name "*.bicep" | while read -r file; do
+                    echo "::group::Linting $file"
+                    if ! az bicep lint --file "$file" 2>&1; then
+                      ERRORS=$((ERRORS + 1))
+                    fi
+                    echo "::endgroup::"
+                  done
+                  exit $ERRORS
 
-      - name: Build all orchestration main files
-        run: |
-          for main in deploy/bicep/orchestration/*/main.bicep; do
-            echo "::group::Building $main"
-            az bicep build --file "$main"
-            echo "::endgroup::"
-          done
+            - name: Build all orchestration main files
+              run: |
+                  for main in deploy/bicep/orchestration/*/main.bicep; do
+                    echo "::group::Building $main"
+                    az bicep build --file "$main"
+                    echo "::endgroup::"
+                  done
 
-  what-if:
-    name: What-If Preview
-    needs: lint-and-build
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        zone: [alz, dmlz, dlz, connectivity]
-    steps:
-      - uses: actions/checkout@v4
+    what-if:
+        name: What-If Preview
+        needs: lint-and-build
+        runs-on: ubuntu-latest
+        strategy:
+            matrix:
+                zone: [alz, dmlz, dlz, connectivity]
+        steps:
+            - uses: actions/checkout@v4
 
-      - name: Azure Login
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_MGMT_SUBSCRIPTION_ID }}
+            - name: Azure Login
+              uses: azure/login@v2
+              with:
+                  client-id: ${{ secrets.AZURE_CLIENT_ID }}
+                  tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+                  subscription-id: ${{ secrets.AZURE_MGMT_SUBSCRIPTION_ID }}
 
-      - name: What-If ${{ matrix.zone }}
-        id: whatif
-        run: |
-          TEMPLATE="deploy/bicep/orchestration/${{ matrix.zone }}/main.bicep"
-          PARAMS="deploy/bicep/orchestration/${{ matrix.zone }}/params.dev.bicepparam"
-          if [ -f "$TEMPLATE" ] && [ -f "$PARAMS" ]; then
-            OUTPUT=$(az deployment sub what-if \
-              --location eastus \
-              --template-file "$TEMPLATE" \
-              --parameters "$PARAMS" \
-              --no-pretty-print 2>&1) || true
-            echo "output<<EOF" >> $GITHUB_OUTPUT
-            echo "$OUTPUT" >> $GITHUB_OUTPUT
-            echo "EOF" >> $GITHUB_OUTPUT
-          fi
+            - name: What-If ${{ matrix.zone }}
+              id: whatif
+              run: |
+                  TEMPLATE="deploy/bicep/orchestration/${{ matrix.zone }}/main.bicep"
+                  PARAMS="deploy/bicep/orchestration/${{ matrix.zone }}/params.dev.bicepparam"
+                  if [ -f "$TEMPLATE" ] && [ -f "$PARAMS" ]; then
+                    OUTPUT=$(az deployment sub what-if \
+                      --location eastus \
+                      --template-file "$TEMPLATE" \
+                      --parameters "$PARAMS" \
+                      --no-pretty-print 2>&1) || true
+                    echo "output<<EOF" >> $GITHUB_OUTPUT
+                    echo "$OUTPUT" >> $GITHUB_OUTPUT
+                    echo "EOF" >> $GITHUB_OUTPUT
+                  fi
 
-      - name: Comment PR with What-If
-        if: steps.whatif.outputs.output
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const body = `### What-If Results: \`${{ matrix.zone }}\`\n\`\`\`\n${{ steps.whatif.outputs.output }}\n\`\`\``;
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: body
-            });
+            - name: Comment PR with What-If
+              if: steps.whatif.outputs.output
+              uses: actions/github-script@v7
+              with:
+                  script: |
+                      const body = `### What-If Results: \`${{ matrix.zone }}\`\n\`\`\`\n${{ steps.whatif.outputs.output }}\n\`\`\``;
+                      github.rest.issues.createComment({
+                        issue_number: context.issue.number,
+                        owner: context.repo.owner,
+                        repo: context.repo.repo,
+                        body: body
+                      });
 
-  security-scan:
-    name: Security Scan
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+    security-scan:
+        name: Security Scan
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
 
-      - name: Run Checkov
-        uses: bridgecrewio/checkov-action@v12
-        with:
-          directory: deploy/
-          framework: bicep,arm
-          soft_fail: true
-          output_format: sarif
-          output_file_path: results.sarif
+            - name: Run Checkov
+              uses: bridgecrewio/checkov-action@v12
+              with:
+                  directory: deploy/
+                  framework: bicep,arm
+                  soft_fail: true
+                  output_format: sarif
+                  output_file_path: results.sarif
 
-      - name: Upload SARIF
-        if: always()
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: results.sarif
+            - name: Upload SARIF
+              if: always()
+              uses: github/codeql-action/upload-sarif@v3
+              with:
+                  sarif_file: results.sarif
 ```
 
 </details>
@@ -887,41 +896,41 @@ Infrastructure doesn't "roll back" like application code. Instead:
 name: Rollback Infrastructure
 
 on:
-  workflow_dispatch:
-    inputs:
-      target_commit:
-        description: 'Git commit SHA to roll back to'
-        required: true
-      zone:
-        description: 'Zone to rollback'
-        type: choice
-        options: [alz, dmlz, dlz, connectivity]
-      environment:
-        type: choice
-        options: [dev, test, prod]
+    workflow_dispatch:
+        inputs:
+            target_commit:
+                description: "Git commit SHA to roll back to"
+                required: true
+            zone:
+                description: "Zone to rollback"
+                type: choice
+                options: [alz, dmlz, dlz, connectivity]
+            environment:
+                type: choice
+                options: [dev, test, prod]
 
 jobs:
-  rollback:
-    runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.target_commit }}
+    rollback:
+        runs-on: ubuntu-latest
+        environment: ${{ inputs.environment }}
+        steps:
+            - uses: actions/checkout@v4
+              with:
+                  ref: ${{ inputs.target_commit }}
 
-      - name: Azure Login
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+            - name: Azure Login
+              uses: azure/login@v2
+              with:
+                  client-id: ${{ secrets.AZURE_CLIENT_ID }}
+                  tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+                  subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Redeploy from previous commit
-        run: |
-          az deployment sub create \
-            --location eastus \
-            --template-file "deploy/bicep/orchestration/${{ inputs.zone }}/main.bicep" \
-            --parameters "deploy/bicep/orchestration/${{ inputs.zone }}/params.${{ inputs.environment }}.bicepparam"
+            - name: Redeploy from previous commit
+              run: |
+                  az deployment sub create \
+                    --location eastus \
+                    --template-file "deploy/bicep/orchestration/${{ inputs.zone }}/main.bicep" \
+                    --parameters "deploy/bicep/orchestration/${{ inputs.zone }}/params.${{ inputs.environment }}.bicepparam"
 ```
 
 </details>
@@ -930,43 +939,43 @@ jobs:
 
 ```yaml
 jobs:
-  deploy:
-    strategy:
-      max-parallel: 1    # Sequential for dependency ordering
-      matrix:
-        include:
-          - zone: alz
-            subscription_secret: AZURE_MGMT_SUBSCRIPTION_ID
-            order: 1
-          - zone: connectivity
-            subscription_secret: AZURE_CONN_SUBSCRIPTION_ID
-            order: 2
-          - zone: dmlz
-            subscription_secret: AZURE_DMLZ_SUBSCRIPTION_ID
-            order: 3
-          - zone: dlz
-            subscription_secret: AZURE_DLZ_SUBSCRIPTION_ID
-            order: 4
-    
-    environment: ${{ inputs.environment }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets[matrix.subscription_secret] }}
-      
-      - name: Deploy ${{ matrix.zone }}
-        run: |
-          az deployment sub create \
-            --location eastus \
-            --template-file "deploy/bicep/orchestration/${{ matrix.zone }}/main.bicep" \
-            --parameters "deploy/bicep/orchestration/${{ matrix.zone }}/params.${{ inputs.environment }}.bicepparam"
+    deploy:
+        strategy:
+            max-parallel: 1 # Sequential for dependency ordering
+            matrix:
+                include:
+                    - zone: alz
+                      subscription_secret: AZURE_MGMT_SUBSCRIPTION_ID
+                      order: 1
+                    - zone: connectivity
+                      subscription_secret: AZURE_CONN_SUBSCRIPTION_ID
+                      order: 2
+                    - zone: dmlz
+                      subscription_secret: AZURE_DMLZ_SUBSCRIPTION_ID
+                      order: 3
+                    - zone: dlz
+                      subscription_secret: AZURE_DLZ_SUBSCRIPTION_ID
+                      order: 4
+
+        environment: ${{ inputs.environment }}
+        runs-on: ubuntu-latest
+        steps:
+            - uses: azure/login@v2
+              with:
+                  client-id: ${{ secrets.AZURE_CLIENT_ID }}
+                  tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+                  subscription-id: ${{ secrets[matrix.subscription_secret] }}
+
+            - name: Deploy ${{ matrix.zone }}
+              run: |
+                  az deployment sub create \
+                    --location eastus \
+                    --template-file "deploy/bicep/orchestration/${{ matrix.zone }}/main.bicep" \
+                    --parameters "deploy/bicep/orchestration/${{ matrix.zone }}/params.${{ inputs.environment }}.bicepparam"
 ```
 
 !!! note
-    For true ordered sequential deployment with dependencies, use separate jobs with `needs:` rather than a matrix. Matrices run jobs in parallel (or `max-parallel: 1` but without dependency outputs between runs).
+For true ordered sequential deployment with dependencies, use separate jobs with `needs:` rather than a matrix. Matrices run jobs in parallel (or `max-parallel: 1` but without dependency outputs between runs).
 
 ---
 
@@ -978,42 +987,43 @@ The Bicep linter is integrated into both the CLI and VS Code extension. Configur
 
 ```json
 {
-  "analyzers": {
-    "core": {
-      "rules": {
-        "no-hardcoded-env-urls": { "level": "error" },
-        "no-hardcoded-location": { "level": "warning" },
-        "no-unused-params": { "level": "error" },
-        "no-unused-vars": { "level": "error" },
-        "outputs-should-not-contain-secrets": { "level": "error" },
-        "secure-parameter-default": { "level": "error" },
-        "use-recent-api-versions": { "level": "warning" },
-        "adminusername-should-not-be-literal": { "level": "error" },
-        "no-unnecessary-dependson": { "level": "warning" },
-        "simplify-interpolation": { "level": "warning" },
-        "use-resource-symbol-reference": { "level": "warning" },
-        "use-safe-access": { "level": "warning" },
-        "use-secure-value-for-secure-inputs": { "level": "error" },
-        "use-stable-resource-identifiers": { "level": "warning" },
-        "no-deployments-resources": { "level": "warning" },
-        "explicit-values-for-loc-params": { "level": "warning" }
-      }
+    "analyzers": {
+        "core": {
+            "rules": {
+                "no-hardcoded-env-urls": { "level": "error" },
+                "no-hardcoded-location": { "level": "warning" },
+                "no-unused-params": { "level": "error" },
+                "no-unused-vars": { "level": "error" },
+                "outputs-should-not-contain-secrets": { "level": "error" },
+                "secure-parameter-default": { "level": "error" },
+                "use-recent-api-versions": { "level": "warning" },
+                "adminusername-should-not-be-literal": { "level": "error" },
+                "no-unnecessary-dependson": { "level": "warning" },
+                "simplify-interpolation": { "level": "warning" },
+                "use-resource-symbol-reference": { "level": "warning" },
+                "use-safe-access": { "level": "warning" },
+                "use-secure-value-for-secure-inputs": { "level": "error" },
+                "use-stable-resource-identifiers": { "level": "warning" },
+                "no-deployments-resources": { "level": "warning" },
+                "explicit-values-for-loc-params": { "level": "warning" }
+            }
+        }
     }
-  }
 }
 ```
 
 **Key rules for data platform deployments:**
 
-| Rule | Level | Why |
-|------|-------|-----|
-| `outputs-should-not-contain-secrets` | Error | Prevents leaking keys/connection strings in outputs |
-| `use-secure-value-for-secure-inputs` | Error | Ensures secure params for passwords/keys |
-| `no-hardcoded-env-urls` | Error | Ensures cloud-agnostic templates |
-| `no-hardcoded-location` | Warning | Enforces parameterized locations |
-| `use-recent-api-versions` | Warning | Catches stale API versions |
+| Rule                                 | Level   | Why                                                 |
+| ------------------------------------ | ------- | --------------------------------------------------- |
+| `outputs-should-not-contain-secrets` | Error   | Prevents leaking keys/connection strings in outputs |
+| `use-secure-value-for-secure-inputs` | Error   | Ensures secure params for passwords/keys            |
+| `no-hardcoded-env-urls`              | Error   | Ensures cloud-agnostic templates                    |
+| `no-hardcoded-location`              | Warning | Enforces parameterized locations                    |
+| `use-recent-api-versions`            | Warning | Catches stale API versions                          |
 
 **CI integration:**
+
 ```bash
 # Lint with error exit code
 az bicep lint --file main.bicep
@@ -1030,54 +1040,56 @@ PSRule for Azure provides 500+ pre-built rules that test IaC against Azure Well-
 ```yaml
 # ps-rule.yaml (root of repo)
 configuration:
-  AZURE_BICEP_FILE_EXPANSION: true
-  AZURE_BICEP_FILE_EXPANSION_TIMEOUT: 10
-  AZURE_PARAMETER_FILE_EXPANSION: true
+    AZURE_BICEP_FILE_EXPANSION: true
+    AZURE_BICEP_FILE_EXPANSION_TIMEOUT: 10
+    AZURE_PARAMETER_FILE_EXPANSION: true
 
 input:
-  pathIgnore:
-    - '.github/'
-    - 'codeqlDB/'
-    - 'tools/'
-    - 'scripts/'
-    - 'node_modules/'
+    pathIgnore:
+        - ".github/"
+        - "codeqlDB/"
+        - "tools/"
+        - "scripts/"
+        - "node_modules/"
 
 rule:
-  include:
-    - Azure.*
+    include:
+        - Azure.*
 
 output:
-  culture: ['en-US']
+    culture: ["en-US"]
 
 binding:
-  targetName:
-    - ResourceName
-    - name
-  targetType:
-    - ResourceType
-    - type
+    targetName:
+        - ResourceName
+        - name
+    targetType:
+        - ResourceType
+        - type
 ```
 
 **GitHub Actions integration:**
+
 ```yaml
 # In CI workflow
 - name: Run PSRule for Azure
   uses: microsoft/ps-rule@v2
   with:
-    inputPath: deploy/
-    modules: PSRule.Rules.Azure
-    baseline: Azure.Default
-    outputFormat: Sarif
-    outputPath: psrule-results.sarif
-    
+      inputPath: deploy/
+      modules: PSRule.Rules.Azure
+      baseline: Azure.Default
+      outputFormat: Sarif
+      outputPath: psrule-results.sarif
+
 - name: Upload PSRule Results
   if: always()
   uses: github/codeql-action/upload-sarif@v3
   with:
-    sarif_file: psrule-results.sarif
+      sarif_file: psrule-results.sarif
 ```
 
 **Recommended baselines for data platforms:**
+
 - `Azure.Default`: General best practices
 - `Azure.GA_2024_06` / `Azure.GA_2025_*`: GA service baseline
 - `Azure.MCSB.v1`: Microsoft Cloud Security Benchmark rules
@@ -1091,27 +1103,27 @@ Checkov supports both Bicep and ARM templates with 750+ built-in policies.
 - name: Run Checkov
   uses: bridgecrewio/checkov-action@v12
   with:
-    directory: deploy/
-    framework: bicep,arm
-    check: >-
-      CKV_AZURE_35,CKV_AZURE_33,CKV_AZURE_17,
-      CKV_AZURE_14,CKV_AZURE_15
-    soft_fail: true
-    output_format: cli,sarif
-    output_file_path: console,results.sarif
-    download_external_modules: true
+      directory: deploy/
+      framework: bicep,arm
+      check: >-
+          CKV_AZURE_35,CKV_AZURE_33,CKV_AZURE_17,
+          CKV_AZURE_14,CKV_AZURE_15
+      soft_fail: true
+      output_format: cli,sarif
+      output_file_path: console,results.sarif
+      download_external_modules: true
 ```
 
 **Key Checkov checks for data platforms:**
 
-| Check ID | Description |
-|----------|-------------|
-| CKV_AZURE_33 | Ensure storage account uses private endpoint |
-| CKV_AZURE_35 | Ensure storage account access is restricted |
-| CKV_AZURE_36 | Ensure storage account uses customer managed key |
-| CKV_AZURE_59 | Ensure Synapse workspace is not accessible publicly |
-| CKV_AZURE_110 | Ensure Key Vault enables purge protection |
-| CKV_AZURE_190 | Ensure Databricks workspace uses private endpoint |
+| Check ID      | Description                                         |
+| ------------- | --------------------------------------------------- |
+| CKV_AZURE_33  | Ensure storage account uses private endpoint        |
+| CKV_AZURE_35  | Ensure storage account access is restricted         |
+| CKV_AZURE_36  | Ensure storage account uses customer managed key    |
+| CKV_AZURE_59  | Ensure Synapse workspace is not accessible publicly |
+| CKV_AZURE_110 | Ensure Key Vault enables purge protection           |
+| CKV_AZURE_190 | Ensure Databricks workspace uses private endpoint   |
 
 <details markdown="1">
 <summary>Custom policy example</summary>
@@ -1140,15 +1152,16 @@ class DataLakeEncryption(BaseResourceCheck):
 
 ### 3.4 Additional Security Scanning Tools
 
-| Tool | What It Scans | Bicep/ARM Support | GitHub Actions |
-|------|--------------|-------------------|---------------|
-| **Checkov** | IaC misconfigurations | Native Bicep + ARM | `bridgecrewio/checkov-action@v12` |
-| **Trivy** | IaC, containers, secrets | ARM JSON (compile Bicep first) | `aquasecurity/trivy-action@master` |
-| **tfsec** | IaC misconfigurations | ARM JSON | Deprecated (use Trivy) |
-| **PSRule** | Azure compliance/WAF | Native Bicep | `microsoft/ps-rule@v2` |
-| **KICS** | IaC misconfigurations | ARM JSON | `checkmarx/kics-github-action@v2` |
+| Tool        | What It Scans            | Bicep/ARM Support              | GitHub Actions                     |
+| ----------- | ------------------------ | ------------------------------ | ---------------------------------- |
+| **Checkov** | IaC misconfigurations    | Native Bicep + ARM             | `bridgecrewio/checkov-action@v12`  |
+| **Trivy**   | IaC, containers, secrets | ARM JSON (compile Bicep first) | `aquasecurity/trivy-action@master` |
+| **tfsec**   | IaC misconfigurations    | ARM JSON                       | Deprecated (use Trivy)             |
+| **PSRule**  | Azure compliance/WAF     | Native Bicep                   | `microsoft/ps-rule@v2`             |
+| **KICS**    | IaC misconfigurations    | ARM JSON                       | `checkmarx/kics-github-action@v2`  |
 
 **Recommended scanning stack for CSA-in-a-Box:**
+
 - [ ] **Bicep Linter** (built-in) - Syntax and best practices
 - [ ] **PSRule for Azure** - Azure Well-Architected compliance
 - [ ] **Checkov** - Security misconfigurations
@@ -1161,7 +1174,7 @@ class DataLakeEncryption(BaseResourceCheck):
 - name: Setup Infracost
   uses: infracost/actions/setup@v3
   with:
-    api-key: ${{ secrets.INFRACOST_API_KEY }}
+      api-key: ${{ secrets.INFRACOST_API_KEY }}
 
 # Note: Infracost has limited Bicep support.
 # Alternative: Use Azure Pricing Calculator API or
@@ -1169,11 +1182,11 @@ class DataLakeEncryption(BaseResourceCheck):
 
 - name: Estimate costs from What-If
   run: |
-    # Custom script to parse what-if output and estimate costs
-    # using Azure Retail Prices API
-    python scripts/estimate-costs.py \
-      --whatif-output whatif-output.json \
-      --region eastus
+      # Custom script to parse what-if output and estimate costs
+      # using Azure Retail Prices API
+      python scripts/estimate-costs.py \
+        --whatif-output whatif-output.json \
+        --region eastus
 ```
 
 ---
@@ -1183,19 +1196,20 @@ class DataLakeEncryption(BaseResourceCheck):
 ### 4.1 ALZ-Bicep vs Azure Verified Modules (AVM)
 
 !!! warning
-    **Critical update: ALZ-Bicep is being deprecated.**
+**Critical update: ALZ-Bicep is being deprecated.**
 
-| Aspect | ALZ-Bicep | Azure Verified Modules (AVM) |
-|--------|-----------|------------------------------|
-| Status | Deprecated Feb 2026, archived Feb 2027 | Active, recommended |
-| Modules | Standalone Bicep modules | Module registry on MCR |
-| Community | Microsoft maintained | Microsoft + community |
-| Consumption | Git clone + customize | `br/public:avm/res/<provider>/<resource>:<version>` |
-| Testing | Manual | Built-in CI/CD tests |
+| Aspect      | ALZ-Bicep                              | Azure Verified Modules (AVM)                        |
+| ----------- | -------------------------------------- | --------------------------------------------------- |
+| Status      | Deprecated Feb 2026, archived Feb 2027 | Active, recommended                                 |
+| Modules     | Standalone Bicep modules               | Module registry on MCR                              |
+| Community   | Microsoft maintained                   | Microsoft + community                               |
+| Consumption | Git clone + customize                  | `br/public:avm/res/<provider>/<resource>:<version>` |
+| Testing     | Manual                                 | Built-in CI/CD tests                                |
 
 **Recommendation: Use AVM modules as the foundation**, supplement with custom modules for data-platform-specific resources.
 
 **AVM module consumption:**
+
 ```bicep
 // Consume AVM modules from Microsoft Container Registry
 module vnet 'br/public:avm/res/network/virtual-network:0.5.0' = {
@@ -1225,7 +1239,7 @@ The Cloud-Scale Analytics architecture maps to these landing zones:
 
 ```text
 Management Group Hierarchy:
-  
+
   Tenant Root
   +-- csa-platform (Management Group)
   |   +-- csa-management (Subscription)     # Log Analytics, Sentinel, Defender
@@ -1242,13 +1256,13 @@ Management Group Hierarchy:
 
 **Reference deployment templates (from Microsoft):**
 
-| Template | Purpose | Per-deployment |
-|----------|---------|---------------|
-| [Data Management Zone](https://github.com/Azure/data-management-zone) | Purview, shared integration runtime, catalog | One per analytics estate |
-| [Data Landing Zone](https://github.com/Azure/data-landing-zone) | Storage, ingestion, compute services | One per domain/team |
-| [Data Product - Batch](https://github.com/Azure/data-product-batch) | Batch processing services | One or more per DLZ |
-| [Data Product - Streaming](https://github.com/Azure/data-product-streaming) | Stream processing services | One or more per DLZ |
-| [Data Product - Analytics](https://github.com/Azure/data-product-analytics) | Analytics and AI services | One or more per DLZ |
+| Template                                                                    | Purpose                                      | Per-deployment           |
+| --------------------------------------------------------------------------- | -------------------------------------------- | ------------------------ |
+| [Data Management Zone](https://github.com/Azure/data-management-zone)       | Purview, shared integration runtime, catalog | One per analytics estate |
+| [Data Landing Zone](https://github.com/Azure/data-landing-zone)             | Storage, ingestion, compute services         | One per domain/team      |
+| [Data Product - Batch](https://github.com/Azure/data-product-batch)         | Batch processing services                    | One or more per DLZ      |
+| [Data Product - Streaming](https://github.com/Azure/data-product-streaming) | Stream processing services                   | One or more per DLZ      |
+| [Data Product - Analytics](https://github.com/Azure/data-product-analytics) | Analytics and AI services                    | One or more per DLZ      |
 
 ### 4.3 Custom Policy Definitions for Data Governance
 
@@ -1305,6 +1319,7 @@ resource dataGovernanceInitiative 'Microsoft.Authorization/policySetDefinitions@
 </details>
 
 **Recommended built-in policies for data platforms:**
+
 - `Require secure transfer for storage accounts`
 - `Azure Synapse workspaces should use private link`
 - `Azure Data Factory should use private link`
@@ -1335,33 +1350,33 @@ graph LR
 name: Progressive Deployment
 
 on:
-  push:
-    branches: [main]
-    paths: ['deploy/**']
+    push:
+        branches: [main]
+        paths: ["deploy/**"]
 
 jobs:
-  # Ring 0: Dev (automatic)
-  deploy-dev:
-    uses: ./.github/workflows/_deploy-all-zones.yml
-    with:
-      environment: dev
-    secrets: inherit
+    # Ring 0: Dev (automatic)
+    deploy-dev:
+        uses: ./.github/workflows/_deploy-all-zones.yml
+        with:
+            environment: dev
+        secrets: inherit
 
-  # Ring 1: Test (after dev succeeds)
-  deploy-test:
-    needs: deploy-dev
-    uses: ./.github/workflows/_deploy-all-zones.yml
-    with:
-      environment: test
-    secrets: inherit
+    # Ring 1: Test (after dev succeeds)
+    deploy-test:
+        needs: deploy-dev
+        uses: ./.github/workflows/_deploy-all-zones.yml
+        with:
+            environment: test
+        secrets: inherit
 
-  # Ring 2: Prod (manual gate)
-  deploy-prod:
-    needs: deploy-test
-    uses: ./.github/workflows/_deploy-all-zones.yml
-    with:
-      environment: prod     # Has required reviewers configured
-    secrets: inherit
+    # Ring 2: Prod (manual gate)
+    deploy-prod:
+        needs: deploy-test
+        uses: ./.github/workflows/_deploy-all-zones.yml
+        with:
+            environment: prod # Has required reviewers configured
+        secrets: inherit
 ```
 
 ### 5.2 Feature Flags for Infrastructure
@@ -1397,10 +1412,10 @@ module synapse 'modules/compute/synapse.bicep' = if (features.enableSynapse) {
 
 True blue-green is complex for stateful infrastructure. For data platforms, use a **slot-based approach** for stateless components and **in-place updates** for stateful ones:
 
-| Component Type | Strategy | Examples |
-|----------------|----------|----------|
-| **Stateless** (blue-green capable) | Deploy alongside, swap routing | Synapse SQL pools, Spark pools, ADF IRs, Load balancers |
-| **Stateful** (in-place update only) | Incremental update | Data Lake, Cosmos DB, Purview catalog, Key Vault, Private DNS |
+| Component Type                      | Strategy                       | Examples                                                      |
+| ----------------------------------- | ------------------------------ | ------------------------------------------------------------- |
+| **Stateless** (blue-green capable)  | Deploy alongside, swap routing | Synapse SQL pools, Spark pools, ADF IRs, Load balancers       |
+| **Stateful** (in-place update only) | Incremental update             | Data Lake, Cosmos DB, Purview catalog, Key Vault, Private DNS |
 
 **Pattern:** Deploy new stateless infrastructure alongside existing, test, then swap DNS/routing:
 
@@ -1444,17 +1459,17 @@ This is implemented at the ADF/Synapse pipeline level rather than at the IaC lev
 ```yaml
 # .github/workflows/ci.yml (add to existing)
 secret-scan:
-  name: Secret Detection
-  runs-on: ubuntu-latest
-  steps:
-    - uses: actions/checkout@v4
-      with:
-        fetch-depth: 0    # Full history for scanning
+    name: Secret Detection
+    runs-on: ubuntu-latest
+    steps:
+        - uses: actions/checkout@v4
+          with:
+              fetch-depth: 0 # Full history for scanning
 
-    - name: Run gitleaks
-      uses: gitleaks/gitleaks-action@v2
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        - name: Run gitleaks
+          uses: gitleaks/gitleaks-action@v2
+          env:
+              GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
 
 <details markdown="1">
@@ -1502,14 +1517,14 @@ If available on your plan, enable:
 # .github/dependabot.yml
 version: 2
 updates:
-  - package-ecosystem: "github-actions"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-    groups:
-      azure-actions:
-        patterns:
-          - "azure/*"
+    - package-ecosystem: "github-actions"
+      directory: "/"
+      schedule:
+          interval: "weekly"
+      groups:
+          azure-actions:
+              patterns:
+                  - "azure/*"
 ```
 
 ### 6.3 Pre-Commit Hooks for Secret Detection
@@ -1517,31 +1532,32 @@ updates:
 ```yaml
 # .pre-commit-config.yaml
 repos:
-  - repo: https://github.com/gitleaks/gitleaks
-    rev: v8.18.0
-    hooks:
-      - id: gitleaks
+    - repo: https://github.com/gitleaks/gitleaks
+      rev: v8.18.0
+      hooks:
+          - id: gitleaks
 
-  - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.6.0
-    hooks:
-      - id: detect-private-key
-      - id: check-added-large-files
-        args: ['--maxkb=500']
-      - id: no-commit-to-branch
-        args: ['--branch', 'main']
+    - repo: https://github.com/pre-commit/pre-commit-hooks
+      rev: v4.6.0
+      hooks:
+          - id: detect-private-key
+          - id: check-added-large-files
+            args: ["--maxkb=500"]
+          - id: no-commit-to-branch
+            args: ["--branch", "main"]
 
-  - repo: local
-    hooks:
-      - id: bicep-lint
-        name: Bicep Lint
-        entry: bash -c 'for f in "$@"; do az bicep lint --file "$f"; done'
-        language: system
-        types_or: [file]
-        files: '\.bicep$'
+    - repo: local
+      hooks:
+          - id: bicep-lint
+            name: Bicep Lint
+            entry: bash -c 'for f in "$@"; do az bicep lint --file "$f"; done'
+            language: system
+            types_or: [file]
+            files: '\.bicep$'
 ```
 
 **Installation:**
+
 ```bash
 pip install pre-commit
 pre-commit install
@@ -1593,6 +1609,7 @@ resource encryptionPolicy 'Microsoft.Authorization/policyAssignments@2025-03-01'
 ### 7.1 Current State Assessment
 
 Based on the existing repository structure, the project already has:
+
 - A `validate.yml` workflow with Bicep lint, gitleaks, Checkov, and PowerShell lint
 - A `deploy.yml` workflow with OIDC auth, what-if support, and per-zone deployment
 - Bicep modules organized by zone (ALZ, DMLZ, DLZ) with modules subdirectories
@@ -1634,22 +1651,22 @@ Based on the existing repository structure, the project already has:
 
 ### 7.3 Tool Matrix Summary
 
-| Category | Tool | Priority | Status in Repo |
-|----------|------|----------|----------------|
-| **Linting** | Bicep Linter | P0 | Exists (enhance config) |
-| **Compliance** | PSRule for Azure | P0 | Not yet |
-| **Security** | Checkov | P0 | Exists |
-| **Secrets** | gitleaks | P0 | Exists |
-| **Secrets** | Pre-commit hooks | P1 | Not yet |
-| **Auth** | OIDC (Workload Identity) | P0 | Exists |
-| **Deployment** | What-if in PRs | P1 | Partial |
-| **Deployment** | Deployment Stacks | P2 | Not yet |
-| **Deployment** | Reusable Workflows | P1 | Not yet |
-| **Registry** | ACR for Bicep modules | P2 | Not yet |
-| **Modules** | Azure Verified Modules | P2 | Not yet |
-| **Policy** | Azure Policy-as-Code | P1 | Partial (in ALZ) |
-| **Monitoring** | Dependabot | P1 | Not yet |
-| **Cost** | Cost estimation | P3 | Not yet |
+| Category       | Tool                     | Priority | Status in Repo          |
+| -------------- | ------------------------ | -------- | ----------------------- |
+| **Linting**    | Bicep Linter             | P0       | Exists (enhance config) |
+| **Compliance** | PSRule for Azure         | P0       | Not yet                 |
+| **Security**   | Checkov                  | P0       | Exists                  |
+| **Secrets**    | gitleaks                 | P0       | Exists                  |
+| **Secrets**    | Pre-commit hooks         | P1       | Not yet                 |
+| **Auth**       | OIDC (Workload Identity) | P0       | Exists                  |
+| **Deployment** | What-if in PRs           | P1       | Partial                 |
+| **Deployment** | Deployment Stacks        | P2       | Not yet                 |
+| **Deployment** | Reusable Workflows       | P1       | Not yet                 |
+| **Registry**   | ACR for Bicep modules    | P2       | Not yet                 |
+| **Modules**    | Azure Verified Modules   | P2       | Not yet                 |
+| **Policy**     | Azure Policy-as-Code     | P1       | Partial (in ALZ)        |
+| **Monitoring** | Dependabot               | P1       | Not yet                 |
+| **Cost**       | Cost estimation          | P3       | Not yet                 |
 
 ### 7.4 CI/CD Pipeline Architecture (Target State)
 
@@ -1687,52 +1704,52 @@ graph TD
 
 ```json
 {
-  "analyzers": {
-    "core": {
-      "verbose": false,
-      "enabled": true,
-      "rules": {
-        "no-hardcoded-env-urls": { "level": "error" },
-        "no-hardcoded-location": { "level": "warning" },
-        "no-unused-params": { "level": "error" },
-        "no-unused-vars": { "level": "error" },
-        "no-unused-existing-resources": { "level": "warning" },
-        "outputs-should-not-contain-secrets": { "level": "error" },
-        "secure-parameter-default": { "level": "error" },
-        "secure-params-in-nested-deploy": { "level": "error" },
-        "secure-secrets-in-params": { "level": "error" },
-        "use-secure-value-for-secure-inputs": { "level": "error" },
-        "use-recent-api-versions": { "level": "warning" },
-        "adminusername-should-not-be-literal": { "level": "error" },
-        "no-unnecessary-dependson": { "level": "warning" },
-        "simplify-interpolation": { "level": "warning" },
-        "prefer-interpolation": { "level": "warning" },
-        "use-resource-symbol-reference": { "level": "warning" },
-        "use-safe-access": { "level": "warning" },
-        "use-stable-resource-identifiers": { "level": "warning" },
-        "no-deployments-resources": { "level": "warning" },
-        "explicit-values-for-loc-params": { "level": "warning" },
-        "use-parent-property": { "level": "warning" },
-        "no-conflicting-metadata": { "level": "warning" }
-      }
+    "analyzers": {
+        "core": {
+            "verbose": false,
+            "enabled": true,
+            "rules": {
+                "no-hardcoded-env-urls": { "level": "error" },
+                "no-hardcoded-location": { "level": "warning" },
+                "no-unused-params": { "level": "error" },
+                "no-unused-vars": { "level": "error" },
+                "no-unused-existing-resources": { "level": "warning" },
+                "outputs-should-not-contain-secrets": { "level": "error" },
+                "secure-parameter-default": { "level": "error" },
+                "secure-params-in-nested-deploy": { "level": "error" },
+                "secure-secrets-in-params": { "level": "error" },
+                "use-secure-value-for-secure-inputs": { "level": "error" },
+                "use-recent-api-versions": { "level": "warning" },
+                "adminusername-should-not-be-literal": { "level": "error" },
+                "no-unnecessary-dependson": { "level": "warning" },
+                "simplify-interpolation": { "level": "warning" },
+                "prefer-interpolation": { "level": "warning" },
+                "use-resource-symbol-reference": { "level": "warning" },
+                "use-safe-access": { "level": "warning" },
+                "use-stable-resource-identifiers": { "level": "warning" },
+                "no-deployments-resources": { "level": "warning" },
+                "explicit-values-for-loc-params": { "level": "warning" },
+                "use-parent-property": { "level": "warning" },
+                "no-conflicting-metadata": { "level": "warning" }
+            }
+        }
+    },
+    "moduleAliases": {
+        "br": {
+            "csaModules": {
+                "registry": "csaiacmodules.azurecr.io",
+                "modulePath": "bicep/modules"
+            },
+            "public": {
+                "registry": "mcr.microsoft.com",
+                "modulePath": "bicep"
+            }
+        }
+    },
+    "experimentalFeaturesEnabled": {
+        "userDefinedTypes": true,
+        "compileTimeImports": true
     }
-  },
-  "moduleAliases": {
-    "br": {
-      "csaModules": {
-        "registry": "csaiacmodules.azurecr.io",
-        "modulePath": "bicep/modules"
-      },
-      "public": {
-        "registry": "mcr.microsoft.com",
-        "modulePath": "bicep"
-      }
-    }
-  },
-  "experimentalFeaturesEnabled": {
-    "userDefinedTypes": true,
-    "compileTimeImports": true
-  }
 }
 ```
 

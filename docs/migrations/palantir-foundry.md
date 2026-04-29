@@ -16,18 +16,18 @@ This playbook is honest where the gap is real. IL6 (classified SCI) is out of sc
 
 ### Federal considerations — Foundry vs csa-inabox
 
-| Consideration | Foundry (today) | csa-inabox (today) | Notes |
-|---|---|---|---|
-| FedRAMP High | Authorized | Inherited through Azure Government + Azure Commercial authorized services; controls mapped in `csa_platform/csa_platform/governance/compliance/nist-800-53-rev5.yaml` | csa-inabox does not hold its own FedRAMP ATO; it inherits from the Azure platform ATOs and documents control coverage for agency-specific SSPs |
-| DoD IL4 | Covered | Covered in Azure Gov | Full parity on Azure Government for IL4 workloads |
-| DoD IL5 | Covered | Covered in Azure Gov with most services; Fabric IL5 parity forecast per Microsoft roadmap | Near-term parity; see `docs/GOV_SERVICE_MATRIX.md` for service-level status |
-| DoD IL6 | Covered | **Gap** — classified SCI workloads out of scope | Recommend Foundry, Databricks-on-IL6, or bespoke tenant for IL6 |
-| ITAR | Covered | Covered by Azure Government tenant defaults inherited by csa-inabox | Data-residency controls assured by Azure Gov tenant-binding |
-| CMMC 2.0 Level 2 | Covered | Controls mapped in `csa_platform/csa_platform/governance/compliance/cmmc-2.0-l2.yaml` + `docs/compliance/cmmc-2.0-l2.md` | DIB primes can inherit |
-| HIPAA Security Rule | Covered | Mapped in `csa_platform/csa_platform/governance/compliance/hipaa-security-rule.yaml`; see `examples/tribal-health/` | HHS / tribal-health / CMS programs |
-| Tribal data sovereignty | Partial | Documented reference implementations in `examples/tribal-health/` and `examples/casino-analytics/` | Explicit tribal-sovereignty patterns |
-| Per-seat licensing | Yes (Foundry named-user seats) | No | csa-inabox is consumption-priced Azure; Fabric capacity is workspace-level, not per-seat |
-| Vendor lock-in | High (Ontology is proprietary) | Low (Delta, Parquet, dbt, Purview REST APIs all open) | Exit path from csa-inabox is well-understood |
+| Consideration           | Foundry (today)                | csa-inabox (today)                                                                                                                                                    | Notes                                                                                                                                          |
+| ----------------------- | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| FedRAMP High            | Authorized                     | Inherited through Azure Government + Azure Commercial authorized services; controls mapped in `csa_platform/csa_platform/governance/compliance/nist-800-53-rev5.yaml` | csa-inabox does not hold its own FedRAMP ATO; it inherits from the Azure platform ATOs and documents control coverage for agency-specific SSPs |
+| DoD IL4                 | Covered                        | Covered in Azure Gov                                                                                                                                                  | Full parity on Azure Government for IL4 workloads                                                                                              |
+| DoD IL5                 | Covered                        | Covered in Azure Gov with most services; Fabric IL5 parity forecast per Microsoft roadmap                                                                             | Near-term parity; see `docs/GOV_SERVICE_MATRIX.md` for service-level status                                                                    |
+| DoD IL6                 | Covered                        | **Gap** — classified SCI workloads out of scope                                                                                                                       | Recommend Foundry, Databricks-on-IL6, or bespoke tenant for IL6                                                                                |
+| ITAR                    | Covered                        | Covered by Azure Government tenant defaults inherited by csa-inabox                                                                                                   | Data-residency controls assured by Azure Gov tenant-binding                                                                                    |
+| CMMC 2.0 Level 2        | Covered                        | Controls mapped in `csa_platform/csa_platform/governance/compliance/cmmc-2.0-l2.yaml` + `docs/compliance/cmmc-2.0-l2.md`                                              | DIB primes can inherit                                                                                                                         |
+| HIPAA Security Rule     | Covered                        | Mapped in `csa_platform/csa_platform/governance/compliance/hipaa-security-rule.yaml`; see `examples/tribal-health/`                                                   | HHS / tribal-health / CMS programs                                                                                                             |
+| Tribal data sovereignty | Partial                        | Documented reference implementations in `examples/tribal-health/` and `examples/casino-analytics/`                                                                    | Explicit tribal-sovereignty patterns                                                                                                           |
+| Per-seat licensing      | Yes (Foundry named-user seats) | No                                                                                                                                                                    | csa-inabox is consumption-priced Azure; Fabric capacity is workspace-level, not per-seat                                                       |
+| Vendor lock-in          | High (Ontology is proprietary) | Low (Delta, Parquet, dbt, Purview REST APIs all open)                                                                                                                 | Exit path from csa-inabox is well-understood                                                                                                   |
 
 ---
 
@@ -35,27 +35,27 @@ This playbook is honest where the gap is real. IL6 (classified SCI) is out of sc
 
 This is the load-bearing table. Every row cites a real file path in the repo where the equivalent pattern lives today, or flags an honest gap with the tracked finding ID.
 
-| Foundry capability | csa-inabox equivalent | Mapping notes | Effort | Evidence (repo path) |
-|---|---|---|---|---|
-| **Ontology** (object types, link types, properties) | Purview Unified Catalog business glossary + classifications + dbt semantic layer | Foundry's object types become Purview glossary terms; link types become foreign keys in dbt + relationships in the Power BI semantic model | L | `csa_platform/csa_platform/governance/purview/purview_automation.py`, `csa_platform/csa_platform/governance/purview/classifications/`, `domains/shared/dbt/models/`, `csa_platform/semantic_model/semantic_model_template.yaml` |
-| **Pipeline Builder** (visual ETL) | Azure Data Factory + Fabric Data Factory + dbt | ADF replaces visual pipeline builder; dbt replaces transform expressions; Fabric Data Factory brings the visual-pipeline UX to Fabric | L | `domains/shared/pipelines/adf/`, `domains/shared/dbt/dbt_project.yml`, `domains/shared/dbt/models/` |
-| **Code Repositories** (Python / PySpark transforms) | Fabric notebooks + Databricks notebooks + Git-integrated Azure DevOps / GitHub | Transforms move to PySpark notebooks with Git backing; CI/CD via existing workflows | M | `domains/shared/notebooks/`, `.github/workflows/deploy.yml`, `.github/workflows/deploy-dbt.yml`, `csa_platform/unity_catalog_pattern/` |
-| **Contour** (point-and-click analysis) | Power BI + Power BI Copilot + Fabric Data Agent + Direct Lake on OneLake | Contour board → Power BI report with Direct Lake semantic model; no-copy analytics pattern preserved | M | `csa_platform/semantic_model/`, `csa_platform/semantic_model/semantic_model_template.yaml`, `csa_platform/semantic_model/scripts/` |
-| **Workshop** (operational analyst apps) | Power Apps + Power BI Embedded + Fabric Real-Time dashboards + custom React portal | Workshop modules map to Power Apps screens for form-driven workflows, Power BI for analytics, React portal for marketplace/discovery | L | `portal/powerapps/`, `portal/powerapps/flows/`, `portal/powerapps/logic-apps/`, `portal/react-webapp/src/` |
-| **Object Explorer** (ontology-aware search + drill) | Purview Unified Catalog + `portal/` marketplace data-product experience | Purview Data Catalog provides the search+lineage surface; the portal adds a data-product browse experience | M | `csa_platform/data_marketplace/`, `portal/react-webapp/src/pages/`, `csa_platform/csa_platform/governance/purview/` |
-| **Functions** (user-defined TypeScript/Python functions) | Azure Functions + Fabric user data functions + platform functions library | Foundry Functions move to Azure Functions (general purpose) or Fabric user data functions (analytic compute) | M | `csa_platform/functions/aiEnrichment/functions/`, `csa_platform/functions/eventProcessing/`, `csa_platform/functions/validation/` |
-| **AIP (AI Platform) — LLM chat + workflows** | Azure AI Foundry + Azure OpenAI + agentic enrichment patterns | AIP's agent-workflow + grounded-chat surface maps to Azure OpenAI models + AI Foundry orchestration; gap: no first-party chat UX yet (see CSA-0008) | L | `csa_platform/ai_integration/`, `csa_platform/ai_integration/enrichment/`, `csa_platform/ai_integration/rag/`, `csa_platform/ai_integration/model_serving/` |
-| **AIP Agents** (auto-executing agents) | **Gap** — CSA Copilot not shipped | Roadmap via CSA-0008. Primitives exist in `csa_platform/ai_integration/` but no agent loop, chat UX, skill catalog, or eval harness yet | XL | Gap — see CSA-0008. Target location: `apps/copilot/` or `csa_copilot/` |
-| **Actions** (code-extensible state-change rules) | Data Activator + Event Grid + Logic Apps + Azure Functions for extensibility | Rules-first logic lives in Data Activator; code-extensible actions escalate through Event Grid → Logic App or Azure Function | M | `csa_platform/data_activator/rules/`, `csa_platform/data_activator/actions/`, `csa_platform/data_activator/functions/` |
-| **Quiver** (natural-language analysis) | Power BI Copilot + Fabric Copilot + (future) CSA Copilot | Power BI Copilot ships NL-over-semantic-model today; deeper cross-ontology NL analysis lands with CSA Copilot | M | `csa_platform/semantic_model/` (semantic layer Copilot grounds on); Gap — see CSA-0008 |
-| **Fusion** (Excel live connection) | Excel live-connection to Power BI semantic model via Analyze in Excel | Native Microsoft capability, zero new work | XS | `csa_platform/semantic_model/semantic_model_template.yaml` (semantic model is the join point) |
-| **Slate** (custom HTML forms) | Power Apps custom canvas apps + (low-code) Logic Apps | Slate's form-builder UX maps to Power Apps; more complex flows move to Logic Apps | S | `portal/powerapps/`, `portal/powerapps/logic-apps/` |
-| **Magritte** (connectors / agents for source systems) | Azure Data Factory integration runtime + self-hosted IR + Linked Services | ADF has 100+ connectors today; self-hosted IR handles on-prem / gov-edge scenarios | S | `domains/shared/pipelines/adf/`, `docs/SELF_HOSTED_IR.md`, `docs/ADF_SETUP.md` |
-| **Foundry Lineage** | Purview lineage + dbt DAG + ADF pipeline lineage | Purview auto-captures ADF + Fabric lineage; dbt emits lineage through `dbt docs` | M | `csa_platform/csa_platform/governance/purview/purview_automation.py`, `domains/shared/dbt/dbt_project.yml` |
-| **Foundry security (Markings / Classifications)** | Purview classifications + Azure RBAC + column-level security + Unity Catalog (where Databricks is used) | Foundry markings map to Purview classifications + ABAC; see the four classification taxonomies shipped today | M | `csa_platform/csa_platform/governance/purview/classifications/pii_classifications.yaml`, `phi_classifications.yaml`, `government_classifications.yaml`, `financial_classifications.yaml` |
-| **Foundry Audit** | Azure Monitor diagnostic settings + tamper-evident audit logger + Purview audit | csa-inabox adds a tamper-evident hash-chained audit path (CSA-0016) on top of Azure Monitor | M | Audit logger module (CSA-0016 implementation), Azure Monitor diagnostic settings in Bicep modules |
-| **Foundry on-prem / AirGap** | Azure Stack Hub + Azure Government (classified cloud for IL5) + on-prem Databricks (where required) | True air-gap is Azure Stack Hub territory; IL5 covered by Azure Gov | L | `docs/GOV_SERVICE_MATRIX.md` |
-| **Foundry data contracts** | dbt contracts + JSON Schema contracts per data product | Every data product in csa-inabox ships a `contract.yaml`; dbt enforces column-level contracts at build time | S | `domains/finance/data-products/invoices/contract.yaml`, `domains/inventory/data-products/inventory/contract.yaml`, `domains/sales/contracts/sales_orders.json`, `.github/workflows/validate-contracts.yml` |
+| Foundry capability                                       | csa-inabox equivalent                                                                                   | Mapping notes                                                                                                                                       | Effort | Evidence (repo path)                                                                                                                                                                                                            |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Ontology** (object types, link types, properties)      | Purview Unified Catalog business glossary + classifications + dbt semantic layer                        | Foundry's object types become Purview glossary terms; link types become foreign keys in dbt + relationships in the Power BI semantic model          | L      | `csa_platform/csa_platform/governance/purview/purview_automation.py`, `csa_platform/csa_platform/governance/purview/classifications/`, `domains/shared/dbt/models/`, `csa_platform/semantic_model/semantic_model_template.yaml` |
+| **Pipeline Builder** (visual ETL)                        | Azure Data Factory + Fabric Data Factory + dbt                                                          | ADF replaces visual pipeline builder; dbt replaces transform expressions; Fabric Data Factory brings the visual-pipeline UX to Fabric               | L      | `domains/shared/pipelines/adf/`, `domains/shared/dbt/dbt_project.yml`, `domains/shared/dbt/models/`                                                                                                                             |
+| **Code Repositories** (Python / PySpark transforms)      | Fabric notebooks + Databricks notebooks + Git-integrated Azure DevOps / GitHub                          | Transforms move to PySpark notebooks with Git backing; CI/CD via existing workflows                                                                 | M      | `domains/shared/notebooks/`, `.github/workflows/deploy.yml`, `.github/workflows/deploy-dbt.yml`, `csa_platform/unity_catalog_pattern/`                                                                                          |
+| **Contour** (point-and-click analysis)                   | Power BI + Power BI Copilot + Fabric Data Agent + Direct Lake on OneLake                                | Contour board → Power BI report with Direct Lake semantic model; no-copy analytics pattern preserved                                                | M      | `csa_platform/semantic_model/`, `csa_platform/semantic_model/semantic_model_template.yaml`, `csa_platform/semantic_model/scripts/`                                                                                              |
+| **Workshop** (operational analyst apps)                  | Power Apps + Power BI Embedded + Fabric Real-Time dashboards + custom React portal                      | Workshop modules map to Power Apps screens for form-driven workflows, Power BI for analytics, React portal for marketplace/discovery                | L      | `portal/powerapps/`, `portal/powerapps/flows/`, `portal/powerapps/logic-apps/`, `portal/react-webapp/src/`                                                                                                                      |
+| **Object Explorer** (ontology-aware search + drill)      | Purview Unified Catalog + `portal/` marketplace data-product experience                                 | Purview Data Catalog provides the search+lineage surface; the portal adds a data-product browse experience                                          | M      | `csa_platform/data_marketplace/`, `portal/react-webapp/src/pages/`, `csa_platform/csa_platform/governance/purview/`                                                                                                             |
+| **Functions** (user-defined TypeScript/Python functions) | Azure Functions + Fabric user data functions + platform functions library                               | Foundry Functions move to Azure Functions (general purpose) or Fabric user data functions (analytic compute)                                        | M      | `csa_platform/functions/aiEnrichment/functions/`, `csa_platform/functions/eventProcessing/`, `csa_platform/functions/validation/`                                                                                               |
+| **AIP (AI Platform) — LLM chat + workflows**             | Azure AI Foundry + Azure OpenAI + agentic enrichment patterns                                           | AIP's agent-workflow + grounded-chat surface maps to Azure OpenAI models + AI Foundry orchestration; gap: no first-party chat UX yet (see CSA-0008) | L      | `csa_platform/ai_integration/`, `csa_platform/ai_integration/enrichment/`, `csa_platform/ai_integration/rag/`, `csa_platform/ai_integration/model_serving/`                                                                     |
+| **AIP Agents** (auto-executing agents)                   | **Gap** — CSA Copilot not shipped                                                                       | Roadmap via CSA-0008. Primitives exist in `csa_platform/ai_integration/` but no agent loop, chat UX, skill catalog, or eval harness yet             | XL     | Gap — see CSA-0008. Target location: `apps/copilot/` or `csa_copilot/`                                                                                                                                                          |
+| **Actions** (code-extensible state-change rules)         | Data Activator + Event Grid + Logic Apps + Azure Functions for extensibility                            | Rules-first logic lives in Data Activator; code-extensible actions escalate through Event Grid → Logic App or Azure Function                        | M      | `csa_platform/data_activator/rules/`, `csa_platform/data_activator/actions/`, `csa_platform/data_activator/functions/`                                                                                                          |
+| **Quiver** (natural-language analysis)                   | Power BI Copilot + Fabric Copilot + (future) CSA Copilot                                                | Power BI Copilot ships NL-over-semantic-model today; deeper cross-ontology NL analysis lands with CSA Copilot                                       | M      | `csa_platform/semantic_model/` (semantic layer Copilot grounds on); Gap — see CSA-0008                                                                                                                                          |
+| **Fusion** (Excel live connection)                       | Excel live-connection to Power BI semantic model via Analyze in Excel                                   | Native Microsoft capability, zero new work                                                                                                          | XS     | `csa_platform/semantic_model/semantic_model_template.yaml` (semantic model is the join point)                                                                                                                                   |
+| **Slate** (custom HTML forms)                            | Power Apps custom canvas apps + (low-code) Logic Apps                                                   | Slate's form-builder UX maps to Power Apps; more complex flows move to Logic Apps                                                                   | S      | `portal/powerapps/`, `portal/powerapps/logic-apps/`                                                                                                                                                                             |
+| **Magritte** (connectors / agents for source systems)    | Azure Data Factory integration runtime + self-hosted IR + Linked Services                               | ADF has 100+ connectors today; self-hosted IR handles on-prem / gov-edge scenarios                                                                  | S      | `domains/shared/pipelines/adf/`, `docs/SELF_HOSTED_IR.md`, `docs/ADF_SETUP.md`                                                                                                                                                  |
+| **Foundry Lineage**                                      | Purview lineage + dbt DAG + ADF pipeline lineage                                                        | Purview auto-captures ADF + Fabric lineage; dbt emits lineage through `dbt docs`                                                                    | M      | `csa_platform/csa_platform/governance/purview/purview_automation.py`, `domains/shared/dbt/dbt_project.yml`                                                                                                                      |
+| **Foundry security (Markings / Classifications)**        | Purview classifications + Azure RBAC + column-level security + Unity Catalog (where Databricks is used) | Foundry markings map to Purview classifications + ABAC; see the four classification taxonomies shipped today                                        | M      | `csa_platform/csa_platform/governance/purview/classifications/pii_classifications.yaml`, `phi_classifications.yaml`, `government_classifications.yaml`, `financial_classifications.yaml`                                        |
+| **Foundry Audit**                                        | Azure Monitor diagnostic settings + tamper-evident audit logger + Purview audit                         | csa-inabox adds a tamper-evident hash-chained audit path (CSA-0016) on top of Azure Monitor                                                         | M      | Audit logger module (CSA-0016 implementation), Azure Monitor diagnostic settings in Bicep modules                                                                                                                               |
+| **Foundry on-prem / AirGap**                             | Azure Stack Hub + Azure Government (classified cloud for IL5) + on-prem Databricks (where required)     | True air-gap is Azure Stack Hub territory; IL5 covered by Azure Gov                                                                                 | L      | `docs/GOV_SERVICE_MATRIX.md`                                                                                                                                                                                                    |
+| **Foundry data contracts**                               | dbt contracts + JSON Schema contracts per data product                                                  | Every data product in csa-inabox ships a `contract.yaml`; dbt enforces column-level contracts at build time                                         | S      | `domains/finance/data-products/invoices/contract.yaml`, `domains/inventory/data-products/inventory/contract.yaml`, `domains/sales/contracts/sales_orders.json`, `.github/workflows/validate-contracts.yml`                      |
 
 ### Gaps called out above (cross-referenced to tracked findings)
 
@@ -165,14 +165,15 @@ In Foundry, all four types live in a shared ontology namespace with link-type ob
 
 Each Foundry object type becomes a Purview glossary term with a classification and steward. The workflow is automated in `csa_platform/csa_platform/governance/purview/purview_automation.py`:
 
-| Glossary term | Classification | Steward | Definition |
-|---|---|---|---|
-| Case | CUI-Specified | Case Management Domain Team | A legal, investigative, or adjudicative matter tracked from intake through disposition. |
-| Party (Case Participant) | PII | Case Management Domain Team | Any person or organization involved in a case (complainant, subject, witness, counsel). |
-| Evidence Item | CUI-Specified | Chain-of-Custody Officer | A document, digital artifact, or physical item preserved under chain-of-custody for a case. |
-| Case Action | Internal | Case Management Domain Team | A state-changing event on a case (assignment, status change, disposition). |
+| Glossary term            | Classification | Steward                     | Definition                                                                                  |
+| ------------------------ | -------------- | --------------------------- | ------------------------------------------------------------------------------------------- |
+| Case                     | CUI-Specified  | Case Management Domain Team | A legal, investigative, or adjudicative matter tracked from intake through disposition.     |
+| Party (Case Participant) | PII            | Case Management Domain Team | Any person or organization involved in a case (complainant, subject, witness, counsel).     |
+| Evidence Item            | CUI-Specified  | Chain-of-Custody Officer    | A document, digital artifact, or physical item preserved under chain-of-custody for a case. |
+| Case Action              | Internal       | Case Management Domain Team | A state-changing event on a case (assignment, status change, disposition).                  |
 
 Classifications resolve to the existing taxonomy files:
+
 - PII → `csa_platform/csa_platform/governance/purview/classifications/pii_classifications.yaml`
 - CUI-Specified → `csa_platform/csa_platform/governance/purview/classifications/government_classifications.yaml`
 
@@ -208,24 +209,24 @@ owner: case_management_domain_team
 model: gold.dim_case
 classification: cui_specified
 columns:
-  - name: case_id
-    data_type: string
-    tests: [not_null, unique]
-  - name: case_number
-    data_type: string
-    tests: [not_null]
-  - name: status
-    data_type: string
-    tests: [accepted_values: [open, under_review, closed, appealed]]
-  - name: priority
-    data_type: string
-  - name: opened_at
-    data_type: timestamp
+    - name: case_id
+      data_type: string
+      tests: [not_null, unique]
+    - name: case_number
+      data_type: string
+      tests: [not_null]
+    - name: status
+      data_type: string
+      tests: [accepted_values: [open, under_review, closed, appealed]]
+    - name: priority
+      data_type: string
+    - name: opened_at
+      data_type: timestamp
 sla:
-  freshness: P1D
-  availability: 99.5
+    freshness: P1D
+    availability: 99.5
 compliance:
-  frameworks: [fedramp_high, cmmc_2_l2]
+    frameworks: [fedramp_high, cmmc_2_l2]
 ```
 
 Contract validation runs via `.github/workflows/validate-contracts.yml`.
@@ -258,18 +259,18 @@ File: `csa_platform/data_activator/rules/case-escalation.yaml`
 ```yaml
 rule_id: case-escalation-overdue-high-priority
 source:
-  type: powerbi_semantic_model
-  model: case_management_gold
-  measure: Overdue High-Priority Cases
+    type: powerbi_semantic_model
+    model: case_management_gold
+    measure: Overdue High-Priority Cases
 condition:
-  when: measure > 0
+    when: measure > 0
 action:
-  type: event_grid_publish
-  topic: case-escalation-events
-  payload_from_measure: true
+    type: event_grid_publish
+    topic: case-escalation-events
+    payload_from_measure: true
 downstream:
-  logic_app: notify-supervisor-flow
-  power_automate_flow: update-case-priority-flow
+    logic_app: notify-supervisor-flow
+    power_automate_flow: update-case-priority-flow
 ```
 
 Data Activator monitors the Direct Lake semantic model, publishes to Event Grid, and fans out to Logic Apps and Power Automate. For more code-extensible logic (the Foundry Function case), the Event Grid event can fan out to an Azure Function in `csa_platform/data_activator/functions/`.
@@ -387,12 +388,12 @@ For a **typical mid-sized federal tenant** (say, 500 analytic users, 20 TB hot d
 
 - **Foundry:** typically **$4M–$7M/year** depending on named-user seats and compute commitments. Predominantly fixed.
 - **csa-inabox on Azure Government:** typically **$2M–$4M/year** at similar scale. Predominantly variable. Breakdown:
-  - Azure Government compute (ADF + Databricks + Fabric capacity F64/F128): **~$1.2M–$2.0M**
-  - Storage (OneLake + ADLS Gen2 + backups): **~$200K–$400K**
-  - Power BI Premium per-user where Fabric capacity doesn't cover embed scenarios: **~$200K–$400K**
-  - Azure OpenAI / AI Foundry consumption: **~$200K–$600K**
-  - Purview + Monitor + Key Vault + Private Endpoints + network: **~$200K–$400K**
-  - Professional services (in-house or partner) — not included
+    - Azure Government compute (ADF + Databricks + Fabric capacity F64/F128): **~$1.2M–$2.0M**
+    - Storage (OneLake + ADLS Gen2 + backups): **~$200K–$400K**
+    - Power BI Premium per-user where Fabric capacity doesn't cover embed scenarios: **~$200K–$400K**
+    - Azure OpenAI / AI Foundry consumption: **~$200K–$600K**
+    - Purview + Monitor + Key Vault + Private Endpoints + network: **~$200K–$400K**
+    - Professional services (in-house or partner) — not included
 
 Cost drivers to plan for:
 
@@ -408,15 +409,15 @@ The consumption model means costs scale with workload, not seats. For agencies w
 
 csa-inabox is honest where Foundry is stronger today:
 
-| Gap | Description | Tracked finding | Planned remediation |
-|---|---|---|---|
-| **CSA Copilot** (equivalent of Quiver / AIP Agents) | No agent loop, chat UX, skill catalog, grounding gate, or eval harness shipped today. Primitives exist in `csa_platform/ai_integration/`. | CSA-0008 (XL) | 6-phase MVP: corpus indexer → grounding + citations → decision-tree walker → skill catalog + tools → gated execute → 4 surfaces (Web/CLI/MCP/API) → LLMOps |
-| **Object Explorer UX fidelity** | Purview Data Catalog and the React portal together provide the search + lineage + data-product surface, but not Foundry Object Explorer's pixel-perfect ontology-drill UX. | CSA-0129 (Fabric module depth) | Fabric data-product experience will close most of the gap; residual is product UX polish |
-| **IL6 coverage** | No IL6 support in csa-inabox. | N/A (out of scope) | Recommend Foundry or bespoke Top-Secret tenant for IL6 |
-| **Action Engine extensibility** | Data Activator is rules-first; Foundry Actions are code-extensible via Functions. | N/A (pattern documented) | Pattern: Event Grid → Azure Function / Logic App provides code-extensibility; documented in Section 4.5 |
-| **Decision-tree guidance** | No service-choice decision trees for Fabric vs Databricks vs Synapse etc. | CSA-0010 (L) | 8 decision trees as mermaid + YAML with branching questions and linked examples |
-| **Teardown scripts / FinOps safety** | Missing `scripts/deploy/teardown-platform.sh` at time of audit; workshop deployments could leak cost. | CSA-0011 (M) — addressed in recent commit (3f96975) | Delivered |
-| **Framework control matrices** | NIST, CMMC, HIPAA matrices delivered; PCI-DSS, SOC 2, GDPR/CCPA still pending. | CSA-0012 (XL) — in progress | Six additional YAMLs + narrative pages |
+| Gap                                                 | Description                                                                                                                                                                | Tracked finding                                     | Planned remediation                                                                                                                                        |
+| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **CSA Copilot** (equivalent of Quiver / AIP Agents) | No agent loop, chat UX, skill catalog, grounding gate, or eval harness shipped today. Primitives exist in `csa_platform/ai_integration/`.                                  | CSA-0008 (XL)                                       | 6-phase MVP: corpus indexer → grounding + citations → decision-tree walker → skill catalog + tools → gated execute → 4 surfaces (Web/CLI/MCP/API) → LLMOps |
+| **Object Explorer UX fidelity**                     | Purview Data Catalog and the React portal together provide the search + lineage + data-product surface, but not Foundry Object Explorer's pixel-perfect ontology-drill UX. | CSA-0129 (Fabric module depth)                      | Fabric data-product experience will close most of the gap; residual is product UX polish                                                                   |
+| **IL6 coverage**                                    | No IL6 support in csa-inabox.                                                                                                                                              | N/A (out of scope)                                  | Recommend Foundry or bespoke Top-Secret tenant for IL6                                                                                                     |
+| **Action Engine extensibility**                     | Data Activator is rules-first; Foundry Actions are code-extensible via Functions.                                                                                          | N/A (pattern documented)                            | Pattern: Event Grid → Azure Function / Logic App provides code-extensibility; documented in Section 4.5                                                    |
+| **Decision-tree guidance**                          | No service-choice decision trees for Fabric vs Databricks vs Synapse etc.                                                                                                  | CSA-0010 (L)                                        | 8 decision trees as mermaid + YAML with branching questions and linked examples                                                                            |
+| **Teardown scripts / FinOps safety**                | Missing `scripts/deploy/teardown-platform.sh` at time of audit; workshop deployments could leak cost.                                                                      | CSA-0011 (M) — addressed in recent commit (3f96975) | Delivered                                                                                                                                                  |
+| **Framework control matrices**                      | NIST, CMMC, HIPAA matrices delivered; PCI-DSS, SOC 2, GDPR/CCPA still pending.                                                                                             | CSA-0012 (XL) — in progress                         | Six additional YAMLs + narrative pages                                                                                                                     |
 
 Every gap has a tracked ID the customer can reference in their own migration risk register.
 
@@ -459,30 +460,30 @@ There is no universal right answer. This playbook exists so the CIO can have the
 - **Decision trees (prospective, CSA-0010):** `docs/decisions/fabric-vs-databricks-vs-synapse.md`
 - **ADRs (prospective):** ADR-0004 Bicep over Terraform, ADR-0010 Fabric as strategic target
 - **Compliance matrices:**
-  - `docs/compliance/nist-800-53-rev5.md` / `csa_platform/csa_platform/governance/compliance/nist-800-53-rev5.yaml`
-  - `docs/compliance/cmmc-2.0-l2.md` / `csa_platform/csa_platform/governance/compliance/cmmc-2.0-l2.yaml`
-  - `docs/compliance/hipaa-security-rule.md` / `csa_platform/csa_platform/governance/compliance/hipaa-security-rule.yaml`
+    - `docs/compliance/nist-800-53-rev5.md` / `csa_platform/csa_platform/governance/compliance/nist-800-53-rev5.yaml`
+    - `docs/compliance/cmmc-2.0-l2.md` / `csa_platform/csa_platform/governance/compliance/cmmc-2.0-l2.yaml`
+    - `docs/compliance/hipaa-security-rule.md` / `csa_platform/csa_platform/governance/compliance/hipaa-security-rule.yaml`
 - **Example verticals worth touring before/during migration:**
-  - `examples/commerce/` — e-commerce reference, closest analog to transaction-heavy Foundry ontologies
-  - `examples/tribal-health/` — HIPAA + tribal sovereignty reference
-  - `examples/epa/` — regulatory / reporting reference
-  - `examples/interior/` — federal land-management reference
-  - `examples/casino-analytics/` — tribal gaming, streaming + video analytics
+    - `examples/commerce/` — e-commerce reference, closest analog to transaction-heavy Foundry ontologies
+    - `examples/tribal-health/` — HIPAA + tribal sovereignty reference
+    - `examples/epa/` — regulatory / reporting reference
+    - `examples/interior/` — federal land-management reference
+    - `examples/casino-analytics/` — tribal gaming, streaming + video analytics
 - **Operational guides:**
-  - `docs/QUICKSTART.md`
-  - `docs/ARCHITECTURE.md`
-  - `docs/GOV_SERVICE_MATRIX.md`
-  - `docs/COST_MANAGEMENT.md`
-  - `docs/SELF_HOSTED_IR.md`
+    - `docs/QUICKSTART.md`
+    - `docs/ARCHITECTURE.md`
+    - `docs/GOV_SERVICE_MATRIX.md`
+    - `docs/COST_MANAGEMENT.md`
+    - `docs/SELF_HOSTED_IR.md`
 - **Platform modules most relevant to a Foundry migration:**
-  - `csa_platform/csa_platform/governance/purview/` — ontology / catalog / classifications
-  - `csa_platform/semantic_model/` — Direct Lake semantic model for Power BI over OneLake
-  - `csa_platform/data_activator/` — Actions analogue
-  - `csa_platform/data_marketplace/` — data-product registry for portal discovery
-  - `csa_platform/ai_integration/` — AIP-style primitives today; CSA Copilot tomorrow
-  - `csa_platform/unity_catalog_pattern/` — OneLake foundational pattern
-  - `csa_platform/multi_synapse/` — multi-workspace Synapse pattern for large tenants
-  - `csa_platform/functions/` — cross-domain Azure Functions, notebook utilities
+    - `csa_platform/csa_platform/governance/purview/` — ontology / catalog / classifications
+    - `csa_platform/semantic_model/` — Direct Lake semantic model for Power BI over OneLake
+    - `csa_platform/data_activator/` — Actions analogue
+    - `csa_platform/data_marketplace/` — data-product registry for portal discovery
+    - `csa_platform/ai_integration/` — AIP-style primitives today; CSA Copilot tomorrow
+    - `csa_platform/unity_catalog_pattern/` — OneLake foundational pattern
+    - `csa_platform/multi_synapse/` — multi-workspace Synapse pattern for large tenants
+    - `csa_platform/functions/` — cross-domain Azure Functions, notebook utilities
 
 ---
 

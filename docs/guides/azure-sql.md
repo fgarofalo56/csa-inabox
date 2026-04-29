@@ -670,7 +670,7 @@ az sql db create \
 
 | Resource                                   | Path                                                                                                 |
 | ------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
-| Data API Builder Tutorial                  | [`docs/tutorials/11-data-api-builder/README.md`](../tutorials/11-data-api-builder/README.md)      |
+| Data API Builder Tutorial                  | [`docs/tutorials/11-data-api-builder/README.md`](../tutorials/11-data-api-builder/README.md)         |
 | APIM Data Mesh Gateway                     | [`docs/guides/apim-data-mesh-gateway.md`](apim-data-mesh-gateway.md)                                 |
 | Security & Compliance Best Practices       | [`docs/best-practices/security-compliance.md`](../best-practices/security-compliance.md)             |
 | Disaster Recovery Guide                    | [`docs/DR.md`](../DR.md)                                                                             |

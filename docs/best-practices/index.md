@@ -2,17 +2,17 @@
 
 Nine field-tested guides for running cloud-scale analytics + AI on Azure. Each one is independent — read the ones relevant to your role.
 
-| Guide | When to read | Length |
-|-------|--------------|--------|
-| [Medallion Architecture](medallion-architecture.md) | Designing your bronze/silver/gold lakehouse | 664 lines |
-| [Data Engineering](data-engineering.md) | Authoring ADF + dbt + Spark pipelines | 800 lines |
-| [Data Governance](data-governance.md) | Setting up Purview, contracts, lineage, classification | 573 lines |
-| [Security & Compliance](security-compliance.md) | Hardening identities, secrets, network, encryption | 654 lines |
-| [Infrastructure as Code & CI/CD](iac-cicd.md) | Bicep, what-if, GitHub Actions, environment promotion | 657 lines |
-| [Cost Optimization](cost-optimization.md) | Tagging, reserved capacity, auto-pause, FinOps | 518 lines |
-| [Monitoring & Observability](monitoring-observability.md) | Log Analytics, Workbooks, OTel, SLI/SLO | 520 lines |
-| [Performance Tuning](performance-tuning.md) | Spark configs, Synapse SQL pools, AI Search shards | 705 lines |
-| [Disaster Recovery](disaster-recovery.md) | RPO/RTO targets, geo-replication, runbook drills | 521 lines |
+| Guide                                                     | When to read                                           | Length    |
+| --------------------------------------------------------- | ------------------------------------------------------ | --------- |
+| [Medallion Architecture](medallion-architecture.md)       | Designing your bronze/silver/gold lakehouse            | 664 lines |
+| [Data Engineering](data-engineering.md)                   | Authoring ADF + dbt + Spark pipelines                  | 800 lines |
+| [Data Governance](data-governance.md)                     | Setting up Purview, contracts, lineage, classification | 573 lines |
+| [Security & Compliance](security-compliance.md)           | Hardening identities, secrets, network, encryption     | 654 lines |
+| [Infrastructure as Code & CI/CD](iac-cicd.md)             | Bicep, what-if, GitHub Actions, environment promotion  | 657 lines |
+| [Cost Optimization](cost-optimization.md)                 | Tagging, reserved capacity, auto-pause, FinOps         | 518 lines |
+| [Monitoring & Observability](monitoring-observability.md) | Log Analytics, Workbooks, OTel, SLI/SLO                | 520 lines |
+| [Performance Tuning](performance-tuning.md)               | Spark configs, Synapse SQL pools, AI Search shards     | 705 lines |
+| [Disaster Recovery](disaster-recovery.md)                 | RPO/RTO targets, geo-replication, runbook drills       | 521 lines |
 
 ## How to use these
 

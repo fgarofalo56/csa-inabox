@@ -94,28 +94,28 @@ flowchart TB
 
 ## Component responsibilities
 
-| Component | Subscription / RG | Purpose |
-|-----------|-------------------|---------|
-| **ExpressRoute / VPN** | Connectivity sub | Private connectivity from on-prem |
-| **Hub VNet + Azure Firewall Premium** | Connectivity sub | Single point of egress + east-west inspection |
-| **Private DNS zones** | Connectivity sub | `privatelink.*` zones linked to all spokes — single source of truth |
-| **Bastion** | Connectivity sub | RDP/SSH to spokes without public IPs |
-| **DLZ (Data Landing Zone)** | Per-domain | The actual data + compute (Storage, Synapse, Databricks, AOAI) — see [`deploy/bicep/DLZ/`](https://github.com/fgarofalo56/csa-inabox/tree/main/deploy/bicep/DLZ) |
-| **DMLZ (Data Mgmt LZ)** | Shared | Cross-cutting governance: Purview, Key Vault, Log Analytics, APIM — see [`deploy/bicep/DMLZ/`](https://github.com/fgarofalo56/csa-inabox/tree/main/deploy/bicep/DMLZ) |
-| **Identity LZ** | Shared | Entra ID Connect, optional domain controllers if you need traditional AD on Azure |
-| **Portal / Apps LZ** | Per-app | User-facing apps (React portal, Power Apps, custom) — internet-facing via Front Door + WAF |
+| Component                             | Subscription / RG | Purpose                                                                                                                                                               |
+| ------------------------------------- | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **ExpressRoute / VPN**                | Connectivity sub  | Private connectivity from on-prem                                                                                                                                     |
+| **Hub VNet + Azure Firewall Premium** | Connectivity sub  | Single point of egress + east-west inspection                                                                                                                         |
+| **Private DNS zones**                 | Connectivity sub  | `privatelink.*` zones linked to all spokes — single source of truth                                                                                                   |
+| **Bastion**                           | Connectivity sub  | RDP/SSH to spokes without public IPs                                                                                                                                  |
+| **DLZ (Data Landing Zone)**           | Per-domain        | The actual data + compute (Storage, Synapse, Databricks, AOAI) — see [`deploy/bicep/DLZ/`](https://github.com/fgarofalo56/csa-inabox/tree/main/deploy/bicep/DLZ)      |
+| **DMLZ (Data Mgmt LZ)**               | Shared            | Cross-cutting governance: Purview, Key Vault, Log Analytics, APIM — see [`deploy/bicep/DMLZ/`](https://github.com/fgarofalo56/csa-inabox/tree/main/deploy/bicep/DMLZ) |
+| **Identity LZ**                       | Shared            | Entra ID Connect, optional domain controllers if you need traditional AD on Azure                                                                                     |
+| **Portal / Apps LZ**                  | Per-app           | User-facing apps (React portal, Power Apps, custom) — internet-facing via Front Door + WAF                                                                            |
 
 ## Subnets per spoke (DLZ example)
 
-| Subnet | Purpose | Min size |
-|--------|---------|----------|
-| `snet-data` | Storage account private endpoints, Cosmos PE | /27 |
-| `snet-app` | Synapse SQL on-demand workers, Function App VNet integration | /26 |
-| `snet-pe` | All other private endpoints (Key Vault, AOAI, AI Search, etc.) | /26 |
-| `snet-mgmt` | Bastion-reachable mgmt VMs, self-hosted IR | /27 |
-| `snet-databricks-public` | Databricks public subnet | /26 (Databricks min) |
-| `snet-databricks-private` | Databricks private subnet | /26 (Databricks min) |
-| `snet-aks` (optional) | Portal AKS nodes if not using Container Apps | /22 |
+| Subnet                    | Purpose                                                        | Min size             |
+| ------------------------- | -------------------------------------------------------------- | -------------------- |
+| `snet-data`               | Storage account private endpoints, Cosmos PE                   | /27                  |
+| `snet-app`                | Synapse SQL on-demand workers, Function App VNet integration   | /26                  |
+| `snet-pe`                 | All other private endpoints (Key Vault, AOAI, AI Search, etc.) | /26                  |
+| `snet-mgmt`               | Bastion-reachable mgmt VMs, self-hosted IR                     | /27                  |
+| `snet-databricks-public`  | Databricks public subnet                                       | /26 (Databricks min) |
+| `snet-databricks-private` | Databricks private subnet                                      | /26 (Databricks min) |
+| `snet-aks` (optional)     | Portal AKS nodes if not using Container Apps                   | /22                  |
 
 **Total**: a single DLZ spoke needs roughly a **/22** worth of address space (1024 IPs) to be comfortable. Plan address allocation accordingly — RFC 1918 exhaustion is a real problem at the 10-spoke mark.
 
@@ -155,12 +155,14 @@ The DMLZ stays shared because Purview / Log Analytics / Key Vault are most usefu
 ## Trade-offs
 
 ✅ **What this gives you**
+
 - Single egress chokepoint for compliance and inspection
 - Consistent identity / DNS / monitoring across all data domains
 - Independent blast radius per domain
 - Simple mental model: "spokes never talk directly, always through hub"
 
 ⚠️ **What you give up**
+
 - Hub firewall is a **single point of failure** — must deploy redundantly (zone-redundant in single region, paired-region for DR)
 - Hub firewall is a **bandwidth bottleneck** — AzFW Premium tops out at ~30 Gbps per region, plan accordingly
 - Hub VNet must be sized correctly the **first time** — resizing requires recreating peerings
@@ -168,12 +170,12 @@ The DMLZ stays shared because Purview / Log Analytics / Key Vault are most usefu
 
 ## Variants
 
-| Scenario | Variant |
-|----------|---------|
-| **Azure Government** | Identical pattern, but check service availability per region — see [Government Service Matrix](../GOV_SERVICE_MATRIX.md) |
-| **Single-subscription dev/POC** | Skip the hub — put everything in one VNet with subnet-level NSGs. Don't ship to production this way. |
-| **Multi-region active-active** | Each region gets its own hub + DLZs; hubs peer to each other (or via vWAN). See [Multi-Region](../MULTI_REGION.md) |
-| **Air-gapped / sovereign** | Hub-spoke still applies; Internet egress replaced with explicit allow-listed proxy. See [Compliance — FedRAMP](../compliance/fedramp-moderate.md) |
+| Scenario                        | Variant                                                                                                                                           |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Azure Government**            | Identical pattern, but check service availability per region — see [Government Service Matrix](../GOV_SERVICE_MATRIX.md)                          |
+| **Single-subscription dev/POC** | Skip the hub — put everything in one VNet with subnet-level NSGs. Don't ship to production this way.                                              |
+| **Multi-region active-active**  | Each region gets its own hub + DLZs; hubs peer to each other (or via vWAN). See [Multi-Region](../MULTI_REGION.md)                                |
+| **Air-gapped / sovereign**      | Hub-spoke still applies; Internet egress replaced with explicit allow-listed proxy. See [Compliance — FedRAMP](../compliance/fedramp-moderate.md) |
 
 ## Related
 

@@ -73,22 +73,26 @@ messaging and is not considered for data streaming.
 ## Pros and Cons of the Options
 
 ### Option 1 — Event Hubs
+
 - Pros: Managed PaaS; Gov-GA; Kafka-protocol compatible; Capture to ADLS;
   native ADX/Databricks integration; predictable throughput-unit pricing.
 - Cons: Subset of Kafka features; no Kafka Connect; fixed partition counts
   on standard tier.
 
 ### Option 2 — Self-hosted Kafka on AKS
+
 - Pros: Full Kafka feature set; Kafka Connect ecosystem; no vendor markup.
 - Cons: Customer-owned cluster operations, upgrades, and HA; stateful
   workload on AKS is operationally expensive.
 
 ### Option 3 — Confluent Cloud on Azure
+
 - Pros: Managed full Kafka; Schema Registry; Kafka Connect; ksqlDB.
 - Cons: Third-party service; Gov-GA story is weaker; additional vendor
   procurement; cross-account networking complexity.
 
 ### Option 4 — Service Bus
+
 - Pros: Strong business-messaging semantics (FIFO, sessions, DLQ).
 - Cons: Not a streaming broker; no partitioned append log; wrong tool for
   high-throughput ingest.
@@ -96,6 +100,7 @@ messaging and is not considered for data streaming.
 ## Validation
 
 We will know this decision is right if:
+
 - All streaming vertical examples ingest with zero custom broker-management
   code.
 - Event Hubs Capture covers >90% of Bronze-archival use cases.

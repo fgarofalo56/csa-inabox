@@ -2,9 +2,8 @@
 
 # CSA-in-a-Box: Quick Start Guide
 
-
 !!! note
-    **Quick Summary**: Get a working Cloud-Scale Analytics platform deployed and flowing data in 60-90 minutes — deploy infrastructure (ALZ → DMLZ → DLZ), load seed data, run the dbt medallion pipeline across 4 domains, set up streaming, bootstrap Purview, deploy the portal, and try vertical examples (USDA, Gov).
+**Quick Summary**: Get a working Cloud-Scale Analytics platform deployed and flowing data in 60-90 minutes — deploy infrastructure (ALZ → DMLZ → DLZ), load seed data, run the dbt medallion pipeline across 4 domains, set up streaming, bootstrap Purview, deploy the portal, and try vertical examples (USDA, Gov).
 
 Get a working Cloud-Scale Analytics platform deployed and flowing data in
 about 60-90 minutes (assuming all prerequisites are met).
@@ -15,7 +14,7 @@ about 60-90 minutes (assuming all prerequisites are met).
 - [📦 Step 1: Deploy Infrastructure](#-step-1-deploy-infrastructure)
 - [📊 Step 2: Load Sample Data](#-step-2-load-sample-data)
 - [🔄 Step 3: Run the dbt Pipeline](#-step-3-run-the-dbt-pipeline)
-  - [Expected Row Counts](#expected-row-counts)
+    - [Expected Row Counts](#expected-row-counts)
 - [⚙️ Step 4: Run ADF Orchestration (Optional)](#️-step-4-run-adf-orchestration-optional)
 - [🔍 Step 5: Explore the Data](#-step-5-explore-the-data)
 - [📡 Step 6: Start Streaming (Optional)](#-step-6-start-streaming-optional)
@@ -32,13 +31,13 @@ about 60-90 minutes (assuming all prerequisites are met).
 
 ## 📎 Prerequisites
 
-| Tool | Minimum Version | Check |
-|------|----------------|-------|
-| Azure CLI | 2.50+ | `az version` |
-| Bicep CLI | 0.25+ | `az bicep version` |
-| Python | 3.10+ | `python --version` |
-| dbt | 1.7+ | `dbt --version` |
-| git | 2.x | `git --version` |
+| Tool      | Minimum Version | Check              |
+| --------- | --------------- | ------------------ |
+| Azure CLI | 2.50+           | `az version`       |
+| Bicep CLI | 0.25+           | `az bicep version` |
+| Python    | 3.10+           | `python --version` |
+| dbt       | 1.7+            | `dbt --version`    |
+| git       | 2.x             | `git --version`    |
 
 ```bash
 # Validate all prerequisites at once:
@@ -65,6 +64,7 @@ bash scripts/deploy/deploy-platform.sh --environment dev
 ```
 
 The deployment script deploys three landing zones in order:
+
 - [ ] **ALZ** (Management) — logging, monitoring, policies
 - [ ] **DMLZ** (Data Management) — Purview, Key Vault, shared services
 - [ ] **DLZ** (Data Landing Zone) — ADF, Databricks, Synapse, ADLS, Event Hub
@@ -75,16 +75,16 @@ The deployment script deploys three landing zones in order:
 
 CSA-in-a-Box ships with realistic seed data:
 
-| Dataset | Rows | Quality Issues |
-|---------|------|----------------|
-| `sample_customers.csv` | 200 | ~5% (bad emails, missing names) |
-| `sample_orders.csv` | 2,000 | ~5% (null customer_id, future dates, negative amounts) |
-| `sample_products.csv` | 50 | Clean |
-| `sample_invoices.csv` | 500 | ~3% (null order_id, negative amounts) |
-| `sample_payments.csv` | 400 | Clean |
-| `sample_inventory.csv` | 300 | ~3% (null product_id, negative qty, overreserved) |
-| `sample_warehouses.csv` | 8 | Clean |
-| `raw_sales_orders.csv` | 1,000 | ~5% (negative prices, future dates, invalid qty) |
+| Dataset                 | Rows  | Quality Issues                                         |
+| ----------------------- | ----- | ------------------------------------------------------ |
+| `sample_customers.csv`  | 200   | ~5% (bad emails, missing names)                        |
+| `sample_orders.csv`     | 2,000 | ~5% (null customer_id, future dates, negative amounts) |
+| `sample_products.csv`   | 50    | Clean                                                  |
+| `sample_invoices.csv`   | 500   | ~3% (null order_id, negative amounts)                  |
+| `sample_payments.csv`   | 400   | Clean                                                  |
+| `sample_inventory.csv`  | 300   | ~3% (null product_id, negative qty, overreserved)      |
+| `sample_warehouses.csv` | 8     | Clean                                                  |
+| `raw_sales_orders.csv`  | 1,000 | ~5% (negative prices, future dates, invalid qty)       |
 
 ```bash
 # Option A: Upload to ADLS Gen2 (requires deployed storage account)
@@ -146,61 +146,61 @@ dbt test
 <details markdown="1">
 <summary>Shared Domain</summary>
 
-| Layer | Model | Expected Rows |
-|-------|-------|--------------|
-| Bronze | `brz_orders` | 2,000 |
-| Bronze | `brz_customers` | 200 |
-| Bronze | `brz_products` | 50 |
-| Silver | `slv_orders` | 2,000 (all rows, ~100 flagged invalid) |
-| Silver | `slv_customers` | 200 (all rows, ~10 flagged invalid) |
-| Silver | `slv_products` | 50 |
-| Gold | `fact_orders` | ~1,900 (valid orders only) |
-| Gold | `dim_customers` | ~190 (valid customers only) |
-| Gold | `dim_products` | 50 |
-| Gold | `gld_daily_order_metrics` | ~1,095 (unique dates) |
-| Gold | `gld_customer_lifetime_value` | ~190 |
-| Gold | `gld_monthly_revenue` | ~36 (months x countries) |
+| Layer  | Model                         | Expected Rows                          |
+| ------ | ----------------------------- | -------------------------------------- |
+| Bronze | `brz_orders`                  | 2,000                                  |
+| Bronze | `brz_customers`               | 200                                    |
+| Bronze | `brz_products`                | 50                                     |
+| Silver | `slv_orders`                  | 2,000 (all rows, ~100 flagged invalid) |
+| Silver | `slv_customers`               | 200 (all rows, ~10 flagged invalid)    |
+| Silver | `slv_products`                | 50                                     |
+| Gold   | `fact_orders`                 | ~1,900 (valid orders only)             |
+| Gold   | `dim_customers`               | ~190 (valid customers only)            |
+| Gold   | `dim_products`                | 50                                     |
+| Gold   | `gld_daily_order_metrics`     | ~1,095 (unique dates)                  |
+| Gold   | `gld_customer_lifetime_value` | ~190                                   |
+| Gold   | `gld_monthly_revenue`         | ~36 (months x countries)               |
 
 </details>
 
 <details markdown="1">
 <summary>Finance Domain</summary>
 
-| Layer | Model | Expected Rows |
-|-------|-------|--------------|
-| Bronze | `brz_invoices` | 500 |
-| Bronze | `brz_payments` | 400 |
-| Silver | `slv_invoices` | 500 (all rows, ~15 flagged invalid) |
-| Silver | `slv_payments` | 400 |
-| Gold | `gld_aging_report` | ~485 (valid invoices) |
-| Gold | `gld_revenue_reconciliation` | ~2,000+ (full outer join orders↔invoices) |
+| Layer  | Model                        | Expected Rows                             |
+| ------ | ---------------------------- | ----------------------------------------- |
+| Bronze | `brz_invoices`               | 500                                       |
+| Bronze | `brz_payments`               | 400                                       |
+| Silver | `slv_invoices`               | 500 (all rows, ~15 flagged invalid)       |
+| Silver | `slv_payments`               | 400                                       |
+| Gold   | `gld_aging_report`           | ~485 (valid invoices)                     |
+| Gold   | `gld_revenue_reconciliation` | ~2,000+ (full outer join orders↔invoices) |
 
 </details>
 
 <details markdown="1">
 <summary>Inventory Domain</summary>
 
-| Layer | Model | Expected Rows |
-|-------|-------|--------------|
-| Bronze | `brz_inventory` | 300 |
-| Bronze | `brz_warehouses` | 8 |
-| Silver | `slv_inventory` | 300 (all rows, ~11 flagged invalid) |
-| Silver | `slv_warehouses` | 8 |
-| Gold | `dim_warehouses` | 8 |
-| Gold | `fact_inventory_snapshot` | ~289 (valid inventory) |
-| Gold | `gld_reorder_alerts` | varies (products below reorder point) |
-| Gold | `gld_inventory_turnover` | ~50 (one per product) |
+| Layer  | Model                     | Expected Rows                         |
+| ------ | ------------------------- | ------------------------------------- |
+| Bronze | `brz_inventory`           | 300                                   |
+| Bronze | `brz_warehouses`          | 8                                     |
+| Silver | `slv_inventory`           | 300 (all rows, ~11 flagged invalid)   |
+| Silver | `slv_warehouses`          | 8                                     |
+| Gold   | `dim_warehouses`          | 8                                     |
+| Gold   | `fact_inventory_snapshot` | ~289 (valid inventory)                |
+| Gold   | `gld_reorder_alerts`      | varies (products below reorder point) |
+| Gold   | `gld_inventory_turnover`  | ~50 (one per product)                 |
 
 </details>
 
 <details markdown="1">
 <summary>Sales Domain</summary>
 
-| Layer | Model | Expected Rows |
-|-------|-------|--------------|
-| Bronze | `brz_sales_orders` | 1,000 |
-| Silver | `slv_sales_orders` | 1,000 (all rows, ~45 flagged invalid) |
-| Gold | `gld_sales_metrics` | varies (date × region × channel) |
+| Layer  | Model               | Expected Rows                         |
+| ------ | ------------------- | ------------------------------------- |
+| Bronze | `brz_sales_orders`  | 1,000                                 |
+| Silver | `slv_sales_orders`  | 1,000 (all rows, ~45 flagged invalid) |
+| Gold   | `gld_sales_metrics` | varies (date × region × channel)      |
 
 </details>
 
@@ -219,6 +219,7 @@ az datafactory pipeline create-run \
 ```
 
 The orchestration pipeline:
+
 - [ ] Ingests each entity to Bronze (parallel ForEach)
 - [ ] Runs dbt Bronze models
 - [ ] Runs dbt Silver models
@@ -230,6 +231,7 @@ The orchestration pipeline:
 ## 🔍 Step 5: Explore the Data
 
 ### Query Silver (validation results)
+
 ```sql
 -- See flagged records in Silver
 SELECT order_id, is_valid, validation_errors
@@ -239,6 +241,7 @@ LIMIT 20;
 ```
 
 ### Query Gold (business metrics)
+
 ```sql
 -- Daily revenue
 SELECT order_date, total_orders, total_revenue, cancellation_rate_pct
@@ -276,6 +279,7 @@ python scripts/streaming/produce_events.py \
 Events flow through: **Event Hub** → **Event Processing Function** → **Cosmos DB** + **ADX**
 
 Monitor in real-time via ADX:
+
 ```kql
 RawEvents
 | where timestamp > ago(15m)
@@ -294,6 +298,7 @@ python scripts/purview/bootstrap_catalog.py \
 ```
 
 This creates:
+
 - [ ] Collection hierarchy (csa-inabox > shared, sales, finance)
 - [ ] Business glossary terms (Customer, Order, Product, Invoice, Revenue, etc.)
 - [ ] Scan sources for ADLS Bronze/Silver/Gold containers
@@ -407,6 +412,7 @@ ENVIRONMENT=local uvicorn api.main:app --reload --port 8000
 ### Step B: Start a Frontend
 
 **React/Next.js:**
+
 ```bash
 cd portal/react-webapp
 npm install
@@ -415,6 +421,7 @@ npm run dev
 ```
 
 **Docker Compose (both at once):**
+
 ```bash
 # From the repository root:
 docker compose -f portal/kubernetes/docker/docker-compose.yml up --build
@@ -423,6 +430,7 @@ docker compose -f portal/kubernetes/docker/docker-compose.yml up --build
 ```
 
 **CLI variant (CSA-0066 — 4th portal variant):**
+
 ```bash
 # Install with portal extras (CSA-0062)
 make setup EXTRAS=dev,portal
@@ -466,11 +474,11 @@ func azure functionapp publish <your-function-app-name> --python
 ### Step B: Deploy the Data Marketplace
 
 !!! important
-    **CSA-0067 / CSA-0131:** The legacy reference marketplace under
-    `csa_platform/data_marketplace/` is **deprecated** and does not ship
-    an `--init` CLI. Use the actively-served marketplace at
-    `portal.shared.api.routers.marketplace` instead — it seeds demo
-    products automatically when `ENVIRONMENT=local` or `DEMO_MODE=true`.
+**CSA-0067 / CSA-0131:** The legacy reference marketplace under
+`csa_platform/data_marketplace/` is **deprecated** and does not ship
+an `--init` CLI. Use the actively-served marketplace at
+`portal.shared.api.routers.marketplace` instead — it seeds demo
+products automatically when `ENVIRONMENT=local` or `DEMO_MODE=true`.
 
 ```bash
 # (Option A, recommended) Start the portal — seed data loads on startup.
@@ -554,18 +562,14 @@ az storage account show \
 
 ### Government-Specific Notes
 
-!!! note
-    - All services use `.us` / `.usgovcloudapi.net` endpoints
-    - Compliance tags are auto-applied: FedRAMP High, FISMA, NIST 800-53 Rev5
-    - Microsoft Fabric is forecast, not GA, in Azure Government — this repo provides Fabric-parity capabilities on Azure PaaS services that ARE available in Gov today
-    - See [GOV_SERVICE_MATRIX.md](GOV_SERVICE_MATRIX.md) for service availability
+!!! note - All services use `.us` / `.usgovcloudapi.net` endpoints - Compliance tags are auto-applied: FedRAMP High, FISMA, NIST 800-53 Rev5 - Microsoft Fabric is forecast, not GA, in Azure Government — this repo provides Fabric-parity capabilities on Azure PaaS services that ARE available in Gov today - See [GOV_SERVICE_MATRIX.md](GOV_SERVICE_MATRIX.md) for service availability
 
 ---
 
 ## 🧹 Teardown
 
 !!! warning
-    **Cost-safety.** CSA-in-a-Box provisions Synapse, Databricks, ADX, Event Hub, and other billable services. A forgotten demo environment can accrue **$1,000+/day**. Always tear down when you are done.
+**Cost-safety.** CSA-in-a-Box provisions Synapse, Databricks, ADX, Event Hub, and other billable services. A forgotten demo environment can accrue **$1,000+/day**. Always tear down when you are done.
 
 Every deployable surface ships with a teardown script that:
 

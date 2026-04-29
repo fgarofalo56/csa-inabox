@@ -11,13 +11,13 @@ This document is the single place to look when answering:
 
 ## Overview
 
-| Control | Workflow | Artifact | Audience |
-|---------|----------|----------|----------|
-| Pinned, hash-verified Python deps | (local) `scripts/update-locks.sh` | `requirements/*.lock` | Maintainers, CI, Docker |
-| CycloneDX + SPDX SBOM (Python + images) | `.github/workflows/sbom.yml` | Workflow artifacts + Release assets | SOC, customers, auditors |
-| CVE scanning (CRITICAL gate) | `.github/workflows/trivy.yml` | PR comment, Code Scanning SARIF | Reviewers |
-| SLSA Level 3 build provenance | `.github/workflows/slsa-provenance.yml` | Signed `*.intoto.jsonl` on Release | Downstream consumers |
-| Weekly dependency upgrades | `.github/dependabot.yml` | PRs labeled `dependencies` | Maintainers |
+| Control                                 | Workflow                                | Artifact                            | Audience                 |
+| --------------------------------------- | --------------------------------------- | ----------------------------------- | ------------------------ |
+| Pinned, hash-verified Python deps       | (local) `scripts/update-locks.sh`       | `requirements/*.lock`               | Maintainers, CI, Docker  |
+| CycloneDX + SPDX SBOM (Python + images) | `.github/workflows/sbom.yml`            | Workflow artifacts + Release assets | SOC, customers, auditors |
+| CVE scanning (CRITICAL gate)            | `.github/workflows/trivy.yml`           | PR comment, Code Scanning SARIF     | Reviewers                |
+| SLSA Level 3 build provenance           | `.github/workflows/slsa-provenance.yml` | Signed `*.intoto.jsonl` on Release  | Downstream consumers     |
+| Weekly dependency upgrades              | `.github/dependabot.yml`                | PRs labeled `dependencies`          | Maintainers              |
 
 ## 1. Regenerating the lock files
 
@@ -43,7 +43,7 @@ python -m pip install --upgrade 'pip-tools>=7'
 The script:
 
 - Invokes `python -m piptools compile --generate-hashes --strip-extras
-  --allow-unsafe --no-emit-index-url --extra=<name> pyproject.toml`
+--allow-unsafe --no-emit-index-url --extra=<name> pyproject.toml`
   for each extra.
 - Runs from the repo root so `pyproject.toml` is picked up correctly.
 - Produces `requirements/<extra>.lock` with full sha256 pinning.
@@ -78,10 +78,10 @@ for each of two surfaces:
 
 ### Where to find the SBOMs
 
-| Location | How | Retention |
-|----------|-----|-----------|
-| Workflow run artifacts | Actions → "SBOM" run → artifacts | 90 days |
-| GitHub Release assets | Releases page → expand release | Permanent |
+| Location               | How                              | Retention |
+| ---------------------- | -------------------------------- | --------- |
+| Workflow run artifacts | Actions → "SBOM" run → artifacts | 90 days   |
+| GitHub Release assets  | Releases page → expand release   | Permanent |
 
 Artifact naming pattern:
 
@@ -180,11 +180,11 @@ trivy config --severity HIGH,CRITICAL portal/kubernetes/
 
 ### PR gating rules
 
-| Severity | Lock files | Container images | Config |
-|----------|------------|------------------|--------|
-| CRITICAL | Blocks PR | Blocks PR | Reports only |
-| HIGH | PR comment + SARIF | SARIF | Reports only |
-| MEDIUM and below | Workflow summary | Workflow summary | Ignored |
+| Severity         | Lock files         | Container images | Config       |
+| ---------------- | ------------------ | ---------------- | ------------ |
+| CRITICAL         | Blocks PR          | Blocks PR        | Reports only |
+| HIGH             | PR comment + SARIF | SARIF            | Reports only |
+| MEDIUM and below | Workflow summary   | Workflow summary | Ignored      |
 
 The HIGH PR comment is idempotent — the workflow updates an existing
 comment rather than spamming a new one each run. SARIF output is
@@ -227,11 +227,11 @@ Trivy, CodeQL, a Dependabot security alert, or an external report):
    `requirements/*.lock` for the package name — the `# via` comment in
    each lock shows the dependency chain.
 3. Classify severity using CVSS + reachability:
-   - **Critical** — remotely exploitable, reachable from the portal or
-     an Azure Function entry point. Mitigate within 72 hours.
-   - **High** — exploitable but not network-reachable. Mitigate within
-     7 days.
-   - **Medium/Low** — track in the next Dependabot batch.
+    - **Critical** — remotely exploitable, reachable from the portal or
+      an Azure Function entry point. Mitigate within 72 hours.
+    - **High** — exploitable but not network-reachable. Mitigate within
+      7 days.
+    - **Medium/Low** — track in the next Dependabot batch.
 
 ### 6.2. Remediate
 
@@ -240,9 +240,9 @@ Trivy, CodeQL, a Dependabot security alert, or an external report):
 1. Bump the floor in `pyproject.toml` to the fixed version (preserving
    the upper bound). Example: `cryptography>=42.0.4,<47.0.0`.
 2. Regenerate the affected locks:
-   ```bash
-   ./scripts/update-locks.sh portal copilot  # only the impacted extras
-   ```
+    ```bash
+    ./scripts/update-locks.sh portal copilot  # only the impacted extras
+    ```
 3. Open a PR titled `fix(security): bump <pkg> to <ver> for CVE-YYYY-NNNN`.
 4. Confirm the Trivy CRITICAL gate now passes on the PR.
 5. Merge and cut a patch release (`vX.Y.Z+1`).

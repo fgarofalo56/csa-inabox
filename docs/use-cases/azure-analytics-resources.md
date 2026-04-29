@@ -21,15 +21,15 @@ The Azure Architecture Center is the primary source for validated reference arch
 | [Modern Data Warehouse](https://learn.microsoft.com/en-us/azure/architecture/solution-ideas/articles/modern-data-warehouse)                                   | Data warehouse pattern with Azure Synapse                                           | Alternative to Databricks-centric approach                         |
 | [Real-Time Analytics on Big Data](https://learn.microsoft.com/en-us/azure/architecture/solution-ideas/articles/real-time-analytics)                           | Streaming analytics with Event Hubs and Spark                                       | Streaming extensions to batch patterns                             |
 | [Big Data with Azure Databricks](https://learn.microsoft.com/en-us/azure/architecture/solution-ideas/articles/azure-databricks-modern-analytics-architecture) | Databricks-centric analytics architecture                                           | Closely aligned with CSA-in-a-Box compute layer                    |
-| [Data Lakehouse](https://learn.microsoft.com/en-us/azure/architecture/solution-ideas/articles/azure-databricks-modern-analytics-architecture)                                       | Delta Lake lakehouse pattern                                                        | Core CSA-in-a-Box storage pattern                                  |
+| [Data Lakehouse](https://learn.microsoft.com/en-us/azure/architecture/solution-ideas/articles/azure-databricks-modern-analytics-architecture)                 | Delta Lake lakehouse pattern                                                        | Core CSA-in-a-Box storage pattern                                  |
 
 ### Design Patterns
 
-| Pattern                                                                                                                                              | Description                    | Relevance                        |
-| ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ | -------------------------------- |
-| [Medallion Architecture](https://learn.microsoft.com/en-us/azure/databricks/lakehouse/medallion)                                                     | Bronze/Silver/Gold data layers | Core CSA-in-a-Box pattern        |
-| [Data Mesh on Azure](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/) | Domain-driven data ownership   | CSA-in-a-Box domain organization |
-| [Data Lake Zones](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/best-practices/data-lake-zones)   | Storage zone organization      | Maps to medallion layers         |
+| Pattern                                                                                                                                            | Description                    | Relevance                        |
+| -------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ | -------------------------------- |
+| [Medallion Architecture](https://learn.microsoft.com/en-us/azure/databricks/lakehouse/medallion)                                                   | Bronze/Silver/Gold data layers | Core CSA-in-a-Box pattern        |
+| [Data Mesh on Azure](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/)                            | Domain-driven data ownership   | CSA-in-a-Box domain organization |
+| [Data Lake Zones](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/best-practices/data-lake-zones) | Storage zone organization      | Maps to medallion layers         |
 
 ---
 
@@ -44,7 +44,7 @@ The Cloud Adoption Framework (CAF) provides organizational, governance, and tech
 | [Cloud-Scale Analytics Overview](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/)                                         | Top-level scenario overview                 | Starting an analytics initiative |
 | [Data Management Landing Zone](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/architectures/data-management-landing-zone) | Centralized governance zone                 | Designing governance layer       |
 | [Data Landing Zone](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/architectures/data-landing-zone)                       | Domain-specific compute and storage         | Creating new domains             |
-| [Data Products](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/)                               | Self-contained governed datasets            | Implementing data contracts      |
+| [Data Products](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/)                                                          | Self-contained governed datasets            | Implementing data contracts      |
 | [Data Governance](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/govern)                                                  | Governance patterns and Purview integration | Setting up governance            |
 
 !!! tip "CAF + CSA-in-a-Box"
@@ -165,13 +165,13 @@ Microsoft Fabric availability in Azure Government regions is evolving. Check the
 
 Published case studies demonstrating Fabric at enterprise scale:
 
-| Organization                    | Scale                      | Outcome                                           | Source                                                                                                                                  |
-| ------------------------------- | -------------------------- | ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| Microsoft IDEAS                 | 420 PiB, 600+ teams        | 50% efficiency improvement, unified data estate   | [Microsoft Learn](https://learn.microsoft.com/fabric/fundamentals/ideas-data-platform-integration)                                      |
-| Edith Cowan University (ECU)    | University-wide analytics  | 50% cost reduction, 70% faster report development | [Microsoft Customer Stories — Fabric](https://www.microsoft.com/en-us/customers/search?filters=product%3Amicrosoft-fabric)   |
+| Organization                    | Scale                      | Outcome                                           | Source                                                                                                                     |
+| ------------------------------- | -------------------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Microsoft IDEAS                 | 420 PiB, 600+ teams        | 50% efficiency improvement, unified data estate   | [Microsoft Learn](https://learn.microsoft.com/fabric/fundamentals/ideas-data-platform-integration)                         |
+| Edith Cowan University (ECU)    | University-wide analytics  | 50% cost reduction, 70% faster report development | [Microsoft Customer Stories — Fabric](https://www.microsoft.com/en-us/customers/search?filters=product%3Amicrosoft-fabric) |
 | Dentsu                          | Global marketing analytics | 55% faster data replication                       | [Microsoft Customer Stories — Fabric](https://www.microsoft.com/en-us/customers/search?filters=product%3Amicrosoft-fabric) |
-| IWG (Regus)                     | Fraud detection            | Detection latency from weeks to seconds           | [Microsoft Customer Stories — Fabric](https://www.microsoft.com/en-us/customers/search?filters=product%3Amicrosoft-fabric)            |
-| OBOS BBL (Norwegian Basketball) | Sports analytics           | Real-time game analytics on Fabric RTI            | [Microsoft Customer Stories — Fabric](https://www.microsoft.com/en-us/customers/search?filters=product%3Amicrosoft-fabric)   |
+| IWG (Regus)                     | Fraud detection            | Detection latency from weeks to seconds           | [Microsoft Customer Stories — Fabric](https://www.microsoft.com/en-us/customers/search?filters=product%3Amicrosoft-fabric) |
+| OBOS BBL (Norwegian Basketball) | Sports analytics           | Real-time game analytics on Fabric RTI            | [Microsoft Customer Stories — Fabric](https://www.microsoft.com/en-us/customers/search?filters=product%3Amicrosoft-fabric) |
 
 ### eDiscovery & Legal Technology Benchmarks
 
@@ -181,7 +181,7 @@ Industry benchmarks for document review and eDiscovery workloads — useful cont
 | -------------- | ------------------------------------------------------------------ | ----------------------------------------------------------------------------- |
 | HaystackID     | DOJ Second Request: 18 TB across 17+ data stores, 106 days average | [HaystackID Second Request Guide](https://haystackid.com/second-request/)     |
 | OpenText       | Average contested merger Second Request cost: ~$4.3M               | [OpenText eDiscovery Resources](https://www.opentext.com/products/ediscovery) |
-| FTI Consulting | Structured analytics reduces review populations by 50–70%          | [FTI Technology](https://www.ftitechnology.com)           |
+| FTI Consulting | Structured analytics reduces review populations by 50–70%          | [FTI Technology](https://www.ftitechnology.com)                               |
 
 ---
 

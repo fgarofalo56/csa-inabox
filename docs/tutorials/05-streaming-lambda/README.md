@@ -36,10 +36,10 @@ Successfully installed azure-kusto-data-4.x azure-kusto-ingest-4.x
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `pip install azure-eventhub` fails | Network/proxy issue | Try `pip install --trusted-host pypi.org azure-eventhub` |
-| `azure-kusto-data` conflicts | Version mismatch | Use `pip install azure-kusto-data==4.4.1 azure-kusto-ingest==4.4.1` |
+| Symptom                            | Cause               | Fix                                                                 |
+| ---------------------------------- | ------------------- | ------------------------------------------------------------------- |
+| `pip install azure-eventhub` fails | Network/proxy issue | Try `pip install --trusted-host pypi.org azure-eventhub`            |
+| `azure-kusto-data` conflicts       | Version mismatch    | Use `pip install azure-kusto-data==4.4.1 azure-kusto-ingest==4.4.1` |
 
 ---
 
@@ -101,14 +101,14 @@ graph TB
 
 > **Lambda vs Kappa Architecture**
 >
-> | Aspect | Lambda | Kappa |
-> |--------|--------|-------|
-> | **Layers** | Speed + Batch + Serving | Single stream processing layer |
-> | **Complexity** | Higher (two code paths) | Lower (one code path) |
-> | **Reprocessing** | Batch layer handles corrections | Replay stream from Event Hub |
-> | **Accuracy** | Batch provides ground truth | Depends on stream correctness |
-> | **Best for** | Mixed workloads, regulatory compliance | Simple event processing, low latency only |
-> | **CSA Use Case** | Earthquake monitoring with historical analysis | Simple alert forwarding |
+> | Aspect           | Lambda                                         | Kappa                                     |
+> | ---------------- | ---------------------------------------------- | ----------------------------------------- |
+> | **Layers**       | Speed + Batch + Serving                        | Single stream processing layer            |
+> | **Complexity**   | Higher (two code paths)                        | Lower (one code path)                     |
+> | **Reprocessing** | Batch layer handles corrections                | Replay stream from Event Hub              |
+> | **Accuracy**     | Batch provides ground truth                    | Depends on stream correctness             |
+> | **Best for**     | Mixed workloads, regulatory compliance         | Simple event processing, low latency only |
+> | **CSA Use Case** | Earthquake monitoring with historical analysis | Simple alert forwarding                   |
 >
 > This tutorial uses **Lambda** because earthquake analysis benefits from batch reprocessing (revised magnitudes, location corrections) alongside real-time alerting.
 
@@ -162,16 +162,18 @@ cd ../../../..
 
 ```json
 {
-  "properties": {
-    "provisioningState": "Succeeded",
-    "outputs": {
-      "eventHubNamespace": { "value": "csa-eh-dev" },
-      "eventHubName": { "value": "earthquake-events" },
-      "streamAnalyticsJobName": { "value": "csa-asa-dev" },
-      "adxClusterUri": { "value": "https://csa-adx-dev.eastus.kusto.windows.net" },
-      "adxDatabaseName": { "value": "csadb" }
+    "properties": {
+        "provisioningState": "Succeeded",
+        "outputs": {
+            "eventHubNamespace": { "value": "csa-eh-dev" },
+            "eventHubName": { "value": "earthquake-events" },
+            "streamAnalyticsJobName": { "value": "csa-asa-dev" },
+            "adxClusterUri": {
+                "value": "https://csa-adx-dev.eastus.kusto.windows.net"
+            },
+            "adxDatabaseName": { "value": "csadb" }
+        }
     }
-  }
 }
 ```
 
@@ -179,11 +181,11 @@ cd ../../../..
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
+| Symptom                      | Cause                        | Fix                                                    |
+| ---------------------------- | ---------------------------- | ------------------------------------------------------ |
 | ADX cluster fails with quota | ADX requires dedicated vCPUs | Use `Dev(No SLA)_Standard_E2a_v4` SKU or request quota |
-| Event Hub namespace exists | Name collision | Event Hub names are globally unique — adjust prefix |
-| Deployment timeout | ADX takes 15-20 min | Increase timeout or re-run — idempotent |
+| Event Hub namespace exists   | Name collision               | Event Hub names are globally unique — adjust prefix    |
+| Deployment timeout           | ADX takes 15-20 min          | Increase timeout or re-run — idempotent                |
 
 ---
 
@@ -217,12 +219,12 @@ echo "Event Hubs created in namespace: $EH_NAMESPACE"
 
 ### 2b. Event Hub Partition Strategy
 
-| Partition Count | Use Case | Throughput |
-|-----------------|----------|------------|
-| 2 | Dev/test, low volume | Up to 2 MB/s ingress |
-| 4 | Tutorial default, moderate volume | Up to 4 MB/s ingress |
-| 8 | Production, high volume | Up to 8 MB/s ingress |
-| 32 | Enterprise, very high volume | Up to 32 MB/s ingress |
+| Partition Count | Use Case                          | Throughput            |
+| --------------- | --------------------------------- | --------------------- |
+| 2               | Dev/test, low volume              | Up to 2 MB/s ingress  |
+| 4               | Tutorial default, moderate volume | Up to 4 MB/s ingress  |
+| 8               | Production, high volume           | Up to 8 MB/s ingress  |
+| 32              | Enterprise, very high volume      | Up to 32 MB/s ingress |
 
 > **Partition Key Strategy:** For earthquake data, use `region` (e.g., `us-west`, `us-east`, `alaska`, `hawaii`) as the partition key. This ensures events from the same region are processed in order and enables region-parallel consumers.
 
@@ -256,17 +258,17 @@ az eventhubs eventhub update \
 
 ```json
 {
-  "captureDescription": {
-    "enabled": true,
-    "encoding": "Avro",
-    "intervalInSeconds": 300,
-    "sizeLimitInBytes": 10485760,
-    "destination": {
-      "name": "EventHubArchive.AzureBlobStorage",
-      "blobContainer": "bronze",
-      "archiveNameFormat": "{Namespace}/{EventHub}/p={PartitionId}/{Year}/{Month}/{Day}/{Hour}/{Minute}/{Second}"
+    "captureDescription": {
+        "enabled": true,
+        "encoding": "Avro",
+        "intervalInSeconds": 300,
+        "sizeLimitInBytes": 10485760,
+        "destination": {
+            "name": "EventHubArchive.AzureBlobStorage",
+            "blobContainer": "bronze",
+            "archiveNameFormat": "{Namespace}/{EventHub}/p={PartitionId}/{Year}/{Month}/{Day}/{Hour}/{Minute}/{Second}"
+        }
     }
-  }
 }
 ```
 
@@ -296,11 +298,11 @@ echo "Connection string saved (do not share!)"
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| Capture not writing to ADLS | Storage RBAC missing | Grant `Storage Blob Data Contributor` to Event Hub's managed identity |
-| `AuthorizationFailed` creating SAS | Insufficient permissions | Need Contributor on the Event Hub namespace |
-| Capture files are empty Avro | No events sent yet | Capture only writes when events arrive (Step 4) |
+| Symptom                            | Cause                    | Fix                                                                   |
+| ---------------------------------- | ------------------------ | --------------------------------------------------------------------- |
+| Capture not writing to ADLS        | Storage RBAC missing     | Grant `Storage Blob Data Contributor` to Event Hub's managed identity |
+| `AuthorizationFailed` creating SAS | Insufficient permissions | Need Contributor on the Event Hub namespace                           |
+| Capture files are empty Avro       | No events sent yet       | Capture only writes when events arrive (Step 4)                       |
 
 ---
 
@@ -481,12 +483,12 @@ az monitor metrics list \
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `AuthenticationError` | Invalid connection string | Re-copy from `az eventhubs eventhub authorization-rule keys list` |
-| No new events sent | All events already seen | Reset by restarting the script (clears `seen_events` set) |
-| USGS returns 503 | Rate limiting | Increase `POLL_INTERVAL_SECONDS` to 60+ |
-| Events sent but not captured | Capture interval not elapsed | Wait for `capture-interval` (300s) to trigger first file |
+| Symptom                      | Cause                        | Fix                                                               |
+| ---------------------------- | ---------------------------- | ----------------------------------------------------------------- |
+| `AuthenticationError`        | Invalid connection string    | Re-copy from `az eventhubs eventhub authorization-rule keys list` |
+| No new events sent           | All events already seen      | Reset by restarting the script (clears `seen_events` set)         |
+| USGS returns 503             | Rate limiting                | Increase `POLL_INTERVAL_SECONDS` to 60+                           |
+| Events sent but not captured | Capture interval not elapsed | Wait for `capture-interval` (300s) to trigger first file          |
 
 ---
 
@@ -621,12 +623,12 @@ Stream Analytics job started
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| Job fails to start | Input/output configuration error | Check job diagnostics in Azure Portal → Stream Analytics → Activity Log |
-| No output rows | No matching events in window | Verify producer is running and events are arriving |
-| `DeserializationError` | JSON schema mismatch | Verify event JSON structure matches query column names |
-| Timestamp error | Epoch milliseconds not converting | Ensure `DATEADD(millisecond, [time], '1970-01-01')` is correct |
+| Symptom                | Cause                             | Fix                                                                     |
+| ---------------------- | --------------------------------- | ----------------------------------------------------------------------- |
+| Job fails to start     | Input/output configuration error  | Check job diagnostics in Azure Portal → Stream Analytics → Activity Log |
+| No output rows         | No matching events in window      | Verify producer is running and events are arriving                      |
+| `DeserializationError` | JSON schema mismatch              | Verify event JSON structure matches query column names                  |
+| Timestamp error        | Epoch milliseconds not converting | Ensure `DATEADD(millisecond, [time], '1970-01-01')` is correct          |
 
 ---
 
@@ -770,10 +772,10 @@ In Databricks, create a scheduled workflow:
 
 1. Go to **Workflows** → **Create Job**
 2. Configure:
-   - **Name:** `CSA Batch Reprocess - Earthquakes`
-   - **Notebook:** `notebooks/streaming/batch_reprocess.py`
-   - **Cluster:** Your tutorial cluster
-   - **Schedule:** Every 6 hours (or daily for lower cost)
+    - **Name:** `CSA Batch Reprocess - Earthquakes`
+    - **Notebook:** `notebooks/streaming/batch_reprocess.py`
+    - **Cluster:** Your tutorial cluster
+    - **Schedule:** Every 6 hours (or daily for lower cost)
 3. Click **Create**
 
 ```bash
@@ -799,7 +801,7 @@ databricks jobs create --json '{
 
 ```json
 {
-  "job_id": 123456789
+    "job_id": 123456789
 }
 ```
 
@@ -807,12 +809,12 @@ databricks jobs create --json '{
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| No Avro files in Bronze | Capture not triggered | Ensure producer is running and capture interval (300s) has elapsed |
-| `AnalysisException: path does not exist` | No captured data yet | Wait for Event Hub Capture to write first files |
-| Schema mismatch on parse | JSON field names changed | Verify producer event structure matches the schema |
-| Delta write fails | Missing permissions | Grant `Storage Blob Data Contributor` to Databricks managed identity |
+| Symptom                                  | Cause                    | Fix                                                                  |
+| ---------------------------------------- | ------------------------ | -------------------------------------------------------------------- |
+| No Avro files in Bronze                  | Capture not triggered    | Ensure producer is running and capture interval (300s) has elapsed   |
+| `AnalysisException: path does not exist` | No captured data yet     | Wait for Event Hub Capture to write first files                      |
+| Schema mismatch on parse                 | JSON field names changed | Verify producer event structure matches the schema                   |
+| Delta write fails                        | Missing permissions      | Grant `Storage Blob Data Contributor` to Databricks managed identity |
 
 ---
 
@@ -936,11 +938,11 @@ Materialized view 'earthquake_daily' created successfully.
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| Cannot connect to ADX web UI | Cluster not running | Start cluster: `az kusto cluster start --name csa-adx-dev --resource-group $CSA_RG_DLZ` |
-| Ingest fails with auth error | Managed identity not configured | Grant `Database Ingestor` role to the service principal |
-| Materialized view lag | Cluster too small | Scale up ADX SKU or reduce materialized view complexity |
+| Symptom                      | Cause                           | Fix                                                                                     |
+| ---------------------------- | ------------------------------- | --------------------------------------------------------------------------------------- |
+| Cannot connect to ADX web UI | Cluster not running             | Start cluster: `az kusto cluster start --name csa-adx-dev --resource-group $CSA_RG_DLZ` |
+| Ingest fails with auth error | Managed identity not configured | Grant `Database Ingestor` role to the service principal                                 |
+| Materialized view lag        | Cluster too small               | Scale up ADX SKU or reduce materialized view complexity                                 |
 
 ---
 
@@ -1035,10 +1037,10 @@ earthquake_realtime
 
 1. In [Azure Data Explorer web UI](https://dataexplorer.azure.com/), click **Dashboards** → **New Dashboard**
 2. Add tiles:
-   - **Tile 1: Map** — Earthquake events by region (use latitude/longitude)
-   - **Tile 2: Time Chart** — Hourly event count (from merged view)
-   - **Tile 3: Stat** — Max magnitude in last 24 hours
-   - **Tile 4: Table** — Latest 20 events from `earthquake_raw`
+    - **Tile 1: Map** — Earthquake events by region (use latitude/longitude)
+    - **Tile 2: Time Chart** — Hourly event count (from merged view)
+    - **Tile 3: Stat** — Max magnitude in last 24 hours
+    - **Tile 4: Table** — Latest 20 events from `earthquake_raw`
 3. Set auto-refresh to 1 minute
 
 ### 8b. Azure Monitor Alerts
@@ -1064,11 +1066,11 @@ az monitor metrics alert create \
 
 ```json
 {
-  "name": "significant-earthquake",
-  "severity": 2,
-  "enabled": true,
-  "evaluationFrequency": "PT1M",
-  "windowSize": "PT5M"
+    "name": "significant-earthquake",
+    "severity": 2,
+    "enabled": true,
+    "evaluationFrequency": "PT1M",
+    "windowSize": "PT5M"
 }
 ```
 

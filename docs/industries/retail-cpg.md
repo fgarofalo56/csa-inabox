@@ -4,28 +4,28 @@
 
 ## Top scenarios
 
-| Scenario | Pattern | Latency | Reference |
-|----------|---------|---------|-----------|
-| **Customer 360** | Multi-source identity resolution + medallion gold + reverse-ETL | minutes | [Reference Arch — Data Flow](../reference-architecture/data-flow-medallion.md) |
-| **Real-time recommendation** | Feature store + online inference + click feedback loop | sub-100ms | [Example — ML Lifecycle](../examples/ml-lifecycle.md) (adapt) |
-| **Demand forecasting** | Sales + weather + promotions + ML | daily | [Example — ML Lifecycle](../examples/ml-lifecycle.md) |
-| **Inventory optimization** | Real-time stock + demand forecast + replenishment | hours | [Tutorial 11 — Data API Builder](../tutorials/11-data-api-builder/README.md) for serving |
-| **Pricing optimization** | Competitive scrape + elasticity model + scenario eval | daily | [Use Case — Anomaly Detection](../use-cases/realtime-intelligence-anomaly-detection.md) (similar streaming patterns) |
-| **Fraud / chargeback** | Transaction streaming + ML scoring | sub-second | [Industries — Financial Services](financial-services.md) |
-| **Conversational commerce** | RAG + product catalog + checkout integration | seconds | [Tutorial 08 — RAG](../tutorials/08-rag-vector-search/README.md), [Example — AI Agents](../examples/ai-agents.md) |
-| **Marketing attribution** | Touchpoint ingest + multi-touch model | daily | [Tutorial 02 — Data Governance](../tutorials/02-data-governance/README.md) |
-| **Loyalty / personalization** | CDP + ML segments + activation channels | minutes | [Tutorial 11 — Data API Builder](../tutorials/11-data-api-builder/README.md) |
+| Scenario                      | Pattern                                                         | Latency    | Reference                                                                                                            |
+| ----------------------------- | --------------------------------------------------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------- |
+| **Customer 360**              | Multi-source identity resolution + medallion gold + reverse-ETL | minutes    | [Reference Arch — Data Flow](../reference-architecture/data-flow-medallion.md)                                       |
+| **Real-time recommendation**  | Feature store + online inference + click feedback loop          | sub-100ms  | [Example — ML Lifecycle](../examples/ml-lifecycle.md) (adapt)                                                        |
+| **Demand forecasting**        | Sales + weather + promotions + ML                               | daily      | [Example — ML Lifecycle](../examples/ml-lifecycle.md)                                                                |
+| **Inventory optimization**    | Real-time stock + demand forecast + replenishment               | hours      | [Tutorial 11 — Data API Builder](../tutorials/11-data-api-builder/README.md) for serving                             |
+| **Pricing optimization**      | Competitive scrape + elasticity model + scenario eval           | daily      | [Use Case — Anomaly Detection](../use-cases/realtime-intelligence-anomaly-detection.md) (similar streaming patterns) |
+| **Fraud / chargeback**        | Transaction streaming + ML scoring                              | sub-second | [Industries — Financial Services](financial-services.md)                                                             |
+| **Conversational commerce**   | RAG + product catalog + checkout integration                    | seconds    | [Tutorial 08 — RAG](../tutorials/08-rag-vector-search/README.md), [Example — AI Agents](../examples/ai-agents.md)    |
+| **Marketing attribution**     | Touchpoint ingest + multi-touch model                           | daily      | [Tutorial 02 — Data Governance](../tutorials/02-data-governance/README.md)                                           |
+| **Loyalty / personalization** | CDP + ML segments + activation channels                         | minutes    | [Tutorial 11 — Data API Builder](../tutorials/11-data-api-builder/README.md)                                         |
 
 ## Regulatory landscape
 
-| Framework | Where in CSA-in-a-Box |
-|-----------|----------------------|
-| **PCI-DSS v4.0** (any payment data) | [Compliance — PCI-DSS](../compliance/pci-dss-v4.md) — strongly recommend tokenization at the edge |
-| **GDPR** (EU customers) | [Compliance — GDPR](../compliance/gdpr-privacy.md) |
-| **CCPA / CPRA** (California) | Same patterns as GDPR; "do not sell" preference + DSR handling |
-| **SOC 2 Type II** | [Compliance — SOC 2](../compliance/soc2-type2.md) — table stakes for B2B SaaS commerce |
-| **State privacy laws** (VA, CO, CT, UT, TX, etc.) | Mostly track GDPR principles; one consent management platform usually serves all |
-| **COPPA** (under-13 users) | If applicable, age-gate at signup; segregate child accounts |
+| Framework                                         | Where in CSA-in-a-Box                                                                             |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| **PCI-DSS v4.0** (any payment data)               | [Compliance — PCI-DSS](../compliance/pci-dss-v4.md) — strongly recommend tokenization at the edge |
+| **GDPR** (EU customers)                           | [Compliance — GDPR](../compliance/gdpr-privacy.md)                                                |
+| **CCPA / CPRA** (California)                      | Same patterns as GDPR; "do not sell" preference + DSR handling                                    |
+| **SOC 2 Type II**                                 | [Compliance — SOC 2](../compliance/soc2-type2.md) — table stakes for B2B SaaS commerce            |
+| **State privacy laws** (VA, CO, CT, UT, TX, etc.) | Mostly track GDPR principles; one consent management platform usually serves all                  |
+| **COPPA** (under-13 users)                        | If applicable, age-gate at signup; segregate child accounts                                       |
 
 ## Reference architecture variations
 

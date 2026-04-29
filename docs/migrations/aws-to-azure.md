@@ -16,18 +16,18 @@ This playbook is honest. AWS GovCloud has been federal-first since 2011 and has 
 
 ### Federal considerations — AWS analytics vs csa-inabox
 
-| Consideration | AWS GovCloud today | csa-inabox on Azure Gov | Notes |
-|---|---|---|---|
-| FedRAMP High | Authorized for most analytics services | Inherited through Azure Gov | Both platforms meet baseline |
-| DoD IL4 | Covered (most analytics services) | Covered | Parity |
-| DoD IL5 | **Service-dependent**; several analytics services have partial IL5 coverage | Covered on Azure Gov for most services; Fabric IL5 parity forecast per Microsoft roadmap | Check AWS IL5 boundary vs `docs/GOV_SERVICE_MATRIX.md` |
-| DoD IL6 | Covered (AWS Top Secret Region) | **Gap** — out of scope for csa-inabox | For IL6, recommend staying on AWS Top Secret or bespoke Azure Top Secret |
-| ITAR | Covered via AWS GovCloud US data-residency | Covered via Azure Government tenant-binding | Parity |
-| CMMC 2.0 Level 2 | Customer-managed mappings; AWS controls available | Controls mapped in `csa_platform/csa_platform/governance/compliance/cmmc-2.0-l2.yaml` + narrative | DIB primes inherit directly on csa-inabox |
-| HIPAA Security Rule | Covered with BAA | Covered; mapped in `csa_platform/csa_platform/governance/compliance/hipaa-security-rule.yaml` | See `examples/tribal-health/` for HHS / IHS worked example |
-| Storage format | S3 object storage + Glue Catalog | ADLS Gen2 + OneLake + Unity Catalog + Purview | OneLake shortcuts allow S3 to stay source-of-truth during migration |
-| Table format | Parquet/ORC + Iceberg (AWS Glue Iceberg) + Hudi | Delta Lake (primary) + Iceberg (ADR-0003) + Parquet | Delta + Iceberg interop; Glue Iceberg tables readable in Databricks |
-| IaC | CloudFormation / CDK / Terraform | Bicep (ADR-0004 `docs/adr/0004-bicep-over-terraform.md`) | Terraform also supported; Bicep chosen for Azure policy evidence |
+| Consideration       | AWS GovCloud today                                                          | csa-inabox on Azure Gov                                                                           | Notes                                                                    |
+| ------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| FedRAMP High        | Authorized for most analytics services                                      | Inherited through Azure Gov                                                                       | Both platforms meet baseline                                             |
+| DoD IL4             | Covered (most analytics services)                                           | Covered                                                                                           | Parity                                                                   |
+| DoD IL5             | **Service-dependent**; several analytics services have partial IL5 coverage | Covered on Azure Gov for most services; Fabric IL5 parity forecast per Microsoft roadmap          | Check AWS IL5 boundary vs `docs/GOV_SERVICE_MATRIX.md`                   |
+| DoD IL6             | Covered (AWS Top Secret Region)                                             | **Gap** — out of scope for csa-inabox                                                             | For IL6, recommend staying on AWS Top Secret or bespoke Azure Top Secret |
+| ITAR                | Covered via AWS GovCloud US data-residency                                  | Covered via Azure Government tenant-binding                                                       | Parity                                                                   |
+| CMMC 2.0 Level 2    | Customer-managed mappings; AWS controls available                           | Controls mapped in `csa_platform/csa_platform/governance/compliance/cmmc-2.0-l2.yaml` + narrative | DIB primes inherit directly on csa-inabox                                |
+| HIPAA Security Rule | Covered with BAA                                                            | Covered; mapped in `csa_platform/csa_platform/governance/compliance/hipaa-security-rule.yaml`     | See `examples/tribal-health/` for HHS / IHS worked example               |
+| Storage format      | S3 object storage + Glue Catalog                                            | ADLS Gen2 + OneLake + Unity Catalog + Purview                                                     | OneLake shortcuts allow S3 to stay source-of-truth during migration      |
+| Table format        | Parquet/ORC + Iceberg (AWS Glue Iceberg) + Hudi                             | Delta Lake (primary) + Iceberg (ADR-0003) + Parquet                                               | Delta + Iceberg interop; Glue Iceberg tables readable in Databricks      |
+| IaC                 | CloudFormation / CDK / Terraform                                            | Bicep (ADR-0004 `docs/adr/0004-bicep-over-terraform.md`)                                          | Terraform also supported; Bicep chosen for Azure policy evidence         |
 
 ---
 
@@ -37,64 +37,64 @@ This section is split by service because the AWS estate is rarely migrated as a 
 
 ### 2.1 Redshift → csa-inabox
 
-| Redshift capability | csa-inabox equivalent | Mapping notes | Effort | Evidence |
-|---|---|---|---|---|
-| RA3 nodes + managed storage | Databricks SQL Warehouses + Delta Lake on ADLS Gen2 | RA3 decoupling maps cleanly to Databricks compute-storage separation | M | `csa_platform/unity_catalog_pattern/README.md`, ADR-0003 `docs/adr/0003-delta-lake-over-iceberg-and-parquet.md` |
-| Spectrum (external tables on S3) | OneLake shortcuts to S3 + Databricks Lakehouse Federation | Spectrum's S3-external query pattern preserved read-only during migration | S | `csa_platform/unity_catalog_pattern/onelake_config.yaml` |
-| Automated vacuum/analyze | Databricks `OPTIMIZE` + `ANALYZE TABLE` + auto-compaction | Delta's `OPTIMIZE ZORDER BY` replaces the sort-key maintenance loop | XS | `domains/shared/dbt/dbt_project.yml` (OPTIMIZE in model configs) |
-| Workload management (WLM) queues | Databricks SQL Warehouse sizing + queuing + serverless auto-scale | Each WLM queue becomes a SQL Warehouse; serverless handles bursty users | M | `csa_platform/multi_synapse/rbac_templates/` (pattern for warehouse sizing per group), ADR-0002 `docs/adr/0002-databricks-over-oss-spark.md` |
-| Federated queries (to RDS/Aurora) | Databricks Lakehouse Federation + ADF linked services | Native Lakehouse Federation covers Postgres/MySQL/SQL Server/Snowflake | M | `domains/shared/pipelines/adf/`, `csa_platform/unity_catalog_pattern/` |
-| Materialized views | dbt incremental models + Databricks materialized views | Most Redshift MVs re-express as dbt incremental; heavy CDC → Delta Live Tables | M | `domains/shared/dbt/dbt_project.yml`, ADR-0001 `docs/adr/0001-adf-dbt-over-airflow.md` |
-| Stored procedures (PL/pgSQL-ish) | dbt macros + Databricks SQL UDFs + notebook jobs | Port logic to dbt macros for SQL-only; complex imperative SPs → notebooks | L | `domains/finance/dbt/macros/`, `domains/shared/dbt/macros/` |
-| Distribution + sort keys | Delta partitioning + Z-ordering | Distribution key → partition column; sort keys → `ZORDER BY` columns | S | ADR-0003 |
-| Data sharing (Redshift data shares) | Delta Sharing + OneLake shortcuts | Open protocol (Delta Sharing) + Purview data-product registry | M | `csa_platform/data_marketplace/`, `csa_platform/data_marketplace/api/` |
-| Concurrency scaling | Databricks SQL Warehouse serverless + auto-scale | Serverless handles the spillover that concurrency scaling solved | XS | ADR-0010 `docs/adr/0010-fabric-strategic-target.md` |
+| Redshift capability                 | csa-inabox equivalent                                             | Mapping notes                                                                  | Effort | Evidence                                                                                                                                     |
+| ----------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------ | ------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| RA3 nodes + managed storage         | Databricks SQL Warehouses + Delta Lake on ADLS Gen2               | RA3 decoupling maps cleanly to Databricks compute-storage separation           | M      | `csa_platform/unity_catalog_pattern/README.md`, ADR-0003 `docs/adr/0003-delta-lake-over-iceberg-and-parquet.md`                              |
+| Spectrum (external tables on S3)    | OneLake shortcuts to S3 + Databricks Lakehouse Federation         | Spectrum's S3-external query pattern preserved read-only during migration      | S      | `csa_platform/unity_catalog_pattern/onelake_config.yaml`                                                                                     |
+| Automated vacuum/analyze            | Databricks `OPTIMIZE` + `ANALYZE TABLE` + auto-compaction         | Delta's `OPTIMIZE ZORDER BY` replaces the sort-key maintenance loop            | XS     | `domains/shared/dbt/dbt_project.yml` (OPTIMIZE in model configs)                                                                             |
+| Workload management (WLM) queues    | Databricks SQL Warehouse sizing + queuing + serverless auto-scale | Each WLM queue becomes a SQL Warehouse; serverless handles bursty users        | M      | `csa_platform/multi_synapse/rbac_templates/` (pattern for warehouse sizing per group), ADR-0002 `docs/adr/0002-databricks-over-oss-spark.md` |
+| Federated queries (to RDS/Aurora)   | Databricks Lakehouse Federation + ADF linked services             | Native Lakehouse Federation covers Postgres/MySQL/SQL Server/Snowflake         | M      | `domains/shared/pipelines/adf/`, `csa_platform/unity_catalog_pattern/`                                                                       |
+| Materialized views                  | dbt incremental models + Databricks materialized views            | Most Redshift MVs re-express as dbt incremental; heavy CDC → Delta Live Tables | M      | `domains/shared/dbt/dbt_project.yml`, ADR-0001 `docs/adr/0001-adf-dbt-over-airflow.md`                                                       |
+| Stored procedures (PL/pgSQL-ish)    | dbt macros + Databricks SQL UDFs + notebook jobs                  | Port logic to dbt macros for SQL-only; complex imperative SPs → notebooks      | L      | `domains/finance/dbt/macros/`, `domains/shared/dbt/macros/`                                                                                  |
+| Distribution + sort keys            | Delta partitioning + Z-ordering                                   | Distribution key → partition column; sort keys → `ZORDER BY` columns           | S      | ADR-0003                                                                                                                                     |
+| Data sharing (Redshift data shares) | Delta Sharing + OneLake shortcuts                                 | Open protocol (Delta Sharing) + Purview data-product registry                  | M      | `csa_platform/data_marketplace/`, `csa_platform/data_marketplace/api/`                                                                       |
+| Concurrency scaling                 | Databricks SQL Warehouse serverless + auto-scale                  | Serverless handles the spillover that concurrency scaling solved               | XS     | ADR-0010 `docs/adr/0010-fabric-strategic-target.md`                                                                                          |
 
 ### 2.2 EMR → csa-inabox
 
-| EMR capability | csa-inabox equivalent | Mapping notes | Effort | Evidence |
-|---|---|---|---|---|
-| EMR on EC2 (Hadoop, Spark, Hive, Presto, Trino) | Azure Databricks (primary) + HDInsight (only where Hadoop/Hive residency is required) | Almost every Spark workload collapses to Databricks; Trino/Presto-on-EMR → Databricks SQL | M–L | `csa_platform/unity_catalog_pattern/`, `domains/shared/notebooks/`, ADR-0002 |
-| EMR Serverless | Azure Databricks Serverless SQL + Jobs | EMR Serverless's per-job compute maps to Databricks serverless jobs | S | ADR-0002, ADR-0010 |
-| EMR Studio | Databricks Workspace Notebooks + Git integration | Notebook-and-repo UX is 1:1 | S | `domains/shared/notebooks/` |
-| EMR Notebooks (SageMaker-linked) | Databricks Notebooks + Azure ML notebooks for deep-ML workflows | Notebook runtime stays with Databricks; Azure ML handles MLOps | S | `csa_platform/ai_integration/model_serving/`, `domains/spark/` |
-| Bootstrap actions | Databricks init scripts + cluster policies | 1:1 semantic mapping | XS | `csa_platform/unity_catalog_pattern/deploy/` |
-| Managed scaling | Databricks cluster autoscaling + serverless | Serverless removes the tuning burden entirely | XS | ADR-0002 |
-| Spot instances | Databricks Spot on Azure (EvictionPolicy + SpotBidMaxPrice) | Direct 1:1 | XS | `csa_platform/unity_catalog_pattern/deploy/` |
-| Hive metastore | Unity Catalog (primary) + external Hive metastore supported | Unity Catalog is the target; bridge via external metastore during cutover | M | `csa_platform/unity_catalog_pattern/unity_catalog/` |
+| EMR capability                                  | csa-inabox equivalent                                                                 | Mapping notes                                                                             | Effort | Evidence                                                                     |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | ------ | ---------------------------------------------------------------------------- |
+| EMR on EC2 (Hadoop, Spark, Hive, Presto, Trino) | Azure Databricks (primary) + HDInsight (only where Hadoop/Hive residency is required) | Almost every Spark workload collapses to Databricks; Trino/Presto-on-EMR → Databricks SQL | M–L    | `csa_platform/unity_catalog_pattern/`, `domains/shared/notebooks/`, ADR-0002 |
+| EMR Serverless                                  | Azure Databricks Serverless SQL + Jobs                                                | EMR Serverless's per-job compute maps to Databricks serverless jobs                       | S      | ADR-0002, ADR-0010                                                           |
+| EMR Studio                                      | Databricks Workspace Notebooks + Git integration                                      | Notebook-and-repo UX is 1:1                                                               | S      | `domains/shared/notebooks/`                                                  |
+| EMR Notebooks (SageMaker-linked)                | Databricks Notebooks + Azure ML notebooks for deep-ML workflows                       | Notebook runtime stays with Databricks; Azure ML handles MLOps                            | S      | `csa_platform/ai_integration/model_serving/`, `domains/spark/`               |
+| Bootstrap actions                               | Databricks init scripts + cluster policies                                            | 1:1 semantic mapping                                                                      | XS     | `csa_platform/unity_catalog_pattern/deploy/`                                 |
+| Managed scaling                                 | Databricks cluster autoscaling + serverless                                           | Serverless removes the tuning burden entirely                                             | XS     | ADR-0002                                                                     |
+| Spot instances                                  | Databricks Spot on Azure (EvictionPolicy + SpotBidMaxPrice)                           | Direct 1:1                                                                                | XS     | `csa_platform/unity_catalog_pattern/deploy/`                                 |
+| Hive metastore                                  | Unity Catalog (primary) + external Hive metastore supported                           | Unity Catalog is the target; bridge via external metastore during cutover                 | M      | `csa_platform/unity_catalog_pattern/unity_catalog/`                          |
 
 ### 2.3 Glue → csa-inabox
 
-| Glue capability | csa-inabox equivalent | Mapping notes | Effort | Evidence |
-|---|---|---|---|---|
-| Glue Data Catalog | Unity Catalog (primary) + Purview (enterprise catalog) | Unity Catalog holds runtime metadata; Purview holds business glossary, classifications, lineage across catalogs | M | `csa_platform/csa_platform/governance/purview/purview_automation.py`, `csa_platform/unity_catalog_pattern/unity_catalog/`, ADR-0006 `docs/adr/0006-purview-over-atlas.md` |
-| Glue Jobs (Spark / Python Shell) | Databricks Jobs + notebooks + ADF activities | Spark jobs move to Databricks Jobs; Python-Shell jobs → Azure Functions or small Databricks Python tasks | M | `domains/shared/notebooks/`, `domains/shared/pipelines/adf/` |
-| Glue Crawlers | Purview scan jobs + Databricks Auto Loader schema inference | Crawlers become Purview scans (governance) + Auto Loader (runtime schema evolution) | M | `csa_platform/csa_platform/governance/purview/purview_automation.py`, `csa_platform/unity_catalog_pattern/` |
-| Glue Streaming Jobs | Databricks structured streaming + Event Hubs / ADX | Kinesis → Event Hubs bridge; streaming ETL lands on Delta tables | M | ADR-0005 `docs/adr/0005-event-hubs-over-kafka.md`, `examples/iot-streaming/` |
-| DataBrew | Power Query (Fabric) + Databricks SQL + dbt | Most DataBrew transforms re-express as Power Query in a Fabric dataflow or dbt model | S | `domains/shared/dbt/dbt_project.yml` |
-| Glue DataQuality | dbt tests + Great Expectations + data-product `contract.yaml` | Every data product ships a contract; dbt tests enforce column-level rules; GE covers row-level expectations | S | `domains/finance/data-products/invoices/contract.yaml`, `.github/workflows/validate-contracts.yml` |
+| Glue capability                  | csa-inabox equivalent                                         | Mapping notes                                                                                                   | Effort | Evidence                                                                                                                                                                  |
+| -------------------------------- | ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Glue Data Catalog                | Unity Catalog (primary) + Purview (enterprise catalog)        | Unity Catalog holds runtime metadata; Purview holds business glossary, classifications, lineage across catalogs | M      | `csa_platform/csa_platform/governance/purview/purview_automation.py`, `csa_platform/unity_catalog_pattern/unity_catalog/`, ADR-0006 `docs/adr/0006-purview-over-atlas.md` |
+| Glue Jobs (Spark / Python Shell) | Databricks Jobs + notebooks + ADF activities                  | Spark jobs move to Databricks Jobs; Python-Shell jobs → Azure Functions or small Databricks Python tasks        | M      | `domains/shared/notebooks/`, `domains/shared/pipelines/adf/`                                                                                                              |
+| Glue Crawlers                    | Purview scan jobs + Databricks Auto Loader schema inference   | Crawlers become Purview scans (governance) + Auto Loader (runtime schema evolution)                             | M      | `csa_platform/csa_platform/governance/purview/purview_automation.py`, `csa_platform/unity_catalog_pattern/`                                                               |
+| Glue Streaming Jobs              | Databricks structured streaming + Event Hubs / ADX            | Kinesis → Event Hubs bridge; streaming ETL lands on Delta tables                                                | M      | ADR-0005 `docs/adr/0005-event-hubs-over-kafka.md`, `examples/iot-streaming/`                                                                                              |
+| DataBrew                         | Power Query (Fabric) + Databricks SQL + dbt                   | Most DataBrew transforms re-express as Power Query in a Fabric dataflow or dbt model                            | S      | `domains/shared/dbt/dbt_project.yml`                                                                                                                                      |
+| Glue DataQuality                 | dbt tests + Great Expectations + data-product `contract.yaml` | Every data product ships a contract; dbt tests enforce column-level rules; GE covers row-level expectations     | S      | `domains/finance/data-products/invoices/contract.yaml`, `.github/workflows/validate-contracts.yml`                                                                        |
 
 ### 2.4 Athena → csa-inabox
 
-| Athena capability | csa-inabox equivalent | Mapping notes | Effort | Evidence |
-|---|---|---|---|---|
-| Federated queries over S3 | Databricks SQL + OneLake shortcuts to S3 | S3 stays source-of-truth read-only during migration; Databricks SQL replaces Athena query engine | S | `csa_platform/unity_catalog_pattern/onelake_config.yaml` |
-| Workgroups | Databricks SQL Warehouses | One workgroup = one warehouse; cost-control settings map to warehouse auto-stop + Azure budgets | XS | `docs/COST_MANAGEMENT.md`, `scripts/deploy/teardown-platform.sh` |
-| Athena Federated Query (to non-S3 sources) | Databricks Lakehouse Federation | Connectors for Postgres/MySQL/SQL Server/Snowflake are native | S | ADR-0002 |
-| Athena ACID (Iceberg on Athena) | Delta Lake ACID (primary) + Iceberg read-compat | If staying on Iceberg during migration, Databricks reads Iceberg natively | S | ADR-0003 |
-| CTAS / INSERT OVERWRITE | dbt models + `MERGE INTO` on Delta | Idempotent merges on Delta replace CTAS idioms | S | `domains/shared/dbt/` |
+| Athena capability                          | csa-inabox equivalent                           | Mapping notes                                                                                    | Effort | Evidence                                                         |
+| ------------------------------------------ | ----------------------------------------------- | ------------------------------------------------------------------------------------------------ | ------ | ---------------------------------------------------------------- |
+| Federated queries over S3                  | Databricks SQL + OneLake shortcuts to S3        | S3 stays source-of-truth read-only during migration; Databricks SQL replaces Athena query engine | S      | `csa_platform/unity_catalog_pattern/onelake_config.yaml`         |
+| Workgroups                                 | Databricks SQL Warehouses                       | One workgroup = one warehouse; cost-control settings map to warehouse auto-stop + Azure budgets  | XS     | `docs/COST_MANAGEMENT.md`, `scripts/deploy/teardown-platform.sh` |
+| Athena Federated Query (to non-S3 sources) | Databricks Lakehouse Federation                 | Connectors for Postgres/MySQL/SQL Server/Snowflake are native                                    | S      | ADR-0002                                                         |
+| Athena ACID (Iceberg on Athena)            | Delta Lake ACID (primary) + Iceberg read-compat | If staying on Iceberg during migration, Databricks reads Iceberg natively                        | S      | ADR-0003                                                         |
+| CTAS / INSERT OVERWRITE                    | dbt models + `MERGE INTO` on Delta              | Idempotent merges on Delta replace CTAS idioms                                                   | S      | `domains/shared/dbt/`                                            |
 
 ### 2.5 S3 → csa-inabox
 
-| S3 role | csa-inabox equivalent | Mapping notes | Effort | Evidence |
-|---|---|---|---|---|
-| Data lake buckets (raw/stage/curated) | ADLS Gen2 containers (bronze/silver/gold) + OneLake workspaces | Medallion layout mirrors the vertical examples below | M | `examples/commerce/`, `examples/noaa/`, `csa_platform/unity_catalog_pattern/onelake_config.yaml` |
-| S3 as source-of-truth during migration | OneLake shortcuts (read-only) | No copy; Azure reads S3 through the shortcut while writes migrate to ADLS Gen2 | XS | `csa_platform/unity_catalog_pattern/onelake_config.yaml` |
-| S3 lifecycle policies | ADLS Gen2 lifecycle management policies | 1:1 rule-set translation; tiers Hot → Cool → Archive | XS | Azure Storage policy (via Bicep) |
-| S3 Object Lock (WORM) | Immutable storage (time-based) on ADLS Gen2 | 1:1 for compliance-driven retention | XS | Azure Storage immutability policies |
-| S3 Access Points | Private endpoints + RBAC + Azure Network rules | ACL-level access maps to RBAC + ABAC on containers | S | `docs/SELF_HOSTED_IR.md` (edge patterns) |
-| S3 Event Notifications → SQS/SNS/Lambda | Event Grid → Logic Apps / Functions | ADLS Gen2 emits `BlobCreated` events to Event Grid; fan-out pattern is identical | S | `csa_platform/data_activator/`, Event Grid modules in Bicep |
-| S3 Cross-Region Replication | ADLS Gen2 object replication + geo-zone-redundant storage | For DR patterns, see `docs/DR.md` | S | `docs/DR.md`, `docs/MULTI_REGION.md` |
+| S3 role                                 | csa-inabox equivalent                                          | Mapping notes                                                                    | Effort | Evidence                                                                                         |
+| --------------------------------------- | -------------------------------------------------------------- | -------------------------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------ |
+| Data lake buckets (raw/stage/curated)   | ADLS Gen2 containers (bronze/silver/gold) + OneLake workspaces | Medallion layout mirrors the vertical examples below                             | M      | `examples/commerce/`, `examples/noaa/`, `csa_platform/unity_catalog_pattern/onelake_config.yaml` |
+| S3 as source-of-truth during migration  | OneLake shortcuts (read-only)                                  | No copy; Azure reads S3 through the shortcut while writes migrate to ADLS Gen2   | XS     | `csa_platform/unity_catalog_pattern/onelake_config.yaml`                                         |
+| S3 lifecycle policies                   | ADLS Gen2 lifecycle management policies                        | 1:1 rule-set translation; tiers Hot → Cool → Archive                             | XS     | Azure Storage policy (via Bicep)                                                                 |
+| S3 Object Lock (WORM)                   | Immutable storage (time-based) on ADLS Gen2                    | 1:1 for compliance-driven retention                                              | XS     | Azure Storage immutability policies                                                              |
+| S3 Access Points                        | Private endpoints + RBAC + Azure Network rules                 | ACL-level access maps to RBAC + ABAC on containers                               | S      | `docs/SELF_HOSTED_IR.md` (edge patterns)                                                         |
+| S3 Event Notifications → SQS/SNS/Lambda | Event Grid → Logic Apps / Functions                            | ADLS Gen2 emits `BlobCreated` events to Event Grid; fan-out pattern is identical | S      | `csa_platform/data_activator/`, Event Grid modules in Bicep                                      |
+| S3 Cross-Region Replication             | ADLS Gen2 object replication + geo-zone-redundant storage      | For DR patterns, see `docs/DR.md`                                                | S      | `docs/DR.md`, `docs/MULTI_REGION.md`                                                             |
 
 ### Cross-cloud transition bridge
 
@@ -205,35 +205,38 @@ spark-submit \
 
 ```json
 {
-  "name": "daily_sales_agg",
-  "schedule": { "quartz_cron_expression": "0 0 2 * * ?", "timezone_id": "UTC" },
-  "tasks": [
-    {
-      "task_key": "agg",
-      "notebook_task": {
-        "notebook_path": "/Repos/acme/sales-analytics/jobs/daily_sales_agg",
-        "base_parameters": {
-          "run_date": "{{job.start_time[yyyy-MM-dd]}}",
-          "source_path": "abfss://raw@acmeanalyticsgov.dfs.core.usgovcloudapi.net/sales/",
-          "target_catalog": "sales_prod",
-          "target_table": "gold.fact_sales_daily"
+    "name": "daily_sales_agg",
+    "schedule": {
+        "quartz_cron_expression": "0 0 2 * * ?",
+        "timezone_id": "UTC"
+    },
+    "tasks": [
+        {
+            "task_key": "agg",
+            "notebook_task": {
+                "notebook_path": "/Repos/acme/sales-analytics/jobs/daily_sales_agg",
+                "base_parameters": {
+                    "run_date": "{{job.start_time[yyyy-MM-dd]}}",
+                    "source_path": "abfss://raw@acmeanalyticsgov.dfs.core.usgovcloudapi.net/sales/",
+                    "target_catalog": "sales_prod",
+                    "target_table": "gold.fact_sales_daily"
+                }
+            },
+            "job_cluster_key": "agg_cluster"
         }
-      },
-      "job_cluster_key": "agg_cluster"
-    }
-  ],
-  "job_clusters": [
-    {
-      "job_cluster_key": "agg_cluster",
-      "new_cluster": {
-        "spark_version": "15.4.x-scala2.12",
-        "node_type_id": "Standard_D8s_v5",
-        "num_workers": 4,
-        "data_security_mode": "SINGLE_USER",
-        "runtime_engine": "PHOTON"
-      }
-    }
-  ]
+    ],
+    "job_clusters": [
+        {
+            "job_cluster_key": "agg_cluster",
+            "new_cluster": {
+                "spark_version": "15.4.x-scala2.12",
+                "node_type_id": "Standard_D8s_v5",
+                "num_workers": 4,
+                "data_security_mode": "SINGLE_USER",
+                "runtime_engine": "PHOTON"
+            }
+        }
+    ]
 }
 ```
 
@@ -267,13 +270,13 @@ The Databricks Job calls `dbt run --select fact_sales_daily` instead of running 
 
 ### 4.3 IAM → managed identity translation
 
-| AWS | Azure |
-|---|---|
-| IAM role `emr-sales-analytics-role` | User-assigned managed identity `umi-sales-analytics` |
-| Instance profile | Managed identity attached to Databricks workspace or job cluster |
-| `s3:GetObject`/`PutObject` bucket policies | RBAC: `Storage Blob Data Contributor` on target container |
-| S3 bucket policy for KMS decrypt | Azure RBAC: `Key Vault Crypto Service Encryption User` on CMK |
-| Glue `glue:GetTable` | Unity Catalog `USAGE` + `SELECT` on catalog/schema/table |
+| AWS                                        | Azure                                                            |
+| ------------------------------------------ | ---------------------------------------------------------------- |
+| IAM role `emr-sales-analytics-role`        | User-assigned managed identity `umi-sales-analytics`             |
+| Instance profile                           | Managed identity attached to Databricks workspace or job cluster |
+| `s3:GetObject`/`PutObject` bucket policies | RBAC: `Storage Blob Data Contributor` on target container        |
+| S3 bucket policy for KMS decrypt           | Azure RBAC: `Key Vault Crypto Service Encryption User` on CMK    |
+| Glue `glue:GetTable`                       | Unity Catalog `USAGE` + `SELECT` on catalog/schema/table         |
 
 Cross-reference: `csa_platform/multi_synapse/rbac_templates/` holds the RBAC template pattern.
 
@@ -376,7 +379,7 @@ Per-bucket decisions:
 - **ITAR:** Azure Government tenant-binding handles data residency.
 - **CMMC 2.0 Level 2:** `csa_platform/csa_platform/governance/compliance/cmmc-2.0-l2.yaml` + `docs/compliance/cmmc-2.0-l2.md`.
 - **HIPAA:** `csa_platform/csa_platform/governance/compliance/hipaa-security-rule.yaml`. See `examples/tribal-health/` for a worked HHS/IHS implementation.
-- **Audit evidence:** the csa-inabox tamper-evident audit chain (CSA-0016) provides stronger evidence than the default CloudTrail-equivalent Azure Monitor path for FedRAMP High control families AU-* and AC-*.
+- **Audit evidence:** the csa-inabox tamper-evident audit chain (CSA-0016) provides stronger evidence than the default CloudTrail-equivalent Azure Monitor path for FedRAMP High control families AU-_ and AC-_.
 - **AWS-specific data to preserve during migration:** CloudTrail logs of data access; S3 bucket-policy history; Redshift access history. These frequently become evidence in post-migration audits; archive before decommission.
 
 ---
@@ -406,13 +409,13 @@ Run `scripts/deploy/estimate-costs.sh` against the target landing-zone configura
 
 ## 8. Gaps and roadmap
 
-| Gap | Description | Tracked finding | Planned remediation |
-|---|---|---|---|
-| **IL6 coverage** | Out of scope for csa-inabox | N/A | Recommend AWS Top Secret Region or bespoke Azure Top Secret |
-| **Direct EMR→Databricks migration tooling** | No first-party lift-and-shift runner for EMR job graphs | N/A | Manual port per Section 4; Databricks partner tooling can accelerate at scale |
-| **Glue DataBrew feature parity** | Power Query + dbt covers most DataBrew cases; a couple of the point-and-click transforms require light SQL rewrite | N/A | Documented pattern; no first-party tooling planned |
-| **CSA Copilot** | No agent loop / chat UX for NL analysis yet | CSA-0008 (XL) | 6-phase MVP |
-| **Framework control matrices** | NIST, CMMC, HIPAA delivered; PCI-DSS, SOC 2, GDPR still pending | CSA-0012 (XL) — in progress | Six YAMLs + narrative pages |
+| Gap                                         | Description                                                                                                        | Tracked finding             | Planned remediation                                                           |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | --------------------------- | ----------------------------------------------------------------------------- |
+| **IL6 coverage**                            | Out of scope for csa-inabox                                                                                        | N/A                         | Recommend AWS Top Secret Region or bespoke Azure Top Secret                   |
+| **Direct EMR→Databricks migration tooling** | No first-party lift-and-shift runner for EMR job graphs                                                            | N/A                         | Manual port per Section 4; Databricks partner tooling can accelerate at scale |
+| **Glue DataBrew feature parity**            | Power Query + dbt covers most DataBrew cases; a couple of the point-and-click transforms require light SQL rewrite | N/A                         | Documented pattern; no first-party tooling planned                            |
+| **CSA Copilot**                             | No agent loop / chat UX for NL analysis yet                                                                        | CSA-0008 (XL)               | 6-phase MVP                                                                   |
+| **Framework control matrices**              | NIST, CMMC, HIPAA delivered; PCI-DSS, SOC 2, GDPR still pending                                                    | CSA-0012 (XL) — in progress | Six YAMLs + narrative pages                                                   |
 
 ---
 
@@ -449,33 +452,33 @@ Mixed-cloud is also a rational endpoint. OneLake shortcuts + Delta Sharing make 
 - **Migration index:** [docs/migrations/README.md](README.md)
 - **Companion playbooks:** [snowflake.md](snowflake.md), [palantir-foundry.md](palantir-foundry.md), [gcp-to-azure.md](gcp-to-azure.md)
 - **Decision trees:**
-  - `docs/decisions/fabric-vs-databricks-vs-synapse.md`
-  - `docs/decisions/kafka-vs-eventhubs-vs-servicebus.md`
-  - `docs/decisions/delta-vs-iceberg-vs-parquet.md`
-  - `docs/decisions/lakehouse-vs-warehouse-vs-lake.md`
-  - `docs/decisions/batch-vs-streaming.md`
+    - `docs/decisions/fabric-vs-databricks-vs-synapse.md`
+    - `docs/decisions/kafka-vs-eventhubs-vs-servicebus.md`
+    - `docs/decisions/delta-vs-iceberg-vs-parquet.md`
+    - `docs/decisions/lakehouse-vs-warehouse-vs-lake.md`
+    - `docs/decisions/batch-vs-streaming.md`
 - **ADRs:**
-  - `docs/adr/0001-adf-dbt-over-airflow.md`
-  - `docs/adr/0002-databricks-over-oss-spark.md`
-  - `docs/adr/0003-delta-lake-over-iceberg-and-parquet.md`
-  - `docs/adr/0004-bicep-over-terraform.md`
-  - `docs/adr/0005-event-hubs-over-kafka.md`
-  - `docs/adr/0006-purview-over-atlas.md`
-  - `docs/adr/0010-fabric-strategic-target.md`
+    - `docs/adr/0001-adf-dbt-over-airflow.md`
+    - `docs/adr/0002-databricks-over-oss-spark.md`
+    - `docs/adr/0003-delta-lake-over-iceberg-and-parquet.md`
+    - `docs/adr/0004-bicep-over-terraform.md`
+    - `docs/adr/0005-event-hubs-over-kafka.md`
+    - `docs/adr/0006-purview-over-atlas.md`
+    - `docs/adr/0010-fabric-strategic-target.md`
 - **Compliance matrices:**
-  - `docs/compliance/nist-800-53-rev5.md` / `csa_platform/csa_platform/governance/compliance/nist-800-53-rev5.yaml`
-  - `docs/compliance/cmmc-2.0-l2.md` / `csa_platform/csa_platform/governance/compliance/cmmc-2.0-l2.yaml`
-  - `docs/compliance/hipaa-security-rule.md` / `csa_platform/csa_platform/governance/compliance/hipaa-security-rule.yaml`
+    - `docs/compliance/nist-800-53-rev5.md` / `csa_platform/csa_platform/governance/compliance/nist-800-53-rev5.yaml`
+    - `docs/compliance/cmmc-2.0-l2.md` / `csa_platform/csa_platform/governance/compliance/cmmc-2.0-l2.yaml`
+    - `docs/compliance/hipaa-security-rule.md` / `csa_platform/csa_platform/governance/compliance/hipaa-security-rule.yaml`
 - **Platform modules:**
-  - `csa_platform/unity_catalog_pattern/` — OneLake + Unity Catalog + S3 shortcut pattern
-  - `csa_platform/csa_platform/governance/purview/` — Purview automation, classifications
-  - `csa_platform/ai_integration/` — AI Foundry / Azure OpenAI primitives
-  - `csa_platform/multi_synapse/` — multi-workspace pattern
-  - `csa_platform/data_marketplace/` — data-product registry
+    - `csa_platform/unity_catalog_pattern/` — OneLake + Unity Catalog + S3 shortcut pattern
+    - `csa_platform/csa_platform/governance/purview/` — Purview automation, classifications
+    - `csa_platform/ai_integration/` — AI Foundry / Azure OpenAI primitives
+    - `csa_platform/multi_synapse/` — multi-workspace pattern
+    - `csa_platform/data_marketplace/` — data-product registry
 - **Example verticals:**
-  - `examples/commerce/`, `examples/noaa/`, `examples/epa/`, `examples/interior/`, `examples/usda/`, `examples/iot-streaming/`
+    - `examples/commerce/`, `examples/noaa/`, `examples/epa/`, `examples/interior/`, `examples/usda/`, `examples/iot-streaming/`
 - **Operational guides:**
-  - `docs/QUICKSTART.md`, `docs/ARCHITECTURE.md`, `docs/GOV_SERVICE_MATRIX.md`, `docs/COST_MANAGEMENT.md`, `docs/DATABRICKS_GUIDE.md`, `docs/SELF_HOSTED_IR.md`
+    - `docs/QUICKSTART.md`, `docs/ARCHITECTURE.md`, `docs/GOV_SERVICE_MATRIX.md`, `docs/COST_MANAGEMENT.md`, `docs/DATABRICKS_GUIDE.md`, `docs/SELF_HOSTED_IR.md`
 
 ---
 
