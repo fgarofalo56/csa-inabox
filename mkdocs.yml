@@ -28,7 +28,7 @@ theme:
     - navigation.tabs
     - navigation.tabs.sticky
     - navigation.sections
-    - navigation.expand
+    - navigation.indexes
     - navigation.top
     - navigation.footer
     - search.suggest
@@ -220,14 +220,31 @@ nav:
           - Streaming & CDC: patterns/streaming-cdc.md
           - Power BI & Fabric Roadmap: patterns/power-bi-fabric-roadmap.md
       - Guides:
-          - ADF Setup: ADF_SETUP.md
-          - Databricks: DATABRICKS_GUIDE.md
-          - Self-Hosted IR: SELF_HOSTED_IR.md
-          - IaC & CI/CD: IaC-CICD-Best-Practices.md
-          - APIM Data-Mesh Gateway: guides/apim-data-mesh-gateway.md
-          - OSS Ecosystem: guides/oss-ecosystem.md
-          - OSS Migration Playbook: guides/oss-migration-playbook.md
-          - OSS Monitoring: guides/oss-monitoring.md
+          - Data Platform:
+              - Databricks: DATABRICKS_GUIDE.md
+              - Databricks Best Practices: guides/databricks-best-practices.md
+              - Unity Catalog: guides/databricks-unity-catalog.md
+              - Azure Synapse: guides/azure-synapse.md
+              - ADLS Gen2: guides/azure-data-lake.md
+              - Azure SQL: guides/azure-sql.md
+              - SQL Server Integration: guides/sql-server-integration.md
+              - Cosmos DB: guides/cosmos-db.md
+          - Analytics & AI:
+              - Power BI: guides/power-bi.md
+              - Azure Data Explorer: guides/azure-data-explorer.md
+              - Azure AI Foundry: guides/azure-ai-foundry.md
+              - Azure AI Search: guides/azure-ai-search.md
+          - Integration & Governance:
+              - ADF Setup: ADF_SETUP.md
+              - Self-Hosted IR: SELF_HOSTED_IR.md
+              - Event Hubs: guides/event-hubs.md
+              - Microsoft Purview: guides/purview.md
+              - APIM Data-Mesh Gateway: guides/apim-data-mesh-gateway.md
+          - Infrastructure & OSS:
+              - IaC & CI/CD: IaC-CICD-Best-Practices.md
+              - OSS Ecosystem: guides/oss-ecosystem.md
+              - OSS Migration Playbook: guides/oss-migration-playbook.md
+              - OSS Monitoring: guides/oss-monitoring.md
 
   # ============================================================
   # 4. USE CASES & WHITE PAPERS — by sector / scenario
@@ -302,8 +319,10 @@ nav:
           - Databricks to Fabric: migrations/databricks-to-fabric.md
           - Teradata to Synapse/Fabric: migrations/teradata.md
           - Hadoop / Hive to Azure: migrations/hadoop-hive.md
+          - Cloudera / CDH to Azure: migrations/cloudera-to-azure.md
           - Informatica to ADF/Fabric: migrations/informatica.md
           - Palantir Foundry: migrations/palantir-foundry.md
+          - Tableau to Power BI: migrations/tableau-to-powerbi.md
           - IoT Hub + Entra: migrations/iot-hub-entra.md
       - Cost Management: COST_MANAGEMENT.md
       - Rollback: ROLLBACK.md

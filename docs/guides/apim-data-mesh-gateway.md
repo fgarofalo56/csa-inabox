@@ -55,12 +55,12 @@ graph LR
 
 ## API Catalog
 
-| API | Path | Backend | Methods | Auth | Description |
-|-----|------|---------|---------|------|-------------|
-| Data API Builder | `/dab/*` | DAB Container App | GET, POST (GraphQL) | JWT + Subscription | REST/GraphQL access to data products |
-| AI Services | `/ai/*` | Portal FastAPI | POST | JWT + Subscription | Chat, embeddings, document intelligence |
-| Marketplace | `/marketplace/*` | Portal FastAPI | GET, POST, PUT, DELETE | JWT + Subscription | Product discovery, access requests |
-| Portal API | `/portal/*` | Portal FastAPI | GET, POST, PUT, DELETE | JWT + Subscription | Governance, domains, users, config |
+| API              | Path             | Backend           | Methods                | Auth               | Description                             |
+| ---------------- | ---------------- | ----------------- | ---------------------- | ------------------ | --------------------------------------- |
+| Data API Builder | `/dab/*`         | DAB Container App | GET, POST (GraphQL)    | JWT + Subscription | REST/GraphQL access to data products    |
+| AI Services      | `/ai/*`          | Portal FastAPI    | POST                   | JWT + Subscription | Chat, embeddings, document intelligence |
+| Marketplace      | `/marketplace/*` | Portal FastAPI    | GET, POST, PUT, DELETE | JWT + Subscription | Product discovery, access requests      |
+| Portal API       | `/portal/*`      | Portal FastAPI    | GET, POST, PUT, DELETE | JWT + Subscription | Governance, domains, users, config      |
 
 ## Security Model
 
@@ -94,11 +94,11 @@ sequenceDiagram
 
 ## Products and Access Tiers
 
-| Product | APIs Included | Rate Limit | Approval | Use Case |
-|---------|--------------|------------|----------|----------|
-| **Data Mesh Internal** | All 4 APIs | 100 calls/min | Auto | Internal teams, Portal SPA |
-| **Data Mesh External** | DAB, Marketplace | 60 calls/min | Manual | Partner integrations |
-| **AI Platform** | AI, Marketplace | 10-100 calls/min (per endpoint) | Manual | Data scientists, AI apps |
+| Product                | APIs Included    | Rate Limit                      | Approval | Use Case                   |
+| ---------------------- | ---------------- | ------------------------------- | -------- | -------------------------- |
+| **Data Mesh Internal** | All 4 APIs       | 100 calls/min                   | Auto     | Internal teams, Portal SPA |
+| **Data Mesh External** | DAB, Marketplace | 60 calls/min                    | Manual   | Partner integrations       |
+| **AI Platform**        | AI, Marketplace  | 10-100 calls/min (per endpoint) | Manual   | Data scientists, AI apps   |
 
 ## Policy Patterns
 
@@ -168,6 +168,7 @@ The global policy enforces organization-wide standards (JWT validation, TLS, rat
 ### Self-Serve Data Platform
 
 The APIM Developer Portal provides:
+
 - Browsable API catalog with interactive documentation
 - Self-service subscription key generation
 - API testing directly in the portal
@@ -176,6 +177,7 @@ The APIM Developer Portal provides:
 ### Data Products as APIs
 
 Each shared dataset in the Data Mesh becomes an API in APIM:
+
 1. Domain team publishes data product via DAB configuration
 2. DAB exposes REST + GraphQL endpoints
 3. APIM imports the DAB OpenAPI spec
@@ -195,6 +197,7 @@ Access the portal at: `https://{apim-name}.developer.azure-api.us`
 ### Customization
 
 The Developer Portal can be customized to match organizational branding:
+
 1. Navigate to the portal management interface in Azure Portal
 2. Customize pages, layouts, and styles
 3. Add custom content pages for onboarding guides
@@ -204,6 +207,7 @@ The Developer Portal can be customized to match organizational branding:
 ### Application Insights
 
 All API calls are logged to Application Insights with:
+
 - Request/response details (configurable sampling)
 - Client IP address
 - Correlation via `X-Request-ID`
@@ -212,6 +216,7 @@ All API calls are logged to Application Insights with:
 ### Log Analytics
 
 Diagnostic settings send all APIM logs and metrics to Log Analytics for:
+
 - KQL queries across all API traffic
 - Azure Workbooks for visual dashboards
 - Alert rules for error spikes or rate limit violations
@@ -274,35 +279,40 @@ az deployment group create \
 
 ### Parameter Files
 
-| File | Environment | SKU | Rate Limit | Locks |
-|------|-------------|-----|-----------|-------|
-| `apim-gateway.dev.bicepparam` | dev | Developer | 500/min | No |
-| `apim-gateway.prod.bicepparam` | prod | Standard | 60/min | Yes |
+| File                           | Environment | SKU       | Rate Limit | Locks |
+| ------------------------------ | ----------- | --------- | ---------- | ----- |
+| `apim-gateway.dev.bicepparam`  | dev         | Developer | 500/min    | No    |
+| `apim-gateway.prod.bicepparam` | prod        | Standard  | 60/min     | Yes   |
 
 ## Troubleshooting
 
 ### Common Issues
 
 **401 Unauthorized — JWT validation failed**
+
 - Verify the `jwt-issuer` and `jwt-audience` named values match your Microsoft Entra ID app registration
 - Check that the token hasn't expired
 - Ensure the token was issued for the correct audience
 
 **429 Too Many Requests**
+
 - Rate limit exceeded for the subscription or user
 - Check `X-RateLimit-Remaining` header in responses
 - Upgrade to a higher-tier product or request limit increase
 
 **504 Gateway Timeout**
+
 - Backend service is not responding within the timeout period
 - Check backend health in Application Insights
 - AI endpoints have a 120-second timeout; others have 30 seconds
 
 **CORS errors in browser**
+
 - Verify `allowed-origins` named value includes your frontend domain
 - For dev, set to `*`; for production, list specific origins
 
 **DAB returns 403 Forbidden**
+
 - The `X-MS-API-ROLE` header may not match a DAB role
 - Check that the JWT contains a `roles` claim
 - Verify DAB configuration includes the role name
