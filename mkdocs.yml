@@ -510,6 +510,25 @@ nav:
                   - "Calculation Conversion": migrations/tableau-to-powerbi/tutorial-calc-conversion.md
               - Benchmarks: migrations/tableau-to-powerbi/benchmarks.md
               - Best Practices: migrations/tableau-to-powerbi/best-practices.md
+          - Qlik to Power BI:
+              - Migration Playbook: migrations/qlik-to-powerbi.md
+              - Migration Center: migrations/qlik-to-powerbi/index.md
+              - Strategic:
+                  - Why Power BI over Qlik: migrations/qlik-to-powerbi/why-powerbi-over-qlik.md
+                  - Total Cost of Ownership: migrations/qlik-to-powerbi/tco-analysis.md
+              - Feature Reference: migrations/qlik-to-powerbi/feature-mapping-complete.md
+              - Migration Guides:
+                  - Data Model Migration: migrations/qlik-to-powerbi/data-model-migration.md
+                  - Expression Migration: migrations/qlik-to-powerbi/expression-migration.md
+                  - Visualization Migration: migrations/qlik-to-powerbi/visualization-migration.md
+                  - Server Migration: migrations/qlik-to-powerbi/server-migration.md
+                  - NPrinting Migration: migrations/qlik-to-powerbi/nprinting-migration.md
+              - Tutorials:
+                  - "App to PBIX": migrations/qlik-to-powerbi/tutorial-app-to-pbix.md
+                  - "Expression Conversion": migrations/qlik-to-powerbi/tutorial-expression-conversion.md
+              - Federal & Government: migrations/qlik-to-powerbi/federal-migration-guide.md
+              - Benchmarks: migrations/qlik-to-powerbi/benchmarks.md
+              - Best Practices: migrations/qlik-to-powerbi/best-practices.md
           - IoT Hub + Entra:
               - Migration Playbook: migrations/iot-hub-entra.md
               - Migration Center: migrations/iot-hub-entra/index.md
@@ -527,6 +546,377 @@ nav:
                   - "Backend Migration": migrations/iot-hub-entra/tutorial-backend-migration.md
               - Benchmarks: migrations/iot-hub-entra/benchmarks.md
               - Best Practices: migrations/iot-hub-entra/best-practices.md
+          - SQL Server to Azure SQL:
+              - Migration Playbook: migrations/sql-server-to-azure.md
+              - Migration Center: migrations/sql-server-to-azure/index.md
+              - Strategic:
+                  - Why Azure SQL: migrations/sql-server-to-azure/why-azure-sql.md
+                  - Total Cost of Ownership: migrations/sql-server-to-azure/tco-analysis.md
+              - Feature Reference: migrations/sql-server-to-azure/feature-mapping-complete.md
+              - Migration Guides:
+                  - Azure SQL Database: migrations/sql-server-to-azure/azure-sql-db-migration.md
+                  - Azure SQL Managed Instance: migrations/sql-server-to-azure/azure-sql-mi-migration.md
+                  - SQL Server on Azure VM: migrations/sql-server-to-azure/sql-on-vm-migration.md
+                  - Schema Migration: migrations/sql-server-to-azure/schema-migration.md
+                  - Data Migration: migrations/sql-server-to-azure/data-migration.md
+                  - Security Migration: migrations/sql-server-to-azure/security-migration.md
+                  - HA/DR Migration: migrations/sql-server-to-azure/ha-dr-migration.md
+              - Tutorials:
+                  - "Online Migration with DMS": migrations/sql-server-to-azure/tutorial-dms-migration.md
+                  - "Assess with Azure Data Studio": migrations/sql-server-to-azure/tutorial-azure-data-studio.md
+              - Federal & Government: migrations/sql-server-to-azure/federal-migration-guide.md
+              - Benchmarks: migrations/sql-server-to-azure/benchmarks.md
+              - Best Practices: migrations/sql-server-to-azure/best-practices.md
+          - SAP to Azure:
+              - Migration Playbook: migrations/sap-to-azure.md
+              - Migration Center: migrations/sap-to-azure/index.md
+              - Strategic:
+                  - Why Azure for SAP: migrations/sap-to-azure/why-azure-for-sap.md
+                  - Total Cost of Ownership: migrations/sap-to-azure/tco-analysis.md
+              - Feature Reference: migrations/sap-to-azure/feature-mapping-complete.md
+              - Migration Guides:
+                  - Infrastructure Migration: migrations/sap-to-azure/infrastructure-migration.md
+                  - HANA Database Migration: migrations/sap-to-azure/hana-migration.md
+                  - S/4HANA Conversion: migrations/sap-to-azure/s4hana-conversion.md
+                  - Integration Migration: migrations/sap-to-azure/integration-migration.md
+                  - Analytics Migration: migrations/sap-to-azure/analytics-migration.md
+                  - Security Migration: migrations/sap-to-azure/security-migration.md
+              - Tutorials:
+                  - "Deploy SAP S/4HANA on Azure": migrations/sap-to-azure/tutorial-sap-azure-deployment.md
+                  - "SAP Data to Fabric": migrations/sap-to-azure/tutorial-sap-data-to-fabric.md
+              - Federal & Government: migrations/sap-to-azure/federal-migration-guide.md
+              - Benchmarks: migrations/sap-to-azure/benchmarks.md
+              - Best Practices: migrations/sap-to-azure/best-practices.md
+          - SAS to Azure ML / Fabric:
+              - Migration Playbook: migrations/sas-to-azure.md
+              - Migration Center: migrations/sas-to-azure/index.md
+              - Strategic:
+                  - Why Azure over SAS: migrations/sas-to-azure/why-azure-over-sas.md
+                  - Total Cost of Ownership: migrations/sas-to-azure/tco-analysis.md
+              - Feature Reference: migrations/sas-to-azure/feature-mapping-complete.md
+              - Migration Guides:
+                  - Lift-and-Shift (SAS on Azure): migrations/sas-to-azure/lift-shift-migration.md
+                  - Analytics Migration: migrations/sas-to-azure/analytics-migration.md
+                  - Data Management Migration: migrations/sas-to-azure/data-management-migration.md
+                  - Reporting Migration: migrations/sas-to-azure/reporting-migration.md
+                  - Model Migration: migrations/sas-to-azure/model-migration.md
+              - Tutorials:
+                  - "SAS Viya on Azure": migrations/sas-to-azure/tutorial-sas-viya-azure.md
+                  - "SAS Program to Python": migrations/sas-to-azure/tutorial-sas-to-python.md
+              - Federal & Government: migrations/sas-to-azure/federal-migration-guide.md
+              - Benchmarks: migrations/sas-to-azure/benchmarks.md
+              - Best Practices: migrations/sas-to-azure/best-practices.md
+          - Splunk to Sentinel:
+              - Migration Playbook: migrations/splunk-to-sentinel.md
+              - Migration Center: migrations/splunk-to-sentinel/index.md
+              - Strategic:
+                  - Why Sentinel over Splunk: migrations/splunk-to-sentinel/why-sentinel-over-splunk.md
+                  - Total Cost of Ownership: migrations/splunk-to-sentinel/tco-analysis.md
+              - Feature Reference: migrations/splunk-to-sentinel/feature-mapping-complete.md
+              - Migration Guides:
+                  - Detection Rules Migration: migrations/splunk-to-sentinel/detection-rules-migration.md
+                  - SOAR Migration: migrations/splunk-to-sentinel/soar-migration.md
+                  - Data Connector Migration: migrations/splunk-to-sentinel/data-connector-migration.md
+                  - Dashboard Migration: migrations/splunk-to-sentinel/dashboard-migration.md
+                  - Historical Data Migration: migrations/splunk-to-sentinel/historical-data-migration.md
+              - Tutorials:
+                  - "SIEM Migration Experience": migrations/splunk-to-sentinel/tutorial-siem-migration-tool.md
+                  - "SPL to KQL Conversion": migrations/splunk-to-sentinel/tutorial-spl-to-kql.md
+              - Federal & Government: migrations/splunk-to-sentinel/federal-migration-guide.md
+              - Benchmarks: migrations/splunk-to-sentinel/benchmarks.md
+              - Best Practices: migrations/splunk-to-sentinel/best-practices.md
+          - Observability to Azure Monitor:
+              - Migration Playbook: migrations/observability-to-azure-monitor.md
+              - Migration Center: migrations/observability-to-azure-monitor/index.md
+              - Strategic:
+                  - Why Azure Monitor: migrations/observability-to-azure-monitor/why-azure-monitor.md
+                  - Total Cost of Ownership: migrations/observability-to-azure-monitor/tco-analysis.md
+              - Feature Reference: migrations/observability-to-azure-monitor/feature-mapping-complete.md
+              - Migration Guides:
+                  - APM Migration: migrations/observability-to-azure-monitor/apm-migration.md
+                  - Log Migration: migrations/observability-to-azure-monitor/log-migration.md
+                  - Metrics Migration: migrations/observability-to-azure-monitor/metrics-migration.md
+                  - Alerting Migration: migrations/observability-to-azure-monitor/alerting-migration.md
+                  - Dashboard Migration: migrations/observability-to-azure-monitor/dashboard-migration.md
+              - Tutorials:
+                  - "Application Insights Instrumentation": migrations/observability-to-azure-monitor/tutorial-app-insights.md
+                  - "Log Analytics & Azure Monitor Agent": migrations/observability-to-azure-monitor/tutorial-log-analytics.md
+              - Federal & Government: migrations/observability-to-azure-monitor/federal-migration-guide.md
+              - Benchmarks: migrations/observability-to-azure-monitor/benchmarks.md
+              - Best Practices: migrations/observability-to-azure-monitor/best-practices.md
+          - VMware to Azure:
+              - Migration Playbook: migrations/vmware-to-azure.md
+              - Migration Center: migrations/vmware-to-azure/index.md
+              - Strategic:
+                  - Why Azure over VMware: migrations/vmware-to-azure/why-azure-over-vmware.md
+                  - Total Cost of Ownership: migrations/vmware-to-azure/tco-analysis.md
+              - Feature Reference: migrations/vmware-to-azure/feature-mapping-complete.md
+              - Migration Guides:
+                  - AVS Migration: migrations/vmware-to-azure/avs-migration.md
+                  - Azure IaaS Migration: migrations/vmware-to-azure/azure-iaas-migration.md
+                  - Networking Migration: migrations/vmware-to-azure/networking-migration.md
+                  - Storage Migration: migrations/vmware-to-azure/storage-migration.md
+                  - Security Migration: migrations/vmware-to-azure/security-migration.md
+                  - Disaster Recovery: migrations/vmware-to-azure/dr-migration.md
+              - Tutorials:
+                  - "HCX Migration to AVS": migrations/vmware-to-azure/tutorial-hcx-migration.md
+                  - "Azure Migrate for VMware": migrations/vmware-to-azure/tutorial-azure-migrate.md
+              - Federal & Government: migrations/vmware-to-azure/federal-migration-guide.md
+              - Benchmarks: migrations/vmware-to-azure/benchmarks.md
+              - Best Practices: migrations/vmware-to-azure/best-practices.md
+          - Kubernetes to AKS:
+              - Migration Playbook: migrations/kubernetes-to-aks.md
+              - Migration Center: migrations/kubernetes-to-aks/index.md
+              - Strategic:
+                  - Why AKS: migrations/kubernetes-to-aks/why-aks.md
+                  - Total Cost of Ownership: migrations/kubernetes-to-aks/tco-analysis.md
+              - Feature Reference: migrations/kubernetes-to-aks/feature-mapping-complete.md
+              - Migration Guides:
+                  - Cluster Migration: migrations/kubernetes-to-aks/cluster-migration.md
+                  - Workload Migration: migrations/kubernetes-to-aks/workload-migration.md
+                  - Storage Migration: migrations/kubernetes-to-aks/storage-migration.md
+                  - Networking Migration: migrations/kubernetes-to-aks/networking-migration.md
+                  - Security Migration: migrations/kubernetes-to-aks/security-migration.md
+                  - CI/CD Migration: migrations/kubernetes-to-aks/cicd-migration.md
+              - Tutorials:
+                  - "Velero Cross-Cluster Migration": migrations/kubernetes-to-aks/tutorial-velero-migration.md
+                  - "Stateful App Migration": migrations/kubernetes-to-aks/tutorial-app-migration.md
+              - Federal & Government: migrations/kubernetes-to-aks/federal-migration-guide.md
+              - Benchmarks: migrations/kubernetes-to-aks/benchmarks.md
+              - Best Practices: migrations/kubernetes-to-aks/best-practices.md
+          - Citrix to Azure Virtual Desktop:
+              - Migration Playbook: migrations/citrix-to-avd.md
+              - Migration Center: migrations/citrix-to-avd/index.md
+              - Strategic:
+                  - Why AVD over Citrix: migrations/citrix-to-avd/why-avd-over-citrix.md
+                  - Total Cost of Ownership: migrations/citrix-to-avd/tco-analysis.md
+              - Feature Reference: migrations/citrix-to-avd/feature-mapping-complete.md
+              - Migration Guides:
+                  - Session Host Migration: migrations/citrix-to-avd/session-host-migration.md
+                  - Profile Migration: migrations/citrix-to-avd/profile-migration.md
+                  - App Delivery Migration: migrations/citrix-to-avd/app-delivery-migration.md
+                  - Networking Migration: migrations/citrix-to-avd/networking-migration.md
+                  - Monitoring Migration: migrations/citrix-to-avd/monitoring-migration.md
+              - Tutorials:
+                  - "Deploy AVD from Scratch": migrations/citrix-to-avd/tutorial-avd-deployment.md
+                  - "Migrate Profiles to FSLogix": migrations/citrix-to-avd/tutorial-profile-migration.md
+              - Federal & Government: migrations/citrix-to-avd/federal-migration-guide.md
+              - Benchmarks: migrations/citrix-to-avd/benchmarks.md
+              - Best Practices: migrations/citrix-to-avd/best-practices.md
+          - Oracle Database to Azure:
+              - Migration Playbook: migrations/oracle-to-azure.md
+              - Migration Center: migrations/oracle-to-azure/index.md
+              - Strategic:
+                  - Why Azure over Oracle: migrations/oracle-to-azure/why-azure-over-oracle.md
+                  - Total Cost of Ownership: migrations/oracle-to-azure/tco-analysis.md
+              - Feature Reference: migrations/oracle-to-azure/feature-mapping-complete.md
+              - Migration Guides:
+                  - Azure SQL MI Migration: migrations/oracle-to-azure/azure-sql-migration.md
+                  - PostgreSQL Migration: migrations/oracle-to-azure/postgresql-migration.md
+                  - Oracle Database@Azure: migrations/oracle-to-azure/oracle-at-azure.md
+                  - Schema Migration: migrations/oracle-to-azure/schema-migration.md
+                  - Data Migration: migrations/oracle-to-azure/data-migration.md
+                  - Security Migration: migrations/oracle-to-azure/security-migration.md
+              - Tutorials:
+                  - "SSMA Migration to Azure SQL MI": migrations/oracle-to-azure/tutorial-ssma-migration.md
+                  - "Oracle to PostgreSQL with ora2pg": migrations/oracle-to-azure/tutorial-oracle-to-postgres.md
+              - Federal & Government: migrations/oracle-to-azure/federal-migration-guide.md
+              - Benchmarks: migrations/oracle-to-azure/benchmarks.md
+              - Best Practices: migrations/oracle-to-azure/best-practices.md
+          - IBM Db2 to Azure SQL:
+              - Migration Playbook: migrations/db2-to-azure-sql.md
+              - Migration Center: migrations/db2-to-azure-sql/index.md
+              - Strategic:
+                  - Why Azure over Db2: migrations/db2-to-azure-sql/why-azure-over-db2.md
+                  - Total Cost of Ownership: migrations/db2-to-azure-sql/tco-analysis.md
+              - Feature Reference: migrations/db2-to-azure-sql/feature-mapping-complete.md
+              - Migration Guides:
+                  - Schema Migration: migrations/db2-to-azure-sql/schema-migration.md
+                  - Data Migration: migrations/db2-to-azure-sql/data-migration.md
+                  - Stored Procedure Migration: migrations/db2-to-azure-sql/stored-proc-migration.md
+                  - Application Migration: migrations/db2-to-azure-sql/application-migration.md
+                  - Mainframe Considerations: migrations/db2-to-azure-sql/mainframe-considerations.md
+              - Tutorials:
+                  - "SSMA Migration (Db2 to Azure SQL)": migrations/db2-to-azure-sql/tutorial-ssma-migration.md
+                  - "Db2 LUW to Azure SQL MI": migrations/db2-to-azure-sql/tutorial-azure-sql-mi.md
+              - Federal & Government: migrations/db2-to-azure-sql/federal-migration-guide.md
+              - Benchmarks: migrations/db2-to-azure-sql/benchmarks.md
+              - Best Practices: migrations/db2-to-azure-sql/best-practices.md
+          - MongoDB to Cosmos DB:
+              - Migration Playbook: migrations/mongodb-to-cosmosdb.md
+              - Migration Center: migrations/mongodb-to-cosmosdb/index.md
+              - Strategic:
+                  - Why Cosmos DB over MongoDB: migrations/mongodb-to-cosmosdb/why-cosmosdb-over-mongodb.md
+                  - Total Cost of Ownership: migrations/mongodb-to-cosmosdb/tco-analysis.md
+              - Feature Reference: migrations/mongodb-to-cosmosdb/feature-mapping-complete.md
+              - Migration Guides:
+                  - vCore Migration: migrations/mongodb-to-cosmosdb/vcore-migration.md
+                  - RU-Based Migration: migrations/mongodb-to-cosmosdb/ru-migration.md
+                  - Schema Migration: migrations/mongodb-to-cosmosdb/schema-migration.md
+                  - Data Migration: migrations/mongodb-to-cosmosdb/data-migration.md
+                  - Application Migration: migrations/mongodb-to-cosmosdb/application-migration.md
+              - Tutorials:
+                  - "VS Code Migration Extension": migrations/mongodb-to-cosmosdb/tutorial-vscode-migration.md
+                  - "DMS Online Migration": migrations/mongodb-to-cosmosdb/tutorial-dms-migration.md
+              - Federal & Government: migrations/mongodb-to-cosmosdb/federal-migration-guide.md
+              - Benchmarks: migrations/mongodb-to-cosmosdb/benchmarks.md
+              - Best Practices: migrations/mongodb-to-cosmosdb/best-practices.md
+          - AD to Entra ID:
+              - Migration Playbook: migrations/ad-to-entra-id.md
+              - Migration Center: migrations/ad-to-entra-id/index.md
+              - Strategic:
+                  - Why Entra ID over AD: migrations/ad-to-entra-id/why-entra-over-ad.md
+                  - Total Cost of Ownership: migrations/ad-to-entra-id/tco-analysis.md
+              - Feature Reference: migrations/ad-to-entra-id/feature-mapping-complete.md
+              - Migration Guides:
+                  - Hybrid Identity Migration: migrations/ad-to-entra-id/hybrid-identity-migration.md
+                  - Cloud-Only Migration: migrations/ad-to-entra-id/cloud-only-migration.md
+                  - Device Migration: migrations/ad-to-entra-id/device-migration.md
+                  - Application Migration: migrations/ad-to-entra-id/application-migration.md
+                  - Group Policy Migration: migrations/ad-to-entra-id/group-policy-migration.md
+                  - Security Migration: migrations/ad-to-entra-id/security-migration.md
+              - Tutorials:
+                  - "Deploy Cloud Sync": migrations/ad-to-entra-id/tutorial-cloud-sync.md
+                  - "Entra Join a Device": migrations/ad-to-entra-id/tutorial-device-join.md
+              - Federal & Government: migrations/ad-to-entra-id/federal-migration-guide.md
+              - Benchmarks: migrations/ad-to-entra-id/benchmarks.md
+              - Best Practices: migrations/ad-to-entra-id/best-practices.md
+          - Okta to Entra ID:
+              - Migration Playbook: migrations/okta-to-entra-id.md
+              - Migration Center: migrations/okta-to-entra-id/index.md
+              - Strategic:
+                  - Why Entra ID over Okta: migrations/okta-to-entra-id/why-entra-over-okta.md
+                  - Total Cost of Ownership: migrations/okta-to-entra-id/tco-analysis.md
+              - Feature Reference: migrations/okta-to-entra-id/feature-mapping-complete.md
+              - Migration Guides:
+                  - Federation Migration: migrations/okta-to-entra-id/federation-migration.md
+                  - SSO Application Migration: migrations/okta-to-entra-id/sso-migration.md
+                  - MFA Migration: migrations/okta-to-entra-id/mfa-migration.md
+                  - Provisioning Migration: migrations/okta-to-entra-id/provisioning-migration.md
+                  - Conditional Access Migration: migrations/okta-to-entra-id/conditional-access-migration.md
+              - Tutorials:
+                  - "Federation Cutover": migrations/okta-to-entra-id/tutorial-federation-cutover.md
+                  - "App SSO Migration": migrations/okta-to-entra-id/tutorial-app-sso.md
+              - Federal & Government: migrations/okta-to-entra-id/federal-migration-guide.md
+              - Benchmarks: migrations/okta-to-entra-id/benchmarks.md
+              - Best Practices: migrations/okta-to-entra-id/best-practices.md
+          - Exchange to Online:
+              - Migration Playbook: migrations/exchange-to-online.md
+              - Migration Center: migrations/exchange-to-online/index.md
+              - Strategic:
+                  - Why Exchange Online: migrations/exchange-to-online/why-exchange-online.md
+                  - Total Cost of Ownership: migrations/exchange-to-online/tco-analysis.md
+              - Feature Reference: migrations/exchange-to-online/feature-mapping-complete.md
+              - Migration Guides:
+                  - Hybrid Migration: migrations/exchange-to-online/hybrid-migration.md
+                  - Cutover Migration: migrations/exchange-to-online/cutover-migration.md
+                  - Staged Migration: migrations/exchange-to-online/staged-migration.md
+                  - Public Folder Migration: migrations/exchange-to-online/public-folder-migration.md
+                  - Compliance Migration: migrations/exchange-to-online/compliance-migration.md
+                  - Security Migration: migrations/exchange-to-online/security-migration.md
+              - Tutorials:
+                  - "Hybrid Setup": migrations/exchange-to-online/tutorial-hybrid-setup.md
+                  - "Mailbox Move": migrations/exchange-to-online/tutorial-mailbox-move.md
+              - Federal & Government: migrations/exchange-to-online/federal-migration-guide.md
+              - Benchmarks: migrations/exchange-to-online/benchmarks.md
+              - Best Practices: migrations/exchange-to-online/best-practices.md
+          - Google Workspace to M365:
+              - Migration Playbook: migrations/google-workspace-to-m365.md
+              - Migration Center: migrations/google-workspace-to-m365/index.md
+              - Strategic:
+                  - Why M365 over Google Workspace: migrations/google-workspace-to-m365/why-m365-over-google.md
+                  - Total Cost of Ownership: migrations/google-workspace-to-m365/tco-analysis.md
+              - Feature Reference: migrations/google-workspace-to-m365/feature-mapping-complete.md
+              - Migration Guides:
+                  - Email Migration (Gmail to Exchange): migrations/google-workspace-to-m365/email-migration.md
+                  - Drive Migration (Drive to OneDrive): migrations/google-workspace-to-m365/drive-migration.md
+                  - Docs Migration (Docs/Sheets/Slides): migrations/google-workspace-to-m365/docs-migration.md
+                  - Calendar & Contacts: migrations/google-workspace-to-m365/calendar-contacts-migration.md
+                  - Collaboration (Chat/Meet to Teams): migrations/google-workspace-to-m365/collaboration-migration.md
+                  - Identity (Google to Entra ID): migrations/google-workspace-to-m365/identity-migration.md
+              - Tutorials:
+                  - "Gmail to Exchange Online": migrations/google-workspace-to-m365/tutorial-gmail-to-exo.md
+                  - "Google Drive to OneDrive": migrations/google-workspace-to-m365/tutorial-drive-to-onedrive.md
+              - Federal & Government: migrations/google-workspace-to-m365/federal-migration-guide.md
+              - Benchmarks: migrations/google-workspace-to-m365/benchmarks.md
+              - Best Practices: migrations/google-workspace-to-m365/best-practices.md
+          - Jenkins to GitHub Actions:
+              - Migration Playbook: migrations/jenkins-to-github-actions.md
+              - Migration Center: migrations/jenkins-to-github-actions/index.md
+              - Strategic:
+                  - Why GitHub Actions: migrations/jenkins-to-github-actions/why-github-actions.md
+                  - Total Cost of Ownership: migrations/jenkins-to-github-actions/tco-analysis.md
+              - Feature Reference: migrations/jenkins-to-github-actions/feature-mapping-complete.md
+              - Migration Guides:
+                  - Pipeline Migration: migrations/jenkins-to-github-actions/pipeline-migration.md
+                  - Plugin Migration: migrations/jenkins-to-github-actions/plugin-migration.md
+                  - Agent Migration: migrations/jenkins-to-github-actions/agent-migration.md
+                  - Secret Migration: migrations/jenkins-to-github-actions/secret-migration.md
+                  - Azure DevOps Alternative: migrations/jenkins-to-github-actions/azure-devops-migration.md
+              - Tutorials:
+                  - "Actions Importer CLI": migrations/jenkins-to-github-actions/tutorial-actions-importer.md
+                  - "Pipeline Conversion": migrations/jenkins-to-github-actions/tutorial-pipeline-conversion.md
+              - Federal & Government: migrations/jenkins-to-github-actions/federal-migration-guide.md
+              - Benchmarks: migrations/jenkins-to-github-actions/benchmarks.md
+              - Best Practices: migrations/jenkins-to-github-actions/best-practices.md
+          - HashiCorp Vault to Key Vault:
+              - Migration Playbook: migrations/vault-to-key-vault.md
+              - Migration Center: migrations/vault-to-key-vault/index.md
+              - Strategic:
+                  - Why Key Vault over Vault: migrations/vault-to-key-vault/why-key-vault-over-vault.md
+                  - Total Cost of Ownership: migrations/vault-to-key-vault/tco-analysis.md
+              - Feature Reference: migrations/vault-to-key-vault/feature-mapping-complete.md
+              - Migration Guides:
+                  - Secrets Migration: migrations/vault-to-key-vault/secrets-migration.md
+                  - PKI Migration: migrations/vault-to-key-vault/pki-migration.md
+                  - Dynamic Secrets to Managed Identity: migrations/vault-to-key-vault/dynamic-secrets-migration.md
+                  - Encryption Migration: migrations/vault-to-key-vault/encryption-migration.md
+                  - Policy Migration: migrations/vault-to-key-vault/policy-migration.md
+              - Tutorials:
+                  - "Secret Migration (Step-by-Step)": migrations/vault-to-key-vault/tutorial-secret-migration.md
+                  - "Managed Identity for Zero Secrets": migrations/vault-to-key-vault/tutorial-managed-identity.md
+              - Federal & Government: migrations/vault-to-key-vault/federal-migration-guide.md
+              - Benchmarks: migrations/vault-to-key-vault/benchmarks.md
+              - Best Practices: migrations/vault-to-key-vault/best-practices.md
+          - SharePoint On-Prem to Online:
+              - Migration Playbook: migrations/sharepoint-to-online.md
+              - Migration Center: migrations/sharepoint-to-online/index.md
+              - Strategic:
+                  - Why SharePoint Online: migrations/sharepoint-to-online/why-sharepoint-online.md
+                  - Total Cost of Ownership: migrations/sharepoint-to-online/tco-analysis.md
+              - Feature Reference: migrations/sharepoint-to-online/feature-mapping-complete.md
+              - Migration Guides:
+                  - Site Migration: migrations/sharepoint-to-online/site-migration.md
+                  - Content Migration: migrations/sharepoint-to-online/content-migration.md
+                  - Workflow Migration: migrations/sharepoint-to-online/workflow-migration.md
+                  - InfoPath Migration: migrations/sharepoint-to-online/infopath-migration.md
+                  - Customization Migration: migrations/sharepoint-to-online/customization-migration.md
+                  - Security Migration: migrations/sharepoint-to-online/security-migration.md
+              - Tutorials:
+                  - "SPMT Migration": migrations/sharepoint-to-online/tutorial-spmt-migration.md
+                  - "Migration Manager": migrations/sharepoint-to-online/tutorial-migration-manager.md
+              - Federal & Government: migrations/sharepoint-to-online/federal-migration-guide.md
+              - Benchmarks: migrations/sharepoint-to-online/benchmarks.md
+              - Best Practices: migrations/sharepoint-to-online/best-practices.md
+          - MySQL to Azure Database:
+              - Migration Playbook: migrations/mysql-to-azure.md
+              - Migration Center: migrations/mysql-to-azure/index.md
+              - Strategic:
+                  - Why Azure Database: migrations/mysql-to-azure/why-azure-database.md
+                  - Total Cost of Ownership: migrations/mysql-to-azure/tco-analysis.md
+              - Feature Reference: migrations/mysql-to-azure/feature-mapping-complete.md
+              - Migration Guides:
+                  - Flexible Server Migration: migrations/mysql-to-azure/flexible-server-migration.md
+                  - PostgreSQL Migration: migrations/mysql-to-azure/postgresql-migration.md
+                  - Schema Migration: migrations/mysql-to-azure/schema-migration.md
+                  - Data Migration: migrations/mysql-to-azure/data-migration.md
+                  - Security Migration: migrations/mysql-to-azure/security-migration.md
+              - Tutorials:
+                  - "DMS Migration": migrations/mysql-to-azure/tutorial-dms-migration.md
+                  - "mysqldump Migration": migrations/mysql-to-azure/tutorial-mysqldump.md
+              - Federal & Government: migrations/mysql-to-azure/federal-migration-guide.md
+              - Benchmarks: migrations/mysql-to-azure/benchmarks.md
+              - Best Practices: migrations/mysql-to-azure/best-practices.md
       - Cost Management: COST_MANAGEMENT.md
       - Rollback: ROLLBACK.md
       - Troubleshooting: TROUBLESHOOTING.md

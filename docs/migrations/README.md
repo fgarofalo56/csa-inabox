@@ -11,6 +11,12 @@ Field-tested migration playbooks from common on-prem and other-cloud platforms o
 | AWS (Redshift, S3, Glue, EMR) | Synapse, ADLS, ADF, Databricks | [aws-to-azure.md](aws-to-azure.md) |
 | GCP (BigQuery, GCS, Dataflow) | Synapse/Fabric, ADLS, ADF      | [gcp-to-azure.md](gcp-to-azure.md) |
 
+### From competitor productivity suites
+
+| Source                                | Target                                                | Playbook                                                   |
+| ------------------------------------- | ----------------------------------------------------- | ---------------------------------------------------------- |
+| Google Workspace (Gmail, Drive, Docs) | Microsoft 365 (Exchange, OneDrive, SharePoint, Teams) | [google-workspace-to-m365.md](google-workspace-to-m365.md) |
+
 ### From specialty platforms
 
 | Source                           | Target                        | Playbook                                           |

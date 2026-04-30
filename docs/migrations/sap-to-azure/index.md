@@ -163,6 +163,69 @@ gantt
 
 ---
 
+## Audience and roles
+
+| Role                          | Primary interest                                                          | Start with                                                                                                                |
+| ----------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| **CIO / CDO**                 | Business case, strategic direction, 2027 risk                             | [Why Azure for SAP](why-azure-for-sap.md), [TCO Analysis](tco-analysis.md)                                                |
+| **Enterprise architect**      | Deployment models, landing zone design, integration patterns              | [Feature Mapping](feature-mapping-complete.md), [Infrastructure Migration](infrastructure-migration.md)                   |
+| **SAP Basis administrator**   | VM sizing, HANA installation, HA/DR, monitoring                           | [Infrastructure Migration](infrastructure-migration.md), [HANA Migration](hana-migration.md), [Benchmarks](benchmarks.md) |
+| **SAP functional consultant** | S/4HANA conversion, data model changes, business process impact           | [S/4HANA Conversion](s4hana-conversion.md), [Feature Mapping](feature-mapping-complete.md)                                |
+| **Data engineer**             | SAP data extraction, Fabric Mirroring, dbt models, medallion architecture | [Analytics Migration](analytics-migration.md), [Tutorial: SAP Data to Fabric](tutorial-sap-data-to-fabric.md)             |
+| **Integration developer**     | PI/PO migration, RFC/IDoc/BAPI connectivity, API Management               | [Integration Migration](integration-migration.md)                                                                         |
+| **Security architect**        | Entra ID SSO, network security, GRC, data encryption                      | [Security Migration](security-migration.md)                                                                               |
+| **Federal program manager**   | FedRAMP, IL4/IL5, Azure Government, DoD-specific patterns                 | [Federal Migration Guide](federal-migration-guide.md)                                                                     |
+| **BI analyst**                | SAP BW to Fabric, SAC to Power BI, reporting migration                    | [Analytics Migration](analytics-migration.md)                                                                             |
+| **Finance / procurement**     | CFO-level cost comparison, licensing, ROI                                 | [TCO Analysis](tco-analysis.md)                                                                                           |
+
+---
+
+## Prerequisites for SAP migration to Azure
+
+Before beginning any SAP migration to Azure, ensure the following prerequisites are in place:
+
+### SAP prerequisites
+
+- [ ] SAP Readiness Check completed (for brownfield conversion)
+- [ ] SAP S-user with software download authorization
+- [ ] SAP license keys for target S/4HANA system
+- [ ] SAP Maintenance Planner access for stack planning
+- [ ] ABAP Test Cockpit (ATC) analysis completed for custom code
+- [ ] SAP HANA installation media downloaded
+- [ ] SUM (Software Update Manager) downloaded for current release
+
+### Azure prerequisites
+
+- [ ] Azure subscription(s) with appropriate RBAC roles (Owner or Contributor)
+- [ ] Azure Center for SAP Solutions provider registered
+- [ ] Sufficient VM quota for M-series/Mv2 in target region
+- [ ] Azure NetApp Files quota approved
+- [ ] ExpressRoute or VPN connectivity to on-premises (if hybrid)
+- [ ] Azure Bastion deployed in hub VNet
+- [ ] CSA-in-a-Box data management landing zone deployed
+
+### Organizational prerequisites
+
+- [ ] Executive sponsor identified
+- [ ] Migration project manager assigned
+- [ ] SAP Basis team trained on Azure fundamentals (AZ-900 + AZ-120)
+- [ ] Change management plan for business users
+- [ ] Go/no-go criteria defined for each migration phase
+- [ ] Rollback plan documented
+
+---
+
+## Related migration centers
+
+| Migration center                                      | Relevance to SAP migration                                             |
+| ----------------------------------------------------- | ---------------------------------------------------------------------- |
+| [AWS to Azure](../aws-to-azure/index.md)              | If consolidating SAP from AWS to Azure alongside analytics migration   |
+| [GCP to Azure](../gcp-to-azure/index.md)              | If consolidating from GCP alongside SAP migration                      |
+| [Palantir Foundry](../palantir-foundry/index.md)      | If replacing Palantir Foundry analytics with CSA-in-a-Box for SAP data |
+| [Tableau to Power BI](../tableau-to-powerbi/index.md) | If migrating Tableau dashboards on SAP data to Power BI                |
+
+---
+
 **Last updated:** 2026-04-30
 **Maintainers:** CSA-in-a-Box core team
 **Related:** [Migration Playbook](../sap-to-azure.md) | [AWS to Azure](../aws-to-azure/index.md) | [GCP to Azure](../gcp-to-azure/index.md) | [Palantir Foundry](../palantir-foundry/index.md)

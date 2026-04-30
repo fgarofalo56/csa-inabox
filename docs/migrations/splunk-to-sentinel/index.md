@@ -186,6 +186,37 @@ gantt
 
 ---
 
+## Cisco acquisition context
+
+Cisco completed its $28 billion acquisition of Splunk in March 2024. This is the largest acquisition in Cisco's history and fundamentally changes the SIEM competitive landscape. Key implications:
+
+- **Product roadmap uncertainty** -- Splunk's R&D priorities now compete with Cisco's broader security portfolio (Cisco XDR, SecureX, Talos)
+- **Pricing trajectory** -- Cisco has a documented history of post-acquisition price increases across acquired products (Duo, Meraki, AppDynamics)
+- **Federal account disruption** -- Organizational integration creates account management transitions during a period when continuity matters most
+- **Cloud strategy shifts** -- Cisco may deprioritize Splunk Cloud in favor of Cisco-branded cloud offerings
+- **Integration direction** -- The open Splunk ecosystem may tighten around Cisco-native security products
+
+For federal agencies with Splunk contracts approaching renewal, this migration center provides the evidence and execution guidance to evaluate Microsoft Sentinel as the strategic alternative.
+
+---
+
+## Migration success metrics
+
+Track these metrics throughout your migration to measure success:
+
+| Metric                          | Target                                         | How to measure                                 |
+| ------------------------------- | ---------------------------------------------- | ---------------------------------------------- |
+| **Detection coverage parity**   | >= 95% of Splunk rules operational in Sentinel | MITRE ATT&CK technique comparison              |
+| **Mean time to detect (MTTD)**  | <= Splunk MTTD or better                       | Incident creation timestamp vs event timestamp |
+| **Mean time to respond (MTTR)** | <= Splunk MTTR or better                       | Incident close timestamp vs creation timestamp |
+| **False positive rate**         | Within 20% of Splunk baseline                  | Weekly FP count comparison during parallel run |
+| **SOC analyst satisfaction**    | >= 70% positive                                | Survey at 30/60/90 days post-cutover           |
+| **Cost reduction**              | >= 50% TCO reduction                           | Annual cost comparison (see TCO Analysis)      |
+| **Data ingestion completeness** | 100% of critical sources in Sentinel           | Source-by-source validation                    |
+| **Playbook automation rate**    | >= 80% of Splunk SOAR playbooks migrated       | Playbook inventory comparison                  |
+
+---
+
 ## Key Microsoft Learn references
 
 - [Microsoft Sentinel documentation](https://learn.microsoft.com/azure/sentinel/)

@@ -182,6 +182,66 @@ A typical SQL Server migration follows this timeline, adjusted for estate size:
 
 ---
 
+## SQL Server version compatibility
+
+All three Azure SQL targets support migration from SQL Server 2008 and later. Older versions require an intermediate upgrade step.
+
+| Source version            | Azure SQL DB | Azure SQL MI | SQL on VM | Notes                                                   |
+| ------------------------- | ------------ | ------------ | --------- | ------------------------------------------------------- |
+| SQL Server 2008 / 2008 R2 | Supported    | Supported    | Supported | ESU expired; upgrade compatibility level post-migration |
+| SQL Server 2012           | Supported    | Supported    | Supported | ESU expired July 2025; free ESU on Azure VMs            |
+| SQL Server 2014           | Supported    | Supported    | Supported | ESU available through 2027; free on Azure VMs           |
+| SQL Server 2016           | Supported    | Supported    | Supported | Extended support ends July 2026 -- urgent               |
+| SQL Server 2017           | Supported    | Supported    | Supported | Extended support ends October 2027                      |
+| SQL Server 2019           | Supported    | Supported    | Supported | Extended support ends January 2030                      |
+| SQL Server 2022           | Supported    | Supported    | Supported | Current version; full feature support                   |
+
+---
+
+## Migration tooling overview
+
+| Tool                                       | Purpose                                      | Cost                             | When to use                                      |
+| ------------------------------------------ | -------------------------------------------- | -------------------------------- | ------------------------------------------------ |
+| **Azure Migrate**                          | Estate discovery and assessment              | Free                             | Large estates (50+ instances)                    |
+| **Data Migration Assistant (DMA)**         | Database compatibility assessment            | Free                             | Per-database assessment                          |
+| **Azure Data Studio + SQL Migration ext**  | Assessment, SKU recommendation, migration    | Free                             | Modern assessment and migration workflow         |
+| **Azure Database Migration Service (DMS)** | Online/offline data migration                | Free (Standard) / Paid (Premium) | Production migrations requiring minimal downtime |
+| **SqlPackage**                             | DACPAC/BACPAC operations                     | Free                             | Schema deployment, small database migration      |
+| **Log Replay Service (LRS)**               | Log-based migration to SQL MI                | Free                             | SQL MI migrations with fine-grained control      |
+| **Managed Instance Link**                  | Live replication to SQL MI                   | Included with MI                 | Zero-downtime migration to SQL MI                |
+| **Azure Data Factory**                     | Table-by-table data copy with transformation | Pay-per-use                      | Migrations requiring data transformation         |
+| **Azure Data Box**                         | Offline data transfer for large databases    | Per-device rental                | Databases > 10 TB with limited bandwidth         |
+
+---
+
+## Frequently asked questions
+
+### What is the maximum database size I can migrate?
+
+- **Azure SQL Database:** Up to 100 TB (Hyperscale tier); 4 TB for General Purpose
+- **Azure SQL Managed Instance:** Up to 16 TB
+- **SQL Server on Azure VM:** Limited only by VM storage configuration
+
+### How much downtime should I plan for?
+
+- **Online migration (DMS/LRS/MI Link):** Minutes of downtime during cutover
+- **Offline migration (BACPAC/backup-restore):** Hours to days depending on database size
+- **Transactional replication:** Minutes of downtime during subscriber promotion
+
+### Can I migrate from SQL Server Express or Developer Edition?
+
+Yes. All SQL Server editions (Express, Standard, Enterprise, Developer, Web) can be migrated to any Azure SQL target. Azure SQL pricing is based on the target configuration, not the source edition.
+
+### What about SQL Server on Linux?
+
+SQL Server on Linux (2017+) can be migrated to Azure SQL using the same tools and approaches. DMS, BACPAC, and backup/restore all support Linux-hosted SQL Server instances.
+
+### Can I keep my on-premises SQL Server running during migration?
+
+Yes. Online migration modes (DMS, LRS, MI Link, transactional replication) keep the source database fully operational during migration. The source is only impacted at cutover when you stop writes and switch connection strings.
+
+---
+
 ## Related
 
 - [Azure SQL Guide](../../guides/azure-sql.md)
