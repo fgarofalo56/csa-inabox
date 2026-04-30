@@ -104,17 +104,17 @@ The Foundry Ontology is the platform's central value proposition and its deepest
 
 ## Lock-in comparison matrix
 
-| Dimension | Foundry lock-in level | Azure lock-in level | Key difference |
-|---|---|---|---|
-| Data format | Medium | Low | Foundry: proprietary layer over Parquet. Azure: open Delta/Parquet |
-| Semantic model | Critical | Low | Foundry: proprietary Ontology. Azure: Purview + dbt (open) |
-| ETL/Pipelines | Medium-High | Low | Foundry: proprietary transforms. Azure: ADF ARM + dbt SQL |
-| Applications | High | Low-Medium | Foundry: no portability. Azure: Power Apps + standard React |
-| AI/ML | Medium-High | Low | Foundry: AIP-specific. Azure: standard OpenAI APIs |
-| DevOps | Medium | Low | Foundry: Apollo. Azure: standard CI/CD (GitHub/Azure DevOps) |
-| Identity | Low | Low | Both use SAML/OIDC federation |
-| APIs | Medium | Low | Foundry: OSDK. Azure: REST + Graph API |
-| Skills | High | Low | Foundry: non-transferable. Azure: industry-standard |
+| Dimension      | Foundry lock-in level | Azure lock-in level | Key difference                                                     |
+| -------------- | --------------------- | ------------------- | ------------------------------------------------------------------ |
+| Data format    | Medium                | Low                 | Foundry: proprietary layer over Parquet. Azure: open Delta/Parquet |
+| Semantic model | Critical              | Low                 | Foundry: proprietary Ontology. Azure: Purview + dbt (open)         |
+| ETL/Pipelines  | Medium-High           | Low                 | Foundry: proprietary transforms. Azure: ADF ARM + dbt SQL          |
+| Applications   | High                  | Low-Medium          | Foundry: no portability. Azure: Power Apps + standard React        |
+| AI/ML          | Medium-High           | Low                 | Foundry: AIP-specific. Azure: standard OpenAI APIs                 |
+| DevOps         | Medium                | Low                 | Foundry: Apollo. Azure: standard CI/CD (GitHub/Azure DevOps)       |
+| Identity       | Low                   | Low                 | Both use SAML/OIDC federation                                      |
+| APIs           | Medium                | Low                 | Foundry: OSDK. Azure: REST + Graph API                             |
+| Skills         | High                  | Low                 | Foundry: non-transferable. Azure: industry-standard                |
 
 ---
 
@@ -122,32 +122,32 @@ The Foundry Ontology is the platform's central value proposition and its deepest
 
 ### Cost to leave Palantir Foundry
 
-| Component | Effort | Cost estimate | Timeline |
-|---|---|---|---|
-| Ontology reverse-engineering | XL | $300K–$800K | 3–6 months |
-| Pipeline re-implementation | L | $200K–$500K | 2–4 months |
-| Workshop app replacement | L–XL | $300K–$1M | 3–6 months |
-| AIP/AI re-implementation | M–L | $150K–$400K | 2–3 months |
-| Function migration | M | $100K–$300K | 1–2 months |
-| Data extraction and validation | M | $100K–$200K | 1–2 months |
-| DevOps re-implementation | S–M | $50K–$150K | 2–4 weeks |
-| User retraining | M | $100K–$300K | 1–2 months |
-| Parallel-run period | L | $500K–$1.5M | 2–4 months |
-| **Total exit cost** | — | **$1.8M–$5.2M** | **6–18 months** |
+| Component                      | Effort | Cost estimate   | Timeline        |
+| ------------------------------ | ------ | --------------- | --------------- |
+| Ontology reverse-engineering   | XL     | $300K–$800K     | 3–6 months      |
+| Pipeline re-implementation     | L      | $200K–$500K     | 2–4 months      |
+| Workshop app replacement       | L–XL   | $300K–$1M       | 3–6 months      |
+| AIP/AI re-implementation       | M–L    | $150K–$400K     | 2–3 months      |
+| Function migration             | M      | $100K–$300K     | 1–2 months      |
+| Data extraction and validation | M      | $100K–$200K     | 1–2 months      |
+| DevOps re-implementation       | S–M    | $50K–$150K      | 2–4 weeks       |
+| User retraining                | M      | $100K–$300K     | 1–2 months      |
+| Parallel-run period            | L      | $500K–$1.5M     | 2–4 months      |
+| **Total exit cost**            | —      | **$1.8M–$5.2M** | **6–18 months** |
 
 ### Cost to leave Azure / CSA-in-a-Box
 
-| Component | Effort | Cost estimate | Timeline |
-|---|---|---|---|
-| Data export (Delta/Parquet → target) | S | $20K–$50K | 1–2 weeks |
-| dbt model portability | XS–S | $10K–$30K | 1 week |
-| Power BI → alternative BI | M | $50K–$200K | 1–2 months |
-| ADF pipeline export | S | $20K–$50K | 1–2 weeks |
-| Azure Functions → target | S | $20K–$50K | 1–2 weeks |
-| Infrastructure (Bicep → Terraform) | S–M | $30K–$100K | 2–4 weeks |
-| Purview metadata export | S | $10K–$30K | 1 week |
-| User retraining | S–M | $50K–$100K | 2–4 weeks |
-| **Total exit cost** | — | **$210K–$610K** | **2–4 months** |
+| Component                            | Effort | Cost estimate   | Timeline       |
+| ------------------------------------ | ------ | --------------- | -------------- |
+| Data export (Delta/Parquet → target) | S      | $20K–$50K       | 1–2 weeks      |
+| dbt model portability                | XS–S   | $10K–$30K       | 1 week         |
+| Power BI → alternative BI            | M      | $50K–$200K      | 1–2 months     |
+| ADF pipeline export                  | S      | $20K–$50K       | 1–2 weeks      |
+| Azure Functions → target             | S      | $20K–$50K       | 1–2 weeks      |
+| Infrastructure (Bicep → Terraform)   | S–M    | $30K–$100K      | 2–4 weeks      |
+| Purview metadata export              | S      | $10K–$30K       | 1 week         |
+| User retraining                      | S–M    | $50K–$100K      | 2–4 weeks      |
+| **Total exit cost**                  | —      | **$210K–$610K** | **2–4 months** |
 
 **Exit cost ratio:** Leaving Foundry costs 5–10x more than leaving Azure.
 
@@ -155,19 +155,19 @@ The Foundry Ontology is the platform's central value proposition and its deepest
 
 ## Open standards in CSA-in-a-Box
 
-| Layer | Standard | Portability |
-|---|---|---|
-| Storage format | Delta Lake (Parquet + transaction log) | Read by Spark, Databricks, Fabric, Snowflake, DuckDB, Polars |
-| File format | Apache Parquet | Universal — read by every data tool |
-| Transform language | SQL (dbt) | Portable to any SQL engine |
-| Semantic model | Power BI XMLA endpoint | Export via Tabular Editor, ALM Toolkit |
-| Metadata | Purview REST API | Export via API; compatible with OpenMetadata, DataHub |
-| API | REST / OpenAPI | Universal |
-| Identity | Entra ID (SAML, OIDC) | Standard federation protocols |
-| Infrastructure | Bicep / ARM | Convertible to Terraform, Pulumi, CloudFormation |
-| CI/CD | GitHub Actions YAML | Portable to GitLab CI, Jenkins, Azure Pipelines |
-| Data contracts | JSON Schema + dbt contracts | Industry-standard schema definitions |
-| Monitoring | Azure Monitor (OpenTelemetry compatible) | Export to Prometheus, Grafana, Splunk, Datadog |
+| Layer              | Standard                                 | Portability                                                  |
+| ------------------ | ---------------------------------------- | ------------------------------------------------------------ |
+| Storage format     | Delta Lake (Parquet + transaction log)   | Read by Spark, Databricks, Fabric, Snowflake, DuckDB, Polars |
+| File format        | Apache Parquet                           | Universal — read by every data tool                          |
+| Transform language | SQL (dbt)                                | Portable to any SQL engine                                   |
+| Semantic model     | Power BI XMLA endpoint                   | Export via Tabular Editor, ALM Toolkit                       |
+| Metadata           | Purview REST API                         | Export via API; compatible with OpenMetadata, DataHub        |
+| API                | REST / OpenAPI                           | Universal                                                    |
+| Identity           | Entra ID (SAML, OIDC)                    | Standard federation protocols                                |
+| Infrastructure     | Bicep / ARM                              | Convertible to Terraform, Pulumi, CloudFormation             |
+| CI/CD              | GitHub Actions YAML                      | Portable to GitLab CI, Jenkins, Azure Pipelines              |
+| Data contracts     | JSON Schema + dbt contracts              | Industry-standard schema definitions                         |
+| Monitoring         | Azure Monitor (OpenTelemetry compatible) | Export to Prometheus, Grafana, Splunk, Datadog               |
 
 ---
 
@@ -191,14 +191,14 @@ The Foundry Ontology is the platform's central value proposition and its deepest
 
 ### Talent portability implications
 
-| Factor | Foundry | Azure |
-|---|---|---|
-| Certified professionals | <50K globally | >10M globally |
-| Training availability | Palantir-only | Microsoft, Coursera, Udemy, universities |
-| Skill transferability | Zero | High (cloud-agnostic fundamentals) |
-| Hiring difficulty | High | Low-moderate |
-| Contractor competition | Limited (Palantir-certified partners) | Broad (thousands of MSPs and SIs) |
-| Knowledge retention risk | High (concentrated in FDEs) | Low (skills in standard tools) |
+| Factor                   | Foundry                               | Azure                                    |
+| ------------------------ | ------------------------------------- | ---------------------------------------- |
+| Certified professionals  | <50K globally                         | >10M globally                            |
+| Training availability    | Palantir-only                         | Microsoft, Coursera, Udemy, universities |
+| Skill transferability    | Zero                                  | High (cloud-agnostic fundamentals)       |
+| Hiring difficulty        | High                                  | Low-moderate                             |
+| Contractor competition   | Limited (Palantir-certified partners) | Broad (thousands of MSPs and SIs)        |
+| Knowledge retention risk | High (concentrated in FDEs)           | Low (skills in standard tools)           |
 
 ---
 
@@ -222,13 +222,13 @@ The Foundry Ontology is the platform's central value proposition and its deepest
 
 ### Data sovereignty
 
-| Requirement | Foundry | Azure |
-|---|---|---|
-| Data residency control | Foundry instance location determines residency | Azure region selection + data residency policies |
-| Data export | API-based export in raw formats | Standard file system access (ADLS, OneLake) |
-| Regulatory compliance | Foundry FedRAMP covers Foundry only | Azure FedRAMP covers 100+ services |
-| Cross-border data controls | Foundry instance isolation | Azure data residency boundaries + sovereign clouds |
-| Right to data portability | Contractual (varies by agreement) | Built into open format architecture |
+| Requirement                | Foundry                                        | Azure                                              |
+| -------------------------- | ---------------------------------------------- | -------------------------------------------------- |
+| Data residency control     | Foundry instance location determines residency | Azure region selection + data residency policies   |
+| Data export                | API-based export in raw formats                | Standard file system access (ADLS, OneLake)        |
+| Regulatory compliance      | Foundry FedRAMP covers Foundry only            | Azure FedRAMP covers 100+ services                 |
+| Cross-border data controls | Foundry instance isolation                     | Azure data residency boundaries + sovereign clouds |
+| Right to data portability  | Contractual (varies by agreement)              | Built into open format architecture                |
 
 ---
 

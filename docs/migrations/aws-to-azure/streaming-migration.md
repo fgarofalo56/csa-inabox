@@ -14,16 +14,16 @@ The migration strategy depends on the source: Kinesis workloads typically re-arc
 
 ## Service mapping overview
 
-| AWS streaming service | Azure equivalent | Migration complexity | Notes |
-|---|---|---|---|
-| Kinesis Data Streams | Event Hubs | M | Shard model maps to partition model |
-| Kinesis Data Firehose | Event Hubs Capture / ADF | S | Managed delivery to storage |
-| Kinesis Data Analytics (SQL) | Stream Analytics | M | SQL-based stream processing |
-| Kinesis Data Analytics (Flink) | Databricks Structured Streaming / HDInsight Flink | L | Flink stateful processing |
-| MSK (Managed Kafka) | Event Hubs with Kafka protocol | M | Config change for Kafka clients |
-| MSK Connect | Event Hubs + ADF connectors | M | Connector-dependent |
-| MSK Serverless | Event Hubs (auto-inflate) | S | Serverless scaling |
-| Lambda (stream consumer) | Azure Functions (Event Hub trigger) | M | Function-level rewrite |
+| AWS streaming service          | Azure equivalent                                  | Migration complexity | Notes                               |
+| ------------------------------ | ------------------------------------------------- | -------------------- | ----------------------------------- |
+| Kinesis Data Streams           | Event Hubs                                        | M                    | Shard model maps to partition model |
+| Kinesis Data Firehose          | Event Hubs Capture / ADF                          | S                    | Managed delivery to storage         |
+| Kinesis Data Analytics (SQL)   | Stream Analytics                                  | M                    | SQL-based stream processing         |
+| Kinesis Data Analytics (Flink) | Databricks Structured Streaming / HDInsight Flink | L                    | Flink stateful processing           |
+| MSK (Managed Kafka)            | Event Hubs with Kafka protocol                    | M                    | Config change for Kafka clients     |
+| MSK Connect                    | Event Hubs + ADF connectors                       | M                    | Connector-dependent                 |
+| MSK Serverless                 | Event Hubs (auto-inflate)                         | S                    | Serverless scaling                  |
+| Lambda (stream consumer)       | Azure Functions (Event Hub trigger)               | M                    | Function-level rewrite              |
 
 ---
 
@@ -31,25 +31,25 @@ The migration strategy depends on the source: Kinesis workloads typically re-arc
 
 ### Architecture comparison
 
-| Concept | Kinesis Data Streams | Event Hubs |
-|---|---|---|
-| Stream | Stream | Event Hub (within a namespace) |
-| Shard | Shard (1 MB/s in, 2 MB/s out) | Partition (1 MB/s in, 2 MB/s out) |
-| Partition key | Partition key (MD5 hash to shard) | Partition key (hash to partition) |
-| Retention | 24h default, up to 365 days | 1-90 days (standard), unlimited (Dedicated) |
-| Consumer | KCL application or Lambda | Consumer group (AMQP) or Kafka consumer |
+| Concept          | Kinesis Data Streams                    | Event Hubs                                                |
+| ---------------- | --------------------------------------- | --------------------------------------------------------- |
+| Stream           | Stream                                  | Event Hub (within a namespace)                            |
+| Shard            | Shard (1 MB/s in, 2 MB/s out)           | Partition (1 MB/s in, 2 MB/s out)                         |
+| Partition key    | Partition key (MD5 hash to shard)       | Partition key (hash to partition)                         |
+| Retention        | 24h default, up to 365 days             | 1-90 days (standard), unlimited (Dedicated)               |
+| Consumer         | KCL application or Lambda               | Consumer group (AMQP) or Kafka consumer                   |
 | Enhanced fan-out | Dedicated 2 MB/s per consumer per shard | $default consumer group (shared) or Kafka consumer groups |
-| Sequence number | Per-shard sequence number | Offset + sequence number per partition |
-| Capacity mode | On-demand or provisioned shards | Auto-inflate (standard) or Dedicated (CU-based) |
+| Sequence number  | Per-shard sequence number               | Offset + sequence number per partition                    |
+| Capacity mode    | On-demand or provisioned shards         | Auto-inflate (standard) or Dedicated (CU-based)           |
 
 ### Capacity mapping
 
-| Kinesis provisioned | Event Hubs equivalent | Throughput |
-|---|---|---|
-| 1 shard | 1 TU (Throughput Unit) | 1 MB/s in, 2 MB/s out |
-| 10 shards | 10 TUs or 1 PU (Premium) | 10 MB/s in, 20 MB/s out |
-| 100 shards | 10 PUs or 1 CU (Dedicated) | 100 MB/s in, 200 MB/s out |
-| On-demand (auto) | Auto-inflate enabled | Up to 40 TUs auto (standard) |
+| Kinesis provisioned | Event Hubs equivalent      | Throughput                   |
+| ------------------- | -------------------------- | ---------------------------- |
+| 1 shard             | 1 TU (Throughput Unit)     | 1 MB/s in, 2 MB/s out        |
+| 10 shards           | 10 TUs or 1 PU (Premium)   | 10 MB/s in, 20 MB/s out      |
+| 100 shards          | 10 PUs or 1 CU (Dedicated) | 100 MB/s in, 200 MB/s out    |
+| On-demand (auto)    | Auto-inflate enabled       | Up to 40 TUs auto (standard) |
 
 ### Producer migration
 
@@ -166,36 +166,36 @@ with consumer:
 
 ### Architecture comparison
 
-| Firehose capability | Event Hubs Capture / ADF | Notes |
-|---|---|---|
-| Delivery to S3 | Event Hubs Capture to ADLS Gen2 | Automatic Avro file writing |
-| Delivery to Redshift | ADF pipeline from Event Hub to Databricks | Via staging on ADLS |
-| Delivery to Elasticsearch | ADF or Azure Function to Azure AI Search | Custom pipeline |
-| Format conversion (Parquet) | Databricks Auto Loader (Parquet/Delta) | Capture writes Avro; convert downstream |
-| Dynamic partitioning | Capture partitions by time (hour/minute) | Custom partitioning via Databricks |
-| Data transformation | Stream Analytics or Azure Functions | Inline transformation |
-| Buffering (size/time) | Capture window (1-15 min, 10-300 MB) | Similar buffering controls |
+| Firehose capability         | Event Hubs Capture / ADF                  | Notes                                   |
+| --------------------------- | ----------------------------------------- | --------------------------------------- |
+| Delivery to S3              | Event Hubs Capture to ADLS Gen2           | Automatic Avro file writing             |
+| Delivery to Redshift        | ADF pipeline from Event Hub to Databricks | Via staging on ADLS                     |
+| Delivery to Elasticsearch   | ADF or Azure Function to Azure AI Search  | Custom pipeline                         |
+| Format conversion (Parquet) | Databricks Auto Loader (Parquet/Delta)    | Capture writes Avro; convert downstream |
+| Dynamic partitioning        | Capture partitions by time (hour/minute)  | Custom partitioning via Databricks      |
+| Data transformation         | Stream Analytics or Azure Functions       | Inline transformation                   |
+| Buffering (size/time)       | Capture window (1-15 min, 10-300 MB)      | Similar buffering controls              |
 
 ### Event Hubs Capture configuration
 
 ```json
 {
-  "properties": {
-    "captureDescription": {
-      "enabled": true,
-      "encoding": "Avro",
-      "intervalInSeconds": 300,
-      "sizeLimitInBytes": 314572800,
-      "destination": {
-        "name": "EventHubArchive.AzureBlockBlob",
-        "properties": {
-          "storageAccountResourceId": "/subscriptions/.../storageAccounts/acmeanalyticsgov",
-          "blobContainer": "streaming-raw",
-          "archiveNameFormat": "{Namespace}/{EventHub}/{PartitionId}/{Year}/{Month}/{Day}/{Hour}/{Minute}/{Second}"
+    "properties": {
+        "captureDescription": {
+            "enabled": true,
+            "encoding": "Avro",
+            "intervalInSeconds": 300,
+            "sizeLimitInBytes": 314572800,
+            "destination": {
+                "name": "EventHubArchive.AzureBlockBlob",
+                "properties": {
+                    "storageAccountResourceId": "/subscriptions/.../storageAccounts/acmeanalyticsgov",
+                    "blobContainer": "streaming-raw",
+                    "archiveNameFormat": "{Namespace}/{EventHub}/{PartitionId}/{Year}/{Month}/{Day}/{Hour}/{Minute}/{Second}"
+                }
+            }
         }
-      }
     }
-  }
 }
 ```
 
@@ -269,20 +269,20 @@ GROUP BY
 
 ```json
 {
-  "name": "input-eventhub",
-  "properties": {
-    "type": "Stream",
-    "datasource": {
-      "type": "Microsoft.EventHub/EventHubs",
-      "properties": {
-        "serviceBusNamespace": "acme-streaming",
-        "eventHubName": "iot-events",
-        "consumerGroupName": "stream-analytics-cg",
-        "authenticationMode": "Msi"
-      }
-    },
-    "serialization": { "type": "Json", "encoding": "UTF8" }
-  }
+    "name": "input-eventhub",
+    "properties": {
+        "type": "Stream",
+        "datasource": {
+            "type": "Microsoft.EventHub/EventHubs",
+            "properties": {
+                "serviceBusNamespace": "acme-streaming",
+                "eventHubName": "iot-events",
+                "consumerGroupName": "stream-analytics-cg",
+                "authenticationMode": "Msi"
+            }
+        },
+        "serialization": { "type": "Json", "encoding": "UTF8" }
+    }
 }
 ```
 
@@ -338,15 +338,15 @@ sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule require
 
 ### Topic mapping
 
-| MSK concept | Event Hubs equivalent | Notes |
-|---|---|---|
-| Topic | Event Hub | One topic per Event Hub |
-| Partition | Partition | Same concept; partition count set at creation |
-| Consumer group | Consumer group | Same concept |
-| Offset | Offset | Same concept |
-| Retention | Retention | 1-90 days (standard); unlimited (Dedicated) |
-| Compaction | Not supported natively | Use Delta Lake for compacted state |
-| Schema Registry | Azure Schema Registry | Avro, JSON Schema, Protobuf |
+| MSK concept     | Event Hubs equivalent  | Notes                                         |
+| --------------- | ---------------------- | --------------------------------------------- |
+| Topic           | Event Hub              | One topic per Event Hub                       |
+| Partition       | Partition              | Same concept; partition count set at creation |
+| Consumer group  | Consumer group         | Same concept                                  |
+| Offset          | Offset                 | Same concept                                  |
+| Retention       | Retention              | 1-90 days (standard); unlimited (Dedicated)   |
+| Compaction      | Not supported natively | Use Delta Lake for compacted state            |
+| Schema Registry | Azure Schema Registry  | Avro, JSON Schema, Protobuf                   |
 
 ### MSK Connect migration
 
@@ -399,6 +399,7 @@ def process_iot_events(events: func.EventHubEvent):
 ```
 
 **Key differences:**
+
 - Lambda receives base64-encoded Kinesis records; Azure Functions receives deserialized Event Hub events.
 - Lambda IAM role replaced by managed identity + Event Hubs Data Receiver role.
 - Lambda concurrency per shard replaced by Function scaling per partition.

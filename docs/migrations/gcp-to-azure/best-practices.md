@@ -28,15 +28,15 @@ Before committing to a migration, complete this assessment to scope the effort a
 
 ### Risk register template
 
-| Risk | Likelihood | Impact | Mitigation |
-|---|---|---|---|
-| GCS egress costs exceed budget | High | Medium | Use OneLake shortcuts for bridge phase; batch transfers during off-peak; negotiate egress waiver with Google |
-| BigQuery SQL dialect differences cause query failures | High | Medium | Automated SQL linting + conversion table; run dialect tests before cutover |
-| LookML-to-DAX conversion takes longer than estimated | High | Medium | Start with the simplest explores; allocate 2-4 weeks per LookML project |
-| BigQuery slot reservations cannot be released mid-commitment | Medium | High | Check commitment end dates; plan migration timeline around commitment boundaries |
-| Streaming pipeline migration causes data gap | Medium | High | Run dual-publish to both Pub/Sub and Event Hubs during transition |
-| Users resist Power BI after years of Looker | High | Medium | Conduct UX previews early; provide training; highlight Copilot as new capability |
-| Compliance gap during transition period | Low | Critical | Maintain dual-run until Azure ATO is granted; document control inheritance |
+| Risk                                                         | Likelihood | Impact   | Mitigation                                                                                                   |
+| ------------------------------------------------------------ | ---------- | -------- | ------------------------------------------------------------------------------------------------------------ |
+| GCS egress costs exceed budget                               | High       | Medium   | Use OneLake shortcuts for bridge phase; batch transfers during off-peak; negotiate egress waiver with Google |
+| BigQuery SQL dialect differences cause query failures        | High       | Medium   | Automated SQL linting + conversion table; run dialect tests before cutover                                   |
+| LookML-to-DAX conversion takes longer than estimated         | High       | Medium   | Start with the simplest explores; allocate 2-4 weeks per LookML project                                      |
+| BigQuery slot reservations cannot be released mid-commitment | Medium     | High     | Check commitment end dates; plan migration timeline around commitment boundaries                             |
+| Streaming pipeline migration causes data gap                 | Medium     | High     | Run dual-publish to both Pub/Sub and Event Hubs during transition                                            |
+| Users resist Power BI after years of Looker                  | High       | Medium   | Conduct UX previews early; provide training; highlight Copilot as new capability                             |
+| Compliance gap during transition period                      | Low        | Critical | Maintain dual-run until Azure ATO is granted; document control inheritance                                   |
 
 ---
 
@@ -85,14 +85,14 @@ LIMIT 50;
 
 ### 3. Map GCP IAM to Entra ID early
 
-| GCP role | Azure equivalent | Notes |
-|---|---|---|
-| `roles/bigquery.dataViewer` | Unity Catalog `SELECT` + RBAC `Storage Blob Data Reader` | Read access to data |
-| `roles/bigquery.dataEditor` | Unity Catalog `MODIFY` + RBAC `Storage Blob Data Contributor` | Write access |
-| `roles/bigquery.jobUser` | Databricks SQL Warehouse `CAN_USE` | Permission to run queries |
-| `roles/bigquery.admin` | Unity Catalog `ALL PRIVILEGES` + Workspace Admin | Full control |
-| Service account | User-assigned managed identity | No key management needed |
-| Workload Identity Federation | Managed identity federated credentials | For CI/CD (GitHub OIDC) |
+| GCP role                     | Azure equivalent                                              | Notes                     |
+| ---------------------------- | ------------------------------------------------------------- | ------------------------- |
+| `roles/bigquery.dataViewer`  | Unity Catalog `SELECT` + RBAC `Storage Blob Data Reader`      | Read access to data       |
+| `roles/bigquery.dataEditor`  | Unity Catalog `MODIFY` + RBAC `Storage Blob Data Contributor` | Write access              |
+| `roles/bigquery.jobUser`     | Databricks SQL Warehouse `CAN_USE`                            | Permission to run queries |
+| `roles/bigquery.admin`       | Unity Catalog `ALL PRIVILEGES` + Workspace Admin              | Full control              |
+| Service account              | User-assigned managed identity                                | No key management needed  |
+| Workload Identity Federation | Managed identity federated credentials                        | For CI/CD (GitHub OIDC)   |
 
 ---
 
@@ -113,6 +113,7 @@ BigQuery StandardSQL and Databricks SQL are both ANSI SQL-based but have materia
 **Common mistake:** Assuming SQL will "just work" after replacing table names.
 
 **Best practice:**
+
 1. Run every scheduled query and view definition through a dialect linter
 2. Address the top 10 most common conversions first: `DATE_SUB`, `SAFE_CAST`, `UNNEST`, `STRUCT`, `FORMAT_DATE`
 3. Use dbt macros to abstract dialect-specific functions, making future migrations easier
@@ -124,6 +125,7 @@ BigQuery ML's `CREATE MODEL` and `ML.PREDICT()` in SQL is simpler than the MLflo
 **Common mistake:** Trying to replicate the exact BigQuery ML workflow on Azure.
 
 **Best practice:** Accept that the Azure ML workflow is different but more powerful:
+
 - Simple models (linear regression, classification): Use Databricks AutoML or Azure AutoML
 - Complex models: Use MLflow for experiment tracking and model registry
 - SQL inference: Use `ai_query()` in Databricks SQL for hosted model inference
@@ -133,6 +135,7 @@ BigQuery ML's `CREATE MODEL` and `ML.PREDICT()` in SQL is simpler than the MLflo
 BigQuery materialized views refresh on write (automatic) or on schedule. Databricks materialized views and dbt incremental models have different refresh semantics.
 
 **Best practice:**
+
 - Automatic refresh-on-write MVs: Port to Delta Live Tables (DLT) expectations
 - Schedule-refresh MVs: Port to dbt incremental models with a Databricks Workflow schedule
 - Always-fresh MVs: Evaluate if a standard Delta table with `OPTIMIZE` is sufficient
@@ -179,24 +182,24 @@ GCP charges $0.12/GB for standard egress to the internet (including to Azure). F
 
 **Strategies to reduce egress costs:**
 
-| Strategy | Savings | Complexity | Best for |
-|---|---|---|---|
-| OneLake shortcuts (zero-copy bridge) | 100% during bridge | Low | Bridge phase: query data in place |
-| Negotiate egress waiver with Google | 50-100% | Low (contractual) | Migrations with existing Google contract |
-| Transfer during off-peak | 10-20% | Low | Large batch transfers |
-| Compress before transfer (Snappy/ZSTD) | 30-60% data reduction | Low | Parquet exports already compressed |
-| Google Transfer Appliance (physical) | ~$0 egress per TB | High | > 50 TB datasets |
-| Export to GCS Nearline first, then transfer | Lower storage while waiting | Low | Multi-week staged migration |
+| Strategy                                    | Savings                     | Complexity        | Best for                                 |
+| ------------------------------------------- | --------------------------- | ----------------- | ---------------------------------------- |
+| OneLake shortcuts (zero-copy bridge)        | 100% during bridge          | Low               | Bridge phase: query data in place        |
+| Negotiate egress waiver with Google         | 50-100%                     | Low (contractual) | Migrations with existing Google contract |
+| Transfer during off-peak                    | 10-20%                      | Low               | Large batch transfers                    |
+| Compress before transfer (Snappy/ZSTD)      | 30-60% data reduction       | Low               | Parquet exports already compressed       |
+| Google Transfer Appliance (physical)        | ~$0 egress per TB           | High              | > 50 TB datasets                         |
+| Export to GCS Nearline first, then transfer | Lower storage while waiting | Low               | Multi-week staged migration              |
 
 ### Transfer parallelism recommendations
 
-| Data volume | Recommended approach | Estimated time |
-|---|---|---|
-| < 1 TB | AzCopy with GCS interop | 1-2 hours |
-| 1-10 TB | ADF Copy Activity (32-64 DIU) | 4-12 hours |
-| 10-50 TB | ADF Copy Activity (128 DIU) + parallel pipelines | 1-3 days |
-| 50-200 TB | ADF + Azure Data Box | 1-2 weeks (physical shipping) |
-| > 200 TB | Google Transfer Appliance + Azure Data Box | 2-4 weeks (physical both sides) |
+| Data volume | Recommended approach                             | Estimated time                  |
+| ----------- | ------------------------------------------------ | ------------------------------- |
+| < 1 TB      | AzCopy with GCS interop                          | 1-2 hours                       |
+| 1-10 TB     | ADF Copy Activity (32-64 DIU)                    | 4-12 hours                      |
+| 10-50 TB    | ADF Copy Activity (128 DIU) + parallel pipelines | 1-3 days                        |
+| 50-200 TB   | ADF + Azure Data Box                             | 1-2 weeks (physical shipping)   |
+| > 200 TB    | Google Transfer Appliance + Azure Data Box       | 2-4 weeks (physical both sides) |
 
 ---
 
@@ -310,17 +313,17 @@ Azure becomes primary:
 
 ### Minimum viable migration team
 
-| Role | Count | Responsibilities |
-|---|---|---|
-| Migration lead / architect | 1 | Overall plan, decision-making, stakeholder communication |
-| Data engineer (BigQuery specialist) | 1-2 | BigQuery inventory, SQL conversion, dbt model authoring |
-| Data engineer (Azure / Databricks) | 1-2 | Databricks setup, Unity Catalog, ADF pipelines, Delta optimization |
-| BI engineer (Looker + Power BI) | 1-2 | LookML-to-DAX conversion, dashboard rebuild, Direct Lake config |
-| Streaming engineer | 0-1 | Event Hubs, Stream Analytics, Structured Streaming (if streaming workloads exist) |
-| Platform / infra engineer | 1 | Bicep IaC, networking (Private Link), CI/CD, Azure Monitor |
-| Security / compliance | 1 | ATO documentation, Purview classifications, access controls, audit evidence |
-| Change management | 1 | User training, communication plan, feedback collection |
-| GCP SME | 1 | Knowledge transfer, BigQuery ML models, Dataflow pipelines, Looker LookML |
+| Role                                | Count | Responsibilities                                                                  |
+| ----------------------------------- | ----- | --------------------------------------------------------------------------------- |
+| Migration lead / architect          | 1     | Overall plan, decision-making, stakeholder communication                          |
+| Data engineer (BigQuery specialist) | 1-2   | BigQuery inventory, SQL conversion, dbt model authoring                           |
+| Data engineer (Azure / Databricks)  | 1-2   | Databricks setup, Unity Catalog, ADF pipelines, Delta optimization                |
+| BI engineer (Looker + Power BI)     | 1-2   | LookML-to-DAX conversion, dashboard rebuild, Direct Lake config                   |
+| Streaming engineer                  | 0-1   | Event Hubs, Stream Analytics, Structured Streaming (if streaming workloads exist) |
+| Platform / infra engineer           | 1     | Bicep IaC, networking (Private Link), CI/CD, Azure Monitor                        |
+| Security / compliance               | 1     | ATO documentation, Purview classifications, access controls, audit evidence       |
+| Change management                   | 1     | User training, communication plan, feedback collection                            |
+| GCP SME                             | 1     | Knowledge transfer, BigQuery ML models, Dataflow pipelines, Looker LookML         |
 
 ### Scale for larger migrations
 
@@ -336,11 +339,11 @@ For migrations with 50+ BigQuery datasets, 10+ Looker projects, and streaming wo
 ## Timeline estimation
 
 | Migration scope | BigQuery datasets | Looker projects | Dataflow pipelines | Estimated duration |
-|---|---|---|---|---|
-| Small | 5-15 | 1-2 | 0-3 | 12-18 weeks |
-| Medium | 15-50 | 3-5 | 3-10 | 20-30 weeks |
-| Large | 50-150 | 5-15 | 10-30 | 30-44 weeks |
-| Enterprise | 150+ | 15+ | 30+ | 44-60 weeks |
+| --------------- | ----------------- | --------------- | ------------------ | ------------------ |
+| Small           | 5-15              | 1-2             | 0-3                | 12-18 weeks        |
+| Medium          | 15-50             | 3-5             | 3-10               | 20-30 weeks        |
+| Large           | 50-150            | 5-15            | 10-30              | 30-44 weeks        |
+| Enterprise      | 150+              | 15+             | 30+                | 44-60 weeks        |
 
 Multiply by 1.3x for federal/government deployments (ATO overhead, clearance requirements, procurement delays).
 
@@ -364,29 +367,29 @@ Multiply by 1.3x for federal/government deployments (ATO overhead, clearance req
 
 ### Technical risks
 
-| Risk | Probability | Mitigation |
-|---|---|---|
-| Query performance regression on Databricks | Medium | Benchmark top 50 queries before committing; tune Z-ordering and Photon |
-| Data loss during transfer | Low | Checksums on every Parquet file; row-count reconciliation per table |
-| dbt model produces different results | Medium | 2-week parallel run with automated reconciliation reports |
-| Streaming data gap during Pub/Sub to Event Hubs switch | Medium | Dual-publish pattern: send events to both during transition |
+| Risk                                                   | Probability | Mitigation                                                             |
+| ------------------------------------------------------ | ----------- | ---------------------------------------------------------------------- |
+| Query performance regression on Databricks             | Medium      | Benchmark top 50 queries before committing; tune Z-ordering and Photon |
+| Data loss during transfer                              | Low         | Checksums on every Parquet file; row-count reconciliation per table    |
+| dbt model produces different results                   | Medium      | 2-week parallel run with automated reconciliation reports              |
+| Streaming data gap during Pub/Sub to Event Hubs switch | Medium      | Dual-publish pattern: send events to both during transition            |
 
 ### Organizational risks
 
-| Risk | Probability | Mitigation |
-|---|---|---|
-| User resistance to Power BI | High | Early UX previews; highlight Copilot; training sessions |
-| Loss of Looker / GCP tribal knowledge | Medium | Document everything before decommission; retain GCP SME through Phase 7 |
-| Budget overrun (egress + dual-run costs) | Medium | Include egress in budget; negotiate with Google; minimize dual-run duration |
-| Timeline slip (cascading delays across phases) | High | Phase gates with go/no-go criteria; pilot first to calibrate velocity |
+| Risk                                           | Probability | Mitigation                                                                  |
+| ---------------------------------------------- | ----------- | --------------------------------------------------------------------------- |
+| User resistance to Power BI                    | High        | Early UX previews; highlight Copilot; training sessions                     |
+| Loss of Looker / GCP tribal knowledge          | Medium      | Document everything before decommission; retain GCP SME through Phase 7     |
+| Budget overrun (egress + dual-run costs)       | Medium      | Include egress in budget; negotiate with Google; minimize dual-run duration |
+| Timeline slip (cascading delays across phases) | High        | Phase gates with go/no-go criteria; pilot first to calibrate velocity       |
 
 ### Compliance risks
 
-| Risk | Probability | Mitigation |
-|---|---|---|
-| Gap in ATO during transition | Low | Maintain dual-run until Azure ATO granted; document control inheritance |
-| Audit evidence loss from GCP | Medium | Archive Cloud Audit Logs, IAM policies, VPC Service Controls before decommission |
-| Data residency violation during transfer | Low | Use Azure Government; verify data never transits non-compliant regions |
+| Risk                                     | Probability | Mitigation                                                                       |
+| ---------------------------------------- | ----------- | -------------------------------------------------------------------------------- |
+| Gap in ATO during transition             | Low         | Maintain dual-run until Azure ATO granted; document control inheritance          |
+| Audit evidence loss from GCP             | Medium      | Archive Cloud Audit Logs, IAM policies, VPC Service Controls before decommission |
+| Data residency violation during transfer | Low         | Use Azure Government; verify data never transits non-compliant regions           |
 
 ---
 

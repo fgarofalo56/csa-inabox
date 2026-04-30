@@ -49,20 +49,20 @@ Open `sample-ontology.yaml` (or your own export) and identify:
 
 For the case-management ontology the inventory looks like this:
 
-| Object Type | Properties | Primary Key | Classification | Role |
-|---|---|---|---|---|
-| Case | 8 | `case_id` | CUI-Specified | Dimension |
-| Party | 5 | `party_id` | PII | Dimension |
-| Evidence | 7 | `evidence_id` | CUI-Specified | Fact |
-| Action | 6 | `action_id` | Internal | Fact |
+| Object Type | Properties | Primary Key   | Classification | Role      |
+| ----------- | ---------- | ------------- | -------------- | --------- |
+| Case        | 8          | `case_id`     | CUI-Specified  | Dimension |
+| Party       | 5          | `party_id`    | PII            | Dimension |
+| Evidence    | 7          | `evidence_id` | CUI-Specified  | Fact      |
+| Action      | 6          | `action_id`   | Internal       | Fact      |
 
 Link types:
 
-| Source | Target | Name | Cardinality |
-|---|---|---|---|
-| Case | Party | involves | many_to_many |
-| Case | Evidence | contains | one_to_many |
-| Case | Action | triggers | one_to_many |
+| Source | Target   | Name     | Cardinality  |
+| ------ | -------- | -------- | ------------ |
+| Case   | Party    | involves | many_to_many |
+| Case   | Evidence | contains | one_to_many  |
+| Case   | Action   | triggers | one_to_many  |
 
 ### 1.2 Create a mapping spreadsheet
 
@@ -93,12 +93,12 @@ For each Foundry object type, create a Purview glossary term that captures the b
 
 Map Foundry markings to Purview classifications:
 
-| Foundry marking | Purview classification |
-|---|---|
-| `pii` | Microsoft.Personal.All (PII) |
-| `cui_basic` | CUI-Basic (custom) |
-| `cui_specified` | CUI-Specified (custom) |
-| `phi` | Microsoft.Health (PHI) |
+| Foundry marking | Purview classification       |
+| --------------- | ---------------------------- |
+| `pii`           | Microsoft.Personal.All (PII) |
+| `cui_basic`     | CUI-Basic (custom)           |
+| `cui_specified` | CUI-Specified (custom)       |
+| `phi`           | Microsoft.Health (PHI)       |
 
 Create any custom classifications (CUI-Basic, CUI-Specified) in Purview before running the automation script.
 
@@ -265,73 +265,74 @@ Use a `schema.yml` file alongside the models to document every column and add da
 version: 2
 
 models:
-  - name: dim_case
-    description: >
-      A legal, investigative, or adjudicative matter tracked from intake
-      through disposition. Migrated from Foundry object type "Case".
-    columns:
-      - name: case_id
-        description: Unique identifier for the case.
-        data_tests:
-          - unique
-          - not_null
-      - name: case_number
-        description: Agency-assigned human-readable identifier.
-        data_tests:
-          - not_null
-      - name: status
-        description: Current case status.
-        data_tests:
-          - accepted_values:
-              values: ["open", "under_review", "closed", "appealed"]
-      - name: priority
-        description: Case priority level.
-        data_tests:
-          - accepted_values:
-              values: ["low", "normal", "high", "urgent"]
-      - name: opened_at
-        description: Timestamp when the case was opened.
-        data_tests:
-          - not_null
-      - name: closed_at
-        description: Timestamp when the case was closed. Null if still open.
-      - name: assigned_officer_id
-        description: ID of the assigned case officer. PII -- must be masked in lower environments.
-      - name: jurisdiction
-        description: Jurisdiction handling the case.
-      - name: days_open
-        description: Computed property -- number of days the case has been open.
+    - name: dim_case
+      description: >
+          A legal, investigative, or adjudicative matter tracked from intake
+          through disposition. Migrated from Foundry object type "Case".
+      columns:
+          - name: case_id
+            description: Unique identifier for the case.
+            data_tests:
+                - unique
+                - not_null
+          - name: case_number
+            description: Agency-assigned human-readable identifier.
+            data_tests:
+                - not_null
+          - name: status
+            description: Current case status.
+            data_tests:
+                - accepted_values:
+                      values: ["open", "under_review", "closed", "appealed"]
+          - name: priority
+            description: Case priority level.
+            data_tests:
+                - accepted_values:
+                      values: ["low", "normal", "high", "urgent"]
+          - name: opened_at
+            description: Timestamp when the case was opened.
+            data_tests:
+                - not_null
+          - name: closed_at
+            description: Timestamp when the case was closed. Null if still open.
+          - name: assigned_officer_id
+            description: ID of the assigned case officer. PII -- must be masked in lower environments.
+          - name: jurisdiction
+            description: Jurisdiction handling the case.
+          - name: days_open
+            description: Computed property -- number of days the case has been open.
 
-  - name: fact_evidence
-    description: >
-      A document, digital artifact, or physical item preserved under
-      chain-of-custody for a case. Migrated from Foundry object type "Evidence".
-    columns:
-      - name: evidence_id
-        description: Unique identifier for the evidence item.
-        data_tests:
-          - unique
-          - not_null
-      - name: case_id
-        description: Foreign key to dim_case.
-        data_tests:
-          - not_null
-          - relationships:
-              to: ref('dim_case')
-              field: case_id
-      - name: evidence_type
-        description: Category of evidence.
-        data_tests:
-          - accepted_values:
-              values: ["document", "digital_media", "physical", "testimony"]
-      - name: collected_at
-        description: Timestamp when evidence was collected.
-      - name: collected_by
-        description: Identifier of the person who collected the evidence. PII.
-      - name: storage_location
-        description: Physical or logical storage location.
-      - name: chain_of_custody_hash
-        description: Tamper-evident audit hash for chain-of-custody verification.
+    - name: fact_evidence
+      description: >
+          A document, digital artifact, or physical item preserved under
+          chain-of-custody for a case. Migrated from Foundry object type "Evidence".
+      columns:
+          - name: evidence_id
+            description: Unique identifier for the evidence item.
+            data_tests:
+                - unique
+                - not_null
+          - name: case_id
+            description: Foreign key to dim_case.
+            data_tests:
+                - not_null
+                - relationships:
+                      to: ref('dim_case')
+                      field: case_id
+          - name: evidence_type
+            description: Category of evidence.
+            data_tests:
+                - accepted_values:
+                      values:
+                          ["document", "digital_media", "physical", "testimony"]
+          - name: collected_at
+            description: Timestamp when evidence was collected.
+          - name: collected_by
+            description: Identifier of the person who collected the evidence. PII.
+          - name: storage_location
+            description: Physical or logical storage location.
+          - name: chain_of_custody_hash
+            description: Tamper-evident audit hash for chain-of-custody verification.
 ```
 
 > **Foundry comparison.** Foundry properties include inline type constraints and classifications. In dbt, column descriptions live in `schema.yml` and data quality tests (`unique`, `not_null`, `accepted_values`, `relationships`) replace Foundry's built-in property validation. The advantage is that dbt tests run in CI, giving you a gate before bad data reaches consumers.
@@ -344,11 +345,11 @@ Foundry link types express how object types relate to one another. In dbt these 
 
 ### 4.1 Map Foundry link types to dbt relationships
 
-| Foundry Link | Cardinality | dbt Implementation |
-|---|---|---|
-| Case --involves--> Party | many_to_many | Bridge table `bridge_case_party` with two FK tests |
-| Case --contains--> Evidence | one_to_many | FK column `case_id` on `fact_evidence` with relationship test |
-| Case --triggers--> Action | one_to_many | FK column `case_id` on `fact_action` with relationship test |
+| Foundry Link                | Cardinality  | dbt Implementation                                            |
+| --------------------------- | ------------ | ------------------------------------------------------------- |
+| Case --involves--> Party    | many_to_many | Bridge table `bridge_case_party` with two FK tests            |
+| Case --contains--> Evidence | one_to_many  | FK column `case_id` on `fact_evidence` with relationship test |
+| Case --triggers--> Action   | one_to_many  | FK column `case_id` on `fact_action` with relationship test   |
 
 ### 4.2 One-to-many relationships
 
@@ -378,23 +379,23 @@ FROM source
 Add tests in `schema.yml`:
 
 ```yaml
-  - name: bridge_case_party
-    description: >
+- name: bridge_case_party
+  description: >
       Many-to-many bridge between cases and parties.
       Replaces Foundry link type "involves".
-    columns:
+  columns:
       - name: case_id
         data_tests:
-          - not_null
-          - relationships:
-              to: ref('dim_case')
-              field: case_id
+            - not_null
+            - relationships:
+                  to: ref('dim_case')
+                  field: case_id
       - name: party_id
         data_tests:
-          - not_null
-          - relationships:
-              to: ref('dim_party')
-              field: party_id
+            - not_null
+            - relationships:
+                  to: ref('dim_party')
+                  field: party_id
 ```
 
 ### 4.4 Using ref() for link traversal
@@ -427,65 +428,65 @@ A data contract formalizes the schema, quality guarantees, SLA, and compliance r
 apiVersion: datacontract/v1.0
 kind: DataContract
 metadata:
-  name: case-data-product
-  version: 1.0.0
-  owner: case_management_domain_team
-  domain: case-management
-  description: >
-    Curated case-management data product exposing dim_case, dim_party,
-    fact_evidence, and fact_action for downstream analytics and reporting.
+    name: case-data-product
+    version: 1.0.0
+    owner: case_management_domain_team
+    domain: case-management
+    description: >
+        Curated case-management data product exposing dim_case, dim_party,
+        fact_evidence, and fact_action for downstream analytics and reporting.
 
 schema:
-  models:
-    - ref: dim_case
-      primary_key: case_id
-      columns: 8
-    - ref: dim_party
-      primary_key: party_id
-      columns: 5
-    - ref: fact_evidence
-      primary_key: evidence_id
-      foreign_keys: [case_id]
-      columns: 7
-    - ref: fact_action
-      primary_key: action_id
-      foreign_keys: [case_id]
-      columns: 6
+    models:
+        - ref: dim_case
+          primary_key: case_id
+          columns: 8
+        - ref: dim_party
+          primary_key: party_id
+          columns: 5
+        - ref: fact_evidence
+          primary_key: evidence_id
+          foreign_keys: [case_id]
+          columns: 7
+        - ref: fact_action
+          primary_key: action_id
+          foreign_keys: [case_id]
+          columns: 6
 
 quality:
-  tests:
-    - type: not_null
-      scope: all_primary_keys
-    - type: unique
-      scope: all_primary_keys
-    - type: referential_integrity
-      scope: all_foreign_keys
-    - type: accepted_values
-      model: dim_case
-      column: status
-      values: [open, under_review, closed, appealed]
-  freshness:
-    max_staleness: 24h
-    check_column: opened_at
-    model: dim_case
+    tests:
+        - type: not_null
+          scope: all_primary_keys
+        - type: unique
+          scope: all_primary_keys
+        - type: referential_integrity
+          scope: all_foreign_keys
+        - type: accepted_values
+          model: dim_case
+          column: status
+          values: [open, under_review, closed, appealed]
+    freshness:
+        max_staleness: 24h
+        check_column: opened_at
+        model: dim_case
 
 sla:
-  availability: 99.5%
-  refresh_cadence: daily
-  support_contact: case-data-team@agency.gov
+    availability: 99.5%
+    refresh_cadence: daily
+    support_contact: case-data-team@agency.gov
 
 compliance:
-  frameworks: [fedramp_high, cmmc_2_l2]
-  classifications:
-    - model: dim_case
-      classification: CUI-Specified
-    - model: dim_party
-      classification: PII
-    - model: fact_evidence
-      classification: CUI-Specified
-    - model: fact_action
-      classification: Internal
-  data_residency: us-gov-regions-only
+    frameworks: [fedramp_high, cmmc_2_l2]
+    classifications:
+        - model: dim_case
+          classification: CUI-Specified
+        - model: dim_party
+          classification: PII
+        - model: fact_evidence
+          classification: CUI-Specified
+        - model: fact_action
+          classification: Internal
+    data_residency: us-gov-regions-only
 ```
 
 ### 5.1 Wire the contract to CI validation
@@ -499,9 +500,9 @@ Add a CI step that validates the contract against dbt test results:
 
 - name: Validate data contract
   run: |
-    python scripts/validate_contract.py \
-      --contract data-products/case/contract.yaml \
-      --dbt-results target/run_results.json
+      python scripts/validate_contract.py \
+        --contract data-products/case/contract.yaml \
+        --dbt-results target/run_results.json
 ```
 
 > **Foundry comparison.** Foundry enforces its ontology contract implicitly -- if a backing dataset violates the schema, pipeline builds fail. With dbt + a contract YAML, you get the same enforcement but with the added benefits of version-controlled contracts, CI gating, and SLA tracking that are visible to non-engineers.
@@ -522,12 +523,12 @@ The Power BI semantic model replaces the Foundry Workshop/Slate presentation lay
 
 Create the following relationships in the Power BI model view:
 
-| Relationship | From (FK) | To (PK) | Cardinality |
-|---|---|---|---|
-| Evidence to Case | `fact_evidence.case_id` | `dim_case.case_id` | Many-to-one |
-| Action to Case | `fact_action.case_id` | `dim_case.case_id` | Many-to-one |
-| Bridge to Case | `bridge_case_party.case_id` | `dim_case.case_id` | Many-to-one |
-| Bridge to Party | `bridge_case_party.party_id` | `dim_party.party_id` | Many-to-one |
+| Relationship     | From (FK)                    | To (PK)              | Cardinality |
+| ---------------- | ---------------------------- | -------------------- | ----------- |
+| Evidence to Case | `fact_evidence.case_id`      | `dim_case.case_id`   | Many-to-one |
+| Action to Case   | `fact_action.case_id`        | `dim_case.case_id`   | Many-to-one |
+| Bridge to Case   | `bridge_case_party.case_id`  | `dim_case.case_id`   | Many-to-one |
+| Bridge to Party  | `bridge_case_party.party_id` | `dim_party.party_id` | Many-to-one |
 
 These relationships mirror the Foundry link types exactly. The bridge table handles the many-to-many relationship between `Case` and `Party`.
 
@@ -603,19 +604,19 @@ In Power BI Desktop, open the Model view and confirm:
 
 Use the following checklist to confirm full migration:
 
-| Foundry Component | Azure Equivalent | Status |
-|---|---|---|
-| Object type `Case` | Purview term + `dim_case` | [ ] |
-| Object type `Party` | Purview term + `dim_party` | [ ] |
-| Object type `Evidence` | Purview term + `fact_evidence` | [ ] |
-| Object type `Action` | Purview term + `fact_action` | [ ] |
-| Link: Case--involves-->Party | `bridge_case_party` + PBI relationship | [ ] |
-| Link: Case--contains-->Evidence | FK `case_id` + dbt relationship test | [ ] |
-| Link: Case--triggers-->Action | FK `case_id` + dbt relationship test | [ ] |
-| Classifications (PII, CUI) | Purview classifications | [ ] |
-| Computed property: days open | DAX measure `Days Open` | [ ] |
-| Action: EscalateOverdueCase | Data Activator rule (separate migration) | [ ] |
-| Data contract | `contract.yaml` + CI validation | [ ] |
+| Foundry Component               | Azure Equivalent                         | Status |
+| ------------------------------- | ---------------------------------------- | ------ |
+| Object type `Case`              | Purview term + `dim_case`                | [ ]    |
+| Object type `Party`             | Purview term + `dim_party`               | [ ]    |
+| Object type `Evidence`          | Purview term + `fact_evidence`           | [ ]    |
+| Object type `Action`            | Purview term + `fact_action`             | [ ]    |
+| Link: Case--involves-->Party    | `bridge_case_party` + PBI relationship   | [ ]    |
+| Link: Case--contains-->Evidence | FK `case_id` + dbt relationship test     | [ ]    |
+| Link: Case--triggers-->Action   | FK `case_id` + dbt relationship test     | [ ]    |
+| Classifications (PII, CUI)      | Purview classifications                  | [ ]    |
+| Computed property: days open    | DAX measure `Days Open`                  | [ ]    |
+| Action: EscalateOverdueCase     | Data Activator rule (separate migration) | [ ]    |
+| Data contract                   | `contract.yaml` + CI validation          | [ ]    |
 
 ---
 
@@ -623,14 +624,14 @@ Use the following checklist to confirm full migration:
 
 You have migrated a Foundry ontology with four object types, three link types, and one automated action to a fully governed Azure-native stack:
 
-| Layer | Foundry | Azure |
-|---|---|---|
-| Governance catalog | Ontology Manager | Purview Unified Catalog |
-| Semantic/transform | Ontology + Contour | dbt models + `schema.yml` |
-| Relationships | Link Types | dbt relationship tests + Power BI relationships |
-| Data quality | Ontology constraints | dbt tests + data contract |
-| Presentation | Workshop / Slate | Power BI (Direct Lake) |
-| Automation | Foundry Actions | Data Activator + Power Automate |
+| Layer              | Foundry              | Azure                                           |
+| ------------------ | -------------------- | ----------------------------------------------- |
+| Governance catalog | Ontology Manager     | Purview Unified Catalog                         |
+| Semantic/transform | Ontology + Contour   | dbt models + `schema.yml`                       |
+| Relationships      | Link Types           | dbt relationship tests + Power BI relationships |
+| Data quality       | Ontology constraints | dbt tests + data contract                       |
+| Presentation       | Workshop / Slate     | Power BI (Direct Lake)                          |
+| Automation         | Foundry Actions      | Data Activator + Power Automate                 |
 
 Each component is independently version-controlled, testable in CI, and governed by Purview -- giving your agency the same analytical power as Foundry with full control over your data platform.
 

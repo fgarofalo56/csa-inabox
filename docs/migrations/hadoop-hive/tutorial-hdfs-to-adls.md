@@ -26,15 +26,15 @@ By the end of this tutorial, you will have:
 
 ### Estimated time
 
-| Step | Duration |
-|---|---|
-| Step 1: Provision Azure resources | 15 minutes |
-| Step 2: Configure ABFS driver on Hadoop | 30 minutes |
-| Step 3: Run DistCp for bulk transfer | Varies (1 hour per 10 TB on ExpressRoute) |
-| Step 4: Convert to Delta Lake | 30-60 minutes |
-| Step 5: Register in Unity Catalog | 15 minutes |
-| Step 6: Validate data integrity | 30 minutes |
-| **Total (excluding transfer time)** | **~2.5 hours + transfer** |
+| Step                                    | Duration                                  |
+| --------------------------------------- | ----------------------------------------- |
+| Step 1: Provision Azure resources       | 15 minutes                                |
+| Step 2: Configure ABFS driver on Hadoop | 30 minutes                                |
+| Step 3: Run DistCp for bulk transfer    | Varies (1 hour per 10 TB on ExpressRoute) |
+| Step 4: Convert to Delta Lake           | 30-60 minutes                             |
+| Step 5: Register in Unity Catalog       | 15 minutes                                |
+| Step 6: Validate data integrity         | 30 minutes                                |
+| **Total (excluding transfer time)**     | **~2.5 hours + transfer**                 |
 
 ---
 
@@ -520,13 +520,13 @@ ALTER TABLE migration.silver.orders SET TBLPROPERTIES (
 
 ### Troubleshooting
 
-| Problem | Solution |
-|---|---|
-| DistCp fails with `ClassNotFoundException` | ABFS JARs not on Hadoop classpath; re-install on all nodes |
-| DistCp extremely slow | Check network bandwidth; consider Data Box for >100 TB |
-| Delta conversion OOM | Increase Databricks cluster size; process tables one at a time |
-| Row count mismatch after conversion | Check for `_SUCCESS`, `.hive-staging*`, and `.crc` files in raw |
-| Schema mismatch | Complex types (STRUCT, MAP) may serialize differently; verify manually |
+| Problem                                    | Solution                                                               |
+| ------------------------------------------ | ---------------------------------------------------------------------- |
+| DistCp fails with `ClassNotFoundException` | ABFS JARs not on Hadoop classpath; re-install on all nodes             |
+| DistCp extremely slow                      | Check network bandwidth; consider Data Box for >100 TB                 |
+| Delta conversion OOM                       | Increase Databricks cluster size; process tables one at a time         |
+| Row count mismatch after conversion        | Check for `_SUCCESS`, `.hive-staging*`, and `.crc` files in raw        |
+| Schema mismatch                            | Complex types (STRUCT, MAP) may serialize differently; verify manually |
 
 ---
 

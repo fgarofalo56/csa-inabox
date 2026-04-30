@@ -7,7 +7,7 @@
 ---
 
 !!! tip "Expanded Migration Center Available"
-    This playbook is the core migration reference. For the complete Foundry-to-Azure migration package — including white papers, deep-dive guides, tutorials, benchmarks, and federal-specific guidance — visit the **[Palantir Foundry Migration Center](palantir-foundry/index.md)**.
+This playbook is the core migration reference. For the complete Foundry-to-Azure migration package — including white papers, deep-dive guides, tutorials, benchmarks, and federal-specific guidance — visit the **[Palantir Foundry Migration Center](palantir-foundry/index.md)**.
 
     **Quick links:**
 

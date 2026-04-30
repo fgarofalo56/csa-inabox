@@ -19,6 +19,7 @@
 ### Test methodology
 
 For each benchmark category:
+
 1. Define a representative workload
 2. Run on Databricks with a common cluster configuration
 3. Run on Fabric with an equivalent capacity SKU
@@ -31,14 +32,14 @@ For each benchmark category:
 
 ### 2.1 Benchmark: TPC-DS-like analytical queries on 10 TB Delta dataset
 
-| Query type | Databricks (Photon, 8-node i3.xlarge) | Databricks (non-Photon, 8-node) | Fabric Spark (F64) | Notes |
-| --- | --- | --- | --- | --- |
-| Simple scan + filter | 4.2s | 8.1s | 9.5s | Photon excels at scan-heavy queries |
-| Multi-table join (3 tables) | 12.8s | 28.3s | 31.0s | Photon vectorized join is fast |
-| Window function (RANK, LAG) | 8.5s | 18.2s | 19.8s | Similar gap |
-| Heavy aggregation (GROUP BY 10 cols) | 6.1s | 14.7s | 15.3s | Photon aggregation is optimized |
-| Complex subquery (correlated) | 22.4s | 45.8s | 48.2s | All Spark; Photon less dominant |
-| String manipulation (regex, concat) | 9.3s | 15.6s | 16.1s | Photon string handling is faster |
+| Query type                           | Databricks (Photon, 8-node i3.xlarge) | Databricks (non-Photon, 8-node) | Fabric Spark (F64) | Notes                               |
+| ------------------------------------ | ------------------------------------- | ------------------------------- | ------------------ | ----------------------------------- |
+| Simple scan + filter                 | 4.2s                                  | 8.1s                            | 9.5s               | Photon excels at scan-heavy queries |
+| Multi-table join (3 tables)          | 12.8s                                 | 28.3s                           | 31.0s              | Photon vectorized join is fast      |
+| Window function (RANK, LAG)          | 8.5s                                  | 18.2s                           | 19.8s              | Similar gap                         |
+| Heavy aggregation (GROUP BY 10 cols) | 6.1s                                  | 14.7s                           | 15.3s              | Photon aggregation is optimized     |
+| Complex subquery (correlated)        | 22.4s                                 | 45.8s                           | 48.2s              | All Spark; Photon less dominant     |
+| String manipulation (regex, concat)  | 9.3s                                  | 15.6s                           | 16.1s              | Photon string handling is faster    |
 
 ### 2.2 Analysis
 
@@ -58,13 +59,13 @@ For each benchmark category:
 
 ### 3.1 Benchmark: Power BI-style queries on 500 GB semantic model
 
-| Query pattern | DBSQL Pro (Medium warehouse) | DBSQL Serverless | Fabric SQL endpoint | Fabric Direct Lake |
-| --- | --- | --- | --- | --- |
-| Single-table scan (dashboard card) | 1.8s | 2.1s | 2.5s | 0.3s |
-| Star-schema join (fact + 3 dims) | 3.2s | 3.8s | 4.1s | 0.8s |
-| Year-over-year comparison | 4.5s | 5.2s | 5.8s | 1.2s |
-| Top-N with filter | 2.1s | 2.5s | 2.9s | 0.5s |
-| Complex DAX-equivalent aggregation | 5.8s | 6.5s | 7.2s | 1.5s |
+| Query pattern                      | DBSQL Pro (Medium warehouse) | DBSQL Serverless | Fabric SQL endpoint | Fabric Direct Lake |
+| ---------------------------------- | ---------------------------- | ---------------- | ------------------- | ------------------ |
+| Single-table scan (dashboard card) | 1.8s                         | 2.1s             | 2.5s                | 0.3s               |
+| Star-schema join (fact + 3 dims)   | 3.2s                         | 3.8s             | 4.1s                | 0.8s               |
+| Year-over-year comparison          | 4.5s                         | 5.2s             | 5.8s                | 1.2s               |
+| Top-N with filter                  | 2.1s                         | 2.5s             | 2.9s                | 0.5s               |
+| Complex DAX-equivalent aggregation | 5.8s                         | 6.5s             | 7.2s                | 1.5s               |
 
 ### 3.2 Analysis
 
@@ -74,12 +75,12 @@ For each benchmark category:
 
 ### 3.3 Cost-per-query comparison
 
-| Platform | Query cost (estimated, 500 GB model, medium complexity) |
-| --- | --- |
-| DBSQL Pro (Medium, always-on) | ~$0.12 per query (DBU cost + VM cost) |
-| DBSQL Serverless | ~$0.08 per query (higher DBU rate, but no idle cost) |
-| Fabric SQL endpoint (F64) | ~$0.02 per query (CU amortized over all workloads) |
-| Fabric Direct Lake (F64) | ~$0.005 per query (VertiPaq, minimal CU) |
+| Platform                      | Query cost (estimated, 500 GB model, medium complexity) |
+| ----------------------------- | ------------------------------------------------------- |
+| DBSQL Pro (Medium, always-on) | ~$0.12 per query (DBU cost + VM cost)                   |
+| DBSQL Serverless              | ~$0.08 per query (higher DBU rate, but no idle cost)    |
+| Fabric SQL endpoint (F64)     | ~$0.02 per query (CU amortized over all workloads)      |
+| Fabric Direct Lake (F64)      | ~$0.005 per query (VertiPaq, minimal CU)                |
 
 Direct Lake is approximately **25x cheaper per query** than DBSQL Pro for typical BI workloads. This is the primary cost driver for migrating BI workloads to Fabric.
 
@@ -89,13 +90,13 @@ Direct Lake is approximately **25x cheaper per query** than DBSQL Pro for typica
 
 ### 4.1 Benchmark: Event ingestion from Event Hubs (10K events/sec)
 
-| Metric | Databricks Structured Streaming (4-node cluster) | Fabric Spark Structured Streaming (F64) | Fabric Eventhouse (RTI) |
-| --- | --- | --- | --- |
-| End-to-end latency (p50) | 2.1s | 2.8s | 0.3s |
-| End-to-end latency (p99) | 8.5s | 11.2s | 1.2s |
-| Throughput (events/sec) | 45K | 35K | 100K+ |
-| Query latency on recent data | 3.5s (Delta + DBSQL) | 4.2s (Delta + SQL endpoint) | 0.1s (KQL) |
-| Cost per hour | ~$18.50 (DBU + VM) | ~$5.20 (CU) | ~$2.10 (CU) |
+| Metric                       | Databricks Structured Streaming (4-node cluster) | Fabric Spark Structured Streaming (F64) | Fabric Eventhouse (RTI) |
+| ---------------------------- | ------------------------------------------------ | --------------------------------------- | ----------------------- |
+| End-to-end latency (p50)     | 2.1s                                             | 2.8s                                    | 0.3s                    |
+| End-to-end latency (p99)     | 8.5s                                             | 11.2s                                   | 1.2s                    |
+| Throughput (events/sec)      | 45K                                              | 35K                                     | 100K+                   |
+| Query latency on recent data | 3.5s (Delta + DBSQL)                             | 4.2s (Delta + SQL endpoint)             | 0.1s (KQL)              |
+| Cost per hour                | ~$18.50 (DBU + VM)                               | ~$5.20 (CU)                             | ~$2.10 (CU)             |
 
 ### 4.2 Analysis
 
@@ -105,12 +106,12 @@ Direct Lake is approximately **25x cheaper per query** than DBSQL Pro for typica
 
 ### 4.3 When to use each
 
-| Scenario | Best platform |
-| --- | --- |
-| Real-time dashboard (sub-second refresh) | **Fabric RTI / Eventhouse** |
-| Complex streaming ETL (joins, windows, UDFs) | **Databricks Structured Streaming** |
-| Event-driven alerting | **Fabric RTI + Data Activator** |
-| Streaming to Delta (append-only archive) | **Fabric Spark Structured Streaming** (cost) or **Databricks** (throughput) |
+| Scenario                                     | Best platform                                                               |
+| -------------------------------------------- | --------------------------------------------------------------------------- |
+| Real-time dashboard (sub-second refresh)     | **Fabric RTI / Eventhouse**                                                 |
+| Complex streaming ETL (joins, windows, UDFs) | **Databricks Structured Streaming**                                         |
+| Event-driven alerting                        | **Fabric RTI + Data Activator**                                             |
+| Streaming to Delta (append-only archive)     | **Fabric Spark Structured Streaming** (cost) or **Databricks** (throughput) |
 
 ---
 
@@ -118,12 +119,12 @@ Direct Lake is approximately **25x cheaper per query** than DBSQL Pro for typica
 
 ### 5.1 Benchmark: Detect and process new files (1,000 files, 10 MB each)
 
-| Metric | Databricks Auto Loader (notification mode) | Databricks Auto Loader (directory listing) | Fabric Data Pipeline (event trigger) | Fabric Spark file streaming |
-| --- | --- | --- | --- | --- |
-| Detection latency | <5s | 30-60s (depends on listing interval) | 10-30s (event propagation) | <5s (checkpoint polling) |
-| Processing latency | 15s (cluster already running) | 15s | 45s (pipeline startup) | 20s (Spark session start) |
-| Total end-to-end | ~20s | ~75s | ~60s | ~25s |
-| Cost per batch | ~$0.45 (DBU + VM) | ~$0.45 | ~$0.08 (CU) | ~$0.12 (CU) |
+| Metric             | Databricks Auto Loader (notification mode) | Databricks Auto Loader (directory listing) | Fabric Data Pipeline (event trigger) | Fabric Spark file streaming |
+| ------------------ | ------------------------------------------ | ------------------------------------------ | ------------------------------------ | --------------------------- |
+| Detection latency  | <5s                                        | 30-60s (depends on listing interval)       | 10-30s (event propagation)           | <5s (checkpoint polling)    |
+| Processing latency | 15s (cluster already running)              | 15s                                        | 45s (pipeline startup)               | 20s (Spark session start)   |
+| Total end-to-end   | ~20s                                       | ~75s                                       | ~60s                                 | ~25s                        |
+| Cost per batch     | ~$0.45 (DBU + VM)                          | ~$0.45                                     | ~$0.08 (CU)                          | ~$0.12 (CU)                 |
 
 ### 5.2 Analysis
 
@@ -138,14 +139,14 @@ Direct Lake is approximately **25x cheaper per query** than DBSQL Pro for typica
 
 ### 6.1 Benchmark: Time from job trigger to first code execution
 
-| Scenario | Databricks | Fabric |
-| --- | --- | --- |
-| Interactive cluster (already running) | 0s | N/A (no persistent cluster) |
-| Job cluster (new cluster start) | 3-7 min | N/A |
-| Serverless notebook | 10-30s | 30-60s |
-| SQL warehouse (running) | 0s | 0s (SQL endpoint always on) |
-| SQL warehouse (cold start) | 30-90s (classic) / 5-10s (serverless) | 0s (SQL endpoint has no cold start) |
-| Data Pipeline activity | N/A | 15-30s (pipeline init) |
+| Scenario                              | Databricks                            | Fabric                              |
+| ------------------------------------- | ------------------------------------- | ----------------------------------- |
+| Interactive cluster (already running) | 0s                                    | N/A (no persistent cluster)         |
+| Job cluster (new cluster start)       | 3-7 min                               | N/A                                 |
+| Serverless notebook                   | 10-30s                                | 30-60s                              |
+| SQL warehouse (running)               | 0s                                    | 0s (SQL endpoint always on)         |
+| SQL warehouse (cold start)            | 30-90s (classic) / 5-10s (serverless) | 0s (SQL endpoint has no cold start) |
+| Data Pipeline activity                | N/A                                   | 15-30s (pipeline init)              |
 
 ### 6.2 Analysis
 
@@ -159,15 +160,15 @@ Direct Lake is approximately **25x cheaper per query** than DBSQL Pro for typica
 
 ### 7.1 Benchmark: 3-tier medallion pipeline on 100 GB daily increment
 
-| Metric | DLT (Pro tier, 4-node cluster) | Fabric (dbt-fabric + Data Pipeline, F64) |
-| --- | --- | --- |
-| Pipeline execution time | 22 min | 28 min |
-| Data quality check time | Included in DLT run | +4 min (dbt test) |
-| Total pipeline time | 22 min | 32 min |
-| Cost per run | ~$12.50 | ~$3.80 |
-| Monthly cost (daily run) | ~$375 | ~$114 |
-| Quality metrics visibility | DLT UI (expectations dashboard) | dbt test results + custom dashboard |
-| Setup complexity | Low (declarative) | Medium (dbt models + pipeline config) |
+| Metric                     | DLT (Pro tier, 4-node cluster)  | Fabric (dbt-fabric + Data Pipeline, F64) |
+| -------------------------- | ------------------------------- | ---------------------------------------- |
+| Pipeline execution time    | 22 min                          | 28 min                                   |
+| Data quality check time    | Included in DLT run             | +4 min (dbt test)                        |
+| Total pipeline time        | 22 min                          | 32 min                                   |
+| Cost per run               | ~$12.50                         | ~$3.80                                   |
+| Monthly cost (daily run)   | ~$375                           | ~$114                                    |
+| Quality metrics visibility | DLT UI (expectations dashboard) | dbt test results + custom dashboard      |
+| Setup complexity           | Low (declarative)               | Medium (dbt models + pipeline config)    |
 
 ### 7.2 Analysis
 
@@ -180,19 +181,19 @@ Direct Lake is approximately **25x cheaper per query** than DBSQL Pro for typica
 
 ## 8. Benchmark summary scorecard
 
-| Category | Databricks wins | Fabric wins | Notes |
-| --- | --- | --- | --- |
-| Raw Spark performance | Yes (Photon) | -- | 2-3x faster with Photon |
-| BI query speed | -- | Yes (Direct Lake) | 5-8x faster for PBI queries |
-| BI query cost | -- | Yes | 25x cheaper per query |
-| Streaming latency | -- | Yes (Eventhouse) | 10x lower latency |
-| Streaming cost | -- | Yes | 9x cheaper |
-| File ingestion speed | Yes (Auto Loader) | -- | Faster detection + processing |
-| File ingestion cost | -- | Yes | 4-5x cheaper |
-| Pipeline execution time | Yes (DLT) | -- | ~30% faster |
-| Pipeline cost | -- | Yes | ~70% cheaper |
-| SQL endpoint cold start | -- | Yes | No cold start in Fabric |
-| Spark startup time | Yes (running cluster) | -- | Instant if cluster is on |
+| Category                | Databricks wins       | Fabric wins       | Notes                         |
+| ----------------------- | --------------------- | ----------------- | ----------------------------- |
+| Raw Spark performance   | Yes (Photon)          | --                | 2-3x faster with Photon       |
+| BI query speed          | --                    | Yes (Direct Lake) | 5-8x faster for PBI queries   |
+| BI query cost           | --                    | Yes               | 25x cheaper per query         |
+| Streaming latency       | --                    | Yes (Eventhouse)  | 10x lower latency             |
+| Streaming cost          | --                    | Yes               | 9x cheaper                    |
+| File ingestion speed    | Yes (Auto Loader)     | --                | Faster detection + processing |
+| File ingestion cost     | --                    | Yes               | 4-5x cheaper                  |
+| Pipeline execution time | Yes (DLT)             | --                | ~30% faster                   |
+| Pipeline cost           | --                    | Yes               | ~70% cheaper                  |
+| SQL endpoint cold start | --                    | Yes               | No cold start in Fabric       |
+| Spark startup time      | Yes (running cluster) | --                | Instant if cluster is on      |
 
 **Pattern:** Databricks wins on raw performance (Photon, DLT optimization). Fabric wins on cost and BI-specific workloads (Direct Lake, Eventhouse). For most organizations, the cost savings outweigh the performance gap for BI and analytics workloads. For heavy compute (ML training, Photon-dependent ETL), Databricks remains faster.
 
@@ -203,6 +204,7 @@ Direct Lake is approximately **25x cheaper per query** than DBSQL Pro for typica
 ### Step 1: Identify representative queries
 
 Select 10-20 queries that represent your actual workload:
+
 - 5 dashboard queries (simple scans, filters, aggregations)
 - 5 ETL queries (joins, window functions, complex transforms)
 - 5 ad-hoc queries (exploratory, varying complexity)
@@ -210,6 +212,7 @@ Select 10-20 queries that represent your actual workload:
 ### Step 2: Prepare identical datasets
 
 Ensure the same Delta tables are accessible from both platforms:
+
 - Use OneLake shortcuts on Fabric pointing to the same ADLS paths Databricks reads
 - Verify row counts match
 
@@ -229,11 +232,11 @@ Ensure the same Delta tables are accessible from both platforms:
 
 Build a comparison spreadsheet:
 
-| Query | DBR time | Fabric time | DBR cost | Fabric cost | Decision |
-| --- | --- | --- | --- | --- | --- |
-| Q1 (dashboard card) | __s | __s | $__ | $__ | ______ |
-| Q2 (star join) | __s | __s | $__ | $__ | ______ |
-| ... | | | | | |
+| Query               | DBR time | Fabric time | DBR cost | Fabric cost | Decision |
+| ------------------- | -------- | ----------- | -------- | ----------- | -------- |
+| Q1 (dashboard card) | \_\_s    | \_\_s       | $\_\_    | $\_\_       | **\_\_** |
+| Q2 (star join)      | \_\_s    | \_\_s       | $\_\_    | $\_\_       | **\_\_** |
+| ...                 |          |             |          |             |          |
 
 If Fabric is within 2x of Databricks performance and 3x cheaper, it is typically the right move for that workload.
 

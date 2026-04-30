@@ -24,15 +24,15 @@ This guide provides the detailed comparison, control mapping, and agency-specifi
 
 ### Architectural model
 
-| Characteristic | GCP Assured Workloads | Azure Government |
-|---|---|---|
-| **Isolation model** | Logical boundary within commercial GCP | Physically isolated cloud |
-| **Datacenter locations** | Commercial GCP regions (US) with organizational policy enforcement | Dedicated US-only government datacenters |
-| **Network backbone** | Shared with commercial GCP | Dedicated government backbone (no commercial peering) |
-| **Operator screening** | Google employees with US person attestation for Assured Workloads | Screened US persons with federal background investigations |
-| **Identity boundary** | Google Cloud Identity (same as commercial) | Entra ID Government (separate from commercial) |
-| **Compliance responsibility** | Customer configures Assured Workloads; Google provides controls | Azure Government inherits controls; customer documents inheritance |
-| **Service catalog** | Subset of GCP services (limited) | 100+ services (broad, growing quarterly) |
+| Characteristic                | GCP Assured Workloads                                              | Azure Government                                                   |
+| ----------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| **Isolation model**           | Logical boundary within commercial GCP                             | Physically isolated cloud                                          |
+| **Datacenter locations**      | Commercial GCP regions (US) with organizational policy enforcement | Dedicated US-only government datacenters                           |
+| **Network backbone**          | Shared with commercial GCP                                         | Dedicated government backbone (no commercial peering)              |
+| **Operator screening**        | Google employees with US person attestation for Assured Workloads  | Screened US persons with federal background investigations         |
+| **Identity boundary**         | Google Cloud Identity (same as commercial)                         | Entra ID Government (separate from commercial)                     |
+| **Compliance responsibility** | Customer configures Assured Workloads; Google provides controls    | Azure Government inherits controls; customer documents inheritance |
+| **Service catalog**           | Subset of GCP services (limited)                                   | 100+ services (broad, growing quarterly)                           |
 
 ### What "logical isolation" vs "physical isolation" means in practice
 
@@ -57,52 +57,52 @@ For agencies with stringent data handling requirements (CUI, ITAR, controlled te
 
 The following GCP services carry FedRAMP High authorization through Assured Workloads (as of early 2026):
 
-| GCP service | FedRAMP High | Notes |
-|---|---|---|
-| BigQuery | Yes | Core warehouse -- covered |
-| GCS | Yes | Object storage -- covered |
-| GKE | Yes | Container orchestration -- covered |
-| Compute Engine | Yes | VM compute -- covered |
-| Cloud SQL | Yes | Managed SQL -- covered |
-| Cloud KMS | Yes | Key management -- covered |
-| Cloud IAM | Yes | Identity -- covered |
-| Cloud Logging | Yes | Logging -- covered |
-| Cloud Monitoring | Yes | Monitoring -- covered |
-| Dataproc | Check | Verify current status |
-| Cloud Composer | Check | Verify current status |
-| Dataflow | Check | Verify current status |
-| Pub/Sub | Check | Verify current status |
-| Looker | Check | Verify current status -- may require separate authorization |
-| Data Catalog | Check | Verify current status |
-| Cloud DLP | Check | Verify current status |
-| Vertex AI | Limited | Some services covered; check specific endpoints |
-| Vertex AI Search | Check | Verify current status |
-| Cloud Functions | Check | Verify current status |
+| GCP service      | FedRAMP High | Notes                                                       |
+| ---------------- | ------------ | ----------------------------------------------------------- |
+| BigQuery         | Yes          | Core warehouse -- covered                                   |
+| GCS              | Yes          | Object storage -- covered                                   |
+| GKE              | Yes          | Container orchestration -- covered                          |
+| Compute Engine   | Yes          | VM compute -- covered                                       |
+| Cloud SQL        | Yes          | Managed SQL -- covered                                      |
+| Cloud KMS        | Yes          | Key management -- covered                                   |
+| Cloud IAM        | Yes          | Identity -- covered                                         |
+| Cloud Logging    | Yes          | Logging -- covered                                          |
+| Cloud Monitoring | Yes          | Monitoring -- covered                                       |
+| Dataproc         | Check        | Verify current status                                       |
+| Cloud Composer   | Check        | Verify current status                                       |
+| Dataflow         | Check        | Verify current status                                       |
+| Pub/Sub          | Check        | Verify current status                                       |
+| Looker           | Check        | Verify current status -- may require separate authorization |
+| Data Catalog     | Check        | Verify current status                                       |
+| Cloud DLP        | Check        | Verify current status                                       |
+| Vertex AI        | Limited      | Some services covered; check specific endpoints             |
+| Vertex AI Search | Check        | Verify current status                                       |
+| Cloud Functions  | Check        | Verify current status                                       |
 
 **Critical note:** "Check" means the service's FedRAMP High status through Assured Workloads should be verified against Google's current authorization boundary. This list changes; check the GCP Assured Workloads documentation for the authoritative current list.
 
 ### Azure Government -- FedRAMP High services (analytics-relevant)
 
-| Azure service | FedRAMP High | Notes |
-|---|---|---|
-| Databricks | Yes | Spark analytics and ML |
-| Microsoft Fabric | Preview/GA in Gov | Check current availability |
-| ADLS Gen2 | Yes | Data lake storage |
-| Power BI | Yes (GCC High) | Business intelligence |
-| Azure Data Factory | Yes | ETL orchestration |
-| Event Hubs | Yes | Event streaming |
-| Azure Functions | Yes | Serverless compute |
-| Azure ML | Yes | Machine learning |
-| Azure OpenAI | Yes (Gov preview/GA) | LLM services |
-| Azure AI Search | Yes | Enterprise search |
-| Purview | Yes | Data governance |
-| Key Vault | Yes | Key management |
-| Azure Monitor | Yes | Monitoring and logging |
-| Entra ID | Yes | Identity |
-| Defender for Cloud | Yes | Security posture |
-| Container Apps | Yes | Serverless containers |
-| AKS | Yes | Container orchestration |
-| Azure SQL | Yes | Managed SQL |
+| Azure service      | FedRAMP High         | Notes                      |
+| ------------------ | -------------------- | -------------------------- |
+| Databricks         | Yes                  | Spark analytics and ML     |
+| Microsoft Fabric   | Preview/GA in Gov    | Check current availability |
+| ADLS Gen2          | Yes                  | Data lake storage          |
+| Power BI           | Yes (GCC High)       | Business intelligence      |
+| Azure Data Factory | Yes                  | ETL orchestration          |
+| Event Hubs         | Yes                  | Event streaming            |
+| Azure Functions    | Yes                  | Serverless compute         |
+| Azure ML           | Yes                  | Machine learning           |
+| Azure OpenAI       | Yes (Gov preview/GA) | LLM services               |
+| Azure AI Search    | Yes                  | Enterprise search          |
+| Purview            | Yes                  | Data governance            |
+| Key Vault          | Yes                  | Key management             |
+| Azure Monitor      | Yes                  | Monitoring and logging     |
+| Entra ID           | Yes                  | Identity                   |
+| Defender for Cloud | Yes                  | Security posture           |
+| Container Apps     | Yes                  | Serverless containers      |
+| AKS                | Yes                  | Container orchestration    |
+| Azure SQL          | Yes                  | Managed SQL                |
 
 **Key difference:** The analytics-relevant service list on Azure Government is broader. Services that are "Check" status on GCP Assured Workloads are generally GA with FedRAMP High on Azure Government.
 
@@ -112,32 +112,32 @@ The following GCP services carry FedRAMP High authorization through Assured Work
 
 ### IL4 (Controlled Unclassified Information)
 
-| Dimension | GCP Assured Workloads | Azure Government |
-|---|---|---|
-| Coverage | Narrow service list at IL4 | Broad coverage in Azure Government regions |
-| Data types | CUI | CUI |
+| Dimension          | GCP Assured Workloads                    | Azure Government                                 |
+| ------------------ | ---------------------------------------- | ------------------------------------------------ |
+| Coverage           | Narrow service list at IL4               | Broad coverage in Azure Government regions       |
+| Data types         | CUI                                      | CUI                                              |
 | Analytics services | BigQuery, GCS covered; others may not be | Databricks, ADLS, Power BI, ADF, Purview covered |
-| AI services | Limited Vertex AI coverage | Azure ML, Azure OpenAI covered |
+| AI services        | Limited Vertex AI coverage               | Azure ML, Azure OpenAI covered                   |
 
 ### IL5 (Higher-sensitivity CUI / National Security)
 
-| Dimension | GCP Assured Workloads | Azure Government DoD |
-|---|---|---|
-| Coverage | **Very limited** -- narrow service list | Broad coverage in Azure Government DoD regions |
-| Data types | Higher-sensitivity CUI, National Security | Higher-sensitivity CUI, National Security |
-| Analytics services | **Gap** -- verify each service individually | Databricks, ADLS covered |
-| AI services | **Significant gap** | Azure ML, Azure OpenAI available |
-| Physical isolation | Logical isolation (same commercial infra) | Dedicated DoD regions (Virginia, Iowa) |
+| Dimension          | GCP Assured Workloads                       | Azure Government DoD                           |
+| ------------------ | ------------------------------------------- | ---------------------------------------------- |
+| Coverage           | **Very limited** -- narrow service list     | Broad coverage in Azure Government DoD regions |
+| Data types         | Higher-sensitivity CUI, National Security   | Higher-sensitivity CUI, National Security      |
+| Analytics services | **Gap** -- verify each service individually | Databricks, ADLS covered                       |
+| AI services        | **Significant gap**                         | Azure ML, Azure OpenAI available               |
+| Physical isolation | Logical isolation (same commercial infra)   | Dedicated DoD regions (Virginia, Iowa)         |
 
 **IL5 is the starkest compliance gap.** For DoD agencies processing National Security data through analytics pipelines, GCP's IL5 coverage is too narrow for most real-world workloads. Azure Government DoD provides the breadth needed.
 
 ### IL6 (Classified -- Secret)
 
-| Dimension | GCP | Azure Government Secret |
-|---|---|---|
-| Coverage | **Not available** | Available -- air-gapped classified cloud |
-| Data types | N/A | Secret / classified data |
-| Analytics services | N/A | Limited but available |
+| Dimension          | GCP               | Azure Government Secret                  |
+| ------------------ | ----------------- | ---------------------------------------- |
+| Coverage           | **Not available** | Available -- air-gapped classified cloud |
+| Data types         | N/A               | Secret / classified data                 |
+| Analytics services | N/A               | Limited but available                    |
 
 GCP has no IL6 offering. If any analytics workload processes classified data, Azure Government Secret is the only hyperscaler path. (CSA-in-a-Box is out of scope for IL6; a bespoke tenant is required.)
 
@@ -145,13 +145,13 @@ GCP has no IL6 offering. If any analytics workload processes classified data, Az
 
 ## ITAR comparison
 
-| Dimension | GCP Assured Workloads ITAR | Azure Government ITAR |
-|---|---|---|
-| Configuration | Assured Workloads ITAR environment | Azure Government tenant (inherits ITAR) |
-| Data residency | US-only regions enforced by policy | US-only government datacenters (physical) |
-| Personnel | US persons (Google-attested) | US persons (background-investigated) |
-| Service coverage | Subset of GCP services | Broad Azure Government catalog |
-| Export control | Customer responsibility to configure correctly | Tenant-level binding -- all data in US sovereign |
+| Dimension        | GCP Assured Workloads ITAR                     | Azure Government ITAR                            |
+| ---------------- | ---------------------------------------------- | ------------------------------------------------ |
+| Configuration    | Assured Workloads ITAR environment             | Azure Government tenant (inherits ITAR)          |
+| Data residency   | US-only regions enforced by policy             | US-only government datacenters (physical)        |
+| Personnel        | US persons (Google-attested)                   | US persons (background-investigated)             |
+| Service coverage | Subset of GCP services                         | Broad Azure Government catalog                   |
+| Export control   | Customer responsibility to configure correctly | Tenant-level binding -- all data in US sovereign |
 
 **Key distinction:** Azure Government's ITAR compliance is **tenant-level** -- once you are in Azure Government, all data is automatically within the ITAR boundary. GCP's ITAR compliance requires correct Assured Workloads configuration per project, creating operational risk if misconfigured.
 
@@ -161,15 +161,15 @@ GCP has no IL6 offering. If any analytics workload processes classified data, Az
 
 For Defense Industrial Base (DIB) organizations subject to CMMC, CSA-in-a-Box provides machine-readable control mappings:
 
-| CMMC domain | GCP approach | CSA-in-a-Box approach |
-|---|---|---|
-| Access Control (AC) | GCP IAM + Assured Workloads | Entra ID + Azure RBAC + Unity Catalog; mapped in `cmmc-2.0-l2.yaml` |
-| Audit & Accountability (AU) | Cloud Audit Logs | Azure Monitor + tamper-evident chain (CSA-0016); mapped in `cmmc-2.0-l2.yaml` |
-| Configuration Management (CM) | GCP Organization Policy | Azure Policy + Bicep IaC; mapped in `cmmc-2.0-l2.yaml` |
-| Identification & Authentication (IA) | Google Cloud Identity | Entra ID + MFA + Conditional Access; mapped in `cmmc-2.0-l2.yaml` |
-| Media Protection (MP) | Customer-managed | Key Vault encryption + ADLS immutability; mapped in `cmmc-2.0-l2.yaml` |
-| System & Communications Protection (SC) | VPC SC + Cloud KMS | Private Endpoints + NSGs + Key Vault; mapped in `cmmc-2.0-l2.yaml` |
-| System & Information Integrity (SI) | Security Command Center | Defender for Cloud + Azure Monitor; mapped in `cmmc-2.0-l2.yaml` |
+| CMMC domain                             | GCP approach                | CSA-in-a-Box approach                                                         |
+| --------------------------------------- | --------------------------- | ----------------------------------------------------------------------------- |
+| Access Control (AC)                     | GCP IAM + Assured Workloads | Entra ID + Azure RBAC + Unity Catalog; mapped in `cmmc-2.0-l2.yaml`           |
+| Audit & Accountability (AU)             | Cloud Audit Logs            | Azure Monitor + tamper-evident chain (CSA-0016); mapped in `cmmc-2.0-l2.yaml` |
+| Configuration Management (CM)           | GCP Organization Policy     | Azure Policy + Bicep IaC; mapped in `cmmc-2.0-l2.yaml`                        |
+| Identification & Authentication (IA)    | Google Cloud Identity       | Entra ID + MFA + Conditional Access; mapped in `cmmc-2.0-l2.yaml`             |
+| Media Protection (MP)                   | Customer-managed            | Key Vault encryption + ADLS immutability; mapped in `cmmc-2.0-l2.yaml`        |
+| System & Communications Protection (SC) | VPC SC + Cloud KMS          | Private Endpoints + NSGs + Key Vault; mapped in `cmmc-2.0-l2.yaml`            |
+| System & Information Integrity (SI)     | Security Command Center     | Defender for Cloud + Azure Monitor; mapped in `cmmc-2.0-l2.yaml`              |
 
 **Key advantage:** CSA-in-a-Box ships the CMMC control mapping as a YAML file (`csa_platform/csa_platform/governance/compliance/cmmc-2.0-l2.yaml`) and a narrative document (`docs/compliance/cmmc-2.0-l2.md`). DIB primes inherit directly without building their own mapping.
 
@@ -179,14 +179,14 @@ For Defense Industrial Base (DIB) organizations subject to CMMC, CSA-in-a-Box pr
 
 For agencies processing Protected Health Information (IHS, VA, tribal health):
 
-| Dimension | GCP | CSA-in-a-Box on Azure |
-|---|---|---|
-| BAA | Available with Google | Available with Microsoft (Azure, M365) |
-| PHI classifications | Cloud DLP custom InfoTypes | Purview PHI classifications (`phi_classifications.yaml`) |
-| Access controls | GCP IAM | Entra ID + Unity Catalog row filters + column masks |
-| Audit logging | Cloud Audit Logs | Azure Monitor + tamper-evident audit (CSA-0016) |
-| Encryption | Cloud KMS (CMEK) | Key Vault (CMEK) with HSM option |
-| Reference implementation | Customer builds from scratch | `examples/tribal-health/` -- IHS worked example |
+| Dimension                | GCP                          | CSA-in-a-Box on Azure                                    |
+| ------------------------ | ---------------------------- | -------------------------------------------------------- |
+| BAA                      | Available with Google        | Available with Microsoft (Azure, M365)                   |
+| PHI classifications      | Cloud DLP custom InfoTypes   | Purview PHI classifications (`phi_classifications.yaml`) |
+| Access controls          | GCP IAM                      | Entra ID + Unity Catalog row filters + column masks      |
+| Audit logging            | Cloud Audit Logs             | Azure Monitor + tamper-evident audit (CSA-0016)          |
+| Encryption               | Cloud KMS (CMEK)             | Key Vault (CMEK) with HSM option                         |
+| Reference implementation | Customer builds from scratch | `examples/tribal-health/` -- IHS worked example          |
 
 ---
 
@@ -212,12 +212,12 @@ When an agency deploys on Azure Government:
 
 ### ATO timeline impact
 
-| Phase | GCP (Assured Workloads) | Azure Government |
-|---|---|---|
-| Inheritable controls | Moderate (~60% of controls) | High (~80% of controls) |
-| Customer-responsible controls | Higher count | Lower count |
-| Evidence generation | Manual documentation | CSA-in-a-Box machine-readable compliance files |
-| Typical ATO timeline | 8-14 months | 4-8 months (with CSA-in-a-Box templates) |
+| Phase                         | GCP (Assured Workloads)     | Azure Government                               |
+| ----------------------------- | --------------------------- | ---------------------------------------------- |
+| Inheritable controls          | Moderate (~60% of controls) | High (~80% of controls)                        |
+| Customer-responsible controls | Higher count                | Lower count                                    |
+| Evidence generation           | Manual documentation        | CSA-in-a-Box machine-readable compliance files |
+| Typical ATO timeline          | 8-14 months                 | 4-8 months (with CSA-in-a-Box templates)       |
 
 ---
 
@@ -318,11 +318,11 @@ Before, during, and after migration, validate:
 
 ## Compliance evidence files in CSA-in-a-Box
 
-| Compliance framework | YAML mapping | Narrative document |
-|---|---|---|
-| NIST 800-53 Rev 5 | `csa_platform/csa_platform/governance/compliance/nist-800-53-rev5.yaml` | `docs/compliance/nist-800-53-rev5.md` |
-| CMMC 2.0 Level 2 | `csa_platform/csa_platform/governance/compliance/cmmc-2.0-l2.yaml` | `docs/compliance/cmmc-2.0-l2.md` |
-| HIPAA Security Rule | `csa_platform/csa_platform/governance/compliance/hipaa-security-rule.yaml` | `docs/compliance/hipaa-security-rule.md` |
+| Compliance framework | YAML mapping                                                               | Narrative document                       |
+| -------------------- | -------------------------------------------------------------------------- | ---------------------------------------- |
+| NIST 800-53 Rev 5    | `csa_platform/csa_platform/governance/compliance/nist-800-53-rev5.yaml`    | `docs/compliance/nist-800-53-rev5.md`    |
+| CMMC 2.0 Level 2     | `csa_platform/csa_platform/governance/compliance/cmmc-2.0-l2.yaml`         | `docs/compliance/cmmc-2.0-l2.md`         |
+| HIPAA Security Rule  | `csa_platform/csa_platform/governance/compliance/hipaa-security-rule.yaml` | `docs/compliance/hipaa-security-rule.md` |
 
 These files provide machine-readable control mappings that accelerate ATO documentation. Each control references the Azure service and CSA-in-a-Box configuration that satisfies the requirement.
 

@@ -16,18 +16,18 @@ The consolidation payoff is significant. Instead of managing Redshift clusters, 
 
 ### Architecture mapping
 
-| Redshift concept | Databricks SQL equivalent | Notes |
-|---|---|---|
-| Cluster (RA3 nodes) | SQL Warehouse (Classic or Serverless) | Serverless recommended for variable workloads |
-| Database | Unity Catalog catalog | One Redshift database per catalog |
-| Schema | Unity Catalog schema | 1:1 mapping |
-| Table (distribution style) | Delta table (partitioned) | See distribution mapping below |
-| External table (Spectrum) | OneLake shortcut / external location | Zero-copy reads from S3 |
-| View | View in Unity Catalog | 1:1 mapping |
-| Materialized view | dbt incremental model / Databricks MV | dbt preferred for testability |
-| Stored procedure | dbt macro / notebook job | See SP migration section |
-| WLM queue | SQL Warehouse | One warehouse per workload class |
-| User/group | Entra ID user/group + Unity Catalog grants | See [Security Migration](security-migration.md) |
+| Redshift concept           | Databricks SQL equivalent                  | Notes                                           |
+| -------------------------- | ------------------------------------------ | ----------------------------------------------- |
+| Cluster (RA3 nodes)        | SQL Warehouse (Classic or Serverless)      | Serverless recommended for variable workloads   |
+| Database                   | Unity Catalog catalog                      | One Redshift database per catalog               |
+| Schema                     | Unity Catalog schema                       | 1:1 mapping                                     |
+| Table (distribution style) | Delta table (partitioned)                  | See distribution mapping below                  |
+| External table (Spectrum)  | OneLake shortcut / external location       | Zero-copy reads from S3                         |
+| View                       | View in Unity Catalog                      | 1:1 mapping                                     |
+| Materialized view          | dbt incremental model / Databricks MV      | dbt preferred for testability                   |
+| Stored procedure           | dbt macro / notebook job                   | See SP migration section                        |
+| WLM queue                  | SQL Warehouse                              | One warehouse per workload class                |
+| User/group                 | Entra ID user/group + Unity Catalog grants | See [Security Migration](security-migration.md) |
 
 ### SQL dialect differences
 
@@ -35,62 +35,62 @@ Redshift SQL is PostgreSQL-derivative. Databricks SQL is SparkSQL-based. Most st
 
 #### Date and time functions
 
-| Operation | Redshift SQL | Databricks SQL |
-|---|---|---|
-| Current date | `GETDATE()` or `CURRENT_DATE` | `CURRENT_DATE()` or `CURRENT_DATE` |
-| Current timestamp | `GETDATE()` or `SYSDATE` | `CURRENT_TIMESTAMP()` or `NOW()` |
-| Date add | `DATEADD(day, 7, date_col)` | `DATE_ADD(date_col, 7)` |
-| Date diff | `DATEDIFF(day, start, end)` | `DATEDIFF(end, start)` (note: reversed arg order) |
-| Date trunc | `DATE_TRUNC('month', date_col)` | `DATE_TRUNC('month', date_col)` (same) |
-| Extract | `EXTRACT(year FROM date_col)` | `YEAR(date_col)` or `EXTRACT(YEAR FROM date_col)` |
-| String to date | `TO_DATE(str, 'YYYY-MM-DD')` | `TO_DATE(str, 'yyyy-MM-dd')` (Java format) |
-| Date to string | `TO_CHAR(date_col, 'YYYY-MM-DD')` | `DATE_FORMAT(date_col, 'yyyy-MM-dd')` |
+| Operation         | Redshift SQL                      | Databricks SQL                                    |
+| ----------------- | --------------------------------- | ------------------------------------------------- |
+| Current date      | `GETDATE()` or `CURRENT_DATE`     | `CURRENT_DATE()` or `CURRENT_DATE`                |
+| Current timestamp | `GETDATE()` or `SYSDATE`          | `CURRENT_TIMESTAMP()` or `NOW()`                  |
+| Date add          | `DATEADD(day, 7, date_col)`       | `DATE_ADD(date_col, 7)`                           |
+| Date diff         | `DATEDIFF(day, start, end)`       | `DATEDIFF(end, start)` (note: reversed arg order) |
+| Date trunc        | `DATE_TRUNC('month', date_col)`   | `DATE_TRUNC('month', date_col)` (same)            |
+| Extract           | `EXTRACT(year FROM date_col)`     | `YEAR(date_col)` or `EXTRACT(YEAR FROM date_col)` |
+| String to date    | `TO_DATE(str, 'YYYY-MM-DD')`      | `TO_DATE(str, 'yyyy-MM-dd')` (Java format)        |
+| Date to string    | `TO_CHAR(date_col, 'YYYY-MM-DD')` | `DATE_FORMAT(date_col, 'yyyy-MM-dd')`             |
 
 #### String functions
 
-| Operation | Redshift SQL | Databricks SQL |
-|---|---|---|
-| Concatenate | `col1 \|\| col2` or `CONCAT(a, b)` | `CONCAT(a, b)` or `a \|\| b` |
-| Substring | `SUBSTRING(str, start, len)` | `SUBSTRING(str, start, len)` (same) |
-| Length | `LEN(str)` | `LENGTH(str)` or `LEN(str)` |
-| Trim | `TRIM(str)` | `TRIM(str)` (same) |
-| Replace | `REPLACE(str, old, new)` | `REPLACE(str, old, new)` (same) |
-| Regex match | `str ~ 'pattern'` | `str RLIKE 'pattern'` |
-| NVL | `NVL(a, b)` | `COALESCE(a, b)` or `NVL(a, b)` |
-| DECODE | `DECODE(col, val1, res1, val2, res2, default)` | `CASE WHEN col = val1 THEN res1 ...` |
+| Operation   | Redshift SQL                                   | Databricks SQL                       |
+| ----------- | ---------------------------------------------- | ------------------------------------ |
+| Concatenate | `col1 \|\| col2` or `CONCAT(a, b)`             | `CONCAT(a, b)` or `a \|\| b`         |
+| Substring   | `SUBSTRING(str, start, len)`                   | `SUBSTRING(str, start, len)` (same)  |
+| Length      | `LEN(str)`                                     | `LENGTH(str)` or `LEN(str)`          |
+| Trim        | `TRIM(str)`                                    | `TRIM(str)` (same)                   |
+| Replace     | `REPLACE(str, old, new)`                       | `REPLACE(str, old, new)` (same)      |
+| Regex match | `str ~ 'pattern'`                              | `str RLIKE 'pattern'`                |
+| NVL         | `NVL(a, b)`                                    | `COALESCE(a, b)` or `NVL(a, b)`      |
+| DECODE      | `DECODE(col, val1, res1, val2, res2, default)` | `CASE WHEN col = val1 THEN res1 ...` |
 
 #### Data types
 
-| Redshift type | Databricks SQL type | Notes |
-|---|---|---|
-| `SMALLINT` | `SMALLINT` | Same |
-| `INTEGER` | `INT` | Same |
-| `BIGINT` | `BIGINT` | Same |
-| `DECIMAL(p,s)` | `DECIMAL(p,s)` | Same |
-| `REAL` / `FLOAT4` | `FLOAT` | Same |
-| `DOUBLE PRECISION` / `FLOAT8` | `DOUBLE` | Same |
-| `BOOLEAN` | `BOOLEAN` | Same |
-| `CHAR(n)` | `STRING` | Databricks uses variable-length strings |
-| `VARCHAR(n)` | `STRING` | Length constraint enforced at application layer |
-| `DATE` | `DATE` | Same |
-| `TIMESTAMP` | `TIMESTAMP` | Same |
-| `TIMESTAMPTZ` | `TIMESTAMP` | Databricks stores UTC; apply timezone in queries |
-| `SUPER` (semi-structured) | `STRING` (JSON) + JSON functions | Use `:` notation for JSON field access |
-| `HLLSKETCH` | `approx_count_distinct()` | Function-based rather than type-based |
-| `GEOMETRY` | `STRING` (WKT) + H3 functions | Spatial support via H3 and Mosaic libraries |
+| Redshift type                 | Databricks SQL type              | Notes                                            |
+| ----------------------------- | -------------------------------- | ------------------------------------------------ |
+| `SMALLINT`                    | `SMALLINT`                       | Same                                             |
+| `INTEGER`                     | `INT`                            | Same                                             |
+| `BIGINT`                      | `BIGINT`                         | Same                                             |
+| `DECIMAL(p,s)`                | `DECIMAL(p,s)`                   | Same                                             |
+| `REAL` / `FLOAT4`             | `FLOAT`                          | Same                                             |
+| `DOUBLE PRECISION` / `FLOAT8` | `DOUBLE`                         | Same                                             |
+| `BOOLEAN`                     | `BOOLEAN`                        | Same                                             |
+| `CHAR(n)`                     | `STRING`                         | Databricks uses variable-length strings          |
+| `VARCHAR(n)`                  | `STRING`                         | Length constraint enforced at application layer  |
+| `DATE`                        | `DATE`                           | Same                                             |
+| `TIMESTAMP`                   | `TIMESTAMP`                      | Same                                             |
+| `TIMESTAMPTZ`                 | `TIMESTAMP`                      | Databricks stores UTC; apply timezone in queries |
+| `SUPER` (semi-structured)     | `STRING` (JSON) + JSON functions | Use `:` notation for JSON field access           |
+| `HLLSKETCH`                   | `approx_count_distinct()`        | Function-based rather than type-based            |
+| `GEOMETRY`                    | `STRING` (WKT) + H3 functions    | Spatial support via H3 and Mosaic libraries      |
 
 ### Distribution and sort key mapping
 
 Redshift distribution styles control how data is physically distributed across nodes. Delta Lake uses partitioning and Z-ordering instead.
 
-| Redshift distribution | Delta Lake equivalent | Migration approach |
-|---|---|---|
-| `DISTSTYLE KEY (col)` | `PARTITIONED BY (col)` | High-cardinality keys become partition columns |
-| `DISTSTYLE EVEN` | No partition (or hash partition) | Let Delta auto-optimize; add Z-order if needed |
-| `DISTSTYLE ALL` | Broadcast hint in joins | Small dimension tables; use `/*+ BROADCAST(dim) */` |
-| `SORTKEY (col1, col2)` | `ZORDER BY (col1, col2)` | Run after initial load: `OPTIMIZE tbl ZORDER BY (col1, col2)` |
-| `COMPOUND SORTKEY` | `ZORDER BY (col1, col2)` | Z-order handles multi-column optimization |
-| `INTERLEAVED SORTKEY` | `ZORDER BY (col1, col2)` | Z-order is inherently multi-dimensional |
+| Redshift distribution  | Delta Lake equivalent            | Migration approach                                            |
+| ---------------------- | -------------------------------- | ------------------------------------------------------------- |
+| `DISTSTYLE KEY (col)`  | `PARTITIONED BY (col)`           | High-cardinality keys become partition columns                |
+| `DISTSTYLE EVEN`       | No partition (or hash partition) | Let Delta auto-optimize; add Z-order if needed                |
+| `DISTSTYLE ALL`        | Broadcast hint in joins          | Small dimension tables; use `/*+ BROADCAST(dim) */`           |
+| `SORTKEY (col1, col2)` | `ZORDER BY (col1, col2)`         | Run after initial load: `OPTIMIZE tbl ZORDER BY (col1, col2)` |
+| `COMPOUND SORTKEY`     | `ZORDER BY (col1, col2)`         | Z-order handles multi-column optimization                     |
+| `INTERLEAVED SORTKEY`  | `ZORDER BY (col1, col2)`         | Z-order is inherently multi-dimensional                       |
 
 **Example: convert a Redshift table definition**
 
@@ -132,13 +132,13 @@ OPTIMIZE sales_prod.gold.fact_orders
 
 ### Workload Management (WLM) to SQL Warehouse sizing
 
-| WLM queue | Typical use | Databricks SQL Warehouse | Sizing guidance |
-|---|---|---|---|
-| ETL queue (high memory) | Batch loads, CTAS | Databricks Job cluster | Auto-scaling; Photon enabled |
-| BI queue (high concurrency) | Dashboard queries | SQL Warehouse (Serverless) | Auto-scale 1-10; 2XS-M size |
-| Ad-hoc queue | Analyst queries | SQL Warehouse (Pro) | Auto-scale 1-4; S-M size |
-| Short query queue | Sub-second lookups | SQL Warehouse (Serverless) | Auto-scale; smallest size |
-| Superuser queue | Admin/DDL | SQL Warehouse (Classic) | Fixed size; restricted access |
+| WLM queue                   | Typical use        | Databricks SQL Warehouse   | Sizing guidance               |
+| --------------------------- | ------------------ | -------------------------- | ----------------------------- |
+| ETL queue (high memory)     | Batch loads, CTAS  | Databricks Job cluster     | Auto-scaling; Photon enabled  |
+| BI queue (high concurrency) | Dashboard queries  | SQL Warehouse (Serverless) | Auto-scale 1-10; 2XS-M size   |
+| Ad-hoc queue                | Analyst queries    | SQL Warehouse (Pro)        | Auto-scale 1-4; S-M size      |
+| Short query queue           | Sub-second lookups | SQL Warehouse (Serverless) | Auto-scale; smallest size     |
+| Superuser queue             | Admin/DDL          | SQL Warehouse (Classic)    | Fixed size; restricted access |
 
 ### Stored procedure migration
 
@@ -225,12 +225,12 @@ result.write \
 
 ### Spark version compatibility
 
-| EMR release | Spark version | Databricks Runtime | Notes |
-|---|---|---|---|
-| EMR 6.15 | Spark 3.4.1 | DBR 13.3 LTS | Direct compatibility |
-| EMR 6.12 | Spark 3.4.0 | DBR 13.3 LTS | Direct compatibility |
-| EMR 7.0 | Spark 3.5.0 | DBR 14.3 LTS | Direct compatibility |
-| EMR 7.1 | Spark 3.5.1 | DBR 15.4 LTS | Direct compatibility |
+| EMR release | Spark version | Databricks Runtime | Notes                |
+| ----------- | ------------- | ------------------ | -------------------- |
+| EMR 6.15    | Spark 3.4.1   | DBR 13.3 LTS       | Direct compatibility |
+| EMR 6.12    | Spark 3.4.0   | DBR 13.3 LTS       | Direct compatibility |
+| EMR 7.0     | Spark 3.5.0   | DBR 14.3 LTS       | Direct compatibility |
+| EMR 7.1     | Spark 3.5.1   | DBR 15.4 LTS       | Direct compatibility |
 
 **Key point:** Spark code written for EMR runs on Databricks with minimal changes. The Spark API is the same. The differences are in cluster configuration, library management, and filesystem paths.
 
@@ -265,46 +265,46 @@ df.write.format("delta").mode("overwrite").saveAsTable("sales_prod.gold.fact_sal
 
 **Library management:**
 
-| EMR approach | Databricks equivalent | Notes |
-|---|---|---|
-| Bootstrap action (install packages) | Init script | Place in DBFS or workspace files |
-| EMR step (jar submission) | Job task (jar/wheel) | Attach library to job or cluster |
+| EMR approach                        | Databricks equivalent            | Notes                                         |
+| ----------------------------------- | -------------------------------- | --------------------------------------------- |
+| Bootstrap action (install packages) | Init script                      | Place in DBFS or workspace files              |
+| EMR step (jar submission)           | Job task (jar/wheel)             | Attach library to job or cluster              |
 | `--py-files` (PySpark dependencies) | Workspace library / PyPI install | `%pip install` in notebook or cluster library |
-| Conda/virtualenv | Databricks cluster library | Install at cluster level or notebook level |
+| Conda/virtualenv                    | Databricks cluster library       | Install at cluster level or notebook level    |
 
 ### EMR Step to Databricks Job conversion
 
 ```json
 {
-  "name": "daily_sales_agg",
-  "schedule": {
-    "quartz_cron_expression": "0 0 2 * * ?",
-    "timezone_id": "UTC"
-  },
-  "tasks": [
-    {
-      "task_key": "aggregate",
-      "notebook_task": {
-        "notebook_path": "/Repos/analytics/sales/jobs/daily_sales_agg",
-        "base_parameters": {
-          "run_date": "{{job.start_time[yyyy-MM-dd]}}"
+    "name": "daily_sales_agg",
+    "schedule": {
+        "quartz_cron_expression": "0 0 2 * * ?",
+        "timezone_id": "UTC"
+    },
+    "tasks": [
+        {
+            "task_key": "aggregate",
+            "notebook_task": {
+                "notebook_path": "/Repos/analytics/sales/jobs/daily_sales_agg",
+                "base_parameters": {
+                    "run_date": "{{job.start_time[yyyy-MM-dd]}}"
+                }
+            },
+            "job_cluster_key": "agg_cluster"
         }
-      },
-      "job_cluster_key": "agg_cluster"
-    }
-  ],
-  "job_clusters": [
-    {
-      "job_cluster_key": "agg_cluster",
-      "new_cluster": {
-        "spark_version": "15.4.x-scala2.12",
-        "node_type_id": "Standard_D8s_v5",
-        "num_workers": 4,
-        "data_security_mode": "SINGLE_USER",
-        "runtime_engine": "PHOTON"
-      }
-    }
-  ]
+    ],
+    "job_clusters": [
+        {
+            "job_cluster_key": "agg_cluster",
+            "new_cluster": {
+                "spark_version": "15.4.x-scala2.12",
+                "node_type_id": "Standard_D8s_v5",
+                "num_workers": 4,
+                "data_security_mode": "SINGLE_USER",
+                "runtime_engine": "PHOTON"
+            }
+        }
+    ]
 }
 ```
 
@@ -330,13 +330,13 @@ apt-get update && apt-get install -y libgdal-dev
 
 ### Migration path selection
 
-| Athena usage pattern | Recommended Azure target | Reasoning |
-|---|---|---|
-| Ad-hoc analyst queries | Databricks SQL Warehouse (Serverless) | Auto-scales to zero; pay per query |
-| Scheduled reports/dashboards | Databricks SQL Warehouse (Pro) | Consistent performance; integrates with Power BI |
-| Federated queries (DynamoDB, RDS) | Databricks Lakehouse Federation | Native connectors for common sources |
-| Lightweight exploration | Fabric SQL endpoint | Zero-config for data already in OneLake |
-| Cost-sensitive scanning | Fabric SQL endpoint | No per-scan charge; included in Fabric capacity |
+| Athena usage pattern              | Recommended Azure target              | Reasoning                                        |
+| --------------------------------- | ------------------------------------- | ------------------------------------------------ |
+| Ad-hoc analyst queries            | Databricks SQL Warehouse (Serverless) | Auto-scales to zero; pay per query               |
+| Scheduled reports/dashboards      | Databricks SQL Warehouse (Pro)        | Consistent performance; integrates with Power BI |
+| Federated queries (DynamoDB, RDS) | Databricks Lakehouse Federation       | Native connectors for common sources             |
+| Lightweight exploration           | Fabric SQL endpoint                   | Zero-config for data already in OneLake          |
+| Cost-sensitive scanning           | Fabric SQL endpoint                   | No per-scan charge; included in Fabric capacity  |
 
 ### Athena saved queries migration
 
@@ -388,25 +388,25 @@ AS SELECT ...;
 
 ### Athena workgroup to SQL Warehouse mapping
 
-| Athena workgroup setting | Databricks SQL Warehouse equivalent |
-|---|---|
-| `BytesScannedCutoffPerQuery` | SQL Warehouse query timeout + Azure budget alerts |
-| `RequesterPaysEnabled` | N/A --- ADLS does not have requester-pays |
-| `OutputLocation` | Default warehouse location in Unity Catalog |
-| `EncryptionConfiguration` | Storage account encryption (CMK via Key Vault) |
-| `EnforceWorkGroupConfiguration` | SQL Warehouse access control + cluster policies |
+| Athena workgroup setting        | Databricks SQL Warehouse equivalent               |
+| ------------------------------- | ------------------------------------------------- |
+| `BytesScannedCutoffPerQuery`    | SQL Warehouse query timeout + Azure budget alerts |
+| `RequesterPaysEnabled`          | N/A --- ADLS does not have requester-pays         |
+| `OutputLocation`                | Default warehouse location in Unity Catalog       |
+| `EncryptionConfiguration`       | Storage account encryption (CMK via Key Vault)    |
+| `EnforceWorkGroupConfiguration` | SQL Warehouse access control + cluster policies   |
 
 ---
 
 ## Data migration tooling comparison
 
-| Tool | Best for | Throughput | Cost |
-|---|---|---|---|
-| AzCopy | Bulk S3 to ADLS copy | 5-10 Gbps over ExpressRoute | Free (egress charges apply) |
-| ADF Copy Activity | Orchestrated, incremental copies | Scales with DIU count | Per-DIU-hour pricing |
-| Databricks notebook | Format conversion (Parquet to Delta) | Scales with cluster size | Per-DBU pricing |
-| OneLake shortcut | Zero-copy bridge | N/A (no data movement) | No data movement cost |
-| AWS DMS | Database-to-database (Redshift to SQL) | Varies by instance | Per-instance-hour |
+| Tool                | Best for                               | Throughput                  | Cost                        |
+| ------------------- | -------------------------------------- | --------------------------- | --------------------------- |
+| AzCopy              | Bulk S3 to ADLS copy                   | 5-10 Gbps over ExpressRoute | Free (egress charges apply) |
+| ADF Copy Activity   | Orchestrated, incremental copies       | Scales with DIU count       | Per-DIU-hour pricing        |
+| Databricks notebook | Format conversion (Parquet to Delta)   | Scales with cluster size    | Per-DBU pricing             |
+| OneLake shortcut    | Zero-copy bridge                       | N/A (no data movement)      | No data movement cost       |
+| AWS DMS             | Database-to-database (Redshift to SQL) | Varies by instance          | Per-instance-hour           |
 
 ---
 

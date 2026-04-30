@@ -12,11 +12,11 @@
 
 Snowflake provides three tightly coupled orchestration primitives:
 
-| Primitive | Purpose | How it works |
-|---|---|---|
-| **Streams** | Change data capture (CDC) | Tracks DML changes (inserts, updates, deletes) on a table; consumes changes on read |
-| **Tasks** | Scheduled SQL execution | Cron or interval-based SQL execution; supports DAG dependencies via `AFTER` clause |
-| **Dynamic Tables** | Declarative materialized transformations | SQL definition + lag target; Snowflake auto-refreshes at the specified interval |
+| Primitive          | Purpose                                  | How it works                                                                        |
+| ------------------ | ---------------------------------------- | ----------------------------------------------------------------------------------- |
+| **Streams**        | Change data capture (CDC)                | Tracks DML changes (inserts, updates, deletes) on a table; consumes changes on read |
+| **Tasks**          | Scheduled SQL execution                  | Cron or interval-based SQL execution; supports DAG dependencies via `AFTER` clause  |
+| **Dynamic Tables** | Declarative materialized transformations | SQL definition + lag target; Snowflake auto-refreshes at the specified interval     |
 
 These work well together because they share the same execution engine and metadata layer.
 
@@ -24,11 +24,11 @@ These work well together because they share the same execution engine and metada
 
 Azure distributes orchestration across purpose-built services:
 
-| Snowflake primitive | Azure equivalent(s) | Why multiple |
-|---|---|---|
-| Streams | Delta change-data-feed (CDF) + Databricks DLT + ADF CDC | CDF for Delta-native CDC; DLT for streaming pipelines; ADF for cross-source CDC |
-| Tasks | ADF triggers + Databricks Jobs + dbt Cloud jobs | ADF for orchestration; Databricks Jobs for notebook/JAR execution; dbt Cloud for SQL models |
-| Dynamic Tables | dbt incremental models + Databricks materialized views + DLT | dbt for SQL transformations; MV for simple cases; DLT for streaming materialization |
+| Snowflake primitive | Azure equivalent(s)                                          | Why multiple                                                                                |
+| ------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------- |
+| Streams             | Delta change-data-feed (CDF) + Databricks DLT + ADF CDC      | CDF for Delta-native CDC; DLT for streaming pipelines; ADF for cross-source CDC             |
+| Tasks               | ADF triggers + Databricks Jobs + dbt Cloud jobs              | ADF for orchestration; Databricks Jobs for notebook/JAR execution; dbt Cloud for SQL models |
+| Dynamic Tables      | dbt incremental models + Databricks materialized views + DLT | dbt for SQL transformations; MV for simple cases; DLT for streaming materialization         |
 
 The Azure model is more flexible but requires choosing the right tool for each pattern.
 
@@ -54,6 +54,7 @@ SELECT * FROM raw_orders_stream;
 ```
 
 Key characteristics:
+
 - Streams track changes since last consumption
 - Changes include `METADATA$ACTION` (INSERT/DELETE), `METADATA$ISUPDATE`, `METADATA$ROW_ID`
 - Consuming a stream in a DML statement advances the offset
@@ -81,13 +82,13 @@ WHERE _change_type = 'insert';
 
 **Translation mapping:**
 
-| Snowflake Stream metadata | Delta CDF column | Values |
-|---|---|---|
-| `METADATA$ACTION = 'INSERT'` | `_change_type = 'insert'` | New row |
-| `METADATA$ACTION = 'DELETE'` | `_change_type = 'delete'` | Deleted row |
-| `METADATA$ISUPDATE = TRUE` + DELETE | `_change_type = 'update_preimage'` | Row before update |
-| `METADATA$ISUPDATE = TRUE` + INSERT | `_change_type = 'update_postimage'` | Row after update |
-| `METADATA$ROW_ID` | No direct equivalent | Use primary key instead |
+| Snowflake Stream metadata           | Delta CDF column                    | Values                  |
+| ----------------------------------- | ----------------------------------- | ----------------------- |
+| `METADATA$ACTION = 'INSERT'`        | `_change_type = 'insert'`           | New row                 |
+| `METADATA$ACTION = 'DELETE'`        | `_change_type = 'delete'`           | Deleted row             |
+| `METADATA$ISUPDATE = TRUE` + DELETE | `_change_type = 'update_preimage'`  | Row before update       |
+| `METADATA$ISUPDATE = TRUE` + INSERT | `_change_type = 'update_postimage'` | Row after update        |
+| `METADATA$ROW_ID`                   | No direct equivalent                | Use primary key instead |
 
 **Key difference:** Delta CDF does not auto-advance an offset. You must track the last processed version or timestamp yourself:
 
@@ -164,8 +165,8 @@ When CDC needs to capture changes from non-Delta sources (SQL Server, PostgreSQL
             {
                 "name": "GetChanges",
                 "type": "Copy",
-                "inputs": [{"referenceName": "SqlServerSource"}],
-                "outputs": [{"referenceName": "DeltaLakeSink"}],
+                "inputs": [{ "referenceName": "SqlServerSource" }],
+                "outputs": [{ "referenceName": "DeltaLakeSink" }],
                 "typeProperties": {
                     "source": {
                         "type": "SqlServerSource",
@@ -234,12 +235,12 @@ Most Snowflake Tasks that run SQL transformations should become dbt models sched
 ```yaml
 # dbt_project.yml
 models:
-  my_project:
-    staging:
-      +materialized: view
-    marts:
-      +materialized: incremental
-      +incremental_strategy: merge
+    my_project:
+        staging:
+            +materialized: view
+        marts:
+            +materialized: incremental
+            +incremental_strategy: merge
 ```
 
 ```sql
@@ -309,7 +310,10 @@ When tasks coordinate across multiple services (not just SQL):
                 "name": "RunDbtMarts",
                 "type": "DatabricksSparkJar",
                 "dependsOn": [
-                    {"activity": "RunDbtStaging", "dependencyConditions": ["Succeeded"]}
+                    {
+                        "activity": "RunDbtStaging",
+                        "dependencyConditions": ["Succeeded"]
+                    }
                 ],
                 "typeProperties": {
                     "mainClassName": "com.acme.DbtRunner",
@@ -320,7 +324,10 @@ When tasks coordinate across multiple services (not just SQL):
                 "name": "RefreshPowerBI",
                 "type": "WebActivity",
                 "dependsOn": [
-                    {"activity": "RunDbtMarts", "dependencyConditions": ["Succeeded"]}
+                    {
+                        "activity": "RunDbtMarts",
+                        "dependencyConditions": ["Succeeded"]
+                    }
                 ],
                 "typeProperties": {
                     "method": "POST",
@@ -345,13 +352,13 @@ When tasks coordinate across multiple services (not just SQL):
 
 ### Task DAG translation
 
-| Snowflake DAG pattern | Azure equivalent |
-|---|---|
-| `TASK A` (root) | dbt model A (no upstream ref) or ADF activity (no dependency) |
-| `TASK B AFTER A` | dbt `ref('model_a')` in model B or ADF activity dependency |
-| `TASK C AFTER A, B` | dbt `ref('model_a')` + `ref('model_b')` in model C |
-| Tree-shaped DAG | dbt DAG (natural) or ADF pipeline with parallel branches |
-| Conditional task (`WHEN condition`) | ADF `If Condition` activity or dbt `run_query` + `if` |
+| Snowflake DAG pattern               | Azure equivalent                                              |
+| ----------------------------------- | ------------------------------------------------------------- |
+| `TASK A` (root)                     | dbt model A (no upstream ref) or ADF activity (no dependency) |
+| `TASK B AFTER A`                    | dbt `ref('model_a')` in model B or ADF activity dependency    |
+| `TASK C AFTER A, B`                 | dbt `ref('model_a')` + `ref('model_b')` in model C            |
+| Tree-shaped DAG                     | dbt DAG (natural) or ADF pipeline with parallel branches      |
+| Conditional task (`WHEN condition`) | ADF `If Condition` activity or dbt `run_query` + `if`         |
 
 ---
 

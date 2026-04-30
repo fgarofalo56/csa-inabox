@@ -6,18 +6,18 @@
 
 ## 1. Security model comparison
 
-| Security dimension | Teradata | Azure |
-| --- | --- | --- |
-| **Identity** | Teradata users + LDAP integration | Entra ID (native) |
-| **Authentication** | Username/password, LDAP, Kerberos | Entra ID (MFA, conditional access, FIDO2) |
-| **Authorization** | Database-level GRANT/REVOKE | Unity Catalog / Synapse RBAC / Fabric permissions |
-| **Row-level security** | Views + session variables | Fabric RLS / Unity Catalog row filters / Synapse RLS |
-| **Column-level security** | GRANT SELECT on columns | Dynamic data masking / Unity Catalog column masks |
-| **Audit logging** | DBC.AccessLog, DBQL | Azure Monitor / Purview / Unity Catalog audit logs |
-| **Encryption at rest** | Teradata encryption (AES-256) | Azure Storage Service Encryption (AES-256, automatic) |
-| **Encryption in transit** | TLS 1.2 | TLS 1.2/1.3 (enforced) |
-| **Network security** | Firewall rules, IP restrictions | Private Link, NSG, Azure Firewall |
-| **Data classification** | Manual tagging | Microsoft Purview (automated classification) |
+| Security dimension        | Teradata                          | Azure                                                 |
+| ------------------------- | --------------------------------- | ----------------------------------------------------- |
+| **Identity**              | Teradata users + LDAP integration | Entra ID (native)                                     |
+| **Authentication**        | Username/password, LDAP, Kerberos | Entra ID (MFA, conditional access, FIDO2)             |
+| **Authorization**         | Database-level GRANT/REVOKE       | Unity Catalog / Synapse RBAC / Fabric permissions     |
+| **Row-level security**    | Views + session variables         | Fabric RLS / Unity Catalog row filters / Synapse RLS  |
+| **Column-level security** | GRANT SELECT on columns           | Dynamic data masking / Unity Catalog column masks     |
+| **Audit logging**         | DBC.AccessLog, DBQL               | Azure Monitor / Purview / Unity Catalog audit logs    |
+| **Encryption at rest**    | Teradata encryption (AES-256)     | Azure Storage Service Encryption (AES-256, automatic) |
+| **Encryption in transit** | TLS 1.2                           | TLS 1.2/1.3 (enforced)                                |
+| **Network security**      | Firewall rules, IP restrictions   | Private Link, NSG, Azure Firewall                     |
+| **Data classification**   | Manual tagging                    | Microsoft Purview (automated classification)          |
 
 ---
 
@@ -93,7 +93,6 @@ Entra ID
     ```
 
 4. **Enforce MFA and conditional access** (Entra ID policies — not available in Teradata):
-
     - Require MFA for all data platform access
     - Restrict access to corporate network or managed devices
     - Require compliant devices for sensitive data access
@@ -200,13 +199,13 @@ ORDER BY submit_time DESC;
 
 ### 3.3 Mapping table
 
-| Teradata log | Azure equivalent | Retention |
-| --- | --- | --- |
-| DBC.AccessLog | Unity Catalog audit / Azure Monitor | Configurable (90-365+ days) |
-| DBC.DeleteAccessLog | Azure Monitor delete events | Configurable |
-| DBC.QryLog (DBQL) | Databricks Query History / Synapse DMVs | 90 days default, archive to ADLS |
-| DBC.LogOnOff | Entra ID sign-in logs | 30-90 days (Entra), archive longer |
-| DBC.DBQLStepTbl | Spark UI / Synapse query diagnostics | 30-90 days, archive to ADLS |
+| Teradata log        | Azure equivalent                        | Retention                          |
+| ------------------- | --------------------------------------- | ---------------------------------- |
+| DBC.AccessLog       | Unity Catalog audit / Azure Monitor     | Configurable (90-365+ days)        |
+| DBC.DeleteAccessLog | Azure Monitor delete events             | Configurable                       |
+| DBC.QryLog (DBQL)   | Databricks Query History / Synapse DMVs | 90 days default, archive to ADLS   |
+| DBC.LogOnOff        | Entra ID sign-in logs                   | 30-90 days (Entra), archive longer |
+| DBC.DBQLStepTbl     | Spark UI / Synapse query diagnostics    | 30-90 days, archive to ADLS        |
 
 ---
 
@@ -352,6 +351,7 @@ Purview provides organization-wide data masking policies that apply across Datab
 ### 6.1 Teradata network security
 
 Teradata typically relies on:
+
 - Physical network isolation (dedicated VLAN)
 - Firewall rules on the Teradata system
 - IP-based access restrictions
@@ -390,13 +390,13 @@ Teradata typically relies on:
 
 Key Azure network security components:
 
-| Component | Purpose | Configuration |
-| --- | --- | --- |
-| Private Endpoints | No public internet exposure for data services | ADLS, Synapse, Key Vault, Databricks |
-| VNet injection | Databricks runs inside your VNet | Databricks workspace deployment |
-| NSG (Network Security Groups) | Firewall rules per subnet | Allow corporate IPs, deny all others |
-| Azure Firewall | Centralized egress filtering | Prevent data exfiltration |
-| ExpressRoute | Private connection to on-prem | Teradata → Azure data transfer |
+| Component                     | Purpose                                       | Configuration                        |
+| ----------------------------- | --------------------------------------------- | ------------------------------------ |
+| Private Endpoints             | No public internet exposure for data services | ADLS, Synapse, Key Vault, Databricks |
+| VNet injection                | Databricks runs inside your VNet              | Databricks workspace deployment      |
+| NSG (Network Security Groups) | Firewall rules per subnet                     | Allow corporate IPs, deny all others |
+| Azure Firewall                | Centralized egress filtering                  | Prevent data exfiltration            |
+| ExpressRoute                  | Private connection to on-prem                 | Teradata → Azure data transfer       |
 
 ---
 
@@ -404,13 +404,13 @@ Key Azure network security components:
 
 ### 7.1 Encryption at rest
 
-| System | Teradata | Azure |
-| --- | --- | --- |
-| Default encryption | Optional (must enable) | Always on (Azure SSE) |
-| Algorithm | AES-256 | AES-256 |
-| Key management | Teradata-managed or HSM | Azure Key Vault (customer-managed keys available) |
-| Granularity | Database or table level | Storage account or resource level |
-| Performance impact | 2-5% overhead | Negligible (hardware-accelerated) |
+| System             | Teradata                | Azure                                             |
+| ------------------ | ----------------------- | ------------------------------------------------- |
+| Default encryption | Optional (must enable)  | Always on (Azure SSE)                             |
+| Algorithm          | AES-256                 | AES-256                                           |
+| Key management     | Teradata-managed or HSM | Azure Key Vault (customer-managed keys available) |
+| Granularity        | Database or table level | Storage account or resource level                 |
+| Performance impact | 2-5% overhead           | Negligible (hardware-accelerated)                 |
 
 **Azure Key Vault configuration for customer-managed keys:**
 
@@ -432,12 +432,12 @@ Key Azure network security components:
 
 ### 7.2 Encryption in transit
 
-| System | Teradata | Azure |
-| --- | --- | --- |
-| Protocol | TLS 1.2 (configurable) | TLS 1.2/1.3 (enforced) |
-| Certificate management | Manual (Teradata admin) | Automatic (Azure-managed) |
-| Internal traffic | Optional encryption | Always encrypted within Azure backbone |
-| Client connections | JDBC/ODBC with TLS | JDBC/ODBC/REST with TLS (mandatory) |
+| System                 | Teradata                | Azure                                  |
+| ---------------------- | ----------------------- | -------------------------------------- |
+| Protocol               | TLS 1.2 (configurable)  | TLS 1.2/1.3 (enforced)                 |
+| Certificate management | Manual (Teradata admin) | Automatic (Azure-managed)              |
+| Internal traffic       | Optional encryption     | Always encrypted within Azure backbone |
+| Client connections     | JDBC/ODBC with TLS      | JDBC/ODBC/REST with TLS (mandatory)    |
 
 ---
 
@@ -446,6 +446,7 @@ Key Azure network security components:
 ### 8.1 Teradata data classification
 
 Teradata does not have built-in data classification. Most organizations use:
+
 - Manual tagging in data catalogs
 - Custom metadata tables
 - Third-party tools (Collibra, Alation)
@@ -454,15 +455,15 @@ Teradata does not have built-in data classification. Most organizations use:
 
 Purview provides:
 
-| Capability | Description |
-| --- | --- |
-| Automated scanning | Scans ADLS, Databricks, Synapse for sensitive data |
-| Built-in classifiers | 200+ classifiers (SSN, credit card, email, etc.) |
-| Custom classifiers | Regex or dictionary-based custom patterns |
-| Sensitivity labels | Apply labels (Public, Confidential, Highly Confidential) |
-| Data lineage | Track data flow from source to dashboard |
-| Data catalog | Searchable catalog of all data assets |
-| Access policies | Centralized access governance across platforms |
+| Capability           | Description                                              |
+| -------------------- | -------------------------------------------------------- |
+| Automated scanning   | Scans ADLS, Databricks, Synapse for sensitive data       |
+| Built-in classifiers | 200+ classifiers (SSN, credit card, email, etc.)         |
+| Custom classifiers   | Regex or dictionary-based custom patterns                |
+| Sensitivity labels   | Apply labels (Public, Confidential, Highly Confidential) |
+| Data lineage         | Track data flow from source to dashboard                 |
+| Data catalog         | Searchable catalog of all data assets                    |
+| Access policies      | Centralized access governance across platforms           |
 
 **Purview scanning configuration:**
 
@@ -472,7 +473,10 @@ Purview provides:
     "properties": {
         "endpoint": "https://datalake.dfs.core.windows.net/",
         "resourceTypes": {
-            "AzureStorageBlob": { "scanRulesetName": "default", "scanRulesetType": "System" }
+            "AzureStorageBlob": {
+                "scanRulesetName": "default",
+                "scanRulesetType": "System"
+            }
         },
         "credential": {
             "referenceName": "purview-managed-identity",

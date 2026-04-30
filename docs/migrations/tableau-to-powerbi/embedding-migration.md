@@ -30,14 +30,14 @@ flowchart LR
 
 ### 1.2 Key architectural differences
 
-| Aspect | Tableau Embedded | Power BI Embedded | Impact |
-|---|---|---|---|
-| **Pricing model** | Per-user (Viewer: $15/user/mo) | Capacity-based (F-SKU: fixed monthly) | Power BI scales to unlimited users at fixed cost |
-| **Authentication** | Tableau Server session (SAML/OIDC) | Embed token (service principal) or AAD | Power BI supports app-owns-data (no user auth needed) |
-| **Embedding method** | JavaScript API v3 + iframe | Power BI JS SDK + iframe | Similar approach; different SDK |
-| **Multi-tenancy** | Row-level security or separate sites | RLS + workspace isolation | Power BI provides more flexible isolation options |
-| **White-labeling** | Limited (custom CSS, hide toolbar) | Full branding control (custom theme, no PBI chrome) | Power BI allows complete brand customization |
-| **Performance** | Depends on Tableau Server capacity | Depends on Fabric capacity SKU | Both scale with allocated compute |
+| Aspect               | Tableau Embedded                     | Power BI Embedded                                   | Impact                                                |
+| -------------------- | ------------------------------------ | --------------------------------------------------- | ----------------------------------------------------- |
+| **Pricing model**    | Per-user (Viewer: $15/user/mo)       | Capacity-based (F-SKU: fixed monthly)               | Power BI scales to unlimited users at fixed cost      |
+| **Authentication**   | Tableau Server session (SAML/OIDC)   | Embed token (service principal) or AAD              | Power BI supports app-owns-data (no user auth needed) |
+| **Embedding method** | JavaScript API v3 + iframe           | Power BI JS SDK + iframe                            | Similar approach; different SDK                       |
+| **Multi-tenancy**    | Row-level security or separate sites | RLS + workspace isolation                           | Power BI provides more flexible isolation options     |
+| **White-labeling**   | Limited (custom CSS, hide toolbar)   | Full branding control (custom theme, no PBI chrome) | Power BI allows complete brand customization          |
+| **Performance**      | Depends on Tableau Server capacity   | Depends on Fabric capacity SKU                      | Both scale with allocated compute                     |
 
 ---
 
@@ -47,14 +47,14 @@ flowchart LR
 
 Tableau Embedded Analytics requires Viewer licenses for every external user who views embedded content:
 
-| External users | License tier | Monthly cost | Annual cost |
-|---|---|---|---|
-| 100 | Viewer ($15/user) | $1,500 | $18,000 |
-| 500 | Viewer | $7,500 | $90,000 |
-| 1,000 | Viewer | $15,000 | $180,000 |
-| 5,000 | Viewer | $75,000 | $900,000 |
-| 10,000 | Viewer | $150,000 | $1,800,000 |
-| 50,000 | Viewer | $750,000 | $9,000,000 |
+| External users | License tier      | Monthly cost | Annual cost |
+| -------------- | ----------------- | ------------ | ----------- |
+| 100            | Viewer ($15/user) | $1,500       | $18,000     |
+| 500            | Viewer            | $7,500       | $90,000     |
+| 1,000          | Viewer            | $15,000      | $180,000    |
+| 5,000          | Viewer            | $75,000      | $900,000    |
+| 10,000         | Viewer            | $150,000     | $1,800,000  |
+| 50,000         | Viewer            | $750,000     | $9,000,000  |
 
 Infrastructure costs (Tableau Server VMs to handle embedded traffic) add 20-40% to these numbers.
 
@@ -63,27 +63,27 @@ Infrastructure costs (Tableau Server VMs to handle embedded traffic) add 20-40% 
 Power BI Embedded uses Fabric capacity SKUs. You pay for compute, not users:
 
 | F-SKU | Monthly cost | Concurrent users (typical) | Annual cost |
-|---|---|---|---|
-| F2 | ~$262 | 5-20 | ~$3,150 |
-| F4 | ~$524 | 10-50 | ~$6,290 |
-| F8 | ~$1,050 | 25-100 | ~$12,600 |
-| F16 | ~$2,100 | 50-250 | ~$25,200 |
-| F32 | ~$3,000 | 100-500 | ~$36,000 |
-| F64 | ~$5,000 | 250-1,000 | ~$60,000 |
-| F128 | ~$10,000 | 500-2,500 | ~$120,000 |
-| F256 | ~$20,000 | 1,000-5,000 | ~$240,000 |
+| ----- | ------------ | -------------------------- | ----------- |
+| F2    | ~$262        | 5-20                       | ~$3,150     |
+| F4    | ~$524        | 10-50                      | ~$6,290     |
+| F8    | ~$1,050      | 25-100                     | ~$12,600    |
+| F16   | ~$2,100      | 50-250                     | ~$25,200    |
+| F32   | ~$3,000      | 100-500                    | ~$36,000    |
+| F64   | ~$5,000      | 250-1,000                  | ~$60,000    |
+| F128  | ~$10,000     | 500-2,500                  | ~$120,000   |
+| F256  | ~$20,000     | 1,000-5,000                | ~$240,000   |
 
 !!! note "Right-sizing capacity"
-    Concurrent users depend on report complexity, data volume, and query patterns. Start with F32 or F64, monitor with Capacity Metrics App, and scale as needed. Auto-scale is available for burst scenarios.
+Concurrent users depend on report complexity, data volume, and query patterns. Start with F32 or F64, monitor with Capacity Metrics App, and scale as needed. Auto-scale is available for burst scenarios.
 
 ### 2.3 Cost comparison at scale
 
-| External users | Tableau annual | Power BI annual | Savings |
-|---|---|---|---|
-| 500 | $90,000+ | ~$36,000 (F32) | 60% |
-| 2,000 | $360,000+ | ~$60,000 (F64) | 83% |
-| 10,000 | $1,800,000+ | ~$120,000 (F128) | 93% |
-| 50,000 | $9,000,000+ | ~$240,000 (F256) | 97% |
+| External users | Tableau annual | Power BI annual  | Savings |
+| -------------- | -------------- | ---------------- | ------- |
+| 500            | $90,000+       | ~$36,000 (F32)   | 60%     |
+| 2,000          | $360,000+      | ~$60,000 (F64)   | 83%     |
+| 10,000         | $1,800,000+    | ~$120,000 (F128) | 93%     |
+| 50,000         | $9,000,000+    | ~$240,000 (F256) | 97%     |
 
 ---
 
@@ -91,17 +91,17 @@ Power BI Embedded uses Fabric capacity SKUs. You pay for compute, not users:
 
 ### 3.1 Tableau JavaScript API to Power BI JavaScript SDK
 
-| Tableau JS API concept | Power BI JS SDK concept | Notes |
-|---|---|---|
-| `tableau.Viz(container, url, options)` | `powerbi.embed(container, config)` | Initialization pattern |
-| Viz URL | Embed URL + embed token | Power BI uses token-based auth |
-| `viz.getWorkbook()` | Report object | Access report object for interaction |
-| `viz.getActiveSheet()` | Report pages | `report.getPages()` |
-| `sheet.applyFilterAsync()` | `page.setFilters()` or `report.setFilters()` | Apply filters programmatically |
-| `sheet.selectMarksAsync()` | Visual interaction via SDK | Click and selection events |
-| `sheet.getSelectedMarksAsync()` | Data export via SDK | Extract selected data |
-| `viz.addEventListener()` | `report.on('event', callback)` | Event handling |
-| `viz.dispose()` | `powerbi.reset(container)` | Cleanup |
+| Tableau JS API concept                 | Power BI JS SDK concept                      | Notes                                |
+| -------------------------------------- | -------------------------------------------- | ------------------------------------ |
+| `tableau.Viz(container, url, options)` | `powerbi.embed(container, config)`           | Initialization pattern               |
+| Viz URL                                | Embed URL + embed token                      | Power BI uses token-based auth       |
+| `viz.getWorkbook()`                    | Report object                                | Access report object for interaction |
+| `viz.getActiveSheet()`                 | Report pages                                 | `report.getPages()`                  |
+| `sheet.applyFilterAsync()`             | `page.setFilters()` or `report.setFilters()` | Apply filters programmatically       |
+| `sheet.selectMarksAsync()`             | Visual interaction via SDK                   | Click and selection events           |
+| `sheet.getSelectedMarksAsync()`        | Data export via SDK                          | Extract selected data                |
+| `viz.addEventListener()`               | `report.on('event', callback)`               | Event handling                       |
+| `viz.dispose()`                        | `powerbi.reset(container)`                   | Cleanup                              |
 
 ### 3.2 Tableau embed code example
 
@@ -116,9 +116,9 @@ Power BI Embedded uses Fabric capacity SKUs. You pay for compute, not users:
         hideToolbar: true,
         width: "100%",
         height: "600px",
-        onFirstInteractive: function() {
+        onFirstInteractive: function () {
             console.log("Dashboard loaded");
-        }
+        },
     };
     var viz = new tableau.Viz(containerDiv, url, options);
 </script>
@@ -143,18 +143,18 @@ Power BI Embedded uses Fabric capacity SKUs. You pay for compute, not users:
             filterPaneEnabled: false,
             layoutType: models.LayoutType.Custom,
             customLayout: {
-                displayOption: models.DisplayOption.FitToWidth
-            }
-        }
+                displayOption: models.DisplayOption.FitToWidth,
+            },
+        },
     };
     var reportContainer = document.getElementById("reportContainer");
     var report = powerbi.embed(reportContainer, embedConfig);
 
-    report.on("loaded", function() {
+    report.on("loaded", function () {
         console.log("Report loaded");
     });
 
-    report.on("dataSelected", function(event) {
+    report.on("dataSelected", function (event) {
         console.log("Data selected:", event.detail);
     });
 </script>
@@ -162,22 +162,22 @@ Power BI Embedded uses Fabric capacity SKUs. You pay for compute, not users:
 
 ### 3.4 SDK feature comparison
 
-| Capability | Tableau JS API | Power BI JS SDK | Notes |
-|---|---|---|---|
-| Embed report | Yes | Yes | Core capability |
-| Apply filters | Yes | Yes | Similar API patterns |
-| Get/set parameters | Yes | Yes (slicers) | Power BI uses slicer state instead of parameters |
-| Event handling | Yes | Yes | Load, render, click, select events |
-| Export data | Yes | Yes | Export visual or underlying data |
-| Export report (PDF) | Limited | Yes | `report.print()` or `report.export()` |
-| Theme/branding | Limited CSS | Full theme JSON + custom layout | Power BI provides more control |
-| Page navigation | Yes | Yes | Navigate between report pages |
-| Bookmarks | N/A | Yes | Apply bookmarks programmatically |
-| Full-screen mode | Yes | Yes | Toggle full-screen |
-| Responsive/mobile layout | Limited | Yes | Power BI supports mobile layout embed |
-| Q&A (natural language) | N/A | Yes | Embed a Q&A visual for natural language queries |
-| Dashboard embed | Yes | Yes | Pin tiles from multiple reports |
-| Single visual embed | N/A | Yes | Embed individual visuals, not full reports |
+| Capability               | Tableau JS API | Power BI JS SDK                 | Notes                                            |
+| ------------------------ | -------------- | ------------------------------- | ------------------------------------------------ |
+| Embed report             | Yes            | Yes                             | Core capability                                  |
+| Apply filters            | Yes            | Yes                             | Similar API patterns                             |
+| Get/set parameters       | Yes            | Yes (slicers)                   | Power BI uses slicer state instead of parameters |
+| Event handling           | Yes            | Yes                             | Load, render, click, select events               |
+| Export data              | Yes            | Yes                             | Export visual or underlying data                 |
+| Export report (PDF)      | Limited        | Yes                             | `report.print()` or `report.export()`            |
+| Theme/branding           | Limited CSS    | Full theme JSON + custom layout | Power BI provides more control                   |
+| Page navigation          | Yes            | Yes                             | Navigate between report pages                    |
+| Bookmarks                | N/A            | Yes                             | Apply bookmarks programmatically                 |
+| Full-screen mode         | Yes            | Yes                             | Toggle full-screen                               |
+| Responsive/mobile layout | Limited        | Yes                             | Power BI supports mobile layout embed            |
+| Q&A (natural language)   | N/A            | Yes                             | Embed a Q&A visual for natural language queries  |
+| Dashboard embed          | Yes            | Yes                             | Pin tiles from multiple reports                  |
+| Single visual embed      | N/A            | Yes                             | Embed individual visuals, not full reports       |
 
 ---
 
@@ -185,11 +185,11 @@ Power BI Embedded uses Fabric capacity SKUs. You pay for compute, not users:
 
 ### 4.1 Authentication model comparison
 
-| Pattern | Tableau | Power BI | Description |
-|---|---|---|---|
-| **User owns data** | SAML/OIDC SSO | Entra ID SSO | User authenticates directly; sees their own data |
-| **App owns data** | Trusted tickets | Service principal + embed token | App authenticates on behalf of user; token-based access |
-| **Anonymous embed** | Publish to web (limited) | Publish to web (limited) | Public embed without authentication |
+| Pattern             | Tableau                  | Power BI                        | Description                                             |
+| ------------------- | ------------------------ | ------------------------------- | ------------------------------------------------------- |
+| **User owns data**  | SAML/OIDC SSO            | Entra ID SSO                    | User authenticates directly; sees their own data        |
+| **App owns data**   | Trusted tickets          | Service principal + embed token | App authenticates on behalf of user; token-based access |
+| **Anonymous embed** | Publish to web (limited) | Publish to web (limited)        | Public embed without authentication                     |
 
 ### 4.2 App-owns-data pattern (most common for embedding)
 
@@ -242,11 +242,11 @@ const embedToken = await axios.post(
 
 ### 5.1 Comparison of isolation approaches
 
-| Pattern | Tableau | Power BI | Best for |
-|---|---|---|---|
-| **Shared model + RLS** | User filters on data source | RLS roles with dynamic identity | Cost-efficient; shared infrastructure |
-| **Workspace per tenant** | Site per tenant (expensive) | Workspace per tenant | Strong isolation; tenant-specific data models |
-| **Database per tenant** | Separate data source per tenant | Separate semantic model or data source per tenant | Maximum isolation; regulatory requirements |
+| Pattern                  | Tableau                         | Power BI                                          | Best for                                      |
+| ------------------------ | ------------------------------- | ------------------------------------------------- | --------------------------------------------- |
+| **Shared model + RLS**   | User filters on data source     | RLS roles with dynamic identity                   | Cost-efficient; shared infrastructure         |
+| **Workspace per tenant** | Site per tenant (expensive)     | Workspace per tenant                              | Strong isolation; tenant-specific data models |
+| **Database per tenant**  | Separate data source per tenant | Separate semantic model or data source per tenant | Maximum isolation; regulatory requirements    |
 
 ### 5.2 RLS-based multi-tenancy (recommended)
 
@@ -305,17 +305,17 @@ Tableau offers limited branding for embedded scenarios:
 
 Power BI Embedded provides comprehensive branding control:
 
-| Branding feature | How to implement |
-|---|---|
-| Custom colors and fonts | Apply a Power BI theme JSON |
-| Remove Power BI chrome | Set `navContentPaneEnabled: false` and `filterPaneEnabled: false` |
-| Custom background | Theme JSON background setting |
-| No "Power BI" branding | A-SKU or F-SKU Embedded licenses remove the footer |
-| Custom loading animation | CSS styling on the container element |
-| Custom error messages | Handle errors in the JavaScript SDK event handler |
-| Responsive layout | Use `DisplayOption.FitToWidth` or `FitToPage` |
-| Custom toolbar | Build your own toolbar using SDK methods (export, print, refresh) |
-| Localization | Power BI supports localization for 40+ languages |
+| Branding feature         | How to implement                                                  |
+| ------------------------ | ----------------------------------------------------------------- |
+| Custom colors and fonts  | Apply a Power BI theme JSON                                       |
+| Remove Power BI chrome   | Set `navContentPaneEnabled: false` and `filterPaneEnabled: false` |
+| Custom background        | Theme JSON background setting                                     |
+| No "Power BI" branding   | A-SKU or F-SKU Embedded licenses remove the footer                |
+| Custom loading animation | CSS styling on the container element                              |
+| Custom error messages    | Handle errors in the JavaScript SDK event handler                 |
+| Responsive layout        | Use `DisplayOption.FitToWidth` or `FitToPage`                     |
+| Custom toolbar           | Build your own toolbar using SDK methods (export, print, refresh) |
+| Localization             | Power BI supports localization for 40+ languages                  |
 
 ### 6.3 Theme JSON for branding
 
@@ -332,11 +332,13 @@ Power BI Embedded provides comprehensive branding control:
     "visualStyles": {
         "*": {
             "*": {
-                "title": [{
-                    "fontFamily": "Your Brand Font",
-                    "fontSize": 14,
-                    "color": {"solid": {"color": "#0063B1"}}
-                }]
+                "title": [
+                    {
+                        "fontFamily": "Your Brand Font",
+                        "fontSize": 14,
+                        "color": { "solid": { "color": "#0063B1" } }
+                    }
+                ]
             }
         }
     }
@@ -349,25 +351,25 @@ Power BI Embedded provides comprehensive branding control:
 
 ### 7.1 Embedded performance best practices
 
-| Technique | Description | Impact |
-|---|---|---|
-| **Pre-load reports** | Embed with `{ type: "report", id: "..." }` config before user navigates | Eliminates load time when user switches to analytics tab |
-| **Bookmark for default state** | Apply a bookmark immediately after load | Faster initial view than applying filters post-load |
-| **Reduce visual count** | Keep embedded pages to 6-8 visuals max | Each visual generates queries; fewer = faster |
-| **Use Import mode** | Import mode is faster than DirectQuery for most embedded scenarios | Eliminates source query latency |
-| **Right-size capacity** | Monitor CU usage; upgrade if throttling occurs | Prevents slow render under load |
-| **Token caching** | Cache embed tokens (valid for 60 minutes by default) | Reduces backend token generation calls |
-| **Client-side caching** | Use `powerbi.bootstrap(container, config)` for pre-initialization | Report container ready before data arrives |
+| Technique                      | Description                                                             | Impact                                                   |
+| ------------------------------ | ----------------------------------------------------------------------- | -------------------------------------------------------- |
+| **Pre-load reports**           | Embed with `{ type: "report", id: "..." }` config before user navigates | Eliminates load time when user switches to analytics tab |
+| **Bookmark for default state** | Apply a bookmark immediately after load                                 | Faster initial view than applying filters post-load      |
+| **Reduce visual count**        | Keep embedded pages to 6-8 visuals max                                  | Each visual generates queries; fewer = faster            |
+| **Use Import mode**            | Import mode is faster than DirectQuery for most embedded scenarios      | Eliminates source query latency                          |
+| **Right-size capacity**        | Monitor CU usage; upgrade if throttling occurs                          | Prevents slow render under load                          |
+| **Token caching**              | Cache embed tokens (valid for 60 minutes by default)                    | Reduces backend token generation calls                   |
+| **Client-side caching**        | Use `powerbi.bootstrap(container, config)` for pre-initialization       | Report container ready before data arrives               |
 
 ### 7.2 Capacity sizing for embedded
 
-| Concurrent report views | Recommended starting SKU | Notes |
-|---|---|---|
-| 1-25 | F8 | Light workloads, simple reports |
-| 25-100 | F16-F32 | Medium complexity, moderate concurrency |
-| 100-500 | F64 | Standard production embedding |
-| 500-2,000 | F128-F256 | High-traffic portals |
-| 2,000+ | F256+ or auto-scale | Enterprise-scale embedding |
+| Concurrent report views | Recommended starting SKU | Notes                                   |
+| ----------------------- | ------------------------ | --------------------------------------- |
+| 1-25                    | F8                       | Light workloads, simple reports         |
+| 25-100                  | F16-F32                  | Medium complexity, moderate concurrency |
+| 100-500                 | F64                      | Standard production embedding           |
+| 500-2,000               | F128-F256                | High-traffic portals                    |
+| 2,000+                  | F256+ or auto-scale      | Enterprise-scale embedding              |
 
 ---
 

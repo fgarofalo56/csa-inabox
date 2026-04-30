@@ -29,15 +29,15 @@ HBase stores data in a sparse, distributed, multi-dimensional sorted map:
 (row_key, column_family:qualifier, timestamp) → value
 ```
 
-| Concept | HBase | Description |
-|---|---|---|
-| Table | Namespace:Table | Top-level container |
-| Row key | Byte array (sorted lexicographically) | Primary access pattern |
-| Column family | Defined at table creation, stored together on disk | Physical storage grouping |
-| Column qualifier | Dynamic, created at write time | Individual field within a family |
-| Cell | (row, cf:qualifier, timestamp) → value | Single value with versioning |
-| Region | Range of row keys | Unit of distribution (like a shard) |
-| Timestamp | Per-cell versioning | Multiple versions of same cell |
+| Concept          | HBase                                              | Description                         |
+| ---------------- | -------------------------------------------------- | ----------------------------------- |
+| Table            | Namespace:Table                                    | Top-level container                 |
+| Row key          | Byte array (sorted lexicographically)              | Primary access pattern              |
+| Column family    | Defined at table creation, stored together on disk | Physical storage grouping           |
+| Column qualifier | Dynamic, created at write time                     | Individual field within a family    |
+| Cell             | (row, cf:qualifier, timestamp) → value             | Single value with versioning        |
+| Region           | Range of row keys                                  | Unit of distribution (like a shard) |
+| Timestamp        | Per-cell versioning                                | Multiple versions of same cell      |
 
 ### Cosmos DB data model (NoSQL API)
 
@@ -47,33 +47,33 @@ HBase stores data in a sparse, distributed, multi-dimensional sorted map:
     "partitionKey": "customer-789",
     "orderDate": "2025-04-30",
     "items": [
-        {"sku": "ABC", "qty": 2, "price": 29.99},
-        {"sku": "DEF", "qty": 1, "price": 149.99}
+        { "sku": "ABC", "qty": 2, "price": 29.99 },
+        { "sku": "DEF", "qty": 1, "price": 149.99 }
     ],
     "status": "shipped",
     "_ts": 1714435200
 }
 ```
 
-| Concept | Cosmos DB | Description |
-|---|---|---|
-| Container | Logical table | Top-level container |
-| Partition key | Single property value | Unit of distribution |
-| Item | JSON document | Single record |
-| Properties | Named fields | Strongly typed |
-| TTL | Per-item or per-container | Automatic expiration |
-| Versioning | Change feed (append-only log) | Not cell-level versioning |
+| Concept       | Cosmos DB                     | Description               |
+| ------------- | ----------------------------- | ------------------------- |
+| Container     | Logical table                 | Top-level container       |
+| Partition key | Single property value         | Unit of distribution      |
+| Item          | JSON document                 | Single record             |
+| Properties    | Named fields                  | Strongly typed            |
+| TTL           | Per-item or per-container     | Automatic expiration      |
+| Versioning    | Change feed (append-only log) | Not cell-level versioning |
 
 ### Model mapping strategy
 
-| HBase pattern | Cosmos DB approach |
-|---|---|
-| Wide rows (many qualifiers) | Nested JSON document with arrays/objects |
-| Tall rows (many versions per cell) | Separate documents per version, or Change Feed for history |
-| Column family grouping | Single document (Cosmos stores per partition, not per column family) |
-| Row key design (composite keys) | Partition key + id combination |
-| Scan by row key range | Query by partition key + range filter |
-| Get by exact row key | Point read by partition key + id |
+| HBase pattern                      | Cosmos DB approach                                                   |
+| ---------------------------------- | -------------------------------------------------------------------- |
+| Wide rows (many qualifiers)        | Nested JSON document with arrays/objects                             |
+| Tall rows (many versions per cell) | Separate documents per version, or Change Feed for history           |
+| Column family grouping             | Single document (Cosmos stores per partition, not per column family) |
+| Row key design (composite keys)    | Partition key + id combination                                       |
+| Scan by row key range              | Query by partition key + range filter                                |
+| Get by exact row key               | Point read by partition key + id                                     |
 
 ### Example: HBase to Cosmos DB document transformation
 
@@ -107,8 +107,8 @@ Column Family "items":
         "total": 209.97
     },
     "items": [
-        {"sku": "ABC", "qty": 2, "price": 29.99},
-        {"sku": "DEF", "qty": 1, "price": 149.99}
+        { "sku": "ABC", "qty": 2, "price": 29.99 },
+        { "sku": "DEF", "qty": 1, "price": 149.99 }
     ]
 }
 ```
@@ -224,34 +224,34 @@ session.execute("""
 
 ### HBase scaling model
 
-| Concept | HBase behavior |
-|---|---|
-| Region | ~10 GB of data, assigned to a RegionServer |
-| RegionServer | JVM process managing multiple regions |
+| Concept        | HBase behavior                             |
+| -------------- | ------------------------------------------ |
+| Region         | ~10 GB of data, assigned to a RegionServer |
+| RegionServer   | JVM process managing multiple regions      |
 | Auto-splitting | Regions split at threshold (default 10 GB) |
-| Scaling up | Add more RegionServers (horizontal) |
-| Hot regions | Manual pre-splitting or salting row keys |
+| Scaling up     | Add more RegionServers (horizontal)        |
+| Hot regions    | Manual pre-splitting or salting row keys   |
 
 ### Cosmos DB scaling model
 
-| Concept | Cosmos DB behavior |
-|---|---|
-| Logical partition | All items with same partition key value (max 20 GB) |
+| Concept            | Cosmos DB behavior                                               |
+| ------------------ | ---------------------------------------------------------------- |
+| Logical partition  | All items with same partition key value (max 20 GB)              |
 | Physical partition | System-managed group of logical partitions (max 50 GB, 10K RU/s) |
-| Request Units (RU) | Normalized cost per operation (1 RU = 1 KB point read) |
-| Auto-scale | Scales from 10% to 100% of provisioned max RU/s |
-| Serverless | Pay per RU consumed, no provisioning |
+| Request Units (RU) | Normalized cost per operation (1 RU = 1 KB point read)           |
+| Auto-scale         | Scales from 10% to 100% of provisioned max RU/s                  |
+| Serverless         | Pay per RU consumed, no provisioning                             |
 
 ### Throughput estimation
 
-| HBase operation | Cosmos DB RU cost (approximate) |
-|---|---|
-| Point read (1 KB item) | 1 RU |
-| Point read (10 KB item) | 2-3 RU |
-| Write (1 KB item) | 5-7 RU |
-| Write (10 KB item) | 10-15 RU |
+| HBase operation          | Cosmos DB RU cost (approximate)  |
+| ------------------------ | -------------------------------- |
+| Point read (1 KB item)   | 1 RU                             |
+| Point read (10 KB item)  | 2-3 RU                           |
+| Write (1 KB item)        | 5-7 RU                           |
+| Write (10 KB item)       | 10-15 RU                         |
 | Query returning 10 items | 10-50 RU (depends on complexity) |
-| Cross-partition query | 50-500+ RU (avoid if possible) |
+| Cross-partition query    | 50-500+ RU (avoid if possible)   |
 
 ### Sizing example
 
@@ -278,20 +278,20 @@ Estimated monthly cost: ~$9,600/month (auto-scale pricing)
 
 HBase coprocessors are server-side code that runs on RegionServers:
 
-| Type | Purpose | Example |
-|---|---|---|
+| Type     | Purpose                                                   | Example                                    |
+| -------- | --------------------------------------------------------- | ------------------------------------------ |
 | Observer | Trigger logic on data events (pre/post Put, Delete, etc.) | Audit logging, secondary index maintenance |
-| Endpoint | Custom RPC endpoints on regions | Server-side aggregation, custom filtering |
+| Endpoint | Custom RPC endpoints on regions                           | Server-side aggregation, custom filtering  |
 
 ### Azure replacements
 
-| HBase coprocessor pattern | Azure equivalent |
-|---|---|
-| Observer: pre-Put validation | Application-level validation before Cosmos write |
-| Observer: post-Put audit logging | Cosmos DB Change Feed → Azure Function → Log Analytics |
-| Observer: secondary index update | Cosmos DB Change Feed → Azure Function → secondary container |
-| Endpoint: server-side aggregation | Cosmos DB stored procedures or aggregate queries |
-| Endpoint: custom filtering | Cosmos DB SQL query (rich query language) |
+| HBase coprocessor pattern         | Azure equivalent                                             |
+| --------------------------------- | ------------------------------------------------------------ |
+| Observer: pre-Put validation      | Application-level validation before Cosmos write             |
+| Observer: post-Put audit logging  | Cosmos DB Change Feed → Azure Function → Log Analytics       |
+| Observer: secondary index update  | Cosmos DB Change Feed → Azure Function → secondary container |
+| Endpoint: server-side aggregation | Cosmos DB stored procedures or aggregate queries             |
+| Endpoint: custom filtering        | Cosmos DB SQL query (rich query language)                    |
 
 ### Change Feed pattern (replacing Observer coprocessors)
 
@@ -337,28 +337,28 @@ def send_shipping_notification(order):
 
 ### Decision matrix
 
-| Factor | NoSQL API | Cassandra API | Table API |
-|---|---|---|---|
-| Best for | New applications, complex queries | Teams with Cassandra/HBase experience | Simple key-value lookups |
-| Query language | SQL-like | CQL (Cassandra Query Language) | OData filter |
-| Schema | Flexible JSON | Column families (CQL tables) | Fixed (PartitionKey, RowKey, properties) |
-| Secondary indexes | Automatic (all properties indexed) | Must declare explicitly | Limited |
-| Complex types | Rich (nested objects, arrays) | Limited (UDTs, collections) | Flat properties only |
-| Aggregation | Built-in (GROUP BY, SUM, AVG) | Limited | None |
-| Driver ecosystem | Cosmos SDK (Python, Java, .NET, JS) | cassandra-driver (any language) | Azure Tables SDK |
-| Migration from HBase | Moderate (schema redesign) | Lower (column family model preserved) | Low (for simple KV patterns) |
-| Performance | Best for reads | Good | Best for simple lookups |
+| Factor               | NoSQL API                           | Cassandra API                         | Table API                                |
+| -------------------- | ----------------------------------- | ------------------------------------- | ---------------------------------------- |
+| Best for             | New applications, complex queries   | Teams with Cassandra/HBase experience | Simple key-value lookups                 |
+| Query language       | SQL-like                            | CQL (Cassandra Query Language)        | OData filter                             |
+| Schema               | Flexible JSON                       | Column families (CQL tables)          | Fixed (PartitionKey, RowKey, properties) |
+| Secondary indexes    | Automatic (all properties indexed)  | Must declare explicitly               | Limited                                  |
+| Complex types        | Rich (nested objects, arrays)       | Limited (UDTs, collections)           | Flat properties only                     |
+| Aggregation          | Built-in (GROUP BY, SUM, AVG)       | Limited                               | None                                     |
+| Driver ecosystem     | Cosmos SDK (Python, Java, .NET, JS) | cassandra-driver (any language)       | Azure Tables SDK                         |
+| Migration from HBase | Moderate (schema redesign)          | Lower (column family model preserved) | Low (for simple KV patterns)             |
+| Performance          | Best for reads                      | Good                                  | Best for simple lookups                  |
 
 ### Recommendations by HBase usage pattern
 
-| HBase pattern | Recommended Cosmos API | Rationale |
-|---|---|---|
-| Wide-column with complex queries | **NoSQL API** | Best query engine, automatic indexing |
-| Simple key-value lookups | **Table API** | Lowest cost, simplest API |
-| Team knows Cassandra or wants CQL | **Cassandra API** | Familiar data model and query language |
-| Heavy write workload | **NoSQL API** or **Cassandra API** | Both handle high write throughput |
-| Global distribution needed | **NoSQL API** | Best multi-region write support |
-| Time-series data | **NoSQL API** with TTL | Auto-expiration, partition by time window |
+| HBase pattern                     | Recommended Cosmos API             | Rationale                                 |
+| --------------------------------- | ---------------------------------- | ----------------------------------------- |
+| Wide-column with complex queries  | **NoSQL API**                      | Best query engine, automatic indexing     |
+| Simple key-value lookups          | **Table API**                      | Lowest cost, simplest API                 |
+| Team knows Cassandra or wants CQL | **Cassandra API**                  | Familiar data model and query language    |
+| Heavy write workload              | **NoSQL API** or **Cassandra API** | Both handle high write throughput         |
+| Global distribution needed        | **NoSQL API**                      | Best multi-region write support           |
+| Time-series data                  | **NoSQL API** with TTL             | Auto-expiration, partition by time window |
 
 ---
 
@@ -441,34 +441,34 @@ cosmos_sample = container.read_item("order-12345", "user-789")
 
 ### Common HBase row key patterns and Cosmos equivalents
 
-| HBase row key pattern | Cosmos DB partition key | Notes |
-|---|---|---|
-| `user_id\|order_id` | partitionKey = `user_id`, id = `order_id` | Most common pattern |
-| `reverse_timestamp\|event_id` | partitionKey = time bucket (e.g., `2025-04-30`), id = `event_id` | Time-series data |
-| `salted_prefix\|entity_id` | partitionKey = `entity_id` (no salting needed) | Cosmos distributes automatically |
-| `region\|date\|sensor_id` | partitionKey = `region\|date`, id = `sensor_id` | Hierarchical partition key |
+| HBase row key pattern         | Cosmos DB partition key                                          | Notes                            |
+| ----------------------------- | ---------------------------------------------------------------- | -------------------------------- |
+| `user_id\|order_id`           | partitionKey = `user_id`, id = `order_id`                        | Most common pattern              |
+| `reverse_timestamp\|event_id` | partitionKey = time bucket (e.g., `2025-04-30`), id = `event_id` | Time-series data                 |
+| `salted_prefix\|entity_id`    | partitionKey = `entity_id` (no salting needed)                   | Cosmos distributes automatically |
+| `region\|date\|sensor_id`     | partitionKey = `region\|date`, id = `sensor_id`                  | Hierarchical partition key       |
 
 ### Anti-patterns to avoid
 
-| Anti-pattern | Problem | Solution |
-|---|---|---|
-| Single partition key value | All data in one partition (20 GB limit, 10K RU/s limit) | Choose high-cardinality partition key |
-| Too many cross-partition queries | High RU cost, poor performance | Design partition key around query patterns |
-| Large documents (>2 MB) | Exceeds Cosmos item size limit | Split into multiple documents or use blob references |
-| Monotonically increasing partition key | Hot partition | Use hierarchical partition keys or time-bucketing |
+| Anti-pattern                           | Problem                                                 | Solution                                             |
+| -------------------------------------- | ------------------------------------------------------- | ---------------------------------------------------- |
+| Single partition key value             | All data in one partition (20 GB limit, 10K RU/s limit) | Choose high-cardinality partition key                |
+| Too many cross-partition queries       | High RU cost, poor performance                          | Design partition key around query patterns           |
+| Large documents (>2 MB)                | Exceeds Cosmos item size limit                          | Split into multiple documents or use blob references |
+| Monotonically increasing partition key | Hot partition                                           | Use hierarchical partition keys or time-bucketing    |
 
 ---
 
 ## Common pitfalls
 
-| Pitfall | Mitigation |
-|---|---|
-| Mapping HBase row key directly to Cosmos id | Cosmos id must be unique within a partition; redesign composite keys |
+| Pitfall                                     | Mitigation                                                              |
+| ------------------------------------------- | ----------------------------------------------------------------------- |
+| Mapping HBase row key directly to Cosmos id | Cosmos id must be unique within a partition; redesign composite keys    |
 | Ignoring RU cost of cross-partition queries | Profile query patterns; denormalize data to avoid cross-partition reads |
-| Expecting cell-level versioning | Use Change Feed for audit trails; Cosmos is not a versioned store |
-| Under-provisioning RU/s | Start with auto-scale; monitor and adjust based on actual usage |
-| Large batch writes without bulk mode | Enable bulk execution in Cosmos SDK for batch operations |
-| Not testing under load | HBase and Cosmos have different latency profiles; load test early |
+| Expecting cell-level versioning             | Use Change Feed for audit trails; Cosmos is not a versioned store       |
+| Under-provisioning RU/s                     | Start with auto-scale; monitor and adjust based on actual usage         |
+| Large batch writes without bulk mode        | Enable bulk execution in Cosmos SDK for batch operations                |
+| Not testing under load                      | HBase and Cosmos have different latency profiles; load test early       |
 
 ---
 

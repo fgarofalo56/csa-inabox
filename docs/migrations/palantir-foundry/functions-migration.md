@@ -20,19 +20,19 @@ Foundry Functions operate within a closed compute environment managed by the pla
 
 ### Function types and capabilities
 
-| Foundry capability | Runtime | Key features | Lock-in risk |
-|---|---|---|---|
-| TypeScript v2 Functions | Node.js | OSDK queries/edits, interfaces, configurable resources | High (OSDK dependency) |
-| TypeScript v1 Functions | Node.js | Webhooks, functions-on-models, BYOM | High |
-| Python Functions | Python | Ontology objects/edits, Pipeline Builder integration | High |
-| Ontology SQL | SQL | Read-only parameterized queries over object types | Medium |
-| Function-backed columns | TypeScript/Python | Derived properties computed on-the-fly | High |
-| Function-backed actions | TypeScript/Python | Ontology-editing functions implementing action logic | High |
-| External Functions | TypeScript | Call external REST APIs from within Foundry | Medium |
-| Webhooks | HTTP | Receive inbound HTTP calls from external systems | Low |
-| Compute Modules | Container | BYO compute for custom runtimes, models, apps | Medium |
-| Actions | Config + Functions | State-changing operations with parameters, rules, side effects | High |
-| Automate | Config + Triggers | Trigger-based automation executing actions/functions | Medium |
+| Foundry capability      | Runtime            | Key features                                                   | Lock-in risk           |
+| ----------------------- | ------------------ | -------------------------------------------------------------- | ---------------------- |
+| TypeScript v2 Functions | Node.js            | OSDK queries/edits, interfaces, configurable resources         | High (OSDK dependency) |
+| TypeScript v1 Functions | Node.js            | Webhooks, functions-on-models, BYOM                            | High                   |
+| Python Functions        | Python             | Ontology objects/edits, Pipeline Builder integration           | High                   |
+| Ontology SQL            | SQL                | Read-only parameterized queries over object types              | Medium                 |
+| Function-backed columns | TypeScript/Python  | Derived properties computed on-the-fly                         | High                   |
+| Function-backed actions | TypeScript/Python  | Ontology-editing functions implementing action logic           | High                   |
+| External Functions      | TypeScript         | Call external REST APIs from within Foundry                    | Medium                 |
+| Webhooks                | HTTP               | Receive inbound HTTP calls from external systems               | Low                    |
+| Compute Modules         | Container          | BYO compute for custom runtimes, models, apps                  | Medium                 |
+| Actions                 | Config + Functions | State-changing operations with parameters, rules, side effects | High                   |
+| Automate                | Config + Triggers  | Trigger-based automation executing actions/functions           | Medium                 |
 
 ### Foundry execution model
 
@@ -116,14 +116,14 @@ graph TB
 
 The CSA-in-a-Box platform includes working Azure Functions implementations:
 
-| Function | Path | Purpose |
-|---|---|---|
-| Event processing | `csa_platform/functions/eventProcessing/` | Event Hub trigger, Cosmos DB output, batch processing |
-| AI enrichment | `csa_platform/functions/aiEnrichment/` | HTTP trigger for AI-powered data enrichment |
-| Validation | `csa_platform/functions/validation/` | PII detection, quality validation, schema validation |
-| Secret rotation | `csa_platform/functions/secretRotation/` | Timer trigger for credential lifecycle |
-| Data Activator rules | `csa_platform/data_activator/rules/` | YAML-driven rule engine with aggregation and anomaly detection |
-| Data Activator actions | `csa_platform/data_activator/actions/` | Teams notifications, dead-letter queues, retry logic |
+| Function               | Path                                      | Purpose                                                        |
+| ---------------------- | ----------------------------------------- | -------------------------------------------------------------- |
+| Event processing       | `csa_platform/functions/eventProcessing/` | Event Hub trigger, Cosmos DB output, batch processing          |
+| AI enrichment          | `csa_platform/functions/aiEnrichment/`    | HTTP trigger for AI-powered data enrichment                    |
+| Validation             | `csa_platform/functions/validation/`      | PII detection, quality validation, schema validation           |
+| Secret rotation        | `csa_platform/functions/secretRotation/`  | Timer trigger for credential lifecycle                         |
+| Data Activator rules   | `csa_platform/data_activator/rules/`      | YAML-driven rule engine with aggregation and anomaly detection |
+| Data Activator actions | `csa_platform/data_activator/actions/`    | Teams notifications, dead-letter queues, retry logic           |
 
 ---
 
@@ -134,43 +134,39 @@ The CSA-in-a-Box platform includes working Azure Functions implementations:
 ```typescript
 // Foundry: TypeScript v2 Function querying Ontology objects
 import {
-  Function,
-  Edits,
-  OntologyEditFunction,
-  Integer,
+    Function,
+    Edits,
+    OntologyEditFunction,
+    Integer,
 } from "@foundry/functions-api";
-import {
-  Objects,
-  FlightAlert,
-  FlightAlertStatus,
-} from "@foundry/ontology-api";
+import { Objects, FlightAlert, FlightAlertStatus } from "@foundry/ontology-api";
 
 export class FlightAlertFunctions {
-  // Query function: find overdue alerts
-  @Function()
-  public getOverdueAlerts(thresholdHours: Integer): FlightAlert[] {
-    const cutoff = new Date();
-    cutoff.setHours(cutoff.getHours() - thresholdHours);
+    // Query function: find overdue alerts
+    @Function()
+    public getOverdueAlerts(thresholdHours: Integer): FlightAlert[] {
+        const cutoff = new Date();
+        cutoff.setHours(cutoff.getHours() - thresholdHours);
 
-    return Objects.search()
-      .flightAlert()
-      .filter((alert) =>
-        alert.status
-          .isEqualTo(FlightAlertStatus.OPEN)
-          .and(alert.createdAt.isBefore(cutoff))
-      )
-      .orderBy((alert) => alert.createdAt.asc())
-      .take(100);
-  }
+        return Objects.search()
+            .flightAlert()
+            .filter((alert) =>
+                alert.status
+                    .isEqualTo(FlightAlertStatus.OPEN)
+                    .and(alert.createdAt.isBefore(cutoff)),
+            )
+            .orderBy((alert) => alert.createdAt.asc())
+            .take(100);
+    }
 
-  // Edit function: escalate an alert
-  @Edits(FlightAlert)
-  @OntologyEditFunction()
-  public escalateAlert(alert: FlightAlert, reason: string): void {
-    alert.status = FlightAlertStatus.ESCALATED;
-    alert.escalationReason = reason;
-    alert.escalatedAt = new Date();
-  }
+    // Edit function: escalate an alert
+    @Edits(FlightAlert)
+    @OntologyEditFunction()
+    public escalateAlert(alert: FlightAlert, reason: string): void {
+        alert.status = FlightAlertStatus.ESCALATED;
+        alert.escalationReason = reason;
+        alert.escalatedAt = new Date();
+    }
 }
 ```
 
@@ -179,96 +175,92 @@ export class FlightAlertFunctions {
 ```typescript
 // Azure: HTTP-triggered function querying Cosmos DB
 import {
-  app,
-  HttpRequest,
-  HttpResponseInit,
-  InvocationContext,
+    app,
+    HttpRequest,
+    HttpResponseInit,
+    InvocationContext,
 } from "@azure/functions";
 import { CosmosClient } from "@azure/cosmos";
 import { DefaultAzureCredential } from "@azure/identity";
 
 const credential = new DefaultAzureCredential();
 const cosmos = new CosmosClient({
-  endpoint: process.env.COSMOS_ENDPOINT!,
-  aadCredentials: credential,
+    endpoint: process.env.COSMOS_ENDPOINT!,
+    aadCredentials: credential,
 });
-const container = cosmos
-  .database("operations")
-  .container("flight-alerts");
+const container = cosmos.database("operations").container("flight-alerts");
 
 // Query function: find overdue alerts
 app.http("getOverdueAlerts", {
-  methods: ["GET"],
-  authLevel: "function",
-  route: "alerts/overdue",
-  handler: async (
-    request: HttpRequest,
-    context: InvocationContext
-  ): Promise<HttpResponseInit> => {
-    const thresholdHours = Number(
-      request.query.get("thresholdHours") ?? "24"
-    );
-    const cutoff = new Date();
-    cutoff.setHours(cutoff.getHours() - thresholdHours);
+    methods: ["GET"],
+    authLevel: "function",
+    route: "alerts/overdue",
+    handler: async (
+        request: HttpRequest,
+        context: InvocationContext,
+    ): Promise<HttpResponseInit> => {
+        const thresholdHours = Number(
+            request.query.get("thresholdHours") ?? "24",
+        );
+        const cutoff = new Date();
+        cutoff.setHours(cutoff.getHours() - thresholdHours);
 
-    const { resources } = await container.items
-      .query({
-        query: `SELECT TOP 100 * FROM c
+        const { resources } = await container.items
+            .query({
+                query: `SELECT TOP 100 * FROM c
                 WHERE c.status = 'OPEN'
                 AND c.createdAt < @cutoff
                 ORDER BY c.createdAt ASC`,
-        parameters: [
-          { name: "@cutoff", value: cutoff.toISOString() },
-        ],
-      })
-      .fetchAll();
+                parameters: [{ name: "@cutoff", value: cutoff.toISOString() }],
+            })
+            .fetchAll();
 
-    return { status: 200, jsonBody: resources };
-  },
+        return { status: 200, jsonBody: resources };
+    },
 });
 
 // Edit function: escalate an alert
 app.http("escalateAlert", {
-  methods: ["POST"],
-  authLevel: "function",
-  route: "alerts/{alertId}/escalate",
-  handler: async (
-    request: HttpRequest,
-    context: InvocationContext
-  ): Promise<HttpResponseInit> => {
-    const alertId = request.params.alertId;
-    const { reason } = (await request.json()) as { reason: string };
+    methods: ["POST"],
+    authLevel: "function",
+    route: "alerts/{alertId}/escalate",
+    handler: async (
+        request: HttpRequest,
+        context: InvocationContext,
+    ): Promise<HttpResponseInit> => {
+        const alertId = request.params.alertId;
+        const { reason } = (await request.json()) as { reason: string };
 
-    const { resource: alert } = await container
-      .item(alertId, alertId)
-      .read();
+        const { resource: alert } = await container
+            .item(alertId, alertId)
+            .read();
 
-    if (!alert) {
-      return { status: 404, jsonBody: { error: "Alert not found" } };
-    }
+        if (!alert) {
+            return { status: 404, jsonBody: { error: "Alert not found" } };
+        }
 
-    alert.status = "ESCALATED";
-    alert.escalationReason = reason;
-    alert.escalatedAt = new Date().toISOString();
+        alert.status = "ESCALATED";
+        alert.escalationReason = reason;
+        alert.escalatedAt = new Date().toISOString();
 
-    await container.item(alertId, alertId).replace(alert);
+        await container.item(alertId, alertId).replace(alert);
 
-    return { status: 200, jsonBody: alert };
-  },
+        return { status: 200, jsonBody: alert };
+    },
 });
 ```
 
 ### Key migration patterns for TypeScript
 
-| Foundry pattern | Azure equivalent | Notes |
-|---|---|---|
-| `Objects.search().objectType()` | Cosmos DB SQL query or Fabric SQL endpoint | Replace OSDK queries with parameterized SQL |
-| `@Edits(ObjectType)` decorator | Direct Cosmos DB `replace()` / `upsert()` | Use transactions for multi-document updates |
-| `@Function()` decorator | `app.http()` / `app.eventHub()` registration | Azure Functions v4 programming model |
-| `alert.property = value` | `alert.property = value` + explicit `replace()` | Foundry auto-persists; Azure requires explicit write |
-| Ontology `.filter()` chains | Cosmos DB SQL `WHERE` clauses | Convert filter chains to parameterized SQL |
-| Interface-based queries | Cosmos DB cross-partition queries | Use container-level queries with partition key strategy |
-| Configurable resources | App Settings + Key Vault references | `@Microsoft.KeyVault(SecretUri=...)` in app settings |
+| Foundry pattern                 | Azure equivalent                                | Notes                                                   |
+| ------------------------------- | ----------------------------------------------- | ------------------------------------------------------- |
+| `Objects.search().objectType()` | Cosmos DB SQL query or Fabric SQL endpoint      | Replace OSDK queries with parameterized SQL             |
+| `@Edits(ObjectType)` decorator  | Direct Cosmos DB `replace()` / `upsert()`       | Use transactions for multi-document updates             |
+| `@Function()` decorator         | `app.http()` / `app.eventHub()` registration    | Azure Functions v4 programming model                    |
+| `alert.property = value`        | `alert.property = value` + explicit `replace()` | Foundry auto-persists; Azure requires explicit write    |
+| Ontology `.filter()` chains     | Cosmos DB SQL `WHERE` clauses                   | Convert filter chains to parameterized SQL              |
+| Interface-based queries         | Cosmos DB cross-partition queries               | Use container-level queries with partition key strategy |
+| Configurable resources          | App Settings + Key Vault references             | `@Microsoft.KeyVault(SecretUri=...)` in app settings    |
 
 ---
 
@@ -404,14 +396,14 @@ async def batch_assess_flights(timer: func.TimerRequest) -> None:
 
 ### Key migration patterns for Python
 
-| Foundry pattern | Azure equivalent | Notes |
-|---|---|---|
-| `@function()` decorator | `@app.route()` / `@app.timer_trigger()` | Azure Functions v2 Python model |
-| `from ontology import ObjectType` | Cosmos DB / SQL SDK client | Replace Ontology imports with SDK clients |
-| `flight.property` (typed access) | `flight.get("property")` (dict access) | Azure uses standard Python dicts |
-| `edits=OntologyEdits` | `container.upsert_item()` | Explicit persistence required |
-| Ontology object references | Cosmos DB document IDs + partition keys | Design partition key strategy upfront |
-| Pipeline Builder integration | Fabric notebook / ADF activity | Python functions in Foundry pipelines become notebook cells or ADF custom activities |
+| Foundry pattern                   | Azure equivalent                        | Notes                                                                                |
+| --------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------ |
+| `@function()` decorator           | `@app.route()` / `@app.timer_trigger()` | Azure Functions v2 Python model                                                      |
+| `from ontology import ObjectType` | Cosmos DB / SQL SDK client              | Replace Ontology imports with SDK clients                                            |
+| `flight.property` (typed access)  | `flight.get("property")` (dict access)  | Azure uses standard Python dicts                                                     |
+| `edits=OntologyEdits`             | `container.upsert_item()`               | Explicit persistence required                                                        |
+| Ontology object references        | Cosmos DB document IDs + partition keys | Design partition key strategy upfront                                                |
+| Pipeline Builder integration      | Fabric notebook / ADF activity          | Python functions in Foundry pipelines become notebook cells or ADF custom activities |
 
 ---
 
@@ -426,25 +418,25 @@ Foundry function-backed columns are derived properties computed on-the-fly when 
 import { Function, Integer } from "@foundry/functions-api";
 
 export class DerivedProperties {
-  @Function()
-  public getUrgencyLevel(delayHours: Integer): string {
-    if (delayHours >= 12) return "CRITICAL";
-    if (delayHours >= 6) return "HIGH";
-    if (delayHours >= 2) return "MEDIUM";
-    return "LOW";
-  }
+    @Function()
+    public getUrgencyLevel(delayHours: Integer): string {
+        if (delayHours >= 12) return "CRITICAL";
+        if (delayHours >= 6) return "HIGH";
+        if (delayHours >= 2) return "MEDIUM";
+        return "LOW";
+    }
 
-  @Function()
-  public getEstimatedCost(
-    delayHours: Integer,
-    passengerCount: Integer,
-    aircraftType: string
-  ): number {
-    const hourlyRate =
-      aircraftType === "wide-body" ? 15000 : 8000;
-    const passengerCompensation = delayHours >= 3 ? passengerCount * 250 : 0;
-    return delayHours * hourlyRate + passengerCompensation;
-  }
+    @Function()
+    public getEstimatedCost(
+        delayHours: Integer,
+        passengerCount: Integer,
+        aircraftType: string,
+    ): number {
+        const hourlyRate = aircraftType === "wide-body" ? 15000 : 8000;
+        const passengerCompensation =
+            delayHours >= 3 ? passengerCount * 250 : 0;
+        return delayHours * hourlyRate + passengerCompensation;
+    }
 }
 ```
 
@@ -503,13 +495,13 @@ FROM {{ ref('stg_flights') }}
 
 ### Decision guide: DAX vs computed column
 
-| Factor | DAX measure | Computed column (dbt / notebook) |
-|---|---|---|
-| Computation timing | At query time | At ETL/transformation time |
-| Storage cost | None | Column stored in Delta table |
-| Performance | Fast for simple logic | Better for complex joins/aggregations |
-| Real-time freshness | Always current | Refreshed on schedule |
-| Reusability | Within Power BI only | Available to all downstream consumers |
+| Factor              | DAX measure           | Computed column (dbt / notebook)      |
+| ------------------- | --------------------- | ------------------------------------- |
+| Computation timing  | At query time         | At ETL/transformation time            |
+| Storage cost        | None                  | Column stored in Delta table          |
+| Performance         | Fast for simple logic | Better for complex joins/aggregations |
+| Real-time freshness | Always current        | Refreshed on schedule                 |
+| Reusability         | Within Power BI only  | Available to all downstream consumers |
 
 ---
 
@@ -522,38 +514,38 @@ Foundry Actions are state-changing operations with parameters, validation rules,
 ```yaml
 # Foundry: Action configuration
 actionType:
-  name: EscalateFlightDelay
-  parameters:
-    - name: flightAlert
-      type: FlightAlert
-      required: true
-    - name: escalationLevel
-      type: string
-      enum: [SUPERVISOR, MANAGER, DIRECTOR]
-      required: true
-    - name: reason
-      type: string
-      required: true
-  rules:
-    - type: modification
-      target: flightAlert
-      field: status
-      value: ESCALATED
-    - type: modification
-      target: flightAlert
-      field: escalationLevel
-      value: "{{escalationLevel}}"
-  submissionCriteria:
-    - condition: flightAlert.status == "OPEN"
-      message: "Only open alerts can be escalated"
-  sideEffects:
-    - type: notification
-      channel: email
-      recipients: "{{escalationLevel}}_group@agency.gov"
-      template: escalation_notification
-    - type: webhook
-      url: "https://ops.agency.gov/api/escalations"
-      method: POST
+    name: EscalateFlightDelay
+    parameters:
+        - name: flightAlert
+          type: FlightAlert
+          required: true
+        - name: escalationLevel
+          type: string
+          enum: [SUPERVISOR, MANAGER, DIRECTOR]
+          required: true
+        - name: reason
+          type: string
+          required: true
+    rules:
+        - type: modification
+          target: flightAlert
+          field: status
+          value: ESCALATED
+        - type: modification
+          target: flightAlert
+          field: escalationLevel
+          value: "{{escalationLevel}}"
+    submissionCriteria:
+        - condition: flightAlert.status == "OPEN"
+          message: "Only open alerts can be escalated"
+    sideEffects:
+        - type: notification
+          channel: email
+          recipients: "{{escalationLevel}}_group@agency.gov"
+          template: escalation_notification
+        - type: webhook
+          url: "https://ops.agency.gov/api/escalations"
+          method: POST
 ```
 
 ### Azure equivalent (after)
@@ -631,24 +623,24 @@ description: Auto-escalate alerts open longer than 6 hours
 enabled: true
 source: cosmos://operations/flight-alerts
 condition:
-  field: delay_hours
-  operator: gte
-  threshold: 6
-  window_minutes: 0
+    field: delay_hours
+    operator: gte
+    threshold: 6
+    window_minutes: 0
 actions:
-  - type: webhook
-    url: "${FUNCTION_APP_URL}/api/actions/escalate"
-    method: POST
-    body:
-      alertId: "{{id}}"
-      escalationLevel: SUPERVISOR
-      reason: "Auto-escalated: delay exceeds 6 hours"
-  - type: teams_notification
-    channel: ops-alerts
-    template: escalation_card
+    - type: webhook
+      url: "${FUNCTION_APP_URL}/api/actions/escalate"
+      method: POST
+      body:
+          alertId: "{{id}}"
+          escalationLevel: SUPERVISOR
+          reason: "Auto-escalated: delay exceeds 6 hours"
+    - type: teams_notification
+      channel: ops-alerts
+      template: escalation_card
 tags:
-  - safety
-  - auto-escalation
+    - safety
+    - auto-escalation
 ```
 
 **Step 3: Event Grid subscription for side effects**
@@ -690,21 +682,21 @@ import { Webhook, WebhookRequest } from "@foundry/functions-api";
 import { Objects, ExternalEvent } from "@foundry/ontology-api";
 
 export class InboundWebhooks {
-  @Webhook()
-  public handleExternalEvent(request: WebhookRequest): void {
-    const payload = request.body as ExternalEventPayload;
+    @Webhook()
+    public handleExternalEvent(request: WebhookRequest): void {
+        const payload = request.body as ExternalEventPayload;
 
-    // Create an Ontology object from the external event
-    Objects.create()
-      .externalEvent({
-        eventId: payload.id,
-        source: payload.source,
-        eventType: payload.type,
-        payload: JSON.stringify(payload.data),
-        receivedAt: new Date(),
-      })
-      .execute();
-  }
+        // Create an Ontology object from the external event
+        Objects.create()
+            .externalEvent({
+                eventId: payload.id,
+                source: payload.source,
+                eventType: payload.type,
+                payload: JSON.stringify(payload.data),
+                receivedAt: new Date(),
+            })
+            .execute();
+    }
 }
 ```
 
@@ -749,12 +741,12 @@ async def handle_external_event(req: func.HttpRequest) -> func.HttpResponse:
 
 ### Webhook migration decision matrix
 
-| Inbound pattern | Azure service | When to use |
-|---|---|---|
-| Simple HTTP callback | Azure Functions (HTTP trigger) | Custom logic required, low-to-medium volume |
-| High-throughput event stream | Event Grid + Functions | Event fan-out, filtering, multiple subscribers |
-| No-code webhook processing | Logic Apps (HTTP trigger) | Citizen-developer scenarios, simple transformations |
-| API gateway with rate limiting | API Management + Functions | Production APIs needing throttling, caching, auth |
+| Inbound pattern                | Azure service                  | When to use                                         |
+| ------------------------------ | ------------------------------ | --------------------------------------------------- |
+| Simple HTTP callback           | Azure Functions (HTTP trigger) | Custom logic required, low-to-medium volume         |
+| High-throughput event stream   | Event Grid + Functions         | Event fan-out, filtering, multiple subscribers      |
+| No-code webhook processing     | Logic Apps (HTTP trigger)      | Citizen-developer scenarios, simple transformations |
+| API gateway with rate limiting | API Management + Functions     | Production APIs needing throttling, caching, auth   |
 
 ---
 
@@ -769,21 +761,24 @@ Foundry External Functions call external REST APIs from within the platform. Azu
 import { ExternalFunction } from "@foundry/functions-api";
 
 export class ExternalIntegrations {
-  @ExternalFunction({
-    url: "https://api.weather.gov/alerts/active",
-    method: "GET",
-    headers: { "User-Agent": "agency-app" },
-  })
-  public getWeatherAlerts(latitude: number, longitude: number): WeatherAlert[] {
-    // Foundry handles the HTTP call and passes the response
-    // The function body transforms the response
-    return response.features.map((f) => ({
-      id: f.id,
-      severity: f.properties.severity,
-      headline: f.properties.headline,
-      area: f.properties.areaDesc,
-    }));
-  }
+    @ExternalFunction({
+        url: "https://api.weather.gov/alerts/active",
+        method: "GET",
+        headers: { "User-Agent": "agency-app" },
+    })
+    public getWeatherAlerts(
+        latitude: number,
+        longitude: number,
+    ): WeatherAlert[] {
+        // Foundry handles the HTTP call and passes the response
+        // The function body transforms the response
+        return response.features.map((f) => ({
+            id: f.id,
+            severity: f.properties.severity,
+            headline: f.properties.headline,
+            area: f.properties.areaDesc,
+        }));
+    }
 }
 ```
 
@@ -844,34 +839,34 @@ Foundry Compute Modules let you run arbitrary containerized workloads: custom ML
 
 ### Migration decision matrix
 
-| Workload type | Azure service | When to use |
-|---|---|---|
-| Stateless HTTP services, APIs | Azure Container Apps | Auto-scaling, KEDA triggers, Dapr integration |
-| Long-running ML inference | AKS (Azure Kubernetes Service) | GPU nodes, custom scheduling, full K8s control |
-| Batch/one-shot containers | Azure Container Instances (ACI) | Burst compute, no cluster management |
-| Simple functions in containers | Azure Functions (custom container) | Familiar programming model, custom runtime |
+| Workload type                  | Azure service                      | When to use                                    |
+| ------------------------------ | ---------------------------------- | ---------------------------------------------- |
+| Stateless HTTP services, APIs  | Azure Container Apps               | Auto-scaling, KEDA triggers, Dapr integration  |
+| Long-running ML inference      | AKS (Azure Kubernetes Service)     | GPU nodes, custom scheduling, full K8s control |
+| Batch/one-shot containers      | Azure Container Instances (ACI)    | Burst compute, no cluster management           |
+| Simple functions in containers | Azure Functions (custom container) | Familiar programming model, custom runtime     |
 
 ### Foundry Compute Module (before)
 
 ```yaml
 # Foundry: Compute Module manifest
 computeModule:
-  name: anomaly-detection-model
-  image: foundry-registry/anomaly-model:v2.1
-  resources:
-    cpu: 4
-    memory: 16Gi
-    gpu: 1
-  endpoints:
-    - name: predict
-      path: /predict
-      method: POST
-    - name: health
-      path: /health
-      method: GET
-  env:
-    MODEL_VERSION: "v2.1"
-    BATCH_SIZE: "32"
+    name: anomaly-detection-model
+    image: foundry-registry/anomaly-model:v2.1
+    resources:
+        cpu: 4
+        memory: 16Gi
+        gpu: 1
+    endpoints:
+        - name: predict
+          path: /predict
+          method: POST
+        - name: health
+          path: /health
+          method: GET
+    env:
+        MODEL_VERSION: "v2.1"
+        BATCH_SIZE: "32"
 ```
 
 ### Azure Container Apps equivalent (after)
@@ -946,40 +941,40 @@ For workloads requiring GPU (e.g., large model inference), use AKS with GPU node
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: anomaly-detection-gpu
-  namespace: ml-inference
+    name: anomaly-detection-gpu
+    namespace: ml-inference
 spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: anomaly-detection
-  template:
-    metadata:
-      labels:
-        app: anomaly-detection
-    spec:
-      nodeSelector:
-        kubernetes.azure.com/agentpool: gpupool
-      containers:
-        - name: model
-          image: myacr.azurecr.io/anomaly-model:v2.1-gpu
-          resources:
-            limits:
-              nvidia.com/gpu: 1
-              memory: "16Gi"
-            requests:
-              cpu: "4"
-              memory: "8Gi"
-          ports:
-            - containerPort: 8080
-          livenessProbe:
-            httpGet:
-              path: /health
-              port: 8080
-            periodSeconds: 30
-          env:
-            - name: MODEL_VERSION
-              value: "v2.1"
+    replicas: 2
+    selector:
+        matchLabels:
+            app: anomaly-detection
+    template:
+        metadata:
+            labels:
+                app: anomaly-detection
+        spec:
+            nodeSelector:
+                kubernetes.azure.com/agentpool: gpupool
+            containers:
+                - name: model
+                  image: myacr.azurecr.io/anomaly-model:v2.1-gpu
+                  resources:
+                      limits:
+                          nvidia.com/gpu: 1
+                          memory: "16Gi"
+                      requests:
+                          cpu: "4"
+                          memory: "8Gi"
+                  ports:
+                      - containerPort: 8080
+                  livenessProbe:
+                      httpGet:
+                          path: /health
+                          port: 8080
+                      periodSeconds: 30
+                  env:
+                      - name: MODEL_VERSION
+                        value: "v2.1"
 ```
 
 ---
@@ -993,23 +988,23 @@ Foundry Automate provides trigger-based automation: time-based schedules, data-c
 ```yaml
 # Foundry: Automate rule
 automation:
-  name: DailyFlightRiskScan
-  trigger:
-    type: schedule
-    cron: "0 6 * * *"  # Daily at 6 AM
-  conditions:
-    - type: objectSet
-      objectType: FlightRecord
-      filter: "riskLevel == null OR lastAssessed < today() - 1"
-      minCount: 1
-  actions:
-    - type: function
-      function: batchAssessAndUpdate
-      parameters:
-        flights: "{{matchingObjects}}"
-    - type: notification
-      channel: teams
-      message: "Risk scan complete: {{matchingObjects.length}} flights assessed"
+    name: DailyFlightRiskScan
+    trigger:
+        type: schedule
+        cron: "0 6 * * *" # Daily at 6 AM
+    conditions:
+        - type: objectSet
+          objectType: FlightRecord
+          filter: "riskLevel == null OR lastAssessed < today() - 1"
+          minCount: 1
+    actions:
+        - type: function
+          function: batchAssessAndUpdate
+          parameters:
+              flights: "{{matchingObjects}}"
+        - type: notification
+          channel: teams
+          message: "Risk scan complete: {{matchingObjects.length}} flights assessed"
 ```
 
 ### Azure equivalents (after)
@@ -1054,13 +1049,13 @@ async def daily_risk_scan(timer: func.TimerRequest) -> None:
 
 For automation owned by business users rather than developers, Power Automate provides a no-code equivalent:
 
-| Flow step | Configuration |
-|---|---|
-| Trigger | Recurrence: Daily at 6:00 AM |
-| Action 1 | HTTP: GET `{functionApp}/api/flights/unassessed` |
-| Condition | If `body.count > 0` |
-| Action 2 | HTTP: POST `{functionApp}/api/flights/batch-assess` |
-| Action 3 | Post message to Teams channel: "Risk scan complete" |
+| Flow step | Configuration                                       |
+| --------- | --------------------------------------------------- |
+| Trigger   | Recurrence: Daily at 6:00 AM                        |
+| Action 1  | HTTP: GET `{functionApp}/api/flights/unassessed`    |
+| Condition | If `body.count > 0`                                 |
+| Action 2  | HTTP: POST `{functionApp}/api/flights/batch-assess` |
+| Action 3  | Post message to Teams channel: "Risk scan complete" |
 
 **Option C: Data Activator for condition-based triggers**
 
@@ -1074,27 +1069,27 @@ description: Alert when a newly assessed flight has HIGH risk
 enabled: true
 source: eventgrid://flight-risk-assessed
 condition:
-  field: riskLevel
-  operator: eq
-  threshold: "HIGH"
+    field: riskLevel
+    operator: eq
+    threshold: "HIGH"
 actions:
-  - type: teams_notification
-    channel: safety-ops
-    template: high_risk_alert
-  - type: webhook
-    url: "${FUNCTION_APP_URL}/api/actions/escalate"
-    method: POST
+    - type: teams_notification
+      channel: safety-ops
+      template: high_risk_alert
+    - type: webhook
+      url: "${FUNCTION_APP_URL}/api/actions/escalate"
+      method: POST
 ```
 
 ### Automation pattern mapping
 
-| Foundry Automate pattern | Azure equivalent | Best for |
-|---|---|---|
-| Scheduled function execution | Azure Functions timer trigger | Developer-owned, code-first automation |
-| Scheduled workflow | Power Automate scheduled flow | Business-user-owned, no-code automation |
-| Data condition trigger | Data Activator rule | Reactive monitoring, threshold-based alerts |
-| Event-driven trigger | Event Grid + Azure Functions | System integration, high-throughput events |
-| Multi-step orchestration | Durable Functions / Logic Apps | Long-running workflows with state |
+| Foundry Automate pattern     | Azure equivalent               | Best for                                    |
+| ---------------------------- | ------------------------------ | ------------------------------------------- |
+| Scheduled function execution | Azure Functions timer trigger  | Developer-owned, code-first automation      |
+| Scheduled workflow           | Power Automate scheduled flow  | Business-user-owned, no-code automation     |
+| Data condition trigger       | Data Activator rule            | Reactive monitoring, threshold-based alerts |
+| Event-driven trigger         | Event Grid + Azure Functions   | System integration, high-throughput events  |
+| Multi-step orchestration     | Durable Functions / Logic Apps | Long-running workflows with state           |
 
 ---
 
@@ -1146,13 +1141,13 @@ def test_process_event_enrichment():
 
 ### Monitoring strategy
 
-| Foundry monitoring | Azure equivalent | Implementation |
-|---|---|---|
-| Function execution logs | Application Insights | Auto-instrumented; traces, dependencies, exceptions |
-| Ontology audit trail | Cosmos DB change feed + Log Analytics | Track all document mutations via change feed |
-| Action execution history | Azure Monitor workbooks | Custom KQL queries over Function invocation logs |
-| Compute Module health | Container Apps revision logs / AKS monitoring | Azure Monitor Container Insights |
-| End-to-end tracing | Application Insights distributed tracing | Correlation IDs propagated across services |
+| Foundry monitoring       | Azure equivalent                              | Implementation                                      |
+| ------------------------ | --------------------------------------------- | --------------------------------------------------- |
+| Function execution logs  | Application Insights                          | Auto-instrumented; traces, dependencies, exceptions |
+| Ontology audit trail     | Cosmos DB change feed + Log Analytics         | Track all document mutations via change feed        |
+| Action execution history | Azure Monitor workbooks                       | Custom KQL queries over Function invocation logs    |
+| Compute Module health    | Container Apps revision logs / AKS monitoring | Azure Monitor Container Insights                    |
+| End-to-end tracing       | Application Insights distributed tracing      | Correlation IDs propagated across services          |
 
 ### Key KQL queries for monitoring migrated functions
 
@@ -1184,32 +1179,32 @@ FunctionAppLogs
 
 Foundry charges for compute through bundled compute units. Typical costs for function-heavy workloads:
 
-| Component | Typical annual cost | Notes |
-|---|---|---|
-| Compute commitment (includes Functions) | $500K-$2M/year | Bundled with pipeline and Ontology indexing compute |
-| Compute Module add-on | $100K-$400K/year | Additional for containerized workloads |
-| AIP compute (if AI functions) | $200K-$800K/year | LLM inference for function-backed AI features |
+| Component                               | Typical annual cost | Notes                                               |
+| --------------------------------------- | ------------------- | --------------------------------------------------- |
+| Compute commitment (includes Functions) | $500K-$2M/year      | Bundled with pipeline and Ontology indexing compute |
+| Compute Module add-on                   | $100K-$400K/year    | Additional for containerized workloads              |
+| AIP compute (if AI functions)           | $200K-$800K/year    | LLM inference for function-backed AI features       |
 
 ### Azure compute pricing (Consumption plan)
 
-| Component | Unit cost | Typical annual cost | Notes |
-|---|---|---|---|
-| Azure Functions executions | $0.20 per million | $500-$5,000/year | First 1M free per month |
-| Azure Functions compute | $0.000016/GB-s | $2,000-$20,000/year | Memory x duration |
-| Event Grid events | $0.60 per million | $500-$2,000/year | First 100K free per month |
-| Container Apps (vCPU) | $0.000024/vCPU-s | $10,000-$50,000/year | Scale-to-zero capable |
-| AKS (node pool) | VM pricing | $20,000-$100,000/year | Pay for VMs, K8s control plane free |
-| Power Automate | $15/user/month | $5,000-$50,000/year | Per-user or per-flow licensing |
-| Data Activator | Included in Fabric capacity | $0 incremental | Included with Fabric F-SKU |
+| Component                  | Unit cost                   | Typical annual cost   | Notes                               |
+| -------------------------- | --------------------------- | --------------------- | ----------------------------------- |
+| Azure Functions executions | $0.20 per million           | $500-$5,000/year      | First 1M free per month             |
+| Azure Functions compute    | $0.000016/GB-s              | $2,000-$20,000/year   | Memory x duration                   |
+| Event Grid events          | $0.60 per million           | $500-$2,000/year      | First 100K free per month           |
+| Container Apps (vCPU)      | $0.000024/vCPU-s            | $10,000-$50,000/year  | Scale-to-zero capable               |
+| AKS (node pool)            | VM pricing                  | $20,000-$100,000/year | Pay for VMs, K8s control plane free |
+| Power Automate             | $15/user/month              | $5,000-$50,000/year   | Per-user or per-flow licensing      |
+| Data Activator             | Included in Fabric capacity | $0 incremental        | Included with Fabric F-SKU          |
 
 ### Cost comparison summary
 
-| Workload profile | Foundry annual cost | Azure annual cost | Savings |
-|---|---|---|---|
-| Light (100K function calls/day) | $500K+ (minimum compute commitment) | $5,000-$15,000 | 95%+ |
-| Medium (1M function calls/day) | $800K-$1.2M | $25,000-$75,000 | 90-95% |
-| Heavy (10M calls/day + containers) | $1.5M-$2.5M | $100,000-$250,000 | 85-90% |
-| Heavy + GPU inference | $2M-$3.5M | $200,000-$400,000 | 80-90% |
+| Workload profile                   | Foundry annual cost                 | Azure annual cost | Savings |
+| ---------------------------------- | ----------------------------------- | ----------------- | ------- |
+| Light (100K function calls/day)    | $500K+ (minimum compute commitment) | $5,000-$15,000    | 95%+    |
+| Medium (1M function calls/day)     | $800K-$1.2M                         | $25,000-$75,000   | 90-95%  |
+| Heavy (10M calls/day + containers) | $1.5M-$2.5M                         | $100,000-$250,000 | 85-90%  |
+| Heavy + GPU inference              | $2M-$3.5M                           | $200,000-$400,000 | 80-90%  |
 
 The cost advantage comes from two factors: Azure Functions' Consumption plan charges per-execution (Foundry requires a compute commitment regardless of utilization), and Azure separates compute tiers so simple HTTP functions do not subsidize expensive GPU workloads.
 

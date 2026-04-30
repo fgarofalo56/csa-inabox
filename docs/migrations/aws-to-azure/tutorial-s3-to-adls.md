@@ -19,13 +19,13 @@ This tutorial walks through migrating a single S3 bucket to ADLS Gen2, setting u
 
 ### Tools
 
-| Tool | Minimum version | Install |
-|------|----------------|---------|
-| AWS CLI | 2.x | `pip install awscli` or MSI installer |
-| Azure CLI | 2.60+ | `curl -sL https://aka.ms/InstallAzureCLIDeb \| sudo bash` |
-| AzCopy | 10.24+ | [Download](https://learn.microsoft.com/azure/storage/common/storage-use-azcopy-v10) |
-| Databricks CLI | 0.220+ | `pip install databricks-cli` |
-| jq | 1.6+ | `sudo apt install jq` or `brew install jq` |
+| Tool           | Minimum version | Install                                                                             |
+| -------------- | --------------- | ----------------------------------------------------------------------------------- |
+| AWS CLI        | 2.x             | `pip install awscli` or MSI installer                                               |
+| Azure CLI      | 2.60+           | `curl -sL https://aka.ms/InstallAzureCLIDeb \| sudo bash`                           |
+| AzCopy         | 10.24+          | [Download](https://learn.microsoft.com/azure/storage/common/storage-use-azcopy-v10) |
+| Databricks CLI | 0.220+          | `pip install databricks-cli`                                                        |
+| jq             | 1.6+            | `sudo apt install jq` or `brew install jq`                                          |
 
 ### AWS access
 
@@ -78,16 +78,16 @@ aws s3api get-bucket-lifecycle-configuration --bucket acme-analytics-raw
 
 Record the following in your migration tracker:
 
-| Attribute | Value |
-|-----------|-------|
-| Bucket name | `acme-analytics-raw` |
-| Region | `us-gov-west-1` |
-| Total size | 2.3 TiB |
-| Object count | 1,247,832 |
-| Primary formats | Parquet (67%), JSON (16%), CSV (9%), ORC (8%) |
+| Attribute       | Value                                          |
+| --------------- | ---------------------------------------------- |
+| Bucket name     | `acme-analytics-raw`                           |
+| Region          | `us-gov-west-1`                                |
+| Total size      | 2.3 TiB                                        |
+| Object count    | 1,247,832                                      |
+| Primary formats | Parquet (67%), JSON (16%), CSV (9%), ORC (8%)  |
 | Lifecycle rules | 90-day transition to S3-IA, 365-day to Glacier |
-| Encryption | SSE-S3 (AES-256) |
-| Versioning | Enabled |
+| Encryption      | SSE-S3 (AES-256)                               |
+| Versioning      | Enabled                                        |
 
 > **AWS comparison:** In AWS, `aws s3 ls --recursive --summarize` is the standard inventory command. In Azure, the equivalent is `az storage blob list --account-name <name> --container-name <name> --query "[].{name:name, size:properties.contentLength}" -o table`.
 
@@ -288,11 +288,11 @@ wait
 
 **Expected transfer rates:**
 
-| Network path | Throughput | 2 TiB estimate |
-|-------------|-----------|-----------------|
-| Public internet | 200-500 Mbps | 9-22 hours |
-| ExpressRoute 1 Gbps | 800-900 Mbps | 5-6 hours |
-| ExpressRoute 10 Gbps | 5-8 Gbps | 35-55 minutes |
+| Network path         | Throughput   | 2 TiB estimate |
+| -------------------- | ------------ | -------------- |
+| Public internet      | 200-500 Mbps | 9-22 hours     |
+| ExpressRoute 1 Gbps  | 800-900 Mbps | 5-6 hours      |
+| ExpressRoute 10 Gbps | 5-8 Gbps     | 35-55 minutes  |
 
 > **AWS comparison:** In AWS, cross-region replication or `aws s3 sync` handles bucket-to-bucket copies. AzCopy is the Azure equivalent of `aws s3 sync` but with native S3-source support. For datasets over 50 TiB, consider Azure Data Box instead of network transfer.
 
@@ -524,10 +524,10 @@ In Azure Data Factory linked services, change the dataset path from the OneLake 
 
 ```json
 {
-  "type": "AzureBlobFSLocation",
-  "fileName": "",
-  "folderPath": "sales/",
-  "fileSystem": "bronze"
+    "type": "AzureBlobFSLocation",
+    "fileName": "",
+    "folderPath": "sales/",
+    "fileSystem": "bronze"
 }
 ```
 

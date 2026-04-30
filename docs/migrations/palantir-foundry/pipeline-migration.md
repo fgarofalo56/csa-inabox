@@ -8,19 +8,19 @@
 
 Palantir Foundry organizes data transformation through a layered system that couples compute, orchestration, and governance into a single proprietary surface.
 
-| Foundry component | Purpose |
-|---|---|
-| **Pipeline Builder** | Visual drag-and-drop ETL designer with type-safe transforms, health checks, and LLM-assisted transform generation |
-| **Code Repositories** | Web-based IDE for Python, Java, SQL, and Mesa transforms with Git branching, pull requests, and CI/CD |
-| **Python transforms** | PySpark jobs wrapped in Foundry decorators (`@transform`, `@transform_df`, `@transform.using`) with automatic dependency tracking |
-| **SQL transforms** | Declarative SQL with automatic input/output dataset binding |
-| **Java transforms** | Full Spark Java API for complex or performance-critical workloads |
-| **Incremental computation** | Process only changed rows or files since the last successful run |
-| **Streaming** | Flink-based low-latency ingestion and transformation |
-| **Scheduling** | Cron-based, dependency-based, and event-based triggers |
-| **Data Expectations** | Assertion-based quality checks on pipeline outputs |
-| **Health Checks** | Monitoring dashboards with alert routing to email, PagerDuty, and Slack |
-| **LLM transforms** | Classification, sentiment analysis, summarization, entity extraction, and translation using integrated LLMs |
+| Foundry component           | Purpose                                                                                                                           |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| **Pipeline Builder**        | Visual drag-and-drop ETL designer with type-safe transforms, health checks, and LLM-assisted transform generation                 |
+| **Code Repositories**       | Web-based IDE for Python, Java, SQL, and Mesa transforms with Git branching, pull requests, and CI/CD                             |
+| **Python transforms**       | PySpark jobs wrapped in Foundry decorators (`@transform`, `@transform_df`, `@transform.using`) with automatic dependency tracking |
+| **SQL transforms**          | Declarative SQL with automatic input/output dataset binding                                                                       |
+| **Java transforms**         | Full Spark Java API for complex or performance-critical workloads                                                                 |
+| **Incremental computation** | Process only changed rows or files since the last successful run                                                                  |
+| **Streaming**               | Flink-based low-latency ingestion and transformation                                                                              |
+| **Scheduling**              | Cron-based, dependency-based, and event-based triggers                                                                            |
+| **Data Expectations**       | Assertion-based quality checks on pipeline outputs                                                                                |
+| **Health Checks**           | Monitoring dashboards with alert routing to email, PagerDuty, and Slack                                                           |
+| **LLM transforms**          | Classification, sentiment analysis, summarization, entity extraction, and translation using integrated LLMs                       |
 
 The key architectural constraint is that every component above runs inside Foundry's proprietary runtime. Code, scheduling definitions, quality rules, and monitoring configuration are stored in Foundry-specific formats that cannot be exported to standard tooling without rewriting.
 
@@ -98,40 +98,46 @@ CSA-in-a-Box provides a reference ADF pipeline for batch ingestion at `domains/s
 
 ```json
 {
-  "name": "pl_ingest_to_bronze",
-  "properties": {
-    "description": "Generic batch ingestion pipeline. Copies data from source to ADLS raw/bronze container with metadata logging.",
-    "activities": [
-      {
-        "name": "SetIngestionTimestamp",
-        "type": "SetVariable",
-        "typeProperties": {
-          "variableName": "ingestionTimestamp",
-          "value": "@utcnow('yyyy-MM-ddTHH:mm:ssZ')"
-        }
-      },
-      {
-        "name": "CopyToRaw",
-        "type": "Copy",
-        "dependsOn": [
-          { "activity": "SetIngestionTimestamp", "dependencyConditions": ["Succeeded"] }
+    "name": "pl_ingest_to_bronze",
+    "properties": {
+        "description": "Generic batch ingestion pipeline. Copies data from source to ADLS raw/bronze container with metadata logging.",
+        "activities": [
+            {
+                "name": "SetIngestionTimestamp",
+                "type": "SetVariable",
+                "typeProperties": {
+                    "variableName": "ingestionTimestamp",
+                    "value": "@utcnow('yyyy-MM-ddTHH:mm:ssZ')"
+                }
+            },
+            {
+                "name": "CopyToRaw",
+                "type": "Copy",
+                "dependsOn": [
+                    {
+                        "activity": "SetIngestionTimestamp",
+                        "dependencyConditions": ["Succeeded"]
+                    }
+                ],
+                "typeProperties": {
+                    "source": { "type": "DelimitedTextSource" },
+                    "sink": {
+                        "type": "ParquetSink",
+                        "storeSettings": { "type": "AzureBlobFSWriteSettings" }
+                    }
+                }
+            }
         ],
-        "typeProperties": {
-          "source": { "type": "DelimitedTextSource" },
-          "sink": {
-            "type": "ParquetSink",
-            "storeSettings": { "type": "AzureBlobFSWriteSettings" }
-          }
+        "parameters": {
+            "sourceContainer": {
+                "type": "String",
+                "defaultValue": "source-data"
+            },
+            "sourceFolderPath": { "type": "String" },
+            "domainName": { "type": "String", "defaultValue": "shared" },
+            "entityName": { "type": "String" }
         }
-      }
-    ],
-    "parameters": {
-      "sourceContainer": { "type": "String", "defaultValue": "source-data" },
-      "sourceFolderPath": { "type": "String" },
-      "domainName": { "type": "String", "defaultValue": "shared" },
-      "entityName": { "type": "String" }
     }
-  }
 }
 ```
 
@@ -149,15 +155,15 @@ ForEachEntity_IngestToBronze (parallel, batch=4)
 
 ### Migration checklist
 
-| Foundry Pipeline Builder feature | ADF equivalent | Notes |
-|---|---|---|
-| Drag-and-drop canvas | ADF visual authoring | Near-identical experience |
-| Source connectors | 100+ ADF connectors | Broader connector coverage |
-| Transform steps | ADF Data Flows / dbt models | dbt preferred for SQL transforms |
-| Dependency graph | ADF activity dependencies | `dependencyConditions` in JSON |
-| Parameterization | ADF pipeline parameters | Expression language: `@pipeline().parameters.x` |
-| Error handling | ADF failure dependencies + WebActivity | Webhook alerts on failure |
-| Version control | ADF Git integration (Azure Repos or GitHub) | ARM templates committed to repo |
+| Foundry Pipeline Builder feature | ADF equivalent                              | Notes                                           |
+| -------------------------------- | ------------------------------------------- | ----------------------------------------------- |
+| Drag-and-drop canvas             | ADF visual authoring                        | Near-identical experience                       |
+| Source connectors                | 100+ ADF connectors                         | Broader connector coverage                      |
+| Transform steps                  | ADF Data Flows / dbt models                 | dbt preferred for SQL transforms                |
+| Dependency graph                 | ADF activity dependencies                   | `dependencyConditions` in JSON                  |
+| Parameterization                 | ADF pipeline parameters                     | Expression language: `@pipeline().parameters.x` |
+| Error handling                   | ADF failure dependencies + WebActivity      | Webhook alerts on failure                       |
+| Version control                  | ADF Git integration (Azure Repos or GitHub) | ARM templates committed to repo                 |
 
 ---
 
@@ -267,13 +273,13 @@ cleaned.write.format("delta").mode("overwrite").saveAsTable("silver.customers_cl
 
 ### Key differences
 
-| Foundry pattern | Azure pattern | Impact |
-|---|---|---|
-| `@transform_df` decorator | dbt `config()` block or plain Spark | Remove all Foundry imports |
-| `Input("/path/to/dataset")` | `{{ ref('model_name') }}` or `spark.read.table()` | Dataset paths become dbt refs or catalog tables |
-| `Output("/path/to/dataset")` | dbt materializes automatically or `df.write.saveAsTable()` | No explicit output declaration needed |
-| `@transform.using(param=...)` | dbt `{{ var('param') }}` or notebook widgets | Parameters externalized |
-| Foundry type system | Delta Lake schema enforcement | Schema managed by Delta + dbt `on_schema_change` |
+| Foundry pattern               | Azure pattern                                              | Impact                                           |
+| ----------------------------- | ---------------------------------------------------------- | ------------------------------------------------ |
+| `@transform_df` decorator     | dbt `config()` block or plain Spark                        | Remove all Foundry imports                       |
+| `Input("/path/to/dataset")`   | `{{ ref('model_name') }}` or `spark.read.table()`          | Dataset paths become dbt refs or catalog tables  |
+| `Output("/path/to/dataset")`  | dbt materializes automatically or `df.write.saveAsTable()` | No explicit output declaration needed            |
+| `@transform.using(param=...)` | dbt `{{ var('param') }}` or notebook widgets               | Parameters externalized                          |
+| Foundry type system           | Delta Lake schema enforcement                              | Schema managed by Delta + dbt `on_schema_change` |
 
 ---
 
@@ -335,13 +341,13 @@ select * from aggregated
 
 ### Translation rules
 
-| Foundry SQL syntax | dbt equivalent |
-|---|---|
-| `@input('dataset_name')` | `{{ ref('model_name') }}` |
-| `@output('dataset_name')` | File name is the model name |
-| Foundry-managed schema | `schema.yml` with column definitions and tests |
-| Inline quality checks | dbt tests in `schema.yml` or `tests/` directory |
-| Dataset-level scheduling | Handled by ADF triggers, not in the SQL |
+| Foundry SQL syntax        | dbt equivalent                                  |
+| ------------------------- | ----------------------------------------------- |
+| `@input('dataset_name')`  | `{{ ref('model_name') }}`                       |
+| `@output('dataset_name')` | File name is the model name                     |
+| Foundry-managed schema    | `schema.yml` with column definitions and tests  |
+| Inline quality checks     | dbt tests in `schema.yml` or `tests/` directory |
+| Dataset-level scheduling  | Handled by ADF triggers, not in the SQL         |
 
 ---
 
@@ -371,20 +377,20 @@ The CSA-in-a-Box project configures incremental models at the project level in `
 
 ```yaml
 models:
-  csa_analytics:
-    bronze:
-      +materialized: incremental
-      +file_format: delta
-      +schema: bronze
-    silver:
-      +materialized: incremental
-      +file_format: delta
-      +schema: silver
-      +incremental_strategy: merge
-    gold:
-      +materialized: table     # Gold is full rebuild by default
-      +file_format: delta
-      +schema: gold
+    csa_analytics:
+        bronze:
+            +materialized: incremental
+            +file_format: delta
+            +schema: bronze
+        silver:
+            +materialized: incremental
+            +file_format: delta
+            +schema: silver
+            +incremental_strategy: merge
+        gold:
+            +materialized: table # Gold is full rebuild by default
+            +file_format: delta
+            +schema: gold
 ```
 
 Individual models control incremental behavior:
@@ -430,30 +436,30 @@ For source-system ingestion, ADF provides watermark-based and change-data-captur
 
 ```json
 {
-  "name": "IncrementalCopy",
-  "type": "Copy",
-  "typeProperties": {
-    "source": {
-      "type": "SqlSource",
-      "sqlReaderQuery": {
-        "value": "SELECT * FROM transactions WHERE modified_date > '@{pipeline().parameters.lastWatermark}'",
-        "type": "Expression"
-      }
+    "name": "IncrementalCopy",
+    "type": "Copy",
+    "typeProperties": {
+        "source": {
+            "type": "SqlSource",
+            "sqlReaderQuery": {
+                "value": "SELECT * FROM transactions WHERE modified_date > '@{pipeline().parameters.lastWatermark}'",
+                "type": "Expression"
+            }
+        }
     }
-  }
 }
 ```
 
 ### Incremental strategy comparison
 
-| Pattern | Foundry | dbt on Azure |
-|---|---|---|
-| **Row-level** | `@incremental()` decorator, automatic row tracking | `is_incremental()` with timestamp watermark |
-| **File-level** | Automatic new-file detection | `incremental_file_filter` macro (CSA-in-a-Box) |
-| **Merge (upsert)** | Implicit on primary key | `incremental_strategy='merge'` + `unique_key` |
-| **Append-only** | Output mode configuration | `incremental_strategy='append'` |
-| **Full refresh** | Manual trigger in UI | `dbt run --full-refresh` or ADF parameter |
-| **Schema evolution** | Handled by Foundry runtime | `on_schema_change='fail'` / `'append_new_columns'` |
+| Pattern              | Foundry                                            | dbt on Azure                                       |
+| -------------------- | -------------------------------------------------- | -------------------------------------------------- |
+| **Row-level**        | `@incremental()` decorator, automatic row tracking | `is_incremental()` with timestamp watermark        |
+| **File-level**       | Automatic new-file detection                       | `incremental_file_filter` macro (CSA-in-a-Box)     |
+| **Merge (upsert)**   | Implicit on primary key                            | `incremental_strategy='merge'` + `unique_key`      |
+| **Append-only**      | Output mode configuration                          | `incremental_strategy='append'`                    |
+| **Full refresh**     | Manual trigger in UI                               | `dbt run --full-refresh` or ADF parameter          |
+| **Schema evolution** | Handled by Foundry runtime                         | `on_schema_change='fail'` / `'append_new_columns'` |
 
 ---
 
@@ -525,13 +531,13 @@ RawEvents
 
 ### Streaming migration decision matrix
 
-| Requirement | Recommended Azure service |
-|---|---|
-| Simple aggregations, < 5 transforms | Stream Analytics |
-| Complex joins, ML scoring, Python logic | Spark Structured Streaming |
-| Sub-second latency, KQL analytics | Fabric Real-Time Intelligence |
-| IoT device management + streaming | IoT Hub + Stream Analytics |
-| Message ordering guarantees | Event Hubs with partition keys |
+| Requirement                             | Recommended Azure service      |
+| --------------------------------------- | ------------------------------ |
+| Simple aggregations, < 5 transforms     | Stream Analytics               |
+| Complex joins, ML scoring, Python logic | Spark Structured Streaming     |
+| Sub-second latency, KQL analytics       | Fabric Real-Time Intelligence  |
+| IoT device management + streaming       | IoT Hub + Stream Analytics     |
+| Message ordering guarantees             | Event Hubs with partition keys |
 
 ---
 
@@ -542,6 +548,7 @@ Foundry supports cron-based, dependency-based, and event-based scheduling. ADF p
 ### Before: Foundry scheduling
 
 Foundry schedules are configured through the UI or API:
+
 - **Cron schedules:** Run at fixed intervals (e.g., daily at 06:00 UTC)
 - **Dependency triggers:** Run when upstream datasets are updated
 - **Event triggers:** Run when external events occur (e.g., file arrival)
@@ -554,34 +561,34 @@ CSA-in-a-Box provides reference triggers at `domains/shared/pipelines/adf/trigge
 
 ```json
 {
-  "name": "tr_daily_medallion",
-  "properties": {
-    "type": "ScheduleTrigger",
-    "typeProperties": {
-      "recurrence": {
-        "frequency": "Day",
-        "interval": 1,
-        "startTime": "2026-01-01T06:00:00Z",
-        "timeZone": "UTC",
-        "schedule": {
-          "hours": [6],
-          "minutes": [0]
-        }
-      }
-    },
-    "pipelines": [
-      {
-        "pipelineReference": {
-          "referenceName": "pl_medallion_orchestration",
-          "type": "PipelineReference"
+    "name": "tr_daily_medallion",
+    "properties": {
+        "type": "ScheduleTrigger",
+        "typeProperties": {
+            "recurrence": {
+                "frequency": "Day",
+                "interval": 1,
+                "startTime": "2026-01-01T06:00:00Z",
+                "timeZone": "UTC",
+                "schedule": {
+                    "hours": [6],
+                    "minutes": [0]
+                }
+            }
         },
-        "parameters": {
-          "environment": "prod",
-          "fullRefresh": false
-        }
-      }
-    ]
-  }
+        "pipelines": [
+            {
+                "pipelineReference": {
+                    "referenceName": "pl_medallion_orchestration",
+                    "type": "PipelineReference"
+                },
+                "parameters": {
+                    "environment": "prod",
+                    "fullRefresh": false
+                }
+            }
+        ]
+    }
 }
 ```
 
@@ -591,17 +598,17 @@ CSA-in-a-Box provides reference triggers at `domains/shared/pipelines/adf/trigge
 
 ```json
 {
-  "name": "tr_hourly_ingest",
-  "properties": {
-    "type": "TumblingWindowTrigger",
-    "typeProperties": {
-      "frequency": "Hour",
-      "interval": 1,
-      "startTime": "2026-01-01T00:00:00Z",
-      "retryPolicy": { "count": 3, "intervalInSeconds": 30 },
-      "dependsOn": []
+    "name": "tr_hourly_ingest",
+    "properties": {
+        "type": "TumblingWindowTrigger",
+        "typeProperties": {
+            "frequency": "Hour",
+            "interval": 1,
+            "startTime": "2026-01-01T00:00:00Z",
+            "retryPolicy": { "count": 3, "intervalInSeconds": 30 },
+            "dependsOn": []
+        }
     }
-  }
 }
 ```
 
@@ -609,28 +616,28 @@ CSA-in-a-Box provides reference triggers at `domains/shared/pipelines/adf/trigge
 
 ```json
 {
-  "name": "tr_file_arrival",
-  "properties": {
-    "type": "BlobEventsTrigger",
-    "typeProperties": {
-      "blobPathBeginsWith": "/landing/sales/",
-      "blobPathEndsWith": ".csv",
-      "events": ["Microsoft.Storage.BlobCreated"],
-      "scope": "/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Storage/storageAccounts/{sa}"
+    "name": "tr_file_arrival",
+    "properties": {
+        "type": "BlobEventsTrigger",
+        "typeProperties": {
+            "blobPathBeginsWith": "/landing/sales/",
+            "blobPathEndsWith": ".csv",
+            "events": ["Microsoft.Storage.BlobCreated"],
+            "scope": "/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Storage/storageAccounts/{sa}"
+        }
     }
-  }
 }
 ```
 
 ### Schedule mapping reference
 
-| Foundry schedule type | ADF trigger type | Key configuration |
-|---|---|---|
-| Cron (fixed interval) | `ScheduleTrigger` | `recurrence.frequency`, `schedule.hours` |
-| Dependency (upstream complete) | `TumblingWindowTrigger` with `dependsOn` | Chain triggers with dependency references |
-| Event (file arrival) | `BlobEventsTrigger` | `blobPathBeginsWith`, `events` |
-| Event (message arrival) | `CustomEventsTrigger` | Event Grid topic subscription |
-| Manual | ADF API / `workflow_dispatch` in GitHub Actions | REST API or GitHub Actions manual trigger |
+| Foundry schedule type          | ADF trigger type                                | Key configuration                         |
+| ------------------------------ | ----------------------------------------------- | ----------------------------------------- |
+| Cron (fixed interval)          | `ScheduleTrigger`                               | `recurrence.frequency`, `schedule.hours`  |
+| Dependency (upstream complete) | `TumblingWindowTrigger` with `dependsOn`        | Chain triggers with dependency references |
+| Event (file arrival)           | `BlobEventsTrigger`                             | `blobPathBeginsWith`, `events`            |
+| Event (message arrival)        | `CustomEventsTrigger`                           | Event Grid topic subscription             |
+| Manual                         | ADF API / `workflow_dispatch` in GitHub Actions | REST API or GitHub Actions manual trigger |
 
 ---
 
@@ -664,29 +671,30 @@ CSA-in-a-Box defines quality tests in `domains/shared/dbt/models/silver/schema.y
 version: 2
 
 models:
-  - name: slv_customers
-    description: >
-      Silver layer: Cleansed customer records. Deduped, standardized
-      casing, validated email format, surrogate-keyed.
-    columns:
-      - name: customer_sk
-        description: Surrogate key (md5 of customer_id).
-        tests:
-          - unique
-          - not_null
-      - name: customer_id
-        description: Natural customer identifier from Bronze.
-      - name: email
-        description: Customer email (lowercased)
-      - name: is_valid
-        description: True when the row passes every quality check.
-        tests:
-          - not_null
-      - name: category
-        tests:
-          - accepted_values:
-              values: ['ELECTRONICS', 'CLOTHING', 'HOME', 'BOOKS', 'SPORTS']
-              severity: warn
+    - name: slv_customers
+      description: >
+          Silver layer: Cleansed customer records. Deduped, standardized
+          casing, validated email format, surrogate-keyed.
+      columns:
+          - name: customer_sk
+            description: Surrogate key (md5 of customer_id).
+            tests:
+                - unique
+                - not_null
+          - name: customer_id
+            description: Natural customer identifier from Bronze.
+          - name: email
+            description: Customer email (lowercased)
+          - name: is_valid
+            description: True when the row passes every quality check.
+            tests:
+                - not_null
+          - name: category
+            tests:
+                - accepted_values:
+                      values:
+                          ["ELECTRONICS", "CLOTHING", "HOME", "BOOKS", "SPORTS"]
+                      severity: warn
 ```
 
 ### After: CSA-in-a-Box data contracts
@@ -698,38 +706,38 @@ apiVersion: csa.microsoft.com/v1
 kind: DataProductContract
 
 metadata:
-  name: finance.invoices
-  domain: finance
-  owner: finance-data-engineering@contoso.com
-  version: "1.0.0"
+    name: finance.invoices
+    domain: finance
+    owner: finance-data-engineering@contoso.com
+    version: "1.0.0"
 
 schema:
-  primary_key: [invoice_sk]
-  columns:
-    - name: invoice_sk
-      type: string
-      nullable: false
-    - name: status
-      type: string
-      nullable: false
-      allowed_values: [DRAFT, SENT, PAID, OVERDUE, CANCELLED, PARTIAL]
+    primary_key: [invoice_sk]
+    columns:
+        - name: invoice_sk
+          type: string
+          nullable: false
+        - name: status
+          type: string
+          nullable: false
+          allowed_values: [DRAFT, SENT, PAID, OVERDUE, CANCELLED, PARTIAL]
 
 sla:
-  freshness_minutes: 60
-  valid_row_ratio: 0.97
+    freshness_minutes: 60
+    valid_row_ratio: 0.97
 
 quality_rules:
-  - rule: expect_column_values_to_not_be_null
-    column: invoice_sk
-  - rule: expect_column_values_to_be_unique
-    column: invoice_sk
-  - rule: expect_column_values_to_be_in_set
-    column: status
-    value_set: [DRAFT, SENT, PAID, OVERDUE, CANCELLED, PARTIAL]
-  - rule: expect_column_values_to_be_between
-    column: total_amount
-    min_value: 0
-    mostly: 0.97
+    - rule: expect_column_values_to_not_be_null
+      column: invoice_sk
+    - rule: expect_column_values_to_be_unique
+      column: invoice_sk
+    - rule: expect_column_values_to_be_in_set
+      column: status
+      value_set: [DRAFT, SENT, PAID, OVERDUE, CANCELLED, PARTIAL]
+    - rule: expect_column_values_to_be_between
+      column: total_amount
+      min_value: 0
+      mostly: 0.97
 ```
 
 Contracts are validated in CI via `.github/workflows/validate-contracts.yml`.
@@ -764,14 +772,14 @@ from validated
 
 ### Quality migration comparison
 
-| Foundry Expectations | Azure equivalent | Advantage |
-|---|---|---|
-| `expect_column_values_to_not_be_null` | dbt `not_null` test | Identical semantics |
-| `expect_column_values_to_be_unique` | dbt `unique` test | Identical semantics |
-| `expect_column_values_to_be_in_set` | dbt `accepted_values` test | Supports `severity: warn` |
-| Custom expectations | dbt singular tests or `dbt_expectations` package | Richer test library |
-| Pipeline-level health checks | dbt source freshness + Azure Monitor alerts | Broader alerting ecosystem |
-| Output assertions | Data contracts with CI validation | Enforced at build time, not just runtime |
+| Foundry Expectations                  | Azure equivalent                                 | Advantage                                |
+| ------------------------------------- | ------------------------------------------------ | ---------------------------------------- |
+| `expect_column_values_to_not_be_null` | dbt `not_null` test                              | Identical semantics                      |
+| `expect_column_values_to_be_unique`   | dbt `unique` test                                | Identical semantics                      |
+| `expect_column_values_to_be_in_set`   | dbt `accepted_values` test                       | Supports `severity: warn`                |
+| Custom expectations                   | dbt singular tests or `dbt_expectations` package | Richer test library                      |
+| Pipeline-level health checks          | dbt source freshness + Azure Monitor alerts      | Broader alerting ecosystem               |
+| Output assertions                     | Data contracts with CI validation                | Enforced at build time, not just runtime |
 
 ---
 
@@ -854,35 +862,35 @@ For batch LLM enrichment orchestrated through ADF:
 
 ```json
 {
-  "name": "LLM_Classify_Tickets",
-  "type": "DatabricksNotebook",
-  "typeProperties": {
-    "notebookPath": "/notebooks/enrich/classify_support_tickets",
-    "baseParameters": {
-      "source_table": "silver.support_tickets",
-      "target_table": "enriched.classified_tickets",
-      "model_deployment": "gpt-4o",
-      "batch_size": "100"
+    "name": "LLM_Classify_Tickets",
+    "type": "DatabricksNotebook",
+    "typeProperties": {
+        "notebookPath": "/notebooks/enrich/classify_support_tickets",
+        "baseParameters": {
+            "source_table": "silver.support_tickets",
+            "target_table": "enriched.classified_tickets",
+            "model_deployment": "gpt-4o",
+            "batch_size": "100"
+        }
+    },
+    "linkedServiceName": {
+        "referenceName": "ls_databricks",
+        "type": "LinkedServiceReference"
     }
-  },
-  "linkedServiceName": {
-    "referenceName": "ls_databricks",
-    "type": "LinkedServiceReference"
-  }
 }
 ```
 
 ### LLM use-case mapping
 
-| Foundry LLM transform | Azure implementation | Service |
-|---|---|---|
-| Classification | Azure OpenAI `gpt-4o` with structured output | Azure OpenAI |
-| Sentiment analysis | Azure AI Language or OpenAI | AI Language / OpenAI |
-| Summarization | Azure OpenAI `gpt-4o` | Azure OpenAI |
-| Entity extraction | Azure AI Language NER or OpenAI | AI Language / OpenAI |
-| Translation | Azure AI Translator or OpenAI | AI Translator / OpenAI |
-| Embedding generation | Azure OpenAI `text-embedding-3-large` | Azure OpenAI |
-| RAG enrichment | Azure AI Search + OpenAI | AI Foundry |
+| Foundry LLM transform | Azure implementation                         | Service                |
+| --------------------- | -------------------------------------------- | ---------------------- |
+| Classification        | Azure OpenAI `gpt-4o` with structured output | Azure OpenAI           |
+| Sentiment analysis    | Azure AI Language or OpenAI                  | AI Language / OpenAI   |
+| Summarization         | Azure OpenAI `gpt-4o`                        | Azure OpenAI           |
+| Entity extraction     | Azure AI Language NER or OpenAI              | AI Language / OpenAI   |
+| Translation           | Azure AI Translator or OpenAI                | AI Translator / OpenAI |
+| Embedding generation  | Azure OpenAI `text-embedding-3-large`        | Azure OpenAI           |
+| RAG enrichment        | Azure AI Search + OpenAI                     | AI Foundry             |
 
 ---
 
@@ -898,45 +906,45 @@ The reference CI/CD workflow deploys dbt models to Databricks across multiple ve
 name: Deploy dbt Models
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'domains/*/dbt/**'
-  workflow_dispatch:
-    inputs:
-      vertical:
-        description: 'Vertical to deploy (or "all")'
-        required: true
-        type: choice
-        options: [all, usda, dot, usps, noaa, epa, commerce, interior]
-      environment:
-        description: 'Target environment'
-        type: choice
-        options: [dev, staging, prod]
-      full_refresh:
-        description: 'Run full refresh (drop and recreate)'
-        type: boolean
-        default: false
+    push:
+        branches: [main]
+        paths:
+            - "domains/*/dbt/**"
+    workflow_dispatch:
+        inputs:
+            vertical:
+                description: 'Vertical to deploy (or "all")'
+                required: true
+                type: choice
+                options: [all, usda, dot, usps, noaa, epa, commerce, interior]
+            environment:
+                description: "Target environment"
+                type: choice
+                options: [dev, staging, prod]
+            full_refresh:
+                description: "Run full refresh (drop and recreate)"
+                type: boolean
+                default: false
 
 jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - run: pip install dbt-databricks==1.8.* dbt-core==1.8.*
-      - run: dbt deps
-      - run: dbt seed --target ${{ inputs.environment }}
-      - run: dbt run --target ${{ inputs.environment }}
-      - run: dbt test --target ${{ inputs.environment }}
-      - uses: actions/upload-artifact@v4
-        with:
-          name: dbt-artifacts
-          path: |
-            target/manifest.json
-            target/run_results.json
+    deploy:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-python@v5
+              with:
+                  python-version: "3.12"
+            - run: pip install dbt-databricks==1.8.* dbt-core==1.8.*
+            - run: dbt deps
+            - run: dbt seed --target ${{ inputs.environment }}
+            - run: dbt run --target ${{ inputs.environment }}
+            - run: dbt test --target ${{ inputs.environment }}
+            - uses: actions/upload-artifact@v4
+              with:
+                  name: dbt-artifacts
+                  path: |
+                      target/manifest.json
+                      target/run_results.json
 ```
 
 ### Data contract validation in CI
@@ -948,30 +956,30 @@ Quality gates enforce contracts before code reaches production:
 name: Validate Data Contracts
 
 on:
-  pull_request:
-    paths:
-      - 'domains/*/data-products/*/contract.yaml'
+    pull_request:
+        paths:
+            - "domains/*/data-products/*/contract.yaml"
 
 jobs:
-  validate:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: pip install pyyaml jsonschema
-      - run: python -m governance.contracts.contract_validator
+    validate:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - run: pip install pyyaml jsonschema
+            - run: python -m governance.contracts.contract_validator
 ```
 
 ### CI/CD comparison
 
-| Foundry CI/CD feature | Azure equivalent | CSA-in-a-Box evidence |
-|---|---|---|
-| Code Repository (web IDE) | GitHub + VS Code / Codespaces | Standard Git workflow |
-| Branch-based development | Git branches + pull requests | GitHub flow |
-| CI checks on PR | GitHub Actions | `.github/workflows/deploy-dbt.yml` |
-| Automated testing | `dbt test` in CI pipeline | Test step in deploy workflow |
-| Environment promotion | Workflow dispatch with environment selector | `dev` / `staging` / `prod` targets |
-| Artifact tracking | GitHub Actions artifacts | `manifest.json`, `run_results.json` |
-| Contract validation | CI contract checks | `.github/workflows/validate-contracts.yml` |
+| Foundry CI/CD feature     | Azure equivalent                            | CSA-in-a-Box evidence                      |
+| ------------------------- | ------------------------------------------- | ------------------------------------------ |
+| Code Repository (web IDE) | GitHub + VS Code / Codespaces               | Standard Git workflow                      |
+| Branch-based development  | Git branches + pull requests                | GitHub flow                                |
+| CI checks on PR           | GitHub Actions                              | `.github/workflows/deploy-dbt.yml`         |
+| Automated testing         | `dbt test` in CI pipeline                   | Test step in deploy workflow               |
+| Environment promotion     | Workflow dispatch with environment selector | `dev` / `staging` / `prod` targets         |
+| Artifact tracking         | GitHub Actions artifacts                    | `manifest.json`, `run_results.json`        |
+| Contract validation       | CI contract checks                          | `.github/workflows/validate-contracts.yml` |
 
 ---
 
@@ -981,31 +989,31 @@ The following benchmarks are representative of typical mid-sized federal deploym
 
 ### ETL throughput
 
-| Workload | Foundry (typical) | Azure (dbt + Databricks) | Notes |
-|---|---|---|---|
-| 10 GB CSV ingest to Parquet | 8-12 min | 3-5 min | ADF parallel copy + ADLS Gen2 |
-| 1 TB incremental merge | 15-25 min | 8-15 min | dbt merge on Delta Lake, Photon-accelerated |
-| 100 SQL transforms (Silver) | 20-30 min | 10-20 min | dbt parallel execution (`threads: 8`) |
-| Full medallion pipeline (20 TB) | 2-4 hours | 1-2 hours | ADF orchestration + dbt + Databricks |
+| Workload                        | Foundry (typical) | Azure (dbt + Databricks) | Notes                                       |
+| ------------------------------- | ----------------- | ------------------------ | ------------------------------------------- |
+| 10 GB CSV ingest to Parquet     | 8-12 min          | 3-5 min                  | ADF parallel copy + ADLS Gen2               |
+| 1 TB incremental merge          | 15-25 min         | 8-15 min                 | dbt merge on Delta Lake, Photon-accelerated |
+| 100 SQL transforms (Silver)     | 20-30 min         | 10-20 min                | dbt parallel execution (`threads: 8`)       |
+| Full medallion pipeline (20 TB) | 2-4 hours         | 1-2 hours                | ADF orchestration + dbt + Databricks        |
 
 ### Cost efficiency
 
-| Metric | Foundry | Azure |
-|---|---|---|
-| Compute for 8-hour daily pipeline window | Included in license (opaque) | ~$150-300/day (Databricks Jobs Compute) |
-| Additional per-seat cost for pipeline authors | $15,000-25,000/seat/year | $0 (GitHub seats, ~$4/user/month) |
-| Storage (20 TB Delta Lake) | Included in license (opaque) | ~$400/month (ADLS Gen2 Hot) |
-| Monitoring and alerting | Included | ~$50-100/month (Azure Monitor) |
+| Metric                                        | Foundry                      | Azure                                   |
+| --------------------------------------------- | ---------------------------- | --------------------------------------- |
+| Compute for 8-hour daily pipeline window      | Included in license (opaque) | ~$150-300/day (Databricks Jobs Compute) |
+| Additional per-seat cost for pipeline authors | $15,000-25,000/seat/year     | $0 (GitHub seats, ~$4/user/month)       |
+| Storage (20 TB Delta Lake)                    | Included in license (opaque) | ~$400/month (ADLS Gen2 Hot)             |
+| Monitoring and alerting                       | Included                     | ~$50-100/month (Azure Monitor)          |
 
 ### Operational advantages
 
-| Dimension | Foundry | Azure |
-|---|---|---|
-| **Debugging** | Foundry-specific logs, limited to web UI | Spark UI, ADF Monitor, Log Analytics, local dbt debug |
-| **Local development** | Not supported (cloud-only IDE) | Full local dev with dbt + DuckDB or local Spark |
-| **Testing** | Foundry-specific test framework | dbt tests, pytest, Great Expectations (industry standard) |
-| **Talent availability** | Small, specialized pool | Large pool (dbt, Spark, SQL, Python are commodity skills) |
-| **Vendor portability** | Locked to Foundry runtime | dbt runs on Databricks, Snowflake, BigQuery, Fabric, Postgres |
+| Dimension               | Foundry                                  | Azure                                                         |
+| ----------------------- | ---------------------------------------- | ------------------------------------------------------------- |
+| **Debugging**           | Foundry-specific logs, limited to web UI | Spark UI, ADF Monitor, Log Analytics, local dbt debug         |
+| **Local development**   | Not supported (cloud-only IDE)           | Full local dev with dbt + DuckDB or local Spark               |
+| **Testing**             | Foundry-specific test framework          | dbt tests, pytest, Great Expectations (industry standard)     |
+| **Talent availability** | Small, specialized pool                  | Large pool (dbt, Spark, SQL, Python are commodity skills)     |
+| **Vendor portability**  | Locked to Foundry runtime                | dbt runs on Databricks, Snowflake, BigQuery, Fabric, Postgres |
 
 ---
 
@@ -1057,19 +1065,19 @@ The following benchmarks are representative of typical mid-sized federal deploym
 
 ## Summary: migration path by component
 
-| Foundry component | Primary Azure target | Secondary option | CSA-in-a-Box evidence |
-|---|---|---|---|
-| Pipeline Builder | ADF visual designer | Fabric Data Factory | `domains/shared/pipelines/adf/` |
-| Code Repositories | GitHub + VS Code | Azure Repos | `.github/workflows/` |
-| Python transforms | dbt SQL models | Fabric/Databricks notebooks | `domains/shared/dbt/models/` |
-| SQL transforms | dbt SQL models | Fabric SQL | `domains/shared/dbt/models/` |
-| Java transforms | Databricks Spark jobs | AKS Spark Submit | N/A (use notebooks) |
-| Incremental computation | dbt incremental models | ADF incremental copy | `dbt_project.yml` |
-| Streaming | Event Hubs + Stream Analytics | Spark Structured Streaming | `domains/shared/notebooks/` |
-| Scheduling | ADF triggers | GitHub Actions `workflow_dispatch` | `domains/shared/pipelines/adf/triggers/` |
-| Data Expectations | dbt tests + data contracts | Great Expectations | `domains/shared/dbt/models/*/schema.yml` |
-| Health Checks | Azure Monitor + ADF webhook alerts | dbt source freshness | `pl_medallion_orchestration.json` |
-| LLM transforms | Azure OpenAI + notebooks | Azure AI Foundry | `domains/shared/notebooks/` |
+| Foundry component       | Primary Azure target               | Secondary option                   | CSA-in-a-Box evidence                    |
+| ----------------------- | ---------------------------------- | ---------------------------------- | ---------------------------------------- |
+| Pipeline Builder        | ADF visual designer                | Fabric Data Factory                | `domains/shared/pipelines/adf/`          |
+| Code Repositories       | GitHub + VS Code                   | Azure Repos                        | `.github/workflows/`                     |
+| Python transforms       | dbt SQL models                     | Fabric/Databricks notebooks        | `domains/shared/dbt/models/`             |
+| SQL transforms          | dbt SQL models                     | Fabric SQL                         | `domains/shared/dbt/models/`             |
+| Java transforms         | Databricks Spark jobs              | AKS Spark Submit                   | N/A (use notebooks)                      |
+| Incremental computation | dbt incremental models             | ADF incremental copy               | `dbt_project.yml`                        |
+| Streaming               | Event Hubs + Stream Analytics      | Spark Structured Streaming         | `domains/shared/notebooks/`              |
+| Scheduling              | ADF triggers                       | GitHub Actions `workflow_dispatch` | `domains/shared/pipelines/adf/triggers/` |
+| Data Expectations       | dbt tests + data contracts         | Great Expectations                 | `domains/shared/dbt/models/*/schema.yml` |
+| Health Checks           | Azure Monitor + ADF webhook alerts | dbt source freshness               | `pl_medallion_orchestration.json`        |
+| LLM transforms          | Azure OpenAI + notebooks           | Azure AI Foundry                   | `domains/shared/notebooks/`              |
 
 ---
 

@@ -25,10 +25,10 @@
 
 ### Two primary paths
 
-| Path | Best for | Throughput | Complexity |
-| --- | --- | --- | --- |
-| **TPT export → Parquet → azcopy** | Initial bulk load, large tables | Very high (TB/hour) | Medium |
-| **ADF with JDBC connector** | Incremental loads, smaller tables, ongoing CDC | Moderate (GB/hour) | Low-Medium |
+| Path                              | Best for                                       | Throughput          | Complexity |
+| --------------------------------- | ---------------------------------------------- | ------------------- | ---------- |
+| **TPT export → Parquet → azcopy** | Initial bulk load, large tables                | Very high (TB/hour) | Medium     |
+| **ADF with JDBC connector**       | Incremental loads, smaller tables, ongoing CDC | Moderate (GB/hour)  | Low-Medium |
 
 For most migrations, use **TPT for the initial bulk load** and **ADF for ongoing incremental sync**.
 
@@ -298,14 +298,18 @@ See `docs/SELF_HOSTED_IR.md` for SHIR setup details.
 {
     "name": "CopyTeradataOrders",
     "type": "Copy",
-    "inputs": [{
-        "referenceName": "TeradataOrdersDataset",
-        "type": "DatasetReference"
-    }],
-    "outputs": [{
-        "referenceName": "ADLSOrdersParquet",
-        "type": "DatasetReference"
-    }],
+    "inputs": [
+        {
+            "referenceName": "TeradataOrdersDataset",
+            "type": "DatasetReference"
+        }
+    ],
+    "outputs": [
+        {
+            "referenceName": "ADLSOrdersParquet",
+            "type": "DatasetReference"
+        }
+    ],
     "typeProperties": {
         "source": {
             "type": "TeradataSource",
@@ -361,14 +365,14 @@ See `docs/SELF_HOSTED_IR.md` for SHIR setup details.
 
 ### 4.5 Throughput optimization
 
-| Tuning knob | Recommendation | Impact |
-| --- | --- | --- |
-| `parallelCopies` | 8-32 (depends on Teradata capacity) | Linear throughput improvement |
-| `partitionOption` | Hash or DynamicRange | Parallel extraction |
-| SHIR sizing | 8+ cores, 32+ GB RAM | Avoids bottleneck |
-| Teradata workload class | Dedicate a class for ADF exports | Prevents impact on production queries |
-| Batch size | 1M rows per Parquet file | Optimal file size for Delta |
-| Network | ExpressRoute (not VPN) for >1 TB | 10x throughput |
+| Tuning knob             | Recommendation                      | Impact                                |
+| ----------------------- | ----------------------------------- | ------------------------------------- |
+| `parallelCopies`        | 8-32 (depends on Teradata capacity) | Linear throughput improvement         |
+| `partitionOption`       | Hash or DynamicRange                | Parallel extraction                   |
+| SHIR sizing             | 8+ cores, 32+ GB RAM                | Avoids bottleneck                     |
+| Teradata workload class | Dedicate a class for ADF exports    | Prevents impact on production queries |
+| Batch size              | 1M rows per Parquet file            | Optimal file size for Delta           |
+| Network                 | ExpressRoute (not VPN) for >1 TB    | 10x throughput                        |
 
 ---
 
@@ -376,12 +380,12 @@ See `docs/SELF_HOSTED_IR.md` for SHIR setup details.
 
 ### 5.1 FastLoad → ADF bulk copy (full table overwrite)
 
-| FastLoad concept | ADF equivalent |
-| --- | --- |
-| Empty table requirement | ADF sink: `tableActionOption: "Overwrite"` |
-| High-speed parallel insert | `parallelCopies: 16-32` |
-| Error tables (ET/UV) | ADF fault tolerance: redirect incompatible rows |
-| Checkpoint/restart | ADF pipeline retry policy |
+| FastLoad concept           | ADF equivalent                                  |
+| -------------------------- | ----------------------------------------------- |
+| Empty table requirement    | ADF sink: `tableActionOption: "Overwrite"`      |
+| High-speed parallel insert | `parallelCopies: 16-32`                         |
+| Error tables (ET/UV)       | ADF fault tolerance: redirect incompatible rows |
+| Checkpoint/restart         | ADF pipeline retry policy                       |
 
 **ADF pipeline for full-table replacement:**
 
@@ -394,7 +398,10 @@ See `docs/SELF_HOSTED_IR.md` for SHIR setup details.
             "typeProperties": {
                 "source": {
                     "type": "ParquetSource",
-                    "storeSettings": { "type": "AzureBlobFSReadSettings", "recursive": true }
+                    "storeSettings": {
+                        "type": "AzureBlobFSReadSettings",
+                        "recursive": true
+                    }
                 },
                 "sink": {
                     "type": "DeltaLakeSink",
@@ -412,22 +419,24 @@ See `docs/SELF_HOSTED_IR.md` for SHIR setup details.
 
 ### 5.2 MultiLoad → ADF + Delta MERGE (upsert)
 
-| MultiLoad concept | Azure equivalent |
-| --- | --- |
-| Insert/Update/Delete/Upsert | Delta MERGE with match conditions |
+| MultiLoad concept           | Azure equivalent                             |
+| --------------------------- | -------------------------------------------- |
+| Insert/Update/Delete/Upsert | Delta MERGE with match conditions            |
 | Multiple DML in single pass | Single MERGE with WHEN MATCHED / NOT MATCHED |
-| Apply table → staging table | ADF loads to staging Delta table |
-| Error table | ADF fault tolerance + error logging |
+| Apply table → staging table | ADF loads to staging Delta table             |
+| Error table                 | ADF fault tolerance + error logging          |
 
 **Two-step pattern: ADF load → Databricks MERGE:**
 
 Step 1 — ADF loads incremental data to staging:
+
 ```sql
 -- ADF copies new/changed rows to staging
 -- Target: staging.orders_incremental
 ```
 
 Step 2 — Databricks notebook merges to target:
+
 ```sql
 MERGE INTO silver.orders AS target
 USING staging.orders_incremental AS source
@@ -448,12 +457,12 @@ During the 6-18 month migration window, Teradata continues receiving writes. You
 
 ### 6.1 Options
 
-| Approach | Latency | Complexity | Cost |
-| --- | --- | --- | --- |
-| **Qlik Replicate (Attunity)** | Near real-time (seconds) | Low | $$ (commercial license) |
-| **Teradata journal tables** | Minutes-hours | Medium | $ (built-in if configured) |
-| **Timestamp-based incremental** | Hours (batch) | Low | $ (ADF only) |
-| **Full daily re-extract** | Daily | Very low | $ (for small tables only) |
+| Approach                        | Latency                  | Complexity | Cost                       |
+| ------------------------------- | ------------------------ | ---------- | -------------------------- |
+| **Qlik Replicate (Attunity)**   | Near real-time (seconds) | Low        | $$ (commercial license)    |
+| **Teradata journal tables**     | Minutes-hours            | Medium     | $ (built-in if configured) |
+| **Timestamp-based incremental** | Hours (batch)            | Low        | $ (ADF only)               |
+| **Full daily re-extract**       | Daily                    | Very low   | $ (for small tables only)  |
 
 ### 6.2 Qlik Replicate approach
 
@@ -465,6 +474,7 @@ Teradata → Qlik Replicate → Event Hubs → Spark Structured Streaming → De
 ```
 
 Configuration highlights:
+
 - Source: Teradata (ODBC connection)
 - Target: Azure Event Hubs or ADLS
 - Replication mode: Full Load + CDC
@@ -616,49 +626,49 @@ def validate_golden_queries(td_conn, az_conn):
 ```yaml
 # models/silver/schema.yml
 models:
-  - name: orders
-    description: "Migrated from Teradata production.orders"
-    columns:
-      - name: order_id
-        tests:
-          - unique
-          - not_null
-      - name: customer_id
-        tests:
-          - not_null
-          - relationships:
-              to: ref('customers')
-              field: customer_id
-      - name: amount
-        tests:
-          - not_null
-          - dbt_expectations.expect_column_values_to_be_between:
-              min_value: 0
-              max_value: 1000000
-      - name: order_date
-        tests:
-          - not_null
-          - dbt_expectations.expect_column_values_to_be_between:
-              min_value: "'2010-01-01'"
-              max_value: "'2030-12-31'"
-    tests:
-      - dbt_utils.equal_rowcount:
-          compare_model: ref('teradata_orders_count')
+    - name: orders
+      description: "Migrated from Teradata production.orders"
+      columns:
+          - name: order_id
+            tests:
+                - unique
+                - not_null
+          - name: customer_id
+            tests:
+                - not_null
+                - relationships:
+                      to: ref('customers')
+                      field: customer_id
+          - name: amount
+            tests:
+                - not_null
+                - dbt_expectations.expect_column_values_to_be_between:
+                      min_value: 0
+                      max_value: 1000000
+          - name: order_date
+            tests:
+                - not_null
+                - dbt_expectations.expect_column_values_to_be_between:
+                      min_value: "'2010-01-01'"
+                      max_value: "'2030-12-31'"
+      tests:
+          - dbt_utils.equal_rowcount:
+                compare_model: ref('teradata_orders_count')
 ```
 
 ### 7.5 Validation dashboard
 
 Build a Power BI dashboard tracking:
 
-| Metric | Source | Target | Status |
-| --- | --- | --- | --- |
-| Table count | 3,247 | 3,247 | Match |
-| Total rows | 45.2B | 45.2B | Match |
-| Checksum (orders) | 8,291,038,291 | 8,291,038,291 | Match |
-| Golden query 1 | $142.3M | $142.3M | Match |
-| Golden query 2 | 89,201 | 89,201 | Match |
-| CDC lag | — | 12 min | OK |
-| Last sync | — | 2024-01-15 14:30 | OK |
+| Metric            | Source        | Target           | Status |
+| ----------------- | ------------- | ---------------- | ------ |
+| Table count       | 3,247         | 3,247            | Match  |
+| Total rows        | 45.2B         | 45.2B            | Match  |
+| Checksum (orders) | 8,291,038,291 | 8,291,038,291    | Match  |
+| Golden query 1    | $142.3M       | $142.3M          | Match  |
+| Golden query 2    | 89,201        | 89,201           | Match  |
+| CDC lag           | —             | 12 min           | OK     |
+| Last sync         | —             | 2024-01-15 14:30 | OK     |
 
 ---
 
@@ -666,12 +676,12 @@ Build a Power BI dashboard tracking:
 
 ### 8.1 Azure Data Box for initial load
 
-| Data volume | Recommended approach | Timeline |
-| --- | --- | --- |
-| < 10 TB | ExpressRoute direct transfer | 1-3 days |
-| 10-100 TB | ExpressRoute (allow 3-14 days) | 1-2 weeks |
+| Data volume   | Recommended approach                    | Timeline  |
+| ------------- | --------------------------------------- | --------- |
+| < 10 TB       | ExpressRoute direct transfer            | 1-3 days  |
+| 10-100 TB     | ExpressRoute (allow 3-14 days)          | 1-2 weeks |
 | 100 TB - 1 PB | Azure Data Box Heavy (multiple devices) | 2-4 weeks |
-| > 1 PB | Data Box Heavy + ExpressRoute for delta | 4-8 weeks |
+| > 1 PB        | Data Box Heavy + ExpressRoute for delta | 4-8 weeks |
 
 ### 8.2 Data Box workflow
 

@@ -41,11 +41,11 @@ Object Types are the core building block. Every other Ontology component referen
 
 Link Types define relationships between Object Types with explicit cardinality:
 
-| Cardinality | Implementation | Example |
-|---|---|---|
-| One-to-one | Foreign key on either side | `Employee` -- `Badge` |
-| One-to-many | Foreign key on the "many" side | `Case` -- `Evidence` |
-| Many-to-many | Join table (bridge dataset) | `Case` -- `Party` |
+| Cardinality  | Implementation                 | Example               |
+| ------------ | ------------------------------ | --------------------- |
+| One-to-one   | Foreign key on either side     | `Employee` -- `Badge` |
+| One-to-many  | Foreign key on the "many" side | `Case` -- `Evidence`  |
+| Many-to-many | Join table (bridge dataset)    | `Case` -- `Party`     |
 
 Each Link Type declares a source Object Type, a target Object Type, the foreign key columns involved, and the cardinality constraint. Links are directional but can be traversed in both directions in queries.
 
@@ -53,18 +53,18 @@ Each Link Type declares a source Object Type, a target Object Type, the foreign 
 
 Properties are typed attributes on Object Types. Foundry supports these types:
 
-| Foundry type | Description | Examples |
-|---|---|---|
-| `string` | Unicode text | Names, identifiers |
-| `integer` / `long` | Whole numbers | Counts, IDs |
-| `double` / `float` | Floating-point numbers | Measurements, scores |
-| `boolean` | True/false | Flags, toggles |
-| `date` | Calendar date | `2026-04-30` |
-| `timestamp` | Date with time and timezone | `2026-04-30T14:30:00Z` |
-| `array` | Ordered list of values | Tags, multi-select |
-| `struct` | Nested key-value object | Address, metadata |
-| `geoshape` | GeoJSON geometry | Polygons, points |
-| `enum` | Constrained set of values | Status codes |
+| Foundry type       | Description                 | Examples               |
+| ------------------ | --------------------------- | ---------------------- |
+| `string`           | Unicode text                | Names, identifiers     |
+| `integer` / `long` | Whole numbers               | Counts, IDs            |
+| `double` / `float` | Floating-point numbers      | Measurements, scores   |
+| `boolean`          | True/false                  | Flags, toggles         |
+| `date`             | Calendar date               | `2026-04-30`           |
+| `timestamp`        | Date with time and timezone | `2026-04-30T14:30:00Z` |
+| `array`            | Ordered list of values      | Tags, multi-select     |
+| `struct`           | Nested key-value object     | Address, metadata      |
+| `geoshape`         | GeoJSON geometry            | Polygons, points       |
+| `enum`             | Constrained set of values   | Status codes           |
 
 Properties can carry classifications (PII, CUI, HIPAA) that control visibility and masking behavior.
 
@@ -158,17 +158,17 @@ graph LR
 
 ### Mapping summary
 
-| Foundry component | Primary Azure equivalent | Secondary equivalent | CSA-in-a-Box evidence |
-|---|---|---|---|
-| Object Types | Purview business glossary terms + dbt gold-layer models (dimensions/facts) | Fabric lakehouse tables | `csa_platform/governance/purview/purview_automation.py` |
-| Link Types | Foreign key relationships in dbt + Power BI model relationships | Purview relationship attributes | `domains/shared/dbt/models/gold/schema.yml` |
-| Properties | Column definitions in dbt schema + Purview classifications | Fabric table columns | `csa_platform/governance/purview/classifications/` |
-| Interfaces | dbt abstract/base models or Purview classification hierarchies | Fabric shared schemas | `domains/shared/dbt/models/` |
-| Actions | Data Activator rules + Event Grid + Azure Functions | Power Automate flows | `csa_platform/data_activator/rules/` |
-| Function-backed columns | Power BI DAX measures / Fabric computed columns | dbt ephemeral models | `csa_platform/semantic_model/semantic_model_template.yaml` |
-| Materialization | dbt incremental models + SCD Type 2 patterns | Fabric lakehouse merge | `domains/shared/dbt/models/gold/fact_orders.sql` |
-| Scenarios | Git branches + dbt environments (`dev` / `staging` / `prod`) | Fabric deployment pipelines | Git-based workflow |
-| Object Views | Power BI visuals + Power Apps components | Power Pages, React portals | Power BI report templates |
+| Foundry component       | Primary Azure equivalent                                                   | Secondary equivalent            | CSA-in-a-Box evidence                                      |
+| ----------------------- | -------------------------------------------------------------------------- | ------------------------------- | ---------------------------------------------------------- |
+| Object Types            | Purview business glossary terms + dbt gold-layer models (dimensions/facts) | Fabric lakehouse tables         | `csa_platform/governance/purview/purview_automation.py`    |
+| Link Types              | Foreign key relationships in dbt + Power BI model relationships            | Purview relationship attributes | `domains/shared/dbt/models/gold/schema.yml`                |
+| Properties              | Column definitions in dbt schema + Purview classifications                 | Fabric table columns            | `csa_platform/governance/purview/classifications/`         |
+| Interfaces              | dbt abstract/base models or Purview classification hierarchies             | Fabric shared schemas           | `domains/shared/dbt/models/`                               |
+| Actions                 | Data Activator rules + Event Grid + Azure Functions                        | Power Automate flows            | `csa_platform/data_activator/rules/`                       |
+| Function-backed columns | Power BI DAX measures / Fabric computed columns                            | dbt ephemeral models            | `csa_platform/semantic_model/semantic_model_template.yaml` |
+| Materialization         | dbt incremental models + SCD Type 2 patterns                               | Fabric lakehouse merge          | `domains/shared/dbt/models/gold/fact_orders.sql`           |
+| Scenarios               | Git branches + dbt environments (`dev` / `staging` / `prod`)               | Fabric deployment pipelines     | Git-based workflow                                         |
+| Object Views            | Power BI visuals + Power Apps components                                   | Power Pages, React portals      | Power BI report templates                                  |
 
 ---
 
@@ -176,61 +176,61 @@ graph LR
 
 ### 3.1 Object Types to dbt models and Purview terms
 
-| Foundry Object Type attribute | dbt equivalent | Purview equivalent |
-|---|---|---|
-| Name | Model file name (`dim_case.sql`) | Glossary term name |
-| Description | `description` in `schema.yml` | Glossary term definition |
-| Primary key | `unique_key` in model config + `unique` test | N/A (metadata only) |
-| Backing dataset | Source ref in `sources.yml` | Registered data asset |
-| Properties | Column definitions in `schema.yml` | Term attributes / entity columns |
-| Classifications | dbt `tags` + `meta.classification` | Purview classification labels |
-| Search config | N/A | Purview search indexing (automatic) |
+| Foundry Object Type attribute | dbt equivalent                               | Purview equivalent                  |
+| ----------------------------- | -------------------------------------------- | ----------------------------------- |
+| Name                          | Model file name (`dim_case.sql`)             | Glossary term name                  |
+| Description                   | `description` in `schema.yml`                | Glossary term definition            |
+| Primary key                   | `unique_key` in model config + `unique` test | N/A (metadata only)                 |
+| Backing dataset               | Source ref in `sources.yml`                  | Registered data asset               |
+| Properties                    | Column definitions in `schema.yml`           | Term attributes / entity columns    |
+| Classifications               | dbt `tags` + `meta.classification`           | Purview classification labels       |
+| Search config                 | N/A                                          | Purview search indexing (automatic) |
 
 ### 3.2 Link Types to relationships
 
-| Foundry Link attribute | dbt equivalent | Power BI equivalent |
-|---|---|---|
-| Source Object Type | `ref()` in SQL FROM clause | "From" table in relationship |
-| Target Object Type | `ref()` in SQL JOIN clause | "To" table in relationship |
-| Cardinality | `relationships` test in `schema.yml` | `cardinality` property (many_to_one, etc.) |
-| Foreign key | Column used in JOIN | `fromColumn` / `toColumn` |
-| Many-to-many bridge | Bridge model (`bridge_case_party.sql`) | Bridge table with dual relationships |
+| Foundry Link attribute | dbt equivalent                         | Power BI equivalent                        |
+| ---------------------- | -------------------------------------- | ------------------------------------------ |
+| Source Object Type     | `ref()` in SQL FROM clause             | "From" table in relationship               |
+| Target Object Type     | `ref()` in SQL JOIN clause             | "To" table in relationship                 |
+| Cardinality            | `relationships` test in `schema.yml`   | `cardinality` property (many_to_one, etc.) |
+| Foreign key            | Column used in JOIN                    | `fromColumn` / `toColumn`                  |
+| Many-to-many bridge    | Bridge model (`bridge_case_party.sql`) | Bridge table with dual relationships       |
 
 ### 3.3 Property types to column types
 
-| Foundry type | dbt/SQL type | Power BI type | Purview classification |
-|---|---|---|---|
-| `string` | `VARCHAR` / `STRING` | `string` | Auto-detected |
-| `integer` | `INT` / `BIGINT` | `int64` | N/A |
-| `double` | `DOUBLE` / `FLOAT` | `double` | N/A |
-| `boolean` | `BOOLEAN` | `boolean` | N/A |
-| `date` | `DATE` | `dateTime` | N/A |
-| `timestamp` | `TIMESTAMP` | `dateTime` | N/A |
-| `array` | `ARRAY<T>` (Spark/Databricks) | Flatten to rows or serialize | N/A |
-| `struct` | `STRUCT<...>` (Spark/Databricks) | Flatten to columns | N/A |
-| `geoshape` | `STRING` (WKT/GeoJSON) | Map visual binding | Custom classification |
-| `enum` | `STRING` + `accepted_values` test | `string` + slicer | N/A |
+| Foundry type | dbt/SQL type                      | Power BI type                | Purview classification |
+| ------------ | --------------------------------- | ---------------------------- | ---------------------- |
+| `string`     | `VARCHAR` / `STRING`              | `string`                     | Auto-detected          |
+| `integer`    | `INT` / `BIGINT`                  | `int64`                      | N/A                    |
+| `double`     | `DOUBLE` / `FLOAT`                | `double`                     | N/A                    |
+| `boolean`    | `BOOLEAN`                         | `boolean`                    | N/A                    |
+| `date`       | `DATE`                            | `dateTime`                   | N/A                    |
+| `timestamp`  | `TIMESTAMP`                       | `dateTime`                   | N/A                    |
+| `array`      | `ARRAY<T>` (Spark/Databricks)     | Flatten to rows or serialize | N/A                    |
+| `struct`     | `STRUCT<...>` (Spark/Databricks)  | Flatten to columns           | N/A                    |
+| `geoshape`   | `STRING` (WKT/GeoJSON)            | Map visual binding           | Custom classification  |
+| `enum`       | `STRING` + `accepted_values` test | `string` + slicer            | N/A                    |
 
 ### 3.4 Actions to Azure event-driven services
 
-| Foundry Action attribute | Azure equivalent | Implementation |
-|---|---|---|
-| Parameters | Azure Function HTTP trigger parameters | Request body schema |
-| Rules (validation) | Function input validation + Data Activator conditions | Python/TypeScript validation |
-| Submission criteria | Entra ID RBAC + conditional access | Azure RBAC role assignments |
-| Side effects: create object | Insert row via dbt incremental or direct Fabric SQL | SQL INSERT / Spark append |
-| Side effects: update property | Update row via merge pattern | SQL MERGE / dbt incremental |
-| Side effects: notify | Event Grid topic publish + Logic App / Power Automate | Event Grid + email/Teams connector |
-| Side effects: trigger pipeline | ADF trigger or Fabric pipeline trigger | REST API call to ADF/Fabric |
+| Foundry Action attribute       | Azure equivalent                                      | Implementation                     |
+| ------------------------------ | ----------------------------------------------------- | ---------------------------------- |
+| Parameters                     | Azure Function HTTP trigger parameters                | Request body schema                |
+| Rules (validation)             | Function input validation + Data Activator conditions | Python/TypeScript validation       |
+| Submission criteria            | Entra ID RBAC + conditional access                    | Azure RBAC role assignments        |
+| Side effects: create object    | Insert row via dbt incremental or direct Fabric SQL   | SQL INSERT / Spark append          |
+| Side effects: update property  | Update row via merge pattern                          | SQL MERGE / dbt incremental        |
+| Side effects: notify           | Event Grid topic publish + Logic App / Power Automate | Event Grid + email/Teams connector |
+| Side effects: trigger pipeline | ADF trigger or Fabric pipeline trigger                | REST API call to ADF/Fabric        |
 
 ### 3.5 Interfaces to dbt patterns
 
-| Foundry Interface pattern | dbt equivalent | How it works |
-|---|---|---|
-| Shared property set | dbt base model or macro | Define shared columns in a base model that downstream models `ref()` |
-| Polymorphic query | dbt `UNION ALL` across implementing models | Create a union model that combines all implementations |
-| Type constraint | `schema.yml` column tests | Enforce column presence and types across models |
-| Classification hierarchy | Purview classification hierarchy | Nested classification terms in Purview glossary |
+| Foundry Interface pattern | dbt equivalent                             | How it works                                                         |
+| ------------------------- | ------------------------------------------ | -------------------------------------------------------------------- |
+| Shared property set       | dbt base model or macro                    | Define shared columns in a base model that downstream models `ref()` |
+| Polymorphic query         | dbt `UNION ALL` across implementing models | Create a union model that combines all implementations               |
+| Type constraint           | `schema.yml` column tests                  | Enforce column presence and types across models                      |
+| Classification hierarchy  | Purview classification hierarchy           | Nested classification terms in Purview glossary                      |
 
 ---
 
@@ -307,13 +307,13 @@ for ot in object_types:
 
 Not all Object Types are equally critical. Rank them using a weighted scoring model:
 
-| Factor | Weight | How to measure |
-|---|---|---|
-| Consumer count | 30% | Number of Workshop apps, reports, and OSDK clients that reference the type |
-| Data volume | 20% | Row count and storage size of the backing dataset |
-| Action count | 20% | Number of Actions that create/modify instances |
-| Link density | 15% | Number of Link Types involving this type |
-| Compliance sensitivity | 15% | PII/CUI/HIPAA classification level |
+| Factor                 | Weight | How to measure                                                             |
+| ---------------------- | ------ | -------------------------------------------------------------------------- |
+| Consumer count         | 30%    | Number of Workshop apps, reports, and OSDK clients that reference the type |
+| Data volume            | 20%    | Row count and storage size of the backing dataset                          |
+| Action count           | 20%    | Number of Actions that create/modify instances                             |
+| Link density           | 15%    | Number of Link Types involving this type                                   |
+| Compliance sensitivity | 15%    | PII/CUI/HIPAA classification level                                         |
 
 Focus on the top 20% of Object Types first. These typically cover 80% of consumer-facing functionality.
 
@@ -321,12 +321,12 @@ Focus on the top 20% of Object Types first. These typically cover 80% of consume
 
 For each prioritized Object Type, create a dbt model in the gold layer. The model name follows the Kimball naming convention used by CSA-in-a-Box:
 
-| Foundry Object Type role | dbt model prefix | Example |
-|---|---|---|
-| Entity (who, what, where) | `dim_` | `dim_case`, `dim_party` |
-| Event / transaction | `fact_` | `fact_evidence`, `fact_action` |
-| Aggregate / metric | `gld_` | `gld_case_metrics` |
-| Many-to-many bridge | `bridge_` | `bridge_case_party` |
+| Foundry Object Type role  | dbt model prefix | Example                        |
+| ------------------------- | ---------------- | ------------------------------ |
+| Entity (who, what, where) | `dim_`           | `dim_case`, `dim_party`        |
+| Event / transaction       | `fact_`          | `fact_evidence`, `fact_action` |
+| Aggregate / metric        | `gld_`           | `gld_case_metrics`             |
+| Many-to-many bridge       | `bridge_`        | `bridge_case_party`            |
 
 Each model should:
 
@@ -346,14 +346,14 @@ Translate each Foundry Link Type into the appropriate dbt and Power BI construct
 
 ```yaml
 columns:
-  - name: case_id
-    description: FK to dim_case
-    tests:
-      - not_null
-      - relationships:
-          to: ref('dim_case')
-          field: case_id
-          severity: warn
+    - name: case_id
+      description: FK to dim_case
+      tests:
+          - not_null
+          - relationships:
+                to: ref('dim_case')
+                field: case_id
+                severity: warn
 ```
 
 **Many-to-many links**: Create a bridge model:
@@ -411,39 +411,39 @@ See [Section 8](#8-power-bi-semantic-model) for the full semantic model definiti
 
 Foundry Actions become a combination of Data Activator rules, Event Grid topics, and Azure Functions. The migration path depends on the Action type:
 
-| Foundry Action pattern | Azure equivalent | When to use |
-|---|---|---|
-| Threshold-based alert | Data Activator rule | Condition on a metric triggers a notification |
-| CRUD operation | Azure Function + Fabric SQL endpoint | Creating or updating objects programmatically |
-| Workflow trigger | Power Automate flow | Multi-step business processes with approvals |
-| Complex business logic | Azure Function + Event Grid | Custom code triggered by events |
+| Foundry Action pattern | Azure equivalent                     | When to use                                   |
+| ---------------------- | ------------------------------------ | --------------------------------------------- |
+| Threshold-based alert  | Data Activator rule                  | Condition on a metric triggers a notification |
+| CRUD operation         | Azure Function + Fabric SQL endpoint | Creating or updating objects programmatically |
+| Workflow trigger       | Power Automate flow                  | Multi-step business processes with approvals  |
+| Complex business logic | Azure Function + Event Grid          | Custom code triggered by events               |
 
 CSA-in-a-Box provides a Data Activator rule engine at `csa_platform/data_activator/rules/`. Define rules in YAML:
 
 ```yaml
 rules:
-  - name: case-escalation-overdue
-    description: >
-      Escalate cases open > 30 days with high/urgent priority
-    source: case-event-topic
-    enabled: true
-    condition:
-      field: days_open
-      operator: gt
-      threshold: 30.0
-      window_minutes: 0
-    actions:
-      - type: teams
-        config:
-          webhook_url: ${TEAMS_WEBHOOK_URL}
-          channel: "#case-management-alerts"
-      - type: email
-        config:
-          recipients:
-            - supervisor-oncall@agency.gov
-    tags:
-      domain: case_management
-      priority: high
+    - name: case-escalation-overdue
+      description: >
+          Escalate cases open > 30 days with high/urgent priority
+      source: case-event-topic
+      enabled: true
+      condition:
+          field: days_open
+          operator: gt
+          threshold: 30.0
+          window_minutes: 0
+      actions:
+          - type: teams
+            config:
+                webhook_url: ${TEAMS_WEBHOOK_URL}
+                channel: "#case-management-alerts"
+          - type: email
+            config:
+                recipients:
+                    - supervisor-oncall@agency.gov
+      tags:
+          domain: case_management
+          priority: high
 ```
 
 ### Step 8: Validate and test
@@ -696,137 +696,137 @@ SELECT * FROM final
 version: 2
 
 models:
-  - name: dim_case
-    description: >
-      Gold layer: Case dimension. One row per case tracked from intake
-      through disposition. Migrated from Foundry Object Type "Case".
-    meta:
-      foundry_source: case_object
-      purview_glossary_term: Case
-      purview_classification: CUI-Specified
-    columns:
-      - name: case_sk
-        description: Surrogate key
-        tests: [unique, not_null]
-      - name: case_id
-        description: Natural case identifier
-        tests: [unique, not_null]
-      - name: case_number
-        description: Agency-assigned human-readable identifier
-      - name: status
-        description: "Case status: open, under_review, closed, appealed"
-        tests:
-          - accepted_values:
-              values: [open, under_review, closed, appealed]
-      - name: priority
-        description: "Case priority: low, normal, high, urgent"
-        tests:
-          - accepted_values:
-              values: [low, normal, high, urgent]
-      - name: days_open
-        description: Computed days since case opened (replaces function-backed column)
-      - name: case_segment
-        description: Derived segmentation for analytics
+    - name: dim_case
+      description: >
+          Gold layer: Case dimension. One row per case tracked from intake
+          through disposition. Migrated from Foundry Object Type "Case".
+      meta:
+          foundry_source: case_object
+          purview_glossary_term: Case
+          purview_classification: CUI-Specified
+      columns:
+          - name: case_sk
+            description: Surrogate key
+            tests: [unique, not_null]
+          - name: case_id
+            description: Natural case identifier
+            tests: [unique, not_null]
+          - name: case_number
+            description: Agency-assigned human-readable identifier
+          - name: status
+            description: "Case status: open, under_review, closed, appealed"
+            tests:
+                - accepted_values:
+                      values: [open, under_review, closed, appealed]
+          - name: priority
+            description: "Case priority: low, normal, high, urgent"
+            tests:
+                - accepted_values:
+                      values: [low, normal, high, urgent]
+          - name: days_open
+            description: Computed days since case opened (replaces function-backed column)
+          - name: case_segment
+            description: Derived segmentation for analytics
 
-  - name: dim_party
-    description: >
-      Gold layer: Party dimension. Any person or organization involved
-      in a case. Migrated from Foundry Object Type "Party".
-    meta:
-      foundry_source: party_object
-      purview_glossary_term: "Party (Case Participant)"
-      purview_classification: PII
-    columns:
-      - name: party_sk
-        description: Surrogate key
-        tests: [unique, not_null]
-      - name: party_id
-        description: Natural party identifier
-        tests: [unique, not_null]
-      - name: full_name
-        description: Full name (PII -- masked in non-production environments)
-        meta:
-          classification: pii
-      - name: date_of_birth
-        description: Date of birth (PII -- hash or redact)
-        meta:
-          classification: pii
-          masking: hash_or_redact
+    - name: dim_party
+      description: >
+          Gold layer: Party dimension. Any person or organization involved
+          in a case. Migrated from Foundry Object Type "Party".
+      meta:
+          foundry_source: party_object
+          purview_glossary_term: "Party (Case Participant)"
+          purview_classification: PII
+      columns:
+          - name: party_sk
+            description: Surrogate key
+            tests: [unique, not_null]
+          - name: party_id
+            description: Natural party identifier
+            tests: [unique, not_null]
+          - name: full_name
+            description: Full name (PII -- masked in non-production environments)
+            meta:
+                classification: pii
+          - name: date_of_birth
+            description: Date of birth (PII -- hash or redact)
+            meta:
+                classification: pii
+                masking: hash_or_redact
 
-  - name: fact_evidence
-    description: >
-      Gold layer: Evidence fact table. Chain-of-custody items
-      linked to cases. Migrated from Foundry Object Type "Evidence".
-    meta:
-      foundry_source: evidence_object
-      purview_glossary_term: "Evidence Item"
-      purview_classification: CUI-Specified
-    columns:
-      - name: evidence_sk
-        description: Surrogate key
-        tests: [unique, not_null]
-      - name: case_id
-        description: FK to dim_case
-        tests:
-          - not_null
-          - relationships:
-              to: ref('dim_case')
-              field: case_id
-              severity: warn
-      - name: case_sk
-        description: Surrogate FK to dim_case
-        tests:
-          - relationships:
-              to: ref('dim_case')
-              field: case_sk
-              severity: warn
+    - name: fact_evidence
+      description: >
+          Gold layer: Evidence fact table. Chain-of-custody items
+          linked to cases. Migrated from Foundry Object Type "Evidence".
+      meta:
+          foundry_source: evidence_object
+          purview_glossary_term: "Evidence Item"
+          purview_classification: CUI-Specified
+      columns:
+          - name: evidence_sk
+            description: Surrogate key
+            tests: [unique, not_null]
+          - name: case_id
+            description: FK to dim_case
+            tests:
+                - not_null
+                - relationships:
+                      to: ref('dim_case')
+                      field: case_id
+                      severity: warn
+          - name: case_sk
+            description: Surrogate FK to dim_case
+            tests:
+                - relationships:
+                      to: ref('dim_case')
+                      field: case_sk
+                      severity: warn
 
-  - name: fact_action
-    description: >
-      Gold layer: Case action fact table. State-changing events on
-      cases. Migrated from Foundry Object Type "Action".
-    meta:
-      foundry_source: action_object
-      purview_glossary_term: "Case Action"
-      purview_classification: Internal
-    columns:
-      - name: action_id
-        description: Natural action identifier
-        tests: [not_null]
-      - name: case_id
-        description: FK to dim_case
-        tests:
-          - not_null
-          - relationships:
-              to: ref('dim_case')
-              field: case_id
-              severity: warn
-      - name: action_type
-        tests:
-          - accepted_values:
-              values:
-                - assign
-                - reassign
-                - escalate
-                - status_change
-                - disposition
-                - appeal_filed
+    - name: fact_action
+      description: >
+          Gold layer: Case action fact table. State-changing events on
+          cases. Migrated from Foundry Object Type "Action".
+      meta:
+          foundry_source: action_object
+          purview_glossary_term: "Case Action"
+          purview_classification: Internal
+      columns:
+          - name: action_id
+            description: Natural action identifier
+            tests: [not_null]
+          - name: case_id
+            description: FK to dim_case
+            tests:
+                - not_null
+                - relationships:
+                      to: ref('dim_case')
+                      field: case_id
+                      severity: warn
+          - name: action_type
+            tests:
+                - accepted_values:
+                      values:
+                          - assign
+                          - reassign
+                          - escalate
+                          - status_change
+                          - disposition
+                          - appeal_filed
 
-  - name: bridge_case_party
-    description: >
-      Bridge table implementing the Case-Party many-to-many
-      relationship. Replaces Foundry "involves" Link Type.
-    columns:
-      - name: case_sk
-        tests:
-          - relationships:
-              to: ref('dim_case')
-              field: case_sk
-      - name: party_sk
-        tests:
-          - relationships:
-              to: ref('dim_party')
-              field: party_sk
+    - name: bridge_case_party
+      description: >
+          Bridge table implementing the Case-Party many-to-many
+          relationship. Replaces Foundry "involves" Link Type.
+      columns:
+          - name: case_sk
+            tests:
+                - relationships:
+                      to: ref('dim_case')
+                      field: case_sk
+          - name: party_sk
+            tests:
+                - relationships:
+                      to: ref('dim_party')
+                      field: party_sk
 ```
 
 ---
@@ -845,59 +845,59 @@ apiVersion: csa.microsoft.com/v1
 kind: GlossaryTermSet
 
 metadata:
-  name: case-management-glossary
-  domain: case_management
-  owner: case-management-team@agency.gov
+    name: case-management-glossary
+    domain: case_management
+    owner: case-management-team@agency.gov
 
 glossary: case_management_ontology
 
 terms:
-  - name: Case
-    definition: >
-      A legal, investigative, or adjudicative matter tracked from intake
-      through disposition. One case aggregates parties, evidence, and
-      actions. Migrated from Palantir Foundry Object Type "case_object".
-    status: Approved
-    classifications: [CUI-Specified]
-    contacts:
-      - name: Case Management Domain Lead
-        email: case-mgmt-lead@agency.gov
-        role: Expert
-    related_terms:
-      - "Party (Case Participant)"
-      - "Evidence Item"
-      - "Case Action"
-    resources:
-      - name: dbt model
-        url: "domains/case_management/dbt/models/gold/dim_case.sql"
-      - name: data contract
-        url: "domains/case_management/data-products/case/contract.yaml"
+    - name: Case
+      definition: >
+          A legal, investigative, or adjudicative matter tracked from intake
+          through disposition. One case aggregates parties, evidence, and
+          actions. Migrated from Palantir Foundry Object Type "case_object".
+      status: Approved
+      classifications: [CUI-Specified]
+      contacts:
+          - name: Case Management Domain Lead
+            email: case-mgmt-lead@agency.gov
+            role: Expert
+      related_terms:
+          - "Party (Case Participant)"
+          - "Evidence Item"
+          - "Case Action"
+      resources:
+          - name: dbt model
+            url: "domains/case_management/dbt/models/gold/dim_case.sql"
+          - name: data contract
+            url: "domains/case_management/data-products/case/contract.yaml"
 
-  - name: "Party (Case Participant)"
-    definition: >
-      Any person or organization involved in a case -- complainant,
-      subject, witness, or counsel. Contains PII subject to masking.
-    status: Approved
-    classifications: [PII]
-    contacts:
-      - name: Privacy Officer
-        email: privacy@agency.gov
-        role: Steward
+    - name: "Party (Case Participant)"
+      definition: >
+          Any person or organization involved in a case -- complainant,
+          subject, witness, or counsel. Contains PII subject to masking.
+      status: Approved
+      classifications: [PII]
+      contacts:
+          - name: Privacy Officer
+            email: privacy@agency.gov
+            role: Steward
 
-  - name: "Evidence Item"
-    definition: >
-      A document, digital artifact, or physical item preserved under
-      chain-of-custody for a case. CUI-Specified classification.
-    status: Approved
-    classifications: [CUI-Specified]
+    - name: "Evidence Item"
+      definition: >
+          A document, digital artifact, or physical item preserved under
+          chain-of-custody for a case. CUI-Specified classification.
+      status: Approved
+      classifications: [CUI-Specified]
 
-  - name: "Case Action"
-    definition: >
-      A state-changing event on a case such as assignment, escalation,
-      status change, or disposition. Generated by humans, Data Activator
-      rules, or Power Automate flows.
-    status: Approved
-    classifications: [Internal]
+    - name: "Case Action"
+      definition: >
+          A state-changing event on a case such as assignment, escalation,
+          status change, or disposition. Generated by humans, Data Activator
+          rules, or Power Automate flows.
+      status: Approved
+      classifications: [Internal]
 ```
 
 ### 6.2 Python automation script
@@ -982,12 +982,12 @@ if __name__ == "__main__":
 
 After importing glossary terms, apply Purview classification rules to the physical data assets. CSA-in-a-Box ships classification rule sets at `csa_platform/governance/purview/classifications/`:
 
-| Classification file | Scope |
-|---|---|
-| `pii_classifications.yaml` | SSN, email, phone, address, name |
-| `phi_classifications.yaml` | HIPAA Protected Health Information |
-| `government_classifications.yaml` | CUI, FCI, classified markings |
-| `financial_classifications.yaml` | Account numbers, routing numbers |
+| Classification file               | Scope                              |
+| --------------------------------- | ---------------------------------- |
+| `pii_classifications.yaml`        | SSN, email, phone, address, name   |
+| `phi_classifications.yaml`        | HIPAA Protected Health Information |
+| `government_classifications.yaml` | CUI, FCI, classified markings      |
+| `financial_classifications.yaml`  | Account numbers, routing numbers   |
 
 Apply classifications to the case management tables:
 
@@ -1074,47 +1074,47 @@ apiVersion: csa.microsoft.com/v1
 kind: DataProductContract
 
 metadata:
-  name: case_management.cases
-  domain: case_management
-  owner: case-data-engineering@agency.gov
-  version: "1.0.0"
-  description: >
-    Case records migrated from Palantir Foundry. Tracks all cases
-    from intake through disposition with full audit history.
+    name: case_management.cases
+    domain: case_management
+    owner: case-data-engineering@agency.gov
+    version: "1.0.0"
+    description: >
+        Case records migrated from Palantir Foundry. Tracks all cases
+        from intake through disposition with full audit history.
 
 schema:
-  primary_key: [case_sk]
-  columns:
-    - name: case_sk
-      type: string
-      nullable: false
-      description: Surrogate key (generated by dbt)
-    - name: case_id
-      type: string
-      nullable: false
-      description: Natural case identifier from source system
-    - name: status
-      type: string
-      nullable: false
-      allowed_values: [open, under_review, closed, appealed]
-    - name: priority
-      type: string
-      nullable: false
-      allowed_values: [low, normal, high, urgent]
+    primary_key: [case_sk]
+    columns:
+        - name: case_sk
+          type: string
+          nullable: false
+          description: Surrogate key (generated by dbt)
+        - name: case_id
+          type: string
+          nullable: false
+          description: Natural case identifier from source system
+        - name: status
+          type: string
+          nullable: false
+          allowed_values: [open, under_review, closed, appealed]
+        - name: priority
+          type: string
+          nullable: false
+          allowed_values: [low, normal, high, urgent]
 
 sla:
-  freshness_minutes: 60
-  valid_row_ratio: 0.99
-  supported_until: "2028-12-31"
+    freshness_minutes: 60
+    valid_row_ratio: 0.99
+    supported_until: "2028-12-31"
 
 quality_rules:
-  - rule: expect_column_values_to_not_be_null
-    column: case_sk
-  - rule: expect_column_values_to_be_unique
-    column: case_sk
-  - rule: expect_column_values_to_be_in_set
-    column: status
-    value_set: [open, under_review, closed, appealed]
+    - rule: expect_column_values_to_not_be_null
+      column: case_sk
+    - rule: expect_column_values_to_be_unique
+      column: case_sk
+    - rule: expect_column_values_to_be_in_set
+      column: status
+      value_set: [open, under_review, closed, appealed]
 ```
 
 ---
@@ -1189,206 +1189,206 @@ apiVersion: csa.microsoft.com/v1
 kind: SemanticModelTemplate
 
 metadata:
-  name: case-management-model
-  version: "1.0.0"
-  description: >
-    Power BI semantic model for the case management domain.
-    Migrated from Palantir Foundry Ontology.
-  owner: case-analytics@agency.gov
-  tags: [power-bi, case-management, ontology-migration]
+    name: case-management-model
+    version: "1.0.0"
+    description: >
+        Power BI semantic model for the case management domain.
+        Migrated from Palantir Foundry Ontology.
+    owner: case-analytics@agency.gov
+    tags: [power-bi, case-management, ontology-migration]
 
 connection:
-  type: databricks_sql
-  workspace:
-    hostname: "adb-{workspace_id}.azuredatabricks.net"
-  sqlWarehouse:
-    httpPath: "/sql/1.0/warehouses/{warehouse_id}"
-    name: case-mgmt-warehouse
-  authentication:
-    type: azure_ad
-    tenantId: "${AZURE_TENANT_ID}"
-    clientId: "${AZURE_CLIENT_ID}"
-  catalog: case_management_catalog
+    type: databricks_sql
+    workspace:
+        hostname: "adb-{workspace_id}.azuredatabricks.net"
+    sqlWarehouse:
+        httpPath: "/sql/1.0/warehouses/{warehouse_id}"
+        name: case-mgmt-warehouse
+    authentication:
+        type: azure_ad
+        tenantId: "${AZURE_TENANT_ID}"
+        clientId: "${AZURE_CLIENT_ID}"
+    catalog: case_management_catalog
 
 tables:
-  - name: dim_case
-    schema: gold
-    source: case_management_catalog.gold.dim_case
-    description: Case dimension -- migrated from Foundry Case object type
-    mode: DirectQuery
-    columns:
-      - name: case_sk
-        dataType: string
-        isKey: true
-      - name: case_id
-        dataType: string
-      - name: case_number
-        dataType: string
-      - name: status
-        dataType: string
-      - name: priority
-        dataType: string
-      - name: opened_at
-        dataType: dateTime
-      - name: closed_at
-        dataType: dateTime
-      - name: days_open
-        dataType: int64
-        description: Computed -- replaces Foundry function-backed column
-      - name: case_segment
-        dataType: string
+    - name: dim_case
+      schema: gold
+      source: case_management_catalog.gold.dim_case
+      description: Case dimension -- migrated from Foundry Case object type
+      mode: DirectQuery
+      columns:
+          - name: case_sk
+            dataType: string
+            isKey: true
+          - name: case_id
+            dataType: string
+          - name: case_number
+            dataType: string
+          - name: status
+            dataType: string
+          - name: priority
+            dataType: string
+          - name: opened_at
+            dataType: dateTime
+          - name: closed_at
+            dataType: dateTime
+          - name: days_open
+            dataType: int64
+            description: Computed -- replaces Foundry function-backed column
+          - name: case_segment
+            dataType: string
 
-  - name: dim_party
-    schema: gold
-    source: case_management_catalog.gold.dim_party
-    description: Party dimension -- migrated from Foundry Party object type
-    mode: DirectQuery
-    columns:
-      - name: party_sk
-        dataType: string
-        isKey: true
-      - name: party_id
-        dataType: string
-      - name: full_name
-        dataType: string
-        piiClassification: direct_identifier
-      - name: role
-        dataType: string
+    - name: dim_party
+      schema: gold
+      source: case_management_catalog.gold.dim_party
+      description: Party dimension -- migrated from Foundry Party object type
+      mode: DirectQuery
+      columns:
+          - name: party_sk
+            dataType: string
+            isKey: true
+          - name: party_id
+            dataType: string
+          - name: full_name
+            dataType: string
+            piiClassification: direct_identifier
+          - name: role
+            dataType: string
 
-  - name: fact_evidence
-    schema: gold
-    source: case_management_catalog.gold.fact_evidence
-    mode: DirectQuery
-    columns:
-      - name: evidence_sk
-        dataType: string
-        isKey: true
-      - name: case_sk
-        dataType: string
-      - name: evidence_type
-        dataType: string
-      - name: collected_at
-        dataType: dateTime
+    - name: fact_evidence
+      schema: gold
+      source: case_management_catalog.gold.fact_evidence
+      mode: DirectQuery
+      columns:
+          - name: evidence_sk
+            dataType: string
+            isKey: true
+          - name: case_sk
+            dataType: string
+          - name: evidence_type
+            dataType: string
+          - name: collected_at
+            dataType: dateTime
 
-  - name: fact_action
-    schema: gold
-    source: case_management_catalog.gold.fact_action
-    mode: DirectQuery
-    columns:
-      - name: action_sk
-        dataType: string
-        isKey: true
-      - name: case_sk
-        dataType: string
-      - name: action_type
-        dataType: string
-      - name: performed_at
-        dataType: dateTime
-      - name: source
-        dataType: string
+    - name: fact_action
+      schema: gold
+      source: case_management_catalog.gold.fact_action
+      mode: DirectQuery
+      columns:
+          - name: action_sk
+            dataType: string
+            isKey: true
+          - name: case_sk
+            dataType: string
+          - name: action_type
+            dataType: string
+          - name: performed_at
+            dataType: dateTime
+          - name: source
+            dataType: string
 
-  - name: bridge_case_party
-    schema: gold
-    source: case_management_catalog.gold.bridge_case_party
-    mode: DirectQuery
-    columns:
-      - name: case_sk
-        dataType: string
-      - name: party_sk
-        dataType: string
-      - name: role
-        dataType: string
+    - name: bridge_case_party
+      schema: gold
+      source: case_management_catalog.gold.bridge_case_party
+      mode: DirectQuery
+      columns:
+          - name: case_sk
+            dataType: string
+          - name: party_sk
+            dataType: string
+          - name: role
+            dataType: string
 
 relationships:
-  - name: evidence_to_case
-    fromTable: fact_evidence
-    fromColumn: case_sk
-    toTable: dim_case
-    toColumn: case_sk
-    cardinality: many_to_one
-    crossFilterDirection: single
+    - name: evidence_to_case
+      fromTable: fact_evidence
+      fromColumn: case_sk
+      toTable: dim_case
+      toColumn: case_sk
+      cardinality: many_to_one
+      crossFilterDirection: single
 
-  - name: action_to_case
-    fromTable: fact_action
-    fromColumn: case_sk
-    toTable: dim_case
-    toColumn: case_sk
-    cardinality: many_to_one
-    crossFilterDirection: single
+    - name: action_to_case
+      fromTable: fact_action
+      fromColumn: case_sk
+      toTable: dim_case
+      toColumn: case_sk
+      cardinality: many_to_one
+      crossFilterDirection: single
 
-  - name: bridge_to_case
-    fromTable: bridge_case_party
-    fromColumn: case_sk
-    toTable: dim_case
-    toColumn: case_sk
-    cardinality: many_to_one
-    crossFilterDirection: both
+    - name: bridge_to_case
+      fromTable: bridge_case_party
+      fromColumn: case_sk
+      toTable: dim_case
+      toColumn: case_sk
+      cardinality: many_to_one
+      crossFilterDirection: both
 
-  - name: bridge_to_party
-    fromTable: bridge_case_party
-    fromColumn: party_sk
-    toTable: dim_party
-    toColumn: party_sk
-    cardinality: many_to_one
-    crossFilterDirection: both
+    - name: bridge_to_party
+      fromTable: bridge_case_party
+      fromColumn: party_sk
+      toTable: dim_party
+      toColumn: party_sk
+      cardinality: many_to_one
+      crossFilterDirection: both
 
 measures:
-  - name: Total Cases
-    table: dim_case
-    expression: "COUNTROWS(dim_case)"
-    formatString: "#,##0"
+    - name: Total Cases
+      table: dim_case
+      expression: "COUNTROWS(dim_case)"
+      formatString: "#,##0"
 
-  - name: Open Cases
-    table: dim_case
-    expression: "CALCULATE(COUNTROWS(dim_case), dim_case[status] = \"open\")"
-    formatString: "#,##0"
+    - name: Open Cases
+      table: dim_case
+      expression: 'CALCULATE(COUNTROWS(dim_case), dim_case[status] = "open")'
+      formatString: "#,##0"
 
-  - name: Avg Days to Resolution
-    table: dim_case
-    expression: >
-      AVERAGEX(
-        FILTER(dim_case, dim_case[status] = "closed"),
-        dim_case[days_open]
-      )
-    formatString: "#,##0.0"
-    description: Average days from open to close (replaces Foundry function-backed column)
+    - name: Avg Days to Resolution
+      table: dim_case
+      expression: >
+          AVERAGEX(
+            FILTER(dim_case, dim_case[status] = "closed"),
+            dim_case[days_open]
+          )
+      formatString: "#,##0.0"
+      description: Average days from open to close (replaces Foundry function-backed column)
 
-  - name: Evidence Count
-    table: fact_evidence
-    expression: "COUNTROWS(fact_evidence)"
-    formatString: "#,##0"
+    - name: Evidence Count
+      table: fact_evidence
+      expression: "COUNTROWS(fact_evidence)"
+      formatString: "#,##0"
 
-  - name: Escalation Rate
-    table: fact_action
-    expression: |
-      DIVIDE(
-        CALCULATE(COUNTROWS(fact_action), fact_action[action_type] = "escalate"),
-        COUNTROWS(fact_action),
-        0
-      )
-    formatString: "0.0%"
-    description: Percentage of actions that are escalations
+    - name: Escalation Rate
+      table: fact_action
+      expression: |
+          DIVIDE(
+            CALCULATE(COUNTROWS(fact_action), fact_action[action_type] = "escalate"),
+            COUNTROWS(fact_action),
+            0
+          )
+      formatString: "0.0%"
+      description: Percentage of actions that are escalations
 
-  - name: Cases per Party
-    table: bridge_case_party
-    expression: "DIVIDE(DISTINCTCOUNT(bridge_case_party[case_sk]), DISTINCTCOUNT(bridge_case_party[party_sk]), 0)"
-    formatString: "#,##0.0"
+    - name: Cases per Party
+      table: bridge_case_party
+      expression: "DIVIDE(DISTINCTCOUNT(bridge_case_party[case_sk]), DISTINCTCOUNT(bridge_case_party[party_sk]), 0)"
+      formatString: "#,##0.0"
 
 rowLevelSecurity:
-  roles:
-    - name: JurisdictionFilter
-      description: Restricts case visibility to user's jurisdiction
-      tableFilters:
-        - table: dim_case
-          daxFilter: "[jurisdiction] = USERPRINCIPALNAME()"
+    roles:
+        - name: JurisdictionFilter
+          description: Restricts case visibility to user's jurisdiction
+          tableFilters:
+              - table: dim_case
+                daxFilter: "[jurisdiction] = USERPRINCIPALNAME()"
 
-    - name: ClassifiedAccess
-      description: CUI-Specified access requires cleared personnel
-      tableFilters:
-        - table: fact_evidence
-          daxFilter: "TRUE()"
-        - table: dim_party
-          daxFilter: "TRUE()"
+        - name: ClassifiedAccess
+          description: CUI-Specified access requires cleared personnel
+          tableFilters:
+              - table: fact_evidence
+                daxFilter: "TRUE()"
+              - table: dim_party
+                daxFilter: "TRUE()"
 ```
 
 ### 8.3 Function-backed columns as DAX measures
@@ -1432,12 +1432,12 @@ dbt test --select tag:case_management
 
 Key tests to verify:
 
-| Test | What it validates |
-|---|---|
-| `unique` on surrogate keys | No duplicate rows |
-| `not_null` on primary keys | No missing identifiers |
-| `accepted_values` on enums | Status/type values match Foundry definitions |
-| `relationships` on foreign keys | Referential integrity matches Link Types |
+| Test                            | What it validates                            |
+| ------------------------------- | -------------------------------------------- |
+| `unique` on surrogate keys      | No duplicate rows                            |
+| `not_null` on primary keys      | No missing identifiers                       |
+| `accepted_values` on enums      | Status/type values match Foundry definitions |
+| `relationships` on foreign keys | Referential integrity matches Link Types     |
 
 ### 9.3 Property-level comparison
 
@@ -1550,12 +1550,12 @@ az eventgrid topic event publish \
 
 Verify that Purview classifications match the Foundry classifications:
 
-| Foundry classification | Expected Purview classification | Verification method |
-|---|---|---|
-| PII | `CSA_PII_*` rules applied | Purview scan results |
-| CUI-Basic | `CSA_GOV_CUI_BASIC` | Purview scan results |
-| CUI-Specified | `CSA_GOV_CUI_SPECIFIED` | Purview scan results |
-| Internal | No sensitivity label | Default behavior |
+| Foundry classification | Expected Purview classification | Verification method  |
+| ---------------------- | ------------------------------- | -------------------- |
+| PII                    | `CSA_PII_*` rules applied       | Purview scan results |
+| CUI-Basic              | `CSA_GOV_CUI_BASIC`             | Purview scan results |
+| CUI-Specified          | `CSA_GOV_CUI_SPECIFIED`         | Purview scan results |
+| Internal               | No sensitivity label            | Default behavior     |
 
 Run a Purview scan and compare the auto-detected classifications against the ontology manifest.
 
@@ -1612,13 +1612,13 @@ Foundry Scenarios provide isolated what-if environments that most migration team
 
 **Mitigation:** Use Git branches combined with dbt environments:
 
-| Foundry Scenario | Azure equivalent |
-|---|---|
-| Create scenario | Create Git feature branch |
-| Modify objects | Edit dbt models or seed data |
-| Evaluate impact | Run `dbt build` against `dev` target |
+| Foundry Scenario | Azure equivalent                                  |
+| ---------------- | ------------------------------------------------- |
+| Create scenario  | Create Git feature branch                         |
+| Modify objects   | Edit dbt models or seed data                      |
+| Evaluate impact  | Run `dbt build` against `dev` target              |
 | Promote scenario | Merge branch to `main`, run against `prod` target |
-| Discard scenario | Delete feature branch |
+| Discard scenario | Delete feature branch                             |
 
 For more sophisticated what-if analysis, use Fabric deployment pipelines or separate Databricks workspaces.
 
@@ -1646,12 +1646,12 @@ Object Views define how Foundry Workshop apps render objects. If you migrate the
 
 **Mitigation:** For each Object View, identify the visual components (cards, tables, charts, maps) and create equivalent Power BI visuals or Power Apps components. Document the mapping in your migration tracker:
 
-| Foundry Object View | Component type | Azure equivalent |
-|---|---|---|
-| Case Detail Card | Card layout | Power BI card visual or Power Apps detail form |
-| Evidence Table | Data table | Power BI table visual with drill-through |
-| Case Map | Map visual | Power BI ArcGIS or Azure Maps visual |
-| Action Timeline | Timeline | Power BI line chart with markers |
+| Foundry Object View | Component type | Azure equivalent                               |
+| ------------------- | -------------- | ---------------------------------------------- |
+| Case Detail Card    | Card layout    | Power BI card visual or Power Apps detail form |
+| Evidence Table      | Data table     | Power BI table visual with drill-through       |
+| Case Map            | Map visual     | Power BI ArcGIS or Azure Maps visual           |
+| Action Timeline     | Timeline       | Power BI line chart with markers               |
 
 ### 10.10 Ignoring Purview lineage registration
 

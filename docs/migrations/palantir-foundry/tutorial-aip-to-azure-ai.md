@@ -173,9 +173,9 @@ Copilot Studio is the direct replacement for AIP Chatbot Studio. It provides a v
 
 1. In the agent settings, select **Knowledge** > **Add knowledge**.
 2. Add one or more sources:
-   - **SharePoint sites** -- point to document libraries containing policies and procedures.
-   - **Websites** -- add public-facing documentation URLs.
-   - **Files** -- upload PDFs, Word documents, or Excel files directly.
+    - **SharePoint sites** -- point to document libraries containing policies and procedures.
+    - **Websites** -- add public-facing documentation URLs.
+    - **Files** -- upload PDFs, Word documents, or Excel files directly.
 3. The agent will automatically index and ground its responses in these sources.
 
 **Step 3 -- Configure topics and actions.**
@@ -866,10 +866,10 @@ Power Automate can post enrichment results as Teams Adaptive Cards:
         {
             "type": "FactSet",
             "facts": [
-                {"title": "Document", "value": "${document_title}"},
-                {"title": "Category", "value": "${category}"},
-                {"title": "Confidence", "value": "${confidence}%"},
-                {"title": "Summary", "value": "${summary}"}
+                { "title": "Document", "value": "${document_title}" },
+                { "title": "Category", "value": "${category}" },
+                { "title": "Confidence", "value": "${confidence}%" },
+                { "title": "Summary", "value": "${summary}" }
             ]
         }
     ],
@@ -911,7 +911,7 @@ Action: Start an approval (Power Automate Approvals connector)
     AI Suggested Category: ${category}
     Confidence: ${confidence}%
     Reasoning: ${reasoning}
-    
+
     Please review and approve or reject this classification.
   |
   v
@@ -946,10 +946,10 @@ For lightweight reviews that do not require formal approvals, use Teams Adaptive
         {
             "type": "FactSet",
             "facts": [
-                {"title": "Document", "value": "${document_title}"},
-                {"title": "Suggested Category", "value": "${category}"},
-                {"title": "Confidence", "value": "${confidence}%"},
-                {"title": "AI Reasoning", "value": "${reasoning}"}
+                { "title": "Document", "value": "${document_title}" },
+                { "title": "Suggested Category", "value": "${category}" },
+                { "title": "Confidence", "value": "${confidence}%" },
+                { "title": "AI Reasoning", "value": "${reasoning}" }
             ]
         },
         {
@@ -968,12 +968,12 @@ For lightweight reviews that do not require formal approvals, use Teams Adaptive
         {
             "type": "Action.Submit",
             "title": "Approve Classification",
-            "data": {"action": "approve", "document_id": "${document_id}"}
+            "data": { "action": "approve", "document_id": "${document_id}" }
         },
         {
             "type": "Action.Submit",
             "title": "Reject & Reclassify",
-            "data": {"action": "reject", "document_id": "${document_id}"}
+            "data": { "action": "reject", "document_id": "${document_id}" }
         },
         {
             "type": "Action.OpenUrl",
@@ -1016,16 +1016,16 @@ sequenceDiagram
 
 ## Capability Mapping Summary
 
-| AIP Capability | Azure Equivalent | Service(s) | Migration Complexity |
-|---|---|---|---|
-| Language Model Service | Azure OpenAI SDK | Azure OpenAI | Low |
-| Chatbot Studio | Copilot Studio or Semantic Kernel | Copilot Studio, SK | Medium |
-| Retrieval Context | Azure AI Search vector indexes | AI Search, OpenAI | Medium |
-| AIP Logic (classify, extract, summarize) | Azure Functions + OpenAI | Functions, OpenAI | Low |
-| AIP Evals | Prompt Flow evaluation or custom | AI Foundry, Python | Medium |
-| AIP Automate | Power Automate + Event Grid | Power Automate | Low |
-| Proposal pattern (human-in-the-loop) | Power Automate Approvals + Teams | Power Automate | Low |
-| Ontology-grounded AI | Semantic model + AI Search | Power BI, AI Search | Medium |
+| AIP Capability                           | Azure Equivalent                  | Service(s)          | Migration Complexity |
+| ---------------------------------------- | --------------------------------- | ------------------- | -------------------- |
+| Language Model Service                   | Azure OpenAI SDK                  | Azure OpenAI        | Low                  |
+| Chatbot Studio                           | Copilot Studio or Semantic Kernel | Copilot Studio, SK  | Medium               |
+| Retrieval Context                        | Azure AI Search vector indexes    | AI Search, OpenAI   | Medium               |
+| AIP Logic (classify, extract, summarize) | Azure Functions + OpenAI          | Functions, OpenAI   | Low                  |
+| AIP Evals                                | Prompt Flow evaluation or custom  | AI Foundry, Python  | Medium               |
+| AIP Automate                             | Power Automate + Event Grid       | Power Automate      | Low                  |
+| Proposal pattern (human-in-the-loop)     | Power Automate Approvals + Teams  | Power Automate      | Low                  |
+| Ontology-grounded AI                     | Semantic model + AI Search        | Power BI, AI Search | Medium               |
 
 ---
 

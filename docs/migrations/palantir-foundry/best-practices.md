@@ -26,14 +26,14 @@ Before committing to a migration, complete this assessment to scope the effort a
 
 ### Risk register template
 
-| Risk | Likelihood | Impact | Mitigation |
-|---|---|---|---|
-| Under-documented Foundry ontology | High | High | Conduct discovery workshops with Foundry SMEs before migration |
-| Shadow consumers outside known Workshop apps | Medium | High | Audit Foundry access logs for unknown API consumers |
-| Schema drift during migration | Medium | Medium | Implement data reconciliation checks at each phase gate |
-| User resistance to Power BI/Power Apps UX | High | Medium | Conduct UX previews early; invest in training |
-| Compliance gap during transition | Low | Critical | Maintain dual-run until new ATO is granted |
-| FDE knowledge loss | Medium | High | Conduct knowledge transfer sessions; document tribal knowledge |
+| Risk                                         | Likelihood | Impact   | Mitigation                                                     |
+| -------------------------------------------- | ---------- | -------- | -------------------------------------------------------------- |
+| Under-documented Foundry ontology            | High       | High     | Conduct discovery workshops with Foundry SMEs before migration |
+| Shadow consumers outside known Workshop apps | Medium     | High     | Audit Foundry access logs for unknown API consumers            |
+| Schema drift during migration                | Medium     | Medium   | Implement data reconciliation checks at each phase gate        |
+| User resistance to Power BI/Power Apps UX    | High       | Medium   | Conduct UX previews early; invest in training                  |
+| Compliance gap during transition             | Low        | Critical | Maintain dual-run until new ATO is granted                     |
+| FDE knowledge loss                           | Medium     | High     | Conduct knowledge transfer sessions; document tribal knowledge |
 
 ---
 
@@ -72,12 +72,12 @@ Not everything needs to migrate on day one:
 
 Create a complete mapping document before writing any code:
 
-| Foundry artifact | Type | Azure target | Owner | Priority | Status |
-|---|---|---|---|---|---|
-| Case object type | Ontology | Purview glossary + dbt dim_case | Domain team | P1 | Not started |
-| Case dashboard | Contour | Power BI report | Analytics team | P1 | Not started |
-| Case workflow | Workshop | Power Apps | App team | P2 | Not started |
-| Escalation rule | Action | Data Activator + Event Grid | Platform team | P2 | Not started |
+| Foundry artifact | Type     | Azure target                    | Owner          | Priority | Status      |
+| ---------------- | -------- | ------------------------------- | -------------- | -------- | ----------- |
+| Case object type | Ontology | Purview glossary + dbt dim_case | Domain team    | P1       | Not started |
+| Case dashboard   | Contour  | Power BI report                 | Analytics team | P1       | Not started |
+| Case workflow    | Workshop | Power Apps                      | App team       | P2       | Not started |
+| Escalation rule  | Action   | Data Activator + Event Grid     | Platform team  | P2       | Not started |
 
 ---
 
@@ -196,13 +196,13 @@ During any parallel run, validate:
 
 ### Training phases
 
-| Phase | Audience | Content | Duration |
-|---|---|---|---|
-| Awareness | All users | What is changing, why, timeline, where to get help | 1 hour |
-| Analyst training | Power BI users | Power BI basics, Copilot, Direct Lake, filters, drill-through | 4 hours |
-| Builder training | Power Apps developers | Power Apps canvas apps, Power Automate, Dataverse/SQL connectors | 8 hours |
-| Engineer training | Data engineers | dbt, ADF, Fabric notebooks, Purview, CI/CD | 16 hours |
-| Admin training | Platform admins | Azure Monitor, Purview governance, Entra ID, cost management | 8 hours |
+| Phase             | Audience              | Content                                                          | Duration |
+| ----------------- | --------------------- | ---------------------------------------------------------------- | -------- |
+| Awareness         | All users             | What is changing, why, timeline, where to get help               | 1 hour   |
+| Analyst training  | Power BI users        | Power BI basics, Copilot, Direct Lake, filters, drill-through    | 4 hours  |
+| Builder training  | Power Apps developers | Power Apps canvas apps, Power Automate, Dataverse/SQL connectors | 8 hours  |
+| Engineer training | Data engineers        | dbt, ADF, Fabric notebooks, Purview, CI/CD                       | 16 hours |
+| Admin training    | Platform admins       | Azure Monitor, Purview governance, Entra ID, cost management     | 8 hours  |
 
 ### Training resources
 
@@ -226,32 +226,32 @@ During any parallel run, validate:
 
 ### Technical risks
 
-| Risk | Mitigation |
-|---|---|
-| Data loss during export | Validate row counts and checksums before and after every export |
-| Pipeline timing differences | Use watermark columns and idempotent loads to handle timing drift |
-| Schema evolution | Implement dbt contracts and schema change alerts |
-| Performance regression | Benchmark key queries before migration; set performance acceptance criteria |
+| Risk                              | Mitigation                                                                  |
+| --------------------------------- | --------------------------------------------------------------------------- |
+| Data loss during export           | Validate row counts and checksums before and after every export             |
+| Pipeline timing differences       | Use watermark columns and idempotent loads to handle timing drift           |
+| Schema evolution                  | Implement dbt contracts and schema change alerts                            |
+| Performance regression            | Benchmark key queries before migration; set performance acceptance criteria |
 | API rate limits on Foundry export | Parallelize exports across multiple service principals; throttle gracefully |
 
 ### Organizational risks
 
-| Risk | Mitigation |
-|---|---|
-| User resistance | Early involvement, champion network, visible quick wins |
-| FDE knowledge loss | Document everything during discovery; record walkthroughs |
-| Budget overrun | Fixed-price milestones for partner work; reserve 20% contingency |
-| Timeline slip | Prioritize ruthlessly; defer non-critical apps to post-migration phase |
-| Stakeholder fatigue | Monthly executive updates showing progress metrics and cost savings |
+| Risk                | Mitigation                                                             |
+| ------------------- | ---------------------------------------------------------------------- |
+| User resistance     | Early involvement, champion network, visible quick wins                |
+| FDE knowledge loss  | Document everything during discovery; record walkthroughs              |
+| Budget overrun      | Fixed-price milestones for partner work; reserve 20% contingency       |
+| Timeline slip       | Prioritize ruthlessly; defer non-critical apps to post-migration phase |
+| Stakeholder fatigue | Monthly executive updates showing progress metrics and cost savings    |
 
 ### Compliance risks
 
-| Risk | Mitigation |
-|---|---|
+| Risk                      | Mitigation                                                                       |
+| ------------------------- | -------------------------------------------------------------------------------- |
 | ATO gap during transition | Maintain Foundry ATO until Azure ATO is granted; never run without authorization |
-| Classification mismatch | Validate Purview classifications against Foundry markings before cutover |
-| Audit trail gap | Ensure Azure Monitor diagnostic settings are active before first data lands |
-| Data residency violation | Confirm Azure region selection meets all data residency requirements |
+| Classification mismatch   | Validate Purview classifications against Foundry markings before cutover         |
+| Audit trail gap           | Ensure Azure Monitor diagnostic settings are active before first data lands      |
+| Data residency violation  | Confirm Azure region selection meets all data residency requirements             |
 
 ---
 
@@ -285,34 +285,42 @@ Define quantitative success criteria before migration:
 ## Common pitfalls and how to avoid them
 
 ### 1. Trying to replicate Foundry exactly
+
 **Problem:** Teams spend months trying to make Power BI look exactly like Contour or Power Apps behave exactly like Workshop.
 **Solution:** Accept that the tools are different. Focus on the business outcomes, not pixel-perfect replication. Power BI and Power Apps have their own strengths — lean into them.
 
 ### 2. Migrating everything at once
+
 **Problem:** Big-bang migrations have high failure rates and create overwhelming change for users.
 **Solution:** Use the phased approach described above. Migrate the top 20% first, validate, then continue.
 
 ### 3. Ignoring the ontology
+
 **Problem:** Teams migrate data without migrating the semantic context. The result is a data lake with no business meaning.
 **Solution:** Invest in Purview glossary terms, dbt documentation, and Power BI semantic models. The ontology is the highest-value asset — don't leave it behind.
 
 ### 4. Under-investing in training
+
 **Problem:** Users get a new tool with no training and blame the platform for their productivity loss.
 **Solution:** Budget 15–20% of migration cost for training and change management.
 
 ### 5. Not testing with real users
+
 **Problem:** Technical validation passes but real users find the experience unacceptable.
 **Solution:** Include pilot users from Week 1. Their feedback shapes the migration, not just validates it.
 
 ### 6. Forgetting about monitoring
+
 **Problem:** Pipelines break after migration because no one set up alerts.
 **Solution:** Configure Azure Monitor alerts, dbt source freshness tests, and Data Activator rules before the first pipeline goes live.
 
 ### 7. Losing Foundry FDE knowledge
+
 **Problem:** Palantir FDEs leave at contract end and institutional knowledge disappears.
 **Solution:** Start knowledge transfer in the discovery phase. Document everything. Record sessions.
 
 ### 8. Neglecting the ATO timeline
+
 **Problem:** The technical migration completes but the system can't go live because the ATO isn't ready.
 **Solution:** Start ATO documentation in Phase 1. Use CSA-in-a-Box compliance YAMLs to accelerate. Engage the ISSO from day one.
 
@@ -322,25 +330,25 @@ Define quantitative success criteria before migration:
 
 ### Core migration team (mid-sized engagement)
 
-| Role | Count | Responsibility |
-|---|---|---|
-| Migration lead / architect | 1 | Overall architecture, risk management, stakeholder communication |
-| Data engineer | 2–3 | ADF pipelines, dbt models, data validation |
-| BI developer | 1–2 | Power BI reports, semantic models, Copilot configuration |
-| App developer | 1–2 | Power Apps, Power Automate, custom React (if needed) |
-| Platform engineer | 1 | Bicep IaC, CI/CD, Azure Monitor, Purview automation |
-| Security/compliance | 1 | ATO documentation, Purview classifications, access controls |
-| Change management | 1 | Training, communication, user feedback |
-| Foundry SME | 1 | Knowledge transfer, ontology documentation, validation |
+| Role                       | Count | Responsibility                                                   |
+| -------------------------- | ----- | ---------------------------------------------------------------- |
+| Migration lead / architect | 1     | Overall architecture, risk management, stakeholder communication |
+| Data engineer              | 2–3   | ADF pipelines, dbt models, data validation                       |
+| BI developer               | 1–2   | Power BI reports, semantic models, Copilot configuration         |
+| App developer              | 1–2   | Power Apps, Power Automate, custom React (if needed)             |
+| Platform engineer          | 1     | Bicep IaC, CI/CD, Azure Monitor, Purview automation              |
+| Security/compliance        | 1     | ATO documentation, Purview classifications, access controls      |
+| Change management          | 1     | Training, communication, user feedback                           |
+| Foundry SME                | 1     | Knowledge transfer, ontology documentation, validation           |
 
 ### Timeline estimation guidelines
 
-| Deployment size | Object types | Pipelines | Apps | Estimated duration |
-|---|---|---|---|---|
-| Small | 10–30 | 10–30 | 2–5 | 12–20 weeks |
-| Medium | 30–100 | 30–100 | 5–15 | 24–36 weeks |
-| Large | 100–300 | 100–300 | 15–50 | 36–52 weeks |
-| Enterprise | 300+ | 300+ | 50+ | 52–78 weeks |
+| Deployment size | Object types | Pipelines | Apps  | Estimated duration |
+| --------------- | ------------ | --------- | ----- | ------------------ |
+| Small           | 10–30        | 10–30     | 2–5   | 12–20 weeks        |
+| Medium          | 30–100       | 30–100    | 5–15  | 24–36 weeks        |
+| Large           | 100–300      | 100–300   | 15–50 | 36–52 weeks        |
+| Enterprise      | 300+         | 300+      | 50+   | 52–78 weeks        |
 
 Multiply by 1.3x for federal/government deployments (ATO overhead, clearance requirements, procurement delays).
 

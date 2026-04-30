@@ -28,17 +28,17 @@ By the end of this tutorial, you will have:
 
 ### Estimated time
 
-| Step | Duration |
-|---|---|
-| Step 1: Set up dbt project | 20 minutes |
-| Step 2: Export and convert Hive DDL | 30 minutes |
-| Step 3: Create dbt source definitions | 20 minutes |
-| Step 4: Convert Hive scripts to dbt models | 60 minutes |
-| Step 5: Add schema tests | 30 minutes |
-| Step 6: Run dbt build and fix issues | 30 minutes |
-| Step 7: Generate documentation | 10 minutes |
-| Step 8: Set up orchestration | 20 minutes |
-| **Total** | **~3.5 hours** |
+| Step                                       | Duration       |
+| ------------------------------------------ | -------------- |
+| Step 1: Set up dbt project                 | 20 minutes     |
+| Step 2: Export and convert Hive DDL        | 30 minutes     |
+| Step 3: Create dbt source definitions      | 20 minutes     |
+| Step 4: Convert Hive scripts to dbt models | 60 minutes     |
+| Step 5: Add schema tests                   | 30 minutes     |
+| Step 6: Run dbt build and fix issues       | 30 minutes     |
+| Step 7: Generate documentation             | 10 minutes     |
+| Step 8: Set up orchestration               | 20 minutes     |
+| **Total**                                  | **~3.5 hours** |
 
 ---
 
@@ -89,11 +89,11 @@ hadoop_migration/
 
 ```yaml
 # dbt_project.yml
-name: 'hadoop_migration'
-version: '1.0.0'
+name: "hadoop_migration"
+version: "1.0.0"
 config-version: 2
 
-profile: 'hadoop_migration'
+profile: "hadoop_migration"
 
 model-paths: ["models"]
 analysis-paths: ["analyses"]
@@ -103,22 +103,22 @@ macro-paths: ["macros"]
 
 target-path: "target"
 clean-targets:
-  - "target"
-  - "dbt_packages"
+    - "target"
+    - "dbt_packages"
 
 models:
-  hadoop_migration:
-    staging:
-      +materialized: view
-      +schema: staging
-    silver:
-      +materialized: table
-      +schema: silver
-      +file_format: delta
-    gold:
-      +materialized: table
-      +schema: gold
-      +file_format: delta
+    hadoop_migration:
+        staging:
+            +materialized: view
+            +schema: staging
+        silver:
+            +materialized: table
+            +schema: silver
+            +file_format: delta
+        gold:
+            +materialized: table
+            +schema: gold
+            +file_format: delta
 ```
 
 ### 1.5 Configure profiles.yml
@@ -126,25 +126,25 @@ models:
 ```yaml
 # ~/.dbt/profiles.yml
 hadoop_migration:
-  target: dev
-  outputs:
-    dev:
-      type: databricks
-      catalog: migration
-      schema: silver
-      host: adb-XXXXXXXXXXXX.azuredatabricks.net
-      http_path: /sql/1.0/warehouses/XXXXXXXXXXXX
-      token: "{{ env_var('DBT_DATABRICKS_TOKEN') }}"
-      threads: 4
+    target: dev
+    outputs:
+        dev:
+            type: databricks
+            catalog: migration
+            schema: silver
+            host: adb-XXXXXXXXXXXX.azuredatabricks.net
+            http_path: /sql/1.0/warehouses/XXXXXXXXXXXX
+            token: "{{ env_var('DBT_DATABRICKS_TOKEN') }}"
+            threads: 4
 
-    prod:
-      type: databricks
-      catalog: production
-      schema: silver
-      host: adb-XXXXXXXXXXXX.azuredatabricks.net
-      http_path: /sql/1.0/warehouses/XXXXXXXXXXXX
-      token: "{{ env_var('DBT_DATABRICKS_TOKEN') }}"
-      threads: 8
+        prod:
+            type: databricks
+            catalog: production
+            schema: silver
+            host: adb-XXXXXXXXXXXX.azuredatabricks.net
+            http_path: /sql/1.0/warehouses/XXXXXXXXXXXX
+            token: "{{ env_var('DBT_DATABRICKS_TOKEN') }}"
+            threads: 8
 ```
 
 ### 1.6 Test connection
@@ -230,75 +230,75 @@ The tables migrated from HDFS to ADLS Gen2 and converted to Delta (from the prev
 version: 2
 
 sources:
-  - name: raw_hadoop
-    description: "Tables migrated from Hadoop HDFS, converted to Delta Lake on ADLS Gen2"
-    database: migration      # Unity Catalog catalog
-    schema: raw              # Unity Catalog schema where raw Delta tables are registered
-    tables:
-      - name: orders
-        description: "Customer orders migrated from Hive analytics.orders"
-        columns:
-          - name: order_id
-            description: "Unique order identifier"
-            tests:
-              - unique
-              - not_null
-          - name: customer_id
-            description: "FK to customers table"
-            tests:
-              - not_null
-          - name: amount
-            description: "Order total amount"
-          - name: order_date
-            description: "Date the order was placed (partition column)"
-        loaded_at_field: updated_at
-        freshness:
-          warn_after: {count: 24, period: hour}
-          error_after: {count: 48, period: hour}
+    - name: raw_hadoop
+      description: "Tables migrated from Hadoop HDFS, converted to Delta Lake on ADLS Gen2"
+      database: migration # Unity Catalog catalog
+      schema: raw # Unity Catalog schema where raw Delta tables are registered
+      tables:
+          - name: orders
+            description: "Customer orders migrated from Hive analytics.orders"
+            columns:
+                - name: order_id
+                  description: "Unique order identifier"
+                  tests:
+                      - unique
+                      - not_null
+                - name: customer_id
+                  description: "FK to customers table"
+                  tests:
+                      - not_null
+                - name: amount
+                  description: "Order total amount"
+                - name: order_date
+                  description: "Date the order was placed (partition column)"
+            loaded_at_field: updated_at
+            freshness:
+                warn_after: { count: 24, period: hour }
+                error_after: { count: 48, period: hour }
 
-      - name: customers
-        description: "Customer master data migrated from Hive analytics.customers"
-        columns:
-          - name: customer_id
-            description: "Unique customer identifier"
-            tests:
-              - unique
-              - not_null
-          - name: name
-            description: "Customer full name"
-          - name: email
-            description: "Customer email address"
-          - name: segment
-            description: "Customer segment (enterprise, mid-market, smb)"
+          - name: customers
+            description: "Customer master data migrated from Hive analytics.customers"
+            columns:
+                - name: customer_id
+                  description: "Unique customer identifier"
+                  tests:
+                      - unique
+                      - not_null
+                - name: name
+                  description: "Customer full name"
+                - name: email
+                  description: "Customer email address"
+                - name: segment
+                  description: "Customer segment (enterprise, mid-market, smb)"
 
-      - name: products
-        description: "Product catalog migrated from Hive analytics.products"
-        columns:
-          - name: product_id
-            tests:
-              - unique
-              - not_null
-          - name: name
-            description: "Product name"
-          - name: category
-            description: "Product category"
-          - name: price
-            description: "Unit price"
+          - name: products
+            description: "Product catalog migrated from Hive analytics.products"
+            columns:
+                - name: product_id
+                  tests:
+                      - unique
+                      - not_null
+                - name: name
+                  description: "Product name"
+                - name: category
+                  description: "Product category"
+                - name: price
+                  description: "Unit price"
 
-      - name: order_items
-        description: "Order line items migrated from Hive analytics.order_items"
-        columns:
-          - name: order_id
-            tests:
-              - not_null
-          - name: product_id
-            tests:
-              - not_null
-          - name: quantity
-            tests:
-              - not_null
-          - name: unit_price
-            description: "Price at time of order"
+          - name: order_items
+            description: "Order line items migrated from Hive analytics.order_items"
+            columns:
+                - name: order_id
+                  tests:
+                      - not_null
+                - name: product_id
+                  tests:
+                      - not_null
+                - name: quantity
+                  tests:
+                      - not_null
+                - name: unit_price
+                  description: "Price at time of order"
 ```
 
 ---
@@ -529,34 +529,41 @@ LEFT JOIN segment_assignment s
 version: 2
 
 models:
-  - name: orders_enriched
-    description: "Orders enriched with customer and product details"
-    columns:
-      - name: order_id
-        description: "Unique order identifier"
-        tests:
-          - unique
-          - not_null
-      - name: customer_id
-        tests:
-          - not_null
-          - relationships:
-              to: ref('stg_customers')
-              field: customer_id
-      - name: amount
-        tests:
-          - not_null
-      - name: status
-        tests:
-          - not_null
-          - accepted_values:
-              values: ['pending', 'processing', 'completed', 'refunded', 'shipped']
-      - name: customer_segment
-        tests:
-          - accepted_values:
-              values: ['enterprise', 'mid-market', 'smb']
-              config:
-                where: "customer_segment IS NOT NULL"
+    - name: orders_enriched
+      description: "Orders enriched with customer and product details"
+      columns:
+          - name: order_id
+            description: "Unique order identifier"
+            tests:
+                - unique
+                - not_null
+          - name: customer_id
+            tests:
+                - not_null
+                - relationships:
+                      to: ref('stg_customers')
+                      field: customer_id
+          - name: amount
+            tests:
+                - not_null
+          - name: status
+            tests:
+                - not_null
+                - accepted_values:
+                      values:
+                          [
+                              "pending",
+                              "processing",
+                              "completed",
+                              "refunded",
+                              "shipped",
+                          ]
+          - name: customer_segment
+            tests:
+                - accepted_values:
+                      values: ["enterprise", "mid-market", "smb"]
+                      config:
+                          where: "customer_segment IS NOT NULL"
 ```
 
 ### 5.2 Gold model tests
@@ -566,33 +573,34 @@ models:
 version: 2
 
 models:
-  - name: daily_revenue
-    description: "Daily revenue aggregates"
-    columns:
-      - name: report_date
-        tests:
-          - unique
-          - not_null
-      - name: total_orders
-        tests:
-          - not_null
-      - name: total_revenue
-        tests:
-          - not_null
+    - name: daily_revenue
+      description: "Daily revenue aggregates"
+      columns:
+          - name: report_date
+            tests:
+                - unique
+                - not_null
+          - name: total_orders
+            tests:
+                - not_null
+          - name: total_revenue
+            tests:
+                - not_null
 
-  - name: customer_360
-    description: "Customer 360-degree view with RFM segmentation"
-    columns:
-      - name: customer_id
-        tests:
-          - unique
-          - not_null
-      - name: rfm_segment
-        tests:
-          - accepted_values:
-              values: ['champion', 'loyal', 'active', 'at_risk', 'churned']
-              config:
-                where: "rfm_segment IS NOT NULL"
+    - name: customer_360
+      description: "Customer 360-degree view with RFM segmentation"
+      columns:
+          - name: customer_id
+            tests:
+                - unique
+                - not_null
+          - name: rfm_segment
+            tests:
+                - accepted_values:
+                      values:
+                          ["champion", "loyal", "active", "at_risk", "churned"]
+                      config:
+                          where: "rfm_segment IS NOT NULL"
 ```
 
 ---
@@ -622,13 +630,13 @@ dbt build
 
 ### 6.4 Common errors and fixes
 
-| Error | Cause | Fix |
-|---|---|---|
-| `PARSE_SYNTAX_ERROR` | HiveQL syntax not compatible with SparkSQL | Fix SQL syntax (see [Hive Migration](hive-migration.md)) |
-| `TABLE_OR_VIEW_NOT_FOUND` | Source table not registered in Unity Catalog | Run `CREATE TABLE ... LOCATION` for the source |
-| `SCHEMA_NOT_FOUND` | Target schema does not exist | Run `CREATE SCHEMA IF NOT EXISTS migration.silver` |
-| `DELTA_TABLE_NOT_FOUND` | Incremental model referencing non-existent target | Run with `--full-refresh` for first build |
-| `Permission denied` | Databricks token lacks access | Check Unity Catalog grants |
+| Error                     | Cause                                             | Fix                                                      |
+| ------------------------- | ------------------------------------------------- | -------------------------------------------------------- |
+| `PARSE_SYNTAX_ERROR`      | HiveQL syntax not compatible with SparkSQL        | Fix SQL syntax (see [Hive Migration](hive-migration.md)) |
+| `TABLE_OR_VIEW_NOT_FOUND` | Source table not registered in Unity Catalog      | Run `CREATE TABLE ... LOCATION` for the source           |
+| `SCHEMA_NOT_FOUND`        | Target schema does not exist                      | Run `CREATE SCHEMA IF NOT EXISTS migration.silver`       |
+| `DELTA_TABLE_NOT_FOUND`   | Incremental model referencing non-existent target | Run with `--full-refresh` for first build                |
+| `Permission denied`       | Databricks token lacks access                     | Check Unity Catalog grants                               |
 
 ### 6.5 Run with full refresh (first time)
 
@@ -698,15 +706,17 @@ Create an ADF pipeline that triggers dbt builds:
             }
         }
     ],
-    "triggers": [{
-        "name": "daily-2am",
-        "type": "ScheduleTrigger",
-        "recurrence": {
-            "frequency": "Day",
-            "interval": 1,
-            "startTime": "02:00:00"
+    "triggers": [
+        {
+            "name": "daily-2am",
+            "type": "ScheduleTrigger",
+            "recurrence": {
+                "frequency": "Day",
+                "interval": 1,
+                "startTime": "02:00:00"
+            }
         }
-    }]
+    ]
 }
 ```
 
@@ -734,16 +744,16 @@ if result.returncode != 0:
 
 ## Comparison: before and after
 
-| Aspect | Hive scripts | dbt on Databricks |
-|---|---|---|
-| Code location | HDFS or edge node filesystem | Git repository |
-| Dependency management | Manual script ordering in Oozie | Automatic via `ref()` and DAG |
-| Testing | None or custom scripts | Built-in schema tests, custom tests |
-| Documentation | External wiki (often outdated) | Auto-generated from YAML |
-| Lineage | Atlas (if configured) | Built-in DAG + Purview integration |
-| Incremental loads | Custom HiveQL logic per script | `is_incremental()` macro |
-| Environment management | Different Hive configs per cluster | `profiles.yml` (dev/staging/prod) |
-| Execution engine | Tez or MapReduce | Photon (2-8x faster) |
+| Aspect                 | Hive scripts                       | dbt on Databricks                   |
+| ---------------------- | ---------------------------------- | ----------------------------------- |
+| Code location          | HDFS or edge node filesystem       | Git repository                      |
+| Dependency management  | Manual script ordering in Oozie    | Automatic via `ref()` and DAG       |
+| Testing                | None or custom scripts             | Built-in schema tests, custom tests |
+| Documentation          | External wiki (often outdated)     | Auto-generated from YAML            |
+| Lineage                | Atlas (if configured)              | Built-in DAG + Purview integration  |
+| Incremental loads      | Custom HiveQL logic per script     | `is_incremental()` macro            |
+| Environment management | Different Hive configs per cluster | `profiles.yml` (dev/staging/prod)   |
+| Execution engine       | Tez or MapReduce                   | Photon (2-8x faster)                |
 
 ---
 

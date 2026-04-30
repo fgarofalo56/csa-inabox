@@ -18,18 +18,18 @@ Azure Event Hubs provides a Kafka-compatible endpoint. Kafka producers and consu
 
 ### Protocol compatibility
 
-| Kafka feature | Event Hubs support |
-|---|---|
-| Kafka protocol (0.10+) | Full support |
-| Producer API | Full support |
-| Consumer API | Full support |
-| Consumer groups | Full support |
-| Topic partitions | Full support (up to 1024 per Event Hub) |
-| Kafka Streams | Supported (with limitations) |
-| Kafka Connect | Supported (source and sink connectors) |
-| Schema Registry | Use Azure Schema Registry (Avro, JSON Schema, Protobuf) |
-| Transactions | Not supported |
-| Compacted topics | Supported (Event Hubs Premium/Dedicated) |
+| Kafka feature          | Event Hubs support                                      |
+| ---------------------- | ------------------------------------------------------- |
+| Kafka protocol (0.10+) | Full support                                            |
+| Producer API           | Full support                                            |
+| Consumer API           | Full support                                            |
+| Consumer groups        | Full support                                            |
+| Topic partitions       | Full support (up to 1024 per Event Hub)                 |
+| Kafka Streams          | Supported (with limitations)                            |
+| Kafka Connect          | Supported (source and sink connectors)                  |
+| Schema Registry        | Use Azure Schema Registry (Avro, JSON Schema, Protobuf) |
+| Transactions           | Not supported                                           |
+| Compacted topics       | Supported (Event Hubs Premium/Dedicated)                |
 
 ### Configuration changes
 
@@ -78,24 +78,24 @@ producer.send("orders", value=b'{"order_id": "12345"}')
 
 ### Topic mapping
 
-| Kafka concept | Event Hubs concept |
-|---|---|
-| Kafka cluster | Event Hubs namespace |
-| Topic | Event Hub (within namespace) |
-| Partition | Partition (1:1 mapping) |
-| Consumer group | Consumer group |
-| Broker | Managed by Azure (no concept of individual brokers) |
-| ZooKeeper | Not needed (managed internally) |
-| Retention | Configurable: 1-90 days (Standard), unlimited with Capture |
+| Kafka concept  | Event Hubs concept                                         |
+| -------------- | ---------------------------------------------------------- |
+| Kafka cluster  | Event Hubs namespace                                       |
+| Topic          | Event Hub (within namespace)                               |
+| Partition      | Partition (1:1 mapping)                                    |
+| Consumer group | Consumer group                                             |
+| Broker         | Managed by Azure (no concept of individual brokers)        |
+| ZooKeeper      | Not needed (managed internally)                            |
+| Retention      | Configurable: 1-90 days (Standard), unlimited with Capture |
 
 ### Throughput tiers
 
-| Event Hubs tier | Throughput | Best for |
-|---|---|---|
-| Basic | 1 TU (1 MB/s ingress, 2 MB/s egress) | Dev/test |
-| Standard | 1-40 TUs (per TU: 1 MB/s in, 2 MB/s out) | Most production workloads |
-| Premium | 1-16 PUs (higher throughput per unit) | High-throughput, low-latency |
-| Dedicated | 1-20 CUs (single-tenant) | Regulated industries, guaranteed isolation |
+| Event Hubs tier | Throughput                               | Best for                                   |
+| --------------- | ---------------------------------------- | ------------------------------------------ |
+| Basic           | 1 TU (1 MB/s ingress, 2 MB/s egress)     | Dev/test                                   |
+| Standard        | 1-40 TUs (per TU: 1 MB/s in, 2 MB/s out) | Most production workloads                  |
+| Premium         | 1-16 PUs (higher throughput per unit)    | High-throughput, low-latency               |
+| Dedicated       | 1-20 CUs (single-tenant)                 | Regulated industries, guaranteed isolation |
 
 ### Event Hubs Capture (replaces Kafka Connect to HDFS)
 
@@ -134,23 +134,23 @@ Oozie consists of:
 
 ### Mapping Oozie to ADF
 
-| Oozie concept | ADF equivalent |
-|---|---|
-| Workflow | Pipeline |
-| Coordinator (time) | Schedule trigger |
-| Coordinator (data-ready) | Event trigger / tumbling window trigger |
-| Bundle | Pipeline group (or ADF factory organization) |
-| Action: Hive | Databricks notebook activity or HDInsight Hive activity |
-| Action: Spark | Databricks notebook/JAR activity |
-| Action: Shell | Azure Batch activity or Azure Function |
-| Action: Java | Databricks JAR activity or Azure Function |
-| Action: Sqoop | Copy activity with JDBC connector |
-| Action: DistCp | Copy activity (ADLS to ADLS) |
-| Action: Email | Web activity (Logic Apps / SendGrid) |
-| Action: SubWorkflow | Execute pipeline activity |
-| Decision node | If condition / Switch activity |
-| Fork/Join | Parallel activity branches |
-| Kill node | Failure path + alert |
+| Oozie concept            | ADF equivalent                                          |
+| ------------------------ | ------------------------------------------------------- |
+| Workflow                 | Pipeline                                                |
+| Coordinator (time)       | Schedule trigger                                        |
+| Coordinator (data-ready) | Event trigger / tumbling window trigger                 |
+| Bundle                   | Pipeline group (or ADF factory organization)            |
+| Action: Hive             | Databricks notebook activity or HDInsight Hive activity |
+| Action: Spark            | Databricks notebook/JAR activity                        |
+| Action: Shell            | Azure Batch activity or Azure Function                  |
+| Action: Java             | Databricks JAR activity or Azure Function               |
+| Action: Sqoop            | Copy activity with JDBC connector                       |
+| Action: DistCp           | Copy activity (ADLS to ADLS)                            |
+| Action: Email            | Web activity (Logic Apps / SendGrid)                    |
+| Action: SubWorkflow      | Execute pipeline activity                               |
+| Decision node            | If condition / Switch activity                          |
+| Fork/Join                | Parallel activity branches                              |
+| Kill node                | Failure path + alert                                    |
 
 ### Example: Oozie workflow to ADF pipeline
 
@@ -218,8 +218,15 @@ Oozie consists of:
         {
             "name": "extract-orders",
             "type": "Copy",
-            "inputs": [{"type": "MySqlSource", "query": "SELECT * FROM orders WHERE updated_at > @pipeline().parameters.lastRunTimestamp"}],
-            "outputs": [{"type": "AzureBlobFSSink", "path": "raw/staging/orders/"}],
+            "inputs": [
+                {
+                    "type": "MySqlSource",
+                    "query": "SELECT * FROM orders WHERE updated_at > @pipeline().parameters.lastRunTimestamp"
+                }
+            ],
+            "outputs": [
+                { "type": "AzureBlobFSSink", "path": "raw/staging/orders/" }
+            ],
             "dependsOn": []
         },
         {
@@ -227,25 +234,39 @@ Oozie consists of:
             "type": "DatabricksNotebook",
             "typeProperties": {
                 "notebookPath": "/etl/transform_orders",
-                "baseParameters": {"date": "@pipeline().parameters.today"}
+                "baseParameters": { "date": "@pipeline().parameters.today" }
             },
-            "dependsOn": [{"activity": "extract-orders", "dependencyConditions": ["Succeeded"]}]
+            "dependsOn": [
+                {
+                    "activity": "extract-orders",
+                    "dependencyConditions": ["Succeeded"]
+                }
+            ]
         },
         {
             "name": "load-warehouse",
             "type": "DatabricksNotebook",
             "typeProperties": {
                 "notebookPath": "/etl/load_warehouse",
-                "baseParameters": {"date": "@pipeline().parameters.today"}
+                "baseParameters": { "date": "@pipeline().parameters.today" }
             },
-            "dependsOn": [{"activity": "transform-orders", "dependencyConditions": ["Succeeded"]}]
+            "dependsOn": [
+                {
+                    "activity": "transform-orders",
+                    "dependencyConditions": ["Succeeded"]
+                }
+            ]
         }
     ],
     "triggers": [
         {
             "name": "daily-schedule",
             "type": "ScheduleTrigger",
-            "recurrence": {"frequency": "Day", "interval": 1, "startTime": "02:00:00"}
+            "recurrence": {
+                "frequency": "Day",
+                "interval": 1,
+                "startTime": "02:00:00"
+            }
         }
     ]
 }
@@ -255,16 +276,16 @@ Oozie consists of:
 
 For teams going all-in on Databricks, Databricks Workflows provides a native alternative to ADF:
 
-| Oozie concept | Databricks Workflows equivalent |
-|---|---|
-| Workflow | Multi-task job |
-| Action: Spark | Notebook task or Spark submit task |
-| Action: Hive | SQL task |
-| Action: Shell | Custom Python task |
-| Decision node | Conditional task (if/else) |
-| Fork/Join | Parallel task execution |
-| Coordinator | Job schedule (cron) |
-| Error handling | Task retry + email notification |
+| Oozie concept  | Databricks Workflows equivalent    |
+| -------------- | ---------------------------------- |
+| Workflow       | Multi-task job                     |
+| Action: Spark  | Notebook task or Spark submit task |
+| Action: Hive   | SQL task                           |
+| Action: Shell  | Custom Python task                 |
+| Decision node  | Conditional task (if/else)         |
+| Fork/Join      | Parallel task execution            |
+| Coordinator    | Job schedule (cron)                |
+| Error handling | Task retry + email notification    |
 
 ---
 
@@ -310,21 +331,23 @@ sqoop import \
         },
         "parallelCopies": 8
     },
-    "inputs": [{"referenceName": "MySqlDataset", "type": "DatasetReference"}],
-    "outputs": [{"referenceName": "ADLSParquetDataset", "type": "DatasetReference"}]
+    "inputs": [{ "referenceName": "MySqlDataset", "type": "DatasetReference" }],
+    "outputs": [
+        { "referenceName": "ADLSParquetDataset", "type": "DatasetReference" }
+    ]
 }
 ```
 
 ### ADF advantages over Sqoop
 
-| Feature | Sqoop | ADF Copy Activity |
-|---|---|---|
-| Supported sources | JDBC only | 100+ connectors (SaaS, databases, files, APIs) |
-| CDC support | Manual incremental mode | CDC connectors for SQL Server, Oracle, PostgreSQL |
-| Monitoring | Oozie logs | ADF Monitor, Azure Monitor, Log Analytics |
-| Retry logic | Manual Oozie configuration | Built-in retry policies |
-| Data preview | None | Visual data preview |
-| Schema drift | Not handled | Schema drift handling built-in |
+| Feature           | Sqoop                      | ADF Copy Activity                                 |
+| ----------------- | -------------------------- | ------------------------------------------------- |
+| Supported sources | JDBC only                  | 100+ connectors (SaaS, databases, files, APIs)    |
+| CDC support       | Manual incremental mode    | CDC connectors for SQL Server, Oracle, PostgreSQL |
+| Monitoring        | Oozie logs                 | ADF Monitor, Azure Monitor, Log Analytics         |
+| Retry logic       | Manual Oozie configuration | Built-in retry policies                           |
+| Data preview      | None                       | Visual data preview                               |
+| Schema drift      | Not handled                | Schema drift handling built-in                    |
 
 ---
 
@@ -340,14 +363,14 @@ Source (e.g., syslog, file tail) → Channel (memory/file) → Sink (HDFS, Kafka
 
 ### Azure replacements by Flume pattern
 
-| Flume pattern | Azure replacement |
-|---|---|
-| File tail → HDFS | Azure Monitor Agent → Log Analytics, or ADF file watcher → ADLS |
-| Syslog → HDFS | Azure Monitor Agent → Log Analytics → ADLS export |
-| HTTP source → HDFS | Event Hubs HTTP endpoint → Capture to ADLS |
-| Kafka source → HDFS | Event Hubs → Capture to ADLS (zero code) |
-| Custom source → HDFS | Azure Function → Event Hubs → Capture to ADLS |
-| Flume interceptors | Event Hubs + Stream Analytics (transformation) |
+| Flume pattern        | Azure replacement                                               |
+| -------------------- | --------------------------------------------------------------- |
+| File tail → HDFS     | Azure Monitor Agent → Log Analytics, or ADF file watcher → ADLS |
+| Syslog → HDFS        | Azure Monitor Agent → Log Analytics → ADLS export               |
+| HTTP source → HDFS   | Event Hubs HTTP endpoint → Capture to ADLS                      |
+| Kafka source → HDFS  | Event Hubs → Capture to ADLS (zero code)                        |
+| Custom source → HDFS | Azure Function → Event Hubs → Capture to ADLS                   |
+| Flume interceptors   | Event Hubs + Stream Analytics (transformation)                  |
 
 ### Example: log collection replacement
 
@@ -392,13 +415,13 @@ ZooKeeper provides distributed coordination for Hadoop services:
 
 In Azure, every service that needed ZooKeeper manages its own coordination internally:
 
-| Hadoop service needing ZK | Azure service | ZK equivalent |
-|---|---|---|
-| HDFS NameNode HA | ADLS Gen2 (managed HA) | Not needed |
-| YARN RM HA | Databricks (managed) | Not needed |
-| HBase RegionServer | Cosmos DB (managed) | Not needed |
-| Kafka broker | Event Hubs (managed) | Not needed |
-| Oozie HA | ADF (managed) | Not needed |
+| Hadoop service needing ZK | Azure service          | ZK equivalent |
+| ------------------------- | ---------------------- | ------------- |
+| HDFS NameNode HA          | ADLS Gen2 (managed HA) | Not needed    |
+| YARN RM HA                | Databricks (managed)   | Not needed    |
+| HBase RegionServer        | Cosmos DB (managed)    | Not needed    |
+| Kafka broker              | Event Hubs (managed)   | Not needed    |
+| Oozie HA                  | ADF (managed)          | Not needed    |
 
 **Action:** Do not migrate ZooKeeper. It is eliminated by the move to managed services.
 
@@ -408,18 +431,18 @@ In Azure, every service that needed ZooKeeper manages its own coordination inter
 
 ### Pig Latin to SparkSQL mapping
 
-| Pig Latin | SparkSQL |
-|---|---|
-| `LOAD 'path' USING PigStorage(',')` | `spark.read.csv('path')` |
-| `FILTER alias BY condition` | `WHERE condition` |
-| `FOREACH alias GENERATE field` | `SELECT field` |
-| `GROUP alias BY field` | `GROUP BY field` |
-| `JOIN a BY key, b BY key` | `a JOIN b ON a.key = b.key` |
-| `ORDER alias BY field` | `ORDER BY field` |
-| `STORE alias INTO 'path'` | `.write.save('path')` |
-| `DISTINCT alias` | `SELECT DISTINCT *` |
-| `UNION alias1, alias2` | `alias1 UNION ALL alias2` |
-| `FLATTEN(bag)` | `LATERAL VIEW explode(bag)` |
+| Pig Latin                           | SparkSQL                    |
+| ----------------------------------- | --------------------------- |
+| `LOAD 'path' USING PigStorage(',')` | `spark.read.csv('path')`    |
+| `FILTER alias BY condition`         | `WHERE condition`           |
+| `FOREACH alias GENERATE field`      | `SELECT field`              |
+| `GROUP alias BY field`              | `GROUP BY field`            |
+| `JOIN a BY key, b BY key`           | `a JOIN b ON a.key = b.key` |
+| `ORDER alias BY field`              | `ORDER BY field`            |
+| `STORE alias INTO 'path'`           | `.write.save('path')`       |
+| `DISTINCT alias`                    | `SELECT DISTINCT *`         |
+| `UNION alias1, alias2`              | `alias1 UNION ALL alias2`   |
+| `FLATTEN(bag)`                      | `LATERAL VIEW explode(bag)` |
 
 ### Example conversion
 
@@ -467,14 +490,14 @@ Pig is effectively deprecated (last major release in 2017). Do not port Pig scri
 
 ## Migration priority order
 
-| Service | Priority | Rationale |
-|---|---|---|
-| ZooKeeper | N/A | Eliminated automatically by managed services |
-| Sqoop | High (early) | Needed for ongoing data ingestion during migration |
-| Kafka | High (early) | Streaming pipelines depend on messaging |
-| Flume | Medium | Often replaced by Azure Monitor Agent early |
-| Oozie | Medium (parallel) | Migrate as workloads move; last Oozie job triggers decommission |
-| Pig | Low | Deprecated; convert during Hive/Spark migration |
+| Service   | Priority          | Rationale                                                       |
+| --------- | ----------------- | --------------------------------------------------------------- |
+| ZooKeeper | N/A               | Eliminated automatically by managed services                    |
+| Sqoop     | High (early)      | Needed for ongoing data ingestion during migration              |
+| Kafka     | High (early)      | Streaming pipelines depend on messaging                         |
+| Flume     | Medium            | Often replaced by Azure Monitor Agent early                     |
+| Oozie     | Medium (parallel) | Migrate as workloads move; last Oozie job triggers decommission |
+| Pig       | Low               | Deprecated; convert during Hive/Spark migration                 |
 
 ---
 

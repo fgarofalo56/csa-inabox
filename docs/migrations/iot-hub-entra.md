@@ -5,7 +5,7 @@
 > **Applies to:** `examples/iot-streaming/deploy/bicep/iot-hub.bicep`
 
 !!! tip "Expanded Migration Center Available"
-    This playbook is the core migration reference. For the complete IoT Hub SAS-to-Entra migration package — including security analysis, deep-dive guides, tutorials, and benchmarks — visit the **[IoT Hub + Entra Migration Center](iot-hub-entra/index.md)**.
+This playbook is the core migration reference. For the complete IoT Hub SAS-to-Entra migration package — including security analysis, deep-dive guides, tutorials, and benchmarks — visit the **[IoT Hub + Entra Migration Center](iot-hub-entra/index.md)**.
 
     **Quick links:**
 

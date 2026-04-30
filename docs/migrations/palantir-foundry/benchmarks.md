@@ -21,18 +21,18 @@ This document uses the following approach:
 
 ## Summary comparison
 
-| Dimension | Palantir Foundry | Microsoft Azure | Edge |
-|---|---|---|---|
-| Analytic query performance | Spark-based; Ontology indexing for object queries | Direct Lake (in-memory), Photon, Kusto | Azure (breadth of engines) |
-| ETL/pipeline throughput | Pipeline Builder on Spark; incremental computation | ADF + Spark, dbt, Fabric, Databricks auto-scaling | Comparable; Azure at scale |
-| AI/LLM inference | Language Model Service; governed access | Azure OpenAI (GPT-4o, 150K+ TPM), AI Foundry multi-model | Azure (model variety, throughput) |
-| Scalability | Kubernetes-based; single/multi-tenant SaaS | Virtually unlimited (Fabric CU scaling, AKS, serverless) | Azure |
-| Real-time / streaming | Flink-based streaming | Event Hubs, Stream Analytics, Real-Time Intelligence | Azure (throughput ceiling) |
-| Application performance | Workshop/Contour rendering | Power BI Direct Lake, Power Apps | Context-dependent |
-| Ecosystem breadth | ~30 platform tools, 200+ connectors | 200+ services, 1,000+ connectors, Power Platform, M365 | Azure |
-| Innovation velocity | Monthly platform updates | Weekly service updates, monthly Fabric releases | Azure |
-| Developer ecosystem | Proprietary SDKs, ~50K certified professionals | Standard APIs, 10M+ certified professionals | Azure |
-| Compliance certifications | FedRAMP High, SOC 2, HIPAA, IL4/5/6 | 100+ compliance offerings across all major frameworks | Azure (breadth) |
+| Dimension                  | Palantir Foundry                                   | Microsoft Azure                                          | Edge                              |
+| -------------------------- | -------------------------------------------------- | -------------------------------------------------------- | --------------------------------- |
+| Analytic query performance | Spark-based; Ontology indexing for object queries  | Direct Lake (in-memory), Photon, Kusto                   | Azure (breadth of engines)        |
+| ETL/pipeline throughput    | Pipeline Builder on Spark; incremental computation | ADF + Spark, dbt, Fabric, Databricks auto-scaling        | Comparable; Azure at scale        |
+| AI/LLM inference           | Language Model Service; governed access            | Azure OpenAI (GPT-4o, 150K+ TPM), AI Foundry multi-model | Azure (model variety, throughput) |
+| Scalability                | Kubernetes-based; single/multi-tenant SaaS         | Virtually unlimited (Fabric CU scaling, AKS, serverless) | Azure                             |
+| Real-time / streaming      | Flink-based streaming                              | Event Hubs, Stream Analytics, Real-Time Intelligence     | Azure (throughput ceiling)        |
+| Application performance    | Workshop/Contour rendering                         | Power BI Direct Lake, Power Apps                         | Context-dependent                 |
+| Ecosystem breadth          | ~30 platform tools, 200+ connectors                | 200+ services, 1,000+ connectors, Power Platform, M365   | Azure                             |
+| Innovation velocity        | Monthly platform updates                           | Weekly service updates, monthly Fabric releases          | Azure                             |
+| Developer ecosystem        | Proprietary SDKs, ~50K certified professionals     | Standard APIs, 10M+ certified professionals              | Azure                             |
+| Compliance certifications  | FedRAMP High, SOC 2, HIPAA, IL4/5/6                | 100+ compliance offerings across all major frameworks    | Azure (breadth)                   |
 
 ---
 
@@ -50,13 +50,13 @@ Foundry's analytic engine is built on Apache Spark. Queries against tabular data
 
 Azure provides multiple purpose-built query engines, each optimized for different workload profiles:
 
-| Engine | Architecture | Typical latency | Best for |
-|---|---|---|---|
-| Fabric Direct Lake | In-memory VertiPaq over Parquet/Delta | Sub-second to 2s | Interactive BI dashboards |
-| Databricks Photon | Native C++ vectorized engine | 2-10s for complex queries | Large-scale analytics, data science |
-| Synapse Serverless | Distributed SQL over open files | 3-15s | Ad-hoc exploration, federated queries |
-| Azure Data Explorer (Kusto) | Column-store with full-text indexing | Sub-second | Log analytics, telemetry, time-series |
-| Cosmos DB | Globally distributed, multi-model | Single-digit ms | Operational lookups, entity resolution |
+| Engine                      | Architecture                          | Typical latency           | Best for                               |
+| --------------------------- | ------------------------------------- | ------------------------- | -------------------------------------- |
+| Fabric Direct Lake          | In-memory VertiPaq over Parquet/Delta | Sub-second to 2s          | Interactive BI dashboards              |
+| Databricks Photon           | Native C++ vectorized engine          | 2-10s for complex queries | Large-scale analytics, data science    |
+| Synapse Serverless          | Distributed SQL over open files       | 3-15s                     | Ad-hoc exploration, federated queries  |
+| Azure Data Explorer (Kusto) | Column-store with full-text indexing  | Sub-second                | Log analytics, telemetry, time-series  |
+| Cosmos DB                   | Globally distributed, multi-model     | Single-digit ms           | Operational lookups, entity resolution |
 
 ### Comparison analysis
 
@@ -78,13 +78,13 @@ quadrantChart
     "Cosmos DB": [0.15, 0.95]
 ```
 
-| Workload | Foundry | Azure | Notes |
-|---|---|---|---|
-| Interactive BI dashboard | 2-10s (Spark) | Sub-second (Direct Lake) | Direct Lake eliminates import/refresh cycles |
-| Ontology object lookup | Sub-second (indexed) | 1-5ms (Cosmos DB) or sub-second (Kusto) | Foundry's ontology index is purpose-built; Azure requires architectural mapping |
-| Ad-hoc SQL over 1TB | 10-30s (Spark cold start) | 3-10s (Photon) | Photon's native C++ engine outperforms JVM-based Spark |
-| Time-series telemetry | 5-15s (Spark) | Sub-second (Kusto) | Kusto is purpose-built for this workload |
-| Graph traversal | Sub-second (ontology) | 2-5s (Cosmos Gremlin) | Foundry's ontology excels for pre-modeled relationship patterns |
+| Workload                 | Foundry                   | Azure                                   | Notes                                                                           |
+| ------------------------ | ------------------------- | --------------------------------------- | ------------------------------------------------------------------------------- |
+| Interactive BI dashboard | 2-10s (Spark)             | Sub-second (Direct Lake)                | Direct Lake eliminates import/refresh cycles                                    |
+| Ontology object lookup   | Sub-second (indexed)      | 1-5ms (Cosmos DB) or sub-second (Kusto) | Foundry's ontology index is purpose-built; Azure requires architectural mapping |
+| Ad-hoc SQL over 1TB      | 10-30s (Spark cold start) | 3-10s (Photon)                          | Photon's native C++ engine outperforms JVM-based Spark                          |
+| Time-series telemetry    | 5-15s (Spark)             | Sub-second (Kusto)                      | Kusto is purpose-built for this workload                                        |
+| Graph traversal          | Sub-second (ontology)     | 2-5s (Cosmos Gremlin)                   | Foundry's ontology excels for pre-modeled relationship patterns                 |
 
 **Bottom line:** Azure provides more specialized engines that outperform Foundry's general-purpose Spark layer for most workload types. Foundry's ontology indexing provides a narrow but real advantage for pre-modeled entity graph queries, though Azure Cosmos DB with Gremlin API or Azure Data Explorer with graph semantics can close this gap with appropriate architectural design.
 
@@ -100,23 +100,23 @@ Foundry's Pipeline Builder provides a visual interface over Spark-based transfor
 
 Azure provides multiple orchestration and transformation engines:
 
-| Component | Role | Throughput characteristics |
-|---|---|---|
-| Azure Data Factory | Orchestration, data movement | 100+ GB/hour per integration runtime; parallel copy activities |
-| Databricks Auto-scaling | Spark transforms with dynamic cluster sizing | Scales from 2 to 100+ nodes based on workload |
+| Component                | Role                                         | Throughput characteristics                                                  |
+| ------------------------ | -------------------------------------------- | --------------------------------------------------------------------------- |
+| Azure Data Factory       | Orchestration, data movement                 | 100+ GB/hour per integration runtime; parallel copy activities              |
+| Databricks Auto-scaling  | Spark transforms with dynamic cluster sizing | Scales from 2 to 100+ nodes based on workload                               |
 | dbt on Fabric/Databricks | SQL-based transforms with incremental models | Incremental materialization comparable to Foundry's incremental computation |
-| Fabric Data Pipelines | Fabric-native orchestration | Integrated with OneLake; no data movement overhead |
-| Fabric Notebooks | Spark notebooks within Fabric capacity | Shares Fabric CU pool; auto-pause for cost efficiency |
+| Fabric Data Pipelines    | Fabric-native orchestration                  | Integrated with OneLake; no data movement overhead                          |
+| Fabric Notebooks         | Spark notebooks within Fabric capacity       | Shares Fabric CU pool; auto-pause for cost efficiency                       |
 
 ### Throughput comparison
 
-| Metric | Foundry | Azure | Notes |
-|---|---|---|---|
-| Raw ingestion (bulk) | 50-200 GB/hour (Spark-dependent) | 100-500+ GB/hour (ADF + parallel copy) | ADF's dedicated copy activities bypass Spark overhead |
-| Transform throughput (SQL) | Spark SQL (JVM overhead) | Photon vectorized (2-8x Spark) | Published Databricks benchmarks show Photon at 2-8x OSS Spark |
-| Incremental processing | Native incremental computation | dbt incremental models, Delta change data feed | Comparable efficiency; dbt provides SQL-native incremental logic |
-| Pipeline orchestration | Pipeline Builder visual editor | ADF visual editor, Fabric pipelines, Airflow on AKS | Azure offers more orchestration options |
-| Auto-scaling speed | Managed by Foundry (opaque) | Databricks auto-scaling: 1-3 min node addition | Azure provides transparent scaling controls |
+| Metric                     | Foundry                          | Azure                                               | Notes                                                            |
+| -------------------------- | -------------------------------- | --------------------------------------------------- | ---------------------------------------------------------------- |
+| Raw ingestion (bulk)       | 50-200 GB/hour (Spark-dependent) | 100-500+ GB/hour (ADF + parallel copy)              | ADF's dedicated copy activities bypass Spark overhead            |
+| Transform throughput (SQL) | Spark SQL (JVM overhead)         | Photon vectorized (2-8x Spark)                      | Published Databricks benchmarks show Photon at 2-8x OSS Spark    |
+| Incremental processing     | Native incremental computation   | dbt incremental models, Delta change data feed      | Comparable efficiency; dbt provides SQL-native incremental logic |
+| Pipeline orchestration     | Pipeline Builder visual editor   | ADF visual editor, Fabric pipelines, Airflow on AKS | Azure offers more orchestration options                          |
+| Auto-scaling speed         | Managed by Foundry (opaque)      | Databricks auto-scaling: 1-3 min node addition      | Azure provides transparent scaling controls                      |
 
 **Incremental computation note:** Foundry's incremental computation is well-regarded and works seamlessly within the platform. Azure's equivalent combines Delta Lake change data feed (for detecting changed rows) with dbt incremental models (for processing only new/changed data). The net effect is architecturally comparable, but Azure's approach uses open standards (Delta Lake, SQL) rather than a proprietary incremental framework.
 
@@ -138,24 +138,24 @@ Foundry's AI Platform (AIP) provides governed LLM access through its Language Mo
 
 Azure provides a multi-layered AI platform:
 
-| Service | Capability | Published performance |
-|---|---|---|
-| Azure OpenAI | GPT-4o, GPT-4.1, o3/o4-mini reasoning | 150K TPM default quota (scalable to 1M+ with PTU); sub-second first-token latency |
-| AI Foundry | Multi-model hub (OpenAI, Meta Llama, Mistral, Cohere, Phi) | Model-dependent; managed compute with auto-scaling |
-| Cognitive Services | Vision, Speech, Language, Decision | Service-specific SLAs; sub-second for most inference |
-| Copilot Studio | Low-code agent builder with RAG | Integrated with M365, Power Platform, and Azure AI Search |
-| ML endpoints | Custom model hosting (real-time and batch) | GPU-backed; A100/H100 options for high-throughput inference |
+| Service            | Capability                                                 | Published performance                                                             |
+| ------------------ | ---------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Azure OpenAI       | GPT-4o, GPT-4.1, o3/o4-mini reasoning                      | 150K TPM default quota (scalable to 1M+ with PTU); sub-second first-token latency |
+| AI Foundry         | Multi-model hub (OpenAI, Meta Llama, Mistral, Cohere, Phi) | Model-dependent; managed compute with auto-scaling                                |
+| Cognitive Services | Vision, Speech, Language, Decision                         | Service-specific SLAs; sub-second for most inference                              |
+| Copilot Studio     | Low-code agent builder with RAG                            | Integrated with M365, Power Platform, and Azure AI Search                         |
+| ML endpoints       | Custom model hosting (real-time and batch)                 | GPU-backed; A100/H100 options for high-throughput inference                       |
 
 ### Comparison
 
-| Metric | Foundry AIP | Azure AI | Notes |
-|---|---|---|---|
-| Token throughput (GPT-4-class) | Not publicly documented | 150K TPM default; 1M+ with PTU | Azure publishes quotas; Foundry does not |
-| Model variety | Limited to partner models | 1,800+ models in AI Foundry catalog | Azure supports open-source, commercial, and custom models |
-| First-token latency | Not publicly documented | 200-500ms (GPT-4o) | Azure publishes latency targets in SLAs |
-| Fine-tuning | Limited; requires Palantir support | Self-service for GPT-4o, Phi, Llama | Azure enables customer-managed fine-tuning |
-| Governance integration | Strong (Ontology markings) | Purview + Entra ID + Content Safety | Different approaches; both provide governed access |
-| Reasoning models | Not publicly available | o3, o4-mini with extended thinking | Azure offers frontier reasoning capabilities |
+| Metric                         | Foundry AIP                        | Azure AI                            | Notes                                                     |
+| ------------------------------ | ---------------------------------- | ----------------------------------- | --------------------------------------------------------- |
+| Token throughput (GPT-4-class) | Not publicly documented            | 150K TPM default; 1M+ with PTU      | Azure publishes quotas; Foundry does not                  |
+| Model variety                  | Limited to partner models          | 1,800+ models in AI Foundry catalog | Azure supports open-source, commercial, and custom models |
+| First-token latency            | Not publicly documented            | 200-500ms (GPT-4o)                  | Azure publishes latency targets in SLAs                   |
+| Fine-tuning                    | Limited; requires Palantir support | Self-service for GPT-4o, Phi, Llama | Azure enables customer-managed fine-tuning                |
+| Governance integration         | Strong (Ontology markings)         | Purview + Entra ID + Content Safety | Different approaches; both provide governed access        |
+| Reasoning models               | Not publicly available             | o3, o4-mini with extended thinking  | Azure offers frontier reasoning capabilities              |
 
 **Bottom line:** Azure provides demonstrably higher throughput, broader model selection, published SLAs, and self-service fine-tuning. Foundry AIP's advantage is seamless ontology integration, which Azure replicates through AI Search indexes backed by Purview-governed data.
 
@@ -171,13 +171,13 @@ Foundry runs on Kubernetes-based infrastructure managed by Apollo (Palantir's de
 
 Azure provides granular, customer-controlled scaling across every service:
 
-| Scaling dimension | Foundry | Azure |
-|---|---|---|
-| Compute elasticity | Managed by platform; scaling boundaries negotiated per contract | Customer-controlled; serverless to 1,000+ node clusters |
-| Concurrent users | Contract-limited (per-seat) | Unlimited (capacity-limited, not user-limited) |
-| Storage scaling | Platform-managed | Exabyte-scale ADLS Gen2; auto-tiering |
+| Scaling dimension       | Foundry                                                           | Azure                                                   |
+| ----------------------- | ----------------------------------------------------------------- | ------------------------------------------------------- |
+| Compute elasticity      | Managed by platform; scaling boundaries negotiated per contract   | Customer-controlled; serverless to 1,000+ node clusters |
+| Concurrent users        | Contract-limited (per-seat)                                       | Unlimited (capacity-limited, not user-limited)          |
+| Storage scaling         | Platform-managed                                                  | Exabyte-scale ADLS Gen2; auto-tiering                   |
 | Geographic distribution | Foundry regions (limited to Palantir-operated or customer-hosted) | 60+ Azure regions including sovereign/government clouds |
-| Burst capacity | Requires Palantir coordination | Self-service; serverless auto-scale in seconds |
+| Burst capacity          | Requires Palantir coordination                                    | Self-service; serverless auto-scale in seconds          |
 
 ### Scale ceiling comparison
 
@@ -206,23 +206,23 @@ Foundry provides streaming capabilities through a Flink-based engine integrated 
 
 Azure offers multiple streaming services at different layers of the stack:
 
-| Service | Published throughput | Latency | Use case |
-|---|---|---|---|
-| Event Hubs | Millions of events/second per namespace | Single-digit ms ingestion | High-volume event ingestion |
-| Event Hubs + Kafka | Kafka-compatible; same throughput | Kafka-native latency | Kafka migration, hybrid architectures |
-| Stream Analytics | 200 MB/s per streaming unit | 100ms-2s processing | SQL-based stream processing |
-| Fabric Real-Time Intelligence | Millions of events/second (Kusto-backed) | Sub-second query over streaming data | Real-time dashboards, alerting |
-| Azure Functions (Event-driven) | Scales to 200 instances per function app | Event-triggered in ms | Serverless event processing |
+| Service                        | Published throughput                     | Latency                              | Use case                              |
+| ------------------------------ | ---------------------------------------- | ------------------------------------ | ------------------------------------- |
+| Event Hubs                     | Millions of events/second per namespace  | Single-digit ms ingestion            | High-volume event ingestion           |
+| Event Hubs + Kafka             | Kafka-compatible; same throughput        | Kafka-native latency                 | Kafka migration, hybrid architectures |
+| Stream Analytics               | 200 MB/s per streaming unit              | 100ms-2s processing                  | SQL-based stream processing           |
+| Fabric Real-Time Intelligence  | Millions of events/second (Kusto-backed) | Sub-second query over streaming data | Real-time dashboards, alerting        |
+| Azure Functions (Event-driven) | Scales to 200 instances per function app | Event-triggered in ms                | Serverless event processing           |
 
 ### Comparison
 
-| Metric | Foundry | Azure | Notes |
-|---|---|---|---|
-| Ingestion throughput | Flink-based; throughput dependent on cluster size | Millions of events/second (Event Hubs) | Event Hubs' partitioned architecture provides higher throughput ceiling |
-| End-to-end latency | Seconds (Flink to ontology) | Sub-second (Event Hubs to Real-Time Intelligence) | Azure's purpose-built streaming services reduce hop count |
-| Stream processing | Flink SQL/Java | Stream Analytics SQL, Flink on AKS, Spark Structured Streaming | Azure supports Flink too, plus additional options |
-| Real-time dashboards | Workshop live views (seconds delay) | Fabric Real-Time dashboards (sub-second) | Kusto-backed Real-Time Intelligence is purpose-built |
-| Event ordering | Flink guarantees | Event Hubs partition-level ordering | Both provide ordered processing within partitions |
+| Metric               | Foundry                                           | Azure                                                          | Notes                                                                   |
+| -------------------- | ------------------------------------------------- | -------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| Ingestion throughput | Flink-based; throughput dependent on cluster size | Millions of events/second (Event Hubs)                         | Event Hubs' partitioned architecture provides higher throughput ceiling |
+| End-to-end latency   | Seconds (Flink to ontology)                       | Sub-second (Event Hubs to Real-Time Intelligence)              | Azure's purpose-built streaming services reduce hop count               |
+| Stream processing    | Flink SQL/Java                                    | Stream Analytics SQL, Flink on AKS, Spark Structured Streaming | Azure supports Flink too, plus additional options                       |
+| Real-time dashboards | Workshop live views (seconds delay)               | Fabric Real-Time dashboards (sub-second)                       | Kusto-backed Real-Time Intelligence is purpose-built                    |
+| Event ordering       | Flink guarantees                                  | Event Hubs partition-level ordering                            | Both provide ordered processing within partitions                       |
 
 **Bottom line:** Azure's streaming infrastructure provides higher throughput ceilings and lower end-to-end latency through purpose-built services. Foundry's Flink integration is capable but constrained by the platform's managed infrastructure model. For organizations already using Flink, Azure supports managed Flink on AKS or HDInsight, preserving existing skills.
 
@@ -238,24 +238,24 @@ Foundry provides two primary application frameworks: **Workshop** (low-code oper
 
 ### Azure applications
 
-| Application surface | Architecture | Typical performance |
-|---|---|---|
-| Power BI (Direct Lake) | VertiPaq in-memory over OneLake Parquet | Sub-second to 2s dashboard load; no refresh latency |
-| Power BI (DirectQuery) | Live query to source | 2-10s depending on source performance |
-| Power Apps (Model-driven) | Dataverse-backed forms | 1-3s form load; sub-second field updates |
-| Power Apps (Canvas) | Custom UI with connector calls | 1-5s depending on data source complexity |
-| Power Pages | Server-rendered web portal | 1-2s page load (cached); 3-5s dynamic |
-| Custom React/Angular | Azure-hosted SPA | Developer-controlled; sub-second with proper caching |
+| Application surface       | Architecture                            | Typical performance                                  |
+| ------------------------- | --------------------------------------- | ---------------------------------------------------- |
+| Power BI (Direct Lake)    | VertiPaq in-memory over OneLake Parquet | Sub-second to 2s dashboard load; no refresh latency  |
+| Power BI (DirectQuery)    | Live query to source                    | 2-10s depending on source performance                |
+| Power Apps (Model-driven) | Dataverse-backed forms                  | 1-3s form load; sub-second field updates             |
+| Power Apps (Canvas)       | Custom UI with connector calls          | 1-5s depending on data source complexity             |
+| Power Pages               | Server-rendered web portal              | 1-2s page load (cached); 3-5s dynamic                |
+| Custom React/Angular      | Azure-hosted SPA                        | Developer-controlled; sub-second with proper caching |
 
 ### Comparison
 
-| Metric | Foundry Workshop/Contour | Azure Power BI/Power Apps | Notes |
-|---|---|---|---|
-| Dashboard initial load | 3-8s (ontology-dependent) | Sub-second to 2s (Direct Lake) | Direct Lake eliminates import/refresh overhead |
-| Dashboard interaction | 1-3s per filter/drill | Sub-second (in-memory VertiPaq) | VertiPaq provides consistent in-memory performance |
-| Operational app load | 3-8s (Workshop) | 1-3s (Power Apps Model-driven) | Both depend on data source complexity |
-| Offline capability | Limited | Power Apps offline mode | Power Apps supports disconnected scenarios |
-| Mobile performance | Browser-based responsive | Native Power Apps mobile app | Power Apps mobile app provides native performance |
+| Metric                 | Foundry Workshop/Contour  | Azure Power BI/Power Apps       | Notes                                              |
+| ---------------------- | ------------------------- | ------------------------------- | -------------------------------------------------- |
+| Dashboard initial load | 3-8s (ontology-dependent) | Sub-second to 2s (Direct Lake)  | Direct Lake eliminates import/refresh overhead     |
+| Dashboard interaction  | 1-3s per filter/drill     | Sub-second (in-memory VertiPaq) | VertiPaq provides consistent in-memory performance |
+| Operational app load   | 3-8s (Workshop)           | 1-3s (Power Apps Model-driven)  | Both depend on data source complexity              |
+| Offline capability     | Limited                   | Power Apps offline mode         | Power Apps supports disconnected scenarios         |
+| Mobile performance     | Browser-based responsive  | Native Power Apps mobile app    | Power Apps mobile app provides native performance  |
 
 **Foundry advantage:** Workshop's tight ontology integration means that complex entity-relationship views render with a single query pattern rather than requiring multiple API calls. For highly relational operational views (e.g., a case management dashboard showing a case, its parties, documents, and timeline simultaneously), Workshop's architecture can provide a more cohesive data-loading pattern.
 
@@ -269,24 +269,24 @@ Foundry provides two primary application frameworks: **Workshop** (low-code oper
 
 Foundry is a vertically integrated platform. Its ecosystem includes:
 
-| Category | Count | Examples |
-|---|---|---|
-| Platform tools | ~30 | Contour, Workshop, Quiver, Fusion, Code Repos, Pipeline Builder, Vertex, AIP |
-| Data connectors | 200+ | JDBC, REST, S3, SFTP, file uploads, cloud storage |
-| Partner integrations | Limited | Select ISV partnerships; most integration requires custom connectors |
-| Marketplace | Foundry Marketplace | Curated apps and datasets; smaller than hyperscaler marketplaces |
+| Category             | Count               | Examples                                                                     |
+| -------------------- | ------------------- | ---------------------------------------------------------------------------- |
+| Platform tools       | ~30                 | Contour, Workshop, Quiver, Fusion, Code Repos, Pipeline Builder, Vertex, AIP |
+| Data connectors      | 200+                | JDBC, REST, S3, SFTP, file uploads, cloud storage                            |
+| Partner integrations | Limited             | Select ISV partnerships; most integration requires custom connectors         |
+| Marketplace          | Foundry Marketplace | Curated apps and datasets; smaller than hyperscaler marketplaces             |
 
 ### Azure ecosystem
 
-| Category | Count | Examples |
-|---|---|---|
-| Azure services | 200+ | Compute, storage, database, AI, analytics, IoT, security, networking |
-| ADF connectors | 100+ | Native connectors to SaaS, databases, files, APIs |
-| Logic Apps connectors | 1,000+ | M365, Salesforce, SAP, ServiceNow, Dynamics, custom APIs |
-| Power Platform connectors | 1,200+ | All Logic Apps connectors plus Power Platform-specific |
-| Azure Marketplace | 18,000+ offerings | ISV solutions, managed services, VM images, SaaS apps |
-| M365 integration | Deep | Teams, SharePoint, Outlook, OneDrive, Copilot |
-| GitHub integration | Native | Actions, Codespaces, Copilot, Advanced Security |
+| Category                  | Count             | Examples                                                             |
+| ------------------------- | ----------------- | -------------------------------------------------------------------- |
+| Azure services            | 200+              | Compute, storage, database, AI, analytics, IoT, security, networking |
+| ADF connectors            | 100+              | Native connectors to SaaS, databases, files, APIs                    |
+| Logic Apps connectors     | 1,000+            | M365, Salesforce, SAP, ServiceNow, Dynamics, custom APIs             |
+| Power Platform connectors | 1,200+            | All Logic Apps connectors plus Power Platform-specific               |
+| Azure Marketplace         | 18,000+ offerings | ISV solutions, managed services, VM images, SaaS apps                |
+| M365 integration          | Deep              | Teams, SharePoint, Outlook, OneDrive, Copilot                        |
+| GitHub integration        | Native            | Actions, Codespaces, Copilot, Advanced Security                      |
 
 ### Ecosystem comparison
 
@@ -311,34 +311,34 @@ _First bar: Foundry. Second bar: Azure. Values are relative to the broader marke
 
 Palantir ships platform updates monthly, with major capability announcements at annual events (e.g., AIPCon, DevCon). Feature availability depends on contract tier and deployment model (SaaS vs. dedicated).
 
-| Cadence | Approximate frequency | Notes |
-|---|---|---|
-| Platform updates | Monthly | Bug fixes, minor features, stability improvements |
-| Major features | Quarterly to annually | AIP, OSDK, new application capabilities |
-| Public previews | Rare | Features typically ship when GA-ready |
-| Deprecation cycle | Not publicly documented | Limited public visibility into sunset timelines |
+| Cadence           | Approximate frequency   | Notes                                             |
+| ----------------- | ----------------------- | ------------------------------------------------- |
+| Platform updates  | Monthly                 | Bug fixes, minor features, stability improvements |
+| Major features    | Quarterly to annually   | AIP, OSDK, new application capabilities           |
+| Public previews   | Rare                    | Features typically ship when GA-ready             |
+| Deprecation cycle | Not publicly documented | Limited public visibility into sunset timelines   |
 
 ### Azure release cadence
 
 Azure operates a continuous deployment model across 200+ services:
 
-| Cadence | Approximate frequency | Notes |
-|---|---|---|
-| Service updates | Weekly (across the portfolio) | azure.microsoft.com/updates tracks 1,000+ updates/year |
-| Fabric releases | Monthly | Each monthly release includes 30-50 new features |
+| Cadence             | Approximate frequency                               | Notes                                                         |
+| ------------------- | --------------------------------------------------- | ------------------------------------------------------------- |
+| Service updates     | Weekly (across the portfolio)                       | azure.microsoft.com/updates tracks 1,000+ updates/year        |
+| Fabric releases     | Monthly                                             | Each monthly release includes 30-50 new features              |
 | Major announcements | Quarterly (Build, Ignite, Inspire + interim events) | Large feature sets announced with public preview availability |
-| Public previews | Continuous | Most features available in preview 3-6 months before GA |
-| Deprecation cycle | Published timelines | Minimum 12-month deprecation notices with migration guides |
+| Public previews     | Continuous                                          | Most features available in preview 3-6 months before GA       |
+| Deprecation cycle   | Published timelines                                 | Minimum 12-month deprecation notices with migration guides    |
 
 ### Innovation comparison
 
-| Metric | Foundry | Azure | Source |
-|---|---|---|---|
-| Annual feature releases | Not publicly tracked | 1,000+ updates/year | Azure Updates feed |
-| Public preview availability | Limited | Continuous across services | Azure Preview Portal |
-| Open-source contributions | Minimal | Major contributor (VS Code, TypeScript, .NET, Playwright, etc.) | GitHub activity |
-| Research publications | Select papers | Microsoft Research: 1,000+ papers/year | Microsoft Research |
-| AI model releases | Partner-dependent | Monthly (OpenAI partnership + Phi, Florence, etc.) | Azure AI blog |
+| Metric                      | Foundry              | Azure                                                           | Source               |
+| --------------------------- | -------------------- | --------------------------------------------------------------- | -------------------- |
+| Annual feature releases     | Not publicly tracked | 1,000+ updates/year                                             | Azure Updates feed   |
+| Public preview availability | Limited              | Continuous across services                                      | Azure Preview Portal |
+| Open-source contributions   | Minimal              | Major contributor (VS Code, TypeScript, .NET, Playwright, etc.) | GitHub activity      |
+| Research publications       | Select papers        | Microsoft Research: 1,000+ papers/year                          | Microsoft Research   |
+| AI model releases           | Partner-dependent    | Monthly (OpenAI partnership + Phi, Florence, etc.)              | Azure AI blog        |
 
 **Bottom line:** Azure's innovation velocity is structurally higher due to Microsoft's scale (220,000+ employees, $20B+ annual R&D spend). Organizations on Azure receive continuous access to new capabilities. Foundry's innovation is meaningful but constrained by a smaller engineering organization and a more controlled release model.
 
@@ -350,26 +350,26 @@ Azure operates a continuous deployment model across 200+ services:
 
 Foundry uses proprietary SDKs, APIs, and development patterns:
 
-| Metric | Foundry | Source |
-|---|---|---|
-| Certified professionals | ~50,000 (estimated from Palantir's published partner data) | Palantir partner ecosystem reports |
-| Stack Overflow questions | ~500 tagged questions | Stack Overflow search |
-| Primary SDKs | OSDK (TypeScript/Python), Foundry SDK | Palantir documentation |
-| API model | Proprietary REST + OSDK | Foundry API documentation |
-| Open-source tooling | Limited | Palantir GitHub repos |
-| Training resources | Palantir Academy (proprietary) | palantir.com |
+| Metric                   | Foundry                                                    | Source                             |
+| ------------------------ | ---------------------------------------------------------- | ---------------------------------- |
+| Certified professionals  | ~50,000 (estimated from Palantir's published partner data) | Palantir partner ecosystem reports |
+| Stack Overflow questions | ~500 tagged questions                                      | Stack Overflow search              |
+| Primary SDKs             | OSDK (TypeScript/Python), Foundry SDK                      | Palantir documentation             |
+| API model                | Proprietary REST + OSDK                                    | Foundry API documentation          |
+| Open-source tooling      | Limited                                                    | Palantir GitHub repos              |
+| Training resources       | Palantir Academy (proprietary)                             | palantir.com                       |
 
 ### Azure developer ecosystem
 
-| Metric | Azure | Source |
-|---|---|---|
-| Certified professionals | 10M+ (Microsoft certifications issued) | Microsoft training dashboard |
-| Stack Overflow questions | 500,000+ Azure-tagged questions | Stack Overflow |
-| Primary SDKs | Azure SDKs for Python, .NET, Java, JavaScript, Go, Rust | github.com/Azure |
-| API model | REST (OpenAPI-documented) + language-native SDKs | docs.microsoft.com |
-| Open-source tooling | Extensive (Bicep, Terraform provider, CLI, SDKs all open-source) | GitHub |
-| Training resources | Microsoft Learn (free), 1,000+ learning paths | learn.microsoft.com |
-| Community events | Global MVP program, user groups, conferences | Microsoft community |
+| Metric                   | Azure                                                            | Source                       |
+| ------------------------ | ---------------------------------------------------------------- | ---------------------------- |
+| Certified professionals  | 10M+ (Microsoft certifications issued)                           | Microsoft training dashboard |
+| Stack Overflow questions | 500,000+ Azure-tagged questions                                  | Stack Overflow               |
+| Primary SDKs             | Azure SDKs for Python, .NET, Java, JavaScript, Go, Rust          | github.com/Azure             |
+| API model                | REST (OpenAPI-documented) + language-native SDKs                 | docs.microsoft.com           |
+| Open-source tooling      | Extensive (Bicep, Terraform provider, CLI, SDKs all open-source) | GitHub                       |
+| Training resources       | Microsoft Learn (free), 1,000+ learning paths                    | learn.microsoft.com          |
+| Community events         | Global MVP program, user groups, conferences                     | Microsoft community          |
 
 ### Developer pool comparison
 
@@ -393,43 +393,43 @@ pie title "Estimated Certified Professional Pool"
 
 Palantir Foundry maintains authorizations for high-security environments:
 
-| Certification | Status | Notes |
-|---|---|---|
-| FedRAMP High | Authorized | Foundry Federal; ATO maintained |
-| SOC 2 Type II | Certified | Annual audit |
-| HIPAA BAA | Available | Business Associate Agreement offered |
-| IL4 | Authorized | Foundry Federal |
-| IL5 | Authorized | Foundry Government Secret |
-| IL6 | Authorized | Foundry Government Top Secret |
-| ISO 27001 | Certified | Information security management |
+| Certification | Status     | Notes                                |
+| ------------- | ---------- | ------------------------------------ |
+| FedRAMP High  | Authorized | Foundry Federal; ATO maintained      |
+| SOC 2 Type II | Certified  | Annual audit                         |
+| HIPAA BAA     | Available  | Business Associate Agreement offered |
+| IL4           | Authorized | Foundry Federal                      |
+| IL5           | Authorized | Foundry Government Secret            |
+| IL6           | Authorized | Foundry Government Top Secret        |
+| ISO 27001     | Certified  | Information security management      |
 
 ### Azure certifications
 
 Azure maintains the broadest compliance portfolio of any cloud provider:
 
-| Category | Certifications | Examples |
-|---|---|---|
-| Government | 10+ | FedRAMP High, DoD IL2/4/5/6, ITAR, CJIS, IRS 1075 |
-| Industry | 15+ | HIPAA, HITRUST, PCI DSS, SOX, GLBA, FERPA |
-| International | 30+ | ISO 27001/27017/27018/27701, SOC 1/2/3, CSA STAR, GDPR, ENS High |
-| Regional/sovereign | 20+ | Azure Government, Azure Government Secret, Azure Government Top Secret, Azure China (21Vianet) |
-| Emerging frameworks | 10+ | CMMC Level 2, Zero Trust, NIST 800-171/800-53 |
-| **Total** | **100+** | Comprehensive listing at Microsoft Trust Center |
+| Category            | Certifications | Examples                                                                                       |
+| ------------------- | -------------- | ---------------------------------------------------------------------------------------------- |
+| Government          | 10+            | FedRAMP High, DoD IL2/4/5/6, ITAR, CJIS, IRS 1075                                              |
+| Industry            | 15+            | HIPAA, HITRUST, PCI DSS, SOX, GLBA, FERPA                                                      |
+| International       | 30+            | ISO 27001/27017/27018/27701, SOC 1/2/3, CSA STAR, GDPR, ENS High                               |
+| Regional/sovereign  | 20+            | Azure Government, Azure Government Secret, Azure Government Top Secret, Azure China (21Vianet) |
+| Emerging frameworks | 10+            | CMMC Level 2, Zero Trust, NIST 800-171/800-53                                                  |
+| **Total**           | **100+**       | Comprehensive listing at Microsoft Trust Center                                                |
 
 ### Certification comparison
 
-| Requirement | Foundry | Azure | Notes |
-|---|---|---|---|
-| FedRAMP High | Yes | Yes | Both authorized |
-| IL4 | Yes | Yes | Both authorized |
-| IL5 | Yes | Yes | Both authorized; Azure Government Secret |
-| IL6 | Yes | Yes | Both authorized; Azure Government Top Secret |
-| CMMC Level 2 | Not publicly documented | Yes (via Azure Government) | Growing DoD requirement |
-| PCI DSS | Not publicly documented | Yes | Relevant for agencies processing payments |
-| GDPR | Limited documentation | Yes (comprehensive) | Relevant for international data |
-| Sovereign clouds | Customer-hosted option | Azure Government, Azure China, EU Data Boundary | Azure provides managed sovereign options |
-| CJIS | Customer-managed | Yes (Azure Government) | Criminal justice requirements |
-| IRS 1075 | Not publicly documented | Yes | Tax data requirements |
+| Requirement      | Foundry                 | Azure                                           | Notes                                        |
+| ---------------- | ----------------------- | ----------------------------------------------- | -------------------------------------------- |
+| FedRAMP High     | Yes                     | Yes                                             | Both authorized                              |
+| IL4              | Yes                     | Yes                                             | Both authorized                              |
+| IL5              | Yes                     | Yes                                             | Both authorized; Azure Government Secret     |
+| IL6              | Yes                     | Yes                                             | Both authorized; Azure Government Top Secret |
+| CMMC Level 2     | Not publicly documented | Yes (via Azure Government)                      | Growing DoD requirement                      |
+| PCI DSS          | Not publicly documented | Yes                                             | Relevant for agencies processing payments    |
+| GDPR             | Limited documentation   | Yes (comprehensive)                             | Relevant for international data              |
+| Sovereign clouds | Customer-hosted option  | Azure Government, Azure China, EU Data Boundary | Azure provides managed sovereign options     |
+| CJIS             | Customer-managed        | Yes (Azure Government)                          | Criminal justice requirements                |
+| IRS 1075         | Not publicly documented | Yes                                             | Tax data requirements                        |
 
 **Bottom line:** Both platforms meet core federal requirements (FedRAMP High, IL4/5/6, HIPAA). Azure's advantage is breadth: 100+ certifications covering industry, international, and emerging frameworks that Foundry does not document. For agencies with diverse compliance requirements beyond federal baselines, Azure provides a single platform that addresses all of them.
 
@@ -479,18 +479,18 @@ This comparison would be incomplete without acknowledging areas where Foundry's 
 
 ## Recommendations
 
-| If your priority is... | Recommended platform | Rationale |
-|---|---|---|
-| Maximum query performance across diverse workloads | Azure | Purpose-built engines (Direct Lake, Kusto, Photon) outperform general-purpose Spark |
-| Pre-modeled entity graph performance | Foundry (or Azure with architecture investment) | Foundry's ontology indexing is purpose-built; Azure can match with Cosmos DB + AI Search |
-| AI/ML at scale | Azure | Broader model selection, published throughput, self-service fine-tuning |
-| Unlimited user scaling | Azure | Capacity-based (not seat-based) model serves unlimited users |
-| Real-time streaming at high volume | Azure | Event Hubs + Real-Time Intelligence provides higher throughput ceilings |
-| Minimal integration complexity | Foundry (small scale) or Azure (at scale) | Foundry is simpler for <20-person teams; Azure is simpler for enterprise-wide deployments |
-| Hiring and talent availability | Azure | 200x larger certified professional pool |
-| Compliance breadth | Azure | 100+ certifications vs. ~10 |
-| Innovation access | Azure | 1,000+ updates/year; continuous public previews |
-| Ecosystem integration | Azure | 200+ services, 1,000+ connectors, M365/Power Platform integration |
+| If your priority is...                             | Recommended platform                            | Rationale                                                                                 |
+| -------------------------------------------------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Maximum query performance across diverse workloads | Azure                                           | Purpose-built engines (Direct Lake, Kusto, Photon) outperform general-purpose Spark       |
+| Pre-modeled entity graph performance               | Foundry (or Azure with architecture investment) | Foundry's ontology indexing is purpose-built; Azure can match with Cosmos DB + AI Search  |
+| AI/ML at scale                                     | Azure                                           | Broader model selection, published throughput, self-service fine-tuning                   |
+| Unlimited user scaling                             | Azure                                           | Capacity-based (not seat-based) model serves unlimited users                              |
+| Real-time streaming at high volume                 | Azure                                           | Event Hubs + Real-Time Intelligence provides higher throughput ceilings                   |
+| Minimal integration complexity                     | Foundry (small scale) or Azure (at scale)       | Foundry is simpler for <20-person teams; Azure is simpler for enterprise-wide deployments |
+| Hiring and talent availability                     | Azure                                           | 200x larger certified professional pool                                                   |
+| Compliance breadth                                 | Azure                                           | 100+ certifications vs. ~10                                                               |
+| Innovation access                                  | Azure                                           | 1,000+ updates/year; continuous public previews                                           |
+| Ecosystem integration                              | Azure                                           | 200+ services, 1,000+ connectors, M365/Power Platform integration                         |
 
 ---
 

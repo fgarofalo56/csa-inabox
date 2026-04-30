@@ -3,7 +3,7 @@
 > **Audience:** Teams running Databricks (on AWS, Azure, GCP, or on-prem) considering Microsoft Fabric as the strategic forward path. **This is not a "rip and replace" guide** — it's a phased migration that keeps Databricks for what it's best at (heavy ML, multi-cloud) and moves BI-first workloads to Fabric.
 
 !!! tip "Expanded Migration Center Available"
-    This playbook is the core migration reference. For the complete Databricks-to-Fabric migration package — including white papers, deep-dive guides, tutorials, and benchmarks — visit the **[Databricks to Fabric Migration Center](databricks-to-fabric/index.md)**.
+This playbook is the core migration reference. For the complete Databricks-to-Fabric migration package — including white papers, deep-dive guides, tutorials, and benchmarks — visit the **[Databricks to Fabric Migration Center](databricks-to-fabric/index.md)**.
 
     **Quick links:**
 

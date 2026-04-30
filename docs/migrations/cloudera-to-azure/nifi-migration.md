@@ -20,92 +20,92 @@ Understanding this paradigm difference is essential. Do not attempt to replicate
 
 ### Data ingestion processors
 
-| NiFi processor | Azure equivalent | Migration approach |
-|---|---|---|
-| **GetFile** / **ListFile** | ADF Copy Activity (file system source) | Self-Hosted IR for on-prem file systems. |
-| **GetSFTP** / **ListSFTP** / **FetchSFTP** | ADF Copy Activity (SFTP connector) | Built-in SFTP connector with SSH key or password auth. |
-| **GetFTP** / **ListFTP** / **FetchFTP** | ADF Copy Activity (FTP connector) | FTP/FTPS connector available. |
-| **GetHTTP** / **InvokeHTTP** | ADF Web Activity / Logic App HTTP action | Web Activity for simple REST calls; Logic App for complex HTTP workflows. |
-| **ListenHTTP** | Logic App (HTTP trigger) / Azure Functions (HTTP trigger) | Event-driven ingestion via webhook. |
-| **ConsumeKafka** / **ConsumeKafka_2_6** | Event Hubs consumer / Databricks Structured Streaming | Event Hubs for Kafka-compatible consumption; Databricks for stream processing. |
-| **PublishKafka** / **PublishKafka_2_6** | Event Hubs producer / ADF Event Hub sink | Event Hubs Kafka endpoint for direct publish. |
-| **GetHDFS** / **ListHDFS** / **FetchHDFS** | ADF Copy Activity (ADLS Gen2 source) | Post-migration, HDFS paths become ADLS Gen2 paths. |
-| **PutHDFS** | ADF Copy Activity (ADLS Gen2 sink) | Write to ADLS Gen2 containers. |
-| **GetMongo** / **PutMongo** | ADF Copy Activity (Cosmos DB connector) | Cosmos DB MongoDB API or NoSQL API. |
-| **GetElasticsearch** | ADF Copy Activity (REST connector) | Custom REST connector to Elasticsearch/OpenSearch API. |
-| **QueryDatabaseTable** / **GenerateTableFetch** | ADF Copy Activity (JDBC/ODBC connector) | 100+ database connectors with built-in parallelism. |
-| **PutDatabaseRecord** | ADF Copy Activity (database sink) | Bulk insert with configurable batch size. |
-| **GetS3Object** / **ListS3** / **FetchS3Object** | ADF Copy Activity (S3 connector) | Cross-cloud ingestion from S3 to ADLS. |
-| **PutS3Object** | ADF Copy Activity (S3 sink) | Rarely needed post-migration. |
+| NiFi processor                                   | Azure equivalent                                          | Migration approach                                                             |
+| ------------------------------------------------ | --------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| **GetFile** / **ListFile**                       | ADF Copy Activity (file system source)                    | Self-Hosted IR for on-prem file systems.                                       |
+| **GetSFTP** / **ListSFTP** / **FetchSFTP**       | ADF Copy Activity (SFTP connector)                        | Built-in SFTP connector with SSH key or password auth.                         |
+| **GetFTP** / **ListFTP** / **FetchFTP**          | ADF Copy Activity (FTP connector)                         | FTP/FTPS connector available.                                                  |
+| **GetHTTP** / **InvokeHTTP**                     | ADF Web Activity / Logic App HTTP action                  | Web Activity for simple REST calls; Logic App for complex HTTP workflows.      |
+| **ListenHTTP**                                   | Logic App (HTTP trigger) / Azure Functions (HTTP trigger) | Event-driven ingestion via webhook.                                            |
+| **ConsumeKafka** / **ConsumeKafka_2_6**          | Event Hubs consumer / Databricks Structured Streaming     | Event Hubs for Kafka-compatible consumption; Databricks for stream processing. |
+| **PublishKafka** / **PublishKafka_2_6**          | Event Hubs producer / ADF Event Hub sink                  | Event Hubs Kafka endpoint for direct publish.                                  |
+| **GetHDFS** / **ListHDFS** / **FetchHDFS**       | ADF Copy Activity (ADLS Gen2 source)                      | Post-migration, HDFS paths become ADLS Gen2 paths.                             |
+| **PutHDFS**                                      | ADF Copy Activity (ADLS Gen2 sink)                        | Write to ADLS Gen2 containers.                                                 |
+| **GetMongo** / **PutMongo**                      | ADF Copy Activity (Cosmos DB connector)                   | Cosmos DB MongoDB API or NoSQL API.                                            |
+| **GetElasticsearch**                             | ADF Copy Activity (REST connector)                        | Custom REST connector to Elasticsearch/OpenSearch API.                         |
+| **QueryDatabaseTable** / **GenerateTableFetch**  | ADF Copy Activity (JDBC/ODBC connector)                   | 100+ database connectors with built-in parallelism.                            |
+| **PutDatabaseRecord**                            | ADF Copy Activity (database sink)                         | Bulk insert with configurable batch size.                                      |
+| **GetS3Object** / **ListS3** / **FetchS3Object** | ADF Copy Activity (S3 connector)                          | Cross-cloud ingestion from S3 to ADLS.                                         |
+| **PutS3Object**                                  | ADF Copy Activity (S3 sink)                               | Rarely needed post-migration.                                                  |
 
 ### Data transformation processors
 
-| NiFi processor | Azure equivalent | Migration approach |
-|---|---|---|
-| **ConvertRecord** | ADF Mapping Data Flow (format conversion) | Convert between CSV, JSON, Avro, Parquet in data flows. |
-| **ConvertAvroToJSON** / **ConvertJSONToAvro** | ADF Mapping Data Flow | Schema-aware format conversion. |
-| **JoltTransformJSON** | ADF Mapping Data Flow (derived column) / Azure Functions | Complex JSON transformations; Functions for JOLT-equivalent logic. |
-| **TransformXml** | ADF Mapping Data Flow / Azure Functions | XSLT transforms in Functions; basic XML in data flows. |
-| **UpdateAttribute** | ADF Pipeline variables / parameters | Metadata manipulation via pipeline expressions. |
-| **EvaluateJsonPath** | ADF expression: `@json(activity('x').output)` | JSON path extraction in ADF expressions. |
-| **ExtractText** | ADF Mapping Data Flow (regex) / Azure Functions | Regex extraction in data flows or Functions. |
-| **ReplaceText** | ADF Mapping Data Flow (replace) | String replacement in derived columns. |
-| **SplitText** / **SplitJson** / **SplitXml** | ADF ForEach activity / Mapping Data Flow | Iterate over split records. |
-| **MergeContent** | ADF Copy Activity (multiple files to one) | Merge files during copy; or Databricks for complex merges. |
-| **CompressContent** / **UnpackContent** | ADF Copy Activity (compression settings) | Built-in gzip, snappy, lz4 support. |
-| **EncryptContent** / **DecryptContent** | Azure Key Vault + Functions | Encryption via Key Vault managed keys. |
-| **LookupRecord** | ADF Lookup Activity + Join in Data Flow | Lookup activity for reference data; join in data flows. |
-| **ValidateRecord** | ADF Mapping Data Flow (conditional split) | Schema validation via conditional split + assert. |
+| NiFi processor                                | Azure equivalent                                         | Migration approach                                                 |
+| --------------------------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------ |
+| **ConvertRecord**                             | ADF Mapping Data Flow (format conversion)                | Convert between CSV, JSON, Avro, Parquet in data flows.            |
+| **ConvertAvroToJSON** / **ConvertJSONToAvro** | ADF Mapping Data Flow                                    | Schema-aware format conversion.                                    |
+| **JoltTransformJSON**                         | ADF Mapping Data Flow (derived column) / Azure Functions | Complex JSON transformations; Functions for JOLT-equivalent logic. |
+| **TransformXml**                              | ADF Mapping Data Flow / Azure Functions                  | XSLT transforms in Functions; basic XML in data flows.             |
+| **UpdateAttribute**                           | ADF Pipeline variables / parameters                      | Metadata manipulation via pipeline expressions.                    |
+| **EvaluateJsonPath**                          | ADF expression: `@json(activity('x').output)`            | JSON path extraction in ADF expressions.                           |
+| **ExtractText**                               | ADF Mapping Data Flow (regex) / Azure Functions          | Regex extraction in data flows or Functions.                       |
+| **ReplaceText**                               | ADF Mapping Data Flow (replace)                          | String replacement in derived columns.                             |
+| **SplitText** / **SplitJson** / **SplitXml**  | ADF ForEach activity / Mapping Data Flow                 | Iterate over split records.                                        |
+| **MergeContent**                              | ADF Copy Activity (multiple files to one)                | Merge files during copy; or Databricks for complex merges.         |
+| **CompressContent** / **UnpackContent**       | ADF Copy Activity (compression settings)                 | Built-in gzip, snappy, lz4 support.                                |
+| **EncryptContent** / **DecryptContent**       | Azure Key Vault + Functions                              | Encryption via Key Vault managed keys.                             |
+| **LookupRecord**                              | ADF Lookup Activity + Join in Data Flow                  | Lookup activity for reference data; join in data flows.            |
+| **ValidateRecord**                            | ADF Mapping Data Flow (conditional split)                | Schema validation via conditional split + assert.                  |
 
 ### Routing processors
 
-| NiFi processor | Azure equivalent | Migration approach |
-|---|---|---|
-| **RouteOnAttribute** | ADF If Condition / Switch Activity | Conditional branching based on metadata. |
-| **RouteOnContent** | ADF Mapping Data Flow (conditional split) | Content-based routing in data flows. |
-| **DistributeLoad** | ADF parallel activities / Event Hubs partitions | Load distribution via partitioning. |
-| **ControlRate** | ADF concurrency settings / Event Hubs throttling | Pipeline and activity concurrency limits. |
-| **Wait** | ADF Wait Activity | Configurable delay between activities. |
-| **RetryFlowFile** | ADF retry policy (per activity) | Built-in retry with configurable count and interval. |
-| **UpdateAttribute (routing)** | ADF Set Variable / Append Variable | Variable manipulation for flow control. |
+| NiFi processor                | Azure equivalent                                 | Migration approach                                   |
+| ----------------------------- | ------------------------------------------------ | ---------------------------------------------------- |
+| **RouteOnAttribute**          | ADF If Condition / Switch Activity               | Conditional branching based on metadata.             |
+| **RouteOnContent**            | ADF Mapping Data Flow (conditional split)        | Content-based routing in data flows.                 |
+| **DistributeLoad**            | ADF parallel activities / Event Hubs partitions  | Load distribution via partitioning.                  |
+| **ControlRate**               | ADF concurrency settings / Event Hubs throttling | Pipeline and activity concurrency limits.            |
+| **Wait**                      | ADF Wait Activity                                | Configurable delay between activities.               |
+| **RetryFlowFile**             | ADF retry policy (per activity)                  | Built-in retry with configurable count and interval. |
+| **UpdateAttribute (routing)** | ADF Set Variable / Append Variable               | Variable manipulation for flow control.              |
 
 ### Delivery processors
 
-| NiFi processor | Azure equivalent | Migration approach |
-|---|---|---|
-| **PutAzureBlobStorage** | ADF Copy Activity (Blob sink) | Direct replacement. |
-| **PutAzureDataLakeStorage** | ADF Copy Activity (ADLS Gen2 sink) | Direct replacement. |
-| **PutEmail** | Logic App (Send Email action) | Logic App with Office 365 or SendGrid connector. |
-| **PutSlack** | Logic App (Slack connector) | Logic App with Slack webhook. |
-| **PutSQL** | ADF Copy Activity (database sink) | Bulk write to SQL databases. |
-| **PutHiveQL** | Databricks SQL activity in ADF | Execute SQL on Databricks via ADF. |
-| **PutParquet** / **PutORC** | ADF Copy Activity (Parquet/Delta sink) | Write Parquet or Delta format to ADLS. |
+| NiFi processor              | Azure equivalent                       | Migration approach                               |
+| --------------------------- | -------------------------------------- | ------------------------------------------------ |
+| **PutAzureBlobStorage**     | ADF Copy Activity (Blob sink)          | Direct replacement.                              |
+| **PutAzureDataLakeStorage** | ADF Copy Activity (ADLS Gen2 sink)     | Direct replacement.                              |
+| **PutEmail**                | Logic App (Send Email action)          | Logic App with Office 365 or SendGrid connector. |
+| **PutSlack**                | Logic App (Slack connector)            | Logic App with Slack webhook.                    |
+| **PutSQL**                  | ADF Copy Activity (database sink)      | Bulk write to SQL databases.                     |
+| **PutHiveQL**               | Databricks SQL activity in ADF         | Execute SQL on Databricks via ADF.               |
+| **PutParquet** / **PutORC** | ADF Copy Activity (Parquet/Delta sink) | Write Parquet or Delta format to ADLS.           |
 
 ---
 
 ## NiFi Registry to ADF Git integration
 
-| NiFi Registry feature | ADF equivalent | Notes |
-|---|---|---|
-| **Versioned flows** | ADF Git integration (Azure DevOps / GitHub) | All pipelines stored as ARM/Bicep JSON in Git. |
-| **Flow snapshots** | Git commits | Each save is a commit; full version history. |
-| **Bucket organization** | Git branches + folders | Organize pipelines by domain or team. |
-| **Promote to production** | Git PR + CI/CD pipeline | ADF publish from collaboration branch to live mode. |
-| **Import/export flows** | ARM template export/import | Pipelines exportable as JSON for cross-environment promotion. |
-| **Access control on buckets** | Git repository permissions + ADF RBAC | Entra ID RBAC on ADF; branch policies on Git. |
+| NiFi Registry feature         | ADF equivalent                              | Notes                                                         |
+| ----------------------------- | ------------------------------------------- | ------------------------------------------------------------- |
+| **Versioned flows**           | ADF Git integration (Azure DevOps / GitHub) | All pipelines stored as ARM/Bicep JSON in Git.                |
+| **Flow snapshots**            | Git commits                                 | Each save is a commit; full version history.                  |
+| **Bucket organization**       | Git branches + folders                      | Organize pipelines by domain or team.                         |
+| **Promote to production**     | Git PR + CI/CD pipeline                     | ADF publish from collaboration branch to live mode.           |
+| **Import/export flows**       | ARM template export/import                  | Pipelines exportable as JSON for cross-environment promotion. |
+| **Access control on buckets** | Git repository permissions + ADF RBAC       | Entra ID RBAC on ADF; branch policies on Git.                 |
 
 ---
 
 ## NiFi clustering to ADF Integration Runtime scaling
 
-| NiFi clustering feature | ADF equivalent | Notes |
-|---|---|---|
-| **NiFi cluster (multi-node)** | Azure Integration Runtime (auto-scaling) | ADF manages IR scaling internally. |
-| **Primary node election** | Not applicable | No primary/secondary; ADF orchestrates activities. |
-| **Load balancing across nodes** | Parallel copy / data flow scaling | ADF parallelizes copy activities automatically. |
-| **Site-to-Site transfer** | Self-Hosted Integration Runtime (SHIR) | SHIR bridges on-prem networks to Azure. |
-| **NiFi cluster coordinator** | ADF service (managed) | No user-managed coordinator. |
-| **Back-pressure** | Pipeline concurrency limits + Event Hubs | Concurrency controls at pipeline and activity level. |
+| NiFi clustering feature         | ADF equivalent                           | Notes                                                |
+| ------------------------------- | ---------------------------------------- | ---------------------------------------------------- |
+| **NiFi cluster (multi-node)**   | Azure Integration Runtime (auto-scaling) | ADF manages IR scaling internally.                   |
+| **Primary node election**       | Not applicable                           | No primary/secondary; ADF orchestrates activities.   |
+| **Load balancing across nodes** | Parallel copy / data flow scaling        | ADF parallelizes copy activities automatically.      |
+| **Site-to-Site transfer**       | Self-Hosted Integration Runtime (SHIR)   | SHIR bridges on-prem networks to Azure.              |
+| **NiFi cluster coordinator**    | ADF service (managed)                    | No user-managed coordinator.                         |
+| **Back-pressure**               | Pipeline concurrency limits + Event Hubs | Concurrency controls at pipeline and activity level. |
 
 ---
 
@@ -115,15 +115,15 @@ NiFi's Record-oriented processors (`ConvertRecord`, `QueryRecord`, `LookupRecord
 
 ### Mapping Data Flow equivalents
 
-| NiFi Record operation | ADF Mapping Data Flow transformation | Notes |
-|---|---|---|
-| **QueryRecord** (SQL on records) | SQL-based source query / Derived Column | SQL queries on inline datasets. |
-| **UpdateRecord** (modify fields) | Derived Column transformation | Create/modify columns with expressions. |
-| **LookupRecord** | Lookup transformation | Join with reference datasets. |
-| **PartitionRecord** | Window / Aggregate transformations | Partition-based operations. |
-| **SplitRecord** | Conditional Split | Route records based on conditions. |
-| **ConvertRecord** (format change) | Sink format configuration | Set output format (Parquet, JSON, CSV, Delta). |
-| **ValidateRecord** | Assert / Conditional Split | Validate records against schema; route failures. |
+| NiFi Record operation             | ADF Mapping Data Flow transformation    | Notes                                            |
+| --------------------------------- | --------------------------------------- | ------------------------------------------------ |
+| **QueryRecord** (SQL on records)  | SQL-based source query / Derived Column | SQL queries on inline datasets.                  |
+| **UpdateRecord** (modify fields)  | Derived Column transformation           | Create/modify columns with expressions.          |
+| **LookupRecord**                  | Lookup transformation                   | Join with reference datasets.                    |
+| **PartitionRecord**               | Window / Aggregate transformations      | Partition-based operations.                      |
+| **SplitRecord**                   | Conditional Split                       | Route records based on conditions.               |
+| **ConvertRecord** (format change) | Sink format configuration               | Set output format (Parquet, JSON, CSV, Delta).   |
+| **ValidateRecord**                | Assert / Conditional Split              | Validate records against schema; route failures. |
 
 ### Example: NiFi Record flow to ADF Data Flow
 
@@ -149,14 +149,14 @@ ADF equivalent:
 
 NiFi Site-to-Site (S2S) transfers data between NiFi instances across networks. The ADF equivalent is the Self-Hosted Integration Runtime (SHIR).
 
-| NiFi S2S feature | ADF SHIR equivalent |
-|---|---|
-| **Push data from remote NiFi to central NiFi** | SHIR reads from on-prem sources, pushes to ADF |
-| **Pull data from central NiFi to remote NiFi** | ADF pipeline triggers SHIR to fetch from on-prem |
-| **Encrypted transfer (TLS)** | SHIR uses TLS by default; private endpoint support |
-| **Compression** | Automatic compression in transit |
-| **Multiple Remote Process Groups** | Multiple SHIR nodes (high availability group) |
-| **Port-based communication** | Outbound HTTPS only (port 443); no inbound firewall rules needed |
+| NiFi S2S feature                               | ADF SHIR equivalent                                              |
+| ---------------------------------------------- | ---------------------------------------------------------------- |
+| **Push data from remote NiFi to central NiFi** | SHIR reads from on-prem sources, pushes to ADF                   |
+| **Pull data from central NiFi to remote NiFi** | ADF pipeline triggers SHIR to fetch from on-prem                 |
+| **Encrypted transfer (TLS)**                   | SHIR uses TLS by default; private endpoint support               |
+| **Compression**                                | Automatic compression in transit                                 |
+| **Multiple Remote Process Groups**             | Multiple SHIR nodes (high availability group)                    |
+| **Port-based communication**                   | Outbound HTTPS only (port 443); no inbound firewall rules needed |
 
 ---
 
@@ -197,7 +197,12 @@ ListSFTP (vendor-sftp.example.com:/outbound/)
             {
                 "name": "for_each_file",
                 "type": "ForEach",
-                "dependsOn": [{ "activity": "list_vendor_files", "dependencyConditions": ["Succeeded"] }],
+                "dependsOn": [
+                    {
+                        "activity": "list_vendor_files",
+                        "dependencyConditions": ["Succeeded"]
+                    }
+                ],
                 "typeProperties": {
                     "items": "@activity('list_vendor_files').output.childItems",
                     "isSequential": false,
@@ -209,11 +214,15 @@ ListSFTP (vendor-sftp.example.com:/outbound/)
                             "typeProperties": {
                                 "source": {
                                     "type": "DelimitedTextSource",
-                                    "storeSettings": { "type": "SftpReadSettings" }
+                                    "storeSettings": {
+                                        "type": "SftpReadSettings"
+                                    }
                                 },
                                 "sink": {
                                     "type": "ParquetSink",
-                                    "storeSettings": { "type": "AzureBlobFSWriteSettings" }
+                                    "storeSettings": {
+                                        "type": "AzureBlobFSWriteSettings"
+                                    }
                                 },
                                 "enableStaging": false
                             }
@@ -224,7 +233,12 @@ ListSFTP (vendor-sftp.example.com:/outbound/)
             {
                 "name": "validate_data",
                 "type": "DatabricksNotebook",
-                "dependsOn": [{ "activity": "for_each_file", "dependencyConditions": ["Succeeded"] }],
+                "dependsOn": [
+                    {
+                        "activity": "for_each_file",
+                        "dependencyConditions": ["Succeeded"]
+                    }
+                ],
                 "typeProperties": {
                     "notebookPath": "/pipelines/vendor_files/validate_and_quarantine",
                     "baseParameters": {
@@ -241,14 +255,14 @@ ListSFTP (vendor-sftp.example.com:/outbound/)
 
 ### Key design decisions in the conversion
 
-| NiFi pattern | ADF decision | Rationale |
-|---|---|---|
-| ListSFTP + FetchSFTP | GetMetadata + ForEach + Copy | ADF separates listing from fetching. ForEach enables parallelism. |
-| ValidateRecord (in-flow) | Databricks notebook (post-copy) | ADF Copy Activity cannot validate mid-stream. Validate after landing in bronze. |
-| ConvertRecord (CSV → Parquet) | Copy Activity sink format = Parquet | ADF Copy Activity handles format conversion natively. |
-| UpdateAttribute | Pipeline parameters / notebook logic | Metadata added during Databricks validation step. |
-| PutEmail (on failure) | Logic App triggered by ADF failure webhook | ADF triggers Logic App for alerting. |
-| PutHDFS (quarantine) | Databricks notebook writes to quarantine container | Invalid records written to separate storage container. |
+| NiFi pattern                  | ADF decision                                       | Rationale                                                                       |
+| ----------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------- |
+| ListSFTP + FetchSFTP          | GetMetadata + ForEach + Copy                       | ADF separates listing from fetching. ForEach enables parallelism.               |
+| ValidateRecord (in-flow)      | Databricks notebook (post-copy)                    | ADF Copy Activity cannot validate mid-stream. Validate after landing in bronze. |
+| ConvertRecord (CSV → Parquet) | Copy Activity sink format = Parquet                | ADF Copy Activity handles format conversion natively.                           |
+| UpdateAttribute               | Pipeline parameters / notebook logic               | Metadata added during Databricks validation step.                               |
+| PutEmail (on failure)         | Logic App triggered by ADF failure webhook         | ADF triggers Logic App for alerting.                                            |
+| PutHDFS (quarantine)          | Databricks notebook writes to quarantine container | Invalid records written to separate storage container.                          |
 
 ---
 
@@ -256,16 +270,16 @@ ListSFTP (vendor-sftp.example.com:/outbound/)
 
 Some NiFi patterns map better to Logic Apps than ADF:
 
-| Pattern | Use Logic Apps | Use ADF |
-|---|---|---|
-| **Webhook / event-driven** | Yes | No |
-| **Email / Teams / Slack notifications** | Yes | No (trigger Logic App from ADF) |
-| **REST API orchestration** | Yes (complex multi-step API calls) | ADF Web Activity (simple GET/POST) |
-| **File polling (SFTP/FTP)** | Logic App SFTP trigger | ADF schedule + Copy Activity |
-| **Low-latency event routing** | Yes | No (ADF has pipeline startup overhead) |
-| **Batch data movement** | No | Yes |
-| **Data transformation** | No | Yes (Mapping Data Flows) |
-| **Complex orchestration** | No | Yes (pipelines with dependencies) |
+| Pattern                                 | Use Logic Apps                     | Use ADF                                |
+| --------------------------------------- | ---------------------------------- | -------------------------------------- |
+| **Webhook / event-driven**              | Yes                                | No                                     |
+| **Email / Teams / Slack notifications** | Yes                                | No (trigger Logic App from ADF)        |
+| **REST API orchestration**              | Yes (complex multi-step API calls) | ADF Web Activity (simple GET/POST)     |
+| **File polling (SFTP/FTP)**             | Logic App SFTP trigger             | ADF schedule + Copy Activity           |
+| **Low-latency event routing**           | Yes                                | No (ADF has pipeline startup overhead) |
+| **Batch data movement**                 | No                                 | Yes                                    |
+| **Data transformation**                 | No                                 | Yes (Mapping Data Flows)               |
+| **Complex orchestration**               | No                                 | Yes (pipelines with dependencies)      |
 
 ---
 
@@ -280,14 +294,14 @@ Some NiFi patterns map better to Logic Apps than ADF:
 
 ### Phase 2: Classify migration approach (1 week)
 
-| NiFi flow type | Migration target | Complexity |
-|---|---|---|
-| Batch file ingestion (SFTP/FTP/FS) | ADF Copy Activity + pipeline | Low |
-| Database ingestion (JDBC) | ADF Copy Activity | Low |
-| Kafka/Event streaming | Event Hubs + Databricks Streaming | Medium |
-| Complex real-time routing | Logic Apps + Functions + Event Grid | High |
-| Record transformation pipelines | ADF Mapping Data Flows | Medium |
-| API integration flows | Logic Apps | Medium |
+| NiFi flow type                     | Migration target                    | Complexity |
+| ---------------------------------- | ----------------------------------- | ---------- |
+| Batch file ingestion (SFTP/FTP/FS) | ADF Copy Activity + pipeline        | Low        |
+| Database ingestion (JDBC)          | ADF Copy Activity                   | Low        |
+| Kafka/Event streaming              | Event Hubs + Databricks Streaming   | Medium     |
+| Complex real-time routing          | Logic Apps + Functions + Event Grid | High       |
+| Record transformation pipelines    | ADF Mapping Data Flows              | Medium     |
+| API integration flows              | Logic Apps                          | Medium     |
 
 ### Phase 3: Convert and test (4-8 weeks)
 

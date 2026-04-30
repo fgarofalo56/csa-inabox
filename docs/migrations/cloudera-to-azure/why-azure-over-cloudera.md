@@ -25,11 +25,11 @@ Cloudera CDH 6.x reached end of life on **March 31, 2022**. This is not a theore
 
 **The upgrade paths from CDH 6.x:**
 
-| Path | Description | Key concern |
-|---|---|---|
-| **CDP Private Cloud** | On-prem successor to CDH | Rising renewal costs, still requires hardware and Hadoop admin team |
-| **CDP Public Cloud** | Cloudera's managed cloud offering | Runs on AWS/Azure/GCP but adds Cloudera licensing on top of cloud costs |
-| **Azure-native platform** | Migrate to managed Azure services | One-time migration effort, then consumption-based economics |
+| Path                      | Description                       | Key concern                                                             |
+| ------------------------- | --------------------------------- | ----------------------------------------------------------------------- |
+| **CDP Private Cloud**     | On-prem successor to CDH          | Rising renewal costs, still requires hardware and Hadoop admin team     |
+| **CDP Public Cloud**      | Cloudera's managed cloud offering | Runs on AWS/Azure/GCP but adds Cloudera licensing on top of cloud costs |
+| **Azure-native platform** | Migrate to managed Azure services | One-time migration effort, then consumption-based economics             |
 
 Organizations that upgraded to CDP Private Cloud bought time, but they did not solve the underlying structural problems: hardware dependency, operational overhead, and a narrowing talent pool. CDP Public Cloud addresses the hardware concern but layers Cloudera licensing on top of cloud infrastructure costs, creating a double-payment problem.
 
@@ -41,17 +41,17 @@ Azure-native migration is the only path that addresses all three concerns simult
 
 Running a Cloudera cluster -- CDH or CDP -- requires a dedicated platform team performing work that Azure handles automatically.
 
-| Operational task | Cloudera (CDH / CDP Private Cloud) | Azure managed services |
-|---|---|---|
-| **OS patching** | Manual across all nodes; coordinate with workload windows | Handled by the service; zero customer involvement |
-| **Cluster scaling** | Add nodes, rebalance HDFS, reconfigure YARN capacities | Autoscaling (Databricks, ADF, Event Hubs) |
-| **High availability** | Configure NameNode HA, ResourceManager HA, HiveServer2 HA | Built into every managed service |
-| **Kerberos administration** | Maintain KDC, manage keytabs, troubleshoot ticket expiration | Entra ID -- no Kerberos infrastructure |
-| **Software upgrades** | Major version upgrades require weeks of planning and testing | Rolling updates managed by Azure |
-| **Monitoring & alerting** | Cloudera Manager + custom integrations | Azure Monitor with built-in service-specific metrics |
-| **Capacity planning** | Quarterly hardware procurement cycles | Scale on demand; no procurement |
-| **Disaster recovery** | Manual HDFS snapshots, cross-cluster replication | GRS/ZRS storage, automated Databricks DR, ADF global parameters |
-| **Security patching** | Manual CVE response across the entire Hadoop stack | Azure security patches applied automatically |
+| Operational task            | Cloudera (CDH / CDP Private Cloud)                           | Azure managed services                                          |
+| --------------------------- | ------------------------------------------------------------ | --------------------------------------------------------------- |
+| **OS patching**             | Manual across all nodes; coordinate with workload windows    | Handled by the service; zero customer involvement               |
+| **Cluster scaling**         | Add nodes, rebalance HDFS, reconfigure YARN capacities       | Autoscaling (Databricks, ADF, Event Hubs)                       |
+| **High availability**       | Configure NameNode HA, ResourceManager HA, HiveServer2 HA    | Built into every managed service                                |
+| **Kerberos administration** | Maintain KDC, manage keytabs, troubleshoot ticket expiration | Entra ID -- no Kerberos infrastructure                          |
+| **Software upgrades**       | Major version upgrades require weeks of planning and testing | Rolling updates managed by Azure                                |
+| **Monitoring & alerting**   | Cloudera Manager + custom integrations                       | Azure Monitor with built-in service-specific metrics            |
+| **Capacity planning**       | Quarterly hardware procurement cycles                        | Scale on demand; no procurement                                 |
+| **Disaster recovery**       | Manual HDFS snapshots, cross-cluster replication             | GRS/ZRS storage, automated Databricks DR, ADF global parameters |
+| **Security patching**       | Manual CVE response across the entire Hadoop stack           | Azure security patches applied automatically                    |
 
 **The operational math:** A typical CDH cluster requires 2-4 full-time platform engineers for day-to-day operations. On Azure, the same data platform can be managed by 1-2 engineers whose time shifts from keeping infrastructure alive to building data products.
 
@@ -63,15 +63,15 @@ The Hadoop architecture -- HDFS for storage, YARN for resource management, MapRe
 
 ### What has changed
 
-| Requirement | Hadoop-era approach | Lakehouse approach (Azure) |
-|---|---|---|
-| **Unified batch + streaming** | Separate Lambda/Kappa architectures | Delta Live Tables, Structured Streaming on Databricks |
-| **ACID transactions on data lake** | Hive ACID (limited, slow) | Delta Lake (ACID on Parquet, time travel, Z-ordering) |
-| **Interactive SQL** | Impala or Hive LLAP (dedicated resources) | Databricks SQL Serverless, Fabric SQL endpoint |
-| **ML/AI on data platform** | Export data to separate ML platform | MLflow, Feature Store, Model Serving on Databricks |
-| **Governance + lineage** | Atlas + Ranger (manual curation) | Purview + Unity Catalog (automated scanning) |
-| **Semantic layer** | None (embedded in BI tools) | dbt semantic layer, Fabric semantic models |
-| **Real-time analytics** | Storm/Flink add-ons (complex) | Fabric Real-Time Intelligence, Event Hubs + Spark Streaming |
+| Requirement                        | Hadoop-era approach                       | Lakehouse approach (Azure)                                  |
+| ---------------------------------- | ----------------------------------------- | ----------------------------------------------------------- |
+| **Unified batch + streaming**      | Separate Lambda/Kappa architectures       | Delta Live Tables, Structured Streaming on Databricks       |
+| **ACID transactions on data lake** | Hive ACID (limited, slow)                 | Delta Lake (ACID on Parquet, time travel, Z-ordering)       |
+| **Interactive SQL**                | Impala or Hive LLAP (dedicated resources) | Databricks SQL Serverless, Fabric SQL endpoint              |
+| **ML/AI on data platform**         | Export data to separate ML platform       | MLflow, Feature Store, Model Serving on Databricks          |
+| **Governance + lineage**           | Atlas + Ranger (manual curation)          | Purview + Unity Catalog (automated scanning)                |
+| **Semantic layer**                 | None (embedded in BI tools)               | dbt semantic layer, Fabric semantic models                  |
+| **Real-time analytics**            | Storm/Flink add-ons (complex)             | Fabric Real-Time Intelligence, Event Hubs + Spark Streaming |
 
 ### The integration advantage
 
@@ -127,20 +127,20 @@ Cloudera Machine Learning (CML) is a capable platform for data science teams:
 
 Azure's AI stack is broader by an order of magnitude:
 
-| Capability | Azure service | Cloudera equivalent |
-|---|---|---|
-| **Large language models** | Azure OpenAI (GPT-4o, o1, o3) | None (no native LLM service) |
-| **Copilot integration** | Copilot for Power BI, Copilot Studio, M365 Copilot | None |
-| **RAG / knowledge bases** | Azure AI Search + Azure OpenAI | None |
-| **Prompt engineering** | AI Foundry prompt flow | None |
-| **Traditional ML** | Azure ML, Databricks MLflow | CML (comparable for this scope) |
-| **AutoML** | Databricks AutoML, Azure ML AutoML | CML AutoML (limited) |
-| **Feature store** | Databricks Feature Store, Azure ML Feature Store | CML Feature Store |
-| **Model serving** | Databricks Model Serving, Azure ML endpoints | CML Model Serving |
-| **Real-time inference** | Azure ML managed online endpoints | CML (basic) |
-| **Vector search** | Azure AI Search, Databricks Vector Search | None |
-| **Computer vision** | Azure AI Vision, Azure AI Document Intelligence | None |
-| **Speech / language** | Azure AI Speech, Azure AI Language | None |
+| Capability                | Azure service                                      | Cloudera equivalent             |
+| ------------------------- | -------------------------------------------------- | ------------------------------- |
+| **Large language models** | Azure OpenAI (GPT-4o, o1, o3)                      | None (no native LLM service)    |
+| **Copilot integration**   | Copilot for Power BI, Copilot Studio, M365 Copilot | None                            |
+| **RAG / knowledge bases** | Azure AI Search + Azure OpenAI                     | None                            |
+| **Prompt engineering**    | AI Foundry prompt flow                             | None                            |
+| **Traditional ML**        | Azure ML, Databricks MLflow                        | CML (comparable for this scope) |
+| **AutoML**                | Databricks AutoML, Azure ML AutoML                 | CML AutoML (limited)            |
+| **Feature store**         | Databricks Feature Store, Azure ML Feature Store   | CML Feature Store               |
+| **Model serving**         | Databricks Model Serving, Azure ML endpoints       | CML Model Serving               |
+| **Real-time inference**   | Azure ML managed online endpoints                  | CML (basic)                     |
+| **Vector search**         | Azure AI Search, Databricks Vector Search          | None                            |
+| **Computer vision**       | Azure AI Vision, Azure AI Document Intelligence    | None                            |
+| **Speech / language**     | Azure AI Speech, Azure AI Language                 | None                            |
 
 **The strategic implication:** Organizations on Cloudera that want to adopt generative AI must bolt on a separate cloud AI service anyway. Migrating to Azure gives you an integrated AI platform where your data, your ML models, and your LLM applications share the same governance, security, and data layer.
 
@@ -184,16 +184,16 @@ Cloudera Data Engineering (CDE) deserves specific mention because it represents 
 
 ### Where Azure still wins
 
-| Dimension | CDE | Databricks |
-|---|---|---|
-| **Serverless compute** | Not available; virtual clusters must be provisioned | Serverless SQL and serverless jobs (pay per query/run) |
-| **Unity Catalog** | Uses Ranger + HMS (two systems) | Unified governance across all workloads |
-| **Delta Sharing** | Limited support | Native open protocol for cross-org data sharing |
-| **Photon engine** | Not available | 2-8x faster for SQL and DataFrame workloads |
-| **dbt integration** | Manual setup | Native dbt support in Databricks SQL |
-| **Notebook collaboration** | Basic notebooks | Real-time co-editing, Git integration, MLflow tracking |
-| **AI/ML integration** | Requires separate CML deployment | MLflow, Feature Store, Model Serving in same workspace |
-| **Ecosystem breadth** | Cloudera ecosystem only | Azure AI, Power BI, Fabric, 100+ Azure services |
+| Dimension                  | CDE                                                 | Databricks                                             |
+| -------------------------- | --------------------------------------------------- | ------------------------------------------------------ |
+| **Serverless compute**     | Not available; virtual clusters must be provisioned | Serverless SQL and serverless jobs (pay per query/run) |
+| **Unity Catalog**          | Uses Ranger + HMS (two systems)                     | Unified governance across all workloads                |
+| **Delta Sharing**          | Limited support                                     | Native open protocol for cross-org data sharing        |
+| **Photon engine**          | Not available                                       | 2-8x faster for SQL and DataFrame workloads            |
+| **dbt integration**        | Manual setup                                        | Native dbt support in Databricks SQL                   |
+| **Notebook collaboration** | Basic notebooks                                     | Real-time co-editing, Git integration, MLflow tracking |
+| **AI/ML integration**      | Requires separate CML deployment                    | MLflow, Feature Store, Model Serving in same workspace |
+| **Ecosystem breadth**      | Cloudera ecosystem only                             | Azure AI, Power BI, Fabric, 100+ Azure services        |
 
 **Bottom line:** CDE is capable for Spark job management. Databricks does everything CDE does and adds serverless compute, Photon acceleration, unified governance, native AI/ML, and tight integration with the rest of Azure.
 
@@ -241,16 +241,16 @@ Cloudera Machine Learning deserves credit as a capable data science platform.
 
 ### Where Azure ML + Databricks ML surpass CML
 
-| Capability | CML | Azure ML + Databricks |
-|---|---|---|
-| **LLM fine-tuning** | Not supported | Azure AI Foundry, Databricks Foundation Model APIs |
-| **Managed endpoints** | Basic model serving | Managed online/batch endpoints with autoscaling |
-| **MLOps maturity** | Basic CI/CD support | Full MLOps with Databricks Asset Bundles, Azure ML pipelines |
-| **Feature store** | Available | Feature Store with online serving, point-in-time lookups |
-| **AutoML** | Limited | Databricks AutoML, Azure ML AutoML |
-| **Responsible AI** | Basic model monitoring | Azure AI Content Safety, Responsible AI dashboard |
-| **Vector search** | Not available | Databricks Vector Search, Azure AI Search |
-| **Integration** | CDP ecosystem only | Power BI, Azure AI, Copilot, 100+ Azure services |
+| Capability            | CML                    | Azure ML + Databricks                                        |
+| --------------------- | ---------------------- | ------------------------------------------------------------ |
+| **LLM fine-tuning**   | Not supported          | Azure AI Foundry, Databricks Foundation Model APIs           |
+| **Managed endpoints** | Basic model serving    | Managed online/batch endpoints with autoscaling              |
+| **MLOps maturity**    | Basic CI/CD support    | Full MLOps with Databricks Asset Bundles, Azure ML pipelines |
+| **Feature store**     | Available              | Feature Store with online serving, point-in-time lookups     |
+| **AutoML**            | Limited                | Databricks AutoML, Azure ML AutoML                           |
+| **Responsible AI**    | Basic model monitoring | Azure AI Content Safety, Responsible AI dashboard            |
+| **Vector search**     | Not available          | Databricks Vector Search, Azure AI Search                    |
+| **Integration**       | CDP ecosystem only     | Power BI, Azure AI, Copilot, 100+ Azure services             |
 
 ---
 
@@ -286,18 +286,18 @@ Intellectual honesty requires acknowledging scenarios where Cloudera may be pref
 
 ## Decision framework
 
-| Factor | Weight | Cloudera advantage? | Azure advantage? |
-|---|---|---|---|
-| CDH end-of-life urgency | Critical | No | **Yes** |
-| Total cost of ownership | High | No | **Yes** (40-60% lower) |
-| Operational overhead | High | No | **Yes** (managed services) |
-| AI/ML capabilities | High | No | **Yes** (order of magnitude broader) |
-| Talent availability | High | No | **Yes** (50-100x larger pool) |
-| Data flow complexity (NiFi) | Medium | **Yes** (NiFi is strong) | Partial (ADF is different) |
-| Data science workbench | Medium | Partial (CML is capable) | **Yes** (broader + LLMs) |
-| On-prem air-gap support | Low (most orgs) | **Yes** | No |
-| Compliance certifications | High | Comparable | **Yes** (broadest in industry) |
-| Ecosystem breadth | High | No | **Yes** |
+| Factor                      | Weight          | Cloudera advantage?      | Azure advantage?                     |
+| --------------------------- | --------------- | ------------------------ | ------------------------------------ |
+| CDH end-of-life urgency     | Critical        | No                       | **Yes**                              |
+| Total cost of ownership     | High            | No                       | **Yes** (40-60% lower)               |
+| Operational overhead        | High            | No                       | **Yes** (managed services)           |
+| AI/ML capabilities          | High            | No                       | **Yes** (order of magnitude broader) |
+| Talent availability         | High            | No                       | **Yes** (50-100x larger pool)        |
+| Data flow complexity (NiFi) | Medium          | **Yes** (NiFi is strong) | Partial (ADF is different)           |
+| Data science workbench      | Medium          | Partial (CML is capable) | **Yes** (broader + LLMs)             |
+| On-prem air-gap support     | Low (most orgs) | **Yes**                  | No                                   |
+| Compliance certifications   | High            | Comparable               | **Yes** (broadest in industry)       |
+| Ecosystem breadth           | High            | No                       | **Yes**                              |
 
 ---
 

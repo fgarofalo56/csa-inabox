@@ -53,36 +53,36 @@ Complexity: [Simple / Medium / Complex]
 
 Open the workbook in Tableau Desktop and document each data source:
 
-| Data source | Connection type | Server/file | Database | Tables used | Custom SQL? | Extract or Live? |
-|---|---|---|---|---|---|---|
-| [Name] | [SQL Server / Snowflake / CSV / etc.] | [Server name] | [DB name] | [Table list] | [Yes/No] | [Extract/Live] |
+| Data source | Connection type                       | Server/file   | Database  | Tables used  | Custom SQL? | Extract or Live? |
+| ----------- | ------------------------------------- | ------------- | --------- | ------------ | ----------- | ---------------- |
+| [Name]      | [SQL Server / Snowflake / CSV / etc.] | [Server name] | [DB name] | [Table list] | [Yes/No]    | [Extract/Live]   |
 
 ### 1.3 Calculated field inventory
 
 Document every calculated field in the data source:
 
-| Field name | Type | Formula | Complexity | DAX approach |
-|---|---|---|---|---|
-| [Name] | [Dimension / Measure] | [Tableau formula] | [Simple / LOD / Table Calc] | [Measure / Calc Column / Power Query] |
+| Field name | Type                  | Formula           | Complexity                  | DAX approach                          |
+| ---------- | --------------------- | ----------------- | --------------------------- | ------------------------------------- |
+| [Name]     | [Dimension / Measure] | [Tableau formula] | [Simple / LOD / Table Calc] | [Measure / Calc Column / Power Query] |
 
 ### 1.4 Worksheet inventory
 
 Document each worksheet in the workbook:
 
-| Worksheet | Chart type | Rows shelf | Columns shelf | Color | Size | Detail | Filters | Table calc? |
-|---|---|---|---|---|---|---|---|---|
-| [Name] | [Bar / Line / etc.] | [Fields] | [Fields] | [Field] | [Field] | [Fields] | [Fields] | [Yes/No] |
+| Worksheet | Chart type          | Rows shelf | Columns shelf | Color   | Size    | Detail   | Filters  | Table calc? |
+| --------- | ------------------- | ---------- | ------------- | ------- | ------- | -------- | -------- | ----------- |
+| [Name]    | [Bar / Line / etc.] | [Fields]   | [Fields]      | [Field] | [Field] | [Fields] | [Fields] | [Yes/No]    |
 
 ### 1.5 Dashboard inventory
 
 Document each dashboard:
 
-| Dashboard | Worksheets included | Actions (filter/highlight/URL) | Parameters | Device layouts? |
-|---|---|---|---|---|
-| [Name] | [List] | [Action details] | [Parameter list] | [Yes/No] |
+| Dashboard | Worksheets included | Actions (filter/highlight/URL) | Parameters       | Device layouts? |
+| --------- | ------------------- | ------------------------------ | ---------------- | --------------- |
+| [Name]    | [List]              | [Action details]               | [Parameter list] | [Yes/No]        |
 
 !!! tip "This step feels slow but saves time overall"
-    Skipping documentation leads to discovering missing calculated fields and broken filters at the end of the conversion when fixing them is expensive. Invest 30-60 minutes upfront.
+Skipping documentation leads to discovering missing calculated fields and broken filters at the end of the conversion when fixing them is expensive. Invest 30-60 minutes upfront.
 
 ---
 
@@ -100,8 +100,8 @@ For each data source in your inventory:
 2. Enter server, database, and credentials
 3. Select the same tables used by the Tableau workbook
 4. If the Tableau workbook uses Custom SQL, decide:
-   - **Preferred:** Create a dbt view or database view with the same logic, then connect to the view
-   - **Alternative:** Use Power Query's "Advanced Editor" to enter a native SQL query
+    - **Preferred:** Create a dbt view or database view with the same logic, then connect to the view
+    - **Alternative:** Use Power Query's "Advanced Editor" to enter a native SQL query
 
 ### 2.3 Apply source-level filters
 
@@ -122,7 +122,7 @@ Perform only minimal shaping in Power Query:
 - Handle null values if needed
 
 !!! warning "Do not put business logic in Power Query"
-    Business calculations belong in DAX measures, not Power Query. Power Query should handle data connectivity and basic shaping only.
+Business calculations belong in DAX measures, not Power Query. Power Query should handle data connectivity and basic shaping only.
 
 ---
 
@@ -194,13 +194,13 @@ Right-click the column → **Hide in report view**.
 
 Using your calculated field inventory from Step 1, categorize each calculation:
 
-| Category | Approach | Priority |
-|---|---|---|
-| Simple aggregates (SUM, AVG, COUNT) | DAX measure | Do first |
-| Row-level calculations (math, string, date) | DAX calculated column or Power Query | Do second |
-| LOD expressions (FIXED, INCLUDE, EXCLUDE) | DAX measure with CALCULATE | Do third (hardest) |
-| Table calculations (RUNNING_SUM, RANK, etc.) | DAX measure with WINDOW or time intelligence | Do fourth |
-| Parameters | What-If parameters or field parameters | Do last |
+| Category                                     | Approach                                     | Priority           |
+| -------------------------------------------- | -------------------------------------------- | ------------------ |
+| Simple aggregates (SUM, AVG, COUNT)          | DAX measure                                  | Do first           |
+| Row-level calculations (math, string, date)  | DAX calculated column or Power Query         | Do second          |
+| LOD expressions (FIXED, INCLUDE, EXCLUDE)    | DAX measure with CALCULATE                   | Do third (hardest) |
+| Table calculations (RUNNING_SUM, RANK, etc.) | DAX measure with WINDOW or time intelligence | Do fourth          |
+| Parameters                                   | What-If parameters or field parameters       | Do last            |
 
 ### 4.2 Create base measures
 
@@ -244,7 +244,7 @@ For every converted measure:
 4. Document any discrepancies and investigate
 
 !!! warning "Validate measures before building visuals"
-    Building visuals on incorrect measures creates rework. Validate every measure in a matrix or table visual first, then build the charts.
+Building visuals on incorrect measures creates rework. Validate every measure in a matrix or table visual first, then build the charts.
 
 ---
 
@@ -274,9 +274,9 @@ By default, Power BI cross-filters all visuals on a page. To match Tableau behav
 1. Select a visual
 2. **Format** → **Edit interactions**
 3. For each target visual, choose:
-   - **Filter** (matches Tableau filter action)
-   - **Highlight** (matches Tableau highlight action)
-   - **None** (no interaction)
+    - **Filter** (matches Tableau filter action)
+    - **Highlight** (matches Tableau highlight action)
+    - **None** (no interaction)
 
 ### 5.4 Add drillthrough pages
 
@@ -290,13 +290,13 @@ For Tableau "Go to Sheet" actions:
 
 Convert Tableau quick filters to Power BI slicers:
 
-| Tableau filter | Power BI slicer |
-|---|---|
-| Single value dropdown | Slicer → Dropdown mode |
-| Multi-value checkbox | Slicer → List mode |
-| Date range | Slicer → Between (date range) |
-| Relative date | Slicer → Relative date |
-| Search box | Slicer → enable Search |
+| Tableau filter        | Power BI slicer               |
+| --------------------- | ----------------------------- |
+| Single value dropdown | Slicer → Dropdown mode        |
+| Multi-value checkbox  | Slicer → List mode            |
+| Date range            | Slicer → Between (date range) |
+| Relative date         | Slicer → Relative date        |
+| Search box            | Slicer → enable Search        |
 
 ---
 
@@ -321,12 +321,12 @@ For each visual:
 
 ### 6.3 Add interactivity features
 
-| Feature | How to add |
-|---|---|
-| Bookmarks | View → Bookmarks → Add bookmark for filter states |
-| Buttons | Insert → Button → configure action (bookmark, page nav, URL) |
-| Page tooltips | Create a tooltip-type page, assign to visuals |
-| Report page navigator | Insert → Navigator → Page navigator |
+| Feature               | How to add                                                   |
+| --------------------- | ------------------------------------------------------------ |
+| Bookmarks             | View → Bookmarks → Add bookmark for filter states            |
+| Buttons               | Insert → Button → configure action (bookmark, page nav, URL) |
+| Page tooltips         | Create a tooltip-type page, assign to visuals                |
+| Report page navigator | Insert → Navigator → Page navigator                          |
 
 ---
 
@@ -376,11 +376,11 @@ After publishing:
 
 1. Navigate to the workspace in Power BI Service
 2. Configure dataset settings:
-   - Data source credentials
-   - Gateway connection (if on-prem sources)
-   - Scheduled refresh
+    - Data source credentials
+    - Gateway connection (if on-prem sources)
+    - Scheduled refresh
 3. Assign RLS roles to users/groups:
-   - Dataset → Security → add members to roles
+    - Dataset → Security → add members to roles
 
 ### 8.3 Side-by-side validation
 
@@ -414,14 +414,14 @@ Before decommissioning the Tableau workbook:
 
 ## Common issues during conversion
 
-| Issue | Cause | Solution |
-|---|---|---|
-| Numbers don't match | Different aggregation grain or filter context | Use a matrix visual to compare at multiple grains; check CALCULATE usage |
-| Visual looks different | Tableau mark-based vs Power BI field-based rendering | Accept the difference; focus on analytical equivalence, not pixel parity |
-| Performance is slow | Too many visuals or large Import dataset | Reduce visual count; use Direct Lake or aggregation tables |
-| DAX error: circular dependency | Calculated column references a measure | Separate calculated columns (static) from measures (dynamic) |
-| Missing chart type | No native Power BI visual for this chart | Check AppSource for custom visuals |
-| Filter behavior is wrong | Default cross-filter vs Tableau actions | Configure Edit Interactions for each visual |
+| Issue                          | Cause                                                | Solution                                                                 |
+| ------------------------------ | ---------------------------------------------------- | ------------------------------------------------------------------------ |
+| Numbers don't match            | Different aggregation grain or filter context        | Use a matrix visual to compare at multiple grains; check CALCULATE usage |
+| Visual looks different         | Tableau mark-based vs Power BI field-based rendering | Accept the difference; focus on analytical equivalence, not pixel parity |
+| Performance is slow            | Too many visuals or large Import dataset             | Reduce visual count; use Direct Lake or aggregation tables               |
+| DAX error: circular dependency | Calculated column references a measure               | Separate calculated columns (static) from measures (dynamic)             |
+| Missing chart type             | No native Power BI visual for this chart             | Check AppSource for custom visuals                                       |
+| Filter behavior is wrong       | Default cross-filter vs Tableau actions              | Configure Edit Interactions for each visual                              |
 
 ---
 

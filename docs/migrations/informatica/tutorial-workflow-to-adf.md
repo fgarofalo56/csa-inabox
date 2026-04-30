@@ -70,17 +70,17 @@ END
 
 ### Workflow metadata to capture
 
-| Component | Value | Notes |
-|---|---|---|
-| Workflow name | `wf_DAILY_SALES_LOAD` | |
-| Schedule | Daily 6:00 AM EST | Cron-like schedule |
-| Sessions | 4 (extract orders, extract products, transform orders, transform products, load fact) | |
-| Parallelism | s_TRANSFORM_ORDERS and s_TRANSFORM_PRODUCTS run in parallel | |
-| Error handling | Email on failure; abort workflow | |
-| Parameters | `$$START_DATE`, `$$END_DATE` | Date range for incremental extract |
-| Connections | Oracle CRM, SAP, SQL Server DW | 3 source/target connections |
-| Pre-session SQL | `TRUNCATE TABLE staging.orders; TRUNCATE TABLE staging.products;` | Cleanup before extract |
-| Post-session SQL | `UPDATE control.watermark SET last_run = GETDATE()` | Update watermark after load |
+| Component        | Value                                                                                 | Notes                              |
+| ---------------- | ------------------------------------------------------------------------------------- | ---------------------------------- |
+| Workflow name    | `wf_DAILY_SALES_LOAD`                                                                 |                                    |
+| Schedule         | Daily 6:00 AM EST                                                                     | Cron-like schedule                 |
+| Sessions         | 4 (extract orders, extract products, transform orders, transform products, load fact) |                                    |
+| Parallelism      | s_TRANSFORM_ORDERS and s_TRANSFORM_PRODUCTS run in parallel                           |                                    |
+| Error handling   | Email on failure; abort workflow                                                      |                                    |
+| Parameters       | `$$START_DATE`, `$$END_DATE`                                                          | Date range for incremental extract |
+| Connections      | Oracle CRM, SAP, SQL Server DW                                                        | 3 source/target connections        |
+| Pre-session SQL  | `TRUNCATE TABLE staging.orders; TRUNCATE TABLE staging.products;`                     | Cleanup before extract             |
+| Post-session SQL | `UPDATE control.watermark SET last_run = GETDATE()`                                   | Update watermark after load        |
 
 ---
 
@@ -147,17 +147,26 @@ Replace PowerCenter connection objects with ADF Linked Services.
         "typeProperties": {
             "server": {
                 "type": "AzureKeyVaultSecret",
-                "store": { "referenceName": "ls_keyvault", "type": "LinkedServiceReference" },
+                "store": {
+                    "referenceName": "ls_keyvault",
+                    "type": "LinkedServiceReference"
+                },
                 "secretName": "sap-server"
             },
             "userName": {
                 "type": "AzureKeyVaultSecret",
-                "store": { "referenceName": "ls_keyvault", "type": "LinkedServiceReference" },
+                "store": {
+                    "referenceName": "ls_keyvault",
+                    "type": "LinkedServiceReference"
+                },
                 "secretName": "sap-username"
             },
             "password": {
                 "type": "AzureKeyVaultSecret",
-                "store": { "referenceName": "ls_keyvault", "type": "LinkedServiceReference" },
+                "store": {
+                    "referenceName": "ls_keyvault",
+                    "type": "LinkedServiceReference"
+                },
                 "secretName": "sap-password"
             }
         },
@@ -337,8 +346,14 @@ graph TD
                     "body": {
                         "cause": "ADF pipeline trigger",
                         "steps_override": [
-                            { "index": 1, "command": "dbt run --select stg_erp__orders int_orders__enriched" },
-                            { "index": 2, "command": "dbt test --select stg_erp__orders int_orders__enriched" }
+                            {
+                                "index": 1,
+                                "command": "dbt run --select stg_erp__orders int_orders__enriched"
+                            },
+                            {
+                                "index": 2,
+                                "command": "dbt test --select stg_erp__orders int_orders__enriched"
+                            }
                         ]
                     }
                 }
@@ -371,8 +386,14 @@ graph TD
                     "body": {
                         "cause": "ADF pipeline trigger",
                         "steps_override": [
-                            { "index": 1, "command": "dbt run --select stg_ref__products int_products__enriched" },
-                            { "index": 2, "command": "dbt test --select stg_ref__products int_products__enriched" }
+                            {
+                                "index": 1,
+                                "command": "dbt run --select stg_ref__products int_products__enriched"
+                            },
+                            {
+                                "index": 2,
+                                "command": "dbt test --select stg_ref__products int_products__enriched"
+                            }
                         ]
                     }
                 }
@@ -409,8 +430,14 @@ graph TD
                     "body": {
                         "cause": "ADF pipeline trigger",
                         "steps_override": [
-                            { "index": 1, "command": "dbt run --select fct_sales" },
-                            { "index": 2, "command": "dbt test --select fct_sales" }
+                            {
+                                "index": 1,
+                                "command": "dbt run --select fct_sales"
+                            },
+                            {
+                                "index": 2,
+                                "command": "dbt test --select fct_sales"
+                            }
                         ]
                     }
                 }
@@ -428,8 +455,17 @@ graph TD
                 "typeProperties": {
                     "storedProcedureName": "control.sp_update_watermark",
                     "storedProcedureParameters": {
-                        "pipeline_name": { "value": "pl_daily_sales_load", "type": "String" },
-                        "run_timestamp": { "value": { "value": "@utcnow()", "type": "Expression" }, "type": "String" }
+                        "pipeline_name": {
+                            "value": "pl_daily_sales_load",
+                            "type": "String"
+                        },
+                        "run_timestamp": {
+                            "value": {
+                                "value": "@utcnow()",
+                                "type": "Expression"
+                            },
+                            "type": "String"
+                        }
                     }
                 },
                 "linkedServiceName": {
@@ -602,13 +638,13 @@ Tumbling Window triggers support:
 
 ### ADF error handling patterns
 
-| PowerCenter error handling | ADF equivalent | Implementation |
-|---|---|---|
-| Session failure -> email | Activity failure dependency -> Web activity | Logic Apps notification |
-| Workflow abort on error | Pipeline fails on activity failure (default) | Automatic |
-| Session retry (n times) | Activity retry policy | `"retry": 2, "retryIntervalInSeconds": 60` |
-| Error row handling | dbt test failures + `store_failures` | Failing rows stored in separate schema |
-| Recovery (restart from failure) | ADF rerun from failed activity | ADF Portal -> Monitor -> Rerun |
+| PowerCenter error handling      | ADF equivalent                               | Implementation                             |
+| ------------------------------- | -------------------------------------------- | ------------------------------------------ |
+| Session failure -> email        | Activity failure dependency -> Web activity  | Logic Apps notification                    |
+| Workflow abort on error         | Pipeline fails on activity failure (default) | Automatic                                  |
+| Session retry (n times)         | Activity retry policy                        | `"retry": 2, "retryIntervalInSeconds": 60` |
+| Error row handling              | dbt test failures + `store_failures`         | Failing rows stored in separate schema     |
+| Recovery (restart from failure) | ADF rerun from failed activity               | ADF Portal -> Monitor -> Rerun             |
 
 ### Implementing retry with exponential backoff
 
@@ -771,18 +807,18 @@ resource trigger 'Microsoft.DataFactory/factories/triggers@2018-06-01' = {
 
 ## Comparison summary
 
-| Aspect | PowerCenter wf_DAILY_SALES_LOAD | ADF pl_daily_sales_load |
-|---|---|---|
-| Definition format | GUI (stored as XML in repository) | JSON / Bicep (Git-versioned) |
-| Scheduling | PowerCenter Scheduler | ADF Trigger (Schedule or Tumbling Window) |
-| Error handling | Email task + abort | Activity dependencies + Logic Apps + Azure Monitor |
-| Retry | Session-level retry (limited) | Activity-level retry with exponential backoff |
-| Monitoring | PowerCenter Workflow Monitor | ADF Monitor + Azure Monitor + Log Analytics |
-| Recovery | Manual restart from Workflow Monitor | Rerun from failed activity (ADF Portal or API) |
-| Deployment | Repository export/import | ARM/Bicep CI/CD pipeline |
-| Parallelism | Link conditions in workflow | Activity dependency graph (native parallel) |
-| Parameters | Parameter file (`.par`) | Pipeline parameters + Key Vault secrets |
-| Notifications | SMTP email task | Logic Apps (Teams, email, Slack, PagerDuty) |
+| Aspect            | PowerCenter wf_DAILY_SALES_LOAD      | ADF pl_daily_sales_load                            |
+| ----------------- | ------------------------------------ | -------------------------------------------------- |
+| Definition format | GUI (stored as XML in repository)    | JSON / Bicep (Git-versioned)                       |
+| Scheduling        | PowerCenter Scheduler                | ADF Trigger (Schedule or Tumbling Window)          |
+| Error handling    | Email task + abort                   | Activity dependencies + Logic Apps + Azure Monitor |
+| Retry             | Session-level retry (limited)        | Activity-level retry with exponential backoff      |
+| Monitoring        | PowerCenter Workflow Monitor         | ADF Monitor + Azure Monitor + Log Analytics        |
+| Recovery          | Manual restart from Workflow Monitor | Rerun from failed activity (ADF Portal or API)     |
+| Deployment        | Repository export/import             | ARM/Bicep CI/CD pipeline                           |
+| Parallelism       | Link conditions in workflow          | Activity dependency graph (native parallel)        |
+| Parameters        | Parameter file (`.par`)              | Pipeline parameters + Key Vault secrets            |
+| Notifications     | SMTP email task                      | Logic Apps (Teams, email, Slack, PagerDuty)        |
 
 ---
 

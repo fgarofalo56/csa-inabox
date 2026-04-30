@@ -25,14 +25,14 @@ This guide walks through each difference with before/after code examples.
 
 Not every notebook should be migrated as-is. Use this decision tree:
 
-| Notebook type | Recommendation |
-| --- | --- |
-| PySpark ETL (read, transform, write) | **Migrate** -- minimal changes needed |
-| SQL-only transformations | **Convert to dbt** -- better long-term maintainability |
-| Notebook spaghetti (many %run chains) | **Rewrite** -- convert to Data Pipelines + modular notebooks |
-| Scala notebooks | **Rewrite in PySpark** -- Fabric does not support Scala notebooks |
-| ML training notebooks | **Keep on Databricks** or migrate to Azure ML |
-| Ad-hoc exploration | **Migrate** -- Fabric notebooks are excellent for ad-hoc |
+| Notebook type                         | Recommendation                                                    |
+| ------------------------------------- | ----------------------------------------------------------------- |
+| PySpark ETL (read, transform, write)  | **Migrate** -- minimal changes needed                             |
+| SQL-only transformations              | **Convert to dbt** -- better long-term maintainability            |
+| Notebook spaghetti (many %run chains) | **Rewrite** -- convert to Data Pipelines + modular notebooks      |
+| Scala notebooks                       | **Rewrite in PySpark** -- Fabric does not support Scala notebooks |
+| ML training notebooks                 | **Keep on Databricks** or migrate to Azure ML                     |
+| Ad-hoc exploration                    | **Migrate** -- Fabric notebooks are excellent for ad-hoc          |
 
 ---
 
@@ -82,12 +82,14 @@ df <- read.df("Tables/customers", source = "delta")
 ### 3.2 %run (notebook inclusion)
 
 **Databricks:**
+
 ```python
 %run ./shared/utilities
 %run ./config/settings
 ```
 
 **Fabric:**
+
 ```python
 # Option 1: mssparkutils.notebook.run() -- executes in a new session
 result = mssparkutils.notebook.run("shared/utilities", timeout_seconds=120)
@@ -102,12 +104,14 @@ mssparkutils.notebook.runMultiple(["shared/utilities", "config/settings"])
 ### 3.3 %pip and %conda
 
 **Databricks:**
+
 ```python
 %pip install pandas==2.1.0 scikit-learn==1.3.0
 %conda install -c conda-forge lightgbm
 ```
 
 **Fabric:**
+
 ```python
 # %pip works the same way
 %pip install pandas==2.1.0 scikit-learn==1.3.0
@@ -121,6 +125,7 @@ mssparkutils.notebook.runMultiple(["shared/utilities", "config/settings"])
 ### 3.4 %md (markdown)
 
 **Databricks:**
+
 ```
 %md
 ## Section Title
@@ -128,6 +133,7 @@ This is documentation within the notebook.
 ```
 
 **Fabric:**
+
 ```
 # Fabric uses markdown cells (cell type: Markdown)
 # Same markdown syntax, different cell type selector
@@ -141,28 +147,28 @@ This is documentation within the notebook.
 
 ### 4.1 File system utilities
 
-| Databricks (`dbutils.fs`) | Fabric (`mssparkutils.fs`) | Notes |
-| --- | --- | --- |
-| `dbutils.fs.ls("/mnt/data")` | `mssparkutils.fs.ls("Files/data")` | Path format changes |
-| `dbutils.fs.cp(src, dst)` | `mssparkutils.fs.cp(src, dst)` | Same API |
-| `dbutils.fs.rm(path, True)` | `mssparkutils.fs.rm(path, True)` | Same API |
-| `dbutils.fs.head(path, 100)` | `mssparkutils.fs.head(path, 100)` | Same API |
-| `dbutils.fs.mkdirs(path)` | `mssparkutils.fs.mkdirs(path)` | Same API |
-| `dbutils.fs.mv(src, dst)` | `mssparkutils.fs.mv(src, dst)` | Same API |
-| `dbutils.fs.put(path, content)` | `mssparkutils.fs.put(path, content)` | Same API |
-| `dbutils.fs.mount(source, mount_point)` | OneLake shortcuts | No mount concept; use shortcuts |
+| Databricks (`dbutils.fs`)               | Fabric (`mssparkutils.fs`)           | Notes                           |
+| --------------------------------------- | ------------------------------------ | ------------------------------- |
+| `dbutils.fs.ls("/mnt/data")`            | `mssparkutils.fs.ls("Files/data")`   | Path format changes             |
+| `dbutils.fs.cp(src, dst)`               | `mssparkutils.fs.cp(src, dst)`       | Same API                        |
+| `dbutils.fs.rm(path, True)`             | `mssparkutils.fs.rm(path, True)`     | Same API                        |
+| `dbutils.fs.head(path, 100)`            | `mssparkutils.fs.head(path, 100)`    | Same API                        |
+| `dbutils.fs.mkdirs(path)`               | `mssparkutils.fs.mkdirs(path)`       | Same API                        |
+| `dbutils.fs.mv(src, dst)`               | `mssparkutils.fs.mv(src, dst)`       | Same API                        |
+| `dbutils.fs.put(path, content)`         | `mssparkutils.fs.put(path, content)` | Same API                        |
+| `dbutils.fs.mount(source, mount_point)` | OneLake shortcuts                    | No mount concept; use shortcuts |
 
 ### 4.2 Path translation
 
 Databricks paths use `/mnt/`, DBFS, or Unity Catalog volumes. Fabric paths use OneLake:
 
-| Databricks path | Fabric equivalent | Notes |
-| --- | --- | --- |
-| `/mnt/adls/container/path` | `abfss://workspace@onelake.dfs.fabric.microsoft.com/lakehouse/Files/path` | Full ABFSS path |
-| `/mnt/adls/container/path` | `Files/path` | Relative path within Lakehouse |
-| `dbfs:/path` | `Files/path` | DBFS maps to Lakehouse Files |
-| `hive_metastore.db.table` | `lakehouse1.table` | Lakehouse name replaces metastore |
-| `catalog.schema.table` (UC) | `lakehouse1.table` | See unity-catalog-migration.md |
+| Databricks path             | Fabric equivalent                                                         | Notes                             |
+| --------------------------- | ------------------------------------------------------------------------- | --------------------------------- |
+| `/mnt/adls/container/path`  | `abfss://workspace@onelake.dfs.fabric.microsoft.com/lakehouse/Files/path` | Full ABFSS path                   |
+| `/mnt/adls/container/path`  | `Files/path`                                                              | Relative path within Lakehouse    |
+| `dbfs:/path`                | `Files/path`                                                              | DBFS maps to Lakehouse Files      |
+| `hive_metastore.db.table`   | `lakehouse1.table`                                                        | Lakehouse name replaces metastore |
+| `catalog.schema.table` (UC) | `lakehouse1.table`                                                        | See unity-catalog-migration.md    |
 
 **Simplified path example:**
 
@@ -279,6 +285,7 @@ df.write.mode("overwrite").saveAsTable("lakehouse1.customers_clean")
 ### 6.1 Databricks approach
 
 Databricks manages libraries at multiple levels:
+
 - **Cluster libraries** -- installed on all nodes when cluster starts
 - **Notebook-scoped** -- `%pip install` in a cell
 - **Unity Catalog volumes** -- host custom wheels
@@ -304,14 +311,14 @@ Fabric uses **environments** for persistent library management:
 
 ### 6.3 Common library mapping
 
-| Databricks library pattern | Fabric equivalent |
-| --- | --- |
+| Databricks library pattern         | Fabric equivalent                         |
+| ---------------------------------- | ----------------------------------------- |
 | Cluster library (always available) | Fabric environment (attached to notebook) |
-| `%pip install` (notebook-scoped) | `%pip install` (same, session-scoped) |
-| Init script (custom setup) | Not supported; use environment + %pip |
-| Custom wheel on DBFS | Upload .whl to Fabric environment |
-| Maven/Ivy JARs (Scala/Java) | Upload .jar to Fabric environment |
-| Conda environment | Not supported; use pip equivalents |
+| `%pip install` (notebook-scoped)   | `%pip install` (same, session-scoped)     |
+| Init script (custom setup)         | Not supported; use environment + %pip     |
+| Custom wheel on DBFS               | Upload .whl to Fabric environment         |
+| Maven/Ivy JARs (Scala/Java)        | Upload .jar to Fabric environment         |
+| Conda environment                  | Not supported; use pip equivalents        |
 
 ---
 
@@ -321,13 +328,13 @@ Databricks Connect allows IDE-based Spark development by connecting a local Pyth
 
 ### 7.1 Alternatives in Fabric
 
-| Use case | Fabric alternative | Notes |
-| --- | --- | --- |
-| IDE development with Spark | VS Code for Fabric (preview) | Edit notebooks in VS Code, execute on Fabric |
-| Remote DataFrame operations | Fabric REST API + Lakehouse JDBC/ODBC | Submit SQL queries via JDBC; no remote Spark context |
-| Local testing before deployment | Local Spark + Fabric deployment | Test locally with PySpark, deploy to Fabric |
-| CI/CD pipeline execution | Fabric REST API (notebook run) | Trigger notebook execution from CI/CD |
-| Interactive exploration | Fabric notebook (browser) | Browser-based notebook experience |
+| Use case                        | Fabric alternative                    | Notes                                                |
+| ------------------------------- | ------------------------------------- | ---------------------------------------------------- |
+| IDE development with Spark      | VS Code for Fabric (preview)          | Edit notebooks in VS Code, execute on Fabric         |
+| Remote DataFrame operations     | Fabric REST API + Lakehouse JDBC/ODBC | Submit SQL queries via JDBC; no remote Spark context |
+| Local testing before deployment | Local Spark + Fabric deployment       | Test locally with PySpark, deploy to Fabric          |
+| CI/CD pipeline execution        | Fabric REST API (notebook run)        | Trigger notebook execution from CI/CD                |
+| Interactive exploration         | Fabric notebook (browser)             | Browser-based notebook experience                    |
 
 ### 7.2 JDBC/ODBC connection
 
@@ -454,15 +461,15 @@ def convert_notebook(source_path: str, output_path: str):
 
 ## 10. Common pitfalls
 
-| Pitfall | Mitigation |
-| --- | --- |
-| Assuming Photon performance | Benchmark query-heavy notebooks; Fabric Spark is slower for Photon-optimized code |
-| Copying Scala notebooks | Rewrite in PySpark; no Fabric Scala notebook support |
-| Hardcoded `/mnt/` paths | Use find-and-replace; update to Lakehouse relative paths |
-| `spark.databricks.*` configs | Audit and remove; replace with Fabric equivalents where available |
-| Init scripts for system packages | Use Fabric environments; some system-level packages may not be available |
-| Databricks Connect workflows | Replace with Fabric REST API or VS Code for Fabric |
-| Large notebooks (>500 lines) | Refactor into modular notebooks + Data Pipeline orchestration |
+| Pitfall                          | Mitigation                                                                        |
+| -------------------------------- | --------------------------------------------------------------------------------- |
+| Assuming Photon performance      | Benchmark query-heavy notebooks; Fabric Spark is slower for Photon-optimized code |
+| Copying Scala notebooks          | Rewrite in PySpark; no Fabric Scala notebook support                              |
+| Hardcoded `/mnt/` paths          | Use find-and-replace; update to Lakehouse relative paths                          |
+| `spark.databricks.*` configs     | Audit and remove; replace with Fabric equivalents where available                 |
+| Init scripts for system packages | Use Fabric environments; some system-level packages may not be available          |
+| Databricks Connect workflows     | Replace with Fabric REST API or VS Code for Fabric                                |
+| Large notebooks (>500 lines)     | Refactor into modular notebooks + Data Pipeline orchestration                     |
 
 ---
 

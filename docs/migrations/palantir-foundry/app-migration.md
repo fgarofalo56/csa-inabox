@@ -18,16 +18,16 @@ This guide provides the detailed mapping, migration patterns, and practical guid
 
 Foundry's application layer consists of six primary tools, all built on top of the Ontology:
 
-| Tool | Purpose | Complexity | Ontology coupling |
-|---|---|---|---|
-| **Workshop** | Low-code operational apps with 60+ widgets | Low-Medium | Direct — widgets bind to object types and actions |
-| **Slate** | Custom HTML/CSS/JS apps with drag-and-drop | Medium-High | API-based — uses Ontology API calls |
-| **Object Views** | Embedded UI components for individual objects | Low | Direct — displays object properties and links |
-| **OSDK** | Auto-generated TypeScript/Python/Java SDKs | Medium | Deep — SDK mirrors Ontology schema |
-| **Custom Workshop Widgets** | React-based OSDK widgets or iframe-hosted apps | High | SDK-based — uses OSDK for data access |
-| **Pilot** | AI-generated apps from natural language | Low | Generates Ontology entities and React+OSDK code |
-| **Marketplace** | Packaged products (pipelines, Ontology, apps) | Low | Bundles Ontology entities with applications |
-| **Consumer Mode** | External-facing apps without full permissions | Low | Limited Ontology access via scoped tokens |
+| Tool                        | Purpose                                        | Complexity  | Ontology coupling                                 |
+| --------------------------- | ---------------------------------------------- | ----------- | ------------------------------------------------- |
+| **Workshop**                | Low-code operational apps with 60+ widgets     | Low-Medium  | Direct — widgets bind to object types and actions |
+| **Slate**                   | Custom HTML/CSS/JS apps with drag-and-drop     | Medium-High | API-based — uses Ontology API calls               |
+| **Object Views**            | Embedded UI components for individual objects  | Low         | Direct — displays object properties and links     |
+| **OSDK**                    | Auto-generated TypeScript/Python/Java SDKs     | Medium      | Deep — SDK mirrors Ontology schema                |
+| **Custom Workshop Widgets** | React-based OSDK widgets or iframe-hosted apps | High        | SDK-based — uses OSDK for data access             |
+| **Pilot**                   | AI-generated apps from natural language        | Low         | Generates Ontology entities and React+OSDK code   |
+| **Marketplace**             | Packaged products (pipelines, Ontology, apps)  | Low         | Bundles Ontology entities with applications       |
+| **Consumer Mode**           | External-facing apps without full permissions  | Low         | Limited Ontology access via scoped tokens         |
 
 **Key architectural principle:** In Foundry, the Ontology is the single data access layer for all applications. Widgets do not query databases — they query object types. Buttons do not call APIs — they execute Actions. This tight coupling is both Foundry's strength (consistent data access) and its primary lock-in mechanism (nothing works without the Ontology).
 
@@ -89,14 +89,14 @@ graph TB
 
 CSA-in-a-Box provides working implementations for many of these components:
 
-| Component | Evidence path | Description |
-|---|---|---|
-| Power Apps | `portal/powerapps/` | Canvas app for data source management |
-| Power Automate flows | `portal/powerapps/flows/` | Five production flows: register-source, approve-access, trigger-pipeline, send-notification, quality-check |
-| Logic Apps | `portal/powerapps/logic-apps/` | Enterprise integration workflows |
-| React portal | `portal/react-webapp/src/` | Full Next.js application with DataTable, Modal, StatusBadge, Toast, and registration wizard components |
-| Data marketplace | `csa_platform/data_marketplace/` | Data product catalog with contract validation, Purview sync, and notifications |
-| Data API Builder | `docs/tutorials/11-data-api-builder/` | Tutorial for exposing SQL data as REST/GraphQL endpoints |
+| Component            | Evidence path                         | Description                                                                                                |
+| -------------------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Power Apps           | `portal/powerapps/`                   | Canvas app for data source management                                                                      |
+| Power Automate flows | `portal/powerapps/flows/`             | Five production flows: register-source, approve-access, trigger-pipeline, send-notification, quality-check |
+| Logic Apps           | `portal/powerapps/logic-apps/`        | Enterprise integration workflows                                                                           |
+| React portal         | `portal/react-webapp/src/`            | Full Next.js application with DataTable, Modal, StatusBadge, Toast, and registration wizard components     |
+| Data marketplace     | `csa_platform/data_marketplace/`      | Data product catalog with contract validation, Purview sync, and notifications                             |
+| Data API Builder     | `docs/tutorials/11-data-api-builder/` | Tutorial for exposing SQL data as REST/GraphQL endpoints                                                   |
 
 ---
 
@@ -104,13 +104,13 @@ CSA-in-a-Box provides working implementations for many of these components:
 
 Workshop is Foundry's flagship application builder. It provides 60+ widgets, an event/action system, variables for state management, and direct Ontology binding. The Azure migration target depends on the app type:
 
-| Workshop app type | Primary Azure target | Secondary target |
-|---|---|---|
-| Operational workflow (task management, approvals) | Power Apps canvas app + Power Automate | Model-driven app + Dataverse |
-| Dashboard / COP display | Power BI Embedded + Power Apps | Power BI report with bookmarks |
-| Data entry / forms | Power Apps canvas app | Power Pages (if external) |
-| Map-centric operations | Power BI + Azure Maps visual | Custom React app + Azure Maps SDK |
-| Object detail / drill-down | Power Apps model-driven app | Power BI drill-through pages |
+| Workshop app type                                 | Primary Azure target                   | Secondary target                  |
+| ------------------------------------------------- | -------------------------------------- | --------------------------------- |
+| Operational workflow (task management, approvals) | Power Apps canvas app + Power Automate | Model-driven app + Dataverse      |
+| Dashboard / COP display                           | Power BI Embedded + Power Apps         | Power BI report with bookmarks    |
+| Data entry / forms                                | Power Apps canvas app                  | Power Pages (if external)         |
+| Map-centric operations                            | Power BI + Azure Maps visual           | Custom React app + Azure Maps SDK |
+| Object detail / drill-down                        | Power Apps model-driven app            | Power BI drill-through pages      |
 
 ### 3.1. Workshop widget mapping table
 
@@ -118,102 +118,102 @@ This is the comprehensive mapping of Workshop widgets to their Azure equivalents
 
 #### Data display widgets
 
-| Workshop widget | Power Apps equivalent | Power BI equivalent | Notes |
-|---|---|---|---|
-| **Object Table** | Gallery control + DataTable control | Table visual / Matrix visual | Power Apps Gallery is more flexible; DataTable is closer to Workshop's table |
-| **Object List** | Gallery control (vertical layout) | Table visual (single column) | Gallery supports custom templates per row |
-| **Property Value** | Label + data binding | Card visual / KPI visual | Direct property display |
-| **Metric** | Label with formatting | KPI visual / Card visual | Power BI cards are richer for single-metric display |
-| **Status Indicator** | Icon + conditional formatting | Conditional formatting on visuals | Use `If()` functions for icon selection in Power Apps |
-| **Resource List** | Gallery with nested gallery | Decomposition tree | For hierarchical resource displays |
-| **Details Panel** | Form control (display mode) | Tooltip pages | Power Apps forms natively show record details |
-| **Object Set Widget** | Collection variable + Gallery | Dataset / Filter context | Power Apps collections serve as in-memory object sets |
+| Workshop widget       | Power Apps equivalent               | Power BI equivalent               | Notes                                                                        |
+| --------------------- | ----------------------------------- | --------------------------------- | ---------------------------------------------------------------------------- |
+| **Object Table**      | Gallery control + DataTable control | Table visual / Matrix visual      | Power Apps Gallery is more flexible; DataTable is closer to Workshop's table |
+| **Object List**       | Gallery control (vertical layout)   | Table visual (single column)      | Gallery supports custom templates per row                                    |
+| **Property Value**    | Label + data binding                | Card visual / KPI visual          | Direct property display                                                      |
+| **Metric**            | Label with formatting               | KPI visual / Card visual          | Power BI cards are richer for single-metric display                          |
+| **Status Indicator**  | Icon + conditional formatting       | Conditional formatting on visuals | Use `If()` functions for icon selection in Power Apps                        |
+| **Resource List**     | Gallery with nested gallery         | Decomposition tree                | For hierarchical resource displays                                           |
+| **Details Panel**     | Form control (display mode)         | Tooltip pages                     | Power Apps forms natively show record details                                |
+| **Object Set Widget** | Collection variable + Gallery       | Dataset / Filter context          | Power Apps collections serve as in-memory object sets                        |
 
 #### Chart and visualization widgets
 
-| Workshop widget | Power Apps equivalent | Power BI equivalent | Notes |
-|---|---|---|---|
-| **Bar Chart** | Power BI Embedded tile | Bar chart visual | Power BI is the primary charting target |
-| **Line Chart** | Power BI Embedded tile | Line chart visual | Power BI supports trend lines, forecasting |
-| **Pie Chart** | Power BI Embedded tile | Pie / Donut chart visual | Power BI donut chart is a modern alternative |
-| **Scatter Plot** | Power BI Embedded tile | Scatter chart visual | Power BI supports play axis for animation |
-| **Histogram** | Power BI Embedded tile | Histogram visual (custom) | Use R/Python visual or custom visual from AppSource |
-| **Timeline** | Power BI Embedded tile | Timeline slicer (custom visual) | Install from AppSource marketplace |
-| **Vega / Vega-Lite** | Power BI custom visual (Deneb) | Deneb visual (Vega/Vega-Lite) | Deneb is a direct Vega-Lite renderer for Power BI |
-| **KPI** | Label with formatting | KPI visual | Power BI KPI supports trend indicators |
-| **Gauge** | Power BI Embedded tile | Gauge visual | Power BI gauge supports min/max/target |
+| Workshop widget      | Power Apps equivalent          | Power BI equivalent             | Notes                                               |
+| -------------------- | ------------------------------ | ------------------------------- | --------------------------------------------------- |
+| **Bar Chart**        | Power BI Embedded tile         | Bar chart visual                | Power BI is the primary charting target             |
+| **Line Chart**       | Power BI Embedded tile         | Line chart visual               | Power BI supports trend lines, forecasting          |
+| **Pie Chart**        | Power BI Embedded tile         | Pie / Donut chart visual        | Power BI donut chart is a modern alternative        |
+| **Scatter Plot**     | Power BI Embedded tile         | Scatter chart visual            | Power BI supports play axis for animation           |
+| **Histogram**        | Power BI Embedded tile         | Histogram visual (custom)       | Use R/Python visual or custom visual from AppSource |
+| **Timeline**         | Power BI Embedded tile         | Timeline slicer (custom visual) | Install from AppSource marketplace                  |
+| **Vega / Vega-Lite** | Power BI custom visual (Deneb) | Deneb visual (Vega/Vega-Lite)   | Deneb is a direct Vega-Lite renderer for Power BI   |
+| **KPI**              | Label with formatting          | KPI visual                      | Power BI KPI supports trend indicators              |
+| **Gauge**            | Power BI Embedded tile         | Gauge visual                    | Power BI gauge supports min/max/target              |
 
 #### Map widgets
 
-| Workshop widget | Power Apps equivalent | Power BI equivalent | Notes |
-|---|---|---|---|
-| **Map (points)** | Map control (preview) | Azure Maps Power BI visual | Azure Maps visual supports clustering, layers |
-| **Map (shapes)** | Custom PCF component | Shape Map visual / Azure Maps | Shape Map for choropleth; Azure Maps for complex |
-| **Map (routes)** | Custom PCF with Azure Maps SDK | Azure Maps visual with route layer | Requires Azure Maps account and API key |
-| **Map (heatmap)** | Custom PCF component | Azure Maps Power BI visual (heat layer) | Azure Maps visual supports heat map layer |
+| Workshop widget   | Power Apps equivalent          | Power BI equivalent                     | Notes                                            |
+| ----------------- | ------------------------------ | --------------------------------------- | ------------------------------------------------ |
+| **Map (points)**  | Map control (preview)          | Azure Maps Power BI visual              | Azure Maps visual supports clustering, layers    |
+| **Map (shapes)**  | Custom PCF component           | Shape Map visual / Azure Maps           | Shape Map for choropleth; Azure Maps for complex |
+| **Map (routes)**  | Custom PCF with Azure Maps SDK | Azure Maps visual with route layer      | Requires Azure Maps account and API key          |
+| **Map (heatmap)** | Custom PCF component           | Azure Maps Power BI visual (heat layer) | Azure Maps visual supports heat map layer        |
 
 See [Section 7](#7-map-widgets-to-azure-maps-power-bi) for detailed map migration patterns.
 
 #### Form and input widgets
 
-| Workshop widget | Power Apps equivalent | Power BI equivalent | Notes |
-|---|---|---|---|
-| **Text Input** | Text input control | N/A (use Power Apps for input) | Power BI is read-only; forms require Power Apps |
-| **Dropdown** | Dropdown / Combo box control | Slicer visual | Slicers filter; dropdowns collect input |
-| **Date Picker** | Date picker control | Date slicer | Power Apps for input; Power BI for filtering |
-| **Checkbox** | Checkbox / Toggle control | N/A | Input control — Power Apps only |
-| **Radio Buttons** | Radio control | N/A | Input control — Power Apps only |
-| **Slider** | Slider control | Numeric range slicer | Power Apps for input; Power BI for filtering |
-| **File Upload** | Attachment control | N/A | Power Apps supports attachments to Dataverse |
-| **Rich Text Editor** | Rich text editor control | N/A | Available in Power Apps canvas apps |
-| **Multi-select** | Combo box (multi-select) | Multi-select slicer | Power Apps for input; Power BI for filtering |
+| Workshop widget      | Power Apps equivalent        | Power BI equivalent            | Notes                                           |
+| -------------------- | ---------------------------- | ------------------------------ | ----------------------------------------------- |
+| **Text Input**       | Text input control           | N/A (use Power Apps for input) | Power BI is read-only; forms require Power Apps |
+| **Dropdown**         | Dropdown / Combo box control | Slicer visual                  | Slicers filter; dropdowns collect input         |
+| **Date Picker**      | Date picker control          | Date slicer                    | Power Apps for input; Power BI for filtering    |
+| **Checkbox**         | Checkbox / Toggle control    | N/A                            | Input control — Power Apps only                 |
+| **Radio Buttons**    | Radio control                | N/A                            | Input control — Power Apps only                 |
+| **Slider**           | Slider control               | Numeric range slicer           | Power Apps for input; Power BI for filtering    |
+| **File Upload**      | Attachment control           | N/A                            | Power Apps supports attachments to Dataverse    |
+| **Rich Text Editor** | Rich text editor control     | N/A                            | Available in Power Apps canvas apps             |
+| **Multi-select**     | Combo box (multi-select)     | Multi-select slicer            | Power Apps for input; Power BI for filtering    |
 
 #### Layout and container widgets
 
-| Workshop widget | Power Apps equivalent | Power BI equivalent | Notes |
-|---|---|---|---|
-| **Tabs** | Tab list control / Screen navigation | Bookmarks + buttons | Power BI bookmarks simulate tabs |
-| **Section** | Container / Group container | Visual group | Containers in Power Apps; groups in Power BI |
-| **Collapsible Section** | Container with visibility toggle | Bookmarks | Use `Visible` property with toggle variable |
-| **Modal / Dialog** | Overlay container + visibility toggle | N/A | Power Apps pattern: container with `Visible=varShowModal` |
-| **Split Pane** | Container with responsive layout | N/A | Use containers with percentage widths |
+| Workshop widget         | Power Apps equivalent                 | Power BI equivalent | Notes                                                     |
+| ----------------------- | ------------------------------------- | ------------------- | --------------------------------------------------------- |
+| **Tabs**                | Tab list control / Screen navigation  | Bookmarks + buttons | Power BI bookmarks simulate tabs                          |
+| **Section**             | Container / Group container           | Visual group        | Containers in Power Apps; groups in Power BI              |
+| **Collapsible Section** | Container with visibility toggle      | Bookmarks           | Use `Visible` property with toggle variable               |
+| **Modal / Dialog**      | Overlay container + visibility toggle | N/A                 | Power Apps pattern: container with `Visible=varShowModal` |
+| **Split Pane**          | Container with responsive layout      | N/A                 | Use containers with percentage widths                     |
 
 #### Action and navigation widgets
 
-| Workshop widget | Power Apps equivalent | Power BI equivalent | Notes |
-|---|---|---|---|
-| **Button** | Button control | Button visual | Power Apps buttons trigger flows; Power BI buttons navigate |
-| **Action Button** | Button + Power Automate flow | N/A | See [Section 6](#6-action-buttons-to-power-automate-flows) |
-| **Link** | Button / Label with `Launch()` | Button with URL action | `Launch()` opens URLs in Power Apps |
-| **Navigation** | Navigate() function | Page navigation / Drillthrough | Multi-screen navigation in Power Apps |
-| **Toast / Notification** | Notify() function | N/A | `Notify("Message", NotificationType.Success)` |
+| Workshop widget          | Power Apps equivalent          | Power BI equivalent            | Notes                                                       |
+| ------------------------ | ------------------------------ | ------------------------------ | ----------------------------------------------------------- |
+| **Button**               | Button control                 | Button visual                  | Power Apps buttons trigger flows; Power BI buttons navigate |
+| **Action Button**        | Button + Power Automate flow   | N/A                            | See [Section 6](#6-action-buttons-to-power-automate-flows)  |
+| **Link**                 | Button / Label with `Launch()` | Button with URL action         | `Launch()` opens URLs in Power Apps                         |
+| **Navigation**           | Navigate() function            | Page navigation / Drillthrough | Multi-screen navigation in Power Apps                       |
+| **Toast / Notification** | Notify() function              | N/A                            | `Notify("Message", NotificationType.Success)`               |
 
 #### Media and embed widgets
 
-| Workshop widget | Power Apps equivalent | Power BI equivalent | Notes |
-|---|---|---|---|
-| **Image** | Image control | Image visual | Both support URLs and base64 |
-| **HTML Viewer** | HTML text control | N/A | Power Apps HTML text control renders HTML |
-| **IFrame** | N/A (security restricted) | N/A | Use Power Pages for iframe embedding |
-| **Video** | Video control | N/A | Power Apps supports MP4 and stream URLs |
-| **PDF Viewer** | PDF viewer control | N/A | Power Apps has a native PDF viewer |
+| Workshop widget | Power Apps equivalent     | Power BI equivalent | Notes                                     |
+| --------------- | ------------------------- | ------------------- | ----------------------------------------- |
+| **Image**       | Image control             | Image visual        | Both support URLs and base64              |
+| **HTML Viewer** | HTML text control         | N/A                 | Power Apps HTML text control renders HTML |
+| **IFrame**      | N/A (security restricted) | N/A                 | Use Power Pages for iframe embedding      |
+| **Video**       | Video control             | N/A                 | Power Apps supports MP4 and stream URLs   |
+| **PDF Viewer**  | PDF viewer control        | N/A                 | Power Apps has a native PDF viewer        |
 
 ### 3.2. Workshop events and actions to Power Apps + Power Automate
 
 Workshop uses an event-action model: user interactions fire events, which trigger actions (navigate, set variable, execute Ontology Action, open panel). Power Apps uses a similar but differently structured model:
 
-| Workshop concept | Power Apps equivalent | Example |
-|---|---|---|
-| Event (on click, on change) | `OnSelect`, `OnChange` properties | `Button.OnSelect = Set(varStatus, "active")` |
-| Variable (local) | `Set()` / `UpdateContext()` | `Set(varSelectedId, ThisItem.Id)` |
-| Variable (shared across widgets) | Global variable with `Set()` | Variables are global by default in canvas apps |
-| Action: Set Variable | `Set()` or `UpdateContext()` | `Set(varFilter, Dropdown1.Selected.Value)` |
-| Action: Navigate | `Navigate()` function | `Navigate(DetailScreen, ScreenTransition.Fade)` |
-| Action: Execute Ontology Action | Power Automate flow (`.Run()`) | `RegisterSource.Run(varSourceName, varType)` |
-| Action: Open Panel | Overlay container + `Set(varShowPanel, true)` | Toggle container visibility |
-| Action: Show Toast | `Notify()` function | `Notify("Saved successfully", NotificationType.Success)` |
-| Action: Refresh Data | `Refresh()` function | `Refresh(DataSource)` |
-| Action: Download File | `Download()` function | `Download(fileUrl)` |
+| Workshop concept                 | Power Apps equivalent                         | Example                                                  |
+| -------------------------------- | --------------------------------------------- | -------------------------------------------------------- |
+| Event (on click, on change)      | `OnSelect`, `OnChange` properties             | `Button.OnSelect = Set(varStatus, "active")`             |
+| Variable (local)                 | `Set()` / `UpdateContext()`                   | `Set(varSelectedId, ThisItem.Id)`                        |
+| Variable (shared across widgets) | Global variable with `Set()`                  | Variables are global by default in canvas apps           |
+| Action: Set Variable             | `Set()` or `UpdateContext()`                  | `Set(varFilter, Dropdown1.Selected.Value)`               |
+| Action: Navigate                 | `Navigate()` function                         | `Navigate(DetailScreen, ScreenTransition.Fade)`          |
+| Action: Execute Ontology Action  | Power Automate flow (`.Run()`)                | `RegisterSource.Run(varSourceName, varType)`             |
+| Action: Open Panel               | Overlay container + `Set(varShowPanel, true)` | Toggle container visibility                              |
+| Action: Show Toast               | `Notify()` function                           | `Notify("Saved successfully", NotificationType.Success)` |
+| Action: Refresh Data             | `Refresh()` function                          | `Refresh(DataSource)`                                    |
+| Action: Download File            | `Download()` function                         | `Download(fileUrl)`                                      |
 
 ### 3.3. Workshop theming to Power Apps theming
 
@@ -234,53 +234,53 @@ Slate is Foundry's custom application framework for developers who need more con
 
 ### 4.1. Migration target selection
 
-| Slate app characteristic | Recommended Azure target | Rationale |
-|---|---|---|
-| Internal app, standard UI patterns | Power Apps canvas app | Faster development, less maintenance |
-| External / public-facing app | Power Pages | Built-in authentication (Azure AD B2C), responsive templates |
-| Complex custom interactions, D3.js, Three.js | Azure Static Web Apps (React) | Full JavaScript control, custom rendering |
-| Real-time data visualization | Azure Static Web Apps + SignalR | WebSocket support for live updates |
-| Hybrid: standard layout + custom widgets | Power Apps + PCF components | PCF provides React-based custom controls inside Power Apps |
+| Slate app characteristic                     | Recommended Azure target        | Rationale                                                    |
+| -------------------------------------------- | ------------------------------- | ------------------------------------------------------------ |
+| Internal app, standard UI patterns           | Power Apps canvas app           | Faster development, less maintenance                         |
+| External / public-facing app                 | Power Pages                     | Built-in authentication (Azure AD B2C), responsive templates |
+| Complex custom interactions, D3.js, Three.js | Azure Static Web Apps (React)   | Full JavaScript control, custom rendering                    |
+| Real-time data visualization                 | Azure Static Web Apps + SignalR | WebSocket support for live updates                           |
+| Hybrid: standard layout + custom widgets     | Power Apps + PCF components     | PCF provides React-based custom controls inside Power Apps   |
 
 ### 4.2. Slate JavaScript to Azure equivalents
 
 Slate apps embed JavaScript that calls Foundry's Ontology API. The following table maps common Slate API patterns to Azure equivalents:
 
-| Slate API pattern | Azure equivalent | Implementation |
-|---|---|---|
-| `OntologyService.getObjects(objectType, filters)` | Dataverse Web API / Data API Builder | `fetch('/api/rest/Incidents?$filter=status eq "open"')` |
-| `OntologyService.getObject(objectType, primaryKey)` | Dataverse Web API (single record) | `fetch('/api/rest/Incidents/INC-001')` |
-| `OntologyService.getLinkedObjects(object, linkType)` | Dataverse relationship navigation | `fetch('/api/rest/Incidents/INC-001/assignments')` |
-| `OntologyService.executeAction(actionName, params)` | Power Automate HTTP trigger / Azure Function | `fetch('/api/actions/escalate', { method: 'POST', body })` |
-| `OntologyService.aggregateObjects(objectType, groupBy, metrics)` | Fabric REST API / SQL query via Data API Builder | `fetch('/api/graphql', { body: aggregationQuery })` |
-| `OntologyService.subscribeToChanges(objectType)` | Azure SignalR Service + Event Grid | WebSocket connection for real-time updates |
+| Slate API pattern                                                | Azure equivalent                                 | Implementation                                             |
+| ---------------------------------------------------------------- | ------------------------------------------------ | ---------------------------------------------------------- |
+| `OntologyService.getObjects(objectType, filters)`                | Dataverse Web API / Data API Builder             | `fetch('/api/rest/Incidents?$filter=status eq "open"')`    |
+| `OntologyService.getObject(objectType, primaryKey)`              | Dataverse Web API (single record)                | `fetch('/api/rest/Incidents/INC-001')`                     |
+| `OntologyService.getLinkedObjects(object, linkType)`             | Dataverse relationship navigation                | `fetch('/api/rest/Incidents/INC-001/assignments')`         |
+| `OntologyService.executeAction(actionName, params)`              | Power Automate HTTP trigger / Azure Function     | `fetch('/api/actions/escalate', { method: 'POST', body })` |
+| `OntologyService.aggregateObjects(objectType, groupBy, metrics)` | Fabric REST API / SQL query via Data API Builder | `fetch('/api/graphql', { body: aggregationQuery })`        |
+| `OntologyService.subscribeToChanges(objectType)`                 | Azure SignalR Service + Event Grid               | WebSocket connection for real-time updates                 |
 
 ### 4.3. Slate drag-and-drop widgets to React components
 
 Slate's widget library provides pre-built UI elements. CSA-in-a-Box's React portal demonstrates equivalent implementations:
 
-| Slate widget | React equivalent (CSA-in-a-Box) | File path |
-|---|---|---|
-| Table widget | `DataTable` component | `portal/react-webapp/src/components/DataTable.tsx` |
-| Modal / Dialog | `Modal` component | `portal/react-webapp/src/components/Modal.tsx` |
-| Status badges | `StatusBadge` component | `portal/react-webapp/src/components/StatusBadge.tsx` |
-| Page header | `PageHeader` component | `portal/react-webapp/src/components/PageHeader.tsx` |
-| Card layout | `Card` component | `portal/react-webapp/src/components/Card.tsx` |
-| Button | `Button` component | `portal/react-webapp/src/components/Button.tsx` |
-| Error display | `ErrorBanner` component | `portal/react-webapp/src/components/ErrorBanner.tsx` |
-| Toast / notification | `Toast` + `useToast` hook | `portal/react-webapp/src/components/Toast.tsx` |
-| Activity feed | `ActivityFeed` component | `portal/react-webapp/src/components/ActivityFeed.tsx` |
-| Empty state placeholder | `EmptyState` component | `portal/react-webapp/src/components/EmptyState.tsx` |
-| Breadcrumb navigation | `Breadcrumbs` component | `portal/react-webapp/src/components/Breadcrumbs.tsx` |
-| Sidebar navigation | `Sidebar` component | `portal/react-webapp/src/components/Sidebar.tsx` |
+| Slate widget            | React equivalent (CSA-in-a-Box) | File path                                             |
+| ----------------------- | ------------------------------- | ----------------------------------------------------- |
+| Table widget            | `DataTable` component           | `portal/react-webapp/src/components/DataTable.tsx`    |
+| Modal / Dialog          | `Modal` component               | `portal/react-webapp/src/components/Modal.tsx`        |
+| Status badges           | `StatusBadge` component         | `portal/react-webapp/src/components/StatusBadge.tsx`  |
+| Page header             | `PageHeader` component          | `portal/react-webapp/src/components/PageHeader.tsx`   |
+| Card layout             | `Card` component                | `portal/react-webapp/src/components/Card.tsx`         |
+| Button                  | `Button` component              | `portal/react-webapp/src/components/Button.tsx`       |
+| Error display           | `ErrorBanner` component         | `portal/react-webapp/src/components/ErrorBanner.tsx`  |
+| Toast / notification    | `Toast` + `useToast` hook       | `portal/react-webapp/src/components/Toast.tsx`        |
+| Activity feed           | `ActivityFeed` component        | `portal/react-webapp/src/components/ActivityFeed.tsx` |
+| Empty state placeholder | `EmptyState` component          | `portal/react-webapp/src/components/EmptyState.tsx`   |
+| Breadcrumb navigation   | `Breadcrumbs` component         | `portal/react-webapp/src/components/Breadcrumbs.tsx`  |
+| Sidebar navigation      | `Sidebar` component             | `portal/react-webapp/src/components/Sidebar.tsx`      |
 
 ### 4.4. Deployment model
 
-| Slate deployment | Azure equivalent | Benefits |
-|---|---|---|
-| Foundry-hosted (internal) | Azure Static Web Apps | Global CDN, staging environments, GitHub Actions CI/CD |
-| Foundry-hosted (public via Consumer Mode) | Power Pages or Azure Static Web Apps + Azure AD B2C | Built-in external identity management |
-| Custom domain | Azure Front Door + Static Web Apps | Custom domains, WAF, DDoS protection |
+| Slate deployment                          | Azure equivalent                                    | Benefits                                               |
+| ----------------------------------------- | --------------------------------------------------- | ------------------------------------------------------ |
+| Foundry-hosted (internal)                 | Azure Static Web Apps                               | Global CDN, staging environments, GitHub Actions CI/CD |
+| Foundry-hosted (public via Consumer Mode) | Power Pages or Azure Static Web Apps + Azure AD B2C | Built-in external identity management                  |
+| Custom domain                             | Azure Front Door + Static Web Apps                  | Custom domains, WAF, DDoS protection                   |
 
 ---
 
@@ -290,19 +290,19 @@ OSDK (Ontology SDK) auto-generates typed SDKs in TypeScript, Python, and Java th
 
 ### 5.1. API mapping
 
-| OSDK capability | Azure equivalent | When to use |
-|---|---|---|
-| Query object types | **Data API Builder** (REST/GraphQL over SQL) | When data lives in Azure SQL or Fabric SQL endpoint |
-| Query object types | **Microsoft Graph API** | When data lives in Microsoft 365 (SharePoint, Teams, Planner) |
-| Query object types | **Dataverse Web API** | When data lives in Dataverse (Power Platform) |
-| Query object types | **Fabric REST API** | When data lives in Fabric Lakehouse / Warehouse |
-| Traverse link types | Data API Builder relationship navigation | GraphQL nested queries for related entities |
-| Execute actions | Power Automate HTTP trigger | Trigger business logic flows from external apps |
-| Execute actions | Azure Functions HTTP trigger | Custom compute for complex operations |
-| Real-time subscriptions | Azure SignalR Service | WebSocket-based real-time data streaming |
-| Real-time subscriptions | Event Grid + WebHooks | Event-driven notifications for data changes |
-| Batch operations | Data API Builder batch endpoints | Multiple operations in a single HTTP request |
-| OpenAPI spec | Data API Builder auto-generated OpenAPI | Automatic OpenAPI documentation for all endpoints |
+| OSDK capability         | Azure equivalent                             | When to use                                                   |
+| ----------------------- | -------------------------------------------- | ------------------------------------------------------------- |
+| Query object types      | **Data API Builder** (REST/GraphQL over SQL) | When data lives in Azure SQL or Fabric SQL endpoint           |
+| Query object types      | **Microsoft Graph API**                      | When data lives in Microsoft 365 (SharePoint, Teams, Planner) |
+| Query object types      | **Dataverse Web API**                        | When data lives in Dataverse (Power Platform)                 |
+| Query object types      | **Fabric REST API**                          | When data lives in Fabric Lakehouse / Warehouse               |
+| Traverse link types     | Data API Builder relationship navigation     | GraphQL nested queries for related entities                   |
+| Execute actions         | Power Automate HTTP trigger                  | Trigger business logic flows from external apps               |
+| Execute actions         | Azure Functions HTTP trigger                 | Custom compute for complex operations                         |
+| Real-time subscriptions | Azure SignalR Service                        | WebSocket-based real-time data streaming                      |
+| Real-time subscriptions | Event Grid + WebHooks                        | Event-driven notifications for data changes                   |
+| Batch operations        | Data API Builder batch endpoints             | Multiple operations in a single HTTP request                  |
+| OpenAPI spec            | Data API Builder auto-generated OpenAPI      | Automatic OpenAPI documentation for all endpoints             |
 
 ### 5.2. Data API Builder as OSDK replacement
 
@@ -364,28 +364,28 @@ Foundry Actions are the write-side of the Ontology: they modify object propertie
 
 ### 6.1. Action type mapping
 
-| Foundry Action type | Power Automate equivalent | Implementation |
-|---|---|---|
-| Modify object properties | Update row (Dataverse) / Update record (SQL) | Standard connector action |
-| Create object | Add row (Dataverse) / Insert record (SQL) | Standard connector action |
-| Delete object | Delete row (Dataverse) / Delete record (SQL) | Standard connector action |
-| Batch modify | Apply to each + Update row | Loop over collection |
-| Trigger notification | Send email (Outlook) / Post message (Teams) | Standard connector action |
-| Call external API | HTTP action / Custom connector | HTTP action with authentication |
-| Run computation | Azure Functions action | Trigger serverless function |
-| Approval workflow | Approvals connector | Start and wait for an approval |
+| Foundry Action type      | Power Automate equivalent                    | Implementation                  |
+| ------------------------ | -------------------------------------------- | ------------------------------- |
+| Modify object properties | Update row (Dataverse) / Update record (SQL) | Standard connector action       |
+| Create object            | Add row (Dataverse) / Insert record (SQL)    | Standard connector action       |
+| Delete object            | Delete row (Dataverse) / Delete record (SQL) | Standard connector action       |
+| Batch modify             | Apply to each + Update row                   | Loop over collection            |
+| Trigger notification     | Send email (Outlook) / Post message (Teams)  | Standard connector action       |
+| Call external API        | HTTP action / Custom connector               | HTTP action with authentication |
+| Run computation          | Azure Functions action                       | Trigger serverless function     |
+| Approval workflow        | Approvals connector                          | Start and wait for an approval  |
 
 ### 6.2. CSA-in-a-Box flow examples
 
 The `portal/powerapps/flows/` directory contains five production Power Automate flows that demonstrate the Action Button replacement pattern:
 
-| Flow | Foundry equivalent | Purpose |
-|---|---|---|
-| `register-source.json` | Action: Register Data Source | Creates a new data source record, triggers metadata scan, notifies data steward |
-| `approve-access.json` | Action: Approve Access Request | Approval workflow with Teams notification, Dataverse status update |
-| `trigger-pipeline.json` | Action: Run Pipeline | Triggers ADF pipeline execution, monitors status, sends completion notification |
-| `send-notification.json` | Action: Notify Users | Multi-channel notification (email, Teams, push) based on user preferences |
-| `quality-check.json` | Action: Run Quality Check | Executes data quality rules, records results, alerts on failures |
+| Flow                     | Foundry equivalent             | Purpose                                                                         |
+| ------------------------ | ------------------------------ | ------------------------------------------------------------------------------- |
+| `register-source.json`   | Action: Register Data Source   | Creates a new data source record, triggers metadata scan, notifies data steward |
+| `approve-access.json`    | Action: Approve Access Request | Approval workflow with Teams notification, Dataverse status update              |
+| `trigger-pipeline.json`  | Action: Run Pipeline           | Triggers ADF pipeline execution, monitors status, sends completion notification |
+| `send-notification.json` | Action: Notify Users           | Multi-channel notification (email, Teams, push) based on user preferences       |
+| `quality-check.json`     | Action: Run Quality Check      | Executes data quality rules, records results, alerts on failures                |
 
 ### 6.3. Connecting Power Apps buttons to Power Automate flows
 
@@ -394,7 +394,7 @@ In Power Apps, Action Buttons become Button controls with `OnSelect` properties 
 ```
 // Workshop: Action Button executes "EscalateIncident" action
 // Power Apps equivalent:
-Button.OnSelect = 
+Button.OnSelect =
     Set(varLoading, true);
     EscalateIncidentFlow.Run(
         Gallery1.Selected.IncidentId,
@@ -416,18 +416,18 @@ Workshop and Slate both offer map widgets that display geospatial data from the 
 
 ### 7.1. Map capability mapping
 
-| Foundry map capability | Azure Maps Power BI visual | Azure Maps SDK (React) | Best for |
-|---|---|---|---|
-| Point markers | Bubble layer / Symbol layer | HtmlMarker / SymbolLayer | Both work; Power BI for analytics, SDK for apps |
-| Clustering | Cluster aggregation | ClusterLayer | Both support clustering |
-| Choropleth / filled shapes | Filled map visual | PolygonLayer | Power BI for static; SDK for interactive |
-| Heatmap | Heat map layer | HeatMapLayer | Both equivalent |
-| Route / path display | Not supported | RouteLayer via REST API | SDK only — requires Azure Maps Route service |
-| Real-time movement | Not supported | HtmlMarker with position updates | SDK only — use with SignalR for live tracking |
-| Drawing tools | Not supported | DrawingManager | SDK only — for user-drawn areas |
-| Indoor maps | Not supported | Indoor Maps module | SDK only — for facility management |
-| 3D buildings | Not supported | 3D extrusion | SDK only |
-| Popups on click | Tooltip | Popup class | Power BI uses tooltips; SDK uses full popups |
+| Foundry map capability     | Azure Maps Power BI visual  | Azure Maps SDK (React)           | Best for                                        |
+| -------------------------- | --------------------------- | -------------------------------- | ----------------------------------------------- |
+| Point markers              | Bubble layer / Symbol layer | HtmlMarker / SymbolLayer         | Both work; Power BI for analytics, SDK for apps |
+| Clustering                 | Cluster aggregation         | ClusterLayer                     | Both support clustering                         |
+| Choropleth / filled shapes | Filled map visual           | PolygonLayer                     | Power BI for static; SDK for interactive        |
+| Heatmap                    | Heat map layer              | HeatMapLayer                     | Both equivalent                                 |
+| Route / path display       | Not supported               | RouteLayer via REST API          | SDK only — requires Azure Maps Route service    |
+| Real-time movement         | Not supported               | HtmlMarker with position updates | SDK only — use with SignalR for live tracking   |
+| Drawing tools              | Not supported               | DrawingManager                   | SDK only — for user-drawn areas                 |
+| Indoor maps                | Not supported               | Indoor Maps module               | SDK only — for facility management              |
+| 3D buildings               | Not supported               | 3D extrusion                     | SDK only                                        |
+| Popups on click            | Tooltip                     | Popup class                      | Power BI uses tooltips; SDK uses full popups    |
 
 ### 7.2. Migration decision
 
@@ -439,7 +439,7 @@ Workshop and Slate both offer map widgets that display geospatial data from the 
 
 ```typescript
 // Example: Azure Maps in a React component (CSA-in-a-Box pattern)
-import { AzureMap, AzureMapDataSourceProvider, 
+import { AzureMap, AzureMapDataSourceProvider,
          AzureMapLayerProvider } from 'react-azure-maps';
 
 const IncidentMap = ({ incidents }) => (
@@ -479,44 +479,44 @@ Workshop forms collect user input and execute Actions to write data. Power Apps 
 
 ### 8.1. Form pattern mapping
 
-| Workshop form pattern | Power Apps equivalent | Implementation notes |
-|---|---|---|
-| Single-object edit form | Edit form control bound to Dataverse | `Form.Mode = FormMode.Edit; SubmitForm(Form1)` |
-| Multi-step wizard | Multi-screen app with navigation | Each step is a screen; use variables to track progress |
-| Inline table editing | Gallery with edit controls | Editable text inputs inside Gallery items |
-| Bulk data entry | Gallery + collection + batch submit | Collect into collection, then `ForAll(Patch())` |
-| Conditional field visibility | `Visible` property with conditions | `Visible = If(Dropdown1.Selected.Value = "Other", true, false)` |
-| Cascading dropdowns | `Filter()` on dependent dropdown items | `Items = Filter(Cities, State = Dropdown_State.Selected.Value)` |
-| File attachment | Attachment control + SharePoint/Blob | Attachments stored in Dataverse or SharePoint |
-| Validation rules | Form validation properties + `IsMatch()` | `If(IsBlank(TextInput1.Text), Notify("Required"))` |
-| Submission confirmation | `Notify()` + navigation | `SubmitForm(Form1); Notify("Saved"); Navigate(ListScreen)` |
+| Workshop form pattern        | Power Apps equivalent                    | Implementation notes                                            |
+| ---------------------------- | ---------------------------------------- | --------------------------------------------------------------- |
+| Single-object edit form      | Edit form control bound to Dataverse     | `Form.Mode = FormMode.Edit; SubmitForm(Form1)`                  |
+| Multi-step wizard            | Multi-screen app with navigation         | Each step is a screen; use variables to track progress          |
+| Inline table editing         | Gallery with edit controls               | Editable text inputs inside Gallery items                       |
+| Bulk data entry              | Gallery + collection + batch submit      | Collect into collection, then `ForAll(Patch())`                 |
+| Conditional field visibility | `Visible` property with conditions       | `Visible = If(Dropdown1.Selected.Value = "Other", true, false)` |
+| Cascading dropdowns          | `Filter()` on dependent dropdown items   | `Items = Filter(Cities, State = Dropdown_State.Selected.Value)` |
+| File attachment              | Attachment control + SharePoint/Blob     | Attachments stored in Dataverse or SharePoint                   |
+| Validation rules             | Form validation properties + `IsMatch()` | `If(IsBlank(TextInput1.Text), Notify("Required"))`              |
+| Submission confirmation      | `Notify()` + navigation                  | `SubmitForm(Form1); Notify("Saved"); Navigate(ListScreen)`      |
 
 ### 8.2. CSA-in-a-Box registration wizard pattern
 
 The React portal at `portal/react-webapp/src/components/register/` implements a multi-step registration wizard that demonstrates the equivalent of a Workshop multi-step form:
 
-| Step | Component | Purpose |
-|---|---|---|
+| Step           | Component            | Purpose                                       |
+| -------------- | -------------------- | --------------------------------------------- |
 | 1. Source Type | `StepSourceType.tsx` | Select data source type (dropdown equivalent) |
-| 2. Connection | `StepConnection.tsx` | Enter connection details (form inputs) |
-| 3. Schema | `StepSchema.tsx` | Review and configure schema (table display) |
-| 4. Ingestion | `StepIngestion.tsx` | Configure ingestion schedule (options) |
-| 5. Owner | `StepOwner.tsx` | Assign data steward (lookup) |
-| 6. Quality | `StepQuality.tsx` | Define quality rules (rule builder) |
-| 7. Review | `StepReview.tsx` | Review and submit (summary + action button) |
+| 2. Connection  | `StepConnection.tsx` | Enter connection details (form inputs)        |
+| 3. Schema      | `StepSchema.tsx`     | Review and configure schema (table display)   |
+| 4. Ingestion   | `StepIngestion.tsx`  | Configure ingestion schedule (options)        |
+| 5. Owner       | `StepOwner.tsx`      | Assign data steward (lookup)                  |
+| 6. Quality     | `StepQuality.tsx`    | Define quality rules (rule builder)           |
+| 7. Review      | `StepReview.tsx`     | Review and submit (summary + action button)   |
 
 This pattern maps directly to a Power Apps multi-screen wizard or a Workshop multi-step form.
 
 ### 8.3. Validation patterns
 
-| Workshop validation | Power Apps equivalent |
-|---|---|
-| Required field | `Required` property on form control; `IsBlank()` check |
-| Regex validation | `IsMatch(TextInput.Text, "^[A-Z]{3}-\d{4}$")` |
-| Range validation | `If(Value(TextInput.Text) < 1 Or Value(TextInput.Text) > 100, ...)` |
-| Cross-field validation | Custom logic in `OnSelect` before `SubmitForm()` |
-| Server-side validation | Power Automate flow returns validation errors |
-| Submission rules | Business rules in Dataverse (model-driven) or flow logic |
+| Workshop validation    | Power Apps equivalent                                               |
+| ---------------------- | ------------------------------------------------------------------- |
+| Required field         | `Required` property on form control; `IsBlank()` check              |
+| Regex validation       | `IsMatch(TextInput.Text, "^[A-Z]{3}-\d{4}$")`                       |
+| Range validation       | `If(Value(TextInput.Text) < 1 Or Value(TextInput.Text) > 100, ...)` |
+| Cross-field validation | Custom logic in `OnSelect` before `SubmitForm()`                    |
+| Server-side validation | Power Automate flow returns validation errors                       |
+| Submission rules       | Business rules in Dataverse (model-driven) or flow logic            |
 
 ---
 
@@ -528,30 +528,30 @@ Foundry's Consumer Mode allows external users (citizens, partners, vendors) to a
 
 Power Pages (formerly Power Apps Portals) is purpose-built for external-facing web applications:
 
-| Capability | Power Pages | Consumer Mode (Foundry) |
-|---|---|---|
-| External identity | Azure AD B2C, social logins, local accounts | Foundry external identity (limited) |
-| Responsive design | Built-in responsive templates | Workshop layouts (less responsive) |
-| Content management | Built-in CMS with Liquid templates | No CMS capability |
-| Data access | Dataverse (table permissions per role) | Ontology (scoped object access) |
-| Custom code | JavaScript, Liquid, CSS | Workshop widgets (limited) |
-| Forms | Entity forms, multi-step forms | Workshop forms |
-| Lists | Entity lists with search, filter, sort | Object Table widget |
-| Authentication | Configurable per page/section | Token-based scoping |
-| SEO | Server-rendered, indexable | Not indexable (SPA) |
-| Performance | CDN, server-rendered | Client-side rendering |
+| Capability         | Power Pages                                 | Consumer Mode (Foundry)             |
+| ------------------ | ------------------------------------------- | ----------------------------------- |
+| External identity  | Azure AD B2C, social logins, local accounts | Foundry external identity (limited) |
+| Responsive design  | Built-in responsive templates               | Workshop layouts (less responsive)  |
+| Content management | Built-in CMS with Liquid templates          | No CMS capability                   |
+| Data access        | Dataverse (table permissions per role)      | Ontology (scoped object access)     |
+| Custom code        | JavaScript, Liquid, CSS                     | Workshop widgets (limited)          |
+| Forms              | Entity forms, multi-step forms              | Workshop forms                      |
+| Lists              | Entity lists with search, filter, sort      | Object Table widget                 |
+| Authentication     | Configurable per page/section               | Token-based scoping                 |
+| SEO                | Server-rendered, indexable                  | Not indexable (SPA)                 |
+| Performance        | CDN, server-rendered                        | Client-side rendering               |
 
 ### 9.2. Azure Static Web Apps + Azure AD B2C (for custom apps)
 
 For applications requiring full UI customization:
 
-| Component | Purpose |
-|---|---|
-| Azure Static Web Apps | Hosts React/Angular/Vue SPA with global CDN |
-| Azure AD B2C | External identity (email, social, SAML federation) |
-| Data API Builder | REST/GraphQL access to Azure SQL backend |
-| Azure Functions | Custom business logic and API endpoints |
-| Azure Front Door | WAF, DDoS protection, custom domains |
+| Component             | Purpose                                            |
+| --------------------- | -------------------------------------------------- |
+| Azure Static Web Apps | Hosts React/Angular/Vue SPA with global CDN        |
+| Azure AD B2C          | External identity (email, social, SAML federation) |
+| Data API Builder      | REST/GraphQL access to Azure SQL backend           |
+| Azure Functions       | Custom business logic and API endpoints            |
+| Azure Front Door      | WAF, DDoS protection, custom domains               |
 
 ### 9.3. Migration decision
 
@@ -567,15 +567,15 @@ Foundry Pilot generates complete applications from natural language prompts. It 
 
 ### 10.1. AI app building comparison
 
-| Capability | Foundry Pilot | Azure equivalent | Maturity |
-|---|---|---|---|
-| Generate app from prompt | Full app generation (Ontology + frontend + data) | **Copilot in Power Apps** — generates canvas app from description | GA |
-| Generate data model | Creates object types and link types | **Copilot in Dataverse** — suggests tables and columns | GA |
-| Generate UI components | React + OSDK code | **Copilot in Power Apps** — generates screens and controls | GA |
-| Generate automation | Creates Actions | **Copilot in Power Automate** — generates flows from description | GA |
-| Generate AI agents | AIP Chatbot Studio | **Copilot Studio** — creates agents from description | GA |
-| Code generation | React + TypeScript | **GitHub Copilot** — inline code suggestions in VS Code | GA |
-| Full-stack generation | End-to-end (unique to Pilot) | Combination of Copilot tools (less integrated) | Partial |
+| Capability               | Foundry Pilot                                    | Azure equivalent                                                  | Maturity |
+| ------------------------ | ------------------------------------------------ | ----------------------------------------------------------------- | -------- |
+| Generate app from prompt | Full app generation (Ontology + frontend + data) | **Copilot in Power Apps** — generates canvas app from description | GA       |
+| Generate data model      | Creates object types and link types              | **Copilot in Dataverse** — suggests tables and columns            | GA       |
+| Generate UI components   | React + OSDK code                                | **Copilot in Power Apps** — generates screens and controls        | GA       |
+| Generate automation      | Creates Actions                                  | **Copilot in Power Automate** — generates flows from description  | GA       |
+| Generate AI agents       | AIP Chatbot Studio                               | **Copilot Studio** — creates agents from description              | GA       |
+| Code generation          | React + TypeScript                               | **GitHub Copilot** — inline code suggestions in VS Code           | GA       |
+| Full-stack generation    | End-to-end (unique to Pilot)                     | Combination of Copilot tools (less integrated)                    | Partial  |
 
 ### 10.2. Key difference
 
@@ -589,38 +589,38 @@ Foundry Marketplace is a storefront for discovering, installing, and managing pa
 
 ### 11.1. Packaging comparison
 
-| Foundry Marketplace concept | Azure equivalent | Implementation |
-|---|---|---|
-| **Product** (bundle of artifacts) | **Managed solution** (Power Platform) | Solutions package apps, flows, tables, dashboards |
-| **Product listing** | **AppSource listing** or internal catalog | AppSource for public; internal catalog for org |
-| **Install product** | **Import solution** | `pac solution import` or admin center UI |
-| **Product versioning** | **Solution versioning** | Semantic versioning with managed/unmanaged layers |
-| **Dependencies** | **Solution dependencies** | Solutions declare dependencies on other solutions |
-| **Product updates** | **Solution upgrade** | Managed solution upgrade preserves customizations |
-| **Product permissions** | **Security roles in solution** | Roles and team templates bundled in solution |
+| Foundry Marketplace concept       | Azure equivalent                          | Implementation                                    |
+| --------------------------------- | ----------------------------------------- | ------------------------------------------------- |
+| **Product** (bundle of artifacts) | **Managed solution** (Power Platform)     | Solutions package apps, flows, tables, dashboards |
+| **Product listing**               | **AppSource listing** or internal catalog | AppSource for public; internal catalog for org    |
+| **Install product**               | **Import solution**                       | `pac solution import` or admin center UI          |
+| **Product versioning**            | **Solution versioning**                   | Semantic versioning with managed/unmanaged layers |
+| **Dependencies**                  | **Solution dependencies**                 | Solutions declare dependencies on other solutions |
+| **Product updates**               | **Solution upgrade**                      | Managed solution upgrade preserves customizations |
+| **Product permissions**           | **Security roles in solution**            | Roles and team templates bundled in solution      |
 
 ### 11.2. CSA-in-a-Box data marketplace
 
 The `csa_platform/data_marketplace/` module demonstrates a data product catalog pattern:
 
-| Component | File | Purpose |
-|---|---|---|
-| Contract validator | `contract_validator.py` | Validates data products against defined contracts |
-| Purview sync | `purview_sync.py` | Synchronizes product metadata with Purview catalog |
-| Notifications | `notifications.py` | Alerts stakeholders about new/updated products |
-| Infrastructure | `deploy/marketplace.bicep` | Bicep template for marketplace infrastructure |
+| Component          | File                       | Purpose                                            |
+| ------------------ | -------------------------- | -------------------------------------------------- |
+| Contract validator | `contract_validator.py`    | Validates data products against defined contracts  |
+| Purview sync       | `purview_sync.py`          | Synchronizes product metadata with Purview catalog |
+| Notifications      | `notifications.py`         | Alerts stakeholders about new/updated products     |
+| Infrastructure     | `deploy/marketplace.bicep` | Bicep template for marketplace infrastructure      |
 
 This marketplace pattern can be extended to package and distribute reusable data products, analytics templates, and application components across an organization.
 
 ### 11.3. Distribution models
 
-| Scenario | Foundry approach | Azure approach |
-|---|---|---|
-| Share within organization | Marketplace internal listing | Managed solution in shared environment |
-| Share across agencies | Marketplace product export | AppSource private listing or solution file exchange |
-| Public distribution | N/A (Foundry is not public) | AppSource public listing |
-| Template with customization | Product with configuration | Unmanaged solution (allows customization) |
-| Locked/certified deployment | Product with permissions | Managed solution (prevents modification) |
+| Scenario                    | Foundry approach             | Azure approach                                      |
+| --------------------------- | ---------------------------- | --------------------------------------------------- |
+| Share within organization   | Marketplace internal listing | Managed solution in shared environment              |
+| Share across agencies       | Marketplace product export   | AppSource private listing or solution file exchange |
+| Public distribution         | N/A (Foundry is not public)  | AppSource public listing                            |
+| Template with customization | Product with configuration   | Unmanaged solution (allows customization)           |
+| Locked/certified deployment | Product with permissions     | Managed solution (prevents modification)            |
 
 ---
 
@@ -630,37 +630,37 @@ Migrating from Foundry to Azure involves a shift in user experience philosophy. 
 
 ### 12.1. What gets better
 
-| Area | Foundry experience | Azure experience | Net change |
-|---|---|---|---|
+| Area                          | Foundry experience                 | Azure experience                                | Net change           |
+| ----------------------------- | ---------------------------------- | ----------------------------------------------- | -------------------- |
 | **Microsoft 365 integration** | Separate platform, SAML federation | Native integration (Teams, Outlook, SharePoint) | Significantly better |
-| **Mobile experience** | Limited Workshop mobile support | Power Apps mobile app (iOS/Android) | Better |
-| **Offline capability** | None | Power Apps offline mode | New capability |
-| **BI and analytics** | Contour (good but limited) | Power BI (industry-leading) | Better |
-| **External sharing** | Consumer Mode (limited) | Power Pages, Azure AD B2C | More flexible |
-| **Ecosystem breadth** | Foundry only | 400+ Power Platform connectors | Vastly broader |
-| **Talent availability** | Niche (Palantir-certified only) | Broad (millions of Power Platform developers) | Much better |
-| **AI assistance** | Pilot (app generation) | Copilot across all tools | Broader coverage |
-| **Total cost** | Per-seat licensing | Consumption-based | Lower |
+| **Mobile experience**         | Limited Workshop mobile support    | Power Apps mobile app (iOS/Android)             | Better               |
+| **Offline capability**        | None                               | Power Apps offline mode                         | New capability       |
+| **BI and analytics**          | Contour (good but limited)         | Power BI (industry-leading)                     | Better               |
+| **External sharing**          | Consumer Mode (limited)            | Power Pages, Azure AD B2C                       | More flexible        |
+| **Ecosystem breadth**         | Foundry only                       | 400+ Power Platform connectors                  | Vastly broader       |
+| **Talent availability**       | Niche (Palantir-certified only)    | Broad (millions of Power Platform developers)   | Much better          |
+| **AI assistance**             | Pilot (app generation)             | Copilot across all tools                        | Broader coverage     |
+| **Total cost**                | Per-seat licensing                 | Consumption-based                               | Lower                |
 
 ### 12.2. What changes (neutral)
 
-| Area | Foundry experience | Azure experience | Managing the change |
-|---|---|---|---|
-| **Development IDE** | Workshop visual builder | Power Apps Studio | Different UI, similar concepts — training required |
-| **Data binding** | Ontology object types | Dataverse tables, SQL, connectors | Different terminology, similar patterns |
-| **Action model** | Ontology Actions | Power Automate flows | Different authoring, equivalent outcomes |
-| **Variable management** | Workshop variables | Power Apps `Set()` / `UpdateContext()` | Similar concept, different syntax |
-| **Layout system** | Workshop sections and tabs | Power Apps containers and screens | Similar patterns, different tools |
+| Area                    | Foundry experience         | Azure experience                       | Managing the change                                |
+| ----------------------- | -------------------------- | -------------------------------------- | -------------------------------------------------- |
+| **Development IDE**     | Workshop visual builder    | Power Apps Studio                      | Different UI, similar concepts — training required |
+| **Data binding**        | Ontology object types      | Dataverse tables, SQL, connectors      | Different terminology, similar patterns            |
+| **Action model**        | Ontology Actions           | Power Automate flows                   | Different authoring, equivalent outcomes           |
+| **Variable management** | Workshop variables         | Power Apps `Set()` / `UpdateContext()` | Similar concept, different syntax                  |
+| **Layout system**       | Workshop sections and tabs | Power Apps containers and screens      | Similar patterns, different tools                  |
 
 ### 12.3. What requires careful handling
 
-| Area | Foundry experience | Azure experience | Mitigation |
-|---|---|---|---|
-| **Ontology-driven coherence** | Single semantic layer for all apps | Multiple data sources, no single "Ontology" | Establish Dataverse as the operational data layer; use Purview for semantic governance |
-| **One-click object exploration** | Object Explorer drills into any object type | No single equivalent | Build model-driven Power Apps for entity exploration; use Power BI drill-through for analytics |
-| **Real-time Ontology updates** | Objects update across all apps simultaneously | Requires explicit refresh or SignalR | Design refresh patterns; use Dataverse real-time workflows for critical updates |
-| **AIP inline integration** | LLM responses reference Ontology objects | Copilot Studio + custom prompts | Copilot Studio agents can query Dataverse; requires explicit configuration |
-| **Forward-deployed support** | Palantir engineers embedded in your team | Microsoft partner ecosystem or internal team | Budget for training and partner engagement during transition |
+| Area                             | Foundry experience                            | Azure experience                             | Mitigation                                                                                     |
+| -------------------------------- | --------------------------------------------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| **Ontology-driven coherence**    | Single semantic layer for all apps            | Multiple data sources, no single "Ontology"  | Establish Dataverse as the operational data layer; use Purview for semantic governance         |
+| **One-click object exploration** | Object Explorer drills into any object type   | No single equivalent                         | Build model-driven Power Apps for entity exploration; use Power BI drill-through for analytics |
+| **Real-time Ontology updates**   | Objects update across all apps simultaneously | Requires explicit refresh or SignalR         | Design refresh patterns; use Dataverse real-time workflows for critical updates                |
+| **AIP inline integration**       | LLM responses reference Ontology objects      | Copilot Studio + custom prompts              | Copilot Studio agents can query Dataverse; requires explicit configuration                     |
+| **Forward-deployed support**     | Palantir engineers embedded in your team      | Microsoft partner ecosystem or internal team | Budget for training and partner engagement during transition                                   |
 
 ### 12.4. Stakeholder communication template
 
@@ -724,16 +724,16 @@ When presenting the migration to stakeholders, frame the conversation around out
 
 Use this table to estimate effort for migrating individual Foundry applications:
 
-| App characteristic | Low complexity (1-2 weeks) | Medium complexity (3-6 weeks) | High complexity (8-16 weeks) |
-|---|---|---|---|
-| Widget count | < 10 widgets | 10-30 widgets | 30+ widgets |
-| Actions | 0-2 actions | 3-8 actions | 8+ actions with complex logic |
-| Data sources | 1-2 object types | 3-8 object types | 8+ object types with complex links |
-| Map usage | No maps | Static point map | Interactive maps with routes/drawing |
-| Custom JavaScript | None | Minimal formatting | Complex D3.js / Three.js |
-| External users | Internal only | External read-only | External with data entry |
-| Real-time requirements | None | Periodic refresh | Live streaming updates |
-| Mobile requirements | Desktop only | Responsive layout | Dedicated mobile experience |
+| App characteristic     | Low complexity (1-2 weeks) | Medium complexity (3-6 weeks) | High complexity (8-16 weeks)         |
+| ---------------------- | -------------------------- | ----------------------------- | ------------------------------------ |
+| Widget count           | < 10 widgets               | 10-30 widgets                 | 30+ widgets                          |
+| Actions                | 0-2 actions                | 3-8 actions                   | 8+ actions with complex logic        |
+| Data sources           | 1-2 object types           | 3-8 object types              | 8+ object types with complex links   |
+| Map usage              | No maps                    | Static point map              | Interactive maps with routes/drawing |
+| Custom JavaScript      | None                       | Minimal formatting            | Complex D3.js / Three.js             |
+| External users         | Internal only              | External read-only            | External with data entry             |
+| Real-time requirements | None                       | Periodic refresh              | Live streaming updates               |
+| Mobile requirements    | Desktop only               | Responsive layout             | Dedicated mobile experience          |
 
 ---
 

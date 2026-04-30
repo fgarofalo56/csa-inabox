@@ -20,15 +20,15 @@ Power BI Pro is $10/user/month. Power BI Premium Per User is $20/user/month. For
 
 ### What the numbers look like at scale
 
-| Organization size | Tableau annual cost | Power BI annual cost | Annual savings |
-|---|---|---|---|
-| 50 users (10 Creator, 15 Explorer, 25 Viewer) | ~$62,100 | ~$6,000 (all Pro) | ~$56,000 |
-| 200 users (30 Creator, 70 Explorer, 100 Viewer) | ~$244,200 | ~$24,000 (all Pro) | ~$220,000 |
-| 500 users (60 Creator, 140 Explorer, 300 Viewer) | ~$529,200 | ~$60,000 (all Pro) | ~$469,000 |
-| 2,000 users (150 Creator, 450 Explorer, 1,400 Viewer) | ~$2,019,600 | ~$240,000 (Pro) + capacity | ~$1,500,000+ |
+| Organization size                                     | Tableau annual cost | Power BI annual cost       | Annual savings |
+| ----------------------------------------------------- | ------------------- | -------------------------- | -------------- |
+| 50 users (10 Creator, 15 Explorer, 25 Viewer)         | ~$62,100            | ~$6,000 (all Pro)          | ~$56,000       |
+| 200 users (30 Creator, 70 Explorer, 100 Viewer)       | ~$244,200           | ~$24,000 (all Pro)         | ~$220,000      |
+| 500 users (60 Creator, 140 Explorer, 300 Viewer)      | ~$529,200           | ~$60,000 (all Pro)         | ~$469,000      |
+| 2,000 users (150 Creator, 450 Explorer, 1,400 Viewer) | ~$2,019,600         | ~$240,000 (Pro) + capacity | ~$1,500,000+   |
 
 !!! tip "E5 changes the equation entirely"
-    If your organization is on Microsoft 365 E5, every user already has a Power BI Pro license included. The incremental cost of Power BI is zero. This single fact has driven more Tableau-to-Power BI migrations than any technical feature comparison.
+If your organization is on Microsoft 365 E5, every user already has a Power BI Pro license included. The incremental cost of Power BI is zero. This single fact has driven more Tableau-to-Power BI migrations than any technical feature comparison.
 
 ### Beyond per-user licensing
 
@@ -107,11 +107,11 @@ Tableau Embedded Analytics uses per-user pricing. Every external user (customer,
 
 Power BI Embedded uses capacity-based pricing (A-SKUs or F-SKUs). You purchase compute capacity, and an unlimited number of users can consume embedded content within that capacity. For ISVs, federal portals, and customer-facing analytics, Power BI Embedded is typically 3-5x cheaper than Tableau at scale.
 
-| Scenario | Tableau Embedded cost | Power BI Embedded cost | Savings |
-|---|---|---|---|
-| 1,000 external viewers | ~$180,000/year | ~$60,000/year (F64 capacity) | ~$120,000 |
-| 5,000 external viewers | ~$900,000/year | ~$60,000/year (F64 capacity) | ~$840,000 |
-| 10,000 external viewers | ~$1,800,000/year | ~$120,000/year (F128 capacity) | ~$1,680,000 |
+| Scenario                | Tableau Embedded cost | Power BI Embedded cost         | Savings     |
+| ----------------------- | --------------------- | ------------------------------ | ----------- |
+| 1,000 external viewers  | ~$180,000/year        | ~$60,000/year (F64 capacity)   | ~$120,000   |
+| 5,000 external viewers  | ~$900,000/year        | ~$60,000/year (F64 capacity)   | ~$840,000   |
+| 10,000 external viewers | ~$1,800,000/year      | ~$120,000/year (F128 capacity) | ~$1,680,000 |
 
 ### Developer experience
 

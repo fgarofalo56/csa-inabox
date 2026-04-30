@@ -10,16 +10,16 @@
 
 This document maps each SAS-based authentication pattern used in IoT Hub and DPS to its Entra equivalent. Each pattern includes the SAS approach, the Entra replacement, migration complexity, and Bicep code showing the before and after states.
 
-| SAS pattern | Entra replacement | Complexity | Guide |
-|---|---|---|---|
-| SAS device symmetric key | X.509 device certificate | Medium | [X.509 Migration](x509-migration.md) |
-| SAS connection string (service) | Managed Identity + Azure RBAC | Low | [Managed Identity Migration](managed-identity-migration.md) |
-| SAS IoT Hub shared access policies | Entra app registrations + RBAC roles | Low | [Managed Identity Migration](managed-identity-migration.md) |
-| DPS SAS enrollment group | DPS X.509 enrollment group | Medium | [DPS Migration](dps-migration.md) |
-| SAS token generation (device) | Certificate thumbprint authentication | Medium | [X.509 Migration](x509-migration.md) |
-| SAS token generation (service) | Managed Identity token acquisition | Low | [Managed Identity Migration](managed-identity-migration.md) |
-| Connection retry with SAS | Connection retry with certificate renewal | Medium | [X.509 Migration](x509-migration.md) |
-| Device twin auth via SAS | Entra-scoped device twin access | Low | This document |
+| SAS pattern                        | Entra replacement                         | Complexity | Guide                                                       |
+| ---------------------------------- | ----------------------------------------- | ---------- | ----------------------------------------------------------- |
+| SAS device symmetric key           | X.509 device certificate                  | Medium     | [X.509 Migration](x509-migration.md)                        |
+| SAS connection string (service)    | Managed Identity + Azure RBAC             | Low        | [Managed Identity Migration](managed-identity-migration.md) |
+| SAS IoT Hub shared access policies | Entra app registrations + RBAC roles      | Low        | [Managed Identity Migration](managed-identity-migration.md) |
+| DPS SAS enrollment group           | DPS X.509 enrollment group                | Medium     | [DPS Migration](dps-migration.md)                           |
+| SAS token generation (device)      | Certificate thumbprint authentication     | Medium     | [X.509 Migration](x509-migration.md)                        |
+| SAS token generation (service)     | Managed Identity token acquisition        | Low        | [Managed Identity Migration](managed-identity-migration.md) |
+| Connection retry with SAS          | Connection retry with certificate renewal | Medium     | [X.509 Migration](x509-migration.md)                        |
+| Device twin auth via SAS           | Entra-scoped device twin access           | Low        | This document                                               |
 
 ---
 
@@ -217,36 +217,36 @@ resource functionIoTHubRole 'Microsoft.Authorization/roleAssignments@2022-04-01'
 
 IoT Hub provides five built-in shared access policies. Each policy grants broad, coarse-grained access.
 
-| SAS policy | Permissions |
-|---|---|
-| `iothubowner` | All operations (full control) |
-| `service` | Service-connect, registry read/write |
-| `device` | Device connect |
-| `registryRead` | Registry read |
-| `registryReadWrite` | Registry read + write |
+| SAS policy          | Permissions                          |
+| ------------------- | ------------------------------------ |
+| `iothubowner`       | All operations (full control)        |
+| `service`           | Service-connect, registry read/write |
+| `device`            | Device connect                       |
+| `registryRead`      | Registry read                        |
+| `registryReadWrite` | Registry read + write                |
 
 ### After (Entra RBAC)
 
 Entra provides granular, least-privilege roles.
 
-| Entra RBAC role | Role ID | Permissions |
-|---|---|---|
-| IoT Hub Data Contributor | `4fc6c259-987e-4a07-842e-c321cc9d413f` | Full data plane (registry, twin, direct methods, C2D) |
-| IoT Hub Data Reader | `b447c946-2db7-41ec-983d-d8bf3b1c77e3` | Read device registry, read twins |
-| IoT Hub Registry Contributor | `4ea46cd5-c1b2-4a8e-910b-273211f9ce47` | Create/update/delete device identities |
-| IoT Hub Twin Contributor | `494bdba2-168f-4f31-a0a1-191d2f7c028c` | Read/write device twins |
-| Contributor | (built-in) | Control plane (manage IoT Hub resource itself) |
-| Reader | (built-in) | Control plane read (view IoT Hub configuration) |
+| Entra RBAC role              | Role ID                                | Permissions                                           |
+| ---------------------------- | -------------------------------------- | ----------------------------------------------------- |
+| IoT Hub Data Contributor     | `4fc6c259-987e-4a07-842e-c321cc9d413f` | Full data plane (registry, twin, direct methods, C2D) |
+| IoT Hub Data Reader          | `b447c946-2db7-41ec-983d-d8bf3b1c77e3` | Read device registry, read twins                      |
+| IoT Hub Registry Contributor | `4ea46cd5-c1b2-4a8e-910b-273211f9ce47` | Create/update/delete device identities                |
+| IoT Hub Twin Contributor     | `494bdba2-168f-4f31-a0a1-191d2f7c028c` | Read/write device twins                               |
+| Contributor                  | (built-in)                             | Control plane (manage IoT Hub resource itself)        |
+| Reader                       | (built-in)                             | Control plane read (view IoT Hub configuration)       |
 
 ### Mapping
 
-| SAS policy | Entra RBAC role(s) | Notes |
-|---|---|---|
-| `iothubowner` | IoT Hub Data Contributor + Contributor | Split data plane and control plane |
-| `service` | IoT Hub Data Contributor | Or IoT Hub Data Reader for read-only services |
-| `device` | N/A (devices use X.509) | Device authentication via certificate, not RBAC |
-| `registryRead` | IoT Hub Data Reader | Least-privilege read access |
-| `registryReadWrite` | IoT Hub Registry Contributor | Device identity management only |
+| SAS policy          | Entra RBAC role(s)                     | Notes                                           |
+| ------------------- | -------------------------------------- | ----------------------------------------------- |
+| `iothubowner`       | IoT Hub Data Contributor + Contributor | Split data plane and control plane              |
+| `service`           | IoT Hub Data Contributor               | Or IoT Hub Data Reader for read-only services   |
+| `device`            | N/A (devices use X.509)                | Device authentication via certificate, not RBAC |
+| `registryRead`      | IoT Hub Data Reader                    | Least-privilege read access                     |
+| `registryReadWrite` | IoT Hub Registry Contributor           | Device identity management only                 |
 
 ### Bicep change
 
@@ -522,15 +522,15 @@ resource analyticsReadRole 'Microsoft.Authorization/roleAssignments@2022-04-01' 
 
 ## Complete migration matrix
 
-| # | SAS pattern | Entra pattern | Credential change | Code change | Bicep change | Complexity |
-|---|---|---|---|---|---|---|
-| 1 | Device symmetric key | X.509 certificate | Key -> cert + private key | SDK method change | `disableLocalAuth: true` | Medium |
-| 2 | Service connection string | Managed Identity | Conn string -> no credential | SDK method change | Add identity + RBAC | Low |
-| 3 | Shared access policies | RBAC roles | Policy name -> role assignment | None (transparent) | `authorizationPolicies: []` | Low |
-| 4 | DPS SAS enrollment | DPS X.509 enrollment | Group key -> CA certificate | SDK method change | DPS config update | Medium |
-| 5 | SAS token generation | Certificate TLS auth | Token -> TLS handshake | SDK method change | None | Medium |
-| 6 | SAS connection retry | Certificate-aware retry | Token refresh -> cert check | Custom retry logic | None | Medium |
-| 7 | Device twin (SAS) | Device twin (RBAC) | Conn string -> managed identity | SDK method change | Add RBAC assignment | Low |
+| #   | SAS pattern               | Entra pattern           | Credential change               | Code change        | Bicep change                | Complexity |
+| --- | ------------------------- | ----------------------- | ------------------------------- | ------------------ | --------------------------- | ---------- |
+| 1   | Device symmetric key      | X.509 certificate       | Key -> cert + private key       | SDK method change  | `disableLocalAuth: true`    | Medium     |
+| 2   | Service connection string | Managed Identity        | Conn string -> no credential    | SDK method change  | Add identity + RBAC         | Low        |
+| 3   | Shared access policies    | RBAC roles              | Policy name -> role assignment  | None (transparent) | `authorizationPolicies: []` | Low        |
+| 4   | DPS SAS enrollment        | DPS X.509 enrollment    | Group key -> CA certificate     | SDK method change  | DPS config update           | Medium     |
+| 5   | SAS token generation      | Certificate TLS auth    | Token -> TLS handshake          | SDK method change  | None                        | Medium     |
+| 6   | SAS connection retry      | Certificate-aware retry | Token refresh -> cert check     | Custom retry logic | None                        | Medium     |
+| 7   | Device twin (SAS)         | Device twin (RBAC)      | Conn string -> managed identity | SDK method change  | Add RBAC assignment         | Low        |
 
 ---
 

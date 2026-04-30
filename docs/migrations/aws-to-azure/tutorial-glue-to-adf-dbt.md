@@ -11,12 +11,12 @@
 
 AWS Glue combines orchestration (triggers, workflows), cataloging (Glue Data Catalog), and compute (Glue Spark/Python jobs) into one service. In csa-inabox on Azure, these responsibilities separate cleanly:
 
-| Glue responsibility | Azure equivalent | Why |
-|-------------------|-----------------|-----|
-| Orchestration (triggers, workflows) | Azure Data Factory (ADF) | Purpose-built orchestrator; see ADR-0001 |
-| Catalog (databases, tables) | Unity Catalog + Purview | Runtime + enterprise governance |
-| Compute (Spark jobs) | Databricks Jobs | Managed Spark with Photon; see ADR-0002 |
-| Transforms (PySpark / Python) | dbt models (SQL-first) or Databricks notebooks | SQL for most transforms; notebooks for complex logic |
+| Glue responsibility                 | Azure equivalent                               | Why                                                  |
+| ----------------------------------- | ---------------------------------------------- | ---------------------------------------------------- |
+| Orchestration (triggers, workflows) | Azure Data Factory (ADF)                       | Purpose-built orchestrator; see ADR-0001             |
+| Catalog (databases, tables)         | Unity Catalog + Purview                        | Runtime + enterprise governance                      |
+| Compute (Spark jobs)                | Databricks Jobs                                | Managed Spark with Photon; see ADR-0002              |
+| Transforms (PySpark / Python)       | dbt models (SQL-first) or Databricks notebooks | SQL for most transforms; notebooks for complex logic |
 
 This tutorial walks through converting a single Glue ETL job to the ADF + dbt pattern, end to end.
 
@@ -28,13 +28,13 @@ This tutorial walks through converting a single Glue ETL job to the ADF + dbt pa
 
 ### Tools
 
-| Tool | Minimum version | Purpose |
-|------|----------------|---------|
-| AWS CLI | 2.x | Export Glue job definitions |
-| Azure CLI | 2.60+ | ADF and Databricks provisioning |
-| dbt-databricks | 1.8+ | Transformation layer |
-| Databricks CLI | 0.220+ | Workspace management |
-| Python | 3.10+ | Local dbt development |
+| Tool           | Minimum version | Purpose                         |
+| -------------- | --------------- | ------------------------------- |
+| AWS CLI        | 2.x             | Export Glue job definitions     |
+| Azure CLI      | 2.60+           | ADF and Databricks provisioning |
+| dbt-databricks | 1.8+            | Transformation layer            |
+| Databricks CLI | 0.220+          | Workspace management            |
+| Python         | 3.10+           | Local dbt development           |
 
 ### AWS access
 
@@ -80,18 +80,18 @@ aws glue get-tables --database-name analytics --output json > glue_tables.json
 
 ### Document the job profile
 
-| Attribute | Value |
-|-----------|-------|
-| Job name | `daily-customer-etl` |
-| Type | Spark (Glue 4.0) |
-| DPU / Workers | 10 DPU (G.1X, 5 workers) |
-| Schedule | Daily at 03:00 UTC |
+| Attribute       | Value                                               |
+| --------------- | --------------------------------------------------- |
+| Job name        | `daily-customer-etl`                                |
+| Type            | Spark (Glue 4.0)                                    |
+| DPU / Workers   | 10 DPU (G.1X, 5 workers)                            |
+| Schedule        | Daily at 03:00 UTC                                  |
 | Script location | `s3://acme-glue-scripts/jobs/daily_customer_etl.py` |
-| Source tables | `raw.customer_events`, `raw.customer_profiles` |
-| Target table | `curated.customer_360` |
-| Connections | `redshift-analytics` (JDBC), `s3-raw-bucket` |
-| Avg runtime | 18 minutes |
-| Bookmarks | Enabled (incremental) |
+| Source tables   | `raw.customer_events`, `raw.customer_profiles`      |
+| Target table    | `curated.customer_360`                              |
+| Connections     | `redshift-analytics` (JDBC), `s3-raw-bucket`        |
+| Avg runtime     | 18 minutes                                          |
+| Bookmarks       | Enabled (incremental)                               |
 
 ### Analyze the PySpark script
 
@@ -174,22 +174,22 @@ ADF Linked Services are the equivalent of Glue Connections.
 
 ```json
 {
-  "name": "ls_adls_analytics",
-  "type": "Microsoft.DataFactory/factories/linkedservices",
-  "properties": {
-    "type": "AzureBlobFS",
-    "typeProperties": {
-      "url": "https://acmeanalyticsgov.dfs.core.usgovcloudapi.net",
-      "accountKey": {
-        "type": "AzureKeyVaultSecret",
-        "store": {
-          "referenceName": "ls_keyvault",
-          "type": "LinkedServiceReference"
-        },
-        "secretName": "storage-account-key"
-      }
+    "name": "ls_adls_analytics",
+    "type": "Microsoft.DataFactory/factories/linkedservices",
+    "properties": {
+        "type": "AzureBlobFS",
+        "typeProperties": {
+            "url": "https://acmeanalyticsgov.dfs.core.usgovcloudapi.net",
+            "accountKey": {
+                "type": "AzureKeyVaultSecret",
+                "store": {
+                    "referenceName": "ls_keyvault",
+                    "type": "LinkedServiceReference"
+                },
+                "secretName": "storage-account-key"
+            }
+        }
     }
-  }
 }
 ```
 
@@ -197,22 +197,22 @@ ADF Linked Services are the equivalent of Glue Connections.
 
 ```json
 {
-  "name": "ls_databricks",
-  "type": "Microsoft.DataFactory/factories/linkedservices",
-  "properties": {
-    "type": "AzureDatabricks",
-    "typeProperties": {
-      "domain": "https://adb-1234567890.1.azuredatabricks.net",
-      "authentication": "MSI",
-      "workspaceResourceId": "/subscriptions/<sub-id>/resourceGroups/rg-analytics/providers/Microsoft.Databricks/workspaces/dbx-analytics",
-      "newClusterNodeType": "Standard_D4s_v5",
-      "newClusterNumOfWorker": "2:8",
-      "newClusterSparkEnvVars": {
-        "PYSPARK_PYTHON": "/databricks/python3/bin/python3"
-      },
-      "newClusterVersion": "15.4.x-scala2.12"
+    "name": "ls_databricks",
+    "type": "Microsoft.DataFactory/factories/linkedservices",
+    "properties": {
+        "type": "AzureDatabricks",
+        "typeProperties": {
+            "domain": "https://adb-1234567890.1.azuredatabricks.net",
+            "authentication": "MSI",
+            "workspaceResourceId": "/subscriptions/<sub-id>/resourceGroups/rg-analytics/providers/Microsoft.Databricks/workspaces/dbx-analytics",
+            "newClusterNodeType": "Standard_D4s_v5",
+            "newClusterNumOfWorker": "2:8",
+            "newClusterSparkEnvVars": {
+                "PYSPARK_PYTHON": "/databricks/python3/bin/python3"
+            },
+            "newClusterVersion": "15.4.x-scala2.12"
+        }
     }
-  }
 }
 ```
 
@@ -228,80 +228,80 @@ If the Glue job includes a data-copy step (reading from an external source into 
 
 ```json
 {
-  "name": "pl_ingest_customer_events",
-  "properties": {
-    "activities": [
-      {
-        "name": "copy_customer_events",
-        "type": "Copy",
-        "inputs": [
-          {
-            "referenceName": "ds_source_customer_events",
-            "type": "DatasetReference"
-          }
-        ],
-        "outputs": [
-          {
-            "referenceName": "ds_adls_bronze_customer_events",
-            "type": "DatasetReference"
-          }
-        ],
-        "typeProperties": {
-          "source": {
-            "type": "ParquetSource",
-            "storeSettings": {
-              "type": "AzureBlobFSReadSettings",
-              "recursive": true,
-              "wildcardFolderPath": {
-                "value": "@formatDateTime(pipeline().parameters.run_date, 'yyyy/MM/dd')",
-                "type": "Expression"
-              }
-            }
-          },
-          "sink": {
-            "type": "ParquetSink",
-            "storeSettings": {
-              "type": "AzureBlobFSWriteSettings"
+    "name": "pl_ingest_customer_events",
+    "properties": {
+        "activities": [
+            {
+                "name": "copy_customer_events",
+                "type": "Copy",
+                "inputs": [
+                    {
+                        "referenceName": "ds_source_customer_events",
+                        "type": "DatasetReference"
+                    }
+                ],
+                "outputs": [
+                    {
+                        "referenceName": "ds_adls_bronze_customer_events",
+                        "type": "DatasetReference"
+                    }
+                ],
+                "typeProperties": {
+                    "source": {
+                        "type": "ParquetSource",
+                        "storeSettings": {
+                            "type": "AzureBlobFSReadSettings",
+                            "recursive": true,
+                            "wildcardFolderPath": {
+                                "value": "@formatDateTime(pipeline().parameters.run_date, 'yyyy/MM/dd')",
+                                "type": "Expression"
+                            }
+                        }
+                    },
+                    "sink": {
+                        "type": "ParquetSink",
+                        "storeSettings": {
+                            "type": "AzureBlobFSWriteSettings"
+                        },
+                        "formatSettings": {
+                            "type": "ParquetWriteSettings"
+                        }
+                    },
+                    "enableStaging": false
+                }
             },
-            "formatSettings": {
-              "type": "ParquetWriteSettings"
+            {
+                "name": "run_dbt_transforms",
+                "type": "DatabricksNotebook",
+                "dependsOn": [
+                    {
+                        "activity": "copy_customer_events",
+                        "dependencyConditions": ["Succeeded"]
+                    }
+                ],
+                "linkedServiceName": {
+                    "referenceName": "ls_databricks",
+                    "type": "LinkedServiceReference"
+                },
+                "typeProperties": {
+                    "notebookPath": "/Repos/acme/analytics/notebooks/run_dbt",
+                    "baseParameters": {
+                        "dbt_command": "dbt run --select customer_360",
+                        "run_date": {
+                            "value": "@pipeline().parameters.run_date",
+                            "type": "Expression"
+                        }
+                    }
+                }
             }
-          },
-          "enableStaging": false
-        }
-      },
-      {
-        "name": "run_dbt_transforms",
-        "type": "DatabricksNotebook",
-        "dependsOn": [
-          {
-            "activity": "copy_customer_events",
-            "dependencyConditions": ["Succeeded"]
-          }
         ],
-        "linkedServiceName": {
-          "referenceName": "ls_databricks",
-          "type": "LinkedServiceReference"
-        },
-        "typeProperties": {
-          "notebookPath": "/Repos/acme/analytics/notebooks/run_dbt",
-          "baseParameters": {
-            "dbt_command": "dbt run --select customer_360",
+        "parameters": {
             "run_date": {
-              "value": "@pipeline().parameters.run_date",
-              "type": "Expression"
+                "type": "string",
+                "defaultValue": "@utcnow('yyyy-MM-dd')"
             }
-          }
         }
-      }
-    ],
-    "parameters": {
-      "run_date": {
-        "type": "string",
-        "defaultValue": "@utcnow('yyyy-MM-dd')"
-      }
     }
-  }
 }
 ```
 
@@ -404,49 +404,49 @@ LEFT JOIN {{ ref('stg_customer_profiles') }} p
 # models/gold/customer_360.yml
 version: 2
 models:
-  - name: customer_360
-    description: >
-      Customer 360 view combining event aggregates with profile data.
-      Migrated from Glue job: daily-customer-etl.
-      Original script: s3://acme-glue-scripts/jobs/daily_customer_etl.py
-    columns:
-      - name: customer_id
-        tests:
-          - not_null
-          - unique
-      - name: lifetime_revenue
-        tests:
-          - not_null
-          - dbt_utils.accepted_range:
-              min_value: 0
-      - name: customer_segment
-        tests:
-          - accepted_values:
-              values: ['platinum', 'gold', 'silver', 'bronze']
-      - name: total_events
-        tests:
-          - not_null
-          - dbt_utils.accepted_range:
-              min_value: 1
+    - name: customer_360
+      description: >
+          Customer 360 view combining event aggregates with profile data.
+          Migrated from Glue job: daily-customer-etl.
+          Original script: s3://acme-glue-scripts/jobs/daily_customer_etl.py
+      columns:
+          - name: customer_id
+            tests:
+                - not_null
+                - unique
+          - name: lifetime_revenue
+            tests:
+                - not_null
+                - dbt_utils.accepted_range:
+                      min_value: 0
+          - name: customer_segment
+            tests:
+                - accepted_values:
+                      values: ["platinum", "gold", "silver", "bronze"]
+          - name: total_events
+            tests:
+                - not_null
+                - dbt_utils.accepted_range:
+                      min_value: 1
 ```
 
 ### Conversion cheat sheet: Glue PySpark to dbt SQL
 
-| Glue PySpark pattern | dbt SQL equivalent |
-|---------------------|--------------------|
-| `glueContext.create_dynamic_frame.from_catalog(...)` | `{{ source('schema', 'table') }}` |
-| `dyf.toDF().filter(...)` | `WHERE` clause |
-| `df.groupBy(...).agg(...)` | `GROUP BY` + aggregate functions |
-| `df.join(other, "key", "left")` | `LEFT JOIN ... ON` |
-| `df.withColumn("new", expr)` | `expression AS new` in SELECT |
-| `when(...).when(...).otherwise(...)` | `CASE WHEN ... WHEN ... ELSE ... END` |
-| `datediff(col1, col2)` | `datediff(col1, col2)` (same in Databricks SQL) |
-| `current_timestamp()` | `current_timestamp()` (same) |
-| `df.write.mode("overwrite").saveAsTable(...)` | `{{ config(materialized='table') }}` |
-| `df.write.mode("append")` | `{{ config(materialized='incremental') }}` |
-| Glue bookmarks (incremental reads) | `{% if is_incremental() %} WHERE ... {% endif %}` |
-| `ResolveChoice` (schema conflicts) | `CAST(col AS type)` in staging model |
-| `glueContext.write_dynamic_frame.from_catalog(...)` | Automatic (dbt writes to configured target) |
+| Glue PySpark pattern                                 | dbt SQL equivalent                                |
+| ---------------------------------------------------- | ------------------------------------------------- |
+| `glueContext.create_dynamic_frame.from_catalog(...)` | `{{ source('schema', 'table') }}`                 |
+| `dyf.toDF().filter(...)`                             | `WHERE` clause                                    |
+| `df.groupBy(...).agg(...)`                           | `GROUP BY` + aggregate functions                  |
+| `df.join(other, "key", "left")`                      | `LEFT JOIN ... ON`                                |
+| `df.withColumn("new", expr)`                         | `expression AS new` in SELECT                     |
+| `when(...).when(...).otherwise(...)`                 | `CASE WHEN ... WHEN ... ELSE ... END`             |
+| `datediff(col1, col2)`                               | `datediff(col1, col2)` (same in Databricks SQL)   |
+| `current_timestamp()`                                | `current_timestamp()` (same)                      |
+| `df.write.mode("overwrite").saveAsTable(...)`        | `{{ config(materialized='table') }}`              |
+| `df.write.mode("append")`                            | `{{ config(materialized='incremental') }}`        |
+| Glue bookmarks (incremental reads)                   | `{% if is_incremental() %} WHERE ... {% endif %}` |
+| `ResolveChoice` (schema conflicts)                   | `CAST(col AS type)` in staging model              |
+| `glueContext.write_dynamic_frame.from_catalog(...)`  | Automatic (dbt writes to configured target)       |
 
 ---
 
@@ -476,24 +476,24 @@ redshift_migration/
 
 ```yaml
 name: analytics_migration
-version: '1.0.0'
+version: "1.0.0"
 config-version: 2
 
-profile: 'analytics_migration'
+profile: "analytics_migration"
 
 model-paths: ["models"]
 test-paths: ["tests"]
 macro-paths: ["macros"]
 
 models:
-  analytics_migration:
-    staging:
-      +materialized: view
-      +schema: staging
-    gold:
-      +materialized: incremental
-      +schema: gold
-      +tags: ['daily']
+    analytics_migration:
+        staging:
+            +materialized: view
+            +schema: staging
+        gold:
+            +materialized: incremental
+            +schema: gold
+            +tags: ["daily"]
 ```
 
 ### Sources configuration
@@ -502,18 +502,18 @@ models:
 # models/staging/_sources.yml
 version: 2
 sources:
-  - name: bronze
-    database: analytics_prod
-    schema: bronze
-    tables:
-      - name: customer_events
-        description: "Raw customer events (migrated from S3 via AzCopy)"
-        loaded_at_field: event_date
-        freshness:
-          warn_after: {count: 24, period: hour}
-          error_after: {count: 48, period: hour}
-      - name: customer_profiles
-        description: "Customer profile data (migrated from Redshift)"
+    - name: bronze
+      database: analytics_prod
+      schema: bronze
+      tables:
+          - name: customer_events
+            description: "Raw customer events (migrated from S3 via AzCopy)"
+            loaded_at_field: event_date
+            freshness:
+                warn_after: { count: 24, period: hour }
+                error_after: { count: 48, period: hour }
+          - name: customer_profiles
+            description: "Customer profile data (migrated from Redshift)"
 ```
 
 ### Run and test
@@ -590,41 +590,41 @@ The pipeline from Step 3 already includes the `run_dbt_transforms` activity. Her
 
 ### Glue trigger to ADF trigger mapping
 
-| Glue trigger type | ADF trigger type | Configuration |
-|------------------|-----------------|---------------|
-| Schedule trigger | Schedule trigger | Cron expression |
-| On-demand | Manual trigger | REST API call or portal |
-| EventBridge event | Event trigger (Storage events) | Blob created/modified events |
-| Crawler completion trigger | Pipeline dependency | Activity dependency chain |
-| Workflow trigger | Pipeline trigger | Tumbling window or schedule |
+| Glue trigger type          | ADF trigger type               | Configuration                |
+| -------------------------- | ------------------------------ | ---------------------------- |
+| Schedule trigger           | Schedule trigger               | Cron expression              |
+| On-demand                  | Manual trigger                 | REST API call or portal      |
+| EventBridge event          | Event trigger (Storage events) | Blob created/modified events |
+| Crawler completion trigger | Pipeline dependency            | Activity dependency chain    |
+| Workflow trigger           | Pipeline trigger               | Tumbling window or schedule  |
 
 ### Create an ADF schedule trigger
 
 ```json
 {
-  "name": "tr_daily_customer_etl",
-  "properties": {
-    "type": "ScheduleTrigger",
-    "typeProperties": {
-      "recurrence": {
-        "frequency": "Day",
-        "interval": 1,
-        "startTime": "2026-04-30T03:00:00Z",
-        "timeZone": "UTC"
-      }
-    },
-    "pipelines": [
-      {
-        "pipelineReference": {
-          "referenceName": "pl_ingest_customer_events",
-          "type": "PipelineReference"
+    "name": "tr_daily_customer_etl",
+    "properties": {
+        "type": "ScheduleTrigger",
+        "typeProperties": {
+            "recurrence": {
+                "frequency": "Day",
+                "interval": 1,
+                "startTime": "2026-04-30T03:00:00Z",
+                "timeZone": "UTC"
+            }
         },
-        "parameters": {
-          "run_date": "@trigger().scheduledTime"
-        }
-      }
-    ]
-  }
+        "pipelines": [
+            {
+                "pipelineReference": {
+                    "referenceName": "pl_ingest_customer_events",
+                    "type": "PipelineReference"
+                },
+                "parameters": {
+                    "run_date": "@trigger().scheduledTime"
+                }
+            }
+        ]
+    }
 }
 ```
 
@@ -632,25 +632,25 @@ The pipeline from Step 3 already includes the `run_dbt_transforms` activity. Her
 
 ```json
 {
-  "name": "tr_new_file_arrival",
-  "properties": {
-    "type": "BlobEventsTrigger",
-    "typeProperties": {
-      "blobPathBeginsWith": "/bronze/customer_events/",
-      "blobPathEndsWith": ".parquet",
-      "ignoreEmptyBlobs": true,
-      "scope": "/subscriptions/<sub>/resourceGroups/rg-analytics/providers/Microsoft.Storage/storageAccounts/acmeanalyticsgov",
-      "events": ["Microsoft.Storage.BlobCreated"]
-    },
-    "pipelines": [
-      {
-        "pipelineReference": {
-          "referenceName": "pl_ingest_customer_events",
-          "type": "PipelineReference"
-        }
-      }
-    ]
-  }
+    "name": "tr_new_file_arrival",
+    "properties": {
+        "type": "BlobEventsTrigger",
+        "typeProperties": {
+            "blobPathBeginsWith": "/bronze/customer_events/",
+            "blobPathEndsWith": ".parquet",
+            "ignoreEmptyBlobs": true,
+            "scope": "/subscriptions/<sub>/resourceGroups/rg-analytics/providers/Microsoft.Storage/storageAccounts/acmeanalyticsgov",
+            "events": ["Microsoft.Storage.BlobCreated"]
+        },
+        "pipelines": [
+            {
+                "pipelineReference": {
+                    "referenceName": "pl_ingest_customer_events",
+                    "type": "PipelineReference"
+                }
+            }
+        ]
+    }
 }
 ```
 

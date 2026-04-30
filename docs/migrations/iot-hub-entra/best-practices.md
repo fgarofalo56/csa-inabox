@@ -49,14 +49,14 @@ Phase 4: Cutover (Week 8)
 
 ### Phase gate criteria
 
-| Gate | Phase 1 | Phase 2 | Phase 3 | Phase 4 |
-|---|---|---|---|---|
-| X.509 connection success rate | > 99% | > 99.9% | > 99.9% | > 99.9% |
-| Managed identity auth failures | 0 | < 5 per day | < 5 per day | < 5 per day |
-| SAS connections remaining | < 90% of fleet | < 50% of fleet | 0 | N/A (disabled) |
-| Certificate-related incidents | 0 critical | 0 critical | 0 critical | 0 |
-| Monitoring coverage | Basic | Full dashboard | Full + alerts | Full + audited |
-| Rollback tested | Yes | Yes | Yes | N/A |
+| Gate                           | Phase 1        | Phase 2        | Phase 3       | Phase 4        |
+| ------------------------------ | -------------- | -------------- | ------------- | -------------- |
+| X.509 connection success rate  | > 99%          | > 99.9%        | > 99.9%       | > 99.9%        |
+| Managed identity auth failures | 0              | < 5 per day    | < 5 per day   | < 5 per day    |
+| SAS connections remaining      | < 90% of fleet | < 50% of fleet | 0             | N/A (disabled) |
+| Certificate-related incidents  | 0 critical     | 0 critical     | 0 critical    | 0              |
+| Monitoring coverage            | Basic          | Full dashboard | Full + alerts | Full + audited |
+| Rollback tested                | Yes            | Yes            | Yes           | N/A            |
 
 ---
 
@@ -100,12 +100,12 @@ az keyvault certificate set-attributes \
 
 ### Certificate lifecycle policy
 
-| Certificate type | Lifetime | Renewal trigger | Storage | Renewal method |
-|---|---|---|---|---|
-| Root CA | 10-20 years | Manual (5 years before expiry) | Offline HSM | Manual ceremony |
-| Intermediate CA | 2-5 years | 90 days before expiry | Azure Key Vault (HSM-backed) | Key Vault auto-renewal |
-| Device leaf | 90-365 days | 30 days before expiry | Device HSM/TPM | DPS re-provisioning |
-| Service certificates | 1-2 years | 30 days before expiry | Azure Key Vault | Key Vault auto-renewal |
+| Certificate type     | Lifetime    | Renewal trigger                | Storage                      | Renewal method         |
+| -------------------- | ----------- | ------------------------------ | ---------------------------- | ---------------------- |
+| Root CA              | 10-20 years | Manual (5 years before expiry) | Offline HSM                  | Manual ceremony        |
+| Intermediate CA      | 2-5 years   | 90 days before expiry          | Azure Key Vault (HSM-backed) | Key Vault auto-renewal |
+| Device leaf          | 90-365 days | 30 days before expiry          | Device HSM/TPM               | DPS re-provisioning    |
+| Service certificates | 1-2 years   | 30 days before expiry          | Azure Key Vault              | Key Vault auto-renewal |
 
 ### Certificate revocation
 
@@ -155,14 +155,14 @@ az cdn endpoint create \
 
 ### When HSM is required
 
-| Environment | HSM requirement | Recommended HSM |
-|---|---|---|
-| DoD IL5 | Required (FIPS 140-2 Level 2+) | Azure Managed HSM + device TPM |
-| DoD IL6 | Required (FIPS 140-2 Level 3) | Azure Dedicated HSM + device SE |
-| FedRAMP High | Strongly recommended | Azure Key Vault Premium (FIPS 140-2 L2) |
-| FedRAMP Moderate | Recommended | Azure Key Vault Standard |
-| CMMC Level 3 | Required for CUI | Device TPM 2.0 |
-| Commercial high-security | Recommended | Device TPM or secure element |
+| Environment              | HSM requirement                | Recommended HSM                         |
+| ------------------------ | ------------------------------ | --------------------------------------- |
+| DoD IL5                  | Required (FIPS 140-2 Level 2+) | Azure Managed HSM + device TPM          |
+| DoD IL6                  | Required (FIPS 140-2 Level 3)  | Azure Dedicated HSM + device SE         |
+| FedRAMP High             | Strongly recommended           | Azure Key Vault Premium (FIPS 140-2 L2) |
+| FedRAMP Moderate         | Recommended                    | Azure Key Vault Standard                |
+| CMMC Level 3             | Required for CUI               | Device TPM 2.0                          |
+| Commercial high-security | Recommended                    | Device TPM or secure element            |
 
 ### HSM architecture
 
@@ -182,14 +182,14 @@ Device Side:
 
 ### Key Vault Premium vs Managed HSM
 
-| Feature | Key Vault Premium | Managed HSM |
-|---|---|---|
-| FIPS 140-2 | Level 2 | Level 3 |
-| HSM type | Multi-tenant | Single-tenant |
-| Key sovereignty | Microsoft-managed | Customer-managed |
-| Pricing | Per operation | Per HSM unit/hour |
-| Use case | Most federal workloads | Highest sensitivity (IL6, ITAR) |
-| Backup/restore | Microsoft-managed | Customer-managed (bring-your-own-key) |
+| Feature         | Key Vault Premium      | Managed HSM                           |
+| --------------- | ---------------------- | ------------------------------------- |
+| FIPS 140-2      | Level 2                | Level 3                               |
+| HSM type        | Multi-tenant           | Single-tenant                         |
+| Key sovereignty | Microsoft-managed      | Customer-managed                      |
+| Pricing         | Per operation          | Per HSM unit/hour                     |
+| Use case        | Most federal workloads | Highest sensitivity (IL6, ITAR)       |
+| Backup/restore  | Microsoft-managed      | Customer-managed (bring-your-own-key) |
 
 ---
 
@@ -197,14 +197,14 @@ Device Side:
 
 ### Critical monitoring during each phase
 
-| Monitor | Alert threshold | Action |
-|---|---|---|
-| X.509 connection failures | > 5 per 15 min | Pause migration, investigate certificate chain |
-| Managed identity auth failures | > 0 | Check RBAC assignment, IMDS endpoint health |
-| SAS connections from migrated devices | > 0 | Device software not updated correctly |
-| DPS registration failures | > 5 per hour | Check enrollment group, CA certificate |
-| Certificate expiry < 7 days | Any | Emergency certificate renewal |
-| IoT Hub throttling | > 10 per minute | Scale IoT Hub or reduce migration batch size |
+| Monitor                               | Alert threshold | Action                                         |
+| ------------------------------------- | --------------- | ---------------------------------------------- |
+| X.509 connection failures             | > 5 per 15 min  | Pause migration, investigate certificate chain |
+| Managed identity auth failures        | > 0             | Check RBAC assignment, IMDS endpoint health    |
+| SAS connections from migrated devices | > 0             | Device software not updated correctly          |
+| DPS registration failures             | > 5 per hour    | Check enrollment group, CA certificate         |
+| Certificate expiry < 7 days           | Any             | Emergency certificate renewal                  |
+| IoT Hub throttling                    | > 10 per minute | Scale IoT Hub or reduce migration batch size   |
 
 ### Dashboard during migration
 
@@ -236,12 +236,12 @@ AzureDiagnostics
 
 ### Rollback by phase
 
-| Phase | Rollback action | Data loss risk | Time to rollback |
-|---|---|---|---|
-| Phase 1 (pilot) | Revert device software, delete X.509 device identities | None | < 1 hour |
-| Phase 2 (50%) | Revert device software in batches | None | 2-4 hours |
-| Phase 3 (100%) | Re-enable SAS enrollment group, revert device software | None | 4-8 hours |
-| Phase 4 (cutover) | Set `disableLocalAuth: false`, restore SAS policies | None, but exits compliance path | 15 minutes |
+| Phase             | Rollback action                                        | Data loss risk                  | Time to rollback |
+| ----------------- | ------------------------------------------------------ | ------------------------------- | ---------------- |
+| Phase 1 (pilot)   | Revert device software, delete X.509 device identities | None                            | < 1 hour         |
+| Phase 2 (50%)     | Revert device software in batches                      | None                            | 2-4 hours        |
+| Phase 3 (100%)    | Re-enable SAS enrollment group, revert device software | None                            | 4-8 hours        |
+| Phase 4 (cutover) | Set `disableLocalAuth: false`, restore SAS policies    | None, but exits compliance path | 15 minutes       |
 
 ### Rollback procedure (post-cutover)
 
@@ -286,6 +286,7 @@ az iot hub show -g "$RG" -n "$IOT_HUB" \
 **How it manifests:** Devices return `401 Unauthorized` or TLS handshake failure during DPS registration.
 
 **Prevention:**
+
 ```bash
 # Always verify the complete chain before deployment
 openssl verify -CAfile chain.pem device-cert.pem
@@ -303,6 +304,7 @@ openssl crl2pkcs7 -nocrl -certfile chain.pem | openssl pkcs7 -print_certs -noout
 **How it manifests:** Backend Functions stop processing telemetry. Device twin updates stop. Alerts stop firing. Failures may not be immediately obvious if error handling swallows the 401 response.
 
 **Prevention:**
+
 ```bash
 # Comprehensive scan for SAS connection strings BEFORE cutover
 for FUNC in $(az functionapp list -g "$RG" --query "[].name" -o tsv); do
@@ -322,6 +324,7 @@ az keyvault secret list --vault-name "$KV_NAME" \
 **How it manifests:** Sudden, total loss of device connectivity on a specific date.
 
 **Prevention:**
+
 - Stagger certificate generation across the fleet (add random jitter to expiry dates)
 - Set certificate renewal to trigger 30 days before expiry
 - Configure monitoring alerts for certificates expiring within 30 days
@@ -345,6 +348,7 @@ done
 **How it manifests:** Devices that were offline during migration cannot connect. They may be in remote locations with no easy access for firmware updates.
 
 **Prevention:**
+
 - Inventory all devices and their connectivity patterns
 - Identify devices with infrequent connectivity (weekly, monthly)
 - Extend the migration window to cover the longest offline period
@@ -445,18 +449,18 @@ After the migration is complete and stable (30-day soak period), perform these h
 
 Define these criteria before starting and validate after completion:
 
-| Criterion | Target | Measurement |
-|---|---|---|
-| Device auth migration | 100% on X.509 | IoT Hub connection logs |
-| Service auth migration | 100% on managed identity | Entra sign-in logs |
-| SAS keys in circulation | 0 | Key Vault audit + app settings scan |
-| Auth failure rate | < 0.01% | Monitoring dashboard |
-| Certificate renewal success rate | 100% | Certificate monitoring alerts |
-| NIST 800-53 controls satisfied | 15+ controls | Control assessment report |
-| Zero Trust maturity | Advanced or Optimal (Identity pillar) | CISA maturity assessment |
-| Compliance findings resolved | CSA-0025 closed | Finding tracker |
-| Rollback capability tested | Yes (pre-cutover) | Test documentation |
-| Team operational readiness | Certificate + MI debugging trained | Training records |
+| Criterion                        | Target                                | Measurement                         |
+| -------------------------------- | ------------------------------------- | ----------------------------------- |
+| Device auth migration            | 100% on X.509                         | IoT Hub connection logs             |
+| Service auth migration           | 100% on managed identity              | Entra sign-in logs                  |
+| SAS keys in circulation          | 0                                     | Key Vault audit + app settings scan |
+| Auth failure rate                | < 0.01%                               | Monitoring dashboard                |
+| Certificate renewal success rate | 100%                                  | Certificate monitoring alerts       |
+| NIST 800-53 controls satisfied   | 15+ controls                          | Control assessment report           |
+| Zero Trust maturity              | Advanced or Optimal (Identity pillar) | CISA maturity assessment            |
+| Compliance findings resolved     | CSA-0025 closed                       | Finding tracker                     |
+| Rollback capability tested       | Yes (pre-cutover)                     | Test documentation                  |
+| Team operational readiness       | Certificate + MI debugging trained    | Training records                    |
 
 ---
 

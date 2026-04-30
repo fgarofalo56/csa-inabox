@@ -55,18 +55,18 @@ For IL6, there is no GCP option. Azure Government Secret is the path.
 
 On GCP, a typical analytics estate requires assembling **multiple independent products**:
 
-| Capability | GCP product | Notes |
-|---|---|---|
-| Data warehouse | BigQuery | Excellent, but proprietary storage format |
-| Managed Spark | Dataproc | Separate product, separate billing |
-| Semantic layer / BI | Looker | Separate product, per-seat licensing |
-| Data visualization | Looker Studio | Yet another product |
-| ETL orchestration | Cloud Composer | Managed Airflow -- separate product |
-| Streaming | Dataflow + Pub/Sub | Two more products |
-| Data transformation | Dataform | Separate product |
-| ML platform | Vertex AI | Separate product, separate billing |
-| Data catalog | Data Catalog | Separate product |
-| DLP | Cloud DLP | Separate product |
+| Capability          | GCP product        | Notes                                     |
+| ------------------- | ------------------ | ----------------------------------------- |
+| Data warehouse      | BigQuery           | Excellent, but proprietary storage format |
+| Managed Spark       | Dataproc           | Separate product, separate billing        |
+| Semantic layer / BI | Looker             | Separate product, per-seat licensing      |
+| Data visualization  | Looker Studio      | Yet another product                       |
+| ETL orchestration   | Cloud Composer     | Managed Airflow -- separate product       |
+| Streaming           | Dataflow + Pub/Sub | Two more products                         |
+| Data transformation | Dataform           | Separate product                          |
+| ML platform         | Vertex AI          | Separate product, separate billing        |
+| Data catalog        | Data Catalog       | Separate product                          |
+| DLP                 | Cloud DLP          | Separate product                          |
 
 That is **10+ products** to procure, integrate, secure, monitor, and staff. Each has its own pricing model, its own IAM model, its own monitoring surface, and its own learning curve.
 
@@ -74,16 +74,16 @@ That is **10+ products** to procure, integrate, secure, monitor, and staff. Each
 
 Microsoft Fabric consolidates warehouse, lakehouse, data engineering, data science, real-time intelligence, and BI into a **single capacity-based platform** with a unified compute model, unified security, and unified governance through OneLake.
 
-| Capability | Azure service | Integration |
-|---|---|---|
-| Data warehouse + lakehouse | Fabric / Databricks | Single platform, shared OneLake storage |
-| Managed Spark | Databricks / Fabric Spark | Same workspace, same identity |
-| Semantic layer + BI | Power BI (Direct Lake) | Native Fabric integration |
-| ETL orchestration | ADF / Fabric Data Factory | Same governance boundary |
-| Streaming | Event Hubs + Fabric RTI | Unified ingest |
-| Data transformation | dbt + Fabric notebooks | Open-source, portable |
-| ML platform | Databricks MLflow / Azure ML | Integrated with compute layer |
-| Data catalog + DLP | Purview | Single governance plane |
+| Capability                 | Azure service                | Integration                             |
+| -------------------------- | ---------------------------- | --------------------------------------- |
+| Data warehouse + lakehouse | Fabric / Databricks          | Single platform, shared OneLake storage |
+| Managed Spark              | Databricks / Fabric Spark    | Same workspace, same identity           |
+| Semantic layer + BI        | Power BI (Direct Lake)       | Native Fabric integration               |
+| ETL orchestration          | ADF / Fabric Data Factory    | Same governance boundary                |
+| Streaming                  | Event Hubs + Fabric RTI      | Unified ingest                          |
+| Data transformation        | dbt + Fabric notebooks       | Open-source, portable                   |
+| ML platform                | Databricks MLflow / Azure ML | Integrated with compute layer           |
+| Data catalog + DLP         | Purview                      | Single governance plane                 |
 
 Fewer moving parts means fewer integration seams, fewer security perimeters, fewer billing surprises, and fewer vendor relationships to manage.
 
@@ -167,14 +167,14 @@ BigQuery offers multiple pricing models, each with trade-offs:
 
 GCP analytics skills (BigQuery SQL, Dataproc administration, LookML development, Cloud Composer) are concentrated in a smaller talent pool than Azure equivalents.
 
-| Skill | GCP talent pool | Azure equivalent | Azure talent pool |
-|---|---|---|---|
-| BigQuery SQL | Moderate | Databricks SQL / T-SQL | Very large |
-| Dataproc Spark admin | Small | Databricks Spark | Large |
-| LookML development | Small (specialized) | DAX / Power BI | Very large |
-| Cloud Composer (Airflow) | Moderate | ADF + dbt | Large |
-| Vertex AI | Moderate | Azure ML + OpenAI | Large |
-| GCP IAM | Moderate | Entra ID + Azure RBAC | Very large |
+| Skill                    | GCP talent pool     | Azure equivalent       | Azure talent pool |
+| ------------------------ | ------------------- | ---------------------- | ----------------- |
+| BigQuery SQL             | Moderate            | Databricks SQL / T-SQL | Very large        |
+| Dataproc Spark admin     | Small               | Databricks Spark       | Large             |
+| LookML development       | Small (specialized) | DAX / Power BI         | Very large        |
+| Cloud Composer (Airflow) | Moderate            | ADF + dbt              | Large             |
+| Vertex AI                | Moderate            | Azure ML + OpenAI      | Large             |
+| GCP IAM                  | Moderate            | Entra ID + Azure RBAC  | Very large        |
 
 Federal SI (Systems Integrator) ecosystem: Azure competency partners outnumber GCP partners significantly in the federal market. When a contract vehicle changes or a new task order is competed, the pool of Azure-capable bidders is materially larger.
 

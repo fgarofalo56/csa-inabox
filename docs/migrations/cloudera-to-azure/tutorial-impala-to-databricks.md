@@ -494,12 +494,12 @@ for name, r in results.items():
 
 ### 7.2 Expected performance comparison
 
-| Query | Impala (typical) | Databricks SQL Serverless | Notes |
-|---|---|---|---|
-| Daily revenue (aggregation) | 2-5 seconds | 1-3 seconds | Photon accelerates aggregations. |
-| Customer segmentation (join) | 5-10 seconds | 3-7 seconds | AQE optimizes join strategy. |
-| Inventory alerts (filter) | < 1 second | < 1 second | Both are fast on filtered scans. |
-| Dashboard view (KPIs) | 3-8 seconds | 2-5 seconds | Result caching helps repeated queries. |
+| Query                        | Impala (typical) | Databricks SQL Serverless | Notes                                  |
+| ---------------------------- | ---------------- | ------------------------- | -------------------------------------- |
+| Daily revenue (aggregation)  | 2-5 seconds      | 1-3 seconds               | Photon accelerates aggregations.       |
+| Customer segmentation (join) | 5-10 seconds     | 3-7 seconds               | AQE optimizes join strategy.           |
+| Inventory alerts (filter)    | < 1 second       | < 1 second                | Both are fast on filtered scans.       |
+| Dashboard view (KPIs)        | 3-8 seconds      | 2-5 seconds               | Result caching helps repeated queries. |
 
 ---
 

@@ -12,18 +12,18 @@ This migration center serves CDOs, data platform architects, data engineers, Had
 
 ## Quick-start decision matrix
 
-| Your situation | Start here |
-|---|---|
-| Executive evaluating Azure vs Cloudera | [Why Azure over Cloudera](why-azure-over-cloudera.md) |
-| Need cost justification for migration | [Total Cost of Ownership Analysis](tco-analysis.md) |
-| Need a feature-by-feature comparison | [Complete Feature Mapping](feature-mapping-complete.md) |
-| Ready to plan a migration | [Migration Playbook](../cloudera-to-azure.md) |
-| Running Impala workloads | [Impala Migration Guide](impala-migration.md) |
-| Running NiFi data flows | [NiFi Migration Guide](nifi-migration.md) |
-| Using CDP Data Engineering / CML | [CDP Data Engineering Guide](cdp-data-engineering.md) |
-| Want hands-on tutorials | [Tutorials](#tutorials) |
-| Need performance data | [Benchmarks](benchmarks.md) |
-| Need migration best practices | [Best Practices](best-practices.md) |
+| Your situation                         | Start here                                              |
+| -------------------------------------- | ------------------------------------------------------- |
+| Executive evaluating Azure vs Cloudera | [Why Azure over Cloudera](why-azure-over-cloudera.md)   |
+| Need cost justification for migration  | [Total Cost of Ownership Analysis](tco-analysis.md)     |
+| Need a feature-by-feature comparison   | [Complete Feature Mapping](feature-mapping-complete.md) |
+| Ready to plan a migration              | [Migration Playbook](../cloudera-to-azure.md)           |
+| Running Impala workloads               | [Impala Migration Guide](impala-migration.md)           |
+| Running NiFi data flows                | [NiFi Migration Guide](nifi-migration.md)               |
+| Using CDP Data Engineering / CML       | [CDP Data Engineering Guide](cdp-data-engineering.md)   |
+| Want hands-on tutorials                | [Tutorials](#tutorials)                                 |
+| Need performance data                  | [Benchmarks](benchmarks.md)                             |
+| Need migration best practices          | [Best Practices](best-practices.md)                     |
 
 ---
 
@@ -31,20 +31,20 @@ This migration center serves CDOs, data platform architects, data engineers, Had
 
 These documents provide the business case, cost analysis, and strategic framing for decision-makers.
 
-| Document | Audience | Description |
-|---|---|---|
-| [Why Azure over Cloudera](why-azure-over-cloudera.md) | CIO / CDO / Board | Executive brief covering CDH end-of-life urgency, managed-service advantages, talent availability, AI/ML capabilities, and honest assessment of Cloudera strengths |
-| [Total Cost of Ownership Analysis](tco-analysis.md) | CFO / CIO / Procurement | Detailed pricing model comparison across CDH on-prem, CDP Private Cloud, and CDP Public Cloud vs Azure consumption model, with 5-year projections |
-| [Benchmarks & Performance](benchmarks.md) | CTO / Platform Engineering | Spark performance, Impala vs Databricks SQL, NiFi vs ADF throughput, cost efficiency, and operational overhead comparisons |
+| Document                                              | Audience                   | Description                                                                                                                                                        |
+| ----------------------------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [Why Azure over Cloudera](why-azure-over-cloudera.md) | CIO / CDO / Board          | Executive brief covering CDH end-of-life urgency, managed-service advantages, talent availability, AI/ML capabilities, and honest assessment of Cloudera strengths |
+| [Total Cost of Ownership Analysis](tco-analysis.md)   | CFO / CIO / Procurement    | Detailed pricing model comparison across CDH on-prem, CDP Private Cloud, and CDP Public Cloud vs Azure consumption model, with 5-year projections                  |
+| [Benchmarks & Performance](benchmarks.md)             | CTO / Platform Engineering | Spark performance, Impala vs Databricks SQL, NiFi vs ADF throughput, cost efficiency, and operational overhead comparisons                                         |
 
 ---
 
 ## Technical references
 
-| Document | Description |
-|---|---|
-| [Complete Feature Mapping](feature-mapping-complete.md) | 40+ Cloudera components mapped to Azure equivalents with migration complexity ratings, from HDFS and Hive through NiFi, Ranger, Atlas, CML, and CDE |
-| [Migration Playbook](../cloudera-to-azure.md) | The original end-to-end migration playbook with component mapping, phased plan, HDFS/Hive/Spark/Oozie migration, security conversion, and validation framework |
+| Document                                                | Description                                                                                                                                                    |
+| ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Complete Feature Mapping](feature-mapping-complete.md) | 40+ Cloudera components mapped to Azure equivalents with migration complexity ratings, from HDFS and Hive through NiFi, Ranger, Atlas, CML, and CDE            |
+| [Migration Playbook](../cloudera-to-azure.md)           | The original end-to-end migration playbook with component mapping, phased plan, HDFS/Hive/Spark/Oozie migration, security conversion, and validation framework |
 
 ---
 
@@ -52,11 +52,11 @@ These documents provide the business case, cost analysis, and strategic framing 
 
 Domain-specific deep dives covering the components that require specialized migration approaches beyond the core playbook.
 
-| Guide | Cloudera component | Azure destination |
-|---|---|---|
-| [Impala Migration](impala-migration.md) | Impala, Kudu | Databricks SQL, Delta Lake, Fabric SQL endpoint |
-| [NiFi Migration](nifi-migration.md) | Apache NiFi, NiFi Registry | Azure Data Factory, Logic Apps, ADF Git integration |
-| [CDP Data Engineering](cdp-data-engineering.md) | CDE, CML, CDP Data Warehouse | Databricks, Azure ML, Databricks SQL, Fabric |
+| Guide                                           | Cloudera component           | Azure destination                                   |
+| ----------------------------------------------- | ---------------------------- | --------------------------------------------------- |
+| [Impala Migration](impala-migration.md)         | Impala, Kudu                 | Databricks SQL, Delta Lake, Fabric SQL endpoint     |
+| [NiFi Migration](nifi-migration.md)             | Apache NiFi, NiFi Registry   | Azure Data Factory, Logic Apps, ADF Git integration |
+| [CDP Data Engineering](cdp-data-engineering.md) | CDE, CML, CDP Data Warehouse | Databricks, Azure ML, Databricks SQL, Fabric        |
 
 ---
 
@@ -64,17 +64,17 @@ Domain-specific deep dives covering the components that require specialized migr
 
 Hands-on, step-by-step walkthroughs for common migration scenarios.
 
-| Tutorial | Duration | What you will build |
-|---|---|---|
-| [NiFi Flow to ADF Pipeline](tutorial-nifi-to-adf.md) | 2-3 hours | Convert a NiFi data ingestion flow to an ADF pipeline with equivalent processors, error handling, and scheduling |
+| Tutorial                                                              | Duration  | What you will build                                                                                                               |
+| --------------------------------------------------------------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| [NiFi Flow to ADF Pipeline](tutorial-nifi-to-adf.md)                  | 2-3 hours | Convert a NiFi data ingestion flow to an ADF pipeline with equivalent processors, error handling, and scheduling                  |
 | [Impala Workload to Databricks SQL](tutorial-impala-to-databricks.md) | 2-3 hours | Migrate an Impala analytical workload to Databricks SQL with SQL conversion, Kudu-to-Delta conversion, and performance validation |
 
 ---
 
 ## Best practices & planning
 
-| Document | Description |
-|---|---|
+| Document                            | Description                                                                                                                                             |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [Best Practices](best-practices.md) | Cluster-by-cluster migration strategy, CDP vs CDH differences, service decomposition, parallel-run patterns, decommission timelines, and team structure |
 
 ---
@@ -124,17 +124,17 @@ gantt
 
 ## Cross-references
 
-| Topic | Document |
-|---|---|
-| ADR: Databricks over OSS Spark | `docs/adr/0002-databricks-over-oss-spark.md` |
+| Topic                                    | Document                                               |
+| ---------------------------------------- | ------------------------------------------------------ |
+| ADR: Databricks over OSS Spark           | `docs/adr/0002-databricks-over-oss-spark.md`           |
 | ADR: Delta Lake over Iceberg and Parquet | `docs/adr/0003-delta-lake-over-iceberg-and-parquet.md` |
-| ADR: Event Hubs over Kafka | `docs/adr/0005-event-hubs-over-kafka.md` |
-| ADR: Purview over Atlas | `docs/adr/0006-purview-over-atlas.md` |
-| ADR: ADF + dbt over Airflow | `docs/adr/0001-adf-dbt-over-airflow.md` |
-| AWS to Azure migration | `docs/migrations/aws-to-azure.md` |
-| GCP to Azure migration | `docs/migrations/gcp-to-azure.md` |
-| Hadoop/Hive migration | `docs/migrations/hadoop-hive.md` |
-| OSS migration playbook | `docs/guides/oss-migration-playbook.md` |
+| ADR: Event Hubs over Kafka               | `docs/adr/0005-event-hubs-over-kafka.md`               |
+| ADR: Purview over Atlas                  | `docs/adr/0006-purview-over-atlas.md`                  |
+| ADR: ADF + dbt over Airflow              | `docs/adr/0001-adf-dbt-over-airflow.md`                |
+| AWS to Azure migration                   | `docs/migrations/aws-to-azure.md`                      |
+| GCP to Azure migration                   | `docs/migrations/gcp-to-azure.md`                      |
+| Hadoop/Hive migration                    | `docs/migrations/hadoop-hive.md`                       |
+| OSS migration playbook                   | `docs/guides/oss-migration-playbook.md`                |
 
 ---
 

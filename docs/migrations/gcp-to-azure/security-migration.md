@@ -63,36 +63,36 @@ flowchart LR
 
 ### Conceptual mapping
 
-| GCP IAM concept | Azure equivalent | Notes |
-|---|---|---|
-| Google Cloud Identity | Entra ID (Azure AD) | Identity provider |
-| GCP Organization | Azure Management Group | Top-level hierarchy |
-| GCP Folder | Management Group (nested) | Organizational hierarchy |
-| GCP Project | Subscription + Resource Group | Resource container |
-| Principal (user) | Entra ID user | Human identity |
-| Principal (group) | Entra ID security group | Group-based access |
-| Service account | Managed Identity (user-assigned) | Non-human identity |
-| IAM role (predefined) | Azure built-in role | Predefined permission set |
-| IAM role (custom) | Azure custom role | Custom permission set |
-| IAM policy binding | Role assignment | Role assigned to principal at scope |
-| IAM condition | Azure ABAC (attribute-based) | Conditional access |
-| Organization Policy | Azure Policy | Org-wide constraints |
-| Workload Identity Federation | Federated Identity Credential | Cross-cloud authentication |
+| GCP IAM concept              | Azure equivalent                 | Notes                               |
+| ---------------------------- | -------------------------------- | ----------------------------------- |
+| Google Cloud Identity        | Entra ID (Azure AD)              | Identity provider                   |
+| GCP Organization             | Azure Management Group           | Top-level hierarchy                 |
+| GCP Folder                   | Management Group (nested)        | Organizational hierarchy            |
+| GCP Project                  | Subscription + Resource Group    | Resource container                  |
+| Principal (user)             | Entra ID user                    | Human identity                      |
+| Principal (group)            | Entra ID security group          | Group-based access                  |
+| Service account              | Managed Identity (user-assigned) | Non-human identity                  |
+| IAM role (predefined)        | Azure built-in role              | Predefined permission set           |
+| IAM role (custom)            | Azure custom role                | Custom permission set               |
+| IAM policy binding           | Role assignment                  | Role assigned to principal at scope |
+| IAM condition                | Azure ABAC (attribute-based)     | Conditional access                  |
+| Organization Policy          | Azure Policy                     | Org-wide constraints                |
+| Workload Identity Federation | Federated Identity Credential    | Cross-cloud authentication          |
 
 ### Role mapping for analytics
 
-| GCP role | Azure RBAC role | Scope | Notes |
-|---|---|---|---|
-| `roles/bigquery.dataViewer` | `Storage Blob Data Reader` + UC `SELECT` | Storage + Unity Catalog | Split across storage and compute layers |
-| `roles/bigquery.dataEditor` | `Storage Blob Data Contributor` + UC `MODIFY` | Storage + Unity Catalog | Write access to data |
-| `roles/bigquery.jobUser` | Databricks SQL Warehouse `CAN_USE` | Workspace | Query execution permission |
-| `roles/bigquery.admin` | `Contributor` on resource + UC `ALL PRIVILEGES` | Resource Group + Catalog | Administrative access |
-| `roles/storage.objectViewer` | `Storage Blob Data Reader` | Storage Account / Container | Read access to blobs |
-| `roles/storage.objectAdmin` | `Storage Blob Data Owner` | Storage Account / Container | Full blob management |
-| `roles/dataproc.editor` | `Contributor` on Databricks workspace | Resource Group | Cluster and job management |
-| `roles/composer.user` | `Data Factory Contributor` | Resource Group | Pipeline management |
-| `roles/viewer` (project) | `Reader` (subscription) | Subscription | Read-only access |
-| `roles/editor` (project) | `Contributor` (subscription) | Subscription | Write access |
+| GCP role                     | Azure RBAC role                                 | Scope                       | Notes                                   |
+| ---------------------------- | ----------------------------------------------- | --------------------------- | --------------------------------------- |
+| `roles/bigquery.dataViewer`  | `Storage Blob Data Reader` + UC `SELECT`        | Storage + Unity Catalog     | Split across storage and compute layers |
+| `roles/bigquery.dataEditor`  | `Storage Blob Data Contributor` + UC `MODIFY`   | Storage + Unity Catalog     | Write access to data                    |
+| `roles/bigquery.jobUser`     | Databricks SQL Warehouse `CAN_USE`              | Workspace                   | Query execution permission              |
+| `roles/bigquery.admin`       | `Contributor` on resource + UC `ALL PRIVILEGES` | Resource Group + Catalog    | Administrative access                   |
+| `roles/storage.objectViewer` | `Storage Blob Data Reader`                      | Storage Account / Container | Read access to blobs                    |
+| `roles/storage.objectAdmin`  | `Storage Blob Data Owner`                       | Storage Account / Container | Full blob management                    |
+| `roles/dataproc.editor`      | `Contributor` on Databricks workspace           | Resource Group              | Cluster and job management              |
+| `roles/composer.user`        | `Data Factory Contributor`                      | Resource Group              | Pipeline management                     |
+| `roles/viewer` (project)     | `Reader` (subscription)                         | Subscription                | Read-only access                        |
+| `roles/editor` (project)     | `Contributor` (subscription)                    | Subscription                | Write access                            |
 
 ### IAM migration steps
 
@@ -108,12 +108,12 @@ flowchart LR
 
 GCP IAM conditions restrict access based on attributes (resource tags, request time, IP). Azure uses Conditional Access policies (for user sign-in) and ABAC (for data plane):
 
-| GCP IAM condition | Azure equivalent | Notes |
-|---|---|---|
-| IP address restriction | Conditional Access (named locations) | Block sign-in from untrusted networks |
-| Time-based restriction | Conditional Access (session controls) | Limit access hours |
-| Resource tag condition | ABAC (storage blob index tags) | Attribute-based data access |
-| Device policy | Conditional Access (device compliance) | Intune-managed device requirement |
+| GCP IAM condition      | Azure equivalent                       | Notes                                 |
+| ---------------------- | -------------------------------------- | ------------------------------------- |
+| IP address restriction | Conditional Access (named locations)   | Block sign-in from untrusted networks |
+| Time-based restriction | Conditional Access (session controls)  | Limit access hours                    |
+| Resource tag condition | ABAC (storage blob index tags)         | Attribute-based data access           |
+| Device policy          | Conditional Access (device compliance) | Intune-managed device requirement     |
 
 ---
 
@@ -121,12 +121,12 @@ GCP IAM conditions restrict access based on attributes (resource tags, request t
 
 GCP service accounts are Google-managed identities for non-human workloads. Azure Managed Identities serve the same purpose but eliminate credential management entirely.
 
-| GCP service account pattern | Azure Managed Identity pattern | Notes |
-|---|---|---|
-| Service account + key file (JSON) | User-assigned Managed Identity (no key) | No credential to rotate |
-| Service account + Workload Identity Federation | Federated Identity Credential | Cross-cloud auth (GitHub, AWS, GCP) |
-| Service account impersonation | Managed Identity + Azure RBAC | Role-based, not impersonation |
-| Per-service account (e.g., `sa-dbt@...`) | Per-workload Managed Identity (e.g., `umi-dbt`) | Same principle: least-privilege per workload |
+| GCP service account pattern                    | Azure Managed Identity pattern                  | Notes                                        |
+| ---------------------------------------------- | ----------------------------------------------- | -------------------------------------------- |
+| Service account + key file (JSON)              | User-assigned Managed Identity (no key)         | No credential to rotate                      |
+| Service account + Workload Identity Federation | Federated Identity Credential                   | Cross-cloud auth (GitHub, AWS, GCP)          |
+| Service account impersonation                  | Managed Identity + Azure RBAC                   | Role-based, not impersonation                |
+| Per-service account (e.g., `sa-dbt@...`)       | Per-workload Managed Identity (e.g., `umi-dbt`) | Same principle: least-privilege per workload |
 
 ### Migration example
 
@@ -172,15 +172,15 @@ az role assignment create \
 
 GCP Data Catalog provides metadata management and search. Microsoft Purview is significantly richer, covering unified catalog, data governance, sensitivity labeling, lineage, and compliance.
 
-| Data Catalog feature | Purview equivalent | Notes |
-|---|---|---|
-| Tag templates | Custom classification rules | Purview classifications are richer |
-| Policy tags | Sensitivity labels | Integrated with M365 |
-| Search | Purview Unified Catalog search | Broader scope (Azure + M365 + multicloud) |
-| Lineage | Purview lineage (auto-discovered) | ADF, Databricks, Fabric lineage |
-| Business glossary | Purview glossary terms | Term hierarchies and ownership |
-| Entry groups | Collections | Organizational grouping |
-| IAM on catalog entries | Purview access policies | Fine-grained data access |
+| Data Catalog feature   | Purview equivalent                | Notes                                     |
+| ---------------------- | --------------------------------- | ----------------------------------------- |
+| Tag templates          | Custom classification rules       | Purview classifications are richer        |
+| Policy tags            | Sensitivity labels                | Integrated with M365                      |
+| Search                 | Purview Unified Catalog search    | Broader scope (Azure + M365 + multicloud) |
+| Lineage                | Purview lineage (auto-discovered) | ADF, Databricks, Fabric lineage           |
+| Business glossary      | Purview glossary terms            | Term hierarchies and ownership            |
+| Entry groups           | Collections                       | Organizational grouping                   |
+| IAM on catalog entries | Purview access policies           | Fine-grained data access                  |
 
 ### Migration steps
 
@@ -197,14 +197,14 @@ GCP Data Catalog provides metadata management and search. Microsoft Purview is s
 
 GCP Cloud DLP inspects and redacts sensitive data. Purview sensitivity labels provide equivalent capabilities plus integration with Microsoft 365.
 
-| Cloud DLP feature | Purview equivalent | Notes |
-|---|---|---|
-| InfoType detectors | Sensitive information types (SITs) | 300+ built-in SITs |
-| Custom InfoTypes | Custom SITs | Regex, keyword, exact match |
-| DLP inspection job | Purview auto-labeling | Automated sensitive data discovery |
-| Redaction | Column masks (Unity Catalog) | Dynamic masking |
-| De-identification | Purview sensitivity labels + masking | Label-driven protection |
-| Results to BigQuery | Results to Purview catalog | Integrated discovery |
+| Cloud DLP feature   | Purview equivalent                   | Notes                              |
+| ------------------- | ------------------------------------ | ---------------------------------- |
+| InfoType detectors  | Sensitive information types (SITs)   | 300+ built-in SITs                 |
+| Custom InfoTypes    | Custom SITs                          | Regex, keyword, exact match        |
+| DLP inspection job  | Purview auto-labeling                | Automated sensitive data discovery |
+| Redaction           | Column masks (Unity Catalog)         | Dynamic masking                    |
+| De-identification   | Purview sensitivity labels + masking | Label-driven protection            |
+| Results to BigQuery | Results to Purview catalog           | Integrated discovery               |
 
 ### CSA-in-a-Box classification taxonomies
 
@@ -217,31 +217,31 @@ CSA-in-a-Box ships four classification taxonomies that cover common federal sens
 
 Map GCP DLP InfoTypes to these taxonomies:
 
-| GCP InfoType | CSA-in-a-Box classification | Notes |
-|---|---|---|
-| `PERSON_NAME` | PII - Full Name | PII taxonomy |
-| `EMAIL_ADDRESS` | PII - Email Address | PII taxonomy |
-| `PHONE_NUMBER` | PII - Phone Number | PII taxonomy |
-| `US_SOCIAL_SECURITY_NUMBER` | PII - SSN | PII taxonomy |
-| `CREDIT_CARD_NUMBER` | Financial - Credit Card | Financial taxonomy |
-| `US_BANK_ROUTING_MICR` | Financial - Bank Routing | Financial taxonomy |
-| `MEDICAL_RECORD_NUMBER` | PHI - Medical Record Number | PHI taxonomy |
+| GCP InfoType                | CSA-in-a-Box classification | Notes              |
+| --------------------------- | --------------------------- | ------------------ |
+| `PERSON_NAME`               | PII - Full Name             | PII taxonomy       |
+| `EMAIL_ADDRESS`             | PII - Email Address         | PII taxonomy       |
+| `PHONE_NUMBER`              | PII - Phone Number          | PII taxonomy       |
+| `US_SOCIAL_SECURITY_NUMBER` | PII - SSN                   | PII taxonomy       |
+| `CREDIT_CARD_NUMBER`        | Financial - Credit Card     | Financial taxonomy |
+| `US_BANK_ROUTING_MICR`      | Financial - Bank Routing    | Financial taxonomy |
+| `MEDICAL_RECORD_NUMBER`     | PHI - Medical Record Number | PHI taxonomy       |
 
 ---
 
 ## Cloud KMS to Azure Key Vault
 
-| Cloud KMS feature | Key Vault equivalent | Notes |
-|---|---|---|
-| Key ring | Key Vault instance | Container for keys |
-| Crypto key | Key (RSA, EC) | Encryption key |
-| Symmetric key | Key (AES) | Symmetric encryption |
-| Key version | Key version | Automatic versioning |
-| Key rotation | Auto-rotation policy | Configurable rotation schedule |
-| CMEK (customer-managed encryption key) | Customer-managed key for storage/Databricks | Same concept |
-| Cloud HSM | Key Vault HSM (Premium SKU) | FIPS 140-2 Level 3 |
-| Cloud EKM | Bring Your Own Key (BYOK) | External key management |
-| IAM on keys | Key Vault access policy or RBAC | Role-based key access |
+| Cloud KMS feature                      | Key Vault equivalent                        | Notes                          |
+| -------------------------------------- | ------------------------------------------- | ------------------------------ |
+| Key ring                               | Key Vault instance                          | Container for keys             |
+| Crypto key                             | Key (RSA, EC)                               | Encryption key                 |
+| Symmetric key                          | Key (AES)                                   | Symmetric encryption           |
+| Key version                            | Key version                                 | Automatic versioning           |
+| Key rotation                           | Auto-rotation policy                        | Configurable rotation schedule |
+| CMEK (customer-managed encryption key) | Customer-managed key for storage/Databricks | Same concept                   |
+| Cloud HSM                              | Key Vault HSM (Premium SKU)                 | FIPS 140-2 Level 3             |
+| Cloud EKM                              | Bring Your Own Key (BYOK)                   | External key management        |
+| IAM on keys                            | Key Vault access policy or RBAC             | Role-based key access          |
 
 ### Migration steps
 
@@ -259,14 +259,14 @@ Map GCP DLP InfoTypes to these taxonomies:
 
 GCP VPC Service Controls create a security perimeter around GCP services to prevent data exfiltration. Azure uses a different but equivalent model based on Private Endpoints and Network Security Groups.
 
-| VPC SC concept | Azure equivalent | Notes |
-|---|---|---|
-| Service perimeter | Private Endpoint + service firewall | Per-service network isolation |
-| Access level | Conditional Access + NSG rules | IP/device-based access |
-| Ingress rule | NSG inbound rule + Private Endpoint | Allow specific traffic in |
-| Egress rule | NSG outbound rule + service firewall | Restrict outbound traffic |
-| Bridge (perimeter-to-perimeter) | VNet peering + Private DNS | Cross-VNet connectivity |
-| Dry-run mode | NSG flow logs + diagnostics | Monitor before enforcing |
+| VPC SC concept                  | Azure equivalent                     | Notes                         |
+| ------------------------------- | ------------------------------------ | ----------------------------- |
+| Service perimeter               | Private Endpoint + service firewall  | Per-service network isolation |
+| Access level                    | Conditional Access + NSG rules       | IP/device-based access        |
+| Ingress rule                    | NSG inbound rule + Private Endpoint  | Allow specific traffic in     |
+| Egress rule                     | NSG outbound rule + service firewall | Restrict outbound traffic     |
+| Bridge (perimeter-to-perimeter) | VNet peering + Private DNS           | Cross-VNet connectivity       |
+| Dry-run mode                    | NSG flow logs + diagnostics          | Monitor before enforcing      |
 
 ### Implementation pattern
 
@@ -290,12 +290,12 @@ Azure VNet
 
 ## Cloud Audit Logs to Azure Monitor
 
-| Cloud Audit Logs type | Azure Monitor equivalent | Notes |
-|---|---|---|
-| Admin Activity logs | Azure Activity Log | Resource management operations |
-| Data Access logs | Diagnostic settings (data plane) | Data read/write operations |
-| System Event logs | Azure Resource Health | Platform events |
-| Policy Denied logs | Azure Policy compliance logs | Policy violations |
+| Cloud Audit Logs type | Azure Monitor equivalent         | Notes                          |
+| --------------------- | -------------------------------- | ------------------------------ |
+| Admin Activity logs   | Azure Activity Log               | Resource management operations |
+| Data Access logs      | Diagnostic settings (data plane) | Data read/write operations     |
+| System Event logs     | Azure Resource Health            | Platform events                |
+| Policy Denied logs    | Azure Policy compliance logs     | Policy violations              |
 
 ### CSA-in-a-Box audit chain
 
@@ -322,16 +322,16 @@ These become evidence in post-migration compliance audits.
 
 ## Security Command Center to Defender for Cloud
 
-| SCC feature | Defender for Cloud equivalent | Notes |
-|---|---|---|
-| Security Health Analytics | Defender CSPM (Cloud Security Posture) | Misconfiguration detection |
-| Event Threat Detection | Defender for Cloud threat detection | Active threat detection |
-| Container Threat Detection | Defender for Containers | Container security |
-| Web Security Scanner | Defender for App Service | Web vulnerability scanning |
-| Vulnerability scanning | Defender vulnerability assessment | VM and container scanning |
-| Compliance monitoring | Regulatory compliance dashboard | NIST, CIS, PCI, FedRAMP |
-| Security findings | Defender alerts and recommendations | Actionable findings |
-| Continuous exports | Continuous export to Log Analytics | SIEM integration |
+| SCC feature                | Defender for Cloud equivalent          | Notes                      |
+| -------------------------- | -------------------------------------- | -------------------------- |
+| Security Health Analytics  | Defender CSPM (Cloud Security Posture) | Misconfiguration detection |
+| Event Threat Detection     | Defender for Cloud threat detection    | Active threat detection    |
+| Container Threat Detection | Defender for Containers                | Container security         |
+| Web Security Scanner       | Defender for App Service               | Web vulnerability scanning |
+| Vulnerability scanning     | Defender vulnerability assessment      | VM and container scanning  |
+| Compliance monitoring      | Regulatory compliance dashboard        | NIST, CIS, PCI, FedRAMP    |
+| Security findings          | Defender alerts and recommendations    | Actionable findings        |
+| Continuous exports         | Continuous export to Log Analytics     | SIEM integration           |
 
 ### Multi-cloud advantage
 

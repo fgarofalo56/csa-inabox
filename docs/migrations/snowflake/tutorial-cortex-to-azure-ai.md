@@ -118,7 +118,7 @@ def cortex_complete_replacement(prompt: str, model: str = "gpt-4o",
                                   temperature: float = 0.3) -> str:
     """
     Drop-in replacement for Snowflake CORTEX.COMPLETE.
-    
+
     Cortex: SNOWFLAKE.CORTEX.COMPLETE('model', 'prompt')
     Azure:  cortex_complete_replacement(prompt, model='gpt-4o')
     """
@@ -134,7 +134,7 @@ def cortex_complete_replacement(prompt: str, model: str = "gpt-4o",
 def cortex_summarize_replacement(text: str, max_length: int = 500) -> str:
     """
     Drop-in replacement for Snowflake CORTEX.SUMMARIZE.
-    
+
     Cortex: SNOWFLAKE.CORTEX.SUMMARIZE(text)
     Azure:  cortex_summarize_replacement(text)
     """
@@ -160,7 +160,7 @@ def cortex_translate_replacement(text: str, source_lang: str = "en",
                                    target_lang: str = "es") -> str:
     """
     Drop-in replacement for Snowflake CORTEX.TRANSLATE.
-    
+
     Cortex: SNOWFLAKE.CORTEX.TRANSLATE(text, 'en', 'es')
     Azure:  cortex_translate_replacement(text, 'en', 'es')
     """
@@ -171,7 +171,7 @@ def cortex_translate_replacement(text: str, source_lang: str = "en",
     }
     source = lang_map.get(source_lang, source_lang)
     target = lang_map.get(target_lang, target_lang)
-    
+
     response = client.chat.completions.create(
         model="gpt-4o",
         messages=[
@@ -191,7 +191,7 @@ def cortex_translate_replacement(text: str, source_lang: str = "en",
 def cortex_sentiment_replacement(text: str) -> float:
     """
     Drop-in replacement for Snowflake CORTEX.SENTIMENT.
-    
+
     Cortex: SNOWFLAKE.CORTEX.SENTIMENT(text) -> float (-1 to 1)
     Azure:  cortex_sentiment_replacement(text) -> float (-1 to 1)
     """
@@ -402,11 +402,11 @@ documents_df = spark.table("analytics_prod.raw.government_documents").toPandas()
 batch_size = 100
 for i in range(0, len(documents_df), batch_size):
     batch = documents_df.iloc[i:i+batch_size]
-    
+
     docs_to_upload = []
     for _, row in batch.iterrows():
         embedding = generate_embedding(row["content"][:8000])  # Truncate for token limit
-        
+
         docs_to_upload.append({
             "id": str(row["document_id"]),
             "title": row["title"],
@@ -416,7 +416,7 @@ for i in range(0, len(documents_df), batch_size):
             "published_date": row["published_date"].isoformat(),
             "content_vector": embedding
         })
-    
+
     result = search_client.upload_documents(documents=docs_to_upload)
     print(f"Indexed batch {i//batch_size + 1}: {len(docs_to_upload)} documents")
 
@@ -449,7 +449,7 @@ def ask_question(question: str, top_k: int = 5,
                  category_filter: str = None) -> dict:
     """
     RAG pipeline: replace Cortex Search + EXTRACT_ANSWER.
-    
+
     1. Embed the question
     2. Search Azure AI Search (hybrid: vector + keyword + semantic)
     3. Generate answer with Azure OpenAI using retrieved context
@@ -459,10 +459,10 @@ def ask_question(question: str, top_k: int = 5,
         model="text-embedding-3-large",
         input=question
     ).data[0].embedding
-    
+
     # Step 2: Hybrid search
     filter_expr = f"category eq '{category_filter}'" if category_filter else None
-    
+
     results = search_client.search(
         search_text=question,
         vector_queries=[
@@ -477,7 +477,7 @@ def ask_question(question: str, top_k: int = 5,
         semantic_configuration_name="semantic-config",
         top=top_k
     )
-    
+
     # Step 3: Build context from search results
     sources = []
     context_parts = []
@@ -490,9 +490,9 @@ def ask_question(question: str, top_k: int = 5,
         context_parts.append(
             f"[Source: {result['title']}]\n{result['content'][:2000]}"
         )
-    
+
     context = "\n\n---\n\n".join(context_parts)
-    
+
     # Step 4: Generate answer
     response = openai_client.chat.completions.create(
         model="gpt-4o",
@@ -515,7 +515,7 @@ def ask_question(question: str, top_k: int = 5,
         max_tokens=1000,
         temperature=0.1
     )
-    
+
     return {
         "answer": response.choices[0].message.content,
         "sources": sources,
@@ -565,17 +565,17 @@ def check_safety(text: str, max_severity: int = 2) -> dict:
     """
     request = AnalyzeTextOptions(text=text[:10000])  # API limit
     response = safety_client.analyze_text(request)
-    
+
     categories = {}
     blocked = False
     blocked_reason = None
-    
+
     for category in response.categories_analysis:
         categories[category.category] = category.severity
         if category.severity > max_severity:
             blocked = True
             blocked_reason = f"{category.category} severity: {category.severity}"
-    
+
     return {
         "safe": not blocked,
         "categories": categories,
@@ -589,15 +589,15 @@ def safe_ai_call(prompt: str, **kwargs) -> str:
     input_check = check_safety(prompt)
     if not input_check["safe"]:
         return f"[BLOCKED] Input blocked: {input_check['blocked_reason']}"
-    
+
     # Make AI call
     result = cortex_complete_replacement(prompt, **kwargs)
-    
+
     # Check output safety
     output_check = check_safety(result)
     if not output_check["safe"]:
         return f"[BLOCKED] Output blocked: {output_check['blocked_reason']}"
-    
+
     return result
 ```
 
@@ -627,10 +627,10 @@ results = []
 for _, row in test_cases.iterrows():
     # Azure OpenAI summary
     azure_summary = cortex_summarize_replacement(row["document_text"])
-    
+
     # Azure OpenAI sentiment
     azure_sentiment = cortex_sentiment_replacement(row["document_text"])
-    
+
     results.append({
         "document_id": row["document_id"],
         "cortex_summary": row["existing_summary"],
@@ -650,14 +650,14 @@ print(f"Sentiment correlation: {results_df['cortex_sentiment'].astype(float).cor
 
 ### 5.2 Quality acceptance criteria
 
-| Metric | Threshold | Notes |
-|---|---|---|
-| Summary ROUGE-L score vs Cortex | >= 0.6 | Azure OpenAI typically scores higher |
-| Sentiment correlation | >= 0.85 | Strong positive correlation |
-| Extract Answer accuracy | >= 90% match rate | On same test corpus |
-| Translation BLEU score | >= 0.7 | For supported language pairs |
-| Latency (p90) | <= 5 seconds | For single-document calls |
-| Content safety false positive rate | <= 5% | Review blocked content manually |
+| Metric                             | Threshold         | Notes                                |
+| ---------------------------------- | ----------------- | ------------------------------------ |
+| Summary ROUGE-L score vs Cortex    | >= 0.6            | Azure OpenAI typically scores higher |
+| Sentiment correlation              | >= 0.85           | Strong positive correlation          |
+| Extract Answer accuracy            | >= 90% match rate | On same test corpus                  |
+| Translation BLEU score             | >= 0.7            | For supported language pairs         |
+| Latency (p90)                      | <= 5 seconds      | For single-document calls            |
+| Content safety false positive rate | <= 5%             | Review blocked content manually      |
 
 ---
 

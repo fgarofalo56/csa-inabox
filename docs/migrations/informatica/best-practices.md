@@ -32,38 +32,38 @@ Before committing to a migration, complete this assessment to scope the effort a
 
 Score each mapping on a 1-5 scale for each dimension:
 
-| Dimension | 1 (Simple) | 3 (Medium) | 5 (Complex) |
-|---|---|---|---|
-| Transformation count | 1-3 | 4-10 | 11+ |
-| Source count | 1 | 2-3 | 4+ |
-| Lookup count | 0 | 1-3 | 4+ |
-| Custom code (Java/SQL) | None | Some expressions | Custom Java/Python |
-| SCD handling | None | Type 1 | Type 2 or 3 |
-| Error handling | None | Basic | Complex (router, error rows) |
-| Reusable components | None | Uses mapplets | Creates/modifies mapplets |
-| Data volume (daily rows) | <1M | 1-50M | >50M |
+| Dimension                | 1 (Simple) | 3 (Medium)       | 5 (Complex)                  |
+| ------------------------ | ---------- | ---------------- | ---------------------------- |
+| Transformation count     | 1-3        | 4-10             | 11+                          |
+| Source count             | 1          | 2-3              | 4+                           |
+| Lookup count             | 0          | 1-3              | 4+                           |
+| Custom code (Java/SQL)   | None       | Some expressions | Custom Java/Python           |
+| SCD handling             | None       | Type 1           | Type 2 or 3                  |
+| Error handling           | None       | Basic            | Complex (router, error rows) |
+| Reusable components      | None       | Uses mapplets    | Creates/modifies mapplets    |
+| Data volume (daily rows) | <1M        | 1-50M            | >50M                         |
 
 **Total score interpretation:**
 
-| Score range | Tier | Migration action | Estimated effort |
-|---|---|---|---|
-| 8-12 | A (Simple) | Direct convert to dbt | 1-2 days |
-| 13-24 | B (Medium) | Decompose and refactor | 3-7 days |
-| 25-35 | C (Complex) | Re-architect | 7-20 days |
-| Any | D (Decommission) | Archive metadata, delete | 0.5 days |
+| Score range | Tier             | Migration action         | Estimated effort |
+| ----------- | ---------------- | ------------------------ | ---------------- |
+| 8-12        | A (Simple)       | Direct convert to dbt    | 1-2 days         |
+| 13-24       | B (Medium)       | Decompose and refactor   | 3-7 days         |
+| 25-35       | C (Complex)      | Re-architect             | 7-20 days        |
+| Any         | D (Decommission) | Archive metadata, delete | 0.5 days         |
 
 ### Risk register template
 
-| Risk | Likelihood | Impact | Mitigation |
-|---|---|---|---|
-| PowerCenter developers resist code-first approach | High | High | Invest in training early; pair programming with dbt-experienced engineers |
-| MDM replacement takes longer than estimated | High | High | Start MDM track independently; consider Profisee as interim |
-| IDQ rule discovery is incomplete | Medium | High | Parallel run for 6+ weeks with comprehensive reconciliation |
-| ADF Self-Hosted IR performance issues | Medium | Medium | Size IR VMs appropriately; test with production data volumes |
-| License termination penalties | Medium | Medium | Review contract terms; negotiate with Informatica early |
-| Downstream consumer disruption | High | High | Communicate early; provide parallel run period |
-| Data format differences (Oracle vs Azure SQL) | Medium | Low | Test data type conversions; document edge cases |
-| Network latency (on-prem sources via Self-Hosted IR) | Low | Medium | Deploy IR close to source; optimize query pushdown |
+| Risk                                                 | Likelihood | Impact | Mitigation                                                                |
+| ---------------------------------------------------- | ---------- | ------ | ------------------------------------------------------------------------- |
+| PowerCenter developers resist code-first approach    | High       | High   | Invest in training early; pair programming with dbt-experienced engineers |
+| MDM replacement takes longer than estimated          | High       | High   | Start MDM track independently; consider Profisee as interim               |
+| IDQ rule discovery is incomplete                     | Medium     | High   | Parallel run for 6+ weeks with comprehensive reconciliation               |
+| ADF Self-Hosted IR performance issues                | Medium     | Medium | Size IR VMs appropriately; test with production data volumes              |
+| License termination penalties                        | Medium     | Medium | Review contract terms; negotiate with Informatica early                   |
+| Downstream consumer disruption                       | High       | High   | Communicate early; provide parallel run period                            |
+| Data format differences (Oracle vs Azure SQL)        | Medium     | Low    | Test data type conversions; document edge cases                           |
+| Network latency (on-prem sources via Self-Hosted IR) | Low        | Medium | Deploy IR close to source; optimize query pushdown                        |
 
 ---
 
@@ -89,13 +89,13 @@ graph LR
 
 Within each tier, organize by business domain for atomic cutovers:
 
-| Wave | Business domain | Tier A mappings | Tier B mappings | Tier C mappings | Duration |
-|---|---|---|---|---|---|
-| 1 (Pilot) | Finance (GL, AP) | 15 | 5 | 2 | 8-10 weeks |
-| 2 | Sales (Orders, Revenue) | 20 | 10 | 5 | 10-14 weeks |
-| 3 | HR + Operations | 25 | 15 | 5 | 12-16 weeks |
-| 4 | DQ + Governance | - | 10 | 15 | 10-14 weeks |
-| 5 | MDM (if applicable) | - | - | 10 | 16-24 weeks |
+| Wave      | Business domain         | Tier A mappings | Tier B mappings | Tier C mappings | Duration    |
+| --------- | ----------------------- | --------------- | --------------- | --------------- | ----------- |
+| 1 (Pilot) | Finance (GL, AP)        | 15              | 5               | 2               | 8-10 weeks  |
+| 2         | Sales (Orders, Revenue) | 20              | 10              | 5               | 10-14 weeks |
+| 3         | HR + Operations         | 25              | 15              | 5               | 12-16 weeks |
+| 4         | DQ + Governance         | -               | 10              | 15              | 10-14 weeks |
+| 5         | MDM (if applicable)     | -               | -               | 10              | 16-24 weeks |
 
 ### What to migrate first within each wave
 
@@ -112,16 +112,16 @@ Within each tier, organize by business domain for atomic cutovers:
 
 ### Key differences in migration approach
 
-| Aspect | PowerCenter migration | IICS migration |
-|---|---|---|
-| Infrastructure | Decommission servers, DR, network | Cancel SaaS subscription |
-| Complexity | Higher (on-prem, more legacy) | Lower (already cloud) |
-| Agent migration | N/A (PowerCenter uses Integration Service) | Secure Agent -> Self-Hosted IR |
-| Deployment model | Repository export -> Git + CI/CD | Org export -> Git + CI/CD |
-| Typical estate age | 10-20 years | 3-8 years |
-| Legacy accumulation | High (many Tier D candidates) | Lower (newer estate) |
-| Team readiness | Often needs more retraining | Often closer to cloud-ready |
-| Timeline | 12-36 months | 8-24 months |
+| Aspect              | PowerCenter migration                      | IICS migration                 |
+| ------------------- | ------------------------------------------ | ------------------------------ |
+| Infrastructure      | Decommission servers, DR, network          | Cancel SaaS subscription       |
+| Complexity          | Higher (on-prem, more legacy)              | Lower (already cloud)          |
+| Agent migration     | N/A (PowerCenter uses Integration Service) | Secure Agent -> Self-Hosted IR |
+| Deployment model    | Repository export -> Git + CI/CD           | Org export -> Git + CI/CD      |
+| Typical estate age  | 10-20 years                                | 3-8 years                      |
+| Legacy accumulation | High (many Tier D candidates)              | Lower (newer estate)           |
+| Team readiness      | Often needs more retraining                | Often closer to cloud-ready    |
+| Timeline            | 12-36 months                               | 8-24 months                    |
 
 ### IICS-specific considerations
 
@@ -155,14 +155,14 @@ graph TB
 
 ### Reconciliation checks
 
-| Check | SQL pattern | Tolerance |
-|---|---|---|
-| Row count match | `SELECT COUNT(*) FROM pc_output EXCEPT SELECT COUNT(*) FROM dbt_output` | 0 rows difference |
-| Sum of numeric columns | `SELECT ABS(SUM(pc.amount) - SUM(dbt.amount)) FROM ...` | < $0.01 (rounding) |
-| Distinct key count | `SELECT COUNT(DISTINCT key) FROM ...` | 0 difference |
-| NULL distribution | `SELECT COUNT(*) WHERE col IS NULL FROM ...` | 0 difference |
-| Date range coverage | `SELECT MIN(date), MAX(date) FROM ...` | Identical ranges |
-| String value comparison (sample) | `SELECT TOP 100 pc.val, dbt.val FROM ... WHERE pc.val != dbt.val` | 0 differences (or documented) |
+| Check                            | SQL pattern                                                             | Tolerance                     |
+| -------------------------------- | ----------------------------------------------------------------------- | ----------------------------- |
+| Row count match                  | `SELECT COUNT(*) FROM pc_output EXCEPT SELECT COUNT(*) FROM dbt_output` | 0 rows difference             |
+| Sum of numeric columns           | `SELECT ABS(SUM(pc.amount) - SUM(dbt.amount)) FROM ...`                 | < $0.01 (rounding)            |
+| Distinct key count               | `SELECT COUNT(DISTINCT key) FROM ...`                                   | 0 difference                  |
+| NULL distribution                | `SELECT COUNT(*) WHERE col IS NULL FROM ...`                            | 0 difference                  |
+| Date range coverage              | `SELECT MIN(date), MAX(date) FROM ...`                                  | Identical ranges              |
+| String value comparison (sample) | `SELECT TOP 100 pc.val, dbt.val FROM ... WHERE pc.val != dbt.val`       | 0 differences (or documented) |
 
 ### Automated reconciliation dbt test
 
@@ -201,13 +201,13 @@ WHERE pc.row_count != d.row_count
 
 ### Parallel-run duration guidelines
 
-| Migration complexity | Recommended parallel-run duration | Notes |
-|---|---|---|
-| Simple pipelines (Tier A) | 7-14 days | Quick validation |
-| Medium pipelines (Tier B) | 14-21 days | Ensure edge cases are covered |
-| Complex pipelines (Tier C) | 21-30 days | Cover month-end, quarter-end cycles |
-| DQ rules | 30 days | Must cover all rule trigger conditions |
-| MDM workflows | 45-60 days | Golden record reconciliation takes time |
+| Migration complexity       | Recommended parallel-run duration | Notes                                   |
+| -------------------------- | --------------------------------- | --------------------------------------- |
+| Simple pipelines (Tier A)  | 7-14 days                         | Quick validation                        |
+| Medium pipelines (Tier B)  | 14-21 days                        | Ensure edge cases are covered           |
+| Complex pipelines (Tier C) | 21-30 days                        | Cover month-end, quarter-end cycles     |
+| DQ rules                   | 30 days                           | Must cover all rule trigger conditions  |
+| MDM workflows              | 45-60 days                        | Golden record reconciliation takes time |
 
 ---
 
@@ -215,46 +215,46 @@ WHERE pc.row_count != d.row_count
 
 ### The skill transition
 
-| PowerCenter skill | dbt equivalent | Training path |
-|---|---|---|
-| PowerCenter Designer (visual mapping) | dbt model (SQL file) | SQL fundamentals + dbt tutorial |
-| Workflow Manager (GUI orchestration) | ADF pipeline (JSON/Bicep) | ADF portal tutorial + Bicep basics |
-| Session log analysis | dbt logs + ADF Monitor | Azure Monitor training |
-| Repository management | Git (branch, commit, PR) | Git fundamentals (1-2 days) |
-| Informatica Admin Console | Azure Portal + dbt Cloud | Azure fundamentals + dbt Cloud tour |
+| PowerCenter skill                     | dbt equivalent            | Training path                       |
+| ------------------------------------- | ------------------------- | ----------------------------------- |
+| PowerCenter Designer (visual mapping) | dbt model (SQL file)      | SQL fundamentals + dbt tutorial     |
+| Workflow Manager (GUI orchestration)  | ADF pipeline (JSON/Bicep) | ADF portal tutorial + Bicep basics  |
+| Session log analysis                  | dbt logs + ADF Monitor    | Azure Monitor training              |
+| Repository management                 | Git (branch, commit, PR)  | Git fundamentals (1-2 days)         |
+| Informatica Admin Console             | Azure Portal + dbt Cloud  | Azure fundamentals + dbt Cloud tour |
 
 ### Training program structure
 
-| Week | Topic | Activities | Outcome |
-|---|---|---|---|
-| 1 | SQL refresher | SQL exercises on real data | Comfortable with CTEs, JOINs, window functions |
-| 2 | dbt fundamentals | dbt tutorial (https://courses.getdbt.com) | Build first dbt project |
-| 3 | dbt intermediate | Incremental models, snapshots, macros, tests | Convert first Tier A mapping |
-| 4 | ADF fundamentals | ADF portal + pipeline creation | Build first ADF pipeline |
-| 5 | Git workflow | Branch, commit, PR, code review | Complete first PR-based deployment |
-| 6 | Paired conversion | Convert Tier A/B mappings with mentor | Build confidence and speed |
-| 7-8 | Independent conversion | Convert mappings independently; mentor available | Fully productive |
+| Week | Topic                  | Activities                                       | Outcome                                        |
+| ---- | ---------------------- | ------------------------------------------------ | ---------------------------------------------- |
+| 1    | SQL refresher          | SQL exercises on real data                       | Comfortable with CTEs, JOINs, window functions |
+| 2    | dbt fundamentals       | dbt tutorial (https://courses.getdbt.com)        | Build first dbt project                        |
+| 3    | dbt intermediate       | Incremental models, snapshots, macros, tests     | Convert first Tier A mapping                   |
+| 4    | ADF fundamentals       | ADF portal + pipeline creation                   | Build first ADF pipeline                       |
+| 5    | Git workflow           | Branch, commit, PR, code review                  | Complete first PR-based deployment             |
+| 6    | Paired conversion      | Convert Tier A/B mappings with mentor            | Build confidence and speed                     |
+| 7-8  | Independent conversion | Convert mappings independently; mentor available | Fully productive                               |
 
 ### Common retraining challenges
 
-| Challenge | Solution |
-|---|---|
-| "I can't see the data flow visually" | Use dbt docs graph + CTRL+click through `ref()` chains; ADF pipeline view provides visual orchestration |
-| "How do I debug without session log?" | `dbt debug` + `{{ log() }}` + Azure SQL query profiler + ADF Monitor |
-| "I miss drag-and-drop" | ADF Mapping Data Flows provide visual interface for cases that need it; dbt is faster for most work |
-| "Git is confusing" | Start with GitHub Desktop (GUI); transition to CLI later |
-| "I don't know SQL well enough" | SQL is the foundation; invest 1-2 weeks in intensive SQL training before dbt |
-| "Testing feels like extra work" | Tests save time in production; demonstrate with a caught-by-test example |
+| Challenge                             | Solution                                                                                                |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| "I can't see the data flow visually"  | Use dbt docs graph + CTRL+click through `ref()` chains; ADF pipeline view provides visual orchestration |
+| "How do I debug without session log?" | `dbt debug` + `{{ log() }}` + Azure SQL query profiler + ADF Monitor                                    |
+| "I miss drag-and-drop"                | ADF Mapping Data Flows provide visual interface for cases that need it; dbt is faster for most work     |
+| "Git is confusing"                    | Start with GitHub Desktop (GUI); transition to CLI later                                                |
+| "I don't know SQL well enough"        | SQL is the foundation; invest 1-2 weeks in intensive SQL training before dbt                            |
+| "Testing feels like extra work"       | Tests save time in production; demonstrate with a caught-by-test example                                |
 
 ### Success metrics for retraining
 
-| Metric | Target | Measurement |
-|---|---|---|
-| Time to first dbt model | < 1 week | Tracked per developer |
-| Mappings converted per week | 3-5 (Tier A) by week 4 | Weekly sprint velocity |
-| dbt test coverage | > 80% of models have tests | `dbt test` output |
-| Code review turnaround | < 24 hours | PR metrics |
-| Developer satisfaction | > 70% positive | Monthly survey |
+| Metric                      | Target                     | Measurement            |
+| --------------------------- | -------------------------- | ---------------------- |
+| Time to first dbt model     | < 1 week                   | Tracked per developer  |
+| Mappings converted per week | 3-5 (Tier A) by week 4     | Weekly sprint velocity |
+| dbt test coverage           | > 80% of models have tests | `dbt test` output      |
+| Code review turnaround      | < 24 hours                 | PR metrics             |
+| Developer satisfaction      | > 70% positive             | Monthly survey         |
 
 ---
 
@@ -326,26 +326,26 @@ WHERE pc.row_count != d.row_count
 
 ### Core migration team (mid-sized engagement)
 
-| Role | Count | Responsibility |
-|---|---|---|
-| Migration lead / architect | 1 | Overall architecture, risk management, stakeholder communication |
-| dbt developer (senior) | 1-2 | Establish patterns, macros, project structure; mentor others |
-| dbt developer (converting) | 2-4 | Convert mappings to dbt models; former PowerCenter developers |
-| ADF developer | 1 | Pipeline creation, Linked Services, IR configuration, triggers |
-| DQ engineer | 1 | Convert IDQ rules to dbt tests + Great Expectations |
-| Platform engineer | 1 | Bicep IaC, CI/CD, Azure Monitor, Purview automation |
-| Change management | 0.5 | Training, communication, user feedback |
-| PowerCenter SME | 1 | Knowledge transfer, mapping analysis, validation |
+| Role                       | Count | Responsibility                                                   |
+| -------------------------- | ----- | ---------------------------------------------------------------- |
+| Migration lead / architect | 1     | Overall architecture, risk management, stakeholder communication |
+| dbt developer (senior)     | 1-2   | Establish patterns, macros, project structure; mentor others     |
+| dbt developer (converting) | 2-4   | Convert mappings to dbt models; former PowerCenter developers    |
+| ADF developer              | 1     | Pipeline creation, Linked Services, IR configuration, triggers   |
+| DQ engineer                | 1     | Convert IDQ rules to dbt tests + Great Expectations              |
+| Platform engineer          | 1     | Bicep IaC, CI/CD, Azure Monitor, Purview automation              |
+| Change management          | 0.5   | Training, communication, user feedback                           |
+| PowerCenter SME            | 1     | Knowledge transfer, mapping analysis, validation                 |
 
 ### Timeline estimation guidelines
 
 | Estate size | Mappings | Workflows | IDQ rules | MDM | Estimated duration |
-|---|---|---|---|---|---|
-| Small | 50-100 | 10-30 | 0-50 | No | 12-16 weeks |
-| Medium | 100-300 | 30-100 | 50-200 | No | 16-28 weeks |
-| Medium + DQ | 100-300 | 30-100 | 200+ | No | 24-36 weeks |
-| Large | 300-800 | 100-300 | 200+ | Yes | 36-52 weeks |
-| Enterprise | 800+ | 300+ | 500+ | Yes | 52-78 weeks |
+| ----------- | -------- | --------- | --------- | --- | ------------------ |
+| Small       | 50-100   | 10-30     | 0-50      | No  | 12-16 weeks        |
+| Medium      | 100-300  | 30-100    | 50-200    | No  | 16-28 weeks        |
+| Medium + DQ | 100-300  | 30-100    | 200+      | No  | 24-36 weeks        |
+| Large       | 300-800  | 100-300   | 200+      | Yes | 36-52 weeks        |
+| Enterprise  | 800+     | 300+      | 500+      | Yes | 52-78 weeks        |
 
 Multiply by 1.2x for federal/government deployments (compliance overhead).
 
@@ -355,16 +355,16 @@ Multiply by 1.2x for federal/government deployments (compliance overhead).
 
 Define clear, measurable success criteria before starting:
 
-| Criterion | Target | How to measure |
-|---|---|---|
-| Data accuracy | 100% match with PowerCenter output | Reconciliation tests (automated) |
-| Pipeline reliability | 99.5% success rate (30-day rolling) | ADF Monitor metrics |
-| Performance | Equal or better than PowerCenter | Execution time comparison |
-| Cost | 60%+ reduction in year 1 | Azure Cost Management vs Informatica invoices |
-| Developer velocity | 2x improvement by month 6 | Pipelines delivered per sprint |
-| Test coverage | 80%+ of models have automated tests | dbt test output |
-| Team satisfaction | 70%+ positive by month 3 | Monthly survey |
-| Downtime during cutover | < 4 hours per wave | Measured per cutover |
+| Criterion               | Target                              | How to measure                                |
+| ----------------------- | ----------------------------------- | --------------------------------------------- |
+| Data accuracy           | 100% match with PowerCenter output  | Reconciliation tests (automated)              |
+| Pipeline reliability    | 99.5% success rate (30-day rolling) | ADF Monitor metrics                           |
+| Performance             | Equal or better than PowerCenter    | Execution time comparison                     |
+| Cost                    | 60%+ reduction in year 1            | Azure Cost Management vs Informatica invoices |
+| Developer velocity      | 2x improvement by month 6           | Pipelines delivered per sprint                |
+| Test coverage           | 80%+ of models have automated tests | dbt test output                               |
+| Team satisfaction       | 70%+ positive by month 3            | Monthly survey                                |
+| Downtime during cutover | < 4 hours per wave                  | Measured per cutover                          |
 
 ---
 

@@ -26,16 +26,16 @@ CSA-in-a-Box codifies this consolidation into deployable Bicep modules, dbt mode
 
 ### Operational complexity comparison
 
-| Operational task | AWS analytics (5 services) | Azure analytics (unified) |
-|---|---|---|
-| Provision new compute | Configure Redshift cluster + EMR cluster + Glue job + Athena workgroup separately | Configure Databricks workspace (single resource) |
-| Grant data access | S3 bucket policy + IAM role + Lake Formation grant + Glue Catalog permission + Redshift GRANT | Unity Catalog GRANT (one statement) |
-| Monitor job failures | CloudWatch for EMR + Glue metrics + Athena query history (3 dashboards) | Azure Monitor + Databricks job dashboard (1-2 dashboards) |
-| Track data lineage | Glue Data Catalog (partial) + custom CloudTrail queries | Purview lineage (automatic across ADF, Databricks, Power BI) |
-| Manage encryption keys | KMS key per service (Redshift, S3, Glue, Athena results) | Key Vault (one vault, one set of keys) |
-| Enforce tagging | AWS Config rules per service | Azure Policy (one policy definition, applied at scope) |
-| Right-size compute | Redshift node sizing + EMR instance fleet + Glue DPU tuning | Databricks auto-scaling (managed) |
-| Troubleshoot slow queries | Redshift system tables + EMR Spark UI + Athena query stats | Databricks SQL query profile (one tool) |
+| Operational task          | AWS analytics (5 services)                                                                    | Azure analytics (unified)                                    |
+| ------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| Provision new compute     | Configure Redshift cluster + EMR cluster + Glue job + Athena workgroup separately             | Configure Databricks workspace (single resource)             |
+| Grant data access         | S3 bucket policy + IAM role + Lake Formation grant + Glue Catalog permission + Redshift GRANT | Unity Catalog GRANT (one statement)                          |
+| Monitor job failures      | CloudWatch for EMR + Glue metrics + Athena query history (3 dashboards)                       | Azure Monitor + Databricks job dashboard (1-2 dashboards)    |
+| Track data lineage        | Glue Data Catalog (partial) + custom CloudTrail queries                                       | Purview lineage (automatic across ADF, Databricks, Power BI) |
+| Manage encryption keys    | KMS key per service (Redshift, S3, Glue, Athena results)                                      | Key Vault (one vault, one set of keys)                       |
+| Enforce tagging           | AWS Config rules per service                                                                  | Azure Policy (one policy definition, applied at scope)       |
+| Right-size compute        | Redshift node sizing + EMR instance fleet + Glue DPU tuning                                   | Databricks auto-scaling (managed)                            |
+| Troubleshoot slow queries | Redshift system tables + EMR Spark UI + Athena query stats                                    | Databricks SQL query profile (one tool)                      |
 
 ---
 
@@ -51,14 +51,14 @@ Delta Lake + Iceberg interoperability (supported natively in Databricks) also me
 
 ### Format portability comparison
 
-| Dimension | AWS analytics | Azure analytics (CSA-in-a-Box) |
-|---|---|---|
-| Primary table format | Varies: Redshift proprietary, Parquet, ORC, Hudi, Iceberg | Delta Lake (open source, Linux Foundation) |
-| Secondary format support | Service-dependent | Iceberg read support (ADR-0003), Parquet native |
-| Storage format lock-in | Redshift data requires UNLOAD to export | Delta Lake is Parquet + transaction log --- portable to any Spark |
-| Catalog portability | Glue Data Catalog (AWS-specific API) | Unity Catalog (open-source API) |
-| Cross-platform reads | S3 is readable everywhere | OneLake + ADLS Gen2 readable via REST API |
-| Exit cost (estimate) | Weeks to months (Redshift UNLOAD + Glue export + format conversion) | Days to weeks (Delta files are portable Parquet) |
+| Dimension                | AWS analytics                                                       | Azure analytics (CSA-in-a-Box)                                    |
+| ------------------------ | ------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| Primary table format     | Varies: Redshift proprietary, Parquet, ORC, Hudi, Iceberg           | Delta Lake (open source, Linux Foundation)                        |
+| Secondary format support | Service-dependent                                                   | Iceberg read support (ADR-0003), Parquet native                   |
+| Storage format lock-in   | Redshift data requires UNLOAD to export                             | Delta Lake is Parquet + transaction log --- portable to any Spark |
+| Catalog portability      | Glue Data Catalog (AWS-specific API)                                | Unity Catalog (open-source API)                                   |
+| Cross-platform reads     | S3 is readable everywhere                                           | OneLake + ADLS Gen2 readable via REST API                         |
+| Exit cost (estimate)     | Weeks to months (Redshift UNLOAD + Glue export + format conversion) | Days to weeks (Delta files are portable Parquet)                  |
 
 ---
 
@@ -74,20 +74,20 @@ Amazon QuickSight serves a purpose, but its market share in federal BI is a frac
 
 ### BI capability comparison
 
-| Capability | QuickSight | Power BI | Advantage |
-|---|---|---|---|
-| In-memory engine | SPICE (10 GB/user default) | VertiPaq / Direct Lake | Direct Lake eliminates refresh |
-| Natural language | QuickSight Q | Copilot (GPT-4 powered) | Copilot writes DAX, creates pages |
-| Embedding | 1-click embed, SDK | Power BI Embedded, Teams tabs, SharePoint | Broader embedding targets |
-| Mobile app | QuickSight Mobile | Power BI Mobile | Both available |
-| Paginated reports | Not available | Power BI paginated reports (SSRS) | Azure advantage |
-| Collaboration | Limited | Teams integration, comments, @mentions | Azure advantage |
-| Data alerts | CloudWatch alarms | Data Activator, Power Automate | Azure advantage |
-| Row-level security | CSV-based user mapping | DAX + Entra ID dynamic RLS | Azure advantage |
-| Semantic model | QuickSight datasets | Power BI semantic models (reusable) | Azure advantage |
-| Composite models | Not available | Composite models (Import + DirectQuery) | Azure advantage |
-| Market share (federal) | Niche | Dominant BI tool in federal | Azure advantage |
-| Cost per user | $18-28/user/month | $10-20/user/month (or Fabric capacity) | Azure advantage |
+| Capability             | QuickSight                 | Power BI                                  | Advantage                         |
+| ---------------------- | -------------------------- | ----------------------------------------- | --------------------------------- |
+| In-memory engine       | SPICE (10 GB/user default) | VertiPaq / Direct Lake                    | Direct Lake eliminates refresh    |
+| Natural language       | QuickSight Q               | Copilot (GPT-4 powered)                   | Copilot writes DAX, creates pages |
+| Embedding              | 1-click embed, SDK         | Power BI Embedded, Teams tabs, SharePoint | Broader embedding targets         |
+| Mobile app             | QuickSight Mobile          | Power BI Mobile                           | Both available                    |
+| Paginated reports      | Not available              | Power BI paginated reports (SSRS)         | Azure advantage                   |
+| Collaboration          | Limited                    | Teams integration, comments, @mentions    | Azure advantage                   |
+| Data alerts            | CloudWatch alarms          | Data Activator, Power Automate            | Azure advantage                   |
+| Row-level security     | CSV-based user mapping     | DAX + Entra ID dynamic RLS                | Azure advantage                   |
+| Semantic model         | QuickSight datasets        | Power BI semantic models (reusable)       | Azure advantage                   |
+| Composite models       | Not available              | Composite models (Import + DirectQuery)   | Azure advantage                   |
+| Market share (federal) | Niche                      | Dominant BI tool in federal               | Azure advantage                   |
+| Cost per user          | $18-28/user/month          | $10-20/user/month (or Fabric capacity)    | Azure advantage                   |
 
 ---
 
@@ -129,16 +129,16 @@ Federal agencies are Microsoft shops. Entra ID manages identity. Microsoft 365 h
 
 ### Integration comparison
 
-| Integration point | AWS analytics | Azure analytics | Impact |
-|---|---|---|---|
-| Identity provider | SAML federation to Entra ID | Native Entra ID | No federation overhead |
-| BI in Teams | Custom embed required | Native Power BI tab | Zero-effort for analysts |
-| Data in SharePoint | Not integrated | OneDrive/SharePoint scanned by Purview | Unified governance |
-| Copilot data grounding | Not available | Microsoft 365 Copilot uses Fabric data | AI-powered insights |
-| Email alerts | SNS + SES + custom | Power Automate + Outlook (native) | Built-in workflow |
-| Mobile access | QuickSight Mobile (separate app) | Power BI Mobile + Teams Mobile | One app ecosystem |
-| Search | Not in Microsoft Search | Purview indexes in Microsoft Search | Data discoverability |
-| Automation | Step Functions + Lambda | Power Automate + Logic Apps | No-code option |
+| Integration point      | AWS analytics                    | Azure analytics                        | Impact                   |
+| ---------------------- | -------------------------------- | -------------------------------------- | ------------------------ |
+| Identity provider      | SAML federation to Entra ID      | Native Entra ID                        | No federation overhead   |
+| BI in Teams            | Custom embed required            | Native Power BI tab                    | Zero-effort for analysts |
+| Data in SharePoint     | Not integrated                   | OneDrive/SharePoint scanned by Purview | Unified governance       |
+| Copilot data grounding | Not available                    | Microsoft 365 Copilot uses Fabric data | AI-powered insights      |
+| Email alerts           | SNS + SES + custom               | Power Automate + Outlook (native)      | Built-in workflow        |
+| Mobile access          | QuickSight Mobile (separate app) | Power BI Mobile + Teams Mobile         | One app ecosystem        |
+| Search                 | Not in Microsoft Search          | Purview indexes in Microsoft Search    | Data discoverability     |
+| Automation             | Step Functions + Lambda          | Power Automate + Logic Apps            | No-code option           |
 
 ---
 
@@ -152,17 +152,17 @@ On AWS, governance is spread across multiple services with overlapping responsib
 
 ### Governance comparison
 
-| Governance function | AWS approach | Azure approach |
-|---|---|---|
-| Data classification | Manual tagging or custom Lambda | Purview auto-classification (PII, PHI, financial, government) |
-| Business glossary | Not native (custom build) | Purview glossary with term relationships |
-| Data lineage | Partial (Glue Catalog, no cross-service) | Purview lineage (ADF, Databricks, Power BI, cross-service) |
-| Access control | Lake Formation + IAM + bucket policies | Unity Catalog grants + Entra ID RBAC |
-| Column-level security | Lake Formation column permissions | Unity Catalog column masks |
-| Row-level security | Lake Formation row filters | Unity Catalog row filters + Power BI RLS |
-| Data contracts | Custom (no native support) | dbt contracts + `contract.yaml` (CSA-in-a-Box) |
-| Audit trail | CloudTrail (per-service) | Azure Monitor (unified) + tamper-evident chain |
-| Compliance evidence | Customer-built | Machine-readable YAML mappings (CSA-in-a-Box) |
+| Governance function   | AWS approach                             | Azure approach                                                |
+| --------------------- | ---------------------------------------- | ------------------------------------------------------------- |
+| Data classification   | Manual tagging or custom Lambda          | Purview auto-classification (PII, PHI, financial, government) |
+| Business glossary     | Not native (custom build)                | Purview glossary with term relationships                      |
+| Data lineage          | Partial (Glue Catalog, no cross-service) | Purview lineage (ADF, Databricks, Power BI, cross-service)    |
+| Access control        | Lake Formation + IAM + bucket policies   | Unity Catalog grants + Entra ID RBAC                          |
+| Column-level security | Lake Formation column permissions        | Unity Catalog column masks                                    |
+| Row-level security    | Lake Formation row filters               | Unity Catalog row filters + Power BI RLS                      |
+| Data contracts        | Custom (no native support)               | dbt contracts + `contract.yaml` (CSA-in-a-Box)                |
+| Audit trail           | CloudTrail (per-service)                 | Azure Monitor (unified) + tamper-evident chain                |
+| Compliance evidence   | Customer-built                           | Machine-readable YAML mappings (CSA-in-a-Box)                 |
 
 ---
 
@@ -198,16 +198,16 @@ AWS IAM is more expressive than Azure RBAC for policy conditions. AWS IAM polici
 
 ## Talent and workforce comparison
 
-| Dimension | AWS analytics | Azure analytics |
-|---|---|---|
-| Certified professionals (estimated) | 1M+ AWS certified globally | 2M+ Azure certified globally |
-| Analytics-specific certifications | AWS Data Analytics Specialty | Azure DP-203, DP-600, DP-700 |
-| Federal cleared workforce | Moderate pool | Larger pool (Microsoft partner ecosystem) |
-| BI tool proficiency | QuickSight is niche | Power BI is the federal BI standard |
-| Spark expertise | Transferable (EMR uses open-source Spark) | Transferable (Databricks uses open-source Spark) |
-| ETL tool expertise | Glue is AWS-specific | dbt is open source, ADF is Azure-specific |
-| IaC expertise | CloudFormation/CDK (AWS-specific) or Terraform | Bicep (Azure-native) or Terraform |
-| Hiring difficulty (federal) | Moderate | Lower (larger Microsoft partner ecosystem) |
+| Dimension                           | AWS analytics                                  | Azure analytics                                  |
+| ----------------------------------- | ---------------------------------------------- | ------------------------------------------------ |
+| Certified professionals (estimated) | 1M+ AWS certified globally                     | 2M+ Azure certified globally                     |
+| Analytics-specific certifications   | AWS Data Analytics Specialty                   | Azure DP-203, DP-600, DP-700                     |
+| Federal cleared workforce           | Moderate pool                                  | Larger pool (Microsoft partner ecosystem)        |
+| BI tool proficiency                 | QuickSight is niche                            | Power BI is the federal BI standard              |
+| Spark expertise                     | Transferable (EMR uses open-source Spark)      | Transferable (Databricks uses open-source Spark) |
+| ETL tool expertise                  | Glue is AWS-specific                           | dbt is open source, ADF is Azure-specific        |
+| IaC expertise                       | CloudFormation/CDK (AWS-specific) or Terraform | Bicep (Azure-native) or Terraform                |
+| Hiring difficulty (federal)         | Moderate                                       | Lower (larger Microsoft partner ecosystem)       |
 
 **Key insight:** Spark skills transfer directly between EMR and Databricks. The migration does not require retraining Spark engineers. The largest retraining cost is ETL (Glue to ADF/dbt) and BI (QuickSight to Power BI), both of which align with broader market skills.
 
@@ -228,18 +228,18 @@ AWS analytics innovation continues (Redshift Serverless, Athena Spark, Glue 4.0)
 
 ### Innovation comparison by area
 
-| Innovation area | AWS trajectory | Azure trajectory | Advantage |
-|---|---|---|---|
-| Unified SaaS analytics | No equivalent to Fabric | Microsoft Fabric (GA 2023) | Azure |
-| Generative AI in BI | QuickSight Q (ML-based NLQ) | Power BI Copilot (GPT-4) | Azure |
-| Foundation models (Gov) | Bedrock (limited Gov models) | Azure OpenAI (GPT-4o, GPT-4.1, o3, o4-mini in Gov) | Azure |
-| AI agents | Bedrock Agents | Azure AI Agents + Copilot Studio | Azure |
-| Serverless SQL | Redshift Serverless, Athena | Databricks Serverless SQL, Fabric SQL | Parity |
-| Real-time analytics | Kinesis + MSK | Fabric RTI + Event Hubs | Parity |
-| Open table formats | Iceberg support (Glue) | Delta Lake + Iceberg interop | Parity |
-| MLOps | SageMaker Pipelines | Azure ML + Databricks + MLflow | Parity |
-| Data mesh | Custom (no native support) | Purview data products + domains | Azure |
-| Developer tools | CodeWhisperer | GitHub Copilot | Azure (broader ecosystem) |
+| Innovation area         | AWS trajectory               | Azure trajectory                                   | Advantage                 |
+| ----------------------- | ---------------------------- | -------------------------------------------------- | ------------------------- |
+| Unified SaaS analytics  | No equivalent to Fabric      | Microsoft Fabric (GA 2023)                         | Azure                     |
+| Generative AI in BI     | QuickSight Q (ML-based NLQ)  | Power BI Copilot (GPT-4)                           | Azure                     |
+| Foundation models (Gov) | Bedrock (limited Gov models) | Azure OpenAI (GPT-4o, GPT-4.1, o3, o4-mini in Gov) | Azure                     |
+| AI agents               | Bedrock Agents               | Azure AI Agents + Copilot Studio                   | Azure                     |
+| Serverless SQL          | Redshift Serverless, Athena  | Databricks Serverless SQL, Fabric SQL              | Parity                    |
+| Real-time analytics     | Kinesis + MSK                | Fabric RTI + Event Hubs                            | Parity                    |
+| Open table formats      | Iceberg support (Glue)       | Delta Lake + Iceberg interop                       | Parity                    |
+| MLOps                   | SageMaker Pipelines          | Azure ML + Databricks + MLflow                     | Parity                    |
+| Data mesh               | Custom (no native support)   | Purview data products + domains                    | Azure                     |
+| Developer tools         | CodeWhisperer                | GitHub Copilot                                     | Azure (broader ecosystem) |
 
 ---
 
@@ -286,13 +286,13 @@ OneLake S3 shortcuts + Delta Sharing make S3 + ADLS Gen2 coexistence straightfor
 
 ## Next steps
 
-| Action | Resource |
-|---|---|
-| Quantify cost savings | [Total Cost of Ownership Analysis](tco-analysis.md) |
-| Map every feature | [Complete Feature Mapping](feature-mapping-complete.md) |
-| Plan the migration | [Migration Playbook](../aws-to-azure.md) |
-| Evaluate federal compliance | [Federal Migration Guide](federal-migration-guide.md) |
-| Start with storage | [Storage Migration Guide](storage-migration.md) |
+| Action                      | Resource                                                |
+| --------------------------- | ------------------------------------------------------- |
+| Quantify cost savings       | [Total Cost of Ownership Analysis](tco-analysis.md)     |
+| Map every feature           | [Complete Feature Mapping](feature-mapping-complete.md) |
+| Plan the migration          | [Migration Playbook](../aws-to-azure.md)                |
+| Evaluate federal compliance | [Federal Migration Guide](federal-migration-guide.md)   |
+| Start with storage          | [Storage Migration Guide](storage-migration.md)         |
 
 ---
 

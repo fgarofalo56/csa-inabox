@@ -39,6 +39,7 @@ We will convert this to:
 ## Step 1: Understand the original DLT pipeline
 
 **DLT Bronze (Python):**
+
 ```python
 import dlt
 from pyspark.sql import functions as F
@@ -59,6 +60,7 @@ def raw_orders():
 ```
 
 **DLT Silver (Python):**
+
 ```python
 @dlt.table(
     comment="Cleaned orders with quality enforcement",
@@ -80,6 +82,7 @@ def orders_clean():
 ```
 
 **DLT Gold (Python):**
+
 ```python
 @dlt.table(
     comment="Daily sales summary by product category",
@@ -130,6 +133,7 @@ Workspace: Orders-Analytics
 ```
 
 Create an OneLake shortcut in `bronze_lakehouse`:
+
 - **Files/landing_orders/** -> shortcut to ADLS path `/container/landing/orders/`
 
 ---
@@ -149,16 +153,16 @@ cd orders_pipeline
 ```yaml
 # ~/.dbt/profiles.yml
 orders_pipeline:
-  target: fabric
-  outputs:
-    fabric:
-      type: fabric
-      driver: "ODBC Driver 18 for SQL Server"
-      server: "<workspace-id>.datawarehouse.fabric.microsoft.com"
-      database: "silver_lakehouse"  # default target lakehouse
-      schema: "dbo"
-      authentication: "CLI"  # Uses Azure CLI auth
-      threads: 4
+    target: fabric
+    outputs:
+        fabric:
+            type: fabric
+            driver: "ODBC Driver 18 for SQL Server"
+            server: "<workspace-id>.datawarehouse.fabric.microsoft.com"
+            database: "silver_lakehouse" # default target lakehouse
+            schema: "dbo"
+            authentication: "CLI" # Uses Azure CLI auth
+            threads: 4
 ```
 
 ### 3.3 Project structure
@@ -188,41 +192,41 @@ orders_pipeline/
 ### 3.4 dbt_project.yml
 
 ```yaml
-name: 'orders_pipeline'
-version: '1.0.0'
+name: "orders_pipeline"
+version: "1.0.0"
 config-version: 2
 
-profile: 'orders_pipeline'
+profile: "orders_pipeline"
 
 model-paths: ["models"]
 test-paths: ["tests"]
 macro-paths: ["macros"]
 
 vars:
-  quality_schema: "audit"
+    quality_schema: "audit"
 
 models:
-  orders_pipeline:
-    bronze:
-      +materialized: view
-      +database: bronze_lakehouse
-    silver:
-      +materialized: table
-      +database: silver_lakehouse
-    gold:
-      +materialized: table
-      +database: gold_lakehouse
+    orders_pipeline:
+        bronze:
+            +materialized: view
+            +database: bronze_lakehouse
+        silver:
+            +materialized: table
+            +database: silver_lakehouse
+        gold:
+            +materialized: table
+            +database: gold_lakehouse
 
 on-run-end:
-  - "{{ log_test_summary() }}"
+    - "{{ log_test_summary() }}"
 ```
 
 ### 3.5 packages.yml
 
 ```yaml
 packages:
-  - package: dbt-labs/dbt_utils
-    version: ">=1.1.0"
+    - package: dbt-labs/dbt_utils
+      version: ">=1.1.0"
 ```
 
 ---
@@ -231,32 +235,34 @@ packages:
 
 ### 4.1 Bronze: Source definition + staging model
 
-**models/bronze/_bronze_sources.yml:**
+**models/bronze/\_bronze_sources.yml:**
+
 ```yaml
 version: 2
 
 sources:
-  - name: landing
-    database: bronze_lakehouse
-    schema: dbo
-    description: "Raw data ingested from ADLS landing zone"
-    tables:
-      - name: raw_orders
-        description: "Raw order events from JSON files"
-        columns:
-          - name: order_id
-            description: "Unique order identifier"
-          - name: customer_id
-            description: "Customer identifier"
-          - name: amount
-            description: "Order amount in USD"
-          - name: order_date
-            description: "Date of the order"
-          - name: product_category
-            description: "Product category"
+    - name: landing
+      database: bronze_lakehouse
+      schema: dbo
+      description: "Raw data ingested from ADLS landing zone"
+      tables:
+          - name: raw_orders
+            description: "Raw order events from JSON files"
+            columns:
+                - name: order_id
+                  description: "Unique order identifier"
+                - name: customer_id
+                  description: "Customer identifier"
+                - name: amount
+                  description: "Order amount in USD"
+                - name: order_date
+                  description: "Date of the order"
+                - name: product_category
+                  description: "Product category"
 ```
 
 **models/bronze/stg_raw_orders.sql:**
+
 ```sql
 -- models/bronze/stg_raw_orders.sql
 -- Staging model: minimal transformation, type casting only
@@ -281,6 +287,7 @@ FROM {{ source('landing', 'raw_orders') }}
 ### 4.2 Silver: Cleaned orders (replacing DLT orders_clean)
 
 **models/silver/orders_clean.sql:**
+
 ```sql
 -- models/silver/orders_clean.sql
 -- Replaces DLT orders_clean with expectations
@@ -317,49 +324,51 @@ FROM deduped
 WHERE rn = 1
 ```
 
-**models/silver/_silver_models.yml:**
+**models/silver/\_silver_models.yml:**
+
 ```yaml
 version: 2
 
 models:
-  - name: orders_clean
-    description: "Cleaned, deduplicated orders. Replaces DLT orders_clean."
-    columns:
-      - name: order_id
-        description: "Unique order identifier"
-        tests:
-          - not_null
-          - unique
-      - name: customer_id
-        description: "Standardized customer identifier"
-        tests:
-          - not_null
-      - name: amount
-        description: "Order amount in USD"
-        tests:
-          - not_null
-          - dbt_utils.expression_is_true:
-              expression: "amount > 0 AND amount < 1000000"
-              config:
-                severity: error
-                store_failures: true
-      - name: order_date
-        description: "Date of the order"
-        tests:
-          # Replaces @dlt.expect("valid_date", ...) -- warn only
-          - not_null:
-              config:
-                severity: warn
-          - dbt_utils.expression_is_true:
-              expression: "order_date >= '2020-01-01'"
-              config:
-                severity: warn
-                store_failures: true
+    - name: orders_clean
+      description: "Cleaned, deduplicated orders. Replaces DLT orders_clean."
+      columns:
+          - name: order_id
+            description: "Unique order identifier"
+            tests:
+                - not_null
+                - unique
+          - name: customer_id
+            description: "Standardized customer identifier"
+            tests:
+                - not_null
+          - name: amount
+            description: "Order amount in USD"
+            tests:
+                - not_null
+                - dbt_utils.expression_is_true:
+                      expression: "amount > 0 AND amount < 1000000"
+                      config:
+                          severity: error
+                          store_failures: true
+          - name: order_date
+            description: "Date of the order"
+            tests:
+                # Replaces @dlt.expect("valid_date", ...) -- warn only
+                - not_null:
+                      config:
+                          severity: warn
+                - dbt_utils.expression_is_true:
+                      expression: "order_date >= '2020-01-01'"
+                      config:
+                          severity: warn
+                          store_failures: true
 ```
 
 ### 4.3 Gold: Summary tables (replacing DLT gold tables)
 
 **models/gold/daily_sales_summary.sql:**
+
 ```sql
 -- models/gold/daily_sales_summary.sql
 -- Replaces DLT daily_sales_summary
@@ -381,6 +390,7 @@ GROUP BY order_date, product_category
 ```
 
 **models/gold/customer_ltv.sql:**
+
 ```sql
 -- models/gold/customer_ltv.sql
 -- Replaces DLT customer_ltv
@@ -400,40 +410,41 @@ FROM {{ ref('orders_clean') }}
 GROUP BY customer_id
 ```
 
-**models/gold/_gold_models.yml:**
+**models/gold/\_gold_models.yml:**
+
 ```yaml
 version: 2
 
 models:
-  - name: daily_sales_summary
-    description: "Daily sales aggregation by product category"
-    columns:
-      - name: total_orders
-        tests:
-          # Replaces @dlt.expect_or_fail("has_records", "total_orders > 0")
-          - dbt_utils.expression_is_true:
-              expression: "total_orders > 0"
-              config:
-                severity: error  # fail pipeline
-      - name: total_revenue
-        tests:
-          - not_null
+    - name: daily_sales_summary
+      description: "Daily sales aggregation by product category"
+      columns:
+          - name: total_orders
+            tests:
+                # Replaces @dlt.expect_or_fail("has_records", "total_orders > 0")
+                - dbt_utils.expression_is_true:
+                      expression: "total_orders > 0"
+                      config:
+                          severity: error # fail pipeline
+          - name: total_revenue
+            tests:
+                - not_null
 
-  - name: customer_ltv
-    description: "Customer lifetime value metrics"
-    columns:
-      - name: lifetime_value
-        tests:
-          # Replaces @dlt.expect("positive_ltv", "lifetime_value >= 0")
-          - dbt_utils.expression_is_true:
-              expression: "lifetime_value >= 0"
-              config:
-                severity: warn
-                store_failures: true
-      - name: customer_id
-        tests:
-          - not_null
-          - unique
+    - name: customer_ltv
+      description: "Customer lifetime value metrics"
+      columns:
+          - name: lifetime_value
+            tests:
+                # Replaces @dlt.expect("positive_ltv", "lifetime_value >= 0")
+                - dbt_utils.expression_is_true:
+                      expression: "lifetime_value >= 0"
+                      config:
+                          severity: warn
+                          store_failures: true
+          - name: customer_id
+            tests:
+                - not_null
+                - unique
 ```
 
 ---
@@ -445,9 +456,9 @@ Since DLT's Auto Loader handled Bronze ingestion, we need a Fabric Data Pipeline
 1. In the workspace, click **New > Data Pipeline**
 2. Name it `orders_bronze_ingest`
 3. Add a **Copy activity**:
-   - Source: ADLS Gen2, JSON files at `/container/landing/orders/`
-   - Sink: Lakehouse table `raw_orders` in `bronze_lakehouse`
-   - Settings: Incremental (use folder date partitions or file modification time)
+    - Source: ADLS Gen2, JSON files at `/container/landing/orders/`
+    - Sink: Lakehouse table `raw_orders` in `bronze_lakehouse`
+    - Settings: Incremental (use folder date partitions or file modification time)
 4. Add a **Schedule trigger**: Run every hour (or use storage event trigger)
 
 ---
@@ -567,14 +578,14 @@ Build a Power BI report with:
 
 Run both the DLT pipeline and the Fabric pipeline against the same input data:
 
-| Metric | DLT result | Fabric result | Match? |
-| --- | --- | --- | --- |
-| Bronze row count | ______ | ______ | [ ] |
-| Silver row count (after quality filters) | ______ | ______ | [ ] |
-| Rows dropped by expectations | ______ | ______ | [ ] |
-| Gold: daily_sales_summary rows | ______ | ______ | [ ] |
-| Gold: total_revenue sum | ______ | ______ | [ ] |
-| Gold: customer_ltv count | ______ | ______ | [ ] |
+| Metric                                   | DLT result | Fabric result | Match? |
+| ---------------------------------------- | ---------- | ------------- | ------ |
+| Bronze row count                         | **\_\_**   | **\_\_**      | [ ]    |
+| Silver row count (after quality filters) | **\_\_**   | **\_\_**      | [ ]    |
+| Rows dropped by expectations             | **\_\_**   | **\_\_**      | [ ]    |
+| Gold: daily_sales_summary rows           | **\_\_**   | **\_\_**      | [ ]    |
+| Gold: total_revenue sum                  | **\_\_**   | **\_\_**      | [ ]    |
+| Gold: customer_ltv count                 | **\_\_**   | **\_\_**      | [ ]    |
 
 ---
 
@@ -592,32 +603,32 @@ After 2 weeks of parallel operation with matching results:
 
 ## DLT-to-Fabric translation reference
 
-| DLT concept | Fabric equivalent | Implementation |
-| --- | --- | --- |
-| `@dlt.table` | dbt model (`.sql` file) | `{{ config(materialized='table') }}` |
-| `@dlt.view` | dbt model (view) | `{{ config(materialized='view') }}` |
-| `dlt.read("table")` | `{{ ref('table') }}` | dbt reference |
-| `dlt.read_stream("table")` | Eventstream + Eventhouse or Spark Streaming | See streaming-migration.md |
-| `@dlt.expect("name", "expr")` | dbt test with `severity: warn` | YAML test definition |
-| `@dlt.expect_or_drop` | WHERE filter in model + `severity: error` test | SQL filter + test |
-| `@dlt.expect_or_fail` | dbt test with `severity: error` | Pipeline fails on test failure |
-| DLT quality metrics | `store_failures` + audit tables | Power BI dashboard |
-| DLT pipeline config | Fabric Data Pipeline JSON | Pipeline activities |
-| DLT compute | Fabric Spark (CU-based) | Serverless, no cluster config |
-| `cloudFiles` (Auto Loader) | Data Pipeline copy activity + trigger | Batch file ingestion |
+| DLT concept                   | Fabric equivalent                              | Implementation                       |
+| ----------------------------- | ---------------------------------------------- | ------------------------------------ |
+| `@dlt.table`                  | dbt model (`.sql` file)                        | `{{ config(materialized='table') }}` |
+| `@dlt.view`                   | dbt model (view)                               | `{{ config(materialized='view') }}`  |
+| `dlt.read("table")`           | `{{ ref('table') }}`                           | dbt reference                        |
+| `dlt.read_stream("table")`    | Eventstream + Eventhouse or Spark Streaming    | See streaming-migration.md           |
+| `@dlt.expect("name", "expr")` | dbt test with `severity: warn`                 | YAML test definition                 |
+| `@dlt.expect_or_drop`         | WHERE filter in model + `severity: error` test | SQL filter + test                    |
+| `@dlt.expect_or_fail`         | dbt test with `severity: error`                | Pipeline fails on test failure       |
+| DLT quality metrics           | `store_failures` + audit tables                | Power BI dashboard                   |
+| DLT pipeline config           | Fabric Data Pipeline JSON                      | Pipeline activities                  |
+| DLT compute                   | Fabric Spark (CU-based)                        | Serverless, no cluster config        |
+| `cloudFiles` (Auto Loader)    | Data Pipeline copy activity + trigger          | Batch file ingestion                 |
 
 ---
 
 ## Common pitfalls
 
-| Pitfall | Mitigation |
-| --- | --- |
-| Trying to make dbt behave like DLT | Accept the paradigm shift: dbt is SQL-first, model-based, test-after-run |
-| Not storing test failures | Always use `store_failures: true` for quality visibility |
-| Running dbt without tests | Chain `dbt test` after `dbt run` in the pipeline; never skip |
-| Ignoring DLT's incremental processing | Use dbt `incremental` materialization with `unique_key` for efficiency |
-| Not testing the dbt-fabric connection | Test `dbt debug` before building models |
-| Large dbt runs exceeding CU budget | Use `dbt run --select tag:priority` to run critical models first |
+| Pitfall                               | Mitigation                                                               |
+| ------------------------------------- | ------------------------------------------------------------------------ |
+| Trying to make dbt behave like DLT    | Accept the paradigm shift: dbt is SQL-first, model-based, test-after-run |
+| Not storing test failures             | Always use `store_failures: true` for quality visibility                 |
+| Running dbt without tests             | Chain `dbt test` after `dbt run` in the pipeline; never skip             |
+| Ignoring DLT's incremental processing | Use dbt `incremental` materialization with `unique_key` for efficiency   |
+| Not testing the dbt-fabric connection | Test `dbt debug` before building models                                  |
+| Large dbt runs exceeding CU budget    | Use `dbt run --select tag:priority` to run critical models first         |
 
 ---
 

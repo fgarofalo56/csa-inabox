@@ -8,16 +8,16 @@
 
 Informatica Data Quality (IDQ) is a mature data quality platform offering profiling, standardization, matching, address validation, scorecards, and exception management. The Azure-native replacement is a combination of purpose-built tools, each handling a specific aspect of data quality:
 
-| IDQ capability | Azure replacement | Role |
-|---|---|---|
-| Data profiling | Purview data profiling + Great Expectations profiler | Automated column statistics and distribution analysis |
-| Data quality rules | dbt tests (schema + custom) + Great Expectations | Rule-as-code with CI/CD integration |
-| Scorecards | dbt test results + Power BI dashboard | Custom dashboards on test metadata |
-| Standardization | dbt models (SQL-based cleansing) | SQL transformations for format normalization |
-| Address validation | Azure Maps API or third-party (Melissa, SmartyStreets) | API-based validation |
-| Duplicate detection | dbt dedup models + Azure ML (fuzzy matching) | SQL-based or ML-based |
-| Reference data management | dbt seeds + Azure SQL reference tables | CSV-based or database-based reference data |
-| Exception management | dbt test failures + Power Automate workflows | Automated exception routing |
+| IDQ capability            | Azure replacement                                      | Role                                                  |
+| ------------------------- | ------------------------------------------------------ | ----------------------------------------------------- |
+| Data profiling            | Purview data profiling + Great Expectations profiler   | Automated column statistics and distribution analysis |
+| Data quality rules        | dbt tests (schema + custom) + Great Expectations       | Rule-as-code with CI/CD integration                   |
+| Scorecards                | dbt test results + Power BI dashboard                  | Custom dashboards on test metadata                    |
+| Standardization           | dbt models (SQL-based cleansing)                       | SQL transformations for format normalization          |
+| Address validation        | Azure Maps API or third-party (Melissa, SmartyStreets) | API-based validation                                  |
+| Duplicate detection       | dbt dedup models + Azure ML (fuzzy matching)           | SQL-based or ML-based                                 |
+| Reference data management | dbt seeds + Azure SQL reference tables                 | CSV-based or database-based reference data            |
+| Exception management      | dbt test failures + Power Automate workflows           | Automated exception routing                           |
 
 ---
 
@@ -108,14 +108,14 @@ suite = context.assistants.onboarding.run(
 
 ### Migration approach
 
-| IDQ profile element | Azure equivalent | Implementation |
-|---|---|---|
-| Column null analysis | Purview profiling + dbt `not_null` test | Automatic with Purview scan; codified with dbt |
-| Unique analysis | Purview distinct count + dbt `unique` test | |
-| Value distribution | Great Expectations `expect_column_distinct_values_to_be_in_set` | |
-| Pattern analysis | Great Expectations `expect_column_values_to_match_regex` | |
-| Data type validation | dbt schema tests + `cast()` in models | |
-| Cross-column dependency | Custom dbt test or Great Expectations `expect_column_pair_values` | |
+| IDQ profile element     | Azure equivalent                                                  | Implementation                                 |
+| ----------------------- | ----------------------------------------------------------------- | ---------------------------------------------- |
+| Column null analysis    | Purview profiling + dbt `not_null` test                           | Automatic with Purview scan; codified with dbt |
+| Unique analysis         | Purview distinct count + dbt `unique` test                        |                                                |
+| Value distribution      | Great Expectations `expect_column_distinct_values_to_be_in_set`   |                                                |
+| Pattern analysis        | Great Expectations `expect_column_values_to_match_regex`          |                                                |
+| Data type validation    | dbt schema tests + `cast()` in models                             |                                                |
+| Cross-column dependency | Custom dbt test or Great Expectations `expect_column_pair_values` |                                                |
 
 ---
 
@@ -140,33 +140,33 @@ Every `dbt test` run produces a result in the dbt manifest and run results:
 # models/staging/_stg__models.yml
 version: 2
 models:
-  - name: stg_customers
-    columns:
-      - name: customer_id
-        tests:
-          - unique
-          - not_null
-      - name: email
-        tests:
-          - not_null
-          - dbt_expectations.expect_column_values_to_match_regex:
-              regex: "^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\\.[a-zA-Z0-9-.]+$"
-      - name: phone
-        tests:
-          - dbt_expectations.expect_column_values_to_match_regex:
-              regex: "^\\+?[1-9]\\d{1,14}$"
-              config:
-                severity: warn
-      - name: status
-        tests:
-          - accepted_values:
-              values: ['active', 'inactive', 'pending', 'suspended']
-      - name: created_date
-        tests:
-          - not_null
-          - dbt_expectations.expect_column_values_to_be_between:
-              min_value: "'2010-01-01'"
-              max_value: "CURRENT_DATE"
+    - name: stg_customers
+      columns:
+          - name: customer_id
+            tests:
+                - unique
+                - not_null
+          - name: email
+            tests:
+                - not_null
+                - dbt_expectations.expect_column_values_to_match_regex:
+                      regex: "^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\\.[a-zA-Z0-9-.]+$"
+          - name: phone
+            tests:
+                - dbt_expectations.expect_column_values_to_match_regex:
+                      regex: "^\\+?[1-9]\\d{1,14}$"
+                      config:
+                          severity: warn
+          - name: status
+            tests:
+                - accepted_values:
+                      values: ["active", "inactive", "pending", "suspended"]
+          - name: created_date
+            tests:
+                - not_null
+                - dbt_expectations.expect_column_values_to_be_between:
+                      min_value: "'2010-01-01'"
+                      max_value: "CURRENT_DATE"
 ```
 
 **Step 2: Store test results for trending**
@@ -202,13 +202,13 @@ WHERE executed_at > (SELECT MAX(executed_at) FROM {{ this }})
 
 Build a Power BI report on `fct_dbt_test_results`:
 
-| Dashboard component | Power BI implementation |
-|---|---|
+| Dashboard component   | Power BI implementation                                       |
+| --------------------- | ------------------------------------------------------------- |
 | Overall quality score | Card visual: `AVG(quality_score)` with conditional formatting |
-| Quality trend | Line chart: `quality_score` by `executed_at` (daily) |
-| Quality by domain | Bar chart: `AVG(quality_score)` grouped by schema/model |
-| Failing tests detail | Table: test_name, model_name, failures, failure_rate |
-| Threshold alerts | Data Activator or Power Automate trigger on score < threshold |
+| Quality trend         | Line chart: `quality_score` by `executed_at` (daily)          |
+| Quality by domain     | Bar chart: `AVG(quality_score)` grouped by schema/model       |
+| Failing tests detail  | Table: test_name, model_name, failures, failure_rate          |
+| Threshold alerts      | Data Activator or Power Automate trigger on score < threshold |
 
 ---
 
@@ -216,19 +216,19 @@ Build a Power BI report on `fct_dbt_test_results`:
 
 ### Rule type mapping
 
-| IDQ rule type | dbt test equivalent | Example |
-|---|---|---|
-| Not null | `not_null` (built-in) | `tests: [not_null]` |
-| Unique | `unique` (built-in) | `tests: [unique]` |
-| Referential integrity | `relationships` (built-in) | `tests: [relationships: {to: ref('dim_customer'), field: customer_id}]` |
-| Accepted values | `accepted_values` (built-in) | `tests: [accepted_values: {values: ['A', 'B', 'C']}]` |
-| Range check | `dbt_expectations.expect_column_values_to_be_between` | min_value / max_value |
-| Pattern match (regex) | `dbt_expectations.expect_column_values_to_match_regex` | regex pattern |
-| Length check | `dbt_expectations.expect_column_value_lengths_to_be_between` | min_length / max_length |
-| Conditional rule | Custom dbt test (SQL) | See below |
-| Cross-column rule | Custom dbt test (SQL) | See below |
-| Aggregate rule | Custom dbt test (SQL) | See below |
-| Freshness check | `dbt source freshness` | `freshness: {warn_after: {count: 24, period: hour}}` |
+| IDQ rule type         | dbt test equivalent                                          | Example                                                                 |
+| --------------------- | ------------------------------------------------------------ | ----------------------------------------------------------------------- |
+| Not null              | `not_null` (built-in)                                        | `tests: [not_null]`                                                     |
+| Unique                | `unique` (built-in)                                          | `tests: [unique]`                                                       |
+| Referential integrity | `relationships` (built-in)                                   | `tests: [relationships: {to: ref('dim_customer'), field: customer_id}]` |
+| Accepted values       | `accepted_values` (built-in)                                 | `tests: [accepted_values: {values: ['A', 'B', 'C']}]`                   |
+| Range check           | `dbt_expectations.expect_column_values_to_be_between`        | min_value / max_value                                                   |
+| Pattern match (regex) | `dbt_expectations.expect_column_values_to_match_regex`       | regex pattern                                                           |
+| Length check          | `dbt_expectations.expect_column_value_lengths_to_be_between` | min_length / max_length                                                 |
+| Conditional rule      | Custom dbt test (SQL)                                        | See below                                                               |
+| Cross-column rule     | Custom dbt test (SQL)                                        | See below                                                               |
+| Aggregate rule        | Custom dbt test (SQL)                                        | See below                                                               |
+| Freshness check       | `dbt source freshness`                                       | `freshness: {warn_after: {count: 24, period: hour}}`                    |
 
 ### Custom dbt test example
 
@@ -286,17 +286,17 @@ expectations = [
 
 IDQ standardization transforms include case normalization, whitespace trimming, format standardization, and abbreviation expansion. These translate directly to SQL in dbt models:
 
-| IDQ standardization | dbt SQL equivalent |
-|---|---|
-| Upper case | `UPPER(column_name)` |
-| Lower case | `LOWER(column_name)` |
-| Proper case | `CONCAT(UPPER(LEFT(column_name, 1)), LOWER(SUBSTRING(column_name, 2, LEN(column_name))))` |
-| Trim whitespace | `TRIM(column_name)` or `LTRIM(RTRIM(column_name))` |
-| Remove special characters | `REPLACE(REPLACE(column_name, '-', ''), '.', '')` |
-| Phone format | Custom macro with regex | See example below |
-| Date format | `CONVERT(DATE, column_name, format_code)` or `TRY_CAST` |
-| Gender standardization | `CASE` statement | See example below |
-| State abbreviation | dbt seed + JOIN | CSV of state names to abbreviations |
+| IDQ standardization       | dbt SQL equivalent                                                                        |
+| ------------------------- | ----------------------------------------------------------------------------------------- | ----------------------------------- |
+| Upper case                | `UPPER(column_name)`                                                                      |
+| Lower case                | `LOWER(column_name)`                                                                      |
+| Proper case               | `CONCAT(UPPER(LEFT(column_name, 1)), LOWER(SUBSTRING(column_name, 2, LEN(column_name))))` |
+| Trim whitespace           | `TRIM(column_name)` or `LTRIM(RTRIM(column_name))`                                        |
+| Remove special characters | `REPLACE(REPLACE(column_name, '-', ''), '.', '')`                                         |
+| Phone format              | Custom macro with regex                                                                   | See example below                   |
+| Date format               | `CONVERT(DATE, column_name, format_code)` or `TRY_CAST`                                   |
+| Gender standardization    | `CASE` statement                                                                          | See example below                   |
+| State abbreviation        | dbt seed + JOIN                                                                           | CSV of state names to abbreviations |
 
 ### Standardization macro example
 
@@ -352,13 +352,13 @@ IDQ includes built-in address validation databases (from Loqate/GBG, formerly QA
 
 ### Azure-native options
 
-| Option | Capability | Cost | Notes |
-|---|---|---|---|
-| Azure Maps (Geocoding API) | Address validation + geocoding | Consumption-based (~$4.50/1000 requests) | Good for US/international; limited standardization |
-| Melissa (Data Quality APIs) | Full address validation + standardization | Subscription ($5K-$50K/year) | Closest IDQ equivalent; USPS CASS certified |
-| SmartyStreets | US address validation | Subscription ($3K-$20K/year) | US-focused; USPS CASS certified |
-| Google Maps Geocoding | Address validation + geocoding | Consumption-based ($5/1000 requests) | Broad international coverage |
-| USPS Web Tools (free) | US address validation | Free (USPS registration) | Limited to USPS addresses; rate-limited |
+| Option                      | Capability                                | Cost                                     | Notes                                              |
+| --------------------------- | ----------------------------------------- | ---------------------------------------- | -------------------------------------------------- |
+| Azure Maps (Geocoding API)  | Address validation + geocoding            | Consumption-based (~$4.50/1000 requests) | Good for US/international; limited standardization |
+| Melissa (Data Quality APIs) | Full address validation + standardization | Subscription ($5K-$50K/year)             | Closest IDQ equivalent; USPS CASS certified        |
+| SmartyStreets               | US address validation                     | Subscription ($3K-$20K/year)             | US-focused; USPS CASS certified                    |
+| Google Maps Geocoding       | Address validation + geocoding            | Consumption-based ($5/1000 requests)     | Broad international coverage                       |
+| USPS Web Tools (free)       | US address validation                     | Free (USPS registration)                 | Limited to USPS addresses; rate-limited            |
 
 ### Integration pattern
 
@@ -438,22 +438,22 @@ LEFT JOIN {{ source('validation', 'address_validation_results') }} v
 
 ### IDQ profiling to Purview scanning + profiling
 
-| IDQ profiling feature | Purview equivalent | Setup |
-|---|---|---|
-| Column statistics | Purview scan with profiling enabled | Enable in scan rule set |
-| Null percentage | Purview column-level null count | Automatic with profiling |
-| Distinct value count | Purview distinct count | Automatic with profiling |
-| Value distribution (top N) | Purview sample values | Automatic with profiling |
-| Pattern detection | Purview classification rules | Built-in classifiers for PII, dates, emails, etc. |
-| Custom profiling rules | Great Expectations custom expectations | Python-based for complex rules |
+| IDQ profiling feature      | Purview equivalent                     | Setup                                             |
+| -------------------------- | -------------------------------------- | ------------------------------------------------- |
+| Column statistics          | Purview scan with profiling enabled    | Enable in scan rule set                           |
+| Null percentage            | Purview column-level null count        | Automatic with profiling                          |
+| Distinct value count       | Purview distinct count                 | Automatic with profiling                          |
+| Value distribution (top N) | Purview sample values                  | Automatic with profiling                          |
+| Pattern detection          | Purview classification rules           | Built-in classifiers for PII, dates, emails, etc. |
+| Custom profiling rules     | Great Expectations custom expectations | Python-based for complex rules                    |
 
 ### Setting up Purview profiling
 
 1. **Register data sources** in Purview Data Map
 2. **Create scan rule set** with profiling enabled:
-   - Navigate to Management -> Scan rule sets -> New
-   - Enable "Data profiling" checkbox
-   - Select classification rules to apply
+    - Navigate to Management -> Scan rule sets -> New
+    - Enable "Data profiling" checkbox
+    - Select classification rules to apply
 3. **Create and run scan** against registered sources
 4. **View results** in Purview Data Catalog -> asset details -> Schema tab
 
@@ -465,13 +465,13 @@ LEFT JOIN {{ source('validation', 'address_validation_results') }} v
 
 IDQ routes data quality exceptions to exception tables where data stewards review and resolve issues. The Azure equivalent:
 
-| IDQ exception feature | Azure equivalent |
-|---|---|
-| Exception table | dbt test failure output table |
-| Exception routing | Power Automate flow triggered on test failure |
-| Steward assignment | Power Automate -> Teams/email notification |
-| Resolution workflow | Power Apps form for steward review |
-| Exception metrics | Power BI dashboard on exception table |
+| IDQ exception feature | Azure equivalent                              |
+| --------------------- | --------------------------------------------- |
+| Exception table       | dbt test failure output table                 |
+| Exception routing     | Power Automate flow triggered on test failure |
+| Steward assignment    | Power Automate -> Teams/email notification    |
+| Resolution workflow   | Power Apps form for steward review            |
+| Exception metrics     | Power BI dashboard on exception table         |
 
 ### Implementation pattern
 
@@ -480,8 +480,8 @@ IDQ routes data quality exceptions to exception tables where data stewards revie
 ```yaml
 # dbt_project.yml
 tests:
-  +store_failures: true
-  +schema: dq_exceptions
+    +store_failures: true
+    +schema: dq_exceptions
 ```
 
 This creates a table for each failing test containing the failing rows.
@@ -508,15 +508,15 @@ Action 3: Update exception dashboard data
 
 ## Migration execution timeline
 
-| Phase | Duration | Activities |
-|---|---|---|
-| 1. Inventory IDQ rules | 2-3 weeks | Export all profiles, rules, scorecards; categorize by complexity |
-| 2. Set up dbt tests | 2-3 weeks | Implement schema tests, custom tests, Great Expectations suites |
-| 3. Build scorecard dashboard | 1-2 weeks | Power BI report on dbt test results |
-| 4. Migrate standardization | 2-4 weeks | Convert IDQ standardization to dbt models + macros |
-| 5. Set up address validation | 2-3 weeks | Integrate Azure Maps or third-party API |
-| 6. Parallel run | 4-6 weeks | Run IDQ and dbt tests in parallel; reconcile results |
-| 7. Cutover | 1-2 weeks | Decommission IDQ; full reliance on dbt tests + GE |
+| Phase                        | Duration  | Activities                                                       |
+| ---------------------------- | --------- | ---------------------------------------------------------------- |
+| 1. Inventory IDQ rules       | 2-3 weeks | Export all profiles, rules, scorecards; categorize by complexity |
+| 2. Set up dbt tests          | 2-3 weeks | Implement schema tests, custom tests, Great Expectations suites  |
+| 3. Build scorecard dashboard | 1-2 weeks | Power BI report on dbt test results                              |
+| 4. Migrate standardization   | 2-4 weeks | Convert IDQ standardization to dbt models + macros               |
+| 5. Set up address validation | 2-3 weeks | Integrate Azure Maps or third-party API                          |
+| 6. Parallel run              | 4-6 weeks | Run IDQ and dbt tests in parallel; reconcile results             |
+| 7. Cutover                   | 1-2 weeks | Decommission IDQ; full reliance on dbt tests + GE                |
 
 ---
 

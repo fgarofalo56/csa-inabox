@@ -18,33 +18,33 @@ However, the economics, architecture, and talent dynamics of the data engineerin
 
 Informatica PowerCenter licensing is based on CPU cores. A typical enterprise license runs **$500K to $3M+ per year** depending on the number of PowerCenter servers, cores, and add-on products:
 
-| Component | Typical annual cost | Notes |
-|---|---|---|
-| PowerCenter base license | $200K-$800K | Per-core licensing; scales with server count |
-| PowerCenter maintenance (20-22%) | $40K-$180K | Annual support and updates |
-| IDQ license | $100K-$400K | Per-core; add-on to PowerCenter or standalone |
-| MDM license | $150K-$500K | Per-core; highest per-core rate in the portfolio |
-| Enterprise Data Catalog | $80K-$250K | Per-core or per-user depending on edition |
-| IICS subscription | $100K-$1M+ | IPU-based (Informatica Processing Units) |
-| Infrastructure (servers, storage) | $50K-$200K | On-prem hardware for PowerCenter |
-| DBA/admin team (2-3 FTEs) | $300K-$600K | PowerCenter repository, server management |
-| **Total (typical mid-enterprise)** | **$1M-$3M+** | Before development team costs |
+| Component                          | Typical annual cost | Notes                                            |
+| ---------------------------------- | ------------------- | ------------------------------------------------ |
+| PowerCenter base license           | $200K-$800K         | Per-core licensing; scales with server count     |
+| PowerCenter maintenance (20-22%)   | $40K-$180K          | Annual support and updates                       |
+| IDQ license                        | $100K-$400K         | Per-core; add-on to PowerCenter or standalone    |
+| MDM license                        | $150K-$500K         | Per-core; highest per-core rate in the portfolio |
+| Enterprise Data Catalog            | $80K-$250K          | Per-core or per-user depending on edition        |
+| IICS subscription                  | $100K-$1M+          | IPU-based (Informatica Processing Units)         |
+| Infrastructure (servers, storage)  | $50K-$200K          | On-prem hardware for PowerCenter                 |
+| DBA/admin team (2-3 FTEs)          | $300K-$600K         | PowerCenter repository, server management        |
+| **Total (typical mid-enterprise)** | **$1M-$3M+**        | Before development team costs                    |
 
 ### The Azure cost structure
 
 Azure Data Factory and dbt operate on consumption-based pricing:
 
-| Component | Typical annual cost | Notes |
-|---|---|---|
-| ADF pipeline runs | $20K-$80K | Pay per activity run + data movement DIU-hours |
-| ADF Integration Runtime | $10K-$40K | Self-Hosted IR for on-prem sources; Azure IR is pay-per-use |
-| dbt Cloud (Team plan) | $6K-$36K | $100/seat/month for 5-30 developers |
-| dbt Core (open source) | $0 | Self-hosted; no license cost |
-| Azure SQL / Synapse compute | $30K-$150K | Target warehouse compute |
-| Purview (governance) | $10K-$50K | Consumption-based scanning and classification |
-| Great Expectations | $0 | Open source; self-hosted |
-| Azure Monitor + Log Analytics | $5K-$20K | Operational monitoring |
-| **Total (typical mid-enterprise)** | **$80K-$400K** | 70-90% reduction from Informatica |
+| Component                          | Typical annual cost | Notes                                                       |
+| ---------------------------------- | ------------------- | ----------------------------------------------------------- |
+| ADF pipeline runs                  | $20K-$80K           | Pay per activity run + data movement DIU-hours              |
+| ADF Integration Runtime            | $10K-$40K           | Self-Hosted IR for on-prem sources; Azure IR is pay-per-use |
+| dbt Cloud (Team plan)              | $6K-$36K            | $100/seat/month for 5-30 developers                         |
+| dbt Core (open source)             | $0                  | Self-hosted; no license cost                                |
+| Azure SQL / Synapse compute        | $30K-$150K          | Target warehouse compute                                    |
+| Purview (governance)               | $10K-$50K           | Consumption-based scanning and classification               |
+| Great Expectations                 | $0                  | Open source; self-hosted                                    |
+| Azure Monitor + Log Analytics      | $5K-$20K            | Operational monitoring                                      |
+| **Total (typical mid-enterprise)** | **$80K-$400K**      | 70-90% reduction from Informatica                           |
 
 ### What this means
 
@@ -87,17 +87,17 @@ The modern stack inverts the model:
 
 This is not just a tool swap. It is a paradigm shift from **GUI-driven ETL development** to **software engineering for data**. The implications are significant:
 
-| Capability | PowerCenter | dbt + ADF |
-|---|---|---|
-| Version control | Repository export (binary) | Git (full diff, branch, PR) |
-| Code review | Not possible | Standard pull request workflow |
-| Unit testing | Manual QA | `dbt test` (automated, CI-integrated) |
-| Documentation | Manual (separate wiki) | Auto-generated from model YAML |
-| CI/CD | Bolted-on (Informatica Deployment tools) | Native (GitHub Actions, Azure DevOps) |
-| Refactoring | Manual impact analysis | IDE refactoring + dbt `ref()` graph |
-| Collaboration | One developer per mapping (lock-based) | Branch-based parallel development |
-| Debugging | Visual debugger in Designer | SQL + dbt logs + ADF Monitor |
-| Reuse | Mapplets (limited composability) | dbt macros (full Jinja templating) |
+| Capability      | PowerCenter                              | dbt + ADF                             |
+| --------------- | ---------------------------------------- | ------------------------------------- |
+| Version control | Repository export (binary)               | Git (full diff, branch, PR)           |
+| Code review     | Not possible                             | Standard pull request workflow        |
+| Unit testing    | Manual QA                                | `dbt test` (automated, CI-integrated) |
+| Documentation   | Manual (separate wiki)                   | Auto-generated from model YAML        |
+| CI/CD           | Bolted-on (Informatica Deployment tools) | Native (GitHub Actions, Azure DevOps) |
+| Refactoring     | Manual impact analysis                   | IDE refactoring + dbt `ref()` graph   |
+| Collaboration   | One developer per mapping (lock-based)   | Branch-based parallel development     |
+| Debugging       | Visual debugger in Designer              | SQL + dbt logs + ADF Monitor          |
+| Reuse           | Mapplets (limited composability)         | dbt macros (full Jinja templating)    |
 
 ### Honest assessment
 
@@ -187,15 +187,15 @@ Informatica was built before the modern data engineering stack matured. While II
 
 The Azure + dbt stack provides all of these natively:
 
-| Practice | Tool | Description |
-|---|---|---|
-| Layered transformations | dbt | staging / intermediate / marts pattern |
-| Data contracts | dbt + Purview | Schema tests + Purview data products |
-| CI/CD for data | GitHub Actions + dbt Cloud | Automated build, test, deploy |
-| Lakehouse | Delta Lake / Fabric OneLake | Open table formats on open storage |
-| Semantic layer | dbt semantic layer / Power BI | Shared metrics and business logic |
-| Data observability | dbt source freshness + Great Expectations | Automated quality monitoring |
-| Infrastructure as Code | Bicep / Terraform | Reproducible environments |
+| Practice                | Tool                                      | Description                            |
+| ----------------------- | ----------------------------------------- | -------------------------------------- |
+| Layered transformations | dbt                                       | staging / intermediate / marts pattern |
+| Data contracts          | dbt + Purview                             | Schema tests + Purview data products   |
+| CI/CD for data          | GitHub Actions + dbt Cloud                | Automated build, test, deploy          |
+| Lakehouse               | Delta Lake / Fabric OneLake               | Open table formats on open storage     |
+| Semantic layer          | dbt semantic layer / Power BI             | Shared metrics and business logic      |
+| Data observability      | dbt source freshness + Great Expectations | Automated quality monitoring           |
+| Infrastructure as Code  | Bicep / Terraform                         | Reproducible environments              |
 
 ---
 
@@ -215,14 +215,14 @@ Informatica has added AI-powered features to IICS (CLAIRE AI) for metadata recom
 
 Azure provides a comprehensive AI platform that operates on the same data assets:
 
-| Capability | Azure service | Integration with data platform |
-|---|---|---|
-| LLM inference | Azure OpenAI Service | Reads from the same lakehouse / Purview catalog |
-| Custom models | Azure ML | Trains on data produced by dbt pipelines |
-| RAG patterns | Azure AI Search + OpenAI | Indexes data governed by Purview |
-| AI agents | Copilot Studio / Azure AI Foundry | Operates on semantically modeled data |
-| Copilot integration | Microsoft 365 Copilot | Surfaces data insights in Teams, Excel, PowerPoint |
-| Document intelligence | Azure AI Document Intelligence | Extracts structured data for ADF ingestion |
+| Capability            | Azure service                     | Integration with data platform                     |
+| --------------------- | --------------------------------- | -------------------------------------------------- |
+| LLM inference         | Azure OpenAI Service              | Reads from the same lakehouse / Purview catalog    |
+| Custom models         | Azure ML                          | Trains on data produced by dbt pipelines           |
+| RAG patterns          | Azure AI Search + OpenAI          | Indexes data governed by Purview                   |
+| AI agents             | Copilot Studio / Azure AI Foundry | Operates on semantically modeled data              |
+| Copilot integration   | Microsoft 365 Copilot             | Surfaces data insights in Teams, Excel, PowerPoint |
+| Document intelligence | Azure AI Document Intelligence    | Extracts structured data for ADF ingestion         |
 
 ### What this means
 
@@ -236,14 +236,14 @@ With Informatica, your data platform and your AI platform are separate ecosystem
 
 The Informatica talent pool is **shrinking**. PowerCenter development is a legacy skill. New data engineers learn Python, SQL, Spark, and dbt -- not PowerCenter Designer. The implications:
 
-| Metric | Informatica | Azure + dbt |
-|---|---|---|
-| Active job postings (US, 2025) | ~2,000 (declining YoY) | ~50,000+ (growing YoY) |
-| New certifications per year | Not publicly tracked | 500,000+ Azure certifications/year |
-| Stack Overflow activity | Minimal | Extensive (dbt, ADF, Azure) |
-| Open-source community | None (proprietary) | dbt: 10,000+ packages; ADF: open ARM templates |
-| Training resources | Informatica University (paid) | Microsoft Learn (free), dbt Learn (free) |
-| Average salary premium | 10-15% premium for scarce skill | Market rate; abundant talent pool |
+| Metric                         | Informatica                     | Azure + dbt                                    |
+| ------------------------------ | ------------------------------- | ---------------------------------------------- |
+| Active job postings (US, 2025) | ~2,000 (declining YoY)          | ~50,000+ (growing YoY)                         |
+| New certifications per year    | Not publicly tracked            | 500,000+ Azure certifications/year             |
+| Stack Overflow activity        | Minimal                         | Extensive (dbt, ADF, Azure)                    |
+| Open-source community          | None (proprietary)              | dbt: 10,000+ packages; ADF: open ARM templates |
+| Training resources             | Informatica University (paid)   | Microsoft Learn (free), dbt Learn (free)       |
+| Average salary premium         | 10-15% premium for scarce skill | Market rate; abundant talent pool              |
 
 ### Hiring implication
 
@@ -283,17 +283,17 @@ This comparison would be incomplete without acknowledging areas where Informatic
 
 ## 9. Decision framework
 
-| If your priority is... | Recommended direction | Rationale |
-|---|---|---|
-| Reducing annual platform cost by 70%+ | Migrate to Azure + dbt | Consumption pricing vs CPU-based licensing |
-| Adopting modern data engineering (Git, CI/CD, testing) | Migrate to Azure + dbt | Code-first paradigm enables software engineering practices |
-| Hiring and retaining data engineers | Migrate to Azure + dbt | 25x larger talent pool; skills are transferable |
-| AI/ML integration with data platform | Migrate to Azure | No equivalent AI capability in Informatica ecosystem |
-| Unified governance at lower cost | Migrate to Azure (Purview) | Replaces 3-4 Informatica products |
-| Minimal disruption to stable workloads | Delay migration; plan incrementally | PowerCenter is stable if the team and budget allow it |
-| Complex MDM with deep match/merge | Evaluate carefully | MDM migration is the hardest; consider Profisee or phased approach |
-| Mainframe data integration | Hybrid approach | Keep PowerCenter for mainframe; migrate everything else |
-| Team is 100% GUI-oriented analysts | Invest in training first | dbt requires SQL skills; plan 3-6 month ramp-up |
+| If your priority is...                                 | Recommended direction               | Rationale                                                          |
+| ------------------------------------------------------ | ----------------------------------- | ------------------------------------------------------------------ |
+| Reducing annual platform cost by 70%+                  | Migrate to Azure + dbt              | Consumption pricing vs CPU-based licensing                         |
+| Adopting modern data engineering (Git, CI/CD, testing) | Migrate to Azure + dbt              | Code-first paradigm enables software engineering practices         |
+| Hiring and retaining data engineers                    | Migrate to Azure + dbt              | 25x larger talent pool; skills are transferable                    |
+| AI/ML integration with data platform                   | Migrate to Azure                    | No equivalent AI capability in Informatica ecosystem               |
+| Unified governance at lower cost                       | Migrate to Azure (Purview)          | Replaces 3-4 Informatica products                                  |
+| Minimal disruption to stable workloads                 | Delay migration; plan incrementally | PowerCenter is stable if the team and budget allow it              |
+| Complex MDM with deep match/merge                      | Evaluate carefully                  | MDM migration is the hardest; consider Profisee or phased approach |
+| Mainframe data integration                             | Hybrid approach                     | Keep PowerCenter for mainframe; migrate everything else            |
+| Team is 100% GUI-oriented analysts                     | Invest in training first            | dbt requires SQL skills; plan 3-6 month ramp-up                    |
 
 ---
 

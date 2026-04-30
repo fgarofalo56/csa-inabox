@@ -7,7 +7,7 @@
 ---
 
 !!! tip "Expanded Migration Center Available"
-    This playbook is the core migration reference. For the complete AWS-to-Azure migration package — including white papers, deep-dive guides, tutorials, benchmarks, and federal-specific guidance — visit the **[AWS to Azure Migration Center](aws-to-azure/index.md)**.
+This playbook is the core migration reference. For the complete AWS-to-Azure migration package — including white papers, deep-dive guides, tutorials, benchmarks, and federal-specific guidance — visit the **[AWS to Azure Migration Center](aws-to-azure/index.md)**.
 
     **Quick links:**
 

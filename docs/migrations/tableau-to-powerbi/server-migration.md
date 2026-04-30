@@ -14,15 +14,15 @@ Server migration covers the infrastructure and administration layer: how content
 
 ### 1.1 Tableau Server vs Power BI Service
 
-| Aspect | Tableau Server | Power BI Service |
-|---|---|---|
-| **Deployment** | On-premises VMs or Tableau Cloud (SaaS) | SaaS only (cloud); Report Server for on-prem |
-| **Infrastructure management** | Customer-managed (patching, backups, scaling) | Microsoft-managed |
-| **Scalability** | Add nodes manually | Automatic (within capacity SKU) |
-| **High availability** | Multi-node cluster configuration | Built-in (SaaS) |
-| **Disaster recovery** | Customer-managed (backup/restore) | Built-in with geo-redundancy |
-| **Upgrades** | Scheduled maintenance windows | Rolling updates by Microsoft |
-| **Multi-tenancy** | Sites (isolated environments) | Tenants + Fabric capacities |
+| Aspect                        | Tableau Server                                | Power BI Service                             |
+| ----------------------------- | --------------------------------------------- | -------------------------------------------- |
+| **Deployment**                | On-premises VMs or Tableau Cloud (SaaS)       | SaaS only (cloud); Report Server for on-prem |
+| **Infrastructure management** | Customer-managed (patching, backups, scaling) | Microsoft-managed                            |
+| **Scalability**               | Add nodes manually                            | Automatic (within capacity SKU)              |
+| **High availability**         | Multi-node cluster configuration              | Built-in (SaaS)                              |
+| **Disaster recovery**         | Customer-managed (backup/restore)             | Built-in with geo-redundancy                 |
+| **Upgrades**                  | Scheduled maintenance windows                 | Rolling updates by Microsoft                 |
+| **Multi-tenancy**             | Sites (isolated environments)                 | Tenants + Fabric capacities                  |
 
 ### 1.2 Content hierarchy mapping
 
@@ -54,13 +54,13 @@ flowchart LR
 
 ### 2.1 Concept mapping
 
-| Tableau concept | Power BI concept | Migration guidance |
-|---|---|---|
+| Tableau concept                      | Power BI concept                      | Migration guidance                                                           |
+| ------------------------------------ | ------------------------------------- | ---------------------------------------------------------------------------- |
 | **Site** (isolated content boundary) | Workspace or separate Fabric capacity | Use separate capacities for strict isolation; workspaces for team separation |
-| **Default site** | Default workspace ("My workspace") | My workspace is personal; do not use for shared content |
-| **Project** (folder structure) | Workspace | Create one workspace per project or team |
-| **Sub-project** (nested folders) | Workspace + naming convention | Power BI workspaces are flat; use naming: `Team - Project` |
-| **Personal space** | "My workspace" | Each user has a personal workspace |
+| **Default site**                     | Default workspace ("My workspace")    | My workspace is personal; do not use for shared content                      |
+| **Project** (folder structure)       | Workspace                             | Create one workspace per project or team                                     |
+| **Sub-project** (nested folders)     | Workspace + naming convention         | Power BI workspaces are flat; use naming: `Team - Project`                   |
+| **Personal space**                   | "My workspace"                        | Each user has a personal workspace                                           |
 
 ### 2.2 Workspace design patterns
 
@@ -102,16 +102,16 @@ Workspace: "Sales Reports"
 ```
 
 !!! tip "Separate semantic models from reports"
-    For large organizations, consider separating semantic models into dedicated workspaces with restricted access. Reports in other workspaces connect via live connection. This mirrors Tableau's published data source pattern and provides better governance.
+For large organizations, consider separating semantic models into dedicated workspaces with restricted access. Reports in other workspaces connect via live connection. This mirrors Tableau's published data source pattern and provides better governance.
 
 ### 2.3 Workspace naming conventions
 
-| Tableau hierarchy | Power BI workspace name | Example |
-|---|---|---|
-| Site: Default, Project: Sales | `Sales` or `Sales Analytics` | `Sales Analytics` |
-| Site: Default, Project: Finance, Sub: Budget | `Finance - Budget` | `Finance - Budget` |
+| Tableau hierarchy                            | Power BI workspace name          | Example                          |
+| -------------------------------------------- | -------------------------------- | -------------------------------- |
+| Site: Default, Project: Sales                | `Sales` or `Sales Analytics`     | `Sales Analytics`                |
+| Site: Default, Project: Finance, Sub: Budget | `Finance - Budget`               | `Finance - Budget`               |
 | Site: Marketing, Project: Campaign Analytics | `Marketing - Campaign Analytics` | `Marketing - Campaign Analytics` |
-| Site: Executive, Project: Board Reports | `Executive - Board Reports` | `Executive - Board Reports` |
+| Site: Executive, Project: Board Reports      | `Executive - Board Reports`      | `Executive - Board Reports`      |
 
 ---
 
@@ -119,32 +119,32 @@ Workspace: "Sales Reports"
 
 ### 3.1 Tableau groups to Entra ID security groups
 
-| Tableau concept | Power BI concept | Migration steps |
-|---|---|---|
-| Local group | Entra ID security group | Create security groups in Entra ID matching Tableau groups |
-| Active Directory group | Entra ID security group | Existing AD groups sync to Entra ID automatically |
-| Group membership | Entra ID group membership | Add users to groups; groups assigned to workspace roles |
-| Guest users | Entra ID B2B guests | Invite external users via Entra B2B; assign to groups |
+| Tableau concept        | Power BI concept          | Migration steps                                            |
+| ---------------------- | ------------------------- | ---------------------------------------------------------- |
+| Local group            | Entra ID security group   | Create security groups in Entra ID matching Tableau groups |
+| Active Directory group | Entra ID security group   | Existing AD groups sync to Entra ID automatically          |
+| Group membership       | Entra ID group membership | Add users to groups; groups assigned to workspace roles    |
+| Guest users            | Entra ID B2B guests       | Invite external users via Entra B2B; assign to groups      |
 
 ### 3.2 Tableau site roles to Power BI workspace roles
 
-| Tableau site role | Power BI workspace role | Capabilities |
-|---|---|---|
-| **Site Administrator / Creator** | **Admin** | Full control: settings, membership, delete workspace |
-| **Creator** | **Member** | Publish, manage, share content; manage refresh; cannot delete workspace |
-| **Explorer (Can Publish)** | **Contributor** | Publish and update content; cannot manage membership |
-| **Explorer** | **Viewer** (via App) | View and interact with published App content |
-| **Viewer** | **Viewer** (via App or shared link) | View-only access |
+| Tableau site role                | Power BI workspace role             | Capabilities                                                            |
+| -------------------------------- | ----------------------------------- | ----------------------------------------------------------------------- |
+| **Site Administrator / Creator** | **Admin**                           | Full control: settings, membership, delete workspace                    |
+| **Creator**                      | **Member**                          | Publish, manage, share content; manage refresh; cannot delete workspace |
+| **Explorer (Can Publish)**       | **Contributor**                     | Publish and update content; cannot manage membership                    |
+| **Explorer**                     | **Viewer** (via App)                | View and interact with published App content                            |
+| **Viewer**                       | **Viewer** (via App or shared link) | View-only access                                                        |
 
 ### 3.3 Content-level permissions
 
-| Tableau permission | Power BI equivalent | How to configure |
-|---|---|---|
-| **Project permissions** (default for contents) | Workspace role | Workspace role applies to all content in the workspace |
-| **Workbook permissions** (override project) | App audience + per-item sharing | Share specific reports via links or Apps with audiences |
-| **Data source permissions** | Semantic model permissions + Build permission | Grant "Build" permission for users who need to create reports on the model |
-| **View permission** | Viewer role or App access | Viewers access through Apps or direct sharing |
-| **Download/export** | Export settings in admin portal | Admin can control export formats globally |
+| Tableau permission                             | Power BI equivalent                           | How to configure                                                           |
+| ---------------------------------------------- | --------------------------------------------- | -------------------------------------------------------------------------- |
+| **Project permissions** (default for contents) | Workspace role                                | Workspace role applies to all content in the workspace                     |
+| **Workbook permissions** (override project)    | App audience + per-item sharing               | Share specific reports via links or Apps with audiences                    |
+| **Data source permissions**                    | Semantic model permissions + Build permission | Grant "Build" permission for users who need to create reports on the model |
+| **View permission**                            | Viewer role or App access                     | Viewers access through Apps or direct sharing                              |
+| **Download/export**                            | Export settings in admin portal               | Admin can control export formats globally                                  |
 
 ### 3.4 Permission migration steps
 
@@ -202,12 +202,12 @@ CONTAINS(
 
 ### 4.3 Dynamic RLS patterns
 
-| RLS pattern | DAX implementation | Use case |
-|---|---|---|
-| User-to-dimension mapping | `USERPRINCIPALNAME()` matched to mapping table | Users see their assigned regions/departments |
-| Manager hierarchy | `PATH` function with parent-child hierarchy | Managers see their direct reports' data |
-| Data-driven roles | Mapping table maintained by business users | Self-service security assignment |
-| Cross-filter RLS | RLS on dimension table, cross-filters to fact | Single security table controls all fact tables |
+| RLS pattern               | DAX implementation                             | Use case                                       |
+| ------------------------- | ---------------------------------------------- | ---------------------------------------------- |
+| User-to-dimension mapping | `USERPRINCIPALNAME()` matched to mapping table | Users see their assigned regions/departments   |
+| Manager hierarchy         | `PATH` function with parent-child hierarchy    | Managers see their direct reports' data        |
+| Data-driven roles         | Mapping table maintained by business users     | Self-service security assignment               |
+| Cross-filter RLS          | RLS on dimension table, cross-filters to fact  | Single security table controls all fact tables |
 
 ### 4.4 RLS migration validation
 
@@ -224,21 +224,21 @@ After configuring RLS:
 
 ### 5.1 Subscriptions
 
-| Tableau subscription | Power BI subscription | Notes |
-|---|---|---|
-| Email subscription (PNG/PDF of view) | Email subscription (PNG/PDF of page) | Similar capability; configure per-report or per-page |
-| Subscription schedule (daily, weekly) | Subscription schedule (daily, weekly, after refresh) | Power BI adds "after data refresh" trigger |
-| Subscription to specific view | Subscription to specific page | Select pages within a report |
-| Subscription with filters | Subscription with slicer state | Subscriber can save filter state before subscribing |
-| Custom email message | Subject line customization | Limited customization in Power BI |
+| Tableau subscription                  | Power BI subscription                                | Notes                                                |
+| ------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------- |
+| Email subscription (PNG/PDF of view)  | Email subscription (PNG/PDF of page)                 | Similar capability; configure per-report or per-page |
+| Subscription schedule (daily, weekly) | Subscription schedule (daily, weekly, after refresh) | Power BI adds "after data refresh" trigger           |
+| Subscription to specific view         | Subscription to specific page                        | Select pages within a report                         |
+| Subscription with filters             | Subscription with slicer state                       | Subscriber can save filter state before subscribing  |
+| Custom email message                  | Subject line customization                           | Limited customization in Power BI                    |
 
 ### 5.2 Data alerts
 
-| Tableau alert | Power BI alert | Notes |
-|---|---|---|
-| Conditional alert on dashboard | Data alert on dashboard tile | Set threshold on a KPI card or gauge |
-| Alert notification | Email + mobile notification | Power BI sends to email and mobile app |
-| Alert frequency | Configurable (hourly, daily) | Configure check frequency |
+| Tableau alert                  | Power BI alert               | Notes                                  |
+| ------------------------------ | ---------------------------- | -------------------------------------- |
+| Conditional alert on dashboard | Data alert on dashboard tile | Set threshold on a KPI card or gauge   |
+| Alert notification             | Email + mobile notification  | Power BI sends to email and mobile app |
+| Alert frequency                | Configurable (hourly, daily) | Configure check frequency              |
 
 ### 5.3 Data Activator (advanced alerting)
 
@@ -258,14 +258,14 @@ Tableau has no equivalent to Data Activator.
 
 ### 6.1 Tableau extract schedules to Power BI refresh schedules
 
-| Tableau schedule concept | Power BI concept | Notes |
-|---|---|---|
-| Extract refresh schedule | Dataset refresh schedule | Configure in dataset settings |
-| Full extract refresh | Full refresh (default) | Replaces all data |
-| Incremental extract refresh | Incremental refresh policy | Define partition key (date column), rolling window |
-| Background task (extract) | Refresh history | Monitor in dataset settings |
-| Refresh frequency | Up to 48/day (Premium) or 8/day (Pro) | Premium/Fabric capacity unlocks higher frequency |
-| Subscription-triggered refresh | "After data refresh" subscription | Emails sent only after successful refresh |
+| Tableau schedule concept       | Power BI concept                      | Notes                                              |
+| ------------------------------ | ------------------------------------- | -------------------------------------------------- |
+| Extract refresh schedule       | Dataset refresh schedule              | Configure in dataset settings                      |
+| Full extract refresh           | Full refresh (default)                | Replaces all data                                  |
+| Incremental extract refresh    | Incremental refresh policy            | Define partition key (date column), rolling window |
+| Background task (extract)      | Refresh history                       | Monitor in dataset settings                        |
+| Refresh frequency              | Up to 48/day (Premium) or 8/day (Pro) | Premium/Fabric capacity unlocks higher frequency   |
+| Subscription-triggered refresh | "After data refresh" subscription     | Emails sent only after successful refresh          |
 
 ### 6.2 Configuring scheduled refresh
 
@@ -299,42 +299,42 @@ Step 8: Test with "Refresh now"
 
 ### 7.1 Tableau Server admin tools to Power BI admin
 
-| Tableau admin tool | Power BI equivalent | Notes |
-|---|---|---|
-| **Admin views** (background tasks, traffic) | **Admin portal** + **Usage metrics** | Admin portal for tenant-wide; Usage metrics per workspace |
-| **Status page** (server health) | **Fabric Capacity Metrics App** | Monitor capacity utilization, throttling, performance |
-| **Resource Monitoring Tool** (RMT) | **Capacity Metrics App** + **Log Analytics** | Detailed performance monitoring |
-| **Content Migration Tool** | **Deployment pipelines** | Promote content across Dev/Test/Prod |
-| **User activity log** | **Activity log** + **Audit log** | Track user actions; integrate with Sentinel for security |
-| **Site settings** | **Tenant settings** (Admin portal) | Global policies for the Power BI tenant |
-| **Tableau Metadata API** | **Scanner API** + **XMLA endpoints** | Programmatic metadata access |
+| Tableau admin tool                          | Power BI equivalent                          | Notes                                                     |
+| ------------------------------------------- | -------------------------------------------- | --------------------------------------------------------- |
+| **Admin views** (background tasks, traffic) | **Admin portal** + **Usage metrics**         | Admin portal for tenant-wide; Usage metrics per workspace |
+| **Status page** (server health)             | **Fabric Capacity Metrics App**              | Monitor capacity utilization, throttling, performance     |
+| **Resource Monitoring Tool** (RMT)          | **Capacity Metrics App** + **Log Analytics** | Detailed performance monitoring                           |
+| **Content Migration Tool**                  | **Deployment pipelines**                     | Promote content across Dev/Test/Prod                      |
+| **User activity log**                       | **Activity log** + **Audit log**             | Track user actions; integrate with Sentinel for security  |
+| **Site settings**                           | **Tenant settings** (Admin portal)           | Global policies for the Power BI tenant                   |
+| **Tableau Metadata API**                    | **Scanner API** + **XMLA endpoints**         | Programmatic metadata access                              |
 
 ### 7.2 Usage metrics migration
 
 Tableau Server tracks views, users, and data source usage. Power BI provides similar telemetry:
 
-| Metric | Tableau source | Power BI source |
-|---|---|---|
-| Report views | Admin views → traffic | Usage metrics report (per workspace) |
-| Unique users | Admin views → users | Usage metrics or Activity log |
-| Last accessed date | Admin views → content | Usage metrics or Scanner API |
-| Data source usage | Admin views → data sources | Dataset usage in Admin portal |
-| Performance (render time) | Admin views → performance | Performance analyzer (Desktop) + Capacity metrics |
-| Stale content | Last accessed > 90 days | Usage metrics → filter by date range |
+| Metric                    | Tableau source             | Power BI source                                   |
+| ------------------------- | -------------------------- | ------------------------------------------------- |
+| Report views              | Admin views → traffic      | Usage metrics report (per workspace)              |
+| Unique users              | Admin views → users        | Usage metrics or Activity log                     |
+| Last accessed date        | Admin views → content      | Usage metrics or Scanner API                      |
+| Data source usage         | Admin views → data sources | Dataset usage in Admin portal                     |
+| Performance (render time) | Admin views → performance  | Performance analyzer (Desktop) + Capacity metrics |
+| Stale content             | Last accessed > 90 days    | Usage metrics → filter by date range              |
 
 ### 7.3 Admin portal key settings
 
 After migration, configure these tenant settings in the Power BI Admin portal:
 
-| Setting | Recommended value | Why |
-|---|---|---|
-| Allow users to create workspaces | Specific security groups | Prevent workspace sprawl |
-| Export to Excel | Enabled for all (or specific groups) | Match Tableau export permissions |
-| Embed content in apps | Enabled for specific groups | Control embedded analytics access |
-| Publish to web (public) | Disabled | Prevent accidental public exposure |
-| Allow XMLA endpoints | Premium/Fabric only | Enable external tools (DAX Studio, Tabular Editor) |
-| Certification | Specific groups (data stewards) | Control who can certify semantic models |
-| Featured content | Enabled | Highlight important reports on the Power BI Home |
+| Setting                          | Recommended value                    | Why                                                |
+| -------------------------------- | ------------------------------------ | -------------------------------------------------- |
+| Allow users to create workspaces | Specific security groups             | Prevent workspace sprawl                           |
+| Export to Excel                  | Enabled for all (or specific groups) | Match Tableau export permissions                   |
+| Embed content in apps            | Enabled for specific groups          | Control embedded analytics access                  |
+| Publish to web (public)          | Disabled                             | Prevent accidental public exposure                 |
+| Allow XMLA endpoints             | Premium/Fabric only                  | Enable external tools (DAX Studio, Tabular Editor) |
+| Certification                    | Specific groups (data stewards)      | Control who can certify semantic models            |
+| Featured content                 | Enabled                              | Highlight important reports on the Power BI Home   |
 
 ---
 
@@ -342,21 +342,21 @@ After migration, configure these tenant settings in the Power BI Admin portal:
 
 ### 8.1 API mapping
 
-| Tableau REST API operation | Power BI REST API | Endpoint |
-|---|---|---|
-| Sign in | OAuth 2.0 / service principal | Entra ID token acquisition |
-| List sites | N/A (single tenant) | Tenant-level operations |
-| List workbooks | List reports in workspace | `GET /groups/{groupId}/reports` |
-| Get workbook | Get report | `GET /reports/{reportId}` |
-| Download .twbx | Export .pbix | `POST /reports/{reportId}/Export` |
-| Publish workbook | Import .pbix | `POST /groups/{groupId}/imports` |
-| List data sources | List datasets | `GET /groups/{groupId}/datasets` |
-| Refresh extract | Trigger refresh | `POST /datasets/{datasetId}/refreshes` |
-| List users | Microsoft Graph API | `GET /users` |
-| List groups | List workspaces | `GET /groups` |
-| Add user to group | Add user to workspace | `POST /groups/{groupId}/users` |
-| Query views | Get pages | `GET /reports/{reportId}/pages` |
-| Metadata API | Scanner API | `POST /admin/workspaces/getInfo` |
+| Tableau REST API operation | Power BI REST API             | Endpoint                               |
+| -------------------------- | ----------------------------- | -------------------------------------- |
+| Sign in                    | OAuth 2.0 / service principal | Entra ID token acquisition             |
+| List sites                 | N/A (single tenant)           | Tenant-level operations                |
+| List workbooks             | List reports in workspace     | `GET /groups/{groupId}/reports`        |
+| Get workbook               | Get report                    | `GET /reports/{reportId}`              |
+| Download .twbx             | Export .pbix                  | `POST /reports/{reportId}/Export`      |
+| Publish workbook           | Import .pbix                  | `POST /groups/{groupId}/imports`       |
+| List data sources          | List datasets                 | `GET /groups/{groupId}/datasets`       |
+| Refresh extract            | Trigger refresh               | `POST /datasets/{datasetId}/refreshes` |
+| List users                 | Microsoft Graph API           | `GET /users`                           |
+| List groups                | List workspaces               | `GET /groups`                          |
+| Add user to group          | Add user to workspace         | `POST /groups/{groupId}/users`         |
+| Query views                | Get pages                     | `GET /reports/{reportId}/pages`        |
+| Metadata API               | Scanner API                   | `POST /admin/workspaces/getInfo`       |
 
 ### 8.2 Automation migration
 

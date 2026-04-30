@@ -14,24 +14,24 @@ This guide covers model training migration, endpoint deployment, pipeline orches
 
 ## Service mapping overview
 
-| AWS AI/ML service | Azure equivalent | Migration complexity | Notes |
-|---|---|---|---|
-| SageMaker Studio | Azure ML Studio / AI Foundry | M | Notebook + experiment + deployment IDE |
-| SageMaker Training | Azure ML Compute / Databricks ML | M | GPU and CPU cluster training |
-| SageMaker Processing | Azure ML Pipeline steps / Databricks Jobs | M | Data processing for ML |
-| SageMaker Endpoints (real-time) | Azure ML Managed Endpoints | M | Managed inference hosting |
-| SageMaker Batch Transform | Azure ML Batch Endpoints | S | Batch inference |
-| SageMaker Pipelines | Azure ML Pipelines / Prompt Flow | M | ML workflow orchestration |
-| SageMaker Feature Store | Databricks Feature Store / Azure ML Feature Store | M | Online and offline feature serving |
-| SageMaker Model Registry | Azure ML Model Registry / MLflow | S | Model versioning and lifecycle |
-| SageMaker Experiments | Azure ML Experiments / MLflow | S | Experiment tracking |
-| SageMaker Ground Truth | Azure ML Data Labeling | M | Human-in-the-loop labeling |
-| SageMaker Clarify | Azure ML Responsible AI | M | Fairness, explainability |
-| SageMaker Model Monitor | Azure ML Model Monitor | M | Drift detection, data quality |
-| Bedrock | Azure OpenAI Service | S | Foundation model API access |
-| Bedrock Agents | Azure AI Agents / Copilot Studio | M | Autonomous AI agents |
-| Bedrock Knowledge Bases | Azure AI Search (RAG) | M | Retrieval-augmented generation |
-| Bedrock Guardrails | Azure AI Content Safety | S | Content filtering and moderation |
+| AWS AI/ML service               | Azure equivalent                                  | Migration complexity | Notes                                  |
+| ------------------------------- | ------------------------------------------------- | -------------------- | -------------------------------------- |
+| SageMaker Studio                | Azure ML Studio / AI Foundry                      | M                    | Notebook + experiment + deployment IDE |
+| SageMaker Training              | Azure ML Compute / Databricks ML                  | M                    | GPU and CPU cluster training           |
+| SageMaker Processing            | Azure ML Pipeline steps / Databricks Jobs         | M                    | Data processing for ML                 |
+| SageMaker Endpoints (real-time) | Azure ML Managed Endpoints                        | M                    | Managed inference hosting              |
+| SageMaker Batch Transform       | Azure ML Batch Endpoints                          | S                    | Batch inference                        |
+| SageMaker Pipelines             | Azure ML Pipelines / Prompt Flow                  | M                    | ML workflow orchestration              |
+| SageMaker Feature Store         | Databricks Feature Store / Azure ML Feature Store | M                    | Online and offline feature serving     |
+| SageMaker Model Registry        | Azure ML Model Registry / MLflow                  | S                    | Model versioning and lifecycle         |
+| SageMaker Experiments           | Azure ML Experiments / MLflow                     | S                    | Experiment tracking                    |
+| SageMaker Ground Truth          | Azure ML Data Labeling                            | M                    | Human-in-the-loop labeling             |
+| SageMaker Clarify               | Azure ML Responsible AI                           | M                    | Fairness, explainability               |
+| SageMaker Model Monitor         | Azure ML Model Monitor                            | M                    | Drift detection, data quality          |
+| Bedrock                         | Azure OpenAI Service                              | S                    | Foundation model API access            |
+| Bedrock Agents                  | Azure AI Agents / Copilot Studio                  | M                    | Autonomous AI agents                   |
+| Bedrock Knowledge Bases         | Azure AI Search (RAG)                             | M                    | Retrieval-augmented generation         |
+| Bedrock Guardrails              | Azure AI Content Safety                           | S                    | Content filtering and moderation       |
 
 ---
 
@@ -39,15 +39,15 @@ This guide covers model training migration, endpoint deployment, pipeline orches
 
 ### Environment comparison
 
-| SageMaker Studio feature | Azure ML Studio | AI Foundry |
-|---|---|---|
-| JupyterLab notebooks | Azure ML Notebooks (JupyterLab) | AI Foundry Notebooks |
-| Kernel gateway | Compute instances (various VM sizes) | Serverless compute |
-| Git integration | Native Git integration | Native Git integration |
-| Experiment tracking | MLflow integration | Built-in experiment tracking |
-| Model registry | Azure ML Model Registry | AI Foundry Model Catalog |
-| Endpoint deployment | Managed Endpoints | Model-as-a-Service |
-| Studio IDE | VS Code for the Web / JupyterLab | AI Foundry portal |
+| SageMaker Studio feature | Azure ML Studio                      | AI Foundry                   |
+| ------------------------ | ------------------------------------ | ---------------------------- |
+| JupyterLab notebooks     | Azure ML Notebooks (JupyterLab)      | AI Foundry Notebooks         |
+| Kernel gateway           | Compute instances (various VM sizes) | Serverless compute           |
+| Git integration          | Native Git integration               | Native Git integration       |
+| Experiment tracking      | MLflow integration                   | Built-in experiment tracking |
+| Model registry           | Azure ML Model Registry              | AI Foundry Model Catalog     |
+| Endpoint deployment      | Managed Endpoints                    | Model-as-a-Service           |
+| Studio IDE               | VS Code for the Web / JupyterLab     | AI Foundry portal            |
 
 ### Migration approach
 
@@ -139,13 +139,13 @@ model_dir = args.model_output
 
 ### Endpoint comparison
 
-| SageMaker endpoint type | Azure ML equivalent | Notes |
-|---|---|---|
-| Real-time endpoint | Managed Online Endpoint | Auto-scaling, blue/green deployment |
-| Serverless endpoint | Serverless Online Endpoint | Scale to zero; pay per invocation |
-| Multi-model endpoint | Multiple deployments under one endpoint | Traffic splitting for A/B testing |
-| Batch Transform | Batch Endpoint | Async batch inference |
-| Inference Recommender | Azure ML profiling | Right-size compute for inference |
+| SageMaker endpoint type | Azure ML equivalent                     | Notes                               |
+| ----------------------- | --------------------------------------- | ----------------------------------- |
+| Real-time endpoint      | Managed Online Endpoint                 | Auto-scaling, blue/green deployment |
+| Serverless endpoint     | Serverless Online Endpoint              | Scale to zero; pay per invocation   |
+| Multi-model endpoint    | Multiple deployments under one endpoint | Traffic splitting for A/B testing   |
+| Batch Transform         | Batch Endpoint                          | Async batch inference               |
+| Inference Recommender   | Azure ML profiling                      | Right-size compute for inference    |
 
 ### Deployment example
 
@@ -219,16 +219,16 @@ ml_client.online_endpoints.begin_create_or_update(endpoint).result()
 
 ### Pipeline comparison
 
-| SageMaker Pipeline step | Azure ML Pipeline equivalent | Notes |
-|---|---|---|
-| ProcessingStep | Command component | Data processing |
-| TrainingStep | Command component (with GPU) | Model training |
-| TransformStep | Batch endpoint invocation | Batch inference |
-| RegisterModel | Model registration component | Register in registry |
-| ConditionStep | Conditional pipeline step | Branching logic |
-| FailStep | Pipeline error handling | Error paths |
-| TuningStep | Sweep job | Hyperparameter tuning |
-| CallbackStep | Custom component | External service integration |
+| SageMaker Pipeline step | Azure ML Pipeline equivalent | Notes                        |
+| ----------------------- | ---------------------------- | ---------------------------- |
+| ProcessingStep          | Command component            | Data processing              |
+| TrainingStep            | Command component (with GPU) | Model training               |
+| TransformStep           | Batch endpoint invocation    | Batch inference              |
+| RegisterModel           | Model registration component | Register in registry         |
+| ConditionStep           | Conditional pipeline step    | Branching logic              |
+| FailStep                | Pipeline error handling      | Error paths                  |
+| TuningStep              | Sweep job                    | Hyperparameter tuning        |
+| CallbackStep            | Custom component             | External service integration |
 
 ### Pipeline migration example
 
@@ -286,19 +286,19 @@ returned_pipeline = ml_client.jobs.create_or_update(pipeline_job)
 
 ### Model availability comparison
 
-| Bedrock model | Azure OpenAI equivalent | Notes |
-|---|---|---|
-| Anthropic Claude 3.5 Sonnet | Claude 3.5 Sonnet (via Azure AI Foundry) | Available as model-as-a-service |
-| Amazon Titan Text | No direct equivalent | Use GPT-4o or open-source models |
-| Amazon Titan Embeddings | text-embedding-3-large | OpenAI embedding model |
-| Meta Llama 3 | Llama 3 (via Azure AI Foundry) | Model-as-a-service deployment |
-| Mistral Large | Mistral Large (via Azure AI Foundry) | Model-as-a-service deployment |
-| Cohere Command R+ | Cohere Command R+ (via Azure AI Foundry) | Model-as-a-service deployment |
-| AI21 Jurassic | No direct equivalent | Use GPT-4o |
-| Stability AI SDXL | DALL-E 3 (Azure OpenAI) | Image generation |
-| **GPT-4o** | **GPT-4o (Azure OpenAI)** | Azure-exclusive model family |
-| **GPT-4.1** | **GPT-4.1 (Azure OpenAI)** | Latest generation |
-| **o3 / o4-mini** | **o3 / o4-mini (Azure OpenAI)** | Reasoning models |
+| Bedrock model               | Azure OpenAI equivalent                  | Notes                            |
+| --------------------------- | ---------------------------------------- | -------------------------------- |
+| Anthropic Claude 3.5 Sonnet | Claude 3.5 Sonnet (via Azure AI Foundry) | Available as model-as-a-service  |
+| Amazon Titan Text           | No direct equivalent                     | Use GPT-4o or open-source models |
+| Amazon Titan Embeddings     | text-embedding-3-large                   | OpenAI embedding model           |
+| Meta Llama 3                | Llama 3 (via Azure AI Foundry)           | Model-as-a-service deployment    |
+| Mistral Large               | Mistral Large (via Azure AI Foundry)     | Model-as-a-service deployment    |
+| Cohere Command R+           | Cohere Command R+ (via Azure AI Foundry) | Model-as-a-service deployment    |
+| AI21 Jurassic               | No direct equivalent                     | Use GPT-4o                       |
+| Stability AI SDXL           | DALL-E 3 (Azure OpenAI)                  | Image generation                 |
+| **GPT-4o**                  | **GPT-4o (Azure OpenAI)**                | Azure-exclusive model family     |
+| **GPT-4.1**                 | **GPT-4.1 (Azure OpenAI)**               | Latest generation                |
+| **o3 / o4-mini**            | **o3 / o4-mini (Azure OpenAI)**          | Reasoning models                 |
 
 ### API migration
 
@@ -353,6 +353,7 @@ answer = response.choices[0].message.content
 ```
 
 **Key differences:**
+
 - Bedrock uses boto3 with model-specific request/response formats. Azure OpenAI uses the standard OpenAI SDK with consistent request/response format across all models.
 - Bedrock authentication is IAM-based. Azure OpenAI uses Entra ID (managed identity or token provider).
 - Azure OpenAI is available in Azure Government regions for federal workloads.
@@ -363,14 +364,14 @@ answer = response.choices[0].message.content
 
 ### Agent architecture comparison
 
-| Bedrock Agents concept | Azure equivalent | Notes |
-|---|---|---|
-| Agent | Azure AI Agent / Copilot Studio agent | Autonomous task execution |
-| Action group | Tool / Function calling | Define callable tools |
-| Knowledge base | Azure AI Search (RAG) | Document retrieval |
-| Guardrails | Azure AI Content Safety | Input/output filtering |
-| Agent executor | Azure AI Agent SDK / Semantic Kernel | Orchestration framework |
-| Session management | Thread management (Agent SDK) | Conversation state |
+| Bedrock Agents concept | Azure equivalent                      | Notes                     |
+| ---------------------- | ------------------------------------- | ------------------------- |
+| Agent                  | Azure AI Agent / Copilot Studio agent | Autonomous task execution |
+| Action group           | Tool / Function calling               | Define callable tools     |
+| Knowledge base         | Azure AI Search (RAG)                 | Document retrieval        |
+| Guardrails             | Azure AI Content Safety               | Input/output filtering    |
+| Agent executor         | Azure AI Agent SDK / Semantic Kernel  | Orchestration framework   |
+| Session management     | Thread management (Agent SDK)         | Conversation state        |
 
 ### Code-first agent migration (Bedrock Agent to Azure AI Agent)
 
@@ -435,6 +436,7 @@ run = project_client.agents.create_and_process_run(
 ### No-code agent migration (to Copilot Studio)
 
 For agents that do not require custom code, Copilot Studio provides a visual agent builder that integrates with:
+
 - Dataverse (structured data)
 - SharePoint (documents)
 - Azure AI Search (RAG)
@@ -447,14 +449,14 @@ For agents that do not require custom code, Copilot Studio provides a visual age
 
 ### RAG architecture comparison
 
-| Bedrock Knowledge Bases | Azure AI Search RAG | Notes |
-|---|---|---|
-| S3 data source | ADLS Gen2 / Blob Storage | Document source |
-| Document chunking | Azure AI Document Intelligence + chunking | Built-in or custom chunking |
-| Embedding model (Titan) | text-embedding-3-large (OpenAI) | Higher-quality embeddings |
-| Vector store (OpenSearch) | Azure AI Search (vector + hybrid) | Hybrid search (vector + keyword) |
-| Retrieval API | AI Search REST API / SDK | More control over retrieval |
-| Foundation model | Azure OpenAI (GPT-4o) | Generation step |
+| Bedrock Knowledge Bases   | Azure AI Search RAG                       | Notes                            |
+| ------------------------- | ----------------------------------------- | -------------------------------- |
+| S3 data source            | ADLS Gen2 / Blob Storage                  | Document source                  |
+| Document chunking         | Azure AI Document Intelligence + chunking | Built-in or custom chunking      |
+| Embedding model (Titan)   | text-embedding-3-large (OpenAI)           | Higher-quality embeddings        |
+| Vector store (OpenSearch) | Azure AI Search (vector + hybrid)         | Hybrid search (vector + keyword) |
+| Retrieval API             | AI Search REST API / SDK                  | More control over retrieval      |
+| Foundation model          | Azure OpenAI (GPT-4o)                     | Generation step                  |
 
 ### RAG pipeline migration
 
@@ -511,14 +513,14 @@ Cross-reference: `csa_platform/ai_integration/` for AI Foundry and Azure OpenAI 
 
 ## Model registry and lifecycle comparison
 
-| SageMaker Model Registry | Azure ML Model Registry | MLflow (Databricks) |
-|---|---|---|
-| Model groups | Model names | Registered models |
-| Model versions | Model versions | Model versions |
-| Approval status (Pending/Approved/Rejected) | Model stages (None/Staging/Production/Archived) | Model stages |
-| Model metrics | Model metrics + tags | Logged metrics + tags |
-| Lineage (data → model → endpoint) | Lineage (data → experiment → model → endpoint) | MLflow lineage |
-| Model cards | Responsible AI dashboard | MLflow model cards |
+| SageMaker Model Registry                    | Azure ML Model Registry                         | MLflow (Databricks)   |
+| ------------------------------------------- | ----------------------------------------------- | --------------------- |
+| Model groups                                | Model names                                     | Registered models     |
+| Model versions                              | Model versions                                  | Model versions        |
+| Approval status (Pending/Approved/Rejected) | Model stages (None/Staging/Production/Archived) | Model stages          |
+| Model metrics                               | Model metrics + tags                            | Logged metrics + tags |
+| Lineage (data → model → endpoint)           | Lineage (data → experiment → model → endpoint)  | MLflow lineage        |
+| Model cards                                 | Responsible AI dashboard                        | MLflow model cards    |
 
 ### Migration approach for model registry
 
@@ -552,16 +554,16 @@ ml_client.models.create_or_update(model)
 
 ## Migration sequence
 
-| Phase | Duration | Activities |
-|---|---|---|
-| 1. Inventory | 1-2 weeks | Catalog all SageMaker models, endpoints, pipelines; list Bedrock usage |
-| 2. Environment setup | 2-3 weeks | Create Azure ML workspace, AI Foundry project, Azure OpenAI deployment |
-| 3. Training migration | 3-4 weeks | Adapt training scripts; replicate experiments on Azure ML |
-| 4. Model deployment | 2-3 weeks | Deploy models to Azure ML managed endpoints; validate inference |
-| 5. Pipeline migration | 3-4 weeks | Convert SageMaker Pipelines to Azure ML Pipelines |
-| 6. LLM/RAG migration | 2-3 weeks | Switch Bedrock calls to Azure OpenAI; migrate Knowledge Bases to AI Search |
-| 7. Agent migration | 2-4 weeks | Rebuild Bedrock Agents as Azure AI Agents or Copilot Studio |
-| 8. Validation | 2-3 weeks | Dual-run inference; compare model outputs; validate RAG quality |
+| Phase                 | Duration  | Activities                                                                 |
+| --------------------- | --------- | -------------------------------------------------------------------------- |
+| 1. Inventory          | 1-2 weeks | Catalog all SageMaker models, endpoints, pipelines; list Bedrock usage     |
+| 2. Environment setup  | 2-3 weeks | Create Azure ML workspace, AI Foundry project, Azure OpenAI deployment     |
+| 3. Training migration | 3-4 weeks | Adapt training scripts; replicate experiments on Azure ML                  |
+| 4. Model deployment   | 2-3 weeks | Deploy models to Azure ML managed endpoints; validate inference            |
+| 5. Pipeline migration | 3-4 weeks | Convert SageMaker Pipelines to Azure ML Pipelines                          |
+| 6. LLM/RAG migration  | 2-3 weeks | Switch Bedrock calls to Azure OpenAI; migrate Knowledge Bases to AI Search |
+| 7. Agent migration    | 2-4 weeks | Rebuild Bedrock Agents as Azure AI Agents or Copilot Studio                |
+| 8. Validation         | 2-3 weeks | Dual-run inference; compare model outputs; validate RAG quality            |
 
 ---
 

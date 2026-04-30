@@ -46,17 +46,17 @@ For teams moving to Microsoft Fabric rather than Databricks:
 ### Direct size translation
 
 | Snowflake size | Credits/hr | Databricks SQL size | DBU/hr | Fabric capacity (approximate) |
-|---|---|---|---|---|
-| X-Small | 1 | 2X-Small | 4 | F4 |
-| Small | 2 | X-Small | 6 | F8 |
-| Medium | 4 | Small | 12 | F16 |
-| Large | 8 | Medium | 24 | F32-F64 |
-| X-Large | 16 | Large | 40 | F64-F128 |
-| 2X-Large | 32 | X-Large | 80 | F128-F256 |
-| 3X-Large | 64 | 2X-Large | 144 | F256-F512 |
-| 4X-Large | 128 | 3X-Large | 240 | F512-F1024 |
-| 5X-Large | 256 | 4X-Large | 320 | F1024-F2048 |
-| 6X-Large | 512 | 4X-Large (multi) | 640 | F2048 |
+| -------------- | ---------- | ------------------- | ------ | ----------------------------- |
+| X-Small        | 1          | 2X-Small            | 4      | F4                            |
+| Small          | 2          | X-Small             | 6      | F8                            |
+| Medium         | 4          | Small               | 12     | F16                           |
+| Large          | 8          | Medium              | 24     | F32-F64                       |
+| X-Large        | 16         | Large               | 40     | F64-F128                      |
+| 2X-Large       | 32         | X-Large             | 80     | F128-F256                     |
+| 3X-Large       | 64         | 2X-Large            | 144    | F256-F512                     |
+| 4X-Large       | 128        | 3X-Large            | 240    | F512-F1024                    |
+| 5X-Large       | 256        | 4X-Large            | 320    | F1024-F2048                   |
+| 6X-Large       | 512        | 4X-Large (multi)    | 640    | F2048                         |
 
 ### Right-sizing methodology
 
@@ -141,21 +141,21 @@ Databricks SQL Warehouses scale differently:
 
 **Translation rules:**
 
-| Snowflake config | Databricks equivalent |
-|---|---|
-| Multi-cluster: min 1, max 1 | Auto-scaling: min 1, max 1 (fixed) |
-| Multi-cluster: min 1, max 3 | Auto-scaling: min cluster size, max 3x cluster size |
+| Snowflake config             | Databricks equivalent                                    |
+| ---------------------------- | -------------------------------------------------------- |
+| Multi-cluster: min 1, max 1  | Auto-scaling: min 1, max 1 (fixed)                       |
+| Multi-cluster: min 1, max 3  | Auto-scaling: min cluster size, max 3x cluster size      |
 | Multi-cluster: min 1, max 10 | Auto-scaling: use next-larger warehouse with max scaling |
-| Multi-cluster: min 3, max 10 | Consider always-on medium + auto-scaling large |
+| Multi-cluster: min 3, max 10 | Consider always-on medium + auto-scaling large           |
 
 ### Concurrency management
 
-| Snowflake | Databricks |
-|---|---|
-| 8 concurrent queries per cluster (default) | Configurable concurrent queries per warehouse |
-| Queue depth triggers multi-cluster scaling | Queue depth triggers node scaling |
-| Economy vs Standard scaling mode | Single scaling policy with configurable aggressiveness |
-| Separate warehouses for isolation | Separate warehouses or query tagging for isolation |
+| Snowflake                                  | Databricks                                             |
+| ------------------------------------------ | ------------------------------------------------------ |
+| 8 concurrent queries per cluster (default) | Configurable concurrent queries per warehouse          |
+| Queue depth triggers multi-cluster scaling | Queue depth triggers node scaling                      |
+| Economy vs Standard scaling mode           | Single scaling policy with configurable aggressiveness |
+| Separate warehouses for isolation          | Separate warehouses or query tagging for isolation     |
 
 ---
 
@@ -171,12 +171,14 @@ Databricks SQL Warehouses scale differently:
 ### Databricks auto-stop
 
 **Classic SQL Warehouses:**
+
 - Configurable in minutes (minimum 1 minute, default 10 minutes)
 - Auto-stop completely deallocates the warehouse
 - Restart takes 30-120 seconds for classic
 - No cached data retention after stop
 
 **Serverless SQL Warehouses:**
+
 - Minimum 10 minutes auto-stop
 - Restart in under 10 seconds (near-instant)
 - Serverless billing is per-query, not per-time
@@ -184,13 +186,13 @@ Databricks SQL Warehouses scale differently:
 
 ### Translation guidance
 
-| Snowflake auto-suspend | Databricks recommendation |
-|---|---|
-| 60 seconds (aggressive) | Serverless warehouse (instant resume) |
-| 300 seconds (moderate) | Classic with 5-min auto-stop |
-| 600 seconds (default) | Classic with 10-min auto-stop |
+| Snowflake auto-suspend      | Databricks recommendation                           |
+| --------------------------- | --------------------------------------------------- |
+| 60 seconds (aggressive)     | Serverless warehouse (instant resume)               |
+| 300 seconds (moderate)      | Classic with 5-min auto-stop                        |
+| 600 seconds (default)       | Classic with 10-min auto-stop                       |
 | 3600 seconds (conservative) | Classic with 15-min auto-stop; consider reservation |
-| Never (always on) | Always-on classic warehouse with reserved capacity |
+| Never (always on)           | Always-on classic warehouse with reserved capacity  |
 
 ---
 
@@ -198,22 +200,22 @@ Databricks SQL Warehouses scale differently:
 
 ### Snowflake optimizations that translate directly
 
-| Snowflake optimization | Databricks equivalent | Notes |
-|---|---|---|
-| Micro-partition pruning | Delta file pruning | Automatic based on file statistics |
-| Clustering keys | Z-ORDER / liquid clustering | `OPTIMIZE table ZORDER BY (col)` or liquid clustering |
-| Result cache | SQL Warehouse result cache | Automatic; same query returns cached result |
-| Metadata cache | Delta file metadata cache | Automatic |
-| Materialized views | Materialized views (Databricks) | GA in Runtime 13+; syntax slightly different |
+| Snowflake optimization  | Databricks equivalent           | Notes                                                 |
+| ----------------------- | ------------------------------- | ----------------------------------------------------- |
+| Micro-partition pruning | Delta file pruning              | Automatic based on file statistics                    |
+| Clustering keys         | Z-ORDER / liquid clustering     | `OPTIMIZE table ZORDER BY (col)` or liquid clustering |
+| Result cache            | SQL Warehouse result cache      | Automatic; same query returns cached result           |
+| Metadata cache          | Delta file metadata cache       | Automatic                                             |
+| Materialized views      | Materialized views (Databricks) | GA in Runtime 13+; syntax slightly different          |
 
 ### Snowflake optimizations that require changes
 
-| Snowflake optimization | Databricks approach | Migration action |
-|---|---|---|
-| Search Optimization Service | Z-ORDER + liquid clustering | Apply Z-ORDER on lookup columns; evaluate liquid clustering |
-| Query acceleration | Photon engine (automatic) | No action needed; Photon is included |
-| Automatic clustering | Liquid clustering (Runtime 14+) | Enable liquid clustering on frequently-queried tables |
-| Warehouse-level query timeout | SQL Warehouse statement timeout | Configure via warehouse settings |
+| Snowflake optimization        | Databricks approach             | Migration action                                            |
+| ----------------------------- | ------------------------------- | ----------------------------------------------------------- |
+| Search Optimization Service   | Z-ORDER + liquid clustering     | Apply Z-ORDER on lookup columns; evaluate liquid clustering |
+| Query acceleration            | Photon engine (automatic)       | No action needed; Photon is included                        |
+| Automatic clustering          | Liquid clustering (Runtime 14+) | Enable liquid clustering on frequently-queried tables       |
+| Warehouse-level query timeout | SQL Warehouse statement timeout | Configure via warehouse settings                            |
 
 ### Query tuning checklist
 
@@ -244,13 +246,13 @@ Snowflake resource monitors track credit consumption and can:
 
 Azure provides multiple layers:
 
-| Layer | Tool | Equivalent to |
-|---|---|---|
-| Budget alerts | Azure Cost Management | Resource monitor notifications |
-| Warehouse auto-stop | Databricks SQL Warehouse config | Resource monitor suspend |
-| Hard kill-switch | `scripts/deploy/teardown-platform.sh` | Resource monitor suspend + kill |
-| Tag-based tracking | Azure resource tags | Resource monitor per-warehouse tracking |
-| Anomaly detection | Azure Cost Management anomaly alerts | No Snowflake equivalent |
+| Layer               | Tool                                  | Equivalent to                           |
+| ------------------- | ------------------------------------- | --------------------------------------- |
+| Budget alerts       | Azure Cost Management                 | Resource monitor notifications          |
+| Warehouse auto-stop | Databricks SQL Warehouse config       | Resource monitor suspend                |
+| Hard kill-switch    | `scripts/deploy/teardown-platform.sh` | Resource monitor suspend + kill         |
+| Tag-based tracking  | Azure resource tags                   | Resource monitor per-warehouse tracking |
+| Anomaly detection   | Azure Cost Management anomaly alerts  | No Snowflake equivalent                 |
 
 **Setup example (Azure Cost Management budget):**
 
@@ -273,7 +275,10 @@ Azure provides multiple layers:
             "enabled": true,
             "operator": "GreaterThanOrEqualTo",
             "threshold": 90,
-            "contactEmails": ["data-platform-team@agency.gov", "cfo-office@agency.gov"]
+            "contactEmails": [
+                "data-platform-team@agency.gov",
+                "cfo-office@agency.gov"
+            ]
         }
     }
 }
@@ -300,13 +305,13 @@ Azure provides multiple layers:
 
 During the parallel-run phase, track these metrics daily:
 
-| Metric | Snowflake source | Databricks source |
-|---|---|---|
-| Query count | `QUERY_HISTORY` view | `system.query.history` table |
-| P50/P90/P99 latency | `QUERY_HISTORY` view | `system.query.history` table |
-| Total compute cost | `WAREHOUSE_METERING_HISTORY` | Databricks usage logs |
-| Error rate | `QUERY_HISTORY` (error queries) | `system.query.history` (failed) |
-| Data freshness | Source table timestamps | Source table timestamps |
+| Metric              | Snowflake source                | Databricks source               |
+| ------------------- | ------------------------------- | ------------------------------- |
+| Query count         | `QUERY_HISTORY` view            | `system.query.history` table    |
+| P50/P90/P99 latency | `QUERY_HISTORY` view            | `system.query.history` table    |
+| Total compute cost  | `WAREHOUSE_METERING_HISTORY`    | Databricks usage logs           |
+| Error rate          | `QUERY_HISTORY` (error queries) | `system.query.history` (failed) |
+| Data freshness      | Source table timestamps         | Source table timestamps         |
 
 ---
 
@@ -340,12 +345,12 @@ For teams choosing Microsoft Fabric over Databricks:
 
 ### Capacity mapping
 
-| Snowflake warehouse count | Recommended Fabric capacity |
-|---|---|
-| 1-3 small warehouses | F32-F64 |
-| 3-5 mixed warehouses | F64-F128 |
-| 5-10 mixed warehouses | F128-F256 |
-| 10+ warehouses or heavy workloads | F256-F512 |
+| Snowflake warehouse count         | Recommended Fabric capacity |
+| --------------------------------- | --------------------------- |
+| 1-3 small warehouses              | F32-F64                     |
+| 3-5 mixed warehouses              | F64-F128                    |
+| 5-10 mixed warehouses             | F128-F256                   |
+| 10+ warehouses or heavy workloads | F256-F512                   |
 
 ### Key differences from Databricks
 

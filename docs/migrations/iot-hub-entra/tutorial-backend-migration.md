@@ -83,12 +83,12 @@ done
 
 Document the inventory:
 
-| Service | Type | Setting name | SAS policy used | Required RBAC role |
-|---|---|---|---|---|
-| func-iot-processor | Azure Function | `IOTHUB_CONNECTION_STRING` | iothubowner | IoT Hub Data Contributor |
-| func-iot-monitor | Azure Function | `IOT_EVENTHUB_CONN` | service | Event Hubs Data Receiver |
-| logic-device-alerts | Logic App | API connection | iothubowner | IoT Hub Data Reader |
-| app-device-dashboard | Web App | `IOTHUB_CONN_STR` | registryRead | IoT Hub Data Reader |
+| Service              | Type           | Setting name               | SAS policy used | Required RBAC role       |
+| -------------------- | -------------- | -------------------------- | --------------- | ------------------------ |
+| func-iot-processor   | Azure Function | `IOTHUB_CONNECTION_STRING` | iothubowner     | IoT Hub Data Contributor |
+| func-iot-monitor     | Azure Function | `IOT_EVENTHUB_CONN`        | service         | Event Hubs Data Receiver |
+| logic-device-alerts  | Logic App      | API connection             | iothubowner     | IoT Hub Data Reader      |
+| app-device-dashboard | Web App        | `IOTHUB_CONN_STR`          | registryRead    | IoT Hub Data Reader      |
 
 ---
 
@@ -329,18 +329,18 @@ Replace the IoT Hub API connection with an HTTP action using managed identity au
 
 ```json
 {
-  "Get_Device_Twin": {
-    "type": "Http",
-    "inputs": {
-      "method": "GET",
-      "uri": "https://@{parameters('iotHubHostname')}/twins/@{triggerBody()?['deviceId']}?api-version=2021-04-12",
-      "authentication": {
-        "type": "ManagedServiceIdentity",
-        "audience": "https://iothubs.azure.net"
-      }
-    },
-    "runAfter": {}
-  }
+    "Get_Device_Twin": {
+        "type": "Http",
+        "inputs": {
+            "method": "GET",
+            "uri": "https://@{parameters('iotHubHostname')}/twins/@{triggerBody()?['deviceId']}?api-version=2021-04-12",
+            "authentication": {
+                "type": "ManagedServiceIdentity",
+                "audience": "https://iothubs.azure.net"
+            }
+        },
+        "runAfter": {}
+    }
 }
 ```
 
@@ -472,7 +472,7 @@ az monitor log-analytics query \
     FunctionAppLogs
     | where TimeGenerated > ago(1h)
     | where FunctionName contains 'iot'
-    | summarize 
+    | summarize
         Invocations = count(),
         Errors = countif(Level == 'Error')
         by FunctionName
@@ -534,13 +534,13 @@ echo "  it appears in the downstream service (dashboard, alerts, etc.)"
 
 ## Troubleshooting
 
-| Symptom | Likely cause | Resolution |
-|---|---|---|
-| Function returns 403 when accessing IoT Hub | RBAC role not assigned or not propagated | Verify role assignment; wait up to 30 minutes for propagation |
-| `DefaultAzureCredential` fails locally | No local credential available | Use `az login` or set `AZURE_CLIENT_ID`/`AZURE_TENANT_ID`/`AZURE_CLIENT_SECRET` for local dev |
-| Event Hub trigger stops firing | Missing Event Hubs Data Receiver role | Assign `a638d3c7-ab3a-418d-83e6-5f17a39d4fde` on Event Hub namespace |
-| Logic App HTTP action returns 401 | Wrong audience in auth config | Use `https://iothubs.azure.net` as the audience |
-| Function works locally but fails in Azure | Local uses `az login` creds, Azure uses managed identity | Ensure managed identity is enabled and has correct RBAC |
+| Symptom                                     | Likely cause                                             | Resolution                                                                                    |
+| ------------------------------------------- | -------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| Function returns 403 when accessing IoT Hub | RBAC role not assigned or not propagated                 | Verify role assignment; wait up to 30 minutes for propagation                                 |
+| `DefaultAzureCredential` fails locally      | No local credential available                            | Use `az login` or set `AZURE_CLIENT_ID`/`AZURE_TENANT_ID`/`AZURE_CLIENT_SECRET` for local dev |
+| Event Hub trigger stops firing              | Missing Event Hubs Data Receiver role                    | Assign `a638d3c7-ab3a-418d-83e6-5f17a39d4fde` on Event Hub namespace                          |
+| Logic App HTTP action returns 401           | Wrong audience in auth config                            | Use `https://iothubs.azure.net` as the audience                                               |
+| Function works locally but fails in Azure   | Local uses `az login` creds, Azure uses managed identity | Ensure managed identity is enabled and has correct RBAC                                       |
 
 ---
 

@@ -21,14 +21,14 @@ Attempting a "big bang" migration of all Snowflake warehouses, dbt models, Corte
 
 Rank warehouses by migration value and complexity:
 
-| Factor | Score 1 (Easy) | Score 3 (Medium) | Score 5 (Hard) |
-|---|---|---|---|
-| dbt model count | < 20 models | 20-100 models | > 100 models |
-| Snowflake-specific SQL | Minimal (standard SQL) | Some (IFF, DATEADD) | Heavy (VARIANT, Snowpark, Cortex) |
-| Downstream consumers | 1-2 reports | 5-10 reports | > 10 reports + external consumers |
-| Data volume | < 100 GB | 100 GB - 1 TB | > 1 TB |
-| Streaming dependencies | None | Snowpipe (batch) | Snowpipe Streaming + Streams + Tasks |
-| External data sharing | None | 1-2 shares | > 2 shares with external partners |
+| Factor                 | Score 1 (Easy)         | Score 3 (Medium)    | Score 5 (Hard)                       |
+| ---------------------- | ---------------------- | ------------------- | ------------------------------------ |
+| dbt model count        | < 20 models            | 20-100 models       | > 100 models                         |
+| Snowflake-specific SQL | Minimal (standard SQL) | Some (IFF, DATEADD) | Heavy (VARIANT, Snowpark, Cortex)    |
+| Downstream consumers   | 1-2 reports            | 5-10 reports        | > 10 reports + external consumers    |
+| Data volume            | < 100 GB               | 100 GB - 1 TB       | > 1 TB                               |
+| Streaming dependencies | None                   | Snowpipe (batch)    | Snowpipe Streaming + Streams + Tasks |
+| External data sharing  | None                   | 1-2 shares          | > 2 shares with external partners    |
 
 **Migration order:**
 
@@ -39,13 +39,13 @@ Rank warehouses by migration value and complexity:
 
 ### Example migration wave plan
 
-| Wave | Warehouses | Models | Weeks | Phase |
-|---|---|---|---|---|
-| Wave 0 (pilot) | FINANCE_WH | 15 models | 3-4 | Prove the pattern |
-| Wave 1 | HR_WH, SALES_WH | 45 models | 3-4 | Scale the pattern |
-| Wave 2 | ANALYTICS_WH, REPORTING_WH | 80 models | 4-5 | Bulk migration |
-| Wave 3 | STREAMING_WH, AI_WH | 30 models + Cortex | 4-6 | Complex workloads |
-| Wave 4 | SHARED_WH | 20 models + 5 shares | 4-6 | Data sharing cutover |
+| Wave           | Warehouses                 | Models               | Weeks | Phase                |
+| -------------- | -------------------------- | -------------------- | ----- | -------------------- |
+| Wave 0 (pilot) | FINANCE_WH                 | 15 models            | 3-4   | Prove the pattern    |
+| Wave 1         | HR_WH, SALES_WH            | 45 models            | 3-4   | Scale the pattern    |
+| Wave 2         | ANALYTICS_WH, REPORTING_WH | 80 models            | 4-5   | Bulk migration       |
+| Wave 3         | STREAMING_WH, AI_WH        | 30 models + Cortex   | 4-6   | Complex workloads    |
+| Wave 4         | SHARED_WH                  | 20 models + 5 shares | 4-6   | Data sharing cutover |
 
 ---
 
@@ -105,12 +105,12 @@ az consumption budget create \
 
 Track these metrics weekly:
 
-| Metric | Target | Alert threshold |
-|---|---|---|
-| Snowflake daily credits (migrated warehouses) | Declining to zero | Any increase week-over-week |
-| Azure daily cost (new warehouses) | Growing per migration wave | > 120% of projected cost |
-| Combined daily spend | < 130% of pre-migration Snowflake spend | > 150% of pre-migration |
-| Snowflake idle warehouse hours | Increasing | < 50% idle for migrated warehouses |
+| Metric                                        | Target                                  | Alert threshold                    |
+| --------------------------------------------- | --------------------------------------- | ---------------------------------- |
+| Snowflake daily credits (migrated warehouses) | Declining to zero                       | Any increase week-over-week        |
+| Azure daily cost (new warehouses)             | Growing per migration wave              | > 120% of projected cost           |
+| Combined daily spend                          | < 130% of pre-migration Snowflake spend | > 150% of pre-migration            |
+| Snowflake idle warehouse hours                | Increasing                              | < 50% idle for migrated warehouses |
 
 ### Cost reduction actions
 
@@ -234,6 +234,7 @@ SET TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true');
 **Symptom:** Credit commits prevent reducing Snowflake spend during parallel-run.
 
 **Prevention:** Review your Snowflake contract before starting migration. Key clauses to check:
+
 - Minimum annual credit commitment
 - Early termination fees
 - Credit rollover policies
@@ -246,6 +247,7 @@ SET TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true');
 **Symptom:** Engineers struggle with Databricks; velocity drops; frustration increases.
 
 **Prevention:** Start training in Phase 0 (Discovery):
+
 - Databricks Academy certifications for engineers
 - Microsoft Learn paths for Fabric teams
 - Hands-on workshops using the pilot warehouse

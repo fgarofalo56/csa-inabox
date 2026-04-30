@@ -10,14 +10,14 @@ Large Cloudera deployments often run multiple clusters serving different teams o
 
 ### Cluster prioritization matrix
 
-| Factor | Weight | How to score |
-|---|---|---|
-| **Business criticality** | High | Revenue-generating = high risk; internal analytics = lower risk |
-| **Technical complexity** | High | UDF count, NiFi flow count, custom SerDes = higher complexity |
-| **Data volume** | Medium | > 100 TB requires Data Box or WANdisco; adds timeline |
-| **Team readiness** | Medium | Team with cloud experience migrates faster |
-| **Interdependencies** | High | Clusters that feed downstream clusters must migrate in order |
-| **License expiration** | High | Clusters with expiring CDH support migrate first |
+| Factor                   | Weight | How to score                                                    |
+| ------------------------ | ------ | --------------------------------------------------------------- |
+| **Business criticality** | High   | Revenue-generating = high risk; internal analytics = lower risk |
+| **Technical complexity** | High   | UDF count, NiFi flow count, custom SerDes = higher complexity   |
+| **Data volume**          | Medium | > 100 TB requires Data Box or WANdisco; adds timeline           |
+| **Team readiness**       | Medium | Team with cloud experience migrates faster                      |
+| **Interdependencies**    | High   | Clusters that feed downstream clusters must migrate in order    |
+| **License expiration**   | High   | Clusters with expiring CDH support migrate first                |
 
 ### Recommended cluster migration order
 
@@ -31,12 +31,12 @@ flowchart TD
 
 ### What each cluster migration proves
 
-| Cluster | What it proves | What you learn |
-|---|---|---|
-| **Dev/Test** | Data transfer pipeline works. Delta conversion works. Spark code ports cleanly. | Transfer throughput, conversion issues, team familiarity. |
-| **Analytics/BI** | Impala-to-Databricks SQL works. BI tool connections work. Users can use the new platform. | SQL dialect issues, BI reconnection patterns, user training needs. |
-| **ETL/Data Engineering** | Spark jobs run in production. Oozie-to-ADF works. NiFi-to-ADF works. | Job scheduling patterns, error handling, monitoring setup. |
-| **Production/Revenue** | Full platform works at scale under SLAs. Security model is complete. | Cutover procedure, parallel-run validation, incident response on Azure. |
+| Cluster                  | What it proves                                                                            | What you learn                                                          |
+| ------------------------ | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| **Dev/Test**             | Data transfer pipeline works. Delta conversion works. Spark code ports cleanly.           | Transfer throughput, conversion issues, team familiarity.               |
+| **Analytics/BI**         | Impala-to-Databricks SQL works. BI tool connections work. Users can use the new platform. | SQL dialect issues, BI reconnection patterns, user training needs.      |
+| **ETL/Data Engineering** | Spark jobs run in production. Oozie-to-ADF works. NiFi-to-ADF works.                      | Job scheduling patterns, error handling, monitoring setup.              |
+| **Production/Revenue**   | Full platform works at scale under SLAs. Security model is complete.                      | Cutover procedure, parallel-run validation, incident response on Azure. |
 
 ---
 
@@ -46,16 +46,16 @@ If you are migrating from CDP rather than CDH, several aspects of the migration 
 
 ### Migration planning matrix
 
-| Aspect | CDH migration | CDP Private Cloud migration | CDP Public Cloud migration |
-|---|---|---|---|
-| **Data location** | HDFS on bare metal; full data lift required | HDFS on bare metal/VM; full data lift required | Cloud object storage; data lift is minimal |
-| **Spark version** | Spark 2.x; upgrade to 3.x during migration | Spark 3.x; direct port to Databricks | Spark 3.x; direct port to Databricks |
-| **Hive version** | Hive 2.x; more syntax differences vs Spark SQL | Hive 3.x; fewer differences | Hive 3.x; fewer differences |
-| **Security model** | Kerberos + Ranger (or legacy Sentry) | Kerberos + Ranger + Knox | IDBroker + Ranger + Knox |
-| **Container platform** | None (bare metal) | Kubernetes (ECS/OCP); teams may have K8s experience | Managed by Cloudera; teams may lack K8s experience |
-| **API maturity** | Older CM API; more manual work | CDP CLI + REST API; scriptable | CDP CLI + REST API; scriptable |
-| **CDE / CML / CDW** | Not available | Available; migration to Databricks/Azure ML | Available; migration to Databricks/Azure ML |
-| **Expected timeline** | Longer (data lift + format conversion + code port) | Medium (data lift + code port; less format conversion) | Shorter (minimal data lift; code port only) |
+| Aspect                 | CDH migration                                      | CDP Private Cloud migration                            | CDP Public Cloud migration                         |
+| ---------------------- | -------------------------------------------------- | ------------------------------------------------------ | -------------------------------------------------- |
+| **Data location**      | HDFS on bare metal; full data lift required        | HDFS on bare metal/VM; full data lift required         | Cloud object storage; data lift is minimal         |
+| **Spark version**      | Spark 2.x; upgrade to 3.x during migration         | Spark 3.x; direct port to Databricks                   | Spark 3.x; direct port to Databricks               |
+| **Hive version**       | Hive 2.x; more syntax differences vs Spark SQL     | Hive 3.x; fewer differences                            | Hive 3.x; fewer differences                        |
+| **Security model**     | Kerberos + Ranger (or legacy Sentry)               | Kerberos + Ranger + Knox                               | IDBroker + Ranger + Knox                           |
+| **Container platform** | None (bare metal)                                  | Kubernetes (ECS/OCP); teams may have K8s experience    | Managed by Cloudera; teams may lack K8s experience |
+| **API maturity**       | Older CM API; more manual work                     | CDP CLI + REST API; scriptable                         | CDP CLI + REST API; scriptable                     |
+| **CDE / CML / CDW**    | Not available                                      | Available; migration to Databricks/Azure ML            | Available; migration to Databricks/Azure ML        |
+| **Expected timeline**  | Longer (data lift + format conversion + code port) | Medium (data lift + code port; less format conversion) | Shorter (minimal data lift; code port only)        |
 
 ### CDP Public Cloud advantage
 
@@ -119,13 +119,13 @@ flowchart LR
 
 ### Right-sizing each service
 
-| CDH service | CDH resource allocation | Azure allocation | Savings mechanism |
-|---|---|---|---|
-| **HDFS** | 3x replication across all DataNodes | ADLS Gen2 (storage-level redundancy) | Eliminate 67% storage overhead from 3x replication. |
-| **Spark** | Fixed YARN queue (e.g., 50% of cluster) | Databricks auto-scaling (0 to N workers) | Pay only during job execution; terminate when idle. |
-| **Impala** | Dedicated Impala daemons (always on) | Databricks SQL Serverless (scale to zero) | Pay per query; no always-on daemons. |
-| **Kafka** | Dedicated Kafka brokers (always on) | Event Hubs (auto-inflate TUs) | Scale throughput units based on actual traffic. |
-| **NiFi** | Dedicated NiFi cluster (always on) | ADF (per-activity pricing) | Pay per pipeline run; no always-on cluster. |
+| CDH service | CDH resource allocation                 | Azure allocation                          | Savings mechanism                                   |
+| ----------- | --------------------------------------- | ----------------------------------------- | --------------------------------------------------- |
+| **HDFS**    | 3x replication across all DataNodes     | ADLS Gen2 (storage-level redundancy)      | Eliminate 67% storage overhead from 3x replication. |
+| **Spark**   | Fixed YARN queue (e.g., 50% of cluster) | Databricks auto-scaling (0 to N workers)  | Pay only during job execution; terminate when idle. |
+| **Impala**  | Dedicated Impala daemons (always on)    | Databricks SQL Serverless (scale to zero) | Pay per query; no always-on daemons.                |
+| **Kafka**   | Dedicated Kafka brokers (always on)     | Event Hubs (auto-inflate TUs)             | Scale throughput units based on actual traffic.     |
+| **NiFi**    | Dedicated NiFi cluster (always on)      | ADF (per-activity pricing)                | Pay per pipeline run; no always-on cluster.         |
 
 ---
 
@@ -200,14 +200,14 @@ spark.createDataFrame(results).write \
 
 ### Phased decommission plan
 
-| Phase | Duration | Action | Risk mitigation |
-|---|---|---|---|
-| **Pre-cutover** | 2-4 weeks | Parallel run; both systems active | Full rollback capability. |
-| **Cutover** | 1 day | Redirect data sources to Azure endpoints | CDH still running as read-only backup. |
-| **Post-cutover bake** | 30 days | CDH read-only; Azure is primary | Can re-enable CDH pipelines if critical issue found. |
-| **CDH shutdown** | 1 day | Stop all CDH services | Data archived to ADLS for reference if needed. |
-| **Hardware decommission** | 2-4 weeks | Wipe disks, return/recycle hardware | Asset management and disposal. |
-| **License termination** | Next renewal date | Do not renew Cloudera Enterprise license | Confirm with procurement. |
+| Phase                     | Duration          | Action                                   | Risk mitigation                                      |
+| ------------------------- | ----------------- | ---------------------------------------- | ---------------------------------------------------- |
+| **Pre-cutover**           | 2-4 weeks         | Parallel run; both systems active        | Full rollback capability.                            |
+| **Cutover**               | 1 day             | Redirect data sources to Azure endpoints | CDH still running as read-only backup.               |
+| **Post-cutover bake**     | 30 days           | CDH read-only; Azure is primary          | Can re-enable CDH pipelines if critical issue found. |
+| **CDH shutdown**          | 1 day             | Stop all CDH services                    | Data archived to ADLS for reference if needed.       |
+| **Hardware decommission** | 2-4 weeks         | Wipe disks, return/recycle hardware      | Asset management and disposal.                       |
+| **License termination**   | Next renewal date | Do not renew Cloudera Enterprise license | Confirm with procurement.                            |
 
 ### Pre-decommission checklist
 
@@ -229,24 +229,24 @@ spark.createDataFrame(results).write \
 
 ### During migration (temporary team augmentation)
 
-| Role | Count | Responsibilities |
-|---|---|---|
-| **Migration lead** | 1 | Overall migration planning, timeline, stakeholder communication |
-| **Data engineer (Spark/Hive)** | 2-3 | Spark job porting, Hive-to-dbt conversion, UDF rewrites |
-| **Data engineer (NiFi/ADF)** | 1-2 | NiFi-to-ADF pipeline conversion, integration testing |
-| **Impala/SQL specialist** | 1 | Impala-to-Databricks SQL conversion, BI tool reconnection |
-| **Security engineer** | 1 | Ranger-to-Unity Catalog policy migration, Kerberos removal |
-| **Azure platform engineer** | 1 | Landing zone setup, networking, IAM, monitoring |
-| **QA / validation** | 1 | Parallel-run validation, data quality checks, reporting |
+| Role                           | Count | Responsibilities                                                |
+| ------------------------------ | ----- | --------------------------------------------------------------- |
+| **Migration lead**             | 1     | Overall migration planning, timeline, stakeholder communication |
+| **Data engineer (Spark/Hive)** | 2-3   | Spark job porting, Hive-to-dbt conversion, UDF rewrites         |
+| **Data engineer (NiFi/ADF)**   | 1-2   | NiFi-to-ADF pipeline conversion, integration testing            |
+| **Impala/SQL specialist**      | 1     | Impala-to-Databricks SQL conversion, BI tool reconnection       |
+| **Security engineer**          | 1     | Ranger-to-Unity Catalog policy migration, Kerberos removal      |
+| **Azure platform engineer**    | 1     | Landing zone setup, networking, IAM, monitoring                 |
+| **QA / validation**            | 1     | Parallel-run validation, data quality checks, reporting         |
 
 ### Post-migration (steady state)
 
-| Role | Count | Responsibilities |
-|---|---|---|
-| **Platform engineer** | 1-2 | Azure infrastructure, Databricks workspace management, monitoring |
-| **Data engineer** | 2-4 | dbt models, ADF pipelines, Databricks jobs, Delta table optimization |
-| **Analytics engineer** | 1-2 | Power BI semantic models, dbt metrics, data documentation |
-| **Data governance** | 0.5-1 | Purview classifications, Unity Catalog grants, data quality |
+| Role                   | Count | Responsibilities                                                     |
+| ---------------------- | ----- | -------------------------------------------------------------------- |
+| **Platform engineer**  | 1-2   | Azure infrastructure, Databricks workspace management, monitoring    |
+| **Data engineer**      | 2-4   | dbt models, ADF pipelines, Databricks jobs, Delta table optimization |
+| **Analytics engineer** | 1-2   | Power BI semantic models, dbt metrics, data documentation            |
+| **Data governance**    | 0.5-1 | Purview classifications, Unity Catalog grants, data quality          |
 
 The post-migration team is typically 30-50% smaller than the CDH operations team because managed services eliminate infrastructure management work.
 
@@ -324,26 +324,26 @@ The post-migration team is typically 30-50% smaller than the CDH operations team
 
 ### Training plan
 
-| Audience | Training topic | Duration | Format |
-|---|---|---|---|
-| Data engineers | Databricks workspace, notebooks, Jobs | 2 days | Hands-on workshop |
-| Data engineers | dbt fundamentals + Databricks dbt integration | 1 day | Hands-on workshop |
-| Data engineers | ADF pipeline development | 1 day | Hands-on workshop |
-| SQL analysts | Databricks SQL Editor, dialect differences | 0.5 day | Demo + practice |
-| BI developers | Power BI + Databricks SQL connector | 0.5 day | Demo + practice |
-| Data governance | Purview + Unity Catalog | 1 day | Hands-on workshop |
-| Platform team | Azure Monitor, cost management, Databricks admin | 2 days | Hands-on workshop |
-| All users | ADLS Gen2 storage navigation, Azure Portal basics | 0.5 day | Self-paced |
+| Audience        | Training topic                                    | Duration | Format            |
+| --------------- | ------------------------------------------------- | -------- | ----------------- |
+| Data engineers  | Databricks workspace, notebooks, Jobs             | 2 days   | Hands-on workshop |
+| Data engineers  | dbt fundamentals + Databricks dbt integration     | 1 day    | Hands-on workshop |
+| Data engineers  | ADF pipeline development                          | 1 day    | Hands-on workshop |
+| SQL analysts    | Databricks SQL Editor, dialect differences        | 0.5 day  | Demo + practice   |
+| BI developers   | Power BI + Databricks SQL connector               | 0.5 day  | Demo + practice   |
+| Data governance | Purview + Unity Catalog                           | 1 day    | Hands-on workshop |
+| Platform team   | Azure Monitor, cost management, Databricks admin  | 2 days   | Hands-on workshop |
+| All users       | ADLS Gen2 storage navigation, Azure Portal basics | 0.5 day  | Self-paced        |
 
 ### Communication cadence
 
-| Communication | Frequency | Audience | Content |
-|---|---|---|---|
-| Migration status update | Weekly | All stakeholders | Progress, blockers, next steps |
-| Technical sync | Twice weekly | Migration team | Technical issues, architecture decisions |
-| Executive briefing | Bi-weekly | CIO/CDO | Timeline, budget, risk, decisions needed |
-| User readiness update | Bi-weekly | End users | Training schedule, what is changing, FAQ |
-| Post-migration retrospective | Once | All | Lessons learned, what worked, what to improve |
+| Communication                | Frequency    | Audience         | Content                                       |
+| ---------------------------- | ------------ | ---------------- | --------------------------------------------- |
+| Migration status update      | Weekly       | All stakeholders | Progress, blockers, next steps                |
+| Technical sync               | Twice weekly | Migration team   | Technical issues, architecture decisions      |
+| Executive briefing           | Bi-weekly    | CIO/CDO          | Timeline, budget, risk, decisions needed      |
+| User readiness update        | Bi-weekly    | End users        | Training schedule, what is changing, FAQ      |
+| Post-migration retrospective | Once         | All              | Lessons learned, what worked, what to improve |
 
 ---
 
@@ -351,16 +351,16 @@ The post-migration team is typically 30-50% smaller than the CDH operations team
 
 Define these before migration starts. Get stakeholder sign-off.
 
-| Criterion | Metric | Target |
-|---|---|---|
-| **Data accuracy** | Row count and checksum match between CDH and Azure | 100% match for all migrated datasets |
-| **Query performance** | P95 query latency on Databricks SQL vs Impala | Within 120% of Impala baseline (or better) |
-| **Pipeline reliability** | ADF/Databricks Workflow success rate | > 99% over 2-week validation period |
-| **Cost** | Monthly Azure run-rate vs monthly CDH cost | ≤ 65% of CDH cost by month 3 post-migration |
-| **Operational overhead** | Platform team hours per week | ≤ 50% of CDH operational hours |
-| **User satisfaction** | Survey of data engineers and analysts | ≥ 80% rate new platform as "good" or "excellent" |
-| **Security compliance** | All Ranger policies recreated on Unity Catalog | 100% policy coverage, verified by audit |
-| **CDH decommission** | CDH hardware decommissioned | Within 60 days of cutover |
+| Criterion                | Metric                                             | Target                                           |
+| ------------------------ | -------------------------------------------------- | ------------------------------------------------ |
+| **Data accuracy**        | Row count and checksum match between CDH and Azure | 100% match for all migrated datasets             |
+| **Query performance**    | P95 query latency on Databricks SQL vs Impala      | Within 120% of Impala baseline (or better)       |
+| **Pipeline reliability** | ADF/Databricks Workflow success rate               | > 99% over 2-week validation period              |
+| **Cost**                 | Monthly Azure run-rate vs monthly CDH cost         | ≤ 65% of CDH cost by month 3 post-migration      |
+| **Operational overhead** | Platform team hours per week                       | ≤ 50% of CDH operational hours                   |
+| **User satisfaction**    | Survey of data engineers and analysts              | ≥ 80% rate new platform as "good" or "excellent" |
+| **Security compliance**  | All Ranger policies recreated on Unity Catalog     | 100% policy coverage, verified by audit          |
+| **CDH decommission**     | CDH hardware decommissioned                        | Within 60 days of cutover                        |
 
 ---
 

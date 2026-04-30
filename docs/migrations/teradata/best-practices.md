@@ -157,14 +157,14 @@ For comprehensive dependency mapping, use **Microsoft SAMA** which automates thi
 
 Do not migrate all workloads to a single Azure service. Decompose by type:
 
-| Workload type | Characteristics | Best Azure target |
-| --- | --- | --- |
-| **Classic SQL EDW** | Star schema, scheduled reports, BTEQ scripts | Synapse Dedicated or Fabric Warehouse |
-| **Ad-hoc analytics** | Analyst queries, variable complexity | Databricks SQL or Synapse Serverless |
-| **Heavy joins/aggregations** | Large fact tables, complex joins | Databricks SQL (Photon) |
-| **ML/feature engineering** | Python, Spark, notebooks | Databricks (ML Runtime) |
-| **Real-time BI** | Sub-second dashboards | Fabric Direct Lake + Power BI |
-| **Operational queries** | <1s response, high concurrency | Synapse Serverless or Cosmos DB |
+| Workload type                | Characteristics                              | Best Azure target                     |
+| ---------------------------- | -------------------------------------------- | ------------------------------------- |
+| **Classic SQL EDW**          | Star schema, scheduled reports, BTEQ scripts | Synapse Dedicated or Fabric Warehouse |
+| **Ad-hoc analytics**         | Analyst queries, variable complexity         | Databricks SQL or Synapse Serverless  |
+| **Heavy joins/aggregations** | Large fact tables, complex joins             | Databricks SQL (Photon)               |
+| **ML/feature engineering**   | Python, Spark, notebooks                     | Databricks (ML Runtime)               |
+| **Real-time BI**             | Sub-second dashboards                        | Fabric Direct Lake + Power BI         |
+| **Operational queries**      | <1s response, high concurrency               | Synapse Serverless or Cosmos DB       |
 
 ### 2.2 Decomposition by schema/domain
 
@@ -274,13 +274,13 @@ ORDER BY queries_using_pi DESC;
 
 ### 3.2 Mapping rules
 
-| Teradata PI pattern | Azure strategy | When to use |
-| --- | --- | --- |
-| PI on natural key (customer_id) | Synapse HASH distribution on same key | When most joins use this key |
-| PI on surrogate key (order_id) | Synapse ROUND_ROBIN or HASH | When PI is arbitrary |
-| PI on composite key | Synapse HASH on most selective column | Pick the column used in most joins |
-| PPI on date column | Delta PARTITION BY (date column) | Almost always correct |
-| PI + PPI combination | Synapse HASH + partition / Delta Z-ORDER + partition | Combine strategies |
+| Teradata PI pattern             | Azure strategy                                       | When to use                        |
+| ------------------------------- | ---------------------------------------------------- | ---------------------------------- |
+| PI on natural key (customer_id) | Synapse HASH distribution on same key                | When most joins use this key       |
+| PI on surrogate key (order_id)  | Synapse ROUND_ROBIN or HASH                          | When PI is arbitrary               |
+| PI on composite key             | Synapse HASH on most selective column                | Pick the column used in most joins |
+| PPI on date column              | Delta PARTITION BY (date column)                     | Almost always correct              |
+| PI + PPI combination            | Synapse HASH + partition / Delta Z-ORDER + partition | Combine strategies                 |
 
 ### 3.3 Distribution skew detection
 
@@ -338,14 +338,14 @@ Week 6+: Hard cutover
 
 Before each cutover, verify:
 
-| Criterion | Threshold | Validation method |
-| --- | --- | --- |
-| Row count match | 100% exact | Automated count comparison |
-| Revenue totals | <$0.01 variance | Golden query comparison |
-| Query latency p95 | Within 2x of Teradata | Performance monitoring |
-| Data freshness | <30 min lag (CDC) | Watermark monitoring |
-| All tests passing | 100% dbt tests pass | dbt test run |
-| Stakeholder approval | Written sign-off | Email or ticket |
+| Criterion            | Threshold             | Validation method          |
+| -------------------- | --------------------- | -------------------------- |
+| Row count match      | 100% exact            | Automated count comparison |
+| Revenue totals       | <$0.01 variance       | Golden query comparison    |
+| Query latency p95    | Within 2x of Teradata | Performance monitoring     |
+| Data freshness       | <30 min lag (CDC)     | Watermark monitoring       |
+| All tests passing    | 100% dbt tests pass   | dbt test run               |
+| Stakeholder approval | Written sign-off      | Email or ticket            |
 
 ---
 
@@ -420,13 +420,13 @@ def run_reconciliation(td_conn, az_conn):
 
 Build a Power BI or Grafana dashboard showing:
 
-| Panel | Description |
-| --- | --- |
-| Pass/fail summary | Green/red for each reconciliation check |
-| Daily trend | Pass rate over the parallel-run period |
-| Discrepancy detail | Breakdown of any failures with values |
-| CDC latency | Time between Teradata write and Azure availability |
-| Schema coverage | % of tables/views with passing reconciliation |
+| Panel              | Description                                        |
+| ------------------ | -------------------------------------------------- |
+| Pass/fail summary  | Green/red for each reconciliation check            |
+| Daily trend        | Pass rate over the parallel-run period             |
+| Discrepancy detail | Breakdown of any failures with values              |
+| CDC latency        | Time between Teradata write and Azure availability |
+| Schema coverage    | % of tables/views with passing reconciliation      |
 
 ---
 
@@ -439,6 +439,7 @@ Build a Power BI or Grafana dashboard showing:
 **Why it fails:** BTEQ's paradigm (connection → execute → check error → export → disconnect) does not map to Azure's paradigm (dbt model → test → deploy).
 
 **Solution:** Convert to dbt models. The dbt framework handles:
+
 - Dependency management (DAG)
 - Error handling (built-in)
 - Testing (schema + custom tests)
@@ -464,6 +465,7 @@ Build a Power BI or Grafana dashboard showing:
 **Problem:** Migration plans allocate 10-15% of effort to BI validation. Actual effort is 30-50%.
 
 **Why it fails:** Every dashboard, report, and data extract must be:
+
 - Repointed to Azure data source
 - Visually validated (numbers match)
 - Performance tested (load times acceptable)
@@ -478,6 +480,7 @@ Build a Power BI or Grafana dashboard showing:
 **Problem:** Stored procedures and macros contain hidden business logic. Teams discover them late in migration.
 
 **Solution:** Inventory all procedures and macros during assessment (Phase 1). Classify each by:
+
 - Lines of code
 - Teradata-specific features used
 - Downstream consumers
@@ -512,6 +515,7 @@ Budget 2-5 days per complex stored procedure for conversion.
 **Problem:** Tables are migrated without considering Teradata PI → Azure distribution mapping. Queries that were fast on Teradata (co-located joins) become slow on Azure (data shuffling).
 
 **Solution:** For every table with >10M rows, explicitly design the distribution strategy:
+
 - Analyze PI columns and join patterns
 - Choose HASH distribution (Synapse) or Z-ORDER (Databricks)
 - Test join performance before cutover
@@ -524,6 +528,7 @@ Budget 2-5 days per complex stored procedure for conversion.
 **Problem:** Executive sponsors expect 6-12 months. Real timelines are 18-36 months for enterprise estates.
 
 **Why it fails:** Migration involves not just data and SQL, but also:
+
 - Change management (users learning new tools)
 - BI re-validation (every report and dashboard)
 - Integration testing (downstream consumers)
@@ -538,16 +543,16 @@ Budget 2-5 days per complex stored procedure for conversion.
 
 ### 7.1 Team structure
 
-| Role | FTE (medium estate) | Responsibilities |
-| --- | --- | --- |
-| Migration lead / PM | 1 | Overall coordination, stakeholder management |
-| Teradata SME | 1-2 | Source system knowledge, SQL translation review |
-| Azure architect | 1 | Target architecture design, performance tuning |
-| Data engineer (SQL) | 3-5 | SQL conversion, dbt model development |
-| Data engineer (ETL) | 2-3 | ADF pipelines, data loading, CDC |
-| BI developer | 2-3 | Report re-validation, Power BI conversion |
-| QA/validation | 1-2 | Reconciliation, testing, data quality |
-| Security engineer | 0.5-1 | Access control, compliance validation |
+| Role                | FTE (medium estate) | Responsibilities                                |
+| ------------------- | ------------------- | ----------------------------------------------- |
+| Migration lead / PM | 1                   | Overall coordination, stakeholder management    |
+| Teradata SME        | 1-2                 | Source system knowledge, SQL translation review |
+| Azure architect     | 1                   | Target architecture design, performance tuning  |
+| Data engineer (SQL) | 3-5                 | SQL conversion, dbt model development           |
+| Data engineer (ETL) | 2-3                 | ADF pipelines, data loading, CDC                |
+| BI developer        | 2-3                 | Report re-validation, Power BI conversion       |
+| QA/validation       | 1-2                 | Reconciliation, testing, data quality           |
+| Security engineer   | 0.5-1               | Access control, compliance validation           |
 
 ### 7.2 Sprint cadence
 
@@ -564,14 +569,14 @@ Budget 2-5 days per complex stored procedure for conversion.
 
 ### 7.3 Risk register
 
-| Risk | Likelihood | Impact | Mitigation |
-| --- | --- | --- | --- |
-| Teradata license expires mid-migration | Medium | Critical | Negotiate short-term extension before starting |
-| Key Teradata SME leaves | Medium | High | Document all knowledge in first 4 weeks |
-| Azure performance does not meet SLA | Medium | High | Benchmark critical queries in Phase 2 |
-| Budget overrun (dual-run costs) | High | Medium | Accurate dual-run cost model in business case |
-| Stakeholder fatigue (18+ month program) | High | Medium | Regular progress demos, quick wins in early sprints |
-| Undiscovered business logic in procedures | Medium | High | Comprehensive inventory in Phase 1 |
+| Risk                                      | Likelihood | Impact   | Mitigation                                          |
+| ----------------------------------------- | ---------- | -------- | --------------------------------------------------- |
+| Teradata license expires mid-migration    | Medium     | Critical | Negotiate short-term extension before starting      |
+| Key Teradata SME leaves                   | Medium     | High     | Document all knowledge in first 4 weeks             |
+| Azure performance does not meet SLA       | Medium     | High     | Benchmark critical queries in Phase 2               |
+| Budget overrun (dual-run costs)           | High       | Medium   | Accurate dual-run cost model in business case       |
+| Stakeholder fatigue (18+ month program)   | High       | Medium   | Regular progress demos, quick wins in early sprints |
+| Undiscovered business logic in procedures | Medium     | High     | Comprehensive inventory in Phase 1                  |
 
 ---
 

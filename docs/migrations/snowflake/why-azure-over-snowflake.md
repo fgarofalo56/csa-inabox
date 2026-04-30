@@ -18,16 +18,16 @@ This is the single most consequential differentiator for federal customers.
 
 ### Current authorization status (as of April 2026)
 
-| Framework | Snowflake Gov | Azure Government |
-|---|---|---|
-| FedRAMP Moderate | Authorized | Authorized |
-| FedRAMP High | **Not authorized** | Authorized |
-| DoD IL4 | Limited (partner-dependent) | Covered |
-| DoD IL5 | **Gap** | Covered (most services; Fabric IL5 parity per Microsoft roadmap) |
-| DoD IL6 | Gap | Gap (Top Secret cloud required) |
-| ITAR | Covered (Gov region) | Covered (tenant-binding) |
-| CMMC 2.0 Level 2 | Controls available; customer-managed | Controls mapped in platform YAML + narrative docs |
-| HIPAA | Covered with BAA | Covered; mapped in compliance automation |
+| Framework        | Snowflake Gov                        | Azure Government                                                 |
+| ---------------- | ------------------------------------ | ---------------------------------------------------------------- |
+| FedRAMP Moderate | Authorized                           | Authorized                                                       |
+| FedRAMP High     | **Not authorized**                   | Authorized                                                       |
+| DoD IL4          | Limited (partner-dependent)          | Covered                                                          |
+| DoD IL5          | **Gap**                              | Covered (most services; Fabric IL5 parity per Microsoft roadmap) |
+| DoD IL6          | Gap                                  | Gap (Top Secret cloud required)                                  |
+| ITAR             | Covered (Gov region)                 | Covered (tenant-binding)                                         |
+| CMMC 2.0 Level 2 | Controls available; customer-managed | Controls mapped in platform YAML + narrative docs                |
+| HIPAA            | Covered with BAA                     | Covered; mapped in compliance automation                         |
 
 ### What this means in practice
 
@@ -91,16 +91,16 @@ The exit cost from csa-inabox is measured in **weeks**. Copy the Parquet files. 
 
 Snowflake started as a SQL warehouse and has been bolting on capabilities:
 
-| Capability | Snowflake product | Status |
-|---|---|---|
-| AI/ML | Cortex | Commercial: GA (limited models). Gov: partial |
-| Search | Cortex Search | Commercial only (as of 2026-04) |
-| Containers | Snowpark Container Services | Commercial: GA. Gov: limited |
-| Streaming | Snowpipe Streaming | Commercial: GA. Gov: partial |
-| Notebooks | Snowflake Notebooks | Commercial: GA. Gov: limited |
-| Governance | Horizon | Included, but Snowflake-scoped only |
-| BI | Snowsight dashboards | Basic; most customers add Tableau/Power BI |
-| Data Marketplace | Marketplace | Available |
+| Capability       | Snowflake product           | Status                                        |
+| ---------------- | --------------------------- | --------------------------------------------- |
+| AI/ML            | Cortex                      | Commercial: GA (limited models). Gov: partial |
+| Search           | Cortex Search               | Commercial only (as of 2026-04)               |
+| Containers       | Snowpark Container Services | Commercial: GA. Gov: limited                  |
+| Streaming        | Snowpipe Streaming          | Commercial: GA. Gov: partial                  |
+| Notebooks        | Snowflake Notebooks         | Commercial: GA. Gov: limited                  |
+| Governance       | Horizon                     | Included, but Snowflake-scoped only           |
+| BI               | Snowsight dashboards        | Basic; most customers add Tableau/Power BI    |
+| Data Marketplace | Marketplace                 | Available                                     |
 
 Each add-on extends Snowflake's surface area but remains tightly coupled to the Snowflake engine. Governance stops at Snowflake's boundary. AI is limited to models Snowflake has chosen to host.
 
@@ -108,16 +108,16 @@ Each add-on extends Snowflake's surface area but remains tightly coupled to the 
 
 Azure provides each capability as a first-class service that predates and exceeds the Snowflake equivalent:
 
-| Capability | Azure service | Maturity |
-|---|---|---|
-| AI/ML | Azure OpenAI (full GPT-4o, GPT-4.1) + AI Foundry | GA in Gov |
-| Search | Azure AI Search (hybrid vector + keyword) | GA in Gov |
-| Containers | Azure Container Apps, AKS | GA in Gov |
-| Streaming | Event Hubs, Azure Data Explorer | GA in Gov |
-| Notebooks | Fabric notebooks, Databricks notebooks | GA in Gov |
-| Governance | Microsoft Purview (cross-platform) | GA in Gov |
-| BI | Power BI (market leader) + Copilot | GA in Gov |
-| Data Marketplace | Fabric Data Marketplace + Purview data products | GA |
+| Capability       | Azure service                                    | Maturity  |
+| ---------------- | ------------------------------------------------ | --------- |
+| AI/ML            | Azure OpenAI (full GPT-4o, GPT-4.1) + AI Foundry | GA in Gov |
+| Search           | Azure AI Search (hybrid vector + keyword)        | GA in Gov |
+| Containers       | Azure Container Apps, AKS                        | GA in Gov |
+| Streaming        | Event Hubs, Azure Data Explorer                  | GA in Gov |
+| Notebooks        | Fabric notebooks, Databricks notebooks           | GA in Gov |
+| Governance       | Microsoft Purview (cross-platform)               | GA in Gov |
+| BI               | Power BI (market leader) + Copilot               | GA in Gov |
+| Data Marketplace | Fabric Data Marketplace + Purview data products  | GA        |
 
 The key difference: Azure services govern, catalog, and secure data **across** the platform, not just within a single engine.
 
@@ -195,6 +195,7 @@ Snowflake pricing is based on **credits**:
 - Storage is billed separately per TB/month
 
 **Hidden cost drivers:**
+
 - Warehouse idle time (auto-suspend helps, but 60s minimum means short queries still burn a full minute)
 - Credit commit contracts that lock in spend regardless of usage
 - Cortex inference charges that are difficult to predict
@@ -212,6 +213,7 @@ Azure pricing is per-service, per-consumption:
 - **No per-seat BI licensing** when using Fabric capacity
 
 **Cost advantages:**
+
 - Scale-to-zero capability for dev/test/workshop environments
 - Reserved capacity discounts (25-40% on Databricks and Fabric)
 - No credit-commit contracts required
@@ -228,33 +230,33 @@ See [TCO Analysis](tco-analysis.md) for detailed 5-year projections.
 
 Cortex provides SQL-callable AI functions:
 
-| Function | Capability | Gov availability |
-|---|---|---|
-| `COMPLETE` | Text generation (limited model selection) | Partial |
-| `SUMMARIZE` | Summarization | Partial |
-| `TRANSLATE` | Translation | Partial |
-| `EXTRACT_ANSWER` | Extractive QA | Partial |
-| `SENTIMENT` | Sentiment analysis | Partial |
-| Cortex Search | Hybrid vector + keyword search | **Not in Gov** |
-| Cortex Analyst | Natural-language BI | **Not in Gov** |
-| Cortex Guard | Content safety filtering | **Not in Gov** |
-| Cortex Fine-tuning | Model customization | **Not in Gov** |
+| Function           | Capability                                | Gov availability |
+| ------------------ | ----------------------------------------- | ---------------- |
+| `COMPLETE`         | Text generation (limited model selection) | Partial          |
+| `SUMMARIZE`        | Summarization                             | Partial          |
+| `TRANSLATE`        | Translation                               | Partial          |
+| `EXTRACT_ANSWER`   | Extractive QA                             | Partial          |
+| `SENTIMENT`        | Sentiment analysis                        | Partial          |
+| Cortex Search      | Hybrid vector + keyword search            | **Not in Gov**   |
+| Cortex Analyst     | Natural-language BI                       | **Not in Gov**   |
+| Cortex Guard       | Content safety filtering                  | **Not in Gov**   |
+| Cortex Fine-tuning | Model customization                       | **Not in Gov**   |
 
 Cortex is limited to models Snowflake has chosen to host. You cannot bring your own model. You cannot fine-tune in Gov. You cannot use the latest GPT-4o or GPT-4.1 models.
 
 ### Azure OpenAI + AI Foundry + AI Search
 
-| Capability | Azure service | Gov availability |
-|---|---|---|
-| Text generation (GPT-4o, GPT-4.1, o3-mini) | Azure OpenAI | **GA in Gov** |
-| Embeddings (text-embedding-3-large) | Azure OpenAI | **GA in Gov** |
-| Fine-tuning | Azure OpenAI fine-tuning | **GA in Gov** |
-| Hybrid vector + keyword search | Azure AI Search | **GA in Gov** |
-| Content safety | Azure AI Content Safety | **GA in Gov** |
-| RAG pipeline | AI Foundry + AI Search | **GA in Gov** |
-| Model catalog (1000+ models) | AI Foundry model catalog | **GA** |
-| Agent orchestration | AI Foundry agent service | **GA** |
-| Natural-language BI | Power BI Copilot | **GA** |
+| Capability                                 | Azure service            | Gov availability |
+| ------------------------------------------ | ------------------------ | ---------------- |
+| Text generation (GPT-4o, GPT-4.1, o3-mini) | Azure OpenAI             | **GA in Gov**    |
+| Embeddings (text-embedding-3-large)        | Azure OpenAI             | **GA in Gov**    |
+| Fine-tuning                                | Azure OpenAI fine-tuning | **GA in Gov**    |
+| Hybrid vector + keyword search             | Azure AI Search          | **GA in Gov**    |
+| Content safety                             | Azure AI Content Safety  | **GA in Gov**    |
+| RAG pipeline                               | AI Foundry + AI Search   | **GA in Gov**    |
+| Model catalog (1000+ models)               | AI Foundry model catalog | **GA**           |
+| Agent orchestration                        | AI Foundry agent service | **GA**           |
+| Natural-language BI                        | Power BI Copilot         | **GA**           |
 
 The scope difference is not incremental -- it is categorical. Azure OpenAI provides the full GPT-4o family. Cortex provides a curated subset of older models with no fine-tuning in Gov.
 
@@ -326,13 +328,13 @@ If any of the following are true, migration is not optional -- it is a complianc
 
 ## 10. Next steps
 
-| Step | Document |
-|---|---|
-| Build the cost case | [TCO Analysis](tco-analysis.md) |
-| Map all Snowflake features | [Feature Mapping (50+ features)](feature-mapping-complete.md) |
-| Understand the federal path | [Federal Migration Guide](federal-migration-guide.md) |
-| Start with a pilot | [Tutorial: dbt Migration](tutorial-dbt-snowflake-to-fabric.md) |
-| Review the master playbook | [docs/migrations/snowflake.md](../snowflake.md) |
+| Step                        | Document                                                       |
+| --------------------------- | -------------------------------------------------------------- |
+| Build the cost case         | [TCO Analysis](tco-analysis.md)                                |
+| Map all Snowflake features  | [Feature Mapping (50+ features)](feature-mapping-complete.md)  |
+| Understand the federal path | [Federal Migration Guide](federal-migration-guide.md)          |
+| Start with a pilot          | [Tutorial: dbt Migration](tutorial-dbt-snowflake-to-fabric.md) |
+| Review the master playbook  | [docs/migrations/snowflake.md](../snowflake.md)                |
 
 ---
 

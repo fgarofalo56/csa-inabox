@@ -11,7 +11,7 @@ status: Authored 2026-04-29 | Expanded 2026-04-30
 **Scope:** End-to-end migration of the Tableau estate — workbooks, data sources, calculations, server infrastructure, permissions, schedules, and user skills — to Power BI Service and Microsoft Fabric, with csa-inabox as the data platform layer.
 
 !!! tip "Expanded Migration Center Available"
-    This playbook is the core migration reference. For the complete Tableau-to-Power BI migration package — including white papers, deep-dive guides, tutorials, and benchmarks — visit the **[Tableau to Power BI Migration Center](tableau-to-powerbi/index.md)**.
+This playbook is the core migration reference. For the complete Tableau-to-Power BI migration package — including white papers, deep-dive guides, tutorials, and benchmarks — visit the **[Tableau to Power BI Migration Center](tableau-to-powerbi/index.md)**.
 
     **Quick links:**
 

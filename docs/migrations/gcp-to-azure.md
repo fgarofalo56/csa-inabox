@@ -7,7 +7,7 @@
 ---
 
 !!! tip "Expanded Migration Center Available"
-    This playbook is the core migration reference. For the complete GCP-to-Azure migration package — including white papers, deep-dive guides, tutorials, benchmarks, and federal-specific guidance — visit the **[GCP to Azure Migration Center](gcp-to-azure/index.md)**.
+This playbook is the core migration reference. For the complete GCP-to-Azure migration package — including white papers, deep-dive guides, tutorials, benchmarks, and federal-specific guidance — visit the **[GCP to Azure Migration Center](gcp-to-azure/index.md)**.
 
     **Quick links:**
 

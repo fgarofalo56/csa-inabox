@@ -89,26 +89,26 @@ OneLake shortcuts are Azure-specific pointers to data stored elsewhere:
 
 ### Share types
 
-| Snowflake share type | Azure equivalent | Notes |
-|---|---|---|
-| Direct share (account-to-account) | Delta Sharing share + recipient | One-to-one sharing via activation link |
-| Share with multiple consumers | Delta Sharing share + multiple recipients | One share, multiple activation links |
-| Reader account | Delta Sharing recipient (no license needed) | Consumer brings own compute; no provider cost |
-| Cross-region share | Delta Sharing (inherently cross-region) | Protocol is region-agnostic |
-| Cross-cloud share (Snowflake-to-Snowflake) | Delta Sharing (inherently cross-cloud) | Protocol is cloud-agnostic |
-| Secure view in share | Delta Sharing with view (Unity Catalog) | Share views, not just tables |
-| Listing (Marketplace) | Purview data product + contract.yaml | Metadata, SLA, schema published as data product |
-| Private listing | Purview data product (restricted access) | Access controlled via Entra ID groups |
+| Snowflake share type                       | Azure equivalent                            | Notes                                           |
+| ------------------------------------------ | ------------------------------------------- | ----------------------------------------------- |
+| Direct share (account-to-account)          | Delta Sharing share + recipient             | One-to-one sharing via activation link          |
+| Share with multiple consumers              | Delta Sharing share + multiple recipients   | One share, multiple activation links            |
+| Reader account                             | Delta Sharing recipient (no license needed) | Consumer brings own compute; no provider cost   |
+| Cross-region share                         | Delta Sharing (inherently cross-region)     | Protocol is region-agnostic                     |
+| Cross-cloud share (Snowflake-to-Snowflake) | Delta Sharing (inherently cross-cloud)      | Protocol is cloud-agnostic                      |
+| Secure view in share                       | Delta Sharing with view (Unity Catalog)     | Share views, not just tables                    |
+| Listing (Marketplace)                      | Purview data product + contract.yaml        | Metadata, SLA, schema published as data product |
+| Private listing                            | Purview data product (restricted access)    | Access controlled via Entra ID groups           |
 
 ### Object types in shares
 
-| Snowflake shared object | Delta Sharing equivalent | Migration action |
-|---|---|---|
-| Table | Delta table share | Register table in Unity Catalog; add to share |
-| Secure view | View share (Unity Catalog) | Create view in UC; add to share |
-| Secure UDF | Not directly shared; wrap in view | Create a view that calls the UDF; share the view |
-| Database | Schema share | Share at schema level in Unity Catalog |
-| Schema | Schema share | Direct mapping |
+| Snowflake shared object | Delta Sharing equivalent          | Migration action                                 |
+| ----------------------- | --------------------------------- | ------------------------------------------------ |
+| Table                   | Delta table share                 | Register table in Unity Catalog; add to share    |
+| Secure view             | View share (Unity Catalog)        | Create view in UC; add to share                  |
+| Secure UDF              | Not directly shared; wrap in view | Create a view that calls the UDF; share the view |
+| Database                | Schema share                      | Share at schema level in Unity Catalog           |
+| Schema                  | Schema share                      | Direct mapping                                   |
 
 ---
 
@@ -182,25 +182,25 @@ description: "Financial data shared with Partner Agency per MOU-2026-042"
 owner: finance-data-team@agency.gov
 classification: cui_specified
 sharing:
-  protocol: delta-sharing
-  share_name: partner_agency_finance_share
-  recipients:
-    - partner_agency_recipient
-  refresh: live
-  sla:
-    availability: "99.5%"
-    freshness: "15 minutes"
+    protocol: delta-sharing
+    share_name: partner_agency_finance_share
+    recipients:
+        - partner_agency_recipient
+    refresh: live
+    sla:
+        availability: "99.5%"
+        freshness: "15 minutes"
 tables:
-  - name: fct_invoice_aging
-    schema: finance_prod.marts
-    columns:
-      - name: invoice_id
-        type: string
-        classification: pii
-      - name: amount
-        type: decimal(18,2)
-      - name: aging_bucket
-        type: string
+    - name: fct_invoice_aging
+      schema: finance_prod.marts
+      columns:
+          - name: invoice_id
+            type: string
+            classification: pii
+          - name: amount
+            type: decimal(18,2)
+          - name: aging_bucket
+            type: string
 ```
 
 ---
@@ -254,14 +254,14 @@ When both provider and consumer are on Azure, OneLake shortcuts are simpler:
 
 ### When to use OneLake shortcuts vs Delta Sharing
 
-| Scenario | Use OneLake shortcuts | Use Delta Sharing |
-|---|---|---|
-| Both on Azure / Fabric | Preferred | Also works |
-| Cross-cloud (Azure to AWS) | Not supported | Required |
-| Consumer has no Databricks/Fabric | Not supported | Required (open protocol) |
-| Need live data, no replication | Both work | Both work |
-| Consumer needs pandas/DuckDB access | Not supported | Required |
-| Simplest possible setup | Preferred | More steps |
+| Scenario                            | Use OneLake shortcuts | Use Delta Sharing        |
+| ----------------------------------- | --------------------- | ------------------------ |
+| Both on Azure / Fabric              | Preferred             | Also works               |
+| Cross-cloud (Azure to AWS)          | Not supported         | Required                 |
+| Consumer has no Databricks/Fabric   | Not supported         | Required (open protocol) |
+| Need live data, no replication      | Both work             | Both work                |
+| Consumer needs pandas/DuckDB access | Not supported         | Required                 |
+| Simplest possible setup             | Preferred             | More steps               |
 
 ### Setting up OneLake shortcuts
 
@@ -276,16 +276,16 @@ When both provider and consumer are on Azure, OneLake shortcuts are simpler:
 
 ### Snowflake Marketplace to Fabric Data Marketplace
 
-| Snowflake Marketplace feature | Fabric / Purview equivalent |
-|---|---|
-| Public listings | Purview data products (public catalog) |
-| Private listings | Purview data products (restricted access) |
-| Provider profiles | Purview data source documentation |
-| Consumer discovery | Purview catalog search + Fabric Data Marketplace |
-| Usage analytics | Purview audit logs + sharing activity |
-| Sample data | contract.yaml with sample schema + preview |
-| Auto-fulfillment | Delta Sharing activation link |
-| Pricing / monetization | Custom (not built-in; handle via procurement) |
+| Snowflake Marketplace feature | Fabric / Purview equivalent                      |
+| ----------------------------- | ------------------------------------------------ |
+| Public listings               | Purview data products (public catalog)           |
+| Private listings              | Purview data products (restricted access)        |
+| Provider profiles             | Purview data source documentation                |
+| Consumer discovery            | Purview catalog search + Fabric Data Marketplace |
+| Usage analytics               | Purview audit logs + sharing activity            |
+| Sample data                   | contract.yaml with sample schema + preview       |
+| Auto-fulfillment              | Delta Sharing activation link                    |
+| Pricing / monetization        | Custom (not built-in; handle via procurement)    |
 
 ### Migrating existing Marketplace listings
 
@@ -347,13 +347,13 @@ Snowflake's clean-room UX is more integrated. For agencies where clean rooms are
 
 ### Common issues during migration
 
-| Issue | Resolution |
-|---|---|
-| Consumer does not have Databricks or Fabric | Provide Delta Sharing profile; consumer uses pandas or DuckDB |
-| Consumer requires Snowflake-specific format | Negotiate format or provide CSV/Parquet export as bridge |
-| Share includes secure UDFs | Rewrite UDFs as views; share the views |
-| Cross-region latency concerns | Delta Sharing supports regional endpoints; data stays in provider region |
-| Consumer needs real-time data | Delta Sharing provides live access to latest Delta version |
+| Issue                                       | Resolution                                                               |
+| ------------------------------------------- | ------------------------------------------------------------------------ |
+| Consumer does not have Databricks or Fabric | Provide Delta Sharing profile; consumer uses pandas or DuckDB            |
+| Consumer requires Snowflake-specific format | Negotiate format or provide CSV/Parquet export as bridge                 |
+| Share includes secure UDFs                  | Rewrite UDFs as views; share the views                                   |
+| Cross-region latency concerns               | Delta Sharing supports regional endpoints; data stays in provider region |
+| Consumer needs real-time data               | Delta Sharing provides live access to latest Delta version               |
 
 ---
 

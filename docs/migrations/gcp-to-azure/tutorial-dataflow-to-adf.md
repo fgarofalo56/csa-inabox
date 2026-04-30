@@ -12,17 +12,17 @@
 
 Before starting this tutorial, ensure you have the following:
 
-| Requirement | Details |
-|---|---|
-| **GCP project** | With Dataflow jobs you intend to migrate; read access to Beam pipeline code |
-| **Apache Beam source code** | Git repository or local copy of the pipeline code |
-| **Azure subscription** | With permissions to create ADF, Storage Account, Event Hubs, and Stream Analytics |
-| **Azure Data Factory** | Provisioned ADF instance |
-| **ADLS Gen2 storage account** | With hierarchical namespace enabled |
-| **Azure Databricks workspace** | With Unity Catalog enabled (for batch transforms) |
-| **dbt Core** | `pip install dbt-databricks` (v1.7+) |
-| **Azure CLI** | Authenticated with `az login` |
-| **Event Hubs namespace** | Provisioned (for streaming pipelines only) |
+| Requirement                    | Details                                                                           |
+| ------------------------------ | --------------------------------------------------------------------------------- |
+| **GCP project**                | With Dataflow jobs you intend to migrate; read access to Beam pipeline code       |
+| **Apache Beam source code**    | Git repository or local copy of the pipeline code                                 |
+| **Azure subscription**         | With permissions to create ADF, Storage Account, Event Hubs, and Stream Analytics |
+| **Azure Data Factory**         | Provisioned ADF instance                                                          |
+| **ADLS Gen2 storage account**  | With hierarchical namespace enabled                                               |
+| **Azure Databricks workspace** | With Unity Catalog enabled (for batch transforms)                                 |
+| **dbt Core**                   | `pip install dbt-databricks` (v1.7+)                                              |
+| **Azure CLI**                  | Authenticated with `az login`                                                     |
+| **Event Hubs namespace**       | Provisioned (for streaming pipelines only)                                        |
 
 > **GCP comparison:** Dataflow is a managed service for Apache Beam pipelines that handles both batch and streaming. On Azure, batch data movement maps to ADF Copy Activities, batch transforms map to dbt models on Databricks, and streaming maps to Event Hubs + Stream Analytics (SQL-first) or Databricks Structured Streaming (code-first).
 
@@ -134,10 +134,10 @@ def run_streaming():
 
 ### 1.4 Build migration inventory
 
-| Pipeline | Type | Sources | Sinks | Transforms | Schedule | Priority |
-|---|---|---|---|---|---|---|
-| customer_orders_batch | Batch | GCS (CSV) | BigQuery | Parse, filter, join, aggregate | Daily 03:00 UTC | High |
-| pageview_streaming | Streaming | Pub/Sub (JSON) | BigQuery | Parse, window (5m tumbling), count | Continuous | High |
+| Pipeline              | Type      | Sources        | Sinks    | Transforms                         | Schedule        | Priority |
+| --------------------- | --------- | -------------- | -------- | ---------------------------------- | --------------- | -------- |
+| customer_orders_batch | Batch     | GCS (CSV)      | BigQuery | Parse, filter, join, aggregate     | Daily 03:00 UTC | High     |
+| pageview_streaming    | Streaming | Pub/Sub (JSON) | BigQuery | Parse, window (5m tumbling), count | Continuous      | High     |
 
 ---
 
@@ -145,32 +145,32 @@ def run_streaming():
 
 ### 2.1 Decision matrix: batch vs. streaming
 
-| Beam pipeline characteristic | Azure target | Rationale |
-|---|---|---|
-| Batch, file-based sources | ADF Copy Activity + dbt | ADF handles file movement; dbt handles SQL transforms |
-| Batch, database sources | ADF Copy Activity + dbt | ADF has 100+ native connectors |
-| Streaming, low-latency (< 1 min) | Event Hubs + Stream Analytics | SQL-first streaming for simple transforms |
-| Streaming, complex stateful logic | Event Hubs + Databricks Structured Streaming | Code-first for complex windowing and state |
-| Hybrid (batch + micro-batch) | ADF + Databricks Auto Loader | Auto Loader provides streaming-like ingestion from files |
+| Beam pipeline characteristic      | Azure target                                 | Rationale                                                |
+| --------------------------------- | -------------------------------------------- | -------------------------------------------------------- |
+| Batch, file-based sources         | ADF Copy Activity + dbt                      | ADF handles file movement; dbt handles SQL transforms    |
+| Batch, database sources           | ADF Copy Activity + dbt                      | ADF has 100+ native connectors                           |
+| Streaming, low-latency (< 1 min)  | Event Hubs + Stream Analytics                | SQL-first streaming for simple transforms                |
+| Streaming, complex stateful logic | Event Hubs + Databricks Structured Streaming | Code-first for complex windowing and state               |
+| Hybrid (batch + micro-batch)      | ADF + Databricks Auto Loader                 | Auto Loader provides streaming-like ingestion from files |
 
 ### 2.2 Map Beam concepts to Azure
 
-| Apache Beam concept | Azure equivalent | Notes |
-|---|---|---|
-| `Pipeline` | ADF Pipeline + dbt project | Top-level orchestration unit |
-| `PCollection` | ADLS Gen2 files or Delta tables | Intermediate data lands in storage |
-| `ReadFromText` / `ReadFromAvro` | ADF Copy Activity (source) | File-based source connectors |
-| `ReadFromPubSub` | Event Hubs consumer | Kafka protocol or native SDK |
-| `WriteToBigQuery` | ADF Copy Activity (sink) or dbt model | Write to Delta Lake / Fabric |
-| `Map` / `FlatMap` | dbt SQL expression or ADF Data Flow mapping | SQL for declarative; Data Flow for visual |
-| `Filter` | dbt `WHERE` clause | Direct SQL equivalent |
-| `GroupByKey` / `CoGroupByKey` | dbt `GROUP BY` / `JOIN` | SQL joins replace Beam grouping |
-| `Combine` (sum, count, avg) | dbt aggregate functions | `SUM()`, `COUNT()`, `AVG()` |
-| `WindowInto` (fixed, sliding, session) | Stream Analytics windowing | `TumblingWindow`, `HoppingWindow`, `SessionWindow` |
-| `ParDo` (custom DoFn) | dbt macro, ADF Data Flow script, or Databricks notebook | Depends on complexity |
-| `Side inputs` | dbt `ref()` to lookup table | Join to a reference table |
-| `Triggers` | Stream Analytics output policy | Watermark and late-arrival handling |
-| `Dead letter queue` | Event Hubs secondary topic + ADF error handling | Separate error path |
+| Apache Beam concept                    | Azure equivalent                                        | Notes                                              |
+| -------------------------------------- | ------------------------------------------------------- | -------------------------------------------------- |
+| `Pipeline`                             | ADF Pipeline + dbt project                              | Top-level orchestration unit                       |
+| `PCollection`                          | ADLS Gen2 files or Delta tables                         | Intermediate data lands in storage                 |
+| `ReadFromText` / `ReadFromAvro`        | ADF Copy Activity (source)                              | File-based source connectors                       |
+| `ReadFromPubSub`                       | Event Hubs consumer                                     | Kafka protocol or native SDK                       |
+| `WriteToBigQuery`                      | ADF Copy Activity (sink) or dbt model                   | Write to Delta Lake / Fabric                       |
+| `Map` / `FlatMap`                      | dbt SQL expression or ADF Data Flow mapping             | SQL for declarative; Data Flow for visual          |
+| `Filter`                               | dbt `WHERE` clause                                      | Direct SQL equivalent                              |
+| `GroupByKey` / `CoGroupByKey`          | dbt `GROUP BY` / `JOIN`                                 | SQL joins replace Beam grouping                    |
+| `Combine` (sum, count, avg)            | dbt aggregate functions                                 | `SUM()`, `COUNT()`, `AVG()`                        |
+| `WindowInto` (fixed, sliding, session) | Stream Analytics windowing                              | `TumblingWindow`, `HoppingWindow`, `SessionWindow` |
+| `ParDo` (custom DoFn)                  | dbt macro, ADF Data Flow script, or Databricks notebook | Depends on complexity                              |
+| `Side inputs`                          | dbt `ref()` to lookup table                             | Join to a reference table                          |
+| `Triggers`                             | Stream Analytics output policy                          | Watermark and late-arrival handling                |
+| `Dead letter queue`                    | Event Hubs secondary topic + ADF error handling         | Separate error path                                |
 
 ---
 
@@ -182,27 +182,33 @@ Create linked services for GCS (source) and ADLS Gen2 (sink):
 
 ```json
 {
-  "name": "ls_gcs_acme",
-  "type": "GoogleCloudStorage",
-  "typeProperties": {
-    "accessKeyId": "<GCS_HMAC_ACCESS_KEY>",
-    "secretAccessKey": {
-      "type": "AzureKeyVaultSecret",
-      "store": { "referenceName": "ls_keyvault", "type": "LinkedServiceReference" },
-      "secretName": "gcs-hmac-secret"
+    "name": "ls_gcs_acme",
+    "type": "GoogleCloudStorage",
+    "typeProperties": {
+        "accessKeyId": "<GCS_HMAC_ACCESS_KEY>",
+        "secretAccessKey": {
+            "type": "AzureKeyVaultSecret",
+            "store": {
+                "referenceName": "ls_keyvault",
+                "type": "LinkedServiceReference"
+            },
+            "secretName": "gcs-hmac-secret"
+        }
     }
-  }
 }
 ```
 
 ```json
 {
-  "name": "ls_adls_bronze",
-  "type": "AzureBlobFS",
-  "typeProperties": {
-    "url": "https://<STORAGE_ACCOUNT>.dfs.core.windows.net"
-  },
-  "connectVia": { "type": "IntegrationRuntimeReference", "referenceName": "AutoResolveIR" }
+    "name": "ls_adls_bronze",
+    "type": "AzureBlobFS",
+    "typeProperties": {
+        "url": "https://<STORAGE_ACCOUNT>.dfs.core.windows.net"
+    },
+    "connectVia": {
+        "type": "IntegrationRuntimeReference",
+        "referenceName": "AutoResolveIR"
+    }
 }
 ```
 
@@ -212,35 +218,35 @@ Replace `ReadFromText` with ADF Copy Activities:
 
 ```json
 {
-  "name": "copy_customers_csv",
-  "type": "Copy",
-  "typeProperties": {
-    "source": {
-      "type": "DelimitedTextSource",
-      "storeSettings": {
-        "type": "GoogleCloudStorageReadSettings",
-        "recursive": true,
-        "wildcardFileName": "*.csv"
-      },
-      "formatSettings": { "type": "DelimitedTextReadSettings" }
+    "name": "copy_customers_csv",
+    "type": "Copy",
+    "typeProperties": {
+        "source": {
+            "type": "DelimitedTextSource",
+            "storeSettings": {
+                "type": "GoogleCloudStorageReadSettings",
+                "recursive": true,
+                "wildcardFileName": "*.csv"
+            },
+            "formatSettings": { "type": "DelimitedTextReadSettings" }
+        },
+        "sink": {
+            "type": "ParquetSink",
+            "storeSettings": { "type": "AzureBlobFSWriteSettings" }
+        }
     },
-    "sink": {
-      "type": "ParquetSink",
-      "storeSettings": { "type": "AzureBlobFSWriteSettings" }
-    }
-  },
-  "inputs": [
-    {
-      "referenceName": "ds_gcs_customers_csv",
-      "type": "DatasetReference"
-    }
-  ],
-  "outputs": [
-    {
-      "referenceName": "ds_adls_customers_parquet",
-      "type": "DatasetReference"
-    }
-  ]
+    "inputs": [
+        {
+            "referenceName": "ds_gcs_customers_csv",
+            "type": "DatasetReference"
+        }
+    ],
+    "outputs": [
+        {
+            "referenceName": "ds_adls_customers_parquet",
+            "type": "DatasetReference"
+        }
+    ]
 }
 ```
 
@@ -349,19 +355,19 @@ group by
 version: 2
 
 models:
-  - name: fact_order_summary
-    description: "Customer order summary replacing Beam pipeline output"
-    columns:
-      - name: customer_id
-        tests:
-          - not_null
-          - unique
-      - name: total_orders
-        tests:
-          - not_null
-      - name: total_revenue
-        tests:
-          - not_null
+    - name: fact_order_summary
+      description: "Customer order summary replacing Beam pipeline output"
+      columns:
+          - name: customer_id
+            tests:
+                - not_null
+                - unique
+          - name: total_orders
+            tests:
+                - not_null
+          - name: total_revenue
+            tests:
+                - not_null
 ```
 
 ### 4.3 Run and validate
@@ -437,13 +443,13 @@ GROUP BY
 
 ### 5.4 Map Beam windowing to Stream Analytics
 
-| Beam window type | Stream Analytics function | SQL syntax |
-|---|---|---|
-| `FixedWindows(300)` (5 min) | `TumblingWindow` | `TumblingWindow(minute, 5)` |
-| `SlidingWindows(600, 60)` (10 min, 1 min slide) | `HoppingWindow` | `HoppingWindow(minute, 10, 1)` |
-| `Sessions(600)` (10 min gap) | `SessionWindow` | `SessionWindow(minute, 10)` |
-| `GlobalWindows()` | No window (full aggregate) | Omit window function |
-| Late data with `allowed_lateness` | Watermark policy | `TIMESTAMP BY col OVER col (Tolerance ...)` |
+| Beam window type                                | Stream Analytics function  | SQL syntax                                  |
+| ----------------------------------------------- | -------------------------- | ------------------------------------------- |
+| `FixedWindows(300)` (5 min)                     | `TumblingWindow`           | `TumblingWindow(minute, 5)`                 |
+| `SlidingWindows(600, 60)` (10 min, 1 min slide) | `HoppingWindow`            | `HoppingWindow(minute, 10, 1)`              |
+| `Sessions(600)` (10 min gap)                    | `SessionWindow`            | `SessionWindow(minute, 10)`                 |
+| `GlobalWindows()`                               | No window (full aggregate) | Omit window function                        |
+| Late data with `allowed_lateness`               | Watermark policy           | `TIMESTAMP BY col OVER col (Tolerance ...)` |
 
 ### 5.5 Alternative: Databricks Structured Streaming
 
@@ -491,26 +497,26 @@ windowed = (df
 
 ```json
 {
-  "name": "tr_daily_0300_utc",
-  "properties": {
-    "type": "ScheduleTrigger",
-    "typeProperties": {
-      "recurrence": {
-        "frequency": "Day",
-        "interval": 1,
-        "startTime": "2025-01-01T03:00:00Z",
-        "timeZone": "UTC"
-      }
-    },
-    "pipelines": [
-      {
-        "pipelineReference": {
-          "referenceName": "pl_customer_orders_daily",
-          "type": "PipelineReference"
-        }
-      }
-    ]
-  }
+    "name": "tr_daily_0300_utc",
+    "properties": {
+        "type": "ScheduleTrigger",
+        "typeProperties": {
+            "recurrence": {
+                "frequency": "Day",
+                "interval": 1,
+                "startTime": "2025-01-01T03:00:00Z",
+                "timeZone": "UTC"
+            }
+        },
+        "pipelines": [
+            {
+                "pipelineReference": {
+                    "referenceName": "pl_customer_orders_daily",
+                    "type": "PipelineReference"
+                }
+            }
+        ]
+    }
 }
 ```
 
@@ -537,13 +543,13 @@ az monitor metrics alert create \
 
 ### 6.3 Scheduling mapping
 
-| Dataflow / GCP scheduling | Azure equivalent |
-|---|---|
-| Cloud Scheduler + Dataflow template launch | ADF Schedule Trigger |
-| Cloud Composer (Airflow) DAG | ADF Pipeline with dependencies |
-| Dataflow streaming (always-on) | Stream Analytics job (always-on) or Databricks streaming job |
-| Pub/Sub trigger → Cloud Function → Dataflow | Event Grid → ADF event-based trigger |
-| Manual `gcloud dataflow jobs run` | `az datafactory pipeline create-run` or ADF Studio "Trigger Now" |
+| Dataflow / GCP scheduling                   | Azure equivalent                                                 |
+| ------------------------------------------- | ---------------------------------------------------------------- |
+| Cloud Scheduler + Dataflow template launch  | ADF Schedule Trigger                                             |
+| Cloud Composer (Airflow) DAG                | ADF Pipeline with dependencies                                   |
+| Dataflow streaming (always-on)              | Stream Analytics job (always-on) or Databricks streaming job     |
+| Pub/Sub trigger → Cloud Function → Dataflow | Event Grid → ADF event-based trigger                             |
+| Manual `gcloud dataflow jobs run`           | `az datafactory pipeline create-run` or ADF Studio "Trigger Now" |
 
 ---
 
@@ -595,28 +601,28 @@ For streaming, compare windowed output over a test period:
 
 ## Beam transform to dbt/ADF mapping reference
 
-| Beam transform | Azure equivalent | Implementation |
-|---|---|---|
-| `ReadFromText(path)` | ADF Copy Activity | Copy from GCS/ADLS to bronze layer |
-| `ReadFromAvro(path)` | ADF Copy Activity (Avro format) | Copy Avro files preserving schema |
-| `ReadFromPubSub(topic)` | Event Hubs consumer | Kafka protocol or native SDK |
-| `WriteToBigQuery(table)` | dbt model or ADF Copy (sink) | Write to Delta table |
-| `WriteToText(path)` | ADF Copy Activity (sink) | Write to ADLS as CSV/JSON |
-| `Map(fn)` | dbt SQL expression | `SELECT fn_logic FROM ...` |
-| `FlatMap(fn)` | dbt `LATERAL VIEW EXPLODE` | Unnest arrays |
-| `Filter(fn)` | dbt `WHERE` clause | `WHERE condition` |
-| `GroupByKey()` | dbt `GROUP BY` | `GROUP BY key_columns` |
-| `CoGroupByKey()` | dbt `JOIN` | `LEFT JOIN` / `INNER JOIN` on keys |
-| `Combine.globally(sum)` | dbt `SUM()` | Aggregate without GROUP BY |
-| `Combine.perKey(sum)` | dbt `SUM() ... GROUP BY` | Aggregate with GROUP BY |
-| `Flatten()` | dbt `UNION ALL` | Combine multiple sources |
-| `Partition(fn)` | dbt `CASE WHEN` + separate models | Route rows to different targets |
-| `WindowInto(FixedWindows)` | Stream Analytics `TumblingWindow` | SQL windowing function |
-| `WindowInto(SlidingWindows)` | Stream Analytics `HoppingWindow` | Sliding window aggregation |
-| `WindowInto(Sessions)` | Stream Analytics `SessionWindow` | Session-based grouping |
-| Side input (`AsDict`) | dbt `ref()` + `JOIN` | Join to reference table |
-| `Reshuffle()` | No equivalent needed | Databricks handles parallelism automatically |
-| Custom `DoFn` with state | Databricks Structured Streaming `mapGroupsWithState` | For stateful streaming logic |
+| Beam transform               | Azure equivalent                                     | Implementation                               |
+| ---------------------------- | ---------------------------------------------------- | -------------------------------------------- |
+| `ReadFromText(path)`         | ADF Copy Activity                                    | Copy from GCS/ADLS to bronze layer           |
+| `ReadFromAvro(path)`         | ADF Copy Activity (Avro format)                      | Copy Avro files preserving schema            |
+| `ReadFromPubSub(topic)`      | Event Hubs consumer                                  | Kafka protocol or native SDK                 |
+| `WriteToBigQuery(table)`     | dbt model or ADF Copy (sink)                         | Write to Delta table                         |
+| `WriteToText(path)`          | ADF Copy Activity (sink)                             | Write to ADLS as CSV/JSON                    |
+| `Map(fn)`                    | dbt SQL expression                                   | `SELECT fn_logic FROM ...`                   |
+| `FlatMap(fn)`                | dbt `LATERAL VIEW EXPLODE`                           | Unnest arrays                                |
+| `Filter(fn)`                 | dbt `WHERE` clause                                   | `WHERE condition`                            |
+| `GroupByKey()`               | dbt `GROUP BY`                                       | `GROUP BY key_columns`                       |
+| `CoGroupByKey()`             | dbt `JOIN`                                           | `LEFT JOIN` / `INNER JOIN` on keys           |
+| `Combine.globally(sum)`      | dbt `SUM()`                                          | Aggregate without GROUP BY                   |
+| `Combine.perKey(sum)`        | dbt `SUM() ... GROUP BY`                             | Aggregate with GROUP BY                      |
+| `Flatten()`                  | dbt `UNION ALL`                                      | Combine multiple sources                     |
+| `Partition(fn)`              | dbt `CASE WHEN` + separate models                    | Route rows to different targets              |
+| `WindowInto(FixedWindows)`   | Stream Analytics `TumblingWindow`                    | SQL windowing function                       |
+| `WindowInto(SlidingWindows)` | Stream Analytics `HoppingWindow`                     | Sliding window aggregation                   |
+| `WindowInto(Sessions)`       | Stream Analytics `SessionWindow`                     | Session-based grouping                       |
+| Side input (`AsDict`)        | dbt `ref()` + `JOIN`                                 | Join to reference table                      |
+| `Reshuffle()`                | No equivalent needed                                 | Databricks handles parallelism automatically |
+| Custom `DoFn` with state     | Databricks Structured Streaming `mapGroupsWithState` | For stateful streaming logic                 |
 
 ---
 

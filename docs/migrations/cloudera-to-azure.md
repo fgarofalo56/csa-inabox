@@ -11,7 +11,7 @@ status: Authored 2026-04-29 | Expanded 2026-04-30
 **Scope:** Full component-by-component migration from the Cloudera ecosystem (HDFS, Hive, Spark, Impala, HBase, Kafka, Oozie, Ranger, Atlas, NiFi, Sqoop, Flume) to csa-inabox on Microsoft Azure.
 
 !!! tip "Expanded Migration Center Available"
-    This playbook is the core migration reference. For the complete Cloudera-to-Azure migration package — including white papers, deep-dive guides, tutorials, and benchmarks — visit the **[Cloudera Migration Center](cloudera-to-azure/index.md)**.
+This playbook is the core migration reference. For the complete Cloudera-to-Azure migration package — including white papers, deep-dive guides, tutorials, and benchmarks — visit the **[Cloudera Migration Center](cloudera-to-azure/index.md)**.
 
     **Quick links:**
 

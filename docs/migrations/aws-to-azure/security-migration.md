@@ -14,30 +14,30 @@ The security model difference is architectural. AWS IAM is policy-based with JSO
 
 ## Service mapping overview
 
-| AWS security service | Azure equivalent | Migration complexity | Notes |
-|---|---|---|---|
-| IAM users | Entra ID users | S | Federated from existing directory |
-| IAM groups | Entra ID groups | S | Dynamic or assigned membership |
-| IAM roles | Managed identities + RBAC role assignments | M | Service-to-service auth via managed identity |
-| IAM policies (JSON) | Azure RBAC role definitions + assignments | M | Different model; requires intent translation |
-| IAM conditions | Azure ABAC conditions | M | ABAC is newer; less mature than IAM conditions |
-| STS (assume role) | Managed identity / workload identity federation | S | No credential management needed |
-| Lake Formation | Purview + Unity Catalog | L | Different governance model; see below |
-| KMS (CMK) | Azure Key Vault (keys) | S | HSM-backed keys available |
-| KMS grants | Key Vault access policies / RBAC | S | RBAC model preferred |
-| Secrets Manager | Azure Key Vault (secrets) | XS | Direct mapping |
-| CloudTrail | Azure Monitor Activity Log + Diagnostic Settings | S | Unified monitoring |
-| CloudWatch | Azure Monitor + Log Analytics | S | Single pane of glass |
-| CloudWatch Logs | Log Analytics workspace | S | KQL query language |
-| X-Ray | Application Insights | S | OpenTelemetry compatible |
-| GuardDuty | Microsoft Defender for Cloud | S | Broader threat detection |
-| VPC | Azure VNet | M | Similar concepts, different implementation |
-| Security groups | Network Security Groups (NSGs) | S | Stateful rules; similar model |
-| NACLs | NSGs (subnet-level) | S | NSGs can be applied at subnet level |
-| AWS Organizations | Azure Management Groups | M | Hierarchical policy inheritance |
-| Service Control Policies | Azure Policy | M | Deny/audit/deploy-if-not-exists |
-| AWS Config | Azure Policy + Resource Graph | S | Compliance evaluation |
-| AWS WAF | Azure WAF (on Front Door / App Gateway) | S | Similar rule sets |
+| AWS security service     | Azure equivalent                                 | Migration complexity | Notes                                          |
+| ------------------------ | ------------------------------------------------ | -------------------- | ---------------------------------------------- |
+| IAM users                | Entra ID users                                   | S                    | Federated from existing directory              |
+| IAM groups               | Entra ID groups                                  | S                    | Dynamic or assigned membership                 |
+| IAM roles                | Managed identities + RBAC role assignments       | M                    | Service-to-service auth via managed identity   |
+| IAM policies (JSON)      | Azure RBAC role definitions + assignments        | M                    | Different model; requires intent translation   |
+| IAM conditions           | Azure ABAC conditions                            | M                    | ABAC is newer; less mature than IAM conditions |
+| STS (assume role)        | Managed identity / workload identity federation  | S                    | No credential management needed                |
+| Lake Formation           | Purview + Unity Catalog                          | L                    | Different governance model; see below          |
+| KMS (CMK)                | Azure Key Vault (keys)                           | S                    | HSM-backed keys available                      |
+| KMS grants               | Key Vault access policies / RBAC                 | S                    | RBAC model preferred                           |
+| Secrets Manager          | Azure Key Vault (secrets)                        | XS                   | Direct mapping                                 |
+| CloudTrail               | Azure Monitor Activity Log + Diagnostic Settings | S                    | Unified monitoring                             |
+| CloudWatch               | Azure Monitor + Log Analytics                    | S                    | Single pane of glass                           |
+| CloudWatch Logs          | Log Analytics workspace                          | S                    | KQL query language                             |
+| X-Ray                    | Application Insights                             | S                    | OpenTelemetry compatible                       |
+| GuardDuty                | Microsoft Defender for Cloud                     | S                    | Broader threat detection                       |
+| VPC                      | Azure VNet                                       | M                    | Similar concepts, different implementation     |
+| Security groups          | Network Security Groups (NSGs)                   | S                    | Stateful rules; similar model                  |
+| NACLs                    | NSGs (subnet-level)                              | S                    | NSGs can be applied at subnet level            |
+| AWS Organizations        | Azure Management Groups                          | M                    | Hierarchical policy inheritance                |
+| Service Control Policies | Azure Policy                                     | M                    | Deny/audit/deploy-if-not-exists                |
+| AWS Config               | Azure Policy + Resource Graph                    | S                    | Compliance evaluation                          |
+| AWS WAF                  | Azure WAF (on Front Door / App Gateway)          | S                    | Similar rule sets                              |
 
 ---
 
@@ -45,34 +45,34 @@ The security model difference is architectural. AWS IAM is policy-based with JSO
 
 ### Identity model comparison
 
-| AWS IAM concept | Azure equivalent | Notes |
-|---|---|---|
-| IAM User | Entra ID User | Usually synced from on-prem AD |
-| IAM Group | Entra ID Security Group | Dynamic membership available |
-| IAM Role (service) | Managed Identity (system or user-assigned) | No credentials to manage |
-| IAM Role (cross-account) | Service Principal + RBAC | Cross-subscription access |
-| IAM Role (federated) | Workload Identity Federation | For GitHub Actions, GCP, etc. |
-| Root account | Global Administrator | Break-glass access only |
-| IAM Policy (inline) | RBAC role assignment (direct) | Assigned at scope |
-| IAM Policy (managed) | Built-in or custom RBAC role | Pre-defined role definitions |
-| IAM Policy (resource) | Resource-level RBAC | Scope to specific resource |
-| STS AssumeRole | Managed identity token acquisition | Automatic with DefaultAzureCredential |
-| STS session tags | Entra ID claims + ABAC conditions | Attribute-based conditions |
+| AWS IAM concept          | Azure equivalent                           | Notes                                 |
+| ------------------------ | ------------------------------------------ | ------------------------------------- |
+| IAM User                 | Entra ID User                              | Usually synced from on-prem AD        |
+| IAM Group                | Entra ID Security Group                    | Dynamic membership available          |
+| IAM Role (service)       | Managed Identity (system or user-assigned) | No credentials to manage              |
+| IAM Role (cross-account) | Service Principal + RBAC                   | Cross-subscription access             |
+| IAM Role (federated)     | Workload Identity Federation               | For GitHub Actions, GCP, etc.         |
+| Root account             | Global Administrator                       | Break-glass access only               |
+| IAM Policy (inline)      | RBAC role assignment (direct)              | Assigned at scope                     |
+| IAM Policy (managed)     | Built-in or custom RBAC role               | Pre-defined role definitions          |
+| IAM Policy (resource)    | Resource-level RBAC                        | Scope to specific resource            |
+| STS AssumeRole           | Managed identity token acquisition         | Automatic with DefaultAzureCredential |
+| STS session tags         | Entra ID claims + ABAC conditions          | Attribute-based conditions            |
 
 ### Common IAM role translations
 
-| AWS IAM role pattern | Azure RBAC equivalent | Scope |
-|---|---|---|
-| `AmazonS3ReadOnlyAccess` | Storage Blob Data Reader | Storage account or container |
-| `AmazonS3FullAccess` | Storage Blob Data Contributor | Storage account or container |
-| `AmazonRedshiftReadOnlyAccess` | Databricks SQL access (Unity Catalog grants) | Catalog/schema/table |
-| `AmazonEMR_FullAccess` | Contributor on Databricks workspace | Resource group |
-| `AWSGlueServiceRole` | Contributor on ADF + Purview Reader | Resource group |
-| `AmazonAthenaFullAccess` | Databricks SQL access (Unity Catalog grants) | Catalog/schema/table |
-| `AmazonKinesisFullAccess` | Azure Event Hubs Data Owner | Event Hubs namespace |
-| `AmazonSageMakerFullAccess` | AzureML Data Scientist | ML workspace |
-| `CloudWatchReadOnlyAccess` | Monitoring Reader | Subscription or resource group |
-| `AdministratorAccess` | Owner (use sparingly) | Subscription |
+| AWS IAM role pattern           | Azure RBAC equivalent                        | Scope                          |
+| ------------------------------ | -------------------------------------------- | ------------------------------ |
+| `AmazonS3ReadOnlyAccess`       | Storage Blob Data Reader                     | Storage account or container   |
+| `AmazonS3FullAccess`           | Storage Blob Data Contributor                | Storage account or container   |
+| `AmazonRedshiftReadOnlyAccess` | Databricks SQL access (Unity Catalog grants) | Catalog/schema/table           |
+| `AmazonEMR_FullAccess`         | Contributor on Databricks workspace          | Resource group                 |
+| `AWSGlueServiceRole`           | Contributor on ADF + Purview Reader          | Resource group                 |
+| `AmazonAthenaFullAccess`       | Databricks SQL access (Unity Catalog grants) | Catalog/schema/table           |
+| `AmazonKinesisFullAccess`      | Azure Event Hubs Data Owner                  | Event Hubs namespace           |
+| `AmazonSageMakerFullAccess`    | AzureML Data Scientist                       | ML workspace                   |
+| `CloudWatchReadOnlyAccess`     | Monitoring Reader                            | Subscription or resource group |
+| `AdministratorAccess`          | Owner (use sparingly)                        | Subscription                   |
 
 ### IAM policy to RBAC translation example
 
@@ -80,41 +80,32 @@ The security model difference is architectural. AWS IAM is policy-based with JSO
 
 ```json
 {
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "s3:GetObject",
-        "s3:ListBucket"
-      ],
-      "Resource": [
-        "arn:aws:s3:::acme-analytics-curated",
-        "arn:aws:s3:::acme-analytics-curated/*"
-      ]
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "athena:StartQueryExecution",
-        "athena:GetQueryResults"
-      ],
-      "Resource": "*",
-      "Condition": {
-        "StringEquals": {
-          "athena:workGroup": "analyst-workgroup"
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": ["s3:GetObject", "s3:ListBucket"],
+            "Resource": [
+                "arn:aws:s3:::acme-analytics-curated",
+                "arn:aws:s3:::acme-analytics-curated/*"
+            ]
+        },
+        {
+            "Effect": "Allow",
+            "Action": ["athena:StartQueryExecution", "athena:GetQueryResults"],
+            "Resource": "*",
+            "Condition": {
+                "StringEquals": {
+                    "athena:workGroup": "analyst-workgroup"
+                }
+            }
+        },
+        {
+            "Effect": "Allow",
+            "Action": ["glue:GetTable", "glue:GetDatabase"],
+            "Resource": "*"
         }
-      }
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "glue:GetTable",
-        "glue:GetDatabase"
-      ],
-      "Resource": "*"
-    }
-  ]
+    ]
 }
 ```
 
@@ -165,16 +156,16 @@ service = DataLakeServiceClient(
 
 ### Access control model comparison
 
-| Lake Formation concept | Azure equivalent | Notes |
-|---|---|---|
-| Database permissions | Unity Catalog: `GRANT USAGE ON CATALOG/SCHEMA` | Catalog/schema level |
-| Table permissions | Unity Catalog: `GRANT SELECT/MODIFY ON TABLE` | Table level |
-| Column permissions | Unity Catalog: column masks | Column-level security |
-| Row filter expression | Unity Catalog: row filters | Row-level security |
-| Data location permissions | Unity Catalog: external locations | Storage credential management |
-| Tag-based access control | Unity Catalog grants (roadmap for tags) | Different model; use grants |
-| Cross-account sharing | Delta Sharing | Open protocol |
-| Data catalog (Glue) | Purview Unified Catalog | Business glossary + lineage |
+| Lake Formation concept    | Azure equivalent                               | Notes                         |
+| ------------------------- | ---------------------------------------------- | ----------------------------- |
+| Database permissions      | Unity Catalog: `GRANT USAGE ON CATALOG/SCHEMA` | Catalog/schema level          |
+| Table permissions         | Unity Catalog: `GRANT SELECT/MODIFY ON TABLE`  | Table level                   |
+| Column permissions        | Unity Catalog: column masks                    | Column-level security         |
+| Row filter expression     | Unity Catalog: row filters                     | Row-level security            |
+| Data location permissions | Unity Catalog: external locations              | Storage credential management |
+| Tag-based access control  | Unity Catalog grants (roadmap for tags)        | Different model; use grants   |
+| Cross-account sharing     | Delta Sharing                                  | Open protocol                 |
+| Data catalog (Glue)       | Purview Unified Catalog                        | Business glossary + lineage   |
 
 ### Lake Formation grants to Unity Catalog grants
 
@@ -233,17 +224,17 @@ ALTER TABLE sales_prod.gold.fact_orders
 
 ### Key management comparison
 
-| AWS KMS concept | Azure Key Vault equivalent | Notes |
-|---|---|---|
-| Customer managed key (CMK) | Key Vault key (RSA/EC) | HSM-backed or software-protected |
-| AWS managed key | Microsoft-managed key | Default encryption |
-| KMS key policy | Key Vault access policy or RBAC | RBAC recommended |
-| KMS grant | Key Vault RBAC role assignment | Scoped to specific key |
-| KMS alias | Key Vault key name + version | Named reference |
-| Envelope encryption | Envelope encryption (same pattern) | Key wrapping |
-| Key rotation (automatic) | Automatic key rotation (configurable) | 30-365 day rotation |
-| Multi-region key | Key Vault with geo-replication | Different approach |
-| CloudHSM | Azure Dedicated HSM / Managed HSM | FIPS 140-2 Level 3 |
+| AWS KMS concept            | Azure Key Vault equivalent            | Notes                            |
+| -------------------------- | ------------------------------------- | -------------------------------- |
+| Customer managed key (CMK) | Key Vault key (RSA/EC)                | HSM-backed or software-protected |
+| AWS managed key            | Microsoft-managed key                 | Default encryption               |
+| KMS key policy             | Key Vault access policy or RBAC       | RBAC recommended                 |
+| KMS grant                  | Key Vault RBAC role assignment        | Scoped to specific key           |
+| KMS alias                  | Key Vault key name + version          | Named reference                  |
+| Envelope encryption        | Envelope encryption (same pattern)    | Key wrapping                     |
+| Key rotation (automatic)   | Automatic key rotation (configurable) | 30-365 day rotation              |
+| Multi-region key           | Key Vault with geo-replication        | Different approach               |
+| CloudHSM                   | Azure Dedicated HSM / Managed HSM     | FIPS 140-2 Level 3               |
 
 ### Storage encryption mapping
 
@@ -287,14 +278,14 @@ connection_string = secret.value
 
 ### Audit logging comparison
 
-| CloudTrail feature | Azure Monitor equivalent | Notes |
-|---|---|---|
-| Management events | Activity Log | ARM operations (create, update, delete) |
-| Data events (S3, Lambda) | Diagnostic Settings (storage, compute) | Per-resource configuration |
-| Insights events | Azure Advisor + Defender | Anomaly detection |
-| Trail (log delivery to S3) | Diagnostic Settings → Log Analytics / Storage | Centralized log collection |
-| CloudTrail Lake | Log Analytics workspace (KQL) | Query and analyze logs |
-| Organization trail | Azure Policy (diagnostic settings) | Enforce logging across subscriptions |
+| CloudTrail feature         | Azure Monitor equivalent                      | Notes                                   |
+| -------------------------- | --------------------------------------------- | --------------------------------------- |
+| Management events          | Activity Log                                  | ARM operations (create, update, delete) |
+| Data events (S3, Lambda)   | Diagnostic Settings (storage, compute)        | Per-resource configuration              |
+| Insights events            | Azure Advisor + Defender                      | Anomaly detection                       |
+| Trail (log delivery to S3) | Diagnostic Settings → Log Analytics / Storage | Centralized log collection              |
+| CloudTrail Lake            | Log Analytics workspace (KQL)                 | Query and analyze logs                  |
+| Organization trail         | Azure Policy (diagnostic settings)            | Enforce logging across subscriptions    |
 
 ### Setting up comprehensive audit logging
 
@@ -360,14 +351,14 @@ StorageBlobLogs
 
 ### Threat detection comparison
 
-| GuardDuty finding type | Defender equivalent | Notes |
-|---|---|---|
-| UnauthorizedAccess (S3) | Defender for Storage alerts | Anomalous access patterns |
-| CryptoCurrency mining (EC2) | Defender for Servers | Compute threat detection |
-| Recon (port scanning) | Defender for Network | Network anomalies |
-| Trojan/Backdoor | Defender for Endpoint | Endpoint protection |
-| IAM anomalies | Entra ID Protection + Defender | Identity threat detection |
-| DNS exfiltration | Defender for DNS | DNS analytics |
+| GuardDuty finding type      | Defender equivalent            | Notes                     |
+| --------------------------- | ------------------------------ | ------------------------- |
+| UnauthorizedAccess (S3)     | Defender for Storage alerts    | Anomalous access patterns |
+| CryptoCurrency mining (EC2) | Defender for Servers           | Compute threat detection  |
+| Recon (port scanning)       | Defender for Network           | Network anomalies         |
+| Trojan/Backdoor             | Defender for Endpoint          | Endpoint protection       |
+| IAM anomalies               | Entra ID Protection + Defender | Identity threat detection |
+| DNS exfiltration            | Defender for DNS               | DNS analytics             |
 
 ### Defender for Cloud configuration
 
@@ -394,21 +385,21 @@ az security pricing create \
 
 ### Network security comparison
 
-| AWS VPC concept | Azure VNet equivalent | Notes |
-|---|---|---|
-| VPC | Virtual Network (VNet) | Address space, subnets |
-| Subnet (public/private) | Subnet (no public/private distinction) | Use NSG + route table for isolation |
-| Security Group (stateful) | Network Security Group (NSG) | Stateful; similar rule model |
-| NACL (stateless) | NSG at subnet level | NSGs are stateful; no stateless equivalent |
-| Internet Gateway | Default internet routing / NAT Gateway | Implicit in Azure |
-| NAT Gateway | Azure NAT Gateway | Similar functionality |
-| VPC Endpoint (Gateway) | Service Endpoint | Route to service via backbone |
-| VPC Endpoint (Interface) | Private Endpoint | Private IP for PaaS service |
-| Transit Gateway | Azure Virtual WAN / VNet Peering | Hub-and-spoke networking |
-| VPC Peering | VNet Peering | Direct peering; transitive via hub |
-| VPN Gateway | Azure VPN Gateway | Site-to-site and point-to-site |
-| Direct Connect | ExpressRoute | Dedicated private connectivity |
-| AWS PrivateLink | Azure Private Link | PaaS service private connectivity |
+| AWS VPC concept           | Azure VNet equivalent                  | Notes                                      |
+| ------------------------- | -------------------------------------- | ------------------------------------------ |
+| VPC                       | Virtual Network (VNet)                 | Address space, subnets                     |
+| Subnet (public/private)   | Subnet (no public/private distinction) | Use NSG + route table for isolation        |
+| Security Group (stateful) | Network Security Group (NSG)           | Stateful; similar rule model               |
+| NACL (stateless)          | NSG at subnet level                    | NSGs are stateful; no stateless equivalent |
+| Internet Gateway          | Default internet routing / NAT Gateway | Implicit in Azure                          |
+| NAT Gateway               | Azure NAT Gateway                      | Similar functionality                      |
+| VPC Endpoint (Gateway)    | Service Endpoint                       | Route to service via backbone              |
+| VPC Endpoint (Interface)  | Private Endpoint                       | Private IP for PaaS service                |
+| Transit Gateway           | Azure Virtual WAN / VNet Peering       | Hub-and-spoke networking                   |
+| VPC Peering               | VNet Peering                           | Direct peering; transitive via hub         |
+| VPN Gateway               | Azure VPN Gateway                      | Site-to-site and point-to-site             |
+| Direct Connect            | ExpressRoute                           | Dedicated private connectivity             |
+| AWS PrivateLink           | Azure Private Link                     | PaaS service private connectivity          |
 
 ### Private Endpoint configuration for analytics services
 
@@ -448,15 +439,15 @@ az network private-endpoint create \
 
 ## Part 7: AWS Organizations to Azure Management Groups
 
-| AWS Organizations concept | Azure equivalent | Notes |
-|---|---|---|
-| Organization | Tenant (Entra ID) | Root of hierarchy |
-| Root | Root Management Group | Top-level scope |
-| Organizational Unit (OU) | Management Group | Hierarchical grouping |
-| Account | Subscription | Billing and access boundary |
-| Service Control Policy (SCP) | Azure Policy (deny effect) | Guardrails |
-| Tag policy | Azure Policy (tag enforcement) | Require tags on resources |
-| Backup policy | Azure Backup policies | Resource protection |
+| AWS Organizations concept    | Azure equivalent               | Notes                       |
+| ---------------------------- | ------------------------------ | --------------------------- |
+| Organization                 | Tenant (Entra ID)              | Root of hierarchy           |
+| Root                         | Root Management Group          | Top-level scope             |
+| Organizational Unit (OU)     | Management Group               | Hierarchical grouping       |
+| Account                      | Subscription                   | Billing and access boundary |
+| Service Control Policy (SCP) | Azure Policy (deny effect)     | Guardrails                  |
+| Tag policy                   | Azure Policy (tag enforcement) | Require tags on resources   |
+| Backup policy                | Azure Backup policies          | Resource protection         |
 
 ### CSA-in-a-Box 4-subscription pattern
 
@@ -473,15 +464,15 @@ Root Management Group
 
 ## Migration sequence
 
-| Phase | Duration | Activities |
-|---|---|---|
-| 1. Identity mapping | 2-3 weeks | Map IAM users/groups/roles to Entra ID; configure federation |
-| 2. RBAC deployment | 2-3 weeks | Translate IAM policies to Azure RBAC; deploy role assignments |
-| 3. Key Vault setup | 1-2 weeks | Create Key Vault; migrate KMS keys; configure CMK encryption |
-| 4. Network deployment | 2-3 weeks | Deploy VNet, subnets, NSGs, Private Endpoints |
-| 5. Monitoring setup | 1-2 weeks | Configure diagnostic settings, Log Analytics, Defender |
-| 6. Data governance | 3-4 weeks | Configure Purview scans, Unity Catalog grants, row/column security |
-| 7. Validation | 2-3 weeks | Audit access patterns; verify least-privilege; penetration test |
+| Phase                 | Duration  | Activities                                                         |
+| --------------------- | --------- | ------------------------------------------------------------------ |
+| 1. Identity mapping   | 2-3 weeks | Map IAM users/groups/roles to Entra ID; configure federation       |
+| 2. RBAC deployment    | 2-3 weeks | Translate IAM policies to Azure RBAC; deploy role assignments      |
+| 3. Key Vault setup    | 1-2 weeks | Create Key Vault; migrate KMS keys; configure CMK encryption       |
+| 4. Network deployment | 2-3 weeks | Deploy VNet, subnets, NSGs, Private Endpoints                      |
+| 5. Monitoring setup   | 1-2 weeks | Configure diagnostic settings, Log Analytics, Defender             |
+| 6. Data governance    | 3-4 weeks | Configure Purview scans, Unity Catalog grants, row/column security |
+| 7. Validation         | 2-3 weeks | Audit access patterns; verify least-privilege; penetration test    |
 
 ---
 

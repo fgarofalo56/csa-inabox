@@ -60,17 +60,17 @@ Dataflow is Google's managed runner for Apache Beam pipelines. The migration pat
 
 Batch Beam pipelines typically read from GCS or BigQuery, apply transforms, and write to BigQuery or GCS. The Azure equivalent is **ADF pipelines + Databricks notebooks** (or Fabric notebooks).
 
-| Beam concept | Azure equivalent | Notes |
-|---|---|---|
-| Pipeline | ADF pipeline | Orchestration container |
-| PCollection | DataFrame / Delta table | Data abstraction |
-| ParDo / DoFn | Databricks notebook cell / UDF | Custom transform logic |
-| GroupByKey | SparkSQL GROUP BY / dbt model | Aggregation |
-| CoGroupByKey | SparkSQL JOIN | Multi-input join |
-| Flatten | UNION ALL | Combine PCollections |
-| Side inputs | Broadcast variables / temp views | Small lookup datasets |
-| Beam IO (BigQuery) | ADF BigQuery connector | Source/sink connectors |
-| Beam IO (GCS) | ADF GCS connector / ADLS | Source/sink connectors |
+| Beam concept       | Azure equivalent                 | Notes                   |
+| ------------------ | -------------------------------- | ----------------------- |
+| Pipeline           | ADF pipeline                     | Orchestration container |
+| PCollection        | DataFrame / Delta table          | Data abstraction        |
+| ParDo / DoFn       | Databricks notebook cell / UDF   | Custom transform logic  |
+| GroupByKey         | SparkSQL GROUP BY / dbt model    | Aggregation             |
+| CoGroupByKey       | SparkSQL JOIN                    | Multi-input join        |
+| Flatten            | UNION ALL                        | Combine PCollections    |
+| Side inputs        | Broadcast variables / temp views | Small lookup datasets   |
+| Beam IO (BigQuery) | ADF BigQuery connector           | Source/sink connectors  |
+| Beam IO (GCS)      | ADF GCS connector / ADLS         | Source/sink connectors  |
 
 **Migration approach:**
 
@@ -84,11 +84,11 @@ Batch Beam pipelines typically read from GCS or BigQuery, apply transforms, and 
 
 Streaming Beam pipelines read from Pub/Sub, apply windowed transforms, and write to BigQuery or Pub/Sub. The Azure equivalent depends on complexity:
 
-| Complexity | Azure path | When to use |
-|---|---|---|
-| Simple aggregation/filtering | Azure Stream Analytics (ASA) | SQL-first, low-code |
-| Complex event processing | Databricks Structured Streaming | Code-first, stateful |
-| Real-time analytics | Fabric Real-Time Intelligence | Integrated with Fabric |
+| Complexity                   | Azure path                      | When to use            |
+| ---------------------------- | ------------------------------- | ---------------------- |
+| Simple aggregation/filtering | Azure Stream Analytics (ASA)    | SQL-first, low-code    |
+| Complex event processing     | Databricks Structured Streaming | Code-first, stateful   |
+| Real-time analytics          | Fabric Real-Time Intelligence   | Integrated with Fabric |
 
 **Stream Analytics migration example:**
 
@@ -151,28 +151,28 @@ Cloud Composer is managed Apache Airflow. The migration path depends on DAG comp
 
 ### DAG classification and target mapping
 
-| DAG pattern | Azure target | Rationale |
-|---|---|---|
-| Simple schedule + SQL transforms | dbt job on Databricks Workflow | dbt manages dependencies natively |
-| Multi-step with GCP operators | ADF pipeline | ADF has 100+ connectors |
-| Python-heavy custom operators | Databricks notebook workflow | Full Python environment |
-| Cross-system orchestration | ADF pipeline calling Databricks + other services | ADF is the orchestration hub |
-| Sensor-based (file arrival) | ADF event trigger + Databricks Auto Loader | Event-driven instead of polling |
+| DAG pattern                      | Azure target                                     | Rationale                         |
+| -------------------------------- | ------------------------------------------------ | --------------------------------- |
+| Simple schedule + SQL transforms | dbt job on Databricks Workflow                   | dbt manages dependencies natively |
+| Multi-step with GCP operators    | ADF pipeline                                     | ADF has 100+ connectors           |
+| Python-heavy custom operators    | Databricks notebook workflow                     | Full Python environment           |
+| Cross-system orchestration       | ADF pipeline calling Databricks + other services | ADF is the orchestration hub      |
+| Sensor-based (file arrival)      | ADF event trigger + Databricks Auto Loader       | Event-driven instead of polling   |
 
 ### Airflow operator to ADF activity mapping
 
-| Airflow operator | ADF activity | Notes |
-|---|---|---|
-| `BigQueryOperator` | ADF Copy Activity (BigQuery source) | During migration; post-migration use Databricks SQL |
-| `DataprocSubmitJobOperator` | ADF Databricks Notebook activity | Submit Spark jobs to Databricks |
-| `GCSToGCSOperator` | ADF Copy Activity (GCS to ADLS) | File copy between storage |
-| `PythonOperator` | ADF Azure Function activity / Databricks notebook | Custom Python logic |
-| `BashOperator` | ADF custom activity / Azure Batch | Shell commands |
-| `EmailOperator` | Logic Apps / Power Automate | Email notifications |
-| `SlackWebhookOperator` | Logic Apps Slack connector | Chat notifications |
-| `FileSensor` | ADF storage event trigger | Event-driven, not polling |
-| `ExternalTaskSensor` | ADF pipeline dependency | Cross-pipeline dependencies |
-| `BranchPythonOperator` | ADF If Condition activity | Conditional branching |
+| Airflow operator            | ADF activity                                      | Notes                                               |
+| --------------------------- | ------------------------------------------------- | --------------------------------------------------- |
+| `BigQueryOperator`          | ADF Copy Activity (BigQuery source)               | During migration; post-migration use Databricks SQL |
+| `DataprocSubmitJobOperator` | ADF Databricks Notebook activity                  | Submit Spark jobs to Databricks                     |
+| `GCSToGCSOperator`          | ADF Copy Activity (GCS to ADLS)                   | File copy between storage                           |
+| `PythonOperator`            | ADF Azure Function activity / Databricks notebook | Custom Python logic                                 |
+| `BashOperator`              | ADF custom activity / Azure Batch                 | Shell commands                                      |
+| `EmailOperator`             | Logic Apps / Power Automate                       | Email notifications                                 |
+| `SlackWebhookOperator`      | Logic Apps Slack connector                        | Chat notifications                                  |
+| `FileSensor`                | ADF storage event trigger                         | Event-driven, not polling                           |
+| `ExternalTaskSensor`        | ADF pipeline dependency                           | Cross-pipeline dependencies                         |
+| `BranchPythonOperator`      | ADF If Condition activity                         | Conditional branching                               |
 
 ### Worked example: Airflow DAG to ADF pipeline
 
@@ -216,19 +216,19 @@ Dataform and dbt are conceptually very close. Both are SQL-first transformation 
 
 ### Mapping table
 
-| Dataform concept | dbt equivalent | Notes |
-|---|---|---|
-| SQLX file | SQL model file | Nearly identical syntax |
-| `config { type: "table" }` | `{{ config(materialized='table') }}` | Jinja config block |
-| `config { type: "incremental" }` | `{{ config(materialized='incremental') }}` | Same concept |
-| `config { type: "view" }` | `{{ config(materialized='view') }}` | Same concept |
-| `${ref("table_name")}` | `{{ ref('table_name') }}` | Reference syntax |
-| `${self()}` | `{{ this }}` | Self-reference |
-| `${when(incremental(), "...")}` | `{% if is_incremental() %}...{% endif %}` | Incremental filter |
-| Assertions | dbt tests | Testing framework |
-| `dataform.json` | `dbt_project.yml` | Project configuration |
-| JavaScript transforms | dbt Python models | For non-SQL logic |
-| Compilation | `dbt compile` | SQL compilation step |
+| Dataform concept                 | dbt equivalent                             | Notes                   |
+| -------------------------------- | ------------------------------------------ | ----------------------- |
+| SQLX file                        | SQL model file                             | Nearly identical syntax |
+| `config { type: "table" }`       | `{{ config(materialized='table') }}`       | Jinja config block      |
+| `config { type: "incremental" }` | `{{ config(materialized='incremental') }}` | Same concept            |
+| `config { type: "view" }`        | `{{ config(materialized='view') }}`        | Same concept            |
+| `${ref("table_name")}`           | `{{ ref('table_name') }}`                  | Reference syntax        |
+| `${self()}`                      | `{{ this }}`                               | Self-reference          |
+| `${when(incremental(), "...")}`  | `{% if is_incremental() %}...{% endif %}`  | Incremental filter      |
+| Assertions                       | dbt tests                                  | Testing framework       |
+| `dataform.json`                  | `dbt_project.yml`                          | Project configuration   |
+| JavaScript transforms            | dbt Python models                          | For non-SQL logic       |
+| Compilation                      | `dbt compile`                              | SQL compilation step    |
 
 ### Migration steps
 
@@ -250,17 +250,17 @@ The migration is typically straightforward because Dataform was designed with si
 
 Pub/Sub is Google's managed message queue. Event Hubs is the Azure equivalent with Kafka protocol support.
 
-| Pub/Sub concept | Event Hubs equivalent | Notes |
-|---|---|---|
-| Topic | Event Hub (within a namespace) | Message channel |
-| Subscription | Consumer group | Message consumption |
-| Push subscription | N/A (use Azure Functions trigger) | Event Hubs is pull-based; Functions provide push semantics |
-| Pull subscription | Consumer group + consumer client | Standard Kafka consumer pattern |
-| Message ordering | Partition key ordering | Per-partition ordering guaranteed |
-| Dead letter topic | Dead letter queue (capture) | Failed message handling |
-| Message retention | 1-90 days (Standard/Premium) | Configurable retention |
-| Exactly-once delivery | At-least-once (consumer manages) | Use idempotent consumers |
-| Schema validation | Schema Registry | Avro/JSON schema enforcement |
+| Pub/Sub concept       | Event Hubs equivalent             | Notes                                                      |
+| --------------------- | --------------------------------- | ---------------------------------------------------------- |
+| Topic                 | Event Hub (within a namespace)    | Message channel                                            |
+| Subscription          | Consumer group                    | Message consumption                                        |
+| Push subscription     | N/A (use Azure Functions trigger) | Event Hubs is pull-based; Functions provide push semantics |
+| Pull subscription     | Consumer group + consumer client  | Standard Kafka consumer pattern                            |
+| Message ordering      | Partition key ordering            | Per-partition ordering guaranteed                          |
+| Dead letter topic     | Dead letter queue (capture)       | Failed message handling                                    |
+| Message retention     | 1-90 days (Standard/Premium)      | Configurable retention                                     |
+| Exactly-once delivery | At-least-once (consumer manages)  | Use idempotent consumers                                   |
+| Schema validation     | Schema Registry                   | Avro/JSON schema enforcement                               |
 
 **Kafka protocol support:** Event Hubs exposes a Kafka endpoint. Existing Pub/Sub consumers that use the Kafka dialect (common for Dataflow/Flink consumers) can connect to Event Hubs by changing the bootstrap server address and authentication.
 
@@ -268,12 +268,12 @@ Pub/Sub is Google's managed message queue. Event Hubs is the Azure equivalent wi
 
 GCS Pub/Sub notifications (triggered on object create/delete) map to Azure Event Grid blob events.
 
-| GCS notification | Event Grid equivalent | Notes |
-|---|---|---|
-| `OBJECT_FINALIZE` | `Microsoft.Storage.BlobCreated` | New blob created |
-| `OBJECT_DELETE` | `Microsoft.Storage.BlobDeleted` | Blob deleted |
-| `OBJECT_ARCHIVE` | Tier change event | Blob tier changed |
-| Notification to Cloud Function | Event Grid subscription to Azure Function | Same pattern |
+| GCS notification               | Event Grid equivalent                     | Notes             |
+| ------------------------------ | ----------------------------------------- | ----------------- |
+| `OBJECT_FINALIZE`              | `Microsoft.Storage.BlobCreated`           | New blob created  |
+| `OBJECT_DELETE`                | `Microsoft.Storage.BlobDeleted`           | Blob deleted      |
+| `OBJECT_ARCHIVE`               | Tier change event                         | Blob tier changed |
+| Notification to Cloud Function | Event Grid subscription to Azure Function | Same pattern      |
 
 ---
 
@@ -281,13 +281,13 @@ GCS Pub/Sub notifications (triggered on object create/delete) map to Azure Event
 
 Cloud Functions and Azure Functions are both serverless, event-driven compute platforms with similar trigger models.
 
-| Cloud Functions trigger | Azure Functions trigger | Notes |
-|---|---|---|
-| HTTP trigger | HTTP trigger | Direct replacement |
-| Pub/Sub trigger | Event Hub trigger / Service Bus trigger | Message-driven |
-| Cloud Storage trigger | Blob trigger / Event Grid trigger | File-arrival driven |
-| Firestore trigger | Cosmos DB trigger | Document change driven |
-| Scheduler trigger | Timer trigger | Cron-based |
+| Cloud Functions trigger | Azure Functions trigger                 | Notes                  |
+| ----------------------- | --------------------------------------- | ---------------------- |
+| HTTP trigger            | HTTP trigger                            | Direct replacement     |
+| Pub/Sub trigger         | Event Hub trigger / Service Bus trigger | Message-driven         |
+| Cloud Storage trigger   | Blob trigger / Event Grid trigger       | File-arrival driven    |
+| Firestore trigger       | Cosmos DB trigger                       | Document change driven |
+| Scheduler trigger       | Timer trigger                           | Cron-based             |
 
 ### Migration steps
 
@@ -334,14 +334,14 @@ def main(myblob: func.InputStream):
 
 For each GCP pipeline, decide on the Azure orchestration pattern:
 
-| Pipeline shape | Azure pattern |
-|---|---|
-| Pure SQL transforms with dependencies | dbt on Databricks Workflow |
-| SQL transforms + file copies + notifications | ADF pipeline calling dbt + copy activities |
-| Spark jobs with dependencies | Databricks multi-task Workflow |
-| Event-driven (file arrival, message) | Event Grid/Hubs trigger + Azure Function + ADF |
-| Complex cross-system (APIs, databases, files) | ADF pipeline as orchestrator |
-| Real-time streaming | Event Hubs + ASA or Structured Streaming |
+| Pipeline shape                                | Azure pattern                                  |
+| --------------------------------------------- | ---------------------------------------------- |
+| Pure SQL transforms with dependencies         | dbt on Databricks Workflow                     |
+| SQL transforms + file copies + notifications  | ADF pipeline calling dbt + copy activities     |
+| Spark jobs with dependencies                  | Databricks multi-task Workflow                 |
+| Event-driven (file arrival, message)          | Event Grid/Hubs trigger + Azure Function + ADF |
+| Complex cross-system (APIs, databases, files) | ADF pipeline as orchestrator                   |
+| Real-time streaming                           | Event Hubs + ASA or Structured Streaming       |
 
 ---
 

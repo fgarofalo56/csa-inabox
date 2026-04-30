@@ -18,13 +18,13 @@ Delta Live Tables (DLT) is Databricks' declarative data pipeline framework. It p
 
 Fabric does **not** have a direct DLT equivalent. The migration path depends on the workload type:
 
-| DLT pattern | Fabric target | Why |
-| --- | --- | --- |
-| Batch DLT pipelines | **dbt-fabric** + Fabric Data Pipelines | dbt provides declarative SQL transforms; Data Pipelines provide orchestration |
-| Streaming DLT tables | **Fabric Real-Time Intelligence (RTI)** | Eventhouse + Eventstream for sub-second streaming |
-| DLT expectations (quality) | **dbt tests** + Great Expectations | dbt tests replace DLT expectations |
-| DLT materialized views | **Lakehouse tables** refreshed by dbt/notebooks | Manual refresh via pipeline schedule |
-| DLT pipeline monitoring | **Fabric monitoring hub** + Data Pipeline alerts | Pipeline-level monitoring |
+| DLT pattern                | Fabric target                                    | Why                                                                           |
+| -------------------------- | ------------------------------------------------ | ----------------------------------------------------------------------------- |
+| Batch DLT pipelines        | **dbt-fabric** + Fabric Data Pipelines           | dbt provides declarative SQL transforms; Data Pipelines provide orchestration |
+| Streaming DLT tables       | **Fabric Real-Time Intelligence (RTI)**          | Eventhouse + Eventstream for sub-second streaming                             |
+| DLT expectations (quality) | **dbt tests** + Great Expectations               | dbt tests replace DLT expectations                                            |
+| DLT materialized views     | **Lakehouse tables** refreshed by dbt/notebooks  | Manual refresh via pipeline schedule                                          |
+| DLT pipeline monitoring    | **Fabric monitoring hub** + Data Pipeline alerts | Pipeline-level monitoring                                                     |
 
 ---
 
@@ -70,6 +70,7 @@ More components, but each is well-understood and independently testable.
 ### 3.1 DLT table definition to dbt model
 
 **Databricks DLT (Python):**
+
 ```python
 import dlt
 
@@ -90,6 +91,7 @@ def customers_clean():
 ```
 
 **Databricks DLT (SQL):**
+
 ```sql
 CREATE OR REFRESH LIVE TABLE customers_clean (
     CONSTRAINT valid_email EXPECT (email IS NOT NULL AND email LIKE '%@%') ON VIOLATION DROP ROW,
@@ -109,6 +111,7 @@ FROM LIVE.raw_customers
 **dbt-fabric equivalent:**
 
 Model file `models/silver/customers_clean.sql`:
+
 ```sql
 -- models/silver/customers_clean.sql
 {{ config(
@@ -127,51 +130,53 @@ WHERE customer_id IS NOT NULL
 ```
 
 Test file `tests/silver/test_customers_clean.yml`:
+
 ```yaml
 # tests/silver/test_customers_clean.yml
 version: 2
 
 models:
-  - name: customers_clean
-    description: "Cleaned customer records"
-    columns:
-      - name: customer_id
-        tests:
-          - not_null
-          - unique
-      - name: email_lower
-        tests:
-          - not_null
-          - dbt_utils.expression_is_true:
-              expression: "email_lower LIKE '%@%'"
-              config:
-                severity: error  # equivalent to ON VIOLATION DROP ROW
-      - name: state
-        tests:
-          - not_null
-          - dbt_utils.expression_is_true:
-              expression: "LENGTH(state) = 2"
-              config:
-                severity: error
-      - name: name
-        tests:
-          - not_null:
-              config:
-                severity: warn  # equivalent to EXPECT (no drop)
+    - name: customers_clean
+      description: "Cleaned customer records"
+      columns:
+          - name: customer_id
+            tests:
+                - not_null
+                - unique
+          - name: email_lower
+            tests:
+                - not_null
+                - dbt_utils.expression_is_true:
+                      expression: "email_lower LIKE '%@%'"
+                      config:
+                          severity: error # equivalent to ON VIOLATION DROP ROW
+          - name: state
+            tests:
+                - not_null
+                - dbt_utils.expression_is_true:
+                      expression: "LENGTH(state) = 2"
+                      config:
+                          severity: error
+          - name: name
+            tests:
+                - not_null:
+                      config:
+                          severity: warn # equivalent to EXPECT (no drop)
 ```
 
 ### 3.2 DLT expectations to dbt tests mapping
 
-| DLT expectation | dbt test equivalent | Behavior |
-| --- | --- | --- |
-| `@dlt.expect("name", "expr")` | `dbt test` with `severity: warn` | Log warning, keep row |
-| `@dlt.expect_or_drop("name", "expr")` | Pre-filter in model SQL + `severity: error` test | Drop row in SQL, test validates |
-| `@dlt.expect_or_fail("name", "expr")` | `dbt test` with `severity: error` + `--fail-fast` | Fail pipeline on violation |
-| DLT quality metrics (% passing) | dbt `store_failures` + custom macro | Store test failures for reporting |
+| DLT expectation                       | dbt test equivalent                               | Behavior                          |
+| ------------------------------------- | ------------------------------------------------- | --------------------------------- |
+| `@dlt.expect("name", "expr")`         | `dbt test` with `severity: warn`                  | Log warning, keep row             |
+| `@dlt.expect_or_drop("name", "expr")` | Pre-filter in model SQL + `severity: error` test  | Drop row in SQL, test validates   |
+| `@dlt.expect_or_fail("name", "expr")` | `dbt test` with `severity: error` + `--fail-fast` | Fail pipeline on violation        |
+| DLT quality metrics (% passing)       | dbt `store_failures` + custom macro               | Store test failures for reporting |
 
 ### 3.3 DLT incremental processing to dbt incremental
 
 **DLT streaming table:**
+
 ```python
 @dlt.table
 def orders_incremental():
@@ -179,6 +184,7 @@ def orders_incremental():
 ```
 
 **dbt incremental model:**
+
 ```sql
 -- models/silver/orders_incremental.sql
 {{ config(
@@ -206,18 +212,19 @@ WHERE ingested_at > (SELECT MAX(ingested_at) FROM {{ this }})
 
 ### 4.1 When to use RTI vs Spark Structured Streaming
 
-| Pattern | Use RTI / Eventhouse | Use Fabric Spark Structured Streaming |
-| --- | --- | --- |
-| Sub-second analytics on streaming data | Yes | No |
-| KQL-based querying and dashboards | Yes | No |
-| Append-only event streams | Yes | Yes |
-| Complex transformations (joins, windows) | Partial (KQL) | Yes (Spark) |
-| Writing to Delta tables | No (Eventhouse uses KQL DB) | Yes |
-| Integration with Power BI Real-Time | Yes (native) | No |
+| Pattern                                  | Use RTI / Eventhouse        | Use Fabric Spark Structured Streaming |
+| ---------------------------------------- | --------------------------- | ------------------------------------- |
+| Sub-second analytics on streaming data   | Yes                         | No                                    |
+| KQL-based querying and dashboards        | Yes                         | No                                    |
+| Append-only event streams                | Yes                         | Yes                                   |
+| Complex transformations (joins, windows) | Partial (KQL)               | Yes (Spark)                           |
+| Writing to Delta tables                  | No (Eventhouse uses KQL DB) | Yes                                   |
+| Integration with Power BI Real-Time      | Yes (native)                | No                                    |
 
 ### 4.2 DLT streaming to Eventstream + Eventhouse
 
 **Databricks DLT streaming:**
+
 ```python
 @dlt.table
 def streaming_events():
@@ -301,14 +308,15 @@ def daily_sales_summary():
 
 ### 5.2 Fabric equivalents
 
-| Approach | Freshness | Effort | Best for |
-| --- | --- | --- | --- |
-| dbt model + scheduled run | Minutes to hours | Low | Batch aggregations |
-| Fabric notebook + Data Pipeline trigger | Minutes | Medium | Complex PySpark aggregations |
-| Lakehouse SQL view | Real-time (query-time) | Low | Simple aggregations, small data |
-| Power BI Direct Lake measure | Real-time (query-time) | Low | BI-layer aggregations |
+| Approach                                | Freshness              | Effort | Best for                        |
+| --------------------------------------- | ---------------------- | ------ | ------------------------------- |
+| dbt model + scheduled run               | Minutes to hours       | Low    | Batch aggregations              |
+| Fabric notebook + Data Pipeline trigger | Minutes                | Medium | Complex PySpark aggregations    |
+| Lakehouse SQL view                      | Real-time (query-time) | Low    | Simple aggregations, small data |
+| Power BI Direct Lake measure            | Real-time (query-time) | Low    | BI-layer aggregations           |
 
 **dbt approach (recommended for batch):**
+
 ```sql
 -- models/gold/daily_sales_summary.sql
 {{ config(materialized='table') }}
@@ -331,6 +339,7 @@ Schedule `dbt run` via a Fabric Data Pipeline on a cron schedule.
 ### 6.1 DLT monitoring
 
 DLT provides:
+
 - Pipeline event log (stored in Delta table)
 - Data quality metrics (expectations pass/fail/drop counts)
 - Pipeline lineage graph
@@ -338,35 +347,35 @@ DLT provides:
 
 ### 6.2 Fabric monitoring equivalents
 
-| DLT monitoring feature | Fabric equivalent |
-| --- | --- |
-| Pipeline event log | Data Pipeline run history (Fabric monitoring hub) |
-| Expectation pass/fail metrics | dbt test results + `store_failures` table |
-| Pipeline lineage graph | Fabric lineage view (workspace-level) |
-| Run history | Data Pipeline run history + Azure Monitor |
-| Alerting on failure | Data Pipeline alerts + Data Activator |
+| DLT monitoring feature        | Fabric equivalent                                 |
+| ----------------------------- | ------------------------------------------------- |
+| Pipeline event log            | Data Pipeline run history (Fabric monitoring hub) |
+| Expectation pass/fail metrics | dbt test results + `store_failures` table         |
+| Pipeline lineage graph        | Fabric lineage view (workspace-level)             |
+| Run history                   | Data Pipeline run history + Azure Monitor         |
+| Alerting on failure           | Data Pipeline alerts + Data Activator             |
 
 ### 6.3 dbt test results for quality monitoring
 
 ```yaml
 # dbt_project.yml
 on-run-end:
-  - "{{ dbt_utils.log_test_results() }}"
+    - "{{ dbt_utils.log_test_results() }}"
 
 # Store test failures for dashboarding
 vars:
-  dbt_utils_dispatch_list: ['dbt_utils']
+    dbt_utils_dispatch_list: ["dbt_utils"]
 
 # In schema.yml, enable store_failures:
 models:
-  - name: customers_clean
-    columns:
-      - name: email_lower
-        tests:
-          - not_null:
-              config:
-                store_failures: true
-                schema: audit
+    - name: customers_clean
+      columns:
+          - name: email_lower
+            tests:
+                - not_null:
+                      config:
+                          store_failures: true
+                          schema: audit
 ```
 
 Failed rows are stored in `audit.not_null_customers_clean_email_lower`. Build a Power BI report on the audit schema for data quality dashboards.
@@ -383,8 +392,8 @@ Failed rows are stored in `audit.not_null_customers_clean_email_lower`. Build a 
     "target": "production",
     "continuous": false,
     "development": false,
-    "clusters": [{"label": "default", "num_workers": 4}],
-    "libraries": [{"notebook": {"path": "/pipelines/customers"}}]
+    "clusters": [{ "label": "default", "num_workers": 4 }],
+    "libraries": [{ "notebook": { "path": "/pipelines/customers" } }]
 }
 ```
 
@@ -406,7 +415,7 @@ Create a Fabric Data Pipeline with the following activities:
             "name": "Run dbt bronze to silver",
             "type": "Notebook",
             "typeProperties": {
-                "notebook": {"referenceName": "dbt_runner"},
+                "notebook": { "referenceName": "dbt_runner" },
                 "parameters": {
                     "dbt_command": "dbt run --select tag:bronze_to_silver"
                 }
@@ -415,9 +424,14 @@ Create a Fabric Data Pipeline with the following activities:
         {
             "name": "Run dbt tests",
             "type": "Notebook",
-            "dependsOn": [{"activity": "Run dbt bronze to silver", "conditions": ["Succeeded"]}],
+            "dependsOn": [
+                {
+                    "activity": "Run dbt bronze to silver",
+                    "conditions": ["Succeeded"]
+                }
+            ],
             "typeProperties": {
-                "notebook": {"referenceName": "dbt_runner"},
+                "notebook": { "referenceName": "dbt_runner" },
                 "parameters": {
                     "dbt_command": "dbt test --select tag:bronze_to_silver"
                 }
@@ -426,9 +440,11 @@ Create a Fabric Data Pipeline with the following activities:
         {
             "name": "Run dbt silver to gold",
             "type": "Notebook",
-            "dependsOn": [{"activity": "Run dbt tests", "conditions": ["Succeeded"]}],
+            "dependsOn": [
+                { "activity": "Run dbt tests", "conditions": ["Succeeded"] }
+            ],
             "typeProperties": {
-                "notebook": {"referenceName": "dbt_runner"},
+                "notebook": { "referenceName": "dbt_runner" },
                 "parameters": {
                     "dbt_command": "dbt run --select tag:silver_to_gold"
                 }
@@ -460,14 +476,14 @@ Create a Fabric Data Pipeline with the following activities:
 
 ## 9. Common pitfalls
 
-| Pitfall | Mitigation |
-| --- | --- |
+| Pitfall                                     | Mitigation                                                                                   |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------- |
 | Trying to replicate DLT's declarative model | Accept that dbt + Data Pipelines is a different paradigm; it is well-understood and testable |
-| Losing quality metric history | Store dbt test failures in audit tables; build dashboards |
-| Ignoring DLT's auto-optimization | Fabric auto-compacts and V-Orders, but verify write patterns are efficient |
-| Mixing batch and streaming in one pipeline | Separate batch (dbt) and streaming (RTI) workloads cleanly |
-| Underestimating DLT CDC complexity | DLT change data capture requires careful translation to Fabric merge patterns |
-| Not scheduling dbt tests | Always run `dbt test` after `dbt run` in the pipeline; treat tests as first-class |
+| Losing quality metric history               | Store dbt test failures in audit tables; build dashboards                                    |
+| Ignoring DLT's auto-optimization            | Fabric auto-compacts and V-Orders, but verify write patterns are efficient                   |
+| Mixing batch and streaming in one pipeline  | Separate batch (dbt) and streaming (RTI) workloads cleanly                                   |
+| Underestimating DLT CDC complexity          | DLT change data capture requires careful translation to Fabric merge patterns                |
+| Not scheduling dbt tests                    | Always run `dbt test` after `dbt run` in the pipeline; treat tests as first-class            |
 
 ---
 

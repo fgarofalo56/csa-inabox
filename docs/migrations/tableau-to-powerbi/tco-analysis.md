@@ -14,34 +14,34 @@ The total cost of ownership (TCO) of an analytics platform extends beyond per-us
 
 ### 1.1 Tableau licensing tiers (as of early 2026)
 
-| License tier | Monthly cost | Annual cost | What it includes |
-|---|---|---|---|
-| **Creator** | $75 | $900 | Desktop + Prep Builder + Server/Cloud access (publish, explore, view) |
-| **Explorer** | $42 | $504 | Server/Cloud access (explore, interact, create on web) |
-| **Viewer** | $15 | $180 | Server/Cloud access (view, interact, subscribe) |
-| **Data Management add-on** | $5.50/user | $66/user | Prep Conductor, Catalog, virtual connections |
-| **Server Management add-on** | $3.00/user | $36/user | Advanced management (Resource Monitoring Tool, Content Migration Tool) |
+| License tier                 | Monthly cost | Annual cost | What it includes                                                       |
+| ---------------------------- | ------------ | ----------- | ---------------------------------------------------------------------- |
+| **Creator**                  | $75          | $900        | Desktop + Prep Builder + Server/Cloud access (publish, explore, view)  |
+| **Explorer**                 | $42          | $504        | Server/Cloud access (explore, interact, create on web)                 |
+| **Viewer**                   | $15          | $180        | Server/Cloud access (view, interact, subscribe)                        |
+| **Data Management add-on**   | $5.50/user   | $66/user    | Prep Conductor, Catalog, virtual connections                           |
+| **Server Management add-on** | $3.00/user   | $36/user    | Advanced management (Resource Monitoring Tool, Content Migration Tool) |
 
 ### 1.2 Power BI licensing tiers (as of early 2026)
 
-| License tier | Monthly cost | Annual cost | What it includes |
-|---|---|---|---|
-| **Power BI Pro** | $10 | $120 | Full authoring, publishing, sharing, collaboration |
-| **Power BI Premium Per User (PPU)** | $20 | $240 | Pro + Premium features (AI, paginated reports, larger models, deployment pipelines) |
-| **Power BI Free** | $0 | $0 | View content in Premium/Fabric capacity workspaces |
-| **Included in M365 E5** | $0 incremental | $0 incremental | Power BI Pro included in Microsoft 365 E5 license |
+| License tier                        | Monthly cost   | Annual cost    | What it includes                                                                    |
+| ----------------------------------- | -------------- | -------------- | ----------------------------------------------------------------------------------- |
+| **Power BI Pro**                    | $10            | $120           | Full authoring, publishing, sharing, collaboration                                  |
+| **Power BI Premium Per User (PPU)** | $20            | $240           | Pro + Premium features (AI, paginated reports, larger models, deployment pipelines) |
+| **Power BI Free**                   | $0             | $0             | View content in Premium/Fabric capacity workspaces                                  |
+| **Included in M365 E5**             | $0 incremental | $0 incremental | Power BI Pro included in Microsoft 365 E5 license                                   |
 
 ### 1.3 Capacity-based pricing
 
-| Platform | SKU | Monthly cost | What it provides |
-|---|---|---|---|
-| **Fabric F2** | 2 CUs | ~$262 | Entry-level Fabric capacity, unlimited viewers |
-| **Fabric F64** | 64 CUs | ~$5,000 | Mid-range production capacity, equivalent to P1 |
-| **Fabric F128** | 128 CUs | ~$10,000 | Large-scale production capacity |
-| **Fabric F256** | 256 CUs | ~$20,000 | Enterprise-scale capacity |
-| **Fabric F512** | 512 CUs | ~$40,000 | High-performance enterprise capacity |
-| **Tableau Server (self-hosted)** | N/A | Varies | VM infrastructure + storage + DBA/admin labor |
-| **Tableau Cloud** | Included | Included in per-user | Hosted by Salesforce (no separate infrastructure fee) |
+| Platform                         | SKU      | Monthly cost         | What it provides                                      |
+| -------------------------------- | -------- | -------------------- | ----------------------------------------------------- |
+| **Fabric F2**                    | 2 CUs    | ~$262                | Entry-level Fabric capacity, unlimited viewers        |
+| **Fabric F64**                   | 64 CUs   | ~$5,000              | Mid-range production capacity, equivalent to P1       |
+| **Fabric F128**                  | 128 CUs  | ~$10,000             | Large-scale production capacity                       |
+| **Fabric F256**                  | 256 CUs  | ~$20,000             | Enterprise-scale capacity                             |
+| **Fabric F512**                  | 512 CUs  | ~$40,000             | High-performance enterprise capacity                  |
+| **Tableau Server (self-hosted)** | N/A      | Varies               | VM infrastructure + storage + DBA/admin labor         |
+| **Tableau Cloud**                | Included | Included in per-user | Hosted by Salesforce (no separate infrastructure fee) |
 
 ---
 
@@ -51,17 +51,17 @@ The total cost of ownership (TCO) of an analytics platform extends beyond per-us
 
 **User mix:** 10 Creators, 15 Explorers, 25 Viewers
 
-| Cost category | Tableau annual | Power BI annual | Notes |
-|---|---|---|---|
-| Creator licenses | $9,000 | $1,200 (Pro) | 10 users x $75/mo vs $10/mo |
-| Explorer licenses | $7,560 | $1,800 (Pro) | 15 users x $42/mo vs $10/mo |
-| Viewer licenses | $4,500 | $3,000 (Pro) | 25 users x $15/mo vs $10/mo |
-| Data Management add-on | $3,300 | $0 | $5.50/user x 50 for catalog/prep conductor |
-| Infrastructure (Server) | $12,000 | $0 | 2 VMs + storage for Tableau Server |
-| Admin labor (0.25 FTE) | $30,000 | $5,000 | Tableau Server requires dedicated admin |
-| **Total annual** | **$66,360** | **$11,000** | |
-| **3-year TCO** | **$199,080** | **$33,000** | |
-| **5-year TCO** | **$331,800** | **$55,000** | |
+| Cost category           | Tableau annual | Power BI annual | Notes                                      |
+| ----------------------- | -------------- | --------------- | ------------------------------------------ |
+| Creator licenses        | $9,000         | $1,200 (Pro)    | 10 users x $75/mo vs $10/mo                |
+| Explorer licenses       | $7,560         | $1,800 (Pro)    | 15 users x $42/mo vs $10/mo                |
+| Viewer licenses         | $4,500         | $3,000 (Pro)    | 25 users x $15/mo vs $10/mo                |
+| Data Management add-on  | $3,300         | $0              | $5.50/user x 50 for catalog/prep conductor |
+| Infrastructure (Server) | $12,000        | $0              | 2 VMs + storage for Tableau Server         |
+| Admin labor (0.25 FTE)  | $30,000        | $5,000          | Tableau Server requires dedicated admin    |
+| **Total annual**        | **$66,360**    | **$11,000**     |                                            |
+| **3-year TCO**          | **$199,080**   | **$33,000**     |                                            |
+| **5-year TCO**          | **$331,800**   | **$55,000**     |                                            |
 
 **Annual savings with Power BI: ~$55,000 (83%)**
 
@@ -69,17 +69,17 @@ The total cost of ownership (TCO) of an analytics platform extends beyond per-us
 
 **User mix:** 30 Creators, 70 Explorers, 100 Viewers
 
-| Cost category | Tableau annual | Power BI annual | Notes |
-|---|---|---|---|
-| Creator licenses | $27,000 | $3,600 (Pro) | |
-| Explorer licenses | $35,280 | $8,400 (Pro) | |
-| Viewer licenses | $18,000 | $12,000 (Pro) | |
-| Data Management add-on | $13,200 | $0 | |
-| Infrastructure (Server) | $36,000 | $0 | 4 VMs (app + backgrounder + gateway nodes) |
-| Admin labor (0.5 FTE) | $60,000 | $15,000 | |
-| **Total annual** | **$189,480** | **$39,000** | |
-| **3-year TCO** | **$568,440** | **$117,000** | |
-| **5-year TCO** | **$947,400** | **$195,000** | |
+| Cost category           | Tableau annual | Power BI annual | Notes                                      |
+| ----------------------- | -------------- | --------------- | ------------------------------------------ |
+| Creator licenses        | $27,000        | $3,600 (Pro)    |                                            |
+| Explorer licenses       | $35,280        | $8,400 (Pro)    |                                            |
+| Viewer licenses         | $18,000        | $12,000 (Pro)   |                                            |
+| Data Management add-on  | $13,200        | $0              |                                            |
+| Infrastructure (Server) | $36,000        | $0              | 4 VMs (app + backgrounder + gateway nodes) |
+| Admin labor (0.5 FTE)   | $60,000        | $15,000         |                                            |
+| **Total annual**        | **$189,480**   | **$39,000**     |                                            |
+| **3-year TCO**          | **$568,440**   | **$117,000**    |                                            |
+| **5-year TCO**          | **$947,400**   | **$195,000**    |                                            |
 
 **Annual savings with Power BI: ~$150,000 (79%)**
 
@@ -87,19 +87,19 @@ The total cost of ownership (TCO) of an analytics platform extends beyond per-us
 
 **User mix:** 60 Creators, 140 Explorers, 300 Viewers
 
-| Cost category | Tableau annual | Power BI annual | Notes |
-|---|---|---|---|
-| Creator licenses | $54,000 | $7,200 (Pro) | |
-| Explorer licenses | $70,560 | $16,800 (Pro) | |
-| Viewer licenses | $54,000 | $0 (Free + capacity) | Viewers use Free license on Fabric capacity |
-| Data Management add-on | $33,000 | $0 | |
-| Server Management add-on | $18,000 | $0 | |
-| Infrastructure (Server) | $72,000 | $0 | 8 VMs (HA cluster) |
-| Fabric capacity (F64) | N/A | $60,000 | Enables unlimited viewers, Premium features |
-| Admin labor (1.0 FTE) | $120,000 | $30,000 | |
-| **Total annual** | **$421,560** | **$114,000** | |
-| **3-year TCO** | **$1,264,680** | **$342,000** | |
-| **5-year TCO** | **$2,107,800** | **$570,000** | |
+| Cost category            | Tableau annual | Power BI annual      | Notes                                       |
+| ------------------------ | -------------- | -------------------- | ------------------------------------------- |
+| Creator licenses         | $54,000        | $7,200 (Pro)         |                                             |
+| Explorer licenses        | $70,560        | $16,800 (Pro)        |                                             |
+| Viewer licenses          | $54,000        | $0 (Free + capacity) | Viewers use Free license on Fabric capacity |
+| Data Management add-on   | $33,000        | $0                   |                                             |
+| Server Management add-on | $18,000        | $0                   |                                             |
+| Infrastructure (Server)  | $72,000        | $0                   | 8 VMs (HA cluster)                          |
+| Fabric capacity (F64)    | N/A            | $60,000              | Enables unlimited viewers, Premium features |
+| Admin labor (1.0 FTE)    | $120,000       | $30,000              |                                             |
+| **Total annual**         | **$421,560**   | **$114,000**         |                                             |
+| **3-year TCO**           | **$1,264,680** | **$342,000**         |                                             |
+| **5-year TCO**           | **$2,107,800** | **$570,000**         |                                             |
 
 **Annual savings with Power BI: ~$307,000 (73%)**
 
@@ -107,19 +107,19 @@ The total cost of ownership (TCO) of an analytics platform extends beyond per-us
 
 **User mix:** 150 Creators, 450 Explorers, 1,400 Viewers
 
-| Cost category | Tableau annual | Power BI annual | Notes |
-|---|---|---|---|
-| Creator licenses | $135,000 | $18,000 (Pro) | |
-| Explorer licenses | $226,800 | $54,000 (Pro) | |
-| Viewer licenses | $252,000 | $0 (Free + capacity) | |
-| Data Management add-on | $132,000 | $0 | |
-| Server Management add-on | $72,000 | $0 | |
-| Infrastructure (Server) | $180,000 | $0 | 16+ VMs (multi-node HA with DR) |
-| Fabric capacity (F128) | N/A | $120,000 | F128 for 2,000-user workload |
-| Admin labor (2.0 FTE) | $240,000 | $60,000 | |
-| **Total annual** | **$1,237,800** | **$252,000** | |
-| **3-year TCO** | **$3,713,400** | **$756,000** | |
-| **5-year TCO** | **$6,189,000** | **$1,260,000** | |
+| Cost category            | Tableau annual | Power BI annual      | Notes                           |
+| ------------------------ | -------------- | -------------------- | ------------------------------- |
+| Creator licenses         | $135,000       | $18,000 (Pro)        |                                 |
+| Explorer licenses        | $226,800       | $54,000 (Pro)        |                                 |
+| Viewer licenses          | $252,000       | $0 (Free + capacity) |                                 |
+| Data Management add-on   | $132,000       | $0                   |                                 |
+| Server Management add-on | $72,000        | $0                   |                                 |
+| Infrastructure (Server)  | $180,000       | $0                   | 16+ VMs (multi-node HA with DR) |
+| Fabric capacity (F128)   | N/A            | $120,000             | F128 for 2,000-user workload    |
+| Admin labor (2.0 FTE)    | $240,000       | $60,000              |                                 |
+| **Total annual**         | **$1,237,800** | **$252,000**         |                                 |
+| **3-year TCO**           | **$3,713,400** | **$756,000**         |                                 |
+| **5-year TCO**           | **$6,189,000** | **$1,260,000**       |                                 |
 
 **Annual savings with Power BI: ~$986,000 (80%)**
 
@@ -129,15 +129,15 @@ The total cost of ownership (TCO) of an analytics platform extends beyond per-us
 
 For organizations on Microsoft 365 E5 ($57/user/month), Power BI Pro is included. The incremental cost of Power BI analytics is effectively zero for the per-user component.
 
-| Organization size | Tableau annual cost | Power BI incremental cost (on E5) | Savings |
-|---|---|---|---|
-| 50 users | $66,360 | ~$5,000 (admin labor only) | ~$61,000 |
-| 200 users | $189,480 | ~$15,000 (admin labor only) | ~$174,000 |
-| 500 users | $421,560 | ~$90,000 (capacity + admin) | ~$332,000 |
-| 2,000 users | $1,237,800 | ~$180,000 (capacity + admin) | ~$1,058,000 |
+| Organization size | Tableau annual cost | Power BI incremental cost (on E5) | Savings     |
+| ----------------- | ------------------- | --------------------------------- | ----------- |
+| 50 users          | $66,360             | ~$5,000 (admin labor only)        | ~$61,000    |
+| 200 users         | $189,480            | ~$15,000 (admin labor only)       | ~$174,000   |
+| 500 users         | $421,560            | ~$90,000 (capacity + admin)       | ~$332,000   |
+| 2,000 users       | $1,237,800          | ~$180,000 (capacity + admin)      | ~$1,058,000 |
 
 !!! tip "Run your own E5 analysis"
-    If you are already paying for M365 E5, Power BI Pro is a sunk cost. The only incremental costs are Fabric capacity (if you need Premium features or free viewer access) and administration. The ROI on migration is measured in months, not years.
+If you are already paying for M365 E5, Power BI Pro is a sunk cost. The only incremental costs are Fabric capacity (if you need Premium features or free viewer access) and administration. The ROI on migration is measured in months, not years.
 
 ---
 
@@ -147,18 +147,18 @@ For organizations on Microsoft 365 E5 ($57/user/month), Power BI Pro is included
 
 Tableau Server requires dedicated infrastructure. A production deployment typically includes:
 
-| Component | Specification | Annual cost estimate |
-|---|---|---|
-| Application server VM(s) | 8-16 vCPU, 64-128 GB RAM | $12,000-$48,000 |
-| Backgrounder VM(s) | 8 vCPU, 32 GB RAM | $8,000-$24,000 |
-| Repository (PostgreSQL) | 4 vCPU, 16 GB RAM, SSD | $6,000-$12,000 |
-| File store / extract storage | 500 GB - 5 TB SSD | $5,000-$20,000 |
-| Backup and DR infrastructure | Secondary site / snapshots | $10,000-$30,000 |
-| SSL certificates and load balancer | | $2,000-$5,000 |
-| OS and antivirus licensing | Windows Server per VM | $3,000-$10,000 |
-| **Subtotal (infrastructure)** | | **$46,000-$149,000** |
-| Admin labor (patching, upgrades, monitoring) | 0.5-2.0 FTE | $60,000-$240,000 |
-| **Total infrastructure + labor** | | **$106,000-$389,000** |
+| Component                                    | Specification              | Annual cost estimate  |
+| -------------------------------------------- | -------------------------- | --------------------- |
+| Application server VM(s)                     | 8-16 vCPU, 64-128 GB RAM   | $12,000-$48,000       |
+| Backgrounder VM(s)                           | 8 vCPU, 32 GB RAM          | $8,000-$24,000        |
+| Repository (PostgreSQL)                      | 4 vCPU, 16 GB RAM, SSD     | $6,000-$12,000        |
+| File store / extract storage                 | 500 GB - 5 TB SSD          | $5,000-$20,000        |
+| Backup and DR infrastructure                 | Secondary site / snapshots | $10,000-$30,000       |
+| SSL certificates and load balancer           |                            | $2,000-$5,000         |
+| OS and antivirus licensing                   | Windows Server per VM      | $3,000-$10,000        |
+| **Subtotal (infrastructure)**                |                            | **$46,000-$149,000**  |
+| Admin labor (patching, upgrades, monitoring) | 0.5-2.0 FTE                | $60,000-$240,000      |
+| **Total infrastructure + labor**             |                            | **$106,000-$389,000** |
 
 ### 4.2 Tableau Cloud
 
@@ -179,20 +179,20 @@ For organizations embedding analytics in external-facing applications (customer 
 Tableau Embedded requires per-user licensing for every external user. Even viewers need a Viewer license ($15/user/month).
 
 | External users | Viewer licenses annual | Infrastructure | Total annual |
-|---|---|---|---|
-| 500 | $90,000 | $36,000 | $126,000 |
-| 2,000 | $360,000 | $72,000 | $432,000 |
-| 10,000 | $1,800,000 | $180,000 | $1,980,000 |
+| -------------- | ---------------------- | -------------- | ------------ |
+| 500            | $90,000                | $36,000        | $126,000     |
+| 2,000          | $360,000               | $72,000        | $432,000     |
+| 10,000         | $1,800,000             | $180,000       | $1,980,000   |
 
 ### 5.2 Power BI Embedded
 
 Power BI Embedded uses capacity-based pricing. You pay for compute, not users.
 
 | External users | Capacity SKU | Annual capacity cost | Total annual |
-|---|---|---|---|
-| 500 | F32 | ~$30,000 | ~$30,000 |
-| 2,000 | F64 | ~$60,000 | ~$60,000 |
-| 10,000 | F128 | ~$120,000 | ~$120,000 |
+| -------------- | ------------ | -------------------- | ------------ |
+| 500            | F32          | ~$30,000             | ~$30,000     |
+| 2,000          | F64          | ~$60,000             | ~$60,000     |
+| 10,000         | F128         | ~$120,000            | ~$120,000    |
 
 **Savings at 10,000 users: ~$1,860,000/year (94%)**
 
@@ -204,40 +204,40 @@ For a detailed comparison, see [Embedding Migration](embedding-migration.md).
 
 ### 6.1 Costs that favor Power BI
 
-| Hidden cost | Tableau | Power BI | Impact |
-|---|---|---|---|
-| Data governance (catalog, lineage) | $5.50/user/month add-on | Included (Purview) | $66/user/year savings |
-| Data preparation tool | Included only in Creator ($75) | Included in all Pro ($10) | Explorers/Viewers get Power Query |
-| Version control | Manual .twbx export | Fabric Git integration (included) | Reduced error risk |
-| AI features (Copilot) | Einstein Discovery (Salesforce addon) | Included in Copilot license | AI-assisted analytics |
-| Report scheduling tool | Included but limited | Included + Data Activator | Automated actions on data changes |
+| Hidden cost                        | Tableau                               | Power BI                          | Impact                            |
+| ---------------------------------- | ------------------------------------- | --------------------------------- | --------------------------------- |
+| Data governance (catalog, lineage) | $5.50/user/month add-on               | Included (Purview)                | $66/user/year savings             |
+| Data preparation tool              | Included only in Creator ($75)        | Included in all Pro ($10)         | Explorers/Viewers get Power Query |
+| Version control                    | Manual .twbx export                   | Fabric Git integration (included) | Reduced error risk                |
+| AI features (Copilot)              | Einstein Discovery (Salesforce addon) | Included in Copilot license       | AI-assisted analytics             |
+| Report scheduling tool             | Included but limited                  | Included + Data Activator         | Automated actions on data changes |
 
 ### 6.2 Costs that favor Tableau (or are neutral)
 
-| Hidden cost | Tableau | Power BI | Impact |
-|---|---|---|---|
-| Migration labor | N/A (already deployed) | $50,000-$500,000+ one-time | Report conversion, DAX training, testing |
-| Training / retraining | N/A | $500-$2,000/creator | DAX learning curve is real |
-| Productivity dip during transition | N/A | 2-4 weeks per creator | Temporary efficiency loss |
-| Custom visual development | Rarely needed | Sometimes needed (AppSource) | Some Tableau chart types need custom visuals |
-| Tableau Prep replacement | Already in use | Power Query or dbt setup | Investment to replace existing Prep flows |
+| Hidden cost                        | Tableau                | Power BI                     | Impact                                       |
+| ---------------------------------- | ---------------------- | ---------------------------- | -------------------------------------------- |
+| Migration labor                    | N/A (already deployed) | $50,000-$500,000+ one-time   | Report conversion, DAX training, testing     |
+| Training / retraining              | N/A                    | $500-$2,000/creator          | DAX learning curve is real                   |
+| Productivity dip during transition | N/A                    | 2-4 weeks per creator        | Temporary efficiency loss                    |
+| Custom visual development          | Rarely needed          | Sometimes needed (AppSource) | Some Tableau chart types need custom visuals |
+| Tableau Prep replacement           | Already in use         | Power Query or dbt setup     | Investment to replace existing Prep flows    |
 
 ### 6.3 One-time migration costs
 
-| Activity | Effort estimate | Cost estimate |
-|---|---|---|
-| Workbook inventory and prioritization | 1-2 weeks, 1-2 people | $5,000-$15,000 |
-| Simple workbook conversion (per workbook) | 2-8 hours | $200-$800 |
-| Complex workbook conversion (LOD, table calcs) | 16-40 hours | $1,600-$4,000 |
-| Semantic model design and build | 2-5 days per data domain | $2,000-$5,000 per domain |
-| Server migration (workspace, permissions, RLS) | 2-4 weeks, 1-2 people | $10,000-$30,000 |
-| Creator training | 5 days x $1,000/day/trainer | $5,000-$15,000 |
-| Consumer training | 2 days x $1,000/day/trainer | $2,000-$5,000 |
-| UAT and validation | 2-4 weeks, 2-4 people | $10,000-$40,000 |
-| **Total migration cost (typical)** | | **$50,000-$200,000** |
+| Activity                                       | Effort estimate             | Cost estimate            |
+| ---------------------------------------------- | --------------------------- | ------------------------ |
+| Workbook inventory and prioritization          | 1-2 weeks, 1-2 people       | $5,000-$15,000           |
+| Simple workbook conversion (per workbook)      | 2-8 hours                   | $200-$800                |
+| Complex workbook conversion (LOD, table calcs) | 16-40 hours                 | $1,600-$4,000            |
+| Semantic model design and build                | 2-5 days per data domain    | $2,000-$5,000 per domain |
+| Server migration (workspace, permissions, RLS) | 2-4 weeks, 1-2 people       | $10,000-$30,000          |
+| Creator training                               | 5 days x $1,000/day/trainer | $5,000-$15,000           |
+| Consumer training                              | 2 days x $1,000/day/trainer | $2,000-$5,000            |
+| UAT and validation                             | 2-4 weeks, 2-4 people       | $10,000-$40,000          |
+| **Total migration cost (typical)**             |                             | **$50,000-$200,000**     |
 
 !!! note "Migration cost pays for itself quickly"
-    For a 200-user organization saving ~$150,000/year, a $100,000 migration investment pays for itself in 8 months. For a 500-user organization saving ~$307,000/year, the payback period is under 4 months.
+For a 200-user organization saving ~$150,000/year, a $100,000 migration investment pays for itself in 8 months. For a 500-user organization saving ~$307,000/year, the payback period is under 4 months.
 
 ---
 
@@ -246,23 +246,23 @@ For a detailed comparison, see [Embedding Migration](embedding-migration.md).
 ### 7.1 Three-year TCO summary
 
 | Organization size | Tableau 3-year TCO | Power BI 3-year TCO | Migration cost | Net 3-year savings |
-|---|---|---|---|---|
-| 50 users | $199,080 | $33,000 | $30,000 | $136,080 |
-| 200 users | $568,440 | $117,000 | $80,000 | $371,440 |
-| 500 users | $1,264,680 | $342,000 | $150,000 | $772,680 |
-| 2,000 users | $3,713,400 | $756,000 | $300,000 | $2,657,400 |
+| ----------------- | ------------------ | ------------------- | -------------- | ------------------ |
+| 50 users          | $199,080           | $33,000             | $30,000        | $136,080           |
+| 200 users         | $568,440           | $117,000            | $80,000        | $371,440           |
+| 500 users         | $1,264,680         | $342,000            | $150,000       | $772,680           |
+| 2,000 users       | $3,713,400         | $756,000            | $300,000       | $2,657,400         |
 
 ### 7.2 Five-year TCO summary
 
 | Organization size | Tableau 5-year TCO | Power BI 5-year TCO | Migration cost | Net 5-year savings |
-|---|---|---|---|---|
-| 50 users | $331,800 | $55,000 | $30,000 | $246,800 |
-| 200 users | $947,400 | $195,000 | $80,000 | $672,400 |
-| 500 users | $2,107,800 | $570,000 | $150,000 | $1,387,800 |
-| 2,000 users | $6,189,000 | $1,260,000 | $300,000 | $4,629,000 |
+| ----------------- | ------------------ | ------------------- | -------------- | ------------------ |
+| 50 users          | $331,800           | $55,000             | $30,000        | $246,800           |
+| 200 users         | $947,400           | $195,000            | $80,000        | $672,400           |
+| 500 users         | $2,107,800         | $570,000            | $150,000       | $1,387,800         |
+| 2,000 users       | $6,189,000         | $1,260,000          | $300,000       | $4,629,000         |
 
 !!! warning "Price escalation risk"
-    Tableau has increased prices multiple times since the Salesforce acquisition. The projections above assume flat pricing. Any Tableau price increase accelerates the payback period for a Power BI migration. Power BI has maintained stable pricing since its launch.
+Tableau has increased prices multiple times since the Salesforce acquisition. The projections above assume flat pricing. Any Tableau price increase accelerates the payback period for a Power BI migration. Power BI has maintained stable pricing since its launch.
 
 ---
 
@@ -281,12 +281,12 @@ For a detailed comparison, see [Embedding Migration](embedding-migration.md).
 
 ### 8.2 Tools
 
-| Tool | Purpose |
-|---|---|
-| [Azure Pricing Calculator](https://azure.microsoft.com/pricing/calculator/) | Estimate Fabric capacity costs |
-| [Power BI Pricing Page](https://powerbi.microsoft.com/pricing/) | Current per-user pricing |
-| [Microsoft 365 Licensing Guide](https://www.microsoft.com/licensing/) | Confirm E5 includes Power BI Pro |
-| [Fabric Capacity Metrics App](https://appsource.microsoft.com/) | Right-size Fabric capacity after migration |
+| Tool                                                                        | Purpose                                    |
+| --------------------------------------------------------------------------- | ------------------------------------------ |
+| [Azure Pricing Calculator](https://azure.microsoft.com/pricing/calculator/) | Estimate Fabric capacity costs             |
+| [Power BI Pricing Page](https://powerbi.microsoft.com/pricing/)             | Current per-user pricing                   |
+| [Microsoft 365 Licensing Guide](https://www.microsoft.com/licensing/)       | Confirm E5 includes Power BI Pro           |
+| [Fabric Capacity Metrics App](https://appsource.microsoft.com/)             | Right-size Fabric capacity after migration |
 
 ### 8.3 Conservative assumptions
 

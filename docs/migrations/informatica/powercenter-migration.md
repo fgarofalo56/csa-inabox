@@ -55,70 +55,70 @@ This is the definitive reference for converting every PowerCenter transformation
 
 ### Source/Target transformations
 
-| PowerCenter transformation | Azure equivalent | Example |
-|---|---|---|
-| **Source Qualifier** | dbt `source()` reference + CTE | `WITH src AS (SELECT * FROM {{ source('erp', 'orders') }} WHERE order_date > '2024-01-01')` |
-| **Target** | dbt materialization (table, view, incremental) | `{{ config(materialized='table') }}` |
-| **Flat File Source** | ADF Copy Activity (Blob/ADLS source) | Copy from ADLS to staging table; dbt reads staging |
-| **XML Source** | ADF Mapping Data Flow (XML connector) | Parse XML in MDF; output to staging table |
-| **XML Generator** | ADF Mapping Data Flow (XML sink) | Generate XML in MDF sink |
+| PowerCenter transformation | Azure equivalent                               | Example                                                                                     |
+| -------------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| **Source Qualifier**       | dbt `source()` reference + CTE                 | `WITH src AS (SELECT * FROM {{ source('erp', 'orders') }} WHERE order_date > '2024-01-01')` |
+| **Target**                 | dbt materialization (table, view, incremental) | `{{ config(materialized='table') }}`                                                        |
+| **Flat File Source**       | ADF Copy Activity (Blob/ADLS source)           | Copy from ADLS to staging table; dbt reads staging                                          |
+| **XML Source**             | ADF Mapping Data Flow (XML connector)          | Parse XML in MDF; output to staging table                                                   |
+| **XML Generator**          | ADF Mapping Data Flow (XML sink)               | Generate XML in MDF sink                                                                    |
 
 ### Row-level transformations
 
-| PowerCenter transformation | Azure equivalent | dbt SQL pattern |
-|---|---|---|
-| **Expression** | dbt SELECT projection | `SELECT col_a, col_b * 1.1 AS col_b_adjusted, UPPER(col_c) AS col_c_clean FROM ...` |
-| **Filter** | dbt WHERE clause | `SELECT * FROM {{ ref('stg_orders') }} WHERE status != 'cancelled'` |
-| **Router** | Multiple dbt models with WHERE | Model 1: `WHERE region = 'east'`; Model 2: `WHERE region = 'west'`; each references same staging model |
-| **Update Strategy** | dbt incremental materialization | `{{ config(materialized='incremental', unique_key='order_id') }}` with `{% if is_incremental() %}` block |
-| **Data Masking** | Azure SQL Dynamic Data Masking or dbt macro | `{{ mask_pii(column_name) }}` macro using `CASE WHEN` logic |
+| PowerCenter transformation | Azure equivalent                            | dbt SQL pattern                                                                                          |
+| -------------------------- | ------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| **Expression**             | dbt SELECT projection                       | `SELECT col_a, col_b * 1.1 AS col_b_adjusted, UPPER(col_c) AS col_c_clean FROM ...`                      |
+| **Filter**                 | dbt WHERE clause                            | `SELECT * FROM {{ ref('stg_orders') }} WHERE status != 'cancelled'`                                      |
+| **Router**                 | Multiple dbt models with WHERE              | Model 1: `WHERE region = 'east'`; Model 2: `WHERE region = 'west'`; each references same staging model   |
+| **Update Strategy**        | dbt incremental materialization             | `{{ config(materialized='incremental', unique_key='order_id') }}` with `{% if is_incremental() %}` block |
+| **Data Masking**           | Azure SQL Dynamic Data Masking or dbt macro | `{{ mask_pii(column_name) }}` macro using `CASE WHEN` logic                                              |
 
 ### Set-level transformations
 
-| PowerCenter transformation | Azure equivalent | dbt SQL pattern |
-|---|---|---|
-| **Aggregator** | dbt GROUP BY | `SELECT customer_id, SUM(amount) AS total_amount, COUNT(*) AS order_count FROM ... GROUP BY customer_id` |
-| **Sorter** | dbt ORDER BY | Generally unnecessary in intermediate models; use in final mart if needed |
-| **Rank** | SQL window function | `ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY order_date DESC) AS rn` |
-| **Normalizer** | SQL UNPIVOT or CROSS APPLY | `SELECT id, month, value FROM src UNPIVOT (value FOR month IN (jan, feb, mar))` |
-| **Union** | dbt UNION ALL | `SELECT * FROM {{ ref('model_a') }} UNION ALL SELECT * FROM {{ ref('model_b') }}` |
+| PowerCenter transformation | Azure equivalent           | dbt SQL pattern                                                                                          |
+| -------------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------- |
+| **Aggregator**             | dbt GROUP BY               | `SELECT customer_id, SUM(amount) AS total_amount, COUNT(*) AS order_count FROM ... GROUP BY customer_id` |
+| **Sorter**                 | dbt ORDER BY               | Generally unnecessary in intermediate models; use in final mart if needed                                |
+| **Rank**                   | SQL window function        | `ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY order_date DESC) AS rn`                            |
+| **Normalizer**             | SQL UNPIVOT or CROSS APPLY | `SELECT id, month, value FROM src UNPIVOT (value FOR month IN (jan, feb, mar))`                          |
+| **Union**                  | dbt UNION ALL              | `SELECT * FROM {{ ref('model_a') }} UNION ALL SELECT * FROM {{ ref('model_b') }}`                        |
 
 ### Lookup transformations
 
-| PowerCenter transformation | Azure equivalent | dbt SQL pattern |
-|---|---|---|
-| **Lookup (connected, equality)** | dbt LEFT JOIN | `SELECT o.*, c.customer_name FROM orders o LEFT JOIN customers c ON o.customer_id = c.customer_id` |
-| **Lookup (connected, range)** | dbt JOIN with range condition | `... ON o.order_date BETWEEN r.start_date AND r.end_date` |
-| **Lookup (unconnected)** | dbt macro returning scalar | See [Unconnected Lookup Pattern](#unconnected-lookup-pattern) below |
-| **Lookup (persistent cache)** | dbt ephemeral model or CTE | Ephemeral models compute once per dbt run, similar to persistent cache |
-| **Joiner** | dbt JOIN (any type) | Supports INNER, LEFT, RIGHT, FULL, CROSS; dbt handles dialect differences |
+| PowerCenter transformation       | Azure equivalent              | dbt SQL pattern                                                                                    |
+| -------------------------------- | ----------------------------- | -------------------------------------------------------------------------------------------------- |
+| **Lookup (connected, equality)** | dbt LEFT JOIN                 | `SELECT o.*, c.customer_name FROM orders o LEFT JOIN customers c ON o.customer_id = c.customer_id` |
+| **Lookup (connected, range)**    | dbt JOIN with range condition | `... ON o.order_date BETWEEN r.start_date AND r.end_date`                                          |
+| **Lookup (unconnected)**         | dbt macro returning scalar    | See [Unconnected Lookup Pattern](#unconnected-lookup-pattern) below                                |
+| **Lookup (persistent cache)**    | dbt ephemeral model or CTE    | Ephemeral models compute once per dbt run, similar to persistent cache                             |
+| **Joiner**                       | dbt JOIN (any type)           | Supports INNER, LEFT, RIGHT, FULL, CROSS; dbt handles dialect differences                          |
 
 ### Key generation
 
-| PowerCenter transformation | Azure equivalent | dbt SQL pattern |
-|---|---|---|
-| **Sequence Generator** | SQL ROW_NUMBER() | `ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) + (SELECT MAX(sk) FROM target)` |
-| **Surrogate key (hash)** | dbt-utils `generate_surrogate_key` | `{{ dbt_utils.generate_surrogate_key(['customer_id', 'product_id']) }}` |
+| PowerCenter transformation | Azure equivalent                   | dbt SQL pattern                                                             |
+| -------------------------- | ---------------------------------- | --------------------------------------------------------------------------- |
+| **Sequence Generator**     | SQL ROW_NUMBER()                   | `ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) + (SELECT MAX(sk) FROM target)` |
+| **Surrogate key (hash)**   | dbt-utils `generate_surrogate_key` | `{{ dbt_utils.generate_surrogate_key(['customer_id', 'product_id']) }}`     |
 
 ### Advanced transformations
 
-| PowerCenter transformation | Azure equivalent | Complexity | Notes |
-|---|---|---|---|
-| **Stored Procedure** | dbt pre/post-hook or `run_operation` | Low | `{{ config(pre_hook="EXEC sp_cleanup") }}` |
-| **SQL Transformation** | dbt model (native) | Low | dbt IS SQL; simplest conversion |
-| **Transaction Control** | ADF pipeline error handling | Medium | ADF handles commit/rollback at pipeline level |
-| **Custom Transformation (Java)** | Azure Function or dbt Python model | High | Rewrite Java in Python or .NET; call from ADF |
-| **HTTP Transformation** | ADF Web activity or REST connector | Medium | ADF REST connector handles auth, pagination |
-| **Java Transformation** | Azure Function | High | Rewrite in Python/C#; expose as HTTP endpoint |
-| **External Procedure** | Azure Function or dbt `run_operation` | Medium | Depends on what the procedure does |
+| PowerCenter transformation       | Azure equivalent                      | Complexity | Notes                                         |
+| -------------------------------- | ------------------------------------- | ---------- | --------------------------------------------- |
+| **Stored Procedure**             | dbt pre/post-hook or `run_operation`  | Low        | `{{ config(pre_hook="EXEC sp_cleanup") }}`    |
+| **SQL Transformation**           | dbt model (native)                    | Low        | dbt IS SQL; simplest conversion               |
+| **Transaction Control**          | ADF pipeline error handling           | Medium     | ADF handles commit/rollback at pipeline level |
+| **Custom Transformation (Java)** | Azure Function or dbt Python model    | High       | Rewrite Java in Python or .NET; call from ADF |
+| **HTTP Transformation**          | ADF Web activity or REST connector    | Medium     | ADF REST connector handles auth, pagination   |
+| **Java Transformation**          | Azure Function                        | High       | Rewrite in Python/C#; expose as HTTP endpoint |
+| **External Procedure**           | Azure Function or dbt `run_operation` | Medium     | Depends on what the procedure does            |
 
 ### SCD and history
 
-| PowerCenter transformation | Azure equivalent | dbt SQL pattern |
-|---|---|---|
-| **Slowly Changing Dimension Type 1** | dbt incremental with merge | `{{ config(materialized='incremental', unique_key='customer_id', incremental_strategy='merge') }}` |
-| **Slowly Changing Dimension Type 2** | dbt snapshot | `{% snapshot customer_snapshot %} ... {% endsnapshot %}` with `check_cols` or `updated_at` |
-| **SCD Type 3** | dbt model with previous-value columns | Custom SQL maintaining `current_value`, `previous_value`, `change_date` |
+| PowerCenter transformation           | Azure equivalent                      | dbt SQL pattern                                                                                    |
+| ------------------------------------ | ------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| **Slowly Changing Dimension Type 1** | dbt incremental with merge            | `{{ config(materialized='incremental', unique_key='customer_id', incremental_strategy='merge') }}` |
+| **Slowly Changing Dimension Type 2** | dbt snapshot                          | `{% snapshot customer_snapshot %} ... {% endsnapshot %}` with `check_cols` or `updated_at`         |
+| **SCD Type 3**                       | dbt model with previous-value columns | Custom SQL maintaining `current_value`, `previous_value`, `change_date`                            |
 
 ---
 
@@ -160,49 +160,49 @@ FROM {{ ref('stg_orders') }}
 
 ### Workflow components
 
-| PowerCenter component | ADF equivalent | Notes |
-|---|---|---|
-| Workflow | Pipeline | Top-level orchestration unit |
-| Session (mapping execution) | Activity (dbt run, Copy Data, Notebook) | One session = one or more activities |
-| Worklet | Sub-pipeline (Execute Pipeline activity) | Nested pipeline for reuse |
-| Decision (link condition) | If Condition activity / Switch activity | Conditional branching |
-| Email task | Web activity -> Logic Apps | Logic Apps sends to Teams, email, Slack |
-| Command task | Web activity or Azure Function activity | Shell command equivalent |
-| Event Wait | Event trigger or Storage Events trigger | Wait for file arrival |
-| Timer | Wait activity | Configurable delay |
-| Assignment (variable) | Set Variable activity | Set pipeline variables |
-| Pre-session SQL | dbt pre-hook | `{{ config(pre_hook="TRUNCATE TABLE staging.target") }}` |
-| Post-session SQL | dbt post-hook | `{{ config(post_hook="EXEC sp_update_watermark") }}` |
-| Session recovery | ADF rerun from failure | ADF tracks activity-level completion |
+| PowerCenter component       | ADF equivalent                           | Notes                                                    |
+| --------------------------- | ---------------------------------------- | -------------------------------------------------------- |
+| Workflow                    | Pipeline                                 | Top-level orchestration unit                             |
+| Session (mapping execution) | Activity (dbt run, Copy Data, Notebook)  | One session = one or more activities                     |
+| Worklet                     | Sub-pipeline (Execute Pipeline activity) | Nested pipeline for reuse                                |
+| Decision (link condition)   | If Condition activity / Switch activity  | Conditional branching                                    |
+| Email task                  | Web activity -> Logic Apps               | Logic Apps sends to Teams, email, Slack                  |
+| Command task                | Web activity or Azure Function activity  | Shell command equivalent                                 |
+| Event Wait                  | Event trigger or Storage Events trigger  | Wait for file arrival                                    |
+| Timer                       | Wait activity                            | Configurable delay                                       |
+| Assignment (variable)       | Set Variable activity                    | Set pipeline variables                                   |
+| Pre-session SQL             | dbt pre-hook                             | `{{ config(pre_hook="TRUNCATE TABLE staging.target") }}` |
+| Post-session SQL            | dbt post-hook                            | `{{ config(post_hook="EXEC sp_update_watermark") }}`     |
+| Session recovery            | ADF rerun from failure                   | ADF tracks activity-level completion                     |
 
 ### Scheduling migration
 
-| PowerCenter scheduler | ADF trigger type | When to use |
-|---|---|---|
-| Time-based schedule | Schedule trigger | Fixed time (daily, hourly, custom cron) |
-| Recurring schedule | Tumbling window trigger | Fixed-interval processing with backfill support |
-| Event-based (file arrival) | Storage Events trigger / Custom Events trigger | React to new files in ADLS/Blob |
-| On-demand | Manual trigger / REST API | Ad-hoc execution via Portal or API |
-| Dependency-based | Pipeline dependency (After success/failure) | Chain pipelines with activity dependencies |
+| PowerCenter scheduler      | ADF trigger type                               | When to use                                     |
+| -------------------------- | ---------------------------------------------- | ----------------------------------------------- |
+| Time-based schedule        | Schedule trigger                               | Fixed time (daily, hourly, custom cron)         |
+| Recurring schedule         | Tumbling window trigger                        | Fixed-interval processing with backfill support |
+| Event-based (file arrival) | Storage Events trigger / Custom Events trigger | React to new files in ADLS/Blob                 |
+| On-demand                  | Manual trigger / REST API                      | Ad-hoc execution via Portal or API              |
+| Dependency-based           | Pipeline dependency (After success/failure)    | Chain pipelines with activity dependencies      |
 
 ### Connection mapping
 
-| PowerCenter connection | ADF Linked Service | Integration Runtime |
-|---|---|---|
-| Oracle (on-prem) | Oracle connector | Self-Hosted IR |
-| SQL Server (on-prem) | SQL Server connector | Self-Hosted IR |
-| SQL Server (Azure) | Azure SQL Database connector | Azure IR (no IR needed) |
-| DB2 (on-prem) | DB2 connector | Self-Hosted IR |
-| Teradata | Teradata connector | Self-Hosted IR |
-| SAP (ABAP, HANA) | SAP Table / SAP CDC / SAP HANA | Self-Hosted IR |
-| Salesforce | Salesforce connector | Azure IR |
-| Oracle (Azure) | Azure Database for PostgreSQL (migrated) or Oracle via IR | Depends on migration status |
-| Flat file (local) | ADLS / Blob Storage (upload first) | Azure IR after upload |
-| Flat file (FTP/SFTP) | FTP / SFTP connector | Azure IR or Self-Hosted IR |
-| S3 | Amazon S3 connector | Azure IR |
-| GCS | Google Cloud Storage connector | Azure IR |
-| REST/SOAP API | REST connector / HTTP connector | Azure IR |
-| ODBC (generic) | ODBC connector | Self-Hosted IR |
+| PowerCenter connection | ADF Linked Service                                        | Integration Runtime         |
+| ---------------------- | --------------------------------------------------------- | --------------------------- |
+| Oracle (on-prem)       | Oracle connector                                          | Self-Hosted IR              |
+| SQL Server (on-prem)   | SQL Server connector                                      | Self-Hosted IR              |
+| SQL Server (Azure)     | Azure SQL Database connector                              | Azure IR (no IR needed)     |
+| DB2 (on-prem)          | DB2 connector                                             | Self-Hosted IR              |
+| Teradata               | Teradata connector                                        | Self-Hosted IR              |
+| SAP (ABAP, HANA)       | SAP Table / SAP CDC / SAP HANA                            | Self-Hosted IR              |
+| Salesforce             | Salesforce connector                                      | Azure IR                    |
+| Oracle (Azure)         | Azure Database for PostgreSQL (migrated) or Oracle via IR | Depends on migration status |
+| Flat file (local)      | ADLS / Blob Storage (upload first)                        | Azure IR after upload       |
+| Flat file (FTP/SFTP)   | FTP / SFTP connector                                      | Azure IR or Self-Hosted IR  |
+| S3                     | Amazon S3 connector                                       | Azure IR                    |
+| GCS                    | Google Cloud Storage connector                            | Azure IR                    |
+| REST/SOAP API          | REST connector / HTTP connector                           | Azure IR                    |
+| ODBC (generic)         | ODBC connector                                            | Self-Hosted IR              |
 
 ---
 
@@ -289,31 +289,31 @@ SELECT * FROM {{ ref('int_customers__enriched') }}
 version: 2
 
 models:
-  - name: stg_crm__customers
-    columns:
-      - name: customer_id
-        tests:
-          - unique
-          - not_null
-      - name: email
-        tests:
-          - not_null
-      - name: is_active
-        tests:
-          - accepted_values:
-              values: [true, false]
+    - name: stg_crm__customers
+      columns:
+          - name: customer_id
+            tests:
+                - unique
+                - not_null
+          - name: email
+            tests:
+                - not_null
+          - name: is_active
+            tests:
+                - accepted_values:
+                      values: [true, false]
 ```
 
 ### Key differences from PowerCenter
 
-| Aspect | PowerCenter | dbt |
-|---|---|---|
-| SCD Type 2 | Manual Router + Update Strategy | `dbt snapshot` (built-in) |
-| Lookup | Separate transformation in mapping | SQL JOIN in model |
-| Expression | Separate transformation | SQL in SELECT clause |
-| Testing | Manual QA | `dbt test` (automated) |
-| Deployment | Repository export | `git push` + CI/CD |
-| Documentation | Separate wiki | Auto-generated from YAML |
+| Aspect        | PowerCenter                        | dbt                       |
+| ------------- | ---------------------------------- | ------------------------- |
+| SCD Type 2    | Manual Router + Update Strategy    | `dbt snapshot` (built-in) |
+| Lookup        | Separate transformation in mapping | SQL JOIN in model         |
+| Expression    | Separate transformation            | SQL in SELECT clause      |
+| Testing       | Manual QA                          | `dbt test` (automated)    |
+| Deployment    | Repository export                  | `git push` + CI/CD        |
+| Documentation | Separate wiki                      | Auto-generated from YAML  |
 
 ---
 
@@ -342,12 +342,12 @@ ORDER BY transformation_count DESC;
 
 Categorize each mapping:
 
-| Tier | Transformation count | Estimated effort | Action |
-|---|---|---|---|
-| A (Simple) | 1-5 transformations | 1-2 days | Direct convert to dbt model |
-| B (Medium) | 6-15 transformations | 3-5 days | Decompose into multiple dbt models |
-| C (Complex) | 16+ transformations | 5-15 days | Re-architect; may need multiple models + macros |
-| D (Decommission) | Any | 0 | Archive metadata; do not migrate |
+| Tier             | Transformation count | Estimated effort | Action                                          |
+| ---------------- | -------------------- | ---------------- | ----------------------------------------------- |
+| A (Simple)       | 1-5 transformations  | 1-2 days         | Direct convert to dbt model                     |
+| B (Medium)       | 6-15 transformations | 3-5 days         | Decompose into multiple dbt models              |
+| C (Complex)      | 16+ transformations  | 5-15 days        | Re-architect; may need multiple models + macros |
+| D (Decommission) | Any                  | 0                | Archive metadata; do not migrate                |
 
 ### Step 2: Set up dbt project (Week 2-3)
 

@@ -290,14 +290,14 @@ FROM analytics_prod.raw.citizen_feedback;
 
 ### Architecture comparison
 
-| Cortex Search | Azure AI Search |
-|---|---|
-| Built into Snowflake SQL | Standalone Azure service |
-| Hybrid vector + keyword search | Hybrid vector + keyword + semantic ranking |
-| Snowflake-managed embeddings | You choose embedding model (Azure OpenAI) |
-| Limited to data in Snowflake | Indexes any data source |
-| SQL interface only | REST API + SDK + SQL (via external function) |
-| Not available in Gov | **GA in Gov** |
+| Cortex Search                  | Azure AI Search                              |
+| ------------------------------ | -------------------------------------------- |
+| Built into Snowflake SQL       | Standalone Azure service                     |
+| Hybrid vector + keyword search | Hybrid vector + keyword + semantic ranking   |
+| Snowflake-managed embeddings   | You choose embedding model (Azure OpenAI)    |
+| Limited to data in Snowflake   | Indexes any data source                      |
+| SQL interface only             | REST API + SDK + SQL (via external function) |
+| Not available in Gov           | **GA in Gov**                                |
 
 ### Migration steps
 
@@ -378,7 +378,7 @@ for row in spark.table("analytics_prod.raw.documents").collect():
         model="text-embedding-3-large",
         input=row["content"]
     ).data[0].embedding
-    
+
     documents.append({
         "id": row["document_id"],
         "title": row["title"],
@@ -401,7 +401,7 @@ def search_documents(query: str, top_k: int = 5) -> list:
         model="text-embedding-3-large",
         input=query
     ).data[0].embedding
-    
+
     results = search_client.search(
         search_text=query,
         vector_queries=[
@@ -469,13 +469,13 @@ client = ContentSafetyClient(
 def check_content_safety(text: str) -> dict:
     request = AnalyzeTextOptions(text=text)
     response = client.analyze_text(request)
-    
+
     results = {}
     for category_result in response.categories_analysis:
         results[category_result.category] = {
             "severity": category_result.severity
         }
-    
+
     return results
 
 # Use as a guardrail before/after LLM calls
@@ -484,19 +484,19 @@ def safe_generate(prompt: str) -> str:
     input_safety = check_content_safety(prompt)
     if any(r["severity"] >= 4 for r in input_safety.values()):
         return "Content blocked: input contains unsafe content"
-    
+
     # Generate response
     response = openai_client.chat.completions.create(
         model="gpt-4o",
         messages=[{"role": "user", "content": prompt}]
     )
     output = response.choices[0].message.content
-    
+
     # Check output
     output_safety = check_content_safety(output)
     if any(r["severity"] >= 4 for r in output_safety.values()):
         return "Content blocked: response contains unsafe content"
-    
+
     return output
 ```
 

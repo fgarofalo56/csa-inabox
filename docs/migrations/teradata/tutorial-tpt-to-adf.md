@@ -163,14 +163,14 @@ DELETE FROM staging.orders_incremental ALL;
 
 ### Component mapping
 
-| TPT/BTEQ component | Azure replacement | Purpose |
-| --- | --- | --- |
-| TPT Export operator | ADF Copy Activity (JDBC) | Extract from Teradata |
-| File writer (pipe-delimited) | ADF Parquet sink | Write to ADLS |
-| BTEQ load to staging | ADF Copy → Delta staging | Load to staging table |
-| BTEQ MERGE to target | dbt incremental model | Transform and merge |
-| cron schedule | ADF trigger (tumbling window) | Orchestration |
-| Watermark tracking | ADF watermark activity | Track incremental position |
+| TPT/BTEQ component           | Azure replacement             | Purpose                    |
+| ---------------------------- | ----------------------------- | -------------------------- |
+| TPT Export operator          | ADF Copy Activity (JDBC)      | Extract from Teradata      |
+| File writer (pipe-delimited) | ADF Parquet sink              | Write to ADLS              |
+| BTEQ load to staging         | ADF Copy → Delta staging      | Load to staging table      |
+| BTEQ MERGE to target         | dbt incremental model         | Transform and merge        |
+| cron schedule                | ADF trigger (tumbling window) | Orchestration              |
+| Watermark tracking           | ADF watermark activity        | Track incremental position |
 
 ---
 
@@ -325,8 +325,14 @@ In ADF Studio → Manage → Linked Services → New:
                 "name": "CopyIncrementalOrders",
                 "type": "Copy",
                 "dependsOn": [
-                    { "activity": "GetLastWatermark", "dependencyConditions": ["Succeeded"] },
-                    { "activity": "GetCurrentWatermark", "dependencyConditions": ["Succeeded"] }
+                    {
+                        "activity": "GetLastWatermark",
+                        "dependencyConditions": ["Succeeded"]
+                    },
+                    {
+                        "activity": "GetCurrentWatermark",
+                        "dependencyConditions": ["Succeeded"]
+                    }
                 ],
                 "typeProperties": {
                     "source": {
@@ -359,7 +365,10 @@ In ADF Studio → Manage → Linked Services → New:
                 "name": "UpdateWatermark",
                 "type": "DatabricksNotebook",
                 "dependsOn": [
-                    { "activity": "CopyIncrementalOrders", "dependencyConditions": ["Succeeded"] }
+                    {
+                        "activity": "CopyIncrementalOrders",
+                        "dependencyConditions": ["Succeeded"]
+                    }
                 ],
                 "typeProperties": {
                     "notebookPath": "/Repos/data-team/teradata-migration/notebooks/update_watermark",
@@ -380,7 +389,10 @@ In ADF Studio → Manage → Linked Services → New:
                 "name": "RunDbtModels",
                 "type": "DatabricksNotebook",
                 "dependsOn": [
-                    { "activity": "UpdateWatermark", "dependencyConditions": ["Succeeded"] }
+                    {
+                        "activity": "UpdateWatermark",
+                        "dependencyConditions": ["Succeeded"]
+                    }
                 ],
                 "typeProperties": {
                     "notebookPath": "/Repos/data-team/teradata-migration/notebooks/run_dbt",
@@ -576,12 +588,12 @@ if result.returncode != 0:
 
 ADF provides built-in monitoring for pipeline runs:
 
-| Metric | Where to find | Alert threshold |
-| --- | --- | --- |
-| Pipeline success/failure | ADF Monitor → Pipeline runs | Alert on any failure |
-| Copy activity duration | Activity run details | >10 min (normally ~3 min) |
-| Rows copied | Copy activity output | 0 rows (data gap) |
-| SHIR health | ADF → Integration runtimes | Offline status |
+| Metric                   | Where to find               | Alert threshold           |
+| ------------------------ | --------------------------- | ------------------------- |
+| Pipeline success/failure | ADF Monitor → Pipeline runs | Alert on any failure      |
+| Copy activity duration   | Activity run details        | >10 min (normally ~3 min) |
+| Rows copied              | Copy activity output        | 0 rows (data gap)         |
+| SHIR health              | ADF → Integration runtimes  | Offline status            |
 
 ### Step 6.2: Azure Monitor alerts
 
@@ -591,19 +603,23 @@ ADF provides built-in monitoring for pipeline runs:
     "type": "Microsoft.Insights/metricAlerts",
     "properties": {
         "criteria": {
-            "allOf": [{
-                "metricName": "PipelineFailedRuns",
-                "metricNamespace": "Microsoft.DataFactory/factories",
-                "operator": "GreaterThan",
-                "threshold": 0,
-                "timeAggregation": "Total"
-            }]
+            "allOf": [
+                {
+                    "metricName": "PipelineFailedRuns",
+                    "metricNamespace": "Microsoft.DataFactory/factories",
+                    "operator": "GreaterThan",
+                    "threshold": 0,
+                    "timeAggregation": "Total"
+                }
+            ]
         },
         "windowSize": "PT15M",
         "evaluationFrequency": "PT5M",
-        "actions": [{
-            "actionGroupId": "/subscriptions/.../actionGroups/data-platform-alerts"
-        }]
+        "actions": [
+            {
+                "actionGroupId": "/subscriptions/.../actionGroups/data-platform-alerts"
+            }
+        ]
     }
 }
 ```
@@ -671,15 +687,15 @@ For the initial bulk migration, create a separate full-load pipeline:
 
 ### Step 7.2: Performance comparison
 
-| Metric | TPT (original) | ADF (replacement) |
-| --- | --- | --- |
-| Full load (100M rows) | ~45 min (TPT direct) | ~60 min (JDBC via SHIR) |
-| Incremental (100K rows) | ~2 min (TPT + BTEQ) | ~3 min (ADF + dbt) |
-| Network bandwidth used | Dedicated VLAN | ExpressRoute / VPN |
-| Parallelism | TPT instances | ADF partition count |
-| Error handling | TPT error tables | ADF fault tolerance |
-| Scheduling | cron | ADF triggers (tumbling window) |
-| Monitoring | Log files + email | ADF Monitor + Azure Monitor |
+| Metric                  | TPT (original)       | ADF (replacement)              |
+| ----------------------- | -------------------- | ------------------------------ |
+| Full load (100M rows)   | ~45 min (TPT direct) | ~60 min (JDBC via SHIR)        |
+| Incremental (100K rows) | ~2 min (TPT + BTEQ)  | ~3 min (ADF + dbt)             |
+| Network bandwidth used  | Dedicated VLAN       | ExpressRoute / VPN             |
+| Parallelism             | TPT instances        | ADF partition count            |
+| Error handling          | TPT error tables     | ADF fault tolerance            |
+| Scheduling              | cron                 | ADF triggers (tumbling window) |
+| Monitoring              | Log files + email    | ADF Monitor + Azure Monitor    |
 
 ---
 
@@ -695,6 +711,7 @@ Teradata → ADF → ADLS → dbt → Delta (new)
 ```
 
 Compare outputs daily:
+
 ```sql
 -- Compare Teradata target with Azure target
 SELECT 'teradata' AS source, order_date, region_id, order_count, net_revenue
@@ -727,15 +744,15 @@ ORDER BY order_date, region_id, source;
 
 ## 9. Troubleshooting
 
-| Issue | Cause | Resolution |
-| --- | --- | --- |
-| ADF JDBC timeout | Large query, slow network | Increase timeout, add partitioning |
-| SHIR out of memory | Too many parallel copies | Reduce `parallelCopies`, increase SHIR RAM |
-| Teradata session limit | Too many ADF partitions | Reduce `partitionCount`, coordinate with DBA |
-| Parquet schema mismatch | Teradata column type change | Update ADF dataset schema mapping |
-| dbt MERGE conflicts | Late-arriving data overlaps | Use wider incremental window (3-7 days) |
-| Watermark gap | ADF failure between copy and watermark update | Re-run with manual watermark override |
-| Data duplication | Retry without idempotent MERGE | Ensure `unique_key` in dbt incremental |
+| Issue                   | Cause                                         | Resolution                                   |
+| ----------------------- | --------------------------------------------- | -------------------------------------------- |
+| ADF JDBC timeout        | Large query, slow network                     | Increase timeout, add partitioning           |
+| SHIR out of memory      | Too many parallel copies                      | Reduce `parallelCopies`, increase SHIR RAM   |
+| Teradata session limit  | Too many ADF partitions                       | Reduce `partitionCount`, coordinate with DBA |
+| Parquet schema mismatch | Teradata column type change                   | Update ADF dataset schema mapping            |
+| dbt MERGE conflicts     | Late-arriving data overlaps                   | Use wider incremental window (3-7 days)      |
+| Watermark gap           | ADF failure between copy and watermark update | Re-run with manual watermark override        |
+| Data duplication        | Retry without idempotent MERGE                | Ensure `unique_key` in dbt incremental       |
 
 ---
 

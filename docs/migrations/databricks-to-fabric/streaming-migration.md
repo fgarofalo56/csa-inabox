@@ -22,13 +22,13 @@ Fabric provides a fundamentally different streaming architecture:
 
 ### Decision matrix
 
-| Streaming pattern | Fabric target | When to use |
-| --- | --- | --- |
-| Event stream analytics (sub-second) | **Eventhouse + Eventstream** | Real-time dashboards, alerting, KQL queries |
-| Micro-batch ETL (seconds to minutes) | **Fabric Spark Structured Streaming** | Complex transformations, Delta table writes |
-| File-based incremental ingestion | **Data Pipelines (tumbling window trigger)** | New file detection, batch processing |
-| CDC / change data capture | **Fabric mirroring** or **Spark Structured Streaming** | Database CDC replication |
-| Complex event processing | **Eventhouse + KQL update policies** | Pattern detection, windowed aggregations |
+| Streaming pattern                    | Fabric target                                          | When to use                                 |
+| ------------------------------------ | ------------------------------------------------------ | ------------------------------------------- |
+| Event stream analytics (sub-second)  | **Eventhouse + Eventstream**                           | Real-time dashboards, alerting, KQL queries |
+| Micro-batch ETL (seconds to minutes) | **Fabric Spark Structured Streaming**                  | Complex transformations, Delta table writes |
+| File-based incremental ingestion     | **Data Pipelines (tumbling window trigger)**           | New file detection, batch processing        |
+| CDC / change data capture            | **Fabric mirroring** or **Spark Structured Streaming** | Database CDC replication                    |
+| Complex event processing             | **Eventhouse + KQL update policies**                   | Pattern detection, windowed aggregations    |
 
 ---
 
@@ -87,6 +87,7 @@ Use Fabric Spark Structured Streaming when:
 ### 3.2 Code migration
 
 **Databricks Structured Streaming:**
+
 ```python
 from pyspark.sql import functions as F
 
@@ -128,6 +129,7 @@ query = (
 ```
 
 **Fabric Spark Structured Streaming:**
+
 ```python
 from pyspark.sql import functions as F
 
@@ -171,13 +173,13 @@ query = (
 
 ### 3.3 Key changes
 
-| Databricks pattern | Fabric equivalent | Notes |
-| --- | --- | --- |
-| Cluster-based streaming job | Fabric Spark notebook (long-running) | Schedule via Data Pipeline; no persistent cluster |
-| `/mnt/checkpoints/` | `Files/checkpoints/` | OneLake path |
-| `dbutils.secrets` | `mssparkutils.credentials` | Key Vault integration |
-| `.table("catalog.schema.table")` | `.toTable("lakehouse_table")` | Lakehouse table reference |
-| Auto-scaling cluster | Fabric Spark auto-scales within capacity | CU-based, not VM-based |
+| Databricks pattern               | Fabric equivalent                        | Notes                                             |
+| -------------------------------- | ---------------------------------------- | ------------------------------------------------- |
+| Cluster-based streaming job      | Fabric Spark notebook (long-running)     | Schedule via Data Pipeline; no persistent cluster |
+| `/mnt/checkpoints/`              | `Files/checkpoints/`                     | OneLake path                                      |
+| `dbutils.secrets`                | `mssparkutils.credentials`               | Key Vault integration                             |
+| `.table("catalog.schema.table")` | `.toTable("lakehouse_table")`            | Lakehouse table reference                         |
+| Auto-scaling cluster             | Fabric Spark auto-scales within capacity | CU-based, not VM-based                            |
 
 ---
 
@@ -185,24 +187,26 @@ query = (
 
 ### 4.1 When to use Eventhouse over Spark Streaming
 
-| Criteria | Eventhouse (RTI) | Spark Structured Streaming |
-| --- | --- | --- |
-| Query latency | Sub-second | Seconds (depends on trigger) |
-| Query language | KQL (Kusto Query Language) | Spark SQL / PySpark |
-| Storage format | KQL database (columnar, compressed) | Delta Lake (Parquet + logs) |
-| Auto-scaling | Fully managed | Within Fabric Spark capacity |
-| Retention policies | Built-in (hot/warm/cold) | Manual (Delta VACUUM) |
-| Real-time dashboards | Native (Real-Time Dashboard) | Via Power BI DirectQuery |
-| Complex transforms | KQL update policies | Full Spark API |
+| Criteria             | Eventhouse (RTI)                    | Spark Structured Streaming   |
+| -------------------- | ----------------------------------- | ---------------------------- |
+| Query latency        | Sub-second                          | Seconds (depends on trigger) |
+| Query language       | KQL (Kusto Query Language)          | Spark SQL / PySpark          |
+| Storage format       | KQL database (columnar, compressed) | Delta Lake (Parquet + logs)  |
+| Auto-scaling         | Fully managed                       | Within Fabric Spark capacity |
+| Retention policies   | Built-in (hot/warm/cold)            | Manual (Delta VACUUM)        |
+| Real-time dashboards | Native (Real-Time Dashboard)        | Via Power BI DirectQuery     |
+| Complex transforms   | KQL update policies                 | Full Spark API               |
 
 ### 4.2 Setting up Eventstream + Eventhouse
 
 **Step 1: Create Eventhouse**
+
 ```
 Fabric workspace > New > Eventhouse > Name: "events-house"
 ```
 
 **Step 2: Create KQL database**
+
 ```kql
 // Create table for events
 .create table Events (
@@ -223,6 +227,7 @@ Fabric workspace > New > Eventhouse > Name: "events-house"
 ```
 
 **Step 3: Create Eventstream**
+
 ```
 Fabric workspace > New > Eventstream > Name: "events-stream"
 > Add Source: Azure Event Hubs
@@ -235,6 +240,7 @@ Fabric workspace > New > Eventstream > Name: "events-stream"
 ```
 
 **Step 4: Query streaming data in real time**
+
 ```kql
 // Last hour of events by type
 Events
@@ -253,15 +259,15 @@ Events
 
 ### 4.3 KQL equivalents for common Spark Streaming patterns
 
-| Spark Streaming pattern | KQL equivalent |
-| --- | --- |
-| `window(col, "5 minutes")` | `bin(Timestamp, 5m)` |
-| `groupBy("key").count()` | `summarize count() by key` |
-| `filter(col("x") > 10)` | `where x > 10` |
+| Spark Streaming pattern           | KQL equivalent                           |
+| --------------------------------- | ---------------------------------------- |
+| `window(col, "5 minutes")`        | `bin(Timestamp, 5m)`                     |
+| `groupBy("key").count()`          | `summarize count() by key`               |
+| `filter(col("x") > 10)`           | `where x > 10`                           |
 | `withWatermark("time", "10 min")` | KQL handles late data via ingestion time |
-| `dropDuplicates(["id"])` | `summarize take_any(*) by id` |
-| `join(other_df, "key")` | `join kind=inner (OtherTable) on key` |
-| UDF (Python function) | KQL functions (limited but performant) |
+| `dropDuplicates(["id"])`          | `summarize take_any(*) by id`            |
+| `join(other_df, "key")`           | `join kind=inner (OtherTable) on key`    |
+| UDF (Python function)             | KQL functions (limited but performant)   |
 
 ---
 
@@ -284,12 +290,12 @@ df = (
 
 ### 5.2 Fabric alternatives
 
-| Approach | Latency | Effort | Best for |
-| --- | --- | --- | --- |
-| Data Pipeline with tumbling window trigger | Minutes | Low | Batch file processing on schedule |
-| Data Pipeline with event trigger (Storage Events) | Seconds | Medium | Event-driven file processing |
-| Fabric Spark Structured Streaming (file source) | Seconds | Medium | Complex transforms on new files |
-| Eventstream (Custom App source) | Sub-second | Medium | Real-time file event processing |
+| Approach                                          | Latency    | Effort | Best for                          |
+| ------------------------------------------------- | ---------- | ------ | --------------------------------- |
+| Data Pipeline with tumbling window trigger        | Minutes    | Low    | Batch file processing on schedule |
+| Data Pipeline with event trigger (Storage Events) | Seconds    | Medium | Event-driven file processing      |
+| Fabric Spark Structured Streaming (file source)   | Seconds    | Medium | Complex transforms on new files   |
+| Eventstream (Custom App source)                   | Sub-second | Medium | Real-time file event processing   |
 
 **Data Pipeline with storage event trigger (recommended for most cases):**
 
@@ -309,16 +315,19 @@ df = (
         "scope": "/subscriptions/.../storageAccounts/...",
         "events": ["Microsoft.Storage.BlobCreated"]
     },
-    "pipelines": [{
-        "pipelineReference": {"referenceName": "ProcessNewFiles"},
-        "parameters": {
-            "filePath": "@trigger().outputs.body.fileName"
+    "pipelines": [
+        {
+            "pipelineReference": { "referenceName": "ProcessNewFiles" },
+            "parameters": {
+                "filePath": "@trigger().outputs.body.fileName"
+            }
         }
-    }]
+    ]
 }
 ```
 
 **Fabric Spark file streaming:**
+
 ```python
 # Fabric notebook: Stream from OneLake file source
 df = (
@@ -367,14 +376,14 @@ This replaces the Databricks pattern of running multiple Structured Streaming qu
 
 ## 7. Auto-scaling comparison
 
-| Aspect | Databricks Streaming | Fabric RTI |
-| --- | --- | --- |
-| Scaling unit | Cluster nodes (VMs) | Fabric CU (capacity) |
-| Scale-up time | Minutes (new VMs) | Seconds (within capacity) |
-| Scale-to-zero | Not for streaming (cluster must run) | Yes (Eventhouse scales with ingestion) |
-| Cost during idle | Full cluster cost | Minimal CU |
-| Over-provisioning | Common (must handle peak) | Smoothing handles spikes |
-| Auto-scaling config | Cluster autoscale min/max nodes | Capacity-level CU budget |
+| Aspect              | Databricks Streaming                 | Fabric RTI                             |
+| ------------------- | ------------------------------------ | -------------------------------------- |
+| Scaling unit        | Cluster nodes (VMs)                  | Fabric CU (capacity)                   |
+| Scale-up time       | Minutes (new VMs)                    | Seconds (within capacity)              |
+| Scale-to-zero       | Not for streaming (cluster must run) | Yes (Eventhouse scales with ingestion) |
+| Cost during idle    | Full cluster cost                    | Minimal CU                             |
+| Over-provisioning   | Common (must handle peak)            | Smoothing handles spikes               |
+| Auto-scaling config | Cluster autoscale min/max nodes      | Capacity-level CU budget               |
 
 **Key insight:** Databricks streaming jobs require an always-on cluster, meaning you pay for cluster VMs 24/7 even during low-traffic periods. Fabric Eventhouse scales with ingestion volume and costs near-zero during idle periods (within your capacity allocation).
 
@@ -400,14 +409,14 @@ This replaces the Databricks pattern of running multiple Structured Streaming qu
 
 ## 9. Common pitfalls
 
-| Pitfall | Mitigation |
-| --- | --- |
-| Assuming Eventhouse replaces Structured Streaming for all use cases | Eventhouse is for analytics (KQL); use Spark Streaming for complex ETL |
-| Running Spark Structured Streaming 24/7 on Fabric | This consumes CU continuously; evaluate if Eventhouse is cheaper |
-| Ignoring Auto Loader's schema evolution | Data Pipeline + Spark lacks Auto Loader's auto-schema-merge; handle manually |
-| Not setting Eventhouse retention policies | Without retention, data grows unbounded; set hot/warm/cold tiers |
-| Expecting Eventstream to handle complex transforms | Eventstream is routing, not transformation; use KQL update policies or Spark for complex logic |
-| Forgetting checkpoint migration | Structured Streaming checkpoints are not portable; restart from earliest offset during cutover |
+| Pitfall                                                             | Mitigation                                                                                     |
+| ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Assuming Eventhouse replaces Structured Streaming for all use cases | Eventhouse is for analytics (KQL); use Spark Streaming for complex ETL                         |
+| Running Spark Structured Streaming 24/7 on Fabric                   | This consumes CU continuously; evaluate if Eventhouse is cheaper                               |
+| Ignoring Auto Loader's schema evolution                             | Data Pipeline + Spark lacks Auto Loader's auto-schema-merge; handle manually                   |
+| Not setting Eventhouse retention policies                           | Without retention, data grows unbounded; set hot/warm/cold tiers                               |
+| Expecting Eventstream to handle complex transforms                  | Eventstream is routing, not transformation; use KQL update policies or Spark for complex logic |
+| Forgetting checkpoint migration                                     | Structured Streaming checkpoints are not portable; restart from earliest offset during cutover |
 
 ---
 

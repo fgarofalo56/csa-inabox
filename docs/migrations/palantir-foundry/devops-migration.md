@@ -24,15 +24,15 @@ Foundry's DevOps capabilities are organized around two core systems:
 
 Supporting capabilities include:
 
-| Foundry capability | What it does |
-|---|---|
-| Global Branching | Coordinates branches across multiple resources (pipelines, Ontology, apps) for isolated testing |
-| Product packaging | Bundles pipelines, Ontology resources, apps, and models into installable products |
-| Marketplace | Storefront for discovering, installing, and managing packaged products |
-| Upgrade Assistant | Manages platform version upgrades and dependency migrations |
-| Environment management | Provides dev, staging, and production environments within the platform |
-| VS Code Integration | Palantir's VS Code extension for local development with platform connectivity |
-| Continue | AI-powered coding assistant integrated into Code Repositories |
+| Foundry capability     | What it does                                                                                    |
+| ---------------------- | ----------------------------------------------------------------------------------------------- |
+| Global Branching       | Coordinates branches across multiple resources (pipelines, Ontology, apps) for isolated testing |
+| Product packaging      | Bundles pipelines, Ontology resources, apps, and models into installable products               |
+| Marketplace            | Storefront for discovering, installing, and managing packaged products                          |
+| Upgrade Assistant      | Manages platform version upgrades and dependency migrations                                     |
+| Environment management | Provides dev, staging, and production environments within the platform                          |
+| VS Code Integration    | Palantir's VS Code extension for local development with platform connectivity                   |
+| Continue               | AI-powered coding assistant integrated into Code Repositories                                   |
 
 ---
 
@@ -40,17 +40,17 @@ Supporting capabilities include:
 
 Azure replaces Foundry's monolithic DevOps model with composable, standards-based components:
 
-| Foundry capability | Azure equivalent | Key advantage |
-|---|---|---|
-| Apollo | GitHub Actions + Bicep IaC + Azure deployment slots | Infrastructure defined as code, not configured through a UI |
-| Code Repositories | GitHub / Azure Repos + VS Code | Industry-standard Git; 100M+ developer ecosystem |
-| Global Branching | Git feature branches + GitHub environments + PR workflows | Standard Git branching; no proprietary coordination layer |
-| Product packaging | Bicep modules + Helm charts + Azure Artifacts | Open packaging standards; reusable across organizations |
-| Marketplace | Azure Marketplace + Power Platform AppSource | Global distribution; ISV monetization built in |
-| Upgrade Assistant | Azure Advisor + Azure Resource Graph + Dependabot | Automated dependency updates; security vulnerability detection |
-| Environment management | Azure subscriptions + resource groups + deployment slots | True infrastructure isolation; RBAC at every level |
-| VS Code Integration | VS Code + Azure extensions + GitHub Copilot | Native VS Code; no proprietary plugin required |
-| Continue | GitHub Copilot + GitHub Copilot Workspace | Multi-model AI coding; works across all languages and repos |
+| Foundry capability     | Azure equivalent                                          | Key advantage                                                  |
+| ---------------------- | --------------------------------------------------------- | -------------------------------------------------------------- |
+| Apollo                 | GitHub Actions + Bicep IaC + Azure deployment slots       | Infrastructure defined as code, not configured through a UI    |
+| Code Repositories      | GitHub / Azure Repos + VS Code                            | Industry-standard Git; 100M+ developer ecosystem               |
+| Global Branching       | Git feature branches + GitHub environments + PR workflows | Standard Git branching; no proprietary coordination layer      |
+| Product packaging      | Bicep modules + Helm charts + Azure Artifacts             | Open packaging standards; reusable across organizations        |
+| Marketplace            | Azure Marketplace + Power Platform AppSource              | Global distribution; ISV monetization built in                 |
+| Upgrade Assistant      | Azure Advisor + Azure Resource Graph + Dependabot         | Automated dependency updates; security vulnerability detection |
+| Environment management | Azure subscriptions + resource groups + deployment slots  | True infrastructure isolation; RBAC at every level             |
+| VS Code Integration    | VS Code + Azure extensions + GitHub Copilot               | Native VS Code; no proprietary plugin required                 |
+| Continue               | GitHub Copilot + GitHub Copilot Workspace                 | Multi-model AI coding; works across all languages and repos    |
 
 ### Architecture comparison
 
@@ -122,74 +122,74 @@ The following is drawn from CSA-in-a-Box's actual deployment workflow (`.github/
 name: Deploy Infrastructure
 
 on:
-  workflow_dispatch:
-    inputs:
-      environment:
-        description: 'Target environment'
-        required: true
-        type: choice
-        options:
-          - dev
-          - test
-          - prod
-      dry_run:
-        description: 'What-if mode (no actual deployment)'
-        required: false
-        type: boolean
-        default: true
+    workflow_dispatch:
+        inputs:
+            environment:
+                description: "Target environment"
+                required: true
+                type: choice
+                options:
+                    - dev
+                    - test
+                    - prod
+            dry_run:
+                description: "What-if mode (no actual deployment)"
+                required: false
+                type: boolean
+                default: true
 
 concurrency:
-  group: deploy-${{ inputs.environment }}
-  cancel-in-progress: false
+    group: deploy-${{ inputs.environment }}
+    cancel-in-progress: false
 
 permissions:
-  id-token: write
-  contents: read
+    id-token: write
+    contents: read
 
 jobs:
-  validate:
-    name: Validate Templates
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
+    validate:
+        name: Validate Templates
+        runs-on: ubuntu-latest
+        timeout-minutes: 30
+        steps:
+            - uses: actions/checkout@v4
 
-      - name: Azure Login (OIDC)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_MGMT_SUBSCRIPTION_ID }}
+            - name: Azure Login (OIDC)
+              uses: azure/login@v2
+              with:
+                  client-id: ${{ secrets.AZURE_CLIENT_ID }}
+                  tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+                  subscription-id: ${{ secrets.AZURE_MGMT_SUBSCRIPTION_ID }}
 
-      - name: Validate Bicep Templates
-        run: |
-          bicep build deploy/bicep/DMLZ/main.bicep
-          bicep build deploy/bicep/DLZ/main.bicep
+            - name: Validate Bicep Templates
+              run: |
+                  bicep build deploy/bicep/DMLZ/main.bicep
+                  bicep build deploy/bicep/DLZ/main.bicep
 
-  deploy-dmlz:
-    name: Deploy Data Management Landing Zone
-    needs: validate
-    runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
-    steps:
-      - uses: actions/checkout@v4
+    deploy-dmlz:
+        name: Deploy Data Management Landing Zone
+        needs: validate
+        runs-on: ubuntu-latest
+        environment: ${{ inputs.environment }}
+        steps:
+            - uses: actions/checkout@v4
 
-      - name: Azure Login
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_DMLZ_SUBSCRIPTION_ID }}
+            - name: Azure Login
+              uses: azure/login@v2
+              with:
+                  client-id: ${{ secrets.AZURE_CLIENT_ID }}
+                  tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+                  subscription-id: ${{ secrets.AZURE_DMLZ_SUBSCRIPTION_ID }}
 
-      - name: What-If / Deploy DMLZ
-        run: |
-          MODE=""
-          if [ "${{ inputs.dry_run }}" = "true" ]; then MODE="--what-if"; fi
-          az deployment sub create \
-            --location eastus \
-            --template-file deploy/bicep/DMLZ/main.bicep \
-            --parameters deploy/bicep/DMLZ/params.${{ inputs.environment }}.json \
-            $MODE
+            - name: What-If / Deploy DMLZ
+              run: |
+                  MODE=""
+                  if [ "${{ inputs.dry_run }}" = "true" ]; then MODE="--what-if"; fi
+                  az deployment sub create \
+                    --location eastus \
+                    --template-file deploy/bicep/DMLZ/main.bicep \
+                    --parameters deploy/bicep/DMLZ/params.${{ inputs.environment }}.json \
+                    $MODE
 ```
 
 **Apollo equivalent:** This workflow replaces Apollo's environment promotion, what-if analysis, and deployment orchestration -- but as auditable, version-controlled code.
@@ -213,16 +213,16 @@ Foundry Code Repositories provides a tightly integrated development experience:
 
 GitHub (or Azure Repos) provides industry-standard Git hosting with a vastly larger ecosystem:
 
-| Feature | Foundry Code Repos | GitHub |
-|---|---|---|
-| Git hosting | Proprietary (Foundry-hosted) | GitHub.com or GitHub Enterprise Server |
-| Web IDE | Built-in (limited) | github.dev, Codespaces, VS Code for the Web |
-| Pull requests | Foundry-specific | Standard GitHub PRs with checks, reviews, CODEOWNERS |
-| CI/CD | Foundry checks system | GitHub Actions (any language, any target) |
-| Dependency management | Foundry transforms library | pip, npm, Maven, NuGet -- any package manager |
-| Code search | Foundry-scoped | GitHub code search (cross-repo, regex, symbol) |
-| Secret scanning | Not available | GitHub Advanced Security (secret scanning, code scanning) |
-| Developer ecosystem | Palantir-specific | 100M+ developers, 400M+ repositories |
+| Feature               | Foundry Code Repos           | GitHub                                                    |
+| --------------------- | ---------------------------- | --------------------------------------------------------- |
+| Git hosting           | Proprietary (Foundry-hosted) | GitHub.com or GitHub Enterprise Server                    |
+| Web IDE               | Built-in (limited)           | github.dev, Codespaces, VS Code for the Web               |
+| Pull requests         | Foundry-specific             | Standard GitHub PRs with checks, reviews, CODEOWNERS      |
+| CI/CD                 | Foundry checks system        | GitHub Actions (any language, any target)                 |
+| Dependency management | Foundry transforms library   | pip, npm, Maven, NuGet -- any package manager             |
+| Code search           | Foundry-scoped               | GitHub code search (cross-repo, regex, symbol)            |
+| Secret scanning       | Not available                | GitHub Advanced Security (secret scanning, code scanning) |
+| Developer ecosystem   | Palantir-specific            | 100M+ developers, 400M+ repositories                      |
 
 ### Migration steps
 
@@ -270,12 +270,12 @@ gitGraph
 
 **Strategy mapping:**
 
-| Foundry Global Branch pattern | Azure equivalent |
-|---|---|
-| Feature branch (all resources) | Feature branch per repo (infra, data, app) |
-| Branch testing environment | GitHub environment with PR-triggered deployment |
-| Branch merge (coordinated) | PR merge per repo; dependency order enforced by CI |
-| Branch-level permissions | GitHub branch protection rules + CODEOWNERS |
+| Foundry Global Branch pattern  | Azure equivalent                                   |
+| ------------------------------ | -------------------------------------------------- |
+| Feature branch (all resources) | Feature branch per repo (infra, data, app)         |
+| Branch testing environment     | GitHub environment with PR-triggered deployment    |
+| Branch merge (coordinated)     | PR merge per repo; dependency order enforced by CI |
+| Branch-level permissions       | GitHub branch protection rules + CODEOWNERS        |
 
 **For coordinated changes across repos** (e.g., a new dbt model requires a new Bicep resource), use linked pull requests with cross-repo status checks or a monorepo structure like CSA-in-a-Box.
 
@@ -311,89 +311,89 @@ This workflow runs on every pull request to catch issues before merge -- replaci
 name: PR Validation
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - 'deploy/bicep/**'
-      - 'transform/dbt/**'
-      - '.github/workflows/**'
+    pull_request:
+        branches: [main]
+        paths:
+            - "deploy/bicep/**"
+            - "transform/dbt/**"
+            - ".github/workflows/**"
 
 permissions:
-  id-token: write
-  contents: read
-  pull-requests: write
+    id-token: write
+    contents: read
+    pull-requests: write
 
 jobs:
-  lint:
-    name: Lint & Validate
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+    lint:
+        name: Lint & Validate
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
 
-      - name: Bicep Lint
-        run: az bicep build --file deploy/bicep/DMLZ/main.bicep
+            - name: Bicep Lint
+              run: az bicep build --file deploy/bicep/DMLZ/main.bicep
 
-      - name: PSRule for Azure
-        uses: microsoft/ps-rule@v2
-        with:
-          modules: PSRule.Rules.Azure
-          inputPath: deploy/bicep/
+            - name: PSRule for Azure
+              uses: microsoft/ps-rule@v2
+              with:
+                  modules: PSRule.Rules.Azure
+                  inputPath: deploy/bicep/
 
-  what-if:
-    name: What-If Analysis
-    needs: lint
-    runs-on: ubuntu-latest
-    environment: dev
-    steps:
-      - uses: actions/checkout@v4
+    what-if:
+        name: What-If Analysis
+        needs: lint
+        runs-on: ubuntu-latest
+        environment: dev
+        steps:
+            - uses: actions/checkout@v4
 
-      - name: Azure Login (OIDC)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_DEV_SUBSCRIPTION_ID }}
+            - name: Azure Login (OIDC)
+              uses: azure/login@v2
+              with:
+                  client-id: ${{ secrets.AZURE_CLIENT_ID }}
+                  tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+                  subscription-id: ${{ secrets.AZURE_DEV_SUBSCRIPTION_ID }}
 
-      - name: What-If
-        run: |
-          az deployment sub what-if \
-            --location eastus \
-            --template-file deploy/bicep/DMLZ/main.bicep \
-            --parameters deploy/bicep/DMLZ/params.dev.json \
-            --no-pretty-print > what-if-output.txt
+            - name: What-If
+              run: |
+                  az deployment sub what-if \
+                    --location eastus \
+                    --template-file deploy/bicep/DMLZ/main.bicep \
+                    --parameters deploy/bicep/DMLZ/params.dev.json \
+                    --no-pretty-print > what-if-output.txt
 
-      - name: Post What-If to PR
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const output = fs.readFileSync('what-if-output.txt', 'utf8');
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: `## Bicep What-If Results\n\`\`\`\n${output.substring(0, 60000)}\n\`\`\``
-            });
+            - name: Post What-If to PR
+              uses: actions/github-script@v7
+              with:
+                  script: |
+                      const fs = require('fs');
+                      const output = fs.readFileSync('what-if-output.txt', 'utf8');
+                      github.rest.issues.createComment({
+                        issue_number: context.issue.number,
+                        owner: context.repo.owner,
+                        repo: context.repo.repo,
+                        body: `## Bicep What-If Results\n\`\`\`\n${output.substring(0, 60000)}\n\`\`\``
+                      });
 
-  dbt-test:
-    name: dbt Tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+    dbt-test:
+        name: dbt Tests
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+            - name: Set up Python
+              uses: actions/setup-python@v5
+              with:
+                  python-version: "3.11"
 
-      - name: Install dbt
-        run: pip install dbt-databricks
+            - name: Install dbt
+              run: pip install dbt-databricks
 
-      - name: dbt compile & test
-        run: |
-          cd transform/dbt
-          dbt compile --target ci
-          dbt test --target ci
+            - name: dbt compile & test
+              run: |
+                  cd transform/dbt
+                  dbt compile --target ci
+                  dbt test --target ci
 ```
 
 ### Government deployment workflow
@@ -403,33 +403,33 @@ CSA-in-a-Box includes a dedicated government deployment workflow (`.github/workf
 ```yaml
 # Simplified from .github/workflows/deploy-gov.yml
 env:
-  AZURE_GOV_ENVIRONMENT: AzureUSGovernment
+    AZURE_GOV_ENVIRONMENT: AzureUSGovernment
 
 jobs:
-  deploy:
-    environment: gov-prod
-    steps:
-      - name: Azure Gov Login
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_GOV_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_GOV_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
-          environment: AzureUSGovernment
+    deploy:
+        environment: gov-prod
+        steps:
+            - name: Azure Gov Login
+              uses: azure/login@v2
+              with:
+                  client-id: ${{ secrets.AZURE_GOV_CLIENT_ID }}
+                  tenant-id: ${{ secrets.AZURE_GOV_TENANT_ID }}
+                  subscription-id: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
+                  environment: AzureUSGovernment
 
-      - name: Deploy
-        run: |
-          az deployment sub create \
-            --location usgovvirginia \
-            --template-file deploy/bicep/gov/main.bicep \
-            --parameters deploy/bicep/gov/params.gov-prod.json
+            - name: Deploy
+              run: |
+                  az deployment sub create \
+                    --location usgovvirginia \
+                    --template-file deploy/bicep/gov/main.bicep \
+                    --parameters deploy/bicep/gov/params.gov-prod.json
 
-      - name: Post FedRAMP Compliance Check
-        run: |
-          echo "Checking encryption at rest..."
-          az resource list --resource-group "rg-csa-gov-prod-platform" \
-            --query "[?type=='Microsoft.Storage/storageAccounts'].{name:name,encryption:properties.encryption.services.blob.enabled}" \
-            --output table
+            - name: Post FedRAMP Compliance Check
+              run: |
+                  echo "Checking encryption at rest..."
+                  az resource list --resource-group "rg-csa-gov-prod-platform" \
+                    --query "[?type=='Microsoft.Storage/storageAccounts'].{name:name,encryption:properties.encryption.services.blob.enabled}" \
+                    --output table
 ```
 
 ---
@@ -581,14 +581,14 @@ Foundry manages environments within the platform -- dev, staging, and production
 
 Azure provides true infrastructure isolation through subscriptions and resource groups:
 
-| Isolation level | Foundry | Azure |
-|---|---|---|
-| Compute isolation | Logical (shared infra) | Physical (separate subscriptions) |
-| Network isolation | Foundry-managed | VNet isolation, private endpoints, NSGs |
-| Identity isolation | Foundry roles | Separate Entra ID groups per environment |
-| Data isolation | Dataset permissions | Separate storage accounts, separate encryption keys |
-| Cost isolation | Not available | Separate subscriptions with budget alerts |
-| Compliance boundary | Platform-level | Per-subscription Azure Policy assignments |
+| Isolation level     | Foundry                | Azure                                               |
+| ------------------- | ---------------------- | --------------------------------------------------- |
+| Compute isolation   | Logical (shared infra) | Physical (separate subscriptions)                   |
+| Network isolation   | Foundry-managed        | VNet isolation, private endpoints, NSGs             |
+| Identity isolation  | Foundry roles          | Separate Entra ID groups per environment            |
+| Data isolation      | Dataset permissions    | Separate storage accounts, separate encryption keys |
+| Cost isolation      | Not available          | Separate subscriptions with budget alerts           |
+| Compliance boundary | Platform-level         | Per-subscription Azure Policy assignments           |
 
 ### CSA-in-a-Box environment topology
 
@@ -625,22 +625,22 @@ GitHub environments replace Apollo's environment management with native protecti
 ```yaml
 # In your workflow, reference environments for deployment gates
 jobs:
-  deploy-staging:
-    environment:
-      name: staging
-      url: https://portal.azure.com
-    steps:
-      - name: Deploy
-        run: az deployment sub create ...
+    deploy-staging:
+        environment:
+            name: staging
+            url: https://portal.azure.com
+        steps:
+            - name: Deploy
+              run: az deployment sub create ...
 
-  deploy-production:
-    environment:
-      name: production
-      url: https://portal.azure.com
-    needs: deploy-staging
-    steps:
-      - name: Deploy
-        run: az deployment sub create ...
+    deploy-production:
+        environment:
+            name: production
+            url: https://portal.azure.com
+        needs: deploy-staging
+        steps:
+            - name: Deploy
+              run: az deployment sub create ...
 ```
 
 Configure each GitHub environment with:
@@ -660,13 +660,13 @@ Foundry lets you bundle pipelines, Ontology resources, applications, and models 
 
 ### Azure alternatives
 
-| Foundry concept | Azure equivalent | Use case |
-|---|---|---|
-| Product package | Bicep module + parameter files | Infrastructure + configuration as a deployable unit |
-| Marketplace distribution | Azure Marketplace / AppSource | Public or private distribution to other tenants |
-| Internal distribution | Azure Artifacts feed | Private package registry for internal teams |
-| Versioned bundles | Container images + Helm charts | Application packaging with semantic versioning |
-| Install/upgrade | `az deployment` + GitHub Actions | Automated deployment from artifact feeds |
+| Foundry concept          | Azure equivalent                 | Use case                                            |
+| ------------------------ | -------------------------------- | --------------------------------------------------- |
+| Product package          | Bicep module + parameter files   | Infrastructure + configuration as a deployable unit |
+| Marketplace distribution | Azure Marketplace / AppSource    | Public or private distribution to other tenants     |
+| Internal distribution    | Azure Artifacts feed             | Private package registry for internal teams         |
+| Versioned bundles        | Container images + Helm charts   | Application packaging with semantic versioning      |
+| Install/upgrade          | `az deployment` + GitHub Actions | Automated deployment from artifact feeds            |
 
 ### Bicep module registry pattern
 
@@ -690,24 +690,24 @@ Publish modules in CI/CD:
 ```yaml
 # .github/workflows/publish-modules.yml
 jobs:
-  publish:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+    publish:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
 
-      - name: Azure Login
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_MGMT_SUBSCRIPTION_ID }}
+            - name: Azure Login
+              uses: azure/login@v2
+              with:
+                  client-id: ${{ secrets.AZURE_CLIENT_ID }}
+                  tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+                  subscription-id: ${{ secrets.AZURE_MGMT_SUBSCRIPTION_ID }}
 
-      - name: Publish Bicep Module
-        run: |
-          VERSION=$(cat VERSION)
-          az bicep publish \
-            --file deploy/bicep/DLZ/main.bicep \
-            --target "br:csainbox.azurecr.io/bicep/dlz:v${VERSION}"
+            - name: Publish Bicep Module
+              run: |
+                  VERSION=$(cat VERSION)
+                  az bicep publish \
+                    --file deploy/bicep/DLZ/main.bicep \
+                    --target "br:csainbox.azurecr.io/bicep/dlz:v${VERSION}"
 ```
 
 ---
@@ -759,25 +759,25 @@ resource stagingSlot 'Microsoft.Web/sites/slots@2023-12-01' = {
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: data-api
+    name: data-api
 spec:
-  replicas: 3
-  strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxUnavailable: 1
-      maxSurge: 1
-  template:
-    spec:
-      containers:
-        - name: data-api
-          image: csainbox.azurecr.io/data-api:v1.2.0
-          readinessProbe:
-            httpGet:
-              path: /health
-              port: 8080
-            initialDelaySeconds: 10
-            periodSeconds: 5
+    replicas: 3
+    strategy:
+        type: RollingUpdate
+        rollingUpdate:
+            maxUnavailable: 1
+            maxSurge: 1
+    template:
+        spec:
+            containers:
+                - name: data-api
+                  image: csainbox.azurecr.io/data-api:v1.2.0
+                  readinessProbe:
+                      httpGet:
+                          path: /health
+                          port: 8080
+                      initialDelaySeconds: 10
+                      periodSeconds: 5
 ```
 
 **3. Bicep what-if + incremental deployment (infrastructure)**
@@ -814,10 +814,10 @@ CSA-in-a-Box tags every successful deployment. To roll back, redeploy from the t
 # Tag format: deploy/<environment>-<short-sha>-<run-number>
 - name: Create deployment tag
   run: |
-    SHORT_SHA=$(git rev-parse --short HEAD)
-    TAG="deploy/${{ inputs.environment }}-${SHORT_SHA}-${{ github.run_number }}"
-    git tag -a "$TAG" -m "Deployed by ${{ github.actor }}"
-    git push origin "$TAG"
+      SHORT_SHA=$(git rev-parse --short HEAD)
+      TAG="deploy/${{ inputs.environment }}-${SHORT_SHA}-${{ github.run_number }}"
+      git tag -a "$TAG" -m "Deployed by ${{ github.actor }}"
+      git push origin "$TAG"
 ```
 
 To roll back, trigger the deployment workflow at the desired tag:
@@ -854,16 +854,16 @@ az deployment sub create \
 
 ### Foundry developer experience vs Azure
 
-| Capability | Foundry | Azure |
-|---|---|---|
-| IDE | Code Repositories (web) + VS Code extension | VS Code (native) + any JetBrains IDE |
-| AI coding assistant | Continue | GitHub Copilot (multi-model, cross-language) |
-| Local development | Limited (VS Code extension) | Full local development with emulators |
-| Debugging | Foundry-specific debugger | Standard debuggers (Python, Node, .NET) |
-| Package management | Foundry library management | pip, npm, Maven, NuGet, Cargo |
-| Code review | Foundry pull requests | GitHub PRs with CODEOWNERS, status checks |
-| Secret management | Foundry secrets | Azure Key Vault + GitHub Secrets |
-| Notebooks | Foundry notebooks | Databricks notebooks, Fabric notebooks, Jupyter |
+| Capability          | Foundry                                     | Azure                                           |
+| ------------------- | ------------------------------------------- | ----------------------------------------------- |
+| IDE                 | Code Repositories (web) + VS Code extension | VS Code (native) + any JetBrains IDE            |
+| AI coding assistant | Continue                                    | GitHub Copilot (multi-model, cross-language)    |
+| Local development   | Limited (VS Code extension)                 | Full local development with emulators           |
+| Debugging           | Foundry-specific debugger                   | Standard debuggers (Python, Node, .NET)         |
+| Package management  | Foundry library management                  | pip, npm, Maven, NuGet, Cargo                   |
+| Code review         | Foundry pull requests                       | GitHub PRs with CODEOWNERS, status checks       |
+| Secret management   | Foundry secrets                             | Azure Key Vault + GitHub Secrets                |
+| Notebooks           | Foundry notebooks                           | Databricks notebooks, Fabric notebooks, Jupyter |
 
 ### VS Code setup for Azure development
 
@@ -884,14 +884,14 @@ Replace the Palantir VS Code extension with Azure-native extensions:
 
 GitHub Copilot replaces Foundry's Continue AI coding assistant with broader capabilities:
 
-| Feature | Foundry Continue | GitHub Copilot |
-|---|---|---|
-| Code completion | Foundry-specific context | Any language, any framework, any repo |
-| Chat interface | Integrated in Code Repos | VS Code, JetBrains, CLI, GitHub.com |
-| Multi-model | Single model | GPT-4o, Claude, Gemini (model selection) |
-| Workspace agents | Not available | GitHub Copilot Workspace (multi-file edits) |
-| Custom instructions | Limited | Repository-level custom instructions (`.github/copilot-instructions.md`) |
-| Enterprise controls | Platform-managed | GitHub Copilot Business/Enterprise policies |
+| Feature             | Foundry Continue         | GitHub Copilot                                                           |
+| ------------------- | ------------------------ | ------------------------------------------------------------------------ |
+| Code completion     | Foundry-specific context | Any language, any framework, any repo                                    |
+| Chat interface      | Integrated in Code Repos | VS Code, JetBrains, CLI, GitHub.com                                      |
+| Multi-model         | Single model             | GPT-4o, Claude, Gemini (model selection)                                 |
+| Workspace agents    | Not available            | GitHub Copilot Workspace (multi-file edits)                              |
+| Custom instructions | Limited                  | Repository-level custom instructions (`.github/copilot-instructions.md`) |
+| Enterprise controls | Platform-managed         | GitHub Copilot Business/Enterprise policies                              |
 
 ---
 
@@ -971,19 +971,19 @@ Use this checklist to track your DevOps migration progress:
 
 ## CSA-in-a-Box evidence paths
 
-| Evidence | Path | Relevance |
-|---|---|---|
-| Primary deployment workflow | `.github/workflows/deploy.yml` | Multi-subscription Bicep deployment with what-if, environment gates, smoke tests, and deployment tagging |
-| Government deployment | `.github/workflows/deploy-gov.yml` | Azure Government deployment with FedRAMP compliance checks |
-| Portal deployment | `.github/workflows/deploy-portal.yml` | Application deployment workflow |
-| dbt deployment | `.github/workflows/deploy-dbt.yml` | Data transformation CI/CD |
-| Bicep modules (DMLZ) | `deploy/bicep/DMLZ/` | Data Management Landing Zone infrastructure |
-| Bicep modules (DLZ) | `deploy/bicep/DLZ/` | Data Landing Zone infrastructure |
-| Bicep modules (ALZ) | `deploy/bicep/landing-zone-alz/` | Azure Landing Zone (networking, policy, security) |
-| Bicep modules (Gov) | `deploy/bicep/gov/` | Government-specific infrastructure |
-| Shared modules | `deploy/bicep/shared/modules/` | Reusable components (private endpoints, networking, RBAC) |
-| IaC best practices | `docs/IaC-CICD-Best-Practices.md` | Comprehensive Bicep and GitHub Actions guide |
-| ADR: Bicep over Terraform | `docs/adr/0004-bicep-over-terraform.md` | Decision rationale for Bicep as primary IaC |
+| Evidence                    | Path                                    | Relevance                                                                                                |
+| --------------------------- | --------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Primary deployment workflow | `.github/workflows/deploy.yml`          | Multi-subscription Bicep deployment with what-if, environment gates, smoke tests, and deployment tagging |
+| Government deployment       | `.github/workflows/deploy-gov.yml`      | Azure Government deployment with FedRAMP compliance checks                                               |
+| Portal deployment           | `.github/workflows/deploy-portal.yml`   | Application deployment workflow                                                                          |
+| dbt deployment              | `.github/workflows/deploy-dbt.yml`      | Data transformation CI/CD                                                                                |
+| Bicep modules (DMLZ)        | `deploy/bicep/DMLZ/`                    | Data Management Landing Zone infrastructure                                                              |
+| Bicep modules (DLZ)         | `deploy/bicep/DLZ/`                     | Data Landing Zone infrastructure                                                                         |
+| Bicep modules (ALZ)         | `deploy/bicep/landing-zone-alz/`        | Azure Landing Zone (networking, policy, security)                                                        |
+| Bicep modules (Gov)         | `deploy/bicep/gov/`                     | Government-specific infrastructure                                                                       |
+| Shared modules              | `deploy/bicep/shared/modules/`          | Reusable components (private endpoints, networking, RBAC)                                                |
+| IaC best practices          | `docs/IaC-CICD-Best-Practices.md`       | Comprehensive Bicep and GitHub Actions guide                                                             |
+| ADR: Bicep over Terraform   | `docs/adr/0004-bicep-over-terraform.md` | Decision rationale for Bicep as primary IaC                                                              |
 
 ---
 

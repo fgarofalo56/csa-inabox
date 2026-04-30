@@ -27,17 +27,17 @@ Many Hadoop clusters still run Spark 2.x (2.3 or 2.4). Databricks and Fabric run
 
 ### Key breaking changes: Spark 2.x to 3.x
 
-| Area | Spark 2.x behavior | Spark 3.x behavior | Migration action |
-|---|---|---|---|
-| `Dataset.unionAll` | Deprecated but functional | Removed | Replace with `union()` |
-| `SQLContext` | Primary entry point | Removed | Use `SparkSession` |
-| `HiveContext` | Used for Hive access | Removed | Use `SparkSession.enableHiveSupport()` |
-| Implicit type coercion | Lenient (string to int) | Strict ANSI mode | Review type casts |
-| `pandas_udf` decorator | `@pandas_udf(schema, type)` | `@pandas_udf(returnType)` | Update decorator signature |
-| Date/timestamp | Based on Java Calendar | Based on Java 8 time API (Proleptic Gregorian) | Test date edge cases |
-| `spark.sql.legacy.timeParserPolicy` | LEGACY by default | EXCEPTION by default | Set policy or fix date formats |
-| `acc` / accumulators | `sc.accumulator()` | `sc.accumulator()` (unchanged but deprecated) | Use `AccumulatorV2` |
-| Scala 2.11 | Supported | Dropped (Scala 2.12/2.13 only) | Recompile Scala JARs |
+| Area                                | Spark 2.x behavior          | Spark 3.x behavior                             | Migration action                       |
+| ----------------------------------- | --------------------------- | ---------------------------------------------- | -------------------------------------- |
+| `Dataset.unionAll`                  | Deprecated but functional   | Removed                                        | Replace with `union()`                 |
+| `SQLContext`                        | Primary entry point         | Removed                                        | Use `SparkSession`                     |
+| `HiveContext`                       | Used for Hive access        | Removed                                        | Use `SparkSession.enableHiveSupport()` |
+| Implicit type coercion              | Lenient (string to int)     | Strict ANSI mode                               | Review type casts                      |
+| `pandas_udf` decorator              | `@pandas_udf(schema, type)` | `@pandas_udf(returnType)`                      | Update decorator signature             |
+| Date/timestamp                      | Based on Java Calendar      | Based on Java 8 time API (Proleptic Gregorian) | Test date edge cases                   |
+| `spark.sql.legacy.timeParserPolicy` | LEGACY by default           | EXCEPTION by default                           | Set policy or fix date formats         |
+| `acc` / accumulators                | `sc.accumulator()`          | `sc.accumulator()` (unchanged but deprecated)  | Use `AccumulatorV2`                    |
+| Scala 2.11                          | Supported                   | Dropped (Scala 2.12/2.13 only)                 | Recompile Scala JARs                   |
 
 ### Automated compatibility check
 
@@ -69,15 +69,15 @@ for config in legacy_configs:
 
 Migrating to Spark 3.x is not just a compatibility exercise — it brings significant improvements:
 
-| Feature | Benefit |
-|---|---|
-| Adaptive Query Execution (AQE) | Automatic optimization of joins, shuffles, and partition sizes |
-| Dynamic Partition Pruning | Faster queries on partitioned tables |
-| Photon engine (Databricks) | C++ native engine, 2-8x faster for SQL/DataFrame workloads |
-| Structured streaming improvements | Better exactly-once semantics, trigger.availableNow |
-| Python 3.8+ support | Modern Python features, better type hints |
-| Pandas API on Spark | Drop-in replacement for pandas at scale |
-| Delta Lake native integration | First-class Delta support in Spark 3.x |
+| Feature                           | Benefit                                                        |
+| --------------------------------- | -------------------------------------------------------------- |
+| Adaptive Query Execution (AQE)    | Automatic optimization of joins, shuffles, and partition sizes |
+| Dynamic Partition Pruning         | Faster queries on partitioned tables                           |
+| Photon engine (Databricks)        | C++ native engine, 2-8x faster for SQL/DataFrame workloads     |
+| Structured streaming improvements | Better exactly-once semantics, trigger.availableNow            |
+| Python 3.8+ support               | Modern Python features, better type hints                      |
+| Pandas API on Spark               | Drop-in replacement for pandas at scale                        |
+| Delta Lake native integration     | First-class Delta support in Spark 3.x                         |
 
 ---
 
@@ -127,8 +127,8 @@ spark-submit \
                 }
             },
             "libraries": [
-                {"pypi": {"package": "mysql-connector-python"}},
-                {"jar": "dbfs:/lib/custom-udf.jar"}
+                { "pypi": { "package": "mysql-connector-python" } },
+                { "jar": "dbfs:/lib/custom-udf.jar" }
             ]
         }
     ],
@@ -164,18 +164,18 @@ df.write.format("delta").mode("overwrite").save(
 
 ### Mapping spark-submit parameters
 
-| spark-submit parameter | Databricks equivalent | Fabric equivalent |
-|---|---|---|
-| `--master yarn` | Not needed (managed) | Not needed (managed) |
-| `--deploy-mode cluster` | Default behavior | Default behavior |
-| `--driver-memory 8g` | `driver_node_type_id` | Spark pool configuration |
-| `--executor-memory 16g` | `node_type_id` | Spark pool node size |
-| `--executor-cores 4` | Determined by node type | Determined by node size |
-| `--num-executors 20` | `autoscale.min_workers` | Pool min nodes |
-| `--queue production` | Cluster policy | Workspace/capacity allocation |
-| `--jars` | `libraries[].jar` | Environment configuration |
-| `--py-files` | `libraries[].whl` or dbfs upload | Environment configuration |
-| `--conf` | `spark_conf{}` | `%%configure` magic or Spark pool settings |
+| spark-submit parameter  | Databricks equivalent            | Fabric equivalent                          |
+| ----------------------- | -------------------------------- | ------------------------------------------ |
+| `--master yarn`         | Not needed (managed)             | Not needed (managed)                       |
+| `--deploy-mode cluster` | Default behavior                 | Default behavior                           |
+| `--driver-memory 8g`    | `driver_node_type_id`            | Spark pool configuration                   |
+| `--executor-memory 16g` | `node_type_id`                   | Spark pool node size                       |
+| `--executor-cores 4`    | Determined by node type          | Determined by node size                    |
+| `--num-executors 20`    | `autoscale.min_workers`          | Pool min nodes                             |
+| `--queue production`    | Cluster policy                   | Workspace/capacity allocation              |
+| `--jars`                | `libraries[].jar`                | Environment configuration                  |
+| `--py-files`            | `libraries[].whl` or dbfs upload | Environment configuration                  |
+| `--conf`                | `spark_conf{}`                   | `%%configure` magic or Spark pool settings |
 
 ---
 
@@ -244,13 +244,13 @@ df.write.format("delta").mode("overwrite").save(
 
 ### Multi-tenancy mapping
 
-| YARN concept | Databricks equivalent | Fabric equivalent |
-|---|---|---|
-| Queue | Cluster policy | Workspace + capacity |
-| Capacity percentage | Max DBU budget per policy | Capacity units (CU) allocation |
-| User ACL on queue | Cluster policy permissions | Workspace role assignment |
-| Preemption | Serverless SQL (auto-managed) | Capacity burst |
-| Fair scheduling | SQL warehouse auto-scaling | Fabric capacity auto-scale |
+| YARN concept        | Databricks equivalent         | Fabric equivalent              |
+| ------------------- | ----------------------------- | ------------------------------ |
+| Queue               | Cluster policy                | Workspace + capacity           |
+| Capacity percentage | Max DBU budget per policy     | Capacity units (CU) allocation |
+| User ACL on queue   | Cluster policy permissions    | Workspace role assignment      |
+| Preemption          | Serverless SQL (auto-managed) | Capacity burst                 |
+| Fair scheduling     | SQL warehouse auto-scaling    | Fabric capacity auto-scale     |
 
 ---
 
@@ -402,62 +402,62 @@ parsed.writeStream \
 
 PySpark code is the most portable. Most PySpark jobs run on Databricks/Fabric with only path changes:
 
-| Change needed | Effort |
-|---|---|
-| HDFS paths to ADLS paths | Find-and-replace |
-| `SparkContext`/`HiveContext` to `SparkSession` | Minor refactor |
-| Python 2 to Python 3 | May require significant effort if still on Python 2 |
-| Custom UDFs | Re-register in Databricks/Fabric |
+| Change needed                                  | Effort                                              |
+| ---------------------------------------------- | --------------------------------------------------- |
+| HDFS paths to ADLS paths                       | Find-and-replace                                    |
+| `SparkContext`/`HiveContext` to `SparkSession` | Minor refactor                                      |
+| Python 2 to Python 3                           | May require significant effort if still on Python 2 |
+| Custom UDFs                                    | Re-register in Databricks/Fabric                    |
 
 ### Scala Spark
 
 Scala Spark jobs require recompilation for the target Spark and Scala version:
 
-| Change needed | Effort |
-|---|---|
-| Recompile for Scala 2.12 (from 2.11) | Update build.sbt, fix deprecations |
-| Update Spark dependency version | Update build.sbt, test for API changes |
-| Remove Hadoop-specific imports | Replace `org.apache.hadoop.*` with ABFS equivalents where needed |
-| Package as fat JAR or wheel | Standard sbt assembly |
+| Change needed                        | Effort                                                           |
+| ------------------------------------ | ---------------------------------------------------------------- |
+| Recompile for Scala 2.12 (from 2.11) | Update build.sbt, fix deprecations                               |
+| Update Spark dependency version      | Update build.sbt, test for API changes                           |
+| Remove Hadoop-specific imports       | Replace `org.apache.hadoop.*` with ABFS equivalents where needed |
+| Package as fat JAR or wheel          | Standard sbt assembly                                            |
 
 ### Java Spark
 
 Java Spark jobs follow the same pattern as Scala:
 
-| Change needed | Effort |
-|---|---|
-| Update Maven POM for Spark 3.x | Update dependency versions |
-| Recompile and test | Standard Maven build |
-| Replace deprecated APIs | `JavaSparkContext` → `SparkSession` patterns |
+| Change needed                  | Effort                                       |
+| ------------------------------ | -------------------------------------------- |
+| Update Maven POM for Spark 3.x | Update dependency versions                   |
+| Recompile and test             | Standard Maven build                         |
+| Replace deprecated APIs        | `JavaSparkContext` → `SparkSession` patterns |
 
 ---
 
 ## Configuration migration reference
 
-| YARN Spark config | Databricks equivalent | Notes |
-|---|---|---|
-| `spark.executor.memory` | Determined by `node_type_id` | Node type defines memory |
-| `spark.executor.cores` | Determined by `node_type_id` | Node type defines cores |
-| `spark.dynamicAllocation.enabled` | Autoscale enabled by default | Built into cluster config |
-| `spark.yarn.queue` | Cluster policy | Different paradigm |
-| `spark.hadoop.fs.defaultFS` | Not needed | ADLS configured per workspace |
-| `spark.sql.warehouse.dir` | Managed by Unity Catalog | Auto-configured |
-| `spark.eventLog.dir` | Managed by Databricks | Auto-configured to DBFS |
-| `spark.sql.shuffle.partitions` | `auto` (AQE handles this) | Let AQE decide |
-| `spark.serializer` | KryoSerializer (default) | Already optimized |
+| YARN Spark config                 | Databricks equivalent        | Notes                         |
+| --------------------------------- | ---------------------------- | ----------------------------- |
+| `spark.executor.memory`           | Determined by `node_type_id` | Node type defines memory      |
+| `spark.executor.cores`            | Determined by `node_type_id` | Node type defines cores       |
+| `spark.dynamicAllocation.enabled` | Autoscale enabled by default | Built into cluster config     |
+| `spark.yarn.queue`                | Cluster policy               | Different paradigm            |
+| `spark.hadoop.fs.defaultFS`       | Not needed                   | ADLS configured per workspace |
+| `spark.sql.warehouse.dir`         | Managed by Unity Catalog     | Auto-configured               |
+| `spark.eventLog.dir`              | Managed by Databricks        | Auto-configured to DBFS       |
+| `spark.sql.shuffle.partitions`    | `auto` (AQE handles this)    | Let AQE decide                |
+| `spark.serializer`                | KryoSerializer (default)     | Already optimized             |
 
 ---
 
 ## Common pitfalls
 
-| Pitfall | Mitigation |
-|---|---|
-| Hardcoded HDFS paths throughout codebase | Use configuration files or environment variables for all paths |
-| Spark 2.x APIs that broke in 3.x | Run Spark migration tool, test thoroughly |
-| Scala 2.11 JARs on Scala 2.12 runtime | Recompile all Scala libraries |
-| YARN queue assumptions in code | Remove queue references; use cluster policies |
-| `spark-submit` scripts as entry points | Convert to Databricks Jobs API or Fabric notebook scheduling |
-| Checkpoints on HDFS | Recreate checkpoints on ADLS (streaming jobs restart from scratch) |
+| Pitfall                                  | Mitigation                                                         |
+| ---------------------------------------- | ------------------------------------------------------------------ |
+| Hardcoded HDFS paths throughout codebase | Use configuration files or environment variables for all paths     |
+| Spark 2.x APIs that broke in 3.x         | Run Spark migration tool, test thoroughly                          |
+| Scala 2.11 JARs on Scala 2.12 runtime    | Recompile all Scala libraries                                      |
+| YARN queue assumptions in code           | Remove queue references; use cluster policies                      |
+| `spark-submit` scripts as entry points   | Convert to Databricks Jobs API or Fabric notebook scheduling       |
+| Checkpoints on HDFS                      | Recreate checkpoints on ADLS (streaming jobs restart from scratch) |
 
 ---
 

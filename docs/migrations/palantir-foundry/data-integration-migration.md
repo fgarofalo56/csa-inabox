@@ -35,12 +35,12 @@ Foundry provides two mechanisms for reaching data behind corporate firewalls:
 
 ### Sync types
 
-| Sync type | Description | Use case |
-|---|---|---|
-| **Batch sync** | Scheduled full or incremental data extraction | Nightly warehouse loads, periodic CRM exports |
-| **CDC sync** | Change data capture from database transaction logs | Near-real-time replication of operational databases |
-| **Streaming sync** | Continuous real-time data ingestion | IoT telemetry, clickstream, financial ticks |
-| **Media sync** | Binary file ingestion (images, PDFs, documents) | Document processing, medical imaging, geospatial tiles |
+| Sync type          | Description                                        | Use case                                               |
+| ------------------ | -------------------------------------------------- | ------------------------------------------------------ |
+| **Batch sync**     | Scheduled full or incremental data extraction      | Nightly warehouse loads, periodic CRM exports          |
+| **CDC sync**       | Change data capture from database transaction logs | Near-real-time replication of operational databases    |
+| **Streaming sync** | Continuous real-time data ingestion                | IoT telemetry, clickstream, financial ticks            |
+| **Media sync**     | Binary file ingestion (images, PDFs, documents)    | Document processing, medical imaging, geospatial tiles |
 
 ### Push-based ingestion
 
@@ -125,22 +125,22 @@ flowchart TB
 
 ### Key Azure services
 
-| Azure service | Foundry equivalent | Role |
-|---|---|---|
-| **Azure Data Factory** | Data Connection + Magritte | Central orchestration, 100+ built-in connectors, scheduling, monitoring |
-| **Fabric Data Factory** | Data Connection (modern) | Next-gen data integration within Microsoft Fabric, Dataflows Gen2 |
-| **Self-hosted Integration Runtime** | Agent worker / proxy | Secure bridge to on-premises and private-network data sources |
-| **Azure Event Hubs** | Streaming syncs | High-throughput streaming ingestion (millions of events/sec) |
-| **Azure Stream Analytics** | Streaming transforms | Real-time SQL-based stream processing |
-| **Fabric Real-Time Intelligence** | Streaming analytics | Real-time dashboards, KQL-based stream analysis |
-| **Azure Event Grid** | HTTPS listeners | Event-driven push ingestion, webhook subscriptions |
-| **Azure Functions** | REST API plugins | Custom connector logic, HTTP triggers, serverless transforms |
-| **Logic Apps** | Email listeners + SaaS connectors | Low-code SaaS integration, email processing workflows |
-| **OneLake shortcuts** | Virtual Tables | Zero-copy federated access to ADLS, S3, GCS, Dataverse |
-| **Fabric mirroring** | CDC syncs (database) | Near-real-time database replication into OneLake |
-| **Synapse serverless SQL** | Virtual Tables (query) | Federated query over external data without ingestion |
-| **Azure Blob Storage** | Media syncs (storage) | Binary file storage for documents, images, media |
-| **Azure AI Document Intelligence** | Media syncs (processing) | OCR, form extraction, document classification |
+| Azure service                       | Foundry equivalent                | Role                                                                    |
+| ----------------------------------- | --------------------------------- | ----------------------------------------------------------------------- |
+| **Azure Data Factory**              | Data Connection + Magritte        | Central orchestration, 100+ built-in connectors, scheduling, monitoring |
+| **Fabric Data Factory**             | Data Connection (modern)          | Next-gen data integration within Microsoft Fabric, Dataflows Gen2       |
+| **Self-hosted Integration Runtime** | Agent worker / proxy              | Secure bridge to on-premises and private-network data sources           |
+| **Azure Event Hubs**                | Streaming syncs                   | High-throughput streaming ingestion (millions of events/sec)            |
+| **Azure Stream Analytics**          | Streaming transforms              | Real-time SQL-based stream processing                                   |
+| **Fabric Real-Time Intelligence**   | Streaming analytics               | Real-time dashboards, KQL-based stream analysis                         |
+| **Azure Event Grid**                | HTTPS listeners                   | Event-driven push ingestion, webhook subscriptions                      |
+| **Azure Functions**                 | REST API plugins                  | Custom connector logic, HTTP triggers, serverless transforms            |
+| **Logic Apps**                      | Email listeners + SaaS connectors | Low-code SaaS integration, email processing workflows                   |
+| **OneLake shortcuts**               | Virtual Tables                    | Zero-copy federated access to ADLS, S3, GCS, Dataverse                  |
+| **Fabric mirroring**                | CDC syncs (database)              | Near-real-time database replication into OneLake                        |
+| **Synapse serverless SQL**          | Virtual Tables (query)            | Federated query over external data without ingestion                    |
+| **Azure Blob Storage**              | Media syncs (storage)             | Binary file storage for documents, images, media                        |
+| **Azure AI Document Intelligence**  | Media syncs (processing)          | OCR, form extraction, document classification                           |
 
 ---
 
@@ -148,20 +148,20 @@ flowchart TB
 
 The following table maps Foundry's major connector categories to their Azure equivalents. ADF supports over 100 built-in connectors; only the most common categories are listed.
 
-| Foundry connector category | Examples | Azure equivalent | Notes |
-|---|---|---|---|
-| **Relational databases** | PostgreSQL, SQL Server, Oracle, MySQL, MariaDB | ADF JDBC/ODBC connectors, native connectors for SQL Server/PostgreSQL/Oracle/MySQL | Native connectors offer better performance than generic JDBC |
-| **Cloud data warehouses** | Snowflake, BigQuery, Redshift, Databricks | ADF Snowflake, BigQuery, Redshift, Databricks connectors | Direct connectors with bulk-load support |
-| **Cloud storage** | S3, GCS, Azure Blob, SFTP, HDFS | ADF S3, GCS, Blob, SFTP connectors; OneLake S3-compatible shortcuts | OneLake shortcuts provide zero-copy S3 access |
-| **SaaS platforms** | Salesforce, ServiceNow, Workday, SAP, Dynamics | ADF Salesforce, ServiceNow, SAP connectors; Dataverse direct integration | Dynamics 365 has native Fabric integration |
-| **REST APIs** | Custom HTTP/REST endpoints | ADF REST connector, Web Activity, Azure Functions custom activities | Pagination, OAuth, and custom auth supported |
-| **File formats** | CSV, JSON, Parquet, Avro, ORC, XML, Excel | ADF dataset format support for all listed formats | Format conversion during copy is built-in |
-| **Messaging systems** | Kafka, RabbitMQ, Azure Service Bus | Event Hubs (Kafka-compatible), ADF connectors | Event Hubs supports Kafka protocol natively |
-| **NoSQL databases** | MongoDB, Cosmos DB, Cassandra, DynamoDB | ADF MongoDB, Cosmos DB, Cassandra, DynamoDB connectors | Cosmos DB has native Fabric mirroring |
-| **Mainframe / legacy** | IBM DB2, AS/400, Teradata, Informix | ADF DB2, Teradata, Informix connectors via SHIR | Requires Self-hosted IR for on-prem mainframes |
-| **Graph databases** | Neo4j | ADF REST connector to Neo4j HTTP API, custom activity | No native ADF connector; use REST or custom |
-| **Email** | IMAP, Exchange, SMTP | Logic Apps Office 365 / Outlook connector | Logic Apps handles email triggers natively |
-| **LDAP / directory** | Active Directory, LDAP | Microsoft Graph API via ADF REST connector | Entra ID provides direct graph access |
+| Foundry connector category | Examples                                       | Azure equivalent                                                                   | Notes                                                        |
+| -------------------------- | ---------------------------------------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| **Relational databases**   | PostgreSQL, SQL Server, Oracle, MySQL, MariaDB | ADF JDBC/ODBC connectors, native connectors for SQL Server/PostgreSQL/Oracle/MySQL | Native connectors offer better performance than generic JDBC |
+| **Cloud data warehouses**  | Snowflake, BigQuery, Redshift, Databricks      | ADF Snowflake, BigQuery, Redshift, Databricks connectors                           | Direct connectors with bulk-load support                     |
+| **Cloud storage**          | S3, GCS, Azure Blob, SFTP, HDFS                | ADF S3, GCS, Blob, SFTP connectors; OneLake S3-compatible shortcuts                | OneLake shortcuts provide zero-copy S3 access                |
+| **SaaS platforms**         | Salesforce, ServiceNow, Workday, SAP, Dynamics | ADF Salesforce, ServiceNow, SAP connectors; Dataverse direct integration           | Dynamics 365 has native Fabric integration                   |
+| **REST APIs**              | Custom HTTP/REST endpoints                     | ADF REST connector, Web Activity, Azure Functions custom activities                | Pagination, OAuth, and custom auth supported                 |
+| **File formats**           | CSV, JSON, Parquet, Avro, ORC, XML, Excel      | ADF dataset format support for all listed formats                                  | Format conversion during copy is built-in                    |
+| **Messaging systems**      | Kafka, RabbitMQ, Azure Service Bus             | Event Hubs (Kafka-compatible), ADF connectors                                      | Event Hubs supports Kafka protocol natively                  |
+| **NoSQL databases**        | MongoDB, Cosmos DB, Cassandra, DynamoDB        | ADF MongoDB, Cosmos DB, Cassandra, DynamoDB connectors                             | Cosmos DB has native Fabric mirroring                        |
+| **Mainframe / legacy**     | IBM DB2, AS/400, Teradata, Informix            | ADF DB2, Teradata, Informix connectors via SHIR                                    | Requires Self-hosted IR for on-prem mainframes               |
+| **Graph databases**        | Neo4j                                          | ADF REST connector to Neo4j HTTP API, custom activity                              | No native ADF connector; use REST or custom                  |
+| **Email**                  | IMAP, Exchange, SMTP                           | Logic Apps Office 365 / Outlook connector                                          | Logic Apps handles email triggers natively                   |
+| **LDAP / directory**       | Active Directory, LDAP                         | Microsoft Graph API via ADF REST connector                                         | Entra ID provides direct graph access                        |
 
 ---
 
@@ -182,25 +182,25 @@ Foundry batch syncs map directly to ADF Copy Activities with trigger-based sched
 
 ```json
 {
-  "name": "LS_SqlServer_OnPrem",
-  "type": "Microsoft.DataFactory/factories/linkedservices",
-  "properties": {
-    "type": "SqlServer",
-    "typeProperties": {
-      "connectionString": {
-        "type": "AzureKeyVaultSecret",
-        "store": {
-          "referenceName": "LS_KeyVault",
-          "type": "LinkedServiceReference"
+    "name": "LS_SqlServer_OnPrem",
+    "type": "Microsoft.DataFactory/factories/linkedservices",
+    "properties": {
+        "type": "SqlServer",
+        "typeProperties": {
+            "connectionString": {
+                "type": "AzureKeyVaultSecret",
+                "store": {
+                    "referenceName": "LS_KeyVault",
+                    "type": "LinkedServiceReference"
+                },
+                "secretName": "sql-server-connection-string"
+            }
         },
-        "secretName": "sql-server-connection-string"
-      }
-    },
-    "connectVia": {
-      "referenceName": "SelfHostedIR",
-      "type": "IntegrationRuntimeReference"
+        "connectVia": {
+            "referenceName": "SelfHostedIR",
+            "type": "IntegrationRuntimeReference"
+        }
     }
-  }
 }
 ```
 
@@ -208,18 +208,18 @@ Foundry batch syncs map directly to ADF Copy Activities with trigger-based sched
 
 ```json
 {
-  "name": "LS_ADLS_Landing",
-  "type": "Microsoft.DataFactory/factories/linkedservices",
-  "properties": {
-    "type": "AzureBlobFS",
-    "typeProperties": {
-      "url": "https://<storage-account>.dfs.core.windows.net"
-    },
-    "credential": {
-      "referenceName": "ManagedIdentityCredential",
-      "type": "CredentialReference"
+    "name": "LS_ADLS_Landing",
+    "type": "Microsoft.DataFactory/factories/linkedservices",
+    "properties": {
+        "type": "AzureBlobFS",
+        "typeProperties": {
+            "url": "https://<storage-account>.dfs.core.windows.net"
+        },
+        "credential": {
+            "referenceName": "ManagedIdentityCredential",
+            "type": "CredentialReference"
+        }
     }
-  }
 }
 ```
 
@@ -227,38 +227,38 @@ Foundry batch syncs map directly to ADF Copy Activities with trigger-based sched
 
 ```json
 {
-  "name": "DS_SqlServer_Orders",
-  "properties": {
-    "type": "SqlServerTable",
-    "linkedServiceName": {
-      "referenceName": "LS_SqlServer_OnPrem",
-      "type": "LinkedServiceReference"
-    },
-    "typeProperties": {
-      "schema": "dbo",
-      "table": "Orders"
+    "name": "DS_SqlServer_Orders",
+    "properties": {
+        "type": "SqlServerTable",
+        "linkedServiceName": {
+            "referenceName": "LS_SqlServer_OnPrem",
+            "type": "LinkedServiceReference"
+        },
+        "typeProperties": {
+            "schema": "dbo",
+            "table": "Orders"
+        }
     }
-  }
 }
 ```
 
 ```json
 {
-  "name": "DS_ADLS_Orders_Parquet",
-  "properties": {
-    "type": "Parquet",
-    "linkedServiceName": {
-      "referenceName": "LS_ADLS_Landing",
-      "type": "LinkedServiceReference"
-    },
-    "typeProperties": {
-      "location": {
-        "type": "AzureBlobFSLocation",
-        "folderPath": "raw/orders",
-        "fileSystem": "landing"
-      }
+    "name": "DS_ADLS_Orders_Parquet",
+    "properties": {
+        "type": "Parquet",
+        "linkedServiceName": {
+            "referenceName": "LS_ADLS_Landing",
+            "type": "LinkedServiceReference"
+        },
+        "typeProperties": {
+            "location": {
+                "type": "AzureBlobFSLocation",
+                "folderPath": "raw/orders",
+                "fileSystem": "landing"
+            }
+        }
     }
-  }
 }
 ```
 
@@ -266,77 +266,77 @@ Foundry batch syncs map directly to ADF Copy Activities with trigger-based sched
 
 ```json
 {
-  "name": "PL_IncrementalCopy_Orders",
-  "properties": {
-    "activities": [
-      {
-        "name": "LookupLastWatermark",
-        "type": "Lookup",
-        "typeProperties": {
-          "source": {
-            "type": "AzureSqlSource",
-            "sqlReaderQuery": "SELECT MAX(LastModified) AS LastWatermark FROM dbo.Watermarks WHERE TableName = 'Orders'"
-          },
-          "dataset": {
-            "referenceName": "DS_Watermark",
-            "type": "DatasetReference"
-          }
-        }
-      },
-      {
-        "name": "CopyIncrementalData",
-        "type": "Copy",
-        "dependsOn": [
-          {
-            "activity": "LookupLastWatermark",
-            "dependencyConditions": ["Succeeded"]
-          }
-        ],
-        "typeProperties": {
-          "source": {
-            "type": "SqlServerSource",
-            "sqlReaderQuery": {
-              "value": "SELECT * FROM dbo.Orders WHERE LastModified > '@{activity('LookupLastWatermark').output.firstRow.LastWatermark}'",
-              "type": "Expression"
-            }
-          },
-          "sink": {
-            "type": "ParquetSink",
-            "storeSettings": {
-              "type": "AzureBlobFSWriteSettings"
+    "name": "PL_IncrementalCopy_Orders",
+    "properties": {
+        "activities": [
+            {
+                "name": "LookupLastWatermark",
+                "type": "Lookup",
+                "typeProperties": {
+                    "source": {
+                        "type": "AzureSqlSource",
+                        "sqlReaderQuery": "SELECT MAX(LastModified) AS LastWatermark FROM dbo.Watermarks WHERE TableName = 'Orders'"
+                    },
+                    "dataset": {
+                        "referenceName": "DS_Watermark",
+                        "type": "DatasetReference"
+                    }
+                }
             },
-            "formatSettings": {
-              "type": "ParquetWriteSettings"
+            {
+                "name": "CopyIncrementalData",
+                "type": "Copy",
+                "dependsOn": [
+                    {
+                        "activity": "LookupLastWatermark",
+                        "dependencyConditions": ["Succeeded"]
+                    }
+                ],
+                "typeProperties": {
+                    "source": {
+                        "type": "SqlServerSource",
+                        "sqlReaderQuery": {
+                            "value": "SELECT * FROM dbo.Orders WHERE LastModified > '@{activity('LookupLastWatermark').output.firstRow.LastWatermark}'",
+                            "type": "Expression"
+                        }
+                    },
+                    "sink": {
+                        "type": "ParquetSink",
+                        "storeSettings": {
+                            "type": "AzureBlobFSWriteSettings"
+                        },
+                        "formatSettings": {
+                            "type": "ParquetWriteSettings"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "UpdateWatermark",
+                "type": "SqlServerStoredProcedure",
+                "dependsOn": [
+                    {
+                        "activity": "CopyIncrementalData",
+                        "dependencyConditions": ["Succeeded"]
+                    }
+                ],
+                "typeProperties": {
+                    "storedProcedureName": "usp_UpdateWatermark",
+                    "storedProcedureParameters": {
+                        "TableName": { "value": "Orders" },
+                        "LastModified": {
+                            "value": {
+                                "value": "@utcnow()",
+                                "type": "Expression"
+                            }
+                        }
+                    }
+                }
             }
-          }
-        }
-      },
-      {
-        "name": "UpdateWatermark",
-        "type": "SqlServerStoredProcedure",
-        "dependsOn": [
-          {
-            "activity": "CopyIncrementalData",
-            "dependencyConditions": ["Succeeded"]
-          }
         ],
-        "typeProperties": {
-          "storedProcedureName": "usp_UpdateWatermark",
-          "storedProcedureParameters": {
-            "TableName": { "value": "Orders" },
-            "LastModified": {
-              "value": {
-                "value": "@utcnow()",
-                "type": "Expression"
-              }
-            }
-          }
-        }
-      }
-    ],
-    "parameters": {},
-    "annotations": ["incremental", "orders", "batch-sync"]
-  }
+        "parameters": {},
+        "annotations": ["incremental", "orders", "batch-sync"]
+    }
 }
 ```
 
@@ -344,30 +344,30 @@ Foundry batch syncs map directly to ADF Copy Activities with trigger-based sched
 
 ```json
 {
-  "name": "TR_NightlySync",
-  "properties": {
-    "type": "ScheduleTrigger",
-    "typeProperties": {
-      "recurrence": {
-        "frequency": "Day",
-        "interval": 1,
-        "startTime": "2026-01-01T02:00:00Z",
-        "timeZone": "Eastern Standard Time",
-        "schedule": {
-          "hours": [2],
-          "minutes": [0]
-        }
-      }
-    },
-    "pipelines": [
-      {
-        "pipelineReference": {
-          "referenceName": "PL_IncrementalCopy_Orders",
-          "type": "PipelineReference"
-        }
-      }
-    ]
-  }
+    "name": "TR_NightlySync",
+    "properties": {
+        "type": "ScheduleTrigger",
+        "typeProperties": {
+            "recurrence": {
+                "frequency": "Day",
+                "interval": 1,
+                "startTime": "2026-01-01T02:00:00Z",
+                "timeZone": "Eastern Standard Time",
+                "schedule": {
+                    "hours": [2],
+                    "minutes": [0]
+                }
+            }
+        },
+        "pipelines": [
+            {
+                "pipelineReference": {
+                    "referenceName": "PL_IncrementalCopy_Orders",
+                    "type": "PipelineReference"
+                }
+            }
+        ]
+    }
 }
 ```
 
@@ -397,28 +397,28 @@ Fabric Mirroring provides automatic, near-real-time replication of operational d
 ```yaml
 # Fabric mirroring conceptual configuration
 mirrored_database:
-  name: "OperationalDB_Mirror"
-  source:
-    type: "AzureSqlDatabase"
-    server: "myserver.database.windows.net"
-    database: "OperationalDB"
-    authentication: "ManagedIdentity"
-  replication:
-    mode: "continuous"
-    tables:
-      - schema: "dbo"
-        name: "Orders"
-        include_columns: "*"
-      - schema: "dbo"
-        name: "Customers"
-        include_columns: "*"
-      - schema: "dbo"
-        name: "Products"
-        include_columns: "*"
-  destination:
-    workspace: "Analytics_Workspace"
-    lakehouse: "OperationalMirror"
-    format: "delta"
+    name: "OperationalDB_Mirror"
+    source:
+        type: "AzureSqlDatabase"
+        server: "myserver.database.windows.net"
+        database: "OperationalDB"
+        authentication: "ManagedIdentity"
+    replication:
+        mode: "continuous"
+        tables:
+            - schema: "dbo"
+              name: "Orders"
+              include_columns: "*"
+            - schema: "dbo"
+              name: "Customers"
+              include_columns: "*"
+            - schema: "dbo"
+              name: "Products"
+              include_columns: "*"
+    destination:
+        workspace: "Analytics_Workspace"
+        lakehouse: "OperationalMirror"
+        format: "delta"
 ```
 
 **Advantages over Foundry CDC:**
@@ -434,28 +434,28 @@ For sources not supported by Fabric Mirroring, ADF provides a native CDC connect
 
 ```json
 {
-  "name": "PL_CDC_OrderChanges",
-  "properties": {
-    "activities": [
-      {
-        "name": "CDCCapture",
-        "type": "Copy",
-        "typeProperties": {
-          "source": {
-            "type": "SqlServerSource",
-            "sqlReaderQuery": "SELECT * FROM cdc.fn_cdc_get_all_changes_dbo_Orders(@from_lsn, @to_lsn, 'all update old')"
-          },
-          "sink": {
-            "type": "ParquetSink",
-            "storeSettings": {
-              "type": "AzureBlobFSWriteSettings"
+    "name": "PL_CDC_OrderChanges",
+    "properties": {
+        "activities": [
+            {
+                "name": "CDCCapture",
+                "type": "Copy",
+                "typeProperties": {
+                    "source": {
+                        "type": "SqlServerSource",
+                        "sqlReaderQuery": "SELECT * FROM cdc.fn_cdc_get_all_changes_dbo_Orders(@from_lsn, @to_lsn, 'all update old')"
+                    },
+                    "sink": {
+                        "type": "ParquetSink",
+                        "storeSettings": {
+                            "type": "AzureBlobFSWriteSettings"
+                        }
+                    },
+                    "enableStaging": false
+                }
             }
-          },
-          "enableStaging": false
-        }
-      }
-    ]
-  }
+        ]
+    }
 }
 ```
 
@@ -481,9 +481,9 @@ schema.history.internal.kafka.topic: cdc.schema-history
 schema.history.internal.consumer.security.protocol: SASL_SSL
 schema.history.internal.consumer.sasl.mechanism: PLAIN
 schema.history.internal.consumer.sasl.jaas.config: >
-  org.apache.kafka.common.security.plain.PlainLoginModule required
-  username="$ConnectionString"
-  password="Endpoint=sb://<namespace>.servicebus.windows.net/;SharedAccessKeyName=<key-name>;SharedAccessKey=<key>";
+    org.apache.kafka.common.security.plain.PlainLoginModule required
+    username="$ConnectionString"
+    password="Endpoint=sb://<namespace>.servicebus.windows.net/;SharedAccessKeyName=<key-name>;SharedAccessKey=<key>";
 ```
 
 > **CSA-in-a-Box reference:** See `patterns/streaming-cdc.md` for production Debezium deployment patterns and Event Hubs configuration.
@@ -675,50 +675,50 @@ def extract_document(blob_url: str) -> dict:
 
 ```json
 {
-  "name": "PL_MediaSync_Documents",
-  "properties": {
-    "activities": [
-      {
-        "name": "CopyFromSFTP",
-        "type": "Copy",
-        "typeProperties": {
-          "source": {
-            "type": "SftpSource",
-            "recursive": true,
-            "wildcardFileName": "*.pdf"
-          },
-          "sink": {
-            "type": "BlobSink",
-            "storeSettings": {
-              "type": "AzureBlobStorageWriteSettings"
+    "name": "PL_MediaSync_Documents",
+    "properties": {
+        "activities": [
+            {
+                "name": "CopyFromSFTP",
+                "type": "Copy",
+                "typeProperties": {
+                    "source": {
+                        "type": "SftpSource",
+                        "recursive": true,
+                        "wildcardFileName": "*.pdf"
+                    },
+                    "sink": {
+                        "type": "BlobSink",
+                        "storeSettings": {
+                            "type": "AzureBlobStorageWriteSettings"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "TriggerDocumentProcessing",
+                "type": "WebActivity",
+                "dependsOn": [
+                    {
+                        "activity": "CopyFromSFTP",
+                        "dependencyConditions": ["Succeeded"]
+                    }
+                ],
+                "typeProperties": {
+                    "url": "https://func-doc-processing.azurewebsites.net/api/process",
+                    "method": "POST",
+                    "body": {
+                        "container": "documents",
+                        "prefix": "@pipeline().parameters.batchPrefix"
+                    },
+                    "authentication": {
+                        "type": "ManagedServiceIdentity",
+                        "resource": "https://func-doc-processing.azurewebsites.net"
+                    }
+                }
             }
-          }
-        }
-      },
-      {
-        "name": "TriggerDocumentProcessing",
-        "type": "WebActivity",
-        "dependsOn": [
-          {
-            "activity": "CopyFromSFTP",
-            "dependencyConditions": ["Succeeded"]
-          }
-        ],
-        "typeProperties": {
-          "url": "https://func-doc-processing.azurewebsites.net/api/process",
-          "method": "POST",
-          "body": {
-            "container": "documents",
-            "prefix": "@pipeline().parameters.batchPrefix"
-          },
-          "authentication": {
-            "type": "ManagedServiceIdentity",
-            "resource": "https://func-doc-processing.azurewebsites.net"
-          }
-        }
-      }
-    ]
-  }
+        ]
+    }
 }
 ```
 
@@ -785,50 +785,54 @@ Replace Foundry email listeners with a Logic App that triggers on incoming email
 
 ```json
 {
-  "definition": {
-    "triggers": {
-      "When_a_new_email_arrives": {
-        "type": "ApiConnection",
-        "inputs": {
-          "host": {
-            "connection": { "name": "@parameters('$connections')['office365']['connectionId']" }
-          },
-          "method": "get",
-          "path": "/v2/Mail/OnNewEmail",
-          "queries": {
-            "folderPath": "Inbox/DataIngestion",
-            "hasAttachment": true,
-            "importance": "Any",
-            "subjectFilter": "[DATA-INGEST]"
-          }
-        },
-        "recurrence": { "frequency": "Minute", "interval": 5 }
-      }
-    },
-    "actions": {
-      "For_each_attachment": {
-        "type": "Foreach",
-        "foreach": "@triggerBody()?['attachments']",
-        "actions": {
-          "Upload_to_Blob": {
-            "type": "ApiConnection",
-            "inputs": {
-              "host": {
-                "connection": { "name": "@parameters('$connections')['azureblob']['connectionId']" }
-              },
-              "method": "post",
-              "path": "/v2/datasets/default/files",
-              "queries": {
-                "folderPath": "/email-ingestion/@{utcNow('yyyy/MM/dd')}",
-                "name": "@items('For_each_attachment')?['name']"
-              },
-              "body": "@base64ToBinary(items('For_each_attachment')?['contentBytes'])"
+    "definition": {
+        "triggers": {
+            "When_a_new_email_arrives": {
+                "type": "ApiConnection",
+                "inputs": {
+                    "host": {
+                        "connection": {
+                            "name": "@parameters('$connections')['office365']['connectionId']"
+                        }
+                    },
+                    "method": "get",
+                    "path": "/v2/Mail/OnNewEmail",
+                    "queries": {
+                        "folderPath": "Inbox/DataIngestion",
+                        "hasAttachment": true,
+                        "importance": "Any",
+                        "subjectFilter": "[DATA-INGEST]"
+                    }
+                },
+                "recurrence": { "frequency": "Minute", "interval": 5 }
             }
-          }
+        },
+        "actions": {
+            "For_each_attachment": {
+                "type": "Foreach",
+                "foreach": "@triggerBody()?['attachments']",
+                "actions": {
+                    "Upload_to_Blob": {
+                        "type": "ApiConnection",
+                        "inputs": {
+                            "host": {
+                                "connection": {
+                                    "name": "@parameters('$connections')['azureblob']['connectionId']"
+                                }
+                            },
+                            "method": "post",
+                            "path": "/v2/datasets/default/files",
+                            "queries": {
+                                "folderPath": "/email-ingestion/@{utcNow('yyyy/MM/dd')}",
+                                "name": "@items('For_each_attachment')?['name']"
+                            },
+                            "body": "@base64ToBinary(items('For_each_attachment')?['contentBytes'])"
+                        }
+                    }
+                }
+            }
         }
-      }
     }
-  }
 }
 ```
 
@@ -946,25 +950,25 @@ The Self-hosted Integration Runtime (SHIR) replaces Foundry's agent worker and a
 
 ### 10.3 Network requirements
 
-| Direction | Port | Protocol | Purpose |
-|---|---|---|---|
-| Outbound | 443 | HTTPS | Control plane communication with ADF |
-| Outbound | 443 | HTTPS | Azure Service Bus relay (data channel) |
-| Outbound | 443 | HTTPS | Azure Key Vault (credential retrieval) |
-| Local | Varies | TCP | Connections to on-prem data sources (1433 for SQL, 1521 for Oracle, 445 for SMB) |
+| Direction | Port   | Protocol | Purpose                                                                          |
+| --------- | ------ | -------- | -------------------------------------------------------------------------------- |
+| Outbound  | 443    | HTTPS    | Control plane communication with ADF                                             |
+| Outbound  | 443    | HTTPS    | Azure Service Bus relay (data channel)                                           |
+| Outbound  | 443    | HTTPS    | Azure Key Vault (credential retrieval)                                           |
+| Local     | Varies | TCP      | Connections to on-prem data sources (1433 for SQL, 1521 for Oracle, 445 for SMB) |
 
 **No inbound firewall rules are required.** The SHIR initiates all connections outbound.
 
 ### 10.4 Comparison with Foundry agents
 
-| Capability | Foundry Agent Worker | Foundry Agent Proxy | Azure SHIR |
-|---|---|---|---|
-| Installation | Java agent on-prem | Lightweight proxy on-prem | Windows service on-prem |
-| Connectivity | Outbound to Foundry cloud | Outbound relay | Outbound via Service Bus relay |
-| High availability | Manual failover | N/A | Built-in multi-node HA (up to 4 nodes) |
-| Monitoring | Foundry UI | Foundry UI | ADF Monitor, Azure Monitor, Log Analytics |
-| Auto-update | Manual | Manual | Automatic with configurable maintenance windows |
-| OS support | Linux, Windows | Linux, Windows | Windows only (Linux via SHIR on AKS for containers) |
+| Capability        | Foundry Agent Worker      | Foundry Agent Proxy       | Azure SHIR                                          |
+| ----------------- | ------------------------- | ------------------------- | --------------------------------------------------- |
+| Installation      | Java agent on-prem        | Lightweight proxy on-prem | Windows service on-prem                             |
+| Connectivity      | Outbound to Foundry cloud | Outbound relay            | Outbound via Service Bus relay                      |
+| High availability | Manual failover           | N/A                       | Built-in multi-node HA (up to 4 nodes)              |
+| Monitoring        | Foundry UI                | Foundry UI                | ADF Monitor, Azure Monitor, Log Analytics           |
+| Auto-update       | Manual                    | Manual                    | Automatic with configurable maintenance windows     |
+| OS support        | Linux, Windows            | Linux, Windows            | Windows only (Linux via SHIR on AKS for containers) |
 
 > **CSA-in-a-Box reference:** See `docs/SELF_HOSTED_IR.md` for detailed SHIR deployment procedures.
 
@@ -978,17 +982,17 @@ The Self-hosted Integration Runtime (SHIR) replaces Foundry's agent worker and a
 
 ```json
 {
-  "name": "LS_KeyVault",
-  "properties": {
-    "type": "AzureKeyVault",
-    "typeProperties": {
-      "baseUrl": "https://kv-data-integration.vault.azure.net/"
-    },
-    "credential": {
-      "referenceName": "ManagedIdentityCredential",
-      "type": "CredentialReference"
+    "name": "LS_KeyVault",
+    "properties": {
+        "type": "AzureKeyVault",
+        "typeProperties": {
+            "baseUrl": "https://kv-data-integration.vault.azure.net/"
+        },
+        "credential": {
+            "referenceName": "ManagedIdentityCredential",
+            "type": "CredentialReference"
+        }
     }
-  }
 }
 ```
 
@@ -1001,13 +1005,13 @@ The Self-hosted Integration Runtime (SHIR) replaces Foundry's agent worker and a
 
 ### 11.2 Network security
 
-| Control | Implementation |
-|---|---|
-| **Private endpoints** | Deploy ADF, ADLS, Key Vault, and Event Hubs with private endpoints in a managed VNet |
-| **Managed VNet** | Enable ADF Managed Virtual Network to isolate integration runtime traffic |
-| **NSG rules** | Restrict SHIR server outbound traffic to required Azure service tags only |
-| **Data exfiltration protection** | Enable ADF data exfiltration prevention to restrict approved targets |
-| **TLS enforcement** | All connections use TLS 1.2+; enforce via linked service configuration |
+| Control                          | Implementation                                                                       |
+| -------------------------------- | ------------------------------------------------------------------------------------ |
+| **Private endpoints**            | Deploy ADF, ADLS, Key Vault, and Event Hubs with private endpoints in a managed VNet |
+| **Managed VNet**                 | Enable ADF Managed Virtual Network to isolate integration runtime traffic            |
+| **NSG rules**                    | Restrict SHIR server outbound traffic to required Azure service tags only            |
+| **Data exfiltration protection** | Enable ADF data exfiltration prevention to restrict approved targets                 |
+| **TLS enforcement**              | All connections use TLS 1.2+; enforce via linked service configuration               |
 
 ### 11.3 Encryption
 
@@ -1028,13 +1032,13 @@ The Self-hosted Integration Runtime (SHIR) replaces Foundry's agent worker and a
 
 ### 12.1 ADF Copy Activity tuning
 
-| Parameter | Default | Recommendation | Impact |
-|---|---|---|---|
-| `parallelCopies` | Auto (DIU-based) | Set explicitly for large tables (16-32) | Higher throughput for partitioned sources |
-| `dataIntegrationUnits` | Auto | 16-64 for large batch copies | More compute for parallel extraction |
-| `enableStaging` | false | true for cross-region or format conversion | Reduces direct source load |
-| `writeBatchSize` | 10000 | 50000-100000 for ADLS Parquet sinks | Fewer, larger files |
-| `maxConcurrentConnections` | Unlimited | Set to source DB connection pool limit | Prevents source overload |
+| Parameter                  | Default          | Recommendation                             | Impact                                    |
+| -------------------------- | ---------------- | ------------------------------------------ | ----------------------------------------- |
+| `parallelCopies`           | Auto (DIU-based) | Set explicitly for large tables (16-32)    | Higher throughput for partitioned sources |
+| `dataIntegrationUnits`     | Auto             | 16-64 for large batch copies               | More compute for parallel extraction      |
+| `enableStaging`            | false            | true for cross-region or format conversion | Reduces direct source load                |
+| `writeBatchSize`           | 10000            | 50000-100000 for ADLS Parquet sinks        | Fewer, larger files                       |
+| `maxConcurrentConnections` | Unlimited        | Set to source DB connection pool limit     | Prevents source overload                  |
 
 ### 12.2 Event Hubs throughput
 
@@ -1087,23 +1091,23 @@ After migrating any sync from Foundry to Azure, implement row-count and checksum
 
 ```json
 {
-  "typeProperties": {
-    "validateDataConsistency": true,
-    "logSettings": {
-      "enableCopyActivityLog": true,
-      "copyActivityLogSettings": {
-        "logLevel": "Warning",
-        "enableReliableLogging": true
-      },
-      "logLocationSettings": {
-        "linkedServiceName": {
-          "referenceName": "LS_ADLS_Logs",
-          "type": "LinkedServiceReference"
-        },
-        "path": "pipeline-logs/copy-validation"
-      }
+    "typeProperties": {
+        "validateDataConsistency": true,
+        "logSettings": {
+            "enableCopyActivityLog": true,
+            "copyActivityLogSettings": {
+                "logLevel": "Warning",
+                "enableReliableLogging": true
+            },
+            "logLocationSettings": {
+                "linkedServiceName": {
+                    "referenceName": "LS_ADLS_Logs",
+                    "type": "LinkedServiceReference"
+                },
+                "path": "pipeline-logs/copy-validation"
+            }
+        }
     }
-  }
 }
 ```
 
@@ -1143,15 +1147,15 @@ Use this checklist to track progress across data integration migration workstrea
 
 ## Related resources
 
-| Resource | Description |
-|---|---|
-| [Migration Playbook](../palantir-foundry.md) | End-to-end Foundry-to-Azure migration guide |
-| [Ontology Migration](ontology-migration.md) | Migrating Foundry Ontology to Purview and dbt |
-| [Pipeline Migration](pipeline-migration.md) | Migrating Foundry Pipeline Builder to ADF and dbt |
-| [Complete Feature Mapping](feature-mapping-complete.md) | Full feature-by-feature comparison |
-| [ADF Setup Guide](../../ADF_SETUP.md) | CSA-in-a-Box ADF provisioning |
-| [Self-hosted IR Guide](../../SELF_HOSTED_IR.md) | SHIR deployment procedures |
-| [Event Hubs Guide](../../guides/event-hubs.md) | Event Hubs configuration |
-| [Streaming CDC Patterns](../../patterns/streaming-cdc.md) | CDC and streaming architecture patterns |
-| [ADF documentation](https://learn.microsoft.com/en-us/azure/data-factory/) | Official Microsoft documentation |
-| [Fabric mirroring documentation](https://learn.microsoft.com/en-us/fabric/database/mirrored-database/overview) | Official Fabric mirroring docs |
+| Resource                                                                                                       | Description                                       |
+| -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| [Migration Playbook](../palantir-foundry.md)                                                                   | End-to-end Foundry-to-Azure migration guide       |
+| [Ontology Migration](ontology-migration.md)                                                                    | Migrating Foundry Ontology to Purview and dbt     |
+| [Pipeline Migration](pipeline-migration.md)                                                                    | Migrating Foundry Pipeline Builder to ADF and dbt |
+| [Complete Feature Mapping](feature-mapping-complete.md)                                                        | Full feature-by-feature comparison                |
+| [ADF Setup Guide](../../ADF_SETUP.md)                                                                          | CSA-in-a-Box ADF provisioning                     |
+| [Self-hosted IR Guide](../../SELF_HOSTED_IR.md)                                                                | SHIR deployment procedures                        |
+| [Event Hubs Guide](../../guides/event-hubs.md)                                                                 | Event Hubs configuration                          |
+| [Streaming CDC Patterns](../../patterns/streaming-cdc.md)                                                      | CDC and streaming architecture patterns           |
+| [ADF documentation](https://learn.microsoft.com/en-us/azure/data-factory/)                                     | Official Microsoft documentation                  |
+| [Fabric mirroring documentation](https://learn.microsoft.com/en-us/fabric/database/mirrored-database/overview) | Official Fabric mirroring docs                    |

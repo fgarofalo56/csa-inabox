@@ -7,7 +7,7 @@
 ---
 
 !!! tip "Expanded Migration Center Available"
-    This playbook is the core migration reference. For the complete Snowflake-to-Azure migration package — including white papers, deep-dive guides, tutorials, benchmarks, and federal-specific guidance — visit the **[Snowflake Migration Center](snowflake/index.md)**.
+This playbook is the core migration reference. For the complete Snowflake-to-Azure migration package — including white papers, deep-dive guides, tutorials, benchmarks, and federal-specific guidance — visit the **[Snowflake Migration Center](snowflake/index.md)**.
 
     **Quick links:**
 

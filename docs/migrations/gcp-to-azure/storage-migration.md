@@ -52,19 +52,19 @@ flowchart LR
 
 ### Conceptual mapping
 
-| GCS concept | ADLS Gen2 equivalent | Notes |
-|---|---|---|
-| Project | Subscription + Resource Group | Organizational container |
-| Bucket | Storage Account + Container | ADLS uses hierarchical namespace |
-| Object | Blob (with directory structure) | ADLS supports true directories |
-| Object prefix (pseudo-folder) | Directory | True directory operations on ADLS |
-| Storage class (Standard) | Hot tier | Default access tier |
-| Storage class (Nearline) | Cool tier | 30-day minimum |
-| Storage class (Coldline) | Cold tier | 90-day minimum (newer than Cool) |
-| Storage class (Archive) | Archive tier | Offline retrieval |
-| Signed URL | SAS token | Time-limited authenticated access |
-| IAM binding | Azure RBAC assignment | `Storage Blob Data Reader/Contributor` |
-| Service account | Managed Identity | No credential management needed |
+| GCS concept                   | ADLS Gen2 equivalent            | Notes                                  |
+| ----------------------------- | ------------------------------- | -------------------------------------- |
+| Project                       | Subscription + Resource Group   | Organizational container               |
+| Bucket                        | Storage Account + Container     | ADLS uses hierarchical namespace       |
+| Object                        | Blob (with directory structure) | ADLS supports true directories         |
+| Object prefix (pseudo-folder) | Directory                       | True directory operations on ADLS      |
+| Storage class (Standard)      | Hot tier                        | Default access tier                    |
+| Storage class (Nearline)      | Cool tier                       | 30-day minimum                         |
+| Storage class (Coldline)      | Cold tier                       | 90-day minimum (newer than Cool)       |
+| Storage class (Archive)       | Archive tier                    | Offline retrieval                      |
+| Signed URL                    | SAS token                       | Time-limited authenticated access      |
+| IAM binding                   | Azure RBAC assignment           | `Storage Blob Data Reader/Contributor` |
+| Service account               | Managed Identity                | No credential management needed        |
 
 ### Naming conventions
 
@@ -140,16 +140,16 @@ ADF provides a managed copy pipeline with monitoring, retry, and scheduling.
 
 ```json
 {
-  "name": "ls_gcs_source",
-  "type": "GoogleCloudStorage",
-  "typeProperties": {
-    "accessKeyId": "<HMAC-ACCESS-KEY>",
-    "secretAccessKey": {
-      "type": "AzureKeyVaultSecret",
-      "store": { "referenceName": "ls_keyvault" },
-      "secretName": "gcs-hmac-secret"
+    "name": "ls_gcs_source",
+    "type": "GoogleCloudStorage",
+    "typeProperties": {
+        "accessKeyId": "<HMAC-ACCESS-KEY>",
+        "secretAccessKey": {
+            "type": "AzureKeyVaultSecret",
+            "store": { "referenceName": "ls_keyvault" },
+            "secretName": "gcs-hmac-secret"
+        }
     }
-  }
 }
 ```
 
@@ -157,32 +157,32 @@ ADF provides a managed copy pipeline with monitoring, retry, and scheduling.
 
 ```json
 {
-  "name": "pl_gcs_to_adls",
-  "activities": [
-    {
-      "name": "CopyFromGCS",
-      "type": "Copy",
-      "inputs": [{ "referenceName": "ds_gcs_parquet" }],
-      "outputs": [{ "referenceName": "ds_adls_parquet" }],
-      "typeProperties": {
-        "source": {
-          "type": "ParquetSource",
-          "storeSettings": {
-            "type": "GoogleCloudStorageReadSettings",
-            "recursive": true,
-            "wildcardFolderPath": "*",
-            "wildcardFileName": "*.parquet"
-          }
-        },
-        "sink": {
-          "type": "ParquetSink",
-          "storeSettings": {
-            "type": "AzureBlobFSWriteSettings"
-          }
+    "name": "pl_gcs_to_adls",
+    "activities": [
+        {
+            "name": "CopyFromGCS",
+            "type": "Copy",
+            "inputs": [{ "referenceName": "ds_gcs_parquet" }],
+            "outputs": [{ "referenceName": "ds_adls_parquet" }],
+            "typeProperties": {
+                "source": {
+                    "type": "ParquetSource",
+                    "storeSettings": {
+                        "type": "GoogleCloudStorageReadSettings",
+                        "recursive": true,
+                        "wildcardFolderPath": "*",
+                        "wildcardFileName": "*.parquet"
+                    }
+                },
+                "sink": {
+                    "type": "ParquetSink",
+                    "storeSettings": {
+                        "type": "AzureBlobFSWriteSettings"
+                    }
+                }
+            }
         }
-      }
-    }
-  ]
+    ]
 }
 ```
 
@@ -253,27 +253,27 @@ ADF can read BigQuery tables directly and write to ADLS/Delta.
 
 ```json
 {
-  "name": "pl_bigquery_to_delta",
-  "activities": [
-    {
-      "name": "CopyBigQueryTable",
-      "type": "Copy",
-      "inputs": [{ "referenceName": "ds_bigquery_table" }],
-      "outputs": [{ "referenceName": "ds_adls_delta" }],
-      "typeProperties": {
-        "source": {
-          "type": "GoogleBigQueryV2Source",
-          "query": "SELECT * FROM `acme-gov.finance.fact_sales_daily`"
-        },
-        "sink": {
-          "type": "ParquetSink",
-          "storeSettings": {
-            "type": "AzureBlobFSWriteSettings"
-          }
+    "name": "pl_bigquery_to_delta",
+    "activities": [
+        {
+            "name": "CopyBigQueryTable",
+            "type": "Copy",
+            "inputs": [{ "referenceName": "ds_bigquery_table" }],
+            "outputs": [{ "referenceName": "ds_adls_delta" }],
+            "typeProperties": {
+                "source": {
+                    "type": "GoogleBigQueryV2Source",
+                    "query": "SELECT * FROM `acme-gov.finance.fact_sales_daily`"
+                },
+                "sink": {
+                    "type": "ParquetSink",
+                    "storeSettings": {
+                        "type": "AzureBlobFSWriteSettings"
+                    }
+                }
+            }
         }
-      }
-    }
-  ]
+    ]
 }
 ```
 
@@ -308,26 +308,35 @@ df.write.format("delta") \
 
 ```json
 {
-  "lifecycle": {
-    "rule": [
-      {
-        "action": { "type": "SetStorageClass", "storageClass": "NEARLINE" },
-        "condition": { "age": 30 }
-      },
-      {
-        "action": { "type": "SetStorageClass", "storageClass": "COLDLINE" },
-        "condition": { "age": 90 }
-      },
-      {
-        "action": { "type": "SetStorageClass", "storageClass": "ARCHIVE" },
-        "condition": { "age": 365 }
-      },
-      {
-        "action": { "type": "Delete" },
-        "condition": { "age": 2555 }
-      }
-    ]
-  }
+    "lifecycle": {
+        "rule": [
+            {
+                "action": {
+                    "type": "SetStorageClass",
+                    "storageClass": "NEARLINE"
+                },
+                "condition": { "age": 30 }
+            },
+            {
+                "action": {
+                    "type": "SetStorageClass",
+                    "storageClass": "COLDLINE"
+                },
+                "condition": { "age": 90 }
+            },
+            {
+                "action": {
+                    "type": "SetStorageClass",
+                    "storageClass": "ARCHIVE"
+                },
+                "condition": { "age": 365 }
+            },
+            {
+                "action": { "type": "Delete" },
+                "condition": { "age": 2555 }
+            }
+        ]
+    }
 }
 ```
 
@@ -382,14 +391,14 @@ resource lifecyclePolicy 'Microsoft.Storage/storageAccounts/managementPolicies@2
 
 Not every GCS bucket needs to move to ADLS. Use this decision tree:
 
-| Bucket profile | Recommendation | Rationale |
-|---|---|---|
-| Active analytics data | Migrate to ADLS Gen2 | Needed for Delta Lake + Databricks queries |
-| Archive-only (cold storage) | Keep on GCS with Archive class | Avoid egress cost; access via OneLake shortcut if needed |
-| Shared with other GCP workloads | OneLake shortcut (bridge) | Zero-copy read access from Azure |
-| Large cold volume (100+ TB) | Azure Data Box | Physical transfer avoids egress cost |
-| Small active dataset (< 1 TB) | AzCopy direct | Simple, fast, low cost |
-| Running pipeline output | Migrate pipeline first, then storage follows | Pipeline determines where data lands |
+| Bucket profile                  | Recommendation                               | Rationale                                                |
+| ------------------------------- | -------------------------------------------- | -------------------------------------------------------- |
+| Active analytics data           | Migrate to ADLS Gen2                         | Needed for Delta Lake + Databricks queries               |
+| Archive-only (cold storage)     | Keep on GCS with Archive class               | Avoid egress cost; access via OneLake shortcut if needed |
+| Shared with other GCP workloads | OneLake shortcut (bridge)                    | Zero-copy read access from Azure                         |
+| Large cold volume (100+ TB)     | Azure Data Box                               | Physical transfer avoids egress cost                     |
+| Small active dataset (< 1 TB)   | AzCopy direct                                | Simple, fast, low cost                                   |
+| Running pipeline output         | Migrate pipeline first, then storage follows | Pipeline determines where data lands                     |
 
 ---
 
