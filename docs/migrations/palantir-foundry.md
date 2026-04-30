@@ -1,8 +1,25 @@
 # Migrating from Palantir Foundry to csa-inabox
 
-**Status:** Authored 2026-04-19
+**Status:** Authored 2026-04-19 | Expanded 2026-04-30
 **Audience:** Federal CIO / CDO / Chief Data Architect and their implementation teams
 **Scope:** Full capability-by-capability migration from Palantir Foundry to the csa-inabox reference platform on Microsoft Azure.
+
+---
+
+!!! tip "Expanded Migration Center Available"
+    This playbook is the core migration reference. For the complete Foundry-to-Azure migration package — including white papers, deep-dive guides, tutorials, benchmarks, and federal-specific guidance — visit the **[Palantir Foundry Migration Center](palantir-foundry/index.md)**.
+
+    **Quick links:**
+
+    - [Why Azure over Palantir (Executive Brief)](palantir-foundry/why-azure-over-palantir.md)
+    - [Total Cost of Ownership Analysis](palantir-foundry/tco-analysis.md)
+    - [Complete Feature Mapping (50+ features)](palantir-foundry/feature-mapping-complete.md)
+    - [Federal Migration Guide](palantir-foundry/federal-migration-guide.md)
+    - [Tutorials & Walkthroughs](palantir-foundry/index.md#tutorials)
+    - [Benchmarks & Performance](palantir-foundry/benchmarks.md)
+    - [Best Practices](palantir-foundry/best-practices.md)
+
+    **Migration guides by domain:** [Ontology](palantir-foundry/ontology-migration.md) | [Data Integration](palantir-foundry/data-integration-migration.md) | [Pipelines](palantir-foundry/pipeline-migration.md) | [Analytics](palantir-foundry/analytics-migration.md) | [Apps](palantir-foundry/app-migration.md) | [AI/AIP](palantir-foundry/ai-migration.md) | [Security](palantir-foundry/security-governance-migration.md) | [DevOps](palantir-foundry/devops-migration.md) | [Functions](palantir-foundry/functions-migration.md)
 
 ---
 

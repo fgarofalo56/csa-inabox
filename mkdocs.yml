@@ -320,7 +320,33 @@ nav:
           - Hadoop / Hive to Azure: migrations/hadoop-hive.md
           - Cloudera / CDH to Azure: migrations/cloudera-to-azure.md
           - Informatica to ADF/Fabric: migrations/informatica.md
-          - Palantir Foundry: migrations/palantir-foundry.md
+          - Palantir Foundry:
+              - Migration Playbook: migrations/palantir-foundry.md
+              - Migration Center: migrations/palantir-foundry/index.md
+              - Strategic:
+                  - Why Azure over Palantir: migrations/palantir-foundry/why-azure-over-palantir.md
+                  - Total Cost of Ownership: migrations/palantir-foundry/tco-analysis.md
+                  - Vendor Lock-In Analysis: migrations/palantir-foundry/vendor-lock-in-analysis.md
+              - Feature Reference: migrations/palantir-foundry/feature-mapping-complete.md
+              - Migration Guides:
+                  - Ontology Migration: migrations/palantir-foundry/ontology-migration.md
+                  - Data Integration: migrations/palantir-foundry/data-integration-migration.md
+                  - Pipeline Migration: migrations/palantir-foundry/pipeline-migration.md
+                  - Analytics Migration: migrations/palantir-foundry/analytics-migration.md
+                  - Application Migration: migrations/palantir-foundry/app-migration.md
+                  - AI & AIP Migration: migrations/palantir-foundry/ai-migration.md
+                  - Security & Governance: migrations/palantir-foundry/security-governance-migration.md
+                  - DevOps & Deployment: migrations/palantir-foundry/devops-migration.md
+                  - Functions Migration: migrations/palantir-foundry/functions-migration.md
+              - Tutorials:
+                  - "First Data Product on Azure": migrations/palantir-foundry/tutorial-first-data-product.md
+                  - "Ontology to Purview": migrations/palantir-foundry/tutorial-ontology-to-purview.md
+                  - "Workshop to Power Apps": migrations/palantir-foundry/tutorial-workshop-to-powerapp.md
+                  - "Pipeline to ADF/dbt": migrations/palantir-foundry/tutorial-pipeline-to-adf.md
+                  - "AIP to Azure AI": migrations/palantir-foundry/tutorial-aip-to-azure-ai.md
+              - Federal & Government: migrations/palantir-foundry/federal-migration-guide.md
+              - Benchmarks: migrations/palantir-foundry/benchmarks.md
+              - Best Practices: migrations/palantir-foundry/best-practices.md
           - Tableau to Power BI: migrations/tableau-to-powerbi.md
           - IoT Hub + Entra: migrations/iot-hub-entra.md
       - Cost Management: COST_MANAGEMENT.md
