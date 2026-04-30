@@ -1,10 +1,23 @@
 # Migrating from Google Cloud Analytics to csa-inabox on Azure
 
-**Status:** Authored 2026-04-19
+**Status:** Authored 2026-04-19 | Expanded 2026-04-30
 **Audience:** Federal CIO / CDO / Chief Data Architect running a GCP analytics estate (BigQuery, Dataproc, GCS, Looker) and moving to Azure — commercial or Azure Government.
 **Scope:** BigQuery (warehouse + BigQuery ML + Omni + scheduled queries + materialized views), Dataproc (managed Spark/Presto/Flink), GCS (data-lake substrate), Looker (semantic layer + modeling + BI). Ancillary services (Dataflow, Pub/Sub, Cloud Composer, Vertex AI) are addressed where they touch the above.
 
 ---
+
+!!! tip "Expanded Migration Center Available"
+    This playbook is the core migration reference. For the complete GCP-to-Azure migration package — including white papers, deep-dive guides, tutorials, benchmarks, and federal-specific guidance — visit the **[GCP to Azure Migration Center](gcp-to-azure/index.md)**.
+
+    **Quick links:**
+
+    - [Why Azure over GCP (Executive Brief)](gcp-to-azure/why-azure-over-gcp.md)
+    - [Total Cost of Ownership Analysis](gcp-to-azure/tco-analysis.md)
+    - [Complete Feature Mapping (50+ features)](gcp-to-azure/feature-mapping-complete.md)
+    - [Federal Migration Guide](gcp-to-azure/federal-migration-guide.md)
+    - [Tutorials & Walkthroughs](gcp-to-azure/index.md#tutorials)
+    - [Benchmarks & Performance](gcp-to-azure/benchmarks.md)
+    - [Best Practices](gcp-to-azure/best-practices.md)
 
 ## 1. Executive summary
 

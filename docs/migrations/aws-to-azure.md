@@ -1,10 +1,23 @@
 # Migrating from AWS Analytics to csa-inabox on Azure
 
-**Status:** Authored 2026-04-19
+**Status:** Authored 2026-04-19 | Expanded 2026-04-30
 **Audience:** Federal CIO / CDO / Chief Data Architect running an AWS analytics estate (Redshift, EMR, Glue, Athena, S3) and moving to Azure — commercial, GovCloud, or Azure Government.
 **Scope:** The AWS analytics estate: Redshift, EMR (EC2 + Serverless + Studio), Glue (Catalog + Jobs + Crawlers), Athena, and S3 as the data-lake substrate. Ancillary services (Kinesis, MSK, Lake Formation, QuickSight) are addressed where they touch the above.
 
 ---
+
+!!! tip "Expanded Migration Center Available"
+    This playbook is the core migration reference. For the complete AWS-to-Azure migration package — including white papers, deep-dive guides, tutorials, benchmarks, and federal-specific guidance — visit the **[AWS to Azure Migration Center](aws-to-azure/index.md)**.
+
+    **Quick links:**
+
+    - [Why Azure over AWS (Executive Brief)](aws-to-azure/why-azure-over-aws.md)
+    - [Total Cost of Ownership Analysis](aws-to-azure/tco-analysis.md)
+    - [Complete Feature Mapping (100+ features)](aws-to-azure/feature-mapping-complete.md)
+    - [Federal Migration Guide](aws-to-azure/federal-migration-guide.md)
+    - [Tutorials & Walkthroughs](aws-to-azure/index.md#tutorials)
+    - [Benchmarks & Performance](aws-to-azure/benchmarks.md)
+    - [Best Practices](aws-to-azure/best-practices.md)
 
 ## 1. Executive summary
 

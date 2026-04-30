@@ -2,6 +2,18 @@
 
 > **Audience:** Teams running Informatica PowerCenter, Informatica Cloud (IICS), or Informatica MDM looking at Azure Data Factory, Fabric Data Pipelines, or dbt as the modern replacement.
 
+!!! tip "Expanded Migration Center Available"
+    This playbook is the core migration reference. For the complete Informatica-to-Azure migration package — including white papers, deep-dive guides, tutorials, and benchmarks — visit the **[Informatica Migration Center](informatica/index.md)**.
+
+    **Quick links:**
+
+    - [Why Azure over Informatica (Executive Brief)](informatica/why-azure-over-informatica.md)
+    - [Total Cost of Ownership Analysis](informatica/tco-analysis.md)
+    - [Complete Feature Mapping (95+ features)](informatica/feature-mapping-complete.md)
+    - [Tutorials & Walkthroughs](informatica/index.md#tutorials)
+    - [Benchmarks & Performance](informatica/benchmarks.md)
+    - [Best Practices](informatica/best-practices.md)
+
 ## Decide first: target architecture
 
 | Source                                          | Best Azure target                                                                                        |

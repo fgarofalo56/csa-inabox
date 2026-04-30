@@ -312,14 +312,157 @@ nav:
           - GDPR & EU Data Boundary: compliance/gdpr-privacy.md
       - Migrations:
           - Overview: migrations/README.md
-          - AWS to Azure: migrations/aws-to-azure.md
-          - GCP to Azure: migrations/gcp-to-azure.md
-          - Snowflake to Azure: migrations/snowflake.md
-          - Databricks to Fabric: migrations/databricks-to-fabric.md
-          - Teradata to Synapse/Fabric: migrations/teradata.md
-          - Hadoop / Hive to Azure: migrations/hadoop-hive.md
-          - Cloudera / CDH to Azure: migrations/cloudera-to-azure.md
-          - Informatica to ADF/Fabric: migrations/informatica.md
+          - AWS to Azure:
+              - Migration Playbook: migrations/aws-to-azure.md
+              - Migration Center: migrations/aws-to-azure/index.md
+              - Strategic:
+                  - Why Azure over AWS: migrations/aws-to-azure/why-azure-over-aws.md
+                  - Total Cost of Ownership: migrations/aws-to-azure/tco-analysis.md
+              - Feature Reference: migrations/aws-to-azure/feature-mapping-complete.md
+              - Migration Guides:
+                  - Storage Migration: migrations/aws-to-azure/storage-migration.md
+                  - Compute Migration: migrations/aws-to-azure/compute-migration.md
+                  - ETL Migration: migrations/aws-to-azure/etl-migration.md
+                  - Analytics Migration: migrations/aws-to-azure/analytics-migration.md
+                  - Streaming Migration: migrations/aws-to-azure/streaming-migration.md
+                  - AI & ML Migration: migrations/aws-to-azure/ai-ml-migration.md
+                  - Security Migration: migrations/aws-to-azure/security-migration.md
+              - Tutorials:
+                  - "S3 to ADLS": migrations/aws-to-azure/tutorial-s3-to-adls.md
+                  - "Redshift to Fabric": migrations/aws-to-azure/tutorial-redshift-to-fabric.md
+                  - "Glue to ADF/dbt": migrations/aws-to-azure/tutorial-glue-to-adf-dbt.md
+              - Federal & Government: migrations/aws-to-azure/federal-migration-guide.md
+              - Benchmarks: migrations/aws-to-azure/benchmarks.md
+              - Best Practices: migrations/aws-to-azure/best-practices.md
+          - GCP to Azure:
+              - Migration Playbook: migrations/gcp-to-azure.md
+              - Migration Center: migrations/gcp-to-azure/index.md
+              - Strategic:
+                  - Why Azure over GCP: migrations/gcp-to-azure/why-azure-over-gcp.md
+                  - Total Cost of Ownership: migrations/gcp-to-azure/tco-analysis.md
+              - Feature Reference: migrations/gcp-to-azure/feature-mapping-complete.md
+              - Migration Guides:
+                  - Storage Migration: migrations/gcp-to-azure/storage-migration.md
+                  - Compute Migration: migrations/gcp-to-azure/compute-migration.md
+                  - ETL Migration: migrations/gcp-to-azure/etl-migration.md
+                  - Analytics Migration: migrations/gcp-to-azure/analytics-migration.md
+                  - AI & ML Migration: migrations/gcp-to-azure/ai-ml-migration.md
+                  - Security Migration: migrations/gcp-to-azure/security-migration.md
+              - Tutorials:
+                  - "BigQuery to Fabric": migrations/gcp-to-azure/tutorial-bigquery-to-fabric.md
+                  - "Looker to Power BI": migrations/gcp-to-azure/tutorial-looker-to-powerbi.md
+                  - "Dataflow to ADF": migrations/gcp-to-azure/tutorial-dataflow-to-adf.md
+              - Federal & Government: migrations/gcp-to-azure/federal-migration-guide.md
+              - Benchmarks: migrations/gcp-to-azure/benchmarks.md
+              - Best Practices: migrations/gcp-to-azure/best-practices.md
+          - Snowflake to Azure:
+              - Migration Playbook: migrations/snowflake.md
+              - Migration Center: migrations/snowflake/index.md
+              - Strategic:
+                  - Why Azure over Snowflake: migrations/snowflake/why-azure-over-snowflake.md
+                  - Total Cost of Ownership: migrations/snowflake/tco-analysis.md
+              - Feature Reference: migrations/snowflake/feature-mapping-complete.md
+              - Migration Guides:
+                  - Warehouse Migration: migrations/snowflake/warehouse-migration.md
+                  - Data Sharing Migration: migrations/snowflake/data-sharing-migration.md
+                  - Snowpark Migration: migrations/snowflake/snowpark-migration.md
+                  - Cortex AI Migration: migrations/snowflake/cortex-migration.md
+                  - Streams & Tasks: migrations/snowflake/streams-tasks-migration.md
+                  - Security Migration: migrations/snowflake/security-migration.md
+              - Tutorials:
+                  - "dbt Snowflake to Fabric": migrations/snowflake/tutorial-dbt-snowflake-to-fabric.md
+                  - "Cortex to Azure AI": migrations/snowflake/tutorial-cortex-to-azure-ai.md
+                  - "Data Sharing to Delta": migrations/snowflake/tutorial-data-sharing-to-delta.md
+              - Federal & Government: migrations/snowflake/federal-migration-guide.md
+              - Benchmarks: migrations/snowflake/benchmarks.md
+              - Best Practices: migrations/snowflake/best-practices.md
+          - Databricks to Fabric:
+              - Migration Playbook: migrations/databricks-to-fabric.md
+              - Migration Center: migrations/databricks-to-fabric/index.md
+              - Strategic:
+                  - Why Fabric over Databricks: migrations/databricks-to-fabric/why-fabric-over-databricks.md
+                  - Total Cost of Ownership: migrations/databricks-to-fabric/tco-analysis.md
+              - Feature Reference: migrations/databricks-to-fabric/feature-mapping-complete.md
+              - Migration Guides:
+                  - Notebook Migration: migrations/databricks-to-fabric/notebook-migration.md
+                  - Unity Catalog Migration: migrations/databricks-to-fabric/unity-catalog-migration.md
+                  - DLT Migration: migrations/databricks-to-fabric/dlt-migration.md
+                  - ML Migration: migrations/databricks-to-fabric/ml-migration.md
+                  - Streaming Migration: migrations/databricks-to-fabric/streaming-migration.md
+              - Tutorials:
+                  - "Notebook to Fabric": migrations/databricks-to-fabric/tutorial-notebook-to-fabric.md
+                  - "DLT to Fabric Pipeline": migrations/databricks-to-fabric/tutorial-dlt-to-fabric-pipeline.md
+              - Benchmarks: migrations/databricks-to-fabric/benchmarks.md
+              - Best Practices: migrations/databricks-to-fabric/best-practices.md
+          - Teradata to Synapse/Fabric:
+              - Migration Playbook: migrations/teradata.md
+              - Migration Center: migrations/teradata/index.md
+              - Strategic:
+                  - Why Azure over Teradata: migrations/teradata/why-azure-over-teradata.md
+                  - Total Cost of Ownership: migrations/teradata/tco-analysis.md
+              - Feature Reference: migrations/teradata/feature-mapping-complete.md
+              - Migration Guides:
+                  - SQL Migration: migrations/teradata/sql-migration.md
+                  - Data Migration: migrations/teradata/data-migration.md
+                  - Workload Migration: migrations/teradata/workload-migration.md
+                  - Security Migration: migrations/teradata/security-migration.md
+              - Tutorials:
+                  - "BTEQ to dbt": migrations/teradata/tutorial-bteq-to-dbt.md
+                  - "TPT to ADF": migrations/teradata/tutorial-tpt-to-adf.md
+              - Benchmarks: migrations/teradata/benchmarks.md
+              - Best Practices: migrations/teradata/best-practices.md
+          - Hadoop / Hive to Azure:
+              - Migration Playbook: migrations/hadoop-hive.md
+              - Migration Center: migrations/hadoop-hive/index.md
+              - Strategic:
+                  - Why Azure over Hadoop: migrations/hadoop-hive/why-azure-over-hadoop.md
+                  - Total Cost of Ownership: migrations/hadoop-hive/tco-analysis.md
+              - Feature Reference: migrations/hadoop-hive/feature-mapping-complete.md
+              - Migration Guides:
+                  - HDFS Migration: migrations/hadoop-hive/hdfs-migration.md
+                  - Hive Migration: migrations/hadoop-hive/hive-migration.md
+                  - Spark Migration: migrations/hadoop-hive/spark-migration.md
+                  - HBase Migration: migrations/hadoop-hive/hbase-migration.md
+                  - Kafka & Oozie: migrations/hadoop-hive/kafka-oozie-migration.md
+                  - Security Migration: migrations/hadoop-hive/security-migration.md
+              - Tutorials:
+                  - "HDFS to ADLS": migrations/hadoop-hive/tutorial-hdfs-to-adls.md
+                  - "Hive to dbt": migrations/hadoop-hive/tutorial-hive-to-dbt.md
+              - Benchmarks: migrations/hadoop-hive/benchmarks.md
+              - Best Practices: migrations/hadoop-hive/best-practices.md
+          - Cloudera / CDH to Azure:
+              - Migration Playbook: migrations/cloudera-to-azure.md
+              - Migration Center: migrations/cloudera-to-azure/index.md
+              - Strategic:
+                  - Why Azure over Cloudera: migrations/cloudera-to-azure/why-azure-over-cloudera.md
+                  - Total Cost of Ownership: migrations/cloudera-to-azure/tco-analysis.md
+              - Feature Reference: migrations/cloudera-to-azure/feature-mapping-complete.md
+              - Migration Guides:
+                  - Impala Migration: migrations/cloudera-to-azure/impala-migration.md
+                  - NiFi Migration: migrations/cloudera-to-azure/nifi-migration.md
+                  - CDP Data Engineering: migrations/cloudera-to-azure/cdp-data-engineering.md
+              - Tutorials:
+                  - "NiFi to ADF": migrations/cloudera-to-azure/tutorial-nifi-to-adf.md
+                  - "Impala to Databricks": migrations/cloudera-to-azure/tutorial-impala-to-databricks.md
+              - Benchmarks: migrations/cloudera-to-azure/benchmarks.md
+              - Best Practices: migrations/cloudera-to-azure/best-practices.md
+          - Informatica to ADF/Fabric:
+              - Migration Playbook: migrations/informatica.md
+              - Migration Center: migrations/informatica/index.md
+              - Strategic:
+                  - Why Azure over Informatica: migrations/informatica/why-azure-over-informatica.md
+                  - Total Cost of Ownership: migrations/informatica/tco-analysis.md
+              - Feature Reference: migrations/informatica/feature-mapping-complete.md
+              - Migration Guides:
+                  - PowerCenter Migration: migrations/informatica/powercenter-migration.md
+                  - IICS Migration: migrations/informatica/iics-migration.md
+                  - Data Quality Migration: migrations/informatica/data-quality-migration.md
+                  - MDM Migration: migrations/informatica/mdm-migration.md
+              - Tutorials:
+                  - "Mapping to dbt": migrations/informatica/tutorial-mapping-to-dbt.md
+                  - "Workflow to ADF": migrations/informatica/tutorial-workflow-to-adf.md
+              - Benchmarks: migrations/informatica/benchmarks.md
+              - Best Practices: migrations/informatica/best-practices.md
           - Palantir Foundry:
               - Migration Playbook: migrations/palantir-foundry.md
               - Migration Center: migrations/palantir-foundry/index.md
@@ -347,8 +490,43 @@ nav:
               - Federal & Government: migrations/palantir-foundry/federal-migration-guide.md
               - Benchmarks: migrations/palantir-foundry/benchmarks.md
               - Best Practices: migrations/palantir-foundry/best-practices.md
-          - Tableau to Power BI: migrations/tableau-to-powerbi.md
-          - IoT Hub + Entra: migrations/iot-hub-entra.md
+          - Tableau to Power BI:
+              - Migration Playbook: migrations/tableau-to-powerbi.md
+              - Migration Center: migrations/tableau-to-powerbi/index.md
+              - Strategic:
+                  - Why Power BI over Tableau: migrations/tableau-to-powerbi/why-powerbi-over-tableau.md
+                  - Total Cost of Ownership: migrations/tableau-to-powerbi/tco-analysis.md
+              - Feature Reference: migrations/tableau-to-powerbi/feature-mapping-complete.md
+              - Migration Guides:
+                  - Calculation Conversion: migrations/tableau-to-powerbi/calculation-conversion.md
+                  - Visualization Migration: migrations/tableau-to-powerbi/visualization-migration.md
+                  - Data Source Migration: migrations/tableau-to-powerbi/data-source-migration.md
+                  - Server Migration: migrations/tableau-to-powerbi/server-migration.md
+                  - Prep Migration: migrations/tableau-to-powerbi/prep-migration.md
+                  - Embedding Migration: migrations/tableau-to-powerbi/embedding-migration.md
+              - Tutorials:
+                  - "Workbook to PBIX": migrations/tableau-to-powerbi/tutorial-workbook-to-pbix.md
+                  - "Data Model to Semantic": migrations/tableau-to-powerbi/tutorial-data-model-to-semantic.md
+                  - "Calculation Conversion": migrations/tableau-to-powerbi/tutorial-calc-conversion.md
+              - Benchmarks: migrations/tableau-to-powerbi/benchmarks.md
+              - Best Practices: migrations/tableau-to-powerbi/best-practices.md
+          - IoT Hub + Entra:
+              - Migration Playbook: migrations/iot-hub-entra.md
+              - Migration Center: migrations/iot-hub-entra/index.md
+              - Strategic:
+                  - Why Entra over SAS: migrations/iot-hub-entra/why-entra-over-sas.md
+                  - Security Analysis: migrations/iot-hub-entra/security-analysis.md
+              - Feature Reference: migrations/iot-hub-entra/feature-mapping-complete.md
+              - Migration Guides:
+                  - X.509 Migration: migrations/iot-hub-entra/x509-migration.md
+                  - Managed Identity Migration: migrations/iot-hub-entra/managed-identity-migration.md
+                  - DPS Migration: migrations/iot-hub-entra/dps-migration.md
+                  - Monitoring Migration: migrations/iot-hub-entra/monitoring-migration.md
+              - Tutorials:
+                  - "Device Migration": migrations/iot-hub-entra/tutorial-device-migration.md
+                  - "Backend Migration": migrations/iot-hub-entra/tutorial-backend-migration.md
+              - Benchmarks: migrations/iot-hub-entra/benchmarks.md
+              - Best Practices: migrations/iot-hub-entra/best-practices.md
       - Cost Management: COST_MANAGEMENT.md
       - Rollback: ROLLBACK.md
       - Troubleshooting: TROUBLESHOOTING.md

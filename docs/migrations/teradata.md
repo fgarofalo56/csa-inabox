@@ -2,6 +2,18 @@
 
 > **Audience:** Teams running Teradata (on-prem or VantageCloud) considering a move to Azure. Most large enterprises have a Teradata commitment of 10-20+ years and migrating is multi-year, not multi-quarter.
 
+!!! tip "Expanded Migration Center Available"
+    This playbook is the core migration reference. For the complete Teradata-to-Azure migration package — including white papers, deep-dive guides, tutorials, and benchmarks — visit the **[Teradata Migration Center](teradata/index.md)**.
+
+    **Quick links:**
+
+    - [Why Azure over Teradata (Executive Brief)](teradata/why-azure-over-teradata.md)
+    - [Total Cost of Ownership Analysis](teradata/tco-analysis.md)
+    - [Complete Feature Mapping (40+ features)](teradata/feature-mapping-complete.md)
+    - [Tutorials & Walkthroughs](teradata/index.md#tutorials)
+    - [Benchmarks & Performance](teradata/benchmarks.md)
+    - [Best Practices](teradata/best-practices.md)
+
 ## Decide first: target architecture
 
 Teradata workloads have characteristics that map differently:

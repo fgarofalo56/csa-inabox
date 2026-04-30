@@ -46,4 +46,10 @@ paths = [
     # and cannot be reversed back into a credential.  Published by Azure
     # Storage diagnostics, not a secret.
     '''scripts/monitor/.*\.ipynb''',
+
+    # Migration documentation contains code examples with placeholder
+    # connection strings, SAS keys, and SQL column names (e.g. "match_key")
+    # that trip the generic-api-key entropy heuristic.  These are
+    # illustrative samples in markdown, not real credentials.
+    '''docs/migrations/.*\.md''',
 ]

@@ -1,10 +1,23 @@
 # Migrating from Snowflake to csa-inabox
 
-**Status:** Authored 2026-04-19
+**Status:** Authored 2026-04-19 | Expanded 2026-04-30
 **Audience:** Federal CIO / CDO / Chief Data Architect and their implementation teams running a Snowflake tenant today (commercial or Snowflake Government).
 **Scope:** Full capability-by-capability migration from Snowflake (warehouses, Snowpark, Cortex, Snowpipe, Tasks/Streams, Data Sharing, dynamic tables) to the csa-inabox reference platform on Microsoft Azure.
 
 ---
+
+!!! tip "Expanded Migration Center Available"
+    This playbook is the core migration reference. For the complete Snowflake-to-Azure migration package — including white papers, deep-dive guides, tutorials, benchmarks, and federal-specific guidance — visit the **[Snowflake Migration Center](snowflake/index.md)**.
+
+    **Quick links:**
+
+    - [Why Azure over Snowflake (Executive Brief)](snowflake/why-azure-over-snowflake.md)
+    - [Total Cost of Ownership Analysis](snowflake/tco-analysis.md)
+    - [Complete Feature Mapping (60+ features)](snowflake/feature-mapping-complete.md)
+    - [Federal Migration Guide](snowflake/federal-migration-guide.md)
+    - [Tutorials & Walkthroughs](snowflake/index.md#tutorials)
+    - [Benchmarks & Performance](snowflake/benchmarks.md)
+    - [Best Practices](snowflake/best-practices.md)
 
 ## 1. Executive summary
 

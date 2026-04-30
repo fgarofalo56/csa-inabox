@@ -1,8 +1,20 @@
 # IoT Hub & DPS — SAS to Entra-Only Migration
 
-> **Status:** Required for FedRAMP High / IL5 | **Owner:** Platform Security | **Authored:** 2026-04-19
+> **Status:** Required for FedRAMP High / IL5 | **Owner:** Platform Security | **Authored:** 2026-04-19 | Expanded 2026-04-30
 > **Finding:** CSA-0025 (HIGH, BREAKING) | **Ballot:** AQ-0014 (approved)
 > **Applies to:** `examples/iot-streaming/deploy/bicep/iot-hub.bicep`
+
+!!! tip "Expanded Migration Center Available"
+    This playbook is the core migration reference. For the complete IoT Hub SAS-to-Entra migration package — including security analysis, deep-dive guides, tutorials, and benchmarks — visit the **[IoT Hub + Entra Migration Center](iot-hub-entra/index.md)**.
+
+    **Quick links:**
+
+    - [Why Entra over SAS (Security Case)](iot-hub-entra/why-entra-over-sas.md)
+    - [Security Analysis](iot-hub-entra/security-analysis.md)
+    - [Complete Feature Mapping](iot-hub-entra/feature-mapping-complete.md)
+    - [Tutorials & Walkthroughs](iot-hub-entra/index.md#tutorials)
+    - [Benchmarks & Performance](iot-hub-entra/benchmarks.md)
+    - [Best Practices](iot-hub-entra/best-practices.md)
 
 !!! important
 **This is a breaking change.** Devices using SAS-key authentication (symmetric
