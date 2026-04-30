@@ -1,14 +1,26 @@
 ---
 title: "Migrating from Tableau to Power BI with CSA-in-a-Box"
 description: "Complete migration playbook from Tableau Server/Cloud to Power BI and Microsoft Fabric — calculation conversion, visualization mapping, data source migration, server migration, and user adoption."
-status: Authored 2026-04-29
+status: Authored 2026-04-29 | Expanded 2026-04-30
 ---
 
 # Migrating from Tableau to Power BI with CSA-in-a-Box
 
-**Status:** Authored 2026-04-29
+**Status:** Authored 2026-04-29 | Expanded 2026-04-30
 **Audience:** BI leads, analytics engineers, data architects, and CDOs running Tableau Server or Tableau Cloud who are evaluating or committed to a Power BI migration.
 **Scope:** End-to-end migration of the Tableau estate — workbooks, data sources, calculations, server infrastructure, permissions, schedules, and user skills — to Power BI Service and Microsoft Fabric, with csa-inabox as the data platform layer.
+
+!!! tip "Expanded Migration Center Available"
+    This playbook is the core migration reference. For the complete Tableau-to-Power BI migration package — including white papers, deep-dive guides, tutorials, and benchmarks — visit the **[Tableau to Power BI Migration Center](tableau-to-powerbi/index.md)**.
+
+    **Quick links:**
+
+    - [Why Power BI over Tableau (Executive Brief)](tableau-to-powerbi/why-powerbi-over-tableau.md)
+    - [Total Cost of Ownership Analysis](tableau-to-powerbi/tco-analysis.md)
+    - [Complete Feature Mapping (105+ features)](tableau-to-powerbi/feature-mapping-complete.md)
+    - [Tutorials & Walkthroughs](tableau-to-powerbi/index.md#tutorials)
+    - [Benchmarks & Performance](tableau-to-powerbi/benchmarks.md)
+    - [Best Practices](tableau-to-powerbi/best-practices.md)
 
 ---
 

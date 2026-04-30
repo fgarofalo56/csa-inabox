@@ -1,14 +1,26 @@
 ---
 title: "Migrating from Cloudera/CDH to CSA-in-a-Box on Azure"
 description: "End-to-end migration playbook from Cloudera CDH/CDP to the csa-inabox reference platform on Azure — HDFS to ADLS, Hive to dbt, Spark on YARN to Databricks, Oozie to ADF, and Ranger/Atlas to Purview."
-status: Authored 2026-04-29
+status: Authored 2026-04-29 | Expanded 2026-04-30
 ---
 
 # Migrating from Cloudera/CDH to CSA-in-a-Box on Azure
 
-**Status:** Authored 2026-04-29
+**Status:** Authored 2026-04-29 | Expanded 2026-04-30
 **Audience:** Data engineers, platform architects, and CDOs running Cloudera CDH 6.x or CDP Private/Public Cloud who need to migrate to a cloud-native analytics platform on Azure.
 **Scope:** Full component-by-component migration from the Cloudera ecosystem (HDFS, Hive, Spark, Impala, HBase, Kafka, Oozie, Ranger, Atlas, NiFi, Sqoop, Flume) to csa-inabox on Microsoft Azure.
+
+!!! tip "Expanded Migration Center Available"
+    This playbook is the core migration reference. For the complete Cloudera-to-Azure migration package — including white papers, deep-dive guides, tutorials, and benchmarks — visit the **[Cloudera Migration Center](cloudera-to-azure/index.md)**.
+
+    **Quick links:**
+
+    - [Why Azure over Cloudera (Executive Brief)](cloudera-to-azure/why-azure-over-cloudera.md)
+    - [Total Cost of Ownership Analysis](cloudera-to-azure/tco-analysis.md)
+    - [Complete Feature Mapping (40+ features)](cloudera-to-azure/feature-mapping-complete.md)
+    - [Tutorials & Walkthroughs](cloudera-to-azure/index.md#tutorials)
+    - [Benchmarks & Performance](cloudera-to-azure/benchmarks.md)
+    - [Best Practices](cloudera-to-azure/best-practices.md)
 
 ---
 
