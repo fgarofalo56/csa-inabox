@@ -37,7 +37,7 @@ from azure.iot.device import IoTHubDeviceClient
 conn_str = (
     "HostName=hub-prod.azure-devices.net;"
     "DeviceId=sensor-floor3-unit47;"
-    "SharedAccessKey=dGhpcyBpcyBhIGZha2Uga2V5..."
+    "SharedAccessKey=<device-symmetric-key>"
 )
 
 client = IoTHubDeviceClient.create_from_connection_string(conn_str)

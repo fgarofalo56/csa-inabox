@@ -431,7 +431,7 @@ SELECT
 
 FROM {{ ref('stg_mdm__customer_match_candidates') }} a
 JOIN {{ ref('stg_mdm__customer_match_candidates') }} b
-    ON a.match_key_1 = b.match_key_1  -- blocking key to reduce pairs
+    ON a.blocking_key = b.blocking_key  -- blocking key to reduce pairs
     AND a.customer_id < b.customer_id
 ```
 
