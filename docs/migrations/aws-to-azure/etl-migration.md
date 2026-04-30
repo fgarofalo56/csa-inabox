@@ -14,18 +14,18 @@ This guide covers each Glue component, its Azure equivalent, migration patterns,
 
 ## Component mapping overview
 
-| Glue component | Primary Azure equivalent | Secondary option | Notes |
-|---|---|---|---|
-| Glue Data Catalog | Unity Catalog (runtime) + Purview (business) | N/A | Unity Catalog for Spark; Purview for governance |
-| Glue ETL Jobs (PySpark) | Databricks Jobs + dbt models | ADF Data Flows | dbt for SQL logic; Databricks for PySpark |
-| Glue Python Shell | Azure Functions | Databricks lightweight task | Serverless for lightweight jobs |
-| Glue Crawlers | Purview scan jobs + Auto Loader schema inference | N/A | Purview for governance; Auto Loader for runtime |
-| Glue Studio (visual) | ADF visual pipeline designer | Fabric Data Factory | Visual ETL in ADF; logic in dbt |
-| Glue Streaming | Databricks Structured Streaming | Stream Analytics | Delta Live Tables for streaming ETL |
-| Glue DataBrew | Power Query in Fabric | dbt | Visual prep in Power Query; SQL in dbt |
-| Glue Data Quality | dbt tests + Great Expectations | data-product contracts | Contract-driven quality |
-| Glue Workflows | ADF pipeline orchestration | Databricks Workflows | ADF for cross-service; Databricks for Spark-only |
-| Step Functions | ADF pipeline + Logic Apps | Durable Functions | ADF for data; Logic Apps for integration |
+| Glue component          | Primary Azure equivalent                         | Secondary option            | Notes                                            |
+| ----------------------- | ------------------------------------------------ | --------------------------- | ------------------------------------------------ |
+| Glue Data Catalog       | Unity Catalog (runtime) + Purview (business)     | N/A                         | Unity Catalog for Spark; Purview for governance  |
+| Glue ETL Jobs (PySpark) | Databricks Jobs + dbt models                     | ADF Data Flows              | dbt for SQL logic; Databricks for PySpark        |
+| Glue Python Shell       | Azure Functions                                  | Databricks lightweight task | Serverless for lightweight jobs                  |
+| Glue Crawlers           | Purview scan jobs + Auto Loader schema inference | N/A                         | Purview for governance; Auto Loader for runtime  |
+| Glue Studio (visual)    | ADF visual pipeline designer                     | Fabric Data Factory         | Visual ETL in ADF; logic in dbt                  |
+| Glue Streaming          | Databricks Structured Streaming                  | Stream Analytics            | Delta Live Tables for streaming ETL              |
+| Glue DataBrew           | Power Query in Fabric                            | dbt                         | Visual prep in Power Query; SQL in dbt           |
+| Glue Data Quality       | dbt tests + Great Expectations                   | data-product contracts      | Contract-driven quality                          |
+| Glue Workflows          | ADF pipeline orchestration                       | Databricks Workflows        | ADF for cross-service; Databricks for Spark-only |
+| Step Functions          | ADF pipeline + Logic Apps                        | Durable Functions           | ADF for data; Logic Apps for integration         |
 
 ---
 
@@ -34,6 +34,7 @@ This guide covers each Glue component, its Azure equivalent, migration patterns,
 ### Architecture comparison
 
 **Glue Data Catalog:**
+
 - Stores database, table, and partition metadata
 - Integrated with Athena, EMR, Redshift Spectrum
 - Per-account, per-region (not global)
@@ -41,6 +42,7 @@ This guide covers each Glue component, its Azure equivalent, migration patterns,
 - Lake Formation layered on top for access control
 
 **Unity Catalog:**
+
 - Three-level namespace: catalog.schema.table
 - Integrated with Databricks SQL, Jobs, ML
 - Cross-workspace (organization-wide)
@@ -48,6 +50,7 @@ This guide covers each Glue component, its Azure equivalent, migration patterns,
 - Lineage tracking for tables, columns, and notebooks
 
 **Purview:**
+
 - Enterprise-wide data catalog and governance
 - Classification (PII, PHI, financial, government)
 - Business glossary with term relationships
@@ -124,13 +127,13 @@ scan_config = {
 
 ### Decision matrix: which target?
 
-| Glue job type | Target | Reasoning |
-|---|---|---|
-| PySpark job doing SQL transforms | dbt SQL model | SQL is more testable and versionable |
-| PySpark job with complex Python logic | Databricks notebook/job | Preserve PySpark; update paths |
-| Python Shell job (lightweight) | Azure Function | Serverless, no cluster overhead |
-| Glue streaming job | Databricks Structured Streaming | Delta Live Tables for managed streaming |
-| Glue visual job (Studio) | ADF Data Flow or dbt | Depends on complexity |
+| Glue job type                         | Target                          | Reasoning                               |
+| ------------------------------------- | ------------------------------- | --------------------------------------- |
+| PySpark job doing SQL transforms      | dbt SQL model                   | SQL is more testable and versionable    |
+| PySpark job with complex Python logic | Databricks notebook/job         | Preserve PySpark; update paths          |
+| Python Shell job (lightweight)        | Azure Function                  | Serverless, no cluster overhead         |
+| Glue streaming job                    | Databricks Structured Streaming | Delta Live Tables for managed streaming |
+| Glue visual job (Studio)              | ADF Data Flow or dbt            | Depends on complexity                   |
 
 ### Worked example: Glue PySpark job to dbt SQL model
 
@@ -222,30 +225,31 @@ GROUP BY sales_date, region, product_id
 ```yaml
 # models/gold/schema.yml
 models:
-  - name: fact_sales_daily
-    description: "Daily sales aggregation by region and product"
-    columns:
-      - name: sales_date
-        tests:
-          - not_null
-      - name: region
-        tests:
-          - not_null
-          - accepted_values:
-              values: ['EAST', 'WEST', 'CENTRAL', 'SOUTH']
-      - name: total_units
-        tests:
-          - not_null
-          - dbt_utils.expression_is_true:
-              expression: ">= 0"
-      - name: total_revenue
-        tests:
-          - not_null
-          - dbt_utils.expression_is_true:
-              expression: ">= 0"
+    - name: fact_sales_daily
+      description: "Daily sales aggregation by region and product"
+      columns:
+          - name: sales_date
+            tests:
+                - not_null
+          - name: region
+            tests:
+                - not_null
+                - accepted_values:
+                      values: ["EAST", "WEST", "CENTRAL", "SOUTH"]
+          - name: total_units
+            tests:
+                - not_null
+                - dbt_utils.expression_is_true:
+                      expression: ">= 0"
+          - name: total_revenue
+            tests:
+                - not_null
+                - dbt_utils.expression_is_true:
+                      expression: ">= 0"
 ```
 
 **What changed:**
+
 1. Glue `DynamicFrame` / `GlueContext` removed; replaced by dbt `ref()` and SQL.
 2. PySpark DataFrame operations expressed as SQL GROUP BY.
 3. S3/Parquet write replaced by Delta Lake incremental merge.
@@ -266,15 +270,15 @@ Glue Crawlers scan data sources (S3, JDBC), infer schemas, and register tables i
 
 ```json
 {
-  "name": "scan-adls-raw",
-  "kind": "AdlsGen2",
-  "properties": {
-    "scanRulesetName": "AdlsGen2DefaultScanRuleSet",
-    "collection": { "referenceName": "raw-data-collection" },
-    "credential": { "referenceName": "managed-identity-credential" },
-    "endpoint": "https://acmeanalyticsgov.dfs.core.usgovcloudapi.net/",
-    "resourceTypes": { "AdlsGen2": { "scanRulesetType": "System" } }
-  }
+    "name": "scan-adls-raw",
+    "kind": "AdlsGen2",
+    "properties": {
+        "scanRulesetName": "AdlsGen2DefaultScanRuleSet",
+        "collection": { "referenceName": "raw-data-collection" },
+        "credential": { "referenceName": "managed-identity-credential" },
+        "endpoint": "https://acmeanalyticsgov.dfs.core.usgovcloudapi.net/",
+        "resourceTypes": { "AdlsGen2": { "scanRulesetType": "System" } }
+    }
 }
 ```
 
@@ -309,53 +313,66 @@ Auto Loader provides runtime schema evolution --- it detects new columns in sour
 
 ```json
 {
-  "name": "pipeline_daily_sales_etl",
-  "properties": {
-    "activities": [
-      {
-        "name": "RunDbtSalesModels",
-        "type": "DatabricksNotebook",
-        "typeProperties": {
-          "notebookPath": "/Repos/analytics/sales/run_dbt",
-          "baseParameters": {
-            "dbt_command": "dbt run --select tag:daily"
-          }
-        },
-        "linkedServiceName": {
-          "referenceName": "AzureDatabricksLinkedService",
-          "type": "LinkedServiceReference"
+    "name": "pipeline_daily_sales_etl",
+    "properties": {
+        "activities": [
+            {
+                "name": "RunDbtSalesModels",
+                "type": "DatabricksNotebook",
+                "typeProperties": {
+                    "notebookPath": "/Repos/analytics/sales/run_dbt",
+                    "baseParameters": {
+                        "dbt_command": "dbt run --select tag:daily"
+                    }
+                },
+                "linkedServiceName": {
+                    "referenceName": "AzureDatabricksLinkedService",
+                    "type": "LinkedServiceReference"
+                }
+            },
+            {
+                "name": "RunDbtTests",
+                "type": "DatabricksNotebook",
+                "dependsOn": [
+                    {
+                        "activity": "RunDbtSalesModels",
+                        "dependencyConditions": ["Succeeded"]
+                    }
+                ],
+                "typeProperties": {
+                    "notebookPath": "/Repos/analytics/sales/run_dbt",
+                    "baseParameters": {
+                        "dbt_command": "dbt test --select tag:daily"
+                    }
+                },
+                "linkedServiceName": {
+                    "referenceName": "AzureDatabricksLinkedService",
+                    "type": "LinkedServiceReference"
+                }
+            },
+            {
+                "name": "RefreshPowerBIDataset",
+                "type": "WebActivity",
+                "dependsOn": [
+                    {
+                        "activity": "RunDbtTests",
+                        "dependencyConditions": ["Succeeded"]
+                    }
+                ],
+                "typeProperties": {
+                    "url": "https://api.powerbi.com/v1.0/myorg/groups/{workspace_id}/datasets/{dataset_id}/refreshes",
+                    "method": "POST",
+                    "authentication": {
+                        "type": "MSI",
+                        "resource": "https://analysis.windows.net/powerbi/api"
+                    }
+                }
+            }
+        ],
+        "parameters": {
+            "run_date": { "type": "string", "defaultValue": "" }
         }
-      },
-      {
-        "name": "RunDbtTests",
-        "type": "DatabricksNotebook",
-        "dependsOn": [{ "activity": "RunDbtSalesModels", "dependencyConditions": ["Succeeded"] }],
-        "typeProperties": {
-          "notebookPath": "/Repos/analytics/sales/run_dbt",
-          "baseParameters": {
-            "dbt_command": "dbt test --select tag:daily"
-          }
-        },
-        "linkedServiceName": {
-          "referenceName": "AzureDatabricksLinkedService",
-          "type": "LinkedServiceReference"
-        }
-      },
-      {
-        "name": "RefreshPowerBIDataset",
-        "type": "WebActivity",
-        "dependsOn": [{ "activity": "RunDbtTests", "dependencyConditions": ["Succeeded"] }],
-        "typeProperties": {
-          "url": "https://api.powerbi.com/v1.0/myorg/groups/{workspace_id}/datasets/{dataset_id}/refreshes",
-          "method": "POST",
-          "authentication": { "type": "MSI", "resource": "https://analysis.windows.net/powerbi/api" }
-        }
-      }
-    ],
-    "parameters": {
-      "run_date": { "type": "string", "defaultValue": "" }
     }
-  }
 }
 ```
 
@@ -365,47 +382,47 @@ Auto Loader provides runtime schema evolution --- it detects new columns in sour
 
 ### Architecture comparison
 
-| Step Functions concept | ADF equivalent | Notes |
-|---|---|---|
-| State machine | Pipeline | Visual orchestration |
-| Task state | Activity | Execute an action |
-| Choice state | If Condition activity | Branching logic |
-| Parallel state | ForEach (parallel) | Concurrent execution |
-| Wait state | Wait activity | Time-based delay |
-| Map state | ForEach activity | Iterate over collection |
-| Fail/Succeed state | Fail activity / pipeline success | Terminal states |
-| Retry/Catch | Activity retry policy + error handling | Built-in retry with backoff |
-| Step Functions Express | ADF with Durable Functions | High-volume, short-lived workflows |
+| Step Functions concept | ADF equivalent                         | Notes                              |
+| ---------------------- | -------------------------------------- | ---------------------------------- |
+| State machine          | Pipeline                               | Visual orchestration               |
+| Task state             | Activity                               | Execute an action                  |
+| Choice state           | If Condition activity                  | Branching logic                    |
+| Parallel state         | ForEach (parallel)                     | Concurrent execution               |
+| Wait state             | Wait activity                          | Time-based delay                   |
+| Map state              | ForEach activity                       | Iterate over collection            |
+| Fail/Succeed state     | Fail activity / pipeline success       | Terminal states                    |
+| Retry/Catch            | Activity retry policy + error handling | Built-in retry with backoff        |
+| Step Functions Express | ADF with Durable Functions             | High-volume, short-lived workflows |
 
 ### Connection management: Glue connections to ADF Linked Services
 
-| Glue connection type | ADF linked service | Key Vault integration |
-|---|---|---|
-| JDBC (PostgreSQL) | AzurePostgreSql | Connection string in Key Vault |
-| JDBC (MySQL) | MySql | Connection string in Key Vault |
-| JDBC (SQL Server) | SqlServer | Connection string in Key Vault |
-| JDBC (Redshift) | AmazonRedshift | Connection string in Key Vault |
-| S3 | AmazonS3 | Access key/secret in Key Vault |
-| DynamoDB | AmazonDynamoDB | Access key/secret in Key Vault |
-| Kafka (MSK) | N/A --- use Event Hubs | Kafka endpoint in connection |
-| Custom (REST API) | RestService | API key/token in Key Vault |
+| Glue connection type | ADF linked service     | Key Vault integration          |
+| -------------------- | ---------------------- | ------------------------------ |
+| JDBC (PostgreSQL)    | AzurePostgreSql        | Connection string in Key Vault |
+| JDBC (MySQL)         | MySql                  | Connection string in Key Vault |
+| JDBC (SQL Server)    | SqlServer              | Connection string in Key Vault |
+| JDBC (Redshift)      | AmazonRedshift         | Connection string in Key Vault |
+| S3                   | AmazonS3               | Access key/secret in Key Vault |
+| DynamoDB             | AmazonDynamoDB         | Access key/secret in Key Vault |
+| Kafka (MSK)          | N/A --- use Event Hubs | Kafka endpoint in connection   |
+| Custom (REST API)    | RestService            | API key/token in Key Vault     |
 
 **Key Vault integration pattern:**
 
 ```json
 {
-  "name": "PostgreSQLLinkedService",
-  "type": "AzurePostgreSql",
-  "typeProperties": {
-    "connectionString": {
-      "type": "AzureKeyVaultSecret",
-      "store": {
-        "referenceName": "KeyVaultLinkedService",
-        "type": "LinkedServiceReference"
-      },
-      "secretName": "postgres-connection-string"
+    "name": "PostgreSQLLinkedService",
+    "type": "AzurePostgreSql",
+    "typeProperties": {
+        "connectionString": {
+            "type": "AzureKeyVaultSecret",
+            "store": {
+                "referenceName": "KeyVaultLinkedService",
+                "type": "LinkedServiceReference"
+            },
+            "secretName": "postgres-connection-string"
+        }
     }
-  }
 }
 ```
 
@@ -417,15 +434,15 @@ Cross-reference: `domains/shared/pipelines/adf/` for ADF pipeline patterns; ADR-
 
 ### Migration mapping
 
-| Glue Data Quality rule | dbt equivalent | Notes |
-|---|---|---|
-| `ColumnExists "col_name"` | `schema.yml` column definition | Schema enforcement at build time |
-| `IsComplete "col_name"` | `not_null` test | Column-level test |
-| `IsUnique "col_name"` | `unique` test | Column-level test |
-| `ColumnValues "col" between X and Y` | `dbt_utils.accepted_range` | Custom test |
-| `RowCount > 0` | `dbt_utils.expression_is_true` | Model-level test |
-| `DataFreshness "col" < 24hrs` | `freshness` in `sources.yml` | Source freshness monitoring |
-| `CustomSQL "SELECT COUNT(*)..."` | Custom SQL test | `tests/custom_test.sql` |
+| Glue Data Quality rule               | dbt equivalent                 | Notes                            |
+| ------------------------------------ | ------------------------------ | -------------------------------- |
+| `ColumnExists "col_name"`            | `schema.yml` column definition | Schema enforcement at build time |
+| `IsComplete "col_name"`              | `not_null` test                | Column-level test                |
+| `IsUnique "col_name"`                | `unique` test                  | Column-level test                |
+| `ColumnValues "col" between X and Y` | `dbt_utils.accepted_range`     | Custom test                      |
+| `RowCount > 0`                       | `dbt_utils.expression_is_true` | Model-level test                 |
+| `DataFreshness "col" < 24hrs`        | `freshness` in `sources.yml`   | Source freshness monitoring      |
+| `CustomSQL "SELECT COUNT(*)..."`     | Custom SQL test                | `tests/custom_test.sql`          |
 
 ### Data product contract pattern
 
@@ -436,31 +453,31 @@ name: fact_sales_daily
 version: "1.0"
 owner: sales-analytics-team
 sla:
-  freshness: 4h
-  availability: 99.5%
+    freshness: 4h
+    availability: 99.5%
 schema:
-  - name: sales_date
-    type: DATE
-    nullable: false
-    description: "Date of sales aggregation"
-  - name: region
-    type: STRING
-    nullable: false
-    description: "Sales region"
-    allowed_values: ["EAST", "WEST", "CENTRAL", "SOUTH"]
-  - name: total_units
-    type: BIGINT
-    nullable: false
-    constraints:
-      - ">= 0"
-  - name: total_revenue
-    type: DECIMAL(18,2)
-    nullable: false
-    constraints:
-      - ">= 0"
+    - name: sales_date
+      type: DATE
+      nullable: false
+      description: "Date of sales aggregation"
+    - name: region
+      type: STRING
+      nullable: false
+      description: "Sales region"
+      allowed_values: ["EAST", "WEST", "CENTRAL", "SOUTH"]
+    - name: total_units
+      type: BIGINT
+      nullable: false
+      constraints:
+          - ">= 0"
+    - name: total_revenue
+      type: DECIMAL(18,2)
+      nullable: false
+      constraints:
+          - ">= 0"
 quality_rules:
-  - row_count: "> 0"
-  - unique_key: ["sales_date", "region", "product_id"]
+    - row_count: "> 0"
+    - unique_key: ["sales_date", "region", "product_id"]
 ```
 
 CI validates contracts via `.github/workflows/validate-contracts.yml`.
@@ -469,14 +486,14 @@ CI validates contracts via `.github/workflows/validate-contracts.yml`.
 
 ## Migration sequence for ETL
 
-| Phase | Duration | Activities |
-|---|---|---|
-| 1. Catalog inventory | 1-2 weeks | Export Glue Catalog; map databases to Unity Catalog catalogs; identify all Glue jobs |
-| 2. Catalog migration | 2-3 weeks | Create Unity Catalog structure; register external locations; configure Purview scans |
-| 3. Pilot ETL migration | 3-4 weeks | Convert 3-5 representative Glue jobs to dbt models; validate with dual-run |
-| 4. Bulk ETL migration | 6-10 weeks | Convert remaining Glue jobs; establish ADF orchestration; deploy contracts |
-| 5. Crawler replacement | 2-3 weeks | Configure Purview scan schedules; deploy Auto Loader for streaming sources |
-| 6. Validation | 2-3 weeks | Dual-run reconciliation; aggregate parity checks; lineage verification |
+| Phase                  | Duration   | Activities                                                                           |
+| ---------------------- | ---------- | ------------------------------------------------------------------------------------ |
+| 1. Catalog inventory   | 1-2 weeks  | Export Glue Catalog; map databases to Unity Catalog catalogs; identify all Glue jobs |
+| 2. Catalog migration   | 2-3 weeks  | Create Unity Catalog structure; register external locations; configure Purview scans |
+| 3. Pilot ETL migration | 3-4 weeks  | Convert 3-5 representative Glue jobs to dbt models; validate with dual-run           |
+| 4. Bulk ETL migration  | 6-10 weeks | Convert remaining Glue jobs; establish ADF orchestration; deploy contracts           |
+| 5. Crawler replacement | 2-3 weeks  | Configure Purview scan schedules; deploy Auto Loader for streaming sources           |
+| 6. Validation          | 2-3 weeks  | Dual-run reconciliation; aggregate parity checks; lineage verification               |
 
 ---
 

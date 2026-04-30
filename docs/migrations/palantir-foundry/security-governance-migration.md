@@ -110,29 +110,29 @@ graph TB
 
 ### Concept mapping table
 
-| Foundry concept | Azure equivalent | CSA-in-a-Box automation |
-|---|---|---|
-| Project | Resource Group + Purview Collection + Fabric Workspace | Bicep landing zone templates |
-| Organization | Entra ID Tenant / Management Group | Management group hierarchy |
-| Roles (Owner/Editor/Viewer/Discoverer) | Azure RBAC + Purview Data Roles + Fabric Roles | RBAC matrix (`rbac-matrix.json`) |
-| Markings | Purview Classifications + Sensitivity Labels (MIP) | Classification YAMLs + `purview_automation.py` |
-| Encryption at rest | Azure Storage Service Encryption (AES-256) / CMK | Bicep encryption config |
-| Encryption in transit | TLS 1.3 enforced by platform | Policy assignments |
-| Audit logging | Azure Monitor + Entra ID Sign-in Logs + Log Analytics | CSA-0016 tamper-evident audit |
-| Data lineage | Purview Lineage + dbt DAG | `purview_automation.py` lineage registration |
-| Sensitive data scanning | Purview Auto-Scanning + Auto-Labeling | Classification rule YAMLs |
-| Retention policies | Storage Lifecycle Management + Purview Retention | Bicep lifecycle rules |
-| Row/column security | Fabric RLS + Power BI RLS + Dynamic Data Masking | dbt model configs |
-| SSO/SAML | Entra ID (SAML, OIDC, WS-Fed) | Entra ID tenant configuration |
-| MFA | Entra MFA + Conditional Access | Conditional Access policies |
-| Checkpoint justifications | PIM Justifications + Access Reviews | PIM configuration |
-| Data Health | Azure Monitor + dbt source freshness + Data Activator | Monitor workbooks |
-| Data Expectations | dbt tests + Great Expectations | dbt test suites |
-| Classification taxonomy | Purview Classification Rules + Custom Classifiers | Classification YAMLs |
-| Data discovery | Purview Data Catalog + Fabric OneLake Data Hub | Purview scan schedules |
-| Stewardship | Purview Stewards + Glossary Term Owners | Glossary term YAMLs |
-| Usage analytics | Azure Monitor Workbooks + Log Analytics | KQL query library |
-| Compliance controls | Azure Compliance (100+ standards) + CSA-in-a-Box YAMLs | NIST, CMMC, HIPAA YAMLs |
+| Foundry concept                        | Azure equivalent                                       | CSA-in-a-Box automation                        |
+| -------------------------------------- | ------------------------------------------------------ | ---------------------------------------------- |
+| Project                                | Resource Group + Purview Collection + Fabric Workspace | Bicep landing zone templates                   |
+| Organization                           | Entra ID Tenant / Management Group                     | Management group hierarchy                     |
+| Roles (Owner/Editor/Viewer/Discoverer) | Azure RBAC + Purview Data Roles + Fabric Roles         | RBAC matrix (`rbac-matrix.json`)               |
+| Markings                               | Purview Classifications + Sensitivity Labels (MIP)     | Classification YAMLs + `purview_automation.py` |
+| Encryption at rest                     | Azure Storage Service Encryption (AES-256) / CMK       | Bicep encryption config                        |
+| Encryption in transit                  | TLS 1.3 enforced by platform                           | Policy assignments                             |
+| Audit logging                          | Azure Monitor + Entra ID Sign-in Logs + Log Analytics  | CSA-0016 tamper-evident audit                  |
+| Data lineage                           | Purview Lineage + dbt DAG                              | `purview_automation.py` lineage registration   |
+| Sensitive data scanning                | Purview Auto-Scanning + Auto-Labeling                  | Classification rule YAMLs                      |
+| Retention policies                     | Storage Lifecycle Management + Purview Retention       | Bicep lifecycle rules                          |
+| Row/column security                    | Fabric RLS + Power BI RLS + Dynamic Data Masking       | dbt model configs                              |
+| SSO/SAML                               | Entra ID (SAML, OIDC, WS-Fed)                          | Entra ID tenant configuration                  |
+| MFA                                    | Entra MFA + Conditional Access                         | Conditional Access policies                    |
+| Checkpoint justifications              | PIM Justifications + Access Reviews                    | PIM configuration                              |
+| Data Health                            | Azure Monitor + dbt source freshness + Data Activator  | Monitor workbooks                              |
+| Data Expectations                      | dbt tests + Great Expectations                         | dbt test suites                                |
+| Classification taxonomy                | Purview Classification Rules + Custom Classifiers      | Classification YAMLs                           |
+| Data discovery                         | Purview Data Catalog + Fabric OneLake Data Hub         | Purview scan schedules                         |
+| Stewardship                            | Purview Stewards + Glossary Term Owners                | Glossary term YAMLs                            |
+| Usage analytics                        | Azure Monitor Workbooks + Log Analytics                | KQL query library                              |
+| Compliance controls                    | Azure Compliance (100+ standards) + CSA-in-a-Box YAMLs | NIST, CMMC, HIPAA YAMLs                        |
 
 ---
 
@@ -153,12 +153,12 @@ Foundry federates with Active Directory via SAML. Azure replaces this with nativ
 
 Foundry roles map to Azure RBAC, Purview, and Fabric roles:
 
-| Foundry role | Azure RBAC | Purview role | Fabric role | Permissions |
-|---|---|---|---|---|
-| Owner | Owner / User Access Admin | Collection Admin | Admin | Full control including access management |
-| Editor | Contributor | Data Curator | Member | Create, update, delete resources; no access management |
-| Viewer | Reader | Data Reader | Viewer | Read-only access to resources and data |
-| Discoverer | (custom) | Data Reader (metadata only) | (none -- use shared links) | See metadata and descriptions; no data access |
+| Foundry role | Azure RBAC                | Purview role                | Fabric role                | Permissions                                            |
+| ------------ | ------------------------- | --------------------------- | -------------------------- | ------------------------------------------------------ |
+| Owner        | Owner / User Access Admin | Collection Admin            | Admin                      | Full control including access management               |
+| Editor       | Contributor               | Data Curator                | Member                     | Create, update, delete resources; no access management |
+| Viewer       | Reader                    | Data Reader                 | Viewer                     | Read-only access to resources and data                 |
+| Discoverer   | (custom)                  | Data Reader (metadata only) | (none -- use shared links) | See metadata and descriptions; no data access          |
 
 **Key difference:** Foundry collapses RBAC and data-plane roles into a single model. Azure separates them. A user might have Azure RBAC `Reader` on a resource group (control plane) while holding Purview `Data Curator` (data governance plane) and Fabric `Member` (analytics plane). This separation provides finer-grained control but requires deliberate role planning.
 
@@ -196,14 +196,14 @@ Azure implements marking functionality through two complementary systems:
 
 ### 4.3 Marking-to-classification mapping
 
-| Foundry marking | Purview classification | MIP sensitivity label | CSA-in-a-Box YAML |
-|---|---|---|---|
-| PII | `CSA_PII_SSN`, `CSA_PII_EMAIL`, `CSA_PII_PHONE`, etc. | Restricted / Confidential | `pii_classifications.yaml` |
-| PHI | `CSA_PHI_DIAGNOSIS`, `CSA_PHI_MEDICATION`, `CSA_PHI_MRN`, etc. | Restricted (Healthcare) | `phi_classifications.yaml` |
-| CUI | `CSA_GOV_CUI_MARKING` | Restricted (Government) | `government_classifications.yaml` |
-| FOUO | `CSA_GOV_FOUO` | Restricted (Government) | `government_classifications.yaml` |
-| CLASSIFIED | `CSA_GOV_CLASSIFICATION_LEVEL` | Highly Restricted | `government_classifications.yaml` |
-| Financial | `CSA_FIN_ACCOUNT_NUMBER`, `CSA_FIN_CREDIT_CARD`, etc. | Confidential (Financial) | `financial_classifications.yaml` |
+| Foundry marking | Purview classification                                         | MIP sensitivity label     | CSA-in-a-Box YAML                 |
+| --------------- | -------------------------------------------------------------- | ------------------------- | --------------------------------- |
+| PII             | `CSA_PII_SSN`, `CSA_PII_EMAIL`, `CSA_PII_PHONE`, etc.          | Restricted / Confidential | `pii_classifications.yaml`        |
+| PHI             | `CSA_PHI_DIAGNOSIS`, `CSA_PHI_MEDICATION`, `CSA_PHI_MRN`, etc. | Restricted (Healthcare)   | `phi_classifications.yaml`        |
+| CUI             | `CSA_GOV_CUI_MARKING`                                          | Restricted (Government)   | `government_classifications.yaml` |
+| FOUO            | `CSA_GOV_FOUO`                                                 | Restricted (Government)   | `government_classifications.yaml` |
+| CLASSIFIED      | `CSA_GOV_CLASSIFICATION_LEVEL`                                 | Highly Restricted         | `government_classifications.yaml` |
+| Financial       | `CSA_FIN_ACCOUNT_NUMBER`, `CSA_FIN_CREDIT_CARD`, etc.          | Confidential (Financial)  | `financial_classifications.yaml`  |
 
 ### 4.4 Marking propagation
 
@@ -221,21 +221,21 @@ Foundry automatically propagates markings through transformations. Azure achieve
 2. **Map to CSA-in-a-Box classification YAMLs.** Match each marking to the corresponding YAML in `csa_platform/governance/purview/classifications/`. Create custom classification rules for any markings not covered by the built-in rule sets.
 3. **Apply classifications via automation.**
 
-   ```python
-   from csa_platform.governance.purview.purview_automation import PurviewAutomation
-   from azure.identity import DefaultAzureCredential
+    ```python
+    from csa_platform.governance.purview.purview_automation import PurviewAutomation
+    from azure.identity import DefaultAzureCredential
 
-   purview = PurviewAutomation(
-       account_name="purview-prod",
-       credential=DefaultAzureCredential(),
-   )
+    purview = PurviewAutomation(
+        account_name="purview-prod",
+        credential=DefaultAzureCredential(),
+    )
 
-   # Apply all CSA-in-a-Box classification rule sets
-   purview.apply_classification_rules("classifications/pii_classifications.yaml")
-   purview.apply_classification_rules("classifications/phi_classifications.yaml")
-   purview.apply_classification_rules("classifications/government_classifications.yaml")
-   purview.apply_classification_rules("classifications/financial_classifications.yaml")
-   ```
+    # Apply all CSA-in-a-Box classification rule sets
+    purview.apply_classification_rules("classifications/pii_classifications.yaml")
+    purview.apply_classification_rules("classifications/phi_classifications.yaml")
+    purview.apply_classification_rules("classifications/government_classifications.yaml")
+    purview.apply_classification_rules("classifications/financial_classifications.yaml")
+    ```
 
 4. **Configure sensitivity labels.** In the Microsoft Purview compliance portal, create sensitivity labels that correspond to each classification tier (Public, Internal, Confidential, Restricted, Highly Restricted). Configure auto-labeling rules that trigger on Purview classifications.
 5. **Validate propagation.** Run a test pipeline that transforms a PII-marked dataset. Verify that the output dataset inherits the PII classification and that the sensitivity label is applied.
@@ -248,14 +248,14 @@ Foundry automatically propagates markings through transformations. Azure achieve
 
 Foundry provides a single audit log covering all user actions, data access, API calls, and system events. Azure distributes audit across multiple log streams that converge in Log Analytics.
 
-| Foundry audit scope | Azure log source | Destination |
-|---|---|---|
-| User login / logout | Entra ID Sign-in Logs | Log Analytics |
-| Resource access | Azure Monitor Activity Logs | Log Analytics |
+| Foundry audit scope | Azure log source                        | Destination   |
+| ------------------- | --------------------------------------- | ------------- |
+| User login / logout | Entra ID Sign-in Logs                   | Log Analytics |
+| Resource access     | Azure Monitor Activity Logs             | Log Analytics |
 | Data reads / writes | Storage Diagnostics + Fabric Audit Logs | Log Analytics |
-| API calls | Azure Monitor Resource Logs | Log Analytics |
-| Admin actions | Entra ID Audit Logs | Log Analytics |
-| Governance changes | Purview Audit Logs | Log Analytics |
+| API calls           | Azure Monitor Resource Logs             | Log Analytics |
+| Admin actions       | Entra ID Audit Logs                     | Log Analytics |
+| Governance changes  | Purview Audit Logs                      | Log Analytics |
 
 **CSA-in-a-Box integration:** The tamper-evident audit pattern (CSA-0016) consolidates all log streams into a single Log Analytics workspace with immutable storage and cross-workspace correlation. This provides a unified audit view equivalent to Foundry's single pane.
 
@@ -270,13 +270,13 @@ Foundry provides a single audit log covering all user actions, data access, API 
 
 Foundry tracks lineage from source through every transformation to final consumers. Azure Purview captures equivalent lineage through multiple integration points.
 
-| Lineage source | How Purview captures it |
-|---|---|
-| Azure Data Factory pipelines | Native integration --- lineage auto-captured for copy activities and data flows |
-| Microsoft Fabric notebooks | Native integration --- lineage captured for Spark transformations |
-| dbt transformations | CSA-in-a-Box `purview_automation.py` reads `manifest.json` and registers lineage |
-| Databricks | Purview connector captures Spark lineage |
-| Power BI | Native integration --- lineage from dataset to report to dashboard |
+| Lineage source               | How Purview captures it                                                          |
+| ---------------------------- | -------------------------------------------------------------------------------- |
+| Azure Data Factory pipelines | Native integration --- lineage auto-captured for copy activities and data flows  |
+| Microsoft Fabric notebooks   | Native integration --- lineage captured for Spark transformations                |
+| dbt transformations          | CSA-in-a-Box `purview_automation.py` reads `manifest.json` and registers lineage |
+| Databricks                   | Purview connector captures Spark lineage                                         |
+| Power BI                     | Native integration --- lineage from dataset to report to dashboard               |
 
 **Migration steps:**
 
@@ -284,12 +284,12 @@ Foundry tracks lineage from source through every transformation to final consume
 2. **Enable built-in lineage** for ADF, Fabric, and Databricks by configuring the Purview connections in each service.
 3. **Register dbt lineage** using the CSA-in-a-Box automation module:
 
-   ```python
-   purview.register_dbt_lineage(
-       manifest_path="target/manifest.json",
-       run_results_path="target/run_results.json",
-   )
-   ```
+    ```python
+    purview.register_dbt_lineage(
+        manifest_path="target/manifest.json",
+        run_results_path="target/run_results.json",
+    )
+    ```
 
 4. **Validate end-to-end lineage** in the Purview Data Catalog. Verify that you can trace a dataset from its source system through ingestion, transformation, and downstream reports.
 
@@ -299,11 +299,11 @@ Foundry tracks lineage from source through every transformation to final consume
 
 ### 6.1 Encryption
 
-| Foundry | Azure | Notes |
-|---|---|---|
-| AES-256 at rest (platform-managed) | Azure Storage Service Encryption (AES-256) | Enabled by default on all Azure storage |
-| TLS in transit | TLS 1.3 enforced by platform | Azure enforces TLS 1.2 minimum; most services default to TLS 1.3 |
-| Customer-managed keys (optional) | Azure Key Vault + CMK | CSA-in-a-Box Bicep templates deploy Key Vault with RBAC access policies |
+| Foundry                            | Azure                                      | Notes                                                                   |
+| ---------------------------------- | ------------------------------------------ | ----------------------------------------------------------------------- |
+| AES-256 at rest (platform-managed) | Azure Storage Service Encryption (AES-256) | Enabled by default on all Azure storage                                 |
+| TLS in transit                     | TLS 1.3 enforced by platform               | Azure enforces TLS 1.2 minimum; most services default to TLS 1.3        |
+| Customer-managed keys (optional)   | Azure Key Vault + CMK                      | CSA-in-a-Box Bicep templates deploy Key Vault with RBAC access policies |
 
 No migration action is required for encryption --- Azure provides equivalent or stronger encryption by default. Organizations requiring customer-managed keys configure Azure Key Vault during landing zone deployment.
 
@@ -326,11 +326,13 @@ Foundry provides row and column security through markings and row-level policies
 **Example: Migrating a Foundry row-level policy to Fabric RLS**
 
 Foundry row-level policy (pseudo-code):
+
 ```
 FILTER dataset WHERE region IN user.allowed_regions
 ```
 
 Equivalent Fabric DAX security role:
+
 ```dax
 [Region] IN VALUES('UserPermissions'[AllowedRegion])
 ```
@@ -352,13 +354,13 @@ CSA-in-a-Box provides machine-readable compliance control mappings that align Fo
 
 ### 7.1 Framework coverage
 
-| Compliance framework | Foundry approach | Azure + CSA-in-a-Box approach | CSA-in-a-Box YAML |
-|---|---|---|---|
-| FedRAMP (Moderate/High) | Platform-level authorization | Azure Government FedRAMP High + CSA control evidence | `nist-800-53-rev5.yaml` |
-| NIST 800-53 Rev 5 | Inherited from platform | Control-by-control mapping with evidence paths | `nist-800-53-rev5.yaml` |
-| CMMC 2.0 Level 2 | Platform assertion | Practice-by-practice mapping with implementation evidence | `cmmc-2.0-l2.yaml` |
-| HIPAA Security Rule | Platform BAA | Azure BAA + control implementation evidence | `hipaa-security-rule.yaml` |
-| SOC 2 Type II | Palantir SOC 2 report | Azure SOC 2 report + CSA implementation controls | Inherited from Azure |
+| Compliance framework    | Foundry approach             | Azure + CSA-in-a-Box approach                             | CSA-in-a-Box YAML          |
+| ----------------------- | ---------------------------- | --------------------------------------------------------- | -------------------------- |
+| FedRAMP (Moderate/High) | Platform-level authorization | Azure Government FedRAMP High + CSA control evidence      | `nist-800-53-rev5.yaml`    |
+| NIST 800-53 Rev 5       | Inherited from platform      | Control-by-control mapping with evidence paths            | `nist-800-53-rev5.yaml`    |
+| CMMC 2.0 Level 2        | Platform assertion           | Practice-by-practice mapping with implementation evidence | `cmmc-2.0-l2.yaml`         |
+| HIPAA Security Rule     | Platform BAA                 | Azure BAA + control implementation evidence               | `hipaa-security-rule.yaml` |
+| SOC 2 Type II           | Palantir SOC 2 report        | Azure SOC 2 report + CSA implementation controls          | Inherited from Azure       |
 
 ### 7.2 Control mapping structure
 
@@ -370,20 +372,20 @@ baseline: "Moderate + High"
 version: "2026-04"
 
 controls:
-  - id: "AC-1"
-    title: "Policy and Procedures"
-    family: "AC"
-    status: "PARTIALLY_IMPLEMENTED"   # IMPLEMENTED | PARTIALLY_IMPLEMENTED | PLANNED | INHERITED
-    evidence:
-      - kind: "doc"                   # bicep | policy | code | script | ci | doc | config
-        path: "csa_platform/governance/compliance/compliance-overview.md"
-        note: "Access control narrative"
-      - kind: "config"
-        path: "csa_platform/governance/rbac/rbac-matrix.json"
-        note: "RBAC persona / role matrix"
-    gaps:
-      - description: "Policy ownership not yet assigned"
-        tracking: "CSA-XXXX"
+    - id: "AC-1"
+      title: "Policy and Procedures"
+      family: "AC"
+      status: "PARTIALLY_IMPLEMENTED" # IMPLEMENTED | PARTIALLY_IMPLEMENTED | PLANNED | INHERITED
+      evidence:
+          - kind: "doc" # bicep | policy | code | script | ci | doc | config
+            path: "csa_platform/governance/compliance/compliance-overview.md"
+            note: "Access control narrative"
+          - kind: "config"
+            path: "csa_platform/governance/rbac/rbac-matrix.json"
+            note: "RBAC persona / role matrix"
+      gaps:
+          - description: "Policy ownership not yet assigned"
+            tracking: "CSA-XXXX"
 ```
 
 **Migration benefit:** Foundry provides compliance as a platform assertion ("Foundry is FedRAMP authorized"). Azure and CSA-in-a-Box provide control-by-control evidence that your specific implementation meets each control requirement. This gives auditors granular traceability rather than blanket platform assertions.
@@ -392,9 +394,9 @@ controls:
 
 1. **Inventory your compliance obligations.** Determine which frameworks apply to your organization (FedRAMP, CMMC, HIPAA, SOC 2, etc.).
 2. **Review CSA-in-a-Box compliance YAMLs.** Located at:
-   - `csa_platform/governance/compliance/nist-800-53-rev5.yaml`
-   - `csa_platform/governance/compliance/cmmc-2.0-l2.yaml`
-   - `csa_platform/governance/compliance/hipaa-security-rule.yaml`
+    - `csa_platform/governance/compliance/nist-800-53-rev5.yaml`
+    - `csa_platform/governance/compliance/cmmc-2.0-l2.yaml`
+    - `csa_platform/governance/compliance/hipaa-security-rule.yaml`
 3. **Map your Foundry controls.** For each control you currently satisfy through Foundry, identify the corresponding CSA-in-a-Box evidence path and status.
 4. **Address gaps.** For controls with `PLANNED` or `PARTIALLY_IMPLEMENTED` status, create implementation tasks. Some controls are `INHERITED` from Azure's shared responsibility model.
 
@@ -408,12 +410,12 @@ Foundry scans datasets for PII, PHI, and other sensitive patterns. Purview provi
 
 CSA-in-a-Box ships four classification rule sets that cover the most common sensitive data categories:
 
-| Rule set | File | Patterns covered |
-|---|---|---|
-| PII | `pii_classifications.yaml` | SSN, email, phone, address, full name, DOB, driver's license, IP address |
-| PHI | `phi_classifications.yaml` | Diagnosis codes, medications, medical record numbers, insurance IDs, lab results |
+| Rule set   | File                              | Patterns covered                                                                                                                    |
+| ---------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| PII        | `pii_classifications.yaml`        | SSN, email, phone, address, full name, DOB, driver's license, IP address                                                            |
+| PHI        | `phi_classifications.yaml`        | Diagnosis codes, medications, medical record numbers, insurance IDs, lab results                                                    |
 | Government | `government_classifications.yaml` | CUI markings, FOUO, classification levels, federal employee IDs, case numbers, FIPS codes, grant numbers, law enforcement sensitive |
-| Financial | `financial_classifications.yaml` | Account numbers, credit cards, routing numbers, tax IDs |
+| Financial  | `financial_classifications.yaml`  | Account numbers, credit cards, routing numbers, tax IDs                                                                             |
 
 ### 8.2 Classification rule YAML structure
 
@@ -424,36 +426,36 @@ apiVersion: csa.microsoft.com/v1
 kind: ClassificationRuleSet
 
 metadata:
-  name: pii-classifications
-  version: "1.0.0"
-  owner: governance-team@contoso.com
-  tags: [pii, classification, purview, compliance]
-  regulations: [NIST-800-122, CCPA, HIPAA-Safe-Harbor]
+    name: pii-classifications
+    version: "1.0.0"
+    owner: governance-team@contoso.com
+    tags: [pii, classification, purview, compliance]
+    regulations: [NIST-800-122, CCPA, HIPAA-Safe-Harbor]
 
 defaultSensitivity: Restricted
 minimumPercentageMatch: 60.0
 
 classifications:
-  - name: CSA_PII_SSN
-    description: US Social Security Number
-    category: PII
-    subcategory: Government ID
-    sensitivity: Restricted
-    dataPatterns:
-      - pattern: '\b\d{3}-\d{2}-\d{4}\b'
-        description: SSN with dashes (123-45-6789)
-    columnPatterns:
-      - pattern: '(?i)(ssn|social_security|social_sec)'
-        description: Column names indicating SSN
-    minimumPercentageMatch: 80.0
-    builtInClassifier: MICROSOFT.PERSONAL.US.SOCIAL_SECURITY_NUMBER
-    remediationAction: mask
-    maskPattern: "***-**-{last4}"
+    - name: CSA_PII_SSN
+      description: US Social Security Number
+      category: PII
+      subcategory: Government ID
+      sensitivity: Restricted
+      dataPatterns:
+          - pattern: '\b\d{3}-\d{2}-\d{4}\b'
+            description: SSN with dashes (123-45-6789)
+      columnPatterns:
+          - pattern: "(?i)(ssn|social_security|social_sec)"
+            description: Column names indicating SSN
+      minimumPercentageMatch: 80.0
+      builtInClassifier: MICROSOFT.PERSONAL.US.SOCIAL_SECURITY_NUMBER
+      remediationAction: mask
+      maskPattern: "***-**-{last4}"
 
 autoLabelingPolicies:
-  - name: PII_Restricted_Auto_Label
-    classificationNames: [CSA_PII_SSN, CSA_PII_DOB, CSA_PII_DRIVERS_LICENSE]
-    targetLabel: Restricted
+    - name: PII_Restricted_Auto_Label
+      classificationNames: [CSA_PII_SSN, CSA_PII_DOB, CSA_PII_DRIVERS_LICENSE]
+      targetLabel: Restricted
 ```
 
 ### 8.3 Creating custom classification rules
@@ -465,30 +467,30 @@ apiVersion: csa.microsoft.com/v1
 kind: ClassificationRuleSet
 
 metadata:
-  name: custom-agency-classifications
-  version: "1.0.0"
-  owner: data-governance@agency.gov
-  tags: [custom, agency-specific]
-  regulations: [agency-policy-001]
+    name: custom-agency-classifications
+    version: "1.0.0"
+    owner: data-governance@agency.gov
+    tags: [custom, agency-specific]
+    regulations: [agency-policy-001]
 
 classifications:
-  - name: CSA_CUSTOM_CASE_SENSITIVE
-    description: Agency-specific case-sensitive identifiers
-    category: Agency
-    subcategory: Case Management
-    sensitivity: Restricted
-    dataPatterns:
-      - pattern: '\bAGY-\d{4}-\d{6}\b'
-        description: Agency case number format
-    columnPatterns:
-      - pattern: '(?i)(case_id|investigation_number|agycase)'
-    minimumPercentageMatch: 70.0
-    remediationAction: restrict_access
+    - name: CSA_CUSTOM_CASE_SENSITIVE
+      description: Agency-specific case-sensitive identifiers
+      category: Agency
+      subcategory: Case Management
+      sensitivity: Restricted
+      dataPatterns:
+          - pattern: '\bAGY-\d{4}-\d{6}\b'
+            description: Agency case number format
+      columnPatterns:
+          - pattern: "(?i)(case_id|investigation_number|agycase)"
+      minimumPercentageMatch: 70.0
+      remediationAction: restrict_access
 
 autoLabelingPolicies:
-  - name: Agency_Restricted_Auto_Label
-    classificationNames: [CSA_CUSTOM_CASE_SENSITIVE]
-    targetLabel: Restricted
+    - name: Agency_Restricted_Auto_Label
+      classificationNames: [CSA_CUSTOM_CASE_SENSITIVE]
+      targetLabel: Restricted
 ```
 
 ### 8.4 Deploying scan rules
@@ -528,29 +530,30 @@ purview.schedule_scan(
 
 ### 9.1 Data health and quality
 
-| Foundry feature | Azure equivalent | Implementation |
-|---|---|---|
-| Data Health app | Azure Monitor + Data Activator | Monitor workbooks tracking freshness, volume, schema drift |
-| Data Expectations | dbt tests + Great Expectations | dbt schema tests (`not_null`, `unique`, `accepted_values`) plus custom data tests |
-| Freshness monitoring | dbt source freshness | `dbt source freshness` command in CI/CD pipeline |
-| Schema validation | dbt schema tests | `schema.yml` contracts with column types and constraints |
+| Foundry feature      | Azure equivalent               | Implementation                                                                    |
+| -------------------- | ------------------------------ | --------------------------------------------------------------------------------- |
+| Data Health app      | Azure Monitor + Data Activator | Monitor workbooks tracking freshness, volume, schema drift                        |
+| Data Expectations    | dbt tests + Great Expectations | dbt schema tests (`not_null`, `unique`, `accepted_values`) plus custom data tests |
+| Freshness monitoring | dbt source freshness           | `dbt source freshness` command in CI/CD pipeline                                  |
+| Schema validation    | dbt schema tests               | `schema.yml` contracts with column types and constraints                          |
 
 **Example: dbt test equivalent to Foundry Data Expectations**
 
 Foundry expectation: "Column `customer_id` is never null and is unique."
 
 dbt equivalent in `schema.yml`:
+
 ```yaml
 models:
-  - name: dim_customer
-    columns:
-      - name: customer_id
-        tests:
-          - not_null
-          - unique
-        meta:
-          classification: PII
-          foundry_marking: INTERNAL
+    - name: dim_customer
+      columns:
+          - name: customer_id
+            tests:
+                - not_null
+                - unique
+            meta:
+                classification: PII
+                foundry_marking: INTERNAL
 ```
 
 ### 9.2 Data discovery and catalog
@@ -572,12 +575,12 @@ Foundry provides a unified search across all datasets, objects, and resources. A
 
 Foundry assigns stewardship at the Project level. Azure distributes stewardship across Purview collections, glossary terms, and resource group ownership.
 
-| Foundry stewardship concept | Azure equivalent |
-|---|---|
-| Project owner | Purview Collection Admin + Resource Group Owner |
-| Dataset steward | Purview asset expert / owner annotation |
-| Glossary term owner | Purview Glossary Term owner (formal role) |
-| Approval workflows | Power Automate flows triggered on governance events |
+| Foundry stewardship concept | Azure equivalent                                    |
+| --------------------------- | --------------------------------------------------- |
+| Project owner               | Purview Collection Admin + Resource Group Owner     |
+| Dataset steward             | Purview asset expert / owner annotation             |
+| Glossary term owner         | Purview Glossary Term owner (formal role)           |
+| Approval workflows          | Power Automate flows triggered on governance events |
 
 ### 9.4 Usage analytics
 
@@ -626,6 +629,7 @@ Fabric Workspace: ws-investigations
 ```
 
 Assign Entra ID security groups:
+
 - `sg-investigations-owners` --> Resource Group Owner + Purview Collection Admin + Fabric Admin
 - `sg-investigations-analysts` --> Contributor + Purview Data Reader + Fabric Member
 - `sg-investigations-viewers` --> Reader + Purview Data Reader (metadata only) + Fabric Viewer
@@ -646,6 +650,7 @@ purview.apply_classification_rules("classifications/government_classifications.y
 **Step 3: Configure sensitivity labels**
 
 In the Microsoft Purview compliance portal:
+
 - Create label: "Restricted -- Law Enforcement Sensitive"
 - Auto-labeling condition: asset has classification `CSA_GOV_LAW_ENFORCEMENT_SENSITIVE` OR `CSA_GOV_CUI_MARKING`
 - Enforcement: encrypt content, restrict external sharing, require justification for access
@@ -680,10 +685,10 @@ GRANT UNMASK TO [sg-investigations-analysts];
 
 - Enable diagnostic settings on the storage account, Fabric workspace, and Purview to route all logs to Log Analytics.
 - Configure PIM for the `sg-investigations-analysts` role with:
-  - Maximum activation duration: 8 hours
-  - Require justification: Yes
-  - Require approval: Yes (approver: investigations unit lead)
-  - Send notification on activation: Yes
+    - Maximum activation duration: 8 hours
+    - Require justification: Yes
+    - Require approval: Yes (approver: investigations unit lead)
+    - Send notification on activation: Yes
 
 **Step 7: Establish lineage**
 
@@ -704,25 +709,29 @@ Configure Azure Storage lifecycle management:
 
 ```json
 {
-  "rules": [
-    {
-      "name": "case-investigations-retention",
-      "type": "Lifecycle",
-      "definition": {
-        "filters": {
-          "blobTypes": ["blockBlob"],
-          "prefixMatch": ["curated/case_investigations/"]
-        },
-        "actions": {
-          "baseBlob": {
-            "tierToCool": { "daysAfterModificationGreaterThan": 365 },
-            "tierToArchive": { "daysAfterModificationGreaterThan": 1825 },
-            "delete": { "daysAfterModificationGreaterThan": 2555 }
-          }
+    "rules": [
+        {
+            "name": "case-investigations-retention",
+            "type": "Lifecycle",
+            "definition": {
+                "filters": {
+                    "blobTypes": ["blockBlob"],
+                    "prefixMatch": ["curated/case_investigations/"]
+                },
+                "actions": {
+                    "baseBlob": {
+                        "tierToCool": {
+                            "daysAfterModificationGreaterThan": 365
+                        },
+                        "tierToArchive": {
+                            "daysAfterModificationGreaterThan": 1825
+                        },
+                        "delete": { "daysAfterModificationGreaterThan": 2555 }
+                    }
+                }
+            }
         }
-      }
-    }
-  ]
+    ]
 }
 ```
 
@@ -748,18 +757,18 @@ After migration, verify each control:
 
 All security and governance automation referenced in this guide lives in the CSA-in-a-Box repository:
 
-| Component | Path | Purpose |
-|---|---|---|
-| Purview automation | `csa_platform/governance/purview/purview_automation.py` | Classification rules, glossary, lineage, scan schedules |
-| PII classifications | `csa_platform/governance/purview/classifications/pii_classifications.yaml` | SSN, email, phone, address, DOB, driver's license, IP |
-| PHI classifications | `csa_platform/governance/purview/classifications/phi_classifications.yaml` | Diagnosis, medication, MRN, insurance, lab results |
+| Component                  | Path                                                                              | Purpose                                                     |
+| -------------------------- | --------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| Purview automation         | `csa_platform/governance/purview/purview_automation.py`                           | Classification rules, glossary, lineage, scan schedules     |
+| PII classifications        | `csa_platform/governance/purview/classifications/pii_classifications.yaml`        | SSN, email, phone, address, DOB, driver's license, IP       |
+| PHI classifications        | `csa_platform/governance/purview/classifications/phi_classifications.yaml`        | Diagnosis, medication, MRN, insurance, lab results          |
 | Government classifications | `csa_platform/governance/purview/classifications/government_classifications.yaml` | CUI, FOUO, classification levels, federal IDs, case numbers |
-| Financial classifications | `csa_platform/governance/purview/classifications/financial_classifications.yaml` | Account numbers, credit cards, routing numbers, tax IDs |
-| NIST 800-53 mapping | `csa_platform/governance/compliance/nist-800-53-rev5.yaml` | Control-by-control evidence for NIST 800-53 Rev 5 |
-| CMMC 2.0 mapping | `csa_platform/governance/compliance/cmmc-2.0-l2.yaml` | Practice-by-practice evidence for CMMC Level 2 |
-| HIPAA mapping | `csa_platform/governance/compliance/hipaa-security-rule.yaml` | HIPAA Security Rule implementation evidence |
-| Purview guide | `docs/guides/purview.md` | End-to-end Purview setup and usage guide |
-| Security best practices | `docs/best-practices/security-compliance.md` | Platform-wide security patterns |
+| Financial classifications  | `csa_platform/governance/purview/classifications/financial_classifications.yaml`  | Account numbers, credit cards, routing numbers, tax IDs     |
+| NIST 800-53 mapping        | `csa_platform/governance/compliance/nist-800-53-rev5.yaml`                        | Control-by-control evidence for NIST 800-53 Rev 5           |
+| CMMC 2.0 mapping           | `csa_platform/governance/compliance/cmmc-2.0-l2.yaml`                             | Practice-by-practice evidence for CMMC Level 2              |
+| HIPAA mapping              | `csa_platform/governance/compliance/hipaa-security-rule.yaml`                     | HIPAA Security Rule implementation evidence                 |
+| Purview guide              | `docs/guides/purview.md`                                                          | End-to-end Purview setup and usage guide                    |
+| Security best practices    | `docs/best-practices/security-compliance.md`                                      | Platform-wide security patterns                             |
 
 ---
 

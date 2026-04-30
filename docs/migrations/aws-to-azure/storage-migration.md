@@ -65,17 +65,17 @@ Fabric Tenant
 
 ### Key architectural differences
 
-| Dimension | S3 | ADLS Gen2 | OneLake |
-|---|---|---|---|
-| Namespace | Flat (prefix-based) | Hierarchical (HNS) | Hierarchical (Fabric-managed) |
-| Directory rename | O(n) --- copies all objects | O(1) --- atomic | O(1) --- managed |
-| Access control | Bucket policies + IAM + ACLs | RBAC + POSIX ACLs | Fabric workspace permissions |
-| Storage tiers | 7 classes | 4 tiers (hot/cool/cold/archive) | Hot (managed by Fabric) |
-| Encryption | SSE-S3, SSE-KMS, SSE-C | Microsoft-managed or CMK via Key Vault | Fabric-managed encryption |
-| Versioning | Object-level versioning | Blob-level versioning + Delta time travel | Delta time travel |
-| Event system | S3 Events to SQS/SNS/Lambda/EventBridge | Event Grid | Fabric Data Activator |
-| Maximum object size | 5 TB | ~190 TB (block blob) | Fabric-managed |
-| API | S3 REST API | Azure Blob REST API + ADLS Gen2 DFS API | OneLake REST API |
+| Dimension           | S3                                      | ADLS Gen2                                 | OneLake                       |
+| ------------------- | --------------------------------------- | ----------------------------------------- | ----------------------------- |
+| Namespace           | Flat (prefix-based)                     | Hierarchical (HNS)                        | Hierarchical (Fabric-managed) |
+| Directory rename    | O(n) --- copies all objects             | O(1) --- atomic                           | O(1) --- managed              |
+| Access control      | Bucket policies + IAM + ACLs            | RBAC + POSIX ACLs                         | Fabric workspace permissions  |
+| Storage tiers       | 7 classes                               | 4 tiers (hot/cool/cold/archive)           | Hot (managed by Fabric)       |
+| Encryption          | SSE-S3, SSE-KMS, SSE-C                  | Microsoft-managed or CMK via Key Vault    | Fabric-managed encryption     |
+| Versioning          | Object-level versioning                 | Blob-level versioning + Delta time travel | Delta time travel             |
+| Event system        | S3 Events to SQS/SNS/Lambda/EventBridge | Event Grid                                | Fabric Data Activator         |
+| Maximum object size | 5 TB                                    | ~190 TB (block blob)                      | Fabric-managed                |
+| API                 | S3 REST API                             | Azure Blob REST API + ADLS Gen2 DFS API   | OneLake REST API              |
 
 ---
 
@@ -90,18 +90,21 @@ S3 Bucket ──[shortcut]──> OneLake Lakehouse ──> Databricks SQL / Fab
 ```
 
 **How it works:**
+
 1. Create a OneLake shortcut pointing to the S3 bucket or prefix.
 2. Databricks and Fabric read S3 data through the shortcut with no data copy.
 3. New writes land on ADLS Gen2 from day one.
 4. Over time, flip individual datasets from S3-backed to ADLS-native.
 
 **Advantages:**
+
 - Zero data movement on day one
 - Compute migration can proceed immediately
 - Fallback: remove shortcuts and return to pure AWS
 - No cross-cloud egress for reads (shortcut reads are server-side)
 
 **Limitations:**
+
 - Read-only from the Azure side (cannot write back to S3 via shortcut)
 - Latency depends on cross-cloud network path
 - S3 access credentials must be managed in Fabric
@@ -110,13 +113,13 @@ S3 Bucket ──[shortcut]──> OneLake Lakehouse ──> Databricks SQL / Fab
 
 ```json
 {
-  "shortcutType": "AmazonS3",
-  "path": "Tables/raw_sales",
-  "target": {
-    "connectionId": "connection-guid",
-    "location": "s3://acme-analytics-raw/sales/",
-    "subpath": ""
-  }
+    "shortcutType": "AmazonS3",
+    "path": "Tables/raw_sales",
+    "target": {
+        "connectionId": "connection-guid",
+        "location": "s3://acme-analytics-raw/sales/",
+        "subpath": ""
+    }
 }
 ```
 
@@ -150,6 +153,7 @@ azcopy copy \
 ```
 
 **Performance tuning:**
+
 - AzCopy automatically parallelizes across multiple connections.
 - Set `AZCOPY_CONCURRENCY_VALUE` to increase parallelism (default: 300).
 - Use `--block-size-mb` to optimize for large files (default: 8MB; use 100MB for Parquet).
@@ -161,39 +165,43 @@ azcopy copy \
 
 ```json
 {
-  "name": "CopyS3ToADLS",
-  "type": "Copy",
-  "inputs": [{
-    "referenceName": "S3RawDataset",
-    "type": "DatasetReference"
-  }],
-  "outputs": [{
-    "referenceName": "ADLSRawDataset",
-    "type": "DatasetReference"
-  }],
-  "typeProperties": {
-    "source": {
-      "type": "ParquetSource",
-      "storeSettings": {
-        "type": "AmazonS3ReadSettings",
-        "recursive": true,
-        "wildcardFolderPath": "sales/*",
-        "wildcardFileName": "*.parquet",
-        "modifiedDatetimeStart": {
-          "value": "@pipeline().parameters.watermark",
-          "type": "Expression"
+    "name": "CopyS3ToADLS",
+    "type": "Copy",
+    "inputs": [
+        {
+            "referenceName": "S3RawDataset",
+            "type": "DatasetReference"
         }
-      }
-    },
-    "sink": {
-      "type": "ParquetSink",
-      "storeSettings": {
-        "type": "AzureBlobFSWriteSettings"
-      }
-    },
-    "enableStaging": false,
-    "parallelCopies": 32
-  }
+    ],
+    "outputs": [
+        {
+            "referenceName": "ADLSRawDataset",
+            "type": "DatasetReference"
+        }
+    ],
+    "typeProperties": {
+        "source": {
+            "type": "ParquetSource",
+            "storeSettings": {
+                "type": "AmazonS3ReadSettings",
+                "recursive": true,
+                "wildcardFolderPath": "sales/*",
+                "wildcardFileName": "*.parquet",
+                "modifiedDatetimeStart": {
+                    "value": "@pipeline().parameters.watermark",
+                    "type": "Expression"
+                }
+            }
+        },
+        "sink": {
+            "type": "ParquetSink",
+            "storeSettings": {
+                "type": "AzureBlobFSWriteSettings"
+            }
+        },
+        "enableStaging": false,
+        "parallelCopies": 32
+    }
 }
 ```
 
@@ -201,21 +209,27 @@ azcopy copy \
 
 ```json
 {
-  "name": "AmazonS3LinkedService",
-  "type": "AmazonS3",
-  "typeProperties": {
-    "accessKeyId": {
-      "type": "AzureKeyVaultSecret",
-      "store": { "referenceName": "KeyVaultLinkedService", "type": "LinkedServiceReference" },
-      "secretName": "aws-access-key-id"
-    },
-    "secretAccessKey": {
-      "type": "AzureKeyVaultSecret",
-      "store": { "referenceName": "KeyVaultLinkedService", "type": "LinkedServiceReference" },
-      "secretName": "aws-secret-access-key"
-    },
-    "serviceUrl": "https://s3.us-gov-west-1.amazonaws.com"
-  }
+    "name": "AmazonS3LinkedService",
+    "type": "AmazonS3",
+    "typeProperties": {
+        "accessKeyId": {
+            "type": "AzureKeyVaultSecret",
+            "store": {
+                "referenceName": "KeyVaultLinkedService",
+                "type": "LinkedServiceReference"
+            },
+            "secretName": "aws-access-key-id"
+        },
+        "secretAccessKey": {
+            "type": "AzureKeyVaultSecret",
+            "store": {
+                "referenceName": "KeyVaultLinkedService",
+                "type": "LinkedServiceReference"
+            },
+            "secretName": "aws-secret-access-key"
+        },
+        "serviceUrl": "https://s3.us-gov-west-1.amazonaws.com"
+    }
 }
 ```
 
@@ -239,14 +253,14 @@ azcopy copy \
 
 ### Current state on AWS
 
-| Format | Typical usage | Azure handling |
-|---|---|---|
-| **Parquet** | Most S3 data lakes; Athena/Glue default | Read natively; convert to Delta for ACID |
-| **ORC** | EMR Hive workloads | Read natively in Databricks; convert to Delta |
-| **CSV/JSON** | Raw ingestion layers | Ingest via Auto Loader with schema inference |
-| **Avro** | Streaming / schema evolution | Read natively; convert to Delta |
-| **Hudi** | CDC / upsert workloads on EMR | Read in Databricks; migrate to Delta for writes |
-| **Iceberg** | Modern Glue / Athena v3 | Read natively in Databricks (ADR-0003); Delta is write target |
+| Format       | Typical usage                           | Azure handling                                                |
+| ------------ | --------------------------------------- | ------------------------------------------------------------- |
+| **Parquet**  | Most S3 data lakes; Athena/Glue default | Read natively; convert to Delta for ACID                      |
+| **ORC**      | EMR Hive workloads                      | Read natively in Databricks; convert to Delta                 |
+| **CSV/JSON** | Raw ingestion layers                    | Ingest via Auto Loader with schema inference                  |
+| **Avro**     | Streaming / schema evolution            | Read natively; convert to Delta                               |
+| **Hudi**     | CDC / upsert workloads on EMR           | Read in Databricks; migrate to Delta for writes               |
+| **Iceberg**  | Modern Glue / Athena v3                 | Read natively in Databricks (ADR-0003); Delta is write target |
 
 ### Delta Lake conversion
 
@@ -288,19 +302,21 @@ OPTIMIZE sales_prod.bronze.raw_sales
 
 ```json
 {
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "AllowAnalyticsTeamRead",
-      "Effect": "Allow",
-      "Principal": { "AWS": "arn:aws:iam::123456789012:role/analytics-team-role" },
-      "Action": ["s3:GetObject", "s3:ListBucket"],
-      "Resource": [
-        "arn:aws:s3:::acme-analytics-curated",
-        "arn:aws:s3:::acme-analytics-curated/*"
-      ]
-    }
-  ]
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "AllowAnalyticsTeamRead",
+            "Effect": "Allow",
+            "Principal": {
+                "AWS": "arn:aws:iam::123456789012:role/analytics-team-role"
+            },
+            "Action": ["s3:GetObject", "s3:ListBucket"],
+            "Resource": [
+                "arn:aws:s3:::acme-analytics-curated",
+                "arn:aws:s3:::acme-analytics-curated/*"
+            ]
+        }
+    ]
 }
 ```
 
@@ -324,15 +340,15 @@ az storage fs access set \
 
 ### Common IAM-to-RBAC translations
 
-| S3/IAM action | Azure RBAC role | Scope |
-|---|---|---|
-| `s3:GetObject` | Storage Blob Data Reader | Container or directory |
-| `s3:PutObject` | Storage Blob Data Contributor | Container or directory |
-| `s3:DeleteObject` | Storage Blob Data Contributor | Container or directory |
-| `s3:ListBucket` | Storage Blob Data Reader | Container |
-| `s3:GetBucketPolicy` | Reader (ARM) | Storage account |
-| `s3:PutBucketPolicy` | Storage Account Contributor | Storage account |
-| KMS `kms:Decrypt` | Key Vault Crypto Service Encryption User | Key Vault |
+| S3/IAM action        | Azure RBAC role                          | Scope                  |
+| -------------------- | ---------------------------------------- | ---------------------- |
+| `s3:GetObject`       | Storage Blob Data Reader                 | Container or directory |
+| `s3:PutObject`       | Storage Blob Data Contributor            | Container or directory |
+| `s3:DeleteObject`    | Storage Blob Data Contributor            | Container or directory |
+| `s3:ListBucket`      | Storage Blob Data Reader                 | Container              |
+| `s3:GetBucketPolicy` | Reader (ARM)                             | Storage account        |
+| `s3:PutBucketPolicy` | Storage Account Contributor              | Storage account        |
+| KMS `kms:Decrypt`    | Key Vault Crypto Service Encryption User | Key Vault              |
 
 ---
 
@@ -340,12 +356,12 @@ az storage fs access set \
 
 ### S3 versioning to ADLS versioning
 
-| S3 feature | ADLS Gen2 equivalent | Notes |
-|---|---|---|
-| Object versioning | Blob versioning | Enable at storage account level |
-| Version-specific GET | Version ID-based access | Same pattern, different API |
-| Lifecycle rule: delete old versions | Lifecycle management: delete previous versions | 1:1 rule translation |
-| MFA Delete | Soft delete + legal hold | Different mechanism, same outcome |
+| S3 feature                          | ADLS Gen2 equivalent                           | Notes                             |
+| ----------------------------------- | ---------------------------------------------- | --------------------------------- |
+| Object versioning                   | Blob versioning                                | Enable at storage account level   |
+| Version-specific GET                | Version ID-based access                        | Same pattern, different API       |
+| Lifecycle rule: delete old versions | Lifecycle management: delete previous versions | 1:1 rule translation              |
+| MFA Delete                          | Soft delete + legal hold                       | Different mechanism, same outcome |
 
 **Recommended approach:** Use Delta Lake time travel instead of blob-level versioning for analytics tables. Time travel provides table-level version history with SQL syntax:
 
@@ -364,26 +380,30 @@ RESTORE TABLE sales_prod.gold.fact_sales TO VERSION AS OF 42;
 
 ```json
 {
-  "rules": [
-    {
-      "enabled": true,
-      "name": "tier-to-cool-90d",
-      "type": "Lifecycle",
-      "definition": {
-        "actions": {
-          "baseBlob": {
-            "tierToCool": { "daysAfterModificationGreaterThan": 90 },
-            "tierToArchive": { "daysAfterModificationGreaterThan": 365 },
-            "delete": { "daysAfterModificationGreaterThan": 2555 }
-          }
-        },
-        "filters": {
-          "blobTypes": ["blockBlob"],
-          "prefixMatch": ["raw/", "bronze/"]
+    "rules": [
+        {
+            "enabled": true,
+            "name": "tier-to-cool-90d",
+            "type": "Lifecycle",
+            "definition": {
+                "actions": {
+                    "baseBlob": {
+                        "tierToCool": {
+                            "daysAfterModificationGreaterThan": 90
+                        },
+                        "tierToArchive": {
+                            "daysAfterModificationGreaterThan": 365
+                        },
+                        "delete": { "daysAfterModificationGreaterThan": 2555 }
+                    }
+                },
+                "filters": {
+                    "blobTypes": ["blockBlob"],
+                    "prefixMatch": ["raw/", "bronze/"]
+                }
+            }
         }
-      }
-    }
-  ]
+    ]
 }
 ```
 
@@ -393,14 +413,14 @@ RESTORE TABLE sales_prod.gold.fact_sales TO VERSION AS OF 42;
 
 ### Decision matrix
 
-| Data volume | Latency tolerance | Pattern | Estimated time |
-|---|---|---|---|
-| < 1 TB | Hours | AzCopy over internet | 1-4 hours |
-| 1-10 TB | Hours | AzCopy over VPN/ExpressRoute | 4-24 hours |
-| 10-50 TB | Days | ADF Copy Activity (parallel) | 1-5 days |
-| 50-100 TB | Days | AzCopy over ExpressRoute (10 Gbps) | 2-5 days |
-| 100+ TB | Weeks | Azure Data Box + parallel AzCopy | 2-4 weeks |
-| Ongoing sync | Real-time | OneLake shortcuts (zero-copy) | Immediate |
+| Data volume  | Latency tolerance | Pattern                            | Estimated time |
+| ------------ | ----------------- | ---------------------------------- | -------------- |
+| < 1 TB       | Hours             | AzCopy over internet               | 1-4 hours      |
+| 1-10 TB      | Hours             | AzCopy over VPN/ExpressRoute       | 4-24 hours     |
+| 10-50 TB     | Days              | ADF Copy Activity (parallel)       | 1-5 days       |
+| 50-100 TB    | Days              | AzCopy over ExpressRoute (10 Gbps) | 2-5 days       |
+| 100+ TB      | Weeks             | Azure Data Box + parallel AzCopy   | 2-4 weeks      |
+| Ongoing sync | Real-time         | OneLake shortcuts (zero-copy)      | Immediate      |
 
 ### Network considerations for federal
 
@@ -422,12 +442,12 @@ S3 data transfer out to the internet costs $0.09/GB for the first 10 TB. For a 1
 
 ## Medallion architecture mapping
 
-| AWS layer | S3 prefix convention | Azure layer | ADLS container | OneLake equivalent |
-|---|---|---|---|---|
-| Raw / Landing | `s3://bucket/raw/` | Bronze | `raw` / `bronze` container | Lakehouse `Files/raw/` |
-| Cleaned / Staging | `s3://bucket/stage/` | Silver | `silver` container | Lakehouse `Tables/silver_*` |
-| Curated / Analytics | `s3://bucket/curated/` | Gold | `gold` container | Lakehouse `Tables/gold_*` |
-| Archive | `s3://bucket/archive/` (Glacier) | Archive tier | `archive` container (archive tier) | N/A --- use ADLS lifecycle |
+| AWS layer           | S3 prefix convention             | Azure layer  | ADLS container                     | OneLake equivalent          |
+| ------------------- | -------------------------------- | ------------ | ---------------------------------- | --------------------------- |
+| Raw / Landing       | `s3://bucket/raw/`               | Bronze       | `raw` / `bronze` container         | Lakehouse `Files/raw/`      |
+| Cleaned / Staging   | `s3://bucket/stage/`             | Silver       | `silver` container                 | Lakehouse `Tables/silver_*` |
+| Curated / Analytics | `s3://bucket/curated/`           | Gold         | `gold` container                   | Lakehouse `Tables/gold_*`   |
+| Archive             | `s3://bucket/archive/` (Glacier) | Archive tier | `archive` container (archive tier) | N/A --- use ADLS lifecycle  |
 
 Cross-reference: `examples/commerce/`, `examples/noaa/` for worked medallion implementations.
 

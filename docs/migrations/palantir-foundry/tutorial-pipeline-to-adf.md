@@ -11,15 +11,15 @@
 
 Before starting this tutorial, ensure you have the following:
 
-| Requirement | Details |
-|---|---|
-| **Azure subscription** | With permissions to create Data Factory, Storage Account, and SQL resources |
-| **Azure Data Factory** | A provisioned ADF instance (or permissions to create one) |
-| **dbt Core** | Installed locally (`pip install dbt-sqlserver` or `pip install dbt-fabric`) |
-| **Git** | For version-controlling dbt models and ADF ARM templates |
-| **Azure CLI** | Authenticated with `az login` |
-| **SQL database or Fabric lakehouse** | Target warehouse for transformed data |
-| **Foundry access** | Read access to the pipeline you are migrating (for documentation purposes) |
+| Requirement                          | Details                                                                     |
+| ------------------------------------ | --------------------------------------------------------------------------- |
+| **Azure subscription**               | With permissions to create Data Factory, Storage Account, and SQL resources |
+| **Azure Data Factory**               | A provisioned ADF instance (or permissions to create one)                   |
+| **dbt Core**                         | Installed locally (`pip install dbt-sqlserver` or `pip install dbt-fabric`) |
+| **Git**                              | For version-controlling dbt models and ADF ARM templates                    |
+| **Azure CLI**                        | Authenticated with `az login`                                               |
+| **SQL database or Fabric lakehouse** | Target warehouse for transformed data                                       |
+| **Foundry access**                   | Read access to the pipeline you are migrating (for documentation purposes)  |
 
 ---
 
@@ -58,14 +58,14 @@ SFTP (CSV files)
 
 Document every external connection the pipeline uses:
 
-| Property | Value |
-|---|---|
-| **Source type** | SFTP |
-| **Hostname** | `sftp.example.com` |
-| **Port** | 22 |
-| **Auth method** | SSH key (stored in Foundry secrets) |
-| **File pattern** | `customers_*.csv`, `orders_*.csv` |
-| **Sync schedule** | Daily at 02:00 UTC |
+| Property          | Value                               |
+| ----------------- | ----------------------------------- |
+| **Source type**   | SFTP                                |
+| **Hostname**      | `sftp.example.com`                  |
+| **Port**          | 22                                  |
+| **Auth method**   | SSH key (stored in Foundry secrets) |
+| **File pattern**  | `customers_*.csv`, `orders_*.csv`   |
+| **Sync schedule** | Daily at 02:00 UTC                  |
 
 ### 1.3 Document transform logic
 
@@ -126,13 +126,13 @@ def compute(customers, orders, order_summary):
 
 ### 1.4 Note scheduling and dependencies
 
-| Property | Foundry value |
-|---|---|
-| **Schedule type** | Cron |
-| **Cron expression** | `0 2 * * *` (daily at 02:00 UTC) |
+| Property             | Foundry value                                                            |
+| -------------------- | ------------------------------------------------------------------------ |
+| **Schedule type**    | Cron                                                                     |
+| **Cron expression**  | `0 2 * * *` (daily at 02:00 UTC)                                         |
 | **Dependency chain** | `raw_sync` → `clean_customers` + `clean_orders` → `joined_order_summary` |
-| **Retry policy** | 2 retries with 5-minute backoff |
-| **Alerts** | Email on failure to `data-team@example.com` |
+| **Retry policy**     | 2 retries with 5-minute backoff                                          |
+| **Alerts**           | Email on failure to `data-team@example.com`                              |
 
 ---
 
@@ -146,26 +146,26 @@ Linked services define connections to external systems. Create two: one for the 
 
 ```json
 {
-  "name": "ls_sftp_source",
-  "type": "Microsoft.DataFactory/factories/linkedservices",
-  "properties": {
-    "type": "Sftp",
-    "typeProperties": {
-      "host": "sftp.example.com",
-      "port": 22,
-      "authenticationType": "SshPublicKey",
-      "userName": "data_extract",
-      "privateKeyPath": "",
-      "privateKeyContent": {
-        "type": "AzureKeyVaultSecret",
-        "store": {
-          "referenceName": "ls_keyvault",
-          "type": "LinkedServiceReference"
-        },
-        "secretName": "sftp-private-key"
-      }
+    "name": "ls_sftp_source",
+    "type": "Microsoft.DataFactory/factories/linkedservices",
+    "properties": {
+        "type": "Sftp",
+        "typeProperties": {
+            "host": "sftp.example.com",
+            "port": 22,
+            "authenticationType": "SshPublicKey",
+            "userName": "data_extract",
+            "privateKeyPath": "",
+            "privateKeyContent": {
+                "type": "AzureKeyVaultSecret",
+                "store": {
+                    "referenceName": "ls_keyvault",
+                    "type": "LinkedServiceReference"
+                },
+                "secretName": "sftp-private-key"
+            }
+        }
     }
-  }
 }
 ```
 
@@ -173,22 +173,22 @@ Linked services define connections to external systems. Create two: one for the 
 
 ```json
 {
-  "name": "ls_adls_datalake",
-  "type": "Microsoft.DataFactory/factories/linkedservices",
-  "properties": {
-    "type": "AzureBlobFS",
-    "typeProperties": {
-      "url": "https://yourstorageaccount.dfs.core.windows.net",
-      "accountKey": {
-        "type": "AzureKeyVaultSecret",
-        "store": {
-          "referenceName": "ls_keyvault",
-          "type": "LinkedServiceReference"
-        },
-        "secretName": "adls-account-key"
-      }
+    "name": "ls_adls_datalake",
+    "type": "Microsoft.DataFactory/factories/linkedservices",
+    "properties": {
+        "type": "AzureBlobFS",
+        "typeProperties": {
+            "url": "https://yourstorageaccount.dfs.core.windows.net",
+            "accountKey": {
+                "type": "AzureKeyVaultSecret",
+                "store": {
+                    "referenceName": "ls_keyvault",
+                    "type": "LinkedServiceReference"
+                },
+                "secretName": "adls-account-key"
+            }
+        }
     }
-  }
 }
 ```
 
@@ -200,43 +200,43 @@ Define the source and sink datasets that the Copy Activity will use:
 
 ```json
 {
-  "name": "ds_sftp_customers_csv",
-  "properties": {
-    "type": "DelimitedText",
-    "linkedServiceName": {
-      "referenceName": "ls_sftp_source",
-      "type": "LinkedServiceReference"
-    },
-    "typeProperties": {
-      "location": {
-        "type": "SftpLocation",
-        "folderPath": "/exports/customers",
-        "fileName": "customers_*.csv"
-      },
-      "columnDelimiter": ",",
-      "firstRowAsHeader": true
+    "name": "ds_sftp_customers_csv",
+    "properties": {
+        "type": "DelimitedText",
+        "linkedServiceName": {
+            "referenceName": "ls_sftp_source",
+            "type": "LinkedServiceReference"
+        },
+        "typeProperties": {
+            "location": {
+                "type": "SftpLocation",
+                "folderPath": "/exports/customers",
+                "fileName": "customers_*.csv"
+            },
+            "columnDelimiter": ",",
+            "firstRowAsHeader": true
+        }
     }
-  }
 }
 ```
 
 ```json
 {
-  "name": "ds_adls_customers_raw",
-  "properties": {
-    "type": "Parquet",
-    "linkedServiceName": {
-      "referenceName": "ls_adls_datalake",
-      "type": "LinkedServiceReference"
-    },
-    "typeProperties": {
-      "location": {
-        "type": "AzureBlobFSLocation",
-        "fileSystem": "bronze",
-        "folderPath": "customers"
-      }
+    "name": "ds_adls_customers_raw",
+    "properties": {
+        "type": "Parquet",
+        "linkedServiceName": {
+            "referenceName": "ls_adls_datalake",
+            "type": "LinkedServiceReference"
+        },
+        "typeProperties": {
+            "location": {
+                "type": "AzureBlobFSLocation",
+                "fileSystem": "bronze",
+                "folderPath": "customers"
+            }
+        }
     }
-  }
 }
 ```
 
@@ -246,60 +246,60 @@ The Copy Activity replaces Foundry's Data Connection sync. It reads from SFTP an
 
 ```json
 {
-  "name": "pl_ingest_customer_orders",
-  "properties": {
-    "activities": [
-      {
-        "name": "copy_customers",
-        "type": "Copy",
-        "inputs": [
-          {
-            "referenceName": "ds_sftp_customers_csv",
-            "type": "DatasetReference"
-          }
-        ],
-        "outputs": [
-          {
-            "referenceName": "ds_adls_customers_raw",
-            "type": "DatasetReference"
-          }
-        ],
-        "typeProperties": {
-          "source": {
-            "type": "DelimitedTextSource"
-          },
-          "sink": {
-            "type": "ParquetSink"
-          }
-        }
-      },
-      {
-        "name": "copy_orders",
-        "type": "Copy",
-        "dependsOn": [],
-        "inputs": [
-          {
-            "referenceName": "ds_sftp_orders_csv",
-            "type": "DatasetReference"
-          }
-        ],
-        "outputs": [
-          {
-            "referenceName": "ds_adls_orders_raw",
-            "type": "DatasetReference"
-          }
-        ],
-        "typeProperties": {
-          "source": {
-            "type": "DelimitedTextSource"
-          },
-          "sink": {
-            "type": "ParquetSink"
-          }
-        }
-      }
-    ]
-  }
+    "name": "pl_ingest_customer_orders",
+    "properties": {
+        "activities": [
+            {
+                "name": "copy_customers",
+                "type": "Copy",
+                "inputs": [
+                    {
+                        "referenceName": "ds_sftp_customers_csv",
+                        "type": "DatasetReference"
+                    }
+                ],
+                "outputs": [
+                    {
+                        "referenceName": "ds_adls_customers_raw",
+                        "type": "DatasetReference"
+                    }
+                ],
+                "typeProperties": {
+                    "source": {
+                        "type": "DelimitedTextSource"
+                    },
+                    "sink": {
+                        "type": "ParquetSink"
+                    }
+                }
+            },
+            {
+                "name": "copy_orders",
+                "type": "Copy",
+                "dependsOn": [],
+                "inputs": [
+                    {
+                        "referenceName": "ds_sftp_orders_csv",
+                        "type": "DatasetReference"
+                    }
+                ],
+                "outputs": [
+                    {
+                        "referenceName": "ds_adls_orders_raw",
+                        "type": "DatasetReference"
+                    }
+                ],
+                "typeProperties": {
+                    "source": {
+                        "type": "DelimitedTextSource"
+                    },
+                    "sink": {
+                        "type": "ParquetSink"
+                    }
+                }
+            }
+        ]
+    }
 }
 ```
 
@@ -307,13 +307,13 @@ The Copy Activity replaces Foundry's Data Connection sync. It reads from SFTP an
 
 In ADF Studio you build this visually by dragging Copy Activities onto the canvas and connecting them. The JSON above is what ADF generates behind the scenes. Key mapping from Foundry:
 
-| Foundry Pipeline Builder | ADF equivalent |
-|---|---|
-| Visual drag-and-drop canvas | ADF Studio pipeline canvas |
-| Data Connection sync | Copy Activity with linked service |
-| Dataset node | ADF Dataset resource |
-| Dependency arrows | `dependsOn` property in activity JSON |
-| Secrets manager | Azure Key Vault linked service |
+| Foundry Pipeline Builder    | ADF equivalent                        |
+| --------------------------- | ------------------------------------- |
+| Visual drag-and-drop canvas | ADF Studio pipeline canvas            |
+| Data Connection sync        | Copy Activity with linked service     |
+| Dataset node                | ADF Dataset resource                  |
+| Dependency arrows           | `dependsOn` property in activity JSON |
+| Secrets manager             | Azure Key Vault linked service        |
 
 ---
 
@@ -337,16 +337,16 @@ Add the following to `~/.dbt/profiles.yml`:
 
 ```yaml
 customer_orders:
-  target: dev
-  outputs:
-    dev:
-      type: sqlserver
-      driver: "ODBC Driver 18 for SQL Server"
-      server: your-server.database.windows.net
-      port: 1433
-      database: your_database
-      schema: analytics
-      authentication: CLI
+    target: dev
+    outputs:
+        dev:
+            type: sqlserver
+            driver: "ODBC Driver 18 for SQL Server"
+            server: your-server.database.windows.net
+            port: 1433
+            database: your_database
+            schema: analytics
+            authentication: CLI
 ```
 
 ### 3.2 Convert the clean_customers transform
@@ -509,42 +509,42 @@ Foundry Data Expectations let you assert quality rules on pipeline outputs. dbt 
 version: 2
 
 sources:
-  - name: bronze
-    schema: bronze
-    tables:
-      - name: customers_raw
-      - name: orders_raw
+    - name: bronze
+      schema: bronze
+      tables:
+          - name: customers_raw
+          - name: orders_raw
 
 models:
-  - name: stg_customers
-    description: "Cleaned and deduplicated customer records"
-    columns:
-      - name: customer_id
-        description: "Primary key"
-        tests:
-          - not_null
-          - unique
-      - name: email
-        description: "Lowercase, trimmed email address"
-        tests:
-          - not_null
+    - name: stg_customers
+      description: "Cleaned and deduplicated customer records"
+      columns:
+          - name: customer_id
+            description: "Primary key"
+            tests:
+                - not_null
+                - unique
+          - name: email
+            description: "Lowercase, trimmed email address"
+            tests:
+                - not_null
 
-  - name: stg_orders
-    description: "Validated order records"
-    columns:
-      - name: order_id
-        tests:
-          - not_null
-          - unique
-      - name: customer_id
-        tests:
-          - not_null
-          - relationships:
-              to: ref('stg_customers')
-              field: customer_id
-      - name: order_amount
-        tests:
-          - not_null
+    - name: stg_orders
+      description: "Validated order records"
+      columns:
+          - name: order_id
+            tests:
+                - not_null
+                - unique
+          - name: customer_id
+            tests:
+                - not_null
+                - relationships:
+                      to: ref('stg_customers')
+                      field: customer_id
+          - name: order_amount
+            tests:
+                - not_null
 ```
 
 Run tests with:
@@ -559,11 +559,11 @@ dbt test
 
 ### 4.1 Layer definitions
 
-| Layer | Purpose | Managed by | Naming convention |
-|---|---|---|---|
-| **Bronze** | Raw ingestion, no transforms | ADF Copy Activity | Tables named after source (`customers_raw`, `orders_raw`) |
-| **Silver** | Cleaned, validated, deduplicated | dbt models | `stg_` prefix (`stg_customers`, `stg_orders`) |
-| **Gold** | Business-ready aggregates and dimensions | dbt models | `dim_` / `fact_` prefix (`dim_customers`, `fact_order_summary`) |
+| Layer      | Purpose                                  | Managed by        | Naming convention                                               |
+| ---------- | ---------------------------------------- | ----------------- | --------------------------------------------------------------- |
+| **Bronze** | Raw ingestion, no transforms             | ADF Copy Activity | Tables named after source (`customers_raw`, `orders_raw`)       |
+| **Silver** | Cleaned, validated, deduplicated         | dbt models        | `stg_` prefix (`stg_customers`, `stg_orders`)                   |
+| **Gold**   | Business-ready aggregates and dimensions | dbt models        | `dim_` / `fact_` prefix (`dim_customers`, `fact_order_summary`) |
 
 ### 4.2 Build the gold layer models
 
@@ -661,26 +661,26 @@ Replace Foundry's cron scheduling with an ADF Schedule Trigger:
 
 ```json
 {
-  "name": "tr_daily_0200_utc",
-  "properties": {
-    "type": "ScheduleTrigger",
-    "typeProperties": {
-      "recurrence": {
-        "frequency": "Day",
-        "interval": 1,
-        "startTime": "2025-01-01T02:00:00Z",
-        "timeZone": "UTC"
-      }
-    },
-    "pipelines": [
-      {
-        "pipelineReference": {
-          "referenceName": "pl_ingest_customer_orders",
-          "type": "PipelineReference"
-        }
-      }
-    ]
-  }
+    "name": "tr_daily_0200_utc",
+    "properties": {
+        "type": "ScheduleTrigger",
+        "typeProperties": {
+            "recurrence": {
+                "frequency": "Day",
+                "interval": 1,
+                "startTime": "2025-01-01T02:00:00Z",
+                "timeZone": "UTC"
+            }
+        },
+        "pipelines": [
+            {
+                "pipelineReference": {
+                    "referenceName": "pl_ingest_customer_orders",
+                    "type": "PipelineReference"
+                }
+            }
+        ]
+    }
 }
 ```
 
@@ -692,25 +692,25 @@ Add a **Web Activity** or **Azure Batch Activity** to run dbt after the Copy Act
 
 ```json
 {
-  "name": "run_dbt_transforms",
-  "type": "AzureBatch",
-  "dependsOn": [
-    {
-      "activity": "copy_customers",
-      "dependencyConditions": ["Succeeded"]
-    },
-    {
-      "activity": "copy_orders",
-      "dependencyConditions": ["Succeeded"]
+    "name": "run_dbt_transforms",
+    "type": "AzureBatch",
+    "dependsOn": [
+        {
+            "activity": "copy_customers",
+            "dependencyConditions": ["Succeeded"]
+        },
+        {
+            "activity": "copy_orders",
+            "dependencyConditions": ["Succeeded"]
+        }
+    ],
+    "typeProperties": {
+        "command": "dbt run --project-dir /mnt/dbt/customer_orders --profiles-dir /mnt/dbt/profiles",
+        "resourceLinkedService": {
+            "referenceName": "ls_azure_batch",
+            "type": "LinkedServiceReference"
+        }
     }
-  ],
-  "typeProperties": {
-    "command": "dbt run --project-dir /mnt/dbt/customer_orders --profiles-dir /mnt/dbt/profiles",
-    "resourceLinkedService": {
-      "referenceName": "ls_azure_batch",
-      "type": "LinkedServiceReference"
-    }
-  }
 }
 ```
 
@@ -725,13 +725,13 @@ Trigger (02:00 UTC)
 
 ### 5.3 Mapping Foundry scheduling to ADF
 
-| Foundry scheduling feature | ADF equivalent |
-|---|---|
-| Cron schedule | Schedule Trigger |
-| Dependency-based (upstream dataset updated) | `dependsOn` with `Succeeded` condition |
-| Event trigger (file arrival) | Storage Event Trigger or Custom Event Trigger |
-| Retry on failure | Activity-level retry policy (`"retryCount": 2, "retryIntervalInSeconds": 300`) |
-| Manual trigger | ADF Studio "Trigger Now" or REST API call |
+| Foundry scheduling feature                  | ADF equivalent                                                                 |
+| ------------------------------------------- | ------------------------------------------------------------------------------ |
+| Cron schedule                               | Schedule Trigger                                                               |
+| Dependency-based (upstream dataset updated) | `dependsOn` with `Succeeded` condition                                         |
+| Event trigger (file arrival)                | Storage Event Trigger or Custom Event Trigger                                  |
+| Retry on failure                            | Activity-level retry policy (`"retryCount": 2, "retryIntervalInSeconds": 300`) |
+| Manual trigger                              | ADF Studio "Trigger Now" or REST API call                                      |
 
 ---
 
@@ -762,15 +762,15 @@ Add freshness checks to your `schema.yml`:
 
 ```yaml
 sources:
-  - name: bronze
-    schema: bronze
-    freshness:
-      warn_after: { count: 6, period: hour }
-      error_after: { count: 12, period: hour }
-    loaded_at_field: _loaded_at
-    tables:
-      - name: customers_raw
-      - name: orders_raw
+    - name: bronze
+      schema: bronze
+      freshness:
+          warn_after: { count: 6, period: hour }
+          error_after: { count: 12, period: hour }
+      loaded_at_field: _loaded_at
+      tables:
+          - name: customers_raw
+          - name: orders_raw
 ```
 
 ### 6.3 Azure Monitor alerts for pipeline failures
@@ -818,11 +818,11 @@ FROM gold.fact_order_summary;
 -- (retrieve from Foundry's dataset preview or API)
 ```
 
-| Metric | Foundry | Azure | Match |
-|---|---|---|---|
-| Row count (customers) | 45,231 | 45,231 | Yes |
-| Row count (orders) | 312,876 | 312,876 | Yes |
-| Row count (order_summary) | 45,231 | 45,231 | Yes |
+| Metric                    | Foundry | Azure   | Match |
+| ------------------------- | ------- | ------- | ----- |
+| Row count (customers)     | 45,231  | 45,231  | Yes   |
+| Row count (orders)        | 312,876 | 312,876 | Yes   |
+| Row count (order_summary) | 45,231  | 45,231  | Yes   |
 
 ### 7.2 Compare key metrics
 
@@ -836,12 +836,12 @@ SELECT
 FROM gold.fact_order_summary;
 ```
 
-| Metric | Foundry | Azure | Variance |
-|---|---|---|---|
-| Unique customers | 45,231 | 45,231 | 0% |
-| Total order count | 312,876 | 312,876 | 0% |
-| Total revenue | $14,502,340.00 | $14,502,340.00 | 0% |
-| Avg order value | $46.35 | $46.35 | 0% |
+| Metric            | Foundry        | Azure          | Variance |
+| ----------------- | -------------- | -------------- | -------- |
+| Unique customers  | 45,231         | 45,231         | 0%       |
+| Total order count | 312,876        | 312,876        | 0%       |
+| Total revenue     | $14,502,340.00 | $14,502,340.00 | 0%       |
+| Avg order value   | $46.35         | $46.35         | 0%       |
 
 ### 7.3 Document reconciliation
 
@@ -866,59 +866,59 @@ Create `.github/workflows/dbt-deploy.yml`:
 name: dbt Deploy
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "dbt/customer_orders/**"
+    push:
+        branches: [main]
+        paths:
+            - "dbt/customer_orders/**"
 
 jobs:
-  dbt-run:
-    runs-on: ubuntu-latest
-    environment: production
+    dbt-run:
+        runs-on: ubuntu-latest
+        environment: production
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+            - name: Set up Python
+              uses: actions/setup-python@v5
+              with:
+                  python-version: "3.11"
 
-      - name: Install dbt
-        run: pip install dbt-sqlserver
+            - name: Install dbt
+              run: pip install dbt-sqlserver
 
-      - name: Write dbt profiles
-        run: |
-          mkdir -p ~/.dbt
-          cat <<EOF > ~/.dbt/profiles.yml
-          customer_orders:
-            target: prod
-            outputs:
-              prod:
-                type: sqlserver
-                driver: "ODBC Driver 18 for SQL Server"
-                server: ${{ secrets.SQL_SERVER }}
-                port: 1433
-                database: ${{ secrets.SQL_DATABASE }}
-                schema: analytics
-                authentication: ServicePrincipal
-                tenant_id: ${{ secrets.AZURE_TENANT_ID }}
-                client_id: ${{ secrets.AZURE_CLIENT_ID }}
-                client_secret: ${{ secrets.AZURE_CLIENT_SECRET }}
-          EOF
+            - name: Write dbt profiles
+              run: |
+                  mkdir -p ~/.dbt
+                  cat <<EOF > ~/.dbt/profiles.yml
+                  customer_orders:
+                    target: prod
+                    outputs:
+                      prod:
+                        type: sqlserver
+                        driver: "ODBC Driver 18 for SQL Server"
+                        server: ${{ secrets.SQL_SERVER }}
+                        port: 1433
+                        database: ${{ secrets.SQL_DATABASE }}
+                        schema: analytics
+                        authentication: ServicePrincipal
+                        tenant_id: ${{ secrets.AZURE_TENANT_ID }}
+                        client_id: ${{ secrets.AZURE_CLIENT_ID }}
+                        client_secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+                  EOF
 
-      - name: Run dbt
-        run: |
-          cd dbt/customer_orders
-          dbt deps
-          dbt run --target prod
-          dbt test --target prod
+            - name: Run dbt
+              run: |
+                  cd dbt/customer_orders
+                  dbt deps
+                  dbt run --target prod
+                  dbt test --target prod
 
-      - name: Check source freshness
-        run: |
-          cd dbt/customer_orders
-          dbt source freshness --target prod
+            - name: Check source freshness
+              run: |
+                  cd dbt/customer_orders
+                  dbt source freshness --target prod
 ```
 
 ### 8.2 ADF ARM template deployment
@@ -930,31 +930,31 @@ Export your ADF resources as ARM templates and deploy them through CI/CD:
 name: ADF Deploy
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "infra/adf/**"
+    push:
+        branches: [main]
+        paths:
+            - "infra/adf/**"
 
 jobs:
-  deploy-adf:
-    runs-on: ubuntu-latest
-    environment: production
+    deploy-adf:
+        runs-on: ubuntu-latest
+        environment: production
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
 
-      - name: Azure Login
-        uses: azure/login@v2
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+            - name: Azure Login
+              uses: azure/login@v2
+              with:
+                  creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Deploy ADF ARM template
-        uses: azure/arm-deploy@v2
-        with:
-          resourceGroupName: rg-data-platform
-          template: infra/adf/arm-template.json
-          parameters: infra/adf/arm-template-parameters.json
+            - name: Deploy ADF ARM template
+              uses: azure/arm-deploy@v2
+              with:
+                  resourceGroupName: rg-data-platform
+                  template: infra/adf/arm-template.json
+                  parameters: infra/adf/arm-template-parameters.json
 ```
 
 ---
@@ -997,18 +997,18 @@ The following diagram shows the end-to-end flow after migration:
 
 ## Quick reference: Foundry to Azure mapping
 
-| Foundry concept | Azure equivalent | Notes |
-|---|---|---|
-| Data Connection (sync) | ADF Copy Activity | Linked services replace Foundry connectors |
-| `@transform` decorator | dbt SQL model | `{{ source() }}` and `{{ ref() }}` replace `Input()`/`Output()` |
-| `@incremental` | `{{ config(materialized='incremental') }}` | Use `{% if is_incremental() %}` for delta logic |
-| Data Expectations | dbt tests (`schema.yml`) | `not_null`, `unique`, `relationships`, custom tests |
-| Pipeline Builder | ADF Studio canvas | Visual designer with JSON export |
-| Cron scheduling | ADF Schedule Trigger | Identical cron semantics |
-| Dependency triggers | `dependsOn` in ADF activities | Explicit dependency conditions |
-| Health Checks | Azure Monitor + dbt source freshness | Combined monitoring replaces single Foundry view |
-| Foundry secrets | Azure Key Vault | Linked service references to Key Vault secrets |
-| Quiver dashboard | Power BI | Connect directly to gold layer tables |
+| Foundry concept        | Azure equivalent                           | Notes                                                           |
+| ---------------------- | ------------------------------------------ | --------------------------------------------------------------- |
+| Data Connection (sync) | ADF Copy Activity                          | Linked services replace Foundry connectors                      |
+| `@transform` decorator | dbt SQL model                              | `{{ source() }}` and `{{ ref() }}` replace `Input()`/`Output()` |
+| `@incremental`         | `{{ config(materialized='incremental') }}` | Use `{% if is_incremental() %}` for delta logic                 |
+| Data Expectations      | dbt tests (`schema.yml`)                   | `not_null`, `unique`, `relationships`, custom tests             |
+| Pipeline Builder       | ADF Studio canvas                          | Visual designer with JSON export                                |
+| Cron scheduling        | ADF Schedule Trigger                       | Identical cron semantics                                        |
+| Dependency triggers    | `dependsOn` in ADF activities              | Explicit dependency conditions                                  |
+| Health Checks          | Azure Monitor + dbt source freshness       | Combined monitoring replaces single Foundry view                |
+| Foundry secrets        | Azure Key Vault                            | Linked service references to Key Vault secrets                  |
+| Quiver dashboard       | Power BI                                   | Connect directly to gold layer tables                           |
 
 ---
 

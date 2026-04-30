@@ -18,34 +18,34 @@ This is not a marketing argument. It is a factual gap in platform authorization 
 
 ### Authorization levels
 
-| Level | Snowflake Gov | Azure Government | Gap |
-|---|---|---|---|
-| FedRAMP Moderate (110 controls) | Authorized | Authorized | None |
-| FedRAMP High (421 controls) | **Not authorized** | Authorized | **311 additional controls** |
+| Level                           | Snowflake Gov      | Azure Government | Gap                         |
+| ------------------------------- | ------------------ | ---------------- | --------------------------- |
+| FedRAMP Moderate (110 controls) | Authorized         | Authorized       | None                        |
+| FedRAMP High (421 controls)     | **Not authorized** | Authorized       | **311 additional controls** |
 
 ### What FedRAMP High adds
 
 FedRAMP High includes 311 controls beyond Moderate, covering:
 
-| Control family | Additional controls | What they protect |
-|---|---|---|
-| AC (Access Control) | +18 controls | Multi-factor, session controls, information flow enforcement |
-| AU (Audit) | +14 controls | Audit correlation, tamper resistance, non-repudiation |
-| CA (Assessment) | +6 controls | Continuous monitoring, penetration testing |
-| CM (Configuration) | +12 controls | Software restriction, component inventory, baseline config |
-| CP (Contingency) | +10 controls | Alternate sites, system backup, information system recovery |
-| IA (Identification) | +8 controls | PIV authentication, cryptographic authentication |
-| IR (Incident Response) | +6 controls | Automated incident handling, supply chain coordination |
-| MA (Maintenance) | +4 controls | Non-local maintenance, maintenance personnel |
-| MP (Media Protection) | +6 controls | Media sanitization, CUI marking |
-| PE (Physical) | +12 controls | Facility access, environmental controls |
-| PL (Planning) | +4 controls | Security architecture, rules of behavior |
-| PM (Program Management) | +8 controls | Risk management strategy, senior leadership |
-| PS (Personnel) | +4 controls | Personnel screening, termination |
-| RA (Risk Assessment) | +6 controls | Vulnerability monitoring, threat intelligence |
-| SA (System Acquisition) | +16 controls | Supply chain risk, developer security |
-| SC (System Communications) | +22 controls | Cryptographic protection, network disconnect, boundary protection |
-| SI (System Information) | +16 controls | Flaw remediation, malicious code, input validation |
+| Control family             | Additional controls | What they protect                                                 |
+| -------------------------- | ------------------- | ----------------------------------------------------------------- |
+| AC (Access Control)        | +18 controls        | Multi-factor, session controls, information flow enforcement      |
+| AU (Audit)                 | +14 controls        | Audit correlation, tamper resistance, non-repudiation             |
+| CA (Assessment)            | +6 controls         | Continuous monitoring, penetration testing                        |
+| CM (Configuration)         | +12 controls        | Software restriction, component inventory, baseline config        |
+| CP (Contingency)           | +10 controls        | Alternate sites, system backup, information system recovery       |
+| IA (Identification)        | +8 controls         | PIV authentication, cryptographic authentication                  |
+| IR (Incident Response)     | +6 controls         | Automated incident handling, supply chain coordination            |
+| MA (Maintenance)           | +4 controls         | Non-local maintenance, maintenance personnel                      |
+| MP (Media Protection)      | +6 controls         | Media sanitization, CUI marking                                   |
+| PE (Physical)              | +12 controls        | Facility access, environmental controls                           |
+| PL (Planning)              | +4 controls         | Security architecture, rules of behavior                          |
+| PM (Program Management)    | +8 controls         | Risk management strategy, senior leadership                       |
+| PS (Personnel)             | +4 controls         | Personnel screening, termination                                  |
+| RA (Risk Assessment)       | +6 controls         | Vulnerability monitoring, threat intelligence                     |
+| SA (System Acquisition)    | +16 controls        | Supply chain risk, developer security                             |
+| SC (System Communications) | +22 controls        | Cryptographic protection, network disconnect, boundary protection |
+| SI (System Information)    | +16 controls        | Flaw remediation, malicious code, input validation                |
 
 ### What this means for your ATO
 
@@ -71,22 +71,22 @@ csa-inabox provides:
 
 ### IL4 (Controlled Unclassified Information)
 
-| Requirement | Snowflake Gov | Azure Government | Notes |
-|---|---|---|---|
-| FedRAMP High baseline | Not met | Met | Required for IL4 |
-| DoD Cloud SRG compliance | Limited (partner-dependent) | Direct compliance | Azure Gov is in DISA SWIP |
-| Encryption at rest (FIPS 140-2) | Yes | Yes (HSM via Key Vault Premium) | Both meet this |
-| PIV/CAC authentication | Via SAML to agency IdP | Native Entra ID + PIV | Entra natively supports PIV |
-| Data residency (CONUS) | Snowflake Gov region | Azure Gov (physically separate) | Both meet this |
+| Requirement                     | Snowflake Gov               | Azure Government                | Notes                       |
+| ------------------------------- | --------------------------- | ------------------------------- | --------------------------- |
+| FedRAMP High baseline           | Not met                     | Met                             | Required for IL4            |
+| DoD Cloud SRG compliance        | Limited (partner-dependent) | Direct compliance               | Azure Gov is in DISA SWIP   |
+| Encryption at rest (FIPS 140-2) | Yes                         | Yes (HSM via Key Vault Premium) | Both meet this              |
+| PIV/CAC authentication          | Via SAML to agency IdP      | Native Entra ID + PIV           | Entra natively supports PIV |
+| Data residency (CONUS)          | Snowflake Gov region        | Azure Gov (physically separate) | Both meet this              |
 
 ### IL5 (Higher sensitivity CUI + mission-critical)
 
-| Requirement | Snowflake Gov | Azure Government | Notes |
-|---|---|---|---|
-| FedRAMP High baseline | Not met | Met | Required for IL5 |
-| Dedicated infrastructure | Shared Gov region | Azure Gov isolated from commercial | Azure Gov is physically separate |
-| National security background checks | Unknown for Snowflake ops staff | Microsoft Gov ops staff cleared | Required for IL5 |
-| Service-level IL5 authorization | **Gap** | Most services; Fabric per roadmap | See `docs/GOV_SERVICE_MATRIX.md` |
+| Requirement                         | Snowflake Gov                   | Azure Government                   | Notes                            |
+| ----------------------------------- | ------------------------------- | ---------------------------------- | -------------------------------- |
+| FedRAMP High baseline               | Not met                         | Met                                | Required for IL5                 |
+| Dedicated infrastructure            | Shared Gov region               | Azure Gov isolated from commercial | Azure Gov is physically separate |
+| National security background checks | Unknown for Snowflake ops staff | Microsoft Gov ops staff cleared    | Required for IL5                 |
+| Service-level IL5 authorization     | **Gap**                         | Most services; Fabric per roadmap  | See `docs/GOV_SERVICE_MATRIX.md` |
 
 ### IL6 (Classified)
 
@@ -98,22 +98,22 @@ Neither Snowflake nor csa-inabox addresses IL6. This requires Top Secret cloud i
 
 As of April 2026, Snowflake Government operates in a single region (`us-gov-west-1`) with these limitations:
 
-| Capability | Commercial Snowflake | Snowflake Gov | Gap |
-|---|---|---|---|
-| Core SQL warehousing | GA | GA | None |
-| Snowpark Python | GA | GA | None |
-| Snowpark Java/Scala | GA | GA | None |
-| Cortex LLM functions | GA (multiple models) | **Limited** (subset of models) | Reduced model selection |
-| Cortex Search | GA | **Not available** | Full gap |
-| Cortex Analyst | GA | **Not available** | Full gap |
-| Cortex Guard | GA | **Not available** | Full gap |
-| Cortex Fine-tuning | GA | **Not available** | Full gap |
-| Snowpark Container Services | GA | **Limited** | Partial availability |
-| Snowpipe Streaming | GA | **Partial** | Not all features |
-| Data Clean Rooms | GA | **Not available** | Full gap |
-| Marketplace | GA (full catalog) | Available (reduced catalog) | Reduced listings |
-| Notebooks | GA | **Limited** | Partial availability |
-| Replication (cross-region) | Multi-region | Single Gov region | No Gov-to-Gov DR |
+| Capability                  | Commercial Snowflake | Snowflake Gov                  | Gap                     |
+| --------------------------- | -------------------- | ------------------------------ | ----------------------- |
+| Core SQL warehousing        | GA                   | GA                             | None                    |
+| Snowpark Python             | GA                   | GA                             | None                    |
+| Snowpark Java/Scala         | GA                   | GA                             | None                    |
+| Cortex LLM functions        | GA (multiple models) | **Limited** (subset of models) | Reduced model selection |
+| Cortex Search               | GA                   | **Not available**              | Full gap                |
+| Cortex Analyst              | GA                   | **Not available**              | Full gap                |
+| Cortex Guard                | GA                   | **Not available**              | Full gap                |
+| Cortex Fine-tuning          | GA                   | **Not available**              | Full gap                |
+| Snowpark Container Services | GA                   | **Limited**                    | Partial availability    |
+| Snowpipe Streaming          | GA                   | **Partial**                    | Not all features        |
+| Data Clean Rooms            | GA                   | **Not available**              | Full gap                |
+| Marketplace                 | GA (full catalog)    | Available (reduced catalog)    | Reduced listings        |
+| Notebooks                   | GA                   | **Limited**                    | Partial availability    |
+| Replication (cross-region)  | Multi-region         | Single Gov region              | No Gov-to-Gov DR        |
 
 **Key observation:** Many of the capabilities Snowflake markets (AI, streaming, containers, clean rooms) are either not available or limited in the Gov region. You are paying for a commercial feature set but receiving a subset.
 
@@ -125,18 +125,18 @@ As of April 2026, Snowflake Government operates in a single region (`us-gov-west
 
 CMMC 2.0 Level 2 requires compliance with all 110 practices in NIST SP 800-171 Rev 2. The data platform must support these practices.
 
-| CMMC domain | Snowflake support | csa-inabox support | Advantage |
-|---|---|---|---|
-| Access Control (AC) | RBAC, MFA, network policies | Entra RBAC, MFA, Conditional Access, Private Endpoints | Azure (identity-centric) |
-| Audit & Accountability (AU) | Query history, access history | Azure Monitor + Purview audit + tamper-evident chain | Azure (tamper-evident) |
-| Configuration Management (CM) | Snowflake-managed infra | Bicep IaC with drift detection | Azure (IaC-managed) |
-| Identification & Authentication (IA) | Username/password, key pair, SSO | Entra ID with PIV/CAC, managed identities | Azure (PIV-native) |
-| Incident Response (IR) | No built-in IR tooling | Azure Sentinel integration | Azure (SIEM-integrated) |
-| Media Protection (MP) | Encryption at rest | Encryption + FIPS 140-2 L3 HSM + soft delete | Azure (HSM-backed) |
-| Physical Protection (PE) | Snowflake-managed datacenters | Azure Gov datacenters (cleared ops) | Azure (dedicated Gov) |
-| Risk Assessment (RA) | Manual assessment | Purview auto-classification + vulnerability scanning | Azure (automated) |
-| System & Communications Protection (SC) | TLS, encryption | Private Endpoints + TLS + customer-managed keys | Azure (network isolation) |
-| System & Information Integrity (SI) | Limited | Azure Defender + Purview + Content Safety | Azure (defense-in-depth) |
+| CMMC domain                             | Snowflake support                | csa-inabox support                                     | Advantage                 |
+| --------------------------------------- | -------------------------------- | ------------------------------------------------------ | ------------------------- |
+| Access Control (AC)                     | RBAC, MFA, network policies      | Entra RBAC, MFA, Conditional Access, Private Endpoints | Azure (identity-centric)  |
+| Audit & Accountability (AU)             | Query history, access history    | Azure Monitor + Purview audit + tamper-evident chain   | Azure (tamper-evident)    |
+| Configuration Management (CM)           | Snowflake-managed infra          | Bicep IaC with drift detection                         | Azure (IaC-managed)       |
+| Identification & Authentication (IA)    | Username/password, key pair, SSO | Entra ID with PIV/CAC, managed identities              | Azure (PIV-native)        |
+| Incident Response (IR)                  | No built-in IR tooling           | Azure Sentinel integration                             | Azure (SIEM-integrated)   |
+| Media Protection (MP)                   | Encryption at rest               | Encryption + FIPS 140-2 L3 HSM + soft delete           | Azure (HSM-backed)        |
+| Physical Protection (PE)                | Snowflake-managed datacenters    | Azure Gov datacenters (cleared ops)                    | Azure (dedicated Gov)     |
+| Risk Assessment (RA)                    | Manual assessment                | Purview auto-classification + vulnerability scanning   | Azure (automated)         |
+| System & Communications Protection (SC) | TLS, encryption                  | Private Endpoints + TLS + customer-managed keys        | Azure (network isolation) |
+| System & Information Integrity (SI)     | Limited                          | Azure Defender + Purview + Content Safety              | Azure (defense-in-depth)  |
 
 csa-inabox documents CMMC mappings in `csa_platform/csa_platform/governance/compliance/cmmc-2.0-l2.yaml` with narratives in `docs/compliance/cmmc-2.0-l2.md`.
 
@@ -146,14 +146,14 @@ csa-inabox documents CMMC mappings in `csa_platform/csa_platform/governance/comp
 
 For HHS, IHS, tribal health, and healthcare-adjacent agencies:
 
-| HIPAA safeguard | Snowflake | csa-inabox |
-|---|---|---|
-| BAA available | Yes | Yes (Microsoft BAA) |
-| PHI encryption at rest | Yes | Yes (FIPS 140-2 L3 HSM) |
-| Access controls on PHI | RBAC + masking policies | Purview PHI classification + UC masking |
-| Audit trail for PHI access | Access history | Tamper-evident audit + Purview audit |
-| PHI de-identification | Manual | Purview auto-classification + masking automation |
-| Minimum necessary standard | Manual role design | Classification-driven access (automated) |
+| HIPAA safeguard            | Snowflake               | csa-inabox                                       |
+| -------------------------- | ----------------------- | ------------------------------------------------ |
+| BAA available              | Yes                     | Yes (Microsoft BAA)                              |
+| PHI encryption at rest     | Yes                     | Yes (FIPS 140-2 L3 HSM)                          |
+| Access controls on PHI     | RBAC + masking policies | Purview PHI classification + UC masking          |
+| Audit trail for PHI access | Access history          | Tamper-evident audit + Purview audit             |
+| PHI de-identification      | Manual                  | Purview auto-classification + masking automation |
+| Minimum necessary standard | Manual role design      | Classification-driven access (automated)         |
 
 See `examples/tribal-health/` for the IHS / tribal health worked implementation and `csa_platform/csa_platform/governance/compliance/hipaa-security-rule.yaml` for the control mapping.
 
@@ -163,36 +163,36 @@ See `examples/tribal-health/` for the IHS / tribal health worked implementation 
 
 ### Federal acquisition vehicles
 
-| Vehicle | Snowflake availability | Azure availability |
-|---|---|---|
-| GSA Schedule (IT 70) | Yes | Yes |
-| GSA MAS (Multiple Award Schedule) | Yes | Yes |
-| BPA (Blanket Purchase Agreement) | Agency-specific | Agency-specific |
-| Azure Enterprise Agreement (ELA) | N/A | Yes (many agencies have existing ELAs) |
-| SEWP V | Yes | Yes |
-| NASA GWAC | Yes | Yes |
-| DISA milCloud | No | Yes (Azure Gov is in milCloud catalog) |
+| Vehicle                           | Snowflake availability | Azure availability                     |
+| --------------------------------- | ---------------------- | -------------------------------------- |
+| GSA Schedule (IT 70)              | Yes                    | Yes                                    |
+| GSA MAS (Multiple Award Schedule) | Yes                    | Yes                                    |
+| BPA (Blanket Purchase Agreement)  | Agency-specific        | Agency-specific                        |
+| Azure Enterprise Agreement (ELA)  | N/A                    | Yes (many agencies have existing ELAs) |
+| SEWP V                            | Yes                    | Yes                                    |
+| NASA GWAC                         | Yes                    | Yes                                    |
+| DISA milCloud                     | No                     | Yes (Azure Gov is in milCloud catalog) |
 
 ### Cost comparison for procurement
 
-| Factor | Snowflake Gov | Azure Gov |
-|---|---|---|
-| Initial contract | Credit commit (typically annual) | Consumption-based or reserved capacity |
-| Pricing model | Credits per hour per warehouse | Per-service consumption |
-| Contract flexibility | Credit commits lock in spend | Consumption adjusts to usage |
-| Existing entitlements | Unlikely | Many agencies have Azure ELA credits |
-| Migration funding | N/A | Microsoft may fund migration professional services |
+| Factor                | Snowflake Gov                    | Azure Gov                                          |
+| --------------------- | -------------------------------- | -------------------------------------------------- |
+| Initial contract      | Credit commit (typically annual) | Consumption-based or reserved capacity             |
+| Pricing model         | Credits per hour per warehouse   | Per-service consumption                            |
+| Contract flexibility  | Credit commits lock in spend     | Consumption adjusts to usage                       |
+| Existing entitlements | Unlikely                         | Many agencies have Azure ELA credits               |
+| Migration funding     | N/A                              | Microsoft may fund migration professional services |
 
 ### Procurement timeline
 
-| Phase | Duration | Actions |
-|---|---|---|
-| Market research | 2-4 weeks | Compare Snowflake Gov vs Azure Gov for your requirements |
-| Requirements definition | 2-4 weeks | Document FedRAMP High need; map to PWS/SOO |
-| Solicitation | 4-8 weeks | RFQ or task order under existing vehicle |
-| Evaluation | 2-4 weeks | Technical evaluation + cost comparison |
-| Award | 1-2 weeks | Contract award |
-| Migration | 24-32 weeks | See [master playbook](../snowflake.md) Phase 0-7 |
+| Phase                   | Duration    | Actions                                                  |
+| ----------------------- | ----------- | -------------------------------------------------------- |
+| Market research         | 2-4 weeks   | Compare Snowflake Gov vs Azure Gov for your requirements |
+| Requirements definition | 2-4 weeks   | Document FedRAMP High need; map to PWS/SOO               |
+| Solicitation            | 4-8 weeks   | RFQ or task order under existing vehicle                 |
+| Evaluation              | 2-4 weeks   | Technical evaluation + cost comparison                   |
+| Award                   | 1-2 weeks   | Contract award                                           |
+| Migration               | 24-32 weeks | See [master playbook](../snowflake.md) Phase 0-7         |
 
 **Tip:** If your agency has an existing Azure ELA, procurement is often a task order modification rather than a new solicitation.
 
@@ -236,15 +236,15 @@ csa-inabox's compliance-as-code approach (YAML + Bicep + automated scanning) is 
 
 ### ATO documentation deliverables
 
-| Deliverable | Source |
-|---|---|
-| System Security Plan (SSP) | Template + csa-inabox control narratives |
-| Control Implementation Summary (CIS) | `csa_platform/csa_platform/governance/compliance/nist-800-53-rev5.yaml` |
-| POA&M (Plan of Action and Milestones) | Generated from gap analysis |
-| Continuous Monitoring Plan | Azure Monitor + Purview + tamper-evident audit |
-| Incident Response Plan | Azure Sentinel integration + agency IR procedures |
-| Contingency Plan | ADLS GRS + Databricks DR + backup procedures |
-| Privacy Impact Assessment (PIA) | Purview auto-classification findings |
+| Deliverable                           | Source                                                                  |
+| ------------------------------------- | ----------------------------------------------------------------------- |
+| System Security Plan (SSP)            | Template + csa-inabox control narratives                                |
+| Control Implementation Summary (CIS)  | `csa_platform/csa_platform/governance/compliance/nist-800-53-rev5.yaml` |
+| POA&M (Plan of Action and Milestones) | Generated from gap analysis                                             |
+| Continuous Monitoring Plan            | Azure Monitor + Purview + tamper-evident audit                          |
+| Incident Response Plan                | Azure Sentinel integration + agency IR procedures                       |
+| Contingency Plan                      | ADLS GRS + Databricks DR + backup procedures                            |
+| Privacy Impact Assessment (PIA)       | Purview auto-classification findings                                    |
 
 ---
 
@@ -278,18 +278,18 @@ Both Snowflake Gov and Azure Gov support ITAR data residency. Azure Gov's advant
 
 Document these risks in your migration risk register:
 
-| Risk ID | Risk | Likelihood | Impact | Mitigation |
-|---|---|---|---|---|
-| R-001 | Snowflake contract lock-in prevents timely migration | Medium | High | Review contract terms; negotiate exit clause; begin migration before renewal |
-| R-002 | Partner agencies cannot consume Delta Sharing | Low | Medium | Delta Sharing is open protocol; provide pandas/DuckDB client guide |
-| R-003 | FedRAMP High evidence gaps during ATO | Medium | High | Use csa-inabox compliance YAML mappings; engage 3PAO early |
-| R-004 | Snowflake Gov features used that are not in Azure Gov | Low | Medium | Feature mapping identifies all gaps; only Clean Rooms is material |
-| R-005 | Data loss during migration | Low | Critical | Run parallel for 2+ weeks; reconcile row counts and aggregates |
-| R-006 | Performance regression after migration | Medium | Medium | Benchmark top 20 queries; right-size warehouses; apply Z-ORDER |
-| R-007 | Staff retraining delay | Medium | Medium | Start training in Phase 0; Databricks Academy and Microsoft Learn available |
-| R-008 | Procurement delay blocks Azure deployment | Medium | High | Use existing Azure ELA if available; start procurement in parallel with Phase 0 |
-| R-009 | Cortex features needed in Gov that Azure has | Low | Low | Azure OpenAI in Gov exceeds Cortex; AI Search replaces Cortex Search |
-| R-010 | Snowflake releases FedRAMP High during migration | Low | Medium | Continue migration -- Azure advantages extend beyond FedRAMP authorization |
+| Risk ID | Risk                                                  | Likelihood | Impact   | Mitigation                                                                      |
+| ------- | ----------------------------------------------------- | ---------- | -------- | ------------------------------------------------------------------------------- |
+| R-001   | Snowflake contract lock-in prevents timely migration  | Medium     | High     | Review contract terms; negotiate exit clause; begin migration before renewal    |
+| R-002   | Partner agencies cannot consume Delta Sharing         | Low        | Medium   | Delta Sharing is open protocol; provide pandas/DuckDB client guide              |
+| R-003   | FedRAMP High evidence gaps during ATO                 | Medium     | High     | Use csa-inabox compliance YAML mappings; engage 3PAO early                      |
+| R-004   | Snowflake Gov features used that are not in Azure Gov | Low        | Medium   | Feature mapping identifies all gaps; only Clean Rooms is material               |
+| R-005   | Data loss during migration                            | Low        | Critical | Run parallel for 2+ weeks; reconcile row counts and aggregates                  |
+| R-006   | Performance regression after migration                | Medium     | Medium   | Benchmark top 20 queries; right-size warehouses; apply Z-ORDER                  |
+| R-007   | Staff retraining delay                                | Medium     | Medium   | Start training in Phase 0; Databricks Academy and Microsoft Learn available     |
+| R-008   | Procurement delay blocks Azure deployment             | Medium     | High     | Use existing Azure ELA if available; start procurement in parallel with Phase 0 |
+| R-009   | Cortex features needed in Gov that Azure has          | Low        | Low      | Azure OpenAI in Gov exceeds Cortex; AI Search replaces Cortex Search            |
+| R-010   | Snowflake releases FedRAMP High during migration      | Low        | Medium   | Continue migration -- Azure advantages extend beyond FedRAMP authorization      |
 
 ---
 

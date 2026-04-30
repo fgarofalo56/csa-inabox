@@ -12,17 +12,17 @@ Machine learning is the area where Databricks has the strongest advantage over F
 
 ### Migration decision matrix
 
-| ML workload | Recommended target | Rationale |
-| --- | --- | --- |
-| MLflow experiment tracking | Fabric ML experiments | MLflow API compatible; works for most use cases |
-| Simple model training (sklearn, XGBoost) | Fabric notebooks | PySpark + Python libraries; no GPU needed |
-| Deep learning training (PyTorch, TensorFlow) | **Stay on Databricks** or Azure ML | GPU clusters not available in Fabric Spark |
-| Model Serving (real-time inference) | Azure ML managed endpoints | No native Fabric model serving |
-| Feature Store | Fabric feature engineering (preview) | Evolving; evaluate maturity |
-| AutoML | Fabric AutoML | Good parity for tabular data |
-| Vector Search (RAG/embeddings) | Azure AI Search | No native Fabric vector search |
-| MLflow Model Registry | Fabric ML model registry | Basic registry; less mature than UC-integrated |
-| Databricks Apps (hosted ML apps) | Azure Container Apps | No Fabric equivalent; deploy separately |
+| ML workload                                  | Recommended target                   | Rationale                                       |
+| -------------------------------------------- | ------------------------------------ | ----------------------------------------------- |
+| MLflow experiment tracking                   | Fabric ML experiments                | MLflow API compatible; works for most use cases |
+| Simple model training (sklearn, XGBoost)     | Fabric notebooks                     | PySpark + Python libraries; no GPU needed       |
+| Deep learning training (PyTorch, TensorFlow) | **Stay on Databricks** or Azure ML   | GPU clusters not available in Fabric Spark      |
+| Model Serving (real-time inference)          | Azure ML managed endpoints           | No native Fabric model serving                  |
+| Feature Store                                | Fabric feature engineering (preview) | Evolving; evaluate maturity                     |
+| AutoML                                       | Fabric AutoML                        | Good parity for tabular data                    |
+| Vector Search (RAG/embeddings)               | Azure AI Search                      | No native Fabric vector search                  |
+| MLflow Model Registry                        | Fabric ML model registry             | Basic registry; less mature than UC-integrated  |
+| Databricks Apps (hosted ML apps)             | Azure Container Apps                 | No Fabric equivalent; deploy separately         |
 
 ---
 
@@ -93,43 +93,45 @@ with mlflow.start_run(run_name="rf-baseline"):
 
 ### 2.3 Key differences
 
-| Feature | Databricks MLflow | Fabric ML experiments |
-| --- | --- | --- |
-| MLflow API compatibility | Full (native) | Full (MLflow API) |
-| Experiment UI | Databricks experiment viewer | Fabric ML experiment viewer |
-| Artifact storage | DBFS / Unity Catalog volumes | OneLake |
-| Model registry | Unity Catalog model registry | Fabric ML model registry |
-| Model lineage | UC lineage (table -> model -> serving) | Basic (experiment -> model) |
-| Auto-logging | `mlflow.autolog()` for all frameworks | `mlflow.autolog()` supported |
-| Spark MLlib integration | Deep (Databricks Runtime) | Standard (Fabric Spark) |
-| GPU training | Yes (GPU clusters) | No (CPU only in Fabric Spark) |
+| Feature                  | Databricks MLflow                      | Fabric ML experiments         |
+| ------------------------ | -------------------------------------- | ----------------------------- |
+| MLflow API compatibility | Full (native)                          | Full (MLflow API)             |
+| Experiment UI            | Databricks experiment viewer           | Fabric ML experiment viewer   |
+| Artifact storage         | DBFS / Unity Catalog volumes           | OneLake                       |
+| Model registry           | Unity Catalog model registry           | Fabric ML model registry      |
+| Model lineage            | UC lineage (table -> model -> serving) | Basic (experiment -> model)   |
+| Auto-logging             | `mlflow.autolog()` for all frameworks  | `mlflow.autolog()` supported  |
+| Spark MLlib integration  | Deep (Databricks Runtime)              | Standard (Fabric Spark)       |
+| GPU training             | Yes (GPU clusters)                     | No (CPU only in Fabric Spark) |
 
 ### 2.4 Migration steps for experiments
 
 1. **Export experiment runs** from Databricks using MLflow API:
-   ```python
-   # On Databricks: export runs
-   import mlflow
-   runs = mlflow.search_runs(experiment_ids=["123"])
-   runs.to_csv("/dbfs/tmp/experiment_export.csv")
-   ```
+
+    ```python
+    # On Databricks: export runs
+    import mlflow
+    runs = mlflow.search_runs(experiment_ids=["123"])
+    runs.to_csv("/dbfs/tmp/experiment_export.csv")
+    ```
 
 2. **Recreate experiment** in Fabric:
-   ```python
-   # On Fabric: create experiment and replay key runs
-   mlflow.set_experiment("customer-churn")
-   # Note: Full run migration (with artifacts) requires manual artifact copy
-   ```
+
+    ```python
+    # On Fabric: create experiment and replay key runs
+    mlflow.set_experiment("customer-churn")
+    # Note: Full run migration (with artifacts) requires manual artifact copy
+    ```
 
 3. **Copy model artifacts** from DBFS/UC to OneLake:
-   ```python
-   # Copy model files to OneLake for Fabric ML model registry
-   mssparkutils.fs.cp(
-       "abfss://container@account.dfs.core.windows.net/models/churn/",
-       "Files/models/churn/",
-       recurse=True
-   )
-   ```
+    ```python
+    # Copy model files to OneLake for Fabric ML model registry
+    mssparkutils.fs.cp(
+        "abfss://container@account.dfs.core.windows.net/models/churn/",
+        "Files/models/churn/",
+        recurse=True
+    )
+    ```
 
 > **Practical note:** Most teams do not migrate historical experiment runs. Instead, they start fresh on Fabric and keep historical runs accessible in Databricks (read-only) during transition.
 
@@ -140,6 +142,7 @@ with mlflow.start_run(run_name="rf-baseline"):
 ### 3.1 Databricks Model Serving
 
 Databricks provides managed model serving with:
+
 - Automatic scaling (including scale-to-zero for serverless)
 - GPU-backed endpoints for large models
 - A/B testing and traffic splitting
@@ -211,16 +214,16 @@ ml_client.online_deployments.begin_create_or_update(deployment).result()
 
 ### 3.3 Serving comparison
 
-| Feature | Databricks Model Serving | Azure ML Managed Endpoints |
-| --- | --- | --- |
-| Deployment model | Databricks-managed | Azure ML-managed |
-| Scale to zero | Yes (serverless) | Yes (with autoscale rules) |
-| GPU inference | Yes | Yes (GPU VM SKUs) |
-| A/B testing | Yes (traffic splitting) | Yes (traffic mirroring) |
-| Foundation model hosting | Yes (DBRX, Llama, etc.) | Yes (via Azure OpenAI or custom) |
-| Monitoring | MLflow + Databricks UI | Azure Monitor + Application Insights |
-| Authentication | Databricks token | Azure AD / API key |
-| Pricing | DBU-based | VM-based (pay per endpoint) |
+| Feature                  | Databricks Model Serving | Azure ML Managed Endpoints           |
+| ------------------------ | ------------------------ | ------------------------------------ |
+| Deployment model         | Databricks-managed       | Azure ML-managed                     |
+| Scale to zero            | Yes (serverless)         | Yes (with autoscale rules)           |
+| GPU inference            | Yes                      | Yes (GPU VM SKUs)                    |
+| A/B testing              | Yes (traffic splitting)  | Yes (traffic mirroring)              |
+| Foundation model hosting | Yes (DBRX, Llama, etc.)  | Yes (via Azure OpenAI or custom)     |
+| Monitoring               | MLflow + Databricks UI   | Azure Monitor + Application Insights |
+| Authentication           | Databricks token         | Azure AD / API key                   |
+| Pricing                  | DBU-based                | VM-based (pay per endpoint)          |
 
 ---
 
@@ -288,14 +291,14 @@ training_df = fs_client.get_features(
 
 ### 4.3 Feature Store comparison
 
-| Feature | Databricks Feature Store | Fabric Feature Engineering |
-| --- | --- | --- |
-| GA status | GA | Preview |
-| Unity Catalog integration | Yes (feature tables are UC tables) | OneLake-based |
-| Online serving | Yes (publish to online store) | Not available |
-| Point-in-time lookups | Yes | Limited |
-| Feature freshness tracking | Yes | Basic |
-| Lineage (feature -> model) | Yes (UC lineage) | Basic |
+| Feature                    | Databricks Feature Store           | Fabric Feature Engineering |
+| -------------------------- | ---------------------------------- | -------------------------- |
+| GA status                  | GA                                 | Preview                    |
+| Unity Catalog integration  | Yes (feature tables are UC tables) | OneLake-based              |
+| Online serving             | Yes (publish to online store)      | Not available              |
+| Point-in-time lookups      | Yes                                | Limited                    |
+| Feature freshness tracking | Yes                                | Basic                      |
+| Lineage (feature -> model) | Yes (UC lineage)                   | Basic                      |
 
 ### 4.4 Migration recommendation
 
@@ -356,15 +359,15 @@ Fabric AutoML uses FLAML (Fast Lightweight AutoML) under the hood. For tabular c
 
 ### 5.3 AutoML comparison
 
-| Feature | Databricks AutoML | Fabric AutoML (FLAML) |
-| --- | --- | --- |
-| Tabular classification | Yes | Yes |
-| Tabular regression | Yes | Yes |
-| Time series forecasting | Yes | Yes (FLAML supports) |
-| Notebook generation | Yes (generates editable notebook) | Manual (use FLAML API) |
-| MLflow integration | Automatic | Manual (log with MLflow API) |
-| Data exploration | Auto-generated EDA notebook | Manual |
-| Glass-box models | Yes (interpretable) | Via FLAML config |
+| Feature                 | Databricks AutoML                 | Fabric AutoML (FLAML)        |
+| ----------------------- | --------------------------------- | ---------------------------- |
+| Tabular classification  | Yes                               | Yes                          |
+| Tabular regression      | Yes                               | Yes                          |
+| Time series forecasting | Yes                               | Yes (FLAML supports)         |
+| Notebook generation     | Yes (generates editable notebook) | Manual (use FLAML API)       |
+| MLflow integration      | Automatic                         | Manual (log with MLflow API) |
+| Data exploration        | Auto-generated EDA notebook       | Manual                       |
+| Glass-box models        | Yes (interpretable)               | Via FLAML config             |
 
 ---
 
@@ -452,14 +455,14 @@ results = search_client.search(
 
 ### 6.3 Vector Search comparison
 
-| Feature | Databricks Vector Search | Azure AI Search |
-| --- | --- | --- |
-| Delta table sync | Yes (auto-sync from Delta) | Manual (push documents) |
-| Embedding generation | Built-in (model endpoints) | Azure OpenAI or custom |
-| Hybrid search (vector + keyword) | Yes | Yes |
-| Filtering | Yes (UC permissions) | Yes (OData filters) |
-| Scale | Databricks-managed | Azure-managed (multiple tiers) |
-| Pricing | Included in DBU (endpoint cost) | Per-unit pricing |
+| Feature                          | Databricks Vector Search        | Azure AI Search                |
+| -------------------------------- | ------------------------------- | ------------------------------ |
+| Delta table sync                 | Yes (auto-sync from Delta)      | Manual (push documents)        |
+| Embedding generation             | Built-in (model endpoints)      | Azure OpenAI or custom         |
+| Hybrid search (vector + keyword) | Yes                             | Yes                            |
+| Filtering                        | Yes (UC permissions)            | Yes (OData filters)            |
+| Scale                            | Databricks-managed              | Azure-managed (multiple tiers) |
+| Pricing                          | Included in DBU (endpoint cost) | Per-unit pricing               |
 
 ---
 

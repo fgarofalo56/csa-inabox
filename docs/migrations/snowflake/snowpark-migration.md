@@ -10,16 +10,16 @@
 
 Snowpark is Snowflake's developer framework for writing data pipelines and ML workflows in Python, Java, or Scala. It consists of:
 
-| Snowpark component | Azure target | Rationale |
-|---|---|---|
-| Snowpark Python DataFrame API | PySpark DataFrame API | PySpark is the original; Snowpark modeled after it |
-| Snowpark Java/Scala DataFrame API | Spark Java/Scala API | Direct translation; Spark API predates Snowpark |
-| Snowpark Python UDFs | Databricks SQL UDFs / PySpark UDFs | SQL UDFs for simple functions; PySpark for complex |
-| Snowpark Java UDFs | Spark Java UDFs | Direct translation |
-| Snowpark stored procedures | Databricks notebooks / SQL stored procedures | Notebooks for complex logic; SQL SPs for simple |
-| Snowpark ML (model training) | MLflow on Databricks | MLflow provides richer experiment tracking and registry |
-| Snowpark ML (model deployment) | Databricks Model Serving | Managed endpoints with auto-scaling |
-| Snowpark Container Services | Azure Container Apps + Databricks Model Serving | General containers: ACA; inference: Model Serving |
+| Snowpark component                | Azure target                                    | Rationale                                               |
+| --------------------------------- | ----------------------------------------------- | ------------------------------------------------------- |
+| Snowpark Python DataFrame API     | PySpark DataFrame API                           | PySpark is the original; Snowpark modeled after it      |
+| Snowpark Java/Scala DataFrame API | Spark Java/Scala API                            | Direct translation; Spark API predates Snowpark         |
+| Snowpark Python UDFs              | Databricks SQL UDFs / PySpark UDFs              | SQL UDFs for simple functions; PySpark for complex      |
+| Snowpark Java UDFs                | Spark Java UDFs                                 | Direct translation                                      |
+| Snowpark stored procedures        | Databricks notebooks / SQL stored procedures    | Notebooks for complex logic; SQL SPs for simple         |
+| Snowpark ML (model training)      | MLflow on Databricks                            | MLflow provides richer experiment tracking and registry |
+| Snowpark ML (model deployment)    | Databricks Model Serving                        | Managed endpoints with auto-scaling                     |
+| Snowpark Container Services       | Azure Container Apps + Databricks Model Serving | General containers: ACA; inference: Model Serving       |
 
 ---
 
@@ -137,21 +137,21 @@ df.write.mode("overwrite").saveAsTable("analytics_prod.staging.customers_clean")
 
 ### Method name differences (complete reference)
 
-| Snowpark method | PySpark method | Notes |
-|---|---|---|
-| `group_by()` | `groupBy()` | Most common difference |
-| `order_by()` | `orderBy()` | |
-| `save_as_table()` | `saveAsTable()` | |
-| `create_dataframe()` | `createDataFrame()` | |
-| `with_column()` | `withColumn()` | |
-| `with_column_renamed()` | `withColumnRenamed()` | |
-| `drop_duplicates()` | `dropDuplicates()` | |
-| `na.fill()` | `na.fill()` | Identical |
-| `na.drop()` | `na.drop()` | Identical |
-| `union_all()` | `unionAll()` | |
-| `union_by_name()` | `unionByName()` | |
-| `to_pandas()` | `toPandas()` | |
-| `cross_join()` | `crossJoin()` | |
+| Snowpark method         | PySpark method        | Notes                  |
+| ----------------------- | --------------------- | ---------------------- |
+| `group_by()`            | `groupBy()`           | Most common difference |
+| `order_by()`            | `orderBy()`           |                        |
+| `save_as_table()`       | `saveAsTable()`       |                        |
+| `create_dataframe()`    | `createDataFrame()`   |                        |
+| `with_column()`         | `withColumn()`        |                        |
+| `with_column_renamed()` | `withColumnRenamed()` |                        |
+| `drop_duplicates()`     | `dropDuplicates()`    |                        |
+| `na.fill()`             | `na.fill()`           | Identical              |
+| `na.drop()`             | `na.drop()`           | Identical              |
+| `union_all()`           | `unionAll()`          |                        |
+| `union_by_name()`       | `unionByName()`       |                        |
+| `to_pandas()`           | `toPandas()`          |                        |
+| `cross_join()`          | `crossJoin()`         |                        |
 
 **Pattern:** Snowpark uses snake_case; PySpark uses camelCase. A regex replacement handles most cases:
 
@@ -358,13 +358,13 @@ mlflow.set_experiment("/experiments/risk-classification")
 
 with mlflow.start_run():
     train_pd = train_df.toPandas()
-    
+
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(train_pd[["feature_a", "feature_b"]])
-    
+
     model = XGBClassifier()
     model.fit(X_scaled, train_pd["label"])
-    
+
     mlflow.log_params(model.get_params())
     mlflow.sklearn.log_model(model, "model")
     mlflow.log_metric("accuracy", model.score(X_scaled, train_pd["label"]))
@@ -428,22 +428,22 @@ Snowpark Container Services provides managed container hosting within Snowflake.
 
 ### Inference workloads
 
-| Snowpark Container Services | Databricks Model Serving |
-|---|---|
+| Snowpark Container Services | Databricks Model Serving                          |
+| --------------------------- | ------------------------------------------------- |
 | Deploy container with model | Register model in MLflow; create serving endpoint |
-| GPU support via Snowflake | GPU support via Databricks (V100, A10G, A100) |
-| Auto-scaling based on load | Auto-scaling based on concurrency |
-| SQL-callable inference | `ai_query()` SQL function or REST API |
+| GPU support via Snowflake   | GPU support via Databricks (V100, A10G, A100)     |
+| Auto-scaling based on load  | Auto-scaling based on concurrency                 |
+| SQL-callable inference      | `ai_query()` SQL function or REST API             |
 
 ### General compute workloads
 
-| Snowpark Container Services | Azure Container Apps |
-|---|---|
-| Long-running containers | Container Apps with scale rules |
-| Scheduled containers | Container Apps Jobs |
-| GPU workloads | Container Apps with GPU (or AKS) |
-| Networking | VNet integration with Private Endpoints |
-| Service mesh | Dapr sidecar (built into Container Apps) |
+| Snowpark Container Services | Azure Container Apps                     |
+| --------------------------- | ---------------------------------------- |
+| Long-running containers     | Container Apps with scale rules          |
+| Scheduled containers        | Container Apps Jobs                      |
+| GPU workloads               | Container Apps with GPU (or AKS)         |
+| Networking                  | VNet integration with Private Endpoints  |
+| Service mesh                | Dapr sidecar (built into Container Apps) |
 
 ### Migration decision tree
 
@@ -488,9 +488,9 @@ def test_classify_risk(spark):
     ])
     data = [("a", 0.9), ("b", 0.6), ("c", 0.2)]
     df = spark.createDataFrame(data, schema)
-    
+
     result = df.withColumn("risk", classify_risk(col("score")))
-    
+
     assert result.filter(col("risk") == "HIGH").count() == 1
     assert result.filter(col("risk") == "MEDIUM").count() == 1
     assert result.filter(col("risk") == "LOW").count() == 1
@@ -505,11 +505,11 @@ Run the full pipeline against a test catalog in Unity Catalog:
 def test_pipeline_end_to_end(spark):
     # Use test catalog
     spark.sql("USE CATALOG analytics_test")
-    
+
     # Run pipeline
     from pipelines.daily_pipeline import run_daily_pipeline
     result = run_daily_pipeline(spark, catalog="analytics_test")
-    
+
     # Validate output
     output = spark.table("analytics_test.marts.fct_daily_summary")
     assert output.count() > 0

@@ -20,14 +20,14 @@ This guide maps every Tableau Prep step type to its equivalent in each tool and 
 
 ### 1.1 Decision matrix
 
-| Scenario | Recommended tool | Why |
-|---|---|---|
-| Light transforms (rename, filter, type cast) | Power Query in semantic model | Fastest; stays in the Power BI workflow |
-| Reusable transforms shared across reports | Dataflow Gen2 | Cloud-based; multiple reports consume the output |
-| Complex business logic (multi-table joins, aggregations) | dbt on csa-inabox | SQL-based; version-controlled; testable; runs in the data warehouse |
-| Data scientists / advanced analysts | Fabric notebooks (Python/Spark) | Full programming language for complex preparation |
-| Simple file unions (monthly CSV files) | Power Query in semantic model | Folder connector handles this natively |
-| ETL replacing Prep Conductor scheduling | Dataflow Gen2 or dbt + ADF/Fabric pipeline | Both support scheduled execution |
+| Scenario                                                 | Recommended tool                           | Why                                                                 |
+| -------------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------- |
+| Light transforms (rename, filter, type cast)             | Power Query in semantic model              | Fastest; stays in the Power BI workflow                             |
+| Reusable transforms shared across reports                | Dataflow Gen2                              | Cloud-based; multiple reports consume the output                    |
+| Complex business logic (multi-table joins, aggregations) | dbt on csa-inabox                          | SQL-based; version-controlled; testable; runs in the data warehouse |
+| Data scientists / advanced analysts                      | Fabric notebooks (Python/Spark)            | Full programming language for complex preparation                   |
+| Simple file unions (monthly CSV files)                   | Power Query in semantic model              | Folder connector handles this natively                              |
+| ETL replacing Prep Conductor scheduling                  | Dataflow Gen2 or dbt + ADF/Fabric pipeline | Both support scheduled execution                                    |
 
 ### 1.2 The csa-inabox recommendation
 
@@ -43,7 +43,7 @@ flowchart TD
 ```
 
 !!! tip "Prefer dbt for transformation logic"
-    With csa-inabox, transformation logic should live in dbt models, not in Power Query or Dataflows. dbt models are version-controlled, testable, and produce Delta tables that Power BI can read via Direct Lake. Power Query should handle only the last mile of shaping between Gold tables and the semantic model.
+With csa-inabox, transformation logic should live in dbt models, not in Power Query or Dataflows. dbt models are version-controlled, testable, and produce Delta tables that Power BI can read via Direct Lake. Power Query should handle only the last mile of shaping between Gold tables and the semantic model.
 
 ---
 
@@ -51,14 +51,14 @@ flowchart TD
 
 ### 2.1 Input step
 
-| Tableau Prep | Power Query equivalent | M code example |
-|---|---|---|
-| Connect to database table | Get Data → Database connector | `= Sql.Database("server", "database")` |
-| Connect to CSV file | Get Data → Text/CSV | `= Csv.Document(File.Contents("path"))` |
-| Connect to Excel file | Get Data → Excel | `= Excel.Workbook(File.Contents("path"))` |
-| Connect to Tableau Extract | Not applicable | Extract data does not exist in Power BI; connect to source |
-| Connect to published data source | Live connection to semantic model | Use "Power BI datasets" connector |
-| Wildcard union (multiple files) | Folder connector | `= Folder.Files("folder_path")` then combine |
+| Tableau Prep                     | Power Query equivalent            | M code example                                             |
+| -------------------------------- | --------------------------------- | ---------------------------------------------------------- |
+| Connect to database table        | Get Data → Database connector     | `= Sql.Database("server", "database")`                     |
+| Connect to CSV file              | Get Data → Text/CSV               | `= Csv.Document(File.Contents("path"))`                    |
+| Connect to Excel file            | Get Data → Excel                  | `= Excel.Workbook(File.Contents("path"))`                  |
+| Connect to Tableau Extract       | Not applicable                    | Extract data does not exist in Power BI; connect to source |
+| Connect to published data source | Live connection to semantic model | Use "Power BI datasets" connector                          |
+| Wildcard union (multiple files)  | Folder connector                  | `= Folder.Files("folder_path")` then combine               |
 
 **Example: Folder connector for multiple CSV files**
 
@@ -80,31 +80,31 @@ in
 
 ### 2.2 Clean step
 
-| Tableau Prep operation | Power Query equivalent | M code |
-|---|---|---|
-| **Rename column** | Right-click → Rename | `= Table.RenameColumns(Source, {{"old", "new"}})` |
-| **Remove column** | Right-click → Remove | `= Table.RemoveColumns(Source, {"ColName"})` |
-| **Change data type** | Transform → Data Type | `= Table.TransformColumnTypes(Source, {{"Col", type number}})` |
-| **Filter rows** | Home → Keep Rows / Remove Rows | `= Table.SelectRows(Source, each [Col] > 100)` |
-| **Replace values** | Transform → Replace Values | `= Table.ReplaceValue(Source, "old", "new", Replacer.ReplaceText, {"Col"})` |
-| **Split column** | Transform → Split Column | `= Table.SplitColumn(Source, "Col", Splitter.SplitTextByDelimiter("-"))` |
-| **Merge columns** | Add Column → Custom Column | `= Table.AddColumn(Source, "Full", each [First] & " " & [Last])` |
-| **Remove duplicates** | Home → Remove Rows → Remove Duplicates | `= Table.Distinct(Source, {"KeyCol"})` |
-| **Remove nulls** | Home → Remove Rows → Remove Blank Rows | `= Table.SelectRows(Source, each [Col] <> null)` |
-| **Calculate field** (row-level) | Add Column → Custom Column | `= Table.AddColumn(Source, "NewCol", each [Price] * [Qty])` |
-| **Group & Replace** (manual mapping) | Replace Values or conditional column | `= Table.AddColumn(Source, "Group", each if [Region] = "NY" then "Northeast" else [Region])` |
+| Tableau Prep operation               | Power Query equivalent                 | M code                                                                                       |
+| ------------------------------------ | -------------------------------------- | -------------------------------------------------------------------------------------------- |
+| **Rename column**                    | Right-click → Rename                   | `= Table.RenameColumns(Source, {{"old", "new"}})`                                            |
+| **Remove column**                    | Right-click → Remove                   | `= Table.RemoveColumns(Source, {"ColName"})`                                                 |
+| **Change data type**                 | Transform → Data Type                  | `= Table.TransformColumnTypes(Source, {{"Col", type number}})`                               |
+| **Filter rows**                      | Home → Keep Rows / Remove Rows         | `= Table.SelectRows(Source, each [Col] > 100)`                                               |
+| **Replace values**                   | Transform → Replace Values             | `= Table.ReplaceValue(Source, "old", "new", Replacer.ReplaceText, {"Col"})`                  |
+| **Split column**                     | Transform → Split Column               | `= Table.SplitColumn(Source, "Col", Splitter.SplitTextByDelimiter("-"))`                     |
+| **Merge columns**                    | Add Column → Custom Column             | `= Table.AddColumn(Source, "Full", each [First] & " " & [Last])`                             |
+| **Remove duplicates**                | Home → Remove Rows → Remove Duplicates | `= Table.Distinct(Source, {"KeyCol"})`                                                       |
+| **Remove nulls**                     | Home → Remove Rows → Remove Blank Rows | `= Table.SelectRows(Source, each [Col] <> null)`                                             |
+| **Calculate field** (row-level)      | Add Column → Custom Column             | `= Table.AddColumn(Source, "NewCol", each [Price] * [Qty])`                                  |
+| **Group & Replace** (manual mapping) | Replace Values or conditional column   | `= Table.AddColumn(Source, "Group", each if [Region] = "NY" then "Northeast" else [Region])` |
 
 ### 2.3 Join step
 
-| Tableau Prep join | Power Query merge | Notes |
-|---|---|---|
-| **Inner join** | Merge Queries → Inner | `JoinKind.Inner` |
-| **Left join** | Merge Queries → Left Outer | `JoinKind.LeftOuter` |
-| **Right join** | Merge Queries → Right Outer | `JoinKind.RightOuter` |
-| **Full outer join** | Merge Queries → Full Outer | `JoinKind.FullOuter` |
-| **Left anti join** (not in right) | Merge Queries → Left Anti | `JoinKind.LeftAnti` |
-| **Right anti join** | Merge Queries → Right Anti | `JoinKind.RightAnti` |
-| **Multi-key join** | Merge on multiple columns | Select multiple columns in the merge dialog |
+| Tableau Prep join                 | Power Query merge           | Notes                                       |
+| --------------------------------- | --------------------------- | ------------------------------------------- |
+| **Inner join**                    | Merge Queries → Inner       | `JoinKind.Inner`                            |
+| **Left join**                     | Merge Queries → Left Outer  | `JoinKind.LeftOuter`                        |
+| **Right join**                    | Merge Queries → Right Outer | `JoinKind.RightOuter`                       |
+| **Full outer join**               | Merge Queries → Full Outer  | `JoinKind.FullOuter`                        |
+| **Left anti join** (not in right) | Merge Queries → Left Anti   | `JoinKind.LeftAnti`                         |
+| **Right anti join**               | Merge Queries → Right Anti  | `JoinKind.RightAnti`                        |
+| **Multi-key join**                | Merge on multiple columns   | Select multiple columns in the merge dialog |
 
 **Example: Left outer join**
 
@@ -129,20 +129,20 @@ in
 
 ### 2.4 Union step
 
-| Tableau Prep union | Power Query append | Notes |
-|---|---|---|
-| Union two tables | Append Queries | `= Table.Combine({Table1, Table2})` |
-| Union multiple tables | Append Queries (three or more) | Select multiple tables in the Append dialog |
-| Wildcard union (files) | Folder connector | Combine files from a folder |
-| Mismatched columns | Append handles automatically | Columns not in both tables get null values |
+| Tableau Prep union     | Power Query append             | Notes                                       |
+| ---------------------- | ------------------------------ | ------------------------------------------- |
+| Union two tables       | Append Queries                 | `= Table.Combine({Table1, Table2})`         |
+| Union multiple tables  | Append Queries (three or more) | Select multiple tables in the Append dialog |
+| Wildcard union (files) | Folder connector               | Combine files from a folder                 |
+| Mismatched columns     | Append handles automatically   | Columns not in both tables get null values  |
 
 ### 2.5 Pivot and unpivot
 
-| Tableau Prep pivot | Power Query equivalent | Notes |
-|---|---|---|
-| **Pivot (rows to columns)** | Transform → Pivot Column | Select value column, choose aggregation |
-| **Unpivot (columns to rows)** | Transform → Unpivot Columns | Select columns to unpivot |
-| **Unpivot other columns** | Transform → Unpivot Other Columns | Select columns to keep, unpivot the rest |
+| Tableau Prep pivot            | Power Query equivalent            | Notes                                    |
+| ----------------------------- | --------------------------------- | ---------------------------------------- |
+| **Pivot (rows to columns)**   | Transform → Pivot Column          | Select value column, choose aggregation  |
+| **Unpivot (columns to rows)** | Transform → Unpivot Columns       | Select columns to unpivot                |
+| **Unpivot other columns**     | Transform → Unpivot Other Columns | Select columns to keep, unpivot the rest |
 
 **Example: Unpivot monthly columns**
 
@@ -161,11 +161,11 @@ in
 
 ### 2.6 Aggregate step
 
-| Tableau Prep aggregate | Power Query Group By | Notes |
-|---|---|---|
-| Group by dimensions, aggregate measures | Transform → Group By | `= Table.Group(Source, {"Dim"}, {{"Total", each List.Sum([Amount])}})` |
-| Multiple aggregations | Group By with multiple columns | Add multiple aggregation columns in the dialog |
-| Count distinct | Group By → Count Distinct Rows | `each Table.RowCount(Table.Distinct(_))` |
+| Tableau Prep aggregate                  | Power Query Group By           | Notes                                                                  |
+| --------------------------------------- | ------------------------------ | ---------------------------------------------------------------------- |
+| Group by dimensions, aggregate measures | Transform → Group By           | `= Table.Group(Source, {"Dim"}, {{"Total", each List.Sum([Amount])}})` |
+| Multiple aggregations                   | Group By with multiple columns | Add multiple aggregation columns in the dialog                         |
+| Count distinct                          | Group By → Count Distinct Rows | `each Table.RowCount(Table.Distinct(_))`                               |
 
 **Example: Group by with multiple aggregations**
 
@@ -186,12 +186,12 @@ in
 
 ### 2.7 Output step
 
-| Tableau Prep output | Power Query equivalent | Notes |
-|---|---|---|
-| Published data source | Semantic model (dataset) | Publish to Power BI Service |
-| Hyper file extract | Import mode dataset | Data stored in Power BI |
-| CSV file | Not applicable in Power Query | Use Power Automate or ADF for file output |
-| Database table | Dataflow Gen2 → Lakehouse table | Dataflow outputs to Fabric Lakehouse |
+| Tableau Prep output   | Power Query equivalent          | Notes                                     |
+| --------------------- | ------------------------------- | ----------------------------------------- |
+| Published data source | Semantic model (dataset)        | Publish to Power BI Service               |
+| Hyper file extract    | Import mode dataset             | Data stored in Power BI                   |
+| CSV file              | Not applicable in Power Query   | Use Power Automate or ADF for file output |
+| Database table        | Dataflow Gen2 → Lakehouse table | Dataflow outputs to Fabric Lakehouse      |
 
 ---
 
@@ -208,16 +208,16 @@ Use dbt when:
 
 ### 3.2 Prep steps to dbt equivalents
 
-| Tableau Prep step | dbt equivalent | Example |
-|---|---|---|
-| **Input** | `source()` macro | `{{ source('raw', 'orders') }}` |
-| **Clean** (filter, rename) | SQL SELECT with aliases | `SELECT col AS new_name FROM source WHERE condition` |
-| **Join** | SQL JOIN | `FROM orders LEFT JOIN customers ON ...` |
-| **Union** | SQL UNION ALL | `SELECT * FROM table1 UNION ALL SELECT * FROM table2` |
-| **Pivot** | SQL PIVOT or CASE WHEN | Use conditional aggregation |
-| **Unpivot** | SQL UNPIVOT or UNION | Stack columns with UNION ALL |
-| **Aggregate** | SQL GROUP BY | `SELECT dim, SUM(measure) FROM ... GROUP BY dim` |
-| **Output** | dbt materialization (table/view) | `{{ config(materialized='table') }}` |
+| Tableau Prep step          | dbt equivalent                   | Example                                               |
+| -------------------------- | -------------------------------- | ----------------------------------------------------- |
+| **Input**                  | `source()` macro                 | `{{ source('raw', 'orders') }}`                       |
+| **Clean** (filter, rename) | SQL SELECT with aliases          | `SELECT col AS new_name FROM source WHERE condition`  |
+| **Join**                   | SQL JOIN                         | `FROM orders LEFT JOIN customers ON ...`              |
+| **Union**                  | SQL UNION ALL                    | `SELECT * FROM table1 UNION ALL SELECT * FROM table2` |
+| **Pivot**                  | SQL PIVOT or CASE WHEN           | Use conditional aggregation                           |
+| **Unpivot**                | SQL UNPIVOT or UNION             | Stack columns with UNION ALL                          |
+| **Aggregate**              | SQL GROUP BY                     | `SELECT dim, SUM(measure) FROM ... GROUP BY dim`      |
+| **Output**                 | dbt materialization (table/view) | `{{ config(materialized='table') }}`                  |
 
 ### 3.3 Example: Complete Prep flow as dbt model
 
@@ -271,14 +271,14 @@ SELECT * FROM aggregated
 
 ### 4.1 Scheduling comparison
 
-| Tableau Prep Conductor | Power BI / Fabric equivalent | Notes |
-|---|---|---|
+| Tableau Prep Conductor               | Power BI / Fabric equivalent             | Notes                                       |
+| ------------------------------------ | ---------------------------------------- | ------------------------------------------- |
 | Linked task (run flow after extract) | Dataflow refresh → Dataset refresh chain | Configure dataset to refresh after dataflow |
-| Schedule (time-based) | Scheduled refresh | Configure in dataset/dataflow settings |
-| Ad-hoc run | Manual refresh button | "Refresh now" in Power BI Service |
-| Flow failure notification | Refresh failure email | Configure in dataset settings |
-| Flow run history | Refresh history | View in dataset/dataflow settings |
-| Prep Conductor license | Included in Fabric/Premium | No additional license needed |
+| Schedule (time-based)                | Scheduled refresh                        | Configure in dataset/dataflow settings      |
+| Ad-hoc run                           | Manual refresh button                    | "Refresh now" in Power BI Service           |
+| Flow failure notification            | Refresh failure email                    | Configure in dataset settings               |
+| Flow run history                     | Refresh history                          | View in dataset/dataflow settings           |
+| Prep Conductor license               | Included in Fabric/Premium               | No additional license needed                |
 
 ### 4.2 Refresh chain example
 
@@ -316,12 +316,12 @@ For each Tableau Prep flow:
 
 ### 5.1 Effort estimation
 
-| Prep flow complexity | Characteristics | Estimated migration effort |
-|---|---|---|
-| Simple | 1-2 inputs, filters, renames, single output | 2-4 hours |
-| Medium | 2-3 inputs, joins, calculated fields, pivots | 4-8 hours |
-| Complex | 4+ inputs, multiple joins, aggregations, conditional logic | 8-16 hours |
-| Very complex | Complex with parameterized queries, LOD-like logic, custom SQL | 16-32 hours |
+| Prep flow complexity | Characteristics                                                | Estimated migration effort |
+| -------------------- | -------------------------------------------------------------- | -------------------------- |
+| Simple               | 1-2 inputs, filters, renames, single output                    | 2-4 hours                  |
+| Medium               | 2-3 inputs, joins, calculated fields, pivots                   | 4-8 hours                  |
+| Complex              | 4+ inputs, multiple joins, aggregations, conditional logic     | 8-16 hours                 |
+| Very complex         | Complex with parameterized queries, LOD-like logic, custom SQL | 16-32 hours                |
 
 ---
 

@@ -55,17 +55,17 @@ Entra ID (identity and authentication)
 
 ### Policy mapping: Ranger to Azure
 
-| Ranger policy type | Azure equivalent | Configuration method |
-|---|---|---|
-| HDFS path-based access | ADLS Gen2 POSIX ACLs + Azure RBAC | `az storage fs access set` or Purview access policies |
-| Hive database access | Unity Catalog schema permissions | `GRANT USE SCHEMA ON schema TO principal` |
-| Hive table access | Unity Catalog table permissions | `GRANT SELECT ON TABLE table TO principal` |
-| Hive column masking | Unity Catalog column masking | `ALTER TABLE ADD CONSTRAINT mask_ssn MASK mask_function` |
-| Hive row filtering | Unity Catalog row filters | `ALTER TABLE ADD CONSTRAINT region_filter ROW FILTER filter_function` |
-| HBase table access | Cosmos DB RBAC | Azure RBAC data plane roles |
-| Kafka topic access | Event Hubs RBAC | Azure RBAC roles (Sender, Receiver) |
-| YARN queue access | Databricks cluster policies | Cluster policy permissions |
-| Tag-based policies | Purview classifications + policies | Purview sensitivity labels |
+| Ranger policy type     | Azure equivalent                   | Configuration method                                                  |
+| ---------------------- | ---------------------------------- | --------------------------------------------------------------------- |
+| HDFS path-based access | ADLS Gen2 POSIX ACLs + Azure RBAC  | `az storage fs access set` or Purview access policies                 |
+| Hive database access   | Unity Catalog schema permissions   | `GRANT USE SCHEMA ON schema TO principal`                             |
+| Hive table access      | Unity Catalog table permissions    | `GRANT SELECT ON TABLE table TO principal`                            |
+| Hive column masking    | Unity Catalog column masking       | `ALTER TABLE ADD CONSTRAINT mask_ssn MASK mask_function`              |
+| Hive row filtering     | Unity Catalog row filters          | `ALTER TABLE ADD CONSTRAINT region_filter ROW FILTER filter_function` |
+| HBase table access     | Cosmos DB RBAC                     | Azure RBAC data plane roles                                           |
+| Kafka topic access     | Event Hubs RBAC                    | Azure RBAC roles (Sender, Receiver)                                   |
+| YARN queue access      | Databricks cluster policies        | Cluster policy permissions                                            |
+| Tag-based policies     | Purview classifications + policies | Purview sensitivity labels                                            |
 
 ### Step-by-step: migrating a Ranger HDFS policy
 
@@ -85,16 +85,14 @@ Entra ID (identity and authentication)
         {
             "groups": ["data-engineering"],
             "accesses": [
-                {"type": "read", "isAllowed": true},
-                {"type": "write", "isAllowed": true},
-                {"type": "execute", "isAllowed": true}
+                { "type": "read", "isAllowed": true },
+                { "type": "write", "isAllowed": true },
+                { "type": "execute", "isAllowed": true }
             ]
         },
         {
             "groups": ["data-analysts"],
-            "accesses": [
-                {"type": "read", "isAllowed": true}
-            ]
+            "accesses": [{ "type": "read", "isAllowed": true }]
         }
     ]
 }
@@ -136,26 +134,24 @@ az storage fs access set \
     "service": "hadoop-hive",
     "name": "analyst-silver-access",
     "resources": {
-        "database": {"values": ["silver"]},
-        "table": {"values": ["*"]},
-        "column": {"values": ["*"]}
+        "database": { "values": ["silver"] },
+        "table": { "values": ["*"] },
+        "column": { "values": ["*"] }
     },
     "policyItems": [
         {
             "groups": ["data-analysts"],
-            "accesses": [
-                {"type": "select", "isAllowed": true}
-            ]
+            "accesses": [{ "type": "select", "isAllowed": true }]
         }
     ],
     "denyPolicyItems": [
         {
             "groups": ["data-analysts"],
-            "accesses": [{"type": "select", "isAllowed": true}],
+            "accesses": [{ "type": "select", "isAllowed": true }],
             "resources": {
-                "database": {"values": ["silver"]},
-                "table": {"values": ["*"]},
-                "column": {"values": ["ssn", "credit_card"]}
+                "database": { "values": ["silver"] },
+                "table": { "values": ["*"] },
+                "column": { "values": ["ssn", "credit_card"] }
             }
         }
     ]
@@ -200,14 +196,14 @@ SET ROW FILTER main.silver.region_filter ON (region);
 
 Sentry was Cloudera's original authorization framework before the Cloudera-Hortonworks merger brought Ranger into CDP. If your environment uses Sentry:
 
-| Sentry concept | Azure equivalent |
-|---|---|
-| Sentry roles | Entra ID groups + Unity Catalog roles |
-| Sentry privileges (SELECT, INSERT, ALL) | Unity Catalog GRANT statements |
-| Sentry server-level privilege | Catalog-level GRANT in Unity Catalog |
-| Sentry database-level privilege | Schema-level GRANT in Unity Catalog |
-| Sentry table-level privilege | Table-level GRANT in Unity Catalog |
-| Sentry column-level privilege | Column masking in Unity Catalog |
+| Sentry concept                          | Azure equivalent                      |
+| --------------------------------------- | ------------------------------------- |
+| Sentry roles                            | Entra ID groups + Unity Catalog roles |
+| Sentry privileges (SELECT, INSERT, ALL) | Unity Catalog GRANT statements        |
+| Sentry server-level privilege           | Catalog-level GRANT in Unity Catalog  |
+| Sentry database-level privilege         | Schema-level GRANT in Unity Catalog   |
+| Sentry table-level privilege            | Table-level GRANT in Unity Catalog    |
+| Sentry column-level privilege           | Column masking in Unity Catalog       |
 
 The migration from Sentry is identical to Ranger in practice. Export Sentry roles and privileges, map to Unity Catalog GRANT statements.
 
@@ -217,15 +213,15 @@ The migration from Sentry is identical to Ranger in practice. Export Sentry role
 
 ### Atlas capabilities and Purview equivalents
 
-| Atlas capability | Purview equivalent | Migration approach |
-|---|---|---|
-| Type system (entity types) | Asset types (auto-discovered) | Purview auto-discovers most asset types |
-| Entity catalog | Asset inventory | Purview scanners auto-catalog ADLS, Databricks, SQL |
-| Classifications (tags) | Sensitivity labels + classifications | Purview auto-classifies PII, PHI, financial data |
-| Glossary terms | Business glossary | Manual migration or re-creation in Purview |
-| Lineage (Hive, Spark) | Lineage (ADF, Databricks, Fabric native) | Automatic with Azure services; no manual setup |
-| REST API | Purview REST API + Python SDK | API patterns differ but functionality equivalent |
-| Audit log | Azure Monitor + Purview audit | Built-in to Azure |
+| Atlas capability           | Purview equivalent                       | Migration approach                                  |
+| -------------------------- | ---------------------------------------- | --------------------------------------------------- |
+| Type system (entity types) | Asset types (auto-discovered)            | Purview auto-discovers most asset types             |
+| Entity catalog             | Asset inventory                          | Purview scanners auto-catalog ADLS, Databricks, SQL |
+| Classifications (tags)     | Sensitivity labels + classifications     | Purview auto-classifies PII, PHI, financial data    |
+| Glossary terms             | Business glossary                        | Manual migration or re-creation in Purview          |
+| Lineage (Hive, Spark)      | Lineage (ADF, Databricks, Fabric native) | Automatic with Azure services; no manual setup      |
+| REST API                   | Purview REST API + Python SDK            | API patterns differ but functionality equivalent    |
+| Audit log                  | Azure Monitor + Purview audit            | Built-in to Azure                                   |
 
 ### Migrating Atlas glossary terms
 
@@ -264,12 +260,12 @@ for term in terms:
 
 Atlas lineage is automatically replaced when you use Azure-native services:
 
-| Data movement | Atlas lineage source | Purview lineage source |
-|---|---|---|
-| ETL pipeline | Hive hook, Spark Atlas connector | ADF native lineage (automatic) |
-| Spark transformation | Spark Atlas connector | Databricks Unity Catalog lineage (automatic) |
-| SQL transformation | Hive hook | Fabric SQL endpoint lineage (automatic) |
-| Data copy | Custom Atlas entities | ADF copy activity lineage (automatic) |
+| Data movement        | Atlas lineage source             | Purview lineage source                       |
+| -------------------- | -------------------------------- | -------------------------------------------- |
+| ETL pipeline         | Hive hook, Spark Atlas connector | ADF native lineage (automatic)               |
+| Spark transformation | Spark Atlas connector            | Databricks Unity Catalog lineage (automatic) |
+| SQL transformation   | Hive hook                        | Fabric SQL endpoint lineage (automatic)      |
+| Data copy            | Custom Atlas entities            | ADF copy activity lineage (automatic)        |
 
 **Key insight:** You do not need to "migrate" lineage. Azure services emit lineage events natively to Purview. Once workloads run on Azure, lineage builds itself automatically.
 
@@ -288,16 +284,16 @@ Hadoop uses Kerberos for authentication:
 
 ### Entra ID in Azure
 
-| Kerberos concept | Entra ID equivalent |
-|---|---|
-| KDC (Key Distribution Center) | Entra ID (cloud identity provider) |
-| Kerberos principal (`user@REALM`) | Entra user principal (`user@domain.com`) |
-| Service principal (keytab) | Managed identity or Entra app registration |
-| `kinit` (get TGT) | `az login` or token acquisition via MSAL |
-| Keytab (stored credential) | Managed identity (no credential to manage) |
-| Cross-realm trust | Entra ID federation / hybrid identity |
-| Kerberos ticket (TGT) | OAuth2 access token |
-| Kerberos service ticket | OAuth2 scope-based access token |
+| Kerberos concept                  | Entra ID equivalent                        |
+| --------------------------------- | ------------------------------------------ |
+| KDC (Key Distribution Center)     | Entra ID (cloud identity provider)         |
+| Kerberos principal (`user@REALM`) | Entra user principal (`user@domain.com`)   |
+| Service principal (keytab)        | Managed identity or Entra app registration |
+| `kinit` (get TGT)                 | `az login` or token acquisition via MSAL   |
+| Keytab (stored credential)        | Managed identity (no credential to manage) |
+| Cross-realm trust                 | Entra ID federation / hybrid identity      |
+| Kerberos ticket (TGT)             | OAuth2 access token                        |
+| Kerberos service ticket           | OAuth2 scope-based access token            |
 
 ### Service-to-service authentication
 
@@ -330,12 +326,12 @@ spark.conf.set(
 
 ### User authentication
 
-| Hadoop pattern | Azure pattern |
-|---|---|
-| `kinit user@REALM` → access Hive | SSO via Entra → access Databricks SQL |
-| LDAP/AD-backed Kerberos | Entra ID (cloud-native or hybrid with AD Connect) |
-| Kerberos ticket renewal (cron job) | OAuth2 token refresh (automatic) |
-| Keytab distribution to edge nodes | Not needed — managed identities are instance-bound |
+| Hadoop pattern                     | Azure pattern                                      |
+| ---------------------------------- | -------------------------------------------------- |
+| `kinit user@REALM` → access Hive   | SSO via Entra → access Databricks SQL              |
+| LDAP/AD-backed Kerberos            | Entra ID (cloud-native or hybrid with AD Connect)  |
+| Kerberos ticket renewal (cron job) | OAuth2 token refresh (automatic)                   |
+| Keytab distribution to edge nodes  | Not needed — managed identities are instance-bound |
 
 ---
 
@@ -427,11 +423,11 @@ def migrate_hdfs_acls_to_adls(hdfs_path, adls_account, adls_filesystem, adls_pat
 
 ### ACL best practices for Azure
 
-| Hadoop practice | Azure recommendation |
-|---|---|
-| Per-user HDFS ACLs | Prefer Entra ID groups over individual user ACLs |
-| Deep directory ACLs | Use default ACLs to propagate permissions to child objects |
-| Ranger + HDFS ACLs | Prefer Unity Catalog for table-level + ADLS ACLs for storage-level |
+| Hadoop practice         | Azure recommendation                                                   |
+| ----------------------- | ---------------------------------------------------------------------- |
+| Per-user HDFS ACLs      | Prefer Entra ID groups over individual user ACLs                       |
+| Deep directory ACLs     | Use default ACLs to propagate permissions to child objects             |
+| Ranger + HDFS ACLs      | Prefer Unity Catalog for table-level + ADLS ACLs for storage-level     |
 | Complex ACL hierarchies | Simplify: use Azure RBAC for broad access + ACLs only for fine-grained |
 
 ---
@@ -440,24 +436,24 @@ def migrate_hdfs_acls_to_adls(hdfs_path, adls_account, adls_filesystem, adls_pat
 
 ### Hadoop encryption
 
-| Feature | Hadoop implementation | Configuration effort |
-|---|---|---|
-| Encryption at rest (HDFS) | HDFS Transparent Encryption + Hadoop KMS | High: KMS setup, EZ creation, key rotation |
-| Encryption at rest (HBase) | HFile encryption | High: per-table configuration |
-| Encryption in transit | SASL/TLS on each service | High: certificate management across all nodes |
-| Key management | Hadoop KMS or Ranger KMS | High: key rotation, ACLs, backup |
+| Feature                    | Hadoop implementation                    | Configuration effort                          |
+| -------------------------- | ---------------------------------------- | --------------------------------------------- |
+| Encryption at rest (HDFS)  | HDFS Transparent Encryption + Hadoop KMS | High: KMS setup, EZ creation, key rotation    |
+| Encryption at rest (HBase) | HFile encryption                         | High: per-table configuration                 |
+| Encryption in transit      | SASL/TLS on each service                 | High: certificate management across all nodes |
+| Key management             | Hadoop KMS or Ranger KMS                 | High: key rotation, ACLs, backup              |
 
 ### Azure encryption
 
-| Feature | Azure implementation | Configuration effort |
-|---|---|---|
-| Encryption at rest (storage) | **Default: enabled** (Microsoft-managed keys) | Zero — always on |
-| Encryption at rest (CMK) | Azure Key Vault integration | Low: create Key Vault, assign CMK |
-| Encryption at rest (Cosmos DB) | **Default: enabled** | Zero — always on |
-| Encryption in transit | **Default: TLS 1.2+** on all services | Zero — always on |
-| Key management | Azure Key Vault | Low: Key Vault is managed service |
-| Key rotation | Automatic (Microsoft-managed) or scheduled (CMK) | Low |
-| Double encryption | Infrastructure encryption option | Low: enable at account creation |
+| Feature                        | Azure implementation                             | Configuration effort              |
+| ------------------------------ | ------------------------------------------------ | --------------------------------- |
+| Encryption at rest (storage)   | **Default: enabled** (Microsoft-managed keys)    | Zero — always on                  |
+| Encryption at rest (CMK)       | Azure Key Vault integration                      | Low: create Key Vault, assign CMK |
+| Encryption at rest (Cosmos DB) | **Default: enabled**                             | Zero — always on                  |
+| Encryption in transit          | **Default: TLS 1.2+** on all services            | Zero — always on                  |
+| Key management                 | Azure Key Vault                                  | Low: Key Vault is managed service |
+| Key rotation                   | Automatic (Microsoft-managed) or scheduled (CMK) | Low                               |
+| Double encryption              | Infrastructure encryption option                 | Low: enable at account creation   |
 
 ### Encryption comparison summary
 
@@ -496,14 +492,14 @@ Azure:
 
 ## Common pitfalls
 
-| Pitfall | Mitigation |
-|---|---|
+| Pitfall                                          | Mitigation                                                             |
+| ------------------------------------------------ | ---------------------------------------------------------------------- |
 | Assuming Azure RBAC replaces all Ranger policies | Azure RBAC is resource-level; Unity Catalog handles table/column-level |
-| Not mapping Hadoop groups to Entra groups | Create Entra groups before migration; use AD Connect for hybrid |
-| Forgetting default ACLs on ADLS directories | New files inherit default ACLs; set defaults on parent directories |
-| Losing Ranger audit trail | Export Ranger audit logs before decommission; archive to ADLS |
-| Ignoring service account credentials | Replace all service keytabs with managed identities |
-| Under-testing column masking and row filters | Test with multiple user roles before cutover |
+| Not mapping Hadoop groups to Entra groups        | Create Entra groups before migration; use AD Connect for hybrid        |
+| Forgetting default ACLs on ADLS directories      | New files inherit default ACLs; set defaults on parent directories     |
+| Losing Ranger audit trail                        | Export Ranger audit logs before decommission; archive to ADLS          |
+| Ignoring service account credentials             | Replace all service keytabs with managed identities                    |
+| Under-testing column masking and row filters     | Test with multiple user roles before cutover                           |
 
 ---
 

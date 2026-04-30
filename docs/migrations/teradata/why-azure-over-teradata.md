@@ -41,13 +41,14 @@ Teradata's revenue has declined from $2.8B (2014) to approximately $1.8B (2024).
 
 On-prem Teradata appliances (IntelliFlex, IntelliBase) have defined hardware lifecycles:
 
-| Hardware generation | Typical EOL | Refresh cost (mid-size) |
-| --- | --- | --- |
-| IntelliFlex 2xxx series | 2024-2026 | $3M-$8M |
-| IntelliFlex 3xxx series | 2027-2029 | $4M-$10M |
-| IntelliBase | Varies | $1M-$3M |
+| Hardware generation     | Typical EOL | Refresh cost (mid-size) |
+| ----------------------- | ----------- | ----------------------- |
+| IntelliFlex 2xxx series | 2024-2026   | $3M-$8M                 |
+| IntelliFlex 3xxx series | 2027-2029   | $4M-$10M                |
+| IntelliBase             | Varies      | $1M-$3M                 |
 
 Each refresh requires:
+
 - Capital budget approval (6-12 months)
 - Physical installation and burn-in (2-4 months)
 - Data migration between generations (1-3 months)
@@ -63,12 +64,12 @@ Migrating to Azure eliminates this cycle entirely.
 
 Teradata licenses are based on **capacity** (nodes, storage, or a combination). Typical annual costs:
 
-| Environment size | Annual Teradata license | Annual hardware/DC | Total annual |
-| --- | --- | --- | --- |
-| Small (1-5 nodes, <50 TB) | $500K-$1.5M | $200K-$500K | $700K-$2M |
-| Medium (6-20 nodes, 50-200 TB) | $1.5M-$5M | $500K-$1.5M | $2M-$6.5M |
-| Large (20-50+ nodes, 200 TB-1 PB) | $5M-$15M | $1.5M-$5M | $6.5M-$20M |
-| Enterprise (50+ nodes, 1 PB+) | $15M-$30M+ | $5M-$15M | $20M-$45M+ |
+| Environment size                  | Annual Teradata license | Annual hardware/DC | Total annual |
+| --------------------------------- | ----------------------- | ------------------ | ------------ |
+| Small (1-5 nodes, <50 TB)         | $500K-$1.5M             | $200K-$500K        | $700K-$2M    |
+| Medium (6-20 nodes, 50-200 TB)    | $1.5M-$5M               | $500K-$1.5M        | $2M-$6.5M    |
+| Large (20-50+ nodes, 200 TB-1 PB) | $5M-$15M                | $1.5M-$5M          | $6.5M-$20M   |
+| Enterprise (50+ nodes, 1 PB+)     | $15M-$30M+              | $5M-$15M           | $20M-$45M+   |
 
 These are **fixed costs** regardless of utilization. Most Teradata systems run at 20-40% average utilization, with spikes to 80-90% during reporting periods.
 
@@ -76,13 +77,13 @@ These are **fixed costs** regardless of utilization. Most Teradata systems run a
 
 Azure costs scale with actual usage:
 
-| Azure service | Pricing model | Scale-to-zero |
-| --- | --- | --- |
-| Synapse Dedicated SQL Pool | DWU-hours consumed | Yes (pause/resume) |
-| Synapse Serverless | TB scanned | Yes (no idle cost) |
-| Databricks SQL Warehouse | DBU-hours consumed | Yes (auto-stop) |
-| Fabric Warehouse | CU-hours consumed | Yes (pause/resume) |
-| ADLS Gen2 | GB stored + transactions | Minimal idle cost |
+| Azure service              | Pricing model            | Scale-to-zero      |
+| -------------------------- | ------------------------ | ------------------ |
+| Synapse Dedicated SQL Pool | DWU-hours consumed       | Yes (pause/resume) |
+| Synapse Serverless         | TB scanned               | Yes (no idle cost) |
+| Databricks SQL Warehouse   | DBU-hours consumed       | Yes (auto-stop)    |
+| Fabric Warehouse           | CU-hours consumed        | Yes (pause/resume) |
+| ADLS Gen2                  | GB stored + transactions | Minimal idle cost  |
 
 ### The math
 
@@ -105,17 +106,18 @@ Teradata appliances must be sized for peak workload:
 
 ### Azure elastic scaling
 
-| Scenario | Teradata approach | Azure approach |
-| --- | --- | --- |
-| Quarter-end reporting spike | Hope the appliance handles it | Auto-scale SQL warehouse from 2X to 8X for 48 hours |
-| New analytics workload | Negotiate node addition (months) | Spin up new SQL warehouse (minutes) |
-| Seasonal low period | Pay full license anyway | Scale down or pause (pay nothing) |
-| One-time data science project | Compete for shared resources | Dedicated Databricks cluster, tear down after |
-| Disaster recovery | Second appliance (2x cost) | Geo-redundant storage + on-demand compute |
+| Scenario                      | Teradata approach                | Azure approach                                      |
+| ----------------------------- | -------------------------------- | --------------------------------------------------- |
+| Quarter-end reporting spike   | Hope the appliance handles it    | Auto-scale SQL warehouse from 2X to 8X for 48 hours |
+| New analytics workload        | Negotiate node addition (months) | Spin up new SQL warehouse (minutes)                 |
+| Seasonal low period           | Pay full license anyway          | Scale down or pause (pay nothing)                   |
+| One-time data science project | Compete for shared resources     | Dedicated Databricks cluster, tear down after       |
+| Disaster recovery             | Second appliance (2x cost)       | Geo-redundant storage + on-demand compute           |
 
 ### Real-world example
 
 A federal agency running a 20-node Teradata system experiences:
+
 - 3 months/year at 80%+ utilization (quarter-end, annual reporting)
 - 6 months/year at 30-40% utilization (steady state)
 - 3 months/year at 10-20% utilization (low period)
@@ -130,16 +132,16 @@ On Teradata, they pay for 20 nodes all year. On Azure, they pay for the equivale
 
 The industry has moved from monolithic EDW (Teradata's model) to lakehouse architecture:
 
-| Dimension | Teradata EDW | Azure Lakehouse |
-| --- | --- | --- |
-| **Storage format** | Proprietary (Teradata blocks) | Open (Delta Lake / Parquet) |
-| **Storage/compute coupling** | Tightly coupled | Fully decoupled |
-| **Data types** | Structured (relational) | Structured + semi-structured + unstructured |
-| **Processing engines** | Single (Teradata SQL) | Multiple (Spark, SQL, Python, R) |
-| **Transformation layer** | Stored procedures, BTEQ scripts | dbt models, notebooks, ADF pipelines |
-| **Schema enforcement** | Schema-on-write only | Schema-on-write + schema-on-read |
-| **Data sharing** | QueryGrid (proprietary) | Delta Sharing (open protocol) |
-| **Version control** | Limited (archive/restore) | Delta time travel, Git for code |
+| Dimension                    | Teradata EDW                    | Azure Lakehouse                             |
+| ---------------------------- | ------------------------------- | ------------------------------------------- |
+| **Storage format**           | Proprietary (Teradata blocks)   | Open (Delta Lake / Parquet)                 |
+| **Storage/compute coupling** | Tightly coupled                 | Fully decoupled                             |
+| **Data types**               | Structured (relational)         | Structured + semi-structured + unstructured |
+| **Processing engines**       | Single (Teradata SQL)           | Multiple (Spark, SQL, Python, R)            |
+| **Transformation layer**     | Stored procedures, BTEQ scripts | dbt models, notebooks, ADF pipelines        |
+| **Schema enforcement**       | Schema-on-write only            | Schema-on-write + schema-on-read            |
+| **Data sharing**             | QueryGrid (proprietary)         | Delta Sharing (open protocol)               |
+| **Version control**          | Limited (archive/restore)       | Delta time travel, Git for code             |
 
 ### Open formats vs proprietary storage
 
@@ -161,14 +163,14 @@ Azure's lakehouse stores data in Delta Lake (Parquet + transaction log):
 
 Teradata organizations typically have thousands of BTEQ scripts and stored procedures that encode business logic. The modern equivalent is **dbt (data build tool)**:
 
-| Teradata approach | dbt approach |
-| --- | --- |
-| BTEQ scripts on scheduler | dbt models in Git, CI/CD deployed |
-| Stored procedures | dbt macros + Jinja |
-| Manual dependency tracking | Automatic DAG resolution |
-| No testing framework | Built-in data tests (unique, not_null, relationships) |
-| No documentation | Auto-generated documentation from YAML |
-| Dialect-specific SQL | Cross-platform SQL (Spark, Synapse, Fabric) |
+| Teradata approach          | dbt approach                                          |
+| -------------------------- | ----------------------------------------------------- |
+| BTEQ scripts on scheduler  | dbt models in Git, CI/CD deployed                     |
+| Stored procedures          | dbt macros + Jinja                                    |
+| Manual dependency tracking | Automatic DAG resolution                              |
+| No testing framework       | Built-in data tests (unique, not_null, relationships) |
+| No documentation           | Auto-generated documentation from YAML                |
+| Dialect-specific SQL       | Cross-platform SQL (Spark, Synapse, Fabric)           |
 
 See [Tutorial — BTEQ to dbt](tutorial-bteq-to-dbt.md) for a hands-on walkthrough.
 
@@ -186,6 +188,7 @@ Teradata offers in-database analytics through:
 - **ClearScape Analytics** — newer analytics package
 
 Limitations:
+
 - Limited algorithm selection compared to scikit-learn, PyTorch, TensorFlow
 - GPU support is minimal or nonexistent on most appliances
 - No native integration with modern ML frameworks
@@ -195,16 +198,16 @@ Limitations:
 
 ### Azure AI/ML ecosystem
 
-| Capability | Azure service | Integration with data platform |
-| --- | --- | --- |
-| Classical ML | Databricks MLflow, Azure ML | Native on lakehouse data |
-| Deep learning | Databricks GPU clusters, Azure ML | GPU auto-scaling |
-| Feature engineering | Databricks Feature Store | Delta tables as features |
-| Model serving | Databricks Model Serving, Azure ML endpoints | Real-time + batch |
-| Vector search | Azure AI Search, Databricks Vector Search | Embeddings on lakehouse |
-| Generative AI | Azure OpenAI Service | Direct integration with data |
-| AutoML | Databricks AutoML, Azure AutoML | One-click from data |
-| MLOps | MLflow, Azure ML pipelines | Full lifecycle management |
+| Capability          | Azure service                                | Integration with data platform |
+| ------------------- | -------------------------------------------- | ------------------------------ |
+| Classical ML        | Databricks MLflow, Azure ML                  | Native on lakehouse data       |
+| Deep learning       | Databricks GPU clusters, Azure ML            | GPU auto-scaling               |
+| Feature engineering | Databricks Feature Store                     | Delta tables as features       |
+| Model serving       | Databricks Model Serving, Azure ML endpoints | Real-time + batch              |
+| Vector search       | Azure AI Search, Databricks Vector Search    | Embeddings on lakehouse        |
+| Generative AI       | Azure OpenAI Service                         | Direct integration with data   |
+| AutoML              | Databricks AutoML, Azure AutoML              | One-click from data            |
+| MLOps               | MLflow, Azure ML pipelines                   | Full lifecycle management      |
 
 ### The AI advantage
 
@@ -231,17 +234,17 @@ ViewPoint and Vantage Analyst are functional but lack the polish, self-service c
 
 ### Power BI + Copilot
 
-| Capability | Teradata BI ecosystem | Power BI + Fabric |
-| --- | --- | --- |
-| Self-service analytics | Limited (analyst tool) | Full self-service with governance |
-| Natural language queries | Not available | Copilot (natural language to DAX/SQL) |
-| Real-time dashboards | Not native | DirectQuery + streaming datasets |
-| Embedded analytics | Limited | Power BI Embedded (full API) |
-| Mobile experience | Minimal | Native mobile apps |
-| Semantic layer | Not standardized | Direct Lake semantic model |
-| Row-level security | Through Teradata views | Native RLS in Power BI + Fabric |
-| Collaboration | Not built in | Teams integration, comments, subscriptions |
-| AI-powered insights | Not available | Smart narratives, anomaly detection, Copilot |
+| Capability               | Teradata BI ecosystem  | Power BI + Fabric                            |
+| ------------------------ | ---------------------- | -------------------------------------------- |
+| Self-service analytics   | Limited (analyst tool) | Full self-service with governance            |
+| Natural language queries | Not available          | Copilot (natural language to DAX/SQL)        |
+| Real-time dashboards     | Not native             | DirectQuery + streaming datasets             |
+| Embedded analytics       | Limited                | Power BI Embedded (full API)                 |
+| Mobile experience        | Minimal                | Native mobile apps                           |
+| Semantic layer           | Not standardized       | Direct Lake semantic model                   |
+| Row-level security       | Through Teradata views | Native RLS in Power BI + Fabric              |
+| Collaboration            | Not built in           | Teams integration, comments, subscriptions   |
+| AI-powered insights      | Not available          | Smart narratives, anomaly detection, Copilot |
 
 ### Direct Lake advantage
 
@@ -260,14 +263,14 @@ On Teradata, BI tools must either import data (stale, duplicated) or use DirectQ
 
 ### The Teradata talent problem
 
-| Metric | Teradata | SQL + Spark + dbt |
-| --- | --- | --- |
-| LinkedIn job postings (US, 2024) | ~200-400 | ~50,000+ |
-| Average contractor rate | $150-$250/hr (scarce) | $80-$150/hr (abundant) |
-| University programs teaching | <5 | Thousands |
-| Open-source community | Minimal | Massive |
-| Certification programs | Teradata Certified (declining) | Databricks, Azure, dbt (growing) |
-| Stack Overflow questions | ~5,000 total | Millions combined |
+| Metric                           | Teradata                       | SQL + Spark + dbt                |
+| -------------------------------- | ------------------------------ | -------------------------------- |
+| LinkedIn job postings (US, 2024) | ~200-400                       | ~50,000+                         |
+| Average contractor rate          | $150-$250/hr (scarce)          | $80-$150/hr (abundant)           |
+| University programs teaching     | <5                             | Thousands                        |
+| Open-source community            | Minimal                        | Massive                          |
+| Certification programs           | Teradata Certified (declining) | Databricks, Azure, dbt (growing) |
+| Stack Overflow questions         | ~5,000 total                   | Millions combined                |
 
 ### Practical impact
 
@@ -279,6 +282,7 @@ On Teradata, BI tools must either import data (stale, duplicated) or use DirectQ
 ### The migration itself creates talent leverage
 
 Migrating to Azure means your team learns skills (SQL, Spark, dbt, Python, Azure services) that:
+
 - Are transferable across industries
 - Have abundant training resources
 - Are actively maintained by large communities

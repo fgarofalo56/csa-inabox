@@ -30,16 +30,16 @@ Each of these is a separate service, a separate billing line, and a separate tea
 
 Fabric bundles all of them:
 
-| Capability | Databricks stack | Fabric equivalent |
-| --- | --- | --- |
-| Lakehouse engine | Databricks Runtime + Photon | Fabric Spark + Lakehouse |
-| SQL analytics | Databricks SQL (DBSQL) | Fabric SQL endpoint |
-| BI tool | Power BI (separate license) | Power BI (native in Fabric) |
-| Real-time analytics | Structured Streaming + Delta Live Tables | Real-Time Intelligence + Eventhouse |
-| Data integration | ADF / Fivetran / Airbyte | Fabric Data Pipelines (ADF v2 native) |
-| Data catalog | Unity Catalog + Purview (separate) | OneLake metadata + Purview (integrated) |
-| ML experiments | MLflow (native) | Fabric ML experiments |
-| Capacity billing | DBU tiers (Jobs, SQL, All-Purpose, Serverless) | Fabric CU (single SKU, 24h smoothing) |
+| Capability          | Databricks stack                               | Fabric equivalent                       |
+| ------------------- | ---------------------------------------------- | --------------------------------------- |
+| Lakehouse engine    | Databricks Runtime + Photon                    | Fabric Spark + Lakehouse                |
+| SQL analytics       | Databricks SQL (DBSQL)                         | Fabric SQL endpoint                     |
+| BI tool             | Power BI (separate license)                    | Power BI (native in Fabric)             |
+| Real-time analytics | Structured Streaming + Delta Live Tables       | Real-Time Intelligence + Eventhouse     |
+| Data integration    | ADF / Fivetran / Airbyte                       | Fabric Data Pipelines (ADF v2 native)   |
+| Data catalog        | Unity Catalog + Purview (separate)             | OneLake metadata + Purview (integrated) |
+| ML experiments      | MLflow (native)                                | Fabric ML experiments                   |
+| Capacity billing    | DBU tiers (Jobs, SQL, All-Purpose, Serverless) | Fabric CU (single SKU, 24h smoothing)   |
 
 The operational simplification is real. One capacity, one billing meter, one admin portal, one set of workspace permissions.
 
@@ -51,11 +51,11 @@ Direct Lake is the single strongest technical reason to move BI workloads to Fab
 
 **Why this matters:**
 
-| Approach | Data freshness | Query speed | Storage cost | Compute cost |
-| --- | --- | --- | --- | --- |
-| Power BI Import | Stale (scheduled refresh) | Fast (in-memory) | Double (lake + PBI) | Refresh compute |
-| DirectQuery to DBSQL | Real-time | Slower (round-trip) | Single | DBSQL warehouse running | 
-| **Direct Lake** | Near-real-time | Fast (VertiPaq on-demand) | Single | Fabric CU only |
+| Approach             | Data freshness            | Query speed               | Storage cost        | Compute cost            |
+| -------------------- | ------------------------- | ------------------------- | ------------------- | ----------------------- |
+| Power BI Import      | Stale (scheduled refresh) | Fast (in-memory)          | Double (lake + PBI) | Refresh compute         |
+| DirectQuery to DBSQL | Real-time                 | Slower (round-trip)       | Single              | DBSQL warehouse running |
+| **Direct Lake**      | Near-real-time            | Fast (VertiPaq on-demand) | Single              | Fabric CU only          |
 
 With Databricks, the typical pattern is: Databricks writes Delta tables, Power BI Import refreshes every N hours, consuming both DBSQL compute and Power BI Premium capacity. Direct Lake eliminates the refresh step entirely. Analysts see fresh data as soon as the pipeline writes it.
 
@@ -82,31 +82,31 @@ Databricks has Databricks Assistant (notebook-focused) and is building out LLM f
 
 Databricks billing is per-DBU with different rates per SKU:
 
-| Databricks SKU | Typical rate (Azure, pay-as-you-go) | Use case |
-| --- | --- | --- |
-| Jobs Compute | ~$0.15/DBU | Scheduled batch jobs |
-| Jobs Light Compute | ~$0.07/DBU | Lightweight jobs |
-| All-Purpose Compute | ~$0.40/DBU | Interactive notebooks |
-| DBSQL Classic | ~$0.22/DBU | BI SQL queries |
-| DBSQL Pro | ~$0.55/DBU | Advanced DBSQL features |
-| DBSQL Serverless | ~$0.70/DBU | Serverless SQL |
-| Delta Live Tables | Varies by tier | Streaming pipelines |
+| Databricks SKU      | Typical rate (Azure, pay-as-you-go) | Use case                |
+| ------------------- | ----------------------------------- | ----------------------- |
+| Jobs Compute        | ~$0.15/DBU                          | Scheduled batch jobs    |
+| Jobs Light Compute  | ~$0.07/DBU                          | Lightweight jobs        |
+| All-Purpose Compute | ~$0.40/DBU                          | Interactive notebooks   |
+| DBSQL Classic       | ~$0.22/DBU                          | BI SQL queries          |
+| DBSQL Pro           | ~$0.55/DBU                          | Advanced DBSQL features |
+| DBSQL Serverless    | ~$0.70/DBU                          | Serverless SQL          |
+| Delta Live Tables   | Varies by tier                      | Streaming pipelines     |
 
 Each SKU has different rates. Cluster autoscaling, spot instances, Photon surcharges, and VM types add further complexity. A mid-size Databricks bill often has 6-8 line items.
 
 Fabric has one meter: **Fabric Capacity Units (CU)**. You buy a capacity SKU (F2, F4, F8 ... F2048). All workloads -- Spark, SQL, Power BI, pipelines, real-time -- consume from the same pool. Unused capacity is averaged over 24 hours (smoothing), so spiky workloads do not require over-provisioning.
 
-| Fabric SKU | CUs | Approximate monthly cost (pay-as-you-go) |
-| --- | --- | --- |
-| F2 | 2 | ~$260 |
-| F8 | 8 | ~$1,040 |
-| F16 | 16 | ~$2,080 |
-| F32 | 32 | ~$4,160 |
-| F64 | 64 | ~$8,320 |
-| F128 | 128 | ~$16,640 |
-| F256 | 256 | ~$33,280 |
-| F512 | 512 | ~$66,560 |
-| F1024 | 1,024 | ~$133,120 |
+| Fabric SKU | CUs   | Approximate monthly cost (pay-as-you-go) |
+| ---------- | ----- | ---------------------------------------- |
+| F2         | 2     | ~$260                                    |
+| F8         | 8     | ~$1,040                                  |
+| F16        | 16    | ~$2,080                                  |
+| F32        | 32    | ~$4,160                                  |
+| F64        | 64    | ~$8,320                                  |
+| F128       | 128   | ~$16,640                                 |
+| F256       | 256   | ~$33,280                                 |
+| F512       | 512   | ~$66,560                                 |
+| F1024      | 1,024 | ~$133,120                                |
 
 Reserved capacity (1-year or 3-year) reduces cost by 20-40%. See [tco-analysis.md](tco-analysis.md) for detailed worked examples.
 
@@ -206,15 +206,15 @@ Databricks Runtime ships newer Spark versions faster and includes Photon-specifi
 
 For most enterprises, the right answer is hybrid:
 
-| Layer | Stays on Databricks | Moves to Fabric |
-| --- | --- | --- |
-| Storage | ADLS Gen2 (Delta tables) | OneLake shortcuts to same ADLS |
-| Compute -- heavy transforms | Databricks Jobs + Photon | -- |
-| Compute -- ad-hoc SQL | -- | Fabric Lakehouse SQL endpoint |
-| Compute -- ML training | Databricks + MLflow | -- |
-| BI | -- | Power BI + Direct Lake |
-| Real-time | -- | Fabric RTI / Eventhouse |
-| Governance | Unity Catalog (data layer) | Purview + workspace roles (BI layer) |
+| Layer                       | Stays on Databricks        | Moves to Fabric                      |
+| --------------------------- | -------------------------- | ------------------------------------ |
+| Storage                     | ADLS Gen2 (Delta tables)   | OneLake shortcuts to same ADLS       |
+| Compute -- heavy transforms | Databricks Jobs + Photon   | --                                   |
+| Compute -- ad-hoc SQL       | --                         | Fabric Lakehouse SQL endpoint        |
+| Compute -- ML training      | Databricks + MLflow        | --                                   |
+| BI                          | --                         | Power BI + Direct Lake               |
+| Real-time                   | --                         | Fabric RTI / Eventhouse              |
+| Governance                  | Unity Catalog (data layer) | Purview + workspace roles (BI layer) |
 
 Both engines read the same Delta tables via OneLake shortcuts. No data duplication. Each platform does what it does best.
 
@@ -222,13 +222,13 @@ Both engines read the same Delta tables via OneLake shortcuts. No data duplicati
 
 ## 5. Federal considerations
 
-| Consideration | Databricks on Azure Gov | Fabric |
-| --- | --- | --- |
-| FedRAMP High | Authorized (Databricks on Azure Gov) | Inherited via Azure (Fabric Gov availability varies) |
-| DoD IL4 / IL5 | Covered on Azure Gov | Check `docs/GOV_SERVICE_MATRIX.md` for Fabric parity |
-| CMMC 2.0 Level 2 | Customer-managed + Databricks controls | Controls mapped in csa-inabox compliance YAML |
-| HIPAA | Covered with BAA | Covered with BAA |
-| Data residency | Azure Gov region-locked | Azure Gov region-locked (when available) |
+| Consideration    | Databricks on Azure Gov                | Fabric                                               |
+| ---------------- | -------------------------------------- | ---------------------------------------------------- |
+| FedRAMP High     | Authorized (Databricks on Azure Gov)   | Inherited via Azure (Fabric Gov availability varies) |
+| DoD IL4 / IL5    | Covered on Azure Gov                   | Check `docs/GOV_SERVICE_MATRIX.md` for Fabric parity |
+| CMMC 2.0 Level 2 | Customer-managed + Databricks controls | Controls mapped in csa-inabox compliance YAML        |
+| HIPAA            | Covered with BAA                       | Covered with BAA                                     |
+| Data residency   | Azure Gov region-locked                | Azure Gov region-locked (when available)             |
 
 > **Important:** Fabric is pre-GA or limited in Azure Government for some workloads as of April 2026. Federal customers should verify current Gov availability in `docs/GOV_SERVICE_MATRIX.md` before committing. Hybrid (Databricks on Azure Gov + Fabric commercial for non-sensitive BI) is a valid interim pattern.
 

@@ -14,12 +14,12 @@ Do not migrate your Hadoop cluster as a monolith. Decompose it into independent 
 
 Create a workload inventory with four tiers:
 
-| Tier | Description | Migration action | Typical percentage |
-|---|---|---|---|
-| **A — Direct port** | Spark/Hive jobs reading Parquet/Delta, standard patterns | Port to Databricks/Fabric with minimal changes | 20-30% |
-| **B — Modernize** | Hive SQL workloads, Pig scripts, simple MapReduce | Convert to dbt + SparkSQL | 20-30% |
-| **C — Re-platform** | HBase, Storm, Flink, custom YARN apps | Redesign for Cosmos DB, Functions, Databricks Streaming | 10-20% |
-| **D — Decommission** | Stale data, abandoned jobs, unused tables | Archive evidence and delete | 30-50% |
+| Tier                 | Description                                              | Migration action                                        | Typical percentage |
+| -------------------- | -------------------------------------------------------- | ------------------------------------------------------- | ------------------ |
+| **A — Direct port**  | Spark/Hive jobs reading Parquet/Delta, standard patterns | Port to Databricks/Fabric with minimal changes          | 20-30%             |
+| **B — Modernize**    | Hive SQL workloads, Pig scripts, simple MapReduce        | Convert to dbt + SparkSQL                               | 20-30%             |
+| **C — Re-platform**  | HBase, Storm, Flink, custom YARN apps                    | Redesign for Cosmos DB, Functions, Databricks Streaming | 10-20%             |
+| **D — Decommission** | Stale data, abandoned jobs, unused tables                | Archive evidence and delete                             | 30-50%             |
 
 ### Step 2: Identify Tier D first
 
@@ -172,24 +172,24 @@ for table_config in tables_to_reconcile:
 
 ### Parallel-run duration
 
-| Workload type | Minimum parallel-run | Recommended |
-|---|---|---|
-| Daily batch ETL | 14 days | 30 days |
-| Weekly reports | 4 weeks | 8 weeks |
-| Monthly aggregations | 2 months | 3 months |
-| Streaming pipelines | 7 days | 14 days |
-| Ad-hoc queries | N/A (validate with test queries) | 5-10 representative queries |
+| Workload type        | Minimum parallel-run             | Recommended                 |
+| -------------------- | -------------------------------- | --------------------------- |
+| Daily batch ETL      | 14 days                          | 30 days                     |
+| Weekly reports       | 4 weeks                          | 8 weeks                     |
+| Monthly aggregations | 2 months                         | 3 months                    |
+| Streaming pipelines  | 7 days                           | 14 days                     |
+| Ad-hoc queries       | N/A (validate with test queries) | 5-10 representative queries |
 
 ### Exit criteria for parallel-run
 
-| Criterion | Threshold |
-|---|---|
-| Row count match | 100% for all tables |
-| Aggregate metric match | Within 0.01% for all numeric columns |
-| Schema match | 100% column name and type match |
-| Missing records | 0 in either direction |
-| Performance | Azure pipeline completes within 1.5x of Hadoop time or better |
-| Consumer acceptance | All downstream consumers validate Azure outputs |
+| Criterion              | Threshold                                                     |
+| ---------------------- | ------------------------------------------------------------- |
+| Row count match        | 100% for all tables                                           |
+| Aggregate metric match | Within 0.01% for all numeric columns                          |
+| Schema match           | 100% column name and type match                               |
+| Missing records        | 0 in either direction                                         |
+| Performance            | Azure pipeline completes within 1.5x of Hadoop time or better |
+| Consumer acceptance    | All downstream consumers validate Azure outputs               |
 
 ---
 
@@ -218,12 +218,12 @@ For each workload:
 
 ### License termination timeline
 
-| Vendor | Typical notice period | Key actions |
-|---|---|---|
-| Cloudera | 90 days before renewal | Notify account team; do not auto-renew |
-| Hortonworks (legacy) | N/A (end of life) | Cancel support contract |
-| AWS EMR | Immediate (pay-as-you-go) | Terminate clusters, cancel reserved instances |
-| Azure HDInsight | Immediate (pay-as-you-go) | Delete clusters |
+| Vendor               | Typical notice period     | Key actions                                   |
+| -------------------- | ------------------------- | --------------------------------------------- |
+| Cloudera             | 90 days before renewal    | Notify account team; do not auto-renew        |
+| Hortonworks (legacy) | N/A (end of life)         | Cancel support contract                       |
+| AWS EMR              | Immediate (pay-as-you-go) | Terminate clusters, cancel reserved instances |
+| Azure HDInsight      | Immediate (pay-as-you-go) | Delete clusters                               |
 
 ### Data retention for compliance
 
@@ -258,42 +258,42 @@ az storage account management-policy create \
 
 ### HBase edge cases
 
-| Edge case | Challenge | Recommended approach |
-|---|---|---|
-| HBase with 100+ column families | Cosmos DB document size limits (2 MB) | Split into multiple containers by access pattern |
-| HBase coprocessors for real-time indexing | No direct equivalent | Use Change Feed + Azure Functions |
-| HBase with Phoenix SQL layer | Phoenix-specific SQL extensions | Rewrite queries for Cosmos DB SQL or move to Azure SQL |
-| HBase TTL (cell-level expiration) | Cosmos DB has item-level TTL | Map cell TTL to item TTL; may require schema redesign |
-| HBase with multi-version cells | Cosmos DB has no cell versioning | Store versions as separate documents or use Change Feed |
+| Edge case                                 | Challenge                             | Recommended approach                                    |
+| ----------------------------------------- | ------------------------------------- | ------------------------------------------------------- |
+| HBase with 100+ column families           | Cosmos DB document size limits (2 MB) | Split into multiple containers by access pattern        |
+| HBase coprocessors for real-time indexing | No direct equivalent                  | Use Change Feed + Azure Functions                       |
+| HBase with Phoenix SQL layer              | Phoenix-specific SQL extensions       | Rewrite queries for Cosmos DB SQL or move to Azure SQL  |
+| HBase TTL (cell-level expiration)         | Cosmos DB has item-level TTL          | Map cell TTL to item TTL; may require schema redesign   |
+| HBase with multi-version cells            | Cosmos DB has no cell versioning      | Store versions as separate documents or use Change Feed |
 
 ### Kafka edge cases
 
-| Edge case | Challenge | Recommended approach |
-|---|---|---|
-| Kafka Streams application | Stateful processing | Evaluate Event Hubs support; may need Databricks Streaming |
-| Kafka transactions | Event Hubs does not support transactions | Design for at-least-once; add idempotency in consumer |
-| Custom Kafka serdes | Must register in Schema Registry | Migrate to Azure Schema Registry |
-| Kafka MirrorMaker | Event Hubs has different replication model | Use Event Hubs Geo-DR or multi-namespace |
-| Low-latency requirements (<5ms) | Event Hubs has higher latency than bare-metal Kafka | Use Event Hubs Premium or evaluate Confluent on Azure |
+| Edge case                       | Challenge                                           | Recommended approach                                       |
+| ------------------------------- | --------------------------------------------------- | ---------------------------------------------------------- |
+| Kafka Streams application       | Stateful processing                                 | Evaluate Event Hubs support; may need Databricks Streaming |
+| Kafka transactions              | Event Hubs does not support transactions            | Design for at-least-once; add idempotency in consumer      |
+| Custom Kafka serdes             | Must register in Schema Registry                    | Migrate to Azure Schema Registry                           |
+| Kafka MirrorMaker               | Event Hubs has different replication model          | Use Event Hubs Geo-DR or multi-namespace                   |
+| Low-latency requirements (<5ms) | Event Hubs has higher latency than bare-metal Kafka | Use Event Hubs Premium or evaluate Confluent on Azure      |
 
 ### Oozie edge cases
 
-| Edge case | Challenge | Recommended approach |
-|---|---|---|
-| Custom Java actions | ADF does not run custom Java | Convert to Databricks JAR task or Azure Function |
-| Oozie SLA monitoring | ADF has different SLA model | Use ADF custom metrics + Azure Monitor alerts |
-| Oozie shared library | Centralized JAR management | Use Databricks cluster libraries or Unity Catalog volumes |
-| Complex decision trees (100+ nodes) | ADF If/Switch has limits | Decompose into multiple ADF pipelines |
-| Oozie bundle (multi-coordinator) | No direct ADF equivalent | Create ADF trigger groups or use Databricks multi-task jobs |
+| Edge case                           | Challenge                    | Recommended approach                                        |
+| ----------------------------------- | ---------------------------- | ----------------------------------------------------------- |
+| Custom Java actions                 | ADF does not run custom Java | Convert to Databricks JAR task or Azure Function            |
+| Oozie SLA monitoring                | ADF has different SLA model  | Use ADF custom metrics + Azure Monitor alerts               |
+| Oozie shared library                | Centralized JAR management   | Use Databricks cluster libraries or Unity Catalog volumes   |
+| Complex decision trees (100+ nodes) | ADF If/Switch has limits     | Decompose into multiple ADF pipelines                       |
+| Oozie bundle (multi-coordinator)    | No direct ADF equivalent     | Create ADF trigger groups or use Databricks multi-task jobs |
 
 ### Streaming edge cases
 
-| Edge case | Challenge | Recommended approach |
-|---|---|---|
-| Storm bolts with external state | Stateful processing redesign | Move to Databricks Structured Streaming with state store |
-| Sub-second latency requirements | Databricks micro-batch adds latency | Evaluate continuous processing mode or Azure Stream Analytics |
-| Complex event processing (CEP) | Spark Structured Streaming lacks native CEP | Use Azure Stream Analytics for CEP patterns |
-| Flink savepoints/checkpoints | Not compatible with Spark | Restart streaming from Event Hubs offset (replay) |
+| Edge case                       | Challenge                                   | Recommended approach                                          |
+| ------------------------------- | ------------------------------------------- | ------------------------------------------------------------- |
+| Storm bolts with external state | Stateful processing redesign                | Move to Databricks Structured Streaming with state store      |
+| Sub-second latency requirements | Databricks micro-batch adds latency         | Evaluate continuous processing mode or Azure Stream Analytics |
+| Complex event processing (CEP)  | Spark Structured Streaming lacks native CEP | Use Azure Stream Analytics for CEP patterns                   |
+| Flink savepoints/checkpoints    | Not compatible with Spark                   | Restart streaming from Event Hubs offset (replay)             |
 
 ---
 
@@ -301,29 +301,29 @@ az storage account management-policy create \
 
 ### Skills transfer matrix
 
-| Hadoop skill | Azure equivalent skill | Training path | Duration |
-|---|---|---|---|
-| HDFS administration | ADLS Gen2 management | Azure Storage learning path | 1-2 days |
-| YARN capacity management | Databricks cluster policies | Databricks admin training | 2-3 days |
-| Hive SQL | SparkSQL + dbt | dbt Fundamentals + Databricks SQL | 3-5 days |
-| Spark on YARN | Spark on Databricks | Databricks Developer training | 2-3 days |
-| Oozie workflow design | ADF pipeline design | ADF learning path | 2-3 days |
-| Ranger policy management | Purview + Unity Catalog | Microsoft Security learning path | 2-3 days |
-| Kerberos administration | Entra ID management | Microsoft Identity learning path | 2-3 days |
-| HBase administration | Cosmos DB management | Cosmos DB learning path | 3-5 days |
-| Kafka administration | Event Hubs management | Event Hubs learning path | 1-2 days |
-| Atlas catalog management | Purview governance | Purview learning path | 2-3 days |
+| Hadoop skill             | Azure equivalent skill      | Training path                     | Duration |
+| ------------------------ | --------------------------- | --------------------------------- | -------- |
+| HDFS administration      | ADLS Gen2 management        | Azure Storage learning path       | 1-2 days |
+| YARN capacity management | Databricks cluster policies | Databricks admin training         | 2-3 days |
+| Hive SQL                 | SparkSQL + dbt              | dbt Fundamentals + Databricks SQL | 3-5 days |
+| Spark on YARN            | Spark on Databricks         | Databricks Developer training     | 2-3 days |
+| Oozie workflow design    | ADF pipeline design         | ADF learning path                 | 2-3 days |
+| Ranger policy management | Purview + Unity Catalog     | Microsoft Security learning path  | 2-3 days |
+| Kerberos administration  | Entra ID management         | Microsoft Identity learning path  | 2-3 days |
+| HBase administration     | Cosmos DB management        | Cosmos DB learning path           | 3-5 days |
+| Kafka administration     | Event Hubs management       | Event Hubs learning path          | 1-2 days |
+| Atlas catalog management | Purview governance          | Purview learning path             | 2-3 days |
 
 ### Recommended certification paths
 
-| Role | Certification | Provider |
-|---|---|---|
-| Data engineer | Databricks Certified Data Engineer Associate | Databricks |
-| Data engineer | Azure Data Engineer Associate (DP-203) | Microsoft |
-| Platform engineer | Azure Administrator Associate (AZ-104) | Microsoft |
-| Security engineer | Azure Security Engineer Associate (AZ-500) | Microsoft |
-| Analytics engineer | dbt Analytics Engineering Certification | dbt Labs |
-| Data architect | Azure Solutions Architect Expert (AZ-305) | Microsoft |
+| Role               | Certification                                | Provider   |
+| ------------------ | -------------------------------------------- | ---------- |
+| Data engineer      | Databricks Certified Data Engineer Associate | Databricks |
+| Data engineer      | Azure Data Engineer Associate (DP-203)       | Microsoft  |
+| Platform engineer  | Azure Administrator Associate (AZ-104)       | Microsoft  |
+| Security engineer  | Azure Security Engineer Associate (AZ-500)   | Microsoft  |
+| Analytics engineer | dbt Analytics Engineering Certification      | dbt Labs   |
+| Data architect     | Azure Solutions Architect Expert (AZ-305)    | Microsoft  |
 
 ### Training timeline
 
@@ -346,15 +346,15 @@ Month 5-6 (Post-migration):
 
 ### Knowledge transfer from Hadoop to Azure
 
-| Hadoop knowledge | How it transfers | What is new |
-|---|---|---|
-| SQL (HiveQL) | 95% transfers directly to SparkSQL | Delta Lake DDL, MERGE, OPTIMIZE |
-| PySpark | 90% transfers directly | Databricks widgets, dbutils, Unity Catalog APIs |
-| Data modeling | Fully transfers | Medallion architecture (bronze/silver/gold) pattern |
-| ETL design patterns | Mostly transfers | dbt incremental models, ADF event triggers |
-| Security concepts | Concepts transfer (RBAC, ACLs) | Entra ID, managed identity, Unity Catalog |
-| Performance tuning | Concepts transfer (partitioning, predicate pushdown) | Photon, AQE, Z-ORDER, liquid clustering |
-| Monitoring | Concepts transfer (dashboards, alerts) | Azure Monitor, Databricks Overwatch, ADF Monitor |
+| Hadoop knowledge    | How it transfers                                     | What is new                                         |
+| ------------------- | ---------------------------------------------------- | --------------------------------------------------- |
+| SQL (HiveQL)        | 95% transfers directly to SparkSQL                   | Delta Lake DDL, MERGE, OPTIMIZE                     |
+| PySpark             | 90% transfers directly                               | Databricks widgets, dbutils, Unity Catalog APIs     |
+| Data modeling       | Fully transfers                                      | Medallion architecture (bronze/silver/gold) pattern |
+| ETL design patterns | Mostly transfers                                     | dbt incremental models, ADF event triggers          |
+| Security concepts   | Concepts transfer (RBAC, ACLs)                       | Entra ID, managed identity, Unity Catalog           |
+| Performance tuning  | Concepts transfer (partitioning, predicate pushdown) | Photon, AQE, Z-ORDER, liquid clustering             |
+| Monitoring          | Concepts transfer (dashboards, alerts)               | Azure Monitor, Databricks Overwatch, ADF Monitor    |
 
 ---
 
@@ -362,18 +362,18 @@ Month 5-6 (Post-migration):
 
 ### Top 10 migration risks and mitigations
 
-| # | Risk | Likelihood | Impact | Mitigation |
-|---|---|---|---|---|
-| 1 | Data loss during transfer | Low | Critical | Checksum validation, parallel-run, HDFS snapshots before migration |
-| 2 | Performance regression | Medium | High | Benchmark before/after, tune Databricks clusters, use Photon |
-| 3 | Security gap during transition | Medium | Critical | Map all Ranger policies before migration, validate with security team |
-| 4 | Missed downstream consumers | High | High | Inventory all consumers before cutover, 30-day read-only period |
-| 5 | Budget overrun (parallel costs) | Medium | Medium | Time-box parallel-run, decommission aggressively |
-| 6 | Team skill gaps | Medium | Medium | Start training early, pair senior and junior engineers |
-| 7 | HBase migration complexity | High | High | Start HBase migration early, allow 2x estimated time |
-| 8 | Oozie workflow translation errors | High | Medium | Test each workflow independently, automated regression tests |
-| 9 | Network bandwidth for data transfer | Medium | Medium | Use ExpressRoute, Data Box for large datasets |
-| 10 | Vendor lock-in concerns | Low | Medium | Use Delta Lake (open format), dbt (portable SQL), standard APIs |
+| #   | Risk                                | Likelihood | Impact   | Mitigation                                                            |
+| --- | ----------------------------------- | ---------- | -------- | --------------------------------------------------------------------- |
+| 1   | Data loss during transfer           | Low        | Critical | Checksum validation, parallel-run, HDFS snapshots before migration    |
+| 2   | Performance regression              | Medium     | High     | Benchmark before/after, tune Databricks clusters, use Photon          |
+| 3   | Security gap during transition      | Medium     | Critical | Map all Ranger policies before migration, validate with security team |
+| 4   | Missed downstream consumers         | High       | High     | Inventory all consumers before cutover, 30-day read-only period       |
+| 5   | Budget overrun (parallel costs)     | Medium     | Medium   | Time-box parallel-run, decommission aggressively                      |
+| 6   | Team skill gaps                     | Medium     | Medium   | Start training early, pair senior and junior engineers                |
+| 7   | HBase migration complexity          | High       | High     | Start HBase migration early, allow 2x estimated time                  |
+| 8   | Oozie workflow translation errors   | High       | Medium   | Test each workflow independently, automated regression tests          |
+| 9   | Network bandwidth for data transfer | Medium     | Medium   | Use ExpressRoute, Data Box for large datasets                         |
+| 10  | Vendor lock-in concerns             | Low        | Medium   | Use Delta Lake (open format), dbt (portable SQL), standard APIs       |
 
 ---
 

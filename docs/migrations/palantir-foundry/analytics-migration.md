@@ -14,17 +14,17 @@ This guide is for data analysts, analytics engineers, BI developers, and platfor
 
 Palantir Foundry provides a layered analytics surface built on top of its proprietary Ontology and dataset model. Understanding each tool's role is essential to selecting the correct Azure replacement.
 
-| Foundry tool | Purpose | Operates on | Key capabilities |
-|---|---|---|---|
-| **Contour** | Point-and-click dataset analysis | Raw datasets | Expression boards, filters, joins, aggregations, pivots, board views (table/chart/map), dashboards, scheduled exports |
-| **Quiver** | Ontology-aware interactive analysis | Ontology objects | Multi-axis charts, time series, geospatial, link traversal, aggregations, table views, embeddable dashboards |
-| **Quiver AIP** | Natural language data analysis | Ontology objects | LLM-generated charts, filters, aggregations from plain-English prompts |
-| **Object Explorer** | Search and browse Ontology objects | Ontology objects | Full-text search, faceted filters, bulk actions, drill-down, export |
-| **Insight** | Point-and-click modeled analysis | Ontology objects | Link traversal, SQL-based aggregations, maps, writeback, dashboards |
-| **Fusion** | Spreadsheet analysis | Datasets / objects | Excel-like interface, formulas, live data connection, writeback |
-| **Notepad** | Collaborative documentation | Mixed | Rich text, embedded Quiver/Contour visualizations, object references |
-| **Code Workbook / Code Workspaces** | Notebook analysis | Datasets | JupyterLab, RStudio, Python, R, SQL, Spark |
-| **Vertex** | System graph and simulation | Ontology objects | Process visualization, network graphs, scenario testing, simulation |
+| Foundry tool                        | Purpose                             | Operates on        | Key capabilities                                                                                                      |
+| ----------------------------------- | ----------------------------------- | ------------------ | --------------------------------------------------------------------------------------------------------------------- |
+| **Contour**                         | Point-and-click dataset analysis    | Raw datasets       | Expression boards, filters, joins, aggregations, pivots, board views (table/chart/map), dashboards, scheduled exports |
+| **Quiver**                          | Ontology-aware interactive analysis | Ontology objects   | Multi-axis charts, time series, geospatial, link traversal, aggregations, table views, embeddable dashboards          |
+| **Quiver AIP**                      | Natural language data analysis      | Ontology objects   | LLM-generated charts, filters, aggregations from plain-English prompts                                                |
+| **Object Explorer**                 | Search and browse Ontology objects  | Ontology objects   | Full-text search, faceted filters, bulk actions, drill-down, export                                                   |
+| **Insight**                         | Point-and-click modeled analysis    | Ontology objects   | Link traversal, SQL-based aggregations, maps, writeback, dashboards                                                   |
+| **Fusion**                          | Spreadsheet analysis                | Datasets / objects | Excel-like interface, formulas, live data connection, writeback                                                       |
+| **Notepad**                         | Collaborative documentation         | Mixed              | Rich text, embedded Quiver/Contour visualizations, object references                                                  |
+| **Code Workbook / Code Workspaces** | Notebook analysis                   | Datasets           | JupyterLab, RStudio, Python, R, SQL, Spark                                                                            |
+| **Vertex**                          | System graph and simulation         | Ontology objects   | Process visualization, network graphs, scenario testing, simulation                                                   |
 
 **Critical distinction:** Contour operates on datasets (tabular files). Quiver, Object Explorer, Insight, and Vertex operate on the Ontology (semantic business objects). This distinction determines the migration path: dataset-oriented tools map to Power BI semantic models, while Ontology-oriented tools require migrating the semantic layer first (see [Ontology Migration](ontology-migration.md)).
 
@@ -36,17 +36,17 @@ The Azure analytics stack replaces Foundry's monolithic toolset with purpose-bui
 
 ### Mapping table
 
-| Foundry tool | Azure equivalent | Migration complexity |
-|---|---|---|
-| Contour | Power BI reports with Direct Lake semantic models | Medium |
-| Quiver | Power BI + Fabric Copilot + Fabric Data Agent | Medium |
-| Quiver AIP | Power BI Copilot (Q&A, natural language) + Fabric Copilot | Low |
-| Object Explorer | Purview Data Catalog + CSA-in-a-Box portal marketplace | Low |
-| Insight | Power BI with relationships + Fabric SQL endpoint | Medium |
-| Fusion | Excel + Analyze in Excel (live Power BI connection) | Low |
-| Notepad | Microsoft Loop + OneNote with embedded Power BI visuals | Low |
-| Code Workbook / Workspaces | Fabric notebooks (PySpark, Python, R, SQL) + Azure Databricks | Medium |
-| Vertex | Azure Digital Twins + Power BI custom visuals | High |
+| Foundry tool               | Azure equivalent                                              | Migration complexity |
+| -------------------------- | ------------------------------------------------------------- | -------------------- |
+| Contour                    | Power BI reports with Direct Lake semantic models             | Medium               |
+| Quiver                     | Power BI + Fabric Copilot + Fabric Data Agent                 | Medium               |
+| Quiver AIP                 | Power BI Copilot (Q&A, natural language) + Fabric Copilot     | Low                  |
+| Object Explorer            | Purview Data Catalog + CSA-in-a-Box portal marketplace        | Low                  |
+| Insight                    | Power BI with relationships + Fabric SQL endpoint             | Medium               |
+| Fusion                     | Excel + Analyze in Excel (live Power BI connection)           | Low                  |
+| Notepad                    | Microsoft Loop + OneNote with embedded Power BI visuals       | Low                  |
+| Code Workbook / Workspaces | Fabric notebooks (PySpark, Python, R, SQL) + Azure Databricks | Medium               |
+| Vertex                     | Azure Digital Twins + Power BI custom visuals                 | High                 |
 
 ### Architecture diagram
 
@@ -108,18 +108,18 @@ Contour is the most heavily used Foundry analytics tool and the primary migratio
 
 ### Feature mapping
 
-| Contour feature | Power BI equivalent | Notes |
-|---|---|---|
-| Expression board (derived columns) | DAX calculated columns / measures | DAX is more expressive than Contour expressions |
-| Board view: table | Table visual | Identical capability |
-| Board view: bar/line/area chart | Bar/Line/Area chart visuals | Power BI offers more chart types |
-| Board view: map | Map / ArcGIS / Azure Maps visual | Richer geospatial than Contour |
-| Filters | Report-level / page-level / visual-level filters + slicers | More granular filter control |
-| Joins | Semantic model relationships (star schema) | Define once, use everywhere |
-| Aggregations | DAX measures (SUM, AVERAGE, COUNT, etc.) | DAX supports 200+ functions |
-| Pivot | Matrix visual | Native pivot table with drill-down |
-| Dashboard (text cells + embedded boards) | Power BI dashboard / report pages | Richer layout options |
-| Scheduled export (CSV/Excel) | Power BI subscriptions + Power Automate exports | Email delivery or SharePoint write |
+| Contour feature                          | Power BI equivalent                                        | Notes                                           |
+| ---------------------------------------- | ---------------------------------------------------------- | ----------------------------------------------- |
+| Expression board (derived columns)       | DAX calculated columns / measures                          | DAX is more expressive than Contour expressions |
+| Board view: table                        | Table visual                                               | Identical capability                            |
+| Board view: bar/line/area chart          | Bar/Line/Area chart visuals                                | Power BI offers more chart types                |
+| Board view: map                          | Map / ArcGIS / Azure Maps visual                           | Richer geospatial than Contour                  |
+| Filters                                  | Report-level / page-level / visual-level filters + slicers | More granular filter control                    |
+| Joins                                    | Semantic model relationships (star schema)                 | Define once, use everywhere                     |
+| Aggregations                             | DAX measures (SUM, AVERAGE, COUNT, etc.)                   | DAX supports 200+ functions                     |
+| Pivot                                    | Matrix visual                                              | Native pivot table with drill-down              |
+| Dashboard (text cells + embedded boards) | Power BI dashboard / report pages                          | Richer layout options                           |
+| Scheduled export (CSV/Excel)             | Power BI subscriptions + Power Automate exports            | Email delivery or SharePoint write              |
 
 ### Worked example: migrating a Contour analysis
 
@@ -136,36 +136,36 @@ CSA-in-a-Box provides a semantic model template that generates relationships and
 ```yaml
 # Reference: csa_platform/semantic_model/semantic_model_template.yaml
 tables:
-  - name: fact_case
-    source: Gold.fact_case
-    measures:
-      - name: Total Cases
-        expression: COUNTROWS(fact_case)
-      - name: Avg Days Open
-        expression: AVERAGE(fact_case[days_open])
-      - name: Priority Score
-        expression: AVERAGE(fact_case[priority_score])
-    columns:
-      - name: days_open
-        expression: DATEDIFF(fact_case[opened_date], TODAY(), DAY)
-        type: calculated
-      - name: priority_score
-        expression: fact_case[severity] * fact_case[impact_weight]
-        type: calculated
+    - name: fact_case
+      source: Gold.fact_case
+      measures:
+          - name: Total Cases
+            expression: COUNTROWS(fact_case)
+          - name: Avg Days Open
+            expression: AVERAGE(fact_case[days_open])
+          - name: Priority Score
+            expression: AVERAGE(fact_case[priority_score])
+      columns:
+          - name: days_open
+            expression: DATEDIFF(fact_case[opened_date], TODAY(), DAY)
+            type: calculated
+          - name: priority_score
+            expression: fact_case[severity] * fact_case[impact_weight]
+            type: calculated
 
-  - name: dim_agent
-    source: Gold.dim_agent
+    - name: dim_agent
+      source: Gold.dim_agent
 
-  - name: dim_region
-    source: Gold.dim_region
+    - name: dim_region
+      source: Gold.dim_region
 
 relationships:
-  - from: fact_case.agent_id
-    to: dim_agent.agent_id
-    cardinality: many-to-one
-  - from: fact_case.region_id
-    to: dim_region.region_id
-    cardinality: many-to-one
+    - from: fact_case.agent_id
+      to: dim_agent.agent_id
+      cardinality: many-to-one
+    - from: fact_case.region_id
+      to: dim_region.region_id
+      cardinality: many-to-one
 ```
 
 Generate the semantic model using the CSA-in-a-Box script:
@@ -192,16 +192,16 @@ In Power BI Service, create a subscription on the report page. Choose email deli
 
 ### Contour expression to DAX translation
 
-| Contour expression | DAX equivalent |
-|---|---|
-| `column_a + column_b` | `fact[column_a] + fact[column_b]` |
-| `if(condition, true_val, false_val)` | `IF(condition, true_val, false_val)` |
-| `date_diff(start, end, "days")` | `DATEDIFF(fact[start], fact[end], DAY)` |
-| `coalesce(col_a, col_b)` | `COALESCE(fact[col_a], fact[col_b])` |
-| `string_contains(col, "text")` | `CONTAINSSTRING(fact[col], "text")` |
-| `round(col, 2)` | `ROUND(fact[col], 2)` |
-| `count_distinct(col)` | `DISTINCTCOUNT(fact[col])` |
-| `running_sum(col)` | `CALCULATE(SUM(fact[col]), FILTER(ALL(dim_date), dim_date[date] <= MAX(dim_date[date])))` |
+| Contour expression                   | DAX equivalent                                                                            |
+| ------------------------------------ | ----------------------------------------------------------------------------------------- |
+| `column_a + column_b`                | `fact[column_a] + fact[column_b]`                                                         |
+| `if(condition, true_val, false_val)` | `IF(condition, true_val, false_val)`                                                      |
+| `date_diff(start, end, "days")`      | `DATEDIFF(fact[start], fact[end], DAY)`                                                   |
+| `coalesce(col_a, col_b)`             | `COALESCE(fact[col_a], fact[col_b])`                                                      |
+| `string_contains(col, "text")`       | `CONTAINSSTRING(fact[col], "text")`                                                       |
+| `round(col, 2)`                      | `ROUND(fact[col], 2)`                                                                     |
+| `count_distinct(col)`                | `DISTINCTCOUNT(fact[col])`                                                                |
+| `running_sum(col)`                   | `CALCULATE(SUM(fact[col]), FILTER(ALL(dim_date), dim_date[date] <= MAX(dim_date[date])))` |
 
 ---
 
@@ -211,15 +211,15 @@ Quiver differs from Contour in one critical way: it operates on the Ontology, no
 
 ### Feature mapping
 
-| Quiver feature | Power BI + Copilot equivalent | Notes |
-|---|---|---|
-| Multi-axis charts | Combo chart / dual-axis visuals | Native support for multiple Y-axes |
-| Time series analysis | Line chart with date hierarchy + forecasting | Built-in AI forecasting visual |
-| Geospatial views | Map / Filled Map / ArcGIS Maps | Azure Maps integration available |
-| Link traversal | Semantic model relationships + drill-through | Star schema replaces link traversal |
-| Aggregations on objects | DAX measures over semantic model | Richer aggregation engine |
-| Table views | Table / Matrix visuals | Conditional formatting, sparklines |
-| Embeddable dashboards | Embedded Power BI (iframe / JS SDK) | See section 10 for patterns |
+| Quiver feature          | Power BI + Copilot equivalent                | Notes                               |
+| ----------------------- | -------------------------------------------- | ----------------------------------- |
+| Multi-axis charts       | Combo chart / dual-axis visuals              | Native support for multiple Y-axes  |
+| Time series analysis    | Line chart with date hierarchy + forecasting | Built-in AI forecasting visual      |
+| Geospatial views        | Map / Filled Map / ArcGIS Maps               | Azure Maps integration available    |
+| Link traversal          | Semantic model relationships + drill-through | Star schema replaces link traversal |
+| Aggregations on objects | DAX measures over semantic model             | Richer aggregation engine           |
+| Table views             | Table / Matrix visuals                       | Conditional formatting, sparklines  |
+| Embeddable dashboards   | Embedded Power BI (iframe / JS SDK)          | See section 10 for patterns         |
 
 ### Migrating link traversal
 
@@ -253,14 +253,14 @@ Quiver AIP allows analysts to generate charts, apply filters, and explore data u
 
 ### Capability comparison
 
-| Quiver AIP capability | Azure equivalent | Service |
-|---|---|---|
+| Quiver AIP capability             | Azure equivalent                      | Service          |
+| --------------------------------- | ------------------------------------- | ---------------- |
 | Natural language chart generation | Q&A visual + Copilot suggested charts | Power BI Copilot |
-| Natural language filters | Copilot filter suggestions | Power BI Copilot |
-| Prompt-driven aggregations | Copilot measure generation | Power BI Copilot |
-| Data summarization | Copilot narrative summaries | Power BI Copilot |
-| Conversational data exploration | Fabric Data Agent | Microsoft Fabric |
-| Custom AI analysis prompts | Fabric notebooks + Azure OpenAI | Microsoft Fabric |
+| Natural language filters          | Copilot filter suggestions            | Power BI Copilot |
+| Prompt-driven aggregations        | Copilot measure generation            | Power BI Copilot |
+| Data summarization                | Copilot narrative summaries           | Power BI Copilot |
+| Conversational data exploration   | Fabric Data Agent                     | Microsoft Fabric |
+| Custom AI analysis prompts        | Fabric notebooks + Azure OpenAI       | Microsoft Fabric |
 
 ### Migration approach
 
@@ -284,11 +284,11 @@ Copilot quality depends on well-described semantic models. Add descriptions to e
 
 Power BI Q&A uses synonyms to interpret natural language. Add synonyms that match the vocabulary your Quiver AIP users are accustomed to:
 
-| Term in Quiver | Synonym in Power BI Q&A |
-|---|---|
-| "objects" | "records", "rows", "cases" |
-| "link" | "relationship", "connection" |
-| "property" | "field", "column", "attribute" |
+| Term in Quiver | Synonym in Power BI Q&A        |
+| -------------- | ------------------------------ |
+| "objects"      | "records", "rows", "cases"     |
+| "link"         | "relationship", "connection"   |
+| "property"     | "field", "column", "attribute" |
 
 **Step 4 -- Test with real user prompts.**
 
@@ -302,14 +302,14 @@ Object Explorer provides a search-and-browse interface over the Foundry Ontology
 
 ### Feature mapping
 
-| Object Explorer feature | Azure equivalent | Notes |
-|---|---|---|
-| Full-text object search | Purview search + portal marketplace search | Purview indexes metadata; portal indexes data products |
-| Faceted property filters | Purview classification filters | Map Ontology properties to Purview classifications |
-| Object detail drill-down | Purview asset detail page + Power BI drill-through | Asset lineage and schema in Purview |
-| Bulk actions on objects | Power Automate flows + Fabric notebooks | Triggered from portal or scheduled |
-| Object export (CSV) | Fabric SQL endpoint + Power BI export | Export via REST API or UI |
-| Object bookmarks and lists | Purview collections + portal favorites | Organize assets by domain |
+| Object Explorer feature    | Azure equivalent                                   | Notes                                                  |
+| -------------------------- | -------------------------------------------------- | ------------------------------------------------------ |
+| Full-text object search    | Purview search + portal marketplace search         | Purview indexes metadata; portal indexes data products |
+| Faceted property filters   | Purview classification filters                     | Map Ontology properties to Purview classifications     |
+| Object detail drill-down   | Purview asset detail page + Power BI drill-through | Asset lineage and schema in Purview                    |
+| Bulk actions on objects    | Power Automate flows + Fabric notebooks            | Triggered from portal or scheduled                     |
+| Object export (CSV)        | Fabric SQL endpoint + Power BI export              | Export via REST API or UI                              |
+| Object bookmarks and lists | Purview collections + portal favorites             | Organize assets by domain                              |
 
 ### Purview Data Catalog setup
 
@@ -351,13 +351,13 @@ The portal marketplace provides a user-friendly data product catalog that replac
 
 Fusion provides a spreadsheet interface connected to Foundry datasets with writeback support. The Azure equivalent is Excel connected to Power BI semantic models via "Analyze in Excel," with writeback through Power Apps or Fabric notebooks.
 
-| Fusion feature | Azure equivalent | Notes |
-|---|---|---|
-| Spreadsheet grid | Excel | Identical experience |
-| Live dataset connection | Analyze in Excel (live connection to semantic model) | PivotTable connected to Power BI |
-| Formulas on live data | Excel formulas + DAX measures | Excel formulas work on the PivotTable |
-| Writeback to dataset | Power Apps form + Fabric SQL endpoint | Separate writeback path required |
-| Sharing / collaboration | Excel in SharePoint / OneDrive + co-authoring | Real-time co-editing |
+| Fusion feature          | Azure equivalent                                     | Notes                                 |
+| ----------------------- | ---------------------------------------------------- | ------------------------------------- |
+| Spreadsheet grid        | Excel                                                | Identical experience                  |
+| Live dataset connection | Analyze in Excel (live connection to semantic model) | PivotTable connected to Power BI      |
+| Formulas on live data   | Excel formulas + DAX measures                        | Excel formulas work on the PivotTable |
+| Writeback to dataset    | Power Apps form + Fabric SQL endpoint                | Separate writeback path required      |
+| Sharing / collaboration | Excel in SharePoint / OneDrive + co-authoring        | Real-time co-editing                  |
 
 **Migration steps:**
 
@@ -371,13 +371,13 @@ Fusion provides a spreadsheet interface connected to Foundry datasets with write
 
 Notepad provides collaborative rich-text documents with embedded Quiver and Contour visualizations. Microsoft Loop and OneNote provide the same capability with embedded Power BI visuals.
 
-| Notepad feature | Azure equivalent | Notes |
-|---|---|---|
-| Rich text editing | Loop / OneNote | Full rich-text editing |
-| Embedded Contour/Quiver charts | Embedded Power BI visuals | Copy visual as image or embed live tile |
-| Object references | Purview asset links + Power BI report links | Hyperlinks to catalog or reports |
-| Collaborative editing | Loop / OneNote co-authoring | Real-time collaboration |
-| Sharing | Loop workspaces / OneNote in Teams | Integrated with Microsoft 365 |
+| Notepad feature                | Azure equivalent                            | Notes                                   |
+| ------------------------------ | ------------------------------------------- | --------------------------------------- |
+| Rich text editing              | Loop / OneNote                              | Full rich-text editing                  |
+| Embedded Contour/Quiver charts | Embedded Power BI visuals                   | Copy visual as image or embed live tile |
+| Object references              | Purview asset links + Power BI report links | Hyperlinks to catalog or reports        |
+| Collaborative editing          | Loop / OneNote co-authoring                 | Real-time collaboration                 |
+| Sharing                        | Loop workspaces / OneNote in Teams          | Integrated with Microsoft 365           |
 
 **Migration steps:**
 
@@ -396,18 +396,18 @@ Foundry's Code Workbook provides a notebook interface for Python, R, and SQL ana
 
 ### Feature mapping
 
-| Foundry notebook feature | Azure equivalent | Notes |
-|---|---|---|
-| Python notebook cells | Fabric notebook (Python / PySpark) | Native PySpark support |
-| R notebook cells | Fabric notebook (SparkR / R) | SparkR for distributed, R for local |
-| SQL notebook cells | Fabric notebook (SQL) + SQL endpoint | T-SQL and Spark SQL |
-| JupyterLab environment | Azure Databricks notebook | Full JupyterLab with extensions |
-| RStudio environment | Databricks RStudio integration | Posit Workbench on Databricks |
-| Dataset read/write | `spark.read.format("delta").load("Tables/...")` | Direct OneLake access |
-| Spark cluster | Fabric Spark pool / Databricks cluster | Managed compute |
-| Scheduling | Fabric pipeline + notebook activity | Scheduled or event-triggered |
-| Visualization in notebook | matplotlib, plotly, seaborn (identical) | Same libraries available |
-| Collaboration | Fabric notebook sharing + Git integration | Shared workspaces with RBAC |
+| Foundry notebook feature  | Azure equivalent                                | Notes                               |
+| ------------------------- | ----------------------------------------------- | ----------------------------------- |
+| Python notebook cells     | Fabric notebook (Python / PySpark)              | Native PySpark support              |
+| R notebook cells          | Fabric notebook (SparkR / R)                    | SparkR for distributed, R for local |
+| SQL notebook cells        | Fabric notebook (SQL) + SQL endpoint            | T-SQL and Spark SQL                 |
+| JupyterLab environment    | Azure Databricks notebook                       | Full JupyterLab with extensions     |
+| RStudio environment       | Databricks RStudio integration                  | Posit Workbench on Databricks       |
+| Dataset read/write        | `spark.read.format("delta").load("Tables/...")` | Direct OneLake access               |
+| Spark cluster             | Fabric Spark pool / Databricks cluster          | Managed compute                     |
+| Scheduling                | Fabric pipeline + notebook activity             | Scheduled or event-triggered        |
+| Visualization in notebook | matplotlib, plotly, seaborn (identical)         | Same libraries available            |
+| Collaboration             | Fabric notebook sharing + Git integration       | Shared workspaces with RBAC         |
 
 ### Migration example: Python analysis notebook
 
@@ -457,12 +457,12 @@ result.show()
 
 Foundry provides time series capabilities through Quiver (time series charts), Contour (date-based aggregations), and Code Workbook (Python/R time series libraries). Azure provides a richer time series stack.
 
-| Foundry approach | Azure equivalent | When to use |
-|---|---|---|
-| Quiver time series charts | Power BI line chart with date hierarchy + AI forecasting | Standard time series visualization |
-| Contour date aggregations | DAX time intelligence functions (TOTALYTD, SAMEPERIODLASTYEAR) | Period-over-period comparisons |
-| Code Workbook (Prophet, statsmodels) | Fabric notebook (same libraries) | Custom forecasting models |
-| Real-time streaming analysis | Azure Data Explorer (ADX) | High-volume telemetry, IoT, logs |
+| Foundry approach                     | Azure equivalent                                               | When to use                        |
+| ------------------------------------ | -------------------------------------------------------------- | ---------------------------------- |
+| Quiver time series charts            | Power BI line chart with date hierarchy + AI forecasting       | Standard time series visualization |
+| Contour date aggregations            | DAX time intelligence functions (TOTALYTD, SAMEPERIODLASTYEAR) | Period-over-period comparisons     |
+| Code Workbook (Prophet, statsmodels) | Fabric notebook (same libraries)                               | Custom forecasting models          |
+| Real-time streaming analysis         | Azure Data Explorer (ADX)                                      | High-volume telemetry, IoT, logs   |
 
 **Azure Data Explorer for high-volume time series:**
 
@@ -480,14 +480,14 @@ SensorReadings
 
 Foundry provides geospatial views in Quiver and Contour (point maps, choropleth maps, heatmaps). Azure provides multiple geospatial options.
 
-| Foundry geospatial feature | Azure equivalent | Notes |
-|---|---|---|
-| Point maps | Power BI Map visual / Azure Maps visual | Lat/long plotting |
-| Choropleth maps | Power BI Filled Map / Shape Map | State/county/country fills |
-| Heatmaps | Power BI Azure Maps heatmap layer | Density visualization |
-| Geospatial filtering | Power BI map visual cross-filtering | Click map to filter other visuals |
-| Custom map layers | Azure Maps custom visual + GeoJSON | Custom boundaries and overlays |
-| Spatial joins | Fabric notebook (GeoPandas / Sedona) | Spatial operations in Spark |
+| Foundry geospatial feature | Azure equivalent                        | Notes                             |
+| -------------------------- | --------------------------------------- | --------------------------------- |
+| Point maps                 | Power BI Map visual / Azure Maps visual | Lat/long plotting                 |
+| Choropleth maps            | Power BI Filled Map / Shape Map         | State/county/country fills        |
+| Heatmaps                   | Power BI Azure Maps heatmap layer       | Density visualization             |
+| Geospatial filtering       | Power BI map visual cross-filtering     | Click map to filter other visuals |
+| Custom map layers          | Azure Maps custom visual + GeoJSON      | Custom boundaries and overlays    |
+| Spatial joins              | Fabric notebook (GeoPandas / Sedona)    | Spatial operations in Spark       |
 
 **Power BI geospatial example:**
 
@@ -509,13 +509,13 @@ In Foundry, Quiver and Contour dashboards are embedded into Workshop and Slate a
 
 ### Azure embedding options
 
-| Embedding pattern | Use case | Authentication | Reference |
-|---|---|---|---|
-| Power BI Embedded (iframe) | External-facing portals | Service principal / embed token | Power BI Embedded REST API |
-| Power BI JavaScript SDK | React/Angular apps with interactivity | Embed token with RLS | `powerbi-client` npm package |
-| Power BI in Teams | Internal collaboration | Entra ID SSO | Teams app manifest |
-| Power BI in SharePoint | Intranet dashboards | Entra ID SSO | SharePoint web part |
-| Power BI publish to web | Public dashboards (non-sensitive) | Anonymous | Public embed URL |
+| Embedding pattern          | Use case                              | Authentication                  | Reference                    |
+| -------------------------- | ------------------------------------- | ------------------------------- | ---------------------------- |
+| Power BI Embedded (iframe) | External-facing portals               | Service principal / embed token | Power BI Embedded REST API   |
+| Power BI JavaScript SDK    | React/Angular apps with interactivity | Embed token with RLS            | `powerbi-client` npm package |
+| Power BI in Teams          | Internal collaboration                | Entra ID SSO                    | Teams app manifest           |
+| Power BI in SharePoint     | Intranet dashboards                   | Entra ID SSO                    | SharePoint web part          |
+| Power BI publish to web    | Public dashboards (non-sensitive)     | Anonymous                       | Public embed URL             |
 
 ### CSA-in-a-Box portal embedding
 
@@ -574,13 +574,13 @@ Vertex is Foundry's tool for system graphs, process visualization, simulation, a
 
 ### Azure equivalents
 
-| Vertex feature | Azure equivalent | Notes |
-|---|---|---|
-| System graph visualization | Azure Digital Twins + 3D Scenes Studio | DTDL models replace Ontology graphs |
-| Process flow visualization | Power BI custom visuals (Sankey, flow) | Simpler than Vertex but covers most cases |
-| Network graph | Power BI Force-Directed Graph custom visual | Community visual from AppSource |
-| Simulation / scenario testing | Azure Digital Twins + Azure Functions | Event-driven simulation pipeline |
-| What-if analysis | Power BI what-if parameters + DAX | Parameter-driven scenario modeling |
+| Vertex feature                | Azure equivalent                            | Notes                                     |
+| ----------------------------- | ------------------------------------------- | ----------------------------------------- |
+| System graph visualization    | Azure Digital Twins + 3D Scenes Studio      | DTDL models replace Ontology graphs       |
+| Process flow visualization    | Power BI custom visuals (Sankey, flow)      | Simpler than Vertex but covers most cases |
+| Network graph                 | Power BI Force-Directed Graph custom visual | Community visual from AppSource           |
+| Simulation / scenario testing | Azure Digital Twins + Azure Functions       | Event-driven simulation pipeline          |
+| What-if analysis              | Power BI what-if parameters + DAX           | Parameter-driven scenario modeling        |
 
 ### Migration approach
 
@@ -611,20 +611,20 @@ Projected Cases Closed =
 
 This table helps analysts understand what changes and what stays the same.
 
-| Analyst task | Foundry experience | Azure experience | Learning curve |
-|---|---|---|---|
-| Build a bar chart from a dataset | Open Contour, select dataset, add expression board, choose bar chart view | Open Power BI Desktop, connect to semantic model, drag fields to bar chart visual | Low -- similar drag-and-drop |
-| Ask a question in plain English | Open Quiver AIP, type prompt, receive chart | Open Power BI report, click Copilot icon, type prompt, receive chart | Low -- nearly identical |
-| Search for a data asset | Open Object Explorer, type search, browse results | Open Purview catalog or portal marketplace, type search, browse results | Low -- similar search UX |
-| Analyze data in a spreadsheet | Open Fusion, connect to dataset, use formulas | Open Excel, click Analyze in Excel, use PivotTable and formulas | Very Low -- Excel is familiar |
-| Write a Python analysis notebook | Open Code Workbook, write Python/PySpark code | Open Fabric notebook, write Python/PySpark code | Very Low -- same Spark API |
-| Traverse object relationships | Open Quiver, click object, traverse links | Open Power BI report, use drill-through pages | Medium -- different paradigm |
-| Create a collaborative report | Open Notepad, embed Quiver/Contour visuals | Open Loop, embed Power BI visuals | Low -- similar concept |
-| Build a system graph | Open Vertex, model nodes and edges | Deploy Azure Digital Twins, define DTDL models | High -- different platform |
-| Embed a dashboard in an app | Use Workshop widget reference | Use Power BI JS SDK embed | Medium -- different API |
-| Schedule a data export | Contour scheduled export | Power BI subscription or Power Automate flow | Low -- similar scheduling |
-| Apply row-level security | Foundry markings / organizations | Power BI RLS roles + Entra ID groups | Medium -- different model |
-| Perform geospatial analysis | Quiver/Contour map board view | Power BI Azure Maps visual | Low -- similar interaction |
+| Analyst task                     | Foundry experience                                                        | Azure experience                                                                  | Learning curve                |
+| -------------------------------- | ------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | ----------------------------- |
+| Build a bar chart from a dataset | Open Contour, select dataset, add expression board, choose bar chart view | Open Power BI Desktop, connect to semantic model, drag fields to bar chart visual | Low -- similar drag-and-drop  |
+| Ask a question in plain English  | Open Quiver AIP, type prompt, receive chart                               | Open Power BI report, click Copilot icon, type prompt, receive chart              | Low -- nearly identical       |
+| Search for a data asset          | Open Object Explorer, type search, browse results                         | Open Purview catalog or portal marketplace, type search, browse results           | Low -- similar search UX      |
+| Analyze data in a spreadsheet    | Open Fusion, connect to dataset, use formulas                             | Open Excel, click Analyze in Excel, use PivotTable and formulas                   | Very Low -- Excel is familiar |
+| Write a Python analysis notebook | Open Code Workbook, write Python/PySpark code                             | Open Fabric notebook, write Python/PySpark code                                   | Very Low -- same Spark API    |
+| Traverse object relationships    | Open Quiver, click object, traverse links                                 | Open Power BI report, use drill-through pages                                     | Medium -- different paradigm  |
+| Create a collaborative report    | Open Notepad, embed Quiver/Contour visuals                                | Open Loop, embed Power BI visuals                                                 | Low -- similar concept        |
+| Build a system graph             | Open Vertex, model nodes and edges                                        | Deploy Azure Digital Twins, define DTDL models                                    | High -- different platform    |
+| Embed a dashboard in an app      | Use Workshop widget reference                                             | Use Power BI JS SDK embed                                                         | Medium -- different API       |
+| Schedule a data export           | Contour scheduled export                                                  | Power BI subscription or Power Automate flow                                      | Low -- similar scheduling     |
+| Apply row-level security         | Foundry markings / organizations                                          | Power BI RLS roles + Entra ID groups                                              | Medium -- different model     |
+| Perform geospatial analysis      | Quiver/Contour map board view                                             | Power BI Azure Maps visual                                                        | Low -- similar interaction    |
 
 ---
 

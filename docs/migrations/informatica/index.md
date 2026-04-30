@@ -12,18 +12,18 @@ This migration center serves CDOs, Chief Data Architects, data engineering manag
 
 ## Quick-start decision matrix
 
-| Your situation | Start here |
-|---|---|
+| Your situation                            | Start here                                                  |
+| ----------------------------------------- | ----------------------------------------------------------- |
 | Executive evaluating Azure vs Informatica | [Why Azure over Informatica](why-azure-over-informatica.md) |
-| Need cost justification for migration | [Total Cost of Ownership Analysis](tco-analysis.md) |
-| Need a feature-by-feature comparison | [Complete Feature Mapping](feature-mapping-complete.md) |
-| Running PowerCenter on-prem | [PowerCenter Migration Guide](powercenter-migration.md) |
-| Running IICS (cloud) | [IICS Migration Guide](iics-migration.md) |
-| Running IDQ / data quality | [Data Quality Migration Guide](data-quality-migration.md) |
-| Running Informatica MDM | [MDM Migration Guide](mdm-migration.md) |
-| Want hands-on tutorials | [Tutorials](#tutorials) |
-| Need performance data | [Benchmarks](benchmarks.md) |
-| Ready to plan migration | [Migration Playbook](../informatica.md) |
+| Need cost justification for migration     | [Total Cost of Ownership Analysis](tco-analysis.md)         |
+| Need a feature-by-feature comparison      | [Complete Feature Mapping](feature-mapping-complete.md)     |
+| Running PowerCenter on-prem               | [PowerCenter Migration Guide](powercenter-migration.md)     |
+| Running IICS (cloud)                      | [IICS Migration Guide](iics-migration.md)                   |
+| Running IDQ / data quality                | [Data Quality Migration Guide](data-quality-migration.md)   |
+| Running Informatica MDM                   | [MDM Migration Guide](mdm-migration.md)                     |
+| Want hands-on tutorials                   | [Tutorials](#tutorials)                                     |
+| Need performance data                     | [Benchmarks](benchmarks.md)                                 |
+| Ready to plan migration                   | [Migration Playbook](../informatica.md)                     |
 
 ---
 
@@ -31,20 +31,20 @@ This migration center serves CDOs, Chief Data Architects, data engineering manag
 
 These documents provide the business case, cost analysis, and strategic framing for decision-makers.
 
-| Document | Audience | Description |
-|---|---|---|
-| [Why Azure over Informatica](why-azure-over-informatica.md) | CIO / CDO / Board | Strategic comparison covering code-first vs GUI paradigm, cloud economics, modern data engineering, AI capabilities, and talent availability |
-| [Total Cost of Ownership Analysis](tco-analysis.md) | CFO / CIO / Procurement | Detailed pricing model comparison: PowerCenter license + hardware vs ADF + dbt consumption, IICS subscription vs Fabric, 5-year projections |
-| [Benchmarks & Performance](benchmarks.md) | CTO / Platform Engineering | ETL throughput, development velocity, cost-per-pipeline, maintenance overhead comparisons |
+| Document                                                    | Audience                   | Description                                                                                                                                  |
+| ----------------------------------------------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Why Azure over Informatica](why-azure-over-informatica.md) | CIO / CDO / Board          | Strategic comparison covering code-first vs GUI paradigm, cloud economics, modern data engineering, AI capabilities, and talent availability |
+| [Total Cost of Ownership Analysis](tco-analysis.md)         | CFO / CIO / Procurement    | Detailed pricing model comparison: PowerCenter license + hardware vs ADF + dbt consumption, IICS subscription vs Fabric, 5-year projections  |
+| [Benchmarks & Performance](benchmarks.md)                   | CTO / Platform Engineering | ETL throughput, development velocity, cost-per-pipeline, maintenance overhead comparisons                                                    |
 
 ---
 
 ## Technical references
 
-| Document | Description |
-|---|---|
+| Document                                                | Description                                                                                                               |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | [Complete Feature Mapping](feature-mapping-complete.md) | 35+ Informatica features mapped to Azure equivalents across PowerCenter, IICS, IDQ, MDM, Enterprise Data Catalog, and B2B |
-| [Migration Playbook](../informatica.md) | The original end-to-end migration playbook with phase-by-phase guidance and pitfall avoidance |
+| [Migration Playbook](../informatica.md)                 | The original end-to-end migration playbook with phase-by-phase guidance and pitfall avoidance                             |
 
 ---
 
@@ -52,13 +52,13 @@ These documents provide the business case, cost analysis, and strategic framing 
 
 Product-specific deep dives covering every aspect of an Informatica-to-Azure migration.
 
-| Guide | Informatica product | Azure destination |
-|---|---|---|
-| [PowerCenter Migration](powercenter-migration.md) | PowerCenter mappings, workflows, sessions, transformations | ADF (orchestration) + dbt (transformations) + Mapping Data Flows |
-| [IICS Migration](iics-migration.md) | Cloud Data Integration, taskflows, connectors, monitoring | ADF / Fabric Data Pipelines + dbt |
-| [Data Quality Migration](data-quality-migration.md) | IDQ profiles, scorecards, rules, standardization | Great Expectations + dbt tests + Purview |
-| [MDM Migration](mdm-migration.md) | Match/merge, hierarchy management, entity resolution, stewardship | Purview + Azure SQL / Cosmos DB + Azure ML |
-| [Best Practices](best-practices.md) | Cross-product | Complexity assessment, conversion priority, parallel-run validation, team retraining |
+| Guide                                               | Informatica product                                               | Azure destination                                                                    |
+| --------------------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| [PowerCenter Migration](powercenter-migration.md)   | PowerCenter mappings, workflows, sessions, transformations        | ADF (orchestration) + dbt (transformations) + Mapping Data Flows                     |
+| [IICS Migration](iics-migration.md)                 | Cloud Data Integration, taskflows, connectors, monitoring         | ADF / Fabric Data Pipelines + dbt                                                    |
+| [Data Quality Migration](data-quality-migration.md) | IDQ profiles, scorecards, rules, standardization                  | Great Expectations + dbt tests + Purview                                             |
+| [MDM Migration](mdm-migration.md)                   | Match/merge, hierarchy management, entity resolution, stewardship | Purview + Azure SQL / Cosmos DB + Azure ML                                           |
+| [Best Practices](best-practices.md)                 | Cross-product                                                     | Complexity assessment, conversion priority, parallel-run validation, team retraining |
 
 ---
 
@@ -66,9 +66,9 @@ Product-specific deep dives covering every aspect of an Informatica-to-Azure mig
 
 Hands-on, step-by-step walkthroughs for common migration scenarios.
 
-| Tutorial | Duration | What you'll build |
-|---|---|---|
-| [PowerCenter Mapping to dbt](tutorial-mapping-to-dbt.md) | 2-3 hours | Convert a complex PowerCenter mapping to a dbt SQL model with tests and documentation |
+| Tutorial                                                   | Duration  | What you'll build                                                                                       |
+| ---------------------------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------- |
+| [PowerCenter Mapping to dbt](tutorial-mapping-to-dbt.md)   | 2-3 hours | Convert a complex PowerCenter mapping to a dbt SQL model with tests and documentation                   |
 | [Informatica Workflow to ADF](tutorial-workflow-to-adf.md) | 2-3 hours | Rebuild an Informatica workflow as an ADF pipeline with dbt integration, scheduling, and error handling |
 
 ---

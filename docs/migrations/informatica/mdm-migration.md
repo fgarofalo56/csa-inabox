@@ -47,15 +47,15 @@ Before choosing an approach, assess your MDM complexity:
 
 **Best for:** Organizations where MDM primarily means deduplication, golden record creation, and basic hierarchy management.
 
-| Capability | Implementation |
-|---|---|
-| Match (deterministic) | dbt model with exact-match join keys |
-| Match (fuzzy) | dbt model with SQL fuzzy functions or Azure ML UDF |
-| Merge (survivorship) | dbt model with CASE-based source priority |
-| Golden record | dbt mart model producing single-best-record per entity |
-| Hierarchy | Azure SQL hierarchical queries (HierarchyID or recursive CTE) |
-| Governance | Purview business glossary + data stewardship workflows |
-| API access | Azure APIM + Azure Functions reading from Azure SQL |
+| Capability            | Implementation                                                |
+| --------------------- | ------------------------------------------------------------- |
+| Match (deterministic) | dbt model with exact-match join keys                          |
+| Match (fuzzy)         | dbt model with SQL fuzzy functions or Azure ML UDF            |
+| Merge (survivorship)  | dbt model with CASE-based source priority                     |
+| Golden record         | dbt mart model producing single-best-record per entity        |
+| Hierarchy             | Azure SQL hierarchical queries (HierarchyID or recursive CTE) |
+| Governance            | Purview business glossary + data stewardship workflows        |
+| API access            | Azure APIM + Azure Functions reading from Azure SQL           |
 
 **Estimated cost:** $30K-$80K/year (vs $150K-$500K+ for Informatica MDM)
 
@@ -63,15 +63,15 @@ Before choosing an approach, assess your MDM complexity:
 
 **Best for:** Organizations with complex match rules, high-volume entity resolution, multi-domain mastering (customer + product + vendor), or regulatory requirements for MDM.
 
-| Capability | Implementation |
-|---|---|
+| Capability     | Implementation                                       |
+| -------------- | ---------------------------------------------------- |
 | Full MDM suite | Profisee platform (Azure-native, FedRAMP authorized) |
-| Match engine | Profisee matching (deterministic + fuzzy) |
-| Survivorship | Profisee survivorship rules |
-| Hierarchy | Profisee hierarchy management |
-| Stewardship | Profisee data stewardship portal |
-| API | Profisee REST API |
-| Integration | Native ADF connector; native Purview integration |
+| Match engine   | Profisee matching (deterministic + fuzzy)            |
+| Survivorship   | Profisee survivorship rules                          |
+| Hierarchy      | Profisee hierarchy management                        |
+| Stewardship    | Profisee data stewardship portal                     |
+| API            | Profisee REST API                                    |
+| Integration    | Native ADF connector; native Purview integration     |
 
 **Estimated cost:** $80K-$200K/year (Profisee license + Azure compute)
 
@@ -79,25 +79,25 @@ Before choosing an approach, assess your MDM complexity:
 
 **Best for:** Organizations with complex fuzzy matching needs (person matching across unreliable sources, organization resolution, product matching).
 
-| Capability | Implementation |
-|---|---|
-| Match engine | Azure ML model trained on labeled match pairs |
-| Feature engineering | dbt models preparing match features |
-| Scoring | Azure ML batch inference or real-time endpoint |
-| Merge | dbt model using ML scores to create golden records |
-| Feedback loop | Power Apps form for match review; results feed back to training data |
+| Capability          | Implementation                                                       |
+| ------------------- | -------------------------------------------------------------------- |
+| Match engine        | Azure ML model trained on labeled match pairs                        |
+| Feature engineering | dbt models preparing match features                                  |
+| Scoring             | Azure ML batch inference or real-time endpoint                       |
+| Merge               | dbt model using ML scores to create golden records                   |
+| Feedback loop       | Power Apps form for match review; results feed back to training data |
 
 **Estimated cost:** $50K-$150K/year (Azure ML compute + development effort)
 
 ### Decision framework
 
-| Your situation | Recommended option | Rationale |
-|---|---|---|
-| Simple deduplication (exact + near-exact) | Option 1: dbt + Purview | SQL-based matching handles 80% of dedup needs |
-| Multi-domain MDM with complex rules | Option 2: Profisee | Purpose-built MDM; lower migration risk |
-| Advanced entity resolution (ML-based) | Option 3: Azure ML | Custom ML model outperforms rule-based matching |
-| Minimal actual MDM usage | Skip MDM replacement | Many MDM installations are underutilized |
-| Regulatory requirement for MDM audit trail | Option 2: Profisee | Built-in audit and compliance features |
+| Your situation                             | Recommended option      | Rationale                                       |
+| ------------------------------------------ | ----------------------- | ----------------------------------------------- |
+| Simple deduplication (exact + near-exact)  | Option 1: dbt + Purview | SQL-based matching handles 80% of dedup needs   |
+| Multi-domain MDM with complex rules        | Option 2: Profisee      | Purpose-built MDM; lower migration risk         |
+| Advanced entity resolution (ML-based)      | Option 3: Azure ML      | Custom ML model outperforms rule-based matching |
+| Minimal actual MDM usage                   | Skip MDM replacement    | Many MDM installations are underutilized        |
+| Regulatory requirement for MDM audit trail | Option 2: Profisee      | Built-in audit and compliance features          |
 
 ---
 
@@ -292,14 +292,14 @@ GROUP BY match_group_id
 
 Informatica MDM provides a Hierarchy Manager for organizational structures, product hierarchies, geographic hierarchies, and custom relationship types. The Azure equivalents:
 
-| Hierarchy feature | Azure equivalent | Notes |
-|---|---|---|
-| Parent-child relationships | Azure SQL HierarchyID data type | Native SQL Server feature for hierarchical data |
-| Multiple hierarchy types | Separate tables or polymorphic relationships | Design based on use case |
-| Hierarchy visualization | Power BI decomposition tree or treemap | Visual hierarchy exploration |
-| Hierarchy editing | Power Apps canvas app | Custom edit interface |
-| Hierarchy API | Azure Functions + APIM | REST API for hierarchy CRUD |
-| Governance | Purview collections | Collections model organizational hierarchy |
+| Hierarchy feature          | Azure equivalent                             | Notes                                           |
+| -------------------------- | -------------------------------------------- | ----------------------------------------------- |
+| Parent-child relationships | Azure SQL HierarchyID data type              | Native SQL Server feature for hierarchical data |
+| Multiple hierarchy types   | Separate tables or polymorphic relationships | Design based on use case                        |
+| Hierarchy visualization    | Power BI decomposition tree or treemap       | Visual hierarchy exploration                    |
+| Hierarchy editing          | Power Apps canvas app                        | Custom edit interface                           |
+| Hierarchy API              | Azure Functions + APIM                       | REST API for hierarchy CRUD                     |
+| Governance                 | Purview collections                          | Collections model organizational hierarchy      |
 
 ### Azure SQL hierarchy implementation
 
@@ -570,31 +570,31 @@ Register this function in API Management with:
 
 MDM migration is the longest and most complex component. Plan accordingly:
 
-| Phase | Duration | Activities |
-|---|---|---|
-| 1. Assessment | 3-4 weeks | Inventory match rules, trust rules, hierarchies, API consumers |
-| 2. Option selection | 2 weeks | Choose Option 1, 2, or 3 based on assessment |
-| 3. Match rule conversion | 6-10 weeks | Implement match logic in dbt/ML/Profisee |
-| 4. Survivorship conversion | 3-4 weeks | Implement trust rules as SQL survivorship |
-| 5. Hierarchy migration | 3-4 weeks | Migrate hierarchy structures |
-| 6. Stewardship setup | 3-4 weeks | Build Power Apps stewardship interface |
-| 7. API migration | 4-6 weeks | Replace SIF API with APIM + Functions |
-| 8. Parallel run | 6-8 weeks | Run both systems; reconcile golden records |
-| 9. Cutover | 2-3 weeks | Repoint consumers; decommission MDM Hub |
-| **Total** | **32-45 weeks** | Plan for MDM to be the longest migration track |
+| Phase                      | Duration        | Activities                                                     |
+| -------------------------- | --------------- | -------------------------------------------------------------- |
+| 1. Assessment              | 3-4 weeks       | Inventory match rules, trust rules, hierarchies, API consumers |
+| 2. Option selection        | 2 weeks         | Choose Option 1, 2, or 3 based on assessment                   |
+| 3. Match rule conversion   | 6-10 weeks      | Implement match logic in dbt/ML/Profisee                       |
+| 4. Survivorship conversion | 3-4 weeks       | Implement trust rules as SQL survivorship                      |
+| 5. Hierarchy migration     | 3-4 weeks       | Migrate hierarchy structures                                   |
+| 6. Stewardship setup       | 3-4 weeks       | Build Power Apps stewardship interface                         |
+| 7. API migration           | 4-6 weeks       | Replace SIF API with APIM + Functions                          |
+| 8. Parallel run            | 6-8 weeks       | Run both systems; reconcile golden records                     |
+| 9. Cutover                 | 2-3 weeks       | Repoint consumers; decommission MDM Hub                        |
+| **Total**                  | **32-45 weeks** | Plan for MDM to be the longest migration track                 |
 
 ---
 
 ## Common MDM migration pitfalls
 
-| Pitfall | Mitigation |
-|---|---|
-| Underestimating match rule complexity | Export all match rules from MDM; test each in dbt before committing |
-| Ignoring survivorship logic | Document every trust rule; implement as explicit CASE logic |
-| Losing audit trail | Implement audit table from day one; capture before/after state |
-| Skipping parallel run | 6-8 week parallel run is mandatory; golden record discrepancies must be resolved |
-| Over-engineering the replacement | Start simple (Option 1); add ML (Option 3) only if SQL matching proves insufficient |
-| Forgetting API consumers | Inventory all SIF API consumers; provide migration path for each |
+| Pitfall                               | Mitigation                                                                          |
+| ------------------------------------- | ----------------------------------------------------------------------------------- |
+| Underestimating match rule complexity | Export all match rules from MDM; test each in dbt before committing                 |
+| Ignoring survivorship logic           | Document every trust rule; implement as explicit CASE logic                         |
+| Losing audit trail                    | Implement audit table from day one; capture before/after state                      |
+| Skipping parallel run                 | 6-8 week parallel run is mandatory; golden record discrepancies must be resolved    |
+| Over-engineering the replacement      | Start simple (Option 1); add ML (Option 3) only if SQL matching proves insufficient |
+| Forgetting API consumers              | Inventory all SIF API consumers; provide migration path for each                    |
 
 ---
 

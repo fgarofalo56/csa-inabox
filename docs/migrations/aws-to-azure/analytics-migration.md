@@ -14,23 +14,23 @@ There is no automated migration tool from QuickSight to Power BI. Dashboard migr
 
 ## Component mapping
 
-| QuickSight concept | Power BI equivalent | Migration complexity | Notes |
-|---|---|---|---|
-| Analysis | Power BI report | M | Manual rebuild; visual-by-visual |
-| Dashboard (published) | Power BI dashboard / report | M | Dashboards in Power BI pin visuals from reports |
-| Dataset | Semantic model (dataset) | S-M | Rebuild connections and relationships |
-| SPICE dataset | Import mode dataset | S | Data import from source |
-| Direct Query dataset | DirectQuery or Direct Lake | S | Direct Lake preferred for Delta tables |
-| Calculated field | DAX measure or calculated column | M | DAX learning curve for QuickSight users |
-| Parameter | Power BI parameter / slicer | S | Multiple implementation options |
-| Filter | Report/page/visual filter | XS | Direct mapping |
-| Row-level security (RLS) | Power BI RLS (DAX) + Entra ID | S | Dynamic RLS via Entra groups |
-| QuickSight Q | Power BI Copilot | S | GPT-4 powered; richer NL interaction |
-| Embedding (anonymous) | Power BI Embedded (App-owns-data) | M | Azure AD app registration required |
-| Embedding (authenticated) | Power BI Embedded (User-owns-data) | S | Entra ID SSO |
-| Threshold alerts | Data Activator / Power Automate alerts | S | Richer alerting with Power Automate |
-| Email reports (scheduled) | Power BI subscriptions | XS | Direct equivalent |
-| Paginated reports | Power BI paginated reports (SSRS) | M | Pixel-perfect reporting; RDLC format |
+| QuickSight concept        | Power BI equivalent                    | Migration complexity | Notes                                           |
+| ------------------------- | -------------------------------------- | -------------------- | ----------------------------------------------- |
+| Analysis                  | Power BI report                        | M                    | Manual rebuild; visual-by-visual                |
+| Dashboard (published)     | Power BI dashboard / report            | M                    | Dashboards in Power BI pin visuals from reports |
+| Dataset                   | Semantic model (dataset)               | S-M                  | Rebuild connections and relationships           |
+| SPICE dataset             | Import mode dataset                    | S                    | Data import from source                         |
+| Direct Query dataset      | DirectQuery or Direct Lake             | S                    | Direct Lake preferred for Delta tables          |
+| Calculated field          | DAX measure or calculated column       | M                    | DAX learning curve for QuickSight users         |
+| Parameter                 | Power BI parameter / slicer            | S                    | Multiple implementation options                 |
+| Filter                    | Report/page/visual filter              | XS                   | Direct mapping                                  |
+| Row-level security (RLS)  | Power BI RLS (DAX) + Entra ID          | S                    | Dynamic RLS via Entra groups                    |
+| QuickSight Q              | Power BI Copilot                       | S                    | GPT-4 powered; richer NL interaction            |
+| Embedding (anonymous)     | Power BI Embedded (App-owns-data)      | M                    | Azure AD app registration required              |
+| Embedding (authenticated) | Power BI Embedded (User-owns-data)     | S                    | Entra ID SSO                                    |
+| Threshold alerts          | Data Activator / Power Automate alerts | S                    | Richer alerting with Power Automate             |
+| Email reports (scheduled) | Power BI subscriptions                 | XS                   | Direct equivalent                               |
+| Paginated reports         | Power BI paginated reports (SSRS)      | M                    | Pixel-perfect reporting; RDLC format            |
 
 ---
 
@@ -38,15 +38,15 @@ There is no automated migration tool from QuickSight to Power BI. Dashboard migr
 
 ### QuickSight data sources to Power BI connections
 
-| QuickSight data source | Power BI connection | Connection mode |
-|---|---|---|
-| Amazon Redshift | Databricks SQL endpoint (post-migration) | DirectQuery or Direct Lake |
-| Amazon S3 (SPICE import) | ADLS Gen2 / OneLake (post-migration) | Direct Lake |
-| Amazon Athena | Databricks SQL endpoint (post-migration) | DirectQuery |
-| Amazon RDS (PostgreSQL/MySQL) | Azure Database for PostgreSQL/MySQL | DirectQuery |
-| Amazon Aurora | Azure SQL Database | DirectQuery |
-| Uploaded CSV/Excel | OneLake / SharePoint | Import |
-| Custom SQL (SPICE) | Databricks SQL view or dbt model | Direct Lake |
+| QuickSight data source        | Power BI connection                      | Connection mode            |
+| ----------------------------- | ---------------------------------------- | -------------------------- |
+| Amazon Redshift               | Databricks SQL endpoint (post-migration) | DirectQuery or Direct Lake |
+| Amazon S3 (SPICE import)      | ADLS Gen2 / OneLake (post-migration)     | Direct Lake                |
+| Amazon Athena                 | Databricks SQL endpoint (post-migration) | DirectQuery                |
+| Amazon RDS (PostgreSQL/MySQL) | Azure Database for PostgreSQL/MySQL      | DirectQuery                |
+| Amazon Aurora                 | Azure SQL Database                       | DirectQuery                |
+| Uploaded CSV/Excel            | OneLake / SharePoint                     | Import                     |
+| Custom SQL (SPICE)            | Databricks SQL view or dbt model         | Direct Lake                |
 
 ### Direct Lake mode (recommended)
 
@@ -65,6 +65,7 @@ Delta Lake table (ADLS Gen2 / OneLake)
 ```
 
 **Configuration:**
+
 1. Create a Fabric Lakehouse (or connect existing ADLS Gen2 storage).
 2. Ensure Delta tables are registered in the Lakehouse.
 3. In Power BI Desktop, connect to the Lakehouse SQL endpoint.
@@ -81,14 +82,14 @@ SPICE (Super-fast, Parallel, In-memory Calculation Engine) is QuickSight's in-me
 
 ### Power BI equivalents
 
-| SPICE capability | Power BI Import mode | Power BI Direct Lake |
-|---|---|---|
-| In-memory storage | Yes (VertiPaq engine) | Yes (column cache from Delta) |
-| Scheduled refresh | Yes (up to 48/day Pro; 48/day PPU) | Automatic (reads Delta directly) |
-| Incremental refresh | Yes (Premium/PPU) | Automatic |
-| Capacity limit | 1 GB (Pro) / 100 GB (PPU) / 400 GB (Premium) | OneLake storage (no model size limit) |
-| Query performance | Fast (fully in-memory) | Fast (selective column loading) |
-| Data freshness | Depends on refresh schedule | Near real-time (reads latest Delta version) |
+| SPICE capability    | Power BI Import mode                         | Power BI Direct Lake                        |
+| ------------------- | -------------------------------------------- | ------------------------------------------- |
+| In-memory storage   | Yes (VertiPaq engine)                        | Yes (column cache from Delta)               |
+| Scheduled refresh   | Yes (up to 48/day Pro; 48/day PPU)           | Automatic (reads Delta directly)            |
+| Incremental refresh | Yes (Premium/PPU)                            | Automatic                                   |
+| Capacity limit      | 1 GB (Pro) / 100 GB (PPU) / 400 GB (Premium) | OneLake storage (no model size limit)       |
+| Query performance   | Fast (fully in-memory)                       | Fast (selective column loading)             |
+| Data freshness      | Depends on refresh schedule                  | Near real-time (reads latest Delta version) |
 
 **Recommendation:** Use Direct Lake for all new semantic models. Use Import mode only for data sources that are not in Delta Lake format.
 
@@ -98,18 +99,18 @@ SPICE (Super-fast, Parallel, In-memory Calculation Engine) is QuickSight's in-me
 
 ### Common translations
 
-| QuickSight calculated field | DAX equivalent | Notes |
-|---|---|---|
-| `sum(quantity)` | `Total Units = SUM('Orders'[quantity])` | Explicit measure definition |
-| `count(distinct customer_id)` | `Unique Customers = DISTINCTCOUNT('Orders'[customer_id])` | Function name differs |
-| `avg(amount)` | `Avg Amount = AVERAGE('Orders'[amount])` | Same concept |
-| `sum(amount) / sum(quantity)` | `Price Per Unit = DIVIDE(SUM('Orders'[amount]), SUM('Orders'[quantity]))` | DIVIDE handles division by zero |
-| `ifelse(region="EAST", "Eastern", "Other")` | `Region Label = IF('Orders'[region] = "EAST", "Eastern", "Other")` | IF instead of ifelse |
-| `dateDiff(order_date, ship_date, "DAY")` | `Days to Ship = DATEDIFF('Orders'[order_date], 'Orders'[ship_date], DAY)` | Same function name in DAX |
-| `percentOfTotal(sum(amount))` | `Pct of Total = DIVIDE(SUM('Orders'[amount]), CALCULATE(SUM('Orders'[amount]), ALL('Orders')))` | Requires CALCULATE + ALL |
-| `runningTotal(sum(amount), order_date)` | Uses a combination of CALCULATE and FILTER | More complex in DAX |
-| `periodOverPeriod(sum(amount), order_date, MONTH, -1)` | `MoM Change = [Total Revenue] - CALCULATE([Total Revenue], DATEADD('Calendar'[Date], -1, MONTH))` | Time intelligence in DAX |
-| `decimalFormat(amount, "#,##0.00")` | Format string in visual or `FORMAT(amount, "#,##0.00")` | Applied at visual level |
+| QuickSight calculated field                            | DAX equivalent                                                                                    | Notes                           |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------- | ------------------------------- |
+| `sum(quantity)`                                        | `Total Units = SUM('Orders'[quantity])`                                                           | Explicit measure definition     |
+| `count(distinct customer_id)`                          | `Unique Customers = DISTINCTCOUNT('Orders'[customer_id])`                                         | Function name differs           |
+| `avg(amount)`                                          | `Avg Amount = AVERAGE('Orders'[amount])`                                                          | Same concept                    |
+| `sum(amount) / sum(quantity)`                          | `Price Per Unit = DIVIDE(SUM('Orders'[amount]), SUM('Orders'[quantity]))`                         | DIVIDE handles division by zero |
+| `ifelse(region="EAST", "Eastern", "Other")`            | `Region Label = IF('Orders'[region] = "EAST", "Eastern", "Other")`                                | IF instead of ifelse            |
+| `dateDiff(order_date, ship_date, "DAY")`               | `Days to Ship = DATEDIFF('Orders'[order_date], 'Orders'[ship_date], DAY)`                         | Same function name in DAX       |
+| `percentOfTotal(sum(amount))`                          | `Pct of Total = DIVIDE(SUM('Orders'[amount]), CALCULATE(SUM('Orders'[amount]), ALL('Orders')))`   | Requires CALCULATE + ALL        |
+| `runningTotal(sum(amount), order_date)`                | Uses a combination of CALCULATE and FILTER                                                        | More complex in DAX             |
+| `periodOverPeriod(sum(amount), order_date, MONTH, -1)` | `MoM Change = [Total Revenue] - CALCULATE([Total Revenue], DATEADD('Calendar'[Date], -1, MONTH))` | Time intelligence in DAX        |
+| `decimalFormat(amount, "#,##0.00")`                    | Format string in visual or `FORMAT(amount, "#,##0.00")`                                           | Applied at visual level         |
 
 ### DAX patterns for common QuickSight calculations
 
@@ -159,14 +160,14 @@ CALCULATE(
 
 ### QuickSight parameter types and Power BI equivalents
 
-| QuickSight parameter | Power BI equivalent | Implementation |
-|---|---|---|
-| String parameter | Slicer (dropdown) | Add a slicer visual bound to the column |
-| Integer parameter | Slicer (numeric range) or What-if parameter | What-if for calculated scenarios |
-| Date parameter | Date slicer | Relative date slicer or calendar slicer |
-| Cascading parameters | Cascading slicers | Use relationship-based filtering |
-| Dynamic default | Default slicer value | Set in report settings |
-| URL parameter | Bookmark + URL filter | `?filter=Table/Column eq 'value'` |
+| QuickSight parameter | Power BI equivalent                         | Implementation                          |
+| -------------------- | ------------------------------------------- | --------------------------------------- |
+| String parameter     | Slicer (dropdown)                           | Add a slicer visual bound to the column |
+| Integer parameter    | Slicer (numeric range) or What-if parameter | What-if for calculated scenarios        |
+| Date parameter       | Date slicer                                 | Relative date slicer or calendar slicer |
+| Cascading parameters | Cascading slicers                           | Use relationship-based filtering        |
+| Dynamic default      | Default slicer value                        | Set in report settings                  |
+| URL parameter        | Bookmark + URL filter                       | `?filter=Table/Column eq 'value'`       |
 
 ### What-if parameter example (replacing QuickSight parameter controls)
 
@@ -239,16 +240,16 @@ RETURN
 
 ## QuickSight Q to Power BI Copilot
 
-| Capability | QuickSight Q | Power BI Copilot |
-|---|---|---|
-| Natural language query | Yes (ML-based NLQ) | Yes (GPT-4 powered) |
-| Suggested questions | Yes | Yes |
-| Answer types | Visuals, KPIs, tables | Visuals, narratives, DAX, full reports |
-| Custom terms/synonyms | Q Topics with synonyms | Linguistic schema + synonyms |
-| Report generation | No | Yes --- Copilot creates entire report pages |
-| DAX authoring | No | Yes --- Copilot writes DAX measures |
-| Data summarization | Limited | Yes --- narrative summaries of data |
-| Government availability | QuickSight Q in GovCloud | Copilot in GCC High (check availability) |
+| Capability              | QuickSight Q             | Power BI Copilot                            |
+| ----------------------- | ------------------------ | ------------------------------------------- |
+| Natural language query  | Yes (ML-based NLQ)       | Yes (GPT-4 powered)                         |
+| Suggested questions     | Yes                      | Yes                                         |
+| Answer types            | Visuals, KPIs, tables    | Visuals, narratives, DAX, full reports      |
+| Custom terms/synonyms   | Q Topics with synonyms   | Linguistic schema + synonyms                |
+| Report generation       | No                       | Yes --- Copilot creates entire report pages |
+| DAX authoring           | No                       | Yes --- Copilot writes DAX measures         |
+| Data summarization      | Limited                  | Yes --- narrative summaries of data         |
+| Government availability | QuickSight Q in GovCloud | Copilot in GCC High (check availability)    |
 
 ---
 
@@ -261,8 +262,8 @@ RETURN
 const embedUrl = `https://us-east-1.quicksight.aws.amazon.com/embed/...`;
 const dashboard = QuickSightEmbedding.embedDashboard({
     url: embedUrl,
-    container: '#dashboard-container',
-    parameters: { region: 'EAST' }
+    container: "#dashboard-container",
+    parameters: { region: "EAST" },
 });
 ```
 
@@ -271,15 +272,15 @@ const dashboard = QuickSightEmbedding.embedDashboard({
 ```javascript
 // Power BI embedding (App-owns-data pattern)
 const embedConfig = {
-    type: 'report',
+    type: "report",
     id: reportId,
     embedUrl: embedUrl,
     accessToken: accessToken,
     tokenType: models.TokenType.Embed,
     settings: {
         filterPaneEnabled: false,
-        navContentPaneEnabled: false
-    }
+        navContentPaneEnabled: false,
+    },
 };
 
 const report = powerbi.embed(container, embedConfig);
@@ -289,7 +290,7 @@ const filter = {
     $schema: "http://powerbi.com/product/schema#basic",
     target: { table: "Orders", column: "region" },
     operator: "In",
-    values: ["EAST"]
+    values: ["EAST"],
 };
 report.setFilters([filter]);
 ```

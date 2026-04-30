@@ -12,16 +12,16 @@ If you have built datasets, transforms, and object types in Palantir Foundry, ev
 
 Before you begin, make sure you have the following:
 
-| Tool | Minimum version | Verify |
-|---|---|---|
-| Azure subscription | Pay-as-you-go or Enterprise | `az account show` |
-| Azure CLI | 2.50+ | `az version` |
-| Bicep CLI | 0.25+ | `az bicep version` |
-| Git | 2.x | `git --version` |
-| Python | 3.10+ | `python --version` |
-| dbt-core | 1.7+ | `dbt --version` |
-| Basic SQL | Comfortable writing SELECT/JOIN/CASE statements | -- |
-| Basic Python | Can read and run scripts | -- |
+| Tool               | Minimum version                                 | Verify             |
+| ------------------ | ----------------------------------------------- | ------------------ |
+| Azure subscription | Pay-as-you-go or Enterprise                     | `az account show`  |
+| Azure CLI          | 2.50+                                           | `az version`       |
+| Bicep CLI          | 0.25+                                           | `az bicep version` |
+| Git                | 2.x                                             | `git --version`    |
+| Python             | 3.10+                                           | `python --version` |
+| dbt-core           | 1.7+                                            | `dbt --version`    |
+| Basic SQL          | Comfortable writing SELECT/JOIN/CASE statements | --                 |
+| Basic Python       | Can read and run scripts                        | --                 |
 
 You should also have **Contributor** (or higher) access to at least one Azure resource group.
 
@@ -107,30 +107,30 @@ cp domains/shared/dbt/packages.yml    domains/my-domain/dbt/packages.yml
 Edit `domains/my-domain/dbt/dbt_project.yml` to set the project name:
 
 ```yaml
-name: 'my_domain_analytics'
-version: '1.0.0'
+name: "my_domain_analytics"
+version: "1.0.0"
 config-version: 2
 require-dbt-version: [">=1.7.0", "<2.0.0"]
-profile: 'csa_analytics'
+profile: "csa_analytics"
 
 model-paths: ["models"]
 seed-paths: ["seeds"]
 macro-paths: ["macros"]
 
 models:
-  my_domain_analytics:
-    bronze:
-      +materialized: incremental
-      +schema: bronze
-      +tags: ['bronze']
-    silver:
-      +materialized: incremental
-      +schema: silver
-      +tags: ['silver']
-    gold:
-      +materialized: table
-      +schema: gold
-      +tags: ['gold']
+    my_domain_analytics:
+        bronze:
+            +materialized: incremental
+            +schema: bronze
+            +tags: ["bronze"]
+        silver:
+            +materialized: incremental
+            +schema: silver
+            +tags: ["silver"]
+        gold:
+            +materialized: table
+            +schema: gold
+            +tags: ["gold"]
 ```
 
 > **Foundry comparison:** In Foundry, you create a new "project" in the left sidebar and organize datasets into folders. Here, the domain folder structure in Git serves the same purpose but with version control, code review, and branch-based collaboration built in.
@@ -397,63 +397,63 @@ apiVersion: csa.microsoft.com/v1
 kind: DataProductContract
 
 metadata:
-  name: my-domain.transactions
-  domain: my-domain
-  owner: my-team@contoso.com
-  version: "1.0.0"
-  description: >
-    Daily transaction records, cleaned and validated through the
-    medallion pipeline. Consumers can rely on the schema and SLAs
-    defined below.
+    name: my-domain.transactions
+    domain: my-domain
+    owner: my-team@contoso.com
+    version: "1.0.0"
+    description: >
+        Daily transaction records, cleaned and validated through the
+        medallion pipeline. Consumers can rely on the schema and SLAs
+        defined below.
 
 schema:
-  primary_key: [transaction_sk]
-  columns:
-    - name: transaction_sk
-      type: string
-      nullable: false
-      description: Surrogate key (hash of transaction_id).
-    - name: transaction_id
-      type: long
-      nullable: false
-      description: Unique transaction identifier from source system.
-    - name: customer_id
-      type: long
-      nullable: false
-      description: Customer identifier.
-    - name: transaction_date
-      type: date
-      nullable: false
-      description: Date the transaction occurred.
-    - name: amount
-      type: decimal(18,2)
-      nullable: false
-      description: Transaction amount in USD.
-    - name: category
-      type: string
-      nullable: false
-      description: Transaction category.
-    - name: is_valid
-      type: boolean
-      nullable: false
-      description: True when all quality checks pass.
+    primary_key: [transaction_sk]
+    columns:
+        - name: transaction_sk
+          type: string
+          nullable: false
+          description: Surrogate key (hash of transaction_id).
+        - name: transaction_id
+          type: long
+          nullable: false
+          description: Unique transaction identifier from source system.
+        - name: customer_id
+          type: long
+          nullable: false
+          description: Customer identifier.
+        - name: transaction_date
+          type: date
+          nullable: false
+          description: Date the transaction occurred.
+        - name: amount
+          type: decimal(18,2)
+          nullable: false
+          description: Transaction amount in USD.
+        - name: category
+          type: string
+          nullable: false
+          description: Transaction category.
+        - name: is_valid
+          type: boolean
+          nullable: false
+          description: True when all quality checks pass.
 
 sla:
-  freshness_minutes: 60
-  valid_row_ratio: 0.97
-  supported_until: "2027-12-31"
+    freshness_minutes: 60
+    valid_row_ratio: 0.97
+    supported_until: "2027-12-31"
 
 quality_rules:
-  - rule: expect_column_values_to_not_be_null
-    column: transaction_sk
-  - rule: expect_column_values_to_be_unique
-    column: transaction_sk
-  - rule: expect_column_values_to_not_be_null
-    column: transaction_id
-  - rule: expect_column_values_to_be_between
-    column: amount
-    min_value: 0
-    mostly: 0.97
+    - rule: expect_column_values_to_not_be_null
+      column: transaction_sk
+    - rule: expect_column_values_to_be_unique
+      column: transaction_sk
+    - rule: expect_column_values_to_not_be_null
+      column: transaction_id
+    - rule: expect_column_values_to_be_between
+      column: amount
+      min_value: 0
+      mostly: 0.97
 ```
 
 > **Foundry comparison:** In Foundry, you define an "object type" in the Ontology -- its properties, primary key, and links. A data contract in CSA-in-a-Box serves the same purpose: it is the published interface that tells consumers what columns exist, their types, nullability, and what quality guarantees are met. The difference is that contracts are YAML files in Git, validated in CI, and enforced at runtime by `governance/contracts/contract_validator.py`.
@@ -487,10 +487,10 @@ Then create a glossary term for your data product in the Azure portal:
 1. Open **Microsoft Purview** > **Data Catalog** > **Glossary**.
 2. Select your domain collection (e.g., `my-domain`).
 3. Click **New Term** and fill in:
-   - **Name:** `Daily Transactions`
-   - **Definition:** `Cleaned and validated daily transaction records. Produced by the my-domain medallion pipeline.`
-   - **Owner:** your team email
-   - **Status:** `Approved`
+    - **Name:** `Daily Transactions`
+    - **Definition:** `Cleaned and validated daily transaction records. Produced by the my-domain medallion pipeline.`
+    - **Owner:** your team email
+    - **Status:** `Approved`
 
 Alternatively, use the Purview REST API:
 
@@ -603,16 +603,16 @@ With your semantic model connected, build a report using Power BI Copilot (requi
 2. Click the **Copilot** icon in the ribbon.
 3. Enter a prompt such as:
 
-   > "Create a report page showing daily transaction trends by category, with a bar chart of total amount by category and a line chart of transaction count over time."
+    > "Create a report page showing daily transaction trends by category, with a bar chart of total amount by category and a line chart of transaction count over time."
 
 4. Copilot generates visuals. Review and refine:
-   - Adjust date filters to the relevant time range.
-   - Add slicers for `category`.
-   - Apply your organization's theme.
+    - Adjust date filters to the relevant time range.
+    - Add slicers for `category`.
+    - Apply your organization's theme.
 
 5. Add a second page manually for detail:
-   - Table visual: `transaction_date`, `category`, `transaction_count`, `total_amount`, `avg_amount`.
-   - Card visuals: `Total Amount`, `Transaction Count`.
+    - Table visual: `transaction_date`, `category`, `transaction_count`, `total_amount`, `avg_amount`.
+    - Card visuals: `Total Amount`, `Transaction Count`.
 
 6. Publish to the Power BI Service:
 
@@ -696,19 +696,19 @@ LIMIT 10;
 
 Use this table as a quick reference when you encounter a Foundry concept and need the Azure equivalent:
 
-| Foundry concept | Azure / CSA-in-a-Box equivalent | Where in the repo |
-|---|---|---|
-| Project / Folder | Domain folder in Git | `domains/<domain>/` |
-| Dataset (raw) | ADLS Gen2 container + ADF pipeline | `domains/<domain>/pipelines/adf/` |
-| Transform (Python/SQL) | dbt model (Bronze/Silver/Gold) | `domains/<domain>/dbt/models/` |
-| Object Type (Ontology) | Data contract + Purview glossary term | `domains/<domain>/data-products/` |
-| Pipeline Builder | Azure Data Factory pipeline | `domains/<domain>/pipelines/adf/` |
-| Data Catalog | Microsoft Purview | `scripts/purview/` |
-| Expectations / Checks | dbt tests + contract validator | `governance/contracts/` |
-| Contour / Quiver | Power BI report + semantic model | `csa_platform/semantic_model/` |
-| Marketplace | CSA-in-a-Box data marketplace portal | `portal/` |
-| Permissions (Compass) | Azure RBAC + Purview access policies | `deploy/bicep/` |
-| Scheduling | ADF triggers | `domains/<domain>/pipelines/adf/triggers/` |
+| Foundry concept        | Azure / CSA-in-a-Box equivalent       | Where in the repo                          |
+| ---------------------- | ------------------------------------- | ------------------------------------------ |
+| Project / Folder       | Domain folder in Git                  | `domains/<domain>/`                        |
+| Dataset (raw)          | ADLS Gen2 container + ADF pipeline    | `domains/<domain>/pipelines/adf/`          |
+| Transform (Python/SQL) | dbt model (Bronze/Silver/Gold)        | `domains/<domain>/dbt/models/`             |
+| Object Type (Ontology) | Data contract + Purview glossary term | `domains/<domain>/data-products/`          |
+| Pipeline Builder       | Azure Data Factory pipeline           | `domains/<domain>/pipelines/adf/`          |
+| Data Catalog           | Microsoft Purview                     | `scripts/purview/`                         |
+| Expectations / Checks  | dbt tests + contract validator        | `governance/contracts/`                    |
+| Contour / Quiver       | Power BI report + semantic model      | `csa_platform/semantic_model/`             |
+| Marketplace            | CSA-in-a-Box data marketplace portal  | `portal/`                                  |
+| Permissions (Compass)  | Azure RBAC + Purview access policies  | `deploy/bicep/`                            |
+| Scheduling             | ADF triggers                          | `domains/<domain>/pipelines/adf/triggers/` |
 
 ---
 

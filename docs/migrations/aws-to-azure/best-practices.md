@@ -101,31 +101,31 @@ AWS VPC (GovCloud)                    Azure VNet (Gov)
 
 ### Mapping strategy
 
-| AWS IAM construct | Azure equivalent | Migration notes |
-|------------------|-----------------|----------------|
-| IAM User (programmatic) | Service Principal or Managed Identity | Prefer managed identity for Azure-native workloads |
-| IAM User (console) | Entra ID user | Federated identity via Entra ID |
-| IAM Role (EC2/EMR instance profile) | User-Assigned Managed Identity | Attach to Databricks workspace or VM |
-| IAM Role (Glue service role) | ADF Managed Identity | ADF gets a system-assigned MI at creation |
-| IAM Role (cross-account) | Cross-tenant service principal | Rare; usually same-tenant in Azure |
-| IAM Group | Entra ID Security Group | Map 1:1; use for RBAC assignments |
-| IAM Policy (inline) | Azure Role Definition (custom) | Avoid custom roles; use built-in where possible |
-| IAM Policy (managed) | Azure Built-in Role | See role mapping table below |
-| S3 Bucket Policy | Storage Account RBAC + ACL | RBAC preferred over ACLs on ADLS Gen2 |
-| Lake Formation permissions | Unity Catalog grants | `GRANT SELECT ON TABLE ...` |
-| KMS Key Policy | Key Vault access policy or RBAC | Key Vault RBAC is the modern approach |
+| AWS IAM construct                   | Azure equivalent                      | Migration notes                                    |
+| ----------------------------------- | ------------------------------------- | -------------------------------------------------- |
+| IAM User (programmatic)             | Service Principal or Managed Identity | Prefer managed identity for Azure-native workloads |
+| IAM User (console)                  | Entra ID user                         | Federated identity via Entra ID                    |
+| IAM Role (EC2/EMR instance profile) | User-Assigned Managed Identity        | Attach to Databricks workspace or VM               |
+| IAM Role (Glue service role)        | ADF Managed Identity                  | ADF gets a system-assigned MI at creation          |
+| IAM Role (cross-account)            | Cross-tenant service principal        | Rare; usually same-tenant in Azure                 |
+| IAM Group                           | Entra ID Security Group               | Map 1:1; use for RBAC assignments                  |
+| IAM Policy (inline)                 | Azure Role Definition (custom)        | Avoid custom roles; use built-in where possible    |
+| IAM Policy (managed)                | Azure Built-in Role                   | See role mapping table below                       |
+| S3 Bucket Policy                    | Storage Account RBAC + ACL            | RBAC preferred over ACLs on ADLS Gen2              |
+| Lake Formation permissions          | Unity Catalog grants                  | `GRANT SELECT ON TABLE ...`                        |
+| KMS Key Policy                      | Key Vault access policy or RBAC       | Key Vault RBAC is the modern approach              |
 
 ### Common role mappings
 
-| AWS managed policy | Azure built-in role | Scope |
-|-------------------|-------------------|-------|
-| `AmazonS3ReadOnlyAccess` | `Storage Blob Data Reader` | Storage account or container |
-| `AmazonS3FullAccess` | `Storage Blob Data Contributor` | Storage account or container |
-| `AmazonRedshiftReadOnlyAccess` | Unity Catalog `SELECT` grant | Catalog/schema/table |
-| `AmazonRedshiftFullAccess` | Unity Catalog `ALL PRIVILEGES` + `Storage Blob Data Contributor` | Workspace + storage |
-| `AWSGlueServiceRole` | ADF system-assigned managed identity + `Data Factory Contributor` | ADF instance |
-| `AmazonAthenaFullAccess` | Databricks SQL Warehouse access + `Storage Blob Data Reader` | Workspace + storage |
-| `AmazonEMRFullAccessPolicy_v2` | `Contributor` on Databricks workspace | Resource group |
+| AWS managed policy             | Azure built-in role                                               | Scope                        |
+| ------------------------------ | ----------------------------------------------------------------- | ---------------------------- |
+| `AmazonS3ReadOnlyAccess`       | `Storage Blob Data Reader`                                        | Storage account or container |
+| `AmazonS3FullAccess`           | `Storage Blob Data Contributor`                                   | Storage account or container |
+| `AmazonRedshiftReadOnlyAccess` | Unity Catalog `SELECT` grant                                      | Catalog/schema/table         |
+| `AmazonRedshiftFullAccess`     | Unity Catalog `ALL PRIVILEGES` + `Storage Blob Data Contributor`  | Workspace + storage          |
+| `AWSGlueServiceRole`           | ADF system-assigned managed identity + `Data Factory Contributor` | ADF instance                 |
+| `AmazonAthenaFullAccess`       | Databricks SQL Warehouse access + `Storage Blob Data Reader`      | Workspace + storage          |
+| `AmazonEMRFullAccessPolicy_v2` | `Contributor` on Databricks workspace                             | Resource group               |
 
 ### Service account migration checklist
 
@@ -222,10 +222,10 @@ The Glue Data Catalog often contains years of accumulated metadata, partitions, 
 1. **Select validation datasets:** Pick 5-10 representative tables covering different shapes (large fact tables, small dimensions, time-series, CDC).
 2. **Run both pipelines:** Execute the AWS pipeline (Glue/EMR/Redshift) and the Azure pipeline (ADF/dbt/Databricks) on the same input data.
 3. **Compare outputs:**
-   - Row counts (must match exactly).
-   - Aggregate checksums (SUM, COUNT DISTINCT on key columns -- must match within 0.01%).
-   - Sample row comparison (random sample of 1000 rows, field-by-field comparison).
-   - Schema comparison (column names, types, nullability).
+    - Row counts (must match exactly).
+    - Aggregate checksums (SUM, COUNT DISTINCT on key columns -- must match within 0.01%).
+    - Sample row comparison (random sample of 1000 rows, field-by-field comparison).
+    - Schema comparison (column names, types, nullability).
 4. **Duration:** Run in parallel for at least 5 business days. Extend to 10 days for mission-critical pipelines.
 5. **Acceptance criteria:** Zero row-count mismatches, < 0.01% aggregate deviation, zero schema mismatches.
 
@@ -248,6 +248,7 @@ Use dbt tests + a validation notebook (see the companion tutorials for code). Au
 **What happens:** S3 event notifications trigger Lambda functions, SQS queues, or SNS topics. These patterns do not have a direct lift-and-shift to Azure.
 
 **Solution:** Map each S3 event pattern to its Azure equivalent early in discovery:
+
 - S3 → Lambda: ADLS Gen2 → Event Grid → Azure Functions.
 - S3 → SQS → consumer: ADLS Gen2 → Event Grid → Service Bus → consumer.
 - S3 → SNS fan-out: ADLS Gen2 → Event Grid → multiple subscribers.
@@ -306,16 +307,16 @@ Use dbt tests + a validation notebook (see the companion tutorials for code). Au
 
 ### Recommended migration team composition
 
-| Role | Count | Responsibilities |
-|------|-------|-----------------|
-| Migration lead / architect | 1 | Overall architecture, decision-making, risk management |
-| Data engineer (AWS-focused) | 2-3 | Redshift profiling, Glue job analysis, S3 inventory, UNLOAD operations |
-| Data engineer (Azure-focused) | 2-3 | ADF pipelines, dbt models, Databricks configuration, Delta Lake optimization |
-| Platform engineer | 1-2 | Networking (ExpressRoute/VPN), identity (Entra ID), Bicep deployments |
-| Security / compliance lead | 1 | IAM mapping, compliance evidence, audit log preservation |
-| BI developer | 1 | Power BI semantic models, QuickSight-to-Power BI report conversion |
-| QA / validation engineer | 1 | Data parity validation, regression testing, parallel-run monitoring |
-| Program manager | 1 | Timeline, risk register, stakeholder communication |
+| Role                          | Count | Responsibilities                                                             |
+| ----------------------------- | ----- | ---------------------------------------------------------------------------- |
+| Migration lead / architect    | 1     | Overall architecture, decision-making, risk management                       |
+| Data engineer (AWS-focused)   | 2-3   | Redshift profiling, Glue job analysis, S3 inventory, UNLOAD operations       |
+| Data engineer (Azure-focused) | 2-3   | ADF pipelines, dbt models, Databricks configuration, Delta Lake optimization |
+| Platform engineer             | 1-2   | Networking (ExpressRoute/VPN), identity (Entra ID), Bicep deployments        |
+| Security / compliance lead    | 1     | IAM mapping, compliance evidence, audit log preservation                     |
+| BI developer                  | 1     | Power BI semantic models, QuickSight-to-Power BI report conversion           |
+| QA / validation engineer      | 1     | Data parity validation, regression testing, parallel-run monitoring          |
+| Program manager               | 1     | Timeline, risk register, stakeholder communication                           |
 
 ### Scaling guidance
 
@@ -329,29 +330,29 @@ Use dbt tests + a validation notebook (see the companion tutorials for code). Au
 
 ### Small migration (< 5 TB data, < 10 pipelines)
 
-| Phase | Duration | Activities |
-|-------|----------|-----------|
-| Discovery | 1 week | Inventory, dependency mapping |
-| Landing zone | 2 weeks | Bicep deployment, networking, identity |
-| Data migration | 1 week | AzCopy transfer, Delta conversion |
-| Pipeline migration | 2-3 weeks | Glue to ADF+dbt, Athena to Databricks SQL |
-| Validation | 1 week | Parallel run, parity checks |
-| Cutover | 1 week | Consumer redirect, decommission |
-| **Total** | **8-10 weeks** | |
+| Phase              | Duration       | Activities                                |
+| ------------------ | -------------- | ----------------------------------------- |
+| Discovery          | 1 week         | Inventory, dependency mapping             |
+| Landing zone       | 2 weeks        | Bicep deployment, networking, identity    |
+| Data migration     | 1 week         | AzCopy transfer, Delta conversion         |
+| Pipeline migration | 2-3 weeks      | Glue to ADF+dbt, Athena to Databricks SQL |
+| Validation         | 1 week         | Parallel run, parity checks               |
+| Cutover            | 1 week         | Consumer redirect, decommission           |
+| **Total**          | **8-10 weeks** |                                           |
 
 ### Medium migration (5-50 TB, 10-50 pipelines)
 
-| Phase | Duration | Activities |
-|-------|----------|-----------|
-| Discovery | 2-3 weeks | Full inventory, wave planning |
-| Landing zone | 3-4 weeks | Bicep, ExpressRoute, identity mapping |
-| Pilot domain | 4-6 weeks | One end-to-end domain migrated |
-| Redshift migration | 6-8 weeks | Schema, data, SQL conversion (overlaps) |
-| Pipeline migration | 4-6 weeks | All Glue jobs converted (overlaps) |
-| Streaming migration | 2-3 weeks | Kinesis to Event Hubs (if applicable) |
-| Validation | 2-3 weeks | Parallel run, regression testing |
-| Cutover + decommission | 2-3 weeks | Staged cutover, audit log archive |
-| **Total** | **20-28 weeks** | |
+| Phase                  | Duration        | Activities                              |
+| ---------------------- | --------------- | --------------------------------------- |
+| Discovery              | 2-3 weeks       | Full inventory, wave planning           |
+| Landing zone           | 3-4 weeks       | Bicep, ExpressRoute, identity mapping   |
+| Pilot domain           | 4-6 weeks       | One end-to-end domain migrated          |
+| Redshift migration     | 6-8 weeks       | Schema, data, SQL conversion (overlaps) |
+| Pipeline migration     | 4-6 weeks       | All Glue jobs converted (overlaps)      |
+| Streaming migration    | 2-3 weeks       | Kinesis to Event Hubs (if applicable)   |
+| Validation             | 2-3 weeks       | Parallel run, regression testing        |
+| Cutover + decommission | 2-3 weeks       | Staged cutover, audit log archive       |
+| **Total**              | **20-28 weeks** |                                         |
 
 ### Large migration (50+ TB, 50+ pipelines, streaming, ML)
 
@@ -363,18 +364,18 @@ Follow the phased plan in the [main playbook](../aws-to-azure.md#5-migration-seq
 
 ### Risk register template
 
-| # | Risk | Likelihood | Impact | Mitigation | Owner |
-|---|------|-----------|--------|-----------|-------|
-| 1 | Data loss during S3-to-ADLS transfer | Low | Critical | Checksum validation per dataset; S3 versioning preserved; rollback to S3 source | Data engineer |
-| 2 | Redshift SQL conversion introduces silent errors | Medium | High | Automated regression test suite comparing Redshift and Databricks results for all converted queries | QA engineer |
-| 3 | ExpressRoute provisioning delay | Medium | Medium | Order circuit 4-6 weeks before data transfer phase; fall back to VPN for small datasets | Platform engineer |
-| 4 | Glue Catalog metadata loss | Low | High | Export full catalog before migration; validate Unity Catalog table count matches Glue table count | Data engineer |
-| 5 | Compliance evidence gap during migration | Medium | Critical | Archive all AWS audit logs before decommission; run Purview scans on day 1; maintain dual-cloud evidence | Security lead |
-| 6 | Consumer disruption during cutover | Medium | High | Staged cutover with OneLake shortcuts; 2-week parallel run; rollback plan per dataset | Migration lead |
-| 7 | Databricks SQL performance regression | Low | Medium | Run top-20 queries on Databricks SQL in staging; OPTIMIZE+ZORDER before cutover; right-size SQL Warehouses | Data engineer |
-| 8 | Budget overrun from cross-cloud egress | Medium | Medium | Budget $90/TB for S3 egress; use ExpressRoute to reduce cost; migrate hot data first, leave cold data on S3 via shortcuts | Program manager |
-| 9 | Team skill gap on Azure/Databricks | High | Medium | 2-week training sprint before migration starts; pair AWS-skilled and Azure-skilled engineers | Migration lead |
-| 10 | Shadow consumers discovered mid-migration | High | Medium | CloudTrail analysis for S3 GetObject callers; Redshift query log analysis for all connecting applications | Data engineer |
+| #   | Risk                                             | Likelihood | Impact   | Mitigation                                                                                                                | Owner             |
+| --- | ------------------------------------------------ | ---------- | -------- | ------------------------------------------------------------------------------------------------------------------------- | ----------------- |
+| 1   | Data loss during S3-to-ADLS transfer             | Low        | Critical | Checksum validation per dataset; S3 versioning preserved; rollback to S3 source                                           | Data engineer     |
+| 2   | Redshift SQL conversion introduces silent errors | Medium     | High     | Automated regression test suite comparing Redshift and Databricks results for all converted queries                       | QA engineer       |
+| 3   | ExpressRoute provisioning delay                  | Medium     | Medium   | Order circuit 4-6 weeks before data transfer phase; fall back to VPN for small datasets                                   | Platform engineer |
+| 4   | Glue Catalog metadata loss                       | Low        | High     | Export full catalog before migration; validate Unity Catalog table count matches Glue table count                         | Data engineer     |
+| 5   | Compliance evidence gap during migration         | Medium     | Critical | Archive all AWS audit logs before decommission; run Purview scans on day 1; maintain dual-cloud evidence                  | Security lead     |
+| 6   | Consumer disruption during cutover               | Medium     | High     | Staged cutover with OneLake shortcuts; 2-week parallel run; rollback plan per dataset                                     | Migration lead    |
+| 7   | Databricks SQL performance regression            | Low        | Medium   | Run top-20 queries on Databricks SQL in staging; OPTIMIZE+ZORDER before cutover; right-size SQL Warehouses                | Data engineer     |
+| 8   | Budget overrun from cross-cloud egress           | Medium     | Medium   | Budget $90/TB for S3 egress; use ExpressRoute to reduce cost; migrate hot data first, leave cold data on S3 via shortcuts | Program manager   |
+| 9   | Team skill gap on Azure/Databricks               | High       | Medium   | 2-week training sprint before migration starts; pair AWS-skilled and Azure-skilled engineers                              | Migration lead    |
+| 10  | Shadow consumers discovered mid-migration        | High       | Medium   | CloudTrail analysis for S3 GetObject callers; Redshift query log analysis for all connecting applications                 | Data engineer     |
 
 ---
 

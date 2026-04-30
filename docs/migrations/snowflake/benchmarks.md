@@ -10,14 +10,14 @@
 
 ### Test environment
 
-| Parameter | Snowflake | Databricks (Azure) | Fabric |
-|---|---|---|---|
-| Region | Snowflake Gov (us-gov-west-1) | Azure Gov (US Gov Virginia) | Azure Gov (US Gov Virginia) |
-| Warehouse / compute | Large (8 credits/hr) | Medium SQL Warehouse (24 DBU/hr) | F64 capacity |
-| Data format | Micro-partitions | Delta Lake (Parquet) | Delta Lake (Parquet) |
-| Data volume | 1 TB (TPC-DS scale 1000) | 1 TB (TPC-DS scale 1000) | 1 TB (TPC-DS scale 1000) |
-| Concurrency | 8 threads | 8 threads | 8 threads |
-| Caching | Cold start (no result cache) | Cold start (no result cache) | Cold start (no result cache) |
+| Parameter           | Snowflake                     | Databricks (Azure)               | Fabric                       |
+| ------------------- | ----------------------------- | -------------------------------- | ---------------------------- |
+| Region              | Snowflake Gov (us-gov-west-1) | Azure Gov (US Gov Virginia)      | Azure Gov (US Gov Virginia)  |
+| Warehouse / compute | Large (8 credits/hr)          | Medium SQL Warehouse (24 DBU/hr) | F64 capacity                 |
+| Data format         | Micro-partitions              | Delta Lake (Parquet)             | Delta Lake (Parquet)         |
+| Data volume         | 1 TB (TPC-DS scale 1000)      | 1 TB (TPC-DS scale 1000)         | 1 TB (TPC-DS scale 1000)     |
+| Concurrency         | 8 threads                     | 8 threads                        | 8 threads                    |
+| Caching             | Cold start (no result cache)  | Cold start (no result cache)     | Cold start (no result cache) |
 
 ### Test categories
 
@@ -36,12 +36,12 @@
 
 ### Point queries (single-row lookup)
 
-| Metric | Snowflake Large | Databricks Medium | Fabric F64 |
-|---|---|---|---|
-| p50 latency | 180 ms | 120 ms | 250 ms |
-| p90 latency | 350 ms | 220 ms | 450 ms |
-| p99 latency | 800 ms | 500 ms | 900 ms |
-| Throughput (queries/min) | 320 | 480 | 220 |
+| Metric                   | Snowflake Large | Databricks Medium | Fabric F64 |
+| ------------------------ | --------------- | ----------------- | ---------- |
+| p50 latency              | 180 ms          | 120 ms            | 250 ms     |
+| p90 latency              | 350 ms          | 220 ms            | 450 ms     |
+| p99 latency              | 800 ms          | 500 ms            | 900 ms     |
+| Throughput (queries/min) | 320             | 480               | 220        |
 
 **Analysis:** Databricks wins on point queries due to Delta Lake file pruning and Photon engine optimizations. Fabric's T-SQL layer adds overhead for simple lookups.
 
@@ -60,12 +60,12 @@ GROUP BY d_year, d_quarter
 ORDER BY d_year, d_quarter;
 ```
 
-| Metric | Snowflake Large | Databricks Medium | Fabric F64 |
-|---|---|---|---|
-| p50 latency | 4.2 s | 3.1 s | 5.8 s |
-| p90 latency | 6.8 s | 4.5 s | 8.2 s |
-| Data scanned | 12.4 GB | 8.7 GB | 12.1 GB |
-| Bytes spilled | 0 | 0 | 0.2 GB |
+| Metric        | Snowflake Large | Databricks Medium | Fabric F64 |
+| ------------- | --------------- | ----------------- | ---------- |
+| p50 latency   | 4.2 s           | 3.1 s             | 5.8 s      |
+| p90 latency   | 6.8 s           | 4.5 s             | 8.2 s      |
+| Data scanned  | 12.4 GB         | 8.7 GB            | 12.1 GB    |
+| Bytes spilled | 0               | 0                 | 0.2 GB     |
 
 **Analysis:** Databricks scans less data due to Delta Lake Z-ORDER on date columns. Photon engine accelerates the aggregation. Snowflake's micro-partition pruning is effective but scans more data when partitions are not perfectly aligned with the query filter.
 
@@ -91,11 +91,11 @@ ORDER BY total_sales DESC
 LIMIT 100;
 ```
 
-| Metric | Snowflake Large | Databricks Medium | Fabric F64 |
-|---|---|---|---|
-| p50 latency | 8.5 s | 6.2 s | 11.3 s |
-| p90 latency | 14.2 s | 9.8 s | 18.5 s |
-| Join strategy | Hash join | Broadcast + hash join | Hash join |
+| Metric        | Snowflake Large | Databricks Medium     | Fabric F64 |
+| ------------- | --------------- | --------------------- | ---------- |
+| p50 latency   | 8.5 s           | 6.2 s                 | 11.3 s     |
+| p90 latency   | 14.2 s          | 9.8 s                 | 18.5 s     |
+| Join strategy | Hash join       | Broadcast + hash join | Hash join  |
 
 **Analysis:** Databricks auto-broadcasts smaller dimension tables, reducing shuffle. Snowflake relies on hash joins uniformly.
 
@@ -117,11 +117,11 @@ WHERE order_date >= '2024-01-01'
 QUALIFY ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY order_date DESC) <= 10;
 ```
 
-| Metric | Snowflake Large | Databricks Medium | Fabric F64 |
-|---|---|---|---|
-| p50 latency | 12.3 s | 10.8 s | 15.2 s |
-| p90 latency | 18.5 s | 15.2 s | 22.8 s |
-| Memory peak | 6.2 GB | 5.8 GB | 7.1 GB |
+| Metric      | Snowflake Large | Databricks Medium | Fabric F64 |
+| ----------- | --------------- | ----------------- | ---------- |
+| p50 latency | 12.3 s          | 10.8 s            | 15.2 s     |
+| p90 latency | 18.5 s          | 15.2 s            | 22.8 s     |
+| Memory peak | 6.2 GB          | 5.8 GB            | 7.1 GB     |
 
 **Analysis:** Window functions are comparable across platforms. Databricks edges ahead on larger partitions due to Photon's columnar processing.
 
@@ -132,13 +132,13 @@ QUALIFY ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY order_date DESC) <=
 ### Vertical scaling (warehouse size impact)
 
 | TPC-DS Query 1 (scan + agg) | Snowflake | Databricks |
-|---|---|---|
-| X-Small / 2X-Small | 32 s | 24 s |
-| Small / X-Small | 18 s | 14 s |
-| Medium / Small | 9 s | 7 s |
-| Large / Medium | 4.2 s | 3.1 s |
-| X-Large / Large | 2.1 s | 1.6 s |
-| 2X-Large / X-Large | 1.2 s | 0.9 s |
+| --------------------------- | --------- | ---------- |
+| X-Small / 2X-Small          | 32 s      | 24 s       |
+| Small / X-Small             | 18 s      | 14 s       |
+| Medium / Small              | 9 s       | 7 s        |
+| Large / Medium              | 4.2 s     | 3.1 s      |
+| X-Large / Large             | 2.1 s     | 1.6 s      |
+| 2X-Large / X-Large          | 1.2 s     | 0.9 s      |
 
 **Scaling efficiency:** Both platforms scale approximately linearly with size. Databricks shows slightly better scaling efficiency at larger sizes due to Photon optimizations.
 
@@ -146,14 +146,14 @@ QUALIFY ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY order_date DESC) <=
 
 Tested with the same 10-query workload at increasing concurrency:
 
-| Concurrent users | Snowflake Large (avg latency) | Databricks Medium (avg latency) |
-|---|---|---|
-| 1 | 4.2 s | 3.1 s |
-| 5 | 4.5 s | 3.3 s |
-| 10 | 5.8 s | 3.8 s |
-| 20 | 8.2 s (some queuing) | 5.2 s |
-| 50 | 14.5 s (heavy queuing) | 8.8 s (auto-scaling triggered) |
-| 100 | 22.3 s (multi-cluster required) | 12.5 s (auto-scaled to 3x) |
+| Concurrent users | Snowflake Large (avg latency)   | Databricks Medium (avg latency) |
+| ---------------- | ------------------------------- | ------------------------------- |
+| 1                | 4.2 s                           | 3.1 s                           |
+| 5                | 4.5 s                           | 3.3 s                           |
+| 10               | 5.8 s                           | 3.8 s                           |
+| 20               | 8.2 s (some queuing)            | 5.2 s                           |
+| 50               | 14.5 s (heavy queuing)          | 8.8 s (auto-scaling triggered)  |
+| 100              | 22.3 s (multi-cluster required) | 12.5 s (auto-scaled to 3x)      |
 
 **Analysis:** Databricks auto-scaling handles concurrency more gracefully because it scales per-node rather than cloning entire warehouses. Snowflake multi-cluster warehouses handle spikes but with higher latency during cluster spin-up.
 
@@ -161,11 +161,11 @@ Tested with the same 10-query workload at increasing concurrency:
 
 ## 4. Warehouse startup benchmarks
 
-| Scenario | Snowflake | Databricks Classic | Databricks Serverless |
-|---|---|---|---|
-| Cold start (no cached data) | 5-30 s | 30-120 s | **< 10 s** |
-| Warm start (cached) | 1-5 s | 5-15 s | **< 5 s** |
-| Auto-resume from suspend/stop | 2-10 s | 15-60 s | **< 10 s** |
+| Scenario                      | Snowflake | Databricks Classic | Databricks Serverless |
+| ----------------------------- | --------- | ------------------ | --------------------- |
+| Cold start (no cached data)   | 5-30 s    | 30-120 s           | **< 10 s**            |
+| Warm start (cached)           | 1-5 s     | 5-15 s             | **< 5 s**             |
+| Auto-resume from suspend/stop | 2-10 s    | 15-60 s            | **< 10 s**            |
 
 **Analysis:** Snowflake's warm start is fast. Databricks classic warehouses are slower to start but serverless warehouses match or beat Snowflake's cold start time. For interactive workloads, serverless is the recommended Databricks option.
 
@@ -175,22 +175,22 @@ Tested with the same 10-query workload at increasing concurrency:
 
 ### End-to-end latency (event to queryable)
 
-| Metric | Snowpipe Streaming | Event Hubs + Autoloader | Event Hubs + ADX |
-|---|---|---|---|
-| p50 latency | 2-5 s | 3-8 s | **< 1 s** |
-| p90 latency | 8-15 s | 10-20 s | **1-3 s** |
-| p99 latency | 20-45 s | 25-60 s | **3-5 s** |
-| Throughput (events/sec) | 50K | 100K | **500K** |
+| Metric                  | Snowpipe Streaming | Event Hubs + Autoloader | Event Hubs + ADX |
+| ----------------------- | ------------------ | ----------------------- | ---------------- |
+| p50 latency             | 2-5 s              | 3-8 s                   | **< 1 s**        |
+| p90 latency             | 8-15 s             | 10-20 s                 | **1-3 s**        |
+| p99 latency             | 20-45 s            | 25-60 s                 | **3-5 s**        |
+| Throughput (events/sec) | 50K                | 100K                    | **500K**         |
 
 **Analysis:** For near-real-time requirements, Azure Data Explorer (ADX) significantly outperforms both Snowpipe Streaming and Autoloader. Autoloader is better suited for micro-batch (seconds-to-minutes latency) rather than true streaming.
 
 ### Streaming cost comparison (100K events/sec sustained)
 
-| Platform | Hourly cost | Monthly cost |
-|---|---|---|
-| Snowpipe Streaming (Large warehouse) | $32/hr | $23,000/mo |
-| Event Hubs (10 TU) + Autoloader (Medium cluster) | $14/hr | $10,000/mo |
-| Event Hubs (10 TU) + ADX (D14_v2) | $18/hr | $13,000/mo |
+| Platform                                         | Hourly cost | Monthly cost |
+| ------------------------------------------------ | ----------- | ------------ |
+| Snowpipe Streaming (Large warehouse)             | $32/hr      | $23,000/mo   |
+| Event Hubs (10 TU) + Autoloader (Medium cluster) | $14/hr      | $10,000/mo   |
+| Event Hubs (10 TU) + ADX (D14_v2)                | $18/hr      | $13,000/mo   |
 
 ---
 
@@ -198,34 +198,34 @@ Tested with the same 10-query workload at increasing concurrency:
 
 ### LLM inference latency
 
-| Function | Cortex (Llama 3.1 70B) | Azure OpenAI (GPT-4o) | Azure OpenAI (GPT-4o-mini) |
-|---|---|---|---|
-| Short prompt (100 tokens in, 50 out) | 1.2 s | 0.8 s | **0.3 s** |
-| Medium prompt (500 tokens in, 200 out) | 3.5 s | 2.1 s | **0.8 s** |
-| Long prompt (2000 tokens in, 500 out) | 8.2 s | 4.5 s | **1.5 s** |
-| Batch (100 prompts, p90) | 45 s | 28 s | **12 s** |
+| Function                               | Cortex (Llama 3.1 70B) | Azure OpenAI (GPT-4o) | Azure OpenAI (GPT-4o-mini) |
+| -------------------------------------- | ---------------------- | --------------------- | -------------------------- |
+| Short prompt (100 tokens in, 50 out)   | 1.2 s                  | 0.8 s                 | **0.3 s**                  |
+| Medium prompt (500 tokens in, 200 out) | 3.5 s                  | 2.1 s                 | **0.8 s**                  |
+| Long prompt (2000 tokens in, 500 out)  | 8.2 s                  | 4.5 s                 | **1.5 s**                  |
+| Batch (100 prompts, p90)               | 45 s                   | 28 s                  | **12 s**                   |
 
 ### LLM quality comparison
 
 Tested on federal document summarization task (500 documents):
 
-| Metric | Cortex (Llama 3.1 70B) | Azure OpenAI (GPT-4o) | Notes |
-|---|---|---|---|
-| ROUGE-L (summary quality) | 0.42 | **0.58** | GPT-4o produces better summaries |
-| Factual accuracy (human eval) | 82% | **94%** | GPT-4o hallucinates less |
-| Instruction following | 75% | **96%** | GPT-4o follows formatting instructions more reliably |
-| Federal terminology accuracy | 78% | **91%** | GPT-4o handles government-specific language better |
+| Metric                        | Cortex (Llama 3.1 70B) | Azure OpenAI (GPT-4o) | Notes                                                |
+| ----------------------------- | ---------------------- | --------------------- | ---------------------------------------------------- |
+| ROUGE-L (summary quality)     | 0.42                   | **0.58**              | GPT-4o produces better summaries                     |
+| Factual accuracy (human eval) | 82%                    | **94%**               | GPT-4o hallucinates less                             |
+| Instruction following         | 75%                    | **96%**               | GPT-4o follows formatting instructions more reliably |
+| Federal terminology accuracy  | 78%                    | **91%**               | GPT-4o handles government-specific language better   |
 
 ### Search benchmark (RAG pipeline)
 
-| Metric | Cortex Search | Azure AI Search | Notes |
-|---|---|---|---|
-| Recall@5 | 0.72 | **0.81** | Better relevance ranking |
-| Precision@5 | 0.68 | **0.76** | Fewer irrelevant results |
-| Query latency (p50) | 150 ms | 120 ms | Comparable |
-| Index size (1M docs) | Managed by Snowflake | 2.5 GB | Transparent storage |
-| Hybrid search support | Vector + keyword | **Vector + keyword + semantic reranking** | Additional reranking layer |
-| Gov availability | **Not available** | GA | Material gap |
+| Metric                | Cortex Search        | Azure AI Search                           | Notes                      |
+| --------------------- | -------------------- | ----------------------------------------- | -------------------------- |
+| Recall@5              | 0.72                 | **0.81**                                  | Better relevance ranking   |
+| Precision@5           | 0.68                 | **0.76**                                  | Fewer irrelevant results   |
+| Query latency (p50)   | 150 ms               | 120 ms                                    | Comparable                 |
+| Index size (1M docs)  | Managed by Snowflake | 2.5 GB                                    | Transparent storage        |
+| Hybrid search support | Vector + keyword     | **Vector + keyword + semantic reranking** | Additional reranking layer |
+| Gov availability      | **Not available**    | GA                                        | Material gap               |
 
 ---
 
@@ -233,21 +233,21 @@ Tested on federal document summarization task (500 documents):
 
 ### Share access latency
 
-| Operation | Snowflake Secure Data Sharing | Delta Sharing | OneLake Shortcut |
-|---|---|---|---|
-| First query on shared table | 2-5 s | 3-8 s | **1-3 s** |
-| Subsequent queries (cached) | 0.5-2 s | 0.5-2 s | **0.3-1 s** |
-| Full table scan (1 GB shared) | 4 s | 5 s | **3 s** |
+| Operation                     | Snowflake Secure Data Sharing | Delta Sharing | OneLake Shortcut |
+| ----------------------------- | ----------------------------- | ------------- | ---------------- |
+| First query on shared table   | 2-5 s                         | 3-8 s         | **1-3 s**        |
+| Subsequent queries (cached)   | 0.5-2 s                       | 0.5-2 s       | **0.3-1 s**      |
+| Full table scan (1 GB shared) | 4 s                           | 5 s           | **3 s**          |
 
 ### Share setup complexity
 
-| Task | Snowflake | Delta Sharing | OneLake Shortcut |
-|---|---|---|---|
-| Create share | 1 SQL command | 1 SQL command | N/A |
-| Add table to share | 1 SQL command | 1 SQL command | N/A |
-| Create recipient | 1 SQL command | 1 SQL command | N/A |
-| Consumer setup | Accept share | Accept activation or create catalog | Create shortcut (5 clicks) |
-| Cross-platform consumer | **Snowflake only** | Any platform | **Azure only** |
+| Task                    | Snowflake          | Delta Sharing                       | OneLake Shortcut           |
+| ----------------------- | ------------------ | ----------------------------------- | -------------------------- |
+| Create share            | 1 SQL command      | 1 SQL command                       | N/A                        |
+| Add table to share      | 1 SQL command      | 1 SQL command                       | N/A                        |
+| Create recipient        | 1 SQL command      | 1 SQL command                       | N/A                        |
+| Consumer setup          | Accept share       | Accept activation or create catalog | Create shortcut (5 clicks) |
+| Cross-platform consumer | **Snowflake only** | Any platform                        | **Azure only**             |
 
 ---
 
@@ -255,23 +255,23 @@ Tested on federal document summarization task (500 documents):
 
 ### Cost per TPC-DS query (normalized)
 
-| Platform | Config | Avg query cost | Avg query time | Cost-performance score |
-|---|---|---|---|---|
-| Snowflake | Large (8 credits/hr) | $0.089/query | 4.2 s | 1.00 (baseline) |
-| Databricks | Medium SQL (24 DBU/hr) | $0.037/query | 3.1 s | **2.74x better** |
-| Databricks Serverless | Medium | $0.048/query | 2.8 s | **2.31x better** |
-| Fabric | F64 | $0.042/query | 5.8 s | **1.54x better** |
+| Platform              | Config                 | Avg query cost | Avg query time | Cost-performance score |
+| --------------------- | ---------------------- | -------------- | -------------- | ---------------------- |
+| Snowflake             | Large (8 credits/hr)   | $0.089/query   | 4.2 s          | 1.00 (baseline)        |
+| Databricks            | Medium SQL (24 DBU/hr) | $0.037/query   | 3.1 s          | **2.74x better**       |
+| Databricks Serverless | Medium                 | $0.048/query   | 2.8 s          | **2.31x better**       |
+| Fabric                | F64                    | $0.042/query   | 5.8 s          | **1.54x better**       |
 
-**Methodology:** Cost-performance score = (Snowflake cost * Snowflake time) / (Platform cost * Platform time). Higher is better.
+**Methodology:** Cost-performance score = (Snowflake cost _ Snowflake time) / (Platform cost _ Platform time). Higher is better.
 
 ### Sustained workload cost (8 hours/day, 22 days/month)
 
-| Platform | Monthly compute cost | Queries executed | Cost per 1000 queries |
-|---|---|---|---|
-| Snowflake Large | $5,632 | 52,800 | $106.67 |
-| Databricks Medium | $1,859 | 71,280 | $26.08 |
-| Databricks Serverless | $2,419 | 79,200 | $30.54 |
-| Fabric F64 | $1,267 | 30,360 | $41.73 |
+| Platform              | Monthly compute cost | Queries executed | Cost per 1000 queries |
+| --------------------- | -------------------- | ---------------- | --------------------- |
+| Snowflake Large       | $5,632               | 52,800           | $106.67               |
+| Databricks Medium     | $1,859               | 71,280           | $26.08                |
+| Databricks Serverless | $2,419               | 79,200           | $30.54                |
+| Fabric F64            | $1,267               | 30,360           | $41.73                |
 
 ---
 

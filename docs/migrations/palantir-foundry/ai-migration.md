@@ -18,20 +18,20 @@ This guide maps every AIP capability to its Azure equivalent, provides working c
 
 Palantir AIP is a collection of capabilities layered on top of the Foundry Ontology:
 
-| AIP capability | Purpose | Ontology coupling |
-|---|---|---|
-| **Language Model Service** | Unified multi-provider LLM access (OpenAI, Anthropic, Google), model catalog, usage tracking, zero-data-retention options | Medium — LLM calls are independent but routing policies reference Foundry projects |
-| **AIP Chatbot Studio** | Build chatbots with retrieval context (documents, objects, functions), tool calling (prompted/sequential and native/parallel), deployable via Threads/Workshop/OSDK/API | High — grounding context, tool definitions, and deployment targets are Ontology-native |
-| **AIP Logic** | No-code visual LLM function builder for prompt engineering, Ontology queries, edits, and downstream integration with Automate | Very High — every Logic node references Ontology objects, properties, or actions |
-| **AIP Assist** | In-platform assistant for documentation, coding help, data exploration | Medium — useful but not mission-critical for migration |
-| **AIP Evals** | Testing environment for LLM evaluation: experiment runs, metrics, auto-generated test cases for non-deterministic models | Medium — eval definitions reference Foundry datasets but logic is reconstructable |
-| **AIP Automate** | Triggers (time-based, data-based) that execute actions, functions, logic, notifications; scheduled reports, data alerting | High — trigger conditions reference Ontology change events |
-| **BYOM** | Register customer-owned models and connect them to AIP tool calling and Logic | Low — model registration is a metadata wrapper |
-| **Model lifecycle** | Model objectives, training, deployment, serving, adapter abstraction | Medium — uses Foundry-specific MLflow fork |
-| **LLM pipeline transforms** | Classification, sentiment, summarization, entity extraction, translation inside Pipeline Builder | Medium — prompt templates are portable, Foundry wrappers are not |
-| **Proposal-based patterns** | Agents create proposals for human review before executing actions (human-in-the-loop) | High — proposals are Ontology objects with approval workflows |
-| **Agent tiers** | Ad-hoc (Threads), task-specific (chatbots), agentic application (integrated), automated (published as functions) | Varies by tier |
-| **LLM-provider APIs** | Proxy endpoints accepting OpenAI/Anthropic format requests, routed through Foundry governance | Low — thin proxy, API contract is standard |
+| AIP capability              | Purpose                                                                                                                                                                 | Ontology coupling                                                                      |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| **Language Model Service**  | Unified multi-provider LLM access (OpenAI, Anthropic, Google), model catalog, usage tracking, zero-data-retention options                                               | Medium — LLM calls are independent but routing policies reference Foundry projects     |
+| **AIP Chatbot Studio**      | Build chatbots with retrieval context (documents, objects, functions), tool calling (prompted/sequential and native/parallel), deployable via Threads/Workshop/OSDK/API | High — grounding context, tool definitions, and deployment targets are Ontology-native |
+| **AIP Logic**               | No-code visual LLM function builder for prompt engineering, Ontology queries, edits, and downstream integration with Automate                                           | Very High — every Logic node references Ontology objects, properties, or actions       |
+| **AIP Assist**              | In-platform assistant for documentation, coding help, data exploration                                                                                                  | Medium — useful but not mission-critical for migration                                 |
+| **AIP Evals**               | Testing environment for LLM evaluation: experiment runs, metrics, auto-generated test cases for non-deterministic models                                                | Medium — eval definitions reference Foundry datasets but logic is reconstructable      |
+| **AIP Automate**            | Triggers (time-based, data-based) that execute actions, functions, logic, notifications; scheduled reports, data alerting                                               | High — trigger conditions reference Ontology change events                             |
+| **BYOM**                    | Register customer-owned models and connect them to AIP tool calling and Logic                                                                                           | Low — model registration is a metadata wrapper                                         |
+| **Model lifecycle**         | Model objectives, training, deployment, serving, adapter abstraction                                                                                                    | Medium — uses Foundry-specific MLflow fork                                             |
+| **LLM pipeline transforms** | Classification, sentiment, summarization, entity extraction, translation inside Pipeline Builder                                                                        | Medium — prompt templates are portable, Foundry wrappers are not                       |
+| **Proposal-based patterns** | Agents create proposals for human review before executing actions (human-in-the-loop)                                                                                   | High — proposals are Ontology objects with approval workflows                          |
+| **Agent tiers**             | Ad-hoc (Threads), task-specific (chatbots), agentic application (integrated), automated (published as functions)                                                        | Varies by tier                                                                         |
+| **LLM-provider APIs**       | Proxy endpoints accepting OpenAI/Anthropic format requests, routed through Foundry governance                                                                           | Low — thin proxy, API contract is standard                                             |
 
 ---
 
@@ -39,20 +39,20 @@ Palantir AIP is a collection of capabilities layered on top of the Foundry Ontol
 
 ### Capability mapping
 
-| Foundry AIP | Azure equivalent | Migration complexity |
-|---|---|---|
-| Language Model Service | **Azure OpenAI Service** (GPT-4o, GPT-4.1, o3, o4-mini) + **AI Foundry model catalog** (Phi-4, Llama 3, Mistral, Cohere) | Low |
-| AIP Chatbot Studio | **Copilot Studio** + **Microsoft 365 Agents SDK** + **Azure AI Agent Service** | Medium |
-| AIP Logic | **Power Automate** + **Azure Functions** + **Semantic Kernel** chains | Medium |
-| AIP Assist | **Microsoft 365 Copilot** + **GitHub Copilot** | Low (no migration — adopt) |
-| AIP Evals | **Azure AI Foundry evaluations** + **Prompt Flow eval** + custom eval pipelines | Medium |
-| AIP Automate | **Power Automate** + **Data Activator** + **Azure Functions** (timer/event triggers) | Medium |
-| BYOM | **Azure ML model registry** + **AI Foundry model catalog** (custom model import) | Low |
-| Model lifecycle | **Azure ML pipelines** + **MLflow** (native or Databricks-hosted) | Medium |
-| LLM pipeline transforms | **Azure OpenAI** in ADF custom activities + **Fabric notebook** enrichment | Low |
-| Proposal patterns | **Power Automate approvals** + **Teams Adaptive Cards** + custom approval APIs | Medium |
-| Agent tiers | **Copilot Studio agents** (declarative, custom engine, API-based) | Medium |
-| LLM-provider APIs | **Azure OpenAI API** (OpenAI-compatible endpoint, drop-in replacement) | Low |
+| Foundry AIP             | Azure equivalent                                                                                                         | Migration complexity       |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------ | -------------------------- |
+| Language Model Service  | **Azure OpenAI Service** (GPT-4o, GPT-4.1, o3, o4-mini) + **AI Foundry model catalog** (Phi-4, Llama 3, Mistral, Cohere) | Low                        |
+| AIP Chatbot Studio      | **Copilot Studio** + **Microsoft 365 Agents SDK** + **Azure AI Agent Service**                                           | Medium                     |
+| AIP Logic               | **Power Automate** + **Azure Functions** + **Semantic Kernel** chains                                                    | Medium                     |
+| AIP Assist              | **Microsoft 365 Copilot** + **GitHub Copilot**                                                                           | Low (no migration — adopt) |
+| AIP Evals               | **Azure AI Foundry evaluations** + **Prompt Flow eval** + custom eval pipelines                                          | Medium                     |
+| AIP Automate            | **Power Automate** + **Data Activator** + **Azure Functions** (timer/event triggers)                                     | Medium                     |
+| BYOM                    | **Azure ML model registry** + **AI Foundry model catalog** (custom model import)                                         | Low                        |
+| Model lifecycle         | **Azure ML pipelines** + **MLflow** (native or Databricks-hosted)                                                        | Medium                     |
+| LLM pipeline transforms | **Azure OpenAI** in ADF custom activities + **Fabric notebook** enrichment                                               | Low                        |
+| Proposal patterns       | **Power Automate approvals** + **Teams Adaptive Cards** + custom approval APIs                                           | Medium                     |
+| Agent tiers             | **Copilot Studio agents** (declarative, custom engine, API-based)                                                        | Medium                     |
+| LLM-provider APIs       | **Azure OpenAI API** (OpenAI-compatible endpoint, drop-in replacement)                                                   | Low                        |
 
 ### Architecture comparison diagram
 
@@ -122,15 +122,15 @@ Foundry's Language Model Service provides:
 
 Azure OpenAI provides the same capabilities with deeper integration into the Azure ecosystem:
 
-| Feature | Foundry LMS | Azure OpenAI |
-|---|---|---|
-| Multi-model access | Model catalog with routing | Multi-deployment per resource; AI Foundry model catalog for OSS |
-| API compatibility | Proprietary + OpenAI-format proxy | Native OpenAI-compatible API (drop-in replacement) |
-| Data residency | Foundry-managed, region selection | Azure region deployment, Government cloud support (IL2-IL6) |
-| Zero data retention | ZDR flag per model | Data, privacy, and security commitments; opt-out of abuse monitoring |
-| Usage tracking | Per-project metrics in Foundry | Azure Monitor metrics, Cost Management tags, token-level logging |
-| Rate limiting | Workspace-level quotas | TPM/RPM quotas per deployment, provisioned throughput units (PTU) |
-| Model governance | Foundry markings and permissions | Azure RBAC, managed identity, content filtering policies |
+| Feature             | Foundry LMS                       | Azure OpenAI                                                         |
+| ------------------- | --------------------------------- | -------------------------------------------------------------------- |
+| Multi-model access  | Model catalog with routing        | Multi-deployment per resource; AI Foundry model catalog for OSS      |
+| API compatibility   | Proprietary + OpenAI-format proxy | Native OpenAI-compatible API (drop-in replacement)                   |
+| Data residency      | Foundry-managed, region selection | Azure region deployment, Government cloud support (IL2-IL6)          |
+| Zero data retention | ZDR flag per model                | Data, privacy, and security commitments; opt-out of abuse monitoring |
+| Usage tracking      | Per-project metrics in Foundry    | Azure Monitor metrics, Cost Management tags, token-level logging     |
+| Rate limiting       | Workspace-level quotas            | TPM/RPM quotas per deployment, provisioned throughput units (PTU)    |
+| Model governance    | Foundry markings and permissions  | Azure RBAC, managed identity, content filtering policies             |
 
 ### Migration steps
 
@@ -140,14 +140,14 @@ Azure OpenAI provides the same capabilities with deeper integration into the Azu
 
 3. **Create model deployments.** Map each Foundry model to its Azure OpenAI equivalent:
 
-   | Foundry model | Azure OpenAI deployment |
-   |---|---|
-   | GPT-4 Turbo | `gpt-4o` or `gpt-4.1` |
-   | GPT-4 | `gpt-4o` |
-   | GPT-3.5 Turbo | `gpt-4o-mini` (superior, lower cost) |
-   | Claude 3 / Claude 3.5 | `gpt-4o` or `gpt-4.1` (comparable capability) |
-   | Llama 3 | AI Foundry serverless deployment (Llama 3.1 / 3.3) |
-   | Mistral | AI Foundry serverless deployment (Mistral Large) |
+    | Foundry model         | Azure OpenAI deployment                            |
+    | --------------------- | -------------------------------------------------- |
+    | GPT-4 Turbo           | `gpt-4o` or `gpt-4.1`                              |
+    | GPT-4                 | `gpt-4o`                                           |
+    | GPT-3.5 Turbo         | `gpt-4o-mini` (superior, lower cost)               |
+    | Claude 3 / Claude 3.5 | `gpt-4o` or `gpt-4.1` (comparable capability)      |
+    | Llama 3               | AI Foundry serverless deployment (Llama 3.1 / 3.3) |
+    | Mistral               | AI Foundry serverless deployment (Mistral Large)   |
 
 4. **Update application code.** Replace Foundry SDK calls with Azure OpenAI SDK calls.
 
@@ -221,11 +221,11 @@ Chatbot Studio (formerly Agent Studio) provides:
 
 Azure provides three agent development paths, mapping to different Foundry chatbot complexity levels:
 
-| Foundry pattern | Azure path | Best for |
-|---|---|---|
-| Simple Q&A chatbot with doc grounding | **Copilot Studio** (declarative agent) | No-code, citizen developers |
-| Tool-calling chatbot with Ontology integration | **Microsoft 365 Agents SDK** + **Azure AI Agent Service** | Pro-code, enterprise agents |
-| Multi-agent team with specialized roles | **Semantic Kernel** multi-agent orchestration | Advanced, custom orchestration |
+| Foundry pattern                                | Azure path                                                | Best for                       |
+| ---------------------------------------------- | --------------------------------------------------------- | ------------------------------ |
+| Simple Q&A chatbot with doc grounding          | **Copilot Studio** (declarative agent)                    | No-code, citizen developers    |
+| Tool-calling chatbot with Ontology integration | **Microsoft 365 Agents SDK** + **Azure AI Agent Service** | Pro-code, enterprise agents    |
+| Multi-agent team with specialized roles        | **Semantic Kernel** multi-agent orchestration             | Advanced, custom orchestration |
 
 ### Migration approach by chatbot type
 
@@ -335,11 +335,11 @@ asyncio.run(run_analysis("Analyze Q1 case closure rates by region"))
 
 ### Agent tier mapping
 
-| Foundry agent tier | Description | Azure equivalent |
-|---|---|---|
-| **Ad-hoc** (AIP Threads) | Conversational AI in the platform UI | Microsoft 365 Copilot chat, Copilot Studio test pane |
-| **Task-specific** (Chatbot Studio) | Purpose-built chatbot with tools and grounding | Copilot Studio custom agent, Azure AI Agent Service |
-| **Agentic application** (integrated) | Agent embedded in Workshop or custom app | Microsoft 365 Agents SDK embedded in Teams/custom app |
+| Foundry agent tier                     | Description                                     | Azure equivalent                                             |
+| -------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------ |
+| **Ad-hoc** (AIP Threads)               | Conversational AI in the platform UI            | Microsoft 365 Copilot chat, Copilot Studio test pane         |
+| **Task-specific** (Chatbot Studio)     | Purpose-built chatbot with tools and grounding  | Copilot Studio custom agent, Azure AI Agent Service          |
+| **Agentic application** (integrated)   | Agent embedded in Workshop or custom app        | Microsoft 365 Agents SDK embedded in Teams/custom app        |
 | **Automated** (published as functions) | Agent triggered by events, no human interaction | Azure Functions + Semantic Kernel, Power Automate AI actions |
 
 ---
@@ -360,13 +360,13 @@ AIP Logic provides a no-code visual canvas for building LLM-powered functions:
 
 AIP Logic functions span a spectrum from simple prompt templates to complex multi-step orchestrations. Choose the Azure target based on complexity:
 
-| Logic function type | Azure target | Rationale |
-|---|---|---|
-| Single prompt with variable injection | **Azure OpenAI** direct call | No orchestration needed |
-| Prompt + data lookup + response formatting | **Semantic Kernel** function chain | Lightweight code-based orchestration |
-| Multi-step with conditionals and branching | **Semantic Kernel** + planner | Complex reasoning with step selection |
-| Business-user-maintained prompts | **Power Automate** AI Builder actions | No-code, citizen developer friendly |
-| Triggered by data changes | **Power Automate** + **Data Activator** | Event-driven, no infrastructure management |
+| Logic function type                        | Azure target                            | Rationale                                  |
+| ------------------------------------------ | --------------------------------------- | ------------------------------------------ |
+| Single prompt with variable injection      | **Azure OpenAI** direct call            | No orchestration needed                    |
+| Prompt + data lookup + response formatting | **Semantic Kernel** function chain      | Lightweight code-based orchestration       |
+| Multi-step with conditionals and branching | **Semantic Kernel** + planner           | Complex reasoning with step selection      |
+| Business-user-maintained prompts           | **Power Automate** AI Builder actions   | No-code, citizen developer friendly        |
+| Triggered by data changes                  | **Power Automate** + **Data Activator** | Event-driven, no infrastructure management |
 
 ### Semantic Kernel function chain example
 
@@ -450,12 +450,12 @@ async def process_case(case_id: str):
 
 CSA-in-a-Box already includes LLM-powered enrichment functions that replace common AIP Logic patterns:
 
-| AIP Logic pattern | CSA-in-a-Box module | Path |
-|---|---|---|
-| Entity extraction | `EntityExtractor` | `csa_platform/ai_integration/enrichment/entity_extractor.py` |
-| Text summarization | `TextSummarizer` | `csa_platform/ai_integration/enrichment/text_summarizer.py` |
+| AIP Logic pattern       | CSA-in-a-Box module  | Path                                                            |
+| ----------------------- | -------------------- | --------------------------------------------------------------- |
+| Entity extraction       | `EntityExtractor`    | `csa_platform/ai_integration/enrichment/entity_extractor.py`    |
+| Text summarization      | `TextSummarizer`     | `csa_platform/ai_integration/enrichment/text_summarizer.py`     |
 | Document classification | `DocumentClassifier` | `csa_platform/ai_integration/enrichment/document_classifier.py` |
-| Custom LLM transforms | RAG generate module | `csa_platform/ai_integration/rag/generate.py` |
+| Custom LLM transforms   | RAG generate module  | `csa_platform/ai_integration/rag/generate.py`                   |
 
 ---
 
@@ -475,14 +475,14 @@ AIP Evals provides:
 
 Azure AI Foundry provides built-in evaluation capabilities that cover all AIP Evals features:
 
-| AIP Evals feature | Azure equivalent | Tool |
-|---|---|---|
-| Experiment runs | Evaluation runs in AI Foundry | AI Foundry portal or SDK |
-| Test case generation | Synthetic data generation | AI Foundry + Prompt Flow |
-| Quality metrics | Groundedness, relevance, coherence, fluency | Built-in evaluators |
-| Safety metrics | Violence, self-harm, hate, sexual content | Azure AI Content Safety evaluators |
-| Custom metrics | Custom evaluator functions | Python-based evaluator plugins |
-| Comparison views | Evaluation dashboard | AI Foundry portal |
+| AIP Evals feature    | Azure equivalent                            | Tool                               |
+| -------------------- | ------------------------------------------- | ---------------------------------- |
+| Experiment runs      | Evaluation runs in AI Foundry               | AI Foundry portal or SDK           |
+| Test case generation | Synthetic data generation                   | AI Foundry + Prompt Flow           |
+| Quality metrics      | Groundedness, relevance, coherence, fluency | Built-in evaluators                |
+| Safety metrics       | Violence, self-harm, hate, sexual content   | Azure AI Content Safety evaluators |
+| Custom metrics       | Custom evaluator functions                  | Python-based evaluator plugins     |
+| Comparison views     | Evaluation dashboard                        | AI Foundry portal                  |
 
 ### Evaluation pipeline example
 
@@ -579,13 +579,13 @@ AIP Automate provides:
 
 ### Azure automation equivalents
 
-| AIP Automate feature | Azure service | Configuration |
-|---|---|---|
-| Time-based triggers | **Power Automate** scheduled flows / **Azure Functions** timer triggers | Cron expressions |
-| Data-based triggers | **Data Activator** / **Event Grid** / **Power Automate** Dataverse triggers | Event subscriptions |
-| Action execution | **Power Automate** actions / **Azure Functions** / **Logic Apps** | Connector-based or code |
-| Notifications | **Power Automate** connectors (Teams, Outlook, Slack) | Built-in connectors |
-| Scheduled reports | **Power BI** subscriptions / **Power Automate** + Power BI connector | Schedule configuration |
+| AIP Automate feature | Azure service                                                               | Configuration           |
+| -------------------- | --------------------------------------------------------------------------- | ----------------------- |
+| Time-based triggers  | **Power Automate** scheduled flows / **Azure Functions** timer triggers     | Cron expressions        |
+| Data-based triggers  | **Data Activator** / **Event Grid** / **Power Automate** Dataverse triggers | Event subscriptions     |
+| Action execution     | **Power Automate** actions / **Azure Functions** / **Logic Apps**           | Connector-based or code |
+| Notifications        | **Power Automate** connectors (Teams, Outlook, Slack)                       | Built-in connectors     |
+| Scheduled reports    | **Power BI** subscriptions / **Power Automate** + Power BI connector        | Schedule configuration  |
 
 ### Data Activator for real-time triggers
 
@@ -702,18 +702,18 @@ graph TB
 
 CSA-in-a-Box provides a complete RAG implementation ready for use:
 
-| Component | Module | Path |
-|---|---|---|
-| Document loading | `DocumentLoader` | `csa_platform/ai_integration/rag/loaders.py` |
-| Chunking | `DocumentChunker` | `csa_platform/ai_integration/rag/chunker.py` |
-| Indexing | `SearchIndexer` | `csa_platform/ai_integration/rag/indexer.py` |
-| Retrieval | `HybridRetriever` | `csa_platform/ai_integration/rag/retriever.py` |
-| Reranking | `RerankPolicy` | `csa_platform/ai_integration/rag/rerank.py` |
-| Generation | `generate_answer_async` | `csa_platform/ai_integration/rag/generate.py` |
-| Service facade | `RAGService` | `csa_platform/ai_integration/rag/service.py` |
-| Configuration | `RAGSettings` | `csa_platform/ai_integration/rag/config.py` |
-| Telemetry | Latency and chunk metrics | `csa_platform/ai_integration/rag/telemetry.py` |
-| GraphRAG | Knowledge graph augmentation | `csa_platform/ai_integration/graphrag/` |
+| Component        | Module                       | Path                                           |
+| ---------------- | ---------------------------- | ---------------------------------------------- |
+| Document loading | `DocumentLoader`             | `csa_platform/ai_integration/rag/loaders.py`   |
+| Chunking         | `DocumentChunker`            | `csa_platform/ai_integration/rag/chunker.py`   |
+| Indexing         | `SearchIndexer`              | `csa_platform/ai_integration/rag/indexer.py`   |
+| Retrieval        | `HybridRetriever`            | `csa_platform/ai_integration/rag/retriever.py` |
+| Reranking        | `RerankPolicy`               | `csa_platform/ai_integration/rag/rerank.py`    |
+| Generation       | `generate_answer_async`      | `csa_platform/ai_integration/rag/generate.py`  |
+| Service facade   | `RAGService`                 | `csa_platform/ai_integration/rag/service.py`   |
+| Configuration    | `RAGSettings`                | `csa_platform/ai_integration/rag/config.py`    |
+| Telemetry        | Latency and chunk metrics    | `csa_platform/ai_integration/rag/telemetry.py` |
+| GraphRAG         | Knowledge graph augmentation | `csa_platform/ai_integration/graphrag/`        |
 
 ### RAG service usage
 
@@ -811,61 +811,61 @@ graph LR
 
 2. **Register in Azure ML.** Use the Azure ML SDK or CLI to register model artifacts with versioning:
 
-   ```bash
-   az ml model create \
-     --name crop-yield-predictor \
-     --version 3 \
-     --path ./model-artifacts/ \
-     --type custom_model \
-     --resource-group rg-csa-prod \
-     --workspace-name csa-ml-workspace
-   ```
+    ```bash
+    az ml model create \
+      --name crop-yield-predictor \
+      --version 3 \
+      --path ./model-artifacts/ \
+      --type custom_model \
+      --resource-group rg-csa-prod \
+      --workspace-name csa-ml-workspace
+    ```
 
 3. **Deploy to managed endpoint.** CSA-in-a-Box provides the `ModelEndpoint` wrapper (`csa_platform/ai_integration/model_serving/endpoint.py`):
 
-   ```python
-   from csa_platform.ai_integration.model_serving.endpoint import ModelEndpoint
+    ```python
+    from csa_platform.ai_integration.model_serving.endpoint import ModelEndpoint
 
-   endpoint = ModelEndpoint(
-       workspace_name="csa-ml-workspace",
-       resource_group="rg-csa-prod",
-       subscription_id="your-subscription-id",
-   )
+    endpoint = ModelEndpoint(
+        workspace_name="csa-ml-workspace",
+        resource_group="rg-csa-prod",
+        subscription_id="your-subscription-id",
+    )
 
-   endpoint.deploy(
-       endpoint_name="crop-yield-predictor",
-       model_name="crop-yield-v2",
-       model_version="3",
-       instance_type="Standard_DS3_v2",
-       instance_count=1,
-   )
+    endpoint.deploy(
+        endpoint_name="crop-yield-predictor",
+        model_name="crop-yield-v2",
+        model_version="3",
+        instance_type="Standard_DS3_v2",
+        instance_count=1,
+    )
 
-   # Invoke
-   result = endpoint.invoke("crop-yield-predictor", {"features": [1.2, 3.4, 5.6]})
-   ```
+    # Invoke
+    result = endpoint.invoke("crop-yield-predictor", {"features": [1.2, 3.4, 5.6]})
+    ```
 
 4. **Set up monitoring.** Azure Monitor provides metrics for latency, throughput, error rates, and model drift. Configure alerts for SLA violations.
 
 5. **Implement A/B testing.** Route traffic between model versions using the managed endpoint traffic routing:
 
-   ```bash
-   az ml online-endpoint update \
-     --name crop-yield-predictor \
-     --traffic "v2=80 v3=20" \
-     --resource-group rg-csa-prod \
-     --workspace-name csa-ml-workspace
-   ```
+    ```bash
+    az ml online-endpoint update \
+      --name crop-yield-predictor \
+      --traffic "v2=80 v3=20" \
+      --resource-group rg-csa-prod \
+      --workspace-name csa-ml-workspace
+    ```
 
 ### BYOM migration
 
 For Foundry BYOM models (externally trained models registered in Foundry for AIP use):
 
-| Foundry BYOM step | Azure equivalent |
-|---|---|
-| Register model in Foundry | Register in Azure ML model registry or import to AI Foundry catalog |
-| Connect to AIP tool calling | Expose via managed endpoint, call from Semantic Kernel plugin |
-| Use in AIP Logic | Call from Azure Functions or Power Automate HTTP action |
-| Monitor usage | Azure Monitor metrics + Application Insights |
+| Foundry BYOM step           | Azure equivalent                                                    |
+| --------------------------- | ------------------------------------------------------------------- |
+| Register model in Foundry   | Register in Azure ML model registry or import to AI Foundry catalog |
+| Connect to AIP tool calling | Expose via managed endpoint, call from Semantic Kernel plugin       |
+| Use in AIP Logic            | Call from Azure Functions or Power Automate HTTP action             |
+| Monitor usage               | Azure Monitor metrics + Application Insights                        |
 
 ---
 
@@ -898,48 +898,54 @@ For richer review experiences with structured data:
 
 ```json
 {
-  "type": "AdaptiveCard",
-  "version": "1.5",
-  "body": [
-    {
-      "type": "TextBlock",
-      "text": "AI Agent Proposal: Case Reclassification",
-      "weight": "bolder",
-      "size": "large"
-    },
-    {
-      "type": "FactSet",
-      "facts": [
-        { "title": "Case ID", "value": "2024-0042" },
-        { "title": "Current Classification", "value": "Medium Priority" },
-        { "title": "Proposed Classification", "value": "Critical" },
-        { "title": "AI Confidence", "value": "94%" },
-        { "title": "Reasoning", "value": "Multiple escalation indicators detected" }
-      ]
-    },
-    {
-      "type": "Input.ChoiceSet",
-      "id": "decision",
-      "label": "Your Decision",
-      "choices": [
-        { "title": "Approve", "value": "approved" },
-        { "title": "Reject", "value": "rejected" },
-        { "title": "Modify", "value": "modify" }
-      ]
-    },
-    {
-      "type": "Input.Text",
-      "id": "comments",
-      "label": "Comments (optional)",
-      "isMultiline": true
-    }
-  ],
-  "actions": [
-    {
-      "type": "Action.Submit",
-      "title": "Submit Decision"
-    }
-  ]
+    "type": "AdaptiveCard",
+    "version": "1.5",
+    "body": [
+        {
+            "type": "TextBlock",
+            "text": "AI Agent Proposal: Case Reclassification",
+            "weight": "bolder",
+            "size": "large"
+        },
+        {
+            "type": "FactSet",
+            "facts": [
+                { "title": "Case ID", "value": "2024-0042" },
+                {
+                    "title": "Current Classification",
+                    "value": "Medium Priority"
+                },
+                { "title": "Proposed Classification", "value": "Critical" },
+                { "title": "AI Confidence", "value": "94%" },
+                {
+                    "title": "Reasoning",
+                    "value": "Multiple escalation indicators detected"
+                }
+            ]
+        },
+        {
+            "type": "Input.ChoiceSet",
+            "id": "decision",
+            "label": "Your Decision",
+            "choices": [
+                { "title": "Approve", "value": "approved" },
+                { "title": "Reject", "value": "rejected" },
+                { "title": "Modify", "value": "modify" }
+            ]
+        },
+        {
+            "type": "Input.Text",
+            "id": "comments",
+            "label": "Comments (optional)",
+            "isMultiline": true
+        }
+    ],
+    "actions": [
+        {
+            "type": "Action.Submit",
+            "title": "Submit Decision"
+        }
+    ]
 }
 ```
 
@@ -1017,14 +1023,14 @@ Foundry AIP supports multi-modal inputs through its Language Model Service (pass
 
 Azure provides a richer multi-modal ecosystem:
 
-| Modality | Azure service | Use case |
-|---|---|---|
-| Text + Vision | **Azure OpenAI** GPT-4o (native vision) | Image analysis, chart interpretation, document understanding |
-| Document Intelligence | **Azure AI Document Intelligence** | Form extraction, receipt processing, ID document parsing |
-| Speech | **Azure AI Speech** | Transcription, real-time translation, text-to-speech |
-| Video | **Azure AI Video Indexer** | Video analysis, face detection, scene segmentation |
-| Translation | **Azure AI Translator** | Real-time text and document translation |
-| Custom Vision | **Azure AI Custom Vision** | Domain-specific image classification and object detection |
+| Modality              | Azure service                           | Use case                                                     |
+| --------------------- | --------------------------------------- | ------------------------------------------------------------ |
+| Text + Vision         | **Azure OpenAI** GPT-4o (native vision) | Image analysis, chart interpretation, document understanding |
+| Document Intelligence | **Azure AI Document Intelligence**      | Form extraction, receipt processing, ID document parsing     |
+| Speech                | **Azure AI Speech**                     | Transcription, real-time translation, text-to-speech         |
+| Video                 | **Azure AI Video Indexer**              | Video analysis, face detection, scene segmentation           |
+| Translation           | **Azure AI Translator**                 | Real-time text and document translation                      |
+| Custom Vision         | **Azure AI Custom Vision**              | Domain-specific image classification and object detection    |
 
 ### Multi-modal agent example
 
@@ -1094,13 +1100,13 @@ In Foundry Pipeline Builder, LLM transforms apply AI enrichment to datasets at s
 
 ### Azure enrichment equivalents
 
-| Foundry transform | Azure equivalent | Implementation |
-|---|---|---|
-| Classification | CSA-in-a-Box `DocumentClassifier` | `csa_platform/ai_integration/enrichment/document_classifier.py` |
-| Sentiment analysis | Azure AI Language sentiment API or Azure OpenAI | Azure AI Language SDK or custom prompt |
-| Summarization | CSA-in-a-Box `TextSummarizer` | `csa_platform/ai_integration/enrichment/text_summarizer.py` |
-| Entity extraction | CSA-in-a-Box `EntityExtractor` | `csa_platform/ai_integration/enrichment/entity_extractor.py` |
-| Translation | Azure AI Translator | REST API or SDK |
+| Foundry transform  | Azure equivalent                                | Implementation                                                  |
+| ------------------ | ----------------------------------------------- | --------------------------------------------------------------- |
+| Classification     | CSA-in-a-Box `DocumentClassifier`               | `csa_platform/ai_integration/enrichment/document_classifier.py` |
+| Sentiment analysis | Azure AI Language sentiment API or Azure OpenAI | Azure AI Language SDK or custom prompt                          |
+| Summarization      | CSA-in-a-Box `TextSummarizer`                   | `csa_platform/ai_integration/enrichment/text_summarizer.py`     |
+| Entity extraction  | CSA-in-a-Box `EntityExtractor`                  | `csa_platform/ai_integration/enrichment/entity_extractor.py`    |
+| Translation        | Azure AI Translator                             | REST API or SDK                                                 |
 
 ### Batch enrichment in Fabric notebooks
 
@@ -1155,24 +1161,24 @@ enriched.write.format("delta").mode("overwrite").save(
 
 ### Inference latency comparison
 
-| Metric | Foundry AIP | Azure OpenAI | Notes |
-|---|---|---|---|
-| GPT-4o first-token latency | 800-1200 ms (proxied) | 200-400 ms (direct) | Foundry adds proxy overhead |
-| GPT-4o tokens/sec throughput | 40-60 t/s | 60-100 t/s | Azure offers PTU for guaranteed throughput |
-| Embedding latency (per batch) | 200-400 ms | 100-200 ms | Azure supports batch embedding API |
-| RAG end-to-end (query to answer) | 2-5 sec | 1-3 sec | Azure AI Search hybrid + semantic reranker |
-| Chatbot response time | 3-8 sec | 1-4 sec | Depends on tool calling depth |
+| Metric                           | Foundry AIP           | Azure OpenAI        | Notes                                      |
+| -------------------------------- | --------------------- | ------------------- | ------------------------------------------ |
+| GPT-4o first-token latency       | 800-1200 ms (proxied) | 200-400 ms (direct) | Foundry adds proxy overhead                |
+| GPT-4o tokens/sec throughput     | 40-60 t/s             | 60-100 t/s          | Azure offers PTU for guaranteed throughput |
+| Embedding latency (per batch)    | 200-400 ms            | 100-200 ms          | Azure supports batch embedding API         |
+| RAG end-to-end (query to answer) | 2-5 sec               | 1-3 sec             | Azure AI Search hybrid + semantic reranker |
+| Chatbot response time            | 3-8 sec               | 1-4 sec             | Depends on tool calling depth              |
 
 ### Cost comparison for AI workloads
 
-| Workload | Foundry AIP annual cost | Azure annual cost | Savings |
-|---|---|---|---|
-| **LLM access** (1M tokens/day) | Included in $200K-$800K AIP add-on | $36K-$72K (pay-per-token) | 60-80% |
-| **Chatbot** (10 agents, 1K queries/day) | Included in AIP add-on + seat licenses | $24K-$48K (Copilot Studio + AOAI) | Significant |
-| **Eval pipelines** (weekly runs) | Included in AIP add-on | $6K-$12K (AI Foundry compute) | Included vs. standalone |
-| **Batch enrichment** (100K records/day) | Compute commitment allocation | $18K-$36K (AOAI batch API, 50% discount) | Variable |
-| **Model serving** (custom ML, 100 RPS) | Compute commitment allocation | $24K-$60K (managed endpoints) | Variable |
-| **Total AI workload** | $200K-$800K/year (AIP add-on alone) | $108K-$228K/year | 40-70% |
+| Workload                                | Foundry AIP annual cost                | Azure annual cost                        | Savings                 |
+| --------------------------------------- | -------------------------------------- | ---------------------------------------- | ----------------------- |
+| **LLM access** (1M tokens/day)          | Included in $200K-$800K AIP add-on     | $36K-$72K (pay-per-token)                | 60-80%                  |
+| **Chatbot** (10 agents, 1K queries/day) | Included in AIP add-on + seat licenses | $24K-$48K (Copilot Studio + AOAI)        | Significant             |
+| **Eval pipelines** (weekly runs)        | Included in AIP add-on                 | $6K-$12K (AI Foundry compute)            | Included vs. standalone |
+| **Batch enrichment** (100K records/day) | Compute commitment allocation          | $18K-$36K (AOAI batch API, 50% discount) | Variable                |
+| **Model serving** (custom ML, 100 RPS)  | Compute commitment allocation          | $24K-$60K (managed endpoints)            | Variable                |
+| **Total AI workload**                   | $200K-$800K/year (AIP add-on alone)    | $108K-$228K/year                         | 40-70%                  |
 
 **Key cost advantages of Azure:**
 
@@ -1184,12 +1190,12 @@ enriched.write.format("delta").mode("overwrite").save(
 
 ### Throughput planning
 
-| Azure OpenAI tier | Tokens per minute | Best for |
-|---|---|---|
-| Standard (pay-as-you-go) | 30K-240K TPM (shared) | Development, low-volume production |
-| Provisioned (PTU) | Guaranteed capacity | High-volume production, SLA-bound |
-| Global Standard | 30K-2M TPM (global routing) | Burst workloads, multi-region |
-| Global Batch | Unlimited (async, 24h SLA) | Enrichment, eval, background processing |
+| Azure OpenAI tier        | Tokens per minute           | Best for                                |
+| ------------------------ | --------------------------- | --------------------------------------- |
+| Standard (pay-as-you-go) | 30K-240K TPM (shared)       | Development, low-volume production      |
+| Provisioned (PTU)        | Guaranteed capacity         | High-volume production, SLA-bound       |
+| Global Standard          | 30K-2M TPM (global routing) | Burst workloads, multi-region           |
+| Global Batch             | Unlimited (async, 24h SLA)  | Enrichment, eval, background processing |
 
 ---
 
@@ -1243,15 +1249,15 @@ enriched.write.format("delta").mode("overwrite").save(
 
 ### Recommended order
 
-| Phase | Duration | What to migrate | Dependencies |
-|---|---|---|---|
-| **Phase 1: LLM access** | 1-2 weeks | Language Model Service to Azure OpenAI | Azure OpenAI resource provisioned |
-| **Phase 2: Enrichment** | 2-3 weeks | LLM pipeline transforms to CSA-in-a-Box enrichment modules | Phase 1 |
-| **Phase 3: RAG** | 2-3 weeks | Document grounding to Azure AI Search + RAG pipeline | Phase 1, AI Search index |
-| **Phase 4: Agents** | 3-4 weeks | Chatbot Studio agents to Copilot Studio / Semantic Kernel | Phases 1-3 |
-| **Phase 5: Evaluations** | 1-2 weeks | AIP Evals to Azure AI Foundry evaluations | Phase 4 |
-| **Phase 6: Automation** | 2-3 weeks | AIP Automate to Power Automate / Data Activator | Phases 1-4 |
-| **Phase 7: Model lifecycle** | 2-4 weeks | Custom models to Azure ML registry + managed endpoints | Phase 1 |
+| Phase                        | Duration  | What to migrate                                            | Dependencies                      |
+| ---------------------------- | --------- | ---------------------------------------------------------- | --------------------------------- |
+| **Phase 1: LLM access**      | 1-2 weeks | Language Model Service to Azure OpenAI                     | Azure OpenAI resource provisioned |
+| **Phase 2: Enrichment**      | 2-3 weeks | LLM pipeline transforms to CSA-in-a-Box enrichment modules | Phase 1                           |
+| **Phase 3: RAG**             | 2-3 weeks | Document grounding to Azure AI Search + RAG pipeline       | Phase 1, AI Search index          |
+| **Phase 4: Agents**          | 3-4 weeks | Chatbot Studio agents to Copilot Studio / Semantic Kernel  | Phases 1-3                        |
+| **Phase 5: Evaluations**     | 1-2 weeks | AIP Evals to Azure AI Foundry evaluations                  | Phase 4                           |
+| **Phase 6: Automation**      | 2-3 weeks | AIP Automate to Power Automate / Data Activator            | Phases 1-4                        |
+| **Phase 7: Model lifecycle** | 2-4 weeks | Custom models to Azure ML registry + managed endpoints     | Phase 1                           |
 
 **Total estimated duration:** 13-21 weeks for a comprehensive AIP migration.
 
@@ -1265,20 +1271,20 @@ Phases 2, 3, and 7 can run in parallel after Phase 1 is complete. Phase 5 should
 
 All Azure AI capabilities described in this guide are implemented or documented in the CSA-in-a-Box platform:
 
-| Capability | Path |
-|---|---|
-| AI integration root | `csa_platform/ai_integration/` |
-| RAG pipeline | `csa_platform/ai_integration/rag/` |
-| GraphRAG | `csa_platform/ai_integration/graphrag/` |
-| Model serving | `csa_platform/ai_integration/model_serving/` |
-| Enrichment (NER, summarization, classification) | `csa_platform/ai_integration/enrichment/` |
-| MCP server | `csa_platform/ai_integration/mcp_server/` |
-| AI Foundry guide | `docs/guides/azure-ai-foundry.md` |
-| AI Search guide | `docs/guides/azure-ai-search.md` |
-| Tutorial 06: AI-First Analytics | `docs/tutorials/06-ai-analytics-foundry/` |
-| Tutorial 07: AI Agents with Semantic Kernel | `docs/tutorials/07-agents-foundry-sk/` |
-| Tutorial 08: RAG with Vector Search | `docs/tutorials/08-rag-vector-search/` |
-| Tutorial 09: GraphRAG Knowledge Graphs | `docs/tutorials/09-graphrag-knowledge/` |
+| Capability                                      | Path                                         |
+| ----------------------------------------------- | -------------------------------------------- |
+| AI integration root                             | `csa_platform/ai_integration/`               |
+| RAG pipeline                                    | `csa_platform/ai_integration/rag/`           |
+| GraphRAG                                        | `csa_platform/ai_integration/graphrag/`      |
+| Model serving                                   | `csa_platform/ai_integration/model_serving/` |
+| Enrichment (NER, summarization, classification) | `csa_platform/ai_integration/enrichment/`    |
+| MCP server                                      | `csa_platform/ai_integration/mcp_server/`    |
+| AI Foundry guide                                | `docs/guides/azure-ai-foundry.md`            |
+| AI Search guide                                 | `docs/guides/azure-ai-search.md`             |
+| Tutorial 06: AI-First Analytics                 | `docs/tutorials/06-ai-analytics-foundry/`    |
+| Tutorial 07: AI Agents with Semantic Kernel     | `docs/tutorials/07-agents-foundry-sk/`       |
+| Tutorial 08: RAG with Vector Search             | `docs/tutorials/08-rag-vector-search/`       |
+| Tutorial 09: GraphRAG Knowledge Graphs          | `docs/tutorials/09-graphrag-knowledge/`      |
 
 ---
 

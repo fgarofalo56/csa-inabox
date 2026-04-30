@@ -12,18 +12,18 @@
 
 Before starting this tutorial, ensure you have the following:
 
-| Requirement | Details |
-|---|---|
-| **GCP project** | With BigQuery datasets you intend to migrate; `roles/bigquery.dataViewer` and `roles/bigquery.jobUser` on the source project |
-| **GCS bucket** | For staging Parquet exports; `roles/storage.objectAdmin` on the bucket |
-| **`gcloud` CLI** | Authenticated with `gcloud auth login` and project set via `gcloud config set project PROJECT_ID` |
-| **`bq` CLI** | Bundled with `gcloud`; verify with `bq version` |
-| **Azure subscription** | With permissions to create Storage Account, Databricks workspace, and Fabric capacity |
-| **ADLS Gen2 storage account** | Provisioned with hierarchical namespace enabled |
-| **Azure Databricks workspace** | With Unity Catalog enabled; `CREATE CATALOG` / `CREATE SCHEMA` privileges |
-| **AzCopy** | Installed locally or available in Cloud Shell; `azcopy --version` |
-| **dbt Core** | `pip install dbt-databricks` (v1.7+) |
-| **Git** | For version-controlling dbt models |
+| Requirement                    | Details                                                                                                                      |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| **GCP project**                | With BigQuery datasets you intend to migrate; `roles/bigquery.dataViewer` and `roles/bigquery.jobUser` on the source project |
+| **GCS bucket**                 | For staging Parquet exports; `roles/storage.objectAdmin` on the bucket                                                       |
+| **`gcloud` CLI**               | Authenticated with `gcloud auth login` and project set via `gcloud config set project PROJECT_ID`                            |
+| **`bq` CLI**                   | Bundled with `gcloud`; verify with `bq version`                                                                              |
+| **Azure subscription**         | With permissions to create Storage Account, Databricks workspace, and Fabric capacity                                        |
+| **ADLS Gen2 storage account**  | Provisioned with hierarchical namespace enabled                                                                              |
+| **Azure Databricks workspace** | With Unity Catalog enabled; `CREATE CATALOG` / `CREATE SCHEMA` privileges                                                    |
+| **AzCopy**                     | Installed locally or available in Cloud Shell; `azcopy --version`                                                            |
+| **dbt Core**                   | `pip install dbt-databricks` (v1.7+)                                                                                         |
+| **Git**                        | For version-controlling dbt models                                                                                           |
 
 > **GCP comparison:** In BigQuery, storage and compute are billed separately but managed as one service. On Azure, ADLS Gen2 provides the storage layer and Databricks SQL provides the compute layer. The separation is explicit, which gives you more control over cost and scaling.
 
@@ -94,13 +94,13 @@ bq query --nouse_legacy_sql \
 
 ### 1.4 Build inventory spreadsheet
 
-| Dataset | Table | Rows | Size (GB) | Partition Column | Cluster Columns | Scheduled Query | Priority |
-|---|---|---|---|---|---|---|---|
-| sales | order_lines | 2.1B | 498 | order_date | region, product_id | No | High |
-| finance | fact_sales_daily | 45M | 12 | sales_date | region, product_id | Yes (daily 02:00) | High |
-| finance | dim_region | 250 | 0.001 | -- | -- | No | Medium |
-| finance | dim_product | 12K | 0.01 | -- | -- | No | Medium |
-| finance | dim_date | 36K | 0.002 | -- | -- | No | Medium |
+| Dataset | Table            | Rows | Size (GB) | Partition Column | Cluster Columns    | Scheduled Query   | Priority |
+| ------- | ---------------- | ---- | --------- | ---------------- | ------------------ | ----------------- | -------- |
+| sales   | order_lines      | 2.1B | 498       | order_date       | region, product_id | No                | High     |
+| finance | fact_sales_daily | 45M  | 12        | sales_date       | region, product_id | Yes (daily 02:00) | High     |
+| finance | dim_region       | 250  | 0.001     | --               | --                 | No                | Medium   |
+| finance | dim_product      | 12K  | 0.01      | --               | --                 | No                | Medium   |
+| finance | dim_date         | 36K  | 0.002     | --               | --                 | No                | Medium   |
 
 > **GCP comparison:** BigQuery `INFORMATION_SCHEMA` views provide this metadata natively. On Azure, Unity Catalog `information_schema` provides equivalent catalog metadata once the tables land in Databricks.
 
@@ -218,23 +218,23 @@ Create an ADF pipeline with a Copy Activity:
 
 ```json
 {
-  "name": "copy_gcs_to_adls",
-  "type": "Copy",
-  "typeProperties": {
-    "source": {
-      "type": "ParquetSource",
-      "storeSettings": {
-        "type": "GoogleCloudStorageReadSettings",
-        "recursive": true
-      }
-    },
-    "sink": {
-      "type": "ParquetSink",
-      "storeSettings": {
-        "type": "AzureBlobFSWriteSettings"
-      }
+    "name": "copy_gcs_to_adls",
+    "type": "Copy",
+    "typeProperties": {
+        "source": {
+            "type": "ParquetSource",
+            "storeSettings": {
+                "type": "GoogleCloudStorageReadSettings",
+                "recursive": true
+            }
+        },
+        "sink": {
+            "type": "ParquetSink",
+            "storeSettings": {
+                "type": "AzureBlobFSWriteSettings"
+            }
+        }
     }
-  }
 }
 ```
 
@@ -338,16 +338,16 @@ Configure `profiles.yml` for Databricks:
 
 ```yaml
 acme_gov_analytics:
-  target: dev
-  outputs:
-    dev:
-      type: databricks
-      catalog: acme_gov
-      schema: finance
-      host: <DATABRICKS_HOST>
-      http_path: /sql/1.0/warehouses/<WAREHOUSE_ID>
-      token: "{{ env_var('DBT_DATABRICKS_TOKEN') }}"
-      threads: 4
+    target: dev
+    outputs:
+        dev:
+            type: databricks
+            catalog: acme_gov
+            schema: finance
+            host: <DATABRICKS_HOST>
+            http_path: /sql/1.0/warehouses/<WAREHOUSE_ID>
+            token: "{{ env_var('DBT_DATABRICKS_TOKEN') }}"
+            threads: 4
 ```
 
 ### 5.2 Create staging models
@@ -389,24 +389,24 @@ GROUP BY 1, 2, 3
 version: 2
 
 models:
-  - name: fact_sales_daily
-    description: "Daily sales rollup by region and product"
-    columns:
-      - name: sales_date
-        tests:
-          - not_null
-      - name: region
-        tests:
-          - not_null
-      - name: product_id
-        tests:
-          - not_null
-      - name: units_sold
-        tests:
-          - not_null
-      - name: gross_amount
-        tests:
-          - not_null
+    - name: fact_sales_daily
+      description: "Daily sales rollup by region and product"
+      columns:
+          - name: sales_date
+            tests:
+                - not_null
+          - name: region
+            tests:
+                - not_null
+          - name: product_id
+            tests:
+                - not_null
+          - name: units_sold
+            tests:
+                - not_null
+          - name: gross_amount
+            tests:
+                - not_null
 ```
 
 ### 5.4 Run and test
@@ -428,30 +428,28 @@ BigQuery scheduled queries run in the BigQuery UI with a cron expression. The Da
 
 ```json
 {
-  "name": "daily_sales_rollup",
-  "tasks": [
-    {
-      "task_key": "dbt_run",
-      "description": "Run dbt fact_sales_daily model",
-      "new_cluster": {
-        "spark_version": "14.3.x-scala2.12",
-        "node_type_id": "Standard_D4s_v3",
-        "num_workers": 2
-      },
-      "libraries": [
-        {"pypi": {"package": "dbt-databricks==1.7.0"}}
-      ],
-      "python_wheel_task": {
-        "package_name": "dbt",
-        "entry_point": "main",
-        "parameters": ["run", "--select", "fact_sales_daily"]
-      }
+    "name": "daily_sales_rollup",
+    "tasks": [
+        {
+            "task_key": "dbt_run",
+            "description": "Run dbt fact_sales_daily model",
+            "new_cluster": {
+                "spark_version": "14.3.x-scala2.12",
+                "node_type_id": "Standard_D4s_v3",
+                "num_workers": 2
+            },
+            "libraries": [{ "pypi": { "package": "dbt-databricks==1.7.0" } }],
+            "python_wheel_task": {
+                "package_name": "dbt",
+                "entry_point": "main",
+                "parameters": ["run", "--select", "fact_sales_daily"]
+            }
+        }
+    ],
+    "schedule": {
+        "quartz_cron_expression": "0 0 2 * * ?",
+        "timezone_id": "UTC"
     }
-  ],
-  "schedule": {
-    "quartz_cron_expression": "0 0 2 * * ?",
-    "timezone_id": "UTC"
-  }
 }
 ```
 
@@ -461,34 +459,34 @@ If you need to coordinate dbt runs with Power BI refresh or Fabric pipelines:
 
 ```json
 {
-  "name": "tr_daily_sales_pipeline",
-  "properties": {
-    "type": "ScheduleTrigger",
-    "typeProperties": {
-      "recurrence": {
-        "frequency": "Day",
-        "interval": 1,
-        "startTime": "2025-01-01T02:00:00Z",
-        "timeZone": "UTC"
-      }
-    },
-    "pipelines": [
-      {
-        "pipelineReference": {
-          "referenceName": "pl_daily_sales_refresh",
-          "type": "PipelineReference"
-        }
-      }
-    ]
-  }
+    "name": "tr_daily_sales_pipeline",
+    "properties": {
+        "type": "ScheduleTrigger",
+        "typeProperties": {
+            "recurrence": {
+                "frequency": "Day",
+                "interval": 1,
+                "startTime": "2025-01-01T02:00:00Z",
+                "timeZone": "UTC"
+            }
+        },
+        "pipelines": [
+            {
+                "pipelineReference": {
+                    "referenceName": "pl_daily_sales_refresh",
+                    "type": "PipelineReference"
+                }
+            }
+        ]
+    }
 }
 ```
 
-| BigQuery scheduling | Azure equivalent | Notes |
-|---|---|---|
-| Scheduled query (cron) | Databricks Workflow schedule | 1:1 mapping; cron syntax is identical |
-| Scheduled query (interval) | ADF Schedule Trigger | For cross-service orchestration |
-| On-demand refresh | Databricks Job API / ADF trigger now | REST API or portal |
+| BigQuery scheduling        | Azure equivalent                     | Notes                                 |
+| -------------------------- | ------------------------------------ | ------------------------------------- |
+| Scheduled query (cron)     | Databricks Workflow schedule         | 1:1 mapping; cron syntax is identical |
+| Scheduled query (interval) | ADF Schedule Trigger                 | For cross-service orchestration       |
+| On-demand refresh          | Databricks Job API / ADF trigger now | REST API or portal                    |
 
 ---
 
@@ -509,9 +507,9 @@ In the Fabric portal:
 1. From the lakehouse, select **New semantic model**
 2. Select the fact and dimension tables: `fact_sales_daily`, `dim_region`, `dim_product`, `dim_date`
 3. Define relationships:
-   - `fact_sales_daily[region]` to `dim_region[region_id]`
-   - `fact_sales_daily[product_id]` to `dim_product[product_id]`
-   - `fact_sales_daily[sales_date]` to `dim_date[date_key]`
+    - `fact_sales_daily[region]` to `dim_region[region_id]`
+    - `fact_sales_daily[product_id]` to `dim_product[product_id]`
+    - `fact_sales_daily[sales_date]` to `dim_date[date_key]`
 
 ### 7.3 Add DAX measures
 
@@ -581,60 +579,60 @@ This table covers the 20+ most common patterns that need conversion during migra
 
 ### Data types
 
-| BigQuery | Databricks SQL | Notes |
-|---|---|---|
-| `INT64` | `BIGINT` | Direct rename |
-| `FLOAT64` | `DOUBLE` | Direct rename |
-| `NUMERIC` / `BIGNUMERIC` | `DECIMAL(38, 18)` | Specify precision explicitly |
-| `BOOL` | `BOOLEAN` | Direct rename |
-| `STRING` | `STRING` | Identical |
-| `BYTES` | `BINARY` | Direct rename |
-| `DATE` | `DATE` | Identical |
-| `DATETIME` | `TIMESTAMP_NTZ` | BigQuery DATETIME has no timezone; use `TIMESTAMP_NTZ` |
-| `TIMESTAMP` | `TIMESTAMP` | Both are UTC-aware |
-| `TIME` | `STRING` (workaround) | Databricks lacks native TIME type; store as string or interval |
-| `GEOGRAPHY` | `STRING` (WKT) | Use Mosaic or H3 libraries for geospatial in Databricks |
-| `STRUCT<a INT64, b STRING>` | `STRUCT<a: BIGINT, b: STRING>` | Colon syntax differs |
-| `ARRAY<STRING>` | `ARRAY<STRING>` | Identical |
-| `JSON` | `STRING` with `from_json()` / `schema_of_json()` | Parse at read time |
+| BigQuery                    | Databricks SQL                                   | Notes                                                          |
+| --------------------------- | ------------------------------------------------ | -------------------------------------------------------------- |
+| `INT64`                     | `BIGINT`                                         | Direct rename                                                  |
+| `FLOAT64`                   | `DOUBLE`                                         | Direct rename                                                  |
+| `NUMERIC` / `BIGNUMERIC`    | `DECIMAL(38, 18)`                                | Specify precision explicitly                                   |
+| `BOOL`                      | `BOOLEAN`                                        | Direct rename                                                  |
+| `STRING`                    | `STRING`                                         | Identical                                                      |
+| `BYTES`                     | `BINARY`                                         | Direct rename                                                  |
+| `DATE`                      | `DATE`                                           | Identical                                                      |
+| `DATETIME`                  | `TIMESTAMP_NTZ`                                  | BigQuery DATETIME has no timezone; use `TIMESTAMP_NTZ`         |
+| `TIMESTAMP`                 | `TIMESTAMP`                                      | Both are UTC-aware                                             |
+| `TIME`                      | `STRING` (workaround)                            | Databricks lacks native TIME type; store as string or interval |
+| `GEOGRAPHY`                 | `STRING` (WKT)                                   | Use Mosaic or H3 libraries for geospatial in Databricks        |
+| `STRUCT<a INT64, b STRING>` | `STRUCT<a: BIGINT, b: STRING>`                   | Colon syntax differs                                           |
+| `ARRAY<STRING>`             | `ARRAY<STRING>`                                  | Identical                                                      |
+| `JSON`                      | `STRING` with `from_json()` / `schema_of_json()` | Parse at read time                                             |
 
 ### Functions
 
-| BigQuery StandardSQL | Databricks SQL | Notes |
-|---|---|---|
-| `DATE_SUB(d, INTERVAL 3 DAY)` | `DATE_SUB(d, 3)` | No `INTERVAL` keyword in Databricks |
-| `DATE_ADD(d, INTERVAL 3 DAY)` | `DATE_ADD(d, 3)` | Same pattern |
-| `DATE_DIFF(d1, d2, DAY)` | `DATEDIFF(d1, d2)` | Different name and arg order |
-| `TIMESTAMP_DIFF(t1, t2, SECOND)` | `TIMESTAMPDIFF(SECOND, t2, t1)` | Arg order reversed |
-| `FORMAT_DATE('%Y-%m', d)` | `DATE_FORMAT(d, 'yyyy-MM')` | Java-style format codes |
-| `FORMAT_TIMESTAMP(...)` | `DATE_FORMAT(CAST(t AS TIMESTAMP), ...)` | Same pattern |
-| `PARSE_DATE('%Y%m%d', s)` | `TO_DATE(s, 'yyyyMMdd')` | Function name differs |
-| `PARSE_TIMESTAMP(...)` | `TO_TIMESTAMP(s, fmt)` | Function name differs |
-| `SAFE_CAST(x AS INT64)` | `TRY_CAST(x AS BIGINT)` | `SAFE_` prefix becomes `TRY_` |
-| `SAFE_DIVIDE(a, b)` | `TRY_DIVIDE(a, b)` or `a / NULLIF(b, 0)` | `SAFE_` becomes `TRY_` |
-| `IFNULL(a, b)` | `COALESCE(a, b)` or `IFNULL(a, b)` | Both work in Databricks |
-| `ARRAY_AGG(x)` | `COLLECT_LIST(x)` | Different name |
-| `ARRAY_AGG(DISTINCT x)` | `COLLECT_SET(x)` | Set-based for distinct |
-| `UNNEST(arr)` | `EXPLODE(arr)` | `LATERAL VIEW EXPLODE()` or inline `EXPLODE()` |
-| `GENERATE_DATE_ARRAY(...)` | `SEQUENCE(start, stop, INTERVAL 1 DAY)` | Different name |
-| `STRING_AGG(x, ',')` | `CONCAT_WS(',', COLLECT_LIST(x))` | Two-step in Databricks |
-| `REGEXP_EXTRACT(s, r)` | `REGEXP_EXTRACT(s, r, 0)` | Add group index explicitly |
-| `REGEXP_CONTAINS(s, r)` | `s RLIKE r` | Operator syntax in Databricks |
-| `STARTS_WITH(s, prefix)` | `s LIKE 'prefix%'` or `STARTSWITH(s, prefix)` | DBR 13.3+ has `STARTSWITH` |
-| `ENDS_WITH(s, suffix)` | `s LIKE '%suffix'` or `ENDSWITH(s, suffix)` | DBR 13.3+ has `ENDSWITH` |
+| BigQuery StandardSQL             | Databricks SQL                                | Notes                                          |
+| -------------------------------- | --------------------------------------------- | ---------------------------------------------- |
+| `DATE_SUB(d, INTERVAL 3 DAY)`    | `DATE_SUB(d, 3)`                              | No `INTERVAL` keyword in Databricks            |
+| `DATE_ADD(d, INTERVAL 3 DAY)`    | `DATE_ADD(d, 3)`                              | Same pattern                                   |
+| `DATE_DIFF(d1, d2, DAY)`         | `DATEDIFF(d1, d2)`                            | Different name and arg order                   |
+| `TIMESTAMP_DIFF(t1, t2, SECOND)` | `TIMESTAMPDIFF(SECOND, t2, t1)`               | Arg order reversed                             |
+| `FORMAT_DATE('%Y-%m', d)`        | `DATE_FORMAT(d, 'yyyy-MM')`                   | Java-style format codes                        |
+| `FORMAT_TIMESTAMP(...)`          | `DATE_FORMAT(CAST(t AS TIMESTAMP), ...)`      | Same pattern                                   |
+| `PARSE_DATE('%Y%m%d', s)`        | `TO_DATE(s, 'yyyyMMdd')`                      | Function name differs                          |
+| `PARSE_TIMESTAMP(...)`           | `TO_TIMESTAMP(s, fmt)`                        | Function name differs                          |
+| `SAFE_CAST(x AS INT64)`          | `TRY_CAST(x AS BIGINT)`                       | `SAFE_` prefix becomes `TRY_`                  |
+| `SAFE_DIVIDE(a, b)`              | `TRY_DIVIDE(a, b)` or `a / NULLIF(b, 0)`      | `SAFE_` becomes `TRY_`                         |
+| `IFNULL(a, b)`                   | `COALESCE(a, b)` or `IFNULL(a, b)`            | Both work in Databricks                        |
+| `ARRAY_AGG(x)`                   | `COLLECT_LIST(x)`                             | Different name                                 |
+| `ARRAY_AGG(DISTINCT x)`          | `COLLECT_SET(x)`                              | Set-based for distinct                         |
+| `UNNEST(arr)`                    | `EXPLODE(arr)`                                | `LATERAL VIEW EXPLODE()` or inline `EXPLODE()` |
+| `GENERATE_DATE_ARRAY(...)`       | `SEQUENCE(start, stop, INTERVAL 1 DAY)`       | Different name                                 |
+| `STRING_AGG(x, ',')`             | `CONCAT_WS(',', COLLECT_LIST(x))`             | Two-step in Databricks                         |
+| `REGEXP_EXTRACT(s, r)`           | `REGEXP_EXTRACT(s, r, 0)`                     | Add group index explicitly                     |
+| `REGEXP_CONTAINS(s, r)`          | `s RLIKE r`                                   | Operator syntax in Databricks                  |
+| `STARTS_WITH(s, prefix)`         | `s LIKE 'prefix%'` or `STARTSWITH(s, prefix)` | DBR 13.3+ has `STARTSWITH`                     |
+| `ENDS_WITH(s, suffix)`           | `s LIKE '%suffix'` or `ENDSWITH(s, suffix)`   | DBR 13.3+ has `ENDSWITH`                       |
 
 ### DDL and DML patterns
 
-| BigQuery | Databricks SQL | Notes |
-|---|---|---|
+| BigQuery                                                         | Databricks SQL                                                                         | Notes                                |
+| ---------------------------------------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------ |
 | `CREATE OR REPLACE TABLE ... PARTITION BY col CLUSTER BY c1, c2` | `CREATE OR REPLACE TABLE ... PARTITIONED BY (col)` + `OPTIMIZE ... ZORDER BY (c1, c2)` | Clustering is a post-write operation |
-| `MERGE INTO t USING s ON ...` | `MERGE INTO t USING s ON ...` | Identical syntax |
-| `INSERT INTO t SELECT ...` | `INSERT INTO t SELECT ...` | Identical |
-| `EXPORT DATA OPTIONS(...)` | `COPY INTO` or DataFrame API | Different export idiom |
-| `CREATE MATERIALIZED VIEW` | `CREATE MATERIALIZED VIEW` (Databricks) or dbt incremental | Available in Databricks SQL |
-| `@@project_id` | `current_catalog()` | Session context |
-| `@@dataset_id` | `current_schema()` | Session context |
-| Implicit comma cross-join `FROM a, b` | Explicit `CROSS JOIN` required | Edit-heavy but safer |
+| `MERGE INTO t USING s ON ...`                                    | `MERGE INTO t USING s ON ...`                                                          | Identical syntax                     |
+| `INSERT INTO t SELECT ...`                                       | `INSERT INTO t SELECT ...`                                                             | Identical                            |
+| `EXPORT DATA OPTIONS(...)`                                       | `COPY INTO` or DataFrame API                                                           | Different export idiom               |
+| `CREATE MATERIALIZED VIEW`                                       | `CREATE MATERIALIZED VIEW` (Databricks) or dbt incremental                             | Available in Databricks SQL          |
+| `@@project_id`                                                   | `current_catalog()`                                                                    | Session context                      |
+| `@@dataset_id`                                                   | `current_schema()`                                                                     | Session context                      |
+| Implicit comma cross-join `FROM a, b`                            | Explicit `CROSS JOIN` required                                                         | Edit-heavy but safer                 |
 
 ---
 

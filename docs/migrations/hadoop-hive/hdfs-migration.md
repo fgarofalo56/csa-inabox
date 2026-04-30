@@ -108,20 +108,20 @@ hadoop distcp \
 
 **Parameter explanation:**
 
-| Parameter | Purpose |
-|---|---|
-| `-m 100` | Use 100 mapper tasks for parallel copy |
-| `-bandwidth 500` | Limit each mapper to 500 MB/s (prevent saturating network) |
-| `-update` | Only copy files that are new or modified (incremental sync) |
-| `-strategy dynamic` | Dynamic work distribution (handles skewed file sizes) |
+| Parameter           | Purpose                                                     |
+| ------------------- | ----------------------------------------------------------- |
+| `-m 100`            | Use 100 mapper tasks for parallel copy                      |
+| `-bandwidth 500`    | Limit each mapper to 500 MB/s (prevent saturating network)  |
+| `-update`           | Only copy files that are new or modified (incremental sync) |
+| `-strategy dynamic` | Dynamic work distribution (handles skewed file sizes)       |
 
 **Performance expectations:**
 
-| Network | Bandwidth | 100 TB transfer time |
-|---|---|---|
-| ExpressRoute 10 Gbps | ~1 GB/s effective | ~28 hours |
-| VPN (1 Gbps) | ~100 MB/s effective | ~12 days |
-| Internet (100 Mbps) | ~10 MB/s effective | ~120 days |
+| Network              | Bandwidth           | 100 TB transfer time |
+| -------------------- | ------------------- | -------------------- |
+| ExpressRoute 10 Gbps | ~1 GB/s effective   | ~28 hours            |
+| VPN (1 Gbps)         | ~100 MB/s effective | ~12 days             |
+| Internet (100 Mbps)  | ~10 MB/s effective  | ~120 days            |
 
 **Recommendation:** Use ExpressRoute for any migration over 10 TB. For migrations over 100 TB, consider Azure Data Box for the initial bulk load, followed by DistCp for incremental sync.
 
@@ -161,14 +161,14 @@ For very large datasets, Azure Data Box provides offline transfer:
 
 ### Why convert to Delta Lake?
 
-| Feature | Parquet/ORC on HDFS | Delta Lake on ADLS |
-|---|---|---|
-| ACID transactions | No | Yes |
-| Time travel | No | Yes (30-day default, configurable) |
-| Schema evolution | Manual | Managed (additive by default, mergeSchema option) |
-| MERGE (upserts) | Not supported | First-class operation |
-| Small-file compaction | Manual scripts | `OPTIMIZE` command |
-| Z-ORDER indexing | Not available | Built-in data skipping |
+| Feature               | Parquet/ORC on HDFS | Delta Lake on ADLS                                |
+| --------------------- | ------------------- | ------------------------------------------------- |
+| ACID transactions     | No                  | Yes                                               |
+| Time travel           | No                  | Yes (30-day default, configurable)                |
+| Schema evolution      | Manual              | Managed (additive by default, mergeSchema option) |
+| MERGE (upserts)       | Not supported       | First-class operation                             |
+| Small-file compaction | Manual scripts      | `OPTIMIZE` command                                |
+| Z-ORDER indexing      | Not available       | Built-in data skipping                            |
 
 ### ORC to Delta
 
@@ -367,11 +367,11 @@ hdfs dfs -ls /user/hive/warehouse/orders/.snapshot/snapshot_20250430/
 
 ### Azure equivalents
 
-| HDFS feature | Azure equivalent | Scope |
-|---|---|---|
-| HDFS directory snapshot | ADLS Gen2 soft delete (7-365 day retention) | Container or blob level |
-| HDFS snapshot diff | Delta Lake time travel | Table level |
-| HDFS snapshot for backup | ADLS blob versioning + lifecycle management | Blob level |
+| HDFS feature             | Azure equivalent                            | Scope                   |
+| ------------------------ | ------------------------------------------- | ----------------------- |
+| HDFS directory snapshot  | ADLS Gen2 soft delete (7-365 day retention) | Container or blob level |
+| HDFS snapshot diff       | Delta Lake time travel                      | Table level             |
+| HDFS snapshot for backup | ADLS blob versioning + lifecycle management | Blob level              |
 
 ### Delta time travel
 
@@ -584,14 +584,14 @@ hadoop distcp \
 
 ## Common issues and solutions
 
-| Issue | Cause | Solution |
-|---|---|---|
-| DistCp fails with OOM | Too many small files overwhelming NameNode | Use `-strategy dynamic` and reduce `-m` count |
-| ABFS driver not found | Missing JARs on Hadoop classpath | Install `hadoop-azure` and `azure-storage` JARs |
-| Permission denied on ADLS | Incorrect authentication configuration | Use shared key, SAS, or service principal with Storage Blob Data Contributor role |
-| Slow transfer speed | Network bottleneck (VPN) | Use ExpressRoute or Azure Data Box for large datasets |
-| File count mismatch | .hive-staging or _SUCCESS files | Filter these during validation; they are metadata, not data |
-| ORC to Delta schema mismatch | Hive complex types (STRUCT, MAP, ARRAY) | Verify complex type compatibility; most work natively |
+| Issue                        | Cause                                      | Solution                                                                          |
+| ---------------------------- | ------------------------------------------ | --------------------------------------------------------------------------------- |
+| DistCp fails with OOM        | Too many small files overwhelming NameNode | Use `-strategy dynamic` and reduce `-m` count                                     |
+| ABFS driver not found        | Missing JARs on Hadoop classpath           | Install `hadoop-azure` and `azure-storage` JARs                                   |
+| Permission denied on ADLS    | Incorrect authentication configuration     | Use shared key, SAS, or service principal with Storage Blob Data Contributor role |
+| Slow transfer speed          | Network bottleneck (VPN)                   | Use ExpressRoute or Azure Data Box for large datasets                             |
+| File count mismatch          | .hive-staging or \_SUCCESS files           | Filter these during validation; they are metadata, not data                       |
+| ORC to Delta schema mismatch | Hive complex types (STRUCT, MAP, ARRAY)    | Verify complex type compatibility; most work natively                             |
 
 ---
 

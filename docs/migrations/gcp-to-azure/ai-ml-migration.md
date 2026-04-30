@@ -66,17 +66,17 @@ Vertex AI Training provides managed compute for custom model training using Tens
 
 ### Mapping
 
-| Vertex AI concept | Azure ML equivalent | Databricks equivalent | Notes |
-|---|---|---|---|
-| Custom training job | Azure ML command job | Databricks notebook job | Submit training code to managed compute |
-| Training pipeline | Azure ML pipeline | Databricks Workflow | Multi-step training orchestration |
-| Managed dataset | Azure ML data asset | Unity Catalog table / volume | Versioned data for training |
-| Experiment tracking | Azure ML experiments | MLflow experiments | Metrics, parameters, artifacts |
-| Model registry | Azure ML model registry | MLflow Model Registry | Versioned model management |
-| Hyperparameter tuning | Azure ML sweep jobs | Optuna / Hyperopt on Databricks | Automated hyperparameter search |
-| Distributed training | Azure ML distributed training | Databricks distributed Spark ML | Multi-node training |
-| Custom containers | Azure ML environments (Docker) | Databricks cluster libraries | Runtime dependency management |
-| TensorBoard | Azure ML TensorBoard integration | MLflow + TensorBoard on Databricks | Training visualization |
+| Vertex AI concept     | Azure ML equivalent              | Databricks equivalent              | Notes                                   |
+| --------------------- | -------------------------------- | ---------------------------------- | --------------------------------------- |
+| Custom training job   | Azure ML command job             | Databricks notebook job            | Submit training code to managed compute |
+| Training pipeline     | Azure ML pipeline                | Databricks Workflow                | Multi-step training orchestration       |
+| Managed dataset       | Azure ML data asset              | Unity Catalog table / volume       | Versioned data for training             |
+| Experiment tracking   | Azure ML experiments             | MLflow experiments                 | Metrics, parameters, artifacts          |
+| Model registry        | Azure ML model registry          | MLflow Model Registry              | Versioned model management              |
+| Hyperparameter tuning | Azure ML sweep jobs              | Optuna / Hyperopt on Databricks    | Automated hyperparameter search         |
+| Distributed training  | Azure ML distributed training    | Databricks distributed Spark ML    | Multi-node training                     |
+| Custom containers     | Azure ML environments (Docker)   | Databricks cluster libraries       | Runtime dependency management           |
+| TensorBoard           | Azure ML TensorBoard integration | MLflow + TensorBoard on Databricks | Training visualization                  |
 
 ### Migration approach
 
@@ -151,29 +151,29 @@ with mlflow.start_run():
 
 ### Vertex AI AutoML to Azure AutoML
 
-| Vertex AI AutoML feature | Azure AutoML equivalent | Notes |
-|---|---|---|
-| Tabular classification | AutoML classification | Direct equivalent |
-| Tabular regression | AutoML regression | Direct equivalent |
-| Tabular forecasting | AutoML forecasting | Direct equivalent |
-| Image classification | AutoML image classification | Direct equivalent |
-| Object detection | AutoML object detection | Direct equivalent |
-| Text classification | AutoML NLP | Direct equivalent |
-| Video classification | Custom Azure ML | Less automated; use custom pipeline |
+| Vertex AI AutoML feature | Azure AutoML equivalent     | Notes                               |
+| ------------------------ | --------------------------- | ----------------------------------- |
+| Tabular classification   | AutoML classification       | Direct equivalent                   |
+| Tabular regression       | AutoML regression           | Direct equivalent                   |
+| Tabular forecasting      | AutoML forecasting          | Direct equivalent                   |
+| Image classification     | AutoML image classification | Direct equivalent                   |
+| Object detection         | AutoML object detection     | Direct equivalent                   |
+| Text classification      | AutoML NLP                  | Direct equivalent                   |
+| Video classification     | Custom Azure ML             | Less automated; use custom pipeline |
 
 ### Vertex AI AutoML to Databricks AutoML
 
 Databricks AutoML provides automated ML for tabular data with a notebook-based UI.
 
-| Feature | Vertex AI AutoML | Databricks AutoML | Azure AutoML |
-|---|---|---|---|
-| Tabular data | Yes | Yes | Yes |
-| Image/video | Yes | No | Yes |
-| Text/NLP | Yes | No | Yes |
-| Explainability | Feature importance | SHAP values | Feature importance + SHAP |
-| Model export | TF SavedModel | MLflow model | ONNX / MLflow |
-| Code generation | No | Yes (generates notebook) | No |
-| Custom preprocessing | Limited | Full notebook control | Featurization config |
+| Feature              | Vertex AI AutoML   | Databricks AutoML        | Azure AutoML              |
+| -------------------- | ------------------ | ------------------------ | ------------------------- |
+| Tabular data         | Yes                | Yes                      | Yes                       |
+| Image/video          | Yes                | No                       | Yes                       |
+| Text/NLP             | Yes                | No                       | Yes                       |
+| Explainability       | Feature importance | SHAP values              | Feature importance + SHAP |
+| Model export         | TF SavedModel      | MLflow model             | ONNX / MLflow             |
+| Code generation      | No                 | Yes (generates notebook) | No                        |
+| Custom preprocessing | Limited            | Full notebook control    | Featurization config      |
 
 **Recommendation:** Use Databricks AutoML for tabular data (it generates editable notebooks). Use Azure AutoML for image, video, and NLP tasks.
 
@@ -187,38 +187,38 @@ Vertex AI Pipelines uses Kubeflow Pipelines (KFP) DSL. Azure provides two pipeli
 
 For traditional ML workflows (data prep, training, evaluation, deployment).
 
-| KFP concept | Azure ML Pipeline equivalent | Notes |
-|---|---|---|
-| `@component` decorator | Azure ML component | Reusable pipeline step |
-| `@pipeline` decorator | Azure ML pipeline | Pipeline definition |
-| `Input` / `Output` | `Input` / `Output` | Data flow between steps |
-| `Artifact` | Azure ML data asset | Pipeline artifacts |
-| Container component | Azure ML environment | Runtime specification |
-| Compiler | `ml_client.jobs.create_or_update()` | Pipeline submission |
+| KFP concept            | Azure ML Pipeline equivalent        | Notes                   |
+| ---------------------- | ----------------------------------- | ----------------------- |
+| `@component` decorator | Azure ML component                  | Reusable pipeline step  |
+| `@pipeline` decorator  | Azure ML pipeline                   | Pipeline definition     |
+| `Input` / `Output`     | `Input` / `Output`                  | Data flow between steps |
+| `Artifact`             | Azure ML data asset                 | Pipeline artifacts      |
+| Container component    | Azure ML environment                | Runtime specification   |
+| Compiler               | `ml_client.jobs.create_or_update()` | Pipeline submission     |
 
 ### Prompt Flow (Azure AI Foundry)
 
 For LLM-based workflows (RAG, agents, evaluation).
 
-| Vertex AI feature | Prompt Flow equivalent | Notes |
-|---|---|---|
-| AIP Logic | Prompt Flow DAG | LLM orchestration |
-| Chatbot Studio | Copilot Studio | No-code agent builder |
-| Vertex AI evaluation | Prompt Flow evaluation | LLM evaluation framework |
-| Grounding | Azure AI Search retrieval | RAG pipeline |
+| Vertex AI feature    | Prompt Flow equivalent    | Notes                    |
+| -------------------- | ------------------------- | ------------------------ |
+| AIP Logic            | Prompt Flow DAG           | LLM orchestration        |
+| Chatbot Studio       | Copilot Studio            | No-code agent builder    |
+| Vertex AI evaluation | Prompt Flow evaluation    | LLM evaluation framework |
+| Grounding            | Azure AI Search retrieval | RAG pipeline             |
 
 ---
 
 ## Vertex AI Endpoints to Azure ML Managed Endpoints
 
-| Vertex AI Endpoints feature | Azure ML Managed Endpoints | Notes |
-|---|---|---|
-| Online prediction | Managed online endpoint | Real-time inference |
-| Batch prediction | Managed batch endpoint | Batch inference |
-| Traffic splitting | Traffic allocation (A/B) | Blue-green deployment |
-| Auto-scaling | Instance auto-scaling | Scale based on load |
-| Model monitoring | Azure ML model monitoring | Data drift, prediction drift |
-| Private endpoint | Private managed endpoint | VNet integration |
+| Vertex AI Endpoints feature | Azure ML Managed Endpoints | Notes                        |
+| --------------------------- | -------------------------- | ---------------------------- |
+| Online prediction           | Managed online endpoint    | Real-time inference          |
+| Batch prediction            | Managed batch endpoint     | Batch inference              |
+| Traffic splitting           | Traffic allocation (A/B)   | Blue-green deployment        |
+| Auto-scaling                | Instance auto-scaling      | Scale based on load          |
+| Model monitoring            | Azure ML model monitoring  | Data drift, prediction drift |
+| Private endpoint            | Private managed endpoint   | VNet integration             |
 
 **Databricks alternative:** Databricks Model Serving provides a simpler deployment path for models tracked in MLflow.
 
@@ -247,18 +247,18 @@ BigQuery ML's `CREATE MODEL` syntax is uniquely simple. The migration to MLflow 
 
 ### Model type mapping
 
-| BigQuery ML model | MLflow / Databricks equivalent | Notes |
-|---|---|---|
-| `LINEAR_REG` | scikit-learn LinearRegression + MLflow | Standard regression |
-| `LOGISTIC_REG` | scikit-learn LogisticRegression + MLflow | Classification |
-| `KMEANS` | scikit-learn KMeans + MLflow | Clustering |
-| `BOOSTED_TREE_REGRESSOR` | XGBoost / LightGBM + MLflow | Gradient boosting |
-| `BOOSTED_TREE_CLASSIFIER` | XGBoost / LightGBM + MLflow | Gradient boosting |
-| `RANDOM_FOREST_REGRESSOR` | scikit-learn RandomForest + MLflow | Ensemble |
-| `DNN_REGRESSOR` | PyTorch / TensorFlow + MLflow | Deep learning |
-| `ARIMA_PLUS` | Prophet / statsmodels + MLflow | Time series |
-| `MATRIX_FACTORIZATION` | Surprise / implicit + MLflow | Recommendation |
-| `TRANSFORM` (feature eng) | Spark feature engineering / dbt | Preprocessing |
+| BigQuery ML model         | MLflow / Databricks equivalent           | Notes               |
+| ------------------------- | ---------------------------------------- | ------------------- |
+| `LINEAR_REG`              | scikit-learn LinearRegression + MLflow   | Standard regression |
+| `LOGISTIC_REG`            | scikit-learn LogisticRegression + MLflow | Classification      |
+| `KMEANS`                  | scikit-learn KMeans + MLflow             | Clustering          |
+| `BOOSTED_TREE_REGRESSOR`  | XGBoost / LightGBM + MLflow              | Gradient boosting   |
+| `BOOSTED_TREE_CLASSIFIER` | XGBoost / LightGBM + MLflow              | Gradient boosting   |
+| `RANDOM_FOREST_REGRESSOR` | scikit-learn RandomForest + MLflow       | Ensemble            |
+| `DNN_REGRESSOR`           | PyTorch / TensorFlow + MLflow            | Deep learning       |
+| `ARIMA_PLUS`              | Prophet / statsmodels + MLflow           | Time series         |
+| `MATRIX_FACTORIZATION`    | Surprise / implicit + MLflow             | Recommendation      |
+| `TRANSFORM` (feature eng) | Spark feature engineering / dbt          | Preprocessing       |
 
 ### Migration example
 
@@ -311,12 +311,12 @@ with mlflow.start_run():
 
 ## Gemini to Azure OpenAI
 
-| Gemini model | Azure OpenAI equivalent | Notes |
-|---|---|---|
-| Gemini 2.0 Flash | GPT-4o-mini | Fast, cost-efficient |
-| Gemini 2.0 Pro | GPT-4o | Strong general purpose |
-| Gemini 1.5 Pro (long context) | GPT-4.1 (long context) | Extended context window |
-| Gemini Ultra | o3 / o4-mini | Advanced reasoning |
+| Gemini model                  | Azure OpenAI equivalent | Notes                   |
+| ----------------------------- | ----------------------- | ----------------------- |
+| Gemini 2.0 Flash              | GPT-4o-mini             | Fast, cost-efficient    |
+| Gemini 2.0 Pro                | GPT-4o                  | Strong general purpose  |
+| Gemini 1.5 Pro (long context) | GPT-4.1 (long context)  | Extended context window |
+| Gemini Ultra                  | o3 / o4-mini            | Advanced reasoning      |
 
 ### API migration
 
@@ -352,16 +352,16 @@ print(response.choices[0].message.content)
 
 ## Vertex AI Search to Azure AI Search
 
-| Vertex AI Search feature | Azure AI Search equivalent | Notes |
-|---|---|---|
-| Unstructured search | Full-text search | BM25 ranking |
-| Structured search | Faceted search + filters | Rich filtering |
-| Hybrid search (semantic + keyword) | Hybrid search (semantic + BM25) | Direct equivalent |
-| Vector search | Vector search (HNSW) | Embedding-based retrieval |
-| Grounding / RAG | RAG with AI Search retriever | Enterprise RAG pattern |
-| Data connectors | Indexers (Blob, SQL, Cosmos DB) | Automated indexing |
-| Snippets / extractive answers | Semantic answers | AI-enhanced results |
-| Conversation search | Conversational search | Multi-turn queries |
+| Vertex AI Search feature           | Azure AI Search equivalent      | Notes                     |
+| ---------------------------------- | ------------------------------- | ------------------------- |
+| Unstructured search                | Full-text search                | BM25 ranking              |
+| Structured search                  | Faceted search + filters        | Rich filtering            |
+| Hybrid search (semantic + keyword) | Hybrid search (semantic + BM25) | Direct equivalent         |
+| Vector search                      | Vector search (HNSW)            | Embedding-based retrieval |
+| Grounding / RAG                    | RAG with AI Search retriever    | Enterprise RAG pattern    |
+| Data connectors                    | Indexers (Blob, SQL, Cosmos DB) | Automated indexing        |
+| Snippets / extractive answers      | Semantic answers                | AI-enhanced results       |
+| Conversation search                | Conversational search           | Multi-turn queries        |
 
 ### RAG pipeline migration
 
@@ -394,15 +394,15 @@ response = openai_client.chat.completions.create(
 
 ## Vertex AI Agents to Azure AI Agents / Copilot Studio
 
-| Vertex AI Agents feature | Azure equivalent | Notes |
-|---|---|---|
-| Agent Builder (no-code) | Copilot Studio | No-code agent builder |
-| Agent Builder (code) | Azure AI Agents (Semantic Kernel) | Code-first agent framework |
-| Tool use / function calling | Function calling (Azure OpenAI) | Tool integration |
-| Grounding (data store) | Azure AI Search grounding | RAG-based grounding |
-| Multi-turn conversation | Copilot Studio / custom agent | Stateful conversation |
-| Evaluation | Prompt Flow evaluation | Agent evaluation framework |
-| Deployment | Azure AI Foundry deployment | Managed agent hosting |
+| Vertex AI Agents feature    | Azure equivalent                  | Notes                      |
+| --------------------------- | --------------------------------- | -------------------------- |
+| Agent Builder (no-code)     | Copilot Studio                    | No-code agent builder      |
+| Agent Builder (code)        | Azure AI Agents (Semantic Kernel) | Code-first agent framework |
+| Tool use / function calling | Function calling (Azure OpenAI)   | Tool integration           |
+| Grounding (data store)      | Azure AI Search grounding         | RAG-based grounding        |
+| Multi-turn conversation     | Copilot Studio / custom agent     | Stateful conversation      |
+| Evaluation                  | Prompt Flow evaluation            | Agent evaluation framework |
+| Deployment                  | Azure AI Foundry deployment       | Managed agent hosting      |
 
 ---
 

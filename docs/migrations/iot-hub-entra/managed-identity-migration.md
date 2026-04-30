@@ -16,15 +16,15 @@ Managed Identity replaces this model entirely. The compute resource authenticate
 
 ## System-assigned vs User-assigned managed identity
 
-| Attribute | System-assigned | User-assigned |
-|---|---|---|
-| **Lifecycle** | Tied to the resource (deleted when resource is deleted) | Independent (persists across resource deletions) |
-| **Sharing** | One per resource | One identity shared across multiple resources |
-| **Use case** | Single-purpose services | Shared access pattern across multiple services |
-| **Bicep** | `identity: { type: 'SystemAssigned' }` | `identity: { type: 'UserAssigned', userAssignedIdentities: { '${uami.id}': {} } }` |
-| **RBAC** | Assign to each resource individually | Assign once, apply to many resources |
-| **Rotation** | Automatic | Automatic |
-| **Recommended for** | Production services with 1:1 resource-to-identity | Dev/test or shared-access patterns |
+| Attribute           | System-assigned                                         | User-assigned                                                                      |
+| ------------------- | ------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| **Lifecycle**       | Tied to the resource (deleted when resource is deleted) | Independent (persists across resource deletions)                                   |
+| **Sharing**         | One per resource                                        | One identity shared across multiple resources                                      |
+| **Use case**        | Single-purpose services                                 | Shared access pattern across multiple services                                     |
+| **Bicep**           | `identity: { type: 'SystemAssigned' }`                  | `identity: { type: 'UserAssigned', userAssignedIdentities: { '${uami.id}': {} } }` |
+| **RBAC**            | Assign to each resource individually                    | Assign once, apply to many resources                                               |
+| **Rotation**        | Automatic                                               | Automatic                                                                          |
+| **Recommended for** | Production services with 1:1 resource-to-identity       | Dev/test or shared-access patterns                                                 |
 
 ### When to use each
 
@@ -46,28 +46,28 @@ Managed Identity replaces this model entirely. The compute resource authenticate
 
 ### Available roles
 
-| Role | Role ID | Permissions | Use when |
-|---|---|---|---|
-| IoT Hub Data Contributor | `4fc6c259-987e-4a07-842e-c321cc9d413f` | Full data plane: registry CRUD, twins, direct methods, C2D, file upload | Backend API needing full device management |
-| IoT Hub Data Reader | `b447c946-2db7-41ec-983d-d8bf3b1c77e3` | Read device registry, read twins, read file upload notifications | Monitoring, dashboards, read-only analytics |
-| IoT Hub Registry Contributor | `4ea46cd5-c1b2-4a8e-910b-273211f9ce47` | Create, update, delete device identities | Device lifecycle management service |
-| IoT Hub Twin Contributor | `494bdba2-168f-4f31-a0a1-191d2f7c028c` | Read and write device/module twins | Configuration management service |
-| Contributor | (built-in) | Control plane: manage IoT Hub resource | Infrastructure automation (Bicep/Terraform) |
-| Reader | (built-in) | Control plane: view IoT Hub configuration | Monitoring, compliance scanners |
+| Role                         | Role ID                                | Permissions                                                             | Use when                                    |
+| ---------------------------- | -------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------- |
+| IoT Hub Data Contributor     | `4fc6c259-987e-4a07-842e-c321cc9d413f` | Full data plane: registry CRUD, twins, direct methods, C2D, file upload | Backend API needing full device management  |
+| IoT Hub Data Reader          | `b447c946-2db7-41ec-983d-d8bf3b1c77e3` | Read device registry, read twins, read file upload notifications        | Monitoring, dashboards, read-only analytics |
+| IoT Hub Registry Contributor | `4ea46cd5-c1b2-4a8e-910b-273211f9ce47` | Create, update, delete device identities                                | Device lifecycle management service         |
+| IoT Hub Twin Contributor     | `494bdba2-168f-4f31-a0a1-191d2f7c028c` | Read and write device/module twins                                      | Configuration management service            |
+| Contributor                  | (built-in)                             | Control plane: manage IoT Hub resource                                  | Infrastructure automation (Bicep/Terraform) |
+| Reader                       | (built-in)                             | Control plane: view IoT Hub configuration                               | Monitoring, compliance scanners             |
 
 ### Least-privilege mapping
 
 Map each service to the minimum role it needs:
 
-| Service function | Minimum RBAC role | Replaces SAS policy |
-|---|---|---|
-| Process telemetry from Event Hub endpoint | Azure Event Hubs Data Receiver (on EH) | `service` |
-| Read device twins for dashboard | IoT Hub Data Reader | `registryRead` |
-| Update device twins (desired properties) | IoT Hub Twin Contributor | `registryReadWrite` |
-| Invoke direct methods on devices | IoT Hub Data Contributor | `service` |
-| Register/delete device identities | IoT Hub Registry Contributor | `registryReadWrite` |
-| Full device management API | IoT Hub Data Contributor | `iothubowner` |
-| Send cloud-to-device messages | IoT Hub Data Contributor | `service` |
+| Service function                          | Minimum RBAC role                      | Replaces SAS policy |
+| ----------------------------------------- | -------------------------------------- | ------------------- |
+| Process telemetry from Event Hub endpoint | Azure Event Hubs Data Receiver (on EH) | `service`           |
+| Read device twins for dashboard           | IoT Hub Data Reader                    | `registryRead`      |
+| Update device twins (desired properties)  | IoT Hub Twin Contributor               | `registryReadWrite` |
+| Invoke direct methods on devices          | IoT Hub Data Contributor               | `service`           |
+| Register/delete device identities         | IoT Hub Registry Contributor           | `registryReadWrite` |
+| Full device management API                | IoT Hub Data Contributor               | `iothubowner`       |
+| Send cloud-to-device messages             | IoT Hub Data Contributor               | `service`           |
 
 ---
 
@@ -179,16 +179,16 @@ Logic Apps IoT Hub connector requires a connection string with SAS key. This is 
 
 ```json
 {
-  "type": "Microsoft.Web/connections",
-  "apiVersion": "2016-06-01",
-  "properties": {
-    "api": {
-      "id": "[subscriptionResourceId('Microsoft.Web/locations/managedApis', 'azureiotdevices')]"
-    },
-    "parameterValues": {
-      "iotHubConnectionString": "HostName=hub-prod.azure-devices.net;SharedAccessKeyName=iothubowner;SharedAccessKey=..."
+    "type": "Microsoft.Web/connections",
+    "apiVersion": "2016-06-01",
+    "properties": {
+        "api": {
+            "id": "[subscriptionResourceId('Microsoft.Web/locations/managedApis', 'azureiotdevices')]"
+        },
+        "parameterValues": {
+            "iotHubConnectionString": "HostName=hub-prod.azure-devices.net;SharedAccessKeyName=iothubowner;SharedAccessKey=..."
+        }
     }
-  }
 }
 ```
 
@@ -198,24 +198,24 @@ Logic Apps Standard supports managed identity for IoT Hub access through the Azu
 
 ```json
 {
-  "type": "Microsoft.Logic/workflows",
-  "properties": {
-    "definition": {
-      "actions": {
-        "Get_Device_Twin": {
-          "type": "Http",
-          "inputs": {
-            "method": "GET",
-            "uri": "https://hub-prod.azure-devices.net/twins/sensor-001?api-version=2021-04-12",
-            "authentication": {
-              "type": "ManagedServiceIdentity",
-              "audience": "https://iothubs.azure.net"
+    "type": "Microsoft.Logic/workflows",
+    "properties": {
+        "definition": {
+            "actions": {
+                "Get_Device_Twin": {
+                    "type": "Http",
+                    "inputs": {
+                        "method": "GET",
+                        "uri": "https://hub-prod.azure-devices.net/twins/sensor-001?api-version=2021-04-12",
+                        "authentication": {
+                            "type": "ManagedServiceIdentity",
+                            "audience": "https://iothubs.azure.net"
+                        }
+                    }
+                }
             }
-          }
         }
-      }
     }
-  }
 }
 ```
 

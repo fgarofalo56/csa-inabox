@@ -74,15 +74,15 @@ Understanding the philosophical differences between Looker and Power BI is criti
 
 ### Key differences
 
-| Dimension | Looker (LookML) | Power BI |
-|---|---|---|
-| Semantic definition | LookML code (views, explores) | Tabular model (TMDL / UI) |
-| Measure language | LookML measure syntax | DAX |
-| Version control | Git-native (first-class) | Git integration (maturing) |
-| Query generation | SQL generated from LookML | DAX queries against Tabular model |
-| Ad-hoc exploration | Explore UI | Power BI Explore + Q&A + Copilot |
-| Symmetric aggregates | Built-in | Requires careful DAX modeling |
-| Embedding | Looker Embed SDK | Power BI Embedded SDK |
+| Dimension            | Looker (LookML)               | Power BI                          |
+| -------------------- | ----------------------------- | --------------------------------- |
+| Semantic definition  | LookML code (views, explores) | Tabular model (TMDL / UI)         |
+| Measure language     | LookML measure syntax         | DAX                               |
+| Version control      | Git-native (first-class)      | Git integration (maturing)        |
+| Query generation     | SQL generated from LookML     | DAX queries against Tabular model |
+| Ad-hoc exploration   | Explore UI                    | Power BI Explore + Q&A + Copilot  |
+| Symmetric aggregates | Built-in                      | Requires careful DAX modeling     |
+| Embedding            | Looker Embed SDK              | Power BI Embedded SDK             |
 
 ---
 
@@ -138,28 +138,28 @@ These relationships are defined in the Power BI model view (UI) or in TMDL (code
 
 LookML **dimensions** map to **columns** in Power BI tables. Most require no translation because they are simply column references.
 
-| LookML dimension type | Power BI equivalent | Notes |
-|---|---|---|
-| `dimension: id` (primary key) | Column (mark as key) | Set as unique identifier |
-| `dimension: name` (string) | Column (text) | Direct mapping |
-| `dimension: amount` (number) | Column (decimal) | Direct mapping |
-| `dimension: created_date` (date) | Column (date) | Direct mapping |
-| `dimension: tier` (string, with `sql` expression) | Calculated column (DAX) | Complex logic becomes DAX |
-| `dimension_group: created` (time) | Date hierarchy on column | Power BI auto-creates hierarchies |
+| LookML dimension type                             | Power BI equivalent      | Notes                             |
+| ------------------------------------------------- | ------------------------ | --------------------------------- |
+| `dimension: id` (primary key)                     | Column (mark as key)     | Set as unique identifier          |
+| `dimension: name` (string)                        | Column (text)            | Direct mapping                    |
+| `dimension: amount` (number)                      | Column (decimal)         | Direct mapping                    |
+| `dimension: created_date` (date)                  | Column (date)            | Direct mapping                    |
+| `dimension: tier` (string, with `sql` expression) | Calculated column (DAX)  | Complex logic becomes DAX         |
+| `dimension_group: created` (time)                 | Date hierarchy on column | Power BI auto-creates hierarchies |
 
 ### Measures to DAX
 
 This is the most labor-intensive part of the migration. Every LookML **measure** becomes a **DAX measure**.
 
-| LookML measure | DAX equivalent | Notes |
-|---|---|---|
-| `measure: count { type: count }` | `Count = COUNTROWS(order_lines)` | Row count |
-| `measure: total_revenue { type: sum; sql: ${revenue} }` | `Total Revenue = SUM(order_lines[revenue])` | Sum aggregation |
-| `measure: avg_order_value { type: average; sql: ${revenue} }` | `Avg Order Value = AVERAGE(order_lines[revenue])` | Average |
-| `measure: distinct_customers { type: count_distinct; sql: ${customer_id} }` | `Distinct Customers = DISTINCTCOUNT(order_lines[customer_id])` | Count distinct |
-| `measure: max_order_date { type: max; sql: ${order_date} }` | `Max Order Date = MAX(order_lines[order_date])` | Maximum |
-| `measure: revenue_ytd { type: sum; sql: ${revenue}; filters: [...] }` | `Revenue YTD = TOTALYTD(SUM(order_lines[revenue]), dim_date[date_key])` | Time intelligence |
-| `measure: pct_of_total { type: percent_of_total; sql: ${revenue} }` | `Pct of Total = DIVIDE(SUM(order_lines[revenue]), CALCULATE(SUM(order_lines[revenue]), ALL(order_lines)))` | Percent of total |
+| LookML measure                                                              | DAX equivalent                                                                                             | Notes             |
+| --------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ----------------- |
+| `measure: count { type: count }`                                            | `Count = COUNTROWS(order_lines)`                                                                           | Row count         |
+| `measure: total_revenue { type: sum; sql: ${revenue} }`                     | `Total Revenue = SUM(order_lines[revenue])`                                                                | Sum aggregation   |
+| `measure: avg_order_value { type: average; sql: ${revenue} }`               | `Avg Order Value = AVERAGE(order_lines[revenue])`                                                          | Average           |
+| `measure: distinct_customers { type: count_distinct; sql: ${customer_id} }` | `Distinct Customers = DISTINCTCOUNT(order_lines[customer_id])`                                             | Count distinct    |
+| `measure: max_order_date { type: max; sql: ${order_date} }`                 | `Max Order Date = MAX(order_lines[order_date])`                                                            | Maximum           |
+| `measure: revenue_ytd { type: sum; sql: ${revenue}; filters: [...] }`       | `Revenue YTD = TOTALYTD(SUM(order_lines[revenue]), dim_date[date_key])`                                    | Time intelligence |
+| `measure: pct_of_total { type: percent_of_total; sql: ${revenue} }`         | `Pct of Total = DIVIDE(SUM(order_lines[revenue]), CALCULATE(SUM(order_lines[revenue]), ALL(order_lines)))` | Percent of total  |
 
 ### Filtered measures
 
@@ -188,11 +188,11 @@ US Revenue = CALCULATE(
 
 PDTs are precomputed tables in Looker. They map directly to dbt incremental models in the CSA-in-a-Box pattern.
 
-| PDT type | dbt equivalent | Notes |
-|---|---|---|
-| SQL-based PDT | dbt table model | Materialized on schedule |
-| Trigger-based PDT | dbt incremental model | Refreshed incrementally |
-| Native derived table | dbt ephemeral model | Computed in query |
+| PDT type             | dbt equivalent        | Notes                    |
+| -------------------- | --------------------- | ------------------------ |
+| SQL-based PDT        | dbt table model       | Materialized on schedule |
+| Trigger-based PDT    | dbt incremental model | Refreshed incrementally  |
+| Native derived table | dbt ephemeral model   | Computed in query        |
 
 ---
 
@@ -200,19 +200,19 @@ PDTs are precomputed tables in Looker. They map directly to dbt incremental mode
 
 ### Visual mapping
 
-| Looker visual | Power BI visual | Notes |
-|---|---|---|
-| Single value tile | Card visual | Direct mapping |
-| Table | Table / Matrix | Matrix for pivot tables |
-| Bar chart | Clustered bar chart | Direct mapping |
-| Line chart | Line chart | Direct mapping |
-| Area chart | Area chart | Direct mapping |
-| Scatter plot | Scatter chart | Direct mapping |
-| Pie/donut chart | Pie / Donut chart | Direct mapping |
-| Map (point) | Map / Azure Map visual | Azure Map for federal compliance |
-| Funnel | Funnel chart | Direct mapping |
-| Waterfall | Waterfall chart | Direct mapping |
-| Text tile | Text box / Smart narrative | Smart narrative adds AI |
+| Looker visual     | Power BI visual            | Notes                            |
+| ----------------- | -------------------------- | -------------------------------- |
+| Single value tile | Card visual                | Direct mapping                   |
+| Table             | Table / Matrix             | Matrix for pivot tables          |
+| Bar chart         | Clustered bar chart        | Direct mapping                   |
+| Line chart        | Line chart                 | Direct mapping                   |
+| Area chart        | Area chart                 | Direct mapping                   |
+| Scatter plot      | Scatter chart              | Direct mapping                   |
+| Pie/donut chart   | Pie / Donut chart          | Direct mapping                   |
+| Map (point)       | Map / Azure Map visual     | Azure Map for federal compliance |
+| Funnel            | Funnel chart               | Direct mapping                   |
+| Waterfall         | Waterfall chart            | Direct mapping                   |
+| Text tile         | Text box / Smart narrative | Smart narrative adds AI          |
 
 ### Dashboard layout
 
@@ -222,26 +222,26 @@ Looker dashboards use a grid layout. Power BI dashboards use a canvas layout wit
 
 ### Filters
 
-| Looker filter | Power BI equivalent | Notes |
-|---|---|---|
-| Dashboard filter | Report-level filter / slicer | Visual slicers are more interactive |
-| Dashboard filter (linked) | Cross-filter between visuals | Automatic in Power BI model |
-| Explore filter | Report page filter | Per-page filtering |
-| User attribute filter | Row-level security (RLS) | Dynamic per-user filtering |
-| Dashboard parameter | What-if parameter | Parameterized analysis |
+| Looker filter             | Power BI equivalent          | Notes                               |
+| ------------------------- | ---------------------------- | ----------------------------------- |
+| Dashboard filter          | Report-level filter / slicer | Visual slicers are more interactive |
+| Dashboard filter (linked) | Cross-filter between visuals | Automatic in Power BI model         |
+| Explore filter            | Report page filter           | Per-page filtering                  |
+| User attribute filter     | Row-level security (RLS)     | Dynamic per-user filtering          |
+| Dashboard parameter       | What-if parameter            | Parameterized analysis              |
 
 ---
 
 ## Looker embedding to Power BI Embedded
 
-| Looker embed feature | Power BI Embedded equivalent | Notes |
-|---|---|---|
-| SSO embed URL | Power BI Embedded embed token | Programmatic token generation |
-| Embed SDK (JavaScript) | Power BI Client SDK (JavaScript) | `powerbi-client` npm package |
-| Embed themes | Custom themes (JSON) | Theme customization |
-| Embed events (drill, filter) | Embed events API | Bi-directional communication |
-| Signed embed URL | Embed token with RLS | Row-level security in embed |
-| Looker embed domain allowlist | Power BI tenant embed settings | Security configuration |
+| Looker embed feature          | Power BI Embedded equivalent     | Notes                         |
+| ----------------------------- | -------------------------------- | ----------------------------- |
+| SSO embed URL                 | Power BI Embedded embed token    | Programmatic token generation |
+| Embed SDK (JavaScript)        | Power BI Client SDK (JavaScript) | `powerbi-client` npm package  |
+| Embed themes                  | Custom themes (JSON)             | Theme customization           |
+| Embed events (drill, filter)  | Embed events API                 | Bi-directional communication  |
+| Signed embed URL              | Embed token with RLS             | Row-level security in embed   |
+| Looker embed domain allowlist | Power BI tenant embed settings   | Security configuration        |
 
 ### License model difference
 
@@ -256,28 +256,28 @@ This is often a significant cost advantage for applications with many external u
 
 Looker Studio (formerly Data Studio) is Google's free self-service BI tool. Migration to Power BI Desktop is straightforward because both are visual report-building tools.
 
-| Looker Studio feature | Power BI equivalent | Notes |
-|---|---|---|
-| Data source connector | Power BI data source | 100+ connectors |
-| Calculated field | DAX measure or calculated column | More powerful in Power BI |
-| Blend (multi-source join) | Model relationship | Power BI handles joins in model |
-| Filter control | Slicer visual | Interactive filtering |
-| Date range control | Date slicer | Date filtering |
-| Community visualization | Custom visual (AppSource) | Extensive marketplace |
-| Sharing (link) | Publish to Power BI Service | App workspace sharing |
-| PDF export | Export to PDF/PowerPoint | Built-in export |
+| Looker Studio feature     | Power BI equivalent              | Notes                           |
+| ------------------------- | -------------------------------- | ------------------------------- |
+| Data source connector     | Power BI data source             | 100+ connectors                 |
+| Calculated field          | DAX measure or calculated column | More powerful in Power BI       |
+| Blend (multi-source join) | Model relationship               | Power BI handles joins in model |
+| Filter control            | Slicer visual                    | Interactive filtering           |
+| Date range control        | Date slicer                      | Date filtering                  |
+| Community visualization   | Custom visual (AppSource)        | Extensive marketplace           |
+| Sharing (link)            | Publish to Power BI Service      | App workspace sharing           |
+| PDF export                | Export to PDF/PowerPoint         | Built-in export                 |
 
 ---
 
 ## Looker scheduled deliveries to Power BI subscriptions
 
-| Looker delivery | Power BI equivalent | Notes |
-|---|---|---|
-| Email (PDF/PNG) | Power BI email subscription | Native feature |
-| Email (CSV) | Power BI subscription + export | Or Power Automate for CSV |
-| Slack delivery | Power Automate Slack connector | Teams integration native |
-| Webhook delivery | Power Automate HTTP action | Flexible integration |
-| Conditional delivery | Data-driven subscription / Data Activator | Alert-based delivery |
+| Looker delivery      | Power BI equivalent                       | Notes                     |
+| -------------------- | ----------------------------------------- | ------------------------- |
+| Email (PDF/PNG)      | Power BI email subscription               | Native feature            |
+| Email (CSV)          | Power BI subscription + export            | Or Power Automate for CSV |
+| Slack delivery       | Power Automate Slack connector            | Teams integration native  |
+| Webhook delivery     | Power Automate HTTP action                | Flexible integration      |
+| Conditional delivery | Data-driven subscription / Data Activator | Alert-based delivery      |
 
 ---
 
@@ -285,12 +285,12 @@ Looker Studio (formerly Data Studio) is Google's free self-service BI tool. Migr
 
 Looker Action Hub triggers external actions from BI events. The Azure equivalent is **Data Activator** (for alert-based triggers) plus **Power Automate** (for workflow automation) plus **Event Grid** (for event routing).
 
-| Looker Action | Azure equivalent | Notes |
-|---|---|---|
-| Send to Slack | Power Automate Slack connector | No-code workflow |
-| Send to email | Power Automate email action | Built-in |
-| Send to webhook | Power Automate HTTP connector | Flexible endpoint |
-| Send to GCS | Power Automate + Azure Blob | Storage action |
+| Looker Action        | Azure equivalent                           | Notes             |
+| -------------------- | ------------------------------------------ | ----------------- |
+| Send to Slack        | Power Automate Slack connector             | No-code workflow  |
+| Send to email        | Power Automate email action                | Built-in          |
+| Send to webhook      | Power Automate HTTP connector              | Flexible endpoint |
+| Send to GCS          | Power Automate + Azure Blob                | Storage action    |
 | Custom action (code) | Azure Function triggered by Data Activator | Event-driven code |
 
 ---

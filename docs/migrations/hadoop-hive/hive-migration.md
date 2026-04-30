@@ -32,14 +32,14 @@ The Hive Metastore Service (HMS) stores metadata in a relational database (MySQL
 
 Databricks Unity Catalog provides a three-level namespace that maps directly to Hive's model:
 
-| Hive concept | Unity Catalog equivalent |
-|---|---|
-| Database | Schema (within a catalog) |
-| Table | Table (managed or external) |
-| Partition | Partition (Delta handles automatically) |
-| View | View |
-| UDF | UDF (registered per catalog) |
-| Table properties | Table properties (TBLPROPERTIES) |
+| Hive concept     | Unity Catalog equivalent                |
+| ---------------- | --------------------------------------- |
+| Database         | Schema (within a catalog)               |
+| Table            | Table (managed or external)             |
+| Partition        | Partition (Delta handles automatically) |
+| View             | View                                    |
+| UDF              | UDF (registered per catalog)            |
+| Table properties | Table properties (TBLPROPERTIES)        |
 
 ### Export Hive DDL
 
@@ -133,31 +133,31 @@ SparkSQL is highly compatible with HiveQL. Most queries run without changes. The
 
 ### Syntax differences
 
-| HiveQL | SparkSQL | Notes |
-|---|---|---|
-| `LATERAL VIEW explode(arr) t AS val` | `LATERAL VIEW explode(arr) t AS val` | Identical syntax |
-| `DISTRIBUTE BY col` | `DISTRIBUTE BY col` | Identical syntax |
-| `SORT BY col` | `SORT BY col` | Identical (within-partition sort) |
-| `CLUSTER BY col` | `CLUSTER BY col` | Identical |
-| `INSERT OVERWRITE TABLE t SELECT ...` | `INSERT OVERWRITE TABLE t SELECT ...` | Identical |
-| `TABLESAMPLE (10 PERCENT)` | `TABLESAMPLE (10 PERCENT)` | Identical |
-| `ADD JAR hdfs:///lib/my-udf.jar` | N/A — use cluster libraries | See UDF section |
-| `SET hive.exec.parallel=true` | N/A — Spark parallelizes by default | Remove SET statements |
-| `SET hive.exec.dynamic.partition.mode=nonstrict` | N/A — Spark allows dynamic partitions by default | Remove |
-| `SET mapreduce.job.reduces=10` | `spark.conf.set("spark.sql.shuffle.partitions", "10")` | Different config key |
+| HiveQL                                           | SparkSQL                                               | Notes                             |
+| ------------------------------------------------ | ------------------------------------------------------ | --------------------------------- |
+| `LATERAL VIEW explode(arr) t AS val`             | `LATERAL VIEW explode(arr) t AS val`                   | Identical syntax                  |
+| `DISTRIBUTE BY col`                              | `DISTRIBUTE BY col`                                    | Identical syntax                  |
+| `SORT BY col`                                    | `SORT BY col`                                          | Identical (within-partition sort) |
+| `CLUSTER BY col`                                 | `CLUSTER BY col`                                       | Identical                         |
+| `INSERT OVERWRITE TABLE t SELECT ...`            | `INSERT OVERWRITE TABLE t SELECT ...`                  | Identical                         |
+| `TABLESAMPLE (10 PERCENT)`                       | `TABLESAMPLE (10 PERCENT)`                             | Identical                         |
+| `ADD JAR hdfs:///lib/my-udf.jar`                 | N/A — use cluster libraries                            | See UDF section                   |
+| `SET hive.exec.parallel=true`                    | N/A — Spark parallelizes by default                    | Remove SET statements             |
+| `SET hive.exec.dynamic.partition.mode=nonstrict` | N/A — Spark allows dynamic partitions by default       | Remove                            |
+| `SET mapreduce.job.reduces=10`                   | `spark.conf.set("spark.sql.shuffle.partitions", "10")` | Different config key              |
 
 ### Functions with different behavior
 
-| Function | HiveQL behavior | SparkSQL behavior | Migration action |
-|---|---|---|---|
-| `CAST(x AS INT)` | Returns NULL on failure | Returns NULL on failure | No change |
-| `unix_timestamp()` | Current time | Current time | No change |
-| `from_unixtime(ts, fmt)` | Java SimpleDateFormat | Java SimpleDateFormat | No change |
-| `regexp_extract(s, p, i)` | Java regex | Java regex | No change |
-| `percentile(col, 0.5)` | Exact percentile (UDAF) | Use `percentile_approx` or `percentile` | Verify precision needs |
-| `collect_set(col)` | Returns array | Returns array | No change |
-| `NVL(a, b)` | Null-safe value | Use `COALESCE(a, b)` | Replace NVL with COALESCE |
-| `IF(cond, true_val, false_val)` | Conditional | Identical | No change |
+| Function                        | HiveQL behavior         | SparkSQL behavior                       | Migration action          |
+| ------------------------------- | ----------------------- | --------------------------------------- | ------------------------- |
+| `CAST(x AS INT)`                | Returns NULL on failure | Returns NULL on failure                 | No change                 |
+| `unix_timestamp()`              | Current time            | Current time                            | No change                 |
+| `from_unixtime(ts, fmt)`        | Java SimpleDateFormat   | Java SimpleDateFormat                   | No change                 |
+| `regexp_extract(s, p, i)`       | Java regex              | Java regex                              | No change                 |
+| `percentile(col, 0.5)`          | Exact percentile (UDAF) | Use `percentile_approx` or `percentile` | Verify precision needs    |
+| `collect_set(col)`              | Returns array           | Returns array                           | No change                 |
+| `NVL(a, b)`                     | Null-safe value         | Use `COALESCE(a, b)`                    | Replace NVL with COALESCE |
+| `IF(cond, true_val, false_val)` | Conditional             | Identical                               | No change                 |
 
 ### Worked before/after examples
 
@@ -274,17 +274,17 @@ Note: The SQL is nearly identical. Changes are: `STORED AS ORC` becomes `USING D
 
 ### Hive table types
 
-| Type | Data lifecycle | Metadata lifecycle | HDFS path |
-|---|---|---|---|
+| Type               | Data lifecycle             | Metadata lifecycle         | HDFS path                        |
+| ------------------ | -------------------------- | -------------------------- | -------------------------------- |
 | Managed (internal) | Deleted when table dropped | Deleted when table dropped | `/user/hive/warehouse/db/table/` |
-| External | Survives table drop | Deleted when table dropped | Custom location |
+| External           | Survives table drop        | Deleted when table dropped | Custom location                  |
 
 ### Delta Lake table types (Databricks)
 
-| Type | Data lifecycle | Catalog | Best for |
-|---|---|---|---|
-| Managed (Unity Catalog) | Deleted when table dropped | Unity Catalog manages location | New tables, governed data |
-| External | Survives table drop | Unity Catalog tracks location | Migrated data, shared storage |
+| Type                    | Data lifecycle             | Catalog                        | Best for                      |
+| ----------------------- | -------------------------- | ------------------------------ | ----------------------------- |
+| Managed (Unity Catalog) | Deleted when table dropped | Unity Catalog manages location | New tables, governed data     |
+| External                | Survives table drop        | Unity Catalog tracks location  | Migrated data, shared storage |
 
 **Recommendation:** Migrate Hive external tables as Delta external tables pointing to ADLS Gen2. Migrate Hive managed tables as Delta managed tables in Unity Catalog. Use external tables for the initial migration (data stays at known ADLS paths), then convert to managed tables when governance is established.
 
@@ -354,14 +354,14 @@ hive -e "DESCRIBE FUNCTION EXTENDED my_custom_udf;"
 
 ### Common Hive UDF patterns and Spark equivalents
 
-| Hive UDF pattern | Spark equivalent |
-|---|---|
-| `GenericUDF` (Java) | Python UDF or Spark built-in function |
-| `GenericUDAF` (Java aggregation) | PySpark UDAF or pandas UDF |
-| `GenericUDTF` (table-generating) | `explode()`, `posexplode()`, or Python UDTF |
-| Simple string manipulation | Spark built-in `regexp_replace`, `substring`, `trim`, etc. |
-| Date manipulation | Spark built-in `date_add`, `datediff`, `date_format`, etc. |
-| Custom hashing | Spark built-in `sha2`, `md5`, `xxhash64` |
+| Hive UDF pattern                 | Spark equivalent                                           |
+| -------------------------------- | ---------------------------------------------------------- |
+| `GenericUDF` (Java)              | Python UDF or Spark built-in function                      |
+| `GenericUDAF` (Java aggregation) | PySpark UDAF or pandas UDF                                 |
+| `GenericUDTF` (table-generating) | `explode()`, `posexplode()`, or Python UDTF                |
+| Simple string manipulation       | Spark built-in `regexp_replace`, `substring`, `trim`, etc. |
+| Date manipulation                | Spark built-in `date_add`, `datediff`, `date_format`, etc. |
+| Custom hashing                   | Spark built-in `sha2`, `md5`, `xxhash64`                   |
 
 ### Migration example: Java UDF to Python UDF
 
@@ -453,13 +453,13 @@ ALTER TABLE bronze.events SET TBLPROPERTIES ('delta.columnMapping.mode' = 'name'
 
 ### Schema evolution comparison
 
-| Feature | Hive SerDe | Delta Lake |
-|---|---|---|
-| Add column | `ALTER TABLE ADD COLUMNS` | `ALTER TABLE ADD COLUMNS` or automatic with `mergeSchema` |
-| Rename column | Not supported (recreate table) | `ALTER TABLE RENAME COLUMN` (with column mapping) |
-| Reorder columns | Not supported | `ALTER TABLE ALTER COLUMN ... FIRST/AFTER` |
-| Drop column | Not supported (recreate table) | `ALTER TABLE DROP COLUMN` (with column mapping) |
-| Type widening | Manual `ALTER TABLE CHANGE` | Automatic with `delta.enableTypeWidening` |
+| Feature         | Hive SerDe                     | Delta Lake                                                |
+| --------------- | ------------------------------ | --------------------------------------------------------- |
+| Add column      | `ALTER TABLE ADD COLUMNS`      | `ALTER TABLE ADD COLUMNS` or automatic with `mergeSchema` |
+| Rename column   | Not supported (recreate table) | `ALTER TABLE RENAME COLUMN` (with column mapping)         |
+| Reorder columns | Not supported                  | `ALTER TABLE ALTER COLUMN ... FIRST/AFTER`                |
+| Drop column     | Not supported (recreate table) | `ALTER TABLE DROP COLUMN` (with column mapping)           |
+| Type widening   | Manual `ALTER TABLE CHANGE`    | Automatic with `delta.enableTypeWidening`                 |
 
 ---
 
@@ -488,13 +488,13 @@ SELECT order_id, customer_id, amount, year, month FROM bronze.orders;
 
 ### When to change partitioning strategy
 
-| Hive pattern | Delta recommendation | Reason |
-|---|---|---|
-| `PARTITIONED BY (year, month, day)` | Keep if > 1 GB per partition | Works well at scale |
-| `PARTITIONED BY (year, month, day, hour)` | Reduce to `(year, month)` + Z-ORDER on day | Too many small partitions |
-| `PARTITIONED BY (customer_id)` | Use liquid clustering instead | High-cardinality partitions |
-| `PARTITIONED BY (region)` | Keep if < 20 distinct values | Low cardinality is fine |
-| No partitioning (small table) | No partitioning | Tables < 1 GB need no partitioning |
+| Hive pattern                              | Delta recommendation                       | Reason                             |
+| ----------------------------------------- | ------------------------------------------ | ---------------------------------- |
+| `PARTITIONED BY (year, month, day)`       | Keep if > 1 GB per partition               | Works well at scale                |
+| `PARTITIONED BY (year, month, day, hour)` | Reduce to `(year, month)` + Z-ORDER on day | Too many small partitions          |
+| `PARTITIONED BY (customer_id)`            | Use liquid clustering instead              | High-cardinality partitions        |
+| `PARTITIONED BY (region)`                 | Keep if < 20 distinct values               | Low cardinality is fine            |
+| No partitioning (small table)             | No partitioning                            | Tables < 1 GB need no partitioning |
 
 ---
 
@@ -502,14 +502,14 @@ SELECT order_id, customer_id, amount, year, month FROM bronze.orders;
 
 ### Why dbt instead of raw SparkSQL scripts?
 
-| Capability | Hive scripts | Raw SparkSQL | dbt |
-|---|---|---|---|
-| Version control | Manual file management | Manual | Built-in (dbt project = Git repo) |
-| Testing | None | Manual assertions | Built-in `schema.yml` tests |
-| Documentation | External wiki | External | Auto-generated from YAML + SQL comments |
-| Lineage | Atlas (if configured) | None | Built-in DAG visualization |
-| Incremental loads | Custom logic per script | Custom logic | `incremental` materialization |
-| Environments | Different configs per cluster | Different configs | `profiles.yml` (dev/staging/prod) |
+| Capability        | Hive scripts                  | Raw SparkSQL      | dbt                                     |
+| ----------------- | ----------------------------- | ----------------- | --------------------------------------- |
+| Version control   | Manual file management        | Manual            | Built-in (dbt project = Git repo)       |
+| Testing           | None                          | Manual assertions | Built-in `schema.yml` tests             |
+| Documentation     | External wiki                 | External          | Auto-generated from YAML + SQL comments |
+| Lineage           | Atlas (if configured)         | None              | Built-in DAG visualization              |
+| Incremental loads | Custom logic per script       | Custom logic      | `incremental` materialization           |
+| Environments      | Different configs per cluster | Different configs | `profiles.yml` (dev/staging/prod)       |
 
 ### dbt model example (converted from Hive)
 
@@ -541,41 +541,41 @@ GROUP BY customer_id, order_date
 ```yaml
 # models/silver/schema.yml
 models:
-  - name: daily_orders
-    description: "Daily order aggregates by customer"
-    columns:
-      - name: customer_id
-        description: "Unique customer identifier"
-        tests:
-          - not_null
-      - name: order_count
-        description: "Number of orders on this date"
-        tests:
-          - not_null
-          - dbt_utils.accepted_range:
-              min_value: 1
-      - name: total_amount
-        description: "Sum of order amounts"
-        tests:
-          - not_null
-      - name: order_date
-        description: "Date of the orders"
-        tests:
-          - not_null
+    - name: daily_orders
+      description: "Daily order aggregates by customer"
+      columns:
+          - name: customer_id
+            description: "Unique customer identifier"
+            tests:
+                - not_null
+          - name: order_count
+            description: "Number of orders on this date"
+            tests:
+                - not_null
+                - dbt_utils.accepted_range:
+                      min_value: 1
+          - name: total_amount
+            description: "Sum of order amounts"
+            tests:
+                - not_null
+          - name: order_date
+            description: "Date of the orders"
+            tests:
+                - not_null
 ```
 
 ---
 
 ## Common pitfalls
 
-| Pitfall | Mitigation |
-|---|---|
-| Assuming HiveQL = SparkSQL | Test every query; pay attention to NULL handling, type coercion |
-| Migrating UDFs without checking built-ins | Audit all UDFs; 60-80% can be replaced by Spark built-in functions |
-| Keeping static partition inserts | Use Delta's automatic partitioning; simpler and less error-prone |
-| Not testing metastore migration | Validate table count, column count, and partition count after migration |
-| Ignoring Hive views | Views must be recreated manually; they do not export via DistCp |
-| Skipping data quality checks | Run dbt tests on migrated data before decommissioning Hive |
+| Pitfall                                   | Mitigation                                                              |
+| ----------------------------------------- | ----------------------------------------------------------------------- |
+| Assuming HiveQL = SparkSQL                | Test every query; pay attention to NULL handling, type coercion         |
+| Migrating UDFs without checking built-ins | Audit all UDFs; 60-80% can be replaced by Spark built-in functions      |
+| Keeping static partition inserts          | Use Delta's automatic partitioning; simpler and less error-prone        |
+| Not testing metastore migration           | Validate table count, column count, and partition count after migration |
+| Ignoring Hive views                       | Views must be recreated manually; they do not export via DistCp         |
+| Skipping data quality checks              | Run dbt tests on migrated data before decommissioning Hive              |
 
 ---
 

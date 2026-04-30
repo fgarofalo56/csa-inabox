@@ -6,11 +6,11 @@
 
 ## Overview
 
-| Detail | Value |
-|---|---|
-| **Estimated time** | 2-3 hours |
-| **Difficulty** | Intermediate |
-| **Prerequisites** | Power Apps license (per-app or per-user), Power Automate, Azure SQL or Dataverse, Power BI workspace |
+| Detail                  | Value                                                                                                                                                     |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Estimated time**      | 2-3 hours                                                                                                                                                 |
+| **Difficulty**          | Intermediate                                                                                                                                              |
+| **Prerequisites**       | Power Apps license (per-app or per-user), Power Automate, Azure SQL or Dataverse, Power BI workspace                                                      |
 | **What you will build** | A canvas app that replicates a Foundry Workshop app, including data galleries, detail forms, action flows, map controls, and embedded Power BI dashboards |
 
 Palantir Foundry Workshop is the platform's no-code application builder. It lets users assemble screens from widgets (tables, charts, maps, forms, action buttons) that bind to Ontology objects and actions. This tutorial walks through the full process of migrating a Workshop app to Power Apps, step by step.
@@ -23,23 +23,23 @@ Palantir Foundry Workshop is the platform's no-code application builder. It lets
 
 Before you start building, use this table to identify the Power Apps equivalent for each Workshop widget you encounter.
 
-| Workshop widget | Power Apps equivalent | Notes |
-|---|---|---|
-| **Resource List / Object Table** | Gallery control (vertical or horizontal) | Bind to a data source; supports templates, icons, conditional formatting |
-| **Object Detail View** | Display form or Edit form | Use `Item` property bound to gallery selection |
-| **Filter Bar** | Dropdown, ComboBox, DatePicker, TextInput | Chain filters with `Filter()` and `Search()` functions |
-| **Tab Navigation** | Tab List control or custom toggle buttons | Use `Visible` property on containers to switch screens inline, or use `Navigate()` for separate screens |
-| **Action Button** | Button control + Power Automate flow | Use `Run()` to invoke a Power Automate flow from the button's `OnSelect` |
-| **Metric / KPI Card** | Label or Card control with aggregation | Use `CountRows()`, `Sum()`, `Average()` on the data source |
-| **Chart (Bar, Line, Pie)** | Power BI tile embedded in Power Apps | Embed a Power BI visual for full interactivity; use the native Charts control only for simple cases |
-| **Map Widget** | Map control (preview) or Power BI map visual | Native Map control supports pins and routes; embed Power BI for choropleths |
-| **Inbox / Task List** | Gallery with status filters | Add filter buttons for "Open", "In Progress", "Closed" |
-| **Form (Writeback)** | Edit form control | Bind to data source with `SubmitForm()` for writes |
-| **Linked Object List** | Second gallery filtered by parent record | Use `Filter(ChildTable, ParentID = Gallery1.Selected.ID)` |
-| **Embedded Dashboard** | Power BI report or tile control | Use the Power BI connector in Power Apps |
-| **Image / Attachment** | Image control + Attachment control | Dataverse supports native attachments; Azure SQL uses blob URLs |
-| **Toggle / Switch** | Toggle control | Maps directly |
-| **Status Badge** | Label with conditional `Fill` and `Color` | Use `Switch()` or `If()` to set colors by status value |
+| Workshop widget                  | Power Apps equivalent                        | Notes                                                                                                   |
+| -------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| **Resource List / Object Table** | Gallery control (vertical or horizontal)     | Bind to a data source; supports templates, icons, conditional formatting                                |
+| **Object Detail View**           | Display form or Edit form                    | Use `Item` property bound to gallery selection                                                          |
+| **Filter Bar**                   | Dropdown, ComboBox, DatePicker, TextInput    | Chain filters with `Filter()` and `Search()` functions                                                  |
+| **Tab Navigation**               | Tab List control or custom toggle buttons    | Use `Visible` property on containers to switch screens inline, or use `Navigate()` for separate screens |
+| **Action Button**                | Button control + Power Automate flow         | Use `Run()` to invoke a Power Automate flow from the button's `OnSelect`                                |
+| **Metric / KPI Card**            | Label or Card control with aggregation       | Use `CountRows()`, `Sum()`, `Average()` on the data source                                              |
+| **Chart (Bar, Line, Pie)**       | Power BI tile embedded in Power Apps         | Embed a Power BI visual for full interactivity; use the native Charts control only for simple cases     |
+| **Map Widget**                   | Map control (preview) or Power BI map visual | Native Map control supports pins and routes; embed Power BI for choropleths                             |
+| **Inbox / Task List**            | Gallery with status filters                  | Add filter buttons for "Open", "In Progress", "Closed"                                                  |
+| **Form (Writeback)**             | Edit form control                            | Bind to data source with `SubmitForm()` for writes                                                      |
+| **Linked Object List**           | Second gallery filtered by parent record     | Use `Filter(ChildTable, ParentID = Gallery1.Selected.ID)`                                               |
+| **Embedded Dashboard**           | Power BI report or tile control              | Use the Power BI connector in Power Apps                                                                |
+| **Image / Attachment**           | Image control + Attachment control           | Dataverse supports native attachments; Azure SQL uses blob URLs                                         |
+| **Toggle / Switch**              | Toggle control                               | Maps directly                                                                                           |
+| **Status Badge**                 | Label with conditional `Fill` and `Color`    | Use `Switch()` or `If()` to set colors by status value                                                  |
 
 ---
 
@@ -51,27 +51,27 @@ Before you start building, use this table to identify the Power Apps equivalent 
 
 Open the Workshop app in Foundry. For each screen, record the following in a spreadsheet or table:
 
-| Field | What to capture |
-|---|---|
-| Screen name | The tab or page title (e.g., "Case Inbox", "Case Detail", "Dashboard") |
-| Widgets | Every widget on the screen and its type (table, chart, map, form, button, metric card) |
-| Data source | The Ontology object type(s) or dataset(s) each widget binds to |
-| Filters | Filter widgets and which properties they filter on |
-| Actions | Action buttons and what each action does (update status, create object, send notification) |
-| Events | Widget-to-widget events (e.g., selecting a row in a table populates a detail panel) |
-| Conditional logic | Any conditional visibility, formatting, or validation rules |
+| Field             | What to capture                                                                            |
+| ----------------- | ------------------------------------------------------------------------------------------ |
+| Screen name       | The tab or page title (e.g., "Case Inbox", "Case Detail", "Dashboard")                     |
+| Widgets           | Every widget on the screen and its type (table, chart, map, form, button, metric card)     |
+| Data source       | The Ontology object type(s) or dataset(s) each widget binds to                             |
+| Filters           | Filter widgets and which properties they filter on                                         |
+| Actions           | Action buttons and what each action does (update status, create object, send notification) |
+| Events            | Widget-to-widget events (e.g., selecting a row in a table populates a detail panel)        |
+| Conditional logic | Any conditional visibility, formatting, or validation rules                                |
 
 ### 1.2 Identify common Workshop patterns
 
 Most Workshop apps follow one or more of these structural patterns. Identify which patterns your app uses, because each maps to a specific Power Apps layout:
 
-| Workshop pattern | Description | Power Apps equivalent |
-|---|---|---|
-| **Inbox / Task List** | Filterable list of work items with status badges and action buttons | Gallery + filter dropdowns + Power Automate flows |
-| **COP Dashboard** | Common operating picture with KPI cards, charts, and a map | Power BI embedded report with slicers |
-| **Detail View** | Single-object view with properties, related lists, and action buttons | Form + related galleries + flow buttons |
-| **Data Entry Form** | Multi-field input form with validation and writeback | Edit form control with `SubmitForm()` |
-| **Master-Detail** | Split view with a list on the left and detail on the right | Two-column layout with Gallery + Form |
+| Workshop pattern      | Description                                                           | Power Apps equivalent                             |
+| --------------------- | --------------------------------------------------------------------- | ------------------------------------------------- |
+| **Inbox / Task List** | Filterable list of work items with status badges and action buttons   | Gallery + filter dropdowns + Power Automate flows |
+| **COP Dashboard**     | Common operating picture with KPI cards, charts, and a map            | Power BI embedded report with slicers             |
+| **Detail View**       | Single-object view with properties, related lists, and action buttons | Form + related galleries + flow buttons           |
+| **Data Entry Form**   | Multi-field input form with validation and writeback                  | Edit form control with `SubmitForm()`             |
+| **Master-Detail**     | Split view with a list on the left and detail on the right            | Two-column layout with Gallery + Form             |
 
 ### 1.3 Map data sources
 
@@ -98,22 +98,22 @@ If your gold-layer tables are in Azure SQL Database, use Data API Builder (DAB) 
 1. **Deploy Data API Builder** alongside your Azure SQL instance. If you used CSA-in-a-Box, DAB is already configured in the Data Landing Zone.
 2. **Define entities** in the DAB configuration for each table Power Apps needs. Example snippet for a `cases` table:
 
-   ```json
-   {
-     "entities": {
-       "Case": {
-         "source": "gold.cases",
-         "rest": { "path": "/cases" },
-         "permissions": [
-           {
-             "role": "authenticated",
-             "actions": ["read", "update"]
-           }
-         ]
-       }
-     }
-   }
-   ```
+    ```json
+    {
+        "entities": {
+            "Case": {
+                "source": "gold.cases",
+                "rest": { "path": "/cases" },
+                "permissions": [
+                    {
+                        "role": "authenticated",
+                        "actions": ["read", "update"]
+                    }
+                ]
+            }
+        }
+    }
+    ```
 
 3. **Create a custom connector** in Power Apps that points to your DAB endpoint. Use the OpenAPI definition DAB auto-generates.
 4. **Test the connection** by querying a few records in the Power Apps designer.
@@ -128,11 +128,11 @@ If you migrated Ontology objects into Dataverse tables:
 
 ### 2.3 Configure security
 
-| Foundry mechanism | Azure equivalent |
-|---|---|
+| Foundry mechanism              | Azure equivalent                                                            |
+| ------------------------------ | --------------------------------------------------------------------------- |
 | Ontology object-level markings | Dataverse row-level security or Azure SQL row-level security (RLS) policies |
-| Property-level classifications | Dataverse column security profiles or Azure SQL column-level permissions |
-| Action permissions | Power Automate flow-level RBAC via Entra ID security groups |
+| Property-level classifications | Dataverse column security profiles or Azure SQL column-level permissions    |
+| Action permissions             | Power Automate flow-level RBAC via Entra ID security groups                 |
 
 > **Foundry-to-Azure comparison:** Foundry enforces security through markings applied to objects and properties. Azure uses Entra ID-based RBAC at every layer. Row-level security in Azure SQL uses `SESSION_CONTEXT` or security predicates; Dataverse uses business units and security roles. Both approaches achieve the same outcome but use standard, auditable Azure identity primitives.
 
@@ -159,41 +159,41 @@ The gallery control is the Power Apps equivalent of Workshop's Object Table / Re
 1. Insert a **Vertical gallery** control.
 2. Set its `Items` property to your data source table:
 
-   ```
-   Cases
-   ```
+    ```
+    Cases
+    ```
 
 3. Configure the gallery template to show key fields. For a case management app, display case ID, title, status, and assigned analyst.
 4. Add conditional formatting for the status badge. In the status label's `Fill` property:
 
-   ```
-   Switch(
-       ThisItem.Status,
-       "Open", RGBA(0, 120, 212, 0.15),
-       "In Progress", RGBA(255, 185, 0, 0.15),
-       "Closed", RGBA(16, 124, 16, 0.15),
-       RGBA(200, 200, 200, 0.15)
-   )
-   ```
+    ```
+    Switch(
+        ThisItem.Status,
+        "Open", RGBA(0, 120, 212, 0.15),
+        "In Progress", RGBA(255, 185, 0, 0.15),
+        "Closed", RGBA(16, 124, 16, 0.15),
+        RGBA(200, 200, 200, 0.15)
+    )
+    ```
 
 ### 3.3 Add filters (Workshop Filter Bar equivalent)
 
 1. Insert a **Dropdown** control above the gallery for status filtering. Set its `Items` to:
 
-   ```
-   ["All", "Open", "In Progress", "Closed"]
-   ```
+    ```
+    ["All", "Open", "In Progress", "Closed"]
+    ```
 
 2. Insert a **TextInput** control for search.
 3. Update the gallery's `Items` property to apply both filters:
 
-   ```
-   Filter(
-       Cases,
-       (StatusDropdown.Selected.Value = "All" Or Status = StatusDropdown.Selected.Value)
-       And (SearchInput.Text = "" Or Title in SearchInput.Text)
-   )
-   ```
+    ```
+    Filter(
+        Cases,
+        (StatusDropdown.Selected.Value = "All" Or Status = StatusDropdown.Selected.Value)
+        And (SearchInput.Text = "" Or Title in SearchInput.Text)
+    )
+    ```
 
 ### 3.4 Add navigation (Workshop Tabs equivalent)
 
@@ -203,9 +203,9 @@ If the Workshop app has multiple tabs (e.g., "Inbox", "Dashboard", "Admin"):
 2. Create separate screens for each major section: `InboxScreen`, `DashboardScreen`, `AdminScreen`.
 3. Wire navigation. In each tab's `OnSelect`:
 
-   ```
-   Navigate(InboxScreen, ScreenTransition.None)
-   ```
+    ```
+    Navigate(InboxScreen, ScreenTransition.None)
+    ```
 
 **Expected result after this step:** A working main screen with a filterable, searchable list of records and navigation to other screens. This replaces the Workshop inbox/task list pattern.
 
@@ -221,9 +221,9 @@ If the Workshop app has multiple tabs (e.g., "Inbox", "Dashboard", "Admin"):
 2. Insert a **Display form** control (use **Edit form** if you need inline editing).
 3. Set the form's `Item` property to the selected record from the gallery:
 
-   ```
-   InboxGallery.Selected
-   ```
+    ```
+    InboxGallery.Selected
+    ```
 
 4. Configure which fields appear and their order. Drag fields in the form editor to rearrange.
 5. Add a **Back** button with `Navigate(InboxScreen, ScreenTransition.None)` in its `OnSelect`.
@@ -235,9 +235,9 @@ If the Workshop detail view shows related objects (e.g., evidence items linked t
 1. Insert a second **Vertical gallery** on the detail screen.
 2. Set its `Items` property to filter the related table by the parent record's key:
 
-   ```
-   Filter(Evidence, CaseID = InboxGallery.Selected.ID)
-   ```
+    ```
+    Filter(Evidence, CaseID = InboxGallery.Selected.ID)
+    ```
 
 3. Configure the gallery template to show relevant fields from the related table.
 
@@ -251,9 +251,9 @@ For charts that require advanced visualization (time series, geospatial heatmaps
 4. Set the `Workspace` and `Report` properties to point to your published report.
 5. Optionally apply filters so the embedded visual responds to the selected record:
 
-   ```
-   "cases/case_id eq '" & InboxGallery.Selected.ID & "'"
-   ```
+    ```
+    "cases/case_id eq '" & InboxGallery.Selected.ID & "'"
+    ```
 
 > **Foundry-to-Azure comparison:** Workshop embeds Contour boards and Quiver charts as widgets. In Power Apps, you embed Power BI reports or tiles. The Power BI visuals offer richer interactivity (drill-through, cross-filtering, Q&A) than Contour boards, and the same report can be used standalone, in Teams, or in Power Apps.
 
@@ -267,13 +267,13 @@ For charts that require advanced visualization (time series, geospatial heatmaps
 
 ### 5.1 Understand the mapping
 
-| Workshop concept | Power Automate equivalent |
-|---|---|
+| Workshop concept                    | Power Automate equivalent                                     |
+| ----------------------------------- | ------------------------------------------------------------- |
 | Action type (e.g., "Update Status") | Flow with data connector action (SQL update, Dataverse patch) |
-| Action parameters (user inputs) | Flow trigger inputs (text, choice, date) |
-| Action validation rules | Flow condition steps or Power Apps input validation |
-| Action side effects (notifications) | Flow actions: Send Email, Post to Teams, Push Notification |
-| Action permissions | Flow connection RBAC + Entra ID group checks |
+| Action parameters (user inputs)     | Flow trigger inputs (text, choice, date)                      |
+| Action validation rules             | Flow condition steps or Power Apps input validation           |
+| Action side effects (notifications) | Flow actions: Send Email, Post to Teams, Push Notification    |
+| Action permissions                  | Flow connection RBAC + Entra ID group checks                  |
 
 ### 5.2 Create an example flow: "Escalate Case"
 
@@ -282,23 +282,23 @@ This flow replicates a Workshop action that updates a case's priority and notifi
 1. In [make.powerautomate.com](https://make.powerautomate.com), select **+ Create** > **Instant cloud flow**.
 2. Choose the trigger **PowerApps (V2)**.
 3. Add input parameters the flow will receive from Power Apps:
-   - `CaseID` (text)
-   - `EscalationReason` (text)
-   - `NewPriority` (text)
+    - `CaseID` (text)
+    - `EscalationReason` (text)
+    - `NewPriority` (text)
 4. Add a **SQL Server: Execute a SQL query** action (or **Dataverse: Update a row**) to update the case:
 
-   ```sql
-   UPDATE gold.cases
-   SET priority = @{triggerBody()['text_2']},
-       escalation_reason = @{triggerBody()['text_1']},
-       updated_at = GETUTCDATE()
-   WHERE case_id = @{triggerBody()['text']}
-   ```
+    ```sql
+    UPDATE gold.cases
+    SET priority = @{triggerBody()['text_2']},
+        escalation_reason = @{triggerBody()['text_1']},
+        updated_at = GETUTCDATE()
+    WHERE case_id = @{triggerBody()['text']}
+    ```
 
 5. Add a **Send an email (V2)** action to notify the supervisor:
-   - **To:** Supervisor's email (look up from a reference table or hard-code for the tutorial)
-   - **Subject:** `Case @{triggerBody()['text']} escalated`
-   - **Body:** `Case has been escalated to @{triggerBody()['text_2']} priority. Reason: @{triggerBody()['text_1']}`
+    - **To:** Supervisor's email (look up from a reference table or hard-code for the tutorial)
+    - **Subject:** `Case @{triggerBody()['text']} escalated`
+    - **Body:** `Case has been escalated to @{triggerBody()['text_2']} priority. Reason: @{triggerBody()['text_1']}`
 6. Add a **Post message in a chat or channel** action (Microsoft Teams) for team visibility.
 7. Save the flow.
 
@@ -307,25 +307,25 @@ This flow replicates a Workshop action that updates a case's priority and notifi
 1. In the Power Apps designer on the detail screen, insert a **Button** control labeled "Escalate Case".
 2. In the button's `OnSelect` property, call the flow:
 
-   ```
-   EscalateCase.Run(
-       InboxGallery.Selected.ID,
-       EscalationReasonInput.Text,
-       PriorityDropdown.Selected.Value
-   )
-   ```
+    ```
+    EscalateCase.Run(
+        InboxGallery.Selected.ID,
+        EscalationReasonInput.Text,
+        PriorityDropdown.Selected.Value
+    )
+    ```
 
 3. Add a confirmation message using `Notify()`:
 
-   ```
-   Notify("Case escalated successfully", NotificationType.Success)
-   ```
+    ```
+    Notify("Case escalated successfully", NotificationType.Success)
+    ```
 
 4. Optionally refresh the gallery to reflect the updated status:
 
-   ```
-   Refresh(Cases)
-   ```
+    ```
+    Refresh(Cases)
+    ```
 
 > **Foundry-to-Azure comparison:** Workshop Actions are Ontology-coupled and run inside Foundry's compute. Power Automate flows are standalone, cloud-hosted workflows with 500+ connectors. A single flow can update a database, send an email, post to Teams, call an Azure Function, and trigger a Logic App, all in one execution. Flows are also versioned, monitored, and governed independently from the app.
 
@@ -348,9 +348,9 @@ The Power Apps Map control (preview) renders an interactive map with pins, route
 
 1. Set the map's `Items` property to your geospatial data source:
 
-   ```
-   Filter(Cases, Not(IsBlank(Latitude)) And Not(IsBlank(Longitude)))
-   ```
+    ```
+    Filter(Cases, Not(IsBlank(Latitude)) And Not(IsBlank(Longitude)))
+    ```
 
 2. Set `ItemsLatitudes` to `"Latitude"` and `ItemsLongitudes` to `"Longitude"`.
 3. Set `ItemsLabels` to `"Title"` to display labels on pins.
@@ -379,10 +379,10 @@ For choropleths, heatmaps, or ArcGIS-style maps, embed a Power BI report that us
 1. Open Power BI Desktop.
 2. Connect to your data source (Azure SQL via DirectQuery or Import, or Fabric SQL endpoint via Direct Lake).
 3. Build the dashboard visuals that replicate the Workshop dashboard:
-   - KPI cards for key metrics
-   - Bar/line charts for trends
-   - Tables for detailed data
-   - Maps for geospatial views
+    - KPI cards for key metrics
+    - Bar/line charts for trends
+    - Tables for detailed data
+    - Maps for geospatial views
 4. Add slicers for filtering (date range, category, status).
 5. Publish the report to your Power BI workspace.
 
@@ -400,10 +400,10 @@ To pass filter context from Power Apps controls (e.g., a dropdown) to the embedd
 
 1. Set the Power BI tile's `TileUrl` property with a filter parameter:
 
-   ```
-   "https://app.powerbigov.us/reportEmbed?reportId=<REPORT_ID>&filter=cases/status eq '"
-   & StatusDropdown.Selected.Value & "'"
-   ```
+    ```
+    "https://app.powerbigov.us/reportEmbed?reportId=<REPORT_ID>&filter=cases/status eq '"
+    & StatusDropdown.Selected.Value & "'"
+    ```
 
 2. This lets users filter the embedded dashboard without leaving Power Apps.
 
@@ -421,18 +421,18 @@ To pass filter context from Power Apps controls (e.g., a dropdown) to the embedd
 
 Walk through every screen and verify:
 
-| Test area | What to verify |
-|---|---|
-| **Data loading** | All galleries and forms display correct data from Azure SQL or Dataverse |
-| **Filtering** | Dropdowns, search boxes, and date pickers filter records correctly |
-| **Navigation** | All tabs, buttons, and back-navigation work as expected |
-| **Detail view** | Selecting a record shows the correct detail form and related data |
-| **Actions** | Every Power Automate flow executes successfully (check flow run history) |
-| **Notifications** | Email and Teams notifications are sent with correct content |
-| **Maps** | Pins render at correct locations; clicking a pin shows the right record |
-| **Power BI visuals** | Embedded reports load, display data, and respond to filters |
-| **Security** | Users see only the records they are authorized to view (test with multiple accounts) |
-| **Performance** | Screens load within 3 seconds; galleries paginate or delegate correctly |
+| Test area            | What to verify                                                                       |
+| -------------------- | ------------------------------------------------------------------------------------ |
+| **Data loading**     | All galleries and forms display correct data from Azure SQL or Dataverse             |
+| **Filtering**        | Dropdowns, search boxes, and date pickers filter records correctly                   |
+| **Navigation**       | All tabs, buttons, and back-navigation work as expected                              |
+| **Detail view**      | Selecting a record shows the correct detail form and related data                    |
+| **Actions**          | Every Power Automate flow executes successfully (check flow run history)             |
+| **Notifications**    | Email and Teams notifications are sent with correct content                          |
+| **Maps**             | Pins render at correct locations; clicking a pin shows the right record              |
+| **Power BI visuals** | Embedded reports load, display data, and respond to filters                          |
+| **Security**         | Users see only the records they are authorized to view (test with multiple accounts) |
+| **Performance**      | Screens load within 3 seconds; galleries paginate or delegate correctly              |
 
 ### 8.2 Delegation and performance
 
@@ -448,9 +448,9 @@ If the Workshop app displays large datasets, use server-side paging in your DAB 
 
 1. Share the app with 3-5 pilot users from the original Workshop user base.
 2. Collect feedback on:
-   - Missing functionality compared to the Workshop app
-   - Usability issues
-   - Performance concerns
+    - Missing functionality compared to the Workshop app
+    - Usability issues
+    - Performance concerns
 3. Iterate on the app based on feedback.
 
 ### 8.4 Publish to app catalog
@@ -476,16 +476,16 @@ If the Workshop app displays large datasets, use server-side paging in your DAB 
 
 You have now completed the full migration of a Workshop app to Power Apps. Here is what each step accomplished:
 
-| Step | Workshop capability replaced | Azure service used |
-|---|---|---|
-| 1. Analyze | Workshop app inventory | Documentation |
-| 2. Data sources | Ontology object binding | Azure SQL (DAB) or Dataverse |
-| 3. Main screen | Resource list, filters, tabs | Power Apps Gallery, Dropdown, Tab List |
+| Step              | Workshop capability replaced               | Azure service used                      |
+| ----------------- | ------------------------------------------ | --------------------------------------- |
+| 1. Analyze        | Workshop app inventory                     | Documentation                           |
+| 2. Data sources   | Ontology object binding                    | Azure SQL (DAB) or Dataverse            |
+| 3. Main screen    | Resource list, filters, tabs               | Power Apps Gallery, Dropdown, Tab List  |
 | 4. Detail screens | Object detail view, linked objects, charts | Power Apps Form, Gallery, Power BI tile |
-| 5. Actions | Action buttons, writeback, notifications | Power Automate flows |
-| 6. Maps | Map widget | Power Apps Map control or Power BI map |
-| 7. Dashboards | Embedded Contour/Quiver boards | Embedded Power BI reports |
-| 8. Publish | Workshop deployment | Power Apps publish, Teams, mobile |
+| 5. Actions        | Action buttons, writeback, notifications   | Power Automate flows                    |
+| 6. Maps           | Map widget                                 | Power Apps Map control or Power BI map  |
+| 7. Dashboards     | Embedded Contour/Quiver boards             | Embedded Power BI reports               |
+| 8. Publish        | Workshop deployment                        | Power Apps publish, Teams, mobile       |
 
 ### Suggested next steps
 

@@ -69,25 +69,25 @@ SAS keys authenticate a **policy**, not an **identity**. When a service connects
 
 Executive Order 14028 (May 2021) mandates federal agencies adopt Zero Trust principles. NIST 800-207 defines Zero Trust through several tenets. SAS keys violate the most fundamental ones:
 
-| Zero Trust tenet | SAS keys | Entra ID |
-|---|---|---|
-| All data sources and computing services are considered resources | SAS treats IoT Hub as a single trust boundary | Entra scopes access per resource, per identity |
-| All communication is secured regardless of network location | SAS keys provide authentication but identical access regardless of caller context | Entra supports Conditional Access, device compliance, network location policies |
-| Access is granted on a per-session basis | SAS tokens can have long lifetimes (hours to days) | Managed identity tokens expire in 1 hour; certificate auth uses TLS session-level handshakes |
-| Access is determined by dynamic policy | SAS policies are static (read, write, connect, manage) | Entra RBAC roles are granular and dynamically assignable |
-| The enterprise monitors and measures integrity and security posture | SAS provides minimal audit signal | Entra provides full sign-in logs, Conditional Access evaluation logs, and risk-based detection |
-| Authentication and authorization are dynamic and strictly enforced | SAS has no concept of risk-based access or step-up authentication | Entra integrates with Identity Protection, risk scoring, and Conditional Access |
+| Zero Trust tenet                                                    | SAS keys                                                                          | Entra ID                                                                                       |
+| ------------------------------------------------------------------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| All data sources and computing services are considered resources    | SAS treats IoT Hub as a single trust boundary                                     | Entra scopes access per resource, per identity                                                 |
+| All communication is secured regardless of network location         | SAS keys provide authentication but identical access regardless of caller context | Entra supports Conditional Access, device compliance, network location policies                |
+| Access is granted on a per-session basis                            | SAS tokens can have long lifetimes (hours to days)                                | Managed identity tokens expire in 1 hour; certificate auth uses TLS session-level handshakes   |
+| Access is determined by dynamic policy                              | SAS policies are static (read, write, connect, manage)                            | Entra RBAC roles are granular and dynamically assignable                                       |
+| The enterprise monitors and measures integrity and security posture | SAS provides minimal audit signal                                                 | Entra provides full sign-in logs, Conditional Access evaluation logs, and risk-based detection |
+| Authentication and authorization are dynamic and strictly enforced  | SAS has no concept of risk-based access or step-up authentication                 | Entra integrates with Identity Protection, risk scoring, and Conditional Access                |
 
 ### CISA Zero Trust Maturity Model
 
 The CISA Zero Trust Maturity Model (v2.0) evaluates agencies across five pillars. SAS key authentication places IoT Hub at the **Traditional** (lowest) maturity level for the Identity pillar. Migrating to Entra ID moves the deployment to **Advanced** or **Optimal** depending on implementation depth.
 
-| Maturity level | Identity pillar requirement | SAS | Entra |
-|---|---|---|---|
-| Traditional | Password/shared secret authentication | Yes | N/A |
-| Initial | MFA for human users | N/A | Yes (for admin access) |
-| Advanced | Phishing-resistant MFA, automated lifecycle | No | Yes (certificate-based, managed identity) |
-| Optimal | Continuous validation, risk-based access | No | Yes (Conditional Access, Identity Protection) |
+| Maturity level | Identity pillar requirement                 | SAS | Entra                                         |
+| -------------- | ------------------------------------------- | --- | --------------------------------------------- |
+| Traditional    | Password/shared secret authentication       | Yes | N/A                                           |
+| Initial        | MFA for human users                         | N/A | Yes (for admin access)                        |
+| Advanced       | Phishing-resistant MFA, automated lifecycle | No  | Yes (certificate-based, managed identity)     |
+| Optimal        | Continuous validation, risk-based access    | No  | Yes (Conditional Access, Identity Protection) |
 
 ---
 
@@ -170,6 +170,7 @@ Impact Level 5 (IL5) in the DoD Cloud Computing Security Requirements Guide (CC 
 ```
 
 **Problems:**
+
 - No enforcement of rotation schedule
 - Rotation requires coordinated downtime
 - Old key remains valid until explicitly revoked
@@ -190,6 +191,7 @@ X.509 Certificates:
 ```
 
 **Advantages:**
+
 - Tokens auto-expire and auto-renew (managed identity)
 - Certificate lifetimes are policy-enforced (30 days, 90 days, 1 year)
 - Azure Key Vault automates certificate renewal
@@ -204,13 +206,13 @@ X.509 Certificates:
 
 ```json
 {
-  "operationName": "DeviceConnect",
-  "properties": {
-    "protocol": "Mqtt",
-    "authType": "sas",
-    "policyName": "device",
-    "statusCode": 200
-  }
+    "operationName": "DeviceConnect",
+    "properties": {
+        "protocol": "Mqtt",
+        "authType": "sas",
+        "policyName": "device",
+        "statusCode": 200
+    }
 }
 ```
 
@@ -221,15 +223,15 @@ X.509 Certificates:
 
 ```json
 {
-  "operationName": "DeviceConnect",
-  "properties": {
-    "protocol": "Mqtt",
-    "authType": "x509",
-    "deviceId": "sensor-floor3-unit47",
-    "certificateThumbprint": "A1B2C3...",
-    "certificateExpiry": "2026-09-15T00:00:00Z",
-    "statusCode": 200
-  }
+    "operationName": "DeviceConnect",
+    "properties": {
+        "protocol": "Mqtt",
+        "authType": "x509",
+        "deviceId": "sensor-floor3-unit47",
+        "certificateThumbprint": "A1B2C3...",
+        "certificateExpiry": "2026-09-15T00:00:00Z",
+        "statusCode": 200
+    }
 }
 ```
 
@@ -237,20 +239,20 @@ For service-level access:
 
 ```json
 {
-  "identity": {
-    "principalId": "a1b2c3d4-...",
-    "principalType": "ServicePrincipal",
-    "displayName": "func-iot-processor"
-  },
-  "authorization": {
-    "roleDefinitionId": "IoT Hub Data Contributor",
-    "scope": "/subscriptions/.../Microsoft.Devices/IotHubs/hub-prod"
-  },
-  "resultType": "Success",
-  "callerIpAddress": "10.0.1.50",
-  "conditionalAccessPolicies": [
-    { "displayName": "Require managed device", "result": "success" }
-  ]
+    "identity": {
+        "principalId": "a1b2c3d4-...",
+        "principalType": "ServicePrincipal",
+        "displayName": "func-iot-processor"
+    },
+    "authorization": {
+        "roleDefinitionId": "IoT Hub Data Contributor",
+        "scope": "/subscriptions/.../Microsoft.Devices/IotHubs/hub-prod"
+    },
+    "resultType": "Success",
+    "callerIpAddress": "10.0.1.50",
+    "conditionalAccessPolicies": [
+        { "displayName": "Require managed device", "result": "success" }
+    ]
 }
 ```
 
@@ -262,23 +264,23 @@ For service-level access:
 
 Migrating from SAS to Entra directly satisfies or substantially advances the following NIST 800-53 Rev 5 controls:
 
-| Control | Description | SAS status | Entra status |
-|---|---|---|---|
-| IA-2 | Identification and authentication | Partial (policy-level) | Full (identity-level) |
-| IA-2(1) | MFA for privileged access | Not supported | Supported via Conditional Access |
-| IA-2(6) | Access with separate device | Not supported | Supported via certificate + device |
-| IA-2(12) | PIV credential acceptance | Not supported | Supported via CBA |
-| IA-4 | Identifier management | Shared identifiers | Unique per identity |
-| IA-5 | Authenticator management | Manual rotation | Automated lifecycle |
-| IA-5(2) | PKI-based authentication | Not applicable | X.509 / certificate-based |
-| IA-8 | Non-organizational user identification | Bearer token | Full identity verification |
-| AU-2 | Audit events | Minimal | Comprehensive sign-in logs |
-| AU-3 | Content of audit records | Policy name only | Full identity context |
-| AU-6 | Audit review, analysis, and reporting | Limited signal | Rich signal for SIEM |
-| AC-2 | Account management | N/A (no accounts) | Full lifecycle management |
-| AC-3 | Access enforcement | Coarse (policy-level) | Granular (RBAC role-level) |
-| AC-6 | Least privilege | 5 fixed policies | Custom RBAC roles |
-| SC-8 | Transmission confidentiality | Bearer token risk | Mutual TLS / bound tokens |
+| Control  | Description                            | SAS status             | Entra status                       |
+| -------- | -------------------------------------- | ---------------------- | ---------------------------------- |
+| IA-2     | Identification and authentication      | Partial (policy-level) | Full (identity-level)              |
+| IA-2(1)  | MFA for privileged access              | Not supported          | Supported via Conditional Access   |
+| IA-2(6)  | Access with separate device            | Not supported          | Supported via certificate + device |
+| IA-2(12) | PIV credential acceptance              | Not supported          | Supported via CBA                  |
+| IA-4     | Identifier management                  | Shared identifiers     | Unique per identity                |
+| IA-5     | Authenticator management               | Manual rotation        | Automated lifecycle                |
+| IA-5(2)  | PKI-based authentication               | Not applicable         | X.509 / certificate-based          |
+| IA-8     | Non-organizational user identification | Bearer token           | Full identity verification         |
+| AU-2     | Audit events                           | Minimal                | Comprehensive sign-in logs         |
+| AU-3     | Content of audit records               | Policy name only       | Full identity context              |
+| AU-6     | Audit review, analysis, and reporting  | Limited signal         | Rich signal for SIEM               |
+| AC-2     | Account management                     | N/A (no accounts)      | Full lifecycle management          |
+| AC-3     | Access enforcement                     | Coarse (policy-level)  | Granular (RBAC role-level)         |
+| AC-6     | Least privilege                        | 5 fixed policies       | Custom RBAC roles                  |
+| SC-8     | Transmission confidentiality           | Bearer token risk      | Mutual TLS / bound tokens          |
 
 This is 15 controls from a single migration. For a FedRAMP High authorization package, each of these controls requires an implementation statement. Migrating to Entra upgrades all 15 from "partially implemented" or "planned" to "fully implemented."
 
@@ -291,6 +293,7 @@ This is 15 controls from a single migration. For a FedRAMP High authorization pa
 A SAS key for the `iothubowner` policy is leaked through ARM deployment history.
 
 **Impact:**
+
 - Attacker can read/write all device twins (exfiltrate device configuration data)
 - Attacker can invoke direct methods on any device (command injection)
 - Attacker can create/delete device identities (denial of service)
@@ -300,6 +303,7 @@ A SAS key for the `iothubowner` policy is leaked through ARM deployment history.
 - **Blast radius:** Entire IoT Hub (all devices, all data)
 
 **Recovery cost:**
+
 - Rotate both keys on every shared access policy
 - Update every device and service using those keys
 - Audit all operations since the key was exposed (potentially months)
@@ -311,12 +315,14 @@ A SAS key for the `iothubowner` policy is leaked through ARM deployment history.
 A managed identity token is somehow intercepted.
 
 **Impact:**
+
 - Token expires in 1 hour (automatic containment)
 - Token is scoped to specific RBAC role (not full admin)
 - Token is bound to the Azure compute instance (cannot be replayed from elsewhere in most configurations)
 - **Blast radius:** Limited to the specific role assignment scope
 
 **Recovery cost:**
+
 - Revoke the managed identity (immediate, single API call)
 - Review sign-in logs for the specific identity (minutes, not months)
 - Scope is limited and fully auditable
@@ -351,18 +357,18 @@ A managed identity token is somehow intercepted.
 
 ## Summary
 
-| Dimension | SAS keys | Entra ID |
-|---|---|---|
-| Credential type | Static shared secret | Dynamic token / X.509 certificate |
-| Expiration | Manual (or never) | Automatic (1 hour / configurable) |
-| Rotation | Manual, disruptive | Automatic, seamless |
-| Attribution | Policy-level | Identity-level |
-| Audit signal | Minimal | Comprehensive |
-| Blast radius | Entire IoT Hub | Scoped to RBAC assignment |
-| FedRAMP High | Fails IA-2, IA-5, AU-2 | Satisfies all |
-| IL5 | Fails IA-2(6), IA-5(2) | Satisfies all |
-| Zero Trust | Traditional maturity | Advanced/Optimal maturity |
-| Recovery cost | $500K-$2M+ | $10K-$50K |
+| Dimension       | SAS keys               | Entra ID                          |
+| --------------- | ---------------------- | --------------------------------- |
+| Credential type | Static shared secret   | Dynamic token / X.509 certificate |
+| Expiration      | Manual (or never)      | Automatic (1 hour / configurable) |
+| Rotation        | Manual, disruptive     | Automatic, seamless               |
+| Attribution     | Policy-level           | Identity-level                    |
+| Audit signal    | Minimal                | Comprehensive                     |
+| Blast radius    | Entire IoT Hub         | Scoped to RBAC assignment         |
+| FedRAMP High    | Fails IA-2, IA-5, AU-2 | Satisfies all                     |
+| IL5             | Fails IA-2(6), IA-5(2) | Satisfies all                     |
+| Zero Trust      | Traditional maturity   | Advanced/Optimal maturity         |
+| Recovery cost   | $500K-$2M+             | $10K-$50K                         |
 
 The migration from SAS to Entra is not optional for federal IoT deployments. It is a foundational security improvement that closes the largest category of IoT credential risk.
 

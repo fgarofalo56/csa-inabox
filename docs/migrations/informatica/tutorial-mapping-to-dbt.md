@@ -37,10 +37,10 @@ By the end of this tutorial, you will have:
 2. Navigate to the mapping you want to convert (we'll use `m_ORDER_FACT` as our example)
 3. Right-click -> Properties -> note all transformation names and types
 4. For each transformation, record:
-   - Transformation type (Expression, Lookup, Aggregator, etc.)
-   - Input/output ports and their expressions
-   - Lookup SQL overrides
-   - Filter conditions
+    - Transformation type (Expression, Lookup, Aggregator, etc.)
+    - Input/output ports and their expressions
+    - Lookup SQL overrides
+    - Filter conditions
 
 ### Option B: Repository query
 
@@ -124,17 +124,17 @@ Edit `profiles.yml` to connect to your Azure SQL or Synapse database:
 ```yaml
 # ~/.dbt/profiles.yml
 order_analytics:
-  target: dev
-  outputs:
-    dev:
-      type: sqlserver  # or synapse, fabric
-      driver: 'ODBC Driver 18 for SQL Server'
-      server: your-server.database.windows.net
-      database: your_database
-      schema: dbt_dev
-      authentication: ActiveDirectoryInteractive  # or ActiveDirectoryServicePrincipal
-      encrypt: true
-      trust_cert: false
+    target: dev
+    outputs:
+        dev:
+            type: sqlserver # or synapse, fabric
+            driver: "ODBC Driver 18 for SQL Server"
+            server: your-server.database.windows.net
+            database: your_database
+            schema: dbt_dev
+            authentication: ActiveDirectoryInteractive # or ActiveDirectoryServicePrincipal
+            encrypt: true
+            trust_cert: false
 ```
 
 ### Define sources
@@ -146,40 +146,40 @@ Create source definitions for the tables the PowerCenter mapping reads from:
 version: 2
 
 sources:
-  - name: erp
-    description: ERP system (source for order data)
-    database: source_db
-    schema: dbo
-    tables:
-      - name: orders
-        description: Raw order transactions
-        columns:
-          - name: order_id
-            tests: [unique, not_null]
-          - name: customer_id
-            tests: [not_null]
-          - name: order_date
-            tests: [not_null]
-        loaded_at_field: updated_at
-        freshness:
-          warn_after: {count: 24, period: hour}
-          error_after: {count: 48, period: hour}
+    - name: erp
+      description: ERP system (source for order data)
+      database: source_db
+      schema: dbo
+      tables:
+          - name: orders
+            description: Raw order transactions
+            columns:
+                - name: order_id
+                  tests: [unique, not_null]
+                - name: customer_id
+                  tests: [not_null]
+                - name: order_date
+                  tests: [not_null]
+            loaded_at_field: updated_at
+            freshness:
+                warn_after: { count: 24, period: hour }
+                error_after: { count: 48, period: hour }
 
-      - name: customers
-        description: Customer master data
-        columns:
-          - name: customer_id
-            tests: [unique, not_null]
+          - name: customers
+            description: Customer master data
+            columns:
+                - name: customer_id
+                  tests: [unique, not_null]
 
-  - name: ref
-    description: Reference data
-    database: source_db
-    schema: ref
-    tables:
-      - name: regions
-        description: Region reference lookup
-      - name: exchange_rates
-        description: Currency exchange rates
+    - name: ref
+      description: Reference data
+      database: source_db
+      schema: ref
+      tables:
+          - name: regions
+            description: Region reference lookup
+          - name: exchange_rates
+            description: Currency exchange rates
 ```
 
 ---
@@ -336,13 +336,13 @@ SELECT * FROM final
 
 ### Mapping each PowerCenter transformation to dbt
 
-| PowerCenter transformation | dbt CTE | What it does |
-|---|---|---|
-| SQ_ORDERS (Source Qualifier + JOIN) | `orders_with_customers` | Joins orders to customers (INNER JOIN) |
-| EXP_DERIVE (order_amount_usd) | `orders_with_usd` | Applies exchange rate; derives year/month |
-| LKP_PRODUCT | `orders_with_product` | LEFT JOIN to product dimension |
-| LKP_REGION | `final` | LEFT JOIN to region reference |
-| EXP_DERIVE (is_high_value) | `final` | CASE expression for high-value flag |
+| PowerCenter transformation          | dbt CTE                 | What it does                              |
+| ----------------------------------- | ----------------------- | ----------------------------------------- |
+| SQ_ORDERS (Source Qualifier + JOIN) | `orders_with_customers` | Joins orders to customers (INNER JOIN)    |
+| EXP_DERIVE (order_amount_usd)       | `orders_with_usd`       | Applies exchange rate; derives year/month |
+| LKP_PRODUCT                         | `orders_with_product`   | LEFT JOIN to product dimension            |
+| LKP_REGION                          | `final`                 | LEFT JOIN to region reference             |
+| EXP_DERIVE (is_high_value)          | `final`                 | CASE expression for high-value flag       |
 
 ---
 
@@ -404,34 +404,43 @@ Replace manual QA with automated dbt tests.
 version: 2
 
 models:
-  - name: fct_order_monthly
-    description: |
-      Monthly aggregated order facts by customer, product category, and region.
-      Replaces PowerCenter mapping m_ORDER_FACT.
-    columns:
-      - name: customer_id
-        description: Foreign key to dim_customer
-        tests:
-          - not_null
-          - relationships:
-              to: ref('stg_erp__customers')
-              field: customer_id
-      - name: order_year
-        tests:
-          - not_null
-          - accepted_values:
-              values: ['2020', '2021', '2022', '2023', '2024', '2025', '2026']
-      - name: total_order_amount_usd
-        tests:
-          - not_null
-          - dbt_expectations.expect_column_values_to_be_between:
-              min_value: 0
-              max_value: 100000000  # $100M max per customer-month
-      - name: order_count
-        tests:
-          - not_null
-          - dbt_expectations.expect_column_values_to_be_between:
-              min_value: 1
+    - name: fct_order_monthly
+      description: |
+          Monthly aggregated order facts by customer, product category, and region.
+          Replaces PowerCenter mapping m_ORDER_FACT.
+      columns:
+          - name: customer_id
+            description: Foreign key to dim_customer
+            tests:
+                - not_null
+                - relationships:
+                      to: ref('stg_erp__customers')
+                      field: customer_id
+          - name: order_year
+            tests:
+                - not_null
+                - accepted_values:
+                      values:
+                          [
+                              "2020",
+                              "2021",
+                              "2022",
+                              "2023",
+                              "2024",
+                              "2025",
+                              "2026",
+                          ]
+          - name: total_order_amount_usd
+            tests:
+                - not_null
+                - dbt_expectations.expect_column_values_to_be_between:
+                      min_value: 0
+                      max_value: 100000000 # $100M max per customer-month
+          - name: order_count
+            tests:
+                - not_null
+                - dbt_expectations.expect_column_values_to_be_between:
+                      min_value: 1
 ```
 
 ### Custom test: reconciliation with PowerCenter
@@ -487,25 +496,25 @@ dbt auto-generates documentation from your YAML files.
 version: 2
 
 models:
-  - name: int_orders__enriched
-    description: |
-      Orders enriched with customer, product, region, and exchange rate data.
-      Converts order amounts to USD.
+    - name: int_orders__enriched
+      description: |
+          Orders enriched with customer, product, region, and exchange rate data.
+          Converts order amounts to USD.
 
-      **PowerCenter origin:** Mapping `m_ORDER_FACT`, transformations SQ_ORDERS through LKP_REGION.
+          **PowerCenter origin:** Mapping `m_ORDER_FACT`, transformations SQ_ORDERS through LKP_REGION.
 
-      **Key business rules:**
-      - Orders joined to customers via INNER JOIN (only matched orders)
-      - Exchange rate applied from rate effective on order date
-      - Products and regions are LEFT JOINed (nulls allowed)
-      - High-value flag set at $10,000 USD threshold
-    columns:
-      - name: order_id
-        description: Unique order identifier from ERP
-      - name: order_amount_usd
-        description: Order amount converted to USD using daily exchange rate
-      - name: is_high_value
-        description: "'Y' if order_amount_usd > 10000, else 'N'"
+          **Key business rules:**
+          - Orders joined to customers via INNER JOIN (only matched orders)
+          - Exchange rate applied from rate effective on order date
+          - Products and regions are LEFT JOINed (nulls allowed)
+          - High-value flag set at $10,000 USD threshold
+      columns:
+          - name: order_id
+            description: Unique order identifier from ERP
+          - name: order_amount_usd
+            description: Order amount converted to USD using daily exchange rate
+          - name: is_high_value
+            description: "'Y' if order_amount_usd > 10000, else 'N'"
 ```
 
 Generate and serve documentation:
@@ -570,55 +579,55 @@ dbt source freshness
 name: dbt Deploy
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+    push:
+        branches: [main]
+    pull_request:
+        branches: [main]
 
 jobs:
-  dbt-test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - run: pip install dbt-sqlserver
-      - run: dbt deps
-      - run: dbt build --target ci  # runs models + tests
-        env:
-          DBT_PROFILES_DIR: .
+    dbt-test:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-python@v5
+              with:
+                  python-version: "3.11"
+            - run: pip install dbt-sqlserver
+            - run: dbt deps
+            - run: dbt build --target ci # runs models + tests
+              env:
+                  DBT_PROFILES_DIR: .
 
-  dbt-deploy:
-    needs: dbt-test
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - run: pip install dbt-sqlserver
-      - run: dbt deps
-      - run: dbt run --target prod
-        env:
-          DBT_PROFILES_DIR: .
+    dbt-deploy:
+        needs: dbt-test
+        if: github.ref == 'refs/heads/main'
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-python@v5
+              with:
+                  python-version: "3.11"
+            - run: pip install dbt-sqlserver
+            - run: dbt deps
+            - run: dbt run --target prod
+              env:
+                  DBT_PROFILES_DIR: .
 ```
 
 ---
 
 ## Step 10: Comparison summary
 
-| Aspect | PowerCenter m_ORDER_FACT | dbt equivalent |
-|---|---|---|
-| Files | 1 mapping (XML in repository) | 5 SQL files + 2 YAML files |
-| Version control | Repository export | Git (full diff, branch, PR) |
-| Testing | Manual QA after each run | 8+ automated tests, CI-integrated |
-| Documentation | Separate wiki page | Auto-generated from YAML |
-| Deployment | Repository export + import | `git push` triggers CI/CD |
-| Debugging | PowerCenter session log | dbt logs + SQL profiler |
-| Reusability | Mapplet (limited) | Macros (full Jinja templating) |
-| Execution time | ~5 min (PowerCenter) | ~3 min (dbt incremental) |
+| Aspect          | PowerCenter m_ORDER_FACT      | dbt equivalent                    |
+| --------------- | ----------------------------- | --------------------------------- |
+| Files           | 1 mapping (XML in repository) | 5 SQL files + 2 YAML files        |
+| Version control | Repository export             | Git (full diff, branch, PR)       |
+| Testing         | Manual QA after each run      | 8+ automated tests, CI-integrated |
+| Documentation   | Separate wiki page            | Auto-generated from YAML          |
+| Deployment      | Repository export + import    | `git push` triggers CI/CD         |
+| Debugging       | PowerCenter session log       | dbt logs + SQL profiler           |
+| Reusability     | Mapplet (limited)             | Macros (full Jinja templating)    |
+| Execution time  | ~5 min (PowerCenter)          | ~3 min (dbt incremental)          |
 
 ---
 

@@ -16,51 +16,51 @@ Cloudera's cost model -- whether CDH on-premises licensing plus hardware, CDP Pr
 
 CDH pricing combines Cloudera Enterprise licensing with self-managed hardware:
 
-| Component | Typical cost | Notes |
-|---|---|---|
-| Cloudera Enterprise license | $4,000-$6,000/node/year | Per-node licensing; tiered discounts for large clusters |
-| Server hardware (per node) | $8,000-$15,000 (3-year amortized) | DataNode: 12-24 HDD, 128-256 GB RAM, 2x CPU |
-| Hardware refresh cycle | Every 3-4 years | Full refresh of all nodes; budget for 25-33% annual amortization |
-| Data center costs | $1,500-$3,000/node/year | Power, cooling, rack space, networking |
-| Hadoop administration team | $600K-$900K/year | 3-4 FTEs at $150K-$225K fully loaded |
-| Network infrastructure | $50K-$150K/year | Spine-leaf networking, 10GbE/25GbE, top-of-rack switches |
-| Backup / DR infrastructure | $100K-$300K/year | Secondary cluster or HDFS snapshot infrastructure |
-| Cloudera professional services | $100K-$300K (initial) | Implementation, tuning, training -- front-loaded |
+| Component                      | Typical cost                      | Notes                                                            |
+| ------------------------------ | --------------------------------- | ---------------------------------------------------------------- |
+| Cloudera Enterprise license    | $4,000-$6,000/node/year           | Per-node licensing; tiered discounts for large clusters          |
+| Server hardware (per node)     | $8,000-$15,000 (3-year amortized) | DataNode: 12-24 HDD, 128-256 GB RAM, 2x CPU                      |
+| Hardware refresh cycle         | Every 3-4 years                   | Full refresh of all nodes; budget for 25-33% annual amortization |
+| Data center costs              | $1,500-$3,000/node/year           | Power, cooling, rack space, networking                           |
+| Hadoop administration team     | $600K-$900K/year                  | 3-4 FTEs at $150K-$225K fully loaded                             |
+| Network infrastructure         | $50K-$150K/year                   | Spine-leaf networking, 10GbE/25GbE, top-of-rack switches         |
+| Backup / DR infrastructure     | $100K-$300K/year                  | Secondary cluster or HDFS snapshot infrastructure                |
+| Cloudera professional services | $100K-$300K (initial)             | Implementation, tuning, training -- front-loaded                 |
 
 **Total for a 50-node CDH cluster (typical mid-market):**
 
-| Line item | Annual cost |
-|---|---|
-| Cloudera license (50 nodes x $5,000) | $250,000 |
-| Hardware amortization (50 x $12,000 / 3.5 yr) | $171,000 |
-| Data center (50 x $2,000) | $100,000 |
-| Hadoop admin team (3 FTE) | $525,000 |
-| Network + backup | $200,000 |
-| **Annual total** | **$1,246,000** |
+| Line item                                     | Annual cost    |
+| --------------------------------------------- | -------------- |
+| Cloudera license (50 nodes x $5,000)          | $250,000       |
+| Hardware amortization (50 x $12,000 / 3.5 yr) | $171,000       |
+| Data center (50 x $2,000)                     | $100,000       |
+| Hadoop admin team (3 FTE)                     | $525,000       |
+| Network + backup                              | $200,000       |
+| **Annual total**                              | **$1,246,000** |
 
 ### CDP Private Cloud pricing structure
 
 CDP Private Cloud replaces CDH but adds capabilities at higher license cost:
 
-| Component | Typical cost | Notes |
-|---|---|---|
-| CDP Private Cloud Base license | $6,000-$10,000/node/year | Higher than CDH; includes Data Hub, CML, CDE entitlements |
-| CDP Data Engineering add-on | $2,000-$4,000/node/year | CDE virtual clusters, Airflow, Spark management |
-| CDP Machine Learning add-on | $3,000-$5,000/node/year | CML sessions, model serving, experiments |
-| Hardware or IaaS VMs | $8,000-$15,000/node/year | Can run on-prem hardware or cloud VMs |
-| OpenShift / Kubernetes infra | $50K-$150K/year | CDP Private Cloud requires container orchestration |
-| Administration team | $500K-$800K/year | 2-3 FTEs; slightly fewer than CDH due to CDE/CML management |
+| Component                      | Typical cost             | Notes                                                       |
+| ------------------------------ | ------------------------ | ----------------------------------------------------------- |
+| CDP Private Cloud Base license | $6,000-$10,000/node/year | Higher than CDH; includes Data Hub, CML, CDE entitlements   |
+| CDP Data Engineering add-on    | $2,000-$4,000/node/year  | CDE virtual clusters, Airflow, Spark management             |
+| CDP Machine Learning add-on    | $3,000-$5,000/node/year  | CML sessions, model serving, experiments                    |
+| Hardware or IaaS VMs           | $8,000-$15,000/node/year | Can run on-prem hardware or cloud VMs                       |
+| OpenShift / Kubernetes infra   | $50K-$150K/year          | CDP Private Cloud requires container orchestration          |
+| Administration team            | $500K-$800K/year         | 2-3 FTEs; slightly fewer than CDH due to CDE/CML management |
 
 **Total for equivalent 50-node CDP Private Cloud deployment:**
 
-| Line item | Annual cost |
-|---|---|
-| CDP license (50 x $8,000 base + $3,000 CDE + $4,000 CML) | $750,000 |
-| Hardware/VM amortization | $171,000 |
-| Data center / cloud IaaS | $100,000 |
-| Kubernetes infrastructure | $100,000 |
-| Admin team (3 FTE) | $525,000 |
-| **Annual total** | **$1,646,000** |
+| Line item                                                | Annual cost    |
+| -------------------------------------------------------- | -------------- |
+| CDP license (50 x $8,000 base + $3,000 CDE + $4,000 CML) | $750,000       |
+| Hardware/VM amortization                                 | $171,000       |
+| Data center / cloud IaaS                                 | $100,000       |
+| Kubernetes infrastructure                                | $100,000       |
+| Admin team (3 FTE)                                       | $525,000       |
+| **Annual total**                                         | **$1,646,000** |
 
 CDP Private Cloud is **32% more expensive** than CDH for comparable capability, primarily due to higher per-node licensing.
 
@@ -68,23 +68,23 @@ CDP Private Cloud is **32% more expensive** than CDH for comparable capability, 
 
 CDP Public Cloud runs Cloudera services on top of AWS, Azure, or GCP infrastructure:
 
-| Component | Typical cost | Notes |
-|---|---|---|
-| CDP Public Cloud subscription | $500K-$1.5M/year | Consumption-based Cloudera Compute Units (CCU) |
-| Underlying cloud infrastructure | $300K-$800K/year | EC2/Azure VMs, S3/ADLS storage, networking |
-| Data Engineering (CDE) | Included in CCU | Virtual clusters billed per CCU |
-| Machine Learning (CML) | Included in CCU | Sessions billed per CCU |
-| Data Warehouse (CDW) | Included in CCU | Hive/Impala on cloud billed per CCU |
-| Administration team | $300K-$500K/year | 1-2 FTEs; less than on-prem but still needed |
+| Component                       | Typical cost     | Notes                                          |
+| ------------------------------- | ---------------- | ---------------------------------------------- |
+| CDP Public Cloud subscription   | $500K-$1.5M/year | Consumption-based Cloudera Compute Units (CCU) |
+| Underlying cloud infrastructure | $300K-$800K/year | EC2/Azure VMs, S3/ADLS storage, networking     |
+| Data Engineering (CDE)          | Included in CCU  | Virtual clusters billed per CCU                |
+| Machine Learning (CML)          | Included in CCU  | Sessions billed per CCU                        |
+| Data Warehouse (CDW)            | Included in CCU  | Hive/Impala on cloud billed per CCU            |
+| Administration team             | $300K-$500K/year | 1-2 FTEs; less than on-prem but still needed   |
 
 **Total for comparable CDP Public Cloud deployment:**
 
-| Line item | Annual cost |
-|---|---|
-| CDP Public Cloud subscription | $900,000 |
-| Cloud infrastructure (Azure VMs, storage) | $500,000 |
-| Admin team (2 FTE) | $350,000 |
-| **Annual total** | **$1,750,000** |
+| Line item                                 | Annual cost    |
+| ----------------------------------------- | -------------- |
+| CDP Public Cloud subscription             | $900,000       |
+| Cloud infrastructure (Azure VMs, storage) | $500,000       |
+| Admin team (2 FTE)                        | $350,000       |
+| **Annual total**                          | **$1,750,000** |
 
 The double-payment problem is visible: you pay Cloudera for the platform AND the cloud provider for the infrastructure.
 
@@ -94,30 +94,30 @@ The double-payment problem is visible: you pay Cloudera for the platform AND the
 
 Azure uses consumption-based pricing across all services:
 
-| Component | Typical cost | Notes |
-|---|---|---|
-| Databricks (Jobs + SQL Warehouses) | $200K-$600K/year | DBU-based; clusters auto-scale and terminate when idle |
-| Azure Data Factory | $30K-$100K/year | Per-pipeline-run; integration runtime hours |
-| ADLS Gen2 storage | $30K-$150K/year | Per-GB; hot/cool/archive tiers; no replication overhead |
-| Event Hubs | $20K-$80K/year | Per-TU + per-event; Kafka-compatible |
-| Purview | $20K-$80K/year | Per-asset scanning and classification |
-| Azure Monitor / Log Analytics | $30K-$100K/year | Per-GB ingestion |
-| Networking / Private Endpoints | $20K-$50K/year | Private link, DNS, NSGs |
-| Key Vault / Entra ID Premium | $10K-$30K/year | Secret management, conditional access |
-| Power BI Pro / Premium | $50K-$200K/year | Per-user or per-capacity |
-| Platform engineering team | $300K-$500K/year | 1-2 FTEs focused on data products, not infrastructure |
+| Component                          | Typical cost     | Notes                                                   |
+| ---------------------------------- | ---------------- | ------------------------------------------------------- |
+| Databricks (Jobs + SQL Warehouses) | $200K-$600K/year | DBU-based; clusters auto-scale and terminate when idle  |
+| Azure Data Factory                 | $30K-$100K/year  | Per-pipeline-run; integration runtime hours             |
+| ADLS Gen2 storage                  | $30K-$150K/year  | Per-GB; hot/cool/archive tiers; no replication overhead |
+| Event Hubs                         | $20K-$80K/year   | Per-TU + per-event; Kafka-compatible                    |
+| Purview                            | $20K-$80K/year   | Per-asset scanning and classification                   |
+| Azure Monitor / Log Analytics      | $30K-$100K/year  | Per-GB ingestion                                        |
+| Networking / Private Endpoints     | $20K-$50K/year   | Private link, DNS, NSGs                                 |
+| Key Vault / Entra ID Premium       | $10K-$30K/year   | Secret management, conditional access                   |
+| Power BI Pro / Premium             | $50K-$200K/year  | Per-user or per-capacity                                |
+| Platform engineering team          | $300K-$500K/year | 1-2 FTEs focused on data products, not infrastructure   |
 
 **Total for equivalent Azure-native deployment:**
 
-| Line item | Annual cost |
-|---|---|
-| Databricks | $400,000 |
-| ADF + Event Hubs + Purview | $150,000 |
-| ADLS Gen2 + networking | $100,000 |
-| Monitoring + security | $60,000 |
-| Power BI | $100,000 |
-| Platform team (2 FTE) | $350,000 |
-| **Annual total** | **$1,160,000** (gross) |
+| Line item                            | Annual cost                     |
+| ------------------------------------ | ------------------------------- |
+| Databricks                           | $400,000                        |
+| ADF + Event Hubs + Purview           | $150,000                        |
+| ADLS Gen2 + networking               | $100,000                        |
+| Monitoring + security                | $60,000                         |
+| Power BI                             | $100,000                        |
+| Platform team (2 FTE)                | $350,000                        |
+| **Annual total**                     | **$1,160,000** (gross)          |
 | **With auto-scaling / idle savings** | **$750,000-$900,000** (typical) |
 
 Auto-scaling savings are real and significant. Databricks clusters terminate when jobs complete. ADF charges nothing when no pipelines run. Event Hubs scales throughput units down during off-peak hours.
@@ -126,14 +126,14 @@ Auto-scaling savings are real and significant. Databricks clusters terminate whe
 
 ## Side-by-side comparison
 
-| Cost dimension | CDH on-prem | CDP Private | CDP Public | Azure-native |
-|---|---|---|---|---|
-| **Annual total** | $1,246K | $1,646K | $1,750K | $750K-$900K |
-| **vs CDH baseline** | -- | +32% | +40% | **-28% to -40%** |
-| **Scales with** | Nodes (fixed) | Nodes (fixed) | CCUs + infra | Actual compute usage |
-| **Idle cost** | 100% (always on) | 100% (always on) | 60-80% (some scaling) | 10-30% (auto-terminate) |
-| **Hardware refresh** | Every 3-4 years | Every 3-4 years | None | None |
-| **Platform team** | 3-4 FTE | 2-3 FTE | 1-2 FTE | 1-2 FTE |
+| Cost dimension       | CDH on-prem      | CDP Private      | CDP Public            | Azure-native            |
+| -------------------- | ---------------- | ---------------- | --------------------- | ----------------------- |
+| **Annual total**     | $1,246K          | $1,646K          | $1,750K               | $750K-$900K             |
+| **vs CDH baseline**  | --               | +32%             | +40%                  | **-28% to -40%**        |
+| **Scales with**      | Nodes (fixed)    | Nodes (fixed)    | CCUs + infra          | Actual compute usage    |
+| **Idle cost**        | 100% (always on) | 100% (always on) | 60-80% (some scaling) | 10-30% (auto-terminate) |
+| **Hardware refresh** | Every 3-4 years  | Every 3-4 years  | None                  | None                    |
+| **Platform team**    | 3-4 FTE          | 2-3 FTE          | 1-2 FTE               | 1-2 FTE                 |
 
 ---
 
@@ -149,16 +149,16 @@ Auto-scaling savings are real and significant. Databricks clusters terminate whe
 
 ### 5-year cumulative cost
 
-| Year | CDH on-prem | CDP Private | CDP Public | Azure-native |
-|---|---|---|---|---|
-| Year 0 (migration) | -- | -- | -- | $400K (migration) |
-| Year 1 | $1,246K | $1,646K | $1,750K | $900K + $400K = $1,300K |
-| Year 2 | $1,290K | $1,710K | $1,820K | $880K |
-| Year 3 | $1,835K (+ refresh) | $2,280K (+ refresh) | $1,895K | $860K |
-| Year 4 | $1,385K | $1,845K | $1,975K | $840K |
-| Year 5 | $1,430K | $1,920K | $2,060K | $820K |
-| **5-year total** | **$7,186K** | **$9,401K** | **$9,500K** | **$4,700K** |
-| **5-year savings vs CDH** | -- | -$2,215K (worse) | -$2,314K (worse) | **+$2,486K (35% savings)** |
+| Year                      | CDH on-prem         | CDP Private         | CDP Public       | Azure-native               |
+| ------------------------- | ------------------- | ------------------- | ---------------- | -------------------------- |
+| Year 0 (migration)        | --                  | --                  | --               | $400K (migration)          |
+| Year 1                    | $1,246K             | $1,646K             | $1,750K          | $900K + $400K = $1,300K    |
+| Year 2                    | $1,290K             | $1,710K             | $1,820K          | $880K                      |
+| Year 3                    | $1,835K (+ refresh) | $2,280K (+ refresh) | $1,895K          | $860K                      |
+| Year 4                    | $1,385K             | $1,845K             | $1,975K          | $840K                      |
+| Year 5                    | $1,430K             | $1,920K             | $2,060K          | $820K                      |
+| **5-year total**          | **$7,186K**         | **$9,401K**         | **$9,500K**      | **$4,700K**                |
+| **5-year savings vs CDH** | --                  | -$2,215K (worse)    | -$2,314K (worse) | **+$2,486K (35% savings)** |
 
 ```mermaid
 xychart-beta
@@ -179,24 +179,24 @@ _Lines top to bottom: CDP Public Cloud, CDP Private Cloud, CDH on-prem, Azure-na
 
 ### Costs that favor Azure migration
 
-| Hidden cost | CDH/CDP impact | Azure impact |
-|---|---|---|
-| **Opportunity cost of platform team** | 3-4 engineers maintaining Hadoop instead of building data products | 1-2 engineers building data products |
-| **Recruitment costs** | Hadoop talent is scarce; hiring takes 3-6 months at premium rates | Azure talent pool is 50-100x larger |
-| **Compliance remediation** | CDH EOL creates audit findings requiring remediation | Azure services are patched automatically |
-| **Innovation velocity** | New capabilities require cluster upgrades and testing | New Azure services available immediately |
-| **Data gravity** | Data locked in HDFS; expensive to integrate with cloud AI services | Data in ADLS Gen2 accessible by all Azure services |
-| **Hardware disposal** | Decommissioning costs for end-of-life hardware | No hardware to dispose of |
+| Hidden cost                           | CDH/CDP impact                                                     | Azure impact                                       |
+| ------------------------------------- | ------------------------------------------------------------------ | -------------------------------------------------- |
+| **Opportunity cost of platform team** | 3-4 engineers maintaining Hadoop instead of building data products | 1-2 engineers building data products               |
+| **Recruitment costs**                 | Hadoop talent is scarce; hiring takes 3-6 months at premium rates  | Azure talent pool is 50-100x larger                |
+| **Compliance remediation**            | CDH EOL creates audit findings requiring remediation               | Azure services are patched automatically           |
+| **Innovation velocity**               | New capabilities require cluster upgrades and testing              | New Azure services available immediately           |
+| **Data gravity**                      | Data locked in HDFS; expensive to integrate with cloud AI services | Data in ADLS Gen2 accessible by all Azure services |
+| **Hardware disposal**                 | Decommissioning costs for end-of-life hardware                     | No hardware to dispose of                          |
 
 ### Costs that favor staying on Cloudera
 
-| Hidden cost | Impact |
-|---|---|
-| **Migration effort** | $300K-$500K one-time; 6-9 months of engineering effort |
-| **Retraining** | Team must learn Databricks, ADF, Azure tooling; budget $50K-$100K |
-| **UDF rewrite** | Java Hive UDFs must be rewritten; budget 30% of workload migration |
-| **Parallel run** | Running both systems during validation adds 2-4 months of double cost |
-| **Risk of disruption** | Any migration carries execution risk; mitigate with phased approach |
+| Hidden cost            | Impact                                                                |
+| ---------------------- | --------------------------------------------------------------------- |
+| **Migration effort**   | $300K-$500K one-time; 6-9 months of engineering effort                |
+| **Retraining**         | Team must learn Databricks, ADF, Azure tooling; budget $50K-$100K     |
+| **UDF rewrite**        | Java Hive UDFs must be rewritten; budget 30% of workload migration    |
+| **Parallel run**       | Running both systems during validation adds 2-4 months of double cost |
+| **Risk of disruption** | Any migration carries execution risk; mitigate with phased approach   |
 
 ---
 

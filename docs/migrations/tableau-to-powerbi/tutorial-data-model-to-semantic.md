@@ -31,49 +31,49 @@ Open the Tableau workbook or published data source. Navigate to the **Data Sourc
 
 Record every table and how they are joined:
 
-| Left table | Join type | Right table | Join condition | Notes |
-|---|---|---|---|---|
-| Orders | Left Join | Customers | Orders.CustomerID = Customers.CustomerID | |
-| Orders | Left Join | Products | Orders.ProductID = Products.ProductID | |
-| Orders | Inner Join | OrderLines | Orders.OrderID = OrderLines.OrderID | Line-item detail |
+| Left table | Join type  | Right table | Join condition                           | Notes            |
+| ---------- | ---------- | ----------- | ---------------------------------------- | ---------------- |
+| Orders     | Left Join  | Customers   | Orders.CustomerID = Customers.CustomerID |                  |
+| Orders     | Left Join  | Products    | Orders.ProductID = Products.ProductID    |                  |
+| Orders     | Inner Join | OrderLines  | Orders.OrderID = OrderLines.OrderID      | Line-item detail |
 
 ### 1.3 Document the logical layer (Tableau 2020.2+)
 
 If the workbook uses Tableau's logical layer (relationships instead of joins):
 
-| Table 1 | Relationship | Table 2 | Related fields | Cardinality |
-|---|---|---|---|---|
-| Orders | relates to | Customers | Orders.CustomerID = Customers.CustomerID | Many-to-One |
-| Orders | relates to | Products | Orders.ProductID = Products.ProductID | Many-to-One |
-| Orders | relates to | Returns | Orders.OrderID = Returns.OrderID | One-to-One |
+| Table 1 | Relationship | Table 2   | Related fields                           | Cardinality |
+| ------- | ------------ | --------- | ---------------------------------------- | ----------- |
+| Orders  | relates to   | Customers | Orders.CustomerID = Customers.CustomerID | Many-to-One |
+| Orders  | relates to   | Products  | Orders.ProductID = Products.ProductID    | Many-to-One |
+| Orders  | relates to   | Returns   | Orders.OrderID = Returns.OrderID         | One-to-One  |
 
 ### 1.4 Document calculated fields
 
 List every calculated field in the data source:
 
-| Field name | Formula | Type | Scope | Migration target |
-|---|---|---|---|---|
-| Profit Ratio | `[Profit] / [Sales]` | Measure | Row-level calc | DAX measure |
-| Customer Segment | `IF [Sales] > 1000 THEN "High" ELSE "Low" END` | Dimension | Row-level calc | Calculated column |
-| Total Sales FIXED Region | `{ FIXED [Region] : SUM([Sales]) }` | LOD | Fixed aggregate | DAX measure with CALCULATE |
-| Running Total | `RUNNING_SUM(SUM([Sales]))` | Table calc | Table across dates | DAX measure with WINDOW |
-| First Purchase Date | `{ FIXED [Customer ID] : MIN([Order Date]) }` | LOD | Used as dimension | Calculated column |
+| Field name               | Formula                                        | Type       | Scope              | Migration target           |
+| ------------------------ | ---------------------------------------------- | ---------- | ------------------ | -------------------------- |
+| Profit Ratio             | `[Profit] / [Sales]`                           | Measure    | Row-level calc     | DAX measure                |
+| Customer Segment         | `IF [Sales] > 1000 THEN "High" ELSE "Low" END` | Dimension  | Row-level calc     | Calculated column          |
+| Total Sales FIXED Region | `{ FIXED [Region] : SUM([Sales]) }`            | LOD        | Fixed aggregate    | DAX measure with CALCULATE |
+| Running Total            | `RUNNING_SUM(SUM([Sales]))`                    | Table calc | Table across dates | DAX measure with WINDOW    |
+| First Purchase Date      | `{ FIXED [Customer ID] : MIN([Order Date]) }`  | LOD        | Used as dimension  | Calculated column          |
 
 ### 1.5 Document data source filters
 
-| Filter field | Condition | Purpose |
-|---|---|---|
-| Order Date | >= 2022-01-01 | Limit to recent data |
-| Status | != "Cancelled" | Exclude cancelled orders |
-| Is Test | = FALSE | Exclude test data |
+| Filter field | Condition      | Purpose                  |
+| ------------ | -------------- | ------------------------ |
+| Order Date   | >= 2022-01-01  | Limit to recent data     |
+| Status       | != "Cancelled" | Exclude cancelled orders |
+| Is Test      | = FALSE        | Exclude test data        |
 
 ### 1.6 Document hierarchies
 
-| Hierarchy name | Levels | Table |
-|---|---|---|
-| Location | Country → State → City | Customers |
-| Product | Category → Sub-Category → Product Name | Products |
-| Time | Year → Quarter → Month → Day | Orders (date field) |
+| Hierarchy name | Levels                                 | Table               |
+| -------------- | -------------------------------------- | ------------------- |
+| Location       | Country → State → City                 | Customers           |
+| Product        | Category → Sub-Category → Product Name | Products            |
+| Time           | Year → Quarter → Month → Day           | Orders (date field) |
 
 ---
 
@@ -99,14 +99,14 @@ The most important design decision is identifying which tables are facts (events
 
 ### 2.2 Common Tableau-to-Power BI modeling patterns
 
-| Tableau pattern | Power BI pattern | Migration action |
-|---|---|---|
-| Single denormalized table | Split into fact + dimensions | Normalize the table in Power Query or at the source |
-| Multi-table join in data source | Star schema with relationships | Define explicit relationships in Model view |
-| Logical layer relationships | Model relationships | Map 1:1 (Tableau relationships are similar to PBI relationships) |
-| Data blending | Composite model or consolidated model | Merge sources in the data layer, not the BI layer |
-| Custom SQL with joins | dbt view or Power Query merge | Prefer dbt views for complex joins |
-| Wide table with many columns | Fact + dimension split | Improves compression and performance |
+| Tableau pattern                 | Power BI pattern                      | Migration action                                                 |
+| ------------------------------- | ------------------------------------- | ---------------------------------------------------------------- |
+| Single denormalized table       | Split into fact + dimensions          | Normalize the table in Power Query or at the source              |
+| Multi-table join in data source | Star schema with relationships        | Define explicit relationships in Model view                      |
+| Logical layer relationships     | Model relationships                   | Map 1:1 (Tableau relationships are similar to PBI relationships) |
+| Data blending                   | Composite model or consolidated model | Merge sources in the data layer, not the BI layer                |
+| Custom SQL with joins           | dbt view or Power Query merge         | Prefer dbt views for complex joins                               |
+| Wide table with many columns    | Fact + dimension split                | Improves compression and performance                             |
 
 ### 2.3 Draw the star schema
 
@@ -222,11 +222,11 @@ Recreate Tableau hierarchies in Power BI:
 1. In the Fields pane, drag child fields onto parent fields within the same table
 2. Or: right-click a field → **New hierarchy** → drag additional fields into it
 
-| Tableau hierarchy | Power BI hierarchy |
-|---|---|
-| Location: Country → State → City | DimCustomer: Country → State → City |
+| Tableau hierarchy                               | Power BI hierarchy                               |
+| ----------------------------------------------- | ------------------------------------------------ |
+| Location: Country → State → City                | DimCustomer: Country → State → City              |
 | Product: Category → Sub-Category → Product Name | DimProduct: Category → SubCategory → ProductName |
-| Time: Year → Quarter → Month → Day | Calendar: Year → Quarter → Month Name → Date |
+| Time: Year → Quarter → Month → Day              | Calendar: Year → Quarter → Month Name → Date     |
 
 ---
 
@@ -241,7 +241,7 @@ Profit Ratio = DIVIDE(FactOrders[Profit], FactOrders[Sales])
 ```
 
 !!! note "Use measures instead of calculated columns when possible"
-    Calculated columns consume memory for every row. If the calculation is only used in aggregation (e.g., always summed or averaged), create it as a measure instead.
+Calculated columns consume memory for every row. If the calculation is only used in aggregation (e.g., always summed or averaged), create it as a measure instead.
 
 ### 4.2 Aggregate calculations → measures
 
@@ -323,8 +323,8 @@ Create a measures table to organize calculations:
 
 1. Right-click in the Fields pane → **New measure table** (or create measures on the fact table)
 2. Group related measures using Display Folders:
-   - Right-click measure → **Properties** → **Display folder**
-   - Example folders: "Sales Metrics", "Profitability", "Time Intelligence", "Customer Metrics"
+    - Right-click measure → **Properties** → **Display folder**
+    - Example folders: "Sales Metrics", "Profitability", "Time Intelligence", "Customer Metrics"
 
 ---
 
@@ -334,25 +334,25 @@ Create a measures table to organize calculations:
 
 Create a temporary report page with matrix visuals that compare key measures across dimensions:
 
-| Validation check | Visual configuration | Expected result |
-|---|---|---|
-| Grand totals | Card visuals for each base measure | Match Tableau grand totals |
-| By region | Matrix: Region rows, measure columns | Match Tableau region breakdown |
-| By month | Matrix: Month rows, measure columns | Match Tableau monthly totals |
-| By product category | Matrix: Category rows, measure columns | Match Tableau category breakdown |
-| Cross-tab (region x month) | Matrix: Region rows, Month columns, measure values | Match Tableau cross-tab |
+| Validation check           | Visual configuration                               | Expected result                  |
+| -------------------------- | -------------------------------------------------- | -------------------------------- |
+| Grand totals               | Card visuals for each base measure                 | Match Tableau grand totals       |
+| By region                  | Matrix: Region rows, measure columns               | Match Tableau region breakdown   |
+| By month                   | Matrix: Month rows, measure columns                | Match Tableau monthly totals     |
+| By product category        | Matrix: Category rows, measure columns             | Match Tableau category breakdown |
+| Cross-tab (region x month) | Matrix: Region rows, Month columns, measure values | Match Tableau cross-tab          |
 
 ### 5.2 Investigate discrepancies
 
 Common causes of number mismatches:
 
-| Symptom | Likely cause | Fix |
-|---|---|---|
-| Power BI total is higher | Missing filter (data source filter not migrated) | Add filter in Power Query |
-| Power BI total is lower | Join type mismatch (inner vs left) | Check relationship type in Model view |
-| Percentages differ | Different denominator scope | Check CALCULATE/ALL patterns vs Tableau context |
-| Counts differ | Duplicate rows or different distinct count logic | Verify grain of the fact table |
-| Dates off by one | Timezone or date boundary difference | Align date truncation in Power Query |
+| Symptom                  | Likely cause                                     | Fix                                             |
+| ------------------------ | ------------------------------------------------ | ----------------------------------------------- |
+| Power BI total is higher | Missing filter (data source filter not migrated) | Add filter in Power Query                       |
+| Power BI total is lower  | Join type mismatch (inner vs left)               | Check relationship type in Model view           |
+| Percentages differ       | Different denominator scope                      | Check CALCULATE/ALL patterns vs Tableau context |
+| Counts differ            | Duplicate rows or different distinct count logic | Verify grain of the fact table                  |
+| Dates off by one         | Timezone or date boundary difference             | Align date truncation in Power Query            |
 
 ### 5.3 Performance check
 
@@ -391,15 +391,15 @@ For users who need to create reports on this semantic model:
 
 ## Key differences to internalize
 
-| Concept | Tableau data model | Power BI semantic model |
-|---|---|---|
-| **Schema design** | Flexible; flat tables work fine | Star schema required for optimal performance |
-| **Joins** | Physical layer (eager joins) or logical layer (lazy joins) | Relationships (always lazy; joined at query time) |
-| **Calculated fields** | Single concept: calculated field | Two concepts: measures (dynamic) and calculated columns (static) |
-| **Aggregation** | Automatic based on field placement | Explicit: measures use aggregate functions, columns are pre-computed |
-| **Filter context** | Implicit from the visualization | Explicit and modifiable with CALCULATE |
-| **Reuse** | Published data source | Shared semantic model with Certified endorsement |
-| **Version control** | Manual .tds export | Fabric Git integration (TMDL format) |
+| Concept               | Tableau data model                                         | Power BI semantic model                                              |
+| --------------------- | ---------------------------------------------------------- | -------------------------------------------------------------------- |
+| **Schema design**     | Flexible; flat tables work fine                            | Star schema required for optimal performance                         |
+| **Joins**             | Physical layer (eager joins) or logical layer (lazy joins) | Relationships (always lazy; joined at query time)                    |
+| **Calculated fields** | Single concept: calculated field                           | Two concepts: measures (dynamic) and calculated columns (static)     |
+| **Aggregation**       | Automatic based on field placement                         | Explicit: measures use aggregate functions, columns are pre-computed |
+| **Filter context**    | Implicit from the visualization                            | Explicit and modifiable with CALCULATE                               |
+| **Reuse**             | Published data source                                      | Shared semantic model with Certified endorsement                     |
+| **Version control**   | Manual .tds export                                         | Fabric Git integration (TMDL format)                                 |
 
 ---
 

@@ -3,7 +3,7 @@
 > **Audience:** Teams running Hadoop (Cloudera, Hortonworks, on-prem, AWS EMR, HDInsight) considering modern lakehouse on Azure. Most Hadoop estates are 7-15 years old, deeply embedded, and **the right answer is rarely "lift and shift to a Hadoop on Azure."**
 
 !!! tip "Expanded Migration Center Available"
-    This playbook is the core migration reference. For the complete Hadoop/Hive-to-Azure migration package — including white papers, deep-dive guides, tutorials, and benchmarks — visit the **[Hadoop/Hive Migration Center](hadoop-hive/index.md)**.
+This playbook is the core migration reference. For the complete Hadoop/Hive-to-Azure migration package — including white papers, deep-dive guides, tutorials, and benchmarks — visit the **[Hadoop/Hive Migration Center](hadoop-hive/index.md)**.
 
     **Quick links:**
 

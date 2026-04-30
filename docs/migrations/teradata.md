@@ -3,7 +3,7 @@
 > **Audience:** Teams running Teradata (on-prem or VantageCloud) considering a move to Azure. Most large enterprises have a Teradata commitment of 10-20+ years and migrating is multi-year, not multi-quarter.
 
 !!! tip "Expanded Migration Center Available"
-    This playbook is the core migration reference. For the complete Teradata-to-Azure migration package — including white papers, deep-dive guides, tutorials, and benchmarks — visit the **[Teradata Migration Center](teradata/index.md)**.
+This playbook is the core migration reference. For the complete Teradata-to-Azure migration package — including white papers, deep-dive guides, tutorials, and benchmarks — visit the **[Teradata Migration Center](teradata/index.md)**.
 
     **Quick links:**
 

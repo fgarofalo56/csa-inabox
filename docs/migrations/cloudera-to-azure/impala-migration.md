@@ -33,30 +33,30 @@ The following Impala SQL constructs work without modification on Databricks SQL:
 
 ### Syntax that requires conversion
 
-| Impala SQL | Databricks SQL | Notes |
-|---|---|---|
-| `COMPUTE STATS table_name` | `ANALYZE TABLE table_name COMPUTE STATISTICS` | Required for optimizer. Delta Lake also collects stats automatically. |
-| `COMPUTE INCREMENTAL STATS` | `ANALYZE TABLE ... COMPUTE STATISTICS FOR COLUMNS` | Delta stats are column-level by default. |
-| `SHOW TABLE STATS table_name` | `DESCRIBE DETAIL table_name` | Delta table metadata. |
-| `SHOW COLUMN STATS table_name` | `DESCRIBE EXTENDED table_name column_name` | Column-level statistics. |
-| `INVALIDATE METADATA` | Not needed | Delta and Unity Catalog maintain metadata automatically. |
-| `REFRESH table_name` | `REFRESH TABLE table_name` | Identical syntax; rarely needed with Delta. |
-| `INSERT OVERWRITE ... PARTITION (col=val)` | `INSERT OVERWRITE ... PARTITION (col)` | Dynamic partition overwrite mode. Or use `MERGE INTO` for incremental. |
-| `CREATE TABLE ... STORED AS PARQUET` | `CREATE TABLE ... USING DELTA` | Default to Delta for all new tables. |
-| `CREATE TABLE ... STORED AS KUDU` | `CREATE TABLE ... USING DELTA` | See Kudu migration section below. |
-| `ALTER TABLE ... ADD PARTITION` | Not needed for Delta | Delta manages partitions automatically. |
-| `ALTER TABLE ... DROP PARTITION` | `DELETE FROM table WHERE partition_col = val` | Delta supports row-level deletes. |
-| `UPSERT INTO` (Kudu) | `MERGE INTO ... WHEN MATCHED THEN UPDATE WHEN NOT MATCHED THEN INSERT` | Delta MERGE is the equivalent. |
-| `[SHUFFLE]` / `[NOSHUFFLE]` hints | Not applicable | Databricks adaptive query execution handles this. |
-| `STRAIGHT_JOIN` hint | Not applicable | Optimizer handles join ordering. |
-| `/* +NOCLUSTERED */` hint | Not applicable | Photon engine optimizes automatically. |
-| `APPX_MEDIAN()` | `PERCENTILE_APPROX(col, 0.5)` | Approximate median function. |
-| `GROUP_CONCAT()` | `COLLECT_LIST()` + `CONCAT_WS()` | Or `ARRAY_JOIN(COLLECT_LIST(...), ',')`. |
-| `NDV()` (approximate distinct) | `APPROX_COUNT_DISTINCT()` | HyperLogLog approximate distinct count. |
-| `EXTRACT(epoch FROM ts)` | `UNIX_TIMESTAMP(ts)` | Epoch extraction. |
-| `FROM_UNIXTIME(ts, 'yyyy-MM-dd')` | `FROM_UNIXTIME(ts, 'yyyy-MM-dd')` | Identical. |
-| `STRLEFT(s, n)` / `STRRIGHT(s, n)` | `LEFT(s, n)` / `RIGHT(s, n)` | Standard SQL function names. |
-| `TRUNC(ts, 'MONTH')` | `TRUNC(ts, 'MONTH')` | Identical. |
+| Impala SQL                                 | Databricks SQL                                                         | Notes                                                                  |
+| ------------------------------------------ | ---------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `COMPUTE STATS table_name`                 | `ANALYZE TABLE table_name COMPUTE STATISTICS`                          | Required for optimizer. Delta Lake also collects stats automatically.  |
+| `COMPUTE INCREMENTAL STATS`                | `ANALYZE TABLE ... COMPUTE STATISTICS FOR COLUMNS`                     | Delta stats are column-level by default.                               |
+| `SHOW TABLE STATS table_name`              | `DESCRIBE DETAIL table_name`                                           | Delta table metadata.                                                  |
+| `SHOW COLUMN STATS table_name`             | `DESCRIBE EXTENDED table_name column_name`                             | Column-level statistics.                                               |
+| `INVALIDATE METADATA`                      | Not needed                                                             | Delta and Unity Catalog maintain metadata automatically.               |
+| `REFRESH table_name`                       | `REFRESH TABLE table_name`                                             | Identical syntax; rarely needed with Delta.                            |
+| `INSERT OVERWRITE ... PARTITION (col=val)` | `INSERT OVERWRITE ... PARTITION (col)`                                 | Dynamic partition overwrite mode. Or use `MERGE INTO` for incremental. |
+| `CREATE TABLE ... STORED AS PARQUET`       | `CREATE TABLE ... USING DELTA`                                         | Default to Delta for all new tables.                                   |
+| `CREATE TABLE ... STORED AS KUDU`          | `CREATE TABLE ... USING DELTA`                                         | See Kudu migration section below.                                      |
+| `ALTER TABLE ... ADD PARTITION`            | Not needed for Delta                                                   | Delta manages partitions automatically.                                |
+| `ALTER TABLE ... DROP PARTITION`           | `DELETE FROM table WHERE partition_col = val`                          | Delta supports row-level deletes.                                      |
+| `UPSERT INTO` (Kudu)                       | `MERGE INTO ... WHEN MATCHED THEN UPDATE WHEN NOT MATCHED THEN INSERT` | Delta MERGE is the equivalent.                                         |
+| `[SHUFFLE]` / `[NOSHUFFLE]` hints          | Not applicable                                                         | Databricks adaptive query execution handles this.                      |
+| `STRAIGHT_JOIN` hint                       | Not applicable                                                         | Optimizer handles join ordering.                                       |
+| `/* +NOCLUSTERED */` hint                  | Not applicable                                                         | Photon engine optimizes automatically.                                 |
+| `APPX_MEDIAN()`                            | `PERCENTILE_APPROX(col, 0.5)`                                          | Approximate median function.                                           |
+| `GROUP_CONCAT()`                           | `COLLECT_LIST()` + `CONCAT_WS()`                                       | Or `ARRAY_JOIN(COLLECT_LIST(...), ',')`.                               |
+| `NDV()` (approximate distinct)             | `APPROX_COUNT_DISTINCT()`                                              | HyperLogLog approximate distinct count.                                |
+| `EXTRACT(epoch FROM ts)`                   | `UNIX_TIMESTAMP(ts)`                                                   | Epoch extraction.                                                      |
+| `FROM_UNIXTIME(ts, 'yyyy-MM-dd')`          | `FROM_UNIXTIME(ts, 'yyyy-MM-dd')`                                      | Identical.                                                             |
+| `STRLEFT(s, n)` / `STRRIGHT(s, n)`         | `LEFT(s, n)` / `RIGHT(s, n)`                                           | Standard SQL function names.                                           |
+| `TRUNC(ts, 'MONTH')`                       | `TRUNC(ts, 'MONTH')`                                                   | Identical.                                                             |
 
 ---
 
@@ -66,16 +66,16 @@ Kudu is Impala's mutable storage engine, designed for fast inserts, updates, and
 
 ### Feature comparison
 
-| Kudu feature | Delta Lake equivalent | Notes |
-|---|---|---|
-| **Primary key** | Not enforced; use `MERGE INTO` with key columns | Delta does not enforce primary keys but supports merge-on-key patterns. |
-| **INSERT / UPDATE / DELETE** | `INSERT` / `UPDATE` / `DELETE` / `MERGE INTO` | Full DML support on Delta. |
-| **UPSERT** | `MERGE INTO ... WHEN MATCHED THEN UPDATE WHEN NOT MATCHED THEN INSERT` | Standard SQL MERGE. |
-| **Hash partitioning** | Delta partitioning + Z-ordering | Z-ORDER BY provides skip-based optimization for high-cardinality columns. |
-| **Range partitioning** | Delta partitioning (directory-based) | Use for low-cardinality columns (date, region). |
-| **Auto-compaction** | Delta auto-optimize (`optimizeWrite`, `autoCompact`) | Enable on table properties. |
-| **Tablet servers** | Managed by Databricks | No user-managed tablet infrastructure. |
-| **Replication factor** | ADLS Gen2 redundancy (LRS/ZRS/GRS) | Storage-level redundancy; no application-level replication. |
+| Kudu feature                 | Delta Lake equivalent                                                  | Notes                                                                     |
+| ---------------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| **Primary key**              | Not enforced; use `MERGE INTO` with key columns                        | Delta does not enforce primary keys but supports merge-on-key patterns.   |
+| **INSERT / UPDATE / DELETE** | `INSERT` / `UPDATE` / `DELETE` / `MERGE INTO`                          | Full DML support on Delta.                                                |
+| **UPSERT**                   | `MERGE INTO ... WHEN MATCHED THEN UPDATE WHEN NOT MATCHED THEN INSERT` | Standard SQL MERGE.                                                       |
+| **Hash partitioning**        | Delta partitioning + Z-ordering                                        | Z-ORDER BY provides skip-based optimization for high-cardinality columns. |
+| **Range partitioning**       | Delta partitioning (directory-based)                                   | Use for low-cardinality columns (date, region).                           |
+| **Auto-compaction**          | Delta auto-optimize (`optimizeWrite`, `autoCompact`)                   | Enable on table properties.                                               |
+| **Tablet servers**           | Managed by Databricks                                                  | No user-managed tablet infrastructure.                                    |
+| **Replication factor**       | ADLS Gen2 redundancy (LRS/ZRS/GRS)                                     | Storage-level redundancy; no application-level replication.               |
 
 ### Kudu table migration script
 
@@ -124,13 +124,13 @@ spark.sql("""
 
 ### Decision framework
 
-| Impala partition type | Cardinality | Delta recommendation |
-|---|---|---|
-| Date column (daily) | ~365/year | **Partition** by date column. Matches Impala behavior. |
-| Date column (hourly) | ~8,760/year | **Partition** by date (daily), not hourly. Z-ORDER by hour if needed. |
-| Region / country | 10-200 | **Partition** if < 100 values; otherwise Z-ORDER. |
-| Customer ID | 10K-10M | **Z-ORDER**, do not partition. Too many partitions degrades performance. |
-| Transaction ID | Very high | **Z-ORDER**. Never partition by high-cardinality columns. |
+| Impala partition type | Cardinality | Delta recommendation                                                     |
+| --------------------- | ----------- | ------------------------------------------------------------------------ |
+| Date column (daily)   | ~365/year   | **Partition** by date column. Matches Impala behavior.                   |
+| Date column (hourly)  | ~8,760/year | **Partition** by date (daily), not hourly. Z-ORDER by hour if needed.    |
+| Region / country      | 10-200      | **Partition** if < 100 values; otherwise Z-ORDER.                        |
+| Customer ID           | 10K-10M     | **Z-ORDER**, do not partition. Too many partitions degrades performance. |
+| Transaction ID        | Very high   | **Z-ORDER**. Never partition by high-cardinality columns.                |
 
 ### Example: convert Impala partitioned table
 
@@ -166,29 +166,29 @@ OPTIMIZE silver.sales.orders ZORDER BY (customer_id);
 
 ### Impala performance knobs vs Databricks equivalents
 
-| Impala tuning technique | Databricks equivalent | Notes |
-|---|---|---|
-| `COMPUTE STATS` for all tables | `ANALYZE TABLE ... COMPUTE STATISTICS` | Delta also collects stats automatically on write. |
-| Impala admission control | Databricks SQL Warehouse sizing (T-shirt sizes) | Choose warehouse size based on concurrency needs. |
-| Impala memory limits per query | Databricks SQL Warehouse auto-manages memory | Photon engine manages memory allocation. |
-| Impala partition pruning | Delta partition pruning + data skipping | Delta uses file-level min/max stats in addition to partition pruning. |
-| Impala runtime filters | Databricks adaptive query execution (AQE) | AQE dynamically optimizes joins and shuffles. |
-| `SET MEM_LIMIT=4g` per query | Warehouse sizing | No per-query memory configuration. |
-| Impala catalog caching | Unity Catalog + result caching | Enable result caching: `SET use_cached_result = true`. |
-| Impala HDFS short-circuit reads | Not applicable | ADLS Gen2 reads are network-based; Photon compensates. |
-| Impala codegen | Photon native vectorized engine | Photon is ~2-8x faster than non-vectorized execution. |
-| Impala resource pools | SQL Warehouse scaling (min/max clusters) | Multi-cluster auto-scaling for concurrency. |
+| Impala tuning technique         | Databricks equivalent                           | Notes                                                                 |
+| ------------------------------- | ----------------------------------------------- | --------------------------------------------------------------------- |
+| `COMPUTE STATS` for all tables  | `ANALYZE TABLE ... COMPUTE STATISTICS`          | Delta also collects stats automatically on write.                     |
+| Impala admission control        | Databricks SQL Warehouse sizing (T-shirt sizes) | Choose warehouse size based on concurrency needs.                     |
+| Impala memory limits per query  | Databricks SQL Warehouse auto-manages memory    | Photon engine manages memory allocation.                              |
+| Impala partition pruning        | Delta partition pruning + data skipping         | Delta uses file-level min/max stats in addition to partition pruning. |
+| Impala runtime filters          | Databricks adaptive query execution (AQE)       | AQE dynamically optimizes joins and shuffles.                         |
+| `SET MEM_LIMIT=4g` per query    | Warehouse sizing                                | No per-query memory configuration.                                    |
+| Impala catalog caching          | Unity Catalog + result caching                  | Enable result caching: `SET use_cached_result = true`.                |
+| Impala HDFS short-circuit reads | Not applicable                                  | ADLS Gen2 reads are network-based; Photon compensates.                |
+| Impala codegen                  | Photon native vectorized engine                 | Photon is ~2-8x faster than non-vectorized execution.                 |
+| Impala resource pools           | SQL Warehouse scaling (min/max clusters)        | Multi-cluster auto-scaling for concurrency.                           |
 
 ### Common performance issues after migration
 
-| Issue | Cause | Solution |
-|---|---|---|
-| Queries slower than Impala | Missing statistics | Run `ANALYZE TABLE` on migrated tables. |
-| High shuffle in joins | Default shuffle partitions too low | `SET spark.sql.shuffle.partitions = 200` (or higher for large tables). |
+| Issue                                | Cause                              | Solution                                                                |
+| ------------------------------------ | ---------------------------------- | ----------------------------------------------------------------------- |
+| Queries slower than Impala           | Missing statistics                 | Run `ANALYZE TABLE` on migrated tables.                                 |
+| High shuffle in joins                | Default shuffle partitions too low | `SET spark.sql.shuffle.partitions = 200` (or higher for large tables).  |
 | Full table scans on partitioned data | Partition predicate not recognized | Use literal values in WHERE clause, not functions on partition columns. |
-| Slow small queries | Warehouse startup time | Use Serverless SQL Warehouse (instant startup). |
-| Concurrent query throttling | Single-cluster warehouse | Enable multi-cluster scaling (2-8 clusters). |
-| OOM on large aggregations | Insufficient warehouse size | Scale up to larger warehouse size (Medium, Large, X-Large). |
+| Slow small queries                   | Warehouse startup time             | Use Serverless SQL Warehouse (instant startup).                         |
+| Concurrent query throttling          | Single-cluster warehouse           | Enable multi-cluster scaling (2-8 clusters).                            |
+| OOM on large aggregations            | Insufficient warehouse size        | Scale up to larger warehouse size (Medium, Large, X-Large).             |
 
 ---
 
@@ -245,13 +245,13 @@ ORDER BY o.order_date, total_revenue DESC;
 
 ### Key changes annotated
 
-| Line | Change | Reason |
-|---|---|---|
-| `COMPUTE INCREMENTAL STATS` | `ANALYZE TABLE ... COMPUTE STATISTICS FOR ALL COLUMNS` | Syntax difference; Delta auto-collects basic stats. |
-| `sales.orders` | `silver.sales.orders` | Three-level namespace: catalog.schema.table. |
-| `NDV()` | `APPROX_COUNT_DISTINCT()` | Spark SQL function name for HyperLogLog. |
-| `APPX_MEDIAN()` | `PERCENTILE_APPROX(col, 0.5)` | Spark SQL approximate median. |
-| `GROUP_CONCAT(DISTINCT ...)` | `CONCAT_WS(', ', COLLECT_SET(...))` | Spark uses COLLECT_SET for distinct + CONCAT_WS for joining. |
+| Line                         | Change                                                 | Reason                                                       |
+| ---------------------------- | ------------------------------------------------------ | ------------------------------------------------------------ |
+| `COMPUTE INCREMENTAL STATS`  | `ANALYZE TABLE ... COMPUTE STATISTICS FOR ALL COLUMNS` | Syntax difference; Delta auto-collects basic stats.          |
+| `sales.orders`               | `silver.sales.orders`                                  | Three-level namespace: catalog.schema.table.                 |
+| `NDV()`                      | `APPROX_COUNT_DISTINCT()`                              | Spark SQL function name for HyperLogLog.                     |
+| `APPX_MEDIAN()`              | `PERCENTILE_APPROX(col, 0.5)`                          | Spark SQL approximate median.                                |
+| `GROUP_CONCAT(DISTINCT ...)` | `CONCAT_WS(', ', COLLECT_SET(...))`                    | Spark uses COLLECT_SET for distinct + CONCAT_WS for joining. |
 
 ---
 

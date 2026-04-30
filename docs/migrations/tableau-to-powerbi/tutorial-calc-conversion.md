@@ -501,22 +501,22 @@ This is a nested aggregation: SUM at the customer level, then AVG across all cus
 
 ## Summary: Conversion pattern cheat sheet
 
-| Tableau pattern | DAX pattern | Key function |
-|---|---|---|
-| Simple aggregate | `SUM(Table[Column])` | SUM, AVERAGE, COUNT |
-| Row-level calc | Calculated column | Direct formula |
-| Conditional logic | `SWITCH(TRUE(), ...)` | SWITCH, IF |
-| FIXED LOD | `CALCULATE(agg, ALLEXCEPT(table, dims))` | CALCULATE + ALLEXCEPT |
-| INCLUDE LOD | `AVERAGEX(VALUES(dim), CALCULATE(agg))` | Iterator + CALCULATE |
-| EXCLUDE LOD | `CALCULATE(agg, ALL(excluded_dim))` | CALCULATE + ALL |
-| Running total | `WINDOW(1, ABS, 0, REL, ORDERBY(col))` | WINDOW |
-| Rank | `RANKX(ALL(table), measure, , DESC)` | RANKX |
-| YoY comparison | `CALCULATE(agg, SAMEPERIODLASTYEAR(dates))` | Time intelligence |
-| Moving average | `AVERAGEX(DATESINPERIOD(...), measure)` | DATESINPERIOD |
-| Top N | `RANKX` + What-If parameter + visual filter | RANKX + SELECTEDVALUE |
-| Percent of total | `DIVIDE(agg, CALCULATE(agg, ALL(table)))` | DIVIDE + ALL |
-| Cohort | Calculated column with ALLEXCEPT | Calculated column |
-| Nested LOD | `AVERAGEX(VALUES(dim), CALCULATE(agg))` | Iterator + CALCULATE |
+| Tableau pattern   | DAX pattern                                 | Key function          |
+| ----------------- | ------------------------------------------- | --------------------- |
+| Simple aggregate  | `SUM(Table[Column])`                        | SUM, AVERAGE, COUNT   |
+| Row-level calc    | Calculated column                           | Direct formula        |
+| Conditional logic | `SWITCH(TRUE(), ...)`                       | SWITCH, IF            |
+| FIXED LOD         | `CALCULATE(agg, ALLEXCEPT(table, dims))`    | CALCULATE + ALLEXCEPT |
+| INCLUDE LOD       | `AVERAGEX(VALUES(dim), CALCULATE(agg))`     | Iterator + CALCULATE  |
+| EXCLUDE LOD       | `CALCULATE(agg, ALL(excluded_dim))`         | CALCULATE + ALL       |
+| Running total     | `WINDOW(1, ABS, 0, REL, ORDERBY(col))`      | WINDOW                |
+| Rank              | `RANKX(ALL(table), measure, , DESC)`        | RANKX                 |
+| YoY comparison    | `CALCULATE(agg, SAMEPERIODLASTYEAR(dates))` | Time intelligence     |
+| Moving average    | `AVERAGEX(DATESINPERIOD(...), measure)`     | DATESINPERIOD         |
+| Top N             | `RANKX` + What-If parameter + visual filter | RANKX + SELECTEDVALUE |
+| Percent of total  | `DIVIDE(agg, CALCULATE(agg, ALL(table)))`   | DIVIDE + ALL          |
+| Cohort            | Calculated column with ALLEXCEPT            | Calculated column     |
+| Nested LOD        | `AVERAGEX(VALUES(dim), CALCULATE(agg))`     | Iterator + CALCULATE  |
 
 ---
 

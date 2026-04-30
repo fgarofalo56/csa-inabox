@@ -12,16 +12,16 @@
 
 Before starting this tutorial, ensure you have the following:
 
-| Requirement | Details |
-|---|---|
-| **Looker instance** | Admin or Developer access to export LookML projects |
-| **Looker API credentials** | Client ID and secret for the Looker API (Settings > Users > API3 Keys) |
-| **Git access** | To the LookML repository backing your Looker project |
-| **Microsoft Fabric workspace** | With Contributor or Admin permissions |
-| **Power BI Desktop** | Latest version installed locally |
-| **Tabular Editor 3** | For advanced semantic model editing (optional but recommended) |
-| **Fabric lakehouse** | With Delta tables already loaded (see [BigQuery to Fabric tutorial](tutorial-bigquery-to-fabric.md)) |
-| **dbt Core** | `pip install dbt-databricks` (for derived table conversion) |
+| Requirement                    | Details                                                                                              |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| **Looker instance**            | Admin or Developer access to export LookML projects                                                  |
+| **Looker API credentials**     | Client ID and secret for the Looker API (Settings > Users > API3 Keys)                               |
+| **Git access**                 | To the LookML repository backing your Looker project                                                 |
+| **Microsoft Fabric workspace** | With Contributor or Admin permissions                                                                |
+| **Power BI Desktop**           | Latest version installed locally                                                                     |
+| **Tabular Editor 3**           | For advanced semantic model editing (optional but recommended)                                       |
+| **Fabric lakehouse**           | With Delta tables already loaded (see [BigQuery to Fabric tutorial](tutorial-bigquery-to-fabric.md)) |
+| **dbt Core**                   | `pip install dbt-databricks` (for derived table conversion)                                          |
 
 > **GCP comparison:** Looker models are defined in LookML, a proprietary YAML-like language that lives in Git. Power BI semantic models use a TMDL/XMLA format with Git integration via Fabric deployment pipelines. The modeling concepts are analogous but the syntax is completely different.
 
@@ -154,37 +154,37 @@ view: fact_sales_daily {
 
 ### 2.1 Concept mapping table
 
-| LookML concept | Power BI equivalent | Migration notes |
-|---|---|---|
-| **Model** (`.model.lkml`) | Semantic model | One Power BI semantic model per Looker model |
-| **View** (`.view.lkml`) | Table in semantic model | Each LookML view becomes a table |
-| **Explore** | Report page or set of report pages | Explore join graph becomes the star schema relationships |
-| **Dimension** | Column | Dimensions map to columns; add to tables in the model |
-| **Dimension group** (time) | Date hierarchy | Use `dim_date` table with calendar hierarchy |
-| **Measure** (sum, count, avg) | DAX measure | Port to DAX using conversion table below |
-| **Derived table** (SQL) | dbt model | SQL-based derived tables become dbt SQL models |
-| **Derived table** (native) | dbt model or calculated table | Native derived tables port to dbt or Power BI calculated tables |
-| **Persistent derived table (PDT)** | dbt incremental model | PDTs map directly to dbt incremental materialization |
-| **LookML refinement** | Measure group / calculation group | Advanced pattern; port case-by-case |
-| **Access filter** | Row-level security (RLS) | Port to DAX RLS expressions |
-| **User attribute** | Entra ID group or UPN | User attributes become Entra ID claims |
-| **Set** | Field set in model view | Define visible columns per report page |
-| **Dashboard** | Power BI report | Visual-by-visual rebuild |
-| **Look** | Power BI report page | Single-visualization Looks become report pages |
-| **Schedule** | Power BI subscription | Email delivery via Power BI subscriptions |
-| **Alert** | Data Activator rule | Threshold alerts port to Data Activator |
-| **Action** | Power Automate flow | Looker Actions port to Power Automate |
+| LookML concept                     | Power BI equivalent                | Migration notes                                                 |
+| ---------------------------------- | ---------------------------------- | --------------------------------------------------------------- |
+| **Model** (`.model.lkml`)          | Semantic model                     | One Power BI semantic model per Looker model                    |
+| **View** (`.view.lkml`)            | Table in semantic model            | Each LookML view becomes a table                                |
+| **Explore**                        | Report page or set of report pages | Explore join graph becomes the star schema relationships        |
+| **Dimension**                      | Column                             | Dimensions map to columns; add to tables in the model           |
+| **Dimension group** (time)         | Date hierarchy                     | Use `dim_date` table with calendar hierarchy                    |
+| **Measure** (sum, count, avg)      | DAX measure                        | Port to DAX using conversion table below                        |
+| **Derived table** (SQL)            | dbt model                          | SQL-based derived tables become dbt SQL models                  |
+| **Derived table** (native)         | dbt model or calculated table      | Native derived tables port to dbt or Power BI calculated tables |
+| **Persistent derived table (PDT)** | dbt incremental model              | PDTs map directly to dbt incremental materialization            |
+| **LookML refinement**              | Measure group / calculation group  | Advanced pattern; port case-by-case                             |
+| **Access filter**                  | Row-level security (RLS)           | Port to DAX RLS expressions                                     |
+| **User attribute**                 | Entra ID group or UPN              | User attributes become Entra ID claims                          |
+| **Set**                            | Field set in model view            | Define visible columns per report page                          |
+| **Dashboard**                      | Power BI report                    | Visual-by-visual rebuild                                        |
+| **Look**                           | Power BI report page               | Single-visualization Looks become report pages                  |
+| **Schedule**                       | Power BI subscription              | Email delivery via Power BI subscriptions                       |
+| **Alert**                          | Data Activator rule                | Threshold alerts port to Data Activator                         |
+| **Action**                         | Power Automate flow                | Looker Actions port to Power Automate                           |
 
 ### 2.2 Relationship mapping
 
 Looker explores define joins that become Power BI relationships:
 
-| Looker join type | Power BI relationship | Cardinality |
-|---|---|---|
-| `left_outer` | Single direction, many-to-one | Default for fact-to-dim |
-| `inner` | Both directions, many-to-one | Less common |
-| `full_outer` | Many-to-many (with caution) | Rare; avoid if possible |
-| `cross` | Calculated table | Port to DAX `CROSSJOIN` |
+| Looker join type | Power BI relationship         | Cardinality             |
+| ---------------- | ----------------------------- | ----------------------- |
+| `left_outer`     | Single direction, many-to-one | Default for fact-to-dim |
+| `inner`          | Both directions, many-to-one  | Less common             |
+| `full_outer`     | Many-to-many (with caution)   | Rare; avoid if possible |
+| `cross`          | Calculated table              | Port to DAX `CROSSJOIN` |
 
 ---
 
@@ -202,11 +202,11 @@ Looker explores define joins that become Power BI relationships:
 
 In **Model View**, create relationships mirroring the LookML explore joins:
 
-| From (fact) | To (dimension) | On columns | Cardinality | Cross-filter |
-|---|---|---|---|---|
-| `fact_sales_daily[region]` | `dim_region[region_id]` | region = region_id | Many-to-one | Single |
-| `fact_sales_daily[product_id]` | `dim_product[product_id]` | product_id = product_id | Many-to-one | Single |
-| `fact_sales_daily[sales_date]` | `dim_date[date_key]` | sales_date = date_key | Many-to-one | Single |
+| From (fact)                    | To (dimension)            | On columns              | Cardinality | Cross-filter |
+| ------------------------------ | ------------------------- | ----------------------- | ----------- | ------------ |
+| `fact_sales_daily[region]`     | `dim_region[region_id]`   | region = region_id      | Many-to-one | Single       |
+| `fact_sales_daily[product_id]` | `dim_product[product_id]` | product_id = product_id | Many-to-one | Single       |
+| `fact_sales_daily[sales_date]` | `dim_date[date_key]`      | sales_date = date_key   | Many-to-one | Single       |
 
 ### 3.3 Publish to Fabric workspace
 
@@ -222,23 +222,23 @@ In **Model View**, create relationships mirroring the LookML explore joins:
 
 ### 4.1 Measure conversion reference
 
-| LookML measure | DAX equivalent | Notes |
-|---|---|---|
-| `type: sum; sql: ${TABLE}.amount` | `Total Amount = SUM(table[amount])` | Direct mapping |
-| `type: count` | `Row Count = COUNTROWS(table)` | Count of rows in the table |
-| `type: count_distinct; sql: ${TABLE}.customer_id` | `Unique Customers = DISTINCTCOUNT(table[customer_id])` | Direct mapping |
-| `type: average; sql: ${TABLE}.amount` | `Avg Amount = AVERAGE(table[amount])` | Direct mapping |
-| `type: min; sql: ${TABLE}.date_col` | `First Date = MIN(table[date_col])` | Direct mapping |
-| `type: max; sql: ${TABLE}.date_col` | `Last Date = MAX(table[date_col])` | Direct mapping |
-| `type: number; sql: ${total_revenue} / NULLIF(${total_units}, 0)` | `Revenue Per Unit = DIVIDE([Total Revenue], [Total Units], 0)` | Use `DIVIDE` for safe division |
-| `type: yesno; sql: ${TABLE}.is_active = 1` | Calculated column: `Is Active = table[is_active] = 1` | Boolean column |
-| `type: sum; sql: CASE WHEN ... THEN ... END` | `Conditional Sum = SUMX(table, IF(condition, value, 0))` | Use `SUMX` + `IF` for conditional |
-| `type: percent_of_total` | `Pct of Total = DIVIDE([Measure], CALCULATE([Measure], REMOVEFILTERS()))` | Use `REMOVEFILTERS` for grand total |
-| `type: running_total; sql: ${TABLE}.amount` | `Running Total = CALCULATE([Total Amount], FILTER(ALL(dim_date), dim_date[date_key] <= MAX(dim_date[date_key])))` | Running total with date filter |
-| `type: list; sql: ${TABLE}.name` | `Name List = CONCATENATEX(table, table[name], ", ")` | String aggregation |
-| Filtered measure with `filters: [dim.field: "value"]` | `Filtered Measure = CALCULATE([Base Measure], table[field] = "value")` | Use `CALCULATE` with filter |
-| `html: <a href="...">` | Conditional formatting or URL column | Power BI handles formatting via UX, not HTML |
-| `drill_fields: [...]` | Drillthrough page or tooltip page | Configure in report design |
+| LookML measure                                                    | DAX equivalent                                                                                                    | Notes                                        |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| `type: sum; sql: ${TABLE}.amount`                                 | `Total Amount = SUM(table[amount])`                                                                               | Direct mapping                               |
+| `type: count`                                                     | `Row Count = COUNTROWS(table)`                                                                                    | Count of rows in the table                   |
+| `type: count_distinct; sql: ${TABLE}.customer_id`                 | `Unique Customers = DISTINCTCOUNT(table[customer_id])`                                                            | Direct mapping                               |
+| `type: average; sql: ${TABLE}.amount`                             | `Avg Amount = AVERAGE(table[amount])`                                                                             | Direct mapping                               |
+| `type: min; sql: ${TABLE}.date_col`                               | `First Date = MIN(table[date_col])`                                                                               | Direct mapping                               |
+| `type: max; sql: ${TABLE}.date_col`                               | `Last Date = MAX(table[date_col])`                                                                                | Direct mapping                               |
+| `type: number; sql: ${total_revenue} / NULLIF(${total_units}, 0)` | `Revenue Per Unit = DIVIDE([Total Revenue], [Total Units], 0)`                                                    | Use `DIVIDE` for safe division               |
+| `type: yesno; sql: ${TABLE}.is_active = 1`                        | Calculated column: `Is Active = table[is_active] = 1`                                                             | Boolean column                               |
+| `type: sum; sql: CASE WHEN ... THEN ... END`                      | `Conditional Sum = SUMX(table, IF(condition, value, 0))`                                                          | Use `SUMX` + `IF` for conditional            |
+| `type: percent_of_total`                                          | `Pct of Total = DIVIDE([Measure], CALCULATE([Measure], REMOVEFILTERS()))`                                         | Use `REMOVEFILTERS` for grand total          |
+| `type: running_total; sql: ${TABLE}.amount`                       | `Running Total = CALCULATE([Total Amount], FILTER(ALL(dim_date), dim_date[date_key] <= MAX(dim_date[date_key])))` | Running total with date filter               |
+| `type: list; sql: ${TABLE}.name`                                  | `Name List = CONCATENATEX(table, table[name], ", ")`                                                              | String aggregation                           |
+| Filtered measure with `filters: [dim.field: "value"]`             | `Filtered Measure = CALCULATE([Base Measure], table[field] = "value")`                                            | Use `CALCULATE` with filter                  |
+| `html: <a href="...">`                                            | Conditional formatting or URL column                                                                              | Power BI handles formatting via UX, not HTML |
+| `drill_fields: [...]`                                             | Drillthrough page or tooltip page                                                                                 | Configure in report design                   |
 
 ### 4.2 Common LookML patterns and DAX equivalents
 
@@ -312,20 +312,20 @@ DIVIDE(
 
 ### 5.1 Map Looker tile types to Power BI visuals
 
-| Looker tile type | Power BI visual | Notes |
-|---|---|---|
-| Single value | Card | Use card visual for KPI callouts |
-| Table | Table or Matrix | Matrix for pivoted tables |
-| Bar chart | Clustered bar chart | Horizontal or vertical |
-| Line chart | Line chart | Identical concept |
-| Area chart | Area chart | Identical concept |
-| Scatter plot | Scatter chart | Identical concept |
-| Map (choropleth) | Filled map or Azure Maps | Use Azure Maps for GovCloud |
-| Pie / donut | Donut chart | Pie charts are available but donut preferred |
-| Funnel | Funnel chart | Identical concept |
-| Pivot table | Matrix | Matrix with row/column groups replaces Looker pivots |
-| Text tile | Text box | Use rich text box for narrative |
-| LookML dashboard filter | Report slicer | Slicer visual or filter pane |
+| Looker tile type        | Power BI visual          | Notes                                                |
+| ----------------------- | ------------------------ | ---------------------------------------------------- |
+| Single value            | Card                     | Use card visual for KPI callouts                     |
+| Table                   | Table or Matrix          | Matrix for pivoted tables                            |
+| Bar chart               | Clustered bar chart      | Horizontal or vertical                               |
+| Line chart              | Line chart               | Identical concept                                    |
+| Area chart              | Area chart               | Identical concept                                    |
+| Scatter plot            | Scatter chart            | Identical concept                                    |
+| Map (choropleth)        | Filled map or Azure Maps | Use Azure Maps for GovCloud                          |
+| Pie / donut             | Donut chart              | Pie charts are available but donut preferred         |
+| Funnel                  | Funnel chart             | Identical concept                                    |
+| Pivot table             | Matrix                   | Matrix with row/column groups replaces Looker pivots |
+| Text tile               | Text box                 | Use rich text box for narrative                      |
+| LookML dashboard filter | Report slicer            | Slicer visual or filter pane                         |
 
 ### 5.2 Create report pages
 
@@ -383,12 +383,12 @@ SELECTCOLUMNS(
 
 Create a table mapping Entra ID users to allowed regions:
 
-| user_email | allowed_region |
-|---|---|
-| analyst1@acme.gov | US-EAST |
-| analyst1@acme.gov | US-WEST |
-| analyst2@acme.gov | US-EAST |
-| manager@acme.gov | (all regions - no restriction) |
+| user_email        | allowed_region                 |
+| ----------------- | ------------------------------ |
+| analyst1@acme.gov | US-EAST                        |
+| analyst1@acme.gov | US-WEST                        |
+| analyst2@acme.gov | US-EAST                        |
+| manager@acme.gov  | (all regions - no restriction) |
 
 ### 6.3 Assign roles to Entra ID groups
 
@@ -409,6 +409,7 @@ In the Fabric workspace:
 If your semantic model connects to a Fabric lakehouse with Delta tables, Direct Lake is the default mode. It reads directly from OneLake without data import.
 
 **Benefits:**
+
 - No scheduled refresh needed for data (reads live Delta files)
 - Automatic fallback to DirectQuery for unsupported patterns
 - Semantic model metadata refresh is fast (seconds)
@@ -429,14 +430,14 @@ For each Looker scheduled delivery, create a Power BI subscription:
 2. **Subscribe to report** (envelope icon)
 3. Configure recipients, frequency, and format (PDF or PNG attachment)
 
-| Looker schedule feature | Power BI subscription equivalent |
-|---|---|
-| Email with inline content | Email with report snapshot |
-| PDF attachment | PDF attachment (via subscription) |
-| CSV export | Export via Power Automate flow |
-| Webhook delivery | Power Automate HTTP action |
-| Conditional send (if data matches) | Data Activator alert trigger |
-| Slack/Teams delivery | Power Automate Teams connector |
+| Looker schedule feature            | Power BI subscription equivalent  |
+| ---------------------------------- | --------------------------------- |
+| Email with inline content          | Email with report snapshot        |
+| PDF attachment                     | PDF attachment (via subscription) |
+| CSV export                         | Export via Power Automate flow    |
+| Webhook delivery                   | Power Automate HTTP action        |
+| Conditional send (if data matches) | Data Activator alert trigger      |
+| Slack/Teams delivery               | Power Automate Teams connector    |
 
 ---
 
@@ -475,29 +476,29 @@ Conduct 2-3 training sessions covering:
 
 ## LookML to DAX conversion quick reference
 
-| LookML expression | DAX equivalent |
-|---|---|
-| `${TABLE}.column` | `table[column]` |
-| `${view_name.field_name}` | `RELATED(table[column])` (if across relationship) |
-| `type: sum` | `SUM(table[col])` |
-| `type: count` | `COUNTROWS(table)` |
-| `type: count_distinct` | `DISTINCTCOUNT(table[col])` |
-| `type: average` | `AVERAGE(table[col])` |
-| `type: median` | `MEDIAN(table[col])` |
-| `type: min` | `MIN(table[col])` |
-| `type: max` | `MAX(table[col])` |
-| `type: number` (calculated) | Use `CALCULATE`, `DIVIDE`, etc. |
-| `type: percent_of_total` | `DIVIDE([Measure], CALCULATE([Measure], REMOVEFILTERS()))` |
-| `type: running_total` | `CALCULATE([Measure], FILTER(ALL(date), date[col] <= MAX(date[col])))` |
-| `type: list` | `CONCATENATEX(table, table[col], ", ")` |
-| `type: yesno` | `IF(condition, TRUE(), FALSE())` |
-| `sql_where: ${dim.col} = 'X'` | `CALCULATE([Measure], table[col] = "X")` |
-| `NULLIF(a, 0)` | `IF(a = 0, BLANK(), a)` |
-| `COALESCE(a, b)` | `COALESCE(a, b)` (DAX supports this) |
-| `CONCAT(a, ' ', b)` | `a & " " & b` |
-| `CASE WHEN ... THEN ... END` | `SWITCH(TRUE(), condition1, val1, condition2, val2, default)` |
-| Liquid parameter `{% parameter %}` | Power BI parameter or slicer | Liquid logic ports to What-If parameters |
-| Liquid condition `{% if ... %}` | `IF()` / `SWITCH()` in DAX | Conditional logic in measures |
+| LookML expression                  | DAX equivalent                                                         |
+| ---------------------------------- | ---------------------------------------------------------------------- | ---------------------------------------- |
+| `${TABLE}.column`                  | `table[column]`                                                        |
+| `${view_name.field_name}`          | `RELATED(table[column])` (if across relationship)                      |
+| `type: sum`                        | `SUM(table[col])`                                                      |
+| `type: count`                      | `COUNTROWS(table)`                                                     |
+| `type: count_distinct`             | `DISTINCTCOUNT(table[col])`                                            |
+| `type: average`                    | `AVERAGE(table[col])`                                                  |
+| `type: median`                     | `MEDIAN(table[col])`                                                   |
+| `type: min`                        | `MIN(table[col])`                                                      |
+| `type: max`                        | `MAX(table[col])`                                                      |
+| `type: number` (calculated)        | Use `CALCULATE`, `DIVIDE`, etc.                                        |
+| `type: percent_of_total`           | `DIVIDE([Measure], CALCULATE([Measure], REMOVEFILTERS()))`             |
+| `type: running_total`              | `CALCULATE([Measure], FILTER(ALL(date), date[col] <= MAX(date[col])))` |
+| `type: list`                       | `CONCATENATEX(table, table[col], ", ")`                                |
+| `type: yesno`                      | `IF(condition, TRUE(), FALSE())`                                       |
+| `sql_where: ${dim.col} = 'X'`      | `CALCULATE([Measure], table[col] = "X")`                               |
+| `NULLIF(a, 0)`                     | `IF(a = 0, BLANK(), a)`                                                |
+| `COALESCE(a, b)`                   | `COALESCE(a, b)` (DAX supports this)                                   |
+| `CONCAT(a, ' ', b)`                | `a & " " & b`                                                          |
+| `CASE WHEN ... THEN ... END`       | `SWITCH(TRUE(), condition1, val1, condition2, val2, default)`          |
+| Liquid parameter `{% parameter %}` | Power BI parameter or slicer                                           | Liquid logic ports to What-If parameters |
+| Liquid condition `{% if ... %}`    | `IF()` / `SWITCH()` in DAX                                             | Conditional logic in measures            |
 
 ---
 

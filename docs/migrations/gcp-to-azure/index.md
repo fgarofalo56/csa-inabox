@@ -12,19 +12,19 @@ This migration center serves federal CIOs, CDOs, Chief Data Architects, platform
 
 ## Quick-start decision matrix
 
-| Your situation | Start here |
-|---|---|
-| Executive evaluating Azure vs GCP | [Why Azure over GCP](why-azure-over-gcp.md) |
-| Need cost justification for migration | [Total Cost of Ownership Analysis](tco-analysis.md) |
-| Need a feature-by-feature comparison | [Complete Feature Mapping](feature-mapping-complete.md) |
-| Ready to plan a migration | [Migration Playbook](../gcp-to-azure.md) |
-| Federal / government-specific requirements | [Federal Migration Guide](federal-migration-guide.md) |
-| Migrating BigQuery or Dataproc | [Compute Migration](compute-migration.md) |
-| Migrating GCS data | [Storage Migration](storage-migration.md) |
-| Migrating Dataflow, Composer, or Pub/Sub | [ETL Migration](etl-migration.md) |
-| Migrating Looker or Looker Studio | [Analytics Migration](analytics-migration.md) |
-| Migrating Vertex AI or BigQuery ML | [AI/ML Migration](ai-ml-migration.md) |
-| Migrating IAM, DLP, or Data Catalog | [Security Migration](security-migration.md) |
+| Your situation                             | Start here                                              |
+| ------------------------------------------ | ------------------------------------------------------- |
+| Executive evaluating Azure vs GCP          | [Why Azure over GCP](why-azure-over-gcp.md)             |
+| Need cost justification for migration      | [Total Cost of Ownership Analysis](tco-analysis.md)     |
+| Need a feature-by-feature comparison       | [Complete Feature Mapping](feature-mapping-complete.md) |
+| Ready to plan a migration                  | [Migration Playbook](../gcp-to-azure.md)                |
+| Federal / government-specific requirements | [Federal Migration Guide](federal-migration-guide.md)   |
+| Migrating BigQuery or Dataproc             | [Compute Migration](compute-migration.md)               |
+| Migrating GCS data                         | [Storage Migration](storage-migration.md)               |
+| Migrating Dataflow, Composer, or Pub/Sub   | [ETL Migration](etl-migration.md)                       |
+| Migrating Looker or Looker Studio          | [Analytics Migration](analytics-migration.md)           |
+| Migrating Vertex AI or BigQuery ML         | [AI/ML Migration](ai-ml-migration.md)                   |
+| Migrating IAM, DLP, or Data Catalog        | [Security Migration](security-migration.md)             |
 
 ---
 
@@ -32,20 +32,20 @@ This migration center serves federal CIOs, CDOs, Chief Data Architects, platform
 
 These documents provide the business case, cost analysis, and strategic framing for decision-makers.
 
-| Document | Audience | Description |
-|---|---|---|
-| [Why Azure over GCP](why-azure-over-gcp.md) | CIO / CDO / Board | Executive white paper covering federal compliance superiority, unified Fabric platform, M365 ecosystem synergy, open Delta Lake format, and talent availability |
-| [Total Cost of Ownership Analysis](tco-analysis.md) | CFO / CIO / Procurement | BigQuery editions vs Fabric capacity, Looker seat costs vs Power BI, 5-year TCO projections across three federal scenarios, hidden cost analysis |
-| [Federal Migration Guide](federal-migration-guide.md) | CISO / ISSO / Compliance | Assured Workloads vs Azure Government, FedRAMP High coverage gaps, IL4/IL5/IL6 comparison, ITAR, CMMC, agency-specific patterns |
+| Document                                              | Audience                 | Description                                                                                                                                                     |
+| ----------------------------------------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Why Azure over GCP](why-azure-over-gcp.md)           | CIO / CDO / Board        | Executive white paper covering federal compliance superiority, unified Fabric platform, M365 ecosystem synergy, open Delta Lake format, and talent availability |
+| [Total Cost of Ownership Analysis](tco-analysis.md)   | CFO / CIO / Procurement  | BigQuery editions vs Fabric capacity, Looker seat costs vs Power BI, 5-year TCO projections across three federal scenarios, hidden cost analysis                |
+| [Federal Migration Guide](federal-migration-guide.md) | CISO / ISSO / Compliance | Assured Workloads vs Azure Government, FedRAMP High coverage gaps, IL4/IL5/IL6 comparison, ITAR, CMMC, agency-specific patterns                                 |
 
 ---
 
 ## Technical references
 
-| Document | Description |
-|---|---|
+| Document                                                | Description                                                                                                                                                |
+| ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [Complete Feature Mapping](feature-mapping-complete.md) | 50+ GCP services mapped to Azure equivalents across storage, compute, ETL, BI, AI/ML, governance, monitoring, and DevOps with migration complexity ratings |
-| [Migration Playbook](../gcp-to-azure.md) | The original end-to-end migration playbook with capability mapping, worked examples, phased 34-week project plan, and competitive framing |
+| [Migration Playbook](../gcp-to-azure.md)                | The original end-to-end migration playbook with capability mapping, worked examples, phased 34-week project plan, and competitive framing                  |
 
 ---
 
@@ -53,21 +53,21 @@ These documents provide the business case, cost analysis, and strategic framing 
 
 Domain-specific deep dives covering every aspect of a GCP-to-Azure migration.
 
-| Guide | GCP capability | Azure destination |
-|---|---|---|
-| [Storage Migration](storage-migration.md) | GCS, BigQuery managed storage, object lifecycle | ADLS Gen2, OneLake, Delta Lake |
-| [Compute Migration](compute-migration.md) | BigQuery SQL/ML, Dataproc Spark, slots, clustering | Databricks SQL, Fabric, dbt, Direct Lake |
-| [ETL Migration](etl-migration.md) | Dataflow, Cloud Composer, Dataform, Pub/Sub, Cloud Functions | ADF, dbt, Databricks Workflows, Event Hubs, Azure Functions |
-| [Analytics Migration](analytics-migration.md) | Looker, LookML, Looker Studio, Explores, embedding | Power BI, DAX, semantic models, Power BI Embedded |
-| [AI/ML Migration](ai-ml-migration.md) | Vertex AI, AutoML, BigQuery ML, Gemini, AI Search | Azure ML, Databricks MLflow, Azure OpenAI, AI Search |
-| [Security Migration](security-migration.md) | Cloud IAM, Data Catalog, DLP, Cloud KMS, VPC SC | Entra ID, Purview, Key Vault, Private Endpoints, Defender |
+| Guide                                         | GCP capability                                               | Azure destination                                           |
+| --------------------------------------------- | ------------------------------------------------------------ | ----------------------------------------------------------- |
+| [Storage Migration](storage-migration.md)     | GCS, BigQuery managed storage, object lifecycle              | ADLS Gen2, OneLake, Delta Lake                              |
+| [Compute Migration](compute-migration.md)     | BigQuery SQL/ML, Dataproc Spark, slots, clustering           | Databricks SQL, Fabric, dbt, Direct Lake                    |
+| [ETL Migration](etl-migration.md)             | Dataflow, Cloud Composer, Dataform, Pub/Sub, Cloud Functions | ADF, dbt, Databricks Workflows, Event Hubs, Azure Functions |
+| [Analytics Migration](analytics-migration.md) | Looker, LookML, Looker Studio, Explores, embedding           | Power BI, DAX, semantic models, Power BI Embedded           |
+| [AI/ML Migration](ai-ml-migration.md)         | Vertex AI, AutoML, BigQuery ML, Gemini, AI Search            | Azure ML, Databricks MLflow, Azure OpenAI, AI Search        |
+| [Security Migration](security-migration.md)   | Cloud IAM, Data Catalog, DLP, Cloud KMS, VPC SC              | Entra ID, Purview, Key Vault, Private Endpoints, Defender   |
 
 ---
 
 ## Government and federal
 
-| Document | Description |
-|---|---|
+| Document                                              | Description                                                                                                                      |
+| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | [Federal Migration Guide](federal-migration-guide.md) | Assured Workloads vs Azure Government, FedRAMP coverage analysis, IL4/IL5/IL6, ITAR, CMMC, procurement, agency-specific patterns |
 
 ---

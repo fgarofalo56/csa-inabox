@@ -16,61 +16,61 @@ Do not replicate Tableau dashboards pixel-for-pixel. Tableau's mark-based render
 
 These chart types have native Power BI visuals that are functionally identical to their Tableau counterparts. Migration is straightforward.
 
-| Tableau chart type | Power BI visual | Migration notes |
-|---|---|---|
-| **Bar chart** (horizontal) | Clustered bar chart | Direct mapping. Drag category to Y axis, measure to X axis |
-| **Column chart** (vertical) | Clustered column chart | Direct mapping. Category on X, measure on Y |
-| **Stacked bar/column** | Stacked bar/column | Add a legend field for the stack |
-| **100% stacked bar/column** | 100% stacked bar/column | Direct mapping |
-| **Line chart** | Line chart | Direct mapping. Power BI supports markers, step lines, line styles |
-| **Area chart** | Area chart | Direct mapping. Stacked and 100% stacked variants available |
-| **Scatter plot** | Scatter chart | Direct mapping. Power BI adds Play axis for time animation |
-| **Pie chart** | Pie chart | Direct mapping. Consider donut or treemap instead |
-| **Donut chart** | Donut chart | Direct mapping |
-| **Treemap** | Treemap | Direct mapping |
-| **Waterfall** | Waterfall chart | Native in Power BI. Supports category and breakdown |
-| **Funnel** | Funnel chart | Direct mapping |
-| **KPI card** | Card / Multi-row card / KPI visual | Card for single metric, KPI visual for target comparison |
-| **Text table** (crosstab) | Matrix visual | Direct mapping. Supports row/column hierarchies, subtotals |
-| **Highlight table** | Matrix with conditional formatting | Apply background color rules based on measure values |
+| Tableau chart type          | Power BI visual                    | Migration notes                                                    |
+| --------------------------- | ---------------------------------- | ------------------------------------------------------------------ |
+| **Bar chart** (horizontal)  | Clustered bar chart                | Direct mapping. Drag category to Y axis, measure to X axis         |
+| **Column chart** (vertical) | Clustered column chart             | Direct mapping. Category on X, measure on Y                        |
+| **Stacked bar/column**      | Stacked bar/column                 | Add a legend field for the stack                                   |
+| **100% stacked bar/column** | 100% stacked bar/column            | Direct mapping                                                     |
+| **Line chart**              | Line chart                         | Direct mapping. Power BI supports markers, step lines, line styles |
+| **Area chart**              | Area chart                         | Direct mapping. Stacked and 100% stacked variants available        |
+| **Scatter plot**            | Scatter chart                      | Direct mapping. Power BI adds Play axis for time animation         |
+| **Pie chart**               | Pie chart                          | Direct mapping. Consider donut or treemap instead                  |
+| **Donut chart**             | Donut chart                        | Direct mapping                                                     |
+| **Treemap**                 | Treemap                            | Direct mapping                                                     |
+| **Waterfall**               | Waterfall chart                    | Native in Power BI. Supports category and breakdown                |
+| **Funnel**                  | Funnel chart                       | Direct mapping                                                     |
+| **KPI card**                | Card / Multi-row card / KPI visual | Card for single metric, KPI visual for target comparison           |
+| **Text table** (crosstab)   | Matrix visual                      | Direct mapping. Supports row/column hierarchies, subtotals         |
+| **Highlight table**         | Matrix with conditional formatting | Apply background color rules based on measure values               |
 
 ### 1.2 Charts requiring configuration
 
 These chart types exist in Power BI but require specific configuration to match Tableau behavior.
 
-| Tableau chart type | Power BI visual | Configuration needed |
-|---|---|---|
-| **Dual-axis chart** | Combo chart (line + clustered column) | Add measures to both Column values and Line values wells. Enable secondary Y axis in format pane |
-| **Combined axis** | Combo chart | Same visual, multiple measures on shared or split axes |
-| **Small multiples (trellis)** | Any chart + Small multiples field | Drag a category field to the Small multiples well. Available on most chart types since 2021 |
-| **Reference line** | Analytics pane → Constant line / Average / Median / Trend | Open Analytics pane on the visual, add the desired reference |
-| **Reference band** | Analytics pane → Error bars or constant lines | Use two constant lines to create a band effect |
-| **Histogram** | Column chart with binned field | Create a bin on the numeric field (right-click → New Group), then chart the bin |
-| **Filled map (choropleth)** | Filled map visual | Drag location to Location, measure to Color saturation |
-| **Symbol map (point map)** | Map visual | Drag latitude/longitude or location fields, measure to Size |
-| **Circle view** | Scatter chart (without lines) | Use scatter chart with category on Details, no lines |
-| **Side-by-side bars** | Clustered bar/column chart | Add a legend field to create side-by-side groups |
+| Tableau chart type            | Power BI visual                                           | Configuration needed                                                                             |
+| ----------------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| **Dual-axis chart**           | Combo chart (line + clustered column)                     | Add measures to both Column values and Line values wells. Enable secondary Y axis in format pane |
+| **Combined axis**             | Combo chart                                               | Same visual, multiple measures on shared or split axes                                           |
+| **Small multiples (trellis)** | Any chart + Small multiples field                         | Drag a category field to the Small multiples well. Available on most chart types since 2021      |
+| **Reference line**            | Analytics pane → Constant line / Average / Median / Trend | Open Analytics pane on the visual, add the desired reference                                     |
+| **Reference band**            | Analytics pane → Error bars or constant lines             | Use two constant lines to create a band effect                                                   |
+| **Histogram**                 | Column chart with binned field                            | Create a bin on the numeric field (right-click → New Group), then chart the bin                  |
+| **Filled map (choropleth)**   | Filled map visual                                         | Drag location to Location, measure to Color saturation                                           |
+| **Symbol map (point map)**    | Map visual                                                | Drag latitude/longitude or location fields, measure to Size                                      |
+| **Circle view**               | Scatter chart (without lines)                             | Use scatter chart with category on Details, no lines                                             |
+| **Side-by-side bars**         | Clustered bar/column chart                                | Add a legend field to create side-by-side groups                                                 |
 
 ### 1.3 Charts requiring custom visuals or alternatives
 
 These Tableau chart types do not have native Power BI equivalents. Use AppSource custom visuals or alternative approaches.
 
-| Tableau chart type | Power BI solution | Where to find / how to implement |
-|---|---|---|
-| **Box-and-whisker plot** | Custom visual: "Box and Whisker" | AppSource → search "Box and Whisker" |
-| **Gantt chart** | Custom visual: "Gantt" by MAQ Software | AppSource → search "Gantt" |
-| **Packed bubble chart** | Custom visual or treemap alternative | AppSource → "Packed Bubble" or use treemap |
-| **Bullet chart** | Custom visual: "Bullet Chart" | AppSource → search "Bullet Chart" |
-| **Lollipop chart** | Custom visual: "Lollipop Chart" | AppSource → search "Lollipop" |
-| **Bump chart** | Line chart with rank measure | Calculate rank per period, plot as line chart |
-| **Radial chart** | Custom visual | AppSource → search "Radial" |
-| **Hex bin plot** | R or Python visual | Use R ggplot2 or Python matplotlib |
-| **Density plot** | R or Python visual | Use R ggplot2 density or Python seaborn |
-| **Sankey diagram** | Custom visual: "Sankey" | AppSource → search "Sankey" |
-| **Chord diagram** | Custom visual: "Chord" | AppSource → search "Chord" |
+| Tableau chart type       | Power BI solution                      | Where to find / how to implement              |
+| ------------------------ | -------------------------------------- | --------------------------------------------- |
+| **Box-and-whisker plot** | Custom visual: "Box and Whisker"       | AppSource → search "Box and Whisker"          |
+| **Gantt chart**          | Custom visual: "Gantt" by MAQ Software | AppSource → search "Gantt"                    |
+| **Packed bubble chart**  | Custom visual or treemap alternative   | AppSource → "Packed Bubble" or use treemap    |
+| **Bullet chart**         | Custom visual: "Bullet Chart"          | AppSource → search "Bullet Chart"             |
+| **Lollipop chart**       | Custom visual: "Lollipop Chart"        | AppSource → search "Lollipop"                 |
+| **Bump chart**           | Line chart with rank measure           | Calculate rank per period, plot as line chart |
+| **Radial chart**         | Custom visual                          | AppSource → search "Radial"                   |
+| **Hex bin plot**         | R or Python visual                     | Use R ggplot2 or Python matplotlib            |
+| **Density plot**         | R or Python visual                     | Use R ggplot2 density or Python seaborn       |
+| **Sankey diagram**       | Custom visual: "Sankey"                | AppSource → search "Sankey"                   |
+| **Chord diagram**        | Custom visual: "Chord"                 | AppSource → search "Chord"                    |
 
 !!! tip "AppSource has 300+ custom visuals"
-    Before concluding that a chart type is not available in Power BI, search AppSource. Most exotic chart types have community or partner-built visuals. Evaluate for your organization's security and certification requirements before deploying.
+Before concluding that a chart type is not available in Power BI, search AppSource. Most exotic chart types have community or partner-built visuals. Evaluate for your organization's security and certification requirements before deploying.
 
 ---
 
@@ -80,15 +80,15 @@ Tableau's mark-based model uses six encoding channels: Color, Size, Shape, Detai
 
 ### 2.1 Mark encoding to Power BI wells
 
-| Tableau mark property | Power BI equivalent | How to implement |
-|---|---|---|
+| Tableau mark property           | Power BI equivalent                             | How to implement                                                              |
+| ------------------------------- | ----------------------------------------------- | ----------------------------------------------------------------------------- |
 | **Color** (continuous gradient) | Color saturation well or conditional formatting | Drag measure to Color saturation; or use conditional formatting on the visual |
-| **Color** (categorical) | Legend well | Drag category to Legend to assign colors per category |
-| **Size** (bubble size) | Size well (scatter chart) | Drag measure to Size well on scatter chart |
-| **Shape** (mark shape) | Not directly available on most visuals | Scatter chart supports limited shapes via custom visuals |
-| **Detail** (disaggregate data) | No direct equivalent | Add field to Tooltips well or create a more granular visual |
-| **Label** (data labels) | Data labels toggle in format pane | Turn on data labels; configure position, font, format |
-| **Tooltip** (hover information) | Tooltips well + Report page tooltips | Drag fields to Tooltips well; create tooltip pages for rich hover |
+| **Color** (categorical)         | Legend well                                     | Drag category to Legend to assign colors per category                         |
+| **Size** (bubble size)          | Size well (scatter chart)                       | Drag measure to Size well on scatter chart                                    |
+| **Shape** (mark shape)          | Not directly available on most visuals          | Scatter chart supports limited shapes via custom visuals                      |
+| **Detail** (disaggregate data)  | No direct equivalent                            | Add field to Tooltips well or create a more granular visual                   |
+| **Label** (data labels)         | Data labels toggle in format pane               | Turn on data labels; configure position, font, format                         |
+| **Tooltip** (hover information) | Tooltips well + Report page tooltips            | Drag fields to Tooltips well; create tooltip pages for rich hover             |
 
 ### 2.2 The Detail shelf problem
 
@@ -105,31 +105,31 @@ Tableau's Detail shelf is unique: it disaggregates data points without affecting
 
 ### 3.1 Filter and highlight actions
 
-| Tableau action | Power BI equivalent | How to configure |
-|---|---|---|
-| **Filter action** (click visual A to filter visual B) | Cross-filtering | Default behavior. To customize: select visual A → Format → Edit Interactions → choose Filter/Highlight/None for each target visual |
-| **Highlight action** (click to highlight related data) | Cross-highlighting | Default behavior. Toggle between filter and highlight in Edit Interactions |
-| **Filter action with specific fields** | Drillthrough | Create a drillthrough page with the detail fields. Right-click a data point → Drillthrough → target page |
-| **Exclude action** (click to exclude data) | No direct equivalent | Use slicers with exclude mode; or create a DAX measure for dynamic exclusion |
+| Tableau action                                         | Power BI equivalent  | How to configure                                                                                                                   |
+| ------------------------------------------------------ | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| **Filter action** (click visual A to filter visual B)  | Cross-filtering      | Default behavior. To customize: select visual A → Format → Edit Interactions → choose Filter/Highlight/None for each target visual |
+| **Highlight action** (click to highlight related data) | Cross-highlighting   | Default behavior. Toggle between filter and highlight in Edit Interactions                                                         |
+| **Filter action with specific fields**                 | Drillthrough         | Create a drillthrough page with the detail fields. Right-click a data point → Drillthrough → target page                           |
+| **Exclude action** (click to exclude data)             | No direct equivalent | Use slicers with exclude mode; or create a DAX measure for dynamic exclusion                                                       |
 
 ### 3.2 Navigation actions
 
-| Tableau action | Power BI equivalent | How to configure |
-|---|---|---|
-| **Go to Sheet action** | Page navigation button | Insert → Button → set Action to Page navigation → select target page |
-| **URL action** | Button with Web URL action | Insert → Button → set Action to Web URL → use DAX for dynamic URL |
-| **URL action** (open external link) | Web URL visual or button | Embed a web page or add a clickable button |
+| Tableau action                      | Power BI equivalent        | How to configure                                                     |
+| ----------------------------------- | -------------------------- | -------------------------------------------------------------------- |
+| **Go to Sheet action**              | Page navigation button     | Insert → Button → set Action to Page navigation → select target page |
+| **URL action**                      | Button with Web URL action | Insert → Button → set Action to Web URL → use DAX for dynamic URL    |
+| **URL action** (open external link) | Web URL visual or button   | Embed a web page or add a clickable button                           |
 
 ### 3.3 Set and parameter actions
 
-| Tableau action | Power BI equivalent | How to configure |
-|---|---|---|
-| **Set action** (click to add/remove from set) | Slicer + bookmark combination | Create bookmarks that apply different slicer states; use buttons to toggle |
-| **Parameter action** (click to set parameter value) | Field parameter with slicer | Create a field parameter, expose as slicer, use in measures |
-| **Parameter action** (change measure dynamically) | Field parameter | Create a field parameter with multiple measures; slicer lets user switch |
+| Tableau action                                      | Power BI equivalent           | How to configure                                                           |
+| --------------------------------------------------- | ----------------------------- | -------------------------------------------------------------------------- |
+| **Set action** (click to add/remove from set)       | Slicer + bookmark combination | Create bookmarks that apply different slicer states; use buttons to toggle |
+| **Parameter action** (click to set parameter value) | Field parameter with slicer   | Create a field parameter, expose as slicer, use in measures                |
+| **Parameter action** (change measure dynamically)   | Field parameter               | Create a field parameter with multiple measures; slicer lets user switch   |
 
 !!! warning "Set actions are Power BI's biggest interaction gap"
-    Tableau set actions are powerful: click a data point and it gets added to a set that dynamically filters other visuals. Power BI has no direct equivalent. The closest workaround is a combination of bookmarks, buttons, and DAX logic. If your Tableau dashboard relies heavily on set actions, plan extra redesign time.
+Tableau set actions are powerful: click a data point and it gets added to a set that dynamically filters other visuals. Power BI has no direct equivalent. The closest workaround is a combination of bookmarks, buttons, and DAX logic. If your Tableau dashboard relies heavily on set actions, plan extra redesign time.
 
 ---
 
@@ -137,15 +137,15 @@ Tableau's Detail shelf is unique: it disaggregates data points without affecting
 
 ### 4.1 Map type mapping
 
-| Tableau map type | Power BI equivalent | When to use |
-|---|---|---|
-| **Symbol map** (dots on map) | Map visual | Default for point-level data with lat/long or place names |
-| **Filled map** (choropleth) | Filled map visual | Color regions by measure value |
-| **Density map** (heat map) | Azure Maps visual (heat map layer) | Requires Azure Maps visual from AppSource |
-| **Dual-axis map** (layers) | Azure Maps visual (multiple layers) | Azure Maps supports multiple data layers |
-| **Custom geocoding** | Shape map | Upload custom TopoJSON for non-standard boundaries |
-| **Mapbox background** | Azure Maps visual (satellite/terrain) | Azure Maps provides satellite, terrain, and road basemaps |
-| **Spatial file** (.shp, .kml) | Shape map with TopoJSON | Convert spatial files to TopoJSON format |
+| Tableau map type              | Power BI equivalent                   | When to use                                               |
+| ----------------------------- | ------------------------------------- | --------------------------------------------------------- |
+| **Symbol map** (dots on map)  | Map visual                            | Default for point-level data with lat/long or place names |
+| **Filled map** (choropleth)   | Filled map visual                     | Color regions by measure value                            |
+| **Density map** (heat map)    | Azure Maps visual (heat map layer)    | Requires Azure Maps visual from AppSource                 |
+| **Dual-axis map** (layers)    | Azure Maps visual (multiple layers)   | Azure Maps supports multiple data layers                  |
+| **Custom geocoding**          | Shape map                             | Upload custom TopoJSON for non-standard boundaries        |
+| **Mapbox background**         | Azure Maps visual (satellite/terrain) | Azure Maps provides satellite, terrain, and road basemaps |
+| **Spatial file** (.shp, .kml) | Shape map with TopoJSON               | Convert spatial files to TopoJSON format                  |
 
 ### 4.2 Map migration recommendations
 
@@ -161,16 +161,16 @@ Tableau's Detail shelf is unique: it disaggregates data points without affecting
 
 ### 5.1 Key formatting differences
 
-| Formatting feature | Tableau | Power BI | Notes |
-|---|---|---|---|
-| **Font control** | Full control per element | Format pane per visual | Similar capability; Power BI has more formatting options per visual in recent releases |
-| **Color palettes** | Built-in + custom (hex) | Built-in + custom (hex) + themes | Power BI themes provide organization-wide consistency |
-| **Borders and dividers** | Borders on worksheets | Borders on visuals | Similar capability |
-| **Background images** | Dashboard background image | Report background image or page wallpaper | Similar capability |
-| **Gridlines** | Configurable per axis | Configurable per axis | Similar |
-| **Number formatting** | Format pane per field | Format pane or DAX FORMAT | DAX FORMAT provides more control |
-| **Conditional formatting** | Color encoding on marks | Conditional formatting rules (background, font, icons, bars) | Power BI is more flexible: rules, gradient, field-based |
-| **Responsive layout** | Dashboard size: automatic, range, fixed | Report canvas: fixed size (default) or responsive | Power BI supports multiple page sizes; mobile layout is separate |
+| Formatting feature         | Tableau                                 | Power BI                                                     | Notes                                                                                  |
+| -------------------------- | --------------------------------------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
+| **Font control**           | Full control per element                | Format pane per visual                                       | Similar capability; Power BI has more formatting options per visual in recent releases |
+| **Color palettes**         | Built-in + custom (hex)                 | Built-in + custom (hex) + themes                             | Power BI themes provide organization-wide consistency                                  |
+| **Borders and dividers**   | Borders on worksheets                   | Borders on visuals                                           | Similar capability                                                                     |
+| **Background images**      | Dashboard background image              | Report background image or page wallpaper                    | Similar capability                                                                     |
+| **Gridlines**              | Configurable per axis                   | Configurable per axis                                        | Similar                                                                                |
+| **Number formatting**      | Format pane per field                   | Format pane or DAX FORMAT                                    | DAX FORMAT provides more control                                                       |
+| **Conditional formatting** | Color encoding on marks                 | Conditional formatting rules (background, font, icons, bars) | Power BI is more flexible: rules, gradient, field-based                                |
+| **Responsive layout**      | Dashboard size: automatic, range, fixed | Report canvas: fixed size (default) or responsive            | Power BI supports multiple page sizes; mobile layout is separate                       |
 
 ### 5.2 Power BI themes
 
@@ -186,10 +186,12 @@ Power BI themes (JSON files) provide organization-wide formatting consistency th
     "visualStyles": {
         "*": {
             "*": {
-                "title": [{
-                    "fontFamily": "Segoe UI",
-                    "fontSize": 14
-                }]
+                "title": [
+                    {
+                        "fontFamily": "Segoe UI",
+                        "fontSize": 14
+                    }
+                ]
             }
         }
     }
@@ -202,14 +204,14 @@ Power BI themes (JSON files) provide organization-wide formatting consistency th
 
 ### 6.1 Tableau dashboard layout vs Power BI report page
 
-| Concept | Tableau | Power BI |
-|---|---|---|
-| **Canvas** | Dashboard with tiled or floating layout | Report page with free-form positioning |
-| **Containers** | Horizontal/vertical containers for responsive layout | No containers; use alignment guides and snap-to-grid |
-| **Multiple dashboards** | Multiple dashboard tabs in a workbook | Multiple pages in a report |
-| **Blank space** | Blank objects | Empty space between visuals |
-| **Show/hide** | Container show/hide with buttons | Bookmarks + buttons (toggle visibility) |
-| **Device-specific** | Device layouts (desktop, tablet, phone) | Mobile layout (separate from desktop) |
+| Concept                 | Tableau                                              | Power BI                                             |
+| ----------------------- | ---------------------------------------------------- | ---------------------------------------------------- |
+| **Canvas**              | Dashboard with tiled or floating layout              | Report page with free-form positioning               |
+| **Containers**          | Horizontal/vertical containers for responsive layout | No containers; use alignment guides and snap-to-grid |
+| **Multiple dashboards** | Multiple dashboard tabs in a workbook                | Multiple pages in a report                           |
+| **Blank space**         | Blank objects                                        | Empty space between visuals                          |
+| **Show/hide**           | Container show/hide with buttons                     | Bookmarks + buttons (toggle visibility)              |
+| **Device-specific**     | Device layouts (desktop, tablet, phone)              | Mobile layout (separate from desktop)                |
 
 ### 6.2 Bookmark-based interactivity
 

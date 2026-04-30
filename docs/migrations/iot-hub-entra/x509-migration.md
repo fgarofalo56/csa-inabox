@@ -21,6 +21,7 @@ This guide covers the full lifecycle: certificate hierarchy design, DPS enrollme
 Suitable for development and testing only. Each device generates its own key pair and self-signs a certificate. The certificate thumbprint is registered directly in IoT Hub.
 
 **Limitations:**
+
 - No chain of trust
 - Each device certificate must be individually registered
 - No centralized revocation
@@ -31,6 +32,7 @@ Suitable for development and testing only. Each device generates its own key pai
 A Certificate Authority issues device certificates. IoT Hub or DPS validates the certificate chain against a registered root or intermediate CA. This is the only acceptable model for production and compliance environments.
 
 **Advantages:**
+
 - Centralized trust anchor (root CA)
 - Scalable (add devices without per-device IoT Hub registration)
 - Revocable (CRL or OCSP)
@@ -67,14 +69,14 @@ A Certificate Authority issues device certificates. IoT Hub or DPS validates the
 
 ### Design decisions
 
-| Decision | Recommendation | Rationale |
-|---|---|---|
-| Root CA storage | Offline HSM (Azure Managed HSM or physical) | Root compromise = total PKI compromise |
-| Intermediate CA storage | Azure Key Vault (Premium SKU with HSM) | Online signing with hardware protection |
-| Leaf cert lifetime | 90 days (default), 30 days (high-security) | Balance rotation frequency with device connectivity |
-| Key algorithm | RSA 2048 (broad device support) or ECC P-256 (resource-constrained devices) | FIPS 140-2 approved algorithms |
-| CRL distribution | Azure Blob Storage with CDN | Low-latency revocation checking |
-| Cert renewal trigger | 30 days before expiry | Allows for offline device reconnection window |
+| Decision                | Recommendation                                                              | Rationale                                           |
+| ----------------------- | --------------------------------------------------------------------------- | --------------------------------------------------- |
+| Root CA storage         | Offline HSM (Azure Managed HSM or physical)                                 | Root compromise = total PKI compromise              |
+| Intermediate CA storage | Azure Key Vault (Premium SKU with HSM)                                      | Online signing with hardware protection             |
+| Leaf cert lifetime      | 90 days (default), 30 days (high-security)                                  | Balance rotation frequency with device connectivity |
+| Key algorithm           | RSA 2048 (broad device support) or ECC P-256 (resource-constrained devices) | FIPS 140-2 approved algorithms                      |
+| CRL distribution        | Azure Blob Storage with CDN                                                 | Low-latency revocation checking                     |
+| Cert renewal trigger    | 30 days before expiry                                                       | Allows for offline device reconnection window       |
 
 ### Generate root CA certificate
 
@@ -358,13 +360,13 @@ For DoD IL5, FIPS 140-2 Level 2 (minimum) or Level 3 cryptographic modules are r
 
 ### Device-level HSM options
 
-| HSM/TPM option | FIPS level | Device type | Notes |
-|---|---|---|---|
-| TPM 2.0 | 140-2 Level 1-2 | Industrial PCs, gateways | Built into many commercial devices |
-| ATECC608B (Microchip) | 140-2 Level 2 | Embedded, MCU-based | Low-cost, I2C interface |
-| OPTIGA Trust M (Infineon) | 140-2 Level 2 | Embedded, MCU-based | Pre-provisioned X.509 support |
-| SE050 (NXP) | 140-2 Level 3 | High-security embedded | EdgeLock platform |
-| Azure Sphere (MediaTek MT3620) | Custom | IoT devices | Integrated HSM + OS + cloud security |
+| HSM/TPM option                 | FIPS level      | Device type              | Notes                                |
+| ------------------------------ | --------------- | ------------------------ | ------------------------------------ |
+| TPM 2.0                        | 140-2 Level 1-2 | Industrial PCs, gateways | Built into many commercial devices   |
+| ATECC608B (Microchip)          | 140-2 Level 2   | Embedded, MCU-based      | Low-cost, I2C interface              |
+| OPTIGA Trust M (Infineon)      | 140-2 Level 2   | Embedded, MCU-based      | Pre-provisioned X.509 support        |
+| SE050 (NXP)                    | 140-2 Level 3   | High-security embedded   | EdgeLock platform                    |
+| Azure Sphere (MediaTek MT3620) | Custom          | IoT devices              | Integrated HSM + OS + cloud security |
 
 ### Provisioning with TPM 2.0
 
@@ -615,13 +617,13 @@ if __name__ == "__main__":
 
 ## Troubleshooting
 
-| Symptom | Likely cause | Resolution |
-|---|---|---|
-| `401 Unauthorized` during DPS registration | Certificate chain does not match enrollment group CA | Verify `openssl verify -CAfile chain.pem device.pem` |
-| `403 Forbidden` after DPS registration | IoT Hub does not have the CA registered | Upload root/intermediate CA to IoT Hub CA certificates |
-| TLS handshake failure | Certificate key mismatch | Verify key matches cert: `openssl x509 -noout -modulus -in cert.pem | openssl md5` vs `openssl rsa -noout -modulus -in key.pem | openssl md5` |
-| Device connects but cannot send telemetry | Device ID in IoT Hub does not match certificate CN | Ensure registration ID matches CN in certificate |
-| Certificate expired | Renewal process not triggered | Check renewal monitoring alerts; see [Monitoring](monitoring-migration.md) |
+| Symptom                                    | Likely cause                                         | Resolution                                                                 |
+| ------------------------------------------ | ---------------------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------ | ------------ |
+| `401 Unauthorized` during DPS registration | Certificate chain does not match enrollment group CA | Verify `openssl verify -CAfile chain.pem device.pem`                       |
+| `403 Forbidden` after DPS registration     | IoT Hub does not have the CA registered              | Upload root/intermediate CA to IoT Hub CA certificates                     |
+| TLS handshake failure                      | Certificate key mismatch                             | Verify key matches cert: `openssl x509 -noout -modulus -in cert.pem        | openssl md5`vs`openssl rsa -noout -modulus -in key.pem | openssl md5` |
+| Device connects but cannot send telemetry  | Device ID in IoT Hub does not match certificate CN   | Ensure registration ID matches CN in certificate                           |
+| Certificate expired                        | Renewal process not triggered                        | Check renewal monitoring alerts; see [Monitoring](monitoring-migration.md) |
 
 ---
 

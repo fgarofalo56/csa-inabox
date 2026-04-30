@@ -86,71 +86,71 @@ pip install dbt-fabric
 
 ```yaml
 my_project:
-  outputs:
-    prod:
-      type: snowflake
-      account: ACMEGOV.us-gov-west-1.snowflake-gov
-      user: DBT_SVC
-      password: "{{ env_var('SNOWFLAKE_PASSWORD') }}"
-      role: DATA_ENGINEER
-      database: ANALYTICS_DB
-      warehouse: TRANSFORM_WH
-      schema: MARTS
-      threads: 8
-    dev:
-      type: snowflake
-      account: ACMEGOV.us-gov-west-1.snowflake-gov
-      user: "{{ env_var('SNOWFLAKE_USER') }}"
-      password: "{{ env_var('SNOWFLAKE_PASSWORD') }}"
-      role: DATA_ENGINEER
-      database: ANALYTICS_DEV
-      warehouse: DEV_WH
-      schema: "dev_{{ env_var('USER') }}"
-      threads: 4
-  target: dev
+    outputs:
+        prod:
+            type: snowflake
+            account: ACMEGOV.us-gov-west-1.snowflake-gov
+            user: DBT_SVC
+            password: "{{ env_var('SNOWFLAKE_PASSWORD') }}"
+            role: DATA_ENGINEER
+            database: ANALYTICS_DB
+            warehouse: TRANSFORM_WH
+            schema: MARTS
+            threads: 8
+        dev:
+            type: snowflake
+            account: ACMEGOV.us-gov-west-1.snowflake-gov
+            user: "{{ env_var('SNOWFLAKE_USER') }}"
+            password: "{{ env_var('SNOWFLAKE_PASSWORD') }}"
+            role: DATA_ENGINEER
+            database: ANALYTICS_DEV
+            warehouse: DEV_WH
+            schema: "dev_{{ env_var('USER') }}"
+            threads: 4
+    target: dev
 ```
 
 **Databricks profile (after):**
 
 ```yaml
 my_project:
-  outputs:
-    prod:
-      type: databricks
-      host: adb-acmegov-analytics.12.databricks.azure.us
-      http_path: /sql/1.0/warehouses/abc123def456
-      catalog: analytics_prod
-      schema: marts
-      token: "{{ env_var('DATABRICKS_TOKEN') }}"
-      threads: 8
-    dev:
-      type: databricks
-      host: adb-acmegov-analytics.12.databricks.azure.us
-      http_path: /sql/1.0/warehouses/dev789ghi012
-      catalog: analytics_dev
-      schema: "dev_{{ env_var('USER') }}"
-      token: "{{ env_var('DATABRICKS_TOKEN') }}"
-      threads: 4
-  target: dev
+    outputs:
+        prod:
+            type: databricks
+            host: adb-acmegov-analytics.12.databricks.azure.us
+            http_path: /sql/1.0/warehouses/abc123def456
+            catalog: analytics_prod
+            schema: marts
+            token: "{{ env_var('DATABRICKS_TOKEN') }}"
+            threads: 8
+        dev:
+            type: databricks
+            host: adb-acmegov-analytics.12.databricks.azure.us
+            http_path: /sql/1.0/warehouses/dev789ghi012
+            catalog: analytics_dev
+            schema: "dev_{{ env_var('USER') }}"
+            token: "{{ env_var('DATABRICKS_TOKEN') }}"
+            threads: 4
+    target: dev
 ```
 
 **Fabric profile (alternative):**
 
 ```yaml
 my_project:
-  outputs:
-    prod:
-      type: fabric
-      driver: "ODBC Driver 18 for SQL Server"
-      server: "acmegov-analytics.datawarehouse.fabric.microsoft.com"
-      database: "analytics_lakehouse"
-      schema: marts
-      authentication: ServicePrincipal
-      tenant_id: "{{ env_var('AZURE_TENANT_ID') }}"
-      client_id: "{{ env_var('AZURE_CLIENT_ID') }}"
-      client_secret: "{{ env_var('AZURE_CLIENT_SECRET') }}"
-      threads: 8
-  target: prod
+    outputs:
+        prod:
+            type: fabric
+            driver: "ODBC Driver 18 for SQL Server"
+            server: "acmegov-analytics.datawarehouse.fabric.microsoft.com"
+            database: "analytics_lakehouse"
+            schema: marts
+            authentication: ServicePrincipal
+            tenant_id: "{{ env_var('AZURE_TENANT_ID') }}"
+            client_id: "{{ env_var('AZURE_CLIENT_ID') }}"
+            client_secret: "{{ env_var('AZURE_CLIENT_SECRET') }}"
+            threads: 8
+    target: prod
 ```
 
 ### 2.3 Update dbt_project.yml
@@ -166,13 +166,13 @@ my_project:
 
 # After (Databricks):
 models:
-  my_project:
-    staging:
-      +materialized: view
-    marts:
-      +materialized: incremental
-      +incremental_strategy: merge
-      +file_format: delta
+    my_project:
+        staging:
+            +materialized: view
+        marts:
+            +materialized: incremental
+            +incremental_strategy: merge
+            +file_format: delta
 ```
 
 ---
@@ -292,30 +292,30 @@ QUALIFY ROW_NUMBER() OVER (PARTITION BY event_id ORDER BY created_at DESC) = 1;
 
 ### 3.3 Complete SQL translation reference
 
-| Snowflake | Databricks | Notes |
-|---|---|---|
-| `IFF(cond, a, b)` | `IF(cond, a, b)` | Function name |
-| `DATEADD(day, n, date)` | `DATE_ADD(date, n)` | Arg order; day-only shortcut |
-| `DATEADD(month, n, date)` | `ADD_MONTHS(date, n)` | Month-specific function |
-| `DATEADD(hour, n, ts)` | `ts + INTERVAL n HOURS` | Interval syntax |
-| `DATEDIFF(day, a, b)` | `DATEDIFF(b, a)` | **Args reversed** |
-| `TRY_TO_NUMBER(x)` | `TRY_CAST(x AS NUMERIC)` | Use TRY_CAST |
-| `TRY_TO_DATE(x)` | `TRY_CAST(x AS DATE)` | Use TRY_CAST |
-| `TRY_TO_TIMESTAMP(x)` | `TRY_CAST(x AS TIMESTAMP)` | Use TRY_CAST |
-| `ARRAY_AGG(x)` | `COLLECT_LIST(x)` | Function name |
-| `OBJECT_CONSTRUCT(...)` | `TO_JSON(NAMED_STRUCT(...))` | Two functions |
-| `col:field::TYPE` | `col.field` or `GET_JSON_OBJECT` | Notation differs |
-| `FLATTEN(...)` | `EXPLODE(...)` | Array/object expansion |
-| `PARSE_JSON(x)` | `FROM_JSON(x, schema)` | Schema required |
-| `TYPEOF(x)` | `TYPEOF(x)` | Same (Runtime 13+) |
-| `LISTAGG(x, ',')` | `CONCAT_WS(',', COLLECT_LIST(x))` | Two functions |
-| `QUALIFY` | `QUALIFY` | Same (Runtime 13+) |
-| `CURRENT_TIMESTAMP()` | `CURRENT_TIMESTAMP()` | Same |
-| `CURRENT_DATE()` | `CURRENT_DATE()` | Same |
-| `TO_VARCHAR(x, fmt)` | `DATE_FORMAT(x, fmt)` | Format strings differ |
-| `SPLIT_PART(x, d, n)` | `SPLIT(x, d)[n-1]` | 0-indexed array |
-| `REGEXP_SUBSTR(x, p)` | `REGEXP_EXTRACT(x, p)` | Function name |
-| `$1, $2` (stage columns) | Named columns | No positional refs |
+| Snowflake                 | Databricks                        | Notes                        |
+| ------------------------- | --------------------------------- | ---------------------------- |
+| `IFF(cond, a, b)`         | `IF(cond, a, b)`                  | Function name                |
+| `DATEADD(day, n, date)`   | `DATE_ADD(date, n)`               | Arg order; day-only shortcut |
+| `DATEADD(month, n, date)` | `ADD_MONTHS(date, n)`             | Month-specific function      |
+| `DATEADD(hour, n, ts)`    | `ts + INTERVAL n HOURS`           | Interval syntax              |
+| `DATEDIFF(day, a, b)`     | `DATEDIFF(b, a)`                  | **Args reversed**            |
+| `TRY_TO_NUMBER(x)`        | `TRY_CAST(x AS NUMERIC)`          | Use TRY_CAST                 |
+| `TRY_TO_DATE(x)`          | `TRY_CAST(x AS DATE)`             | Use TRY_CAST                 |
+| `TRY_TO_TIMESTAMP(x)`     | `TRY_CAST(x AS TIMESTAMP)`        | Use TRY_CAST                 |
+| `ARRAY_AGG(x)`            | `COLLECT_LIST(x)`                 | Function name                |
+| `OBJECT_CONSTRUCT(...)`   | `TO_JSON(NAMED_STRUCT(...))`      | Two functions                |
+| `col:field::TYPE`         | `col.field` or `GET_JSON_OBJECT`  | Notation differs             |
+| `FLATTEN(...)`            | `EXPLODE(...)`                    | Array/object expansion       |
+| `PARSE_JSON(x)`           | `FROM_JSON(x, schema)`            | Schema required              |
+| `TYPEOF(x)`               | `TYPEOF(x)`                       | Same (Runtime 13+)           |
+| `LISTAGG(x, ',')`         | `CONCAT_WS(',', COLLECT_LIST(x))` | Two functions                |
+| `QUALIFY`                 | `QUALIFY`                         | Same (Runtime 13+)           |
+| `CURRENT_TIMESTAMP()`     | `CURRENT_TIMESTAMP()`             | Same                         |
+| `CURRENT_DATE()`          | `CURRENT_DATE()`                  | Same                         |
+| `TO_VARCHAR(x, fmt)`      | `DATE_FORMAT(x, fmt)`             | Format strings differ        |
+| `SPLIT_PART(x, d, n)`     | `SPLIT(x, d)[n-1]`                | 0-indexed array              |
+| `REGEXP_SUBSTR(x, p)`     | `REGEXP_EXTRACT(x, p)`            | Function name                |
+| `$1, $2` (stage columns)  | Named columns                     | No positional refs           |
 
 ---
 
@@ -363,11 +363,11 @@ GROUP BY DATE_TRUNC('day', order_date), region
 # Databricks: all Delta tables have configurable retention
 # dbt_project.yml
 models:
-  my_project:
-    staging:
-      +materialized: view  # Views for staging (no storage cost)
-    marts:
-      +materialized: incremental
+    my_project:
+        staging:
+            +materialized: view # Views for staging (no storage cost)
+        marts:
+            +materialized: incremental
 ```
 
 ### 4.3 Secure views
@@ -417,14 +417,14 @@ Snowflake uppercases all unquoted identifiers. Databricks preserves case.
 ```yaml
 # If your Snowflake sources use uppercase:
 sources:
-  - name: raw
-    database: analytics_prod
-    schema: raw
-    tables:
-      - name: orders
-        # If the actual Delta table is lowercase, this works as-is
-        # If you need to reference an uppercase table from Snowflake:
-        # identifier: ORDERS  # explicit override
+    - name: raw
+      database: analytics_prod
+      schema: raw
+      tables:
+          - name: orders
+            # If the actual Delta table is lowercase, this works as-is
+            # If you need to reference an uppercase table from Snowflake:
+            # identifier: ORDERS  # explicit override
 ```
 
 ---
@@ -508,44 +508,44 @@ ORDER BY dt DESC
 name: dbt CI
 
 on:
-  pull_request:
-    paths:
-      - 'models/**'
-      - 'macros/**'
-      - 'tests/**'
-      - 'dbt_project.yml'
+    pull_request:
+        paths:
+            - "models/**"
+            - "macros/**"
+            - "tests/**"
+            - "dbt_project.yml"
 
 jobs:
-  dbt-test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+    dbt-test:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+            - name: Set up Python
+              uses: actions/setup-python@v5
+              with:
+                  python-version: "3.11"
 
-      - name: Install dependencies
-        run: pip install dbt-databricks==1.7.0
+            - name: Install dependencies
+              run: pip install dbt-databricks==1.7.0
 
-      - name: dbt deps
-        run: dbt deps
+            - name: dbt deps
+              run: dbt deps
 
-      - name: dbt compile
-        run: dbt compile --target ci
-        env:
-          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+            - name: dbt compile
+              run: dbt compile --target ci
+              env:
+                  DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
 
-      - name: dbt run (changed models only)
-        run: dbt run --target ci --select state:modified+
-        env:
-          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+            - name: dbt run (changed models only)
+              run: dbt run --target ci --select state:modified+
+              env:
+                  DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
 
-      - name: dbt test
-        run: dbt test --target ci --select state:modified+
-        env:
-          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+            - name: dbt test
+              run: dbt test --target ci --select state:modified+
+              env:
+                  DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
 ```
 
 ### 7.2 Contract validation
@@ -556,8 +556,8 @@ Wire to csa-inabox contract validation:
 # Add to .github/workflows/validate-contracts.yml
 - name: Validate dbt contracts
   run: |
-    dbt compile --target ci
-    python scripts/validate_contracts.py --dbt-manifest target/manifest.json
+      dbt compile --target ci
+      python scripts/validate_contracts.py --dbt-manifest target/manifest.json
 ```
 
 ---
@@ -611,14 +611,14 @@ Set up a Databricks Job to run dbt on schedule:
 
 ## Common pitfalls and solutions
 
-| Pitfall | Symptom | Solution |
-|---|---|---|
-| DATEDIFF arg order | Negative values where positive expected | Swap arguments: `DATEDIFF(end, start)` on Databricks |
-| Case sensitivity | Table not found errors | Check catalog/schema/table name casing |
-| VARIANT column access | Syntax errors with `:` notation | Use dot notation or GET_JSON_OBJECT |
-| Snowflake-specific macros | Compilation errors in macros/ | Rewrite macros for Databricks SQL dialect |
-| Transient table config | Warning about unknown config | Remove `+transient: true` from dbt_project.yml |
-| Warehouse not found | Connection errors | Verify http_path in profiles.yml |
+| Pitfall                   | Symptom                                 | Solution                                             |
+| ------------------------- | --------------------------------------- | ---------------------------------------------------- |
+| DATEDIFF arg order        | Negative values where positive expected | Swap arguments: `DATEDIFF(end, start)` on Databricks |
+| Case sensitivity          | Table not found errors                  | Check catalog/schema/table name casing               |
+| VARIANT column access     | Syntax errors with `:` notation         | Use dot notation or GET_JSON_OBJECT                  |
+| Snowflake-specific macros | Compilation errors in macros/           | Rewrite macros for Databricks SQL dialect            |
+| Transient table config    | Warning about unknown config            | Remove `+transient: true` from dbt_project.yml       |
+| Warehouse not found       | Connection errors                       | Verify http_path in profiles.yml                     |
 
 ---
 

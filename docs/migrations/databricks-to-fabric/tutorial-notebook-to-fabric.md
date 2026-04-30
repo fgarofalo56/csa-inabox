@@ -196,9 +196,9 @@ Before converting the notebook, make the source CSV files accessible in Fabric.
 3. In the Lakehouse explorer, right-click **Files** > **New shortcut**
 4. Select **Azure Data Lake Storage Gen2**
 5. Enter the connection details:
-   - **URL:** `https://<storageaccount>.dfs.core.windows.net`
-   - **Sub path:** `/<container>/raw/customers`
-   - **Shortcut name:** `raw_customers`
+    - **URL:** `https://<storageaccount>.dfs.core.windows.net`
+    - **Sub path:** `/<container>/raw/customers`
+    - **Shortcut name:** `raw_customers`
 6. Authenticate with your Entra ID credentials or a service principal
 
 The CSV files now appear at `Files/raw_customers/` in the Lakehouse. No data was copied.
@@ -210,8 +210,8 @@ The CSV files now appear at `Files/raw_customers/` in the Lakehouse. No data was
 1. In the workspace, click **New > Environment**
 2. Name it `customer-etl-env`
 3. Under **Public libraries**, add:
-   - `phonenumbers==8.13.0`
-   - `email-validator==2.0.0`
+    - `phonenumbers==8.13.0`
+    - `email-validator==2.0.0`
 4. Click **Publish** and wait for the environment to build (~2-5 minutes)
 
 ---
@@ -230,13 +230,16 @@ The CSV files now appear at `Files/raw_customers/` in the Lakehouse. No data was
 Create the following cells in the Fabric notebook:
 
 **Cell 1 (Markdown):**
+
 ```markdown
 # Customer ETL Pipeline
+
 Reads raw CSV from OneLake shortcut, cleans, writes Silver Lakehouse table.
 Converted from Databricks notebook `customer_etl.py`.
 ```
 
 **Cell 2 (PySpark) -- Imports:**
+
 ```python
 # Libraries are installed via the Fabric environment (customer-etl-env)
 # No need for %pip install in the notebook
@@ -247,6 +250,7 @@ from pyspark.sql.types import StringType
 ```
 
 **Cell 3 (PySpark) -- Configuration:**
+
 ```python
 # Parameters -- in Fabric, these are passed from Data Pipeline
 # or via mssparkutils.notebook.run()
@@ -261,6 +265,7 @@ print(f"Write mode: {write_mode}")
 ```
 
 **Cell 4 (PySpark) -- Read raw data:**
+
 ```python
 # Read CSVs from OneLake shortcut (no /mnt/ needed)
 df_raw = (
@@ -275,6 +280,7 @@ df_raw.printSchema()
 ```
 
 **Cell 5 (PySpark) -- Transform:**
+
 ```python
 # UDF: Standardize phone numbers (same as Databricks)
 @F.udf(StringType())
@@ -324,6 +330,7 @@ print(f"Clean records: {df_clean.count()}")
 ```
 
 **Cell 6 (PySpark) -- Write Silver table:**
+
 ```python
 # Write to Lakehouse table (replaces Unity Catalog table path)
 (
@@ -338,9 +345,10 @@ print(f"Table '{output_table}' written successfully.")
 ```
 
 **Cell 7 (Spark SQL) -- Verify:**
+
 ```sql
 -- Verify row count (use cell type: Spark SQL)
-SELECT COUNT(*) as total_records, 
+SELECT COUNT(*) as total_records,
        COUNT(DISTINCT customer_id) as unique_customers,
        MIN(created_date) as earliest,
        MAX(created_date) as latest
@@ -348,6 +356,7 @@ FROM bronze_lakehouse.customers_clean
 ```
 
 **Cell 8 (PySpark) -- Optimization note:**
+
 ```python
 # Fabric auto-applies V-Order optimization on write.
 # Manual OPTIMIZE + ZORDER is available but usually unnecessary.
@@ -358,6 +367,7 @@ print("V-Order auto-optimization applied during write.")
 ```
 
 **Cell 9 (PySpark) -- Exit:**
+
 ```python
 record_count = spark.table(output_table).count()
 mssparkutils.notebook.exit(f"SUCCESS: {record_count} records in {output_table}")
@@ -370,14 +380,14 @@ mssparkutils.notebook.exit(f"SUCCESS: {record_count} records in {output_table}")
 1. In the workspace, click **New > Data Pipeline**
 2. Name it `customer_etl_pipeline`
 3. Add a **Notebook activity**:
-   - Notebook: `customer_etl`
-   - Parameters:
-     - `input_path`: `Files/raw_customers/`
-     - `output_table`: `customers_clean`
-     - `mode`: `overwrite`
+    - Notebook: `customer_etl`
+    - Parameters:
+        - `input_path`: `Files/raw_customers/`
+        - `output_table`: `customers_clean`
+        - `mode`: `overwrite`
 4. Add a **Schedule trigger**:
-   - Recurrence: Daily at 06:00 UTC
-   - Or: Storage event trigger on `Files/raw_customers/` for event-driven runs
+    - Recurrence: Daily at 06:00 UTC
+    - Or: Storage event trigger on `Files/raw_customers/` for event-driven runs
 
 ---
 
@@ -390,9 +400,9 @@ mssparkutils.notebook.exit(f"SUCCESS: {record_count} records in {output_table}")
 5. The semantic model is created with Direct Lake mode -- no import, no refresh
 6. Open the semantic model and click **New report**
 7. Build your report:
-   - Card visual: Total Customers (`COUNT(customer_id)`)
-   - Bar chart: Customers by State (`state_upper`)
-   - Table: Customer list with filters
+    - Card visual: Total Customers (`COUNT(customer_id)`)
+    - Bar chart: Customers by State (`state_upper`)
+    - Table: Customer list with filters
 8. Save the report
 
 **Result:** The Power BI report reads directly from the Delta files in OneLake. When the notebook runs and updates the table, the report shows fresh data automatically. No scheduled refresh, no DBSQL warehouse running.
@@ -403,15 +413,15 @@ mssparkutils.notebook.exit(f"SUCCESS: {record_count} records in {output_table}")
 
 Run both the Databricks notebook and the Fabric notebook against the same source data and compare:
 
-| Validation check | Databricks result | Fabric result | Match? |
-| --- | --- | --- | --- |
-| Raw record count | ______ | ______ | [ ] |
-| Clean record count | ______ | ______ | [ ] |
-| Unique customer IDs | ______ | ______ | [ ] |
-| Records per state (top 5) | ______ | ______ | [ ] |
-| Email validation failures | ______ | ______ | [ ] |
-| Phone standardization failures | ______ | ______ | [ ] |
-| Schema (column names + types) | ______ | ______ | [ ] |
+| Validation check               | Databricks result | Fabric result | Match? |
+| ------------------------------ | ----------------- | ------------- | ------ |
+| Raw record count               | **\_\_**          | **\_\_**      | [ ]    |
+| Clean record count             | **\_\_**          | **\_\_**      | [ ]    |
+| Unique customer IDs            | **\_\_**          | **\_\_**      | [ ]    |
+| Records per state (top 5)      | **\_\_**          | **\_\_**      | [ ]    |
+| Email validation failures      | **\_\_**          | **\_\_**      | [ ]    |
+| Phone standardization failures | **\_\_**          | **\_\_**      | [ ]    |
+| Schema (column names + types)  | **\_\_**          | **\_\_**      | [ ]    |
 
 If all checks pass, the migration is validated.
 
@@ -431,17 +441,17 @@ After 2 weeks of parallel operation:
 
 ## Summary of changes
 
-| Original (Databricks) | Converted (Fabric) | Change type |
-| --- | --- | --- |
-| `%pip install` | Fabric environment | Library management |
-| `dbutils.widgets.get()` | `mssparkutils.notebook.getParam()` | Parameterization |
-| `/mnt/raw/customers/` | `Files/raw_customers/` (shortcut) | Path |
-| `production.silver.customers_clean` | `customers_clean` (Lakehouse table) | Table reference |
-| `OPTIMIZE ... ZORDER BY` | V-Order auto-applied | Optimization |
-| `%sql` magic | Spark SQL cell type | Cell type |
-| `dbutils.notebook.exit()` | `mssparkutils.notebook.exit()` | Notebook API |
-| Power BI Import + DBSQL | Direct Lake (no refresh) | BI model |
-| Databricks Workflow job | Fabric Data Pipeline | Scheduling |
+| Original (Databricks)               | Converted (Fabric)                  | Change type        |
+| ----------------------------------- | ----------------------------------- | ------------------ |
+| `%pip install`                      | Fabric environment                  | Library management |
+| `dbutils.widgets.get()`             | `mssparkutils.notebook.getParam()`  | Parameterization   |
+| `/mnt/raw/customers/`               | `Files/raw_customers/` (shortcut)   | Path               |
+| `production.silver.customers_clean` | `customers_clean` (Lakehouse table) | Table reference    |
+| `OPTIMIZE ... ZORDER BY`            | V-Order auto-applied                | Optimization       |
+| `%sql` magic                        | Spark SQL cell type                 | Cell type          |
+| `dbutils.notebook.exit()`           | `mssparkutils.notebook.exit()`      | Notebook API       |
+| Power BI Import + DBSQL             | Direct Lake (no refresh)            | BI model           |
+| Databricks Workflow job             | Fabric Data Pipeline                | Scheduling         |
 
 Total code changes: ~15 lines modified out of ~80 lines of PySpark. The transformation logic is identical.
 

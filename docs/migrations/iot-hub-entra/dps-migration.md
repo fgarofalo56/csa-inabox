@@ -16,17 +16,17 @@ Migrating to X.509 attestation means devices prove their identity through a cert
 
 ## SAS symmetric key attestation vs X.509 attestation
 
-| Dimension | SAS symmetric key | X.509 attestation |
-|---|---|---|
-| **Group credential** | Single shared symmetric key | CA certificate (public, not secret) |
-| **Per-device credential** | Derived key (HMAC of group key + device ID) | Unique leaf certificate + private key |
-| **Compromise blast radius** | All devices in enrollment group | Single device |
-| **Key storage** | Flash memory (often unprotected) | HSM/TPM (hardware-protected) |
-| **Rotation** | Requires new group key + all device re-derivation | Per-device certificate renewal |
-| **Revocation** | Disable entire enrollment group or individual registration | Revoke individual certificate (CRL/OCSP) |
-| **Audit attribution** | Device ID only | Device ID + certificate thumbprint |
-| **FedRAMP High** | Fails IA-5(2) | Passes |
-| **FIPS 140-2** | SDK-dependent | Hardware-backed (HSM) |
+| Dimension                   | SAS symmetric key                                          | X.509 attestation                        |
+| --------------------------- | ---------------------------------------------------------- | ---------------------------------------- |
+| **Group credential**        | Single shared symmetric key                                | CA certificate (public, not secret)      |
+| **Per-device credential**   | Derived key (HMAC of group key + device ID)                | Unique leaf certificate + private key    |
+| **Compromise blast radius** | All devices in enrollment group                            | Single device                            |
+| **Key storage**             | Flash memory (often unprotected)                           | HSM/TPM (hardware-protected)             |
+| **Rotation**                | Requires new group key + all device re-derivation          | Per-device certificate renewal           |
+| **Revocation**              | Disable entire enrollment group or individual registration | Revoke individual certificate (CRL/OCSP) |
+| **Audit attribution**       | Device ID only                                             | Device ID + certificate thumbprint       |
+| **FedRAMP High**            | Fails IA-5(2)                                              | Passes                                   |
+| **FIPS 140-2**              | SDK-dependent                                              | Hardware-backed (HSM)                    |
 
 ---
 
@@ -303,11 +303,11 @@ az iot dps linked-hub update \
 
 When a device re-provisions (e.g., after certificate renewal), DPS must decide what happens to the device's existing data in IoT Hub.
 
-| Policy | Behavior | Use when |
-|---|---|---|
-| Reprovision and migrate data | Device moves to new hub, twin data follows | Geographic rebalancing, hub migration |
-| Reprovision and reset | Device moves to new hub, twin reset to enrollment defaults | Clean start needed, major firmware update |
-| Never reprovision | Device stays on originally assigned hub | Stable deployments, regulatory data residency |
+| Policy                       | Behavior                                                   | Use when                                      |
+| ---------------------------- | ---------------------------------------------------------- | --------------------------------------------- |
+| Reprovision and migrate data | Device moves to new hub, twin data follows                 | Geographic rebalancing, hub migration         |
+| Reprovision and reset        | Device moves to new hub, twin reset to enrollment defaults | Clean start needed, major firmware update     |
+| Never reprovision            | Device stays on originally assigned hub                    | Stable deployments, regulatory data residency |
 
 ### Setting reprovisioning policy
 
@@ -475,13 +475,13 @@ az iot dps compute-device-key \
 
 ## Troubleshooting
 
-| Symptom | Likely cause | Resolution |
-|---|---|---|
-| DPS returns 401 on device registration | Certificate not signed by enrollment group CA | Verify chain: `openssl verify -CAfile intermediate-ca.pem device.pem` |
-| DPS returns 404 on enrollment group | Enrollment group name mismatch | Check `az iot dps enrollment-group list` |
-| DPS linked hub shows `keyBased` | Post-deploy link script not run | Run `link-dps-to-iothub.sh` |
-| Device provisions but cannot connect to hub | Hub does not trust the CA | Upload root/intermediate CA to IoT Hub certificates |
-| Custom allocation function returns 500 | Function managed identity missing RBAC | Assign IoT Hub Data Reader to the function identity |
+| Symptom                                     | Likely cause                                  | Resolution                                                            |
+| ------------------------------------------- | --------------------------------------------- | --------------------------------------------------------------------- |
+| DPS returns 401 on device registration      | Certificate not signed by enrollment group CA | Verify chain: `openssl verify -CAfile intermediate-ca.pem device.pem` |
+| DPS returns 404 on enrollment group         | Enrollment group name mismatch                | Check `az iot dps enrollment-group list`                              |
+| DPS linked hub shows `keyBased`             | Post-deploy link script not run               | Run `link-dps-to-iothub.sh`                                           |
+| Device provisions but cannot connect to hub | Hub does not trust the CA                     | Upload root/intermediate CA to IoT Hub certificates                   |
+| Custom allocation function returns 500      | Function managed identity missing RBAC        | Assign IoT Hub Data Reader to the function identity                   |
 
 ---
 

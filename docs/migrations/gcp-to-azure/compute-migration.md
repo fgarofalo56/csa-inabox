@@ -29,51 +29,51 @@ The existing playbook (Section 4.3) documents the critical dialect differences. 
 
 #### Core syntax differences
 
-| BigQuery StandardSQL | Databricks SQL | Notes |
-|---|---|---|
-| `DATE_SUB(CURRENT_DATE(), INTERVAL 3 DAY)` | `DATE_SUB(CURRENT_DATE(), 3)` | Argument form differs |
-| `DATE_ADD(d, INTERVAL 7 DAY)` | `DATE_ADD(d, 7)` | Same pattern |
-| `TIMESTAMP_DIFF(a, b, HOUR)` | `TIMESTAMPDIFF(HOUR, b, a)` | Argument order reversed |
-| `SAFE_CAST(x AS INT64)` | `TRY_CAST(x AS BIGINT)` | Naming and type |
-| `SAFE_DIVIDE(a, b)` | `TRY_DIVIDE(a, b)` or `a / NULLIF(b, 0)` | TRY_DIVIDE available in DBR 13+ |
-| `INT64` | `BIGINT` | Type name |
-| `FLOAT64` | `DOUBLE` | Type name |
-| `BOOL` | `BOOLEAN` | Type name |
-| `BYTES` | `BINARY` | Type name |
-| `STRING` | `STRING` | Same |
-| `STRUCT<a INT64, b STRING>` | `STRUCT<a: BIGINT, b: STRING>` | Colon syntax in struct fields |
-| `ARRAY<STRING>` | `ARRAY<STRING>` | Same |
-| `UNNEST(arr)` | `explode(arr)` or `LATERAL VIEW explode(arr)` | Different keyword |
-| `GENERATE_ARRAY(1, 10)` | `sequence(1, 10)` | Function name |
-| `FORMAT_DATE('%Y-%m', d)` | `DATE_FORMAT(d, 'yyyy-MM')` | Format string syntax (Java vs strftime) |
-| `PARSE_DATE('%Y-%m-%d', s)` | `TO_DATE(s, 'yyyy-MM-dd')` | Parse function name |
-| `IF(cond, a, b)` | `IF(cond, a, b)` | Same |
-| `IFNULL(a, b)` | `COALESCE(a, b)` or `IFNULL(a, b)` | Both work in Databricks |
-| `STARTS_WITH(s, prefix)` | `s LIKE 'prefix%'` or `startswith(s, prefix)` | Function available in DBR 13+ |
-| `REGEXP_CONTAINS(s, r'pattern')` | `s RLIKE 'pattern'` | Different operator |
-| `REGEXP_EXTRACT(s, r'pattern')` | `REGEXP_EXTRACT(s, 'pattern')` | Same function, different literal |
-| `@@project_id` session var | `current_catalog()` | Session context |
-| `@@dataset_id` session var | `current_schema()` | Session context |
+| BigQuery StandardSQL                       | Databricks SQL                                | Notes                                   |
+| ------------------------------------------ | --------------------------------------------- | --------------------------------------- |
+| `DATE_SUB(CURRENT_DATE(), INTERVAL 3 DAY)` | `DATE_SUB(CURRENT_DATE(), 3)`                 | Argument form differs                   |
+| `DATE_ADD(d, INTERVAL 7 DAY)`              | `DATE_ADD(d, 7)`                              | Same pattern                            |
+| `TIMESTAMP_DIFF(a, b, HOUR)`               | `TIMESTAMPDIFF(HOUR, b, a)`                   | Argument order reversed                 |
+| `SAFE_CAST(x AS INT64)`                    | `TRY_CAST(x AS BIGINT)`                       | Naming and type                         |
+| `SAFE_DIVIDE(a, b)`                        | `TRY_DIVIDE(a, b)` or `a / NULLIF(b, 0)`      | TRY_DIVIDE available in DBR 13+         |
+| `INT64`                                    | `BIGINT`                                      | Type name                               |
+| `FLOAT64`                                  | `DOUBLE`                                      | Type name                               |
+| `BOOL`                                     | `BOOLEAN`                                     | Type name                               |
+| `BYTES`                                    | `BINARY`                                      | Type name                               |
+| `STRING`                                   | `STRING`                                      | Same                                    |
+| `STRUCT<a INT64, b STRING>`                | `STRUCT<a: BIGINT, b: STRING>`                | Colon syntax in struct fields           |
+| `ARRAY<STRING>`                            | `ARRAY<STRING>`                               | Same                                    |
+| `UNNEST(arr)`                              | `explode(arr)` or `LATERAL VIEW explode(arr)` | Different keyword                       |
+| `GENERATE_ARRAY(1, 10)`                    | `sequence(1, 10)`                             | Function name                           |
+| `FORMAT_DATE('%Y-%m', d)`                  | `DATE_FORMAT(d, 'yyyy-MM')`                   | Format string syntax (Java vs strftime) |
+| `PARSE_DATE('%Y-%m-%d', s)`                | `TO_DATE(s, 'yyyy-MM-dd')`                    | Parse function name                     |
+| `IF(cond, a, b)`                           | `IF(cond, a, b)`                              | Same                                    |
+| `IFNULL(a, b)`                             | `COALESCE(a, b)` or `IFNULL(a, b)`            | Both work in Databricks                 |
+| `STARTS_WITH(s, prefix)`                   | `s LIKE 'prefix%'` or `startswith(s, prefix)` | Function available in DBR 13+           |
+| `REGEXP_CONTAINS(s, r'pattern')`           | `s RLIKE 'pattern'`                           | Different operator                      |
+| `REGEXP_EXTRACT(s, r'pattern')`            | `REGEXP_EXTRACT(s, 'pattern')`                | Same function, different literal        |
+| `@@project_id` session var                 | `current_catalog()`                           | Session context                         |
+| `@@dataset_id` session var                 | `current_schema()`                            | Session context                         |
 
 #### DDL differences
 
-| BigQuery | Databricks | Notes |
-|---|---|---|
-| `CREATE TABLE ... PARTITION BY date_col` | `CREATE TABLE ... PARTITIONED BY (date_col)` | Keyword plural |
-| `CLUSTER BY col1, col2` | `OPTIMIZE table ZORDER BY (col1, col2)` | Separate command |
-| `OPTIONS(partition_expiration_days=400)` | `VACUUM` + retention config | No auto-expiration; use scheduled `VACUUM` |
-| `CREATE OR REPLACE TABLE` | `CREATE OR REPLACE TABLE` | Same |
-| `CREATE TEMP TABLE` | `CREATE TEMPORARY VIEW` or temp table | Different semantics |
-| `EXPORT DATA OPTIONS(...)` | `COPY INTO` or Spark write API | Export idiom differs |
+| BigQuery                                 | Databricks                                   | Notes                                      |
+| ---------------------------------------- | -------------------------------------------- | ------------------------------------------ |
+| `CREATE TABLE ... PARTITION BY date_col` | `CREATE TABLE ... PARTITIONED BY (date_col)` | Keyword plural                             |
+| `CLUSTER BY col1, col2`                  | `OPTIMIZE table ZORDER BY (col1, col2)`      | Separate command                           |
+| `OPTIONS(partition_expiration_days=400)` | `VACUUM` + retention config                  | No auto-expiration; use scheduled `VACUUM` |
+| `CREATE OR REPLACE TABLE`                | `CREATE OR REPLACE TABLE`                    | Same                                       |
+| `CREATE TEMP TABLE`                      | `CREATE TEMPORARY VIEW` or temp table        | Different semantics                        |
+| `EXPORT DATA OPTIONS(...)`               | `COPY INTO` or Spark write API               | Export idiom differs                       |
 
 #### Window function differences
 
-| BigQuery | Databricks | Notes |
-|---|---|---|
-| `QUALIFY ROW_NUMBER() OVER(...) = 1` | Wrap in subquery with `WHERE rn = 1` | QUALIFY not supported in Databricks SQL |
-| `FIRST_VALUE(x IGNORE NULLS)` | `FIRST_VALUE(x) IGNORE NULLS` | Placement differs |
-| `LAST_VALUE(x IGNORE NULLS)` | `LAST_VALUE(x) IGNORE NULLS` | Placement differs |
-| `PERCENTILE_CONT(x, 0.5)` | `PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY x)` | SQL standard syntax |
+| BigQuery                             | Databricks                                       | Notes                                   |
+| ------------------------------------ | ------------------------------------------------ | --------------------------------------- |
+| `QUALIFY ROW_NUMBER() OVER(...) = 1` | Wrap in subquery with `WHERE rn = 1`             | QUALIFY not supported in Databricks SQL |
+| `FIRST_VALUE(x IGNORE NULLS)`        | `FIRST_VALUE(x) IGNORE NULLS`                    | Placement differs                       |
+| `LAST_VALUE(x IGNORE NULLS)`         | `LAST_VALUE(x) IGNORE NULLS`                     | Placement differs                       |
+| `PERCENTILE_CONT(x, 0.5)`            | `PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY x)` | SQL standard syntax                     |
 
 ### Automated dialect conversion
 
@@ -106,27 +106,27 @@ print(databricks_sql)
 
 ### Conceptual mapping
 
-| BigQuery concept | Azure equivalent | Notes |
-|---|---|---|
-| Slot | Databricks DBU or Fabric CU | Not 1:1; depends on workload shape |
-| On-demand slots | Databricks Serverless SQL | Auto-scaling, no pre-provisioning |
-| Standard Edition slots | Databricks SQL Classic (small) | Entry-level committed compute |
-| Enterprise Edition slots | Databricks SQL Classic/Serverless | Mid-tier with governance features |
-| Enterprise Plus slots | Databricks SQL + UC Premium | Advanced security and compliance |
-| Flex slots (deprecated) | N/A | Use serverless or auto-scaling instead |
-| Reservation | Reserved capacity (Databricks or Fabric) | 1-3 year commitment for discounts |
-| Assignment | Workspace allocation | Capacity assigned to specific workspaces |
+| BigQuery concept         | Azure equivalent                         | Notes                                    |
+| ------------------------ | ---------------------------------------- | ---------------------------------------- |
+| Slot                     | Databricks DBU or Fabric CU              | Not 1:1; depends on workload shape       |
+| On-demand slots          | Databricks Serverless SQL                | Auto-scaling, no pre-provisioning        |
+| Standard Edition slots   | Databricks SQL Classic (small)           | Entry-level committed compute            |
+| Enterprise Edition slots | Databricks SQL Classic/Serverless        | Mid-tier with governance features        |
+| Enterprise Plus slots    | Databricks SQL + UC Premium              | Advanced security and compliance         |
+| Flex slots (deprecated)  | N/A                                      | Use serverless or auto-scaling instead   |
+| Reservation              | Reserved capacity (Databricks or Fabric) | 1-3 year commitment for discounts        |
+| Assignment               | Workspace allocation                     | Capacity assigned to specific workspaces |
 
 ### Sizing guidance
 
 There is no direct slot-to-DBU conversion formula because the architectures differ. Use this heuristic:
 
-| BigQuery slot count | Databricks SQL Warehouse size | Fabric capacity | Notes |
-|---|---|---|---|
-| 100 slots | Small (8-16 DBU/hour) | F32 | Light workloads |
-| 500 slots | Medium (32-64 DBU/hour) | F64 | Mid-sized analytics |
-| 1,000 slots | Large (64-128 DBU/hour) | F128 | Heavy analytics |
-| 2,000+ slots | X-Large + multiple warehouses | F256 | Enterprise scale |
+| BigQuery slot count | Databricks SQL Warehouse size | Fabric capacity | Notes               |
+| ------------------- | ----------------------------- | --------------- | ------------------- |
+| 100 slots           | Small (8-16 DBU/hour)         | F32             | Light workloads     |
+| 500 slots           | Medium (32-64 DBU/hour)       | F64             | Mid-sized analytics |
+| 1,000 slots         | Large (64-128 DBU/hour)       | F128            | Heavy analytics     |
+| 2,000+ slots        | X-Large + multiple warehouses | F256            | Enterprise scale    |
 
 **Recommendation:** Start with the estimated size, run representative workloads for 2 weeks, then right-size based on actual DBU consumption.
 
@@ -136,12 +136,12 @@ There is no direct slot-to-DBU conversion formula because the architectures diff
 
 BigQuery materialized views auto-refresh when base tables change. The dbt equivalent depends on the refresh pattern:
 
-| BigQuery MV pattern | dbt equivalent | When to use |
-|---|---|---|
-| Auto-refresh on write | Delta Live Tables (DLT) | Real-time or near-real-time refresh |
-| Scheduled refresh | dbt incremental model + scheduled job | Batch refresh on schedule |
-| Query-time refresh | dbt ephemeral model | Computed on each query |
-| Complex aggregation MV | dbt incremental with merge strategy | Aggregation over fact tables |
+| BigQuery MV pattern    | dbt equivalent                        | When to use                         |
+| ---------------------- | ------------------------------------- | ----------------------------------- |
+| Auto-refresh on write  | Delta Live Tables (DLT)               | Real-time or near-real-time refresh |
+| Scheduled refresh      | dbt incremental model + scheduled job | Batch refresh on schedule           |
+| Query-time refresh     | dbt ephemeral model                   | Computed on each query              |
+| Complex aggregation MV | dbt incremental with merge strategy   | Aggregation over fact tables        |
 
 ### Worked example: BigQuery MV to dbt incremental
 
@@ -188,12 +188,12 @@ GROUP BY 1, 2
 
 ## Scheduled queries to dbt + ADF triggers
 
-| BigQuery scheduled query pattern | Azure equivalent | Implementation |
-|---|---|---|
-| Simple daily/hourly query | Databricks Workflow schedule | Cron-based schedule on a SQL task |
-| Query with downstream dependencies | dbt job with model dependencies | dbt handles DAG ordering automatically |
-| Cross-system orchestration | ADF pipeline with triggers | ADF orchestrates across Databricks, Fabric, external systems |
-| Event-driven (on table update) | Databricks Auto Loader + DLT | File-arrival triggers processing |
+| BigQuery scheduled query pattern   | Azure equivalent                | Implementation                                               |
+| ---------------------------------- | ------------------------------- | ------------------------------------------------------------ |
+| Simple daily/hourly query          | Databricks Workflow schedule    | Cron-based schedule on a SQL task                            |
+| Query with downstream dependencies | dbt job with model dependencies | dbt handles DAG ordering automatically                       |
+| Cross-system orchestration         | ADF pipeline with triggers      | ADF orchestrates across Databricks, Fabric, external systems |
+| Event-driven (on table update)     | Databricks Auto Loader + DLT    | File-arrival triggers processing                             |
 
 ### Migration steps
 
@@ -209,12 +209,12 @@ GROUP BY 1, 2
 
 BigQuery BI Engine is an in-memory acceleration layer that speeds up BI queries over BigQuery tables. The Azure equivalent is Power BI Direct Lake mode.
 
-| BigQuery BI Engine | Power BI Direct Lake | Notes |
-|---|---|---|
+| BigQuery BI Engine               | Power BI Direct Lake                   | Notes                                      |
+| -------------------------------- | -------------------------------------- | ------------------------------------------ |
 | In-memory cache of BigQuery data | Direct read from Delta Lake in OneLake | No data copy -- reads Delta files directly |
-| Automatic refresh | Automatic refresh on Delta changes | Near-real-time without scheduled imports |
-| Reservation-based (GB of memory) | Included in Fabric capacity | No separate reservation needed |
-| Optimized for Looker/BI queries | Optimized for Power BI queries | Native integration |
+| Automatic refresh                | Automatic refresh on Delta changes     | Near-real-time without scheduled imports   |
+| Reservation-based (GB of memory) | Included in Fabric capacity            | No separate reservation needed             |
+| Optimized for Looker/BI queries  | Optimized for Power BI queries         | Native integration                         |
 
 **Migration:** Once data is in Delta Lake on OneLake, create a Direct Lake semantic model in Power BI that points to the Delta tables. No BI Engine configuration is needed -- Direct Lake is the default mode for Fabric lakehouses.
 
@@ -224,12 +224,12 @@ BigQuery BI Engine is an in-memory acceleration layer that speeds up BI queries 
 
 ### Partitioning
 
-| BigQuery partition type | Delta equivalent | Migration notes |
-|---|---|---|
-| Date/timestamp column | `PARTITIONED BY (date_col)` | Direct mapping |
-| Integer range partition | `PARTITIONED BY (int_col)` | May need bucketing for equivalent performance |
-| Ingestion-time (_PARTITIONTIME) | `PARTITIONED BY (_ingest_date)` | Add explicit ingest date column |
-| No partitioning | No partitioning needed for small tables | Delta stats-based pruning often sufficient |
+| BigQuery partition type          | Delta equivalent                        | Migration notes                               |
+| -------------------------------- | --------------------------------------- | --------------------------------------------- |
+| Date/timestamp column            | `PARTITIONED BY (date_col)`             | Direct mapping                                |
+| Integer range partition          | `PARTITIONED BY (int_col)`              | May need bucketing for equivalent performance |
+| Ingestion-time (\_PARTITIONTIME) | `PARTITIONED BY (_ingest_date)`         | Add explicit ingest date column               |
+| No partitioning                  | No partitioning needed for small tables | Delta stats-based pruning often sufficient    |
 
 ### Clustering to Z-ordering
 
@@ -254,12 +254,12 @@ ALTER TABLE finance.fact_sales_daily SET TBLPROPERTIES (
 
 BigQuery Omni allows querying data in S3 or Azure Storage from BigQuery. During migration, use OneLake shortcuts for the reverse: querying GCS data from Azure.
 
-| BigQuery Omni feature | Azure equivalent | Notes |
-|---|---|---|
-| External connection to S3 | OneLake shortcut to S3 | Zero-copy read |
-| External connection to Azure Storage | OneLake shortcut to ADLS | Zero-copy read |
-| Cross-cloud query | Lakehouse Federation | Query external sources from Databricks SQL |
-| Bi-directional cross-cloud | Not fully replicated | Azure reads GCS; BigQuery reads Azure -- not unified console |
+| BigQuery Omni feature                | Azure equivalent         | Notes                                                        |
+| ------------------------------------ | ------------------------ | ------------------------------------------------------------ |
+| External connection to S3            | OneLake shortcut to S3   | Zero-copy read                                               |
+| External connection to Azure Storage | OneLake shortcut to ADLS | Zero-copy read                                               |
+| Cross-cloud query                    | Lakehouse Federation     | Query external sources from Databricks SQL                   |
+| Bi-directional cross-cloud           | Not fully replicated     | Azure reads GCS; BigQuery reads Azure -- not unified console |
 
 ---
 
@@ -267,15 +267,15 @@ BigQuery Omni allows querying data in S3 or Azure Storage from BigQuery. During 
 
 ### Cluster migration
 
-| Dataproc concept | Databricks equivalent | Notes |
-|---|---|---|
-| Cluster (master + workers) | All-purpose cluster | Interactive workloads |
-| Autoscaling cluster | Auto-scaling cluster + serverless | Serverless eliminates cluster management |
-| Serverless Spark | Serverless SQL + Jobs | No cluster management |
-| Init actions | Cluster init scripts + policies | Libraries via cluster policy |
-| Component gateway | Workspace web terminal | Browser-based access |
-| Jupyter on Dataproc | Databricks Notebooks | Richer collaboration features |
-| Job submission (gcloud dataproc jobs) | Databricks Jobs API / Workflows | REST API + CLI |
+| Dataproc concept                      | Databricks equivalent             | Notes                                    |
+| ------------------------------------- | --------------------------------- | ---------------------------------------- |
+| Cluster (master + workers)            | All-purpose cluster               | Interactive workloads                    |
+| Autoscaling cluster                   | Auto-scaling cluster + serverless | Serverless eliminates cluster management |
+| Serverless Spark                      | Serverless SQL + Jobs             | No cluster management                    |
+| Init actions                          | Cluster init scripts + policies   | Libraries via cluster policy             |
+| Component gateway                     | Workspace web terminal            | Browser-based access                     |
+| Jupyter on Dataproc                   | Databricks Notebooks              | Richer collaboration features            |
+| Job submission (gcloud dataproc jobs) | Databricks Jobs API / Workflows   | REST API + CLI                           |
 
 ### Spark compatibility
 

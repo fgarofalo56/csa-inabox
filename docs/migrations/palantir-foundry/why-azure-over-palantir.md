@@ -121,24 +121,28 @@ CSA-in-a-Box is a reference implementation, not a monolith. Agencies can start w
 Organizations that choose to remain on Foundry should understand these compounding risks:
 
 ### Financial risk
+
 - Per-seat licensing creates a tax on data democratization
 - Renewal negotiations have limited leverage (switching costs are high)
 - Palantir's stock-price-driven growth expectations may drive price increases
 - FDE dependency represents ongoing professional services cost
 
 ### Technical risk
+
 - Proprietary ontology format has no industry-standard export path
 - Function code (TypeScript/Python) uses Foundry-specific APIs and decorators
 - Workshop apps are not portable to any other platform
 - Apollo deployment system is Foundry-only
 
 ### Talent risk
+
 - Foundry skills are not transferable to other platforms
 - Small talent pool creates hiring difficulty and wage pressure
 - Dependency on Palantir FDEs for complex implementations
 - Knowledge concentration risk when key personnel leave
 
 ### Strategic risk
+
 - Single-vendor dependency for a mission-critical platform
 - No multi-cloud or hybrid flexibility
 - Platform roadmap controlled by Palantir's commercial priorities

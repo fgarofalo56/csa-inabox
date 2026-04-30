@@ -21,15 +21,15 @@ This tutorial covers the complete migration path: profiling your Redshift worklo
 
 ### Tools
 
-| Tool | Minimum version | Purpose |
-|------|----------------|---------|
-| AWS CLI | 2.x | Redshift access and UNLOAD commands |
-| `psql` or DBeaver | Latest | Connect to Redshift for profiling |
-| Azure CLI | 2.60+ | Azure resource provisioning |
-| AzCopy | 10.24+ | S3-to-ADLS data transfer |
-| Databricks CLI | 0.220+ | Workspace and job management |
-| dbt-databricks | 1.8+ | Transformation layer |
-| Power BI Desktop | Latest | Semantic model creation |
+| Tool              | Minimum version | Purpose                             |
+| ----------------- | --------------- | ----------------------------------- |
+| AWS CLI           | 2.x             | Redshift access and UNLOAD commands |
+| `psql` or DBeaver | Latest          | Connect to Redshift for profiling   |
+| Azure CLI         | 2.60+           | Azure resource provisioning         |
+| AzCopy            | 10.24+          | S3-to-ADLS data transfer            |
+| Databricks CLI    | 0.220+          | Workspace and job management        |
+| dbt-databricks    | 1.8+            | Transformation layer                |
+| Power BI Desktop  | Latest          | Semantic model creation             |
 
 ### AWS access
 
@@ -152,11 +152,11 @@ ORDER BY t.size DESC;
 
 Document the results:
 
-| Schema.Table | Rows | Size (GB) | Dist style | Dist key | Sort key | Scan freq |
-|-------------|------|-----------|-----------|----------|----------|-----------|
-| public.fact_orders | 2.1B | 340 | KEY | customer_id | order_date | 12,400/mo |
-| public.dim_products | 850K | 0.5 | ALL | - | product_id | 11,200/mo |
-| public.fact_events | 5.8B | 890 | KEY | event_type | event_ts | 3,200/mo |
+| Schema.Table        | Rows | Size (GB) | Dist style | Dist key    | Sort key   | Scan freq |
+| ------------------- | ---- | --------- | ---------- | ----------- | ---------- | --------- |
+| public.fact_orders  | 2.1B | 340       | KEY        | customer_id | order_date | 12,400/mo |
+| public.dim_products | 850K | 0.5       | ALL        | -           | product_id | 11,200/mo |
+| public.fact_events  | 5.8B | 890       | KEY        | event_type  | event_ts   | 3,200/mo  |
 
 ---
 
@@ -180,19 +180,19 @@ ORDER BY tablename, seq;
 
 The core differences between Redshift DDL and Databricks SQL DDL:
 
-| Redshift DDL feature | Databricks SQL equivalent | Notes |
-|---------------------|--------------------------|-------|
-| `DISTKEY(col)` | `PARTITIONED BY (col)` or omit | See distribution mapping below |
-| `DISTSTYLE ALL` | Omit (Delta handles broadcast joins) | Small dimension tables auto-broadcast |
-| `DISTSTYLE EVEN` | Omit (default) | Delta distributes by file |
-| `SORTKEY(col1, col2)` | `ZORDER BY (col1, col2)` via OPTIMIZE | Applied post-load, not at CREATE |
-| `INTERLEAVED SORTKEY` | `ZORDER BY` (native interleaving) | ZORDER is interleaved by default |
-| `ENCODE` compression | Omit (Delta/Parquet handles compression) | Delta uses snappy/zstd automatically |
-| `VARCHAR(256)` | `STRING` | Databricks STRING is unbounded |
-| `SMALLINT` | `SMALLINT` or `INT` | Direct mapping |
-| `TIMESTAMP` | `TIMESTAMP` | Check timezone handling |
-| `IDENTITY(seed, step)` | `GENERATED ALWAYS AS IDENTITY` | Databricks supports identity columns |
-| `DEFAULT getdate()` | `DEFAULT current_timestamp()` | Function name difference |
+| Redshift DDL feature   | Databricks SQL equivalent                | Notes                                 |
+| ---------------------- | ---------------------------------------- | ------------------------------------- |
+| `DISTKEY(col)`         | `PARTITIONED BY (col)` or omit           | See distribution mapping below        |
+| `DISTSTYLE ALL`        | Omit (Delta handles broadcast joins)     | Small dimension tables auto-broadcast |
+| `DISTSTYLE EVEN`       | Omit (default)                           | Delta distributes by file             |
+| `SORTKEY(col1, col2)`  | `ZORDER BY (col1, col2)` via OPTIMIZE    | Applied post-load, not at CREATE      |
+| `INTERLEAVED SORTKEY`  | `ZORDER BY` (native interleaving)        | ZORDER is interleaved by default      |
+| `ENCODE` compression   | Omit (Delta/Parquet handles compression) | Delta uses snappy/zstd automatically  |
+| `VARCHAR(256)`         | `STRING`                                 | Databricks STRING is unbounded        |
+| `SMALLINT`             | `SMALLINT` or `INT`                      | Direct mapping                        |
+| `TIMESTAMP`            | `TIMESTAMP`                              | Check timezone handling               |
+| `IDENTITY(seed, step)` | `GENERATED ALWAYS AS IDENTITY`           | Databricks supports identity columns  |
+| `DEFAULT getdate()`    | `DEFAULT current_timestamp()`            | Function name difference              |
 
 ### Example conversion
 
@@ -371,44 +371,44 @@ ALTER TABLE analytics_prod.gold.fact_orders SET TBLPROPERTIES (
 
 This is the most labor-intensive part of the migration. The table below covers the 25 most common dialect differences.
 
-| # | Redshift SQL | Databricks SQL | Category |
-|---|-------------|---------------|----------|
-| 1 | `GETDATE()` | `current_timestamp()` | Date/time |
-| 2 | `SYSDATE` | `current_timestamp()` | Date/time |
-| 3 | `DATEADD(day, 7, col)` | `date_add(col, 7)` or `col + INTERVAL 7 DAYS` | Date/time |
-| 4 | `DATEDIFF(day, start, end)` | `datediff(end, start)` | Date/time (note arg order reversal) |
-| 5 | `CONVERT(VARCHAR, col, 112)` | `date_format(col, 'yyyyMMdd')` | Date/time |
-| 6 | `TO_CHAR(col, 'YYYY-MM-DD')` | `date_format(col, 'yyyy-MM-dd')` | Date/time (case-sensitive format) |
-| 7 | `EXTRACT(DOW FROM col)` | `dayofweek(col)` | Date/time |
-| 8 | `TRUNC(col)` (date truncation) | `date_trunc('day', col)` | Date/time |
-| 9 | `NVL(a, b)` | `coalesce(a, b)` or `nvl(a, b)` | Null handling (both work in Databricks) |
-| 10 | `NVL2(a, b, c)` | `CASE WHEN a IS NOT NULL THEN b ELSE c END` | Null handling |
-| 11 | `ISNULL(col)` | `col IS NULL` or `isnull(col)` | Null handling |
-| 12 | `TOP n` | `LIMIT n` | Query structure |
-| 13 | `SELECT INTO #temp` | `CREATE TEMP VIEW temp AS SELECT ...` | Temp tables |
-| 14 | `CREATE TEMP TABLE` | `CREATE OR REPLACE TEMP VIEW` | Temp tables |
-| 15 | `IDENTITY(seed, step)` | `GENERATED ALWAYS AS IDENTITY` | DDL |
-| 16 | `VARCHAR(n)` | `STRING` | Data types |
-| 17 | `SUPER` (semi-structured) | `VARIANT` or `STRING` + JSON functions | Data types |
-| 18 | `APPROXIMATE COUNT(DISTINCT)` | `approx_count_distinct(col)` | Aggregation |
-| 19 | `LISTAGG(col, ',')` | `concat_ws(',', collect_list(col))` | Aggregation |
-| 20 | `MEDIAN(col)` | `percentile_approx(col, 0.5)` | Aggregation |
-| 21 | `LEN(col)` | `length(col)` | String |
-| 22 | `STRTOL(hex, 16)` | `conv(hex, 16, 10)` | String |
-| 23 | `DECODE(col, v1, r1, v2, r2, default)` | `CASE col WHEN v1 THEN r1 WHEN v2 THEN r2 ELSE default END` | Conditional |
-| 24 | `\|\|` (string concat) | `concat(a, b)` or `\|\|` | String (both work) |
-| 25 | `COPY FROM` | ADF Copy Activity or Auto Loader | Data loading |
+| #   | Redshift SQL                           | Databricks SQL                                              | Category                                |
+| --- | -------------------------------------- | ----------------------------------------------------------- | --------------------------------------- |
+| 1   | `GETDATE()`                            | `current_timestamp()`                                       | Date/time                               |
+| 2   | `SYSDATE`                              | `current_timestamp()`                                       | Date/time                               |
+| 3   | `DATEADD(day, 7, col)`                 | `date_add(col, 7)` or `col + INTERVAL 7 DAYS`               | Date/time                               |
+| 4   | `DATEDIFF(day, start, end)`            | `datediff(end, start)`                                      | Date/time (note arg order reversal)     |
+| 5   | `CONVERT(VARCHAR, col, 112)`           | `date_format(col, 'yyyyMMdd')`                              | Date/time                               |
+| 6   | `TO_CHAR(col, 'YYYY-MM-DD')`           | `date_format(col, 'yyyy-MM-dd')`                            | Date/time (case-sensitive format)       |
+| 7   | `EXTRACT(DOW FROM col)`                | `dayofweek(col)`                                            | Date/time                               |
+| 8   | `TRUNC(col)` (date truncation)         | `date_trunc('day', col)`                                    | Date/time                               |
+| 9   | `NVL(a, b)`                            | `coalesce(a, b)` or `nvl(a, b)`                             | Null handling (both work in Databricks) |
+| 10  | `NVL2(a, b, c)`                        | `CASE WHEN a IS NOT NULL THEN b ELSE c END`                 | Null handling                           |
+| 11  | `ISNULL(col)`                          | `col IS NULL` or `isnull(col)`                              | Null handling                           |
+| 12  | `TOP n`                                | `LIMIT n`                                                   | Query structure                         |
+| 13  | `SELECT INTO #temp`                    | `CREATE TEMP VIEW temp AS SELECT ...`                       | Temp tables                             |
+| 14  | `CREATE TEMP TABLE`                    | `CREATE OR REPLACE TEMP VIEW`                               | Temp tables                             |
+| 15  | `IDENTITY(seed, step)`                 | `GENERATED ALWAYS AS IDENTITY`                              | DDL                                     |
+| 16  | `VARCHAR(n)`                           | `STRING`                                                    | Data types                              |
+| 17  | `SUPER` (semi-structured)              | `VARIANT` or `STRING` + JSON functions                      | Data types                              |
+| 18  | `APPROXIMATE COUNT(DISTINCT)`          | `approx_count_distinct(col)`                                | Aggregation                             |
+| 19  | `LISTAGG(col, ',')`                    | `concat_ws(',', collect_list(col))`                         | Aggregation                             |
+| 20  | `MEDIAN(col)`                          | `percentile_approx(col, 0.5)`                               | Aggregation                             |
+| 21  | `LEN(col)`                             | `length(col)`                                               | String                                  |
+| 22  | `STRTOL(hex, 16)`                      | `conv(hex, 16, 10)`                                         | String                                  |
+| 23  | `DECODE(col, v1, r1, v2, r2, default)` | `CASE col WHEN v1 THEN r1 WHEN v2 THEN r2 ELSE default END` | Conditional                             |
+| 24  | `\|\|` (string concat)                 | `concat(a, b)` or `\|\|`                                    | String (both work)                      |
+| 25  | `COPY FROM`                            | ADF Copy Activity or Auto Loader                            | Data loading                            |
 
 ### Redshift distribution strategy to Databricks partitioning
 
-| Redshift distribution | Databricks equivalent | When to use |
-|----------------------|----------------------|-------------|
-| `DISTKEY(col)` on high-cardinality column | `PARTITIONED BY (date_col)` + `ZORDER BY (col)` | Fact tables joined on the dist key; partition by date, Z-order by the former dist key |
-| `DISTKEY(col)` on low-cardinality column | `PARTITIONED BY (col)` | If cardinality is < 1000 (e.g., region), partition directly |
-| `DISTSTYLE ALL` | No partitioning needed | Small dimension tables (< 1M rows) broadcast automatically in Databricks |
-| `DISTSTYLE EVEN` | Default (no partitioning) or `PARTITIONED BY (date_col)` | When the table has no natural join key |
-| `COMPOUND SORTKEY(a, b)` | `ZORDER BY (a, b)` via `OPTIMIZE` | Z-ordering is interleaved by nature; compound ordering is approximated |
-| `INTERLEAVED SORTKEY(a, b, c)` | `ZORDER BY (a, b, c)` via `OPTIMIZE` | Direct mapping; Z-ordering is natively interleaved |
+| Redshift distribution                     | Databricks equivalent                                    | When to use                                                                           |
+| ----------------------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `DISTKEY(col)` on high-cardinality column | `PARTITIONED BY (date_col)` + `ZORDER BY (col)`          | Fact tables joined on the dist key; partition by date, Z-order by the former dist key |
+| `DISTKEY(col)` on low-cardinality column  | `PARTITIONED BY (col)`                                   | If cardinality is < 1000 (e.g., region), partition directly                           |
+| `DISTSTYLE ALL`                           | No partitioning needed                                   | Small dimension tables (< 1M rows) broadcast automatically in Databricks              |
+| `DISTSTYLE EVEN`                          | Default (no partitioning) or `PARTITIONED BY (date_col)` | When the table has no natural join key                                                |
+| `COMPOUND SORTKEY(a, b)`                  | `ZORDER BY (a, b)` via `OPTIMIZE`                        | Z-ordering is interleaved by nature; compound ordering is approximated                |
+| `INTERLEAVED SORTKEY(a, b, c)`            | `ZORDER BY (a, b, c)` via `OPTIMIZE`                     | Direct mapping; Z-ordering is natively interleaved                                    |
 
 ---
 
@@ -432,24 +432,24 @@ pip install dbt-databricks>=1.8.0
 ```yaml
 # ~/.dbt/profiles.yml
 redshift_migration:
-  target: dev
-  outputs:
-    dev:
-      type: databricks
-      catalog: analytics_dev
-      schema: gold
-      host: adb-1234567890.1.azuredatabricks.net
-      http_path: /sql/1.0/warehouses/abc123def456
-      token: "{{ env_var('DATABRICKS_TOKEN') }}"
-      threads: 8
-    prod:
-      type: databricks
-      catalog: analytics_prod
-      schema: gold
-      host: adb-1234567890.1.azuredatabricks.net
-      http_path: /sql/1.0/warehouses/prod789xyz
-      token: "{{ env_var('DATABRICKS_TOKEN') }}"
-      threads: 16
+    target: dev
+    outputs:
+        dev:
+            type: databricks
+            catalog: analytics_dev
+            schema: gold
+            host: adb-1234567890.1.azuredatabricks.net
+            http_path: /sql/1.0/warehouses/abc123def456
+            token: "{{ env_var('DATABRICKS_TOKEN') }}"
+            threads: 8
+        prod:
+            type: databricks
+            catalog: analytics_prod
+            schema: gold
+            host: adb-1234567890.1.azuredatabricks.net
+            http_path: /sql/1.0/warehouses/prod789xyz
+            token: "{{ env_var('DATABRICKS_TOKEN') }}"
+            threads: 16
 ```
 
 ### Example conversion: Redshift stored procedure to dbt model
@@ -514,16 +514,16 @@ GROUP BY 1, 2, 3
 # models/gold/daily_revenue_summary.yml
 version: 2
 models:
-  - name: daily_revenue_summary
-    description: "Daily revenue summary by category and region. Migrated from Redshift sp_daily_revenue_summary."
-    columns:
-      - name: report_date
-        tests: [not_null]
-      - name: total_revenue
-        tests:
-          - not_null
-          - dbt_utils.accepted_range:
-              min_value: 0
+    - name: daily_revenue_summary
+      description: "Daily revenue summary by category and region. Migrated from Redshift sp_daily_revenue_summary."
+      columns:
+          - name: report_date
+            tests: [not_null]
+          - name: total_revenue
+            tests:
+                - not_null
+                - dbt_utils.accepted_range:
+                      min_value: 0
 ```
 
 ---
@@ -651,16 +651,16 @@ for vq in validation_queries:
 -- deviates from the expected row count by more than 0.1%
 
 SELECT
-  report_date,
-  ABS(dbx_revenue - expected_revenue) / expected_revenue AS pct_diff
+report_date,
+ABS(dbx_revenue - expected_revenue) / expected_revenue AS pct_diff
 FROM (
-  SELECT
-    report_date,
-    total_revenue AS dbx_revenue
-  FROM {{ ref('daily_revenue_summary') }}
+SELECT
+report_date,
+total_revenue AS dbx_revenue
+FROM {{ ref('daily_revenue_summary') }}
 ) dbx
 JOIN {{ ref('seed_redshift_revenue_baseline') }} baseline
-  USING (report_date)
+USING (report_date)
 WHERE ABS(dbx_revenue - expected_revenue) / expected_revenue > 0.001
 ```
 
@@ -670,12 +670,12 @@ WHERE ABS(dbx_revenue - expected_revenue) / expected_revenue > 0.001
 
 ### Sizing Databricks SQL Warehouses
 
-| Redshift node type | Recommended Databricks SQL Warehouse | Notes |
-|-------------------|-------------------------------------|-------|
-| dc2.large (2 nodes) | Small (2X-Small serverless) | Light ad-hoc |
-| dc2.8xlarge (4 nodes) | Medium serverless | Standard analytics |
-| ra3.xlplus (6 nodes) | Large serverless | Heavy dashboards |
-| ra3.4xlarge (8+ nodes) | X-Large or 2X-Large serverless | Concurrent BI + ETL |
+| Redshift node type     | Recommended Databricks SQL Warehouse | Notes               |
+| ---------------------- | ------------------------------------ | ------------------- |
+| dc2.large (2 nodes)    | Small (2X-Small serverless)          | Light ad-hoc        |
+| dc2.8xlarge (4 nodes)  | Medium serverless                    | Standard analytics  |
+| ra3.xlplus (6 nodes)   | Large serverless                     | Heavy dashboards    |
+| ra3.4xlarge (8+ nodes) | X-Large or 2X-Large serverless       | Concurrent BI + ETL |
 
 ### Key optimization techniques
 

@@ -52,19 +52,20 @@ Fabric Tenant (Entra ID tenant)
 
 ### 2.3 Mapping rules
 
-| Unity Catalog level | Fabric equivalent | Notes |
-| --- | --- | --- |
-| Metastore | Fabric tenant (Entra ID) | One metastore = one tenant |
-| Catalog | Fabric workspace | One catalog maps to one or more workspaces |
-| Schema | Lakehouse or Warehouse | One schema maps to one Lakehouse/Warehouse |
-| Table | Lakehouse table or Warehouse table | Same Delta tables |
-| View | Lakehouse view or Warehouse view | SQL views supported in both |
-| Function (SQL UDF) | Warehouse SQL function | Lakehouse SQL endpoint does not support UDFs |
-| Volume (file storage) | Lakehouse Files section | Unstructured file storage |
+| Unity Catalog level   | Fabric equivalent                  | Notes                                        |
+| --------------------- | ---------------------------------- | -------------------------------------------- |
+| Metastore             | Fabric tenant (Entra ID)           | One metastore = one tenant                   |
+| Catalog               | Fabric workspace                   | One catalog maps to one or more workspaces   |
+| Schema                | Lakehouse or Warehouse             | One schema maps to one Lakehouse/Warehouse   |
+| Table                 | Lakehouse table or Warehouse table | Same Delta tables                            |
+| View                  | Lakehouse view or Warehouse view   | SQL views supported in both                  |
+| Function (SQL UDF)    | Warehouse SQL function             | Lakehouse SQL endpoint does not support UDFs |
+| Volume (file storage) | Lakehouse Files section            | Unstructured file storage                    |
 
 ### 2.4 Worked example
 
 **Databricks Unity Catalog:**
+
 ```
 production (catalog)
 ├── bronze (schema)
@@ -81,6 +82,7 @@ production (catalog)
 ```
 
 **Fabric equivalent:**
+
 ```
 Production-Analytics (workspace)
 ├── bronze_lakehouse (Lakehouse)
@@ -105,11 +107,11 @@ Production-Analytics (workspace)
 
 For every table in Unity Catalog, document the mapping:
 
-| UC path | Fabric path | Storage location | Shortcut or copy | Owner |
-| --- | --- | --- | --- | --- |
-| `production.bronze.raw_customers` | `Production-Analytics / bronze_lakehouse / raw_customers` | `abfss://container@account.dfs.core.windows.net/bronze/customers/` | Shortcut | data-eng-team |
-| `production.silver.customers_clean` | `Production-Analytics / silver_lakehouse / customers_clean` | OneLake (native) | Copy | data-eng-team |
-| `production.gold.daily_sales_summary` | `Production-Analytics / gold_lakehouse / daily_sales_summary` | OneLake (native) | Copy | analytics-team |
+| UC path                               | Fabric path                                                   | Storage location                                                   | Shortcut or copy | Owner          |
+| ------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------ | ---------------- | -------------- |
+| `production.bronze.raw_customers`     | `Production-Analytics / bronze_lakehouse / raw_customers`     | `abfss://container@account.dfs.core.windows.net/bronze/customers/` | Shortcut         | data-eng-team  |
+| `production.silver.customers_clean`   | `Production-Analytics / silver_lakehouse / customers_clean`   | OneLake (native)                                                   | Copy             | data-eng-team  |
+| `production.gold.daily_sales_summary` | `Production-Analytics / gold_lakehouse / daily_sales_summary` | OneLake (native)                                                   | Copy             | analytics-team |
 
 ---
 
@@ -223,35 +225,35 @@ ALTER TABLE production.gold.customer_360
 
 Fabric uses workspace roles + item-level permissions:
 
-| UC privilege | Fabric equivalent | Scope |
-| --- | --- | --- |
-| `USAGE ON CATALOG` | Workspace role: Viewer+ | Workspace level |
-| `USAGE ON SCHEMA` | Lakehouse role or SQL permission | Lakehouse/Warehouse level |
-| `SELECT ON TABLE` | Workspace Viewer role OR SQL GRANT SELECT | Item level |
-| `MODIFY ON TABLE` | Workspace Contributor role | Item level |
-| `CREATE TABLE` | Workspace Contributor/Member role | Item level |
-| `Column-level security` | Warehouse SQL (column-level DENY) | Warehouse only |
-| `Row-level security` | Warehouse RLS + Power BI RLS | Warehouse + PBI |
-| `Row filter` | Warehouse dynamic data masking | Warehouse only |
+| UC privilege            | Fabric equivalent                         | Scope                     |
+| ----------------------- | ----------------------------------------- | ------------------------- |
+| `USAGE ON CATALOG`      | Workspace role: Viewer+                   | Workspace level           |
+| `USAGE ON SCHEMA`       | Lakehouse role or SQL permission          | Lakehouse/Warehouse level |
+| `SELECT ON TABLE`       | Workspace Viewer role OR SQL GRANT SELECT | Item level                |
+| `MODIFY ON TABLE`       | Workspace Contributor role                | Item level                |
+| `CREATE TABLE`          | Workspace Contributor/Member role         | Item level                |
+| `Column-level security` | Warehouse SQL (column-level DENY)         | Warehouse only            |
+| `Row-level security`    | Warehouse RLS + Power BI RLS              | Warehouse + PBI           |
+| `Row filter`            | Warehouse dynamic data masking            | Warehouse only            |
 
 ### 4.3 Workspace role mapping
 
-| UC role pattern | Fabric workspace role | Permissions |
-| --- | --- | --- |
-| Catalog owner / admin | Workspace Admin | Full control over workspace and items |
-| Schema owner / data engineer | Workspace Member | Create, edit, delete items; share workspace |
-| Table writer / pipeline service principal | Workspace Contributor | Create and edit items; cannot share |
-| Table reader / analyst | Workspace Viewer | Read-only access to items |
+| UC role pattern                           | Fabric workspace role | Permissions                                 |
+| ----------------------------------------- | --------------------- | ------------------------------------------- |
+| Catalog owner / admin                     | Workspace Admin       | Full control over workspace and items       |
+| Schema owner / data engineer              | Workspace Member      | Create, edit, delete items; share workspace |
+| Table writer / pipeline service principal | Workspace Contributor | Create and edit items; cannot share         |
+| Table reader / analyst                    | Workspace Viewer      | Read-only access to items                   |
 
 ### 4.4 Important gaps
 
-| UC capability | Fabric status | Workaround |
-| --- | --- | --- |
-| Column-level security on Lakehouse | Not available | Use Fabric Warehouse for column-level security |
-| Row-level security on Lakehouse | Not available | Use Fabric Warehouse RLS or Power BI RLS |
-| Fine-grained SQL GRANT/REVOKE | Available in Warehouse only | Sensitive tables should use Warehouse, not Lakehouse |
-| Metastore-level auditing | Azure Monitor + Purview | Different audit surface |
-| Cross-catalog references | Cross-workspace shortcuts | Shortcuts bridge workspaces |
+| UC capability                      | Fabric status               | Workaround                                           |
+| ---------------------------------- | --------------------------- | ---------------------------------------------------- |
+| Column-level security on Lakehouse | Not available               | Use Fabric Warehouse for column-level security       |
+| Row-level security on Lakehouse    | Not available               | Use Fabric Warehouse RLS or Power BI RLS             |
+| Fine-grained SQL GRANT/REVOKE      | Available in Warehouse only | Sensitive tables should use Warehouse, not Lakehouse |
+| Metastore-level auditing           | Azure Monitor + Purview     | Different audit surface                              |
+| Cross-catalog references           | Cross-workspace shortcuts   | Shortcuts bridge workspaces                          |
 
 ---
 
@@ -260,6 +262,7 @@ Fabric uses workspace roles + item-level permissions:
 ### 5.1 Unity Catalog lineage
 
 UC automatically tracks table-level and column-level lineage:
+
 - Which notebooks/jobs read/write each table
 - Column-level provenance (which source columns produce which target columns)
 - Lineage visualization in the Databricks UI
@@ -267,10 +270,12 @@ UC automatically tracks table-level and column-level lineage:
 ### 5.2 Fabric + Purview lineage
 
 Fabric tracks lineage through:
+
 - **Fabric lineage view** -- workspace-level lineage showing dependencies between items (Lakehouse -> Notebook -> Lakehouse -> Semantic Model -> Report)
 - **Microsoft Purview** -- tenant-level data governance with lineage across Fabric, Azure SQL, Synapse, and external sources
 
 **Setup steps:**
+
 1. Connect Fabric to Purview (tenant-level setting in Fabric admin portal)
 2. Enable automatic lineage scanning in Purview
 3. Purview scans Fabric workspace metadata and builds lineage graph
@@ -278,14 +283,14 @@ Fabric tracks lineage through:
 
 ### 5.3 Lineage gap analysis
 
-| UC lineage feature | Fabric + Purview | Gap? |
-| --- | --- | --- |
-| Table-level lineage | Fabric lineage view | No |
-| Column-level lineage | Purview (with scanning) | Partial -- depends on scan depth |
-| Notebook-to-table lineage | Fabric lineage view | No |
-| Pipeline-to-table lineage | Fabric lineage view | No |
-| Cross-workspace lineage | Purview (tenant-wide) | No |
-| External source lineage | Purview connectors | No -- Purview has broader coverage |
+| UC lineage feature        | Fabric + Purview        | Gap?                               |
+| ------------------------- | ----------------------- | ---------------------------------- |
+| Table-level lineage       | Fabric lineage view     | No                                 |
+| Column-level lineage      | Purview (with scanning) | Partial -- depends on scan depth   |
+| Notebook-to-table lineage | Fabric lineage view     | No                                 |
+| Pipeline-to-table lineage | Fabric lineage view     | No                                 |
+| Cross-workspace lineage   | Purview (tenant-wide)   | No                                 |
+| External source lineage   | Purview connectors      | No -- Purview has broader coverage |
 
 ---
 
@@ -308,13 +313,13 @@ GRANT SELECT ON SHARE customer_share TO RECIPIENT partner_org;
 
 ### 6.2 Fabric sharing options
 
-| Sharing pattern | Fabric mechanism | Notes |
-| --- | --- | --- |
-| Cross-workspace (same tenant) | OneLake shortcuts | Zero-copy, same tenant |
-| Cross-tenant (Fabric-to-Fabric) | Fabric data sharing (preview) | Evolving feature |
-| Cross-platform (Fabric-to-external) | Delta Sharing (via Databricks or open-source) | Fabric can consume Delta Shares |
-| B2B data sharing | Purview Data Share | Governed sharing with audit trail |
-| API-based sharing | Fabric REST API + Lakehouse SQL endpoint | JDBC/ODBC access |
+| Sharing pattern                     | Fabric mechanism                              | Notes                             |
+| ----------------------------------- | --------------------------------------------- | --------------------------------- |
+| Cross-workspace (same tenant)       | OneLake shortcuts                             | Zero-copy, same tenant            |
+| Cross-tenant (Fabric-to-Fabric)     | Fabric data sharing (preview)                 | Evolving feature                  |
+| Cross-platform (Fabric-to-external) | Delta Sharing (via Databricks or open-source) | Fabric can consume Delta Shares   |
+| B2B data sharing                    | Purview Data Share                            | Governed sharing with audit trail |
+| API-based sharing                   | Fabric REST API + Lakehouse SQL endpoint      | JDBC/ODBC access                  |
 
 ### 6.3 Migration recommendation
 
@@ -362,15 +367,15 @@ For organizations using Delta Sharing today:
 
 ## 8. Common pitfalls
 
-| Pitfall | Mitigation |
-| --- | --- |
-| Assuming Fabric has a UC-equivalent namespace | Document the workspace/lakehouse mapping explicitly |
-| Losing column-level security | Route sensitive tables to Fabric Warehouse, not Lakehouse |
-| Forgetting UC row filters | Implement in Fabric Warehouse RLS or Power BI RLS |
-| Expecting automatic lineage migration | Lineage must be rebuilt via Purview scanning; it does not transfer |
-| Ignoring Delta Sharing dependencies | Map all sharing relationships before decommissioning UC |
-| Over-permissioning via workspace roles | Workspace roles are coarser than UC grants; use Warehouse SQL grants for finer control |
-| Not connecting Purview early | Connect Purview before migration so lineage builds from the start |
+| Pitfall                                       | Mitigation                                                                             |
+| --------------------------------------------- | -------------------------------------------------------------------------------------- |
+| Assuming Fabric has a UC-equivalent namespace | Document the workspace/lakehouse mapping explicitly                                    |
+| Losing column-level security                  | Route sensitive tables to Fabric Warehouse, not Lakehouse                              |
+| Forgetting UC row filters                     | Implement in Fabric Warehouse RLS or Power BI RLS                                      |
+| Expecting automatic lineage migration         | Lineage must be rebuilt via Purview scanning; it does not transfer                     |
+| Ignoring Delta Sharing dependencies           | Map all sharing relationships before decommissioning UC                                |
+| Over-permissioning via workspace roles        | Workspace roles are coarser than UC grants; use Warehouse SQL grants for finer control |
+| Not connecting Purview early                  | Connect Purview before migration so lineage builds from the start                      |
 
 ---
 

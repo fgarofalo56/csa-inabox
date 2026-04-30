@@ -56,11 +56,11 @@ WHERE "kind" = 'INBOUND';
 
 Create an inventory spreadsheet:
 
-| Share name | Direction | Partner | Objects shared | Refresh | SLA | Consumers | Notes |
-|---|---|---|---|---|---|---|---|
-| finance_data_share | Outbound | Agency B | 5 tables, 2 views | Live | 99.5% | 3 users | MOU-2026-042 |
-| hr_analytics_share | Outbound | Agency C | 3 tables | Live | 99.0% | 5 users | DUA-2025-018 |
-| census_data | Inbound | Census Bureau | 12 tables | Daily | N/A | 10 users | Public data |
+| Share name         | Direction | Partner       | Objects shared    | Refresh | SLA   | Consumers | Notes        |
+| ------------------ | --------- | ------------- | ----------------- | ------- | ----- | --------- | ------------ |
+| finance_data_share | Outbound  | Agency B      | 5 tables, 2 views | Live    | 99.5% | 3 users   | MOU-2026-042 |
+| hr_analytics_share | Outbound  | Agency C      | 3 tables          | Live    | 99.0% | 5 users   | DUA-2025-018 |
+| census_data        | Inbound   | Census Bureau | 12 tables         | Daily   | N/A   | 10 users  | Public data  |
 
 ---
 
@@ -152,11 +152,11 @@ GRANT SELECT ON SHARE finance_data_share TO RECIPIENT agency_b_databricks;
 
 ### 3.3 Document recipients
 
-| Recipient | Activation method | Platform | Contact | Share(s) |
-|---|---|---|---|---|
-| agency_b_finance_team | Activation link | pandas/DuckDB | data-team@agencyb.gov | finance_data_share |
-| agency_b_databricks | Sharing ID | Databricks | data-team@agencyb.gov | finance_data_share |
-| agency_c_fabric | Activation link | Microsoft Fabric | analytics@agencyc.gov | hr_analytics_share |
+| Recipient             | Activation method | Platform         | Contact               | Share(s)           |
+| --------------------- | ----------------- | ---------------- | --------------------- | ------------------ |
+| agency_b_finance_team | Activation link   | pandas/DuckDB    | data-team@agencyb.gov | finance_data_share |
+| agency_b_databricks   | Sharing ID        | Databricks       | data-team@agencyb.gov | finance_data_share |
+| agency_c_fabric       | Activation link   | Microsoft Fabric | analytics@agencyc.gov | hr_analytics_share |
 
 ---
 
@@ -425,14 +425,14 @@ FROM (
 
 ### 7.2 Cutover execution
 
-| Day | Action |
-|---|---|
-| Day 0 | All consumers confirmed on Delta Sharing |
-| Day 1 | Set Snowflake share to read-only (no new data) |
-| Day 3 | Verify no queries hitting Snowflake share |
-| Day 7 | Revoke Snowflake share grants |
-| Day 14 | Drop Snowflake share |
-| Day 30 | Update MOU/DUA documentation |
+| Day    | Action                                         |
+| ------ | ---------------------------------------------- |
+| Day 0  | All consumers confirmed on Delta Sharing       |
+| Day 1  | Set Snowflake share to read-only (no new data) |
+| Day 3  | Verify no queries hitting Snowflake share      |
+| Day 7  | Revoke Snowflake share grants                  |
+| Day 14 | Drop Snowflake share                           |
+| Day 30 | Update MOU/DUA documentation                   |
 
 ### 7.3 Communication template
 
@@ -509,14 +509,14 @@ If the partner is also on Azure, negotiate OneLake shortcuts for the simplest se
 
 ## Common issues and solutions
 
-| Issue | Solution |
-|---|---|
-| Activation link expired | Generate a new recipient and activation link |
-| Consumer cannot authenticate | Verify Entra ID permissions for OneLake shortcuts; verify activation for Delta Sharing |
-| Data freshness lag | Delta shares are live (latest Delta version); check table update pipeline |
-| Schema mismatch | Compare Snowflake schema vs Delta schema; handle type differences (VARCHAR vs STRING) |
-| Consumer needs data in non-Delta format | Delta Sharing delivers Parquet; consumers can convert as needed |
-| Partner refuses to leave Snowflake | Use Lakehouse Federation as a bridge; plan for long-term federation |
+| Issue                                   | Solution                                                                               |
+| --------------------------------------- | -------------------------------------------------------------------------------------- |
+| Activation link expired                 | Generate a new recipient and activation link                                           |
+| Consumer cannot authenticate            | Verify Entra ID permissions for OneLake shortcuts; verify activation for Delta Sharing |
+| Data freshness lag                      | Delta shares are live (latest Delta version); check table update pipeline              |
+| Schema mismatch                         | Compare Snowflake schema vs Delta schema; handle type differences (VARCHAR vs STRING)  |
+| Consumer needs data in non-Delta format | Delta Sharing delivers Parquet; consumers can convert as needed                        |
+| Partner refuses to leave Snowflake      | Use Lakehouse Federation as a bridge; plan for long-term federation                    |
 
 ---
 

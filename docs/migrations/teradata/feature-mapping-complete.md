@@ -241,13 +241,13 @@ OPTION (MAXRECURSION 100);
 
 **Azure equivalents:**
 
-| TPT operator | Azure equivalent | Notes |
-| --- | --- | --- |
-| Load operator (bulk insert) | ADF Copy Activity (bulk) | JDBC or Parquet staging |
-| Update operator (upsert) | ADF + Delta MERGE | ADF loads to staging, dbt/SQL merges |
-| Export operator | ADF Copy Activity (extract) | JDBC from Teradata source |
-| Stream operator (real-time) | Event Hubs + Spark Streaming | Different architecture entirely |
-| SQL operator | ADF Stored Procedure activity | Or dbt run |
+| TPT operator                | Azure equivalent              | Notes                                |
+| --------------------------- | ----------------------------- | ------------------------------------ |
+| Load operator (bulk insert) | ADF Copy Activity (bulk)      | JDBC or Parquet staging              |
+| Update operator (upsert)    | ADF + Delta MERGE             | ADF loads to staging, dbt/SQL merges |
+| Export operator             | ADF Copy Activity (extract)   | JDBC from Teradata source            |
+| Stream operator (real-time) | Event Hubs + Spark Streaming  | Different architecture entirely      |
+| SQL operator                | ADF Stored Procedure activity | Or dbt run                           |
 
 **Migration effort:** High. TPT scripts must be redesigned as ADF pipelines + dbt models. See [Tutorial — TPT to ADF](tutorial-tpt-to-adf.md).
 
@@ -271,13 +271,13 @@ SELECT * FROM summary;
 
 **Azure equivalents:**
 
-| BTEQ feature | Azure equivalent |
-| --- | --- |
-| SQL execution | dbt model / Databricks notebook / Synapse SQL script |
+| BTEQ feature                   | Azure equivalent                                         |
+| ------------------------------ | -------------------------------------------------------- |
+| SQL execution                  | dbt model / Databricks notebook / Synapse SQL script     |
 | Error handling (.IF ERRORCODE) | dbt tests / ADF error handling / try-except in notebooks |
-| Export to file | ADF Copy Activity / Spark DataFrame write / CETAS |
-| Variable substitution | dbt Jinja variables / ADF parameters |
-| Scheduling | ADF triggers / Databricks Jobs / dbt Cloud scheduler |
+| Export to file                 | ADF Copy Activity / Spark DataFrame write / CETAS        |
+| Variable substitution          | dbt Jinja variables / ADF parameters                     |
+| Scheduling                     | ADF triggers / Databricks Jobs / dbt Cloud scheduler     |
 
 **Migration effort:** High. BTEQ scripts are the bulk of migration work. See [Tutorial — BTEQ to dbt](tutorial-bteq-to-dbt.md).
 
@@ -299,13 +299,13 @@ INSERT INTO orders_staging VALUES (:col1, :col2, :col3);
 
 ```json
 {
-  "type": "Copy",
-  "source": { "type": "DelimitedTextSource" },
-  "sink": {
-    "type": "DeltaLakeSink",
-    "writeBatchSize": 1000000,
-    "tableActionOption": "Overwrite"
-  }
+    "type": "Copy",
+    "source": { "type": "DelimitedTextSource" },
+    "sink": {
+        "type": "DeltaLakeSink",
+        "writeBatchSize": 1000000,
+        "tableActionOption": "Overwrite"
+    }
 }
 ```
 
@@ -341,13 +341,13 @@ WHEN NOT MATCHED AND staging.action = 'I' THEN INSERT *;
 
 **Azure mapping:**
 
-| TASM concept | Synapse | Databricks | Fabric |
-| --- | --- | --- | --- |
-| Workload class | Resource class | SQL warehouse size | Capacity allocation |
-| Priority level | Workload importance | Warehouse priority | Not directly available |
-| Throttle rule | Concurrency slots | Max clusters cap | Capacity smoothing |
-| Filter rule | Application routing | Warehouse routing | Workspace routing |
-| Exception handling | DMV-based monitoring | Query watchdog | Capacity guardrails |
+| TASM concept       | Synapse              | Databricks         | Fabric                 |
+| ------------------ | -------------------- | ------------------ | ---------------------- |
+| Workload class     | Resource class       | SQL warehouse size | Capacity allocation    |
+| Priority level     | Workload importance  | Warehouse priority | Not directly available |
+| Throttle rule      | Concurrency slots    | Max clusters cap   | Capacity smoothing     |
+| Filter rule        | Application routing  | Warehouse routing  | Workspace routing      |
+| Exception handling | DMV-based monitoring | Query watchdog     | Capacity guardrails    |
 
 **Migration effort:** High. Requires architectural redesign. See [Workload Migration](workload-migration.md).
 
@@ -358,6 +358,7 @@ WHEN NOT MATCHED AND staging.action = 'I' THEN INSERT *;
 **Teradata:** AI-driven workload management that auto-adjusts priorities.
 
 **Azure:** No direct equivalent. Implement via:
+
 - Databricks: Auto-scaling SQL warehouses + query queuing
 - Synapse: Workload management with workload groups and classifiers
 - Custom: Azure Monitor alerts triggering Azure Functions for dynamic adjustment
@@ -380,11 +381,11 @@ SELECT * FROM DBC.AccessLog WHERE TableName = 'sensitive_data';
 
 **Azure:** Azure Monitor + Diagnostic Logs + Microsoft Purview.
 
-| Teradata log | Azure equivalent |
-| --- | --- |
-| DBC.AccessLog | Azure Monitor Diagnostic Logs |
-| DBC.DeleteAccessLog | Purview Data Use Management |
-| DBQL (Query Log) | Databricks Query History / Synapse DMVs |
+| Teradata log        | Azure equivalent                        |
+| ------------------- | --------------------------------------- |
+| DBC.AccessLog       | Azure Monitor Diagnostic Logs           |
+| DBC.DeleteAccessLog | Purview Data Use Management             |
+| DBQL (Query Log)    | Databricks Query History / Synapse DMVs |
 
 **Migration effort:** Medium. Different mechanism, equivalent coverage. See [Security Migration](security-migration.md).
 
@@ -465,12 +466,12 @@ CREATE PROFILE analyst_profile AS
 
 **Azure:** Entra ID groups + RBAC.
 
-| Teradata concept | Azure equivalent |
-| --- | --- |
-| Role | Entra ID security group |
+| Teradata concept             | Azure equivalent                                     |
+| ---------------------------- | ---------------------------------------------------- |
+| Role                         | Entra ID security group                              |
 | Profile (spool, temp limits) | Databricks cluster policies / Synapse resource class |
-| Database-level GRANT | Unity Catalog grants / Synapse permissions |
-| User | Entra ID user or service principal |
+| Database-level GRANT         | Unity Catalog grants / Synapse permissions           |
+| User                         | Entra ID user or service principal                   |
 
 **Migration effort:** Medium. Conceptual mapping is straightforward; implementation requires Entra ID integration.
 
@@ -482,12 +483,12 @@ CREATE PROFILE analyst_profile AS
 
 **Azure:** No single equivalent. Distributed across:
 
-| Unity feature | Azure equivalent |
-| --- | --- |
-| Connection management | Azure Private Link + DNS |
-| Query routing | Application-level routing / ADF |
+| Unity feature         | Azure equivalent                   |
+| --------------------- | ---------------------------------- |
+| Connection management | Azure Private Link + DNS           |
+| Query routing         | Application-level routing / ADF    |
 | Multi-system failover | Azure Traffic Manager / Front Door |
-| Ecosystem monitoring | Azure Monitor + Grafana |
+| Ecosystem monitoring  | Azure Monitor + Grafana            |
 
 **Migration effort:** Medium-High. Architectural redesign needed.
 
@@ -509,11 +510,11 @@ CREATE TABLE orders (
 
 **Azure mapping:**
 
-| Target | PI equivalent | Configuration |
-| --- | --- | --- |
-| Synapse Dedicated | Hash distribution column | `DISTRIBUTION = HASH(customer_id)` |
-| Databricks Delta | Z-ORDER column | `OPTIMIZE orders ZORDER BY (customer_id)` |
-| Fabric Warehouse | Automatic distribution | Engine-managed |
+| Target            | PI equivalent            | Configuration                             |
+| ----------------- | ------------------------ | ----------------------------------------- |
+| Synapse Dedicated | Hash distribution column | `DISTRIBUTION = HASH(customer_id)`        |
+| Databricks Delta  | Z-ORDER column           | `OPTIMIZE orders ZORDER BY (customer_id)` |
+| Fabric Warehouse  | Automatic distribution   | Engine-managed                            |
 
 **Migration effort:** Medium. Requires analysis of PI choices and translation to distribution strategy.
 
@@ -563,12 +564,12 @@ CREATE INDEX idx_order_date ON orders (order_date);
 
 **Azure:** No direct equivalent in Delta Lake. Alternatives:
 
-| Strategy | When to use |
-| --- | --- |
-| Z-ORDER / OPTIMIZE | Frequently filtered columns |
-| Bloom filter index | High-cardinality equality filters |
-| Materialized view | Repeated aggregation patterns |
-| Denormalization | Star schema access patterns |
+| Strategy              | When to use                                     |
+| --------------------- | ----------------------------------------------- |
+| Z-ORDER / OPTIMIZE    | Frequently filtered columns                     |
+| Bloom filter index    | High-cardinality equality filters               |
+| Materialized view     | Repeated aggregation patterns                   |
+| Denormalization       | Star schema access patterns                     |
 | Delta file statistics | Automatically maintained, support data skipping |
 
 **Migration effort:** Medium. Requires workload analysis to determine which SIs to replace and how.
@@ -588,11 +589,11 @@ PRIMARY INDEX (order_id);
 
 **Azure:**
 
-| Target | JI equivalent |
-| --- | --- |
-| Databricks | Materialized view (Delta) or dbt incremental model |
-| Synapse | Materialized view or indexed view |
-| Fabric | Automatic performance optimization (engine-managed) |
+| Target     | JI equivalent                                       |
+| ---------- | --------------------------------------------------- |
+| Databricks | Materialized view (Delta) or dbt incremental model  |
+| Synapse    | Materialized view or indexed view                   |
+| Fabric     | Automatic performance optimization (engine-managed) |
 
 **Migration effort:** Medium. Identify JIs and replace with materialized views or dbt models.
 
@@ -617,12 +618,12 @@ END;
 
 **Azure equivalents:**
 
-| Approach | Best for |
-| --- | --- |
-| dbt model (incremental) | Most transformation procedures |
-| Databricks notebook | Complex logic with Python |
+| Approach                       | Best for                                |
+| ------------------------------ | --------------------------------------- |
+| dbt model (incremental)        | Most transformation procedures          |
+| Databricks notebook            | Complex logic with Python               |
 | Synapse T-SQL stored procedure | Direct translation of simple procedures |
-| Azure Function | Event-driven procedures |
+| Azure Function                 | Event-driven procedures                 |
 
 **Migration effort:** Medium-High. Each procedure must be analyzed individually.
 
@@ -695,6 +696,7 @@ END;
 **Teradata:** Custom data types.
 
 **Azure:** Not directly supported in Delta Lake. Model as:
+
 - Struct types in Spark (for nested data)
 - JSON columns for flexible schemas
 - Domain validation in dbt tests
@@ -711,14 +713,14 @@ END;
 
 **Azure equivalents:**
 
-| ViewPoint feature | Azure equivalent |
-| --- | --- |
-| Query monitor | Databricks Query History / Synapse DMVs |
-| Space usage | ADLS Storage Explorer / Delta table DESCRIBE |
-| Session management | Databricks SQL Warehouse UI / Synapse portal |
-| Alert configuration | Azure Monitor alerts |
-| System health | Azure Monitor dashboards / Grafana |
-| Workload analysis | Databricks SQL Analytics / Synapse Workload Management |
+| ViewPoint feature   | Azure equivalent                                       |
+| ------------------- | ------------------------------------------------------ |
+| Query monitor       | Databricks Query History / Synapse DMVs                |
+| Space usage         | ADLS Storage Explorer / Delta table DESCRIBE           |
+| Session management  | Databricks SQL Warehouse UI / Synapse portal           |
+| Alert configuration | Azure Monitor alerts                                   |
+| System health       | Azure Monitor dashboards / Grafana                     |
+| Workload analysis   | Databricks SQL Analytics / Synapse Workload Management |
 
 **Migration effort:** Low-Medium. Azure has equivalent or better monitoring, but dashboards must be rebuilt.
 
@@ -735,12 +737,12 @@ SELECT * FROM hadoop_server.db.table@hadoop_connector;
 
 **Azure:**
 
-| Target | Federation approach |
-| --- | --- |
-| Synapse Serverless | External tables (ADLS, Cosmos DB, SQL Server) |
-| Databricks | Lakehouse Federation (MySQL, PostgreSQL, SQL Server, Snowflake) |
-| Fabric | Shortcuts (OneLake, S3, GCS, ADLS) |
-| ADF | Copy activities across any supported source |
+| Target             | Federation approach                                             |
+| ------------------ | --------------------------------------------------------------- |
+| Synapse Serverless | External tables (ADLS, Cosmos DB, SQL Server)                   |
+| Databricks         | Lakehouse Federation (MySQL, PostgreSQL, SQL Server, Snowflake) |
+| Fabric             | Shortcuts (OneLake, S3, GCS, ADLS)                              |
+| ADF                | Copy activities across any supported source                     |
 
 **Migration effort:** Medium. Federation patterns exist but require redesign.
 
@@ -752,12 +754,12 @@ SELECT * FROM hadoop_server.db.table@hadoop_connector;
 
 **Azure:** Platform-managed backups.
 
-| ARC feature | Azure equivalent |
-| --- | --- |
-| Full backup | ADLS snapshots / Delta CLONE |
-| Incremental backup | Delta time travel (automatic) |
+| ARC feature          | Azure equivalent                       |
+| -------------------- | -------------------------------------- |
+| Full backup          | ADLS snapshots / Delta CLONE           |
+| Incremental backup   | Delta time travel (automatic)          |
 | Object-level restore | Delta RESTORE / point-in-time recovery |
-| Archive | ADLS lifecycle to Cool/Archive tier |
+| Archive              | ADLS lifecycle to Cool/Archive tier    |
 
 **Migration effort:** Low. Azure backups are largely automatic.
 
@@ -770,6 +772,7 @@ SELECT * FROM hadoop_server.db.table@hadoop_connector;
 **Teradata:** Multi-value compression (MVC), block-level compression, algorithmic compression (ALC).
 
 **Azure:** Delta Lake inherits Parquet compression:
+
 - Snappy compression (default, fast)
 - ZSTD compression (better ratio)
 - Z-ORDER for data co-location
@@ -791,13 +794,13 @@ SELECT * FROM DBC.ColumnsV WHERE DatabaseName = 'my_db' AND TableName = 'orders'
 
 **Azure:**
 
-| DBC view | Databricks | Synapse |
-| --- | --- | --- |
-| DBC.TablesV | INFORMATION_SCHEMA.TABLES / Unity Catalog | INFORMATION_SCHEMA.TABLES |
-| DBC.ColumnsV | INFORMATION_SCHEMA.COLUMNS | INFORMATION_SCHEMA.COLUMNS |
-| DBC.IndicesV | DESCRIBE EXTENDED / SHOW TBLPROPERTIES | sys.indexes |
-| DBC.AccessLog | audit_log (Unity Catalog) | sys.dm_pdw_exec_requests |
-| DBC.QryLogV | query_history (system table) | sys.dm_pdw_exec_requests |
+| DBC view      | Databricks                                | Synapse                    |
+| ------------- | ----------------------------------------- | -------------------------- |
+| DBC.TablesV   | INFORMATION_SCHEMA.TABLES / Unity Catalog | INFORMATION_SCHEMA.TABLES  |
+| DBC.ColumnsV  | INFORMATION_SCHEMA.COLUMNS                | INFORMATION_SCHEMA.COLUMNS |
+| DBC.IndicesV  | DESCRIBE EXTENDED / SHOW TBLPROPERTIES    | sys.indexes                |
+| DBC.AccessLog | audit_log (Unity Catalog)                 | sys.dm_pdw_exec_requests   |
+| DBC.QryLogV   | query_history (system table)              | sys.dm_pdw_exec_requests   |
 
 **Migration effort:** Low-Medium. Script-based DBC queries need rewriting.
 
@@ -834,51 +837,51 @@ CREATE TABLE ##shared_tmp (...);
 
 ## 9. Quick reference matrix
 
-| # | Teradata feature | Azure equivalent | Effort |
-| --- | --- | --- | --- |
-| 1 | QUALIFY | Databricks native / CTE pattern | Low |
-| 2 | MERGE | Delta MERGE / T-SQL MERGE | Low |
-| 3 | COLLECT STATISTICS | ANALYZE TABLE / auto-stats | Low |
-| 4 | SET tables | Constraints + dbt unique test | Medium |
-| 5 | Temporal tables | Delta time travel / Synapse temporal | Medium |
-| 6 | Recursive views | Recursive CTE | Low |
-| 7 | TPT | ADF Copy Activity + dbt | High |
-| 8 | BTEQ | dbt models + ADF orchestration | High |
-| 9 | FastLoad | ADF bulk copy | Medium |
-| 10 | MultiLoad | ADF + Delta MERGE | Medium |
-| 11 | TASM | Multiple warehouses + routing | High |
-| 12 | TIWM | Auto-scaling + monitoring | High |
-| 13 | Access logging | Azure Monitor + Purview | Medium |
-| 14 | Row-level security | Fabric RLS / Unity Catalog | Medium |
-| 15 | Column-level security | Dynamic masking / column masks | Medium |
-| 16 | Roles/profiles | Entra ID groups + RBAC | Medium |
-| 17 | Unity | Azure networking + routing | Medium-High |
-| 18 | Primary Index | Distribution/Z-ORDER | Medium |
-| 19 | PPI | Delta partitioning | Medium |
-| 20 | Secondary Index | Z-ORDER/bloom filters | Medium |
-| 21 | Join Index | Materialized views / dbt | Medium |
-| 22 | Stored procedures | dbt models / notebooks | Medium-High |
-| 23 | Macros | dbt macros | Low-Medium |
-| 24 | SQL UDFs | Spark SQL UDFs / T-SQL functions | Medium |
-| 25 | Java/C UDFs | Python/Scala UDFs | High |
-| 26 | UDTs | Structs / JSON | Medium |
-| 27 | ViewPoint | Azure Monitor / Grafana | Low-Medium |
-| 28 | QueryGrid | Lakehouse Federation / external tables | Medium |
-| 29 | ARC | Delta time travel / ADLS snapshots | Low |
-| 30 | Compression (MVC) | Parquet/columnstore (automatic) | Low |
-| 31 | DBC views | INFORMATION_SCHEMA / system tables | Low-Medium |
-| 32 | Volatile tables | Temp views / temp tables | Low |
-| 33 | Global temp tables | Temp schema / T-SQL ## tables | Low |
-| 34 | CASESPECIFIC | Default case-sensitive in Spark | Low |
-| 35 | FORMAT phrases | CAST + DATE_FORMAT | Low |
-| 36 | SAMPLE clause | TABLESAMPLE | Low |
-| 37 | NORMALIZE | Custom window function logic | Medium |
-| 38 | PERIOD data type | Two DATE/TIMESTAMP columns | Medium |
-| 39 | Geospatial (ST_Geometry) | Sedona (Spark) / T-SQL geography | Medium |
-| 40 | JSON support (JSON/JSONB) | Native JSON in Spark / OPENJSON in T-SQL | Low |
-| 41 | XML support | Spark XML / T-SQL XML methods | Medium |
-| 42 | HASH functions | Spark hash/md5/sha2 / T-SQL HASHBYTES | Low |
-| 43 | NAMED pipe | ADF streaming / Event Hubs | High |
+| #   | Teradata feature          | Azure equivalent                         | Effort      |
+| --- | ------------------------- | ---------------------------------------- | ----------- |
+| 1   | QUALIFY                   | Databricks native / CTE pattern          | Low         |
+| 2   | MERGE                     | Delta MERGE / T-SQL MERGE                | Low         |
+| 3   | COLLECT STATISTICS        | ANALYZE TABLE / auto-stats               | Low         |
+| 4   | SET tables                | Constraints + dbt unique test            | Medium      |
+| 5   | Temporal tables           | Delta time travel / Synapse temporal     | Medium      |
+| 6   | Recursive views           | Recursive CTE                            | Low         |
+| 7   | TPT                       | ADF Copy Activity + dbt                  | High        |
+| 8   | BTEQ                      | dbt models + ADF orchestration           | High        |
+| 9   | FastLoad                  | ADF bulk copy                            | Medium      |
+| 10  | MultiLoad                 | ADF + Delta MERGE                        | Medium      |
+| 11  | TASM                      | Multiple warehouses + routing            | High        |
+| 12  | TIWM                      | Auto-scaling + monitoring                | High        |
+| 13  | Access logging            | Azure Monitor + Purview                  | Medium      |
+| 14  | Row-level security        | Fabric RLS / Unity Catalog               | Medium      |
+| 15  | Column-level security     | Dynamic masking / column masks           | Medium      |
+| 16  | Roles/profiles            | Entra ID groups + RBAC                   | Medium      |
+| 17  | Unity                     | Azure networking + routing               | Medium-High |
+| 18  | Primary Index             | Distribution/Z-ORDER                     | Medium      |
+| 19  | PPI                       | Delta partitioning                       | Medium      |
+| 20  | Secondary Index           | Z-ORDER/bloom filters                    | Medium      |
+| 21  | Join Index                | Materialized views / dbt                 | Medium      |
+| 22  | Stored procedures         | dbt models / notebooks                   | Medium-High |
+| 23  | Macros                    | dbt macros                               | Low-Medium  |
+| 24  | SQL UDFs                  | Spark SQL UDFs / T-SQL functions         | Medium      |
+| 25  | Java/C UDFs               | Python/Scala UDFs                        | High        |
+| 26  | UDTs                      | Structs / JSON                           | Medium      |
+| 27  | ViewPoint                 | Azure Monitor / Grafana                  | Low-Medium  |
+| 28  | QueryGrid                 | Lakehouse Federation / external tables   | Medium      |
+| 29  | ARC                       | Delta time travel / ADLS snapshots       | Low         |
+| 30  | Compression (MVC)         | Parquet/columnstore (automatic)          | Low         |
+| 31  | DBC views                 | INFORMATION_SCHEMA / system tables       | Low-Medium  |
+| 32  | Volatile tables           | Temp views / temp tables                 | Low         |
+| 33  | Global temp tables        | Temp schema / T-SQL ## tables            | Low         |
+| 34  | CASESPECIFIC              | Default case-sensitive in Spark          | Low         |
+| 35  | FORMAT phrases            | CAST + DATE_FORMAT                       | Low         |
+| 36  | SAMPLE clause             | TABLESAMPLE                              | Low         |
+| 37  | NORMALIZE                 | Custom window function logic             | Medium      |
+| 38  | PERIOD data type          | Two DATE/TIMESTAMP columns               | Medium      |
+| 39  | Geospatial (ST_Geometry)  | Sedona (Spark) / T-SQL geography         | Medium      |
+| 40  | JSON support (JSON/JSONB) | Native JSON in Spark / OPENJSON in T-SQL | Low         |
+| 41  | XML support               | Spark XML / T-SQL XML methods            | Medium      |
+| 42  | HASH functions            | Spark hash/md5/sha2 / T-SQL HASHBYTES    | Low         |
+| 43  | NAMED pipe                | ADF streaming / Event Hubs               | High        |
 
 ---
 

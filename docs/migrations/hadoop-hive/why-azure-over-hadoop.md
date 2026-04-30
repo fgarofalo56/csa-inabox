@@ -18,19 +18,19 @@ Most Hadoop clusters in production today are 7 to 15 years old. They were built 
 
 ### The timeline tells the story
 
-| Year | Event |
-|---|---|
-| 2006 | Hadoop created at Yahoo |
-| 2008 | Hadoop becomes Apache top-level project |
-| 2011 | Cloudera, Hortonworks, MapR raise massive VC rounds |
-| 2014 | Spark emerges as MapReduce replacement |
-| 2017 | Cloud-native data lakes begin displacing Hadoop |
-| 2019 | Cloudera and Hortonworks merge (survival move) |
-| 2021 | MapR acquired by HPE, effectively end-of-life |
-| 2022 | Databricks lakehouse architecture becomes mainstream |
-| 2023 | Microsoft announces HDInsight retirement timeline |
+| Year | Event                                                         |
+| ---- | ------------------------------------------------------------- |
+| 2006 | Hadoop created at Yahoo                                       |
+| 2008 | Hadoop becomes Apache top-level project                       |
+| 2011 | Cloudera, Hortonworks, MapR raise massive VC rounds           |
+| 2014 | Spark emerges as MapReduce replacement                        |
+| 2017 | Cloud-native data lakes begin displacing Hadoop               |
+| 2019 | Cloudera and Hortonworks merge (survival move)                |
+| 2021 | MapR acquired by HPE, effectively end-of-life                 |
+| 2022 | Databricks lakehouse architecture becomes mainstream          |
+| 2023 | Microsoft announces HDInsight retirement timeline             |
 | 2024 | Cloudera goes private; on-prem Hadoop becomes a niche product |
-| 2025 | Most major enterprises actively migrating off Hadoop |
+| 2025 | Most major enterprises actively migrating off Hadoop          |
 
 ### What this means
 
@@ -46,16 +46,16 @@ The vendor ecosystem that sustained Hadoop — Cloudera, Hortonworks, MapR — h
 
 Running a production Hadoop cluster requires specialized knowledge across a daunting stack:
 
-| Component | Operational requirement |
-|---|---|
-| HDFS NameNode | High-availability configuration, JournalNode quorum, fsimage management, balancer runs |
-| YARN | Resource queue configuration, capacity scheduler tuning, node manager health checks |
-| Hive Metastore | MySQL/PostgreSQL backend, schema upgrades, compaction management |
-| ZooKeeper | Quorum maintenance, session timeout tuning, four-letter-word monitoring |
-| Kerberos KDC | Key distribution, principal management, keytab rotation, cross-realm trusts |
-| Ranger/Sentry | Policy synchronization, plugin upgrades, audit log management |
-| Ambari/CM | Agent health monitoring, rolling upgrades, service restarts |
-| OS + JVM | Kernel tuning, JVM garbage collection optimization, security patching |
+| Component      | Operational requirement                                                                |
+| -------------- | -------------------------------------------------------------------------------------- |
+| HDFS NameNode  | High-availability configuration, JournalNode quorum, fsimage management, balancer runs |
+| YARN           | Resource queue configuration, capacity scheduler tuning, node manager health checks    |
+| Hive Metastore | MySQL/PostgreSQL backend, schema upgrades, compaction management                       |
+| ZooKeeper      | Quorum maintenance, session timeout tuning, four-letter-word monitoring                |
+| Kerberos KDC   | Key distribution, principal management, keytab rotation, cross-realm trusts            |
+| Ranger/Sentry  | Policy synchronization, plugin upgrades, audit log management                          |
+| Ambari/CM      | Agent health monitoring, rolling upgrades, service restarts                            |
+| OS + JVM       | Kernel tuning, JVM garbage collection optimization, security patching                  |
 
 A typical mid-sized Hadoop cluster (50-200 nodes) requires 3-8 full-time administrators. Large enterprises with multiple clusters may dedicate 15-30 people to Hadoop operations.
 
@@ -86,14 +86,14 @@ A 100-node Cloudera cluster typically costs $2M-$5M per year in fully loaded cos
 
 ### The Azure cost model rewards efficiency
 
-| Hadoop cost driver | Azure equivalent | Key difference |
-|---|---|---|
-| 24/7 cluster hardware | Databricks auto-scaling clusters | Clusters spin up for jobs, then terminate |
-| HDFS replication (3x) | ADLS Gen2 (LRS/ZRS/GRS) | Storage replication managed by service; no 3x raw cost |
-| Cloudera license per node | Databricks DBU pricing | Pay per compute-second, not per node-year |
-| Hardware refresh (3-5 yr) | No hardware to refresh | CapEx eliminated |
-| DC power and cooling | Included in Azure pricing | Embedded in consumption cost |
-| Admin team (5-15 FTE) | 1-3 platform engineers | Managed services reduce headcount |
+| Hadoop cost driver        | Azure equivalent                 | Key difference                                         |
+| ------------------------- | -------------------------------- | ------------------------------------------------------ |
+| 24/7 cluster hardware     | Databricks auto-scaling clusters | Clusters spin up for jobs, then terminate              |
+| HDFS replication (3x)     | ADLS Gen2 (LRS/ZRS/GRS)          | Storage replication managed by service; no 3x raw cost |
+| Cloudera license per node | Databricks DBU pricing           | Pay per compute-second, not per node-year              |
+| Hardware refresh (3-5 yr) | No hardware to refresh           | CapEx eliminated                                       |
+| DC power and cooling      | Included in Azure pricing        | Embedded in consumption cost                           |
+| Admin team (5-15 FTE)     | 1-3 platform engineers           | Managed services reduce headcount                      |
 
 ### Utilization matters
 
@@ -111,17 +111,17 @@ Hadoop tried to be everything: storage (HDFS), compute (YARN/MapReduce), SQL (Hi
 
 Modern Azure decomposes these into purpose-built services:
 
-| Hadoop monolith component | Azure specialized service | Why it is better |
-|---|---|---|
-| HDFS | ADLS Gen2 | Infinite scale, tiered storage, no NameNode bottleneck |
-| YARN + MapReduce | Databricks / Fabric Spark | Auto-scaling, spot instances, Photon engine |
-| Hive | Databricks SQL / Fabric SQL endpoint | Sub-second queries via Direct Lake, Photon |
-| HBase | Cosmos DB | Global distribution, multi-model, guaranteed SLAs |
-| Kafka (on Hadoop) | Event Hubs | Kafka-compatible API, fully managed, auto-inflate |
-| Oozie | ADF / Databricks Workflows | Visual orchestration, 100+ connectors, CI/CD integration |
-| Ranger/Sentry | Purview + Unity Catalog | Unified governance across all data assets |
-| Atlas | Microsoft Purview | Automated scanning, classification, lineage |
-| ZooKeeper | Managed by each service | No ZooKeeper to operate — it is built into the managed services |
+| Hadoop monolith component | Azure specialized service            | Why it is better                                                |
+| ------------------------- | ------------------------------------ | --------------------------------------------------------------- |
+| HDFS                      | ADLS Gen2                            | Infinite scale, tiered storage, no NameNode bottleneck          |
+| YARN + MapReduce          | Databricks / Fabric Spark            | Auto-scaling, spot instances, Photon engine                     |
+| Hive                      | Databricks SQL / Fabric SQL endpoint | Sub-second queries via Direct Lake, Photon                      |
+| HBase                     | Cosmos DB                            | Global distribution, multi-model, guaranteed SLAs               |
+| Kafka (on Hadoop)         | Event Hubs                           | Kafka-compatible API, fully managed, auto-inflate               |
+| Oozie                     | ADF / Databricks Workflows           | Visual orchestration, 100+ connectors, CI/CD integration        |
+| Ranger/Sentry             | Purview + Unity Catalog              | Unified governance across all data assets                       |
+| Atlas                     | Microsoft Purview                    | Automated scanning, classification, lineage                     |
+| ZooKeeper                 | Managed by each service              | No ZooKeeper to operate — it is built into the managed services |
 
 ### Storage-compute separation changes everything
 
@@ -135,15 +135,15 @@ Azure separates storage (ADLS Gen2) from compute (Databricks, Fabric, Synapse). 
 
 ### The management layer comparison
 
-| Concern | Hadoop (self-managed) | Azure (PaaS) |
-|---|---|---|
-| High availability | Manual: NameNode HA, ResourceManager HA, ZK quorum | Built-in: SLA-backed |
-| Disaster recovery | Manual: DistCp to DR cluster, custom failover scripts | Built-in: ADLS GRS, Databricks DR workspace |
-| Auto-scaling | YARN capacity scheduler (static allocation) | Dynamic auto-scaling per job |
-| Monitoring | Ambari/CM + custom Grafana/Prometheus stack | Azure Monitor, Databricks Overwatch, Fabric Monitoring Hub |
-| Security patching | Manual: rolling restarts, JVM updates, OS patches | Automatic: managed by platform |
-| Upgrades | Multi-month projects with regression risk | Seamless: Databricks runtime upgrades, Fabric continuous updates |
-| Encryption | Manual: KMS setup, HDFS transparent encryption | Default: encryption at rest and in transit |
+| Concern           | Hadoop (self-managed)                                 | Azure (PaaS)                                                     |
+| ----------------- | ----------------------------------------------------- | ---------------------------------------------------------------- |
+| High availability | Manual: NameNode HA, ResourceManager HA, ZK quorum    | Built-in: SLA-backed                                             |
+| Disaster recovery | Manual: DistCp to DR cluster, custom failover scripts | Built-in: ADLS GRS, Databricks DR workspace                      |
+| Auto-scaling      | YARN capacity scheduler (static allocation)           | Dynamic auto-scaling per job                                     |
+| Monitoring        | Ambari/CM + custom Grafana/Prometheus stack           | Azure Monitor, Databricks Overwatch, Fabric Monitoring Hub       |
+| Security patching | Manual: rolling restarts, JVM updates, OS patches     | Automatic: managed by platform                                   |
+| Upgrades          | Multi-month projects with regression risk             | Seamless: Databricks runtime upgrades, Fabric continuous updates |
+| Encryption        | Manual: KMS setup, HDFS transparent encryption        | Default: encryption at rest and in transit                       |
 
 ### What your team gets back
 
@@ -167,17 +167,17 @@ Hadoop has no native AI/ML story. Organizations running ML on Hadoop typically b
 
 ### Azure's AI story
 
-| Capability | Azure service | Hadoop equivalent |
-|---|---|---|
-| LLMs and generative AI | Azure OpenAI (GPT-4o, o3, o4-mini) | None |
-| Copilot for data analysis | Microsoft 365 Copilot, Fabric Copilot | None |
-| AI agent development | Azure AI Foundry, Semantic Kernel | None |
-| ML training (managed) | Azure ML, Databricks MLflow | Spark MLlib (limited) |
-| ML serving | Azure ML endpoints, Databricks Model Serving | Manual deployment |
-| Feature engineering | Databricks Feature Store, Fabric feature tables | Manual Hive/Spark pipelines |
-| Vector search | Azure AI Search, Cosmos DB vector | None |
-| GPU compute | NC/ND-series VMs, Databricks GPU clusters | Custom YARN GPU scheduling (fragile) |
-| RAG pipelines | Azure AI Search + OpenAI + Prompt Flow | Build from scratch |
+| Capability                | Azure service                                   | Hadoop equivalent                    |
+| ------------------------- | ----------------------------------------------- | ------------------------------------ |
+| LLMs and generative AI    | Azure OpenAI (GPT-4o, o3, o4-mini)              | None                                 |
+| Copilot for data analysis | Microsoft 365 Copilot, Fabric Copilot           | None                                 |
+| AI agent development      | Azure AI Foundry, Semantic Kernel               | None                                 |
+| ML training (managed)     | Azure ML, Databricks MLflow                     | Spark MLlib (limited)                |
+| ML serving                | Azure ML endpoints, Databricks Model Serving    | Manual deployment                    |
+| Feature engineering       | Databricks Feature Store, Fabric feature tables | Manual Hive/Spark pipelines          |
+| Vector search             | Azure AI Search, Cosmos DB vector               | None                                 |
+| GPU compute               | NC/ND-series VMs, Databricks GPU clusters       | Custom YARN GPU scheduling (fragile) |
+| RAG pipelines             | Azure AI Search + OpenAI + Prompt Flow          | Build from scratch                   |
 
 Organizations that migrate to Azure gain immediate access to the most comprehensive AI platform available. This is not an incremental improvement — it is a category change that Hadoop cannot match at any investment level.
 
@@ -200,15 +200,15 @@ Delta Lake is an open-source storage layer that adds ACID transactions, time tra
 
 ### What you gain by converting to Delta
 
-| Feature | Parquet/ORC on HDFS | Delta Lake on ADLS Gen2 |
-|---|---|---|
-| ACID transactions | No | Yes |
-| Time travel | No (HDFS snapshots are cluster-level) | Yes (per-table, any point in time) |
-| Schema evolution | Manual, error-prone | Managed, with enforcement options |
-| Upserts (MERGE) | Not supported natively | First-class MERGE INTO |
-| Small file compaction | Manual scripts | OPTIMIZE command |
-| Data skipping | Manual partition pruning | Automatic via Z-ORDER and liquid clustering |
-| Streaming + batch | Separate pipelines | Unified with structured streaming |
+| Feature               | Parquet/ORC on HDFS                   | Delta Lake on ADLS Gen2                     |
+| --------------------- | ------------------------------------- | ------------------------------------------- |
+| ACID transactions     | No                                    | Yes                                         |
+| Time travel           | No (HDFS snapshots are cluster-level) | Yes (per-table, any point in time)          |
+| Schema evolution      | Manual, error-prone                   | Managed, with enforcement options           |
+| Upserts (MERGE)       | Not supported natively                | First-class MERGE INTO                      |
+| Small file compaction | Manual scripts                        | OPTIMIZE command                            |
+| Data skipping         | Manual partition pruning              | Automatic via Z-ORDER and liquid clustering |
+| Streaming + batch     | Separate pipelines                    | Unified with structured streaming           |
 
 **Your data is not locked into Hadoop.** It is in open formats that migrate directly to Azure with full fidelity. The target format (Delta) is also open-source and portable.
 
@@ -227,16 +227,16 @@ Finding and retaining Hadoop administrators is increasingly difficult:
 
 ### The Azure talent ecosystem
 
-| Skill | Hadoop talent pool | Azure/Databricks talent pool |
-|---|---|---|
-| SQL | Available | Abundant |
-| Python / PySpark | Available | Abundant |
-| Spark tuning | Scarce | Growing |
-| HDFS / YARN admin | Very scarce | Not needed |
-| Kerberos / Ranger | Very scarce | Replaced by Entra ID / Purview |
-| dbt | Not applicable | Rapidly growing |
-| Power BI / Fabric | Not applicable | Massive |
-| Azure ML / AI | Not applicable | Growing fast |
+| Skill             | Hadoop talent pool | Azure/Databricks talent pool   |
+| ----------------- | ------------------ | ------------------------------ |
+| SQL               | Available          | Abundant                       |
+| Python / PySpark  | Available          | Abundant                       |
+| Spark tuning      | Scarce             | Growing                        |
+| HDFS / YARN admin | Very scarce        | Not needed                     |
+| Kerberos / Ranger | Very scarce        | Replaced by Entra ID / Purview |
+| dbt               | Not applicable     | Rapidly growing                |
+| Power BI / Fabric | Not applicable     | Massive                        |
+| Azure ML / AI     | Not applicable     | Growing fast                   |
 
 **Migrating to Azure does not require retraining your entire team.** SQL and PySpark skills transfer directly. What changes is the operational layer — and that change makes your team's work more interesting, more impactful, and easier to hire for.
 
@@ -274,15 +274,15 @@ These edge cases are real and should be scoped carefully during the assessment p
 
 ## Decision framework
 
-| Factor | Stay on Hadoop if... | Migrate to Azure if... |
-|---|---|---|
-| Cluster age | < 3 years old, recently upgraded | > 5 years old, upgrade looming |
-| License renewal | Just renewed multi-year contract | Renewal in < 18 months |
-| Team skills | Deep Hadoop expertise, team wants to stay | Team wants modern skills, hiring is hard |
-| Workload profile | Mostly custom YARN apps, heavy HBase | Mostly Spark/Hive, standard patterns |
-| AI/ML plans | No AI/ML on the roadmap | AI/ML is strategic priority |
-| Budget | CapEx-only funding model | OpEx-friendly, consumption-based OK |
-| Risk tolerance | Low (prefer status quo) | Medium (willing to invest in modernization) |
+| Factor           | Stay on Hadoop if...                      | Migrate to Azure if...                      |
+| ---------------- | ----------------------------------------- | ------------------------------------------- |
+| Cluster age      | < 3 years old, recently upgraded          | > 5 years old, upgrade looming              |
+| License renewal  | Just renewed multi-year contract          | Renewal in < 18 months                      |
+| Team skills      | Deep Hadoop expertise, team wants to stay | Team wants modern skills, hiring is hard    |
+| Workload profile | Mostly custom YARN apps, heavy HBase      | Mostly Spark/Hive, standard patterns        |
+| AI/ML plans      | No AI/ML on the roadmap                   | AI/ML is strategic priority                 |
+| Budget           | CapEx-only funding model                  | OpEx-friendly, consumption-based OK         |
+| Risk tolerance   | Low (prefer status quo)                   | Medium (willing to invest in modernization) |
 
 For most organizations, the right column applies to 80% or more of the criteria. The Hadoop era served its purpose. The Azure lakehouse era is here.
 

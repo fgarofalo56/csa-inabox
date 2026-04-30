@@ -128,16 +128,16 @@ WHERE job_name = 'daily_revenue_summary';
 
 Break the script into logical components:
 
-| BTEQ component | What it does | dbt equivalent |
-| --- | --- | --- |
-| `.LOGON` / `.LOGOFF` | Connection management | dbt profile (connection config) |
-| `DROP/CREATE VOLATILE TABLE` | Staging transformation | CTE or ephemeral model |
-| `COLLECT STATISTICS` | Optimizer hints | Not needed (Delta auto-stats) |
-| `DELETE + INSERT` | Idempotent reload | dbt incremental model (merge strategy) |
-| `.IF ERRORCODE` | Error handling | dbt built-in error handling |
-| `UPDATE etl_control` | Job tracking | dbt metadata (run results) |
-| `.EXPORT FILE` | File export | Separate pipeline (ADF or Spark write) |
-| `GROUP BY 2, 3, 4, 5` | Positional GROUP BY | Named GROUP BY (dbt best practice) |
+| BTEQ component               | What it does           | dbt equivalent                         |
+| ---------------------------- | ---------------------- | -------------------------------------- |
+| `.LOGON` / `.LOGOFF`         | Connection management  | dbt profile (connection config)        |
+| `DROP/CREATE VOLATILE TABLE` | Staging transformation | CTE or ephemeral model                 |
+| `COLLECT STATISTICS`         | Optimizer hints        | Not needed (Delta auto-stats)          |
+| `DELETE + INSERT`            | Idempotent reload      | dbt incremental model (merge strategy) |
+| `.IF ERRORCODE`              | Error handling         | dbt built-in error handling            |
+| `UPDATE etl_control`         | Job tracking           | dbt metadata (run results)             |
+| `.EXPORT FILE`               | File export            | Separate pipeline (ADF or Spark write) |
+| `GROUP BY 2, 3, 4, 5`        | Positional GROUP BY    | Named GROUP BY (dbt best practice)     |
 
 ### Key decisions
 
@@ -180,12 +180,12 @@ print(spark_sql)
 
 ### Step 3.2: Manual adjustments
 
-| Teradata syntax | Spark SQL equivalent | Notes |
-| --- | --- | --- |
-| `CURRENT_DATE - 1` | `DATE_SUB(CURRENT_DATE(), 1)` | Date arithmetic |
-| `CURRENT_TIMESTAMP` | `CURRENT_TIMESTAMP()` | Function call syntax |
-| `GROUP BY 2, 3, 4, 5` | `GROUP BY region_name, territory, ...` | Use named columns |
-| `CAST(x AS VARCHAR(30))` | `CAST(x AS STRING)` | STRING in Spark |
+| Teradata syntax          | Spark SQL equivalent                   | Notes                |
+| ------------------------ | -------------------------------------- | -------------------- |
+| `CURRENT_DATE - 1`       | `DATE_SUB(CURRENT_DATE(), 1)`          | Date arithmetic      |
+| `CURRENT_TIMESTAMP`      | `CURRENT_TIMESTAMP()`                  | Function call syntax |
+| `GROUP BY 2, 3, 4, 5`    | `GROUP BY region_name, territory, ...` | Use named columns    |
+| `CAST(x AS VARCHAR(30))` | `CAST(x AS STRING)`                    | STRING in Spark      |
 
 ---
 
@@ -206,25 +206,25 @@ cd teradata_migration
 
 ```yaml
 teradata_migration:
-  target: dev
-  outputs:
-    dev:
-      type: databricks
-      catalog: main
-      schema: silver
-      host: "adb-1234567890.12.azuredatabricks.net"
-      http_path: "/sql/1.0/warehouses/abc123def456"
-      token: "{{ env_var('DBT_DATABRICKS_TOKEN') }}"
-      threads: 4
+    target: dev
+    outputs:
+        dev:
+            type: databricks
+            catalog: main
+            schema: silver
+            host: "adb-1234567890.12.azuredatabricks.net"
+            http_path: "/sql/1.0/warehouses/abc123def456"
+            token: "{{ env_var('DBT_DATABRICKS_TOKEN') }}"
+            threads: 4
 
-    prod:
-      type: databricks
-      catalog: main
-      schema: silver
-      host: "adb-1234567890.12.azuredatabricks.net"
-      http_path: "/sql/1.0/warehouses/prod-warehouse"
-      token: "{{ env_var('DBT_DATABRICKS_TOKEN') }}"
-      threads: 8
+        prod:
+            type: databricks
+            catalog: main
+            schema: silver
+            host: "adb-1234567890.12.azuredatabricks.net"
+            http_path: "/sql/1.0/warehouses/prod-warehouse"
+            token: "{{ env_var('DBT_DATABRICKS_TOKEN') }}"
+            threads: 8
 ```
 
 ### Step 4.3: Create source definitions
@@ -235,42 +235,42 @@ teradata_migration:
 version: 2
 
 sources:
-  - name: teradata_raw
-    description: "Tables migrated from Teradata production database"
-    database: main
-    schema: bronze
-    tables:
-      - name: orders
-        description: "Customer orders (migrated from Teradata production.orders)"
-        columns:
-          - name: order_id
-            tests: [unique, not_null]
-          - name: customer_id
-            tests: [not_null]
-          - name: order_date
-            tests: [not_null]
-          - name: amount
-            tests: [not_null]
-          - name: status
-            tests: [not_null]
+    - name: teradata_raw
+      description: "Tables migrated from Teradata production database"
+      database: main
+      schema: bronze
+      tables:
+          - name: orders
+            description: "Customer orders (migrated from Teradata production.orders)"
+            columns:
+                - name: order_id
+                  tests: [unique, not_null]
+                - name: customer_id
+                  tests: [not_null]
+                - name: order_date
+                  tests: [not_null]
+                - name: amount
+                  tests: [not_null]
+                - name: status
+                  tests: [not_null]
 
-      - name: customers
-        description: "Customer master (migrated from Teradata production.customers)"
-        columns:
-          - name: customer_id
-            tests: [unique, not_null]
+          - name: customers
+            description: "Customer master (migrated from Teradata production.customers)"
+            columns:
+                - name: customer_id
+                  tests: [unique, not_null]
 
-      - name: products
-        description: "Product catalog (migrated from Teradata production.products)"
-        columns:
-          - name: product_id
-            tests: [unique, not_null]
+          - name: products
+            description: "Product catalog (migrated from Teradata production.products)"
+            columns:
+                - name: product_id
+                  tests: [unique, not_null]
 
-      - name: regions
-        description: "Region lookup (migrated from Teradata production.regions)"
-        columns:
-          - name: region_id
-            tests: [unique, not_null]
+          - name: regions
+            description: "Region lookup (migrated from Teradata production.regions)"
+            columns:
+                - name: region_id
+                  tests: [unique, not_null]
 ```
 
 ---
@@ -371,59 +371,59 @@ GROUP BY
 version: 2
 
 models:
-  - name: daily_revenue_summary
-    description: |
-      Daily revenue summary aggregated by region, territory, customer segment,
-      and product category. Migrated from Teradata BTEQ script
-      daily_revenue_summary.bteq.
-    columns:
-      - name: report_date
-        description: "The date of the orders being summarized"
-        tests:
-          - not_null
-          - dbt_expectations.expect_column_values_to_be_of_type:
-              column_type: date
+    - name: daily_revenue_summary
+      description: |
+          Daily revenue summary aggregated by region, territory, customer segment,
+          and product category. Migrated from Teradata BTEQ script
+          daily_revenue_summary.bteq.
+      columns:
+          - name: report_date
+            description: "The date of the orders being summarized"
+            tests:
+                - not_null
+                - dbt_expectations.expect_column_values_to_be_of_type:
+                      column_type: date
 
-      - name: region_name
-        tests: [not_null]
+          - name: region_name
+            tests: [not_null]
 
-      - name: territory
-        tests: [not_null]
+          - name: territory
+            tests: [not_null]
 
-      - name: customer_segment
-        tests: [not_null]
+          - name: customer_segment
+            tests: [not_null]
 
-      - name: order_count
-        tests:
-          - not_null
-          - dbt_expectations.expect_column_values_to_be_between:
-              min_value: 1
+          - name: order_count
+            tests:
+                - not_null
+                - dbt_expectations.expect_column_values_to_be_between:
+                      min_value: 1
 
-      - name: gross_revenue
-        tests:
-          - not_null
-          - dbt_expectations.expect_column_values_to_be_between:
-              min_value: 0
+          - name: gross_revenue
+            tests:
+                - not_null
+                - dbt_expectations.expect_column_values_to_be_between:
+                      min_value: 0
 
-      - name: net_revenue
-        tests:
-          - not_null
-          - dbt_expectations.expect_column_values_to_be_between:
-              min_value: 0
+          - name: net_revenue
+            tests:
+                - not_null
+                - dbt_expectations.expect_column_values_to_be_between:
+                      min_value: 0
 
-      - name: total_discount
-        tests:
-          - dbt_expectations.expect_column_values_to_be_between:
-              min_value: 0
+          - name: total_discount
+            tests:
+                - dbt_expectations.expect_column_values_to_be_between:
+                      min_value: 0
 
-    tests:
-      - dbt_utils.unique_combination_of_columns:
-          combination_of_columns:
-            - report_date
-            - region_name
-            - territory
-            - customer_segment
-            - product_category
+      tests:
+          - dbt_utils.unique_combination_of_columns:
+                combination_of_columns:
+                    - report_date
+                    - region_name
+                    - territory
+                    - customer_segment
+                    - product_category
 ```
 
 ### Step 6.2: Custom data test (golden query validation)
@@ -553,16 +553,16 @@ dbt docs serve
 # dbt Cloud job configuration
 name: "Daily Revenue Summary"
 schedule:
-  cron: "0 6 * * *"  # 06:00 daily (matching original BTEQ cron)
+    cron: "0 6 * * *" # 06:00 daily (matching original BTEQ cron)
 environment: production
 commands:
-  - "dbt run --select stg_daily_orders daily_revenue_summary"
-  - "dbt test --select daily_revenue_summary"
+    - "dbt run --select stg_daily_orders daily_revenue_summary"
+    - "dbt test --select daily_revenue_summary"
 notifications:
-  email:
-    - finance-data-team@company.com
-  on_failure: true
-  on_success: false
+    email:
+        - finance-data-team@company.com
+    on_failure: true
+    on_success: false
 ```
 
 ### Step 8.2: Databricks Jobs deployment (alternative)
@@ -625,18 +625,18 @@ df.coalesce(1).write.csv(
 
 ## 9. Conversion checklist
 
-| BTEQ component | Status | dbt equivalent |
-| --- | --- | --- |
-| `.LOGON` / `.LOGOFF` | Replaced | dbt profile |
-| `CREATE VOLATILE TABLE` | Replaced | `stg_daily_orders` (ephemeral model) |
-| `COLLECT STATISTICS` | Removed | Delta auto-stats + OPTIMIZE post-hook |
-| `DELETE + INSERT` | Replaced | Incremental model (merge strategy) |
-| `.IF ERRORCODE` | Replaced | dbt built-in error handling |
-| `INSERT INTO ... GROUP BY` | Replaced | `daily_revenue_summary` model |
-| `UPDATE etl_control` | Replaced | dbt run results + monitoring |
-| `.EXPORT FILE` | Replaced | Separate Spark/ADF export job |
-| Date arithmetic | Converted | `DATE_SUB(CURRENT_DATE(), 1)` |
-| Positional GROUP BY | Converted | Named column GROUP BY |
+| BTEQ component             | Status    | dbt equivalent                        |
+| -------------------------- | --------- | ------------------------------------- |
+| `.LOGON` / `.LOGOFF`       | Replaced  | dbt profile                           |
+| `CREATE VOLATILE TABLE`    | Replaced  | `stg_daily_orders` (ephemeral model)  |
+| `COLLECT STATISTICS`       | Removed   | Delta auto-stats + OPTIMIZE post-hook |
+| `DELETE + INSERT`          | Replaced  | Incremental model (merge strategy)    |
+| `.IF ERRORCODE`            | Replaced  | dbt built-in error handling           |
+| `INSERT INTO ... GROUP BY` | Replaced  | `daily_revenue_summary` model         |
+| `UPDATE etl_control`       | Replaced  | dbt run results + monitoring          |
+| `.EXPORT FILE`             | Replaced  | Separate Spark/ADF export job         |
+| Date arithmetic            | Converted | `DATE_SUB(CURRENT_DATE(), 1)`         |
+| Positional GROUP BY        | Converted | Named column GROUP BY                 |
 
 ---
 

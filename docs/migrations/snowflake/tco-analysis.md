@@ -12,16 +12,17 @@
 
 Snowflake bills through a **credit** system. Credits are consumed by compute; storage is billed separately.
 
-| Component | Pricing unit | Typical Gov rate |
-|---|---|---|
-| Compute (warehouses) | Credits/hour (1 credit = XS warehouse) | $3.50-$4.50/credit (Gov) |
-| Storage | $/TB/month | $40-$46/TB/month (Gov) |
-| Snowpipe | Credits per file notification + compute | Variable |
-| Cortex (LLM) | Credits per 1M tokens (varies by model) | $2-$10/credit equivalent |
-| Reader accounts | Credits consumed by external consumers | Same rate as warehouse credits |
-| Data transfer | $/GB egress | $0.08-$0.12/GB |
+| Component            | Pricing unit                            | Typical Gov rate               |
+| -------------------- | --------------------------------------- | ------------------------------ |
+| Compute (warehouses) | Credits/hour (1 credit = XS warehouse)  | $3.50-$4.50/credit (Gov)       |
+| Storage              | $/TB/month                              | $40-$46/TB/month (Gov)         |
+| Snowpipe             | Credits per file notification + compute | Variable                       |
+| Cortex (LLM)         | Credits per 1M tokens (varies by model) | $2-$10/credit equivalent       |
+| Reader accounts      | Credits consumed by external consumers  | Same rate as warehouse credits |
+| Data transfer        | $/GB egress                             | $0.08-$0.12/GB                 |
 
 **Key characteristics:**
+
 - Minimum 60-second billing per query (even for sub-second queries)
 - Credit commits may be required for Gov pricing tiers
 - Auto-suspend minimum is 60 seconds (warehouses burn credits while warming)
@@ -32,17 +33,18 @@ Snowflake bills through a **credit** system. Credits are consumed by compute; st
 
 Azure bills per-service with consumption-based pricing:
 
-| Component | Pricing unit | Typical Gov rate |
-|---|---|---|
-| Databricks SQL Warehouse | DBU/hour | $0.22-$0.55/DBU (Gov, varies by tier) |
-| Fabric capacity | CU/hour (F2 through F2048) | $0.18-$0.36/CU/hour (Gov) |
-| Azure OpenAI (GPT-4o) | $/1K tokens | $0.005-$0.015/1K tokens |
-| Azure AI Search | $/unit/hour + $/document | $0.25-$2.50/hour per unit |
-| Storage (ADLS Gen2) | $/GB/month | $0.019-$0.046/GB/month |
-| Event Hubs | $/throughput unit/hour | $0.028/TU/hour |
-| Power BI (via Fabric capacity) | Included in Fabric CU | $0 incremental |
+| Component                      | Pricing unit               | Typical Gov rate                      |
+| ------------------------------ | -------------------------- | ------------------------------------- |
+| Databricks SQL Warehouse       | DBU/hour                   | $0.22-$0.55/DBU (Gov, varies by tier) |
+| Fabric capacity                | CU/hour (F2 through F2048) | $0.18-$0.36/CU/hour (Gov)             |
+| Azure OpenAI (GPT-4o)          | $/1K tokens                | $0.005-$0.015/1K tokens               |
+| Azure AI Search                | $/unit/hour + $/document   | $0.25-$2.50/hour per unit             |
+| Storage (ADLS Gen2)            | $/GB/month                 | $0.019-$0.046/GB/month                |
+| Event Hubs                     | $/throughput unit/hour     | $0.028/TU/hour                        |
+| Power BI (via Fabric capacity) | Included in Fabric CU      | $0 incremental                        |
 
 **Key characteristics:**
+
 - Auto-stop at 1 minute (classic) or 10 minutes (serverless)
 - Scale-to-zero for dev/test (Fabric capacity can be paused)
 - Reserved capacity discounts: 25-40% on 1-year or 3-year commits
@@ -56,17 +58,18 @@ Azure bills per-service with consumption-based pricing:
 This table maps Snowflake warehouse sizes to Azure equivalents with hourly cost comparison.
 
 | Snowflake size | Credits/hr | Snowflake $/hr (Gov) | Databricks SQL size | DBU/hr | Databricks $/hr (Gov) | Delta |
-|---|---|---|---|---|---|---|
-| X-Small | 1 | $4.00 | 2X-Small | 4 | $1.76 | -56% |
-| Small | 2 | $8.00 | X-Small | 6 | $2.64 | -67% |
-| Medium | 4 | $16.00 | Small | 12 | $5.28 | -67% |
-| Large | 8 | $32.00 | Medium | 24 | $10.56 | -67% |
-| X-Large | 16 | $64.00 | Large | 40 | $17.60 | -73% |
-| 2X-Large | 32 | $128.00 | X-Large | 80 | $35.20 | -73% |
-| 3X-Large | 64 | $256.00 | 2X-Large | 144 | $63.36 | -75% |
-| 4X-Large | 128 | $512.00 | 3X-Large | 240 | $105.60 | -79% |
+| -------------- | ---------- | -------------------- | ------------------- | ------ | --------------------- | ----- |
+| X-Small        | 1          | $4.00                | 2X-Small            | 4      | $1.76                 | -56%  |
+| Small          | 2          | $8.00                | X-Small             | 6      | $2.64                 | -67%  |
+| Medium         | 4          | $16.00               | Small               | 12     | $5.28                 | -67%  |
+| Large          | 8          | $32.00               | Medium              | 24     | $10.56                | -67%  |
+| X-Large        | 16         | $64.00               | Large               | 40     | $17.60                | -73%  |
+| 2X-Large       | 32         | $128.00              | X-Large             | 80     | $35.20                | -73%  |
+| 3X-Large       | 64         | $256.00              | 2X-Large            | 144    | $63.36                | -75%  |
+| 4X-Large       | 128        | $512.00              | 3X-Large            | 240    | $105.60               | -79%  |
 
 **Notes:**
+
 - Databricks serverless SQL is typically 20-30% more expensive per DBU but spins up in under 10 seconds vs 2-30 seconds for Snowflake warm-from-cold
 - Reserved Databricks capacity reduces these rates by 25-40%
 - The delta narrows when Snowflake credit commits are factored in, but remains 40-60% favorable to Azure at most tiers
@@ -75,11 +78,11 @@ This table maps Snowflake warehouse sizes to Azure equivalents with hourly cost 
 
 Snowflake multi-cluster warehouses multiply credits linearly:
 
-| Snowflake config | Credits/hr | Azure equivalent | Cost/hr (Azure Gov) |
-|---|---|---|---|
-| Large x 1 cluster | 8 | Medium SQL Warehouse (auto-scale 1) | $10.56 |
-| Large x 3 clusters | 24 | Medium SQL Warehouse (auto-scale 3) | $31.68 |
-| Large x 10 clusters | 80 | Large SQL Warehouse (auto-scale) | $44.00 |
+| Snowflake config    | Credits/hr | Azure equivalent                    | Cost/hr (Azure Gov) |
+| ------------------- | ---------- | ----------------------------------- | ------------------- |
+| Large x 1 cluster   | 8          | Medium SQL Warehouse (auto-scale 1) | $10.56              |
+| Large x 3 clusters  | 24         | Medium SQL Warehouse (auto-scale 3) | $31.68              |
+| Large x 10 clusters | 80         | Large SQL Warehouse (auto-scale)    | $44.00              |
 
 Databricks auto-scaling is more granular -- it scales by individual nodes rather than full warehouse clones, resulting in better cost efficiency under variable concurrency.
 
@@ -89,36 +92,37 @@ Databricks auto-scaling is more granular -- it scales by individual nodes rather
 
 ### Snowpipe batch ingestion
 
-| Snowflake Snowpipe | Azure Autoloader |
-|---|---|
+| Snowflake Snowpipe                                  | Azure Autoloader                        |
+| --------------------------------------------------- | --------------------------------------- |
 | $0.06/1000 files (notification) + warehouse credits | Included in Databricks jobs cluster DBU |
-| Separate compute for continuous loading | Autoloader runs on existing cluster |
-| Streaming variant requires additional credits | Structured Streaming on same cluster |
+| Separate compute for continuous loading             | Autoloader runs on existing cluster     |
+| Streaming variant requires additional credits       | Structured Streaming on same cluster    |
 
 For a typical ingestion workload (10,000 files/hour, 100 GB/day):
+
 - **Snowflake:** ~$15/hour (Snowpipe notification + XS warehouse)
 - **Azure:** ~$5/hour (Autoloader on jobs cluster)
 
 ### Snowpipe Streaming translation
 
-| Snowflake Snowpipe Streaming | Azure Event Hubs + Autoloader |
-|---|---|
+| Snowflake Snowpipe Streaming           | Azure Event Hubs + Autoloader       |
+| -------------------------------------- | ----------------------------------- |
 | Credits per second of active streaming | Event Hubs TU/hour + Autoloader DBU |
-| Limited to Snowflake-native consumers | Event Hubs supports any consumer |
-| Gov: partial availability | Gov: GA |
+| Limited to Snowflake-native consumers  | Event Hubs supports any consumer    |
+| Gov: partial availability              | Gov: GA                             |
 
 ---
 
 ## 4. Cortex AI cost comparison
 
-| Cortex function | Snowflake cost | Azure equivalent | Azure cost | Delta |
-|---|---|---|---|---|
-| `COMPLETE` (Llama 3.1 70B) | ~$3.00/credit (1M tokens) | Azure OpenAI GPT-4o-mini | $0.15/1M input tokens | -95% |
-| `COMPLETE` (Mixtral 8x7B) | ~$2.00/credit (1M tokens) | Azure OpenAI GPT-4o-mini | $0.15/1M input tokens | -93% |
-| `SUMMARIZE` | ~$2.50/credit | Azure OpenAI GPT-4o | $2.50/1M input tokens | Comparable |
-| `TRANSLATE` | ~$2.00/credit | Azure AI Translator | $10/1M characters | Varies |
-| Cortex Search (per query) | Credits consumed | Azure AI Search | $0.25-$2.50/unit/hr | Fixed vs variable |
-| Cortex Fine-tuning | Not in Gov | Azure OpenAI fine-tuning | $0.008/1K tokens | N/A |
+| Cortex function            | Snowflake cost            | Azure equivalent         | Azure cost            | Delta             |
+| -------------------------- | ------------------------- | ------------------------ | --------------------- | ----------------- |
+| `COMPLETE` (Llama 3.1 70B) | ~$3.00/credit (1M tokens) | Azure OpenAI GPT-4o-mini | $0.15/1M input tokens | -95%              |
+| `COMPLETE` (Mixtral 8x7B)  | ~$2.00/credit (1M tokens) | Azure OpenAI GPT-4o-mini | $0.15/1M input tokens | -93%              |
+| `SUMMARIZE`                | ~$2.50/credit             | Azure OpenAI GPT-4o      | $2.50/1M input tokens | Comparable        |
+| `TRANSLATE`                | ~$2.00/credit             | Azure AI Translator      | $10/1M characters     | Varies            |
+| Cortex Search (per query)  | Credits consumed          | Azure AI Search          | $0.25-$2.50/unit/hr   | Fixed vs variable |
+| Cortex Fine-tuning         | Not in Gov                | Azure OpenAI fine-tuning | $0.008/1K tokens      | N/A               |
 
 **Key insight:** Azure OpenAI provides access to GPT-4o and GPT-4.1 models that significantly outperform the models available through Cortex. The cost comparison is less meaningful than the capability comparison -- you get better models at lower cost.
 
@@ -126,14 +130,15 @@ For a typical ingestion workload (10,000 files/hour, 100 GB/day):
 
 ## 5. Storage cost comparison
 
-| Storage tier | Snowflake Gov | Azure Gov (ADLS Gen2) | Delta |
-|---|---|---|---|
-| Hot storage (per TB/month) | $40-$46 | $19-$23 | -50% |
-| Time Travel storage (per TB/month) | Same rate | Same rate (Delta versioning) | Comparable |
-| Failsafe storage (per TB/month) | $40-$46 (7 days included) | GRS replication: $38-$46 | Comparable |
-| Long-term archive | Not natively supported (unload to S3) | Archive tier: $0.002/GB/month | -95% |
+| Storage tier                       | Snowflake Gov                         | Azure Gov (ADLS Gen2)         | Delta      |
+| ---------------------------------- | ------------------------------------- | ----------------------------- | ---------- |
+| Hot storage (per TB/month)         | $40-$46                               | $19-$23                       | -50%       |
+| Time Travel storage (per TB/month) | Same rate                             | Same rate (Delta versioning)  | Comparable |
+| Failsafe storage (per TB/month)    | $40-$46 (7 days included)             | GRS replication: $38-$46      | Comparable |
+| Long-term archive                  | Not natively supported (unload to S3) | Archive tier: $0.002/GB/month | -95%       |
 
 For a 100 TB tenant:
+
 - **Snowflake:** ~$4,300/month storage
 - **Azure ADLS Gen2 (hot):** ~$2,100/month storage
 - **Azure (80 TB hot + 20 TB archive):** ~$1,600/month
@@ -144,39 +149,39 @@ For a 100 TB tenant:
 
 ### Scenario A: Small agency (50 users, 5 TB hot, 10 dbt models)
 
-| Cost category | Snowflake Gov (annual) | Azure Gov (annual) | Savings |
-|---|---|---|---|
-| Compute (warehouses) | $360,000 | $144,000 | 60% |
-| Storage | $26,400 | $13,200 | 50% |
-| AI (light Cortex usage) | $24,000 | $12,000 | 50% |
-| BI (Snowsight + Tableau) | $120,000 | $60,000 (Fabric F64) | 50% |
-| Governance / security | Included | $36,000 (Purview + Monitor) | N/A |
-| **Total** | **$530,400** | **$265,200** | **50%** |
+| Cost category            | Snowflake Gov (annual) | Azure Gov (annual)          | Savings |
+| ------------------------ | ---------------------- | --------------------------- | ------- |
+| Compute (warehouses)     | $360,000               | $144,000                    | 60%     |
+| Storage                  | $26,400                | $13,200                     | 50%     |
+| AI (light Cortex usage)  | $24,000                | $12,000                     | 50%     |
+| BI (Snowsight + Tableau) | $120,000               | $60,000 (Fabric F64)        | 50%     |
+| Governance / security    | Included               | $36,000 (Purview + Monitor) | N/A     |
+| **Total**                | **$530,400**           | **$265,200**                | **50%** |
 
 ### Scenario B: Mid-sized agency (500 users, 50 TB hot, 100 dbt models)
 
-| Cost category | Snowflake Gov (annual) | Azure Gov (annual) | Savings |
-|---|---|---|---|
-| Compute (warehouses) | $1,800,000 | $720,000 | 60% |
-| Storage | $264,000 | $132,000 | 50% |
-| AI (moderate Cortex usage) | $180,000 | $120,000 | 33% |
-| BI (Snowsight + Tableau) | $360,000 | $240,000 (Fabric F128) | 33% |
-| Streaming (Snowpipe) | $120,000 | $48,000 | 60% |
-| Governance / security | Included | $120,000 (Purview + Monitor) | N/A |
-| **Total** | **$2,724,000** | **$1,380,000** | **49%** |
+| Cost category              | Snowflake Gov (annual) | Azure Gov (annual)           | Savings |
+| -------------------------- | ---------------------- | ---------------------------- | ------- |
+| Compute (warehouses)       | $1,800,000             | $720,000                     | 60%     |
+| Storage                    | $264,000               | $132,000                     | 50%     |
+| AI (moderate Cortex usage) | $180,000               | $120,000                     | 33%     |
+| BI (Snowsight + Tableau)   | $360,000               | $240,000 (Fabric F128)       | 33%     |
+| Streaming (Snowpipe)       | $120,000               | $48,000                      | 60%     |
+| Governance / security      | Included               | $120,000 (Purview + Monitor) | N/A     |
+| **Total**                  | **$2,724,000**         | **$1,380,000**               | **49%** |
 
 ### Scenario C: Large agency (2000 users, 200 TB hot, 500 dbt models)
 
-| Cost category | Snowflake Gov (annual) | Azure Gov (annual) | Savings |
-|---|---|---|---|
-| Compute (warehouses) | $7,200,000 | $2,880,000 | 60% |
-| Storage | $1,056,000 | $528,000 | 50% |
-| AI (heavy Cortex + Search) | $720,000 | $480,000 | 33% |
-| BI (Snowsight + Tableau) | $960,000 | $480,000 (Fabric F256) | 50% |
-| Streaming (Snowpipe) | $480,000 | $192,000 | 60% |
-| Governance / security | Included | $360,000 (Purview + Monitor) | N/A |
-| Data Sharing (reader accounts) | $360,000 | $0 (Delta Sharing) | 100% |
-| **Total** | **$10,776,000** | **$4,920,000** | **54%** |
+| Cost category                  | Snowflake Gov (annual) | Azure Gov (annual)           | Savings |
+| ------------------------------ | ---------------------- | ---------------------------- | ------- |
+| Compute (warehouses)           | $7,200,000             | $2,880,000                   | 60%     |
+| Storage                        | $1,056,000             | $528,000                     | 50%     |
+| AI (heavy Cortex + Search)     | $720,000               | $480,000                     | 33%     |
+| BI (Snowsight + Tableau)       | $960,000               | $480,000 (Fabric F256)       | 50%     |
+| Streaming (Snowpipe)           | $480,000               | $192,000                     | 60%     |
+| Governance / security          | Included               | $360,000 (Purview + Monitor) | N/A     |
+| Data Sharing (reader accounts) | $360,000               | $0 (Delta Sharing)           | 100%    |
+| **Total**                      | **$10,776,000**        | **$4,920,000**               | **54%** |
 
 ---
 
@@ -184,14 +189,14 @@ For a 100 TB tenant:
 
 Assuming Scenario B (mid-sized agency) with 15% annual data growth and 10% annual workload growth.
 
-| Year | Snowflake Gov | Azure Gov | Cumulative savings |
-|---|---|---|---|
-| Year 1 | $2,724,000 | $1,380,000 + $300,000 migration | $1,044,000 |
-| Year 2 | $3,097,000 | $1,545,000 | $2,596,000 |
-| Year 3 | $3,523,000 | $1,726,000 | $4,393,000 |
-| Year 4 | $4,009,000 | $1,929,000 | $6,473,000 |
-| Year 5 | $4,564,000 | $2,158,000 | $8,879,000 |
-| **5-year total** | **$17,917,000** | **$9,038,000** | **$8,879,000 (50%)** |
+| Year             | Snowflake Gov   | Azure Gov                       | Cumulative savings   |
+| ---------------- | --------------- | ------------------------------- | -------------------- |
+| Year 1           | $2,724,000      | $1,380,000 + $300,000 migration | $1,044,000           |
+| Year 2           | $3,097,000      | $1,545,000                      | $2,596,000           |
+| Year 3           | $3,523,000      | $1,726,000                      | $4,393,000           |
+| Year 4           | $4,009,000      | $1,929,000                      | $6,473,000           |
+| Year 5           | $4,564,000      | $2,158,000                      | $8,879,000           |
+| **5-year total** | **$17,917,000** | **$9,038,000**                  | **$8,879,000 (50%)** |
 
 **Migration investment payback:** 4-6 months (Year 1 savings cover migration costs by month 5).
 
@@ -237,13 +242,13 @@ Assuming Scenario B (mid-sized agency) with 15% annual data growth and 10% annua
 
 Monitor both platforms simultaneously:
 
-| Metric | Snowflake tool | Azure tool |
-|---|---|---|
-| Compute spend | Resource Monitors | Azure Cost Management budgets |
-| Warehouse utilization | `WAREHOUSE_METERING_HISTORY` | Databricks SQL Warehouse metrics |
-| Query costs | `QUERY_HISTORY` view | Databricks query profile + Log Analytics |
-| Storage growth | `STORAGE_USAGE` | Azure Monitor storage metrics |
-| AI costs | Cortex usage views | Azure OpenAI usage dashboard |
+| Metric                | Snowflake tool               | Azure tool                               |
+| --------------------- | ---------------------------- | ---------------------------------------- |
+| Compute spend         | Resource Monitors            | Azure Cost Management budgets            |
+| Warehouse utilization | `WAREHOUSE_METERING_HISTORY` | Databricks SQL Warehouse metrics         |
+| Query costs           | `QUERY_HISTORY` view         | Databricks query profile + Log Analytics |
+| Storage growth        | `STORAGE_USAGE`              | Azure Monitor storage metrics            |
+| AI costs              | Cortex usage views           | Azure OpenAI usage dashboard             |
 
 ### Post-migration
 

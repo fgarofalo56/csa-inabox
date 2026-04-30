@@ -35,15 +35,15 @@ Key differentiators driving federal migration:
 
 Azure Government is a physically isolated instance of Microsoft Azure built exclusively for US federal, state, local, and tribal governments and their partners. It is not a "feature flag" on commercial Azure --- it is a separate cloud with dedicated infrastructure, separate identity boundaries, and independent compliance certifications.
 
-| Characteristic | Azure Commercial | Azure Government |
-|---|---|---|
-| Datacenter locations | 60+ regions globally | 8 US-only regions (Gov, DoD, Secret, Top Secret) |
-| Operator screening | Standard background checks | US persons with federal background investigations |
-| Network isolation | Shared backbone | Dedicated backbone, no peering with commercial |
-| Compliance baseline | SOC 1/2, ISO 27001 | FedRAMP High, DoD IL4/IL5, CJIS, IRS 1075 |
-| Identity boundary | Azure AD commercial | Azure AD Government (separate directory) |
-| Service availability | Full catalog (200+ services) | ~180 services (growing quarterly) |
-| Support | Standard Microsoft support | Government-cleared support engineers |
+| Characteristic       | Azure Commercial             | Azure Government                                  |
+| -------------------- | ---------------------------- | ------------------------------------------------- |
+| Datacenter locations | 60+ regions globally         | 8 US-only regions (Gov, DoD, Secret, Top Secret)  |
+| Operator screening   | Standard background checks   | US persons with federal background investigations |
+| Network isolation    | Shared backbone              | Dedicated backbone, no peering with commercial    |
+| Compliance baseline  | SOC 1/2, ISO 27001           | FedRAMP High, DoD IL4/IL5, CJIS, IRS 1075         |
+| Identity boundary    | Azure AD commercial          | Azure AD Government (separate directory)          |
+| Service availability | Full catalog (200+ services) | ~180 services (growing quarterly)                 |
+| Support              | Standard Microsoft support   | Government-cleared support engineers              |
 
 ### Government regions and classification levels
 
@@ -101,15 +101,15 @@ Azure Government holds a FedRAMP High P-ATO covering 200+ services. At the FedRA
 
 ### Foundry FedRAMP vs Azure FedRAMP: scope comparison
 
-| Dimension | Palantir Foundry FedRAMP | Azure Government FedRAMP |
-|---|---|---|
-| Authorization scope | Single platform (Foundry) | 200+ individual services |
-| Baseline | FedRAMP Moderate (IL4 varies by deployment) | FedRAMP High |
-| Controls inherited | ~300 controls for Foundry only | 800+ controls across all authorized services |
-| Additional services | Each requires separate assessment | Pre-authorized within the P-ATO boundary |
-| Adding new capabilities | May require ATO amendment | Already covered if service is in P-ATO scope |
-| Assessment frequency | Annual (3PAO assessment) | Continuous monitoring + annual assessment |
-| Transparency | Limited to Foundry's package | Full SSP, CRM, and control documentation available |
+| Dimension               | Palantir Foundry FedRAMP                    | Azure Government FedRAMP                           |
+| ----------------------- | ------------------------------------------- | -------------------------------------------------- |
+| Authorization scope     | Single platform (Foundry)                   | 200+ individual services                           |
+| Baseline                | FedRAMP Moderate (IL4 varies by deployment) | FedRAMP High                                       |
+| Controls inherited      | ~300 controls for Foundry only              | 800+ controls across all authorized services       |
+| Additional services     | Each requires separate assessment           | Pre-authorized within the P-ATO boundary           |
+| Adding new capabilities | May require ATO amendment                   | Already covered if service is in P-ATO scope       |
+| Assessment frequency    | Annual (3PAO assessment)                    | Continuous monitoring + annual assessment          |
+| Transparency            | Limited to Foundry's package                | Full SSP, CRM, and control documentation available |
 
 When agencies build data platforms on Foundry, their ATO covers Foundry alone. Adding Azure Cognitive Services, Power BI, or a separate database requires additional ATO work. On Azure Government, all 200+ services under the P-ATO are pre-authorized --- agencies can adopt new services without ATO amendments, provided the services remain within the P-ATO boundary.
 
@@ -185,14 +185,14 @@ IL6 covers classified information up to the Secret level.
 
 ### How Palantir handles IL levels vs Azure
 
-| Aspect | Palantir Foundry | Azure Government |
-|---|---|---|
-| IL4 deployment | Foundry on AWS GovCloud or Azure Gov (managed by Palantir) | Native Azure Government services |
-| IL5 deployment | Dedicated Foundry instance, FDE-managed | Azure Government DoD regions, agency-managed |
-| IL6 deployment | Foundry on classified networks (limited availability) | Azure Government Secret (growing service catalog) |
-| Operational model | Palantir-managed (FDEs required) | Agency-managed or partner-managed (no vendor lock-in) |
-| Service expansion | Limited to Foundry capabilities | 150–200 services per IL level |
-| Multi-IL architecture | Separate Foundry instances per IL | Cross-IL patterns with Azure Arc and cross-domain solutions |
+| Aspect                | Palantir Foundry                                           | Azure Government                                            |
+| --------------------- | ---------------------------------------------------------- | ----------------------------------------------------------- |
+| IL4 deployment        | Foundry on AWS GovCloud or Azure Gov (managed by Palantir) | Native Azure Government services                            |
+| IL5 deployment        | Dedicated Foundry instance, FDE-managed                    | Azure Government DoD regions, agency-managed                |
+| IL6 deployment        | Foundry on classified networks (limited availability)      | Azure Government Secret (growing service catalog)           |
+| Operational model     | Palantir-managed (FDEs required)                           | Agency-managed or partner-managed (no vendor lock-in)       |
+| Service expansion     | Limited to Foundry capabilities                            | 150–200 services per IL level                               |
+| Multi-IL architecture | Separate Foundry instances per IL                          | Cross-IL patterns with Azure Arc and cross-domain solutions |
 
 ### Network isolation patterns per Impact Level
 
@@ -221,11 +221,11 @@ IL6 covers classified information up to the Secret level.
 
 The Cybersecurity Maturity Model Certification (CMMC) 2.0 streamlines the original five-level model into three levels aligned with existing NIST standards:
 
-| CMMC Level | Practices | Assessment | Applicable standard |
-|---|---|---|---|
-| Level 1 (Foundational) | 17 practices | Annual self-assessment | FAR 52.204-21 |
-| Level 2 (Advanced) | 110 practices | Triennial C3PAO assessment | NIST SP 800-171 Rev 2 |
-| Level 3 (Expert) | 110+ practices + enhanced | Government-led assessment | NIST SP 800-172 |
+| CMMC Level             | Practices                 | Assessment                 | Applicable standard   |
+| ---------------------- | ------------------------- | -------------------------- | --------------------- |
+| Level 1 (Foundational) | 17 practices              | Annual self-assessment     | FAR 52.204-21         |
+| Level 2 (Advanced)     | 110 practices             | Triennial C3PAO assessment | NIST SP 800-171 Rev 2 |
+| Level 3 (Expert)       | 110+ practices + enhanced | Government-led assessment  | NIST SP 800-172       |
 
 CMMC Level 2 is the threshold for any contractor handling CUI and is the most common certification target in the Defense Industrial Base (DIB).
 
@@ -331,25 +331,25 @@ Palantir Foundry's ITAR compliance depends on the deployment model. On Palantir-
 
 The following table compares service availability across Azure Commercial and Azure Government regions, focusing on services relevant to Foundry-to-Azure data platform migrations:
 
-| Service | Azure Commercial | Azure Government (IL4) | Azure Gov DoD (IL5) | Notes |
-|---|---|---|---|---|
-| Azure Data Factory | GA | GA | GA | Full feature parity |
-| Azure Synapse Analytics | GA | GA | GA | Dedicated and serverless SQL pools |
-| Azure Databricks | GA | GA | GA | Unity Catalog available in Gov |
-| Azure SQL Database | GA | GA | GA | Full feature parity |
-| Azure Cosmos DB | GA | GA | GA | All APIs available |
-| Azure Kubernetes Service | GA | GA | GA | Full feature parity |
-| Power BI | GA | GA (GCC, GCC High) | GA (DoD) | See Power BI section below |
-| Microsoft Purview | GA | GA | GA | Data governance and classification |
-| Azure Machine Learning | GA | GA | GA | Including managed endpoints |
-| Azure OpenAI Service | GA | GA | Limited | GPT-4, GPT-4o in Gov Virginia |
-| Microsoft Fabric | GA | Preview/GA (phased) | Planned | See Fabric section below |
-| Azure Event Hubs | GA | GA | GA | Full feature parity |
-| Azure Functions | GA | GA | GA | All triggers and bindings |
-| Azure Key Vault | GA | GA | GA | FIPS 140-2 Level 3 HSM |
-| Azure Monitor | GA | GA | GA | Including Log Analytics |
-| Microsoft Sentinel | GA | GA | GA | Full SIEM/SOAR capabilities |
-| Azure API Management | GA | GA | GA | Full feature parity |
+| Service                  | Azure Commercial | Azure Government (IL4) | Azure Gov DoD (IL5) | Notes                              |
+| ------------------------ | ---------------- | ---------------------- | ------------------- | ---------------------------------- |
+| Azure Data Factory       | GA               | GA                     | GA                  | Full feature parity                |
+| Azure Synapse Analytics  | GA               | GA                     | GA                  | Dedicated and serverless SQL pools |
+| Azure Databricks         | GA               | GA                     | GA                  | Unity Catalog available in Gov     |
+| Azure SQL Database       | GA               | GA                     | GA                  | Full feature parity                |
+| Azure Cosmos DB          | GA               | GA                     | GA                  | All APIs available                 |
+| Azure Kubernetes Service | GA               | GA                     | GA                  | Full feature parity                |
+| Power BI                 | GA               | GA (GCC, GCC High)     | GA (DoD)            | See Power BI section below         |
+| Microsoft Purview        | GA               | GA                     | GA                  | Data governance and classification |
+| Azure Machine Learning   | GA               | GA                     | GA                  | Including managed endpoints        |
+| Azure OpenAI Service     | GA               | GA                     | Limited             | GPT-4, GPT-4o in Gov Virginia      |
+| Microsoft Fabric         | GA               | Preview/GA (phased)    | Planned             | See Fabric section below           |
+| Azure Event Hubs         | GA               | GA                     | GA                  | Full feature parity                |
+| Azure Functions          | GA               | GA                     | GA                  | All triggers and bindings          |
+| Azure Key Vault          | GA               | GA                     | GA                  | FIPS 140-2 Level 3 HSM             |
+| Azure Monitor            | GA               | GA                     | GA                  | Including Log Analytics            |
+| Microsoft Sentinel       | GA               | GA                     | GA                  | Full SIEM/SOAR capabilities        |
+| Azure API Management     | GA               | GA                     | GA                  | Full feature parity                |
 
 ### Power BI in Government
 
@@ -456,12 +456,12 @@ CSA-in-a-Box provides machine-readable compliance artifacts that integrate direc
 
 ### Common ATO timelines
 
-| Scenario | Traditional timeline | With Azure P-ATO + CSA-in-a-Box |
-|---|---|---|
-| New system, no prior ATO | 12–18 months | 4–6 months |
-| Major change to existing ATO | 6–12 months | 2–4 months |
-| Adding services within existing boundary | 3–6 months | 2–6 weeks |
-| Annual reauthorization | 2–4 months | 2–4 weeks (automated evidence) |
+| Scenario                                 | Traditional timeline | With Azure P-ATO + CSA-in-a-Box |
+| ---------------------------------------- | -------------------- | ------------------------------- |
+| New system, no prior ATO                 | 12–18 months         | 4–6 months                      |
+| Major change to existing ATO             | 6–12 months          | 2–4 months                      |
+| Adding services within existing boundary | 3–6 months           | 2–6 weeks                       |
+| Annual reauthorization                   | 2–4 months           | 2–4 weeks (automated evidence)  |
 
 ### ISSO engagement best practices
 
@@ -515,13 +515,13 @@ Microsoft maintains a large cleared workforce for Azure Government operations:
 
 ### Palantir FDE model vs Azure SI partner model
 
-| Aspect | Palantir FDE model | Azure SI partner model |
-|---|---|---|
-| Staffing model | Palantir-employed FDEs embedded at agency | Agency selects from multiple cleared SI partners |
-| Clearance management | Palantir manages clearances for FDEs | SI partner manages clearances; broader cleared talent pool |
-| Knowledge transfer | FDE departure creates knowledge risk | Larger partner ecosystem reduces single-point-of-failure risk |
-| Vendor diversity | Single vendor for platform + services | Separate vendors for cloud (Microsoft) and services (SI partners) |
-| Cost | $300K–$600K/FDE/year (Palantir pricing) | Competitive SI rates; multiple vendors drive cost competition |
+| Aspect               | Palantir FDE model                        | Azure SI partner model                                            |
+| -------------------- | ----------------------------------------- | ----------------------------------------------------------------- |
+| Staffing model       | Palantir-employed FDEs embedded at agency | Agency selects from multiple cleared SI partners                  |
+| Clearance management | Palantir manages clearances for FDEs      | SI partner manages clearances; broader cleared talent pool        |
+| Knowledge transfer   | FDE departure creates knowledge risk      | Larger partner ecosystem reduces single-point-of-failure risk     |
+| Vendor diversity     | Single vendor for platform + services     | Separate vendors for cloud (Microsoft) and services (SI partners) |
+| Cost                 | $300K–$600K/FDE/year (Palantir pricing)   | Competitive SI rates; multiple vendors drive cost competition     |
 
 ### Training cleared staff on Azure
 
@@ -539,15 +539,15 @@ Agencies should invest in upskilling existing cleared staff on Azure to reduce d
 
 Federal agencies have multiple procurement pathways for Azure Government services:
 
-| Vehicle | Type | Applicable agencies | Notes |
-|---|---|---|---|
-| **JWCC** | IDIQ (multi-award) | DoD | Joint Warfighting Cloud Capability; Microsoft is one of four awardees |
-| **CSP program** | Direct/reseller | All federal | Cloud Solution Provider; available through authorized resellers |
-| **Enterprise Agreement (EA)** | Direct | Large agencies | Volume licensing with committed spend; best for predictable workloads |
-| **ITES-SW2** | BPA | Army | Army-specific software procurement; includes Azure Government |
-| **NASA SEWP V/VI** | GWAC | All federal | Government-wide acquisition contract; competitive pricing |
-| **GSA Schedule 70 / MAS** | Schedule | All federal | Multiple Award Schedule; broad access to Microsoft and partner services |
-| **2GIT** | BPA | All federal | GSA's blanket purchase agreement for IT; streamlined procurement |
+| Vehicle                       | Type               | Applicable agencies | Notes                                                                   |
+| ----------------------------- | ------------------ | ------------------- | ----------------------------------------------------------------------- |
+| **JWCC**                      | IDIQ (multi-award) | DoD                 | Joint Warfighting Cloud Capability; Microsoft is one of four awardees   |
+| **CSP program**               | Direct/reseller    | All federal         | Cloud Solution Provider; available through authorized resellers         |
+| **Enterprise Agreement (EA)** | Direct             | Large agencies      | Volume licensing with committed spend; best for predictable workloads   |
+| **ITES-SW2**                  | BPA                | Army                | Army-specific software procurement; includes Azure Government           |
+| **NASA SEWP V/VI**            | GWAC               | All federal         | Government-wide acquisition contract; competitive pricing               |
+| **GSA Schedule 70 / MAS**     | Schedule           | All federal         | Multiple Award Schedule; broad access to Microsoft and partner services |
+| **2GIT**                      | BPA                | All federal         | GSA's blanket purchase agreement for IT; streamlined procurement        |
 
 ### BPA and IDIQ considerations
 
@@ -628,15 +628,15 @@ Include the following in migration contracts to prevent future lock-in:
 
 ### Timeline and cost outcomes
 
-| Metric | Foundry (before) | Azure Government (after) |
-|---|---|---|
-| Annual platform cost | $12.5M | $5.2M (58% reduction) |
-| Analyst capacity | 500 (capped by licensing) | 700+ (no per-seat limit) |
-| ATO renewal effort | 4 months, manual evidence | 2 weeks, automated evidence |
-| Certified data engineers | 3 (Foundry-specific) | 12 (Azure-certified, growing) |
-| Data export capability | Manual CSV from UI | Programmatic via REST APIs and Power BI |
-| AI/ML capabilities | AIP (Foundry-only) | Azure OpenAI, Azure ML, Cognitive Services |
-| Vendor lock-in risk | Critical (proprietary everything) | Low (open standards, multi-vendor ecosystem) |
+| Metric                   | Foundry (before)                  | Azure Government (after)                     |
+| ------------------------ | --------------------------------- | -------------------------------------------- |
+| Annual platform cost     | $12.5M                            | $5.2M (58% reduction)                        |
+| Analyst capacity         | 500 (capped by licensing)         | 700+ (no per-seat limit)                     |
+| ATO renewal effort       | 4 months, manual evidence         | 2 weeks, automated evidence                  |
+| Certified data engineers | 3 (Foundry-specific)              | 12 (Azure-certified, growing)                |
+| Data export capability   | Manual CSV from UI                | Programmatic via REST APIs and Power BI      |
+| AI/ML capabilities       | AIP (Foundry-only)                | Azure OpenAI, Azure ML, Cognitive Services   |
+| Vendor lock-in risk      | Critical (proprietary everything) | Low (open standards, multi-vendor ecosystem) |
 
 ### Lessons learned
 
@@ -648,7 +648,7 @@ Include the following in migration contracts to prevent future lock-in:
 
 ---
 
-*Last updated: 2026-04-30*
+_Last updated: 2026-04-30_
 
 ---
 

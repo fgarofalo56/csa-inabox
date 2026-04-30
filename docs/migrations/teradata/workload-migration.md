@@ -19,13 +19,13 @@ Teradata Active System Management (TASM) provides:
 
 Typical enterprise TASM configuration:
 
-| Workload class | Priority | CPU share | Max concurrent | Typical users |
-| --- | --- | --- | --- | --- |
-| Tier-1 Executive | Highest | 30% | 20 | C-suite dashboards |
-| Tier-2 Production | High | 40% | 50 | Scheduled ETL, BI reports |
-| Tier-3 Analyst | Medium | 20% | 30 | Ad-hoc analyst queries |
-| Tier-4 Development | Low | 10% | 10 | Dev/test, data science |
-| Tactical (short queries) | Elevated | Dedicated AMP worker tasks | 100+ | Operational queries <5 sec |
+| Workload class           | Priority | CPU share                  | Max concurrent | Typical users              |
+| ------------------------ | -------- | -------------------------- | -------------- | -------------------------- |
+| Tier-1 Executive         | Highest  | 30%                        | 20             | C-suite dashboards         |
+| Tier-2 Production        | High     | 40%                        | 50             | Scheduled ETL, BI reports  |
+| Tier-3 Analyst           | Medium   | 20%                        | 30             | Ad-hoc analyst queries     |
+| Tier-4 Development       | Low      | 10%                        | 10             | Dev/test, data science     |
+| Tactical (short queries) | Elevated | Dedicated AMP worker tasks | 100+           | Operational queries <5 sec |
 
 ### 1.2 TIWM (Teradata Intelligent Workload Manager)
 
@@ -71,17 +71,17 @@ Instead of one system with workload classes, use multiple compute endpoints:
 
 ### 2.2 Mapping table
 
-| TASM concept | Databricks SQL | Synapse Dedicated | Fabric |
-| --- | --- | --- | --- |
-| Workload class | Separate SQL warehouse | Resource class + workload group | Separate workspace/capacity |
-| Priority level | Warehouse size (DBU) | Workload importance (low/normal/high) | Capacity allocation % |
-| CPU share | Cluster size + auto-scale | DWU allocation per workload group | CU allocation |
-| Max concurrent | Max clusters * queries/cluster | Concurrency slots per workload group | Capacity smoothing |
-| Throttle rule | Warehouse max-clusters cap | Workload group cap_percentage_resource | Capacity limits |
-| Exception handling | Query watchdog (timeout) | Query timeout (DMV monitoring) | Capacity guardrails |
-| Classification rule | Application routing (DNS/endpoint) | Workload classifier (sp_configure) | Workspace assignment |
-| SLA target | Warehouse SLA monitoring | DMV-based custom alerting | Fabric Capacity Metrics |
-| Tactical queries | Serverless SQL (instant start) | Serverless SQL pool | Fabric SQL endpoint (auto) |
+| TASM concept        | Databricks SQL                     | Synapse Dedicated                      | Fabric                      |
+| ------------------- | ---------------------------------- | -------------------------------------- | --------------------------- |
+| Workload class      | Separate SQL warehouse             | Resource class + workload group        | Separate workspace/capacity |
+| Priority level      | Warehouse size (DBU)               | Workload importance (low/normal/high)  | Capacity allocation %       |
+| CPU share           | Cluster size + auto-scale          | DWU allocation per workload group      | CU allocation               |
+| Max concurrent      | Max clusters \* queries/cluster    | Concurrency slots per workload group   | Capacity smoothing          |
+| Throttle rule       | Warehouse max-clusters cap         | Workload group cap_percentage_resource | Capacity limits             |
+| Exception handling  | Query watchdog (timeout)           | Query timeout (DMV monitoring)         | Capacity guardrails         |
+| Classification rule | Application routing (DNS/endpoint) | Workload classifier (sp_configure)     | Workspace assignment        |
+| SLA target          | Warehouse SLA monitoring           | DMV-based custom alerting              | Fabric Capacity Metrics     |
+| Tactical queries    | Serverless SQL (instant start)     | Serverless SQL pool                    | Fabric SQL endpoint (auto)  |
 
 ---
 
@@ -142,12 +142,12 @@ dev_warehouse = {
 
 Route queries to the correct warehouse based on the connecting application:
 
-| Application | Warehouse | Connection string |
-| --- | --- | --- |
-| Executive dashboards (Power BI) | executive-tier1 | `sql/protocolv1/o/.../executive-tier1` |
-| Scheduled ETL (dbt / ADF) | production-tier2 | `sql/protocolv1/o/.../production-tier2` |
-| Ad-hoc analyst tools (DBeaver, etc.) | analyst-tier3 | `sql/protocolv1/o/.../analyst-tier3` |
-| Dev/test notebooks | dev-tier4 | `sql/protocolv1/o/.../dev-tier4` |
+| Application                          | Warehouse        | Connection string                       |
+| ------------------------------------ | ---------------- | --------------------------------------- |
+| Executive dashboards (Power BI)      | executive-tier1  | `sql/protocolv1/o/.../executive-tier1`  |
+| Scheduled ETL (dbt / ADF)            | production-tier2 | `sql/protocolv1/o/.../production-tier2` |
+| Ad-hoc analyst tools (DBeaver, etc.) | analyst-tier3    | `sql/protocolv1/o/.../analyst-tier3`    |
+| Dev/test notebooks                   | dev-tier4        | `sql/protocolv1/o/.../dev-tier4`        |
 
 ### 3.3 Query watchdog (exception handling)
 
@@ -249,12 +249,12 @@ WITH (
 
 ### 4.2 Concurrency management
 
-| TASM setting | Synapse equivalent |
-| --- | --- |
+| TASM setting             | Synapse equivalent                                                    |
+| ------------------------ | --------------------------------------------------------------------- |
 | Max concurrent per class | `CAP_PERCENTAGE_RESOURCE` (limits total resource → limits concurrent) |
-| System-wide concurrency | DWU level determines total concurrency slots (128 at DW6000c) |
-| Queue depth | Synapse queues excess queries automatically |
-| Queue timeout | No built-in; implement via DMV monitoring |
+| System-wide concurrency  | DWU level determines total concurrency slots (128 at DW6000c)         |
+| Queue depth              | Synapse queues excess queries automatically                           |
+| Queue timeout            | No built-in; implement via DMV monitoring                             |
 
 ### 4.3 Resource class mapping
 
@@ -280,12 +280,12 @@ EXEC sp_addrolemember 'smallrc', 'analyst_user';
 
 Fabric uses capacity units (CUs) for resource allocation:
 
-| Workload tier | Fabric approach | Configuration |
-| --- | --- | --- |
-| Tier-1 Executive | Dedicated Fabric capacity (F16+) | Separate capacity for executive workspace |
-| Tier-2 Production | Shared Fabric capacity (F64+) | Production workspace with priority |
-| Tier-3 Analyst | Shared capacity with smoothing | Analyst workspace with burst allowed |
-| Tier-4 Dev | Fabric trial or F2 capacity | Smallest capacity, scale to zero |
+| Workload tier     | Fabric approach                  | Configuration                             |
+| ----------------- | -------------------------------- | ----------------------------------------- |
+| Tier-1 Executive  | Dedicated Fabric capacity (F16+) | Separate capacity for executive workspace |
+| Tier-2 Production | Shared Fabric capacity (F64+)    | Production workspace with priority        |
+| Tier-3 Analyst    | Shared capacity with smoothing   | Analyst workspace with burst allowed      |
+| Tier-4 Dev        | Fabric trial or F2 capacity      | Smallest capacity, scale to zero          |
 
 ### 5.2 Workspace isolation
 
@@ -309,12 +309,12 @@ Fabric Tenant
 
 ### 6.1 Distribution strategy (replaces Primary Index tuning)
 
-| Teradata PI tuning | Azure equivalent |
-| --- | --- |
-| Choose PI for co-located joins | Synapse: `DISTRIBUTION = HASH(join_column)` |
-| Skew analysis | Synapse: `DBCC PDW_SHOWSPACEUSED` |
+| Teradata PI tuning             | Azure equivalent                                                   |
+| ------------------------------ | ------------------------------------------------------------------ |
+| Choose PI for co-located joins | Synapse: `DISTRIBUTION = HASH(join_column)`                        |
+| Skew analysis                  | Synapse: `DBCC PDW_SHOWSPACEUSED`                                  |
 | Redistribute for new workloads | Synapse: `ALTER TABLE ... REBUILD WITH (DISTRIBUTION = HASH(...))` |
-| PI change (requires reload) | Delta: Re-OPTIMIZE with different Z-ORDER |
+| PI change (requires reload)    | Delta: Re-OPTIMIZE with different Z-ORDER                          |
 
 ### 6.2 Partition strategy (replaces PPI tuning)
 
@@ -337,22 +337,22 @@ OPTIMIZE silver.orders ZORDER BY (customer_id);
 
 ### 6.3 Concurrency scaling
 
-| Scenario | Teradata TASM | Azure approach |
-| --- | --- | --- |
-| 100 concurrent BI queries | Single system, TASM prioritization | Databricks: multi-cluster SQL warehouse (10 clusters x 10 queries) |
-| ETL competing with queries | TASM throttle rules | Separate warehouses for ETL vs queries |
-| Runaway query protection | TASM exception rules | Query watchdog + timeout settings |
-| Burst capacity | No burst — fixed hardware | Auto-scale warehouses (Databricks) or DWU scaling (Synapse) |
+| Scenario                   | Teradata TASM                      | Azure approach                                                     |
+| -------------------------- | ---------------------------------- | ------------------------------------------------------------------ |
+| 100 concurrent BI queries  | Single system, TASM prioritization | Databricks: multi-cluster SQL warehouse (10 clusters x 10 queries) |
+| ETL competing with queries | TASM throttle rules                | Separate warehouses for ETL vs queries                             |
+| Runaway query protection   | TASM exception rules               | Query watchdog + timeout settings                                  |
+| Burst capacity             | No burst — fixed hardware          | Auto-scale warehouses (Databricks) or DWU scaling (Synapse)        |
 
 ### 6.4 Query performance comparison
 
-| Workload type | Teradata tuning | Azure tuning |
-| --- | --- | --- |
-| Large joins (fact-dim) | PI on join key | Synapse: HASH distribution on join key. Databricks: Z-ORDER + Photon |
-| Aggregations | AMP-level aggregation | Databricks: Photon + Delta statistics. Synapse: columnstore |
-| Full table scan | Block-level I/O | Delta: partition pruning + data skipping |
-| Point lookups | Secondary Index | Delta: Z-ORDER + bloom filter |
-| Complex subqueries | Optimizer rewrites | Databricks: AQE (Adaptive Query Execution) |
+| Workload type          | Teradata tuning       | Azure tuning                                                         |
+| ---------------------- | --------------------- | -------------------------------------------------------------------- |
+| Large joins (fact-dim) | PI on join key        | Synapse: HASH distribution on join key. Databricks: Z-ORDER + Photon |
+| Aggregations           | AMP-level aggregation | Databricks: Photon + Delta statistics. Synapse: columnstore          |
+| Full table scan        | Block-level I/O       | Delta: partition pruning + data skipping                             |
+| Point lookups          | Secondary Index       | Delta: Z-ORDER + bloom filter                                        |
+| Complex subqueries     | Optimizer rewrites    | Databricks: AQE (Adaptive Query Execution)                           |
 
 ---
 
@@ -360,13 +360,13 @@ OPTIMIZE silver.orders ZORDER BY (customer_id);
 
 ### 7.1 Replacing ViewPoint workload monitors
 
-| ViewPoint metric | Azure equivalent | Tool |
-| --- | --- | --- |
-| Active queries per class | Queries per warehouse | Databricks SQL Analytics / Synapse DMVs |
-| Queue depth | Queued queries | Databricks warehouse metrics / Synapse DMVs |
-| Response time p50/p95 | Query latency | Azure Monitor custom metrics |
-| Resource utilization | CPU/memory/I/O | Azure Monitor / Databricks Compute metrics |
-| Spooling queries | Disk spill | Spark UI / Synapse query diagnostics |
+| ViewPoint metric         | Azure equivalent      | Tool                                        |
+| ------------------------ | --------------------- | ------------------------------------------- |
+| Active queries per class | Queries per warehouse | Databricks SQL Analytics / Synapse DMVs     |
+| Queue depth              | Queued queries        | Databricks warehouse metrics / Synapse DMVs |
+| Response time p50/p95    | Query latency         | Azure Monitor custom metrics                |
+| Resource utilization     | CPU/memory/I/O        | Azure Monitor / Databricks Compute metrics  |
+| Spooling queries         | Disk spill            | Spark UI / Synapse query diagnostics        |
 
 ### 7.2 Azure Monitor alerts
 
@@ -384,9 +384,11 @@ OPTIMIZE silver.orders ZORDER BY (customer_id);
                 }
             ]
         },
-        "actions": [{
-            "actionGroupId": "/subscriptions/.../actionGroups/data-platform-alerts"
-        }],
+        "actions": [
+            {
+                "actionGroupId": "/subscriptions/.../actionGroups/data-platform-alerts"
+            }
+        ],
         "description": "Alert when query queue exceeds 20 (equivalent to TASM throttle warning)"
     }
 }
@@ -396,13 +398,13 @@ OPTIMIZE silver.orders ZORDER BY (customer_id);
 
 Key metrics to replicate from ViewPoint:
 
-| Dashboard panel | Data source | Query |
-| --- | --- | --- |
-| Active queries by tier | Databricks SQL API | Statement list, group by warehouse |
-| Query latency by tier | Databricks Query History | AVG/P95 execution time |
-| Queue wait time | Databricks Warehouse Events | Queue duration |
-| Cost by tier | Databricks Billing API | DBU consumption by warehouse |
-| Error rate by tier | Databricks Query History | Failed/total ratio |
+| Dashboard panel        | Data source                 | Query                              |
+| ---------------------- | --------------------------- | ---------------------------------- |
+| Active queries by tier | Databricks SQL API          | Statement list, group by warehouse |
+| Query latency by tier  | Databricks Query History    | AVG/P95 execution time             |
+| Queue wait time        | Databricks Warehouse Events | Queue duration                     |
+| Cost by tier           | Databricks Billing API      | DBU consumption by warehouse       |
+| Error rate by tier     | Databricks Query History    | Failed/total ratio                 |
 
 ---
 

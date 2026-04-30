@@ -16,15 +16,15 @@ This guide covers three CDP-specific components that require dedicated migration
 
 ### Architecture comparison
 
-| CDE concept | Databricks equivalent | Notes |
-|---|---|---|
-| **CDE Service** | Databricks account | Top-level container for all resources. |
-| **Virtual Cluster** | Databricks Workspace | Isolated environment with its own compute, notebooks, and jobs. |
-| **CDE Spark job** | Databricks Job (Spark task) | Spark application submitted for scheduled or on-demand execution. |
-| **CDE resource (files/archives)** | Databricks DBFS / Unity Catalog Volumes | File storage for job dependencies. |
-| **CDE job run** | Databricks Job Run | Individual execution of a job. |
-| **CDE CLI** | Databricks CLI / REST API | Command-line management interface. |
-| **CDE API** | Databricks REST API / SDK | Programmatic access to all functionality. |
+| CDE concept                       | Databricks equivalent                   | Notes                                                             |
+| --------------------------------- | --------------------------------------- | ----------------------------------------------------------------- |
+| **CDE Service**                   | Databricks account                      | Top-level container for all resources.                            |
+| **Virtual Cluster**               | Databricks Workspace                    | Isolated environment with its own compute, notebooks, and jobs.   |
+| **CDE Spark job**                 | Databricks Job (Spark task)             | Spark application submitted for scheduled or on-demand execution. |
+| **CDE resource (files/archives)** | Databricks DBFS / Unity Catalog Volumes | File storage for job dependencies.                                |
+| **CDE job run**                   | Databricks Job Run                      | Individual execution of a job.                                    |
+| **CDE CLI**                       | Databricks CLI / REST API               | Command-line management interface.                                |
+| **CDE API**                       | Databricks REST API / SDK               | Programmatic access to all functionality.                         |
 
 ### CDE job definition to Databricks job
 
@@ -39,11 +39,11 @@ executor-cores: 4
 executor-memory: 8g
 num-executors: 10
 conf:
-  spark.sql.shuffle.partitions: 400
+    spark.sql.shuffle.partitions: 400
 schedule:
-  enabled: true
-  cron-expression: "0 2 * * *"
-  start: "2025-01-01T00:00:00Z"
+    enabled: true
+    cron-expression: "0 2 * * *"
+    start: "2025-01-01T00:00:00Z"
 ```
 
 ```json
@@ -79,13 +79,13 @@ schedule:
 
 ### Key differences in job management
 
-| CDE behavior | Databricks behavior | Migration note |
-|---|---|---|
-| Virtual cluster has fixed compute | Clusters are per-job or shared (job clusters vs all-purpose) | Use job clusters for production; all-purpose for development. |
-| Resources uploaded via CDE CLI | Libraries attached via cluster config or job config | Upload JARs/wheels to DBFS or Unity Catalog Volumes. |
-| CDE manages Spark versions per VC | Databricks Runtime version set per cluster | Choose DBR version in cluster config. |
-| CDE auto-scales within VC limits | Databricks auto-scales per cluster policy | Set min/max workers in cluster or policy. |
-| CDE resource isolation via namespace | Databricks workspace isolation + Unity Catalog | Workspace-level isolation; data access via Unity Catalog grants. |
+| CDE behavior                         | Databricks behavior                                          | Migration note                                                   |
+| ------------------------------------ | ------------------------------------------------------------ | ---------------------------------------------------------------- |
+| Virtual cluster has fixed compute    | Clusters are per-job or shared (job clusters vs all-purpose) | Use job clusters for production; all-purpose for development.    |
+| Resources uploaded via CDE CLI       | Libraries attached via cluster config or job config          | Upload JARs/wheels to DBFS or Unity Catalog Volumes.             |
+| CDE manages Spark versions per VC    | Databricks Runtime version set per cluster                   | Choose DBR version in cluster config.                            |
+| CDE auto-scales within VC limits     | Databricks auto-scales per cluster policy                    | Set min/max workers in cluster or policy.                        |
+| CDE resource isolation via namespace | Databricks workspace isolation + Unity Catalog               | Workspace-level isolation; data access via Unity Catalog grants. |
 
 ---
 
@@ -95,12 +95,12 @@ CDE includes Apache Airflow for orchestration. This is one of the more straightf
 
 ### Migration targets
 
-| CDE Airflow pattern | Target | When to use |
-|---|---|---|
-| Simple Spark DAG (all tasks are Spark) | Databricks Workflows (multi-task job) | All tasks run on Databricks compute. |
-| Mixed DAG (Spark + SQL + shell + API) | ADF Pipeline | Cross-service orchestration (Databricks + SQL + Logic Apps). |
-| Complex DAG with branching/dynamic tasks | Databricks Workflows + ADF | Databricks for compute tasks; ADF for cross-service logic. |
-| Airflow sensors (file/time/external) | ADF triggers (schedule/event/tumbling window) | ADF trigger types replace Airflow sensor patterns. |
+| CDE Airflow pattern                      | Target                                        | When to use                                                  |
+| ---------------------------------------- | --------------------------------------------- | ------------------------------------------------------------ |
+| Simple Spark DAG (all tasks are Spark)   | Databricks Workflows (multi-task job)         | All tasks run on Databricks compute.                         |
+| Mixed DAG (Spark + SQL + shell + API)    | ADF Pipeline                                  | Cross-service orchestration (Databricks + SQL + Logic Apps). |
+| Complex DAG with branching/dynamic tasks | Databricks Workflows + ADF                    | Databricks for compute tasks; ADF for cross-service logic.   |
+| Airflow sensors (file/time/external)     | ADF triggers (schedule/event/tumbling window) | ADF trigger types replace Airflow sensor patterns.           |
 
 ### Airflow DAG to Databricks Workflow conversion
 
@@ -191,18 +191,18 @@ extract >> transform >> load
 
 ### Airflow operator mapping
 
-| Airflow operator (CDE) | Databricks Workflow / ADF equivalent | Notes |
-|---|---|---|
-| `CDEJobRunOperator` | Databricks Spark task | Direct mapping. |
-| `BashOperator` | ADF Custom Activity (Azure Batch) | Shell scripts run on Azure Batch. |
-| `PythonOperator` | Databricks Python task / Azure Functions | Python scripts as Spark tasks or serverless Functions. |
-| `SqlSensor` | ADF Lookup Activity + Until loop | Poll database until condition met. |
-| `FileSensor` | ADF GetMetadata + Until loop / Event Grid trigger | File arrival detection. |
-| `ExternalTaskSensor` | ADF Execute Pipeline with dependency | Cross-pipeline dependencies. |
-| `BranchPythonOperator` | ADF If Condition / Switch | Conditional branching. |
-| `TriggerDagRunOperator` | ADF Execute Pipeline activity | Trigger another pipeline/workflow. |
-| `EmailOperator` | Logic App (triggered by ADF/Databricks webhook) | Email notifications via Logic App. |
-| `SlackWebhookOperator` | Logic App (Slack connector) | Slack alerts via Logic App. |
+| Airflow operator (CDE)  | Databricks Workflow / ADF equivalent              | Notes                                                  |
+| ----------------------- | ------------------------------------------------- | ------------------------------------------------------ |
+| `CDEJobRunOperator`     | Databricks Spark task                             | Direct mapping.                                        |
+| `BashOperator`          | ADF Custom Activity (Azure Batch)                 | Shell scripts run on Azure Batch.                      |
+| `PythonOperator`        | Databricks Python task / Azure Functions          | Python scripts as Spark tasks or serverless Functions. |
+| `SqlSensor`             | ADF Lookup Activity + Until loop                  | Poll database until condition met.                     |
+| `FileSensor`            | ADF GetMetadata + Until loop / Event Grid trigger | File arrival detection.                                |
+| `ExternalTaskSensor`    | ADF Execute Pipeline with dependency              | Cross-pipeline dependencies.                           |
+| `BranchPythonOperator`  | ADF If Condition / Switch                         | Conditional branching.                                 |
+| `TriggerDagRunOperator` | ADF Execute Pipeline activity                     | Trigger another pipeline/workflow.                     |
+| `EmailOperator`         | Logic App (triggered by ADF/Databricks webhook)   | Email notifications via Logic App.                     |
+| `SlackWebhookOperator`  | Logic App (Slack connector)                       | Slack alerts via Logic App.                            |
 
 ---
 
@@ -210,31 +210,31 @@ extract >> transform >> load
 
 ### Architecture comparison
 
-| CML component | Azure equivalent | Notes |
-|---|---|---|
-| **CML Workspace** | Azure ML Workspace / Databricks Workspace | Both provide Jupyter-style environments. |
-| **CML Session** | Azure ML Compute Instance / Databricks cluster | Interactive compute for development. |
-| **CML Experiments** | MLflow on Databricks / Azure ML Experiments | MLflow tracking is available on both platforms. |
-| **CML Models (registry)** | Databricks Model Registry / Azure ML Model Registry | Model versioning and stage management. |
-| **CML Model Serving** | Databricks Model Serving / Azure ML Managed Endpoints | Real-time inference endpoints. |
-| **CML Applied ML Prototypes (AMPs)** | Databricks Solution Accelerators | Pre-built templates for common ML patterns. |
-| **CML Projects (Git-backed)** | Databricks Repos / Azure ML linked repos | Git integration for version control. |
-| **CML Jobs (scheduled)** | Databricks Jobs / Azure ML Pipelines | Scheduled ML training and scoring. |
+| CML component                        | Azure equivalent                                      | Notes                                           |
+| ------------------------------------ | ----------------------------------------------------- | ----------------------------------------------- |
+| **CML Workspace**                    | Azure ML Workspace / Databricks Workspace             | Both provide Jupyter-style environments.        |
+| **CML Session**                      | Azure ML Compute Instance / Databricks cluster        | Interactive compute for development.            |
+| **CML Experiments**                  | MLflow on Databricks / Azure ML Experiments           | MLflow tracking is available on both platforms. |
+| **CML Models (registry)**            | Databricks Model Registry / Azure ML Model Registry   | Model versioning and stage management.          |
+| **CML Model Serving**                | Databricks Model Serving / Azure ML Managed Endpoints | Real-time inference endpoints.                  |
+| **CML Applied ML Prototypes (AMPs)** | Databricks Solution Accelerators                      | Pre-built templates for common ML patterns.     |
+| **CML Projects (Git-backed)**        | Databricks Repos / Azure ML linked repos              | Git integration for version control.            |
+| **CML Jobs (scheduled)**             | Databricks Jobs / Azure ML Pipelines                  | Scheduled ML training and scoring.              |
 
 ### Migration decision: Azure ML vs Databricks ML
 
-| Use case | Choose Azure ML | Choose Databricks ML |
-|---|---|---|
-| **Heavy Spark-based feature engineering** | No | **Yes** (native Spark) |
-| **Traditional ML (scikit-learn, XGBoost)** | **Yes** | Yes |
-| **Deep learning (PyTorch, TensorFlow)** | **Yes** (GPU clusters) | Yes (GPU clusters) |
-| **LLM fine-tuning** | **Yes** (Azure AI Foundry) | Yes (Foundation Model APIs) |
-| **AutoML** | **Yes** (Azure ML AutoML) | Yes (Databricks AutoML) |
-| **Responsible AI dashboard** | **Yes** | No |
-| **Already using Databricks for data** | No | **Yes** (unified platform) |
-| **Complex pipeline orchestration** | **Yes** (Azure ML Pipelines) | Databricks Workflows |
-| **Need endpoint autoscaling** | **Yes** (managed online endpoints) | Yes (Model Serving) |
-| **Real-time feature serving** | Databricks Feature Store | Databricks Feature Store |
+| Use case                                   | Choose Azure ML                    | Choose Databricks ML        |
+| ------------------------------------------ | ---------------------------------- | --------------------------- |
+| **Heavy Spark-based feature engineering**  | No                                 | **Yes** (native Spark)      |
+| **Traditional ML (scikit-learn, XGBoost)** | **Yes**                            | Yes                         |
+| **Deep learning (PyTorch, TensorFlow)**    | **Yes** (GPU clusters)             | Yes (GPU clusters)          |
+| **LLM fine-tuning**                        | **Yes** (Azure AI Foundry)         | Yes (Foundation Model APIs) |
+| **AutoML**                                 | **Yes** (Azure ML AutoML)          | Yes (Databricks AutoML)     |
+| **Responsible AI dashboard**               | **Yes**                            | No                          |
+| **Already using Databricks for data**      | No                                 | **Yes** (unified platform)  |
+| **Complex pipeline orchestration**         | **Yes** (Azure ML Pipelines)       | Databricks Workflows        |
+| **Need endpoint autoscaling**              | **Yes** (managed online endpoints) | Yes (Model Serving)         |
+| **Real-time feature serving**              | Databricks Feature Store           | Databricks Feature Store    |
 
 **Recommendation:** If your data engineering runs on Databricks, use Databricks ML for tight integration. If you need Responsible AI dashboards, LLM fine-tuning with Azure AI Foundry, or complex multi-step ML pipelines, use Azure ML. Many organizations use both.
 
@@ -294,36 +294,36 @@ w.serving_endpoints.create(
 
 ### CDW architecture to Azure mapping
 
-| CDW component | Azure equivalent | Notes |
-|---|---|---|
-| **CDW Hive Virtual Warehouse** | Databricks SQL Warehouse | HiveQL to Spark SQL conversion (see playbook Section 6). |
-| **CDW Impala Virtual Warehouse** | Databricks SQL Warehouse | See [Impala Migration](impala-migration.md). |
-| **CDW auto-scaling** | Databricks SQL Serverless auto-scaling | More granular scaling on Databricks. |
-| **CDW Data Visualization** | Power BI | Richer visualization; Direct Lake for lakehouse data. |
-| **CDW query isolation** | Databricks SQL multi-cluster auto-scaling | Each concurrent user group gets its own cluster. |
-| **CDW Hue interface** | Databricks SQL Editor | SQL editor with autocomplete, query history. |
+| CDW component                    | Azure equivalent                          | Notes                                                    |
+| -------------------------------- | ----------------------------------------- | -------------------------------------------------------- |
+| **CDW Hive Virtual Warehouse**   | Databricks SQL Warehouse                  | HiveQL to Spark SQL conversion (see playbook Section 6). |
+| **CDW Impala Virtual Warehouse** | Databricks SQL Warehouse                  | See [Impala Migration](impala-migration.md).             |
+| **CDW auto-scaling**             | Databricks SQL Serverless auto-scaling    | More granular scaling on Databricks.                     |
+| **CDW Data Visualization**       | Power BI                                  | Richer visualization; Direct Lake for lakehouse data.    |
+| **CDW query isolation**          | Databricks SQL multi-cluster auto-scaling | Each concurrent user group gets its own cluster.         |
+| **CDW Hue interface**            | Databricks SQL Editor                     | SQL editor with autocomplete, query history.             |
 
 ### CDW to Fabric SQL endpoint (alternative)
 
 For organizations adopting Microsoft Fabric, CDW workloads can also target Fabric SQL endpoint:
 
-| CDW feature | Fabric SQL endpoint | Notes |
-|---|---|---|
+| CDW feature                  | Fabric SQL endpoint                          | Notes                                      |
+| ---------------------------- | -------------------------------------------- | ------------------------------------------ |
 | Interactive SQL on lake data | Fabric SQL endpoint (read Delta via OneLake) | T-SQL syntax instead of HiveQL/Impala SQL. |
-| BI serving | Power BI Direct Lake mode | Sub-second dashboard refresh. |
-| Data exploration | Fabric Lakehouse notebooks | PySpark + SQL in Fabric notebooks. |
-| Scheduled queries | Fabric Data Pipeline (notebook activity) | Scheduled notebook execution. |
+| BI serving                   | Power BI Direct Lake mode                    | Sub-second dashboard refresh.              |
+| Data exploration             | Fabric Lakehouse notebooks                   | PySpark + SQL in Fabric notebooks.         |
+| Scheduled queries            | Fabric Data Pipeline (notebook activity)     | Scheduled notebook execution.              |
 
 **When to choose Fabric vs Databricks SQL:**
 
-| Scenario | Fabric SQL endpoint | Databricks SQL |
-|---|---|---|
-| Organization is Microsoft 365-heavy | **Yes** | Maybe |
-| Heavy Spark workloads alongside SQL | Maybe | **Yes** |
-| Need T-SQL compatibility | **Yes** | No (Spark SQL) |
-| Need Unity Catalog governance | No | **Yes** |
-| BI-primary workload (Power BI) | **Yes** (Direct Lake) | Yes (via connector) |
-| Mixed workload (ETL + SQL + ML) | Maybe | **Yes** |
+| Scenario                            | Fabric SQL endpoint   | Databricks SQL      |
+| ----------------------------------- | --------------------- | ------------------- |
+| Organization is Microsoft 365-heavy | **Yes**               | Maybe               |
+| Heavy Spark workloads alongside SQL | Maybe                 | **Yes**             |
+| Need T-SQL compatibility            | **Yes**               | No (Spark SQL)      |
+| Need Unity Catalog governance       | No                    | **Yes**             |
+| BI-primary workload (Power BI)      | **Yes** (Direct Lake) | Yes (via connector) |
+| Mixed workload (ETL + SQL + ML)     | Maybe                 | **Yes**             |
 
 ---
 
@@ -354,15 +354,15 @@ flowchart TD
 
 If you are migrating from CDP rather than CDH, several things are easier:
 
-| Migration aspect | CDH migration | CDP migration |
-|---|---|---|
-| **Data location** | HDFS on bare metal; requires Data Box or network transfer | If CDP Public Cloud: data already in cloud storage |
-| **Spark version** | CDH ships Spark 2.x (old); upgrade to Spark 3.x needed | CDP ships Spark 3.x; direct port to Databricks |
-| **Hive version** | CDH ships Hive 2.x; more syntax differences | CDP ships Hive 3.x; fewer syntax changes |
-| **Kerberos** | Deep Kerberos integration in all services | CDP supports Kerberos but also token-based auth |
-| **Container awareness** | CDH is bare-metal/VM only | CDP Private Cloud runs on Kubernetes; familiar concepts |
-| **API maturity** | CDH APIs are older; more manual work | CDP APIs are modern REST; easier to script migration |
-| **MLflow** | Not available on CDH | CML includes MLflow; experiments port directly |
+| Migration aspect        | CDH migration                                             | CDP migration                                           |
+| ----------------------- | --------------------------------------------------------- | ------------------------------------------------------- |
+| **Data location**       | HDFS on bare metal; requires Data Box or network transfer | If CDP Public Cloud: data already in cloud storage      |
+| **Spark version**       | CDH ships Spark 2.x (old); upgrade to Spark 3.x needed    | CDP ships Spark 3.x; direct port to Databricks          |
+| **Hive version**        | CDH ships Hive 2.x; more syntax differences               | CDP ships Hive 3.x; fewer syntax changes                |
+| **Kerberos**            | Deep Kerberos integration in all services                 | CDP supports Kerberos but also token-based auth         |
+| **Container awareness** | CDH is bare-metal/VM only                                 | CDP Private Cloud runs on Kubernetes; familiar concepts |
+| **API maturity**        | CDH APIs are older; more manual work                      | CDP APIs are modern REST; easier to script migration    |
+| **MLflow**              | Not available on CDH                                      | CML includes MLflow; experiments port directly          |
 
 ---
 

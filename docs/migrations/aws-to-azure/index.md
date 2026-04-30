@@ -12,20 +12,20 @@ This migration center serves federal CIOs, CDOs, Chief Data Architects, platform
 
 ## Quick-start decision matrix
 
-| Your situation | Start here |
-|---|---|
-| Executive evaluating Azure vs AWS for analytics | [Why Azure over AWS](why-azure-over-aws.md) |
-| Need cost justification for migration | [Total Cost of Ownership Analysis](tco-analysis.md) |
-| Need a feature-by-feature comparison | [Complete Feature Mapping](feature-mapping-complete.md) |
-| Ready to plan a migration | [Migration Playbook](../aws-to-azure.md) |
-| Federal/government-specific requirements | [Federal Migration Guide](federal-migration-guide.md) |
-| Migrating S3 data to Azure | [Storage Migration](storage-migration.md) |
-| Migrating Redshift/EMR/Athena | [Compute Migration](compute-migration.md) |
-| Migrating Glue ETL pipelines | [ETL Migration](etl-migration.md) |
-| Migrating QuickSight dashboards | [Analytics Migration](analytics-migration.md) |
-| Migrating Kinesis/MSK streaming | [Streaming Migration](streaming-migration.md) |
-| Migrating SageMaker/Bedrock AI workloads | [AI/ML Migration](ai-ml-migration.md) |
-| Migrating IAM/Lake Formation security | [Security Migration](security-migration.md) |
+| Your situation                                  | Start here                                              |
+| ----------------------------------------------- | ------------------------------------------------------- |
+| Executive evaluating Azure vs AWS for analytics | [Why Azure over AWS](why-azure-over-aws.md)             |
+| Need cost justification for migration           | [Total Cost of Ownership Analysis](tco-analysis.md)     |
+| Need a feature-by-feature comparison            | [Complete Feature Mapping](feature-mapping-complete.md) |
+| Ready to plan a migration                       | [Migration Playbook](../aws-to-azure.md)                |
+| Federal/government-specific requirements        | [Federal Migration Guide](federal-migration-guide.md)   |
+| Migrating S3 data to Azure                      | [Storage Migration](storage-migration.md)               |
+| Migrating Redshift/EMR/Athena                   | [Compute Migration](compute-migration.md)               |
+| Migrating Glue ETL pipelines                    | [ETL Migration](etl-migration.md)                       |
+| Migrating QuickSight dashboards                 | [Analytics Migration](analytics-migration.md)           |
+| Migrating Kinesis/MSK streaming                 | [Streaming Migration](streaming-migration.md)           |
+| Migrating SageMaker/Bedrock AI workloads        | [AI/ML Migration](ai-ml-migration.md)                   |
+| Migrating IAM/Lake Formation security           | [Security Migration](security-migration.md)             |
 
 ---
 
@@ -33,11 +33,11 @@ This migration center serves federal CIOs, CDOs, Chief Data Architects, platform
 
 These documents provide the business case, cost analysis, and strategic framing for decision-makers.
 
-| Document | Audience | Description |
-|---|---|---|
-| [Why Azure over AWS](why-azure-over-aws.md) | CIO / CDO / Board | Executive white paper covering strategic advantages, ecosystem synergies, talent comparison, innovation velocity, and an honest assessment of AWS strengths |
-| [Total Cost of Ownership Analysis](tco-analysis.md) | CFO / CIO / Procurement | Detailed pricing model comparison across three federal tenant sizes, 5-year TCO projections, hidden cost analysis, and cost optimization strategies |
-| [Complete Feature Mapping](feature-mapping-complete.md) | CTO / Platform Architecture | 60+ AWS analytics features mapped to Azure equivalents with migration complexity ratings and gap analysis |
+| Document                                                | Audience                    | Description                                                                                                                                                 |
+| ------------------------------------------------------- | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Why Azure over AWS](why-azure-over-aws.md)             | CIO / CDO / Board           | Executive white paper covering strategic advantages, ecosystem synergies, talent comparison, innovation velocity, and an honest assessment of AWS strengths |
+| [Total Cost of Ownership Analysis](tco-analysis.md)     | CFO / CIO / Procurement     | Detailed pricing model comparison across three federal tenant sizes, 5-year TCO projections, hidden cost analysis, and cost optimization strategies         |
+| [Complete Feature Mapping](feature-mapping-complete.md) | CTO / Platform Architecture | 60+ AWS analytics features mapped to Azure equivalents with migration complexity ratings and gap analysis                                                   |
 
 ---
 
@@ -45,31 +45,31 @@ These documents provide the business case, cost analysis, and strategic framing 
 
 Domain-specific deep dives covering every aspect of an AWS-to-Azure analytics migration.
 
-| Guide | AWS capability | Azure destination |
-|---|---|---|
-| [Storage Migration](storage-migration.md) | S3 buckets, lifecycle policies, versioning, access points | ADLS Gen2, OneLake, OneLake S3 shortcuts |
-| [Compute Migration](compute-migration.md) | Redshift, EMR, Athena | Databricks SQL, Databricks Jobs, Fabric SQL endpoint |
-| [ETL Migration](etl-migration.md) | Glue Jobs, Crawlers, Data Catalog, Step Functions | ADF, dbt, Purview, Unity Catalog |
-| [Analytics Migration](analytics-migration.md) | QuickSight dashboards, SPICE, Q | Power BI, Direct Lake, Copilot |
-| [Streaming Migration](streaming-migration.md) | Kinesis Data Streams, Firehose, Analytics, MSK | Event Hubs, Stream Analytics, Fabric RTI |
-| [AI/ML Migration](ai-ml-migration.md) | SageMaker, Bedrock, Bedrock Agents | Azure ML, Azure OpenAI, AI Foundry, Copilot Studio |
-| [Security Migration](security-migration.md) | IAM, Lake Formation, KMS, GuardDuty, CloudTrail | Entra ID, Purview, Key Vault, Defender, Azure Monitor |
+| Guide                                         | AWS capability                                            | Azure destination                                     |
+| --------------------------------------------- | --------------------------------------------------------- | ----------------------------------------------------- |
+| [Storage Migration](storage-migration.md)     | S3 buckets, lifecycle policies, versioning, access points | ADLS Gen2, OneLake, OneLake S3 shortcuts              |
+| [Compute Migration](compute-migration.md)     | Redshift, EMR, Athena                                     | Databricks SQL, Databricks Jobs, Fabric SQL endpoint  |
+| [ETL Migration](etl-migration.md)             | Glue Jobs, Crawlers, Data Catalog, Step Functions         | ADF, dbt, Purview, Unity Catalog                      |
+| [Analytics Migration](analytics-migration.md) | QuickSight dashboards, SPICE, Q                           | Power BI, Direct Lake, Copilot                        |
+| [Streaming Migration](streaming-migration.md) | Kinesis Data Streams, Firehose, Analytics, MSK            | Event Hubs, Stream Analytics, Fabric RTI              |
+| [AI/ML Migration](ai-ml-migration.md)         | SageMaker, Bedrock, Bedrock Agents                        | Azure ML, Azure OpenAI, AI Foundry, Copilot Studio    |
+| [Security Migration](security-migration.md)   | IAM, Lake Formation, KMS, GuardDuty, CloudTrail           | Entra ID, Purview, Key Vault, Defender, Azure Monitor |
 
 ---
 
 ## Technical references
 
-| Document | Description |
-|---|---|
+| Document                                                | Description                                                                                                                  |
+| ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | [Complete Feature Mapping](feature-mapping-complete.md) | Every AWS analytics feature mapped to its Azure equivalent with migration complexity ratings and CSA-in-a-Box evidence paths |
-| [Migration Playbook](../aws-to-azure.md) | The end-to-end migration playbook with capability mapping, worked examples, phased project plan, and competitive framing |
+| [Migration Playbook](../aws-to-azure.md)                | The end-to-end migration playbook with capability mapping, worked examples, phased project plan, and competitive framing     |
 
 ---
 
 ## Government and federal
 
-| Document | Description |
-|---|---|
+| Document                                              | Description                                                                                                                                                      |
+| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [Federal Migration Guide](federal-migration-guide.md) | AWS GovCloud vs Azure Government comparison, FedRAMP High analysis, IL4/IL5/IL6 coverage, CMMC mapping, ITAR, procurement guidance, and agency-specific patterns |
 
 ---

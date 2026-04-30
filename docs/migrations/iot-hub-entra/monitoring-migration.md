@@ -47,8 +47,8 @@ AzureDiagnostics
 | where ResourceProvider == "MICROSOFT.DEVICES"
 | where Category == "Connections"
 | where TimeGenerated > ago(7d)
-| extend authType = tostring(properties_s) 
-| summarize 
+| extend authType = tostring(properties_s)
+| summarize
     TotalConnections = count(),
     UniqueDevices = dcount(deviceId_s)
     by authType_s
@@ -62,7 +62,7 @@ AzureDiagnostics
 | where Category == "Connections"
 | where TimeGenerated > ago(24h)
 | where authType_s == "sas"
-| summarize 
+| summarize
     LastConnection = max(TimeGenerated),
     ConnectionCount = count()
     by deviceId_s
@@ -96,9 +96,9 @@ az monitor diagnostic-settings create \
 // Managed identity authentications to IoT Hub
 ManagedIdentitySignInLogs
 | where TimeGenerated > ago(24h)
-| where ResourceDisplayName contains "IoT Hub" 
+| where ResourceDisplayName contains "IoT Hub"
     or ResourceId contains "Microsoft.Devices/IotHubs"
-| project 
+| project
     TimeGenerated,
     ServicePrincipalName,
     ServicePrincipalId,
@@ -115,7 +115,7 @@ ManagedIdentitySignInLogs
 | where TimeGenerated > ago(24h)
 | where ResultType != "0"  // Non-success
 | where ResourceDisplayName contains "IoT Hub"
-| project 
+| project
     TimeGenerated,
     ServicePrincipalName,
     ResultType,
@@ -228,7 +228,7 @@ az monitor scheduled-query create \
 ManagedIdentitySignInLogs
 | where TimeGenerated > ago(7d)
 | where ResourceDisplayName contains "IoT Hub"
-| summarize 
+| summarize
     AuthCount = count(),
     SuccessCount = countif(ResultType == "0"),
     FailureCount = countif(ResultType != "0"),
@@ -299,7 +299,7 @@ AzureDiagnostics
 ManagedIdentitySignInLogs
 | where TimeGenerated > ago(24h)
 | where ResourceDisplayName contains "IoT Hub"
-| summarize 
+| summarize
     Total = count(),
     Failures = countif(ResultType != "0")
     by bin(TimeGenerated, 1h)
@@ -315,7 +315,7 @@ AzureDiagnostics
 | where Category == "Connections"
 | where authType_s == "x509"
 | where TimeGenerated > ago(1h)
-| summarize 
+| summarize
     ConnectedDevices = dcount(deviceId_s),
     TotalConnections = count()
 | extend Status = iff(ConnectedDevices > 0, "Healthy", "No X.509 connections")

@@ -56,32 +56,32 @@ Before building the pipeline, create the connections ADF will use.
 
 In ADF Studio, navigate to **Manage** > **Linked services** > **New**.
 
-| Setting | Value |
-|---|---|
-| Name | `ls_sftp_vendor` |
-| Type | SFTP |
-| Host | `vendor-sftp.example.com` |
-| Port | 22 |
-| Authentication | SSH public key or password |
-| Username | `vendor_user` |
+| Setting             | Value                                           |
+| ------------------- | ----------------------------------------------- |
+| Name                | `ls_sftp_vendor`                                |
+| Type                | SFTP                                            |
+| Host                | `vendor-sftp.example.com`                       |
+| Port                | 22                                              |
+| Authentication      | SSH public key or password                      |
+| Username            | `vendor_user`                                   |
 | Key Vault reference | Select Key Vault secret for SSH key or password |
 
 ### 1.2 ADLS Gen2 linked service
 
-| Setting | Value |
-|---|---|
-| Name | `ls_adls_datalake` |
-| Type | Azure Data Lake Storage Gen2 |
-| Authentication | Managed Identity (recommended) |
-| URL | `https://yourstorageaccount.dfs.core.windows.net` |
+| Setting        | Value                                             |
+| -------------- | ------------------------------------------------- |
+| Name           | `ls_adls_datalake`                                |
+| Type           | Azure Data Lake Storage Gen2                      |
+| Authentication | Managed Identity (recommended)                    |
+| URL            | `https://yourstorageaccount.dfs.core.windows.net` |
 
 ### 1.3 Logic App linked service (for email alerts)
 
-| Setting | Value |
-|---|---|
-| Name | `ls_logicapp_alert` |
-| Type | REST (or Web Activity target) |
-| Base URL | Logic App HTTP trigger URL |
+| Setting  | Value                         |
+| -------- | ----------------------------- |
+| Name     | `ls_logicapp_alert`           |
+| Type     | REST (or Web Activity target) |
+| Base URL | Logic App HTTP trigger URL    |
 
 ---
 
@@ -89,34 +89,34 @@ In ADF Studio, navigate to **Manage** > **Linked services** > **New**.
 
 ### 2.1 Source dataset: SFTP CSV files
 
-| Setting | Value |
-|---|---|
-| Name | `ds_sftp_vendor_csv` |
-| Linked service | `ls_sftp_vendor` |
-| Format | Delimited text (CSV) |
-| Path | `/outbound/` |
-| First row as header | Yes |
-| Column delimiter | Comma |
-| Parameters | `fileName` (String) |
+| Setting             | Value                |
+| ------------------- | -------------------- |
+| Name                | `ds_sftp_vendor_csv` |
+| Linked service      | `ls_sftp_vendor`     |
+| Format              | Delimited text (CSV) |
+| Path                | `/outbound/`         |
+| First row as header | Yes                  |
+| Column delimiter    | Comma                |
+| Parameters          | `fileName` (String)  |
 
 ### 2.2 Sink dataset: ADLS Parquet (bronze)
 
-| Setting | Value |
-|---|---|
-| Name | `ds_adls_bronze_parquet` |
-| Linked service | `ls_adls_datalake` |
-| Format | Parquet |
-| Path | `bronze/vendor_orders/` |
-| Parameters | `fileName` (String) |
+| Setting        | Value                    |
+| -------------- | ------------------------ |
+| Name           | `ds_adls_bronze_parquet` |
+| Linked service | `ls_adls_datalake`       |
+| Format         | Parquet                  |
+| Path           | `bronze/vendor_orders/`  |
+| Parameters     | `fileName` (String)      |
 
 ### 2.3 Quarantine dataset: ADLS CSV (quarantine)
 
-| Setting | Value |
-|---|---|
-| Name | `ds_adls_quarantine_csv` |
-| Linked service | `ls_adls_datalake` |
-| Format | Delimited text (CSV) |
-| Path | `quarantine/vendor_orders/` |
+| Setting        | Value                       |
+| -------------- | --------------------------- |
+| Name           | `ds_adls_quarantine_csv`    |
+| Linked service | `ls_adls_datalake`          |
+| Format         | Delimited text (CSV)        |
+| Path           | `quarantine/vendor_orders/` |
 
 ---
 
@@ -143,82 +143,82 @@ ForEach (parallel, batch=10)
 
 Drag a **GetMetadata** activity onto the canvas.
 
-| Setting | Value |
-|---|---|
-| Name | `get_sftp_file_list` |
-| Dataset | `ds_sftp_vendor_csv` |
-| Field list | `childItems` |
+| Setting    | Value                |
+| ---------- | -------------------- |
+| Name       | `get_sftp_file_list` |
+| Dataset    | `ds_sftp_vendor_csv` |
+| Field list | `childItems`         |
 
 ### 3.3 Activity 2: Filter -- select only CSV files
 
 Drag a **Filter** activity and connect it after GetMetadata.
 
-| Setting | Value |
-|---|---|
-| Name | `filter_csv_files` |
-| Items | `@activity('get_sftp_file_list').output.childItems` |
-| Condition | `@endswith(item().name, '.csv')` |
+| Setting   | Value                                               |
+| --------- | --------------------------------------------------- |
+| Name      | `filter_csv_files`                                  |
+| Items     | `@activity('get_sftp_file_list').output.childItems` |
+| Condition | `@endswith(item().name, '.csv')`                    |
 
 ### 3.4 Activity 3: ForEach -- process each file
 
 Drag a **ForEach** activity and connect it after Filter.
 
-| Setting | Value |
-|---|---|
-| Name | `for_each_csv_file` |
-| Items | `@activity('filter_csv_files').output.value` |
-| Sequential | No (parallel execution) |
-| Batch count | 10 |
+| Setting     | Value                                        |
+| ----------- | -------------------------------------------- |
+| Name        | `for_each_csv_file`                          |
+| Items       | `@activity('filter_csv_files').output.value` |
+| Sequential  | No (parallel execution)                      |
+| Batch count | 10                                           |
 
 ### 3.5 Inside ForEach: Copy Activity (main copy)
 
 Inside the ForEach, add a **Copy Activity**.
 
-| Setting | Value |
-|---|---|
-| Name | `copy_sftp_to_bronze` |
-| Source dataset | `ds_sftp_vendor_csv` |
-| Source file name | `@item().name` |
-| Sink dataset | `ds_adls_bronze_parquet` |
-| Sink file name | `@concat(replace(item().name, '.csv', ''), '_', formatDateTime(utcNow(), 'yyyyMMddHHmmss'), '.parquet')` |
+| Setting          | Value                                                                                                    |
+| ---------------- | -------------------------------------------------------------------------------------------------------- |
+| Name             | `copy_sftp_to_bronze`                                                                                    |
+| Source dataset   | `ds_sftp_vendor_csv`                                                                                     |
+| Source file name | `@item().name`                                                                                           |
+| Sink dataset     | `ds_adls_bronze_parquet`                                                                                 |
+| Sink file name   | `@concat(replace(item().name, '.csv', ''), '_', formatDateTime(utcNow(), 'yyyyMMddHHmmss'), '.parquet')` |
 
 **Mapping tab:** Define explicit column mapping to enforce schema (equivalent to NiFi's ValidateRecord):
 
-| Source column | Sink column | Type |
-|---|---|---|
-| `order_id` | `order_id` | Int32 |
-| `customer_id` | `customer_id` | Int32 |
-| `amount` | `amount` | Decimal |
-| `order_date` | `order_date` | Date |
-| `status` | `status` | String |
+| Source column | Sink column   | Type    |
+| ------------- | ------------- | ------- |
+| `order_id`    | `order_id`    | Int32   |
+| `customer_id` | `customer_id` | Int32   |
+| `amount`      | `amount`      | Decimal |
+| `order_date`  | `order_date`  | Date    |
+| `status`      | `status`      | String  |
 
 **Additional columns** (equivalent to NiFi's UpdateAttribute):
 
-| Column name | Value |
-|---|---|
-| `ingestion_timestamp` | `@utcNow()` |
-| `source_system` | `vendor_sftp` |
+| Column name           | Value         |
+| --------------------- | ------------- |
+| `ingestion_timestamp` | `@utcNow()`   |
+| `source_system`       | `vendor_sftp` |
 
 ### 3.6 Inside ForEach: failure handling
 
 Add a **Copy Activity** for quarantine, connected to the main Copy on **Failure** dependency.
 
-| Setting | Value |
-|---|---|
-| Name | `copy_to_quarantine` |
-| Source | `ds_sftp_vendor_csv` with `@item().name` |
-| Sink | `ds_adls_quarantine_csv` |
-| Dependency | `copy_sftp_to_bronze` on Failure |
+| Setting    | Value                                    |
+| ---------- | ---------------------------------------- |
+| Name       | `copy_to_quarantine`                     |
+| Source     | `ds_sftp_vendor_csv` with `@item().name` |
+| Sink       | `ds_adls_quarantine_csv`                 |
+| Dependency | `copy_sftp_to_bronze` on Failure         |
 
 Add a **Web Activity** after the quarantine copy (equivalent to NiFi's PutEmail):
 
-| Setting | Value |
-|---|---|
-| Name | `send_failure_alert` |
-| URL | Logic App HTTP trigger URL |
-| Method | POST |
-| Body | `@json(concat('{"file":"', item().name, '","error":"', activity('copy_sftp_to_bronze').error.message, '","pipeline":"', pipeline().Pipeline, '","timestamp":"', utcNow(), '"}'))` |
-| Dependency | `copy_to_quarantine` on Success |
+| Setting    | Value                                                                                                                                                                             |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Name       | `send_failure_alert`                                                                                                                                                              |
+| URL        | Logic App HTTP trigger URL                                                                                                                                                        |
+| Method     | POST                                                                                                                                                                              |
+| Body       | `@json(concat('{"file":"', item().name, '","error":"', activity('copy_sftp_to_bronze').error.message, '","pipeline":"', pipeline().Pipeline, '","timestamp":"', utcNow(), '"}'))` |
+| Dependency | `copy_to_quarantine` on Success                                                                                                                                                   |
 
 ---
 
@@ -249,11 +249,11 @@ In the Azure Portal:
 
 5. Add action: **Send an email (V2)** (Office 365 Outlook connector)
 
-| Setting | Value |
-|---|---|
-| To | `data-eng@example.com` |
-| Subject | `Vendor file ingestion failure: @{triggerBody()?['file']}` |
-| Body | `Pipeline @{triggerBody()?['pipeline']} failed to process file @{triggerBody()?['file']} at @{triggerBody()?['timestamp']}. Error: @{triggerBody()?['error']}` |
+| Setting | Value                                                                                                                                                          |
+| ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| To      | `data-eng@example.com`                                                                                                                                         |
+| Subject | `Vendor file ingestion failure: @{triggerBody()?['file']}`                                                                                                     |
+| Body    | `Pipeline @{triggerBody()?['pipeline']} failed to process file @{triggerBody()?['file']} at @{triggerBody()?['timestamp']}. Error: @{triggerBody()?['error']}` |
 
 6. Save and copy the HTTP trigger URL into the ADF Web Activity.
 
@@ -266,13 +266,13 @@ This replaces NiFi's scheduling (every 15 minutes).
 1. In ADF Studio, go to the pipeline and click **Add trigger** > **New/Edit**
 2. Create a **Schedule trigger**:
 
-| Setting | Value |
-|---|---|
-| Name | `tr_vendor_ingestion_15min` |
-| Type | Schedule |
-| Recurrence | Every 15 minutes |
-| Start date | `2026-05-01T00:00:00Z` |
-| Time zone | UTC |
+| Setting    | Value                       |
+| ---------- | --------------------------- |
+| Name       | `tr_vendor_ingestion_15min` |
+| Type       | Schedule                    |
+| Recurrence | Every 15 minutes            |
+| Start date | `2026-05-01T00:00:00Z`      |
+| Time zone  | UTC                         |
 
 3. Publish the pipeline and trigger.
 
@@ -350,42 +350,42 @@ ADF provides built-in pipeline monitoring:
 
 Create alerts for:
 
-| Alert | Condition | Action |
-|---|---|---|
-| Pipeline failure | Pipeline run status = Failed | Email + Teams notification |
-| Long-running pipeline | Duration > 30 minutes | Email notification |
-| No data in 2 hours | Custom metric (row count = 0) | Email + PagerDuty |
+| Alert                 | Condition                     | Action                     |
+| --------------------- | ----------------------------- | -------------------------- |
+| Pipeline failure      | Pipeline run status = Failed  | Email + Teams notification |
+| Long-running pipeline | Duration > 30 minutes         | Email notification         |
+| No data in 2 hours    | Custom metric (row count = 0) | Email + PagerDuty          |
 
 ---
 
 ## NiFi to ADF mapping summary for this tutorial
 
-| NiFi component | ADF equivalent | Tutorial step |
-|---|---|---|
-| ListSFTP | GetMetadata activity | Step 3.2 |
-| FetchSFTP | Copy Activity (source) | Step 3.5 |
-| ValidateRecord | Copy Activity column mapping (schema enforcement) | Step 3.5 |
-| UpdateAttribute | Copy Activity additional columns | Step 3.5 |
-| ConvertRecord (CSV → Parquet) | Copy Activity sink format = Parquet | Step 3.5 |
-| PutHDFS | Copy Activity sink (ADLS Gen2) | Step 3.5 |
-| RouteOnAttribute (valid/invalid) | Copy Activity success/failure dependency | Step 3.6 |
-| PutFile (quarantine) | Copy Activity to quarantine container | Step 3.6 |
-| PutEmail | Logic App via Web Activity | Step 4 |
-| NiFi schedule (15 min) | ADF Schedule Trigger | Step 5 |
-| NiFi bulletin board | ADF Monitor + Azure Monitor alerts | Step 7 |
+| NiFi component                   | ADF equivalent                                    | Tutorial step |
+| -------------------------------- | ------------------------------------------------- | ------------- |
+| ListSFTP                         | GetMetadata activity                              | Step 3.2      |
+| FetchSFTP                        | Copy Activity (source)                            | Step 3.5      |
+| ValidateRecord                   | Copy Activity column mapping (schema enforcement) | Step 3.5      |
+| UpdateAttribute                  | Copy Activity additional columns                  | Step 3.5      |
+| ConvertRecord (CSV → Parquet)    | Copy Activity sink format = Parquet               | Step 3.5      |
+| PutHDFS                          | Copy Activity sink (ADLS Gen2)                    | Step 3.5      |
+| RouteOnAttribute (valid/invalid) | Copy Activity success/failure dependency          | Step 3.6      |
+| PutFile (quarantine)             | Copy Activity to quarantine container             | Step 3.6      |
+| PutEmail                         | Logic App via Web Activity                        | Step 4        |
+| NiFi schedule (15 min)           | ADF Schedule Trigger                              | Step 5        |
+| NiFi bulletin board              | ADF Monitor + Azure Monitor alerts                | Step 7        |
 
 ---
 
 ## Common issues during NiFi-to-ADF conversion
 
-| Issue | Cause | Solution |
-|---|---|---|
-| SFTP connection timeout | Firewall blocking ADF | Use Self-Hosted IR behind the firewall. |
-| Schema mismatch errors | Source CSV has unexpected columns | Add fault tolerance in Copy Activity settings. |
-| Duplicate files on retry | ADF re-processes after partial failure | Use file naming with timestamps to avoid overwrites. |
-| Email not sent on failure | Logic App URL incorrect or expired | Regenerate Logic App trigger URL; test independently. |
-| Slow file processing | Sequential ForEach | Set `isSequential: false` and `batchCount: 10+`. |
-| Files left on SFTP | NiFi auto-deleted after fetch; ADF does not | Add a Delete Activity after successful copy. |
+| Issue                     | Cause                                       | Solution                                              |
+| ------------------------- | ------------------------------------------- | ----------------------------------------------------- |
+| SFTP connection timeout   | Firewall blocking ADF                       | Use Self-Hosted IR behind the firewall.               |
+| Schema mismatch errors    | Source CSV has unexpected columns           | Add fault tolerance in Copy Activity settings.        |
+| Duplicate files on retry  | ADF re-processes after partial failure      | Use file naming with timestamps to avoid overwrites.  |
+| Email not sent on failure | Logic App URL incorrect or expired          | Regenerate Logic App trigger URL; test independently. |
+| Slow file processing      | Sequential ForEach                          | Set `isSequential: false` and `batchCount: 10+`.      |
+| Files left on SFTP        | NiFi auto-deleted after fetch; ADF does not | Add a Delete Activity after successful copy.          |
 
 ---
 

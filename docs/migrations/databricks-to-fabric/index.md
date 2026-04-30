@@ -36,20 +36,20 @@ flowchart TD
 
 ## Decision matrix
 
-| Workload category | Databricks strength | Fabric strength | Recommendation |
-| --- | --- | --- | --- |
-| BI semantic models | DBR SQL endpoint + Power BI Import | Direct Lake (zero-copy) + native PBI | **Fabric** |
-| Ad-hoc SQL analytics | DBSQL warehouse, Photon | Lakehouse SQL endpoint, auto-optimized | **Fabric** (cost) |
-| PySpark notebooks | Photon runtime, GPU attach | Fabric Spark (forked OSS) | **Databricks** (perf) |
-| dbt transformations | dbt-databricks adapter, mature | dbt-fabric adapter, growing | **Either** |
-| Delta Live Tables | DLT (declarative, expectations) | Data Pipelines + dbt tests | **Databricks** (maturity) |
-| MLflow experiments | Native MLflow, Unity Catalog lineage | Fabric ML experiments (limited) | **Databricks** |
-| Model serving | Databricks Model Serving, GPU | Azure ML managed endpoints | **Databricks** |
-| Feature store | Databricks Feature Store + UC | Fabric feature engineering (preview) | **Databricks** |
-| Structured streaming | Structured Streaming, Auto Loader | Real-Time Intelligence / Eventhouse | **Fabric** (sub-second) |
-| Governance / catalog | Unity Catalog (3-level namespace) | OneLake + Purview | **Databricks** (maturity) |
-| Cost model | DBU tiers (Jobs, SQL, All-Purpose) | Fabric CU (single capacity) | **Fabric** (simplicity) |
-| Multi-cloud | AWS, Azure, GCP | Azure only | **Databricks** |
+| Workload category    | Databricks strength                  | Fabric strength                        | Recommendation            |
+| -------------------- | ------------------------------------ | -------------------------------------- | ------------------------- |
+| BI semantic models   | DBR SQL endpoint + Power BI Import   | Direct Lake (zero-copy) + native PBI   | **Fabric**                |
+| Ad-hoc SQL analytics | DBSQL warehouse, Photon              | Lakehouse SQL endpoint, auto-optimized | **Fabric** (cost)         |
+| PySpark notebooks    | Photon runtime, GPU attach           | Fabric Spark (forked OSS)              | **Databricks** (perf)     |
+| dbt transformations  | dbt-databricks adapter, mature       | dbt-fabric adapter, growing            | **Either**                |
+| Delta Live Tables    | DLT (declarative, expectations)      | Data Pipelines + dbt tests             | **Databricks** (maturity) |
+| MLflow experiments   | Native MLflow, Unity Catalog lineage | Fabric ML experiments (limited)        | **Databricks**            |
+| Model serving        | Databricks Model Serving, GPU        | Azure ML managed endpoints             | **Databricks**            |
+| Feature store        | Databricks Feature Store + UC        | Fabric feature engineering (preview)   | **Databricks**            |
+| Structured streaming | Structured Streaming, Auto Loader    | Real-Time Intelligence / Eventhouse    | **Fabric** (sub-second)   |
+| Governance / catalog | Unity Catalog (3-level namespace)    | OneLake + Purview                      | **Databricks** (maturity) |
+| Cost model           | DBU tiers (Jobs, SQL, All-Purpose)   | Fabric CU (single capacity)            | **Fabric** (simplicity)   |
+| Multi-cloud          | AWS, Azure, GCP                      | Azure only                             | **Databricks**            |
 
 ---
 
@@ -57,35 +57,35 @@ flowchart TD
 
 ### Strategic & cost
 
-| Document | Description | Lines |
-| --- | --- | --- |
-| [why-fabric-over-databricks.md](why-fabric-over-databricks.md) | Strategic white paper: when Fabric is the right move and when it is not | ~400 |
-| [tco-analysis.md](tco-analysis.md) | DBU pricing vs Fabric CU, reserved capacity, storage, worked examples | ~350 |
-| [benchmarks.md](benchmarks.md) | Photon vs Fabric Spark, DLT vs RTI, SQL warehouse comparisons | ~300 |
+| Document                                                       | Description                                                             | Lines |
+| -------------------------------------------------------------- | ----------------------------------------------------------------------- | ----- |
+| [why-fabric-over-databricks.md](why-fabric-over-databricks.md) | Strategic white paper: when Fabric is the right move and when it is not | ~400  |
+| [tco-analysis.md](tco-analysis.md)                             | DBU pricing vs Fabric CU, reserved capacity, storage, worked examples   | ~350  |
+| [benchmarks.md](benchmarks.md)                                 | Photon vs Fabric Spark, DLT vs RTI, SQL warehouse comparisons           | ~300  |
 
 ### Feature mapping & migration guides
 
-| Document | Description | Lines |
-| --- | --- | --- |
-| [feature-mapping-complete.md](feature-mapping-complete.md) | 40+ feature-by-feature mapping: Databricks to Fabric equivalents | ~400 |
-| [notebook-migration.md](notebook-migration.md) | PySpark notebooks, dbutils, library management, Databricks Connect | ~350 |
-| [unity-catalog-migration.md](unity-catalog-migration.md) | Unity Catalog to OneLake + Purview: catalogs, schemas, RBAC, lineage | ~400 |
-| [dlt-migration.md](dlt-migration.md) | Delta Live Tables to Fabric Data Pipelines + dbt, expectations, monitoring | ~350 |
-| [ml-migration.md](ml-migration.md) | MLflow, Model Serving, Feature Store, AutoML, Vector Search | ~350 |
-| [streaming-migration.md](streaming-migration.md) | Structured Streaming to Fabric Real-Time Intelligence / Eventhouse | ~300 |
+| Document                                                   | Description                                                                | Lines |
+| ---------------------------------------------------------- | -------------------------------------------------------------------------- | ----- |
+| [feature-mapping-complete.md](feature-mapping-complete.md) | 40+ feature-by-feature mapping: Databricks to Fabric equivalents           | ~400  |
+| [notebook-migration.md](notebook-migration.md)             | PySpark notebooks, dbutils, library management, Databricks Connect         | ~350  |
+| [unity-catalog-migration.md](unity-catalog-migration.md)   | Unity Catalog to OneLake + Purview: catalogs, schemas, RBAC, lineage       | ~400  |
+| [dlt-migration.md](dlt-migration.md)                       | Delta Live Tables to Fabric Data Pipelines + dbt, expectations, monitoring | ~350  |
+| [ml-migration.md](ml-migration.md)                         | MLflow, Model Serving, Feature Store, AutoML, Vector Search                | ~350  |
+| [streaming-migration.md](streaming-migration.md)           | Structured Streaming to Fabric Real-Time Intelligence / Eventhouse         | ~300  |
 
 ### Hands-on tutorials
 
-| Document | Description | Lines |
-| --- | --- | --- |
-| [tutorial-notebook-to-fabric.md](tutorial-notebook-to-fabric.md) | Step-by-step: convert a Databricks PySpark notebook to Fabric | ~350 |
-| [tutorial-dlt-to-fabric-pipeline.md](tutorial-dlt-to-fabric-pipeline.md) | Migrate a DLT pipeline to Fabric Data Pipeline + dbt with quality tests | ~350 |
+| Document                                                                 | Description                                                             | Lines |
+| ------------------------------------------------------------------------ | ----------------------------------------------------------------------- | ----- |
+| [tutorial-notebook-to-fabric.md](tutorial-notebook-to-fabric.md)         | Step-by-step: convert a Databricks PySpark notebook to Fabric           | ~350  |
+| [tutorial-dlt-to-fabric-pipeline.md](tutorial-dlt-to-fabric-pipeline.md) | Migrate a DLT pipeline to Fabric Data Pipeline + dbt with quality tests | ~350  |
 
 ### Operations
 
-| Document | Description | Lines |
-| --- | --- | --- |
-| [best-practices.md](best-practices.md) | Hybrid strategy, workspace mapping, capacity planning, pitfall avoidance | ~300 |
+| Document                               | Description                                                              | Lines |
+| -------------------------------------- | ------------------------------------------------------------------------ | ----- |
+| [best-practices.md](best-practices.md) | Hybrid strategy, workspace mapping, capacity planning, pitfall avoidance | ~300  |
 
 ---
 

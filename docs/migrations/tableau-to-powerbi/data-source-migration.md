@@ -14,17 +14,17 @@ Data source migration is the foundation of a Tableau-to-Power BI migration. Get 
 
 ### 1.1 Tableau connection types to Power BI equivalents
 
-| Tableau connection type | Power BI equivalent | When to use | csa-inabox recommendation |
-|---|---|---|---|
-| **Tableau Extract** (.hyper) | Import mode (scheduled refresh) | Small-to-medium datasets (< 1 GB) that tolerate refresh latency | Migrate to **Direct Lake** on Gold tables instead |
-| **Live connection** | DirectQuery | Real-time freshness required; source can handle query load | Use DirectQuery to operational sources; Direct Lake for analytics |
-| **Published data source** | Shared semantic model (Certified) | Governed, reusable data layer shared across reports | One semantic model per data domain, endorsed as Certified |
-| **Data blending** | Composite model or star schema relationships | Cross-source analysis | Consolidate in the semantic model or use composite model |
-| **Custom SQL** | Power Query native query or DirectQuery SQL | Complex queries that cannot be modeled | Prefer dbt views over custom SQL in the semantic model |
-| **Federated / cross-database join** | Composite model (DirectQuery + Import) | Mix sources in one model | Composite models support mixing DirectQuery and Import |
-| **Tableau Bridge** (cloud to on-prem) | On-premises data gateway | Cloud service connecting to on-premises sources | Install and configure the gateway; map to Tableau Bridge function |
-| **File-based** (CSV, Excel, JSON) | Power Query file connectors | Flat file sources | Same files connect through Power Query; schedule refresh |
-| **Cloud connectors** (Snowflake, BigQuery, etc.) | Power BI native connectors | Cloud data warehouses | Power BI has 150+ native connectors |
+| Tableau connection type                          | Power BI equivalent                          | When to use                                                     | csa-inabox recommendation                                         |
+| ------------------------------------------------ | -------------------------------------------- | --------------------------------------------------------------- | ----------------------------------------------------------------- |
+| **Tableau Extract** (.hyper)                     | Import mode (scheduled refresh)              | Small-to-medium datasets (< 1 GB) that tolerate refresh latency | Migrate to **Direct Lake** on Gold tables instead                 |
+| **Live connection**                              | DirectQuery                                  | Real-time freshness required; source can handle query load      | Use DirectQuery to operational sources; Direct Lake for analytics |
+| **Published data source**                        | Shared semantic model (Certified)            | Governed, reusable data layer shared across reports             | One semantic model per data domain, endorsed as Certified         |
+| **Data blending**                                | Composite model or star schema relationships | Cross-source analysis                                           | Consolidate in the semantic model or use composite model          |
+| **Custom SQL**                                   | Power Query native query or DirectQuery SQL  | Complex queries that cannot be modeled                          | Prefer dbt views over custom SQL in the semantic model            |
+| **Federated / cross-database join**              | Composite model (DirectQuery + Import)       | Mix sources in one model                                        | Composite models support mixing DirectQuery and Import            |
+| **Tableau Bridge** (cloud to on-prem)            | On-premises data gateway                     | Cloud service connecting to on-premises sources                 | Install and configure the gateway; map to Tableau Bridge function |
+| **File-based** (CSV, Excel, JSON)                | Power Query file connectors                  | Flat file sources                                               | Same files connect through Power Query; schedule refresh          |
+| **Cloud connectors** (Snowflake, BigQuery, etc.) | Power BI native connectors                   | Cloud data warehouses                                           | Power BI has 150+ native connectors                               |
 
 ### 1.2 Decision tree for connection type selection
 
@@ -59,13 +59,13 @@ Tableau extracts (.hyper files) are the most common data connection pattern in T
 
 Direct Lake is a Power BI storage mode exclusive to Microsoft Fabric. It connects Power BI semantic models to Delta tables in OneLake and reads the Parquet files directly with Vertipaq-like compression and performance.
 
-| Extract problem | Direct Lake solution |
-|---|---|
-| Data duplication | Zero copies — Power BI reads the Delta files in place |
-| Stale data | Always fresh — reads the latest Delta version automatically |
-| Refresh failures | No refresh needed — no extract process to fail |
-| Storage consumption | No additional storage — data lives in OneLake only |
-| Governance gap | All reports read from the same Gold-layer Delta tables |
+| Extract problem     | Direct Lake solution                                        |
+| ------------------- | ----------------------------------------------------------- |
+| Data duplication    | Zero copies — Power BI reads the Delta files in place       |
+| Stale data          | Always fresh — reads the latest Delta version automatically |
+| Refresh failures    | No refresh needed — no extract process to fail              |
+| Storage consumption | No additional storage — data lives in OneLake only          |
+| Governance gap      | All reports read from the same Gold-layer Delta tables      |
 
 ### 2.3 Direct Lake prerequisites
 
@@ -92,14 +92,14 @@ Step 7: Decommission the Tableau extract
 
 ### 3.1 Concept mapping
 
-| Tableau concept | Power BI concept | Notes |
-|---|---|---|
-| Published data source | Shared semantic model (dataset) | Shared across reports in a workspace or via endorsement |
-| Certified data source | Endorsed semantic model (Certified) | Certified label marks the model as trusted |
-| Data source permissions | Semantic model permissions + workspace roles | Control who can build on the model |
-| Data source revisions | Fabric Git integration (TMDL format) | Version control for model definitions |
-| Embedded vs published source | Dedicated vs shared semantic model | Always prefer shared for governance |
-| Data source filters | Power Query filters in the model | Filter at the source or in Power Query |
+| Tableau concept              | Power BI concept                             | Notes                                                   |
+| ---------------------------- | -------------------------------------------- | ------------------------------------------------------- |
+| Published data source        | Shared semantic model (dataset)              | Shared across reports in a workspace or via endorsement |
+| Certified data source        | Endorsed semantic model (Certified)          | Certified label marks the model as trusted              |
+| Data source permissions      | Semantic model permissions + workspace roles | Control who can build on the model                      |
+| Data source revisions        | Fabric Git integration (TMDL format)         | Version control for model definitions                   |
+| Embedded vs published source | Dedicated vs shared semantic model           | Always prefer shared for governance                     |
+| Data source filters          | Power Query filters in the model             | Filter at the source or in Power Query                  |
 
 ### 3.2 Semantic model design principles
 
@@ -150,12 +150,12 @@ Tableau data blending allows ad-hoc cross-source analysis by linking a primary d
 
 ### 4.2 Power BI alternatives to data blending
 
-| Tableau blending pattern | Power BI solution | Recommendation |
-|---|---|---|
-| Two sources with a shared dimension | Composite model (DirectQuery to source A, Import for source B) | Use when sources must remain separate |
-| Two sources that should be consolidated | Single semantic model with both sources joined in Power Query or dbt | Preferred approach: consolidate in the data layer |
-| Supplemental lookup table (e.g., budget targets) | Import the lookup table into the semantic model and create a relationship | Simple and performant |
-| Cross-database analysis | Composite model with DirectQuery to multiple sources | Supported since 2020; some performance trade-offs |
+| Tableau blending pattern                         | Power BI solution                                                         | Recommendation                                    |
+| ------------------------------------------------ | ------------------------------------------------------------------------- | ------------------------------------------------- |
+| Two sources with a shared dimension              | Composite model (DirectQuery to source A, Import for source B)            | Use when sources must remain separate             |
+| Two sources that should be consolidated          | Single semantic model with both sources joined in Power Query or dbt      | Preferred approach: consolidate in the data layer |
+| Supplemental lookup table (e.g., budget targets) | Import the lookup table into the semantic model and create a relationship | Simple and performant                             |
+| Cross-database analysis                          | Composite model with DirectQuery to multiple sources                      | Supported since 2020; some performance trade-offs |
 
 ### 4.3 Composite model example
 
@@ -187,16 +187,16 @@ Tableau allows custom SQL at the data source level. Common patterns:
 
 ### 5.2 Power BI alternatives
 
-| Tableau custom SQL pattern | Power BI solution | Recommendation |
-|---|---|---|
-| Pre-aggregation query | DirectQuery with aggregation tables | Use Power BI aggregation tables for dual-speed models |
-| Complex joins | Power Query M (merge queries) | Build joins in Power Query for Import models |
-| Parameterized query | Power Query parameters | Create parameters in Power Query and reference in the query |
-| Stored procedure | DirectQuery or Import with stored proc | Power BI supports stored procedures via DirectQuery |
-| Views | DirectQuery to SQL views | Preferred: create dbt views, connect Power BI via DirectQuery |
+| Tableau custom SQL pattern | Power BI solution                      | Recommendation                                                |
+| -------------------------- | -------------------------------------- | ------------------------------------------------------------- |
+| Pre-aggregation query      | DirectQuery with aggregation tables    | Use Power BI aggregation tables for dual-speed models         |
+| Complex joins              | Power Query M (merge queries)          | Build joins in Power Query for Import models                  |
+| Parameterized query        | Power Query parameters                 | Create parameters in Power Query and reference in the query   |
+| Stored procedure           | DirectQuery or Import with stored proc | Power BI supports stored procedures via DirectQuery           |
+| Views                      | DirectQuery to SQL views               | Preferred: create dbt views, connect Power BI via DirectQuery |
 
 !!! tip "Prefer dbt views over custom SQL"
-    With csa-inabox, transformation logic should live in dbt models (Silver and Gold layers), not in Power Query or custom SQL inside the semantic model. Create dbt views or tables that encapsulate the logic, then connect Power BI to those views via Direct Lake or DirectQuery.
+With csa-inabox, transformation logic should live in dbt models (Silver and Gold layers), not in Power Query or custom SQL inside the semantic model. Create dbt views or tables that encapsulate the logic, then connect Power BI to those views via Direct Lake or DirectQuery.
 
 ---
 
@@ -204,13 +204,13 @@ Tableau allows custom SQL at the data source level. Common patterns:
 
 ### 6.1 Concept mapping
 
-| Tableau Bridge | On-premises data gateway | Notes |
-|---|---|---|
+| Tableau Bridge                    | On-premises data gateway                | Notes                                                                 |
+| --------------------------------- | --------------------------------------- | --------------------------------------------------------------------- |
 | Bridge client (installed on-prem) | Gateway application (installed on-prem) | Both run as Windows services on a machine with access to on-prem data |
-| Bridge pool (multiple clients) | Gateway cluster (multiple nodes) | High availability through multiple gateway instances |
-| Live connection through Bridge | DirectQuery through gateway | Real-time query forwarded through the gateway |
-| Extract refresh through Bridge | Scheduled refresh through gateway | Refresh triggered by Power BI Service, executed through gateway |
-| Bridge connection rules | Gateway data source configuration | Define connections to specific databases/files |
+| Bridge pool (multiple clients)    | Gateway cluster (multiple nodes)        | High availability through multiple gateway instances                  |
+| Live connection through Bridge    | DirectQuery through gateway             | Real-time query forwarded through the gateway                         |
+| Extract refresh through Bridge    | Scheduled refresh through gateway       | Refresh triggered by Power BI Service, executed through gateway       |
+| Bridge connection rules           | Gateway data source configuration       | Define connections to specific databases/files                        |
 
 ### 6.2 Gateway migration steps
 
@@ -228,14 +228,14 @@ Tableau allows custom SQL at the data source level. Common patterns:
 
 ### 7.1 Common file patterns
 
-| File type | Tableau approach | Power BI approach | Notes |
-|---|---|---|---|
-| **CSV** | Connect via file connector | Power Query CSV connector | Identical approach |
-| **Excel** | Connect via Excel connector | Power Query Excel connector | Power BI handles Excel natively |
-| **JSON** | Connect via JSON connector | Power Query JSON connector | Power Query flattens nested JSON |
-| **Google Sheets** | Tableau Cloud connector | Power Query Google Sheets connector or web connector | May need a gateway for scheduled refresh |
-| **SharePoint Excel/CSV** | Tableau Cloud connector | Power Query SharePoint connector | Native integration; auto-refresh supported |
-| **PDF tables** | Not supported natively | Power Query PDF connector | Power BI can extract tables from PDFs |
+| File type                | Tableau approach            | Power BI approach                                    | Notes                                      |
+| ------------------------ | --------------------------- | ---------------------------------------------------- | ------------------------------------------ |
+| **CSV**                  | Connect via file connector  | Power Query CSV connector                            | Identical approach                         |
+| **Excel**                | Connect via Excel connector | Power Query Excel connector                          | Power BI handles Excel natively            |
+| **JSON**                 | Connect via JSON connector  | Power Query JSON connector                           | Power Query flattens nested JSON           |
+| **Google Sheets**        | Tableau Cloud connector     | Power Query Google Sheets connector or web connector | May need a gateway for scheduled refresh   |
+| **SharePoint Excel/CSV** | Tableau Cloud connector     | Power Query SharePoint connector                     | Native integration; auto-refresh supported |
+| **PDF tables**           | Not supported natively      | Power Query PDF connector                            | Power BI can extract tables from PDFs      |
 
 ### 7.2 File-based refresh considerations
 
@@ -251,16 +251,16 @@ For file-based data sources, consider moving files to a governed location:
 
 ### 8.1 Common cloud connections
 
-| Cloud source | Tableau connector | Power BI connector | Recommended mode |
-|---|---|---|---|
-| **Azure SQL Database** | Native | Native | DirectQuery or Import |
-| **Azure Synapse Analytics** | Native | Native | DirectQuery |
-| **Snowflake** | Native | Native | DirectQuery |
-| **Google BigQuery** | Native | Native | DirectQuery |
-| **Amazon Redshift** | Native | Native | DirectQuery |
-| **Databricks SQL** | Native | Native (via Databricks connector) | DirectQuery or Direct Lake via OneLake shortcuts |
-| **SAP HANA** | Native | Native | DirectQuery |
-| **PostgreSQL** | Native | Native | DirectQuery or Import |
+| Cloud source                | Tableau connector | Power BI connector                | Recommended mode                                 |
+| --------------------------- | ----------------- | --------------------------------- | ------------------------------------------------ |
+| **Azure SQL Database**      | Native            | Native                            | DirectQuery or Import                            |
+| **Azure Synapse Analytics** | Native            | Native                            | DirectQuery                                      |
+| **Snowflake**               | Native            | Native                            | DirectQuery                                      |
+| **Google BigQuery**         | Native            | Native                            | DirectQuery                                      |
+| **Amazon Redshift**         | Native            | Native                            | DirectQuery                                      |
+| **Databricks SQL**          | Native            | Native (via Databricks connector) | DirectQuery or Direct Lake via OneLake shortcuts |
+| **SAP HANA**                | Native            | Native                            | DirectQuery                                      |
+| **PostgreSQL**              | Native            | Native                            | DirectQuery or Import                            |
 
 ### 8.2 Databricks-specific guidance
 
@@ -307,12 +307,12 @@ For organizations using Databricks (common with csa-inabox), the optimal path is
 
 Tableau relationships (introduced in 2020.2) map closely to Power BI model relationships:
 
-| Tableau relationship concept | Power BI relationship concept | Notes |
-|---|---|---|
-| Relationship between tables | Relationship between tables | Both support 1:1, 1:many, many:many |
-| Relationship cardinality | Cardinality | Configure in model view |
-| Performance options | Cross-filter direction | Single or Both for bi-directional |
-| Root table vs related table | Fact table vs dimension table | Star schema: fact in center, dimensions around |
+| Tableau relationship concept | Power BI relationship concept | Notes                                          |
+| ---------------------------- | ----------------------------- | ---------------------------------------------- |
+| Relationship between tables  | Relationship between tables   | Both support 1:1, 1:many, many:many            |
+| Relationship cardinality     | Cardinality                   | Configure in model view                        |
+| Performance options          | Cross-filter direction        | Single or Both for bi-directional              |
+| Root table vs related table  | Fact table vs dimension table | Star schema: fact in center, dimensions around |
 
 ---
 
